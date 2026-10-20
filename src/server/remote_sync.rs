@@ -628,7 +628,9 @@ async fn create_preview_inner(
         source_id.clone(),
         catalog.id.clone(),
         sync_request.clone(),
-        SyncGuardMode::Preview,
+        SyncGuardMode::Preview {
+            stop: crate::concurrency::Stop::new(),
+        },
     )
     .await;
     let (result, fingerprint) = match execution {
@@ -852,7 +854,9 @@ pub async fn refresh_preview(
         request.peer_db_id.clone(),
         catalog.id.clone(),
         request,
-        SyncGuardMode::Preview,
+        SyncGuardMode::Preview {
+            stop: crate::concurrency::Stop::new(),
+        },
     )
     .await;
     let (result, fingerprint) = match execution {

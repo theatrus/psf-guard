@@ -1,4 +1,4 @@
-import type { JobControl, JobLink, JobRow } from '../../api/types';
+import type { JobControl, JobLink, JobRow, PreviewKind } from '../../api/types';
 import type { TransferJob } from '../../api/transferTypes';
 
 /** The route a row's Stop and move buttons call. */
@@ -11,7 +11,8 @@ export type ActivityControl =
   | { kind: 'backup' }
   | { kind: 'ts-sync'; jobId: string }
   | { kind: 'wbpp-running'; dbId: string }
-  | { kind: 'wbpp-queued'; dbId: string; queueId: string };
+  | { kind: 'wbpp-queued'; dbId: string; queueId: string }
+  | { kind: 'preview'; preview: PreviewKind; dbId: string };
 
 /** The two lines a person can reorder. Each runs one job at a time. */
 export type ActivityQueue = 'stack' | 'wbpp';
@@ -94,6 +95,8 @@ function controlOf(control: JobControl): ActivityControl {
       return { kind: 'backup' };
     case 'wbpp-queued':
       return { kind: 'wbpp-queued', dbId: control.db_id, queueId: control.queue_id };
+    case 'preview':
+      return { kind: 'preview', preview: control.preview, dbId: control.db_id };
     default:
       return { kind: control.kind, dbId: control.db_id };
   }

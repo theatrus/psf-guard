@@ -507,7 +507,7 @@ async fn send_inner(
         };
         // Recover a TS commit whose receipt was interrupted. A no-op comparison
         // acknowledges matching rows without overwriting anything TS changed.
-        let (comparison, _) = run(true, SyncGuardMode::PlanningPreview).await.map_err(sync_error)?;
+        let (comparison, _) = run(true, SyncGuardMode::PlanningPreview { stop: crate::concurrency::Stop::new() }).await.map_err(sync_error)?;
         if comparison.total_inserted == 0 && comparison.total_updated == 0 { return Ok(comparison); }
         run(false, SyncGuardMode::PlanningApply { destination_fingerprint: record.destination_fingerprint }).await
             .map(|(result, _)| result).map_err(|e| format!("{} Preview and activate again to review the current TS planning.", sync_error(e)))

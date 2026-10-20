@@ -5,6 +5,7 @@
 //! destination after taking SQLite's write lock, so it writes the same source
 //! data the user reviewed or refuses a stale destination.
 
+use crate::concurrency::Stop;
 use crate::server::api::{SchedulerSyncKind, SchedulerSyncRequest, SchedulerSyncResponse};
 use crate::server::database_context::{
     open_scheduler_connection_with_flags, SCHEDULER_BUSY_TIMEOUT,
@@ -155,7 +156,8 @@ impl SyncPreviewManager {
     }
 
     /// Take a transactionally consistent online copy of a live SQLite source.
-    pub fn create_source_snapshot(&self, source_path: &Path) -> Result<String> {
+    /// `stop` ends the copy early with [`SnapshotStopped`].
+    pub fn create_source_snapshot(&self, source_path: &Path, stop: &Stop) -> Result<String> {
         fs::create_dir_all(&self.directory).with_context(|| {
             format!(
                 "creating sync preview directory {}",
@@ -171,6 +173,7 @@ impl SyncPreviewManager {
                 &temporary,
                 SCHEDULER_BUSY_TIMEOUT,
                 SNAPSHOT_OVERALL_TIMEOUT,
+                stop,
             )?;
             fs::rename(&temporary, &published)
                 .with_context(|| format!("publishing transfer snapshot {}", published.display()))?;
@@ -363,6 +366,7 @@ fn copy_source_snapshot(
     temporary: &Path,
     stall_timeout: Duration,
     overall_timeout: Duration,
+    stop: &Stop,
 ) -> Result<()> {
     let source =
         open_scheduler_connection_with_flags(source_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
@@ -387,6 +391,9 @@ fn copy_source_snapshot(
     let mut last_net_progress = started;
     let mut lowest_remaining = None;
     loop {
+        if stop.requested() {
+            return Err(SnapshotStopped.into());
+        }
         let step = backup
             .step(256)
             .context("copying transfer source snapshot")?;
@@ -436,6 +443,18 @@ fn copy_source_snapshot(
     }
     Ok(())
 }
+
+/// A snapshot copy stopped before it finished.
+#[derive(Debug)]
+pub struct SnapshotStopped;
+
+impl std::fmt::Display for SnapshotStopped {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("sync preview snapshot stopped")
+    }
+}
+
+impl std::error::Error for SnapshotStopped {}
 
 /// SQLite restarts an online backup when another connection changes the
 /// source. A successful step after that restart is not net progress if it only
@@ -787,7 +806,9 @@ mod tests {
             .execute_batch("CREATE TABLE sample (value TEXT);")
             .unwrap();
         drop(source);
-        let snapshot = manager.create_source_snapshot(&source_path).unwrap();
+        let snapshot = manager
+            .create_source_snapshot(&source_path, &Stop::new())
+            .unwrap();
         let record = manager
             .store(
                 "source".into(),
@@ -921,7 +942,9 @@ mod tests {
             .execute_batch("CREATE TABLE sample (value TEXT);")
             .unwrap();
         drop(source);
-        let snapshot = manager.create_source_snapshot(&source_path).unwrap();
+        let snapshot = manager
+            .create_source_snapshot(&source_path, &Stop::new())
+            .unwrap();
         let record = manager
             .store(
                 "catalog".into(),
@@ -1034,7 +1057,9 @@ mod tests {
         drop(source);
 
         let manager = SyncPreviewManager::new(directory.path().join("cache"));
-        let filename = manager.create_source_snapshot(&source_path).unwrap();
+        let filename = manager
+            .create_source_snapshot(&source_path, &Stop::new())
+            .unwrap();
         let source = Connection::open(&source_path).unwrap();
         source
             .execute("UPDATE sample SET value = 'later'", [])
@@ -1064,12 +1089,34 @@ mod tests {
             &temporary,
             Duration::from_millis(25),
             Duration::from_secs(1),
+            &Stop::new(),
         )
         .unwrap_err();
 
         assert!(started.elapsed() < Duration::from_secs(1));
         assert!(format!("{error:#}").contains("made no snapshot progress"));
         locker.execute_batch("ROLLBACK").unwrap();
+    }
+
+    #[test]
+    fn a_stop_ends_the_snapshot_copy() {
+        let directory = tempdir().unwrap();
+        let source_path = directory.path().join("source.sqlite");
+        Connection::open(&source_path)
+            .unwrap()
+            .execute_batch("CREATE TABLE sample (value TEXT);")
+            .unwrap();
+        let stop = Stop::new();
+        stop.request();
+        let error = copy_source_snapshot(
+            &source_path,
+            &directory.path().join("snapshot.tmp"),
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            &stop,
+        )
+        .unwrap_err();
+        assert!(error.downcast_ref::<SnapshotStopped>().is_some());
     }
 
     #[test]
@@ -1088,6 +1135,7 @@ mod tests {
             &temporary,
             Duration::from_secs(1),
             Duration::from_millis(25),
+            &Stop::new(),
         )
         .unwrap_err();
 

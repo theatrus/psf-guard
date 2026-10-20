@@ -2,6 +2,7 @@
 //! sync routes.
 
 use super::*;
+use crate::concurrency::Stop;
 
 /// `POST /api/databases/{db_id}/sync` — preview or run one safe scheduler
 /// database sync. The path database is the local working copy. A pull reads
@@ -33,16 +34,53 @@ pub(super) async fn execute_scheduler_sync(
 
 pub(crate) enum SyncGuardMode {
     None,
-    Preview,
+    /// A dry run, rolled back. Its stop interrupts the run's SQLite work.
+    Preview {
+        stop: Stop,
+    },
     Apply {
         destination_fingerprint: String,
     },
     /// Activation has a frozen, project-scoped source rather than a whole catalog.
-    PlanningPreview,
+    PlanningPreview {
+        stop: Stop,
+    },
     PlanningApply {
         destination_fingerprint: String,
     },
 }
+
+impl SyncGuardMode {
+    /// A preview's stop; `None` for a run that writes.
+    fn preview_stop(&self) -> Option<&Stop> {
+        match self {
+            Self::Preview { stop } | Self::PlanningPreview { stop } => Some(stop),
+            _ => None,
+        }
+    }
+}
+
+/// How many SQLite steps a preview takes between looks at its stop.
+const PREVIEW_STOP_LOOK_EVERY: i32 = 10_000;
+
+/// Let `stop` interrupt the statement `connection` runs.
+fn stop_interrupts(connection: &rusqlite::Connection, stop: &Stop) {
+    let stop = stop.clone();
+    let _ = connection.progress_handler(PREVIEW_STOP_LOOK_EVERY, Some(move || stop.requested()));
+}
+
+/// A preview stopped before it finished: a newer preview of the same sync
+/// replaced it, or a person stopped it.
+#[derive(Debug)]
+pub(crate) struct PreviewStopped;
+
+impl std::fmt::Display for PreviewStopped {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("sync preview stopped")
+    }
+}
+
+impl std::error::Error for PreviewStopped {}
 
 #[derive(Debug)]
 pub(super) struct StaleSyncPreview;
@@ -137,6 +175,9 @@ pub(super) fn classify_scheduler_sync_failure(
     source_path: &str,
     destination_path: &str,
 ) -> AppError {
+    if error.downcast_ref::<PreviewStopped>().is_some() {
+        return AppError::Conflict("This sync preview was stopped before it finished.".into());
+    }
     if error.downcast_ref::<StaleSyncPreview>().is_some() {
         return AppError::Conflict(
             "This preview is stale because the destination database changed. Preview again.".into(),
@@ -194,7 +235,7 @@ pub(crate) async fn execute_scheduler_sync_paths(
 
     let scoped_planning = matches!(
         &guard_mode,
-        SyncGuardMode::PlanningPreview | SyncGuardMode::PlanningApply { .. }
+        SyncGuardMode::PlanningPreview { .. } | SyncGuardMode::PlanningApply { .. }
     );
     if scoped_planning && !matches!(req.kind, SchedulerSyncKind::PushPlanning) {
         return Err(AppError::BadRequest(
@@ -249,6 +290,17 @@ pub(crate) async fn execute_scheduler_sync_paths(
 
             let (source, destination) =
                 open_scheduler_sync_connections(&source_path, &destination_path)?;
+            let preview_stop = guard_mode.preview_stop().cloned();
+            if let Some(stop) = &preview_stop {
+                stop_interrupts(&source, stop);
+                stop_interrupts(&destination, stop);
+            }
+            // An interrupted statement fails with SQLite's interrupt error;
+            // a preview reports that it stopped instead.
+            let stopped = |error: anyhow::Error| match &preview_stop {
+                Some(stop) if stop.requested() => anyhow::Error::new(PreviewStopped),
+                _ => error,
+            };
 
             let run = |transaction: Option<&Transaction<'_>>| -> anyhow::Result<(
                 SchedulerSyncResponse,
@@ -417,7 +469,7 @@ pub(crate) async fn execute_scheduler_sync_paths(
                     let (response, changed_image_ids) = run(None)?;
                     Ok((response, None, changed_image_ids))
                 }
-                SyncGuardMode::Preview | SyncGuardMode::PlanningPreview => {
+                SyncGuardMode::Preview { .. } | SyncGuardMode::PlanningPreview { .. } => {
                     // A pull or planning preview writes, then rolls back; a
                     // grade preview only reads.
                     let behavior = if matches!(kind, SchedulerSyncKind::PushGrades) {
@@ -425,9 +477,11 @@ pub(crate) async fn execute_scheduler_sync_paths(
                     } else {
                         TransactionBehavior::Immediate
                     };
-                    let transaction = Transaction::new_unchecked(&destination, behavior)?;
-                    let fingerprint = fingerprint(&transaction)?;
-                    let (response, _) = run(Some(&transaction))?;
+                    let transaction = Transaction::new_unchecked(&destination, behavior)
+                        .map_err(|error| stopped(error.into()))?;
+                    let fingerprint = fingerprint(&transaction).map_err(stopped)?;
+                    // Dropping the transaction rolls it back, stopped or not.
+                    let (response, _) = run(Some(&transaction)).map_err(stopped)?;
                     transaction.rollback()?;
                     Ok((response, Some(fingerprint), Vec::new()))
                 }
@@ -536,6 +590,20 @@ pub(super) fn sync_endpoint_paths(
     })
 }
 
+/// What a sync preview does, for the jobs route: `Previewing a pull from
+/// Rig`.
+fn sync_preview_label(state: &AppState, request: &SchedulerSyncRequest) -> String {
+    let peer = state
+        .get_database(&request.peer_db_id)
+        .map(|peer| peer.name.clone())
+        .unwrap_or_else(|| request.peer_db_id.clone());
+    match request.kind {
+        SchedulerSyncKind::Pull => format!("Previewing a pull from {peer}"),
+        SchedulerSyncKind::PushPlanning => format!("Previewing planning sent to {peer}"),
+        SchedulerSyncKind::PushGrades => format!("Previewing grades sent to {peer}"),
+    }
+}
+
 /// Create a server-owned dry preview. Apply is a separate endpoint keyed by
 /// the returned opaque preview ID.
 pub async fn preview_sync_database_route(
@@ -545,16 +613,38 @@ pub async fn preview_sync_database_route(
 ) -> Result<Json<ApiResponse<SchedulerSyncPreviewResponse>>, AppError> {
     request.dry_run = true;
     let (source_path, _destination_path) = sync_endpoint_paths(&state, &db_id, &request)?;
+    // A newer preview from this database's page stops this one.
+    let run =
+        state
+            .previews
+            .sync
+            .start(&state, db_id.clone(), sync_preview_label(&state, &request));
+    let replaced = |run: &crate::server::job_line::latest::LatestRun<String>| {
+        (!run.is_latest())
+            .then(|| AppError::Conflict("A newer preview of this sync replaced this one.".into()))
+    };
     let source_path_for_error = source_path.display().to_string();
     let snapshot_state = state.clone();
+    let snapshot_stop = run.stop().clone();
     let source_snapshot_file = tokio::task::spawn_blocking(move || {
         snapshot_state
             .sync_previews
-            .create_source_snapshot(&source_path)
+            .create_source_snapshot(&source_path, &snapshot_stop)
     })
     .await
     .map_err(|error| AppError::InternalError(format!("sync snapshot task failed: {error}")))?
-    .map_err(|error| classify_sync_snapshot_failure(error, &source_path_for_error))?;
+    .map_err(|error| {
+        if error
+            .downcast_ref::<crate::server::sync_preview::SnapshotStopped>()
+            .is_some()
+        {
+            replaced(&run).unwrap_or_else(|| {
+                AppError::Conflict("This sync preview was stopped before it finished.".into())
+            })
+        } else {
+            classify_sync_snapshot_failure(error, &source_path_for_error)
+        }
+    })?;
     let source_snapshot_path = state
         .sync_previews
         .source_snapshot_path_for_file(&source_snapshot_file)
@@ -564,9 +654,17 @@ pub async fn preview_sync_database_route(
         &db_id,
         request.clone(),
         Some(source_snapshot_path),
-        SyncGuardMode::Preview,
+        SyncGuardMode::Preview {
+            stop: run.stop().clone(),
+        },
     )
     .await;
+    // A replaced preview keeps nothing: the newer one's result is the one
+    // the page shows.
+    let preview = match replaced(&run) {
+        Some(error) => Err(error),
+        None => preview,
+    };
     let (result, destination_fingerprint) = match preview {
         Ok((result, Some(fingerprint))) => (result, fingerprint),
         Ok(_) => unreachable!("preview execution always returns a fingerprint"),
@@ -682,7 +780,7 @@ pub async fn refresh_sync_database_preview_route(
         &db_id,
         request,
         Some(source_snapshot),
-        SyncGuardMode::Preview,
+        SyncGuardMode::Preview { stop: Stop::new() },
     )
     .await?;
     let fingerprint = fingerprint

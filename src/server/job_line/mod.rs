@@ -39,6 +39,7 @@ use tokio::sync::Notify;
 
 pub mod catalog;
 mod dispatch;
+pub mod latest;
 mod tracked;
 mod work;
 pub use dispatch::{DispatchRules, Turn};

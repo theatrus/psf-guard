@@ -673,7 +673,10 @@ async fn plugin_endpoints_cannot_read_refresh_or_apply_an_activation_approval() 
     let snapshot = harness
         .state
         .sync_previews
-        .create_source_snapshot(&harness.destination_path)
+        .create_source_snapshot(
+            &harness.destination_path,
+            &psf_guard::concurrency::Stop::new(),
+        )
         .unwrap();
     let approved = harness
         .state

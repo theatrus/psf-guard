@@ -939,6 +939,31 @@ fn catalog_installs_show_bytes_or_files() {
 }
 
 #[test]
+fn a_preview_is_a_persons_work_that_stop_ends() {
+    let row = row_list(&Snapshot {
+        databases: vec![db("db-1", "Home")],
+        previews: vec![crate::server::previews::PreviewRun {
+            kind: crate::server::previews::PreviewKind::Sync,
+            db_id: "db-1".into(),
+            label: "Previewing a pull from Rig".into(),
+            started_at: 1800,
+        }],
+        ..Snapshot::default()
+    })
+    .into_iter()
+    .find(|row| row.kind == RowKind::Preview)
+    .unwrap();
+    assert_eq!(row.title, "Previewing a pull from Rig");
+    assert_eq!(row.scope, "Home");
+    assert_eq!(row.status, RowStatus::Running);
+    assert!(!row.background && row.stoppable);
+    assert_eq!(
+        serde_json::to_value(row.control.unwrap()).unwrap(),
+        serde_json::json!({"kind": "preview", "preview": "sync", "db_id": "db-1"})
+    );
+}
+
+#[test]
 fn transfers_are_filed_by_who_queued_them_and_review_needs_attention() {
     let row = |job: Value| transfer_row(&job).unwrap();
     assert!(row(transfer("t", "queued", true)).background);

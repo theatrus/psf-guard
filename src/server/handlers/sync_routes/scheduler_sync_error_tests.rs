@@ -75,3 +75,32 @@ fn snapshot_filesystem_failures_are_operational() {
         AppError::DatabaseError(_)
     ));
 }
+
+#[test]
+fn a_stopped_preview_is_a_conflict() {
+    let error = anyhow::Error::new(PreviewStopped).context("previewing a pull");
+    let app_error = classify_scheduler_sync_failure(&error, "source.sqlite", "dest.sqlite");
+    assert!(matches!(&app_error, AppError::Conflict(message) if message.contains("stopped")));
+}
+
+#[test]
+fn a_preview_stop_interrupts_the_statement_under_way() {
+    let connection = rusqlite::Connection::open_in_memory().unwrap();
+    let stop = Stop::new();
+    stop_interrupts(&connection, &stop);
+    let count =
+        "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1000000) \
+                 SELECT COUNT(*) FROM n";
+    // Not stopped: the statement runs to the end.
+    let rows: i64 = connection.query_row(count, [], |row| row.get(0)).unwrap();
+    assert_eq!(rows, 1_000_000);
+    // Stopped: SQLite ends it early.
+    stop.request();
+    let error = connection
+        .query_row(count, [], |row| row.get::<_, i64>(0))
+        .unwrap_err();
+    assert_eq!(
+        error.sqlite_error_code(),
+        Some(rusqlite::ErrorCode::OperationInterrupted)
+    );
+}

@@ -32,6 +32,7 @@ use crate::server::calibration_duplicates::DuplicateJobStatus;
 use crate::server::catalog_install::{CatalogInstallPreset, CatalogInstallProgress};
 use crate::server::flat_measure::FlatMeasureStatus;
 use crate::server::frame_sites::FrameSitesStatus;
+use crate::server::previews::{PreviewKind, PreviewRun};
 use crate::server::quality_backfill::QualityBackfillProgress;
 use crate::server::reject_removal::RemovalJobStatus;
 use crate::server::spatial_scan::SpatialScanProgress;
@@ -88,6 +89,7 @@ pub enum RowKind {
     Headers,
     FlatUse,
     Upkeep,
+    Preview,
 }
 
 /// The two lines a person can reorder. Each runs one job at a time.
@@ -120,6 +122,7 @@ pub enum RowControl {
     TsSync { job_id: String },
     WbppRunning { db_id: String },
     WbppQueued { db_id: String, queue_id: String },
+    Preview { preview: PreviewKind, db_id: String },
 }
 
 /// A view in the app.
@@ -351,6 +354,7 @@ pub struct Snapshot {
     pub ts_sync: Vec<TsSyncJob>,
     pub backup: Option<BackupJob>,
     pub catalog_install: Option<CatalogInstallProgress>,
+    pub previews: Vec<PreviewRun>,
     /// The person's work that background jobs wait for, if any runs.
     pub interactive: Option<String>,
 }
@@ -373,6 +377,7 @@ impl Default for Snapshot {
             ts_sync: Vec::new(),
             backup: None,
             catalog_install: None,
+            previews: Vec::new(),
             interactive: None,
         }
     }
@@ -1328,6 +1333,24 @@ fn backup_row(job: &BackupJob) -> JobRow {
 
 /// A Seiza catalog installation a person started in Settings › Catalogs.
 /// Settings is a dialog, not a view, so the row has no link.
+/// A preview a person waits for. It runs at once and Stop ends it.
+fn preview_row(run: &PreviewRun, names: &HashMap<&str, &str>) -> JobRow {
+    JobRow {
+        control: Some(RowControl::Preview {
+            preview: run.kind,
+            db_id: run.db_id.clone(),
+        }),
+        stoppable: true,
+        started_at: Some(run.started_at),
+        ..JobRow::new(
+            format!("preview:{:?}:{}", run.kind, run.db_id),
+            RowKind::Preview,
+            run.label.clone(),
+            names.get(run.db_id.as_str()).copied().unwrap_or(&run.db_id),
+        )
+    }
+}
+
 fn catalog_install_row(progress: &CatalogInstallProgress) -> JobRow {
     let percent = match progress.bytes_total {
         Some(total) if total > 0 => {
@@ -1460,6 +1483,12 @@ pub fn rows(snapshot: &Snapshot, project_of: ProjectOf) -> Vec<JobRow> {
         rows.push(catalog_install_row(install));
     }
     rows.extend(snapshot.ts_sync.iter().filter_map(ts_sync_row));
+    let names: HashMap<&str, &str> = snapshot
+        .databases
+        .iter()
+        .map(|db| (db.id.as_str(), db.name.as_str()))
+        .collect();
+    rows.extend(snapshot.previews.iter().map(|run| preview_row(run, &names)));
     // A stable sort: rows that compare equal keep the order above.
     rows.sort_by(compare);
     rows
@@ -1545,6 +1574,7 @@ fn snapshot(state: &Arc<AppState>, transfers: Vec<Value>, manages: bool) -> Snap
         },
         backup: backups_allowed.then(|| state.backups.job()).flatten(),
         catalog_install: Some(state.catalog_install.status().progress),
+        previews: state.previews.running(),
         interactive: state.interactive_job_name(),
     }
 }

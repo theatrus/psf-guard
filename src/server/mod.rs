@@ -41,6 +41,7 @@ pub mod page_build;
 pub mod pairing;
 pub mod peers;
 pub mod preview_queue;
+pub mod previews;
 pub mod processing_setups;
 pub mod quality_arrival;
 pub mod quality_backfill;
@@ -778,6 +779,7 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route("/databases/import-ts", post(ts_sync::import_route))
         .route("/ts-sync", get(ts_sync::status_route))
         .route("/ts-sync/{job_id}/stop", post(ts_sync::stop_route))
+        .route("/previews/{kind}/{db_id}/stop", post(previews::stop_route))
         .route(
             "/databases/{db_id}/sync",
             post(handlers::sync_database_route),

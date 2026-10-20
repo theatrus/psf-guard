@@ -1335,6 +1335,13 @@ export const apiClient = {
     return data.data || [];
   },
 
+  /** Stop a preview under way. The request that started it fails with a
+   *  conflict. */
+  stopPreview: async (preview: import('./types').PreviewKind, dbId: string): Promise<void> => {
+    const api = await getApi();
+    await api.post(`/previews/${preview}/${encodeURIComponent(dbId)}/stop`);
+  },
+
   stopTsSync: async (id: string): Promise<void> => {
     const api = await getApi();
     await api.post(`/ts-sync/${encodeURIComponent(id)}/stop`);
