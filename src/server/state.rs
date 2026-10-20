@@ -114,6 +114,8 @@ pub struct AppState {
     pub wbpp_queue: crate::server::wbpp_queue::WbppQueue,
     /// What the jobs route keeps between polls.
     pub jobs_cache: crate::server::jobs::JobsCache,
+    /// The catalog jobs of this server, one per catalog of each kind.
+    pub catalog_jobs: crate::server::catalog_jobs::CatalogJobRegistry,
     /// Process-global, single-flight Seiza catalog installation with progress
     /// that survives closing and reopening the Settings page.
     pub catalog_install: crate::server::catalog_install::CatalogInstallManager,
@@ -547,6 +549,7 @@ impl AppState {
             ts_sync: crate::server::ts_sync::Manager::default(),
             wbpp_queue: crate::server::wbpp_queue::WbppQueue::default(),
             jobs_cache: crate::server::jobs::JobsCache::default(),
+            catalog_jobs: crate::server::catalog_jobs::CatalogJobRegistry::default(),
             catalog_install: crate::server::catalog_install::CatalogInstallManager::default(),
             sync_previews: crate::server::sync_preview::SyncPreviewManager::new(&cache_dir),
             sync_apply_lock: tokio::sync::Mutex::new(()),
@@ -860,6 +863,7 @@ impl AppState {
             ts_sync: crate::server::ts_sync::Manager::default(),
             wbpp_queue: crate::server::wbpp_queue::WbppQueue::default(),
             jobs_cache: crate::server::jobs::JobsCache::default(),
+            catalog_jobs: crate::server::catalog_jobs::CatalogJobRegistry::default(),
             catalog_install: crate::server::catalog_install::CatalogInstallManager::default(),
             sync_previews: crate::server::sync_preview::SyncPreviewManager::new(
                 "/tmp/psf-guard-test",

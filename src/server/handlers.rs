@@ -8745,6 +8745,7 @@ pub(crate) fn scan_target(
 
 /// GET /api/db/{db_id}/analysis/spatial-scan — progress + store size.
 pub async fn get_spatial_scan_progress(
+    State(state): State<Arc<AppState>>,
     ctx: DbContext,
     Query(query): Query<SpatialScanStatusQuery>,
 ) -> Result<Json<ApiResponse<SpatialScanStatusResponse>>, AppError> {
@@ -8796,7 +8797,7 @@ pub async fn get_spatial_scan_progress(
     let (mut progress, cached_count) = scan::progress_snapshot(&ctx.spatial_metrics);
     // Between one scan's end and the next's start, a queued scan still runs
     // as far as a page following it is concerned.
-    if !progress.running && crate::server::quality_scans::scan_queued(&ctx) {
+    if !progress.running && crate::server::quality_scans::scan_queued(&state, &ctx) {
         progress.running = true;
     }
     Ok(Json(ApiResponse::success(SpatialScanStatusResponse {

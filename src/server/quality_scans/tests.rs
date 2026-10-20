@@ -61,7 +61,7 @@ async fn a_queued_scan_shows_as_preparing_and_finishes_when_nothing_needs_comput
     let (progress, _) = spatial_scan::progress_snapshot(&ctx.spatial_metrics);
     assert!(progress.running);
     assert_eq!(progress.target_id, Some(1));
-    let job = JOBS.job(&scanner(&ctx));
+    let job = state.catalog_jobs.quality_scans.job(&scanner(&ctx));
     until("the runner never exited", || !job.queue().has_runner()).await;
     let (progress, _) = spatial_scan::progress_snapshot(&ctx.spatial_metrics);
     assert!(!progress.running, "no frame needed computing");
@@ -77,7 +77,7 @@ async fn the_analysis_scans_each_target_then_finishes_and_refuses_a_second_meanw
         !queue_analysis(&state, &ctx, vec![1], false, false),
         "an analysis is already queued"
     );
-    let job = JOBS.job(&scanner(&ctx));
+    let job = state.catalog_jobs.quality_scans.job(&scanner(&ctx));
     until("the analysis never finished", || {
         !job.queue().has_runner() && !quality_backfill::snapshot(&ctx.quality_backfill).running
     })
@@ -216,7 +216,7 @@ async fn the_scan_route_queues_and_answers_at_once() {
     assert!(data.started);
     assert!(data.progress.running, "a page polls from the answer on");
     assert_eq!(data.progress.target_id, Some(2));
-    let job = JOBS.job(&scanner(&ctx));
+    let job = state.catalog_jobs.quality_scans.job(&scanner(&ctx));
     until("the runner never exited", || !job.queue().has_runner()).await;
     // While the server shuts down, nothing is queued.
     state.shutdown.begin();

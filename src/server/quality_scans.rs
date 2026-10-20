@@ -21,7 +21,7 @@ use std::time::Instant;
 use crate::concurrency::{Priority, Stop};
 use crate::server::api::SpatialScanRequest;
 use crate::server::database_context::DatabaseContext;
-use crate::server::job_line::catalog::{CatalogJob, CatalogJobs, CatalogWork, Step};
+use crate::server::job_line::catalog::{CatalogJob, CatalogWork, Step};
 use crate::server::state::AppState;
 use crate::server::{quality_backfill, spatial_scan};
 
@@ -177,11 +177,9 @@ impl CatalogWork for QualityScans {
     }
 }
 
-/// One job per scan progress store: a database's contexts share one store,
-/// and the store shows one scan at a time.
-static JOBS: CatalogJobs<QualityScans> = CatalogJobs::new();
-
-/// The key of the job that scans for `ctx`: its scan progress store.
+/// The key of the job that scans for `ctx`: its scan progress store. A
+/// database's contexts share one store, and the store shows one scan at a
+/// time.
 fn scanner(ctx: &DatabaseContext) -> String {
     format!("{:p}", Arc::as_ptr(&ctx.spatial_metrics))
 }
@@ -210,21 +208,27 @@ pub(crate) fn queue_scan(
         request.filter_name.clone(),
         false,
     );
-    JOBS.request(state, &scanner(ctx), |queue| {
-        let same = queue.scans.iter_mut().find(|queued| {
-            queued.request.target_id == request.target_id
-                && queued.request.filter_name == request.filter_name
+    state
+        .catalog_jobs
+        .quality_scans
+        .request(state, &scanner(ctx), |queue| {
+            let same = queue.scans.iter_mut().find(|queued| {
+                queued.request.target_id == request.target_id
+                    && queued.request.filter_name == request.filter_name
+            });
+            match same {
+                Some(queued) => merge(&mut queued.request, &request),
+                None => queue.scans.push_back(PersonScan {
+                    ctx: Arc::clone(ctx),
+                    request,
+                    runtime,
+                }),
+            }
         });
-        match same {
-            Some(queued) => merge(&mut queued.request, &request),
-            None => queue.scans.push_back(PersonScan {
-                ctx: Arc::clone(ctx),
-                request,
-                runtime,
-            }),
-        }
-    });
-    JOBS.job(&scanner(ctx))
+    state
+        .catalog_jobs
+        .quality_scans
+        .job(&scanner(ctx))
         .stop_if(|queue| queue.analysis_running);
     true
 }
@@ -232,8 +236,11 @@ pub(crate) fn queue_scan(
 /// Whether a person's scan waits in the queue of the store `ctx` scans
 /// with: the progress then reads as running, though the scan before it has
 /// finished.
-pub(crate) fn scan_queued(ctx: &DatabaseContext) -> bool {
-    JOBS.existing(&scanner(ctx))
+pub(crate) fn scan_queued(state: &AppState, ctx: &DatabaseContext) -> bool {
+    state
+        .catalog_jobs
+        .quality_scans
+        .existing(&scanner(ctx))
         .is_some_and(|job| !job.queue().scans.is_empty())
 }
 
@@ -266,23 +273,26 @@ pub(crate) fn queue_analysis(
         return false;
     };
     let targets = target_ids.len();
-    let queued = JOBS.request(state, &scanner(ctx), |queue| {
-        if queue.analysis.is_some()
-            || !quality_backfill::try_begin(&ctx.quality_backfill, force, targets)
-        {
-            return false;
-        }
-        if targets > 0 {
-            queue.analysis = Some(Analysis {
-                ctx: Arc::clone(ctx),
-                targets: target_ids.into(),
-                force,
-                fill_metadata,
-                runtime,
-            });
-        }
-        true
-    });
+    let queued = state
+        .catalog_jobs
+        .quality_scans
+        .request(state, &scanner(ctx), |queue| {
+            if queue.analysis.is_some()
+                || !quality_backfill::try_begin(&ctx.quality_backfill, force, targets)
+            {
+                return false;
+            }
+            if targets > 0 {
+                queue.analysis = Some(Analysis {
+                    ctx: Arc::clone(ctx),
+                    targets: target_ids.into(),
+                    force,
+                    fill_metadata,
+                    runtime,
+                });
+            }
+            true
+        });
     if queued && targets > 0 {
         tracing::info!(
             "📐 Database quality {} queued for db={} ({targets} targets)",

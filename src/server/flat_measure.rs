@@ -39,7 +39,7 @@ use crate::concurrency::{ComputePool, Priority, Stop};
 use crate::server::api::ApiResponse;
 use crate::server::extract::DbContext;
 use crate::server::handlers::AppError;
-use crate::server::job_line::catalog::{CatalogJob, CatalogJobs, CatalogWork, Step};
+use crate::server::job_line::catalog::{CatalogJob, CatalogWork, Step};
 use crate::server::job_text::{joined, plural};
 use crate::server::state::AppState;
 use axum::extract::State;
@@ -49,7 +49,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, LazyLock, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 /// How long requests must pause before a pass starts, so a burst of
@@ -144,6 +144,13 @@ pub(crate) struct Queue {
     attempts: BTreeMap<String, u32>,
     /// What Stop paused.
     stopped: Scope,
+    /// Rigs a page shows, and when it last said so.
+    watches: HashMap<String, Instant>,
+    /// When a page's look last queued a check of a rig.
+    looks: HashMap<String, Instant>,
+    /// The catalog's rigs, and when they were read: a page may only name
+    /// those.
+    known_rigs: Option<RigList>,
 }
 
 /// What the waiting requests allow now.
@@ -321,10 +328,8 @@ impl CatalogWork for FlatMeasure {
 }
 
 /// One job per catalog file.
-static JOBS: CatalogJobs<FlatMeasure> = CatalogJobs::new();
-
-fn job(path: &str) -> Arc<Job> {
-    JOBS.job(path)
+fn job(state: &AppState, path: &str) -> Arc<Job> {
+    state.catalog_jobs.flat_measure.job(path)
 }
 
 fn rig_list(scope: &Scope) -> Vec<String> {
@@ -347,8 +352,8 @@ fn unix_at(at: Instant) -> i64 {
 }
 
 /// Where flat measuring stands for the catalog at `path`.
-pub fn status(path: &str) -> FlatMeasureStatus {
-    let job = job(path);
+pub fn status(state: &AppState, path: &str) -> FlatMeasureStatus {
+    let job = job(state, path);
     let mut status = job.status();
     let queue = job.queue();
     // What the next pass takes: requests since this one began, and retries
@@ -434,8 +439,8 @@ pub fn rigs_left(rigs_after: usize, next_pass: &[String]) -> Option<String> {
 }
 
 /// Whether a pass runs over the catalog at `path`.
-pub fn running(path: &str) -> bool {
-    job(path).queue().running.is_some()
+pub fn running(state: &AppState, path: &str) -> bool {
+    job(state, path).queue().running.is_some()
 }
 
 /// Queue flat measuring for the catalog at `path`: `scope` names the rigs
@@ -453,9 +458,12 @@ fn enqueue(state: &Arc<AppState>, path: &str, scope: Scope, trigger: Trigger) {
     }
     // The runner thread sleeps until requests stop arriving. Shutdown waits
     // only while a pass runs.
-    JOBS.request(state, path, |queue| {
-        queue.add(scope, Instant::now(), trigger)
-    });
+    state
+        .catalog_jobs
+        .flat_measure
+        .request(state, path, |queue| {
+            queue.add(scope, Instant::now(), trigger)
+        });
 }
 
 /// [`queue`] for every catalog the server holds.
@@ -468,17 +476,16 @@ pub fn queue_all(state: &Arc<AppState>, scope: Scope) {
 /// Stop: the running pass ends at its next step, and what it and the
 /// waiting requests had left is paused until those flats change,
 /// [`resume`], or the next start.
-pub fn cancel(path: &str) -> FlatMeasureStatus {
-    let job = job(path);
-    job.stop(|queue| queue.stop());
-    status(path)
+pub fn cancel(state: &AppState, path: &str) -> FlatMeasureStatus {
+    job(state, path).stop(|queue| queue.stop());
+    status(state, path)
 }
 
 /// Take up what Stop paused.
 pub fn resume(state: &Arc<AppState>, path: &str) -> FlatMeasureStatus {
-    let stopped = std::mem::take(&mut job(path).queue().stopped);
+    let stopped = std::mem::take(&mut job(state, path).queue().stopped);
     queue(state, path, stopped);
-    status(path)
+    status(state, path)
 }
 
 /// The runner's choice, given the queue and whether grading is busy: a pass
@@ -651,10 +658,10 @@ fn run_with(
         return Ok(Default::default());
     }
     let names: HashMap<String, String> = flat_rigs(&conn)?.into_iter().collect();
-    let workers = PriorityWorkers::new(state, path, "", largest_flat_pixels(&conn), job);
+    let workers = PriorityWorkers::new(state, "", largest_flat_pixels(&conn), job);
     let keep_going = || !state.shutdown.is_stopping() && !stop.requested();
     let yield_now = || workers.yield_now();
-    let goes_first = |rig: &str| watched(path, rig);
+    let goes_first = |rig: &str| watched_in(job, rig);
     let mut progress = |at: &Progress<'_>| {
         workers.set_rig(at.rig);
         job.update(|status| {
@@ -716,47 +723,37 @@ fn largest_flat_pixels(conn: &Connection) -> Option<usize> {
 // ---------------------------------------------------------------------------
 // Interest: a page showing a rig lifts its pass to the viewed tier.
 
-/// Pages showing a catalog's rigs, `(catalog, rig)`, and when they last
-/// said so.
-static WATCHES: LazyLock<Mutex<HashMap<(String, String), Instant>>> =
-    LazyLock::new(Default::default);
-
-/// When a page's look last queued a check of a rig.
-static LOOKS: LazyLock<Mutex<HashMap<(String, String), Instant>>> = LazyLock::new(Default::default);
-
 /// How long a catalog's list of rigs is trusted before it is read again.
 const RIG_LIST_TTL: Duration = Duration::from_secs(60);
-
-/// Each catalog's rigs, and when they were read: a page may only name
-/// those.
-static KNOWN_RIGS: LazyLock<Mutex<HashMap<String, RigList>>> = LazyLock::new(Default::default);
 
 /// A catalog's rigs, and when they were read.
 type RigList = (Instant, BTreeSet<String>);
 
 /// Whether the catalog at `path` records this rig. Read on a connection of
-/// its own, at most every [`RIG_LIST_TTL`].
-fn catalog_has_rig(path: &str, rig: &str) -> bool {
+/// its own, at most every [`RIG_LIST_TTL`], with the queue unlocked.
+fn catalog_has_rig(job: &Job, path: &str, rig: &str) -> bool {
     let now = Instant::now();
-    let mut known = KNOWN_RIGS.lock().unwrap_or_else(|p| p.into_inner());
-    known.retain(|_, (read, _)| now.saturating_duration_since(*read) < RIG_LIST_TTL);
-    let (_, rigs) = known.entry(path.to_string()).or_insert_with(|| {
-        let rigs = Connection::open_with_flags(
-            path,
-            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )
-        .and_then(|conn| {
-            conn.busy_timeout(BUSY_TIMEOUT)?;
-            let mut statement = conn.prepare("SELECT rig_uuid FROM psf_guard_rig")?;
-            let rigs: BTreeSet<String> = statement
-                .query_map([], |row| row.get::<_, String>(0))?
-                .collect::<rusqlite::Result<_>>()?;
-            Ok(rigs)
-        })
-        .unwrap_or_default();
-        (now, rigs)
-    });
-    rigs.contains(rig)
+    if let Some((read, rigs)) = &job.queue().known_rigs
+        && now.saturating_duration_since(*read) < RIG_LIST_TTL
+    {
+        return rigs.contains(rig);
+    }
+    let rigs: BTreeSet<String> = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .and_then(|conn| {
+        conn.busy_timeout(BUSY_TIMEOUT)?;
+        let mut statement = conn.prepare("SELECT rig_uuid FROM psf_guard_rig")?;
+        let rigs: BTreeSet<String> = statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(rigs)
+    })
+    .unwrap_or_default();
+    let known = rigs.contains(rig);
+    job.queue().known_rigs = Some((now, rigs));
+    known
 }
 
 /// A page shows the flats of `rig` in the catalog at `path`. For
@@ -766,49 +763,49 @@ fn catalog_has_rig(path: &str, rig: &str) -> bool {
 /// record is ignored. Reads the catalog's rigs: call it off the request
 /// path.
 pub fn watch(state: &Arc<AppState>, path: &str, rig: &str) {
-    if !catalog_has_rig(path, rig) {
+    let job = job(state, path);
+    if !catalog_has_rig(&job, path, rig) {
         return;
     }
     let now = Instant::now();
-    watch_at(path, rig, now);
-    let key = (path.to_string(), rig.to_string());
     {
-        let mut looks = LOOKS.lock().unwrap_or_else(|p| p.into_inner());
-        looks.retain(|_, at| now.saturating_duration_since(*at) < WATCH_RECHECK);
-        if looks.contains_key(&key) {
+        let mut queue = job.queue();
+        watch_at(&mut queue, rig, now);
+        queue
+            .looks
+            .retain(|_, at| now.saturating_duration_since(*at) < WATCH_RECHECK);
+        if queue.looks.contains_key(rig) {
             return;
         }
-    }
-    let job = job(path);
-    {
-        let queue = job.queue();
         let paused = queue.stopped.reads_lights(rig);
         let waiting = queue.due.contains_key(rig) || queue.due.contains_key(EVERY_RIG);
         if paused || waiting || queue.running.is_some() {
             return;
         }
+        // Only a check queued counts against the next.
+        queue.looks.insert(rig.to_string(), now);
     }
     enqueue(state, path, Scope::flats(Rigs::of([rig])), Trigger::Look);
-    // Only a check queued counts against the next.
-    LOOKS
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .insert(key, now);
 }
 
-fn watch_at(path: &str, rig: &str, at: Instant) {
-    let mut watches = WATCHES.lock().unwrap_or_else(|p| p.into_inner());
-    watches.retain(|_, seen| at.saturating_duration_since(*seen) < WATCH_TTL);
-    watches.insert((path.to_string(), rig.to_string()), at);
+fn watch_at(queue: &mut Queue, rig: &str, at: Instant) {
+    queue
+        .watches
+        .retain(|_, seen| at.saturating_duration_since(*seen) < WATCH_TTL);
+    queue.watches.insert(rig.to_string(), at);
 }
 
 /// Whether a page shows this rig's flats now.
-pub fn watched(path: &str, rig: &str) -> bool {
+pub fn watched(state: &AppState, path: &str, rig: &str) -> bool {
+    watched_in(&job(state, path), rig)
+}
+
+/// Whether a page shows this rig's flats now, in `job`'s catalog.
+fn watched_in(job: &Job, rig: &str) -> bool {
     let now = Instant::now();
-    WATCHES
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .get(&(path.to_string(), rig.to_string()))
+    job.queue()
+        .watches
+        .get(rig)
         .is_some_and(|seen| now.saturating_duration_since(*seen) < WATCH_TTL)
 }
 
@@ -819,23 +816,15 @@ pub fn watched(path: &str, rig: &str) -> bool {
 /// interactive work a person started.
 struct PriorityWorkers<'a> {
     state: &'a AppState,
-    path: &'a str,
     rig: Mutex<String>,
     frame_pixels: Option<usize>,
     job: &'a Job,
 }
 
 impl<'a> PriorityWorkers<'a> {
-    fn new(
-        state: &'a AppState,
-        path: &'a str,
-        rig: &str,
-        frame_pixels: Option<usize>,
-        job: &'a Job,
-    ) -> Self {
+    fn new(state: &'a AppState, rig: &str, frame_pixels: Option<usize>, job: &'a Job) -> Self {
         Self {
             state,
-            path,
             rig: Mutex::new(rig.to_string()),
             frame_pixels,
             job,
@@ -852,7 +841,7 @@ impl<'a> PriorityWorkers<'a> {
     /// The tier the rig's watchers ask for now.
     fn priority(&self) -> Priority {
         let rig = self.rig.lock().unwrap_or_else(|p| p.into_inner()).clone();
-        if watched(self.path, &rig) {
+        if watched_in(self.job, &rig) {
             Priority::Viewed
         } else {
             Priority::Background
@@ -1075,8 +1064,11 @@ pub fn sites_found(state: &Arc<AppState>, path: &str, rigs: Vec<String>) {
 
 /// `GET /api/db/{db}/calibrations/flat-measure` — where flat measuring
 /// stands. The header and the page share this one poll.
-pub async fn get_status(ctx: DbContext) -> Json<ApiResponse<FlatMeasureStatus>> {
-    Json(ApiResponse::success(status(&ctx.database_path)))
+pub async fn get_status(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+) -> Json<ApiResponse<FlatMeasureStatus>> {
+    Json(ApiResponse::success(status(&state, &ctx.database_path)))
 }
 
 #[derive(Debug, Deserialize)]
@@ -1100,19 +1092,23 @@ pub async fn post_watch(
     }
     let (path, rig) = (ctx.database_path.clone(), rig.to_string());
     // It may read the catalog's rigs: off the request path.
+    let watching = Arc::clone(&state);
     let path = tokio::task::spawn_blocking(move || {
-        watch(&state, &path, &rig);
+        watch(&watching, &path, &rig);
         path
     })
     .await
     .map_err(|error| AppError::InternalError(format!("noting the rig in view: {error}")))?;
-    Ok(Json(ApiResponse::success(status(&path))))
+    Ok(Json(ApiResponse::success(status(&state, &path))))
 }
 
 /// `POST /api/db/{db}/calibrations/flat-measure/cancel` — Stop: what runs
 /// and waits is paused until those flats change, Resume, or the next start.
-pub async fn post_cancel(ctx: DbContext) -> Json<ApiResponse<FlatMeasureStatus>> {
-    Json(ApiResponse::success(cancel(&ctx.database_path)))
+pub async fn post_cancel(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+) -> Json<ApiResponse<FlatMeasureStatus>> {
+    Json(ApiResponse::success(cancel(&state, &ctx.database_path)))
 }
 
 /// `POST /api/db/{db}/calibrations/flat-measure/resume` — take up what Stop

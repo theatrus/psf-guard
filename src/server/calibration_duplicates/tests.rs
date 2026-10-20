@@ -84,7 +84,7 @@ impl Fixture {
 
     /// The status, as the page reads it.
     async fn status(&self) -> DuplicateJobStatus {
-        let Json(now) = get_duplicates(self.ctx()).await;
+        let Json(now) = get_duplicates(State(Arc::clone(&self.state)), self.ctx()).await;
         now.data.unwrap()
     }
 
@@ -105,7 +105,7 @@ impl Fixture {
     async fn finished(&self, run: u64) -> DuplicateJobStatus {
         let began = Instant::now();
         loop {
-            let Json(now) = get_duplicates(self.ctx()).await;
+            let Json(now) = get_duplicates(State(Arc::clone(&self.state)), self.ctx()).await;
             let now = now.data.unwrap();
             if now.run == run && now.state != "running" {
                 return now;
@@ -122,7 +122,7 @@ impl Fixture {
 #[tokio::test]
 async fn a_check_runs_as_a_job_and_the_status_route_never_does_the_work() {
     let fixture = Fixture::new();
-    let Json(before) = get_duplicates(fixture.ctx()).await;
+    let Json(before) = get_duplicates(State(Arc::clone(&fixture.state)), fixture.ctx()).await;
     let before = before.data.unwrap();
     assert_eq!(before.state, "idle");
     assert!(before.report.is_none(), "the status route plans nothing");
@@ -179,10 +179,10 @@ async fn a_repair_needs_management_and_the_previewed_plan() {
     assert_eq!(fixture.rows(), 1);
     // The merged rows' rig, named by the plan, is queued for flats.
     assert_eq!(
-        crate::server::flat_measure::status(fixture.path()).rigs,
+        crate::server::flat_measure::status(&fixture.state, fixture.path()).rigs,
         ["rig"]
     );
-    crate::server::flat_measure::cancel(fixture.path());
+    crate::server::flat_measure::cancel(&fixture.state, fixture.path());
     assert!(fixture.images.join("drop").join(NAME).is_file());
 
     // The plan the token named is gone: a repair with it changes nothing.
@@ -215,14 +215,14 @@ async fn a_changed_plan_says_what_changed() {
     let applied = fixture.repair(&fresh.token).await.unwrap();
     let applied = fixture.finished(applied.run).await;
     assert_eq!(applied.repaired.unwrap().outcome.rows_removed, 1);
-    crate::server::flat_measure::cancel(fixture.path());
+    crate::server::flat_measure::cancel(&fixture.state, fixture.path());
 }
 
 #[tokio::test]
 async fn stop_ends_a_check_and_one_run_at_a_time() {
     let fixture = Fixture::new();
     fixture.state.set_allow_database_management(true);
-    let job = job(fixture.path());
+    let job = job(&fixture.state, fixture.path());
     job.queue().hold = true;
     let started = fixture.check().await;
     // A second check joins the first; a repair waits its turn.
@@ -231,7 +231,7 @@ async fn stop_ends_a_check_and_one_run_at_a_time() {
         fixture.repair("token").await,
         Err(AppError::Conflict(_))
     ));
-    let Json(stopping) = stop_duplicates(fixture.ctx()).await;
+    let Json(stopping) = stop_duplicates(State(Arc::clone(&fixture.state)), fixture.ctx()).await;
     assert_eq!(stopping.data.unwrap().run, started.run);
     let stopped = fixture.finished(started.run).await;
     assert_eq!(stopped.state, "stopped");
@@ -250,11 +250,11 @@ async fn a_stopped_repair_rolls_back() {
     fixture.state.set_allow_database_management(true);
     let checked = fixture.check().await;
     let report = fixture.finished(checked.run).await.report.unwrap();
-    let job = job(fixture.path());
+    let job = job(&fixture.state, fixture.path());
     job.queue().hold = true;
     let started = fixture.repair(&report.token).await.unwrap();
     // Held at its first step; Stop takes effect before the first merge.
-    stop(fixture.path());
+    stop(&fixture.state, fixture.path());
     let stopped = fixture.finished(started.run).await;
     job.queue().hold = false;
     assert_eq!(stopped.state, "stopped");
@@ -293,7 +293,7 @@ async fn a_repair_waits_for_no_stack_build_but_not_for_another_repair() {
         .await
         .expect("the repair runs while a stack build holds the worker");
     assert_eq!(applied.repaired.unwrap().outcome.rows_removed, 1);
-    crate::server::flat_measure::cancel(fixture.path());
+    crate::server::flat_measure::cancel(&fixture.state, fixture.path());
 }
 
 #[test]

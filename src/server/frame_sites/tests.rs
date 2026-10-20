@@ -64,12 +64,12 @@ fn the_watch_starts_no_runner_for_a_stopped_job() {
     let (path, _files) = library(temp.path(), 1);
     let state = test_state();
     {
-        let job = job(&path);
+        let job = job(&state, &path);
         let mut queue = job.queue();
         queue.stopped = true;
     }
     nudge(&state, &path);
-    let job = job(&path);
+    let job = job(&state, &path);
     let queue = job.queue();
     assert!(!queue.has_runner() && !queue.pending && queue.stopped);
 }
@@ -90,16 +90,17 @@ fn stop_pauses_until_resume_or_a_change() {
 /// says so.
 #[test]
 fn the_status_says_when_another_pass_waits() {
+    let state = test_state();
     let path = "/next-pass/frame-sites.sqlite";
-    let job = job(path);
+    let job = job(&state, path);
     job.queue().running = true;
-    assert!(!status(path).next_pass);
+    assert!(!status(&state, path).next_pass);
     job.queue().add(Instant::now());
-    let running = status(path);
+    let running = status(&state, path);
     assert_eq!(running.state, "running");
     assert!(running.next_pass);
     job.queue().running = false;
-    let queued = status(path);
+    let queued = status(&state, path);
     assert_eq!(queued.state, "queued");
     assert!(!queued.next_pass, "only behind a pass under way");
     job.queue().pending = false;
@@ -197,7 +198,9 @@ fn a_volume_away_is_tried_again_and_its_frames_read_once_back() {
     assert_eq!(done.last_error, None);
     assert_eq!(job.queue().attempts, 0);
     // Its rig went to flat measuring, which waits for grading.
-    assert!(!crate::server::flat_measure::status(&path).rigs.is_empty());
+    assert!(!crate::server::flat_measure::status(&state, &path)
+        .rigs
+        .is_empty());
 }
 
 fn wait_until(what: &str, done: impl Fn() -> bool) {
@@ -219,20 +222,20 @@ fn the_runner_exits_when_idle_and_starts_again_on_request() {
     let (path, _files) = library(temp.path(), 2);
     let state = test_state();
     queue(&state, &path);
-    assert!(job(&path).queue().has_runner());
+    assert!(job(&state, &path).queue().has_runner());
     wait_until("the runner never let go", || {
-        !job(&path).queue().has_runner()
+        !job(&state, &path).queue().has_runner()
     });
-    let done = status(&path);
+    let done = status(&state, &path);
     assert_eq!(done.state, "idle");
     assert_eq!(done.last.unwrap().clocked, 2);
     queue(&state, &path);
     assert!(
-        job(&path).queue().has_runner(),
+        job(&state, &path).queue().has_runner(),
         "a new request starts a runner"
     );
     wait_until("the second runner never let go", || {
-        !job(&path).queue().has_runner()
+        !job(&state, &path).queue().has_runner()
     });
 }
 
@@ -245,10 +248,10 @@ fn the_runner_ends_with_the_server() {
     queue(&state, &path);
     state.shutdown.begin();
     wait_until("the runner outlived the server", || {
-        !job(&path).queue().has_runner()
+        !job(&state, &path).queue().has_runner()
     });
     queue(&state, &path);
-    assert!(!job(&path).queue().has_runner());
+    assert!(!job(&state, &path).queue().has_runner());
 }
 
 /// When the runner thread fails, the status shows an error and no pass is

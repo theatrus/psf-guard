@@ -26,7 +26,7 @@ use crate::calibration::{backfill_frame_sites, SiteBackfill, SiteBackfillOutcome
 use crate::concurrency::Stop;
 use crate::server::api::ApiResponse;
 use crate::server::extract::DbContext;
-use crate::server::job_line::catalog::{CatalogJob, CatalogJobs, CatalogWork, Step};
+use crate::server::job_line::catalog::{CatalogJob, CatalogWork, Step};
 use crate::server::state::AppState;
 use axum::extract::State;
 use axum::Json;
@@ -204,10 +204,8 @@ impl CatalogWork for FrameSites {
     }
 }
 
-static JOBS: CatalogJobs<FrameSites> = CatalogJobs::new();
-
-fn job(path: &str) -> Arc<Job> {
-    JOBS.job(path)
+fn job(state: &AppState, path: &str) -> Arc<Job> {
+    state.catalog_jobs.frame_sites.job(path)
 }
 
 fn unix_at(at: Instant) -> i64 {
@@ -216,8 +214,8 @@ fn unix_at(at: Instant) -> i64 {
 }
 
 /// Where the frame-sites job stands for the catalog at `path`.
-pub fn status(path: &str) -> FrameSitesStatus {
-    let job = job(path);
+pub fn status(state: &AppState, path: &str) -> FrameSitesStatus {
+    let job = job(state, path);
     let mut status = job.status();
     let queue = job.queue();
     status.retry_at = queue.due.map(unix_at);
@@ -268,24 +266,26 @@ fn request(state: &Arc<AppState>, path: &str, ask: fn(&mut Queue, Instant)) {
     if state.shutdown.is_stopping() {
         return;
     }
-    JOBS.request(state, path, |queue| ask(queue, Instant::now()));
+    state
+        .catalog_jobs
+        .frame_sites
+        .request(state, path, |queue| ask(queue, Instant::now()));
 }
 
 /// Stop: the running pass ends at its next chunk, and nothing more runs
 /// until a change, [`resume`], or the next start.
-pub fn cancel(path: &str) -> FrameSitesStatus {
-    let job = job(path);
-    job.stop(|queue| queue.stop());
-    status(path)
+pub fn cancel(state: &AppState, path: &str) -> FrameSitesStatus {
+    job(state, path).stop(|queue| queue.stop());
+    status(state, path)
 }
 
 /// Take up what Stop paused.
 pub fn resume(state: &Arc<AppState>, path: &str) -> FrameSitesStatus {
-    let stopped = std::mem::take(&mut job(path).queue().stopped);
+    let stopped = std::mem::take(&mut job(state, path).queue().stopped);
     if stopped {
         queue(state, path);
     }
-    status(path)
+    status(state, path)
 }
 
 fn run_logged(state: &Arc<AppState>, path: &str, job: &Job, stop: &Stop) {
@@ -450,13 +450,19 @@ pub fn spawn_away_watch(state: &Arc<AppState>) {
 // Routes.
 
 /// `GET /api/db/{db}/calibrations/frame-sites` — where the job stands.
-pub async fn get_status(ctx: DbContext) -> Json<ApiResponse<FrameSitesStatus>> {
-    Json(ApiResponse::success(status(&ctx.database_path)))
+pub async fn get_status(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+) -> Json<ApiResponse<FrameSitesStatus>> {
+    Json(ApiResponse::success(status(&state, &ctx.database_path)))
 }
 
 /// `POST /api/db/{db}/calibrations/frame-sites/cancel` — Stop.
-pub async fn post_cancel(ctx: DbContext) -> Json<ApiResponse<FrameSitesStatus>> {
-    Json(ApiResponse::success(cancel(&ctx.database_path)))
+pub async fn post_cancel(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+) -> Json<ApiResponse<FrameSitesStatus>> {
+    Json(ApiResponse::success(cancel(&state, &ctx.database_path)))
 }
 
 /// `POST /api/db/{db}/calibrations/frame-sites/resume` — take up what

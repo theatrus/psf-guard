@@ -96,8 +96,11 @@ async fn every_choice_waits_for_the_database_management_gate() {
     assert!(rows[0].chosen_at > 10);
     // The rig's lights are asked again; no flat is measured again.
     let path = &context.database_path;
-    assert_eq!(crate::server::flat_measure::status(path).rigs, ["rig"]);
-    crate::server::flat_measure::cancel(path);
+    assert_eq!(
+        crate::server::flat_measure::status(&state, path).rigs,
+        ["rig"]
+    );
+    crate::server::flat_measure::cancel(&state, path);
 
     let Json(lights) = put_light_choices(State(Arc::clone(&state)), ctx(), Json(reset_light()))
         .await

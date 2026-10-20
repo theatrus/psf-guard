@@ -678,7 +678,7 @@ async fn a_read_only_token_reads_and_checks_but_does_not_choose() {
     .await
     .unwrap();
     assert_eq!(chosen["updated"], 1, "{chosen}");
-    crate::server::flat_measure::cancel(&state.all_databases()[0].database_path);
+    crate::server::flat_measure::cancel(&state, &state.all_databases()[0].database_path);
 }
 
 /// A server with a database registry, so backups can run.

@@ -12,6 +12,7 @@ pub mod calibration_quality;
 pub mod calibration_scope;
 pub mod calibration_settings;
 pub mod catalog_install;
+pub mod catalog_jobs;
 pub mod database_context;
 pub mod director;
 pub mod embedded_static;

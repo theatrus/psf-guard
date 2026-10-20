@@ -52,7 +52,7 @@ use crate::server::calibration_browser::ReadableRoots;
 use crate::server::database_context::DatabaseContext;
 use crate::server::extract::DbContext;
 use crate::server::handlers::{require_database_management_allowed, AppError};
-use crate::server::job_line::catalog::{CatalogJob, CatalogJobs, CatalogWork, Step};
+use crate::server::job_line::catalog::{CatalogJob, CatalogWork, Step};
 use crate::server::state::AppState;
 
 /// The stages a status names, for the page's words.
@@ -189,10 +189,8 @@ impl CatalogWork for Duplicates {
     }
 }
 
-static JOBS: CatalogJobs<Duplicates> = CatalogJobs::new();
-
-fn job(path: &str) -> Arc<Job> {
-    JOBS.job(path)
+fn job(state: &AppState, path: &str) -> Arc<Job> {
+    state.catalog_jobs.duplicates.job(path)
 }
 
 /// The running check or repair, and its stop flag.
@@ -237,8 +235,8 @@ fn now() -> i64 {
 }
 
 /// Where the duplicate check or repair stands for the catalog at `path`.
-pub fn status(path: &str) -> DuplicateJobStatus {
-    let mut status = job(path).status();
+pub fn status(state: &AppState, path: &str) -> DuplicateJobStatus {
+    let mut status = job(state, path).status();
     if status.state.is_empty() {
         status.state = "idle".into();
     }
@@ -269,8 +267,8 @@ pub fn label(stage: Option<&str>, done: usize, total: usize) -> String {
 
 /// Stop: a check ends at its next file, a repair at its next exposure,
 /// rolled back whole.
-pub fn stop(path: &str) -> DuplicateJobStatus {
-    let job = job(path);
+pub fn stop(state: &AppState, path: &str) -> DuplicateJobStatus {
+    let job = job(state, path);
     job.stop(|queue| {
         // A run that is pending, and not started by the runner thread, is
         // removed so it never starts. The stop of a running run, or of one
@@ -285,7 +283,7 @@ pub fn stop(path: &str) -> DuplicateJobStatus {
             });
         }
     });
-    status(path)
+    status(state, path)
 }
 
 #[derive(Debug, Clone)]
@@ -357,50 +355,54 @@ fn start(
     ctx: &Arc<DatabaseContext>,
     action: Action,
 ) -> Result<DuplicateJobStatus, AppError> {
-    let job = job(&ctx.database_path);
-    JOBS.request(state, &ctx.database_path, |queue| {
-        if queue.run_active {
-            let running = job.status();
-            if matches!(action, Action::Check { .. }) && running.action.as_deref() == Some("check")
-            {
-                // A person joining a background check lifts it.
-                if !action.automatic() {
-                    queue.interactive = true;
+    let job = job(state, &ctx.database_path);
+    state
+        .catalog_jobs
+        .duplicates
+        .request(state, &ctx.database_path, |queue| {
+            if queue.run_active {
+                let running = job.status();
+                if matches!(action, Action::Check { .. })
+                    && running.action.as_deref() == Some("check")
+                {
+                    // A person joining a background check lifts it.
+                    if !action.automatic() {
+                        queue.interactive = true;
+                    }
+                    return Ok(());
                 }
-                return Ok(());
+                return Err(AppError::Conflict(format!(
+                    "A duplicate {} is running on this catalog. Wait for it, or stop it.",
+                    running.action.as_deref().unwrap_or("check")
+                )));
             }
-            return Err(AppError::Conflict(format!(
-                "A duplicate {} is running on this catalog. Wait for it, or stop it.",
-                running.action.as_deref().unwrap_or("check")
-            )));
-        }
-        queue.interactive = !action.automatic();
-        queue.run_active = true;
-        job.update(|status| {
-            status.run += 1;
-            status.state = "running".into();
-            status.action = Some(action.name().into());
-            status.stage = Some(STAGE_FILES.into());
-            status.done = 0;
-            status.total = 0;
-            status.started_at = Some(now());
-            status.finished_at = None;
-            status.changed = None;
-            status.error = None;
-            status.waiting_for = None;
-            status.priority = Some(
-                if action.automatic() {
-                    Priority::Background
-                } else {
-                    Priority::Interactive
-                }
-                .label()
-                .into(),
-            );
-        });
-        queue.pending = Some((action, Arc::clone(ctx)));
-        Ok(())
-    })?;
+            queue.interactive = !action.automatic();
+            queue.run_active = true;
+            job.update(|status| {
+                status.run += 1;
+                status.state = "running".into();
+                status.action = Some(action.name().into());
+                status.stage = Some(STAGE_FILES.into());
+                status.done = 0;
+                status.total = 0;
+                status.started_at = Some(now());
+                status.finished_at = None;
+                status.changed = None;
+                status.error = None;
+                status.waiting_for = None;
+                status.priority = Some(
+                    if action.automatic() {
+                        Priority::Background
+                    } else {
+                        Priority::Interactive
+                    }
+                    .label()
+                    .into(),
+                );
+            });
+            queue.pending = Some((action, Arc::clone(ctx)));
+            Ok(())
+        })?;
     Ok(job.status())
 }
 
@@ -727,8 +729,11 @@ fn after_repair(state: &Arc<AppState>, ctx: &DatabaseContext, rigs: Vec<String>)
 
 /// GET /api/db/{db}/calibrations/duplicates — where the check or repair
 /// stands, with the latest plan. Never does the work itself.
-pub async fn get_duplicates(ctx: DbContext) -> Json<ApiResponse<DuplicateJobStatus>> {
-    let mut status = status(&ctx.database_path);
+pub async fn get_duplicates(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+) -> Json<ApiResponse<DuplicateJobStatus>> {
+    let mut status = status(&state, &ctx.database_path);
     // Whether the plan still describes the catalog: one aggregate query on
     // a connection of its own, and none while a run is going.
     if status.state != "running"
@@ -797,8 +802,11 @@ pub async fn repair_duplicates(
 
 /// POST /api/db/{db}/calibrations/duplicates/stop — stop the check or
 /// repair running.
-pub async fn stop_duplicates(ctx: DbContext) -> Json<ApiResponse<DuplicateJobStatus>> {
-    Json(ApiResponse::success(stop(&ctx.database_path)))
+pub async fn stop_duplicates(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+) -> Json<ApiResponse<DuplicateJobStatus>> {
+    Json(ApiResponse::success(stop(&state, &ctx.database_path)))
 }
 
 #[cfg(test)]

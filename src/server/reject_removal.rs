@@ -34,7 +34,7 @@ use crate::server::{
     database_context::{open_scheduler_connection, DatabaseContext},
     extract::DbContext,
     handlers::AppError,
-    job_line::catalog::{CatalogJob, CatalogJobs, CatalogWork, Step},
+    job_line::catalog::{CatalogJob, CatalogWork, Step},
     state::AppState,
 };
 
@@ -229,10 +229,8 @@ impl CatalogWork for RejectRemoval {
     }
 }
 
-static JOBS: CatalogJobs<RejectRemoval> = CatalogJobs::new();
-
-fn job(path: &str) -> Arc<Job> {
-    JOBS.job(path)
+fn job(state: &AppState, path: &str) -> Arc<Job> {
+    state.catalog_jobs.reject_removal.job(path)
 }
 
 fn progress(job: &Job, stage: Stage, done: usize, total: usize) {
@@ -244,8 +242,8 @@ fn progress(job: &Job, stage: Stage, done: usize, total: usize) {
 }
 
 /// Where the reject removal job stands for the catalog at `path`.
-pub fn status(path: &str) -> RemovalJobStatus {
-    let mut status = job(path).status();
+pub fn status(state: &AppState, path: &str) -> RemovalJobStatus {
+    let mut status = job(state, path).status();
     if status.state.is_empty() {
         status.state = "idle".into();
     }
@@ -279,8 +277,8 @@ pub fn label(stage: Option<&str>, done: usize, total: usize) -> String {
 }
 
 /// Stop the run between frames: the frames done stay done.
-pub fn stop(path: &str) -> RemovalJobStatus {
-    let job = job(path);
+pub fn stop(state: &AppState, path: &str) -> RemovalJobStatus {
+    let job = job(state, path);
     job.stop(|queue| {
         // A run that is pending, and not started by the runner thread, is
         // removed so it never starts. The stop of a running run, or of one
@@ -295,7 +293,7 @@ pub fn stop(path: &str) -> RemovalJobStatus {
             });
         }
     });
-    status(path)
+    status(state, path)
 }
 
 /// Frames a collaboration report names: none without Director.
@@ -315,36 +313,39 @@ fn start(
     action: Action,
     protected: BTreeSet<String>,
 ) -> Result<RemovalJobStatus, AppError> {
-    let job = job(&ctx.database_path);
-    JOBS.request(state, &ctx.database_path, |queue| {
-        if queue.run_active {
-            return Err(AppError::Conflict(
-                "Reject removal is already running on this catalog. Wait for it, or stop it."
-                    .into(),
-            ));
-        }
-        queue.run_active = true;
-        job.update(|status| {
-            status.run += 1;
-            status.state = "running".into();
-            status.action = Some(action.name().into());
-            status.stage = None;
-            status.done = 0;
-            status.total = 0;
-            status.started_at = Some(now());
-            status.finished_at = None;
-            status.changed = false;
-            status.error = None;
-            status.priority = Some(Priority::Interactive.label().into());
-        });
-        queue.pending = Some(PendingRun {
-            action,
-            ctx: Arc::clone(ctx),
-            protected,
-            runtime: tokio::runtime::Handle::current(),
-        });
-        Ok(())
-    })?;
+    let job = job(state, &ctx.database_path);
+    state
+        .catalog_jobs
+        .reject_removal
+        .request(state, &ctx.database_path, |queue| {
+            if queue.run_active {
+                return Err(AppError::Conflict(
+                    "Reject removal is already running on this catalog. Wait for it, or stop it."
+                        .into(),
+                ));
+            }
+            queue.run_active = true;
+            job.update(|status| {
+                status.run += 1;
+                status.state = "running".into();
+                status.action = Some(action.name().into());
+                status.stage = None;
+                status.done = 0;
+                status.total = 0;
+                status.started_at = Some(now());
+                status.finished_at = None;
+                status.changed = false;
+                status.error = None;
+                status.priority = Some(Priority::Interactive.label().into());
+            });
+            queue.pending = Some(PendingRun {
+                action,
+                ctx: Arc::clone(ctx),
+                protected,
+                runtime: tokio::runtime::Handle::current(),
+            });
+            Ok(())
+        })?;
     Ok(job.status())
 }
 
@@ -635,8 +636,11 @@ fn accepted(status: RemovalJobStatus) -> Started {
 
 /// `GET /api/db/{db}/rejects/removal` — where the catalog's reject removal
 /// job stands, with the latest preview and outcome. Never does the work.
-pub async fn get_status(ctx: DbContext) -> Json<ApiResponse<RemovalJobStatus>> {
-    Json(ApiResponse::success(status(&ctx.database_path)))
+pub async fn get_status(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+) -> Json<ApiResponse<RemovalJobStatus>> {
+    Json(ApiResponse::success(status(&state, &ctx.database_path)))
 }
 
 /// `POST /api/db/{db}/rejects/removal/preview` — work out what a removal of
@@ -664,8 +668,11 @@ pub async fn apply(
 }
 
 /// `POST /api/db/{db}/rejects/removal/stop` — stop the run between frames.
-pub async fn stop_removal(ctx: DbContext) -> Json<ApiResponse<RemovalJobStatus>> {
-    Json(ApiResponse::success(stop(&ctx.database_path)))
+pub async fn stop_removal(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+) -> Json<ApiResponse<RemovalJobStatus>> {
+    Json(ApiResponse::success(stop(&state, &ctx.database_path)))
 }
 
 /// Every removal batch, and the frames of one when pending.

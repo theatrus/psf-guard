@@ -481,22 +481,22 @@ fn an_unreadable_session_is_queued_again() {
     let path = state.all_databases()[0].database_path.clone();
     queue(&state, &path, Scope::flats(Rigs::of([library.a.clone()])));
     let deadline = Instant::now() + Duration::from_secs(60);
-    while status(&path).finished_at.is_none() {
+    while status(&state, &path).finished_at.is_none() {
         assert!(Instant::now() < deadline, "the pass never ran");
         std::thread::sleep(Duration::from_millis(100));
     }
-    let after = status(&path);
+    let after = status(&state, &path);
     assert_eq!(after.last.as_ref().unwrap().unreadable, 1, "{after:?}");
     assert!(after.last.as_ref().unwrap().retry.contains(&library.a));
     // The share comes back; the rig waits for its next try.
     for (file, moved) in &away {
         std::fs::rename(moved, file).unwrap();
     }
-    let now = status(&path);
+    let now = status(&state, &path);
     assert_eq!(now.state, "queued", "{now:?}");
     assert_eq!(now.rigs, std::slice::from_ref(&library.a));
     assert!(now.retry_at.is_some());
-    cancel(&path);
+    cancel(&state, &path);
 }
 
 /// Stop pauses what runs and what waits; a change to a rig's flats resumes
@@ -604,9 +604,9 @@ async fn forgetting_through_the_route_queues_its_rig() {
     )
     .await
     .unwrap();
-    let queued = status(&path);
+    let queued = status(&state, &path);
     assert_eq!(queued.rigs, std::slice::from_ref(&library.b), "{queued:?}");
-    cancel(&path);
+    cancel(&state, &path);
 }
 
 // ---------------------------------------------------------------------------
@@ -619,15 +619,15 @@ async fn forgetting_through_the_route_queues_its_rig() {
 #[test]
 fn a_viewed_pass_leaves_a_persons_stack_its_share() {
     let state = test_state();
-    let job = Job::default();
     let path = "/viewed/catalog.sqlite";
-    watch_at(path, "rig-a", Instant::now());
-    assert!(watched(path, "rig-a"));
+    let job = job(&state, path);
+    watch_at(&mut job.queue(), "rig-a", Instant::now());
+    assert!(watched(&state, path, "rig-a"));
     assert!(
-        !watched(path, "rig-b"),
+        !watched(&state, path, "rig-b"),
         "another rig stays in the background"
     );
-    let workers = PriorityWorkers::new(&state, path, "rig-a", None, &job);
+    let workers = PriorityWorkers::new(&state, "rig-a", None, &job);
     let stack_share =
         crate::concurrency::plan_workers(None, &state.worker_policy(), Priority::Interactive, None)
             .workers;
@@ -647,11 +647,11 @@ fn a_viewed_pass_leaves_a_persons_stack_its_share() {
 
     // The page goes: the next step is background again.
     watch_at(
-        path,
+        &mut job.queue(),
         "rig-a",
         Instant::now() - WATCH_TTL - Duration::from_secs(1),
     );
-    assert!(!watched(path, "rig-a"));
+    assert!(!watched(&state, path, "rig-a"));
     workers.run(&mut || {});
     assert_eq!(job.status().priority.as_deref(), Some("background"));
 }
@@ -661,20 +661,20 @@ fn a_viewed_pass_leaves_a_persons_stack_its_share() {
 fn a_pass_waits_for_the_persons_work_at_either_tier() {
     for watch_it in [false, true] {
         let state = Arc::new(test_state());
-        let job = Arc::new(Job::default());
         let path = if watch_it {
             "/waits/viewed.sqlite"
         } else {
             "/waits/background.sqlite"
         };
+        let job = job(&state, path);
         if watch_it {
-            watch_at(path, "rig", Instant::now());
+            watch_at(&mut job.queue(), "rig", Instant::now());
         }
         let preview = state.begin_named_interactive_job("a preview");
         let waiter = {
             let (state, job) = (Arc::clone(&state), Arc::clone(&job));
             std::thread::spawn(move || {
-                PriorityWorkers::new(&state, path, "rig", None, &job).yield_now();
+                PriorityWorkers::new(&state, "rig", None, &job).yield_now();
             })
         };
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -698,11 +698,11 @@ fn rigs_that_find_their_sites_are_graded_and_planned_again() {
     let state = Arc::new(test_state());
     let path = library.path.as_str();
     sites_found(&state, path, Vec::new());
-    assert!(job(path).queue().pending.is_empty());
+    assert!(job(&state, path).queue().pending.is_empty());
     assert!(!crate::server::calibration_quality::progress(path).running);
     sites_found(&state, path, vec![library.a.clone()]);
     assert_eq!(
-        job(path).queue().pending,
+        job(&state, path).queue().pending,
         Scope::flats(Rigs::of([library.a.clone()]))
     );
     // Grading ran, or is running, for the catalog.
@@ -717,7 +717,7 @@ fn rigs_that_find_their_sites_are_graded_and_planned_again() {
         );
         std::thread::sleep(Duration::from_millis(50));
     }
-    job(path).queue().pending = Scope::default();
+    job(&state, path).queue().pending = Scope::default();
 }
 
 /// A page's look queues a check of its rig at most every
@@ -729,29 +729,30 @@ fn a_page_looking_at_a_rig_asks_for_a_check_now_and_then() {
     let state = Arc::new(test_state());
     let path = library.path.as_str();
     // Rig B is paused: a look queues nothing, though it lifts the rig.
-    job(path).queue().stopped = Scope::flats(Rigs::of([library.b.clone()]));
+    job(&state, path).queue().stopped = Scope::flats(Rigs::of([library.b.clone()]));
     watch(&state, path, &library.b);
-    assert!(job(path).queue().pending.is_empty());
-    assert!(watched(path, &library.b));
+    assert!(job(&state, path).queue().pending.is_empty());
+    assert!(watched(&state, path, &library.b));
     // Rig A is idle: one check, then none until WATCH_RECHECK.
     watch(&state, path, &library.a);
-    let first = job(path).queue().pending.clone();
+    let first = job(&state, path).queue().pending.clone();
     assert_eq!(first, Scope::flats(Rigs::of([library.a.clone()])));
-    job(path).queue().pending = Scope::default();
+    job(&state, path).queue().pending = Scope::default();
     watch(&state, path, &library.a);
-    assert!(job(path).queue().pending.is_empty(), "rate-limited");
+    assert!(job(&state, path).queue().pending.is_empty(), "rate-limited");
     // A rig the catalog does not record: nothing at all.
     watch(&state, path, "no-such-rig");
-    assert!(job(path).queue().pending.is_empty());
-    assert!(!watched(path, "no-such-rig"));
-    let looks = LOOKS.lock().unwrap();
-    assert!(looks.contains_key(&(path.to_string(), library.a.clone())));
+    assert!(job(&state, path).queue().pending.is_empty());
+    assert!(!watched(&state, path, "no-such-rig"));
+    let job = job(&state, path);
+    let queue = job.queue();
+    assert!(queue.looks.contains_key(&library.a));
     assert!(
-        !looks.contains_key(&(path.to_string(), library.b.clone())),
+        !queue.looks.contains_key(&library.b),
         "a look that queued nothing is not counted"
     );
-    drop(looks);
-    cancel(path);
+    drop(queue);
+    cancel(&state, path);
 }
 
 #[test]
@@ -767,20 +768,20 @@ fn every_rig_counts_as_changed_when_a_state_cannot_be_read() {
 fn stop_pauses_waiting_work_and_resume_takes_it_up() {
     let state = Arc::new(test_state());
     let path = "/stopped/catalog.sqlite";
-    let job = job(path);
+    let job = job(&state, path);
     job.queue().add(
         Scope::flats(Rigs::of(["a"])),
         Instant::now(),
         Trigger::Change,
     );
-    let stopped = cancel(path);
+    let stopped = cancel(&state, path);
     assert_eq!(stopped.state, "stopped");
     assert_eq!(stopped.stopped, ["a"]);
     assert!(stopped.rigs.is_empty());
     let resumed = resume(&state, path);
     assert!(resumed.stopped.is_empty());
     assert_eq!(resumed.rigs, ["a"]);
-    cancel(path);
+    cancel(&state, path);
 }
 
 // ---------------------------------------------------------------------------
@@ -872,13 +873,8 @@ fn looks_are_pruned() {
     for index in 0..500 {
         watch(&state, path, &format!("rig-{index}"));
     }
-    cancel(path);
-    let kept = LOOKS
-        .lock()
-        .unwrap()
-        .keys()
-        .filter(|(catalog, _)| catalog == path)
-        .count();
+    cancel(&state, path);
+    let kept = job(&state, path).queue().looks.len();
     assert!(kept < 500, "{kept} looks kept");
 }
 
@@ -978,8 +974,9 @@ fn a_pass_counts_the_rigs_after_this_one() {
 /// apart from the pass itself.
 #[test]
 fn the_status_lists_what_waits_for_the_next_pass() {
+    let state = test_state();
     let path = "/next-pass/catalog.sqlite";
-    let job = job(path);
+    let job = job(&state, path);
     {
         let mut queue = job.queue();
         queue.add(
@@ -989,11 +986,11 @@ fn the_status_lists_what_waits_for_the_next_pass() {
         );
     }
     // Nothing runs: the waiting rig is simply queued.
-    let waiting = status(path);
+    let waiting = status(&state, path);
     assert_eq!(waiting.state, "queued");
     assert!(waiting.next_pass.is_empty());
     job.queue().running = Some(Scope::flats(Rigs::of(["a"])));
-    let running = status(path);
+    let running = status(&state, path);
     assert_eq!(running.rigs, ["a", "b"]);
     assert_eq!(running.next_pass, ["b"]);
     // A retry due by now joins the next pass; one due later does not.
@@ -1003,7 +1000,7 @@ fn the_status_lists_what_waits_for_the_next_pass() {
         queue.due.insert("c".into(), now - Duration::from_secs(1));
         queue.due.insert("d".into(), now + Duration::from_secs(600));
     }
-    let retrying = status(path);
+    let retrying = status(&state, path);
     assert_eq!(retrying.next_pass, ["b", "c"]);
     assert_eq!(retrying.rigs, ["a", "b", "c", "d"]);
     let mut queue = job.queue();
@@ -1047,9 +1044,9 @@ async fn a_keep_out_choice_through_the_route_queues_its_rig() {
     )
     .await
     .unwrap();
-    let queued = status(&path);
+    let queued = status(&state, &path);
     assert_eq!(queued.rigs, std::slice::from_ref(&library.a), "{queued:?}");
-    cancel(&path);
+    cancel(&state, &path);
 }
 
 /// A session's dust is measured with the pedestal taken out: a bias that
