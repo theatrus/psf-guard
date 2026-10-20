@@ -83,6 +83,74 @@ pub struct JobStatus {
     pub started_at: i64,
     /// Stop was asked; the run ends at its next step.
     pub stopping: bool,
+    /// The run's step in words, as Settings and the job list show it:
+    /// `Copying catalog imaging-rig · 2/9 files`, or what it waits for.
+    pub description: String,
+    /// The stage alone, such as `Backup: Copying`, for a screen reader: it
+    /// changes a few times a run, where the counts change every second.
+    pub stage_label: String,
+    /// 0–100 by bytes, or `None` before the total is known.
+    pub percent: Option<f64>,
+}
+
+/// Each stage's words.
+fn stage_words(stage: &str) -> &str {
+    match stage {
+        "preparing" => "Preparing",
+        "copying" => "Copying",
+        "compressing" => "Compressing",
+        "finishing" => "Finishing",
+        "pruning" => "Removing older backups",
+        other => other,
+    }
+}
+
+impl JobStatus {
+    /// `Copying catalog imaging-rig · 2/9 files`, or what the run waits
+    /// for, or `Stopping…`.
+    pub fn description(&self) -> String {
+        if self.stopping {
+            return "Stopping…".into();
+        }
+        if let Some(what) = &self.waiting_for {
+            return format!("Waiting for {what}");
+        }
+        let stage = stage_words(&self.stage);
+        let what = match &self.current {
+            Some(current) => format!("{stage} {current}"),
+            None => stage.to_string(),
+        };
+        if self.files_total > 0 {
+            format!("{what} · {}/{} files", self.files_done, self.files_total)
+        } else {
+            what
+        }
+    }
+
+    /// The stage alone: `Backup: Copying`, `Backup waiting for …` or
+    /// `Stopping the backup`.
+    pub fn stage_label(&self) -> String {
+        if self.stopping {
+            return "Stopping the backup".into();
+        }
+        if let Some(what) = &self.waiting_for {
+            return format!("Backup waiting for {what}");
+        }
+        format!("Backup: {}", stage_words(&self.stage))
+    }
+
+    /// 0–100 by bytes, or `None` before the total is known.
+    pub fn percent(&self) -> Option<f64> {
+        crate::server::job_text::percent_u64(self.bytes_done, self.bytes_total)
+    }
+
+    /// The status with its words filled in, as a client reads it.
+    fn with_text(mut self) -> Self {
+        self.description = self.description();
+        self.stage_label = self.stage_label();
+        self.percent = self.percent();
+        self
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -247,7 +315,12 @@ impl BackupManager {
     }
 
     pub fn job(&self) -> Option<JobStatus> {
-        self.inner.lock().unwrap().job.clone()
+        self.inner
+            .lock()
+            .unwrap()
+            .job
+            .clone()
+            .map(JobStatus::with_text)
     }
 
     pub fn last_run(&self) -> Option<LastRun> {
@@ -411,6 +484,9 @@ pub fn start(state: &Arc<AppState>, request: RunRequest) -> Result<JobStatus, St
         waiting_for: None,
         started_at: Utc::now().timestamp(),
         stopping: false,
+        description: String::new(),
+        stage_label: String::new(),
+        percent: None,
     };
     // A stopping server starts no runner, so it takes no run either.
     if state.shutdown.is_stopping() {
@@ -436,7 +512,7 @@ pub fn start(state: &Arc<AppState>, request: RunRequest) -> Result<JobStatus, St
                 stopped: false,
             });
         });
-    Ok(status)
+    Ok(status.with_text())
 }
 
 /// Backups as a job with one runner per server.
@@ -503,7 +579,7 @@ impl CatalogWork for Backups {
 }
 
 /// The key of the server's one backup runner. Each server state has its
-/// own catalog jobs, so two servers in one process keep apart.
+/// own catalog jobs, so two servers in one process run separate backups.
 const RUNNER_KEY: &str = "backups";
 
 /// Free the slot of the run that ended, so the next run can start. A run

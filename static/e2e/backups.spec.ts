@@ -118,6 +118,8 @@ test('lists a scheduled backup in the job line and stops it from there', async (
       location: 'destination', stage: 'copying', current: 'catalog imaging-rig-e2e', files_done: 2,
       files_total: 6, bytes_done: 40, bytes_total: 100, waiting_for: null,
       started_at: 1_760_000_000, stopping: stopped,
+      description: stopped ? 'Stopping…' : 'Copying catalog imaging-rig-e2e · 2/6 files',
+      stage_label: stopped ? 'Stopping the backup' : 'Backup: Copying', percent: 40,
     },
   }));
   await page.route('**/api/backups/stop', (route) => {

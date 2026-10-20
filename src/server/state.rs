@@ -820,7 +820,6 @@ impl AppState {
         self.databases.read().unwrap().get(slug).cloned()
     }
 
-    /// Get every configured database context.
     /// Link every context of the catalog at `path` to this server, so a
     /// directory refresh the context finishes reaches this server's jobs.
     pub fn link_contexts(self: &Arc<Self>, path: &str) {
@@ -831,6 +830,7 @@ impl AppState {
         }
     }
 
+    /// Get every configured database context.
     pub fn all_databases(&self) -> Vec<Arc<DatabaseContext>> {
         self.databases.read().unwrap().values().cloned().collect()
     }

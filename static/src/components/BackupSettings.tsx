@@ -13,7 +13,6 @@ import {
   type BackupsOverview,
 } from '../api/backupTypes';
 import { isTauriApp } from '../utils/tauri';
-import { describeJob, jobPercent, jobStage } from '../utils/backupJob';
 import PathField from './PathField';
 import './BackupSettings.css';
 import UnsavedMark from './UnsavedMark';
@@ -185,16 +184,16 @@ function ScopeChoice({
 }
 
 function JobProgress({ job, onStop, stopping }: { job: BackupJob; onStop: () => void; stopping: boolean }) {
-  const percent = jobPercent(job);
+  const { percent } = job;
   return (
     <div className="backup-job">
       {/* Read out when the stage changes, not on every second's progress. */}
       <span className="backup-announce" aria-live="polite">
-        {jobStage(job)}
+        {job.stage_label}
       </span>
       <div className="backup-job-head">
         <strong>{job.trigger === 'schedule' ? 'Scheduled backup' : 'Backing up'}</strong>
-        <span className="muted">{describeJob(job)}</span>
+        <span className="muted">{job.description}</span>
       </div>
       <div
         className="backup-job-bar"

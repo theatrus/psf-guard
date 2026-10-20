@@ -850,6 +850,9 @@ fn backup_job(trigger: crate::backup::Trigger) -> BackupJob {
         waiting_for: None,
         started_at: 1700,
         stopping: false,
+        description: String::new(),
+        stage_label: String::new(),
+        percent: None,
     }
 }
 

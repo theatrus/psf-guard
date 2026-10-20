@@ -37,6 +37,11 @@ pub(crate) fn percent(done: usize, total: usize) -> Option<f64> {
     (total > 0).then(|| (done as f64 / total as f64 * 100.0).min(100.0))
 }
 
+/// [`percent`] for byte counts.
+pub(crate) fn percent_u64(done: u64, total: u64) -> Option<f64> {
+    (total > 0).then(|| (done as f64 / total as f64 * 100.0).min(100.0))
+}
+
 /// `Checking files 812 of 2,140`, or `Checking files…` before the total
 /// is known.
 pub(crate) fn stage_count(verb: &str, done: usize, total: usize) -> String {

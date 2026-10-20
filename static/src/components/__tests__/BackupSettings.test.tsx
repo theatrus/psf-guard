@@ -62,7 +62,8 @@ const running: BackupJob = {
   trigger: 'manual', scope: 'full', include_secrets: false, destination: '/srv/cache/backup-downloads',
   location: 'downloads', stage: 'copying', current: 'catalog imaging-rig', files_done: 3,
   files_total: 9, bytes_done: 50, bytes_total: 200, waiting_for: null, started_at: 1_790_000_000,
-  stopping: false,
+  stopping: false, description: 'Copying catalog imaging-rig · 3/9 files', stage_label: 'Backup: Copying',
+  percent: 25,
 };
 
 function serve(view: () => BackupsOverview, status: () => { job: BackupJob | null } = () => ({ job: null })) {
@@ -96,7 +97,7 @@ describe('BackupSettings', () => {
       }),
       http.post('/api/backups/stop', () => {
         stopped = true;
-        job = { ...running, stopping: true };
+        job = { ...running, stopping: true, description: 'Stopping…', stage_label: 'Stopping the backup' };
         return ok({ job, last_run: null });
       })
     );

@@ -1287,48 +1287,20 @@ fn ts_sync_row(job: &TsSyncJob) -> Option<JobRow> {
     )
 }
 
-/// `Copying catalog imaging-rig · 2/9 files`, or what the backup waits for.
-pub fn describe_backup(job: &BackupJob) -> String {
-    if job.stopping {
-        return "Stopping…".into();
-    }
-    if let Some(what) = &job.waiting_for {
-        return format!("Waiting for {what}");
-    }
-    let stage = match job.stage.as_str() {
-        "preparing" => "Preparing",
-        "copying" => "Copying",
-        "compressing" => "Compressing",
-        "finishing" => "Finishing",
-        "pruning" => "Removing older backups",
-        other => other,
-    };
-    let what = match &job.current {
-        Some(current) => format!("{stage} {current}"),
-        None => stage.to_string(),
-    };
-    if job.files_total > 0 {
-        format!("{what} · {}/{} files", job.files_done, job.files_total)
-    } else {
-        what
-    }
-}
-
 /// A backup: a person's from Settings, or the schedule's, which pauses for
 /// a person's work and is listed as waiting meanwhile. Settings is a
 /// dialog, not a view, so the row has no link.
 fn backup_row(job: &BackupJob) -> JobRow {
     let scheduled = job.trigger == crate::backup::Trigger::Schedule;
     JobRow {
-        detail: describe_backup(job),
+        detail: job.description(),
         status: if job.waiting_for.is_some() {
             RowStatus::Waiting
         } else {
             RowStatus::Running
         },
         waiting_for: job.waiting_for.clone(),
-        percent: (job.bytes_total > 0)
-            .then(|| (job.bytes_done as f64 / job.bytes_total as f64 * 100.0).min(100.0)),
+        percent: job.percent(),
         stoppable: !job.stopping,
         control: Some(RowControl::Backup),
         hint: Some(if job.location == Location::Downloads {

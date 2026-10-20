@@ -1013,3 +1013,94 @@ fn a_failed_runner_frees_the_slot_and_records_the_run_as_failed() {
     );
     fixture.state.shutdown.begin();
 }
+
+fn status(stage: &str) -> JobStatus {
+    JobStatus {
+        trigger: Trigger::Manual,
+        scope: BackupScope::Full,
+        include_secrets: false,
+        destination: "/backups".into(),
+        location: Location::Elsewhere,
+        stage: stage.into(),
+        current: None,
+        files_done: 0,
+        files_total: 0,
+        bytes_done: 0,
+        bytes_total: 0,
+        waiting_for: None,
+        started_at: 1700,
+        stopping: false,
+        description: String::new(),
+        stage_label: String::new(),
+        percent: None,
+    }
+}
+
+#[test]
+fn a_backup_status_carries_its_progress_text() {
+    let copying = JobStatus {
+        current: Some("catalog imaging-rig".into()),
+        files_done: 2,
+        files_total: 9,
+        bytes_done: 30,
+        bytes_total: 120,
+        ..status("copying")
+    }
+    .with_text();
+    assert_eq!(
+        copying.description,
+        "Copying catalog imaging-rig · 2/9 files"
+    );
+    assert_eq!(copying.stage_label, "Backup: Copying");
+    assert_eq!(copying.percent, Some(25.0));
+
+    let pruning = status("pruning").with_text();
+    assert_eq!(pruning.description, "Removing older backups");
+    assert_eq!(pruning.stage_label, "Backup: Removing older backups");
+    assert_eq!(pruning.percent, None);
+
+    for (stage, words) in [
+        ("preparing", "Preparing"),
+        ("compressing", "Compressing"),
+        ("finishing", "Finishing"),
+        ("verifying", "verifying"),
+    ] {
+        assert_eq!(status(stage).description(), words);
+    }
+
+    let past_the_total = JobStatus {
+        bytes_done: 130,
+        bytes_total: 120,
+        ..status("finishing")
+    };
+    assert_eq!(past_the_total.percent(), Some(100.0));
+
+    let waiting = JobStatus {
+        waiting_for: Some("a stack build".into()),
+        files_total: 9,
+        ..status("preparing")
+    };
+    assert_eq!(waiting.description(), "Waiting for a stack build");
+    assert_eq!(waiting.stage_label(), "Backup waiting for a stack build");
+
+    let stopping = JobStatus {
+        stopping: true,
+        ..waiting
+    };
+    assert_eq!(stopping.description(), "Stopping…");
+    assert_eq!(stopping.stage_label(), "Stopping the backup");
+}
+
+#[test]
+fn a_started_backup_returns_its_progress_text() {
+    let fixture = fixture(40);
+    let started = start(&fixture.state, manual(BackupScope::Full, None)).unwrap();
+    assert_eq!(started.description, "Preparing");
+    assert_eq!(started.stage_label, "Backup: Preparing");
+    if let Some(job) = fixture.state.backups.job() {
+        assert_eq!(job.description, job.description());
+        assert_eq!(job.stage_label, job.stage_label());
+        assert_eq!(job.percent, job.percent());
+    }
+    wait_for_the_run(&fixture.state);
+}

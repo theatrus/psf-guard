@@ -39,6 +39,12 @@ export interface BackupJob {
   waiting_for: string | null;
   started_at: number;
   stopping: boolean;
+  /** The run's step in words: `Copying catalog imaging-rig · 2/9 files`. */
+  description: string;
+  /** The stage alone, read out when it changes: `Backup: Copying`. */
+  stage_label: string;
+  /** 0–100 by bytes, or null before the total is known. */
+  percent: number | null;
 }
 
 export interface BackupLastRun {
