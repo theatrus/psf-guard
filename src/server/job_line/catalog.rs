@@ -31,6 +31,52 @@ pub enum Step<Item> {
     Run(Item),
 }
 
+/// Requests that run once they stop arriving: `quiet` after the last one,
+/// but no later than `longest` after the first, so a steady stream still
+/// runs. A job keeps one in its queue and reads it in [`CatalogWork::next`].
+#[derive(Debug, Default, Clone)]
+pub struct Settling {
+    first: Option<Instant>,
+    last: Option<Instant>,
+}
+
+impl Settling {
+    /// A request arrived at `now`.
+    pub fn touch(&mut self, now: Instant) {
+        self.first.get_or_insert(now);
+        self.last = Some(now);
+    }
+
+    /// Whether a request waits to settle.
+    pub fn is_pending(&self) -> bool {
+        self.last.is_some()
+    }
+
+    /// When the requests settle: `quiet` after the last, or `longest` after
+    /// the first, whichever comes sooner. `None` when nothing waits.
+    pub fn due_at(&self, quiet: Duration, longest: Option<Duration>) -> Option<Instant> {
+        let quiet_at = self.last? + quiet;
+        Some(match (self.first, longest) {
+            (Some(first), Some(longest)) => quiet_at.min(first + longest),
+            _ => quiet_at,
+        })
+    }
+
+    /// The runner's next step for these requests: [`Step::Exit`] when none
+    /// waits, [`Step::Sleep`] until they settle, or [`Step::Run`] once they
+    /// have, which clears them.
+    pub fn step(&mut self, now: Instant, quiet: Duration, longest: Option<Duration>) -> Step<()> {
+        let Some(due) = self.due_at(quiet, longest) else {
+            return Step::Exit;
+        };
+        if now < due {
+            return Step::Sleep(due - now);
+        }
+        *self = Self::default();
+        Step::Run(())
+    }
+}
+
 /// One kind of background job that runs one thread per catalog.
 pub trait CatalogWork: Sized + Send + Sync + 'static {
     /// The pending work: merged requests, retries and work that Stop paused.
@@ -428,6 +474,32 @@ mod tests {
         job.queue().push(3);
         assert!(job.stop_if(|queue| !queue.is_empty()));
         assert!(stop.requested());
+    }
+
+    #[test]
+    fn requests_run_once_they_settle_or_the_longest_wait_passes() {
+        let start = Instant::now();
+        let quiet = Duration::from_secs(10);
+        let longest = Some(Duration::from_secs(25));
+        let mut settling = Settling::default();
+        assert_eq!(settling.step(start, quiet, longest), Step::Exit);
+        settling.touch(start);
+        assert_eq!(
+            settling.step(start, quiet, longest),
+            Step::Sleep(Duration::from_secs(10))
+        );
+        // Each request pushes it out, but not past the longest wait.
+        settling.touch(start + Duration::from_secs(8));
+        settling.touch(start + Duration::from_secs(16));
+        assert_eq!(
+            settling.step(start + Duration::from_secs(20), quiet, longest),
+            Step::Sleep(Duration::from_secs(5))
+        );
+        assert_eq!(
+            settling.step(start + Duration::from_secs(25), quiet, longest),
+            Step::Run(())
+        );
+        assert!(!settling.is_pending(), "running clears it");
     }
 
     #[test]
