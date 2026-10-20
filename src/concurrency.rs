@@ -183,6 +183,56 @@ impl From<Stop> for seiza_stacking::CancelSignal {
     }
 }
 
+/// A yes-or-no setting that Settings can change while the server uses it:
+/// every clone reads the value the last change stored.
+#[derive(Debug, Clone, Default)]
+pub struct LiveSetting(std::sync::Arc<AtomicBool>);
+
+impl LiveSetting {
+    pub fn new(on: bool) -> Self {
+        Self(std::sync::Arc::new(AtomicBool::new(on)))
+    }
+
+    /// Whether the setting is on.
+    pub fn is_on(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+
+    /// Turn the setting on or off.
+    pub fn set(&self, on: bool) {
+        self.0.store(on, Ordering::Relaxed);
+    }
+}
+
+/// Marks that one piece of work of a kind is scheduled or running, so a
+/// second request does not start another. [`InFlight::claim`] returns a
+/// claim that clears the mark when it is dropped, a panic included.
+#[derive(Debug, Clone, Default)]
+pub struct InFlight(std::sync::Arc<AtomicBool>);
+
+impl InFlight {
+    /// Mark the work as in flight. `None` when it already is.
+    pub fn claim(&self) -> Option<InFlightClaim> {
+        (!self.0.swap(true, Ordering::SeqCst)).then(|| InFlightClaim(self.clone()))
+    }
+
+    /// Whether the work is in flight now.
+    pub fn is_marked(&self) -> bool {
+        self.0.load(Ordering::SeqCst)
+    }
+}
+
+/// The claim [`InFlight::claim`] returns; dropping it clears the mark.
+#[derive(Debug)]
+#[must_use = "the work is no longer marked in flight once the claim is dropped"]
+pub struct InFlightClaim(InFlight);
+
+impl Drop for InFlightClaim {
+    fn drop(&mut self) {
+        (self.0).0.store(false, Ordering::SeqCst);
+    }
+}
+
 /// Workers leased from [`WorkerBudgets`], returned when dropped.
 #[derive(Debug)]
 pub struct WorkerLease {
@@ -712,6 +762,32 @@ pub fn probe_frame_pixels(path: &Path) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_live_setting_reads_the_last_change_in_every_clone() {
+        let setting = super::LiveSetting::new(true);
+        let read_elsewhere = setting.clone();
+        setting.set(false);
+        assert!(!read_elsewhere.is_on());
+    }
+
+    #[test]
+    fn work_in_flight_is_claimed_once_and_cleared_when_the_claim_drops() {
+        let in_flight = super::InFlight::default();
+        let claim = in_flight.claim().expect("free at first");
+        assert!(in_flight.is_marked());
+        assert!(
+            in_flight.claim().is_none(),
+            "a second request starts nothing"
+        );
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _claim = claim;
+            panic!("the work failed");
+        }));
+        assert!(unwound.is_err());
+        assert!(!in_flight.is_marked(), "a panic clears the mark");
+        assert!(in_flight.claim().is_some());
+    }
+
     use super::*;
 
     #[test]

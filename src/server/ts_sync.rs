@@ -402,6 +402,7 @@ fn import(state: &Arc<AppState>, job: &str, request: ImportRequest) -> Result<()
         j.source_connected = entry.ts_sync.is_some();
     });
     let _ = context.ensure_cache_available();
+    super::catalog_upkeep::start(state, &context.database_path);
     super::calibration_quality::request(state, &context.database_path);
     super::flat_measure::queue(
         state,

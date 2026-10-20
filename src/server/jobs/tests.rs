@@ -1361,3 +1361,30 @@ fn working_out_flat_group_use_is_an_automatic_row_while_it_runs() {
     assert!(rows[0].background);
     assert_eq!(rows[0].key, "flat-use:a");
 }
+
+#[test]
+fn catalog_upkeep_is_listed_while_it_runs() {
+    use crate::server::catalog_upkeep::{UpkeepStage, UpkeepStatus};
+    let upkeep = |stage, done, total| DatabaseState {
+        upkeep: UpkeepStatus { stage, done, total },
+        ..db("a", "Askar")
+    };
+    assert!(row_list(&with_db(upkeep(UpkeepStage::Idle, 0, 0))).is_empty());
+    // Readout modes with nothing to read get no row.
+    assert!(row_list(&with_db(upkeep(UpkeepStage::ReadingReadoutModes, 0, 0))).is_empty());
+    let rows = row_list(&with_db(upkeep(
+        UpkeepStage::ReadingReadoutModes,
+        250,
+        1_000,
+    )));
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        (rows[0].title.as_str(), rows[0].detail.as_str()),
+        ("Reading readout modes", "250 of 1,000 calibration frames")
+    );
+    assert_eq!(rows[0].percent, Some(25.0));
+    assert!(rows[0].automatic && rows[0].background);
+    let rows = row_list(&with_db(upkeep(UpkeepStage::BuildingIndexes, 0, 0)));
+    assert_eq!(rows[0].title, "Building query indexes");
+    assert_eq!(rows[0].key, "upkeep:a");
+}

@@ -288,7 +288,9 @@ pub async fn revoke_client_route(
     registry
         .save(&registry_path)
         .map_err(|error| AppError::InternalError(format!("persisting registry: {error}")))?;
+    let path = context.database_path.clone();
     state.databases.write().unwrap().insert(entry.id, context);
+    crate::server::catalog_upkeep::start(&state, &path);
     tracing::info!("revoked paired client {client_uuid} on catalog {db_id}");
     Ok(Json(ApiResponse::success(true)))
 }

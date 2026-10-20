@@ -13,6 +13,7 @@ pub mod calibration_scope;
 pub mod calibration_settings;
 pub mod catalog_install;
 pub mod catalog_jobs;
+pub mod catalog_upkeep;
 pub mod database_context;
 pub mod director;
 pub mod embedded_static;
@@ -1130,11 +1131,7 @@ async fn run_server_internal(
             })
             .unwrap_or_default();
         for path in paths {
-            crate::server::database_context::spawn_query_index_build(path.clone(), &state.shutdown);
-            crate::server::database_context::spawn_calibration_header_backfill(
-                path.clone(),
-                &state.shutdown,
-            );
+            crate::server::catalog_upkeep::start(&state, &path);
             // Frames imported before the catalog kept their sites: a rig
             // whose sites it reads is graded again and its flats planned
             // again as each chunk commits.

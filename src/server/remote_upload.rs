@@ -211,9 +211,7 @@ pub async fn upload_image(
         explicit: config.directory_layout.is_some(),
     };
     let registered_roots = ctx.image_dir_paths.clone();
-    let pair_derivatives = ctx
-        .pair_calibrated_copies
-        .load(std::sync::atomic::Ordering::Relaxed);
+    let pair_derivatives = ctx.pair_calibrated_copies.is_on();
     let response_sha256 = sha256.clone();
     let response_filename = filename.clone();
     let published = tokio::task::spawn_blocking(move || {

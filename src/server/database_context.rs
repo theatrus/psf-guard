@@ -10,7 +10,6 @@
 //! handlers until B2 nests them under `/api/db/{slug}/...`.
 
 use crate::directory_tree::DirectoryTree;
-use crate::server::shutdown::Shutdown;
 use crate::server::state::{FileCheckCache, RefreshProgress, RefreshStage, RefreshStatus};
 use anyhow::Result;
 use rusqlite::{Connection, OpenFlags};
@@ -25,7 +24,7 @@ use tokio::sync::Mutex as TokioMutex;
 /// Flags used to (re)open a writable scheduler database connection. `NO_MUTEX`
 /// because we serialize access ourselves with `Mutex<Connection>`; no `CREATE`
 /// so a vanished path errors instead of leaving a junk empty database behind.
-fn db_open_flags() -> OpenFlags {
+pub(crate) fn db_open_flags() -> OpenFlags {
     OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX
 }
 
@@ -158,172 +157,7 @@ fn upgrade_psf_guard_tables(conn: &Connection, path: &str) {
 /// How long the index build waits for the catalog's write lock before giving
 /// up for now. Deliberately short: N.I.N.A. may be saving frames into this
 /// file, and a query that scans is far better than a capture that blocks.
-const INDEX_BUILD_BUSY_TIMEOUT: Duration = Duration::from_secs(2);
-
-/// Build PSF Guard's query indexes on a catalog, off the open path.
-///
-/// This is an optimization, not a correctness step, and it is the expensive
-/// half: building an index takes the catalog's write lock, and on a rollback
-/// journal that blocks every other writer for the duration. Doing it during
-/// `open_scheduler_connection` put it on whichever thread happened to open the
-/// connection — including Tokio workers inside request handlers — and gave it
-/// the full sixty-second busy timeout to sit on.
-///
-/// So it runs on its own thread, on its own connection, with a short timeout,
-/// and only where the server knows it is not in the middle of something —
-/// once at startup, not every time a `DatabaseContext` is built. Constructing
-/// a context happens during imports and database management, and a background
-/// writer arriving mid-import is exactly the contention this is trying to
-/// avoid creating.
-///
-/// A catalog being written right now is left alone and picked up at the next
-/// server start; the only cost of skipping is that per-target lookups scan
-/// until then.
-pub(crate) fn spawn_query_index_build(path: String, shutdown: &Arc<Shutdown>) {
-    // A stop waits for the index being built rather than cut it off.
-    let work = shutdown.hold(format!("query index build ({path})"));
-    std::thread::spawn(move || {
-        let _work = work;
-        let built = Connection::open_with_flags(&path, db_open_flags())
-            .and_then(|conn| {
-                conn.busy_timeout(INDEX_BUILD_BUSY_TIMEOUT)?;
-                Ok(conn)
-            })
-            .map_err(anyhow::Error::from)
-            .and_then(|conn| crate::db::ensure_query_indexes(&conn));
-        match built {
-            Ok(true) => tracing::info!("Added PSF Guard query indexes to {path}"),
-            Ok(false) => {}
-            Err(error) => tracing::info!(
-                "Left PSF Guard query indexes for later on {path}: {error:#}. \
-                 Queries still work; per-target lookups scan the image table."
-            ),
-        }
-    });
-}
-
-/// Fill in readout-mode names for calibration frames imported before the
-/// catalog kept them, after startup and off every request path.
-///
-/// This is what schema rung 6 used to do while the server was still starting,
-/// which on a large library on a NAS meant minutes with no port bound and
-/// nothing logged. It runs here instead: its own connection with a short busy
-/// timeout, one commit per hundred frames, a progress line every chunk, and a
-/// clean stop if the capture software holds the catalog — the next start
-/// picks up where it left off. Frame sites are the frame-sites job's
-/// ([`crate::server::frame_sites`]).
-pub(crate) fn spawn_calibration_header_backfill(path: String, shutdown: &Arc<Shutdown>) {
-    // A stop ends the pass at its next commit.
-    let work = shutdown.hold(format!("readout mode backfill ({path})"));
-    std::thread::spawn(move || {
-        let outcome = Connection::open_with_flags(&path, db_open_flags())
-            .and_then(|conn| {
-                conn.busy_timeout(INDEX_BUILD_BUSY_TIMEOUT)?;
-                Ok(conn)
-            })
-            .map_err(anyhow::Error::from)
-            .and_then(|conn| {
-                let mut announced = false;
-                crate::calibration::backfill_readout_mode_names(
-                    &conn,
-                    || !work.is_stopping(),
-                    |done, total| {
-                        if !announced {
-                            tracing::info!(
-                                "Reading the headers of {total} calibration frame(s) in {path} to \
-                             record their readout modes; the server is already up"
-                            );
-                            announced = true;
-                        }
-                        if done < total {
-                            tracing::info!("Readout modes: {done} of {total} frames in {path}");
-                        }
-                    },
-                )
-            });
-        match outcome {
-            Ok(outcome) if outcome.pending == 0 => {}
-            Ok(outcome) => tracing::info!(
-                "Recorded readout modes in {path}: {} named, {} name none, {} unreadable \
-                 (left for the next start)",
-                outcome.named,
-                outcome.nameless,
-                outcome.unreadable
-            ),
-            Err(error) => tracing::info!(
-                "Paused recording readout modes in {path}: {error:#}. \
-                 The next server start continues where this left off."
-            ),
-        }
-    });
-}
-
-/// Pair calibrated and registered copies already on disk with their lights,
-/// after a directory refresh. One pass at a time per catalog, on its own
-/// connection; it stands aside while an import holds the catalog, and the
-/// next refresh runs it again.
-pub(crate) fn spawn_derivative_pairing(
-    path: String,
-    tree: Arc<DirectoryTree>,
-    enabled: Arc<AtomicBool>,
-    import_lock: Arc<TokioMutex<()>>,
-) {
-    type Checked = HashMap<PathBuf, crate::frame_derivatives::FileStamp>;
-    static RUNNING: Mutex<Vec<String>> = Mutex::new(Vec::new());
-    static CHECKED: std::sync::LazyLock<Mutex<HashMap<String, Checked>>> =
-        std::sync::LazyLock::new(Default::default);
-    if !enabled.load(Ordering::Relaxed) {
-        return;
-    }
-    {
-        let mut running = RUNNING
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if running.contains(&path) {
-            return;
-        }
-        running.push(path.clone());
-    }
-    std::thread::spawn(move || {
-        let files: Vec<PathBuf> = tree.get_fits_files().into_iter().cloned().collect();
-        let outcome = match import_lock.try_lock() {
-            Err(_) => Ok(None),
-            Ok(_guard) => Connection::open_with_flags(&path, db_open_flags())
-                .and_then(|conn| {
-                    conn.busy_timeout(INDEX_BUILD_BUSY_TIMEOUT)?;
-                    Ok(conn)
-                })
-                .map_err(anyhow::Error::from)
-                .and_then(|mut conn| {
-                    let mut all = CHECKED
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner());
-                    let checked = all.entry(path.clone()).or_default();
-                    crate::frame_derivatives::pair_files_on_disk(&mut conn, &files, checked)
-                        .map(Some)
-                }),
-        };
-        match outcome {
-            Ok(Some(report)) if report.paired > 0 || report.ambiguous > 0 => tracing::info!(
-                "Paired {} calibrated or registered cop(ies) with their lights in {path} \
-                 ({} superseded, {} ambiguous, {} with no light yet)",
-                report.paired,
-                report.superseded,
-                report.ambiguous,
-                report.unmatched
-            ),
-            Ok(_) => {}
-            Err(error) => tracing::info!(
-                "Paused pairing calibrated copies in {path}: {error:#}. \
-                 The next directory refresh tries again."
-            ),
-        }
-        RUNNING
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .retain(|running| running != &path);
-    });
-}
+pub(crate) const INDEX_BUILD_BUSY_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Identity of the on-disk database file: the `(device, inode)` pair on unix.
 ///
@@ -378,16 +212,6 @@ fn fingerprint_path(path: &str) -> Option<DbFingerprint> {
 /// context — which `.lock().unwrap()` on a poisoned mutex would do.
 fn lock_recover<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-struct TreeRebuildInflight {
-    flag: Arc<AtomicBool>,
-}
-
-impl Drop for TreeRebuildInflight {
-    fn drop(&mut self) {
-        self.flag.store(false, Ordering::SeqCst);
-    }
 }
 
 /// Whether a rusqlite error is the specific signature of a connection whose
@@ -502,10 +326,10 @@ pub struct DatabaseContext {
     /// Shared so Settings can change it on the live context.
     pub analyze_new_frames: Arc<AtomicBool>,
     /// Pair calibrated and registered copies with their lights, on import
-    /// and in the background pass. Shared so Settings can change it live.
-    pub pair_calibrated_copies: Arc<AtomicBool>,
+    /// and in the background pass. Settings changes it on the live context.
+    pub pair_calibrated_copies: crate::concurrency::LiveSetting,
     /// Measure quality on calibrated copies instead of raw files.
-    pub scan_calibrated_copies: Arc<AtomicBool>,
+    pub scan_calibrated_copies: crate::concurrency::LiveSetting,
     /// Per-DB cache directory: `<cache_root>/<slug>/`. Created on construction.
     /// Image previews, star lists, astrometry and the other per-image results
     /// for this database live below here, so two DBs with overlapping image
@@ -558,8 +382,9 @@ pub struct DatabaseContext {
     /// Serializes cold directory-tree builds so N concurrent requests on an
     /// empty cache share one filesystem scan instead of starting N.
     tree_build_lock: Arc<Mutex<()>>,
-    /// True while a stale-revalidation/progress tree rebuild is scheduled or running.
-    tree_rebuild_inflight: Arc<AtomicBool>,
+    /// Marked while a stale-revalidation or progress tree rebuild is
+    /// scheduled or running.
+    tree_rebuild_inflight: crate::concurrency::InFlight,
     pub refresh_mutex: Arc<TokioMutex<()>>,
     /// Serializes memory-heavy on-demand plate solves within one database.
     /// A waiting duplicate re-checks the persistent cache before decoding
@@ -834,10 +659,10 @@ impl DatabaseContext {
             .store(entry.analyze_new_frames, Ordering::Relaxed);
         context
             .pair_calibrated_copies
-            .store(entry.pair_calibrated_copies, Ordering::Relaxed);
+            .set(entry.pair_calibrated_copies);
         context
             .scan_calibrated_copies
-            .store(entry.scan_calibrated_copies, Ordering::Relaxed);
+            .set(entry.scan_calibrated_copies);
         Ok(context)
     }
 
@@ -948,8 +773,8 @@ impl DatabaseContext {
             autoimport: None,
             scan_rules: Default::default(),
             analyze_new_frames: Arc::new(AtomicBool::new(false)),
-            pair_calibrated_copies: Arc::new(AtomicBool::new(true)),
-            scan_calibrated_copies: Arc::new(AtomicBool::new(false)),
+            pair_calibrated_copies: crate::concurrency::LiveSetting::new(true),
+            scan_calibrated_copies: crate::concurrency::LiveSetting::new(false),
             cache_dir_path,
             stack_root,
             calibration_root,
@@ -968,7 +793,7 @@ impl DatabaseContext {
             remote_file_verifications: Arc::new(Mutex::new(HashSet::new())),
             remote_image_verification_locks: Arc::new(Mutex::new(HashMap::new())),
             tree_build_lock: Arc::new(Mutex::new(())),
-            tree_rebuild_inflight: Arc::new(AtomicBool::new(false)),
+            tree_rebuild_inflight: crate::concurrency::InFlight::default(),
             refresh_mutex: Arc::new(TokioMutex::new(())),
             astrometry_solve_mutex: Arc::new(TokioMutex::new(())),
             astrometry_evidence: Arc::new(crate::astrometry::AstrometryEvidenceCache::new()),
@@ -1191,14 +1016,8 @@ impl DatabaseContext {
         });
     }
 
-    fn try_mark_directory_tree_rebuild(&self) -> Option<TreeRebuildInflight> {
-        if self.tree_rebuild_inflight.swap(true, Ordering::SeqCst) {
-            None
-        } else {
-            Some(TreeRebuildInflight {
-                flag: Arc::clone(&self.tree_rebuild_inflight),
-            })
-        }
+    fn try_mark_directory_tree_rebuild(&self) -> Option<crate::concurrency::InFlightClaim> {
+        self.tree_rebuild_inflight.claim()
     }
 
     fn rebuild_directory_tree_internal(&self) -> Result<Arc<DirectoryTree>> {
@@ -1226,10 +1045,10 @@ impl DatabaseContext {
             stats.format_age()
         );
 
-        spawn_derivative_pairing(
-            self.database_path.clone(),
+        crate::server::catalog_upkeep::tree_published(
+            &self.database_path,
             Arc::clone(&tree),
-            Arc::clone(&self.pair_calibrated_copies),
+            self.pair_calibrated_copies.clone(),
             Arc::clone(&self.image_import_mutex),
         );
         crate::server::calibration_health::tree_published(&self.database_path);
@@ -1382,7 +1201,7 @@ impl DatabaseContext {
         image: &crate::models::AcquiredImage,
         path: &std::path::Path,
     ) {
-        let tree_needs_update = self.tree_rebuild_inflight.load(Ordering::SeqCst) || {
+        let tree_needs_update = self.tree_rebuild_inflight.is_marked() || {
             let cache = self.directory_tree_cache.read().unwrap();
             cache
                 .as_ref()
@@ -1391,8 +1210,7 @@ impl DatabaseContext {
         let inserted = if tree_needs_update {
             let mut additions = self.directory_tree_additions.write().unwrap();
             let mut cache = self.directory_tree_cache.write().unwrap();
-            let preserve_for_rebuild =
-                self.tree_rebuild_inflight.load(Ordering::SeqCst) || cache.is_none();
+            let preserve_for_rebuild = self.tree_rebuild_inflight.is_marked() || cache.is_none();
             if preserve_for_rebuild {
                 additions.insert(path.to_path_buf());
             }
@@ -2070,7 +1888,7 @@ impl DatabaseContext {
         let directory_tree_cache = Arc::clone(&self.directory_tree_cache);
         let directory_tree_additions = Arc::clone(&self.directory_tree_additions);
         let tree_build_lock = Arc::clone(&self.tree_build_lock);
-        let tree_rebuild_inflight = Arc::clone(&self.tree_rebuild_inflight);
+        let tree_rebuild_inflight = self.tree_rebuild_inflight.clone();
         let tree_result =
             tokio::task::spawn_blocking(move || -> Result<(Arc<DirectoryTree>, bool)> {
                 let _build_guard = lock_recover(tree_build_lock.as_ref());
@@ -2082,13 +1900,7 @@ impl DatabaseContext {
                         return Ok((Arc::clone(tree), false));
                     }
                 }
-                let _inflight = if tree_rebuild_inflight.swap(true, Ordering::SeqCst) {
-                    None
-                } else {
-                    Some(TreeRebuildInflight {
-                        flag: Arc::clone(&tree_rebuild_inflight),
-                    })
-                };
+                let _inflight = tree_rebuild_inflight.claim();
 
                 let roots: Vec<&std::path::Path> =
                     image_dir_paths.iter().map(|p| p.as_path()).collect();
@@ -2192,8 +2004,8 @@ impl DatabaseContext {
             autoimport: None,
             scan_rules: Default::default(),
             analyze_new_frames: Arc::new(AtomicBool::new(false)),
-            pair_calibrated_copies: Arc::new(AtomicBool::new(true)),
-            scan_calibrated_copies: Arc::new(AtomicBool::new(false)),
+            pair_calibrated_copies: crate::concurrency::LiveSetting::new(true),
+            scan_calibrated_copies: crate::concurrency::LiveSetting::new(false),
             cache_dir_path: PathBuf::from("/tmp/psf-guard-test"),
             stack_root: PathBuf::from("/tmp/psf-guard-test"),
             calibration_root: PathBuf::from("/tmp/psf-guard-test"),
@@ -2212,7 +2024,7 @@ impl DatabaseContext {
             remote_file_verifications: Arc::new(Mutex::new(HashSet::new())),
             remote_image_verification_locks: Arc::new(Mutex::new(HashMap::new())),
             tree_build_lock: Arc::new(Mutex::new(())),
-            tree_rebuild_inflight: Arc::new(AtomicBool::new(false)),
+            tree_rebuild_inflight: crate::concurrency::InFlight::default(),
             refresh_mutex: Arc::new(TokioMutex::new(())),
             astrometry_solve_mutex: Arc::new(TokioMutex::new(())),
             astrometry_evidence: Arc::new(crate::astrometry::AstrometryEvidenceCache::new()),

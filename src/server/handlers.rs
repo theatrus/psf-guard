@@ -1565,6 +1565,8 @@ pub async fn add_database_route(
         .write()
         .unwrap()
         .insert(entry.id.clone(), ctx.clone());
+    // Its query indexes and readout modes, as at start.
+    crate::server::catalog_upkeep::start(&state, &ctx.database_path);
 
     // Kick a background refresh for the newly-registered DB so file/dir caches
     // populate without the user having to refresh manually.
@@ -1830,6 +1832,7 @@ pub async fn update_database_route(
         }
         map.insert(new_id.clone(), new_ctx.clone());
     }
+    crate::server::catalog_upkeep::start(&state, &new_ctx.database_path);
 
     let _ = new_ctx.ensure_cache_available();
     // Lights may be found elsewhere, or found at last.
@@ -3273,6 +3276,7 @@ pub async fn create_database_route(
         .write()
         .unwrap()
         .insert(entry.id.clone(), ctx.clone());
+    crate::server::catalog_upkeep::start(&state, &ctx.database_path);
 
     let options = crate::commands::import::ImportOptions {
         time_gap_days: req
@@ -3768,9 +3772,7 @@ fn run_import_blocking(
     )
     .map_err(|e| anyhow::anyhow!("opening {} for import: {}", ctx.database_path, e))?;
     let mut options = options.clone();
-    options.pair_derivatives &= ctx
-        .pair_calibrated_copies
-        .load(std::sync::atomic::Ordering::Relaxed);
+    options.pair_derivatives &= ctx.pair_calibrated_copies.is_on();
     options.light_filter = light_filter;
     options.match_by_position = ctx.scan_rules.match_by_position;
     let mut outcome = imp::import_frames(&mut conn, frames, &options)?;
@@ -4024,12 +4026,8 @@ pub async fn get_calibrated_copies(
     .map_err(|error| AppError::InternalError(format!("counting pairings: {error}")))?
     .map_err(|error| AppError::InternalError(format!("counting pairings: {error:#}")))?;
     Ok(Json(ApiResponse::success(CalibratedCopiesResponse {
-        pair: ctx
-            .pair_calibrated_copies
-            .load(std::sync::atomic::Ordering::Relaxed),
-        scan_calibrated: ctx
-            .scan_calibrated_copies
-            .load(std::sync::atomic::Ordering::Relaxed),
+        pair: ctx.pair_calibrated_copies.is_on(),
+        scan_calibrated: ctx.scan_calibrated_copies.is_on(),
         counts,
     })))
 }
@@ -4062,14 +4060,10 @@ pub async fn update_calibrated_copies(
     let live = state.get_database(&db_id);
     for context in live.iter().map(|live| &**live).chain([&*ctx.0]) {
         if let Some(pair) = request.pair {
-            context
-                .pair_calibrated_copies
-                .store(pair, std::sync::atomic::Ordering::Relaxed);
+            context.pair_calibrated_copies.set(pair);
         }
         if let Some(scan) = request.scan_calibrated {
-            context
-                .scan_calibrated_copies
-                .store(scan, std::sync::atomic::Ordering::Relaxed);
+            context.scan_calibrated_copies.set(scan);
         }
     }
     get_calibrated_copies(ctx).await
@@ -8084,9 +8078,7 @@ fn quality_scan_source(
         let revision = source_file_cache_token(&path).map(calibrated);
         return Ok((path, revision));
     }
-    if ctx
-        .scan_calibrated_copies
-        .load(std::sync::atomic::Ordering::Relaxed)
+    if ctx.scan_calibrated_copies.is_on()
         && let Some(copy) = calibrated_copy_for_scan(ctx, image)
     {
         let revision = format!(
@@ -9522,8 +9514,7 @@ mod file_resolution_tests {
         assert_eq!(path, raw);
         assert!(revision.unwrap().starts_with("file:"));
 
-        ctx.scan_calibrated_copies
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+        ctx.scan_calibrated_copies.set(true);
         let (path, revision) =
             quality_scan_source(&ctx, &light, "Target", "frame_0115.fits").unwrap();
         // The calibrated copy, never the registered one.

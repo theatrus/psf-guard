@@ -87,6 +87,7 @@ pub enum RowKind {
     Health,
     Headers,
     FlatUse,
+    Upkeep,
 }
 
 /// The two lines a person can reorder. Each runs one job at a time.
@@ -303,6 +304,7 @@ pub struct DatabaseState {
     pub header_reads: Option<(usize, usize)>,
     /// Whether what the flat groups feed is being worked out.
     pub flat_use: bool,
+    pub upkeep: crate::server::catalog_upkeep::UpkeepStatus,
 }
 
 /// A Target Scheduler sync or import job, as the rows need it.
@@ -724,6 +726,45 @@ fn grading_row(db: &DatabaseState, interactive: Option<&str>) -> JobRow {
         )
     }
     .automatic(true)
+}
+
+/// The catalog's upkeep while it runs: building PSF Guard's query indexes,
+/// reading the readout modes of calibration frames that lack them, or
+/// pairing calibrated copies with their lights. Always automatic. Reading
+/// readout modes gets a row only once it has frames to read.
+fn upkeep_row(db: &DatabaseState) -> Option<JobRow> {
+    use crate::server::catalog_upkeep::UpkeepStage;
+    let upkeep = &db.upkeep;
+    let (title, detail) = match upkeep.stage {
+        UpkeepStage::Idle => return None,
+        UpkeepStage::BuildingIndexes => ("Building query indexes", String::new()),
+        UpkeepStage::ReadingReadoutModes if upkeep.total == 0 => return None,
+        UpkeepStage::ReadingReadoutModes => (
+            "Reading readout modes",
+            format!(
+                "{} of {} calibration {}",
+                grouped(upkeep.done.min(upkeep.total)),
+                grouped(upkeep.total),
+                plural(upkeep.total, "frame", "frames")
+            ),
+        ),
+        UpkeepStage::PairingCopies => ("Pairing calibrated copies", String::new()),
+    };
+    Some(
+        JobRow {
+            detail,
+            status: RowStatus::Running,
+            percent: percent(upkeep.done, upkeep.total),
+            link: Some(RowLink::view(LinkView::Calibration, &db.id)),
+            ..JobRow::new(
+                format!("upkeep:{}", db.id),
+                RowKind::Upkeep,
+                title,
+                &db.name,
+            )
+        }
+        .automatic(true),
+    )
 }
 
 /// Working out calibration health, once a pass has projects to judge:
@@ -1396,6 +1437,9 @@ pub fn rows(snapshot: &Snapshot, project_of: ProjectOf) -> Vec<JobRow> {
         if db.flat_use {
             rows.push(flat_use_row(db));
         }
+        if let Some(row) = upkeep_row(db) {
+            rows.push(row);
+        }
     }
     // Running builds first, then the line in order.
     let mut stacks: Vec<&StackActivityEntry> = snapshot.stacks.active.iter().collect();
@@ -1507,6 +1551,7 @@ fn snapshot(state: &Arc<AppState>, transfers: Vec<Value>, manages: bool) -> Snap
             health: crate::server::calibration_health::progress(&ctx.database_path),
             header_reads: crate::server::calibration_scope::header_reads(&ctx.database_path),
             flat_use: crate::server::flat_group_use::refreshing(&ctx.database_path),
+            upkeep: crate::server::catalog_upkeep::status(&ctx.database_path),
         })
         .collect();
     let backups_allowed = manages && crate::server::handlers::require_registry_path(state).is_ok();
