@@ -48,23 +48,30 @@ const TOUCH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 /// NFS is slow, and only Settings shows them.
 const SIZES_TTL: Duration = Duration::from_secs(60 * 60);
 
-/// Limits for the cache, stacks and calibration masters, in that order.
+/// Limits for the cache, stacks and calibration masters, in that order. A
+/// process-wide setting, as the calibration and stacking settings are: the
+/// registry applies it before any catalog opens ([`configure`]).
 static LIMITS: [AtomicU8; 3] = [
     AtomicU8::new(DEFAULT_MAX_VOLUME_PERCENT),
     AtomicU8::new(DEFAULT_MAX_VOLUME_PERCENT),
     AtomicU8::new(DEFAULT_MAX_VOLUME_PERCENT),
 ];
-/// Each volume's limit as the last pass worked it out, by device, so
-/// pre-generation stops where that volume's cull would clear.
-static VOLUME_LIMITS: std::sync::LazyLock<Mutex<HashMap<u64, u8>>> =
-    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
-static LAST: Mutex<Vec<VolumeReport>> = Mutex::new(Vec::new());
-/// One pass at a time: two reading the same volume would each cull the
-/// whole excess.
-static PASS: Mutex<()> = Mutex::new(());
-/// Each volume's cache sizes, by device, with when they were measured.
-static SIZES: std::sync::LazyLock<Mutex<HashMap<u64, (Instant, CacheSizes)>>> =
-    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// What the storage passes keep between passes, for the life of the server
+/// state that owns it ([`AppState::cache_budget`]).
+#[derive(Default)]
+pub struct CacheBudget {
+    /// Each volume's limit as the last pass worked it out, by device, so
+    /// pre-generation stops where that volume's cull would clear.
+    volume_limits: Mutex<HashMap<u64, u8>>,
+    /// What the last pass found on each volume, for Settings.
+    last: Mutex<Vec<VolumeReport>>,
+    /// One pass at a time: two reading the same volume would each cull the
+    /// whole excess.
+    pass: Mutex<()>,
+    /// Each volume's cache sizes, by device, with when they were measured.
+    sizes: Mutex<HashMap<u64, (Instant, CacheSizes)>>,
+}
 
 /// Apply the registry's choice. Stacks and masters without a limit of
 /// their own use the cache's.
@@ -100,9 +107,9 @@ pub fn limit_for(kind: StorageKind) -> u8 {
 /// must sit below the band a cull clears, so pre-generation never makes
 /// previews the next pass would delete. A preview someone opens is made
 /// either way. True when there is no limit or the volume cannot be read.
-pub fn room_for_previews(cache_dir: &Path) -> bool {
+pub fn room_for_previews(budget: &CacheBudget, cache_dir: &Path) -> bool {
     let limit = device_of(cache_dir)
-        .and_then(|device| VOLUME_LIMITS.lock().unwrap().get(&device).copied())
+        .and_then(|device| budget.volume_limits.lock().unwrap().get(&device).copied())
         .unwrap_or_else(max_volume_percent);
     if limit >= 100 {
         return true;
@@ -117,8 +124,8 @@ fn room_at(usage: Usage, limit: u8) -> bool {
 }
 
 /// What the last pass found on each cache volume.
-pub fn last_reports() -> Vec<VolumeReport> {
-    LAST.lock().unwrap().clone()
+pub fn last_reports(budget: &CacheBudget) -> Vec<VolumeReport> {
+    budget.last.lock().unwrap().clone()
 }
 
 /// One volume holding storage folders, as the last pass found it.
@@ -194,7 +201,7 @@ pub async fn run(state: Arc<AppState>) {
         })
         .await
         .unwrap_or_default();
-        record(reports);
+        record(&state.cache_budget, reports);
         if !state.shutdown.sleep(PASS_INTERVAL).await {
             return;
         }
@@ -202,8 +209,8 @@ pub async fn run(state: Arc<AppState>) {
 }
 
 /// Keep a pass's findings for Settings.
-pub fn record(reports: Vec<VolumeReport>) {
-    *LAST.lock().unwrap() = reports;
+pub fn record(budget: &CacheBudget, reports: Vec<VolumeReport>) {
+    *budget.last.lock().unwrap() = reports;
 }
 
 /// One storage folder of one database, with the kinds that live in it.
@@ -261,7 +268,11 @@ pub fn pass_after_limit_change(state: &AppState) -> Vec<VolumeReport> {
 }
 
 fn run_pass(state: &AppState, masters: bool) -> Vec<VolumeReport> {
-    let _one_at_a_time = PASS.lock().unwrap_or_else(|poison| poison.into_inner());
+    let budget = &state.cache_budget;
+    let _one_at_a_time = budget
+        .pass
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
     let mut volumes: Vec<(u64, Vec<Folder>)> = Vec::new();
     for folder in folders(state) {
         let Some(device) = device_of(&folder.path) else {
@@ -276,7 +287,7 @@ fn run_pass(state: &AppState, masters: bool) -> Vec<VolumeReport> {
         .iter()
         .map(|(device, folders)| (*device, volume_limit(folders)))
         .collect();
-    *VOLUME_LIMITS.lock().unwrap() = limits.clone();
+    *budget.volume_limits.lock().unwrap() = limits.clone();
     // Masters only while no build runs, since a build may be reading one;
     // the stack worker is reserved only when a volume needs masters removed.
     let no_build = || {
@@ -286,7 +297,9 @@ fn run_pass(state: &AppState, masters: bool) -> Vec<VolumeReport> {
     };
     volumes
         .into_iter()
-        .filter_map(|(device, folders)| report_volume(device, &folders, limits[&device], &no_build))
+        .filter_map(|(device, folders)| {
+            report_volume(&budget.sizes, device, &folders, limits[&device], &no_build)
+        })
         .collect()
 }
 
@@ -300,7 +313,11 @@ fn volume_limit(folders: &[Folder]) -> u8 {
         .unwrap_or_else(max_volume_percent)
 }
 
+/// Each volume's cache sizes, by device, with when they were measured.
+type Sizes = Mutex<HashMap<u64, (Instant, CacheSizes)>>;
+
 fn report_volume(
+    known_sizes: &Sizes,
     device: u64,
     folders: &[Folder],
     limit: u8,
@@ -381,7 +398,7 @@ fn report_volume(
     }
     // Measured again after a cull, else at most hourly.
     let sizes = {
-        let cached = SIZES
+        let cached = known_sizes
             .lock()
             .unwrap()
             .get(&device)
@@ -392,7 +409,7 @@ fn report_volume(
             for folder in folders {
                 sizes.add(&folder.path);
             }
-            SIZES
+            known_sizes
                 .lock()
                 .unwrap()
                 .insert(device, (Instant::now(), sizes));
@@ -789,7 +806,7 @@ mod tests {
         let device = device_of(temp.path()).unwrap();
 
         // A limit of 0% asks for everything that may go.
-        let report = report_volume(device, &folders, 0, &|| None).unwrap();
+        let report = report_volume(&Sizes::default(), device, &folders, 0, &|| None).unwrap();
 
         assert_eq!(report.culled_files, 2);
         assert!(!cache.join("previews/old.png").exists());

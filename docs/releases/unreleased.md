@@ -13,6 +13,9 @@
 - The background jobs list in the header now shows calibration grading
   while it measures new calibration frames, and calibration health checks
   while they work through your projects.
+- The background jobs list also shows when the Calibration page reads
+  light headers for a project, with how many it has read, and when it
+  matches lights to flat groups.
 - When Seiza chooses a stack's reference frame and the plate solves show
   frames at more than one rotator angle, the reference now comes from the
   largest group. Before, a reference from a small group could reject every

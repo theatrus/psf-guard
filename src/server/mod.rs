@@ -1380,7 +1380,7 @@ async fn background_pregeneration_task(state: Arc<AppState>) {
             }
             // The cache volume is near its limit: previews made now would be
             // culled by the next pass and made again by the next scan.
-            if !cache_budget::room_for_previews(&ctx.cache_dir_path) {
+            if !cache_budget::room_for_previews(&state.cache_budget, &ctx.cache_dir_path) {
                 tracing::debug!(
                     "⏸️ Pre-generation paused (db={}): the cache volume is near its limit",
                     ctx.id
@@ -1474,7 +1474,7 @@ async fn background_pregeneration_task(state: Arc<AppState>) {
                 }
                 // And as soon as the volume nears its limit, so one scan
                 // cannot write a whole catalog past it.
-                if !cache_budget::room_for_previews(&ctx.cache_dir_path) {
+                if !cache_budget::room_for_previews(&state.cache_budget, &ctx.cache_dir_path) {
                     yielded_early = true;
                     break;
                 }

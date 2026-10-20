@@ -282,9 +282,36 @@ Then:
   puts that target back at the front of the analysis. The runner gathers
   the frames that need computing, so the start route only checks that the
   target exists and returns at once.
+- Calibration grading also waits on `CatalogJobs` for remote uploads to
+  pause ([`Settling`](../../src/server/job_line/catalog.rs)) before its
+  pass, and counts as busy meanwhile, so flat measuring waits for it.
+- The scan of newly arrived frames (`quality_arrival.rs`) is one job per
+  database: arrivals settle for two minutes, then the job queues the
+  database-wide analysis for the targets with unmeasured frames. A
+  database already scanning, or a catalog it cannot read, is looked at
+  again after 30 s. The frames it queued stay out of the next scans for a
+  day, in the job's own state.
+- The Calibration page's project scope (`calibration_scope.rs`) is one
+  runner per catalog. It refreshes scopes first and reads the light
+  headers the health pass has not kept in chunks of 32 between them, so a
+  scope grows as headers arrive. A project's read stops once no view has
+  asked for its scope for a minute. Its row, **Reading light headers**,
+  is a person's: a view asked for it.
+- What the flat groups feed (`flat_group_use.rs`) is one runner per
+  catalog, with a growing wait after a failed refresh. Its row, **Working
+  out what the flat groups feed**, is automatic.
 - Flat measuring, frame sites, the duplicate check, reject removal,
-  calibration grading, calibration health and quality scans all run on
-  `CatalogJobs`.
+  calibration grading, calibration health, quality scans, arrivals, the
+  calibration scope and flat group use all run on `CatalogJobs`. Their
+  state lives in their job, not in statics of its own.
+- Automatic import (`autoimport.rs`) is a schedule rather than a queue: a
+  loop looks every 30 s at which databases are due and starts the
+  ordinary import job, which has its own row. Its records and the lights
+  its runs left out live on `AppState`.
+- The storage budget (`cache_budget.rs`) keeps its volume limits, last
+  reports and cache sizes on `AppState` (`CacheBudget`). The limits a
+  person sets are a process-wide setting, applied from the registry like
+  the calibration and stacking settings.
 - Preview pre-generation (`preview_queue.rs`) is a bounded pool of short
   tasks and stays as it is.
 - Stack builds and WBPP runs wait in job lines rather than per-catalog

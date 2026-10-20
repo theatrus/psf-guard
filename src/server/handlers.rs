@@ -1263,7 +1263,7 @@ pub(crate) async fn execute_scheduler_sync_paths(
             &destination_id_for_cache,
             crate::server::stack_preview::automatic::RefreshReason::Sync,
         );
-        crate::server::quality_arrival::note_arrival(&state, &destination_id_for_cache);
+        crate::server::quality_arrival::note_arrival(state, &destination_id_for_cache);
         // Synced calibration frames are graded, and then every project's
         // calibration health is judged again.
         if let Some(destination) = state.get_database(&destination_id_for_cache) {
@@ -3584,14 +3584,19 @@ pub(crate) fn spawn_import_job_with_trigger(
         let dir_paths: Vec<std::path::PathBuf> =
             dirs.iter().map(std::path::PathBuf::from).collect();
         let shutdown = Arc::clone(&state.shutdown);
+        let blocking_state = Arc::clone(&state);
         let import_result = tokio::task::spawn_blocking(move || {
             // The calibration frames before, so flat measuring is asked only
             // for the rigs this import touched.
             let flats_before =
                 crate::server::flat_measure::rig_state_at(&blocking_ctx.database_path);
-            run_import_blocking(&blocking_ctx, &dir_paths, &blocking_options, &|| {
-                shutdown.is_stopping()
-            })
+            run_import_blocking(
+                &blocking_state.autoimport,
+                &blocking_ctx,
+                &dir_paths,
+                &blocking_options,
+                &|| shutdown.is_stopping(),
+            )
             .map(|outcome| (outcome, flats_before))
         })
         .await;
@@ -3680,6 +3685,7 @@ pub(crate) fn spawn_import_job_with_trigger(
 /// dedicated connection (never the shared request connection). A server stop
 /// (`stopping`) before the transaction leaves the catalog as it was.
 fn run_import_blocking(
+    autoimport: &crate::server::autoimport::AutoImportScheduler,
     ctx: &DatabaseContext,
     dirs: &[std::path::PathBuf],
     options: &crate::commands::import::ImportOptions,
@@ -3713,6 +3719,7 @@ fn run_import_blocking(
         prefiltered = known.len();
         files.retain(|path| !known.contains(path));
         left_out = crate::server::autoimport::take_left_out(
+            autoimport,
             &ctx.database_path,
             &light_filter,
             dirs,
@@ -3769,6 +3776,7 @@ fn run_import_blocking(
     let mut outcome = imp::import_frames(&mut conn, frames, &options)?;
     if options.only_new {
         crate::server::autoimport::remember_left_out(
+            autoimport,
             &ctx.database_path,
             &light_filter,
             &outcome.left_out_files,
