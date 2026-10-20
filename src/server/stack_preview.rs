@@ -1348,10 +1348,11 @@ impl StackPreviewManager {
             .unwrap_or(false)
     }
 
-    /// Stop every re-apply queued or running so other work gets the worker.
-    /// Each waits for its turn again rather than ending.
-    pub(super) fn yield_automatic_processing(&self) {
-        for run_id in self.automatic_processing_ids() {
+    /// Stop the server's re-applies, queued or running, in one project, so
+    /// a refresh's builds of that project get the worker. Each waits for its
+    /// turn again rather than ending.
+    pub(super) fn yield_automatic_processing(&self, database_id: &str, project_id: i32) {
+        for run_id in self.automatic_processing_ids(database_id, project_id) {
             self.yielded.lock().unwrap().insert(run_id.clone());
             self.request_cancel(&run_id);
         }

@@ -556,12 +556,15 @@ async fn tick(state: &Arc<AppState>) {
         for project_id in projects {
             match refresh_project(state, &ctx, project_id, pending.reason).await {
                 Ok(RefreshOutcome::Started) => {
-                    // The build goes ahead of a re-apply holding the worker,
-                    // which waits for its turn again. If the build makes a
-                    // newer stack, the re-apply moves on to it; nothing in
-                    // a re-apply touches a refresh, so the two cannot chase
-                    // each other.
-                    state.stack_previews.yield_automatic_processing();
+                    // The build goes ahead of a re-apply of this project
+                    // holding the worker, which waits for its turn again.
+                    // If the build makes a newer stack, the re-apply moves
+                    // on to it; nothing in a re-apply touches a refresh, so
+                    // the two cannot chase each other. Re-applies of other
+                    // projects run on.
+                    state
+                        .stack_previews
+                        .yield_automatic_processing(&key.database_id, project_id);
                     // One refresh's builds at a time: the rest of this
                     // database and every other due key are planned once
                     // these have run, keeping their history so the cap

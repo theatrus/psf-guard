@@ -346,7 +346,7 @@ fn start(
             });
             Ok(())
         })?;
-    Ok(job.status())
+    Ok(status(state, &ctx.database_path))
 }
 
 /// How a run ended short of its result.

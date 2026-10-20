@@ -351,6 +351,9 @@ async fn a_check_the_page_starts_runs_in_the_background_until_a_person_asks() {
     let person = fixture.state.begin_named_interactive_job("a stack build");
     let started = fixture.check_as(true).await;
     assert_eq!(started.priority.as_deref(), Some("background"));
+    // The reply carries the same text as the status route.
+    assert_eq!(started.title, "Checking for duplicates");
+    assert!(!started.label.is_empty());
     let began = Instant::now();
     let waiting = loop {
         let now = fixture.status().await;

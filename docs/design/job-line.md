@@ -337,10 +337,13 @@ interrupted builds. The scheduler still holds due refreshes before
 shared connection: it plans one refresh at a time, while no person's work
 has run for 30 seconds and no automatic build waits in the line or runs.
 Once planned, the line decides when the builds run. An automatic re-apply
-of processing is probed and queued once no person's work runs; in the
-line it is blocked by its target's channel key, so it waits only for
-builds of its own target, and a person's work preempts it like other
-automatic work. The stop snapshot the journal's last write needs lives in
+of processing is probed and queued once no person's work runs. In the
+line it is blocked by its target's channel key and by its project's key,
+which a build still being prepared holds, so it waits only for builds of
+its own target. A person's work preempts it like other automatic work. A
+refresh whose builds start stops the running automatic re-applies of its
+own project, which go back to waiting; re-applies of other projects run
+on. The stop snapshot the journal's last write needs lives in
 `journal::StopRecord`, not in the line, since it encodes the journal's
 restart rules.
 

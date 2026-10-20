@@ -2004,16 +2004,16 @@ fn submit_stretch_variant(
         Ok(submission) => {
             let automatic = state.stack_previews.is_automatic_processing(&stretch_id);
             // An automatic re-apply waits for builds of its own target,
-            // which may bring a newer stack it would only be redone for.
+            // which may bring a newer stack it would only be redone for. A
+            // build still being prepared holds its whole project.
             let blocked_by = automatic
                 .then(|| state.stack_previews.processing_scope(&stretch_id))
                 .flatten()
                 .map(|scope| {
-                    vec![super::channel_key(
-                        &scope.database_id,
-                        scope.project_id,
-                        scope.target_id,
-                    )]
+                    vec![
+                        super::channel_key(&scope.database_id, scope.project_id, scope.target_id),
+                        super::project_channels_key(&scope.database_id, scope.project_id),
+                    ]
                 })
                 .unwrap_or_default();
             let entry = super::Entry::new(

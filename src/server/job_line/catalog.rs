@@ -1,7 +1,11 @@
 //! Background jobs that run one thread per catalog.
 //!
-//! Flat measuring, frame sites, calibration grading, calibration health, the
-//! duplicate check and reject removal each keep a queue per catalog. The
+//! Each catalog job keeps a queue per catalog: flat measuring, frame sites,
+//! calibration grading and health, the duplicate check, reject removal,
+//! quality scans, arrivals, the Calibration page's header reads, flat group
+//! use, catalog upkeep, the stack preparation line, Target Scheduler imports
+//! and syncs, and backups. The registry of them is
+//! `crate::server::catalog_jobs::CatalogJobRegistry`, on `AppState`. The
 //! queue stores merged requests, retries that are due later, and work that
 //! Stop paused. While a catalog's queue has work, one runner thread
 //! processes it one item at a time; the thread exits when the queue is
@@ -14,11 +18,15 @@
 //! how to run it.
 
 use std::collections::HashMap;
-use std::sync::{Arc, LazyLock, Mutex, MutexGuard, RwLock};
+use std::sync::{Arc, Condvar, LazyLock, Mutex, MutexGuard, RwLock};
 use std::time::{Duration, Instant};
 
 use crate::concurrency::Stop;
 use crate::server::state::AppState;
+
+/// The longest a sleeping runner thread waits before it looks again, so it
+/// sees a server stop.
+const SHUTDOWN_LOOK: Duration = Duration::from_secs(1);
 
 /// What a catalog's runner thread does next.
 #[derive(Debug, PartialEq, Eq)]
@@ -127,7 +135,9 @@ pub trait CatalogWork: Sized + Send + Sync + 'static {
     fn after_queue_empty(_state: &Arc<AppState>, _catalog: &str) {}
 
     /// The runner thread panicked or could not start. Clear the running
-    /// state from the queue and the status, and record the error.
+    /// state from the queue and the status, and record the error. It runs
+    /// under the queue lock: a lock it takes must never be held by a caller
+    /// of [`CatalogJob::stop`] or [`CatalogJobs::request`].
     fn runner_failed(queue: &mut Self::Queue, status: &mut Self::Status);
 }
 
@@ -135,6 +145,9 @@ pub trait CatalogWork: Sized + Send + Sync + 'static {
 pub struct CatalogJob<W: CatalogWork> {
     queue: Mutex<Queued<W::Queue>>,
     status: RwLock<W::Status>,
+    /// Wakes a runner thread that sleeps until queued work is due, when a
+    /// request changes the queue.
+    wake: Condvar,
 }
 
 struct Queued<Q> {
@@ -160,6 +173,7 @@ impl<W: CatalogWork> Default for CatalogJob<W> {
         Self {
             queue: Mutex::new(Queued::default()),
             status: RwLock::new(W::Status::default()),
+            wake: Condvar::new(),
         }
     }
 }
@@ -309,6 +323,9 @@ impl<W: CatalogWork> CatalogJobs<W> {
         let (result, start) = {
             let mut queued = job.lock();
             let result = edit(&mut queued.queue);
+            // A runner that sleeps until queued work is due reads the change
+            // now.
+            job.wake.notify_all();
             let start = !queued.runner_active
                 && !state.shutdown.is_stopping()
                 && W::has_work(&queued.queue);
@@ -320,9 +337,15 @@ impl<W: CatalogWork> CatalogJobs<W> {
         if start {
             let (state, catalog, runner_job) =
                 (Arc::clone(state), catalog.to_string(), Arc::clone(&job));
+            // Work a runner starts on the async runtime, such as queueing a
+            // scan, needs a runtime on its thread.
+            let runtime = state.runtime();
             let started = std::thread::Builder::new()
                 .name(W::RUNNER.into())
-                .spawn(move || run_queue(&state, &catalog, &runner_job));
+                .spawn(move || {
+                    let _runtime = runtime.as_ref().map(|runtime| runtime.enter());
+                    run_queue(&state, &catalog, &runner_job)
+                });
             if let Err(error) = started {
                 tracing::warn!("Could not start {}: {error}", W::RUNNER);
                 job.runner_failed();
@@ -387,8 +410,13 @@ fn run_queue<W: CatalogWork>(state: &Arc<AppState>, catalog: &str, job: &Catalog
                     return;
                 }
                 Step::Sleep(wait) => {
+                    // A request wakes it early; the cap lets it see a
+                    // server stop soon, which wakes no one.
+                    let (queued, _) = job
+                        .wake
+                        .wait_timeout(queued, wait.min(SHUTDOWN_LOOK))
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
                     drop(queued);
-                    std::thread::sleep(wait);
                     continue;
                 }
                 Step::Run(item) => {
@@ -474,6 +502,112 @@ mod tests {
         job.queue().push(3);
         assert!(job.stop_if(|queue| !queue.is_empty()));
         assert!(stop.requested());
+    }
+
+    struct Sleeper;
+
+    impl CatalogWork for Sleeper {
+        /// When the queued number is due.
+        type Queue = Option<(Instant, u32)>;
+        type Status = Vec<u32>;
+        type Item = u32;
+        const RUNNER: &'static str = "sleeper";
+        const SHUTDOWN_WAITS_FOR: Option<&'static str> = None;
+
+        fn next(_: &AppState, _: &str, queue: &mut Self::Queue, now: Instant) -> Step<u32> {
+            match *queue {
+                None => Step::Exit,
+                Some((due, _)) if now < due => Step::Sleep(due - now),
+                Some((_, item)) => {
+                    *queue = None;
+                    Step::Run(item)
+                }
+            }
+        }
+
+        fn run(_: &Arc<AppState>, _: &str, job: &CatalogJob<Self>, item: u32, _: &Stop) {
+            job.update(|done| done.push(item));
+        }
+
+        fn runner_failed(_: &mut Self::Queue, _: &mut Vec<u32>) {}
+    }
+
+    struct RuntimeCheck;
+
+    impl CatalogWork for RuntimeCheck {
+        type Queue = bool;
+        /// Whether the run found an async runtime.
+        type Status = Option<bool>;
+        type Item = ();
+        const RUNNER: &'static str = "runtime-check";
+        const SHUTDOWN_WAITS_FOR: Option<&'static str> = None;
+
+        fn next(_: &AppState, _: &str, queue: &mut bool, _: Instant) -> Step<()> {
+            if std::mem::take(queue) {
+                Step::Run(())
+            } else {
+                Step::Exit
+            }
+        }
+
+        fn run(_: &Arc<AppState>, _: &str, job: &CatalogJob<Self>, (): (), _: &Stop) {
+            let found = tokio::runtime::Handle::try_current().is_ok();
+            job.update(|status| *status = Some(found));
+        }
+
+        fn runner_failed(_: &mut bool, _: &mut Option<bool>) {}
+    }
+
+    #[test]
+    fn a_runner_started_off_the_runtime_can_start_async_work() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let state = Arc::new(AppState::new_for_test(
+            rusqlite::Connection::open_in_memory().unwrap(),
+        ));
+        state.set_runtime(runtime.handle().clone());
+        let jobs = Arc::new(CatalogJobs::<RuntimeCheck>::new());
+        // A sync runner thread, say, raises the request: no runtime there.
+        let (requester_state, requester_jobs) = (Arc::clone(&state), Arc::clone(&jobs));
+        std::thread::spawn(move || {
+            requester_jobs.request(&requester_state, "c", |queue| *queue = true)
+        })
+        .join()
+        .unwrap();
+        let job = jobs.job("c");
+        let started = Instant::now();
+        while job.status().is_none() {
+            assert!(
+                started.elapsed() < Duration::from_secs(2),
+                "the runner never ran"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(job.status(), Some(true));
+    }
+
+    #[test]
+    fn a_request_wakes_a_runner_that_sleeps_until_work_is_due() {
+        let jobs = CatalogJobs::<Sleeper>::new();
+        let state = Arc::new(AppState::new_for_test(
+            rusqlite::Connection::open_in_memory().unwrap(),
+        ));
+        // Due in an hour: the runner sleeps.
+        jobs.request(&state, "c", |queue| {
+            *queue = Some((Instant::now() + Duration::from_secs(3600), 1))
+        });
+        std::thread::sleep(Duration::from_millis(50));
+        // Due now: the runner wakes and runs it at once.
+        let started = Instant::now();
+        jobs.request(&state, "c", |queue| *queue = Some((Instant::now(), 2)));
+        let job = jobs.job("c");
+        while job.status().is_empty() {
+            assert!(
+                started.elapsed() < Duration::from_millis(500),
+                "the runner kept sleeping"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(job.status(), [2]);
     }
 
     #[test]

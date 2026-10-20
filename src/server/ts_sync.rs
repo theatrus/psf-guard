@@ -385,18 +385,13 @@ fn import(state: &Arc<AppState>, job: &str, request: ImportRequest) -> Result<()
             return Err(e);
         }
     };
-    state
-        .databases
-        .write()
-        .unwrap()
-        .insert(entry.id.clone(), context.clone());
+    state.add_database(context.clone());
     state.ts_sync.update(job, |j| {
         j.catalog_id = Some(entry.id.clone());
         j.name = entry.name.clone();
         j.source_connected = entry.ts_sync.is_some();
     });
     let _ = context.ensure_cache_available();
-    super::catalog_upkeep::start(state, &context.database_path);
     super::calibration_quality::request(state, &context.database_path);
     super::flat_measure::queue(
         state,
@@ -499,8 +494,9 @@ pub fn spawn(state: Arc<AppState>) {
 /// its sync, and [`IMPORT_RUNNER`] for imports, which run one at a time.
 pub(crate) struct TsSyncWork;
 
-/// The runner of every import.
-const IMPORT_RUNNER: &str = "import";
+/// The runner of every import. No catalog id contains a colon, so it never
+/// shares a runner with a sync.
+const IMPORT_RUNNER: &str = "import:";
 
 /// The work asked for, until the runner takes it.
 #[derive(Default)]

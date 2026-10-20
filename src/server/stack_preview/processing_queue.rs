@@ -220,13 +220,21 @@ impl StackPreviewManager {
             .is_some_and(|run| run.automatic)
     }
 
-    /// Re-applies queued or running, which step aside for a person's work.
-    pub(super) fn automatic_processing_ids(&self) -> Vec<String> {
+    /// The server's re-applies, queued or running, in one project.
+    pub(super) fn automatic_processing_ids(
+        &self,
+        database_id: &str,
+        project_id: i32,
+    ) -> Vec<String> {
         self.processing
             .lock()
             .unwrap()
             .iter()
-            .filter(|(_, run)| run.automatic)
+            .filter(|(_, run)| {
+                run.automatic
+                    && run.scope.database_id == database_id
+                    && run.scope.project_id == project_id
+            })
             .map(|(run_id, _)| run_id.clone())
             .collect()
     }

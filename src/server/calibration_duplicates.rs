@@ -403,7 +403,7 @@ fn start(
             queue.pending = Some((action, Arc::clone(ctx)));
             Ok(())
         })?;
-    Ok(job.status())
+    Ok(status(state, &ctx.database_path))
 }
 
 /// How a run ended short of its result.

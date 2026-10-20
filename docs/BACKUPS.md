@@ -219,8 +219,8 @@ image folder paths in Settings › Databases if they differ.
 - Core: `src/backup/` (plan, archive, manifest, listing, pruning, schedule,
   secrets, online copy).
 - Server job and routes: `src/server/backup_job.rs`, under `/api/backups`.
-  One run at a time, server-wide, on one `CatalogJobs` runner keyed by the
-  server's backup manager; the handler only queues it. Stop requests the
+  One run at a time, server-wide, on one `CatalogJobs` runner under the
+  fixed key `backups`; the handler only queues it. Stop requests the
   run's `Stop`, and a run queued but not yet started begins stopped. It follows [the background job contract](design/background-jobs.md):
   a scheduled run is `Background` work that yields through
   `AppState::wait_for_interactive_work_unless`, so Stop also ends a wait,

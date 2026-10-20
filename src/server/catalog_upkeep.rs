@@ -55,6 +55,26 @@ pub(crate) struct Pairing {
     import_lock: Arc<TokioMutex<()>>,
 }
 
+/// The record of checked files, out of the queue while a pass updates it.
+/// Dropping it puts the record back.
+struct CheckedFiles<'a> {
+    job: &'a Job,
+    files: HashMap<PathBuf, FileStamp>,
+}
+
+impl<'a> CheckedFiles<'a> {
+    fn take(job: &'a Job) -> Self {
+        let files = std::mem::take(&mut job.queue().checked);
+        Self { job, files }
+    }
+}
+
+impl Drop for CheckedFiles<'_> {
+    fn drop(&mut self) {
+        self.job.queue().checked = std::mem::take(&mut self.files);
+    }
+}
+
 /// The piece of upkeep the runner takes next.
 pub(crate) enum Item {
     Indexes,
@@ -88,7 +108,9 @@ impl CatalogWork for CatalogUpkeep {
     type Item = Item;
     const RUNNER: &'static str = "catalog-upkeep";
     /// Shutdown waits for the index being built, the readout-mode chunk
-    /// being committed, or the pairing pass.
+    /// being committed, or the pairing pass to commit the headers it read.
+    /// Readout modes and pairing read no more headers once the server
+    /// stops.
     const SHUTDOWN_WAITS_FOR: Option<&'static str> = Some("catalog upkeep");
 
     fn next(_: &AppState, _: &str, queue: &mut Queue, _: Instant) -> Step<Item> {
@@ -118,10 +140,10 @@ impl CatalogWork for CatalogUpkeep {
             Item::Pairing(pairing) => {
                 job.update(|status| status.stage = UpkeepStage::PairingCopies);
                 // The pass reads and updates the record of checked files;
-                // the queue holds it between passes.
-                let mut checked = std::mem::take(&mut job.queue().checked);
-                pair_copies(path, &pairing, &mut checked);
-                job.queue().checked = checked;
+                // the queue holds it between passes, and gets it back even
+                // when the pass panics.
+                let mut checked = CheckedFiles::take(job);
+                pair_copies(path, &pairing, &mut checked.files, keep_going);
             }
         }
         job.update(|status| *status = UpkeepStatus::default());
@@ -255,7 +277,12 @@ fn read_readout_modes(path: &str, job: &Job, keep_going: impl Fn() -> bool) {
 /// Pair the calibrated and registered copies in a published tree with their
 /// lights. Stands aside while an import holds the catalog; the next refresh
 /// runs it again.
-fn pair_copies(path: &str, pairing: &Pairing, checked: &mut HashMap<PathBuf, FileStamp>) {
+fn pair_copies(
+    path: &str,
+    pairing: &Pairing,
+    checked: &mut HashMap<PathBuf, FileStamp>,
+    keep_going: impl Fn() -> bool,
+) {
     if !pairing.enabled.is_on() {
         return;
     }
@@ -263,7 +290,8 @@ fn pair_copies(path: &str, pairing: &Pairing, checked: &mut HashMap<PathBuf, Fil
     let outcome = match pairing.import_lock.try_lock() {
         Err(_) => Ok(None),
         Ok(_guard) => open(path).and_then(|mut conn| {
-            crate::frame_derivatives::pair_files_on_disk(&mut conn, &files, checked).map(Some)
+            crate::frame_derivatives::pair_files_on_disk(&mut conn, &files, checked, keep_going)
+                .map(Some)
         }),
     };
     match outcome {

@@ -872,6 +872,9 @@ pub fn api_router(state: Arc<AppState>) -> Router {
     // The MCP tools send their requests through this same router, as the
     // caller, so every gate the UI meets applies to an agent too.
     state.set_api_router(api_routes.clone());
+    if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+        state.set_runtime(runtime);
+    }
     api_routes
 }
 
@@ -1114,11 +1117,12 @@ async fn run_server_internal(
     crate::server::backup_job::spawn(Arc::clone(&state));
     crate::server::director::spawn_collaboration(Arc::clone(&state));
 
-    // Build PSF Guard's query indexes on each configured catalog, once, off
-    // the request path and before cache refreshes start long-lived reads.
-    // Startup is the quietest moment: no PSF Guard import or database
-    // management is in flight. An external writer can still win the race; the
-    // short index attempt then skips safely. See `spawn_query_index_build`.
+    // Each catalog's upkeep (query indexes, then readout modes) on its
+    // runner, off the request path and before cache refreshes start
+    // long-lived reads. A database added or changed later asks again
+    // (`AppState::add_database`). Each step uses a short busy timeout, so a
+    // writer holding the catalog wins and the step waits for the next
+    // request.
     {
         let paths: Vec<String> = state
             .databases

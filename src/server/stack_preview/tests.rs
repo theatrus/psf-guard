@@ -2948,8 +2948,16 @@ async fn a_refresh_build_goes_ahead_of_a_reapply_holding_the_worker() {
         the_automatic_run(&state).is_some()
     })
     .await;
+    let run = the_automatic_run(&state).unwrap();
+    // A refresh of another project leaves it be.
+    state
+        .stack_previews
+        .yield_automatic_processing(&run.database_id, run.project_id + 1);
+    assert!(the_automatic_run(&state).is_some());
     // The refresh's build goes ahead; the re-apply waits for its turn.
-    state.stack_previews.yield_automatic_processing();
+    state
+        .stack_previews
+        .yield_automatic_processing(&run.database_id, run.project_id);
     eventually("the re-apply steps aside", || {
         the_automatic_run(&state).is_none()
     })
@@ -2980,7 +2988,10 @@ async fn a_reapply_yielding_after_the_setting_went_off_stops_waiting() {
     // Switched off while it waits, which leaves it be; then it steps
     // aside for a refresh's build.
     reapply::configure(false);
-    state.stack_previews.yield_automatic_processing();
+    let run = the_automatic_run(&state).unwrap();
+    state
+        .stack_previews
+        .yield_automatic_processing(&run.database_id, run.project_id);
     eventually("it settles", || state.stack_previews.reapply_count() == 0).await;
     assert!(
         shown(&state, &"2".repeat(64)).is_none(),

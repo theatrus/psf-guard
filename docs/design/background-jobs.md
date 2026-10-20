@@ -266,7 +266,8 @@ Then:
   shows in the job line with Stop, and stops between frames, keeping the
   frames done.
 - Backups (`backup_job.rs`) run one at a time server-wide, on one
-  `CatalogJobs` runner keyed by the server's backup manager. A scheduled run
+  `CatalogJobs` runner under the fixed key `backups`; each server state has
+  its own `CatalogJobs`, so it is one runner per server. A scheduled run
   is `Background` and yields between files and SQLite steps; a run a person
   starts does not wait. Stop ends the run rather than pausing it: the
   schedule tries again at its next time.

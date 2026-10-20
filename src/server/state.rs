@@ -32,6 +32,9 @@ pub struct AppState {
     /// The `/api` router, once built; the MCP tools send their requests
     /// through it as the caller.
     api_router: std::sync::OnceLock<axum::Router>,
+    /// The server's async runtime, once it serves. Work threads enter it to
+    /// start async work such as a quality scan.
+    runtime: std::sync::OnceLock<tokio::runtime::Handle>,
     /// Canonical multi-DB state, keyed by slug.
     pub databases: RwLock<HashMap<String, Arc<DatabaseContext>>>,
     /// Pre-generation configuration (process-global).
@@ -488,6 +491,18 @@ impl AppState {
     pub fn api_router(&self) -> Option<axum::Router> {
         self.api_router.get().cloned()
     }
+
+    /// Keep the runtime the server runs on. Only the first call counts.
+    pub fn set_runtime(&self, runtime: tokio::runtime::Handle) {
+        let _ = self.runtime.set(runtime);
+    }
+
+    /// The runtime of the calling thread, or else the server's.
+    pub fn runtime(&self) -> Option<tokio::runtime::Handle> {
+        tokio::runtime::Handle::try_current()
+            .ok()
+            .or_else(|| self.runtime.get().cloned())
+    }
 }
 
 impl AppState {
@@ -524,6 +539,7 @@ impl AppState {
 
         Ok(Self {
             api_router: std::sync::OnceLock::new(),
+            runtime: std::sync::OnceLock::new(),
             databases: RwLock::new(map),
             pregeneration_config,
             storage_status: RwLock::new(StorageStatus::defaulting_to(&storage_roots.cache)),
@@ -820,6 +836,14 @@ impl AppState {
         self.databases.read().unwrap().get(slug).cloned()
     }
 
+    /// Serve `ctx` under its id, in place of any context there, and start
+    /// its catalog's upkeep: query indexes, readout modes and pairing.
+    pub fn add_database(self: &Arc<Self>, ctx: Arc<DatabaseContext>) {
+        let path = ctx.database_path.clone();
+        self.databases.write().unwrap().insert(ctx.id.clone(), ctx);
+        crate::server::catalog_upkeep::start(self, &path);
+    }
+
     /// Link every context of the catalog at `path` to this server, so a
     /// directory refresh the context finishes reaches this server's jobs.
     pub fn link_contexts(self: &Arc<Self>, path: &str) {
@@ -849,6 +873,7 @@ impl AppState {
 
         Self {
             api_router: std::sync::OnceLock::new(),
+            runtime: std::sync::OnceLock::new(),
             databases: RwLock::new(databases),
             pregeneration_config: crate::cli::PregenerationConfig::default(),
             storage_roots: crate::server::storage::StorageRoots::single("/tmp/psf-guard-test"),

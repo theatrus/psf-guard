@@ -330,22 +330,24 @@ impl BackupManager {
     /// Ask the run under way to stop. False when none runs. `runners` is
     /// the server's backup runners, which hold a run not taken yet.
     pub(crate) fn stop(&self, runners: &CatalogJobs<Backups>) -> bool {
-        let mut inner = self.inner.lock().unwrap();
-        match inner.job.as_mut() {
+        let running = match self.inner.lock().unwrap().job.as_mut() {
             Some(job) => {
                 job.stopping = true;
-                if let Some(runner) = runners.existing(RUNNER_KEY) {
-                    // A run the runner has not taken yet starts stopped.
-                    runner.stop(|queue| {
-                        if let Some(pending) = &mut queue.pending {
-                            pending.stopped = true;
-                        }
-                    });
-                }
                 true
             }
             None => false,
+        };
+        // The run's record is unlocked first: a failed runner frees the run's
+        // slot from under the queue lock.
+        if running && let Some(runner) = runners.existing(RUNNER_KEY) {
+            // A run the runner has not taken yet starts stopped.
+            runner.stop(|queue| {
+                if let Some(pending) = &mut queue.pending {
+                    pending.stopped = true;
+                }
+            });
         }
+        running
     }
 
     #[cfg(test)]

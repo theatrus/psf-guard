@@ -789,13 +789,8 @@ pub async fn add_database_route(
     reg.save(&registry_path)
         .map_err(|e| AppError::InternalError(format!("persisting registry: {}", e)))?;
 
-    state
-        .databases
-        .write()
-        .unwrap()
-        .insert(entry.id.clone(), ctx.clone());
     // Its query indexes and readout modes, as at start.
-    crate::server::catalog_upkeep::start(&state, &ctx.database_path);
+    state.add_database(ctx.clone());
 
     // Kick a background refresh for the newly-registered DB so file/dir caches
     // populate without the user having to refresh manually.
@@ -1053,15 +1048,11 @@ pub async fn update_database_route(
     reg.save(&registry_path)
         .map_err(|e| AppError::InternalError(format!("persisting registry: {}", e)))?;
 
-    {
-        let mut map = state.databases.write().unwrap();
-        // If slug changed, remove the old entry.
-        if new_id != db_id {
-            map.remove(&db_id);
-        }
-        map.insert(new_id.clone(), new_ctx.clone());
+    // If slug changed, remove the old entry.
+    if new_id != db_id {
+        state.databases.write().unwrap().remove(&db_id);
     }
-    crate::server::catalog_upkeep::start(&state, &new_ctx.database_path);
+    state.add_database(new_ctx.clone());
 
     let _ = new_ctx.ensure_cache_available();
     // Lights may be found elsewhere, or found at last.
@@ -1660,12 +1651,7 @@ pub async fn create_database_route(
     reg.save(&registry_path)
         .map_err(|e| AppError::InternalError(format!("persisting registry: {}", e)))?;
 
-    state
-        .databases
-        .write()
-        .unwrap()
-        .insert(entry.id.clone(), ctx.clone());
-    crate::server::catalog_upkeep::start(&state, &ctx.database_path);
+    state.add_database(ctx.clone());
 
     let options = crate::commands::import::ImportOptions {
         time_gap_days: req
