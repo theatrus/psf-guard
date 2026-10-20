@@ -239,10 +239,27 @@ Two things are serialized, for different reasons:
 - **The line carries the spec**: what to run now. It is a snapshot, right
   for handing to a worker and wrong as the record a restart rebuilds from.
 
-The line could carry only the request too, and prepare it when its turn
-comes, so a spec could never go stale while it waits. Build stacks would
-then list its channel builds only once it starts, rather than at once.
-That is left open.
+Step 8 changes this: **the line carries the request until its turn**, and
+the spec is made only then. A request is previewed when it is asked for
+and prepared again at its turn:
+
+- **Preview, on request.** The catalog's preparation runner reads enough
+  to list what the request becomes: Build stacks splits into one entry per
+  channel, each with its build record, so the page lists the channel builds
+  at once as now. Each entry carries its channel's request, not a spec.
+- **Prepare, at the turn.** When an entry reaches the front of its lane,
+  its task chooses frames, groups and calibration again from the catalog
+  as it is then, and runs the build with the lease held. When the prepared
+  build's content differs from the preview's, it runs under the new
+  content id, and the preview's record points to it (`replaced_by`), as a
+  record being prepared does now. A matching completed build is reused, as
+  now.
+- **A color composition** joins blocked by its target's channel keys and
+  is prepared at its turn, from the stacks its channels made. The separate
+  wait task and the second trip through the preparation runner go away.
+
+A spec is then never older than the turn it runs in. Its cost is a second
+read of the catalog, which happens while the lane is held.
 
 ### Waiting
 
@@ -293,10 +310,25 @@ Assignment works the same whether the worker is local or remote:
 - Stop is a message on the lease. The worker stops at its next checkpoint
   and hands back what it has, as a stopped build does now.
 
-A person's entry still interrupts automatic work: the coordinator stops the
-automatic entry at its checkpoint, the stopped build is cancelled, and its
-refresh queues it again later. Putting it back in its place instead would
-change behavior; step 2 kept it as it was, and it is still open.
+Step 9 puts **priority in the line**. Each entry carries its tier: a
+person's or automatic.
+
+- **Order.** A person's entry joins ahead of every automatic entry in its
+  lane, behind other people's entries. **Move to top** still moves any
+  entry.
+- **Preemption.** When a person's entry joins a lane on which automatic
+  work runs, the line stops the automatic entry at its checkpoint and puts
+  its request back in the line, ahead of the other automatic entries. It is
+  prepared again at its turn, and its checkpoint lets the build resume
+  where it stopped. The header lists it as queued automatic work.
+- **Work elsewhere.** An automatic entry does not start while a person's
+  work holds the interactive guard elsewhere on the server, such as a
+  quality scan, as the refresh scheduler's hold does now.
+
+This replaces `cancel_automatic`, the refresh scheduler's list of
+interrupted builds, and its hold of due refreshes: a due refresh puts its
+requests in the line, and the line decides when they run. Re-applies of
+processing yield the same way.
 
 Preparation keeps one runner per catalog on this server. A long preparation
 in one catalog then does not hold up another, as now.
@@ -394,7 +426,7 @@ kind and database, and maps each row with one function (`jobItem`). See
 
 ## Migration
 
-Steps 1 to 7 ship together in one PR. Each keeps behavior unless it says
+Steps 1 to 10 ship together in one PR. Each keeps behavior unless it says
 otherwise.
 
 1. **Move the line out of `stack_preview`.** *Built.*
@@ -414,8 +446,16 @@ otherwise.
 6. **WBPP as a second line.** *Built*, with PixInsight as its single lane
    and the dispatcher shared with the stack line.
 7. **The header route.** *Built.*
-8. **Remote workers** (later, its own design record): registration,
-   scoped input access, upload by digest, and assignment by `needs`.
+8. **Requests in the line.** Preview a request when it is asked for, and
+   prepare it at its turn. See [Requests and specs](#requests-and-specs).
+9. **Priority in the line.** Tiers order the line, a person's entry
+   preempts running automatic work back into the line, and the refresh
+   scheduler queues its requests rather than holding them. See
+   [Coordinator and workers](#coordinator-and-workers).
+10. **The remaining background work.** Quality scans and backfill on
+    `CatalogJobs`, and header rows for calibration grading and health.
+11. **Remote workers** (later, its own design record): registration,
+    scoped input access, upload by digest, and assignment by `needs`.
 
 Steps 1 and 2 give most of the cleanup. Step 3 is what remote work needs,
 and keeps the server's own work honest about its inputs even if remote
@@ -426,15 +466,14 @@ work never comes. Step 4 depends on step 2.
 - Preview pre-generation (`preview_queue.rs`) is a bounded pool of
   short tasks, not a line. It stays as it is.
 - The automatic refresh scheduler decides *what* to queue and when. It
-  stays separate and queues entries like any other caller.
+  stays separate and queues requests like any other caller; from step 9 the
+  line, not the scheduler, decides when they run.
 
 ## Open questions
 
 - Should `Target` waits also wait for an automatic refresh that is still
   settling for that project, so a composition does not start just before
   new frames are stacked?
-- Should a person's entry move ahead of automatic entries when it joins the
-  line, rather than relying on the interruption alone?
 - Should `Quick` stay a lane, or become a rule the main lane applies,
   "may run beside the current entry"?
 - Should the in-process worker go through the same lease and message path as
