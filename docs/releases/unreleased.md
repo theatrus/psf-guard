@@ -46,6 +46,21 @@
   calibration again when its turn comes. Grades you change while a build
   waits are used, and when the frames changed, the card follows the new
   build.
+- Sync, import and export previews now run as soon as you ask, and a newer
+  preview replaces one still running. In **Data Transfer** and **Remote PSF
+  Guard**, you can change the options while a preview runs: the
+  running preview stops and you can preview again at once. Before, the form
+  stayed locked until the preview finished, and a second import preview was
+  refused while the first ran. An import you start also replaces an import
+  preview that is still running.
+- The background jobs list in the header now shows previews, imports,
+  exports to the export folder, artifact searches and planning sent to a
+  remote site while they run. Previews, imports, exports, artifact searches
+  and star catalog installations have **Stop**. Stopping an import rolls it
+  back. Stopping an export keeps the files already placed, and the next
+  export skips them.
+- An artifact search now waits its turn in the stack queue like a build,
+  ahead of automatic work.
 
 ## Fixes
 

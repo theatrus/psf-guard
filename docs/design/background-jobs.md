@@ -281,10 +281,25 @@ Then:
   or changed, and calibrated-copy pairing after each directory refresh. Its
   row appears while it builds indexes, reads readout modes that are
   missing, or pairs copies.
-- The directory-tree revalidation (`DatabaseContext::get_directory_tree`)
-  stays a single deduplicated thread, marked with an `InFlight` claim. Its
-  callers, request helpers and command-line paths alike, hold only a
-  database context, not the server state that `CatalogJobs` needs.
+- A database's cache refreshes (`catalog_refresh.rs`) run on `CatalogJobs`,
+  one runner per database: the file-cache refresh the header lists as the
+  database's refresh, and the rebuild of a stale folder index while
+  requests use the stale one. A context reaches its server through its
+  `ServerLink`; a context no server works for, such as in a unit test,
+  keeps a thread of its own.
+- Imports (`import_job.rs`) that write run on `CatalogJobs`, one runner per
+  database, with a row and Stop, which rolls the transaction back. An
+  import preview is a preview, not a job: see
+  [Previews](job-line.md#previews-the-newest-request-wins).
+- Exports into the export folder (`export_job.rs`) run on `CatalogJobs`,
+  one runner per database, as a person's work, with a row and Stop, which
+  ends the export before its next file.
+- A star catalog installation (`catalog_install.rs`) is one download
+  server-wide. It holds the server stop's wait, ends when the server stops,
+  and its row has Stop.
+- The director's planning resends (`director/remote_push.rs`) run once per
+  peer when a site answers. They hold the server stop's wait, and the
+  header lists them as automatic work.
 - Calibration grading (`calibration_quality.rs`) is a Background runner per
   catalog. Its row in the job line appears once a pass has frames to
   measure; a pass that only regrades the library is quick and gets none.
@@ -322,14 +337,16 @@ Then:
   Scheduler syncs all run on `CatalogJobs`. Their state lives in their
   job, not in statics of its own.
 - Automatic import (`autoimport.rs`) is a schedule rather than a queue: a
-  loop looks every 30 s at which databases are due and starts the
-  ordinary import job, which has its own row. Its records and the lights
+  timer looks every 30 s at which databases are due and starts the
+  ordinary import job, which has its own row. Every timer runs through
+  `schedule::every`; see [Timers](job-line.md#timers). Its records and the lights
   its runs left out live on `AppState`.
 - The storage budget (`cache_budget.rs`) keeps its volume limits, last
   reports and cache sizes on `AppState` (`CacheBudget`). The limits a
   person sets are a process-wide setting, applied from the registry like
   the calibration and stacking settings.
 - Preview pre-generation (`preview_queue.rs`) is a bounded pool of short
-  tasks and stays as it is.
+  tasks and stays as it is, and so does the director's sky-image
+  generation, which renders on demand for display like an image preview.
 - Stack builds and WBPP runs wait in job lines rather than per-catalog
   queues; see [One job line](job-line.md).

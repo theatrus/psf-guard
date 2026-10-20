@@ -24,7 +24,10 @@ an entry is. See [Remote work](#remote-work).
 `src/server/job_line/` holds the job line, its dispatchers and the
 per-catalog job runner. Stack builds, preview re-renders, color
 compositions and processing runs go through the stack line; WBPP runs go
-through a second line; six per-catalog jobs run on `CatalogJobs`.
+through a second line; every per-catalog job runs on `CatalogJobs`;
+previews run at once as the newest request
+([Previews](#previews-the-newest-request-wins)); and timers run on one
+schedule type ([Timers](#timers)).
 
 The stack line:
 
@@ -62,9 +65,10 @@ The stack line:
   the line, however it ends: the line wakes its dispatchers when an entry
   ends or is settled after a stop.
 - **Reservations go first.** Work that takes the worker outside the line,
-  such as an artifact search or removing calibration masters, is counted
-  while it waits, and the dispatcher leaves the lane to it, as the old
-  semaphore's first-come order did.
+  which is now only removing calibration masters, is counted while it
+  waits, and the dispatcher leaves the lane to it, as the old semaphore's
+  first-come order did. An artifact search is a person's entry in the line
+  like a build.
 - **One dispatcher per lane, for every line.** `DispatchRules` names a
   line, its lanes and how each entry runs (its priority, and whether
   background work pauses for it). `JobLine::ensure_dispatching` starts the
@@ -404,8 +408,9 @@ Every background job that works on one catalog at a time runs on
 health, the duplicate check, reject removal, quality scans and the
 database-wide analysis, arrivals, the Calibration page's header reads,
 flat group use, catalog upkeep, the stack preparation line, Target
-Scheduler imports and syncs, and backups (one runner, server-wide). Each
-job implements `CatalogWork`:
+Scheduler imports and syncs, backups (one runner, server-wide), imports
+and exports of frames, and a database's cache refreshes (the file cache
+and the stale folder index). Each job implements `CatalogWork`:
 
 ```rust
 trait CatalogWork {
@@ -423,13 +428,15 @@ trait CatalogWork {
 
 `CatalogJobs` stores one job per catalog. `request` edits a catalog's
 queue and starts its runner thread when none exists and the queue has
-work. The runner thread runs each item when `next` returns it, sleeps while
-queued work is not due, and exits when the queue is empty or the server
-shuts down. Each item gets a fresh `Stop`; `CatalogJob::stop` edits the
+work. The runner thread enters the server's async runtime, so work it
+runs can start async work. It runs each item when `next` returns it,
+sleeps while queued work is not due, and exits when the queue is empty or
+the server shuts down. A request wakes a sleeping runner at once. Each item gets a fresh `Stop`; `CatalogJob::stop` edits the
 queue and requests it under one lock. When the runner thread panics or
 cannot start,
 `runner_failed` clears the running state and records the error, so the
-next request starts a new thread. Shutdown waits for an item only when
+next request starts a new thread. It runs under the queue lock, so a lock
+it takes must never be held by a caller of `stop` or `request`. Shutdown waits for an item only when
 `SHUTDOWN_WAITS_FOR` is set: the duplicate check stops at once, and the
 duplicate repair and reject removal register their own shutdown holds
 around their writes.
@@ -446,6 +453,45 @@ server started again in the same process, as the desktop app does, starts
 with none, and the caches each job keeps go with it. Shared flags are
 named types: `Stop` for a stop, `LiveSetting` for a setting changed on a
 live context, and `InFlight` for a mark its claim clears when dropped.
+
+## Previews: the newest request wins
+
+A preview of a sync, an import or an export is cheap next to a stack
+build, and a person waits for each one. Previews never wait in a line.
+`job_line::latest::LatestRequests` runs them: a request starts at once, as
+a person's work holding the interactive guard, and a newer request for the
+same subject stops the one before it. The older run sees its stop and ends
+early, and its result is dropped (`LatestRun::is_latest`). The registry is
+`AppState.previews`:
+
+| Kind | Keyed by | How a stop ends it |
+|---|---|---|
+| Sync between databases | the local database | the snapshot copy checks it; the dry run's SQLite connections are interrupted (`Stop::interrupts`) |
+| Import | the database | header reads stop at the next file; the rolled-back transaction is interrupted |
+| AstroBin export | the database | its result is dropped |
+| Sync with another server | the local database | the request to the peer is dropped; the local merge is interrupted |
+| Sync pushed here | the catalog and the source that sent it | as a sync between databases |
+
+An import that writes replaces an import preview. A preview never
+replaces an import that writes: it is refused while one runs. The pages
+keep their inputs live while a preview runs: a changed input stops the
+preview (`POST /api/previews/{kind}/{key}/stop`), and the page ignores a
+replaced request's reply. The header lists previews under way with Stop.
+
+The director's activation preview stays as it is: it runs on in-memory
+copies in moments, and the dialog already keeps only the reply for its
+current inputs.
+
+## Timers
+
+Work the server does on a timer runs through `schedule::every`: automatic
+import, Target Scheduler sync, backups, the job journal, the refresh
+scheduler, the stack folder sweep, the cache budget, the away-frame watch,
+the update notice, and the collaboration refresh and transfers. Each run
+is a task of its own, so a run that panics is logged and the next comes on
+time. The timer wakes as soon as the server stops, and holds the server
+state weakly. A run decides what is due and asks a job for it; long work
+belongs on the job machinery, not in the run.
 
 ## The header
 
