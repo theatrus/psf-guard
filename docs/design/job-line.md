@@ -396,9 +396,13 @@ this server may not have.
 
 ## Per-catalog jobs
 
-Flat measuring, frame sites, calibration grading, calibration health, the
-duplicate check and reject removal run on `CatalogJobs<W>`. Each job
-implements `CatalogWork`:
+Every background job that works on one catalog at a time runs on
+`CatalogJobs<W>`: flat measuring, frame sites, calibration grading and
+health, the duplicate check, reject removal, quality scans and the
+database-wide analysis, arrivals, the Calibration page's header reads,
+flat group use, catalog upkeep, the stack preparation line, Target
+Scheduler imports and syncs, and backups (one runner, server-wide). Each
+job implements `CatalogWork`:
 
 ```rust
 trait CatalogWork {
@@ -418,8 +422,9 @@ trait CatalogWork {
 queue and starts its runner thread when none exists and the queue has
 work. The runner thread runs each item when `next` returns it, sleeps while
 queued work is not due, and exits when the queue is empty or the server
-shuts down. Each item gets a fresh `Stop`; `CatalogJob::stop_running`
-requests it. When the runner thread panics or cannot start,
+shuts down. Each item gets a fresh `Stop`; `CatalogJob::stop` edits the
+queue and requests it under one lock. When the runner thread panics or
+cannot start,
 `runner_failed` clears the running state and records the error, so the
 next request starts a new thread. Shutdown waits for an item only when
 `SHUTDOWN_WAITS_FOR` is set: the duplicate check stops at once, and the
@@ -427,7 +432,17 @@ duplicate repair and reject removal register their own shutdown holds
 around their writes.
 
 What each job queues, when an item is due, and what it does stay in its
-own module.
+own module. Requests that run once they stop arriving keep a `Settling` in
+their queue: it runs them a quiet interval after the last one, or a
+longest wait after the first. `after_queue_empty` runs once the queue is
+empty, as calibration grading uses to request one health pass after its
+last pass.
+
+The jobs live on `AppState` (`CatalogJobRegistry`), not in statics, so a
+server started again in the same process, as the desktop app does, starts
+with none, and the caches each job keeps go with it. Shared flags are
+named types: `Stop` for a stop, `LiveSetting` for a setting changed on a
+live context, and `InFlight` for a mark its claim clears when dropped.
 
 ## The header
 
