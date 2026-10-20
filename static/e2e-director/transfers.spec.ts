@@ -6,6 +6,25 @@ import path from 'node:path';
 import { applyRealSchema } from '../e2e/fixtures/sync';
 import { openSettings } from '../e2e/helpers';
 import type { TransferJob } from '../src/api/transferTypes';
+import type { JobRow } from '../src/api/types';
+
+// The header row the server builds from a transfer (`transfer_row` in
+// src/server/jobs.rs). The server reads transfers from the Director, which
+// this test replaces in the browser, so the test adds the row itself.
+function transferRow(job: TransferJob): JobRow | null {
+  if (job.state === 'complete' || job.state === 'cancelled') return null;
+  const active = job.state === 'uploading' || job.state === 'preparing';
+  const sent = job.completed_bytes + job.sent_bytes;
+  const labels: Record<string, string> = { preparing: 'Checking files', review: 'Review required', queued: 'Pending', uploading: 'Uploading', paused: 'Paused', retry: 'Retry scheduled', needs_review: 'Needs attention' };
+  return {
+    key: `transfer:${job.id}`, kind: 'transfer', title: 'Transfers', scope: `${job.catalog} · ${job.label}`,
+    detail: job.error ?? `${job.completed_files}/${job.total_files} files · ${(sent / 1024 / 1024).toFixed(1)} MiB`,
+    status: active ? 'running' : job.state === 'review' || job.state === 'needs_review' ? 'attention' : job.state === 'queued' ? 'queued' : 'waiting',
+    background: false, automatic: false, stoppable: false,
+    percent: active && job.total_bytes > 0 ? Math.min(100, (100 * sent) / job.total_bytes) : null,
+    state_label: labels[job.state], hint: job.current_file || undefined, transfer: job,
+  };
+}
 
 test('pending uploads offer stacks and remain visible and controllable in background activity', async ({ page, request }, testInfo) => {
   const root = mkdtempSync(path.join(process.env.PSF_GUARD_DIRECTOR_E2E_TMP!, 'transfers-'));
@@ -17,6 +36,11 @@ test('pending uploads offer stacks and remain visible and controllable in backgr
   const operations: Record<string, unknown>[] = []; const jobs: TransferJob[] = [];
   const errors: string[] = []; page.on('pageerror', e => errors.push(e.message));
   await page.route('**/api/director/v1/transfers', r => r.fulfill({ json: { success: true, data: { jobs, policies: [] } } }));
+  await page.route('**/api/jobs', async route => {
+    const reply = await (await route.fetch()).json();
+    reply.data.jobs.push(...jobs.map(transferRow).filter(row => row !== null));
+    await route.fulfill({ json: reply });
+  });
   await page.route('**/api/director/v1/rigs/*/collaboration', r => r.fulfill({ json: { success: true, data: [{ status: 'registered', binding: { id: connection, rig_id: randomUUID(), name: 'Transfer rig', base_url: 'https://collab.example/', agent_id: '000000000001', state: 'registered', allow_loopback_http: false } }] } }));
   await page.route(`**/api/director/v1/collaboration/${connection}/work`, async route => {
     const input = route.request().postDataJSON(); operations.push(input); let data: unknown = {};
