@@ -90,6 +90,7 @@ pub enum RowKind {
     FlatUse,
     Upkeep,
     Preview,
+    Import,
 }
 
 /// The two lines a person can reorder. Each runs one job at a time.
@@ -123,6 +124,7 @@ pub enum RowControl {
     WbppRunning { db_id: String },
     WbppQueued { db_id: String, queue_id: String },
     Preview { preview: PreviewKind, db_id: String },
+    Import { db_id: String },
 }
 
 /// A view in the app.
@@ -308,6 +310,9 @@ pub struct DatabaseState {
     /// Whether what the flat groups feed is being worked out.
     pub flat_use: bool,
     pub upkeep: crate::server::catalog_upkeep::UpkeepStatus,
+    /// An import that writes, while it runs. A preview is listed with the
+    /// previews.
+    pub import: Option<crate::server::import_job::ImportJobProgress>,
 }
 
 /// A Target Scheduler sync or import job, as the rows need it.
@@ -737,6 +742,42 @@ fn grading_row(db: &DatabaseState, interactive: Option<&str>) -> JobRow {
 /// reading the readout modes of calibration frames that lack them, or
 /// pairing calibrated copies with their lights. Always automatic. Reading
 /// readout modes gets a row only once it has frames to read.
+/// An import that writes. A scheduled one is automatic work.
+fn import_row(db: &DatabaseState, import: &crate::server::import_job::ImportJobProgress) -> JobRow {
+    let automatic = import.trigger == "automatic";
+    let detail = match import.stage.as_str() {
+        "importing" => "Writing frames to the catalog".to_string(),
+        _ => format!(
+            "{} of {} {} read",
+            grouped(import.scanned_files.min(import.total_files)),
+            grouped(import.total_files),
+            plural(import.total_files, "header", "headers")
+        ),
+    };
+    JobRow {
+        detail,
+        percent: (import.stage == "scanning")
+            .then(|| percent(import.scanned_files, import.total_files))
+            .flatten(),
+        background: automatic,
+        automatic,
+        control: Some(RowControl::Import {
+            db_id: db.id.clone(),
+        }),
+        stoppable: true,
+        ..JobRow::new(
+            format!("import:{}", db.id),
+            RowKind::Import,
+            if automatic {
+                "Importing new frames"
+            } else {
+                "Importing frames"
+            },
+            &db.name,
+        )
+    }
+}
+
 fn upkeep_row(db: &DatabaseState) -> Option<JobRow> {
     use crate::server::catalog_upkeep::UpkeepStage;
     let upkeep = &db.upkeep;
@@ -1435,6 +1476,9 @@ pub fn rows(snapshot: &Snapshot, project_of: ProjectOf) -> Vec<JobRow> {
         if let Some(row) = upkeep_row(db) {
             rows.push(row);
         }
+        if let Some(import) = &db.import {
+            rows.push(import_row(db, import));
+        }
     }
     // Running builds first, then the line in order.
     let mut stacks: Vec<&StackActivityEntry> = snapshot.stacks.active.iter().collect();
@@ -1553,6 +1597,10 @@ fn snapshot(state: &Arc<AppState>, transfers: Vec<Value>, manages: bool) -> Snap
             header_reads: crate::server::calibration_scope::header_reads(state, &ctx.database_path),
             flat_use: crate::server::flat_group_use::refreshing(state, &ctx.database_path),
             upkeep: crate::server::catalog_upkeep::status(state, &ctx.database_path),
+            import: Some(crate::server::import_job::progress_snapshot(
+                &ctx.import_job,
+            ))
+            .filter(|progress| progress.running && !progress.preview),
         })
         .collect();
     let backups_allowed = manages && crate::server::handlers::require_registry_path(state).is_ok();

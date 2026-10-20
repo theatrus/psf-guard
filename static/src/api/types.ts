@@ -2047,11 +2047,12 @@ export type JobControl =
   | { kind: 'ts-sync'; job_id: string }
   | { kind: 'wbpp-running'; db_id: string }
   | { kind: 'wbpp-queued'; db_id: string; queue_id: string }
-  | { kind: 'preview'; preview: PreviewKind; db_id: string };
+  | { kind: 'preview'; preview: PreviewKind; db_id: string }
+  | { kind: 'import'; db_id: string };
 
 /** What a preview previews. Mirrors `PreviewKind` in
  *  `src/server/previews.rs`. */
-export type PreviewKind = 'sync';
+export type PreviewKind = 'sync' | 'import';
 
 /** The view that shows what a job works on: `/{view}?db=…&project=…&target=…`,
  *  then `params` in order. */
@@ -2066,7 +2067,7 @@ export interface JobLink {
 /** One job in the header's list, as `GET /api/jobs` returns it. */
 export interface JobRow {
   key: string;
-  kind: 'refresh' | 'quality' | 'flats' | 'sites' | 'duplicates' | 'rejects' | 'stack' | 'processing' | 'wbpp' | 'transfer' | 'backup' | 'catalog' | 'grading' | 'health' | 'headers' | 'flat_use' | 'upkeep' | 'preview';
+  kind: 'refresh' | 'quality' | 'flats' | 'sites' | 'duplicates' | 'rejects' | 'stack' | 'processing' | 'wbpp' | 'transfer' | 'backup' | 'catalog' | 'grading' | 'health' | 'headers' | 'flat_use' | 'upkeep' | 'preview' | 'import';
   title: string;
   scope: string;
   detail: string;
@@ -3446,6 +3447,9 @@ export interface CalibrationDuplicateStatus {
 /** Progress of the singleton per-DB import job (poll ~1s while running). */
 export interface ImportJobProgress {
   running: boolean;
+  /** Whether the run is a preview, which writes nothing. A newer preview,
+   *  or an import, replaces it. */
+  preview?: boolean;
   /** scanning | importing | complete | error | "" (never ran) */
   stage: string;
   image_dirs: string[];

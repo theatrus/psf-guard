@@ -41,10 +41,10 @@ pub use image_routes::{batch_update_image_grades, get_image, get_images, update_
 use import_routes::{fill_missing_star_metadata, sanitize_file_stem, unique_db_file};
 pub use import_routes::{
     get_autoimport_status, get_import_folders, get_import_progress, run_autoimport_now,
-    start_import_route, ImportFolder,
+    start_import_route, stop_import_route, ImportFolder,
 };
 pub(crate) use import_routes::{
-    spawn_import_job, spawn_import_job_with_trigger, spawn_quality_backfill,
+    run_import, spawn_import_job, spawn_import_job_with_trigger, spawn_quality_backfill,
 };
 pub use overview::{get_overall_stats, get_projects_overview, get_targets_overview};
 #[cfg(test)]

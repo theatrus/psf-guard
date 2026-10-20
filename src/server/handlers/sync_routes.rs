@@ -60,15 +60,6 @@ impl SyncGuardMode {
     }
 }
 
-/// How many SQLite steps a preview takes between looks at its stop.
-const PREVIEW_STOP_LOOK_EVERY: i32 = 10_000;
-
-/// Let `stop` interrupt the statement `connection` runs.
-fn stop_interrupts(connection: &rusqlite::Connection, stop: &Stop) {
-    let stop = stop.clone();
-    let _ = connection.progress_handler(PREVIEW_STOP_LOOK_EVERY, Some(move || stop.requested()));
-}
-
 /// A preview stopped before it finished: a newer preview of the same sync
 /// replaced it, or a person stopped it.
 #[derive(Debug)]
@@ -292,8 +283,8 @@ pub(crate) async fn execute_scheduler_sync_paths(
                 open_scheduler_sync_connections(&source_path, &destination_path)?;
             let preview_stop = guard_mode.preview_stop().cloned();
             if let Some(stop) = &preview_stop {
-                stop_interrupts(&source, stop);
-                stop_interrupts(&destination, stop);
+                stop.interrupts(&source);
+                stop.interrupts(&destination);
             }
             // An interrupted statement fails with SQLite's interrupt error;
             // a preview reports that it stopped instead.

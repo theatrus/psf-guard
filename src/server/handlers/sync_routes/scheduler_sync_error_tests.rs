@@ -87,7 +87,7 @@ fn a_stopped_preview_is_a_conflict() {
 fn a_preview_stop_interrupts_the_statement_under_way() {
     let connection = rusqlite::Connection::open_in_memory().unwrap();
     let stop = Stop::new();
-    stop_interrupts(&connection, &stop);
+    stop.interrupts(&connection);
     let count =
         "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1000000) \
                  SELECT COUNT(*) FROM n";

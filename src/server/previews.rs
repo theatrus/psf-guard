@@ -19,6 +19,8 @@ use crate::server::state::AppState;
 pub enum PreviewKind {
     /// A sync between two databases.
     Sync,
+    /// An import of frames into a database.
+    Import,
 }
 
 /// The previews under way, by kind. Each is keyed by the database whose
@@ -27,6 +29,8 @@ pub enum PreviewKind {
 pub struct Previews {
     /// Database syncs, by the local database.
     pub sync: LatestRequests<String>,
+    /// Imports, by the database they import into.
+    pub import: LatestRequests<String>,
 }
 
 /// A preview under way, for the jobs route.
@@ -43,12 +47,13 @@ impl Previews {
     fn of(&self, kind: PreviewKind) -> &LatestRequests<String> {
         match kind {
             PreviewKind::Sync => &self.sync,
+            PreviewKind::Import => &self.import,
         }
     }
 
     /// Every preview under way, oldest first within each kind.
     pub fn running(&self) -> Vec<PreviewRun> {
-        [PreviewKind::Sync]
+        [PreviewKind::Sync, PreviewKind::Import]
             .into_iter()
             .flat_map(|kind| {
                 self.of(kind).running().into_iter().map(

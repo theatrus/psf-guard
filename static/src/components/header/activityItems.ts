@@ -12,7 +12,8 @@ export type ActivityControl =
   | { kind: 'ts-sync'; jobId: string }
   | { kind: 'wbpp-running'; dbId: string }
   | { kind: 'wbpp-queued'; dbId: string; queueId: string }
-  | { kind: 'preview'; preview: PreviewKind; dbId: string };
+  | { kind: 'preview'; preview: PreviewKind; dbId: string }
+  | { kind: 'import'; dbId: string };
 
 /** The two lines a person can reorder. Each runs one job at a time. */
 export type ActivityQueue = 'stack' | 'wbpp';

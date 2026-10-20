@@ -21,6 +21,7 @@ pub struct CatalogJobRegistry {
     pub(crate) catalog_upkeep: CatalogJobs<crate::server::catalog_upkeep::CatalogUpkeep>,
     pub(crate) backups: CatalogJobs<crate::server::backup_job::Backups>,
     pub(crate) ts_sync: CatalogJobs<crate::server::ts_sync::TsSyncWork>,
+    pub(crate) imports: CatalogJobs<crate::server::import_job::Imports>,
 }
 
 #[cfg(test)]

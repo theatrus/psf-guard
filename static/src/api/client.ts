@@ -1964,6 +1964,13 @@ export const apiClient = {
     return data.data;
   },
 
+  /** Stop the database's import or import preview. An import that is
+   *  writing rolls back. */
+  stopImport: async (dbId: string): Promise<void> => {
+    const apiInstance = await getApi();
+    await apiInstance.post(dbPath(dbId, '/import/stop'));
+  },
+
   cancelFlatMeasure: async (dbId: string): Promise<FlatMeasureStatus> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.post<ApiResponse<FlatMeasureStatus>>(

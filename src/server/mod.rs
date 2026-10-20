@@ -593,6 +593,7 @@ pub fn api_router(state: Arc<AppState>) -> Router {
             "/import",
             post(handlers::start_import_route).get(handlers::get_import_progress),
         )
+        .route("/import/stop", post(handlers::stop_import_route))
         .route(
             "/calibrated-copies",
             get(handlers::get_calibrated_copies).put(handlers::update_calibrated_copies),

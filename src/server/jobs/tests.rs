@@ -939,6 +939,46 @@ fn catalog_installs_show_bytes_or_files() {
 }
 
 #[test]
+fn an_import_shows_its_header_reads_and_stop() {
+    let import = crate::server::import_job::ImportJobProgress {
+        running: true,
+        stage: "scanning".into(),
+        total_files: 400,
+        scanned_files: 100,
+        trigger: "automatic".into(),
+        ..Default::default()
+    };
+    let rows = row_list(&with_db(DatabaseState {
+        import: Some(import.clone()),
+        ..db("db-1", "Home")
+    }));
+    let row = rows.iter().find(|row| row.kind == RowKind::Import).unwrap();
+    assert_eq!(row.title, "Importing new frames");
+    assert_eq!(row.detail, "100 of 400 headers read");
+    assert_eq!(row.percent, Some(25.0));
+    assert!(row.automatic && row.background && row.stoppable);
+    assert_eq!(
+        row.control,
+        Some(RowControl::Import {
+            db_id: "db-1".into()
+        })
+    );
+
+    let rows = row_list(&with_db(DatabaseState {
+        import: Some(crate::server::import_job::ImportJobProgress {
+            stage: "importing".into(),
+            trigger: "manual".into(),
+            ..import
+        }),
+        ..db("db-1", "Home")
+    }));
+    let row = rows.iter().find(|row| row.kind == RowKind::Import).unwrap();
+    assert_eq!(row.title, "Importing frames");
+    assert_eq!(row.detail, "Writing frames to the catalog");
+    assert!(!row.background && row.percent.is_none());
+}
+
+#[test]
 fn a_preview_is_a_persons_work_that_stop_ends() {
     let row = row_list(&Snapshot {
         databases: vec![db("db-1", "Home")],

@@ -171,6 +171,16 @@ impl Stop {
         std::sync::Arc::ptr_eq(&self.0, &other.0)
     }
 
+    /// Let this stop interrupt the statement `connection` runs: SQLite ends
+    /// it with an interrupt error within a few thousand steps, and a
+    /// transaction it was in rolls back when dropped.
+    pub fn interrupts(&self, connection: &rusqlite::Connection) {
+        /// How many SQLite steps run between looks at the stop.
+        const LOOK_EVERY: i32 = 10_000;
+        let stop = self.clone();
+        let _ = connection.progress_handler(LOOK_EVERY, Some(move || stop.requested()));
+    }
+
     /// The flag itself, for code that checks an `&AtomicBool`.
     pub fn as_flag(&self) -> &AtomicBool {
         &self.0

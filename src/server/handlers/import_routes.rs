@@ -192,6 +192,18 @@ pub async fn run_autoimport_now(
     })))
 }
 
+/// `POST /api/db/{db_id}/import/stop` — stop the database's import or
+/// import preview. An import that is writing rolls back. Replies whether
+/// one was running.
+pub async fn stop_import_route(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+) -> Json<ApiResponse<bool>> {
+    Json(ApiResponse::success(crate::server::import_job::stop(
+        &state, &ctx,
+    )))
+}
+
 /// `GET /api/db/{db_id}/import` — import job progress (1s poll).
 pub async fn get_import_progress(
     ctx: DbContext,
@@ -237,10 +249,11 @@ pub(super) fn unique_db_file(base: &std::path::Path, stem: &str) -> std::path::P
     unreachable!()
 }
 
-/// Launch the singleton import job for one database: header scan → one-shot
-/// import transaction. Optional quality work starts afterwards with the
-/// background worker budget and does not delay import completion.
-/// Returns false when a job is already running for this database.
+/// Start an import into one database: a preview runs at once, and a run
+/// that writes queues on the database's import runner. Optional quality
+/// work starts afterwards with the background worker budget and does not
+/// delay import completion. Returns false when a run that writes holds the
+/// database's import record.
 pub(crate) fn spawn_import_job(
     state: &Arc<AppState>,
     ctx: Arc<DatabaseContext>,
@@ -266,135 +279,207 @@ pub(crate) fn spawn_import_job_with_trigger(
     if state.shutdown.is_stopping() {
         return false;
     }
-    if !job::try_begin(&ctx.import_job, dirs.clone()) {
-        return false;
+    if options.dry_run {
+        return start_import_preview(state, ctx, dirs, options);
     }
-    job::set_trigger(&ctx.import_job, trigger);
+    let Some(claim) = job::try_begin(&ctx.import_job, dirs.clone(), false) else {
+        return false;
+    };
+    // The import replaces a preview under way: it was asked for after it.
+    state
+        .previews
+        .stop(crate::server::previews::PreviewKind::Import, &ctx.id);
+    job::set_trigger(&ctx.import_job, claim, trigger);
     tracing::info!(
-        "📥 Import started for db={} ({} director{})",
+        "📥 Import queued for db={} ({} director{})",
         ctx.id,
         dirs.len(),
         if dirs.len() == 1 { "y" } else { "ies" }
     );
+    let run = job::ImportRun {
+        ctx: Arc::clone(&ctx),
+        dirs,
+        options,
+        backfill,
+        fill_metadata,
+        claim,
+        automatic: trigger == "automatic",
+    };
+    state
+        .catalog_jobs
+        .imports
+        .request(state, &ctx.id, |queue| queue.pending = Some(run));
+    true
+}
 
-    let state = state.clone();
-    // A stop lets an import already writing its transaction finish.
-    let work = state.shutdown.hold(format!("import (db={})", ctx.id));
-    tokio::spawn(async move {
-        let _work = work;
-        let job_store = ctx.import_job.clone();
+/// Preview an import at once: read the headers and run the import
+/// transaction, then roll it back. A newer preview, or an import, stops it.
+fn start_import_preview(
+    state: &Arc<AppState>,
+    ctx: Arc<DatabaseContext>,
+    dirs: Vec<String>,
+    options: crate::commands::import::ImportOptions,
+) -> bool {
+    use crate::server::import_job as job;
+
+    let Some(runtime) = state.runtime() else {
+        return false;
+    };
+    let Some(claim) = job::try_begin(&ctx.import_job, dirs.clone(), true) else {
+        return false;
+    };
+    job::set_trigger(&ctx.import_job, claim, "manual");
+    let run = state.previews.import.start(
+        state,
+        ctx.id.clone(),
+        format!("Previewing an import into {}", ctx.name),
+    );
+    let state = Arc::clone(state);
+    runtime.spawn(async move {
+        // The rolled-back transaction still takes the catalog's write lock.
         let _import_guard = ctx.image_import_mutex.lock().await;
-
-        let blocking_ctx = ctx.clone();
-        let blocking_options = options.clone();
-        let dir_paths: Vec<std::path::PathBuf> =
-            dirs.iter().map(std::path::PathBuf::from).collect();
-        let shutdown = Arc::clone(&state.shutdown);
+        let store = Arc::clone(&ctx.import_job);
+        if !job::is_current(&store, claim) {
+            return;
+        }
+        let stop = run.stop().clone();
         let blocking_state = Arc::clone(&state);
-        let import_result = tokio::task::spawn_blocking(move || {
-            // The calibration frames before, so flat measuring is asked only
-            // for the rigs this import touched.
-            let flats_before =
-                crate::server::flat_measure::rig_state_at(&blocking_ctx.database_path);
+        let blocking_ctx = Arc::clone(&ctx);
+        let preview = tokio::task::spawn_blocking(move || {
+            let dir_paths: Vec<std::path::PathBuf> =
+                dirs.iter().map(std::path::PathBuf::from).collect();
             run_import_blocking(
                 &blocking_state.autoimport,
                 &blocking_ctx,
                 &dir_paths,
-                &blocking_options,
-                &|| shutdown.is_stopping(),
+                &options,
+                claim,
+                &stop,
+                &|| blocking_state.shutdown.is_stopping() || stop.requested(),
             )
-            .map(|outcome| (outcome, flats_before))
         })
         .await;
-
-        let (outcome, flats_before) = match import_result {
-            Ok(Ok(outcome)) => outcome,
-            Ok(Err(e)) => {
-                tracing::warn!("📥 Import for db={} failed: {:#}", ctx.id, e);
-                job::finish(&job_store, Some(format!("{:#}", e)));
-                return;
-            }
-            Err(join_err) => {
-                tracing::error!("📥 Import task for db={} panicked: {}", ctx.id, join_err);
-                job::finish(
-                    &job_store,
-                    Some(format!("import task panicked: {join_err}")),
-                );
-                return;
-            }
-        };
-
-        tracing::info!(
-            "📥 Import for db={} done: {} imported, {} projects, {} targets{}",
-            ctx.id,
-            outcome.imported,
-            outcome.projects_created,
-            outcome.targets_created,
-            if outcome.dry_run { " (dry-run)" } else { "" }
-        );
-        let mut target_ids = outcome.created_target_ids.clone();
-        for id in &outcome.attached_target_ids {
-            if !target_ids.contains(id) {
-                target_ids.push(*id);
-            }
+        match preview {
+            Ok(Ok(outcome)) => job::complete_import(&store, claim, outcome),
+            Ok(Err(error)) => job::finish(&store, claim, Some(format!("{error:#}"))),
+            Err(join_error) => job::finish(
+                &store,
+                claim,
+                Some(format!("import preview panicked: {join_error}")),
+            ),
         }
-        let dry_run = outcome.dry_run;
-        let imported_any = outcome.imported > 0;
-        job::complete_import(&job_store, outcome);
-        if !dry_run {
-            state.auto_stacks.touch_database(
-                &ctx.id,
-                crate::server::stack_preview::automatic::RefreshReason::Arrival,
-            );
-        }
-
-        // New rows reference files the DB-based file cache hasn't seen; kick
-        // the normal background refresh so the UI resolves them promptly.
-        let _ = ctx.ensure_cache_available();
-
-        // New calibration frames are graded before a stack or an export
-        // relies on them; with none to measure this regrades the library.
-        if !dry_run {
-            crate::server::calibration_quality::request(&state, &ctx.database_path);
-            // The flat sessions it touched are measured once grading is done,
-            // and new lights shot during a change are asked which side they
-            // are on.
-            let (flat_state, path) = (Arc::clone(&state), ctx.database_path.clone());
-            let _ = tokio::task::spawn_blocking(move || {
-                crate::server::flat_measure::queue_change(
-                    &flat_state,
-                    &path,
-                    flats_before.as_ref(),
-                    imported_any,
-                )
-            })
-            .await;
-        }
-
-        // Quality analysis is a general database maintenance job, not an
-        // import stage. An opt-in import only queues the changed targets;
-        // otherwise a database that analyzes new frames queues them itself.
-        // A backfill already running refuses this one; the arrival queue
-        // then picks the frames up once it finishes, if the database asks.
-        let queued = backfill
-            && !target_ids.is_empty()
-            && spawn_quality_backfill(&state, ctx.clone(), target_ids, false, fill_metadata);
-        if !queued && !dry_run && imported_any {
-            crate::server::quality_arrival::note_arrival(&state, &ctx.id);
-        }
+        drop(run);
     });
     true
 }
 
+/// A run that writes, on the database's import runner: read the headers,
+/// write one transaction, then queue the work new frames need. A person's
+/// import is their work, which automatic work waits for; Stop rolls it
+/// back.
+pub(crate) fn run_import(
+    state: &Arc<AppState>,
+    run: crate::server::import_job::ImportRun,
+    stop: &crate::concurrency::Stop,
+) {
+    use crate::server::import_job as job;
+
+    let crate::server::import_job::ImportRun {
+        ctx,
+        dirs,
+        options,
+        backfill,
+        fill_metadata,
+        claim,
+        automatic,
+    } = run;
+    let job_store = Arc::clone(&ctx.import_job);
+    let _person = (!automatic)
+        .then(|| state.begin_named_interactive_job(format!("an import into {}", ctx.name)));
+    let _import_guard = ctx.image_import_mutex.blocking_lock();
+    tracing::info!("📥 Import started for db={}", ctx.id);
+    // The calibration frames before, so flat measuring is asked only for
+    // the rigs this import touched.
+    let flats_before = crate::server::flat_measure::rig_state_at(&ctx.database_path);
+    let dir_paths: Vec<std::path::PathBuf> = dirs.iter().map(std::path::PathBuf::from).collect();
+    let outcome = match run_import_blocking(
+        &state.autoimport,
+        &ctx,
+        &dir_paths,
+        &options,
+        claim,
+        stop,
+        &|| state.shutdown.is_stopping() || stop.requested(),
+    ) {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            tracing::warn!("📥 Import for db={} failed: {:#}", ctx.id, error);
+            job::finish(&job_store, claim, Some(format!("{error:#}")));
+            return;
+        }
+    };
+
+    tracing::info!(
+        "📥 Import for db={} done: {} imported, {} projects, {} targets",
+        ctx.id,
+        outcome.imported,
+        outcome.projects_created,
+        outcome.targets_created,
+    );
+    let mut target_ids = outcome.created_target_ids.clone();
+    for id in &outcome.attached_target_ids {
+        if !target_ids.contains(id) {
+            target_ids.push(*id);
+        }
+    }
+    let imported_any = outcome.imported > 0;
+    job::complete_import(&job_store, claim, outcome);
+    state.auto_stacks.touch_database(
+        &ctx.id,
+        crate::server::stack_preview::automatic::RefreshReason::Arrival,
+    );
+
+    // New rows reference files the DB-based file cache hasn't seen; kick
+    // the normal background refresh so the UI resolves them promptly.
+    let _ = ctx.ensure_cache_available();
+
+    // New calibration frames are graded before a stack or an export relies
+    // on them; with none to measure this regrades the library. The flat
+    // sessions it touched are measured once grading is done, and new
+    // lights shot during a change are asked which side they are on.
+    crate::server::calibration_quality::request(state, &ctx.database_path);
+    crate::server::flat_measure::queue_change(
+        state,
+        &ctx.database_path,
+        flats_before.as_ref(),
+        imported_any,
+    );
+
+    // Quality analysis is a general database maintenance job, not an
+    // import stage. An opt-in import only queues the changed targets;
+    // otherwise a database that analyzes new frames queues them itself.
+    // A backfill already running refuses this one; the arrival queue then
+    // picks the frames up once it finishes, if the database asks.
+    let queued = backfill
+        && !target_ids.is_empty()
+        && spawn_quality_backfill(state, ctx.clone(), target_ids, false, fill_metadata);
+    if !queued && imported_any {
+        crate::server::quality_arrival::note_arrival(state, &ctx.id);
+    }
+}
+
 /// Stages 1+2 of the import job, on a blocking thread: collect files, scan
 /// headers (with progress), then run the single import transaction on a
-/// dedicated connection (never the shared request connection). A server stop
-/// (`stopping`) before the transaction leaves the catalog as it was.
+/// dedicated connection (never the shared request connection). `stopping`
+/// before the transaction leaves the catalog as it was; `stop` during it
+/// rolls it back. Progress goes to the import record under `claim`.
 pub(super) fn run_import_blocking(
     autoimport: &crate::server::autoimport::AutoImportScheduler,
     ctx: &DatabaseContext,
     dirs: &[std::path::PathBuf],
     options: &crate::commands::import::ImportOptions,
+    claim: crate::server::import_job::Claim,
+    stop: &crate::concurrency::Stop,
     stopping: &(dyn Fn() -> bool + Sync),
 ) -> anyhow::Result<crate::commands::import::ImportOutcome> {
     use crate::commands::import as imp;
@@ -431,10 +516,10 @@ pub(super) fn run_import_blocking(
             dirs,
             &mut files,
         );
-        job::set_prefiltered(&ctx.import_job, prefiltered);
+        job::set_prefiltered(&ctx.import_job, claim, prefiltered);
         if files.is_empty() {
             // Nothing new: no header reads, no transaction, no migration.
-            job::set_scan_totals(&ctx.import_job, 0, 0);
+            job::set_scan_totals(&ctx.import_job, claim, 0, 0);
             let mut outcome = imp::ImportOutcome {
                 scanned: prefiltered,
                 skipped_existing: prefiltered,
@@ -447,7 +532,7 @@ pub(super) fn run_import_blocking(
             return Ok(outcome);
         }
     }
-    job::set_scan_totals(&ctx.import_job, files.len(), 0);
+    job::set_scan_totals(&ctx.import_job, claim, files.len(), 0);
 
     let store = ctx.import_job.clone();
     let frames: Option<Vec<imp::headers::FrameMeta>> = files
@@ -457,27 +542,34 @@ pub(super) fn run_import_blocking(
                 return None;
             }
             let meta = imp::headers::read_frame_meta(path);
-            store.write().unwrap().progress.scanned_files += 1;
+            job::count_scanned(&store, claim);
             Some(meta)
         })
         .collect();
-    let stopped = || anyhow::anyhow!("the server stopped before the import was written");
+    let stopped = || anyhow::anyhow!("The import stopped before it was written.");
     let frames = frames.ok_or_else(stopped)?;
     if stopping() {
         return Err(stopped());
     }
 
-    job::set_stage(&ctx.import_job, "importing");
+    job::set_stage(&ctx.import_job, claim, "importing");
     let mut conn = open_scheduler_connection_with_flags(
         &ctx.database_path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_URI,
     )
     .map_err(|e| anyhow::anyhow!("opening {} for import: {}", ctx.database_path, e))?;
+    stop.interrupts(&conn);
     let mut options = options.clone();
     options.pair_derivatives &= ctx.pair_calibrated_copies.is_on();
     options.light_filter = light_filter;
     options.match_by_position = ctx.scan_rules.match_by_position;
-    let mut outcome = imp::import_frames(&mut conn, frames, &options)?;
+    let mut outcome = imp::import_frames(&mut conn, frames, &options).map_err(|error| {
+        if stop.requested() {
+            anyhow::anyhow!("The import stopped; its transaction was rolled back.")
+        } else {
+            error
+        }
+    })?;
     if options.only_new {
         crate::server::autoimport::remember_left_out(
             autoimport,
