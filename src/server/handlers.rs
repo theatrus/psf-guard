@@ -418,8 +418,16 @@ pub async fn start_astrometry_catalog_install(
     let guard = state.begin_named_interactive_job("a star catalog installation");
     let status = state
         .catalog_install
-        .start(request.preset, output_dir, guard);
+        .start(request.preset, output_dir, guard, &state.shutdown);
     Ok(Json(ApiResponse::success(status)))
+}
+
+/// Stop the star catalog installation under way. Files already installed
+/// stay. Replies whether one was running.
+pub async fn stop_astrometry_catalog_install(
+    State(state): State<Arc<AppState>>,
+) -> Json<ApiResponse<bool>> {
+    Json(ApiResponse::success(state.catalog_install.stop()))
 }
 
 /// Header-only catalog association and embedded-WCS overlay geometry for one

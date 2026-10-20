@@ -129,6 +129,7 @@ pub enum RowControl {
     Preview { preview: PreviewKind, key: String },
     Import { db_id: String },
     Export { db_id: String },
+    CatalogInstall,
 }
 
 /// A view in the app.
@@ -1493,6 +1494,8 @@ fn catalog_install_row(progress: &CatalogInstallProgress) -> JobRow {
         detail: progress.message.clone(),
         percent,
         hint: progress.output_dir.clone(),
+        control: Some(RowControl::CatalogInstall),
+        stoppable: true,
         ..JobRow::new(
             format!("catalog:{}", progress.started_at.unwrap_or(0)),
             RowKind::Catalog,

@@ -149,6 +149,8 @@ pub struct CatalogInstallStatus {
 #[derive(Clone, Default)]
 pub struct CatalogInstallManager {
     progress: Arc<RwLock<CatalogInstallProgress>>,
+    /// The stop of the installation under way, or of the last one.
+    stop: Arc<RwLock<crate::concurrency::Stop>>,
 }
 
 impl CatalogInstallManager {
@@ -162,31 +164,47 @@ impl CatalogInstallManager {
 
     /// Start installing `preset` in the background and return at once. While
     /// one installation runs, another start returns its status without
-    /// starting a second download.
+    /// starting a second download. Stop, or the server stopping, ends it.
     pub fn start(
         &self,
         preset: CatalogInstallPreset,
         output_dir: PathBuf,
         guard: InteractiveJobGuard,
+        shutdown: &Arc<crate::server::shutdown::Shutdown>,
     ) -> CatalogInstallStatus {
+        let hold = shutdown.hold("a star catalog installation");
+        let shutdown = Arc::clone(shutdown);
         self.start_with(
             preset,
             output_dir,
-            guard,
+            (guard, hold),
+            async move { shutdown.begun().await },
             |manager, preset, output_dir| async move { manager.install(preset, output_dir).await },
         )
     }
 
-    /// [`Self::start`], with the work that installs given.
-    fn start_with<G, F, Fut>(
+    /// Stop the installation under way. False when none runs.
+    pub fn stop(&self) -> bool {
+        if !self.progress.read().unwrap().running {
+            return false;
+        }
+        self.stop.read().unwrap().request();
+        true
+    }
+
+    /// [`Self::start`], with the work that installs, and what else ends
+    /// it, given.
+    fn start_with<G, E, F, Fut>(
         &self,
         preset: CatalogInstallPreset,
         output_dir: PathBuf,
         guard: G,
+        server_stop: E,
         install: F,
     ) -> CatalogInstallStatus
     where
         G: Send + 'static,
+        E: std::future::Future<Output = ()> + Send + 'static,
         F: FnOnce(Self, CatalogInstallPreset, PathBuf) -> Fut,
         Fut: std::future::Future<Output = Result<(), String>> + Send + 'static,
     {
@@ -217,12 +235,21 @@ impl CatalogInstallManager {
             };
         }
 
+        let stop = crate::concurrency::Stop::new();
+        *self.stop.write().unwrap() = stop.clone();
         let manager = self.clone();
         let work = install(self.clone(), preset, output_dir);
         tokio::spawn(async move {
             let _guard = guard;
-            if let Err(error) = work.await {
-                manager.finish_with_error(error);
+            let ended = tokio::select! {
+                ended = work => ended,
+                () = stop.stopped() => Err("Stopped.".to_string()),
+                () = server_stop => Err("The server stopped.".to_string()),
+            };
+            match ended {
+                Ok(()) => {}
+                Err(_) if stop.requested() => manager.finish_stopped(),
+                Err(error) => manager.finish_with_error(error),
             }
         });
 
@@ -292,6 +319,16 @@ impl CatalogInstallManager {
         progress.bytes_completed = None;
         progress.bytes_total = None;
         progress.written_bytes = None;
+        progress.finished_at = Some(unix_now());
+    }
+
+    fn finish_stopped(&self) {
+        tracing::info!("Seiza catalog installation stopped");
+        let mut progress = self.progress.write().unwrap();
+        progress.running = false;
+        progress.phase = CatalogInstallPhase::Error;
+        progress.message = "Catalog installation stopped. Catalogs installed before stay.".into();
+        progress.error = Some("Stopped.".into());
         progress.finished_at = Some(unix_now());
     }
 
@@ -453,6 +490,7 @@ mod tests {
             CatalogInstallPreset::GaiaPhotometry,
             PathBuf::from("/catalogs"),
             (),
+            std::future::pending(),
             |manager, _, output_dir| async move {
                 report_download_event(
                     &manager.progress,
@@ -481,6 +519,7 @@ mod tests {
             CatalogInstallPreset::BlindDeep,
             PathBuf::from("/catalogs"),
             (),
+            std::future::pending(),
             |_, _, _| async { Err("a second download must not start".to_string()) },
         );
         assert!(!started_twice.started);
@@ -507,6 +546,26 @@ mod tests {
             manager.status().progress.phase,
             CatalogInstallPhase::Complete
         );
+    }
+
+    #[tokio::test]
+    async fn stop_ends_an_installation_under_way() {
+        let manager = CatalogInstallManager::default();
+        assert!(!manager.stop(), "nothing runs");
+        manager.start_with(
+            CatalogInstallPreset::GaiaPhotometry,
+            PathBuf::from("/catalogs"),
+            (),
+            std::future::pending(),
+            |_, _, _| std::future::pending(),
+        );
+        assert!(manager.stop());
+        while manager.status().progress.running {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        let progress = manager.status().progress;
+        assert_eq!(progress.phase, CatalogInstallPhase::Error);
+        assert_eq!(progress.error.as_deref(), Some("Stopped."));
     }
 
     #[test]

@@ -225,13 +225,6 @@ pub async fn check_peer(
 ///
 /// Defaults are the cautious ones — dry run, reviewed grades only — so an
 /// omitted field can never write more than the caller asked for.
-/// Resolves once `stop` is set, looking every tenth of a second.
-async fn stopped(stop: &crate::concurrency::Stop) {
-    while !stop.requested() {
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
-}
-
 pub async fn sync_with_peer(
     State(state): State<Arc<AppState>>,
     Path(db_id): Path<String>,
@@ -298,7 +291,7 @@ pub async fn sync_with_peer(
     // the stop through SQLite.
     let outcome = tokio::select! {
         outcome = sync => outcome.map_err(|error| AppError::BadRequest(format!("{error:#}"))),
-        () = stopped(&stop) => Err(AppError::Conflict(
+        () = stop.stopped() => Err(AppError::Conflict(
             "This sync preview was stopped before it finished.".into(),
         )),
     };

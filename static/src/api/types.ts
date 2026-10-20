@@ -2049,7 +2049,8 @@ export type JobControl =
   | { kind: 'wbpp-queued'; db_id: string; queue_id: string }
   | { kind: 'preview'; preview: PreviewKind; key: string }
   | { kind: 'import'; db_id: string }
-  | { kind: 'export'; db_id: string };
+  | { kind: 'export'; db_id: string }
+  | { kind: 'catalog-install' };
 
 /** What a preview previews. Mirrors `PreviewKind` in
  *  `src/server/previews.rs`. */

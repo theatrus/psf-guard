@@ -774,6 +774,10 @@ pub fn api_router(state: Arc<AppState>) -> Router {
                 .post(handlers::start_astrometry_catalog_install),
         )
         .route(
+            "/astrometry/catalogs/install/stop",
+            post(handlers::stop_astrometry_catalog_install),
+        )
+        .route(
             "/databases",
             get(handlers::list_databases).post(handlers::add_database_route),
         )

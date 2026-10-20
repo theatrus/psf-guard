@@ -14,7 +14,8 @@ export type ActivityControl =
   | { kind: 'wbpp-queued'; dbId: string; queueId: string }
   | { kind: 'preview'; preview: PreviewKind; key: string }
   | { kind: 'import'; dbId: string }
-  | { kind: 'export'; dbId: string };
+  | { kind: 'export'; dbId: string }
+  | { kind: 'catalog-install' };
 
 /** The two lines a person can reorder. Each runs one job at a time. */
 export type ActivityQueue = 'stack' | 'wbpp';
@@ -95,6 +96,8 @@ function controlOf(control: JobControl): ActivityControl {
       return { kind: 'ts-sync', jobId: control.job_id };
     case 'backup':
       return { kind: 'backup' };
+    case 'catalog-install':
+      return { kind: 'catalog-install' };
     case 'wbpp-queued':
       return { kind: 'wbpp-queued', dbId: control.db_id, queueId: control.queue_id };
     case 'preview':

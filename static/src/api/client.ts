@@ -1328,6 +1328,13 @@ export const apiClient = {
     return data.data;
   },
 
+  /** Stop the star catalog installation under way. Catalogs installed
+   *  before stay. */
+  stopCatalogInstall: async (): Promise<void> => {
+    const apiInstance = await getApi();
+    await apiInstance.post('/astrometry/catalogs/install/stop');
+  },
+
   /** List every configured database. */
   getDatabases: async (): Promise<DatabaseSummary[]> => {
     const apiInstance = await getApi();

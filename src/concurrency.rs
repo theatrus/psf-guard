@@ -171,6 +171,14 @@ impl Stop {
         std::sync::Arc::ptr_eq(&self.0, &other.0)
     }
 
+    /// Resolves once someone asks the work to stop, looking every tenth of
+    /// a second. Async work races its future against it.
+    pub async fn stopped(&self) {
+        while !self.requested() {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    }
+
     /// Let this stop interrupt the statement `connection` runs: SQLite ends
     /// it with an interrupt error within a few thousand steps, and a
     /// transaction it was in rolls back when dropped.

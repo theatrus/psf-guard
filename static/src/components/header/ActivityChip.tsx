@@ -86,6 +86,7 @@ function runAction(action: ActivityAction): Promise<unknown> {
   if (control.kind === 'preview') return apiClient.stopPreview(control.preview, control.key);
   if (control.kind === 'import') return apiClient.stopImport(control.dbId);
   if (control.kind === 'export') return apiClient.stopServerExport(control.dbId);
+  if (control.kind === 'catalog-install') return apiClient.stopCatalogInstall();
   return apiClient.removeQueuedWbppRun(control.dbId, control.queueId);
 }
 
