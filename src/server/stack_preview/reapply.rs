@@ -644,7 +644,10 @@ fn settle_ended_run(ctx: &DatabaseContext, reapply: &Reapply) {
 /// carried. One that stepped aside for a person's work waits again.
 pub(super) fn run_finished(state: &Arc<AppState>, run_id: &str, outcome: RunOutcome) {
     let manager = &state.stack_previews;
-    let yielded = manager.take_yielded(run_id);
+    // Stopped for a person's work, by the line or by the yield below: it
+    // waits again rather than ending.
+    let preempted = manager.line.take_preempted(run_id);
+    let yielded = manager.take_yielded(run_id) || preempted;
     let Some((channel, reapply)) = manager.reapply_for_run(run_id) else {
         // Any run ending frees the worker for a re-apply waiting on it.
         if !manager.reapplies.lock().unwrap().is_empty() {

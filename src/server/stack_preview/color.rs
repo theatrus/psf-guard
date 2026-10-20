@@ -2078,26 +2078,49 @@ pub(super) fn enqueue_color_job(
     origin: super::journal::JournaledStackJob,
     slot: Option<&str>,
 ) -> bool {
-    let job_id = prepared.public.job_id.clone();
     let quick = takes_quick_lane(&state, &prepared);
+    let spec = ColorRequest {
+        job_id: prepared.public.job_id.clone(),
+        database_id: prepared.public.database_id.clone(),
+        project_id: prepared.public.project_id,
+        request: request.clone(),
+    };
+    let lane = if quick {
+        super::Lane::Quick
+    } else {
+        super::Lane::Main
+    };
+    submit_color(state, spec, lane, origin, prepared.public.automatic, slot);
+    quick
+}
+
+/// Put a composition in the line from its request. An automatic
+/// composition that a person's work stops goes back in the line as its
+/// request, and its finished RC-Astro steps stay cached.
+fn submit_color(
+    state: Arc<AppState>,
+    spec: ColorRequest,
+    lane: super::Lane,
+    origin: super::journal::JournaledStackJob,
+    automatic: bool,
+    slot: Option<&str>,
+) {
+    let job_id = spec.job_id.clone();
     // A composition stops while it waits for the worker, and while it runs
     // at its next channel or step; a running RC-Astro tool is killed.
     let cancel = state.stack_previews.track_job(&job_id);
-    state.stack_previews.remember_origin(&job_id, origin);
+    state
+        .stack_previews
+        .remember_origin(&job_id, origin.clone());
     // A server stop waits for a running composition to reach its next stop
     // point; the journal brings it back, and its finished RC-Astro steps
     // stay cached.
     let work = state.shutdown.hold(format!(
         "color composition for project {} (db={})",
-        prepared.public.project_id, prepared.public.database_id
+        spec.project_id, spec.database_id
     ));
     let (failed_job, stopped_job) = (job_id.clone(), job_id.clone());
-    let spec = ColorRequest {
-        job_id: job_id.clone(),
-        database_id: prepared.public.database_id.clone(),
-        project_id: prepared.public.project_id,
-        request: request.clone(),
-    };
+    let again = (spec.clone(), origin);
     let submission = super::Submission::<ColorWork>::new(
         "a color composition",
         &spec,
@@ -2133,15 +2156,24 @@ pub(super) fn enqueue_color_job(
                 }
                 state.stack_previews.forget_job_of(&job_id, &cancel);
                 drop(work);
+                if state.stack_previews.line.take_preempted(&job_id)
+                    && requeue_stopped_color(state, &job_id)
+                {
+                    let (spec, origin) = again;
+                    let first = state.stack_previews.line.first_automatic();
+                    submit_color(
+                        Arc::clone(state),
+                        spec,
+                        lane,
+                        origin,
+                        true,
+                        first.as_deref(),
+                    );
+                }
             })
     });
     match submission {
         Ok(submission) => {
-            let lane = if quick {
-                super::Lane::Quick
-            } else {
-                super::Lane::Main
-            };
             super::submit(
                 &state,
                 &job_id,
@@ -2149,6 +2181,7 @@ pub(super) fn enqueue_color_job(
                 slot,
                 cancel,
                 Vec::new(),
+                automatic,
                 Box::new(submission),
             );
         }
@@ -2160,7 +2193,23 @@ pub(super) fn enqueue_color_job(
             state.stack_previews.forget_job_of(&job_id, &cancel);
         }
     }
-    quick
+}
+
+/// Make a composition that a person's work stopped queued again. False
+/// when it did not stop, such as one that finished before the stop
+/// reached it: it is not queued again.
+fn requeue_stopped_color(state: &AppState, job_id: &str) -> bool {
+    let mut requeued = false;
+    state.stack_previews.update_color(job_id, |job| {
+        if job.state != StackJobState::Cancelled {
+            return;
+        }
+        job.state = StackJobState::Queued;
+        job.error = None;
+        job.phase = "Queued".into();
+        requeued = true;
+    });
+    requeued
 }
 
 /// A color composition on the line.
@@ -2183,7 +2232,7 @@ impl super::LineWork for ColorWork {
 }
 
 /// A composition in the line: its request, prepared at its turn.
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct ColorRequest {
     /// The id the composition was listed under when it was previewed.
     job_id: String,

@@ -79,6 +79,8 @@ static WBPP_LINE: DispatchRules = DispatchRules {
         priority: Priority::Interactive,
         pauses_background_work: false,
     },
+    // Every WBPP run is a person's.
+    automatic_may_start: |_| true,
 };
 
 /// The key a database's masters copy holds: the database's queued runs are

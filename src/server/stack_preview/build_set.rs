@@ -283,7 +283,7 @@ pub(super) fn queue(
         What::Mono { .. } => vec![project_channels_key(&ctx.id, asked.project_id)],
         What::Color(_) => Vec::new(),
     };
-    manager.hold_place(&job_id, holds);
+    manager.hold_place(&job_id, holds, asked.automatic);
     line.by_request.insert(request_key.clone(), job_id.clone());
     drop(line);
     line_up(
@@ -491,13 +491,15 @@ fn wait_for_channels(state: &Arc<AppState>, mut preparation: Preparation) -> Opt
     manager.update_color(&preparation.job_id, |job| {
         job.phase = "Waiting for the channel builds to finish".into();
     });
+    let tier = super::tier_of(preparation.automatic);
     let entry = super::Entry::new(
         preparation.job_id.clone(),
         super::Lane::Quick,
         preparation.cancel.clone(),
         Box::new(ChannelWait(preparation)),
     )
-    .blocked_by(keys);
+    .blocked_by(keys)
+    .tier(tier);
     super::submit_entry(state, entry, None);
     None
 }

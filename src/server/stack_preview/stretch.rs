@@ -2008,6 +2008,7 @@ fn submit_stretch_variant(
             None,
             cancel,
             Vec::new(),
+            state.stack_previews.is_automatic_processing(&stretch_id),
             Box::new(submission),
         ),
         Err(message) => {

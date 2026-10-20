@@ -35,7 +35,7 @@ use build_set::{prepare_channels, validate_request};
 pub use build_set::{start_stack_preview_channels, start_stack_previews};
 
 pub(super) use crate::server::job_line::Entry;
-use crate::server::job_line::{DispatchRules, Lease, Turn};
+use crate::server::job_line::{DispatchRules, Lease, Tier, Turn};
 pub(super) use crate::server::job_line::{Lane, LineWork, Needs, Submission, Task, Worker};
 use axum::{
     body::Body,
@@ -49,7 +49,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -877,9 +877,6 @@ pub struct ScheduledRefreshView {
     /// work, such as `a stack build`, or the build holding the worker.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub waiting_for: Option<String>,
-    /// How far its build had got when a person's build stopped it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_progress: Option<automatic::LastProgress>,
 }
 
 /// Processing re-applied to a refreshed stack, waiting for its turn.
@@ -1102,10 +1099,11 @@ impl StackPreviewManager {
         }
     }
 
-    /// Hold a place in the line for a request still being prepared. The
-    /// work it becomes takes the place.
-    fn hold_place(&self, job_id: &str, holds: Vec<String>) {
-        self.line.hold_place(job_id, holds);
+    /// Hold a place in the line for a request still being prepared: a
+    /// person's ahead of automatic work. The work it becomes takes the
+    /// place.
+    fn hold_place(&self, job_id: &str, holds: Vec<String>, automatic: bool) {
+        self.line.hold_place(job_id, holds, tier_of(automatic));
     }
 
     /// Give up a place a request held, unless work took it.
@@ -1241,17 +1239,6 @@ impl StackPreviewManager {
 
     /// Ask a queued or running job to stop. Returns false when the job is not
     /// in flight, which includes a job that already finished.
-    /// Ask a job to stop, and say whether this asked first: false when it
-    /// was already asked, or has no stop flag.
-    fn newly_cancel(&self, job_id: &str) -> bool {
-        let Some(flag) = self.line.stop_flag(job_id) else {
-            return false;
-        };
-        let first = flag.request_first();
-        self.line.changed();
-        first
-    }
-
     pub fn request_cancel(&self, job_id: &str) -> bool {
         // A build that has ended has nothing to stop, though its flag may
         // not be forgotten yet.
@@ -1311,6 +1298,9 @@ impl StackPreviewManager {
             job.automatic = false;
         }
         self.adopt_processing(job_id);
+        // It runs as the person's: ahead of automatic work, and not stopped
+        // for another person's work as automatic work is.
+        self.line.set_tier(job_id, Tier::Person);
         // A restart brings it back as the person's too.
         self.line
             .update_journal(job_id, |origin: &mut journal::JournaledStackJob| {
@@ -1334,37 +1324,6 @@ impl StackPreviewManager {
                     .map(|job| job.automatic)
             })
             .unwrap_or(false)
-    }
-
-    /// Stop every automatic build so an interactive one gets the worker.
-    /// Returns the projects whose refresh should come back once the worker
-    /// is free, with where each build stood; a stopped build's checkpoint
-    /// resumes when it does.
-    pub fn cancel_automatic(&self) -> Vec<automatic::InterruptedBuild> {
-        let mut stopped: Vec<StackActivityEntry> = Vec::new();
-        for job in self.jobs.lock().unwrap().values() {
-            // One still being prepared, as a restart puts back, yields too.
-            if job.automatic
-                && matches!(
-                    job.state,
-                    StackJobState::Preparing | StackJobState::Queued | StackJobState::Running
-                )
-            {
-                stopped.push(mono_activity(job));
-            }
-        }
-        for job in self.color_jobs.lock().unwrap().values() {
-            if job.automatic && matches!(job.state, StackJobState::Queued | StackJobState::Running)
-            {
-                stopped.push(color_activity(job));
-            }
-        }
-        // A build already stopped, by a person's Stop, stays stopped: only
-        // the builds this call stops come back.
-        stopped.retain(|entry| self.newly_cancel(&entry.job_id));
-        // A re-apply steps aside too, and waits for its turn again.
-        self.yield_automatic_processing();
-        interrupted_builds(stopped)
     }
 
     /// Stop every re-apply queued or running so other work gets the worker.
@@ -2077,9 +2036,18 @@ fn queue_preview_render(
     )
     .map(|submission| {
         let (job_id, cancel) = (job_id.clone(), cancel.clone());
+        let database_id = ctx.id.clone();
         submission.finally(move |state, _| {
             state.stack_previews.forget_job_of(&job_id, &cancel);
             drop(work);
+            // Stopped for a person's work: render what is still out of date
+            // again, after it.
+            if state.stack_previews.line.take_preempted(&job_id)
+                && let Some(finished) = state.stack_previews.get(&job_id)
+                && let Some(ctx) = state.get_database(&database_id)
+            {
+                queue_preview_render(state, &ctx, &finished, true, None);
+            }
         })
     });
     match submission {
@@ -2090,6 +2058,7 @@ fn queue_preview_render(
             None,
             cancel,
             Vec::new(),
+            automatic,
             Box::new(submission),
         ),
         Err(error) => {
@@ -2240,47 +2209,14 @@ pub(super) fn persist_latest_and_reapply(
     Ok(())
 }
 
-/// One refresh per project an automatic build was stopped on, keeping how
-/// far the furthest running build of it had got.
-fn interrupted_builds(stopped: Vec<StackActivityEntry>) -> Vec<automatic::InterruptedBuild> {
-    let mut builds: BTreeMap<(String, i32), Option<automatic::LastProgress>> = BTreeMap::new();
-    for entry in stopped {
-        // The line says where a build stopped in frames, which only a mono
-        // build counts; a color job counts steps, in hundredths.
-        let last = (entry.kind == StackActivityKind::Mono
-            && entry.state == StackJobState::Running
-            && entry.total_units > 0)
-            .then(|| automatic::LastProgress {
-                label: entry.label.clone(),
-                processed_units: entry.processed_units,
-                total_units: entry.total_units,
-            });
-        let slot = builds
-            .entry((entry.database_id, entry.project_id))
-            .or_default();
-        if slot.is_none() {
-            *slot = last;
-        }
-    }
-    builds
-        .into_iter()
-        .map(
-            |((database_id, project_id), last_progress)| automatic::InterruptedBuild {
-                database_id,
-                project_id,
-                last_progress,
-            },
-        )
-        .collect()
-}
-
-/// A build the user asks for takes the worker: automatic builds stop, and
-/// their projects wait, listed as waiting, to refresh as soon as the user's
-/// build is done.
+/// A person's work takes the stacking worker: the automatic entry running
+/// on it, if any, stops at its checkpoint and goes back in the line behind
+/// the person's work. Automatic builds still waiting stay in line. Re-applies
+/// of processing, queued or running, step aside and wait for their turn
+/// again, as they did before the line ordered work by tier.
 pub(super) fn interrupt_automatic(state: &AppState) {
-    for build in state.stack_previews.cancel_automatic() {
-        state.auto_stacks.interrupted(build);
-    }
+    state.stack_previews.line.preempt_automatic(Lane::Main);
+    state.stack_previews.yield_automatic_processing();
 }
 
 /// Ask a queued or running stack build to stop. Returns the job as it stands;
@@ -2369,20 +2305,24 @@ pub(crate) fn stack_activity(state: &Arc<AppState>, planning: RefreshPlanning) -
     }
 }
 
-/// What automatic stack work waits for, in words that fit "Waiting for …":
-/// the build or run holding the worker, or the line ahead of it, a
-/// person's work, a quiet moment after it, or a quality analysis of its
-/// database. `None` when it is free to start at the scheduler's next look.
-/// A refresh is not held off by a re-apply; a re-apply waits for anything
-/// in the line.
+/// What automatic stack work waits for, in words that fit "Waiting for …".
+/// A due refresh waits only for a quality analysis of its database, which
+/// rewrites the scores it would stack by; its builds then wait in the line.
+/// A re-apply waits for the build or run holding the worker, or the line
+/// ahead of it, a person's work, or a quiet moment after it. `None` when
+/// it is free to start at the scheduler's next look.
 fn automatic_work_waits_for(state: &AppState, database_id: &str, reapply: bool) -> Option<String> {
-    let manager = &state.stack_previews;
-    let held = if reapply {
-        !manager.active().is_empty()
-    } else {
-        automatic::holds_off_refreshes(manager)
+    let quality_analysis = || {
+        let ctx = state.get_database(database_id)?;
+        crate::server::quality_backfill::snapshot(&ctx.quality_backfill)
+            .running
+            .then(|| format!("the quality analysis of {}", ctx.name))
     };
-    let holder = held.then(|| {
+    if !reapply {
+        return quality_analysis();
+    }
+    let manager = &state.stack_previews;
+    let holder = (!manager.active().is_empty()).then(|| {
         manager
             .worker_holder("")
             .or_else(|| manager.quick_lane_holder())
@@ -2394,12 +2334,7 @@ fn automatic_work_waits_for(state: &AppState, database_id: &str, reapply: bool) 
             (!automatic::quiet_for_automatic_work(state))
                 .then(|| "a quiet moment after your work".to_string())
         })
-        .or_else(|| {
-            let ctx = state.get_database(database_id)?;
-            crate::server::quality_backfill::snapshot(&ctx.quality_backfill)
-                .running
-                .then(|| format!("the quality analysis of {}", ctx.name))
-        })
+        .or_else(quality_analysis)
 }
 
 /// A re-apply whose run has just joined the line is listed as that run,
@@ -2509,19 +2444,7 @@ fn name_scheduled(
                 .into_iter()
                 .map(|(_, name)| name)
                 .collect::<Vec<_>>();
-            // A stopped build is listed even when what it would restack
-            // cannot be told, as for a color composition.
-            let channels = if channels.is_empty() {
-                refresh
-                    .last_progress
-                    .iter()
-                    .map(|last| last.label.clone())
-                    .collect()
-            } else {
-                channels
-            };
-            (fresh > 0 || unknown || (refresh.waiting && refresh.interrupted))
-                .then_some((refresh, channels))
+            (fresh > 0 || unknown).then_some((refresh, channels))
         })
         .map(|(refresh, channels)| {
             let ctx = state.get_database(&refresh.database_id);
@@ -2554,7 +2477,6 @@ fn name_scheduled(
                 channels,
                 waiting: refresh.waiting,
                 waiting_for,
-                last_progress: refresh.last_progress,
             }
         })
         .collect()
@@ -3170,7 +3092,7 @@ pub(crate) fn source_fingerprint(path: &FsPath) -> String {
 /// `slot` held while the request it came from was previewed. The line
 /// carries `request`, the build's own channel request, and the build is
 /// prepared again from it at its turn; `prepared` is the preview, which
-/// gives the build its record and the keys it holds while it waits.
+/// gives the build the keys it holds while it waits.
 fn enqueue_job(
     state: Arc<AppState>,
     prepared: PreparedJob,
@@ -3178,22 +3100,52 @@ fn enqueue_job(
     origin: journal::JournaledStackJob,
     slot: Option<&str>,
 ) {
-    let job_id = prepared.public.job_id.clone();
+    // While it waits and while it runs, compositions of its targets wait.
+    let mut targets = prepared
+        .public
+        .groups
+        .iter()
+        .map(|group| group.target_id)
+        .collect::<Vec<_>>();
+    targets.sort_unstable();
+    targets.dedup();
     let database_id = prepared.public.database_id.clone();
-    let cancel = state.stack_previews.track_job(&job_id);
-    state.stack_previews.remember_origin(&job_id, origin);
-    // A stop waits for the build to checkpoint, or to leave the line.
-    let work = state.shutdown.hold(format!(
-        "stack build for project {} (db={})",
-        prepared.public.project_id, prepared.public.database_id
-    ));
-    let (stopped_job, failed_job) = (job_id.clone(), job_id.clone());
+    let holds = targets
+        .into_iter()
+        .map(|target_id| channel_key(&database_id, prepared.public.project_id, target_id))
+        .collect();
     let spec = BuildRequest {
-        job_id: job_id.clone(),
-        database_id: database_id.clone(),
+        job_id: prepared.public.job_id.clone(),
+        database_id,
         project_id: prepared.public.project_id,
         request: request.clone(),
     };
+    submit_build(state, spec, holds, origin, prepared.public.automatic, slot);
+}
+
+/// Put a build in the line from its request. An automatic build that a
+/// person's work stops goes back in the line as its request, and resumes
+/// from its checkpoint at its turn.
+fn submit_build(
+    state: Arc<AppState>,
+    spec: BuildRequest,
+    holds: Vec<String>,
+    origin: journal::JournaledStackJob,
+    automatic: bool,
+    slot: Option<&str>,
+) {
+    let job_id = spec.job_id.clone();
+    let cancel = state.stack_previews.track_job(&job_id);
+    state
+        .stack_previews
+        .remember_origin(&job_id, origin.clone());
+    // A stop waits for the build to checkpoint, or to leave the line.
+    let work = state.shutdown.hold(format!(
+        "stack build for project {} (db={})",
+        spec.project_id, spec.database_id
+    ));
+    let (stopped_job, failed_job) = (job_id.clone(), job_id.clone());
+    let again = (spec.clone(), holds.clone(), origin);
     let submission = Submission::<BuildWork>::new(
         "a stack build",
         &spec,
@@ -3229,21 +3181,22 @@ fn enqueue_job(
                 }
                 state.stack_previews.forget_job_of(&job_id, &cancel);
                 drop(work);
+                if state.stack_previews.line.take_preempted(&job_id)
+                    && requeue_stopped_build(state, &job_id)
+                {
+                    let (spec, holds, origin) = again;
+                    let first = state.stack_previews.line.first_automatic();
+                    submit_build(
+                        Arc::clone(state),
+                        spec,
+                        holds,
+                        origin,
+                        true,
+                        first.as_deref(),
+                    );
+                }
             })
     });
-    // While it waits and while it runs, compositions of its targets wait.
-    let mut targets = prepared
-        .public
-        .groups
-        .iter()
-        .map(|group| group.target_id)
-        .collect::<Vec<_>>();
-    targets.sort_unstable();
-    targets.dedup();
-    let holds = targets
-        .into_iter()
-        .map(|target_id| channel_key(&database_id, prepared.public.project_id, target_id))
-        .collect();
     match submission {
         Ok(submission) => submit(
             &state,
@@ -3252,6 +3205,7 @@ fn enqueue_job(
             slot,
             cancel,
             holds,
+            automatic,
             Box::new(submission),
         ),
         Err(error) => {
@@ -3262,6 +3216,27 @@ fn enqueue_job(
             state.stack_previews.forget_job_of(&job_id, &cancel);
         }
     }
+}
+
+/// Make a build that a person's work stopped queued again, with its
+/// stopped channels waiting once more. False when it did not stop, such as
+/// one that finished before the stop reached it: it is not queued again.
+fn requeue_stopped_build(state: &AppState, job_id: &str) -> bool {
+    let mut requeued = false;
+    state.stack_previews.update(job_id, |job| {
+        if job.state != StackJobState::Cancelled {
+            return;
+        }
+        job.state = StackJobState::Queued;
+        for group in &mut job.groups {
+            if group.state == StackGroupState::Cancelled {
+                group.state = StackGroupState::Queued;
+                group.phase = "queued".into();
+            }
+        }
+        requeued = true;
+    });
+    requeued
 }
 
 /// What a build holds in the line, waiting or running, for each target it
@@ -3279,6 +3254,7 @@ pub(super) fn project_channels_key(database_id: &str, project_id: i32) -> String
 /// Put work in the line under `job_id`, stopped by `cancel`: on the worker
 /// lane in the place `before` held, or at the back. The lane's dispatcher
 /// runs it in its turn.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn submit(
     state: &Arc<AppState>,
     job_id: &str,
@@ -3286,13 +3262,25 @@ pub(super) fn submit(
     before: Option<&str>,
     cancel: Stop,
     holds: Vec<String>,
+    automatic: bool,
     task: Box<dyn Task>,
 ) {
     submit_entry(
         state,
-        Entry::new(job_id, lane, cancel, task).holding(holds),
+        Entry::new(job_id, lane, cancel, task)
+            .holding(holds)
+            .tier(tier_of(automatic)),
         before,
     );
+}
+
+/// The line's tier for work the automatic refresh started, or a person's.
+pub(super) fn tier_of(automatic: bool) -> Tier {
+    if automatic {
+        Tier::Automatic
+    } else {
+        Tier::Person
+    }
 }
 
 /// Put `entry` in the line, as [`submit`] does.
@@ -3323,6 +3311,10 @@ static STACK_LINE: DispatchRules = DispatchRules {
             pauses_background_work: !automatic,
         }
     },
+    // A person's work anywhere on the server comes first. A person's next
+    // build that joins after automatic work started stops it, and the
+    // automatic build resumes from its checkpoint.
+    automatic_may_start: |state| !state.interactive_job_active(),
 };
 
 /// Start each lane's dispatcher if it is not running.
@@ -3353,7 +3345,7 @@ impl LineWork for BuildWork {
 }
 
 /// A build in the line: its channel request, prepared at its turn.
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct BuildRequest {
     /// The id the build was listed under when it was previewed.
     job_id: String,
@@ -7573,7 +7565,7 @@ mod tests {
         let mut job = completed_job(job_id, vec![]);
         job.state = StackJobState::Queued;
         assert!(state.stack_previews.insert(job));
-        state.stack_previews.hold_place(job_id, Vec::new());
+        state.stack_previews.hold_place(job_id, Vec::new(), false);
     }
 
     /// The re-apply's run in the activity list, once it is queued.
@@ -8189,104 +8181,6 @@ mod tests {
     }
 
     #[test]
-    fn stopped_automatic_builds_come_back_once_per_project_with_their_progress() {
-        let entry = |job_id: &str, project_id, state, processed, total| StackActivityEntry {
-            kind: StackActivityKind::Mono,
-            job_id: job_id.into(),
-            database_id: "db".into(),
-            project_id,
-            target_id: Some(42),
-            state,
-            label: format!("M44 · {job_id}"),
-            detail: String::new(),
-            processed_units: processed,
-            total_units: total,
-            created_unix_seconds: 1,
-            automatic: true,
-            queue_position: None,
-            progress_label: None,
-            processing: None,
-        };
-        let builds = interrupted_builds(vec![
-            entry("Ha", 1, StackJobState::Queued, 0, 0),
-            entry("R", 1, StackJobState::Running, 12, 40),
-            entry("G", 2, StackJobState::Queued, 0, 0),
-        ]);
-        assert_eq!(
-            builds,
-            vec![
-                automatic::InterruptedBuild {
-                    database_id: "db".into(),
-                    project_id: 1,
-                    last_progress: Some(automatic::LastProgress {
-                        label: "M44 · R".into(),
-                        processed_units: 12,
-                        total_units: 40,
-                    }),
-                },
-                automatic::InterruptedBuild {
-                    database_id: "db".into(),
-                    project_id: 2,
-                    last_progress: None,
-                },
-            ]
-        );
-    }
-
-    /// A running automatic color job comes back with its project, but says
-    /// nothing of where it stopped: the line reports frames, and a color job
-    /// counts steps, in hundredths.
-    #[test]
-    fn a_stopped_automatic_color_job_comes_back_without_frame_progress() {
-        let color = StackActivityEntry {
-            kind: StackActivityKind::Color,
-            job_id: "c".repeat(64),
-            database_id: "db".into(),
-            project_id: 3,
-            target_id: Some(42),
-            state: StackJobState::Running,
-            label: "M44 · SHO".into(),
-            detail: String::new(),
-            processed_units: 1250,
-            total_units: 4000,
-            created_unix_seconds: 1,
-            automatic: true,
-            queue_position: None,
-            progress_label: Some("H-alpha: BlurXTerminator (42%)".into()),
-            processing: None,
-        };
-        assert_eq!(
-            interrupted_builds(vec![color]),
-            vec![automatic::InterruptedBuild {
-                database_id: "db".into(),
-                project_id: 3,
-                last_progress: None,
-            }]
-        );
-    }
-
-    /// A person pressed Stop on an automatic build and, before the worker
-    /// settles it into `cancelled`, starts a build of their own. The build
-    /// they stopped stays stopped: it does not come back as a refresh due at
-    /// once.
-    #[test]
-    fn an_automatic_build_a_person_stopped_stays_stopped() {
-        let manager = StackPreviewManager::new();
-        let mut job = running_build("auto");
-        job.automatic = true;
-        assert!(manager.insert(job));
-        manager.track_job("auto");
-        // The person's Stop: the flag is set, the job still reads Running.
-        assert!(manager.request_cancel("auto"));
-        // The person's own build then interrupts automatic work.
-        let interrupted = manager.cancel_automatic();
-        assert!(
-            interrupted.is_empty(),
-            "a build the person stopped comes back as {interrupted:?}"
-        );
-    }
-
-    #[test]
     fn a_stopped_task_finishing_late_keeps_the_new_jobs_stop_flag() {
         let manager = StackPreviewManager::new();
         let stopped = manager.track_job("same");
@@ -8348,7 +8242,6 @@ mod tests {
             channels: vec!["M44 · R".into()],
             waiting,
             waiting_for: None,
-            last_progress: None,
         };
         let mut build = mono_activity(&running_build("auto"));
         build.database_id = "db".into();
@@ -8496,7 +8389,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_reapply_does_not_hold_off_automatic_refreshes() {
+    async fn a_refresh_build_goes_ahead_of_a_reapply_holding_the_worker() {
         let _policy = reapply_policy(true);
         let cache = tempfile::tempdir().unwrap();
         let (state, _) = processed_card(cache.path()).await;
@@ -8506,10 +8399,6 @@ mod tests {
             the_automatic_run(&state).is_some()
         })
         .await;
-        assert!(
-            !automatic::holds_off_refreshes(&state.stack_previews),
-            "a due refresh may start while only a re-apply holds the worker"
-        );
         // The refresh's build goes ahead; the re-apply waits for its turn.
         state.stack_previews.yield_automatic_processing();
         eventually("the re-apply steps aside", || {
@@ -8525,9 +8414,6 @@ mod tests {
                 .state,
             stretch::ReprocessingState::Waiting
         );
-        // Anything else still holds refreshes off.
-        assert!(state.stack_previews.insert(running_build("held")));
-        assert!(automatic::holds_off_refreshes(&state.stack_previews));
         drop(busy);
     }
 
@@ -8707,7 +8593,6 @@ mod tests {
             .unwrap();
         assert_eq!(entry.label, "4 frames");
         assert_eq!(entry.detail, "Reading frames and matching calibration");
-        assert!(automatic::holds_off_refreshes(&state.stack_previews));
         // The same click again is the same build.
         let again =
             build_set::queue_preparation(&state, &ctx, 1, build_request(vec![4, 3, 2, 1]), true)
@@ -8842,7 +8727,7 @@ mod tests {
     async fn a_build_being_prepared_holds_its_place_without_holding_up_the_line() {
         let manager = StackPreviewManager::new();
         manager.queue_test_build("ahead");
-        manager.hold_place("slot", Vec::new());
+        manager.hold_place("slot", Vec::new(), false);
         manager.queue_test_build("behind");
         assert_eq!(manager.line.order(), ["ahead", "slot", "behind"]);
         assert_eq!(manager.dispatch_next().await, (true, "ahead".to_string()));
@@ -9032,49 +8917,65 @@ mod tests {
         assert!(state.stack_previews.request_cancel("restored"));
     }
 
+    #[test]
+    fn a_stopped_build_is_queued_again_with_its_stopped_channels_waiting() {
+        let state = AppState::new_for_test(rusqlite::Connection::open_in_memory().unwrap());
+        let mut job = running_build("auto");
+        job.automatic = true;
+        cancel_unfinished_groups(&mut job);
+        job.state = StackJobState::Cancelled;
+        assert!(state.stack_previews.insert(job));
+        assert!(requeue_stopped_build(&state, "auto"));
+        let requeued = state.stack_previews.get("auto").unwrap();
+        assert_eq!(requeued.state, StackJobState::Queued);
+        assert!(requeued
+            .groups
+            .iter()
+            .all(|group| group.state != StackGroupState::Cancelled));
+        // A build that finished before the stop reached it is not queued
+        // again.
+        let mut done = running_build("done");
+        done.state = StackJobState::Completed;
+        assert!(state.stack_previews.insert(done));
+        assert!(!requeue_stopped_build(&state, "done"));
+    }
+
     #[tokio::test(flavor = "multi_thread")]
-    async fn an_automatic_build_still_being_prepared_yields_to_a_persons_work() {
+    async fn a_persons_request_goes_ahead_of_an_automatic_one_still_being_prepared() {
         let directory = tempfile::tempdir().unwrap();
         let (state, ctx) = state_with_frames(directory.path());
         let db = ctx.db();
         let busy = db.lock().unwrap();
-        // An automatic refresh's build the journal put back, not yet prepared.
-        let automatic = build_set::queue(
-            &state,
-            &ctx,
-            build_set::Asked {
-                project_id: 1,
-                what: build_set::What::Mono {
-                    request: Box::new(build_request(vec![1, 2, 3, 4])),
-                    split: false,
-                },
-                automatic: true,
-                job_id: None,
-                retry_until: None,
+        let asked = |automatic| build_set::Asked {
+            project_id: 1,
+            what: build_set::What::Mono {
+                request: Box::new(build_request(if automatic {
+                    vec![1, 2, 3, 4]
+                } else {
+                    vec![1, 2]
+                })),
+                split: false,
             },
-        )
-        .unwrap();
-        assert!(state.stack_previews.get(&automatic).unwrap().automatic);
-        let stopped = state.stack_previews.cancel_automatic();
-        assert_eq!(stopped.len(), 1);
+            automatic,
+            job_id: None,
+            retry_until: None,
+        };
+        // An automatic refresh's request, not yet prepared, then a person's.
+        let automatic = build_set::queue(&state, &ctx, asked(true)).unwrap();
+        let person = build_set::queue(&state, &ctx, asked(false)).unwrap();
         assert_eq!(
-            (stopped[0].database_id.as_str(), stopped[0].project_id),
-            (ctx.id.as_str(), 1),
-            "its refresh is told it was interrupted"
+            state.stack_previews.line.order(),
+            [person.clone(), automatic.clone()]
         );
+        // The automatic one keeps its place and its journal entry.
+        assert_eq!(state.stack_previews.journal_entries().len(), 2);
         drop(busy);
-        assert_eq!(
-            prepared(&state, &automatic).await.state,
-            StackJobState::Cancelled
-        );
-        for _ in 0..100 {
-            if state.stack_previews.journal_entries().is_empty() {
-                break;
+        for job_id in [&person, &automatic] {
+            let done = prepared(&state, job_id).await;
+            for built in &done.replaced_by {
+                state.stack_previews.request_cancel(built);
             }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
-        assert!(state.stack_previews.journal_entries().is_empty());
-        assert!(state.stack_previews.line.order().is_empty());
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -9084,7 +8985,7 @@ mod tests {
         // A build of target 7's channels waits in the line.
         state
             .stack_previews
-            .hold_place("building", vec![channel_key(&ctx.id, 1, 7)]);
+            .hold_place("building", vec![channel_key(&ctx.id, 1, 7)], false);
         let rgb: color::StackColorRequest =
             serde_json::from_value(serde_json::json!({"target_id": 7, "kind": "rgb"})).unwrap();
         let lrgb: color::StackColorRequest =

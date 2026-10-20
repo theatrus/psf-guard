@@ -1069,12 +1069,10 @@ export interface ScheduledRefresh {
    * to do nothing.
    */
   channels?: string[];
-  /** Due, and waiting for the stacking worker rather than settling. */
+  /** Due, and waiting for a quality analysis to finish rather than settling. */
   waiting?: boolean;
   /** What it waits for, in words that fit "Waiting for …". */
   waiting_for?: string | null;
-  /** How far its build had got when a person's build stopped it. */
-  last_progress?: { label: string; processed_units: number; total_units: number } | null;
 }
 
 /** Processing re-applied to a refreshed stack, waiting for its turn. */

@@ -231,31 +231,9 @@ pub struct ScheduledRefresh {
     pub due_in_seconds: u64,
     /// Changes with every touch, and is never reused.
     pub touches: u64,
-    /// Due, and waiting only for the worker: for a person's work, a build,
-    /// or a quality analysis. A refresh still settling is not waiting.
+    /// Due, and waiting for a quality analysis to finish before its builds
+    /// join the line. A refresh still settling is not waiting.
     pub waiting: bool,
-    /// How far its build had got when a person's build stopped it.
-    pub last_progress: Option<LastProgress>,
-    /// A person's build stopped its build. It is listed even when what it
-    /// expects to restack cannot be told, such as a color composition.
-    pub interrupted: bool,
-}
-
-/// Where an automatic build stood when it stepped aside for a person's.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LastProgress {
-    /// The channel it was on, such as `M44 · Ha`.
-    pub label: String,
-    pub processed_units: usize,
-    pub total_units: usize,
-}
-
-/// An automatic build stopped so a person's build could run.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InterruptedBuild {
-    pub database_id: String,
-    pub project_id: i32,
-    pub last_progress: Option<LastProgress>,
 }
 
 /// One project, or every followed project of one database.
@@ -273,10 +251,6 @@ struct Pending {
     /// The latest touch's stamp, so what the refresh expects to do is worked
     /// out once per change rather than on every look at the queue.
     touches: u64,
-    /// Where its build stood when a person's build stopped it.
-    last: Option<LastProgress>,
-    /// A person's build stopped its build.
-    interrupted: bool,
 }
 
 impl Pending {
@@ -339,8 +313,6 @@ impl AutomaticStackRefresh {
             first_touched: now,
             reason,
             touches: 0,
-            last: None,
-            interrupted: false,
         });
         entry.touches = TOUCHES.fetch_add(1, Ordering::Relaxed) + 1;
         if entry.waiting(now) {
@@ -368,10 +340,10 @@ impl AutomaticStackRefresh {
         // already come sooner.
     }
 
-    /// Put back a due refresh that cannot run yet because the worker is
-    /// busy. It stays due, listed as waiting, and the scheduler's next look
-    /// after the worker frees starts it. A touch since it was taken does
-    /// not push it out again.
+    /// Put back a due refresh that cannot start yet, while a quality
+    /// analysis rewrites the scores it would stack by. It stays due, listed
+    /// as waiting, and a later look starts it. A touch since it was taken
+    /// does not push it out again.
     fn hold(&self, key: RefreshKey, pending: Pending) {
         let mut entries = self.pending.lock().unwrap();
         match entries.entry(key) {
@@ -379,46 +351,10 @@ impl AutomaticStackRefresh {
                 let entry = occupied.get_mut();
                 entry.due_at = entry.due_at.min(pending.due_at);
                 entry.first_touched = entry.first_touched.min(pending.first_touched);
-                if entry.last.is_none() {
-                    entry.last = pending.last;
-                }
-                entry.interrupted |= pending.interrupted;
             }
             std::collections::hash_map::Entry::Vacant(vacant) => {
                 vacant.insert(pending);
             }
-        }
-    }
-
-    /// A person's build stopped this project's automatic build. Its refresh
-    /// is due at once, listed as waiting, and keeps where the build stood.
-    /// It starts once the person's work has been quiet for
-    /// [`RESUME_QUIET`], and resumes from the stopped build's checkpoint
-    /// when no frame or grade changed meanwhile.
-    pub fn interrupted(&self, build: InterruptedBuild) {
-        if !ENABLED.load(Ordering::Relaxed) {
-            return;
-        }
-        let now = Instant::now();
-        let touches = TOUCHES.fetch_add(1, Ordering::Relaxed) + 1;
-        let key = RefreshKey {
-            database_id: build.database_id,
-            project_id: Some(build.project_id),
-        };
-        let mut entries = self.pending.lock().unwrap();
-        let entry = entries.entry(key).or_insert(Pending {
-            due_at: now,
-            first_touched: now,
-            reason: RefreshReason::Arrival,
-            touches,
-            last: None,
-            interrupted: true,
-        });
-        entry.due_at = entry.due_at.min(now);
-        entry.touches = touches;
-        entry.interrupted = true;
-        if build.last_progress.is_some() {
-            entry.last = build.last_progress;
         }
     }
 
@@ -466,8 +402,6 @@ impl AutomaticStackRefresh {
                 project_id: key.project_id,
                 reason: entry.reason,
                 touches: entry.touches,
-                last_progress: entry.last,
-                interrupted: entry.interrupted,
             })
             .collect::<Vec<_>>();
         scheduled.sort_by(|left, right| {
@@ -519,8 +453,6 @@ impl AutomaticStackRefresh {
             first_touched: now,
             reason: refresh.reason,
             touches: 0,
-            last: None,
-            interrupted: false,
         });
         entry.due_at = entry.due_at.min(due_at);
     }
@@ -594,19 +526,10 @@ async fn tick(state: &Arc<AppState>) {
         }
     }
     let _starting = Starting(refreshes);
-    // One stacking worker, and the user comes first on it: while a build
-    // runs, or interactive work is in flight or ended only moments ago,
-    // everything due waits, listed as waiting. A re-apply of processing
-    // does not hold a refresh off: the refresh may bring a newer stack,
-    // which the re-apply would only be redone for.
-    if !quiet_for_automatic_work(state) || holds_off_refreshes(&state.stack_previews) {
-        for (key, pending) in due {
-            refreshes.hold(key, pending);
-        }
-        return;
-    }
-    let mut remaining = due.into_iter();
-    while let Some((key, pending)) = remaining.next() {
+    // Every due refresh puts its builds in the line now. The line runs
+    // them after any person's work, one at a time, and starts none while a
+    // person's work runs elsewhere.
+    for (key, pending) in due {
         let Some(ctx) = state.get_database(&key.database_id) else {
             continue;
         };
@@ -629,33 +552,6 @@ async fn tick(state: &Arc<AppState>) {
                     // a re-apply touches a refresh, so the two cannot chase
                     // each other.
                     state.stack_previews.yield_automatic_processing();
-                    // The worker is taken; the rest of this database and
-                    // every other due key wait for the next free moment,
-                    // keeping their history so the cap still holds.
-                    let rest: Vec<i32> = match key.project_id {
-                        Some(_) => Vec::new(),
-                        None => followed_projects(&ctx)
-                            .into_iter()
-                            .filter(|other| *other > project_id)
-                            .collect(),
-                    };
-                    for other in rest {
-                        refreshes.hold(
-                            RefreshKey {
-                                database_id: key.database_id.clone(),
-                                project_id: Some(other),
-                            },
-                            Pending {
-                                last: None,
-                                interrupted: false,
-                                ..pending.clone()
-                            },
-                        );
-                    }
-                    for (key, pending) in remaining {
-                        refreshes.hold(key, pending);
-                    }
-                    return;
                 }
                 Ok(RefreshOutcome::Unchanged) => {}
                 Ok(RefreshOutcome::Skipped(why)) => {
@@ -684,15 +580,6 @@ pub(super) fn quiet_for_automatic_work(state: &AppState) -> bool {
     state
         .interactive_quiet_for()
         .is_some_and(|quiet| quiet >= RESUME_QUIET)
-}
-
-/// Whether queued or running work keeps due refreshes waiting: anything but
-/// a re-apply of processing.
-pub(super) fn holds_off_refreshes(manager: &super::StackPreviewManager) -> bool {
-    manager
-        .active()
-        .into_iter()
-        .any(|entry| !(entry.kind == super::StackActivityKind::Processing && entry.automatic))
 }
 
 enum RefreshOutcome {
@@ -1729,14 +1616,8 @@ mod tests {
         (directory, Arc::new(ctx))
     }
 
-    async fn stack_activity(state: &Arc<AppState>) -> serde_json::Value {
-        let axum::Json(response) =
-            super::super::get_stack_activity(axum::extract::State(Arc::clone(state))).await;
-        serde_json::to_value(response).unwrap()
-    }
-
     #[test]
-    fn a_refresh_stopped_for_a_person_is_listed_as_waiting_for_them() {
+    fn a_due_refresh_queues_its_builds_while_a_person_works() {
         // The policy is held outside the runtime: an async test cannot hold
         // a blocking lock across its awaits.
         let _policy = enabled(5, 15);
@@ -1745,11 +1626,11 @@ mod tests {
             .enable_all()
             .build()
             .unwrap()
-            .block_on(refresh_stopped_for_a_person());
+            .block_on(refresh_while_a_person_works());
         configure(AutomationPolicy::default());
     }
 
-    async fn refresh_stopped_for_a_person() {
+    async fn refresh_while_a_person_works() {
         let (_directory, ctx) = project_with_a_stale_channel();
         let state = Arc::new(AppState::new_for_test(
             rusqlite::Connection::open_in_memory().unwrap(),
@@ -1759,88 +1640,56 @@ mod tests {
             .write()
             .unwrap()
             .insert(ctx.id.clone(), Arc::clone(&ctx));
-
-        // A person's scan runs, and their build stopped the automatic one
-        // a third of the way through.
+        // A person's scan runs while the refresh comes due.
         let person = state.begin_named_interactive_job("a quality scan");
-        state.auto_stacks.interrupted(InterruptedBuild {
-            database_id: ctx.id.clone(),
-            project_id: 1,
-            last_progress: Some(LastProgress {
-                label: "T · R".into(),
-                processed_units: 1,
-                total_units: 3,
-            }),
-        });
-        // The scheduler looks while the person's work runs: the refresh
-        // stays due and listed, rather than leaving the queue.
-        mark_ready();
-        tick(&state).await;
-        let json = stack_activity(&state).await;
-        let scheduled = json["data"]["scheduled"].as_array().unwrap();
-        assert_eq!(scheduled.len(), 1, "{json}");
-        assert_eq!(scheduled[0]["waiting"], true);
-        assert_eq!(scheduled[0]["due_in_seconds"], 0);
-        assert_eq!(scheduled[0]["waiting_for"], "a quality scan");
-        assert_eq!(scheduled[0]["channels"], serde_json::json!(["T · R"]));
-        assert_eq!(
-            scheduled[0]["last_progress"],
-            serde_json::json!({"label": "T · R", "processed_units": 1, "total_units": 3})
-        );
-
-        // A new frame meanwhile does not send it back to settling.
         state
             .auto_stacks
             .touch_projects(&ctx.id, [1], RefreshReason::Arrival);
-        assert!(state.auto_stacks.scheduled()[0].waiting);
-
-        // The person's work ends: it waits for a quiet moment, still listed
-        // once.
-        drop(person);
-        let json = stack_activity(&state).await;
-        let scheduled = json["data"]["scheduled"].as_array().unwrap();
-        assert_eq!(scheduled.len(), 1);
-        assert_eq!(scheduled[0]["waiting"], true);
-        assert_eq!(
-            scheduled[0]["waiting_for"],
-            "a quiet moment after your work"
-        );
-
-        // A person building channel after channel leaves a gap between
-        // builds. The scheduler looks inside it: the refresh does not slip
-        // in, to be stopped again by the next build.
+        let key = RefreshKey {
+            database_id: ctx.id.clone(),
+            project_id: Some(1),
+        };
+        assert!(state.auto_stacks.run_now(&key));
+        mark_ready();
         tick(&state).await;
-        let started = |state: &AppState| {
+        // Its build joins the line as automatic work and leaves the list of
+        // scheduled refreshes; the line starts it once the person's work has
+        // been quiet for long enough.
+        let automatic_build = || {
             state
                 .stack_previews
                 .jobs
                 .lock()
                 .unwrap()
                 .values()
-                .any(|job| job.automatic && job.project_id == 1)
+                .find(|job| job.automatic && job.project_id == 1)
+                .cloned()
         };
-        assert!(!started(&state), "it started in the gap between builds");
-        assert!(state.auto_stacks.scheduled()[0].waiting);
-
-        // Quiet for long enough: the next look starts its build, and the
-        // refresh leaves the list, starting set and all.
-        state.interactive_ended_ago(RESUME_QUIET);
-        tick(&state).await;
-        assert!(started(&state), "the refresh did not start");
+        let build = automatic_build().expect("the refresh queued no build");
+        assert_eq!(build.state, StackJobState::Queued);
         assert!(state.auto_stacks.scheduled().is_empty());
         assert!(state.auto_stacks.starting.lock().unwrap().is_empty());
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        assert_eq!(
+            automatic_build().unwrap().state,
+            StackJobState::Queued,
+            "it started while the person's work ran"
+        );
+        drop(person);
+        state.stack_previews.request_cancel(&build.job_id);
     }
 
     #[test]
     fn a_refresh_being_started_is_still_listed_and_listed_once() {
         let _policy = enabled(5, 15);
         let refresh = AutomaticStackRefresh::default();
-        refresh.interrupted(InterruptedBuild {
+        refresh.touch_projects("db-a", [7], RefreshReason::Arrival);
+        let key = RefreshKey {
             database_id: "db-a".into(),
-            project_id: 7,
-            last_progress: None,
-        });
-        // The scheduler takes it to start: until its build is in the line,
+            project_id: Some(7),
+        };
+        assert!(refresh.run_now(&key));
+        // The scheduler takes it to start: until its builds are in the line,
         // the list still shows it, waiting.
         let taken = refresh.take_due(Instant::now());
         refresh
@@ -1850,7 +1699,7 @@ mod tests {
             .extend(taken.iter().cloned());
         let listed = refresh.scheduled();
         assert_eq!(listed.len(), 1);
-        assert!(listed[0].waiting && listed[0].interrupted);
+        assert!(listed[0].waiting);
         // Put back while still marked as starting, it is listed once.
         for (key, pending) in taken {
             refresh.hold(key, pending);
@@ -1862,52 +1711,14 @@ mod tests {
     }
 
     #[test]
-    fn a_stopped_color_composition_is_listed_though_no_channel_would_restack() {
-        let _policy = enabled(5, 15);
-        let (_directory, ctx) = project_with_a_stale_channel();
-        let state = AppState::new_for_test(rusqlite::Connection::open_in_memory().unwrap());
-        state
-            .databases
-            .write()
-            .unwrap()
-            .insert(ctx.id.clone(), Arc::clone(&ctx));
-        // Project 2 has no cards: no channel is expected to restack.
-        state.auto_stacks.interrupted(InterruptedBuild {
-            database_id: ctx.id.clone(),
-            project_id: 2,
-            last_progress: Some(LastProgress {
-                label: "T · RGB".into(),
-                processed_units: 1,
-                total_units: 3,
-            }),
-        });
-        let listed = super::super::name_scheduled(
-            &state,
-            state.auto_stacks.scheduled(),
-            super::super::RefreshPlanning::Plan,
-        );
-        assert_eq!(listed.len(), 1);
-        assert!(listed[0].waiting);
-        assert_eq!(listed[0].channels, ["T · RGB"]);
-        configure(AutomationPolicy::default());
-    }
-
-    #[test]
-    fn a_settling_refresh_is_not_waiting_and_turned_off_automation_keeps_no_interrupted_build() {
+    fn a_settling_refresh_is_not_waiting() {
         let _policy = enabled(5, 15);
         let refresh = AutomaticStackRefresh::default();
         refresh.touch_projects("db-a", [7], RefreshReason::Arrival);
         let scheduled = refresh.scheduled();
         assert!(!scheduled[0].waiting, "still settling");
         assert!(scheduled[0].due_in_seconds > 0);
-
         configure(AutomationPolicy::default());
-        refresh.interrupted(InterruptedBuild {
-            database_id: "db-a".into(),
-            project_id: 8,
-            last_progress: None,
-        });
-        assert_eq!(refresh.pending_count(), 1, "off means nothing comes back");
     }
 
     #[test]

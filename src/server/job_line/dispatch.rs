@@ -27,6 +27,10 @@ pub struct DispatchRules {
     pub lanes: &'static [Lane],
     /// How the entry with the given id runs.
     pub turn: fn(&AppState, &str) -> Turn,
+    /// Whether an automatic entry may start now. While this returns false,
+    /// such as while a person's work runs elsewhere on the server, the
+    /// dispatcher passes over automatic entries.
+    pub automatic_may_start: fn(&AppState) -> bool,
 }
 
 impl JobLine {
@@ -59,7 +63,9 @@ impl JobLine {
 /// each entry that was stopped while queued.
 async fn dispatch(state: Arc<AppState>, rules: &'static DispatchRules, lane: Lane) {
     loop {
-        let next = (rules.line)(&state).next(lane).await;
+        let next = (rules.line)(&state)
+            .next_when(lane, || (rules.automatic_may_start)(&state))
+            .await;
         let state = Arc::clone(&state);
         match next {
             Dispatch::Run {

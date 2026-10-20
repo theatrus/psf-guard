@@ -56,6 +56,17 @@ pub enum Lane {
     Quick,
 }
 
+/// Whose work an entry is. A person's entry runs ahead of automatic ones,
+/// and stops a running automatic entry on its lane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Tier {
+    /// Work a person asked for.
+    #[default]
+    Person,
+    /// Work the server started on its own, such as an automatic refresh.
+    Automatic,
+}
+
 /// Work in the line.
 pub struct Entry {
     id: String,
@@ -64,6 +75,7 @@ pub struct Entry {
     task: Box<dyn Task>,
     holds: Vec<String>,
     blocked_by: Vec<String>,
+    tier: Tier,
 }
 
 impl Entry {
@@ -76,7 +88,14 @@ impl Entry {
             task,
             holds: Vec::new(),
             blocked_by: Vec::new(),
+            tier: Tier::Person,
         }
+    }
+
+    /// Whose work it is: a person's by default.
+    pub fn tier(mut self, tier: Tier) -> Self {
+        self.tier = tier;
+        self
     }
 
     /// The id that pages follow.
@@ -105,6 +124,7 @@ enum Place {
     Held {
         id: String,
         holds: Vec<String>,
+        tier: Tier,
     },
     /// The next turn, kept for work about to join: for `hold_for` from when
     /// it first holds anything up.
@@ -135,6 +155,30 @@ impl Place {
     fn is_work(&self) -> bool {
         matches!(self, Self::Work(_))
     }
+
+    /// Whose work the place is for. A reserved turn is a person's.
+    fn tier(&self) -> Tier {
+        match self {
+            Self::Held { tier, .. } => *tier,
+            Self::Reserved { .. } => Tier::Person,
+            Self::Work(entry) => entry.tier,
+        }
+    }
+
+    fn set_tier(&mut self, to: Tier) {
+        match self {
+            Self::Held { tier, .. } => *tier = to,
+            Self::Reserved { .. } => {}
+            Self::Work(entry) => entry.tier = to,
+        }
+    }
+}
+
+/// The entry running on a lane.
+struct RunningEntry {
+    id: String,
+    tier: Tier,
+    stop: Stop,
 }
 
 #[derive(Default)]
@@ -148,9 +192,12 @@ struct LineState {
     /// The keys the work running on each lane holds.
     main_holds: Vec<String>,
     quick_holds: Vec<String>,
-    /// The id of the entry running on each lane.
-    main_running: Option<String>,
-    quick_running: Option<String>,
+    /// The entry running on each lane.
+    main_running: Option<RunningEntry>,
+    quick_running: Option<RunningEntry>,
+    /// Automatic entries stopped to make way for a person's work, by id,
+    /// until their kind puts them back in the line.
+    preempted: std::collections::HashSet<String>,
     /// Work waiting to reserve the worker outside the line. It goes before
     /// the line's next entry, as a reservation always has.
     reservations: usize,
@@ -166,7 +213,7 @@ impl LineState {
         }
     }
 
-    fn running_id(&mut self, lane: Lane) -> &mut Option<String> {
+    fn running(&mut self, lane: Lane) -> &mut Option<RunningEntry> {
         match lane {
             Lane::Main => &mut self.main_running,
             Lane::Quick => &mut self.quick_running,
@@ -196,6 +243,36 @@ impl LineState {
             || held(&self.main_holds)
             || held(&self.quick_holds)
             || keys.iter().any(|key| self.outside.contains_key(key))
+    }
+
+    /// Where an entry of `tier` joins the main lane's line when nothing
+    /// names its place: a person's ahead of the first automatic place, an
+    /// automatic one at the back.
+    fn place_for(&self, tier: Tier) -> usize {
+        match tier {
+            Tier::Person => self
+                .order
+                .iter()
+                .position(|place| place.tier() == Tier::Automatic)
+                .unwrap_or(self.order.len()),
+            Tier::Automatic => self.order.len(),
+        }
+    }
+
+    /// Stop the automatic entry running on `lane`, if one is, and mark it
+    /// preempted so its kind puts it back in the line. Returns whether one
+    /// was stopped.
+    fn preempt(&mut self, lane: Lane) -> bool {
+        let Some(running) = self.running(lane) else {
+            return false;
+        };
+        if running.tier != Tier::Automatic || running.stop.requested() {
+            return false;
+        }
+        running.stop.request();
+        let id = running.id.clone();
+        self.preempted.insert(id);
+        true
     }
 
     /// Whether `entry` is blocked: whether anything other than the entry
@@ -238,18 +315,37 @@ impl LineState {
             .any(|place| matches!(place, Place::Work(entry) if !self.is_blocked(entry)))
     }
 
-    fn take_next(&mut self, lane: Lane) -> Result<Entry, Option<Instant>> {
+    fn take_next(
+        &mut self,
+        lane: Lane,
+        automatic_may_start: bool,
+    ) -> Result<Entry, Option<Instant>> {
+        // An automatic entry passed over only because a person's work runs
+        // elsewhere is looked at again shortly.
+        let mut gated = false;
+        let mut may_run = |entry: &Entry, state: &Self| {
+            if state.is_blocked(entry) {
+                return false;
+            }
+            if entry.tier == Tier::Automatic && !automatic_may_start {
+                gated = true;
+                return false;
+            }
+            true
+        };
+        let retry = || Some(Instant::now() + AUTOMATIC_GATE_POLL);
         if lane == Lane::Quick {
-            let index = (0..self.quick.len())
-                .find(|&index| !self.is_blocked(&self.quick[index]))
-                .ok_or(None)?;
+            let found = (0..self.quick.len()).find(|&index| may_run(&self.quick[index], self));
+            let Some(index) = found else {
+                return Err(if gated { retry() } else { None });
+            };
             return self.quick.remove(index).ok_or(None);
         }
         let now = Instant::now();
         let mut index = 0;
         while index < self.order.len() {
             if let Place::Work(entry) = &self.order[index]
-                && self.is_blocked(entry)
+                && !may_run(entry, self)
             {
                 index += 1;
                 continue;
@@ -283,9 +379,13 @@ impl LineState {
                 },
             }
         }
-        Err(None)
+        Err(if gated { retry() } else { None })
     }
 }
+
+/// How often the line looks again at automatic entries it passed over
+/// while a person's work ran elsewhere.
+pub const AUTOMATIC_GATE_POLL: Duration = Duration::from_millis(250);
 
 /// One line of work and its lanes.
 #[derive(Default)]
@@ -343,7 +443,7 @@ impl Drop for Lease {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         *state.busy(self.lane) = false;
         state.running_holds(self.lane).clear();
-        *state.running_id(self.lane) = None;
+        *state.running(self.lane) = None;
         drop(state);
         self.wakeup.notify_waiters();
     }
@@ -464,17 +564,23 @@ impl JobLine {
         self.wake();
     }
 
-    /// Hold a place in the main lane's line for work still being
-    /// prepared, at the back, holding `holds` meanwhile. The place runs
-    /// nothing and holds up nothing behind it; the work it becomes takes it.
-    pub fn hold_place(&self, id: &str, holds: Vec<String>) {
+    /// Hold a place in the main lane's line for work of `tier` still being
+    /// prepared, holding `holds` meanwhile: a person's ahead of automatic
+    /// work, an automatic one at the back. The place runs nothing and does
+    /// not block the entries behind it; the work it becomes takes it.
+    pub fn hold_place(&self, id: &str, holds: Vec<String>, tier: Tier) {
         {
             let mut state = self.lock();
             if state.index_of(id).is_none() {
-                state.order.push(Place::Held {
-                    id: id.to_string(),
-                    holds,
-                });
+                let index = state.place_for(tier);
+                state.order.insert(
+                    index,
+                    Place::Held {
+                        id: id.to_string(),
+                        holds,
+                        tier,
+                    },
+                );
             }
         }
         self.wake();
@@ -573,6 +679,10 @@ impl JobLine {
     pub fn submit(&self, entry: Entry, before: Option<&str>) -> Result<(), Entry> {
         {
             let mut state = self.lock();
+            // A person's work stops automatic work running on its lane.
+            if entry.tier == Tier::Person {
+                state.preempt(entry.lane);
+            }
             match entry.lane {
                 Lane::Main => match state.index_of(&entry.id) {
                     Some(index) => match &state.order[index] {
@@ -585,7 +695,7 @@ impl JobLine {
                     None => {
                         let index = before
                             .and_then(|before| state.index_of(before))
-                            .unwrap_or(state.order.len());
+                            .unwrap_or_else(|| state.place_for(entry.tier));
                         state.order.insert(index, Place::Work(entry));
                     }
                 },
@@ -594,7 +704,15 @@ impl JobLine {
                         self.tracked.restore_stop(&entry.id, queued.stop.clone());
                         return Err(entry);
                     }
-                    state.quick.push_back(entry);
+                    let index = match entry.tier {
+                        Tier::Person => state
+                            .quick
+                            .iter()
+                            .position(|queued| queued.tier == Tier::Automatic)
+                            .unwrap_or(state.quick.len()),
+                        Tier::Automatic => state.quick.len(),
+                    };
+                    state.quick.insert(index, entry);
                 }
             }
         }
@@ -686,19 +804,76 @@ impl JobLine {
 
     /// The id of the entry running on `lane`.
     pub fn running_on(&self, lane: Lane) -> Option<String> {
-        self.lock().running_id(lane).clone()
+        self.lock()
+            .running(lane)
+            .as_ref()
+            .map(|running| running.id.clone())
+    }
+
+    /// Stop the automatic entry running on `lane`, if one is, for a
+    /// person's work that takes the lane outside the line. The entry's kind
+    /// puts it back in the line ([`JobLine::take_preempted`]). Returns
+    /// whether one was stopped.
+    pub fn preempt_automatic(&self, lane: Lane) -> bool {
+        self.lock().preempt(lane)
+    }
+
+    /// The id of the first automatic place in the main lane's line: where
+    /// automatic work stopped for a person's goes back, ahead of the
+    /// automatic work that had not started.
+    pub fn first_automatic(&self) -> Option<String> {
+        self.lock()
+            .order
+            .iter()
+            .find(|place| place.tier() == Tier::Automatic)
+            .map(|place| place.id().to_string())
+    }
+
+    /// Whether the entry `id` was stopped to make way for a person's work,
+    /// rather than by a person's Stop. Asking forgets it, so the kind that
+    /// puts the entry back asks once.
+    pub fn take_preempted(&self, id: &str) -> bool {
+        self.lock().preempted.remove(id)
+    }
+
+    /// Change whose work the entry or held place `id` is, such as when a
+    /// person adopts automatic work. A waiting place that becomes a
+    /// person's moves ahead of the automatic places before it. Running work
+    /// that becomes a person's is no longer preempted.
+    pub fn set_tier(&self, id: &str, tier: Tier) {
+        {
+            let mut state = self.lock();
+            for lane in [Lane::Main, Lane::Quick] {
+                if let Some(running) = state.running(lane)
+                    && running.id == id
+                {
+                    running.tier = tier;
+                }
+            }
+            if let Some(index) = state.index_of(id) {
+                let mut place = state.order.remove(index);
+                place.set_tier(tier);
+                let to = if tier == Tier::Person {
+                    state.place_for(Tier::Person).min(index)
+                } else {
+                    index
+                };
+                state.order.insert(to, place);
+            }
+            if let Some(entry) = state.quick.iter_mut().find(|entry| entry.id == id) {
+                entry.tier = tier;
+            }
+        }
+        self.wake();
     }
 
     /// The lane of the entry `id`, queued or running.
     pub fn lane_of(&self, id: &str) -> Option<Lane> {
         let mut state = self.lock();
-        if state.quick.iter().any(|entry| entry.id == id)
-            || state.running_id(Lane::Quick).as_deref() == Some(id)
-        {
+        let runs = |running: &Option<RunningEntry>| running.as_ref().is_some_and(|r| r.id == id);
+        if state.quick.iter().any(|entry| entry.id == id) || runs(state.running(Lane::Quick)) {
             Some(Lane::Quick)
-        } else if state.index_of(id).is_some()
-            || state.running_id(Lane::Main).as_deref() == Some(id)
-        {
+        } else if state.index_of(id).is_some() || runs(state.running(Lane::Main)) {
             Some(Lane::Main)
         } else {
             None
@@ -785,7 +960,7 @@ impl JobLine {
 
     /// What `lane`'s dispatcher does next, now: settle an entry stopped
     /// while it waited, or run the next entry while the lane is free.
-    fn try_next(&self, lane: Lane) -> Result<Dispatch, Option<Instant>> {
+    fn try_next(&self, lane: Lane, automatic_may_start: bool) -> Result<Dispatch, Option<Instant>> {
         let mut state = self.lock();
         if let Some(entry) = state.take_stopped(lane) {
             // The keys it held are free now: entries blocked by them, in
@@ -800,10 +975,14 @@ impl JobLine {
         if *state.busy(lane) || (lane == Lane::Main && state.reservations > 0) {
             return Err(None);
         }
-        let entry = state.take_next(lane)?;
+        let entry = state.take_next(lane, automatic_may_start)?;
         *state.busy(lane) = true;
         *state.running_holds(lane) = entry.holds.clone();
-        *state.running_id(lane) = Some(entry.id.clone());
+        *state.running(lane) = Some(RunningEntry {
+            id: entry.id.clone(),
+            tier: entry.tier,
+            stop: entry.stop.clone(),
+        });
         drop(state);
         Ok(Dispatch::Run {
             id: entry.id,
@@ -816,13 +995,21 @@ impl JobLine {
     /// Wait for what `lane`'s dispatcher does next. A reserved turn that
     /// holds the lane is looked at again when it runs out.
     pub async fn next(&self, lane: Lane) -> Dispatch {
+        self.next_when(lane, || true).await
+    }
+
+    /// [`JobLine::next`], passing over automatic entries while
+    /// `automatic_may_start` returns false, such as while a person's work
+    /// runs elsewhere on the server. Automatic entries passed over are
+    /// looked at again every [`AUTOMATIC_GATE_POLL`].
+    pub async fn next_when(&self, lane: Lane, automatic_may_start: impl Fn() -> bool) -> Dispatch {
         loop {
             let notified = self.wakeup.notified();
             tokio::pin!(notified);
             // Registered before the line is read, so a change between the
             // read and the wait still wakes the dispatcher.
             notified.as_mut().enable();
-            match self.try_next(lane) {
+            match self.try_next(lane, automatic_may_start()) {
                 Ok(dispatch) => return dispatch,
                 Err(Some(until)) => {
                     tokio::select! {
@@ -934,7 +1121,7 @@ mod tests {
     async fn work_takes_its_held_place_and_runs_in_line_order() {
         let (sender, _) = std::sync::mpsc::channel();
         let line = JobLine::new();
-        line.hold_place("slot", Vec::new());
+        line.hold_place("slot", Vec::new(), Tier::Person);
         line.submit(entry("after", Lane::Main, &sender).0, None)
             .ok()
             .unwrap();
@@ -1104,6 +1291,101 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_persons_entry_joins_ahead_of_automatic_ones_and_preempts_running_automatic_work() {
+        let (sender, _) = std::sync::mpsc::channel();
+        let line = JobLine::new();
+        let automatic = |id: &str| entry(id, Lane::Main, &sender).0.tier(Tier::Automatic);
+        line.submit(automatic("auto running"), None).ok().unwrap();
+        let running = line.next(Lane::Main).await;
+        let Dispatch::Run { stop, .. } = &running else {
+            panic!("the automatic entry did not run");
+        };
+        let running_stop = stop.clone();
+        line.submit(automatic("auto 1"), None).ok().unwrap();
+        line.hold_place("person preparing", Vec::new(), Tier::Person);
+        line.submit(entry("person", Lane::Main, &sender).0, None)
+            .ok()
+            .unwrap();
+        line.submit(automatic("auto 2"), None).ok().unwrap();
+        assert_eq!(
+            line.order(),
+            ["person preparing", "person", "auto 1", "auto 2"]
+        );
+        // The person's entry stopped the automatic work running, which its
+        // kind puts back in the line.
+        assert!(running_stop.requested());
+        assert!(line.take_preempted("auto running"));
+        assert!(!line.take_preempted("auto running"), "asked once");
+        assert_eq!(line.first_automatic().as_deref(), Some("auto 1"));
+        drop(running);
+    }
+
+    #[tokio::test]
+    async fn adopted_work_moves_ahead_and_is_not_preempted() {
+        let (sender, _) = std::sync::mpsc::channel();
+        let line = JobLine::new();
+        let automatic = |id: &str| entry(id, Lane::Main, &sender).0.tier(Tier::Automatic);
+        // A waiting automatic entry a person adopts moves ahead of the
+        // automatic entries before it, behind the person's own.
+        let _busy = line.try_reserve_main().unwrap();
+        line.submit(entry("person", Lane::Main, &sender).0, None)
+            .ok()
+            .unwrap();
+        line.submit(automatic("auto"), None).ok().unwrap();
+        line.submit(automatic("adopted"), None).ok().unwrap();
+        line.set_tier("adopted", Tier::Person);
+        assert_eq!(line.order(), ["person", "adopted", "auto"]);
+        drop(_busy);
+
+        // Running automatic work a person adopts is not stopped for another
+        // person's entry.
+        let line = JobLine::new();
+        line.submit(automatic("running"), None).ok().unwrap();
+        let running = line.next(Lane::Main).await;
+        line.set_tier("running", Tier::Person);
+        line.submit(entry("person", Lane::Main, &sender).0, None)
+            .ok()
+            .unwrap();
+        assert!(!line.take_preempted("running"));
+        let Dispatch::Run { stop, .. } = &running else {
+            panic!("the entry did not run");
+        };
+        assert!(!stop.requested());
+    }
+
+    #[tokio::test]
+    async fn automatic_entries_wait_while_the_gate_is_closed() {
+        let (sender, _) = std::sync::mpsc::channel();
+        let line = Arc::new(JobLine::new());
+        line.submit(
+            entry("auto", Lane::Main, &sender).0.tier(Tier::Automatic),
+            None,
+        )
+        .ok()
+        .unwrap();
+        let open = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let next = {
+            let (line, open) = (Arc::clone(&line), Arc::clone(&open));
+            tokio::spawn(async move {
+                let dispatch = line
+                    .next_when(Lane::Main, || {
+                        open.load(std::sync::atomic::Ordering::SeqCst)
+                    })
+                    .await;
+                id_of(&dispatch).1.to_string()
+            })
+        };
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(!next.is_finished(), "it started while the gate was closed");
+        // A person's entry is not gated.
+        line.submit(entry("person", Lane::Main, &sender).0, None)
+            .ok()
+            .unwrap();
+        assert_eq!(next.await.unwrap(), "person");
+        open.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    #[tokio::test]
     async fn stopping_a_queued_entry_frees_the_entries_its_keys_blocked() {
         let (sender, _) = std::sync::mpsc::channel();
         let line = Arc::new(JobLine::new());
@@ -1158,7 +1440,7 @@ mod tests {
         let (sender, _) = std::sync::mpsc::channel();
         let line = Arc::new(JobLine::new());
         let keys = vec!["target 7".to_string(), "project".to_string()];
-        line.hold_place("preparing", vec!["project".into()]);
+        line.hold_place("preparing", vec!["project".into()], Tier::Person);
         let building = Entry::new(
             "build",
             Lane::Main,
@@ -1243,8 +1525,8 @@ mod tests {
     fn a_released_place_leaves_and_work_under_its_id_stays() {
         let (sender, _) = std::sync::mpsc::channel();
         let line = JobLine::new();
-        line.hold_place("gone", Vec::new());
-        line.hold_place("taken", Vec::new());
+        line.hold_place("gone", Vec::new(), Tier::Person);
+        line.hold_place("taken", Vec::new(), Tier::Person);
         line.submit(entry("taken", Lane::Main, &sender).0, None)
             .ok()
             .unwrap();

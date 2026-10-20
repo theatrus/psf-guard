@@ -1063,17 +1063,9 @@ fn wbpp_queued_row(run: &WbppQueuedActivity, index: usize, project_of: ProjectOf
     }
 }
 
-/// An automatic refresh that came due, or whose build stopped for a
-/// person's build, waiting for the stack worker.
+/// An automatic refresh that came due and waits for a quality analysis of
+/// its database before its builds join the line.
 fn waiting_refresh_row(refresh: &ScheduledRefreshView) -> JobRow {
-    let last = refresh.last_progress.as_ref();
-    let stopped = match last {
-        Some(last) if last.total_units > 0 => format!(
-            "stopped at {}/{} frames",
-            last.processed_units, last.total_units
-        ),
-        _ => String::new(),
-    };
     let project = match (refresh.project_id, &refresh.project_name) {
         (None, _) => "every followed project".to_string(),
         (Some(_), Some(name)) => name.clone(),
@@ -1081,10 +1073,10 @@ fn waiting_refresh_row(refresh: &ScheduledRefreshView) -> JobRow {
     };
     let channels = refresh.channels.len();
     JobRow {
-        detail: waiting_detail(refresh.waiting_for.as_deref(), &stopped),
+        detail: waiting_detail(refresh.waiting_for.as_deref(), ""),
         status: RowStatus::Waiting,
         waiting_for: refresh.waiting_for.clone(),
-        percent: last.and_then(|last| fraction(last.processed_units, last.total_units)),
+        percent: None,
         remaining: (channels > 0).then(|| {
             format!(
                 "{channels} {} to stack",

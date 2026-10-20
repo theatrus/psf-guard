@@ -536,8 +536,8 @@ fn automatic_work_that_paused_is_listed_as_waiting_after_running_work() {
         serde_json::from_value(json!({
             "database_id": "db-a", "database_name": "Askar", "project_id": 3,
             "project_name": "Bravo", "reason": "arrival", "due_in_seconds": 0,
-            "channels": ["M44 · Ha"], "waiting": true, "waiting_for": "a stack build",
-            "last_progress": {"label": "M44 · Ha", "processed_units": 12, "total_units": 40},
+            "channels": ["M44 · Ha"], "waiting": true,
+            "waiting_for": "the quality analysis of Askar",
         }))
         .unwrap(),
         // Still settling: not work yet.
@@ -576,11 +576,8 @@ fn automatic_work_that_paused_is_listed_as_waiting_after_running_work() {
     assert_eq!(rows[2].percent, Some(25.0), "the progress it had reached");
     assert_eq!(rows[3].key, "refresh-waiting:db-a:3");
     assert_eq!(rows[3].scope, "Askar · Bravo");
-    assert_eq!(
-        rows[3].detail,
-        "Waiting for a stack build · stopped at 12/40 frames"
-    );
-    assert_eq!(rows[3].percent, Some(30.0));
+    assert_eq!(rows[3].detail, "Waiting for the quality analysis of Askar");
+    assert_eq!(rows[3].percent, None);
     assert_eq!(rows[3].link, Some(stacks_link("db-a", 3, None)));
     assert_eq!(rows[3].hint.as_deref(), Some("Restacks M44 · Ha"));
     assert_eq!(rows[3].remaining.as_deref(), Some("1 channel to stack"));
