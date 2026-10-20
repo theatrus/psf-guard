@@ -967,3 +967,34 @@ async fn no_one_downloads_an_archive_with_secrets_or_an_unreadable_manifest() {
         StatusCode::NOT_FOUND
     );
 }
+
+#[test]
+fn a_failed_runner_frees_the_slot_and_records_the_run_as_failed() {
+    let fixture = fixture(4000);
+    fixture
+        .state
+        .backups
+        .set_step_pause(Duration::from_millis(30));
+    let folder = fixture.root.join("backups");
+    start(
+        &fixture.state,
+        manual(BackupScope::Full, Some(folder.clone())),
+    )
+    .unwrap();
+    assert!(fixture.state.backups.job().is_some());
+    // The runner thread is lost, as on a panic: the slot frees, and the run
+    // is recorded as failed.
+    let mut queue = Queue {
+        server: Arc::downgrade(&fixture.state),
+        ..Queue::default()
+    };
+    Backups::runner_failed(&mut queue, &mut ());
+    assert!(fixture.state.backups.job().is_none());
+    let last = fixture.state.backups.last_run().unwrap();
+    assert_eq!(last.outcome, Outcome::Failed);
+    assert_eq!(
+        last.error.as_deref(),
+        Some("the backup stopped unexpectedly")
+    );
+    fixture.state.shutdown.begin();
+}
