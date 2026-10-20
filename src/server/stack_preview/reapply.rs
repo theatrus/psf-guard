@@ -447,10 +447,12 @@ async fn start_waiting(state: &Arc<AppState>) {
     if !enabled() || !super::journal::restored() || state.shutdown.is_stopping() {
         return;
     }
-    // An automatic one waits behind anything a person started and every
-    // build. A person's own is theirs: it goes next.
+    // An automatic one is probed and queued while no person's work runs;
+    // in the line it waits behind a person's work by tier, and behind
+    // builds of its own target by their channel key. A person's own is
+    // theirs: it goes next.
     let personal_turn = state.stack_previews.personal_reapply_in_line().is_none();
-    let busy = state.interactive_job_active() || !state.stack_previews.active().is_empty();
+    let busy = state.interactive_job_active();
     let scheduled = state.auto_stacks.scheduled();
     let mut waiting = state
         .stack_previews
@@ -470,12 +472,10 @@ async fn start_waiting(state: &Arc<AppState>) {
         .collect::<Vec<_>>();
     waiting.sort_by_key(|(_, reapply)| (!reapply.personal, reapply.since));
     for (channel, reapply) in waiting {
-        // Each automatic one takes seconds to probe. Once other work or a
-        // person's re-apply is waiting, this look gives way to it.
+        // Each automatic one takes seconds to probe. Once a person's work
+        // runs or a person's re-apply waits, this look gives way to it.
         if !reapply.personal
-            && (state.stack_previews.personal_reapply_waiting()
-                || state.interactive_job_active()
-                || !state.stack_previews.active().is_empty())
+            && (state.stack_previews.personal_reapply_waiting() || state.interactive_job_active())
         {
             return;
         }

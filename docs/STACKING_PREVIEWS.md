@@ -1350,11 +1350,14 @@ Reprocessing runs even when no page is open.
   completed channels wait for automatic reprocessing; stopping does not
   immediately start RC-Astro.
 - After an automatic refresh, processing appears under **Automatic** as
-  **Re-applying processing**. It waits for the project's refresh delay and
-  for other builds and work you start to finish. This avoids running
-  RC-Astro after every frame in a burst. The job shows what it is waiting
-  for. New work you start, or another automatic refresh that is due, can
-  interrupt automatic reprocessing. It resumes when the worker is free.
+  **Re-applying processing**. It waits for the project's refresh delay, and
+  joins the queue once no work you started is running. In the queue it
+  waits behind everything you started and behind builds of its own target,
+  which may bring a newer stack. This avoids running RC-Astro after every
+  frame in a burst. The job shows what it is waiting for. A build you start
+  stops running automatic reprocessing, which waits for its turn again; an
+  automatic refresh's build of the same target does the same. It resumes
+  when its turn comes.
 - PSF Guard processes only the newest stack for a channel. A newer stack
   cancels queued or running reprocessing for the old revision, including
   any running RC-Astro tool. Tool results from the old pixels are not reused.

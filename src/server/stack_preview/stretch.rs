@@ -2001,16 +2001,31 @@ fn submit_stretch_variant(
         })
     });
     match submission {
-        Ok(submission) => super::submit(
-            &state,
-            &stretch_id,
-            super::Lane::Main,
-            None,
-            cancel,
-            Vec::new(),
-            state.stack_previews.is_automatic_processing(&stretch_id),
-            Box::new(submission),
-        ),
+        Ok(submission) => {
+            let automatic = state.stack_previews.is_automatic_processing(&stretch_id);
+            // An automatic re-apply waits for builds of its own target,
+            // which may bring a newer stack it would only be redone for.
+            let blocked_by = automatic
+                .then(|| state.stack_previews.processing_scope(&stretch_id))
+                .flatten()
+                .map(|scope| {
+                    vec![super::channel_key(
+                        &scope.database_id,
+                        scope.project_id,
+                        scope.target_id,
+                    )]
+                })
+                .unwrap_or_default();
+            let entry = super::Entry::new(
+                stretch_id.as_str(),
+                super::Lane::Main,
+                cancel,
+                Box::new(submission),
+            )
+            .blocked_by(blocked_by)
+            .tier(super::tier_of(automatic));
+            super::submit_entry(&state, entry, None);
+        }
         Err(message) => {
             RunLog {
                 short: short_id(&stretch_id).to_string(),

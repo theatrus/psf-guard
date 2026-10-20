@@ -31,6 +31,9 @@
   queue behind your work and resumes from its checkpoint, instead of being
   cancelled and rescheduled. Automatic builds always wait behind the builds
   you queued, and the header lists them as queued automatic builds.
+- Automatic reprocessing after a refresh no longer waits for every other
+  build to finish: it waits behind your work and behind builds of its own
+  target only.
 - A queued stack build or color preview reads its frames, grades and
   calibration again when its turn comes. Grades you change while a build
   waits are used, and when the frames changed, the card follows the new

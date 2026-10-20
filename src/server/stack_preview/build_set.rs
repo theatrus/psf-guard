@@ -75,12 +75,19 @@ impl CatalogWork for Preparations {
     /// Each preparation registers its own shutdown hold.
     const SHUTDOWN_WAITS_FOR: Option<&'static str> = None;
 
-    fn next(_: &AppState, _: &str, queue: &mut PreparationQueue, now: Instant) -> Step<Preparation> {
+    fn next(
+        _: &AppState,
+        _: &str,
+        queue: &mut PreparationQueue,
+        now: Instant,
+    ) -> Step<Preparation> {
         let (due, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut queue.retries)
             .into_iter()
             .partition(|(at, _)| *at <= now);
         queue.retries = waiting;
-        queue.pending.extend(due.into_iter().map(|(_, preparation)| preparation));
+        queue
+            .pending
+            .extend(due.into_iter().map(|(_, preparation)| preparation));
         if let Some(preparation) = queue.pending.pop_front() {
             return Step::Run(preparation);
         }
@@ -90,7 +97,13 @@ impl CatalogWork for Preparations {
         }
     }
 
-    fn run(state: &Arc<AppState>, _: &str, _: &CatalogJob<Self>, preparation: Preparation, _: &Stop) {
+    fn run(
+        state: &Arc<AppState>,
+        _: &str,
+        _: &CatalogJob<Self>,
+        preparation: Preparation,
+        _: &Stop,
+    ) {
         // Queueing what it prepares starts work on the async runtime.
         let _runtime = preparation.runtime.enter();
         prepare_one(state, preparation);
@@ -287,9 +300,8 @@ pub(super) fn queue(
     asked: Asked,
 ) -> Result<String, AppError> {
     let manager = &state.stack_previews;
-    let runtime = tokio::runtime::Handle::try_current().map_err(|_| {
-        AppError::InternalError("No runtime to prepare the stack build on".into())
-    })?;
+    let runtime = tokio::runtime::Handle::try_current()
+        .map_err(|_| AppError::InternalError("No runtime to prepare the stack build on".into()))?;
     let request_key = asked.what.key(&ctx.id, asked.project_id);
     let mut line = manager.preparing.by_request();
     if let Some(job_id) = line
@@ -364,7 +376,9 @@ fn line_up(state: &Arc<AppState>, preparation: Preparation) {
         .stack_previews
         .preparing
         .catalogs
-        .request(state, &database_id, |queue| queue.pending.push_back(preparation));
+        .request(state, &database_id, |queue| {
+            queue.pending.push_back(preparation)
+        });
 }
 
 /// A request's own id while it is prepared: not the id what it becomes
@@ -520,7 +534,9 @@ fn retry_later(state: &Arc<AppState>, preparation: Preparation) {
         .stack_previews
         .preparing
         .catalogs
-        .request(state, &database_id, |queue| queue.retries.push((due, preparation)));
+        .request(state, &database_id, |queue| {
+            queue.retries.push((due, preparation))
+        });
 }
 
 /// Whether a preparation was stopped, or the server is stopping.

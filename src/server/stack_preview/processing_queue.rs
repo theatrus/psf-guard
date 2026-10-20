@@ -183,12 +183,7 @@ impl StackPreviewManager {
     /// of the journal's last write; at any other time a finished run has
     /// already left the journal.
     pub(super) fn processing_completed(&self, run_id: &str) {
-        if self.stopped_for_shutdown.lock().unwrap().is_some() {
-            self.completed_during_stop
-                .lock()
-                .unwrap()
-                .insert(run_id.to_string());
-        }
+        self.stop_record.completed(run_id);
     }
 
     /// The state of a processing run, for the journal: running or queued
@@ -201,11 +196,18 @@ impl StackPreviewManager {
                 StackJobState::Queued
             });
         }
-        self.completed_during_stop
+        self.stop_record
+            .completed_during_stop(run_id)
+            .then_some(StackJobState::Completed)
+    }
+
+    /// The channel a processing run works on.
+    pub(super) fn processing_scope(&self, run_id: &str) -> Option<ProcessingScope> {
+        self.processing
             .lock()
             .unwrap()
-            .contains(run_id)
-            .then_some(StackJobState::Completed)
+            .get(run_id)
+            .map(|run| run.scope.clone())
     }
 
     /// Whether a processing run is the server's re-apply rather than a

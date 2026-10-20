@@ -33,6 +33,42 @@ const MAX_ATTEMPTS: u32 = 2;
 const RETRY_FOR: Duration = Duration::from_secs(30 * 60);
 pub(super) const RETRY_EVERY: Duration = Duration::from_secs(60);
 
+/// What the journal's last write needs from a server stop: the builds and
+/// runs the stop interrupted, in the order they would have run, and the
+/// processing runs that published after the stop began.
+#[derive(Default)]
+pub(super) struct StopRecord {
+    /// `None` until a stop begins. A stopped build is no longer tracked by
+    /// the line; this keeps its journal record.
+    interrupted: std::sync::Mutex<Option<Vec<(String, JournaledStackJob)>>>,
+    completed: std::sync::Mutex<std::collections::HashSet<String>>,
+}
+
+impl StopRecord {
+    /// A stop began, interrupting `interrupted`.
+    pub(super) fn begin(&self, interrupted: Vec<(String, JournaledStackJob)>) {
+        *self.interrupted.lock().unwrap() = Some(interrupted);
+    }
+
+    /// What the stop interrupted, once one began.
+    pub(super) fn interrupted(&self) -> Option<Vec<(String, JournaledStackJob)>> {
+        self.interrupted.lock().unwrap().clone()
+    }
+
+    /// A processing run published: during a stop, its journal entry is
+    /// left out of the last write.
+    pub(super) fn completed(&self, run_id: &str) {
+        if self.interrupted.lock().unwrap().is_some() {
+            self.completed.lock().unwrap().insert(run_id.to_string());
+        }
+    }
+
+    /// Whether a processing run published after the stop began.
+    pub(super) fn completed_during_stop(&self, run_id: &str) -> bool {
+        self.completed.lock().unwrap().contains(run_id)
+    }
+}
+
 /// A stack build or processing run as it was asked for.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]

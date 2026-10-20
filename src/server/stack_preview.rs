@@ -1058,17 +1058,12 @@ pub struct StackPreviewManager {
     /// prepares nothing at length runs in its quick lane, beside the worker
     /// rather than behind it.
     line: crate::server::job_line::JobLine,
-    /// Every build a server stop interrupted, in the order they would have
-    /// run. A stopped build is no longer tracked by the line; this keeps its
-    /// journal record for the journal's last write.
-    stopped_for_shutdown: Mutex<Option<Vec<(String, journal::JournaledStackJob)>>>,
+    /// What a server stop interrupted, for the journal's last write.
+    stop_record: journal::StopRecord,
     /// Stretch, deconvolution and RC-Astro runs waiting in the line or
     /// running, by run id. The journal keeps them through the line's
     /// journal records.
     processing: Mutex<HashMap<String, processing_queue::ProcessingRun>>,
-    /// Processing runs that published their result after a server stop
-    /// began, so its last journal write leaves them out.
-    completed_during_stop: Mutex<HashSet<String>>,
     /// Processing carried to refreshed stacks and waiting to run again, or
     /// running, by channel.
     reapplies: Mutex<HashMap<String, reapply::Reapply>>,
@@ -1089,9 +1084,8 @@ impl StackPreviewManager {
             artifact_jobs: Mutex::new(HashMap::new()),
             latest_write: Mutex::new(()),
             line: crate::server::job_line::JobLine::new(),
-            stopped_for_shutdown: Mutex::new(None),
+            stop_record: journal::StopRecord::default(),
             processing: Mutex::new(HashMap::new()),
-            completed_during_stop: Mutex::new(HashSet::new()),
             reapplies: Mutex::new(HashMap::new()),
             yielded: Mutex::new(HashSet::new()),
             preparing: build_set::PreparationLine::default(),
@@ -1171,7 +1165,7 @@ impl StackPreviewManager {
     /// asked for, in the order it will run: running first, then the line.
     pub fn journal_entries(&self) -> Vec<journal::JournaledStackJob> {
         let mut entries = self.ordered_origins();
-        let Some(stopped) = self.stopped_for_shutdown.lock().unwrap().clone() else {
+        let Some(stopped) = self.stop_record.interrupted() else {
             return entries.into_iter().map(|(_, origin)| origin).collect();
         };
         // A build the stop interrupted comes back unless it finished first.
@@ -1231,7 +1225,7 @@ impl StackPreviewManager {
     /// run as cut off, and the chain resumes from its last finished step.
     pub fn stop_for_shutdown(&self) {
         let interrupted = self.ordered_origins();
-        *self.stopped_for_shutdown.lock().unwrap() = Some(interrupted);
+        self.stop_record.begin(interrupted);
         for job_id in self.line.tracked_ids() {
             self.request_cancel(&job_id);
         }
@@ -2219,12 +2213,10 @@ pub(super) fn persist_latest_and_reapply(
 
 /// A person's work takes the stacking worker: the automatic entry running
 /// on it, if any, stops at its checkpoint and goes back in the line behind
-/// the person's work. Automatic builds still waiting stay in line. Re-applies
-/// of processing, queued or running, step aside and wait for their turn
-/// again, as they did before the line ordered work by tier.
+/// the person's work. A stopped re-apply waits for its turn again.
+/// Automatic work still waiting stays in line, behind the person's.
 pub(super) fn interrupt_automatic(state: &AppState) {
     state.stack_previews.line.preempt_automatic(Lane::Main);
-    state.stack_previews.yield_automatic_processing();
 }
 
 /// Ask a queued or running stack build to stop. Returns the job as it stands;
@@ -7898,7 +7890,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_reapply_steps_aside_for_a_person_and_waits_again() {
+    async fn a_queued_reapply_waits_in_line_behind_a_persons_work() {
         let _policy = reapply_policy(true);
         let cache = tempfile::tempdir().unwrap();
         let (state, _) = processed_card(cache.path()).await;
@@ -7909,19 +7901,16 @@ mod tests {
             the_automatic_run(&state).is_some()
         })
         .await;
-        // A person starts work: automatic work yields, the re-apply too.
+        // A person starts work: the queued re-apply keeps its place, behind
+        // the person's work.
         interrupt_automatic(&state);
-        eventually("the re-apply leaves the line", || {
-            the_automatic_run(&state).is_none()
-        })
-        .await;
-        assert_eq!(state.stack_previews.reapply_count(), 1);
-        assert_eq!(
-            shown(&state, &second).unwrap().reprocessing.unwrap().state,
-            stretch::ReprocessingState::Waiting
-        );
+        let person = crate::server::job_line::testing::entry("person", Lane::Main, Stop::new());
+        assert!(state.stack_previews.line.submit(person, None).is_ok());
+        let run = the_automatic_run(&state).expect("it left the line");
+        assert_eq!(state.stack_previews.line.order()[0], "person");
+        assert_eq!(run.state, StackJobState::Queued);
+        state.stack_previews.line.remove("person");
         drop(busy);
-        reapply::start_due(Arc::clone(&state)).await;
         eventually("it runs once the worker is free", || {
             shown(&state, &second).is_some_and(|shown| shown.reprocessing.is_none())
         })
@@ -8015,28 +8004,29 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn an_automatic_refresh_reapplies_only_after_the_queued_builds() {
+    async fn an_automatic_reapply_waits_in_line_for_builds_of_its_target() {
         let _policy = reapply_policy(true);
         let cache = tempfile::tempdir().unwrap();
         let (state, _) = processed_card(cache.path()).await;
-        queued_build(&state, "later");
-        let second = "2".repeat(64);
-        refresh(&state, cache.path(), &second, "rev-2");
-        // Past the moment it looks for its turn: it keeps waiting.
-        tokio::time::sleep(std::time::Duration::from_secs(4)).await;
-        reapply::start_due(Arc::clone(&state)).await;
-        assert_eq!(state.stack_previews.reapply_count(), 1);
-        assert!(the_reapply_run(&state).is_none());
-        assert_eq!(state.stack_previews.waiting_reapplies().len(), 1);
-
+        // A build of the same target waits in the line, holding its key.
         state
             .stack_previews
-            .update("later", |job| job.state = StackJobState::Cancelled);
-        state.stack_previews.release_place("later");
+            .hold_place("later", vec![channel_key("test", 7, 42)], false);
+        let second = "2".repeat(64);
+        refresh(&state, cache.path(), &second, "rev-2");
+        tokio::time::sleep(std::time::Duration::from_secs(4)).await;
         reapply::start_due(Arc::clone(&state)).await;
-        let run = the_reapply_run(&state).unwrap();
+        // It joins the line as automatic work, and waits for the build.
+        let run = the_reapply_run(&state).expect("the re-apply is in the line");
         assert!(run.automatic, "it is still background work");
-        eventually("it runs once the line is empty", || {
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        assert_eq!(
+            the_reapply_run(&state).unwrap().state,
+            StackJobState::Queued,
+            "it ran before the build of its target"
+        );
+        state.stack_previews.release_place("later");
+        eventually("it runs once the build leaves the line", || {
             shown(&state, &second).is_some_and(|shown| shown.reprocessing.is_none())
         })
         .await;
@@ -8465,10 +8455,10 @@ mod tests {
             the_automatic_run(&state).is_some()
         })
         .await;
-        // Switched off while it runs, which leaves it be; then it steps
-        // aside for a person.
+        // Switched off while it waits, which leaves it be; then it steps
+        // aside for a refresh's build.
         reapply::configure(false);
-        interrupt_automatic(&state);
+        state.stack_previews.yield_automatic_processing();
         eventually("it settles", || state.stack_previews.reapply_count() == 0).await;
         assert!(
             shown(&state, &"2".repeat(64)).is_none(),

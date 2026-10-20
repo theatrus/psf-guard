@@ -336,11 +336,18 @@ interrupted builds. The scheduler still holds due refreshes before
 *planning* them, because planning reads every light's header on the
 shared connection: it plans one refresh at a time, while no person's work
 has run for 30 seconds and no automatic build waits in the line or runs.
-Once planned, the line decides when the builds run. Re-applies of
-processing still yield outside the line, as before.
+Once planned, the line decides when the builds run. An automatic re-apply
+of processing is probed and queued once no person's work runs; in the
+line it is blocked by its target's channel key, so it waits only for
+builds of its own target, and a person's work preempts it like other
+automatic work. The stop snapshot the journal's last write needs lives in
+`journal::StopRecord`, not in the line, since it encodes the journal's
+restart rules.
 
-Preparation keeps one runner per catalog on this server. A long preparation
-in one catalog then does not hold up another, as now.
+Preparation keeps one runner per catalog on this server, on `CatalogJobs`
+(`build_set::Preparations`). A long preparation in one catalog then does not
+hold up another, and a request whose storage is not readable yet waits in
+its catalog's queue until its retry is due.
 
 ### Journal and restart
 
@@ -458,10 +465,8 @@ otherwise.
 8. **Requests in the line.** *Built:* builds and compositions carry their
    request and are prepared again at their turn. See
    [Requests and specs](#requests-and-specs).
-9. **Priority in the line.** *Built.* See
-   [Coordinator and workers](#coordinator-and-workers). Re-applies of
-   processing still step aside outside the line, as before, and wait in
-   their own list until their turn.
+9. **Priority in the line.** *Built*, for re-applies too. See
+   [Coordinator and workers](#coordinator-and-workers).
 10. **The remaining background work.** *Built:* quality scans and the
     database-wide analysis run on `CatalogJobs`, and calibration grading
     and health have header rows.
