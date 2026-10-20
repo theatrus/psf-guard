@@ -6,8 +6,10 @@
 //! headers come from those the calibration health pass keeps. A light the
 //! pass has not reached is read by a background job sized like any other
 //! interactive work ([`crate::concurrency`]); the scope says how many are
-//! pending and grows as they arrive, and the job stops once no view has
-//! asked for a minute. No request reads a header.
+//! pending and grows as they arrive, and the read stops once no view has
+//! asked for a minute. No request reads a header. One runner per catalog
+//! ([`CatalogJobs`]) reads headers in chunks and refreshes scopes between
+//! them.
 //!
 //! Matching runs on a read-only connection of its own, off the async
 //! workers, never on the shared request connection, and the result is kept
@@ -21,70 +23,174 @@
 use crate::calibration::project_scope::{self, ProjectScope};
 use crate::calibration::{KeptHeader, ProjectLight};
 use crate::commands::import::headers::FrameMeta;
+use crate::concurrency::Stop;
 use crate::concurrency::{ComputePool, Priority};
 use crate::server::api::ApiResponse;
 use crate::server::database_context::DatabaseContext;
 use crate::server::extract::DbContext;
 use crate::server::handlers::AppError;
+use crate::server::job_line::catalog::{CatalogJob, CatalogJobs, CatalogWork, Step};
 use crate::server::state::AppState;
 use axum::extract::{Query, State};
 use axum::Json;
 use rayon::prelude::*;
 use rusqlite::{Connection, OpenFlags};
 use serde::Deserialize;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
-/// Scopes kept at most, across every catalog; the oldest go first.
+/// Scopes kept at most per catalog; the oldest go first.
 const KEPT_SCOPES: usize = 32;
 
-/// A header job stops once no view has asked for its scope this long.
+/// A project's header read stops once no view has asked for its scope
+/// this long.
 const IDLE_STOP: Duration = Duration::from_secs(60);
 
-/// A catalog's path and a project.
-type ScopeKey = (String, i32);
+/// Lights whose headers one turn of the runner reads, so a refresh of the
+/// scope runs between turns and the scope grows as headers arrive.
+const READ_CHUNK: usize = 32;
 
 /// What one kept scope was worked out from.
 type Revision = String;
-
-#[derive(Default)]
-struct Kept {
-    /// With its revision and when it was last used.
-    scopes: HashMap<ScopeKey, (Revision, u64, Arc<ProjectScope>)>,
-    clock: u64,
-}
-
-static KEPT: LazyLock<Mutex<Kept>> = LazyLock::new(Mutex::default);
 
 /// Headers the background job read for one project's lights, by light:
 /// where the file was, and what it said.
 type ReadHeaders = BTreeMap<i32, (PathBuf, FrameMeta)>;
 
-/// Headers the background job read for lights the health pass has not
-/// kept.
-static READ: LazyLock<Mutex<HashMap<ScopeKey, ReadHeaders>>> = LazyLock::new(Mutex::default);
+/// Scopes, header reads and refreshes, run on one thread per catalog.
+pub(crate) struct ScopeWork;
 
-/// Header jobs running, with when a view last asked for their scope.
-static READING: LazyLock<Mutex<HashMap<ScopeKey, Instant>>> = LazyLock::new(Mutex::default);
+type Job = CatalogJob<ScopeWork>;
 
-/// Scopes being refreshed in the background.
-static REFRESHING: LazyLock<Mutex<HashSet<ScopeKey>>> = LazyLock::new(Mutex::default);
-
-/// One lock per catalog and project, so the page's lists, asked at once,
-/// share one working out instead of each doing it.
-static WORKING: LazyLock<Mutex<HashMap<ScopeKey, Arc<Mutex<()>>>>> = LazyLock::new(Mutex::default);
-
-fn key(path: &str, project: i32) -> ScopeKey {
-    (path.to_string(), project)
+/// One catalog's scopes and the work that keeps them current.
+#[derive(Default)]
+pub(crate) struct Queue {
+    /// Kept scopes by project, with their revision and when each was last
+    /// used.
+    kept: HashMap<i32, (Revision, u64, Arc<ProjectScope>)>,
+    clock: u64,
+    /// Headers read for lights the health pass has not kept, by project.
+    read: HashMap<i32, ReadHeaders>,
+    /// Header reads under way, by project.
+    reading: HashMap<i32, Reading>,
+    /// Scopes to refresh, in the order asked.
+    refreshes: VecDeque<(i32, Arc<DatabaseContext>)>,
+    /// Projects whose refresh is queued or running.
+    refreshing: HashSet<i32>,
+    /// One lock per project, so the page's lists, asked at once, share one
+    /// working out instead of each doing it.
+    working: HashMap<i32, Arc<Mutex<()>>>,
 }
 
-fn working_lock(key: &ScopeKey) -> Arc<Mutex<()>> {
-    let mut locks = WORKING.lock().unwrap_or_else(|p| p.into_inner());
+/// One project's header read.
+struct Reading {
+    /// Lights not read yet.
+    lights: VecDeque<ProjectLight>,
+    /// How many lights the read set out to read.
+    total: usize,
+    /// When a view last asked for the project's scope.
+    asked: Instant,
+}
+
+/// One turn of the runner.
+pub(crate) enum Item {
+    /// Work out a project's scope again.
+    Refresh(i32, Arc<DatabaseContext>),
+    /// Read the headers of some of a project's lights.
+    Read {
+        project: i32,
+        lights: Vec<ProjectLight>,
+    },
+}
+
+impl CatalogWork for ScopeWork {
+    type Queue = Queue;
+    type Status = ();
+    type Item = Item;
+    const RUNNER: &'static str = "calibration-scope";
+    /// It reads headers and the catalog, and writes nothing that a stop
+    /// must wait for.
+    const SHUTDOWN_WAITS_FOR: Option<&'static str> = None;
+
+    /// Refreshes go first, so a scope follows the headers read so far.
+    /// Header reads no view has asked for in [`IDLE_STOP`] are dropped.
+    fn next(_: &AppState, _: &str, queue: &mut Queue, now: Instant) -> Step<Item> {
+        if let Some((project, ctx)) = queue.refreshes.pop_front() {
+            return Step::Run(Item::Refresh(project, ctx));
+        }
+        queue
+            .reading
+            .retain(|_, reading| now.saturating_duration_since(reading.asked) <= IDLE_STOP);
+        queue
+            .reading
+            .retain(|_, reading| !reading.lights.is_empty());
+        let Some((&project, reading)) = queue.reading.iter_mut().next() else {
+            return Step::Exit;
+        };
+        let take = reading.lights.len().min(READ_CHUNK);
+        let lights = reading.lights.drain(..take).collect();
+        Step::Run(Item::Read { project, lights })
+    }
+
+    fn run(state: &Arc<AppState>, path: &str, job: &Job, item: Item, _: &Stop) {
+        match item {
+            Item::Refresh(project, ctx) => {
+                let outcome = read_only(&ctx.database_path)
+                    .and_then(|conn| revision(&conn, job, &ctx, project))
+                    .and_then(|revision| work_out(state, job, &ctx, project, revision));
+                if let Err(error) = outcome {
+                    tracing::warn!("Could not work out project {project}'s calibration: {error:#}");
+                }
+                job.queue().refreshing.remove(&project);
+            }
+            Item::Read { project, lights } => read_headers(state, path, job, project, &lights),
+        }
+    }
+
+    fn has_work(queue: &Queue) -> bool {
+        !queue.refreshes.is_empty()
+            || queue
+                .reading
+                .values()
+                .any(|reading| !reading.lights.is_empty())
+    }
+
+    /// Forget the work in hand; the next view asks for it again.
+    fn runner_failed(queue: &mut Queue, _: &mut ()) {
+        queue.refreshes.clear();
+        queue.refreshing.clear();
+        queue.reading.clear();
+    }
+}
+
+/// One job per catalog path.
+static JOBS: CatalogJobs<ScopeWork> = CatalogJobs::new();
+
+fn job(path: &str) -> Arc<Job> {
+    JOBS.job(path)
+}
+
+/// How far the header reads of the catalog at `path` have got: lights read
+/// and lights to read, across its projects. `None` when none runs.
+pub(crate) fn header_reads(path: &str) -> Option<(usize, usize)> {
+    let job = JOBS.existing(path)?;
+    let queue = job.queue();
+    let (left, total) = queue
+        .reading
+        .values()
+        .fold((0, 0), |(left, total), reading| {
+            (left + reading.lights.len(), total + reading.total)
+        });
+    (total > 0 && (left > 0 || queue.running())).then(|| (total - left, total))
+}
+
+fn working_lock(job: &Job, project: i32) -> Arc<Mutex<()>> {
+    let mut queue = job.queue();
     // Locks no one holds or waits for go, so the map stays small.
-    locks.retain(|_, lock| Arc::strong_count(lock) > 1);
-    Arc::clone(locks.entry(key.clone()).or_default())
+    queue.working.retain(|_, lock| Arc::strong_count(lock) > 1);
+    Arc::clone(queue.working.entry(project).or_default())
 }
 
 fn read_only(path: &str) -> anyhow::Result<Connection> {
@@ -96,50 +202,50 @@ fn read_only(path: &str) -> anyhow::Result<Connection> {
     )
 }
 
-fn read_count(key: &ScopeKey) -> usize {
-    READ.lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .get(key)
-        .map_or(0, BTreeMap::len)
+fn read_count(job: &Job, project: i32) -> usize {
+    job.queue().read.get(&project).map_or(0, BTreeMap::len)
 }
 
 /// The revision a project's scope depends on: the catalog's inputs, and
 /// which headers are known.
-fn revision(conn: &Connection, ctx: &DatabaseContext, project: i32) -> anyhow::Result<Revision> {
+fn revision(
+    conn: &Connection,
+    job: &Job,
+    ctx: &DatabaseContext,
+    project: i32,
+) -> anyhow::Result<Revision> {
     let catalog = project_scope::scope_revision(conn, project)?;
     let kept = crate::server::calibration_health::headers_stamp(&ctx.cache_dir_path, project);
-    let read = read_count(&key(&ctx.database_path, project));
+    let read = read_count(job, project);
     Ok(format!("{catalog}:{kept}:{read}"))
 }
 
 /// A kept scope: whether it is of `revision`, and the scope.
-fn kept(key: &ScopeKey) -> Option<(Revision, Arc<ProjectScope>)> {
-    let mut kept = KEPT.lock().unwrap_or_else(|p| p.into_inner());
-    kept.clock += 1;
-    let now = kept.clock;
-    let entry = kept.scopes.get_mut(key)?;
+fn kept(job: &Job, project: i32) -> Option<(Revision, Arc<ProjectScope>)> {
+    let mut queue = job.queue();
+    queue.clock += 1;
+    let now = queue.clock;
+    let entry = queue.kept.get_mut(&project)?;
     entry.1 = now;
     Some((entry.0.clone(), Arc::clone(&entry.2)))
 }
 
-fn keep(key: &ScopeKey, revision: Revision, scope: Arc<ProjectScope>) {
-    let mut kept = KEPT.lock().unwrap_or_else(|p| p.into_inner());
-    kept.clock += 1;
-    let now = kept.clock;
-    kept.scopes.insert(key.clone(), (revision, now, scope));
-    while kept.scopes.len() > KEPT_SCOPES {
-        let Some(oldest) = kept
-            .scopes
+fn keep(job: &Job, project: i32, revision: Revision, scope: Arc<ProjectScope>) {
+    let mut queue = job.queue();
+    queue.clock += 1;
+    let now = queue.clock;
+    queue.kept.insert(project, (revision, now, scope));
+    while queue.kept.len() > KEPT_SCOPES {
+        let Some(oldest) = queue
+            .kept
             .iter()
             .min_by_key(|(_, (_, used, _))| *used)
-            .map(|(key, _)| key.clone())
+            .map(|(project, _)| *project)
         else {
             break;
         };
-        kept.scopes.remove(&oldest);
-        READ.lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .remove(&oldest);
+        queue.kept.remove(&oldest);
+        queue.read.remove(&oldest);
     }
 }
 
@@ -172,98 +278,80 @@ fn light_headers(
     (metas, unread, wanted)
 }
 
-/// Mark a header job's scope as wanted now. Whether a job is running.
-fn touch_reading(key: &ScopeKey) -> bool {
-    let mut reading = READING.lock().unwrap_or_else(|p| p.into_inner());
-    match reading.get_mut(key) {
-        Some(asked) => {
-            *asked = Instant::now();
+/// Mark a project's header read as wanted now. Whether one runs.
+fn touch_reading(job: &Job, project: i32) -> bool {
+    match job.queue().reading.get_mut(&project) {
+        Some(reading) => {
+            reading.asked = Instant::now();
             true
         }
         None => false,
     }
 }
 
-/// Read the headers of `lights` in the background, sized as interactive
-/// work, unless a job for this scope runs already. It stops between lights
-/// once the server stops or no view has asked for a minute.
-fn start_reading(state: &Arc<AppState>, key: &ScopeKey, lights: Vec<ProjectLight>) {
-    {
-        let mut reading = READING.lock().unwrap_or_else(|p| p.into_inner());
-        if let Some(asked) = reading.get_mut(key) {
-            *asked = Instant::now();
-            return;
+/// Read the headers of `lights` in the background, unless a read for this
+/// project runs already, which is marked as wanted now instead.
+fn start_reading(state: &Arc<AppState>, path: &str, project: i32, lights: Vec<ProjectLight>) {
+    JOBS.request(state, path, |queue| match queue.reading.get_mut(&project) {
+        Some(reading) => reading.asked = Instant::now(),
+        None => {
+            let total = lights.len();
+            queue.reading.insert(
+                project,
+                Reading {
+                    lights: lights.into(),
+                    total,
+                    asked: Instant::now(),
+                },
+            );
         }
-        reading.insert(key.clone(), Instant::now());
-    }
-    let state = Arc::clone(state);
-    let key = key.clone();
-    let spawned = std::thread::Builder::new()
-        .name("calibration-scope-headers".into())
-        .spawn({
-            let key = key.clone();
-            move || {
-                read_headers(&state, &key, &lights);
-                READING
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .remove(&key);
-            }
-        });
-    if let Err(error) = spawned {
-        tracing::warn!("Could not start reading a project's light headers: {error}");
-        READING
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .remove(&key);
-    }
+    });
 }
 
-fn read_headers(state: &AppState, key: &ScopeKey, lights: &[ProjectLight]) {
-    let idle = || {
-        READING
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .get(key)
-            .is_none_or(|asked| asked.elapsed() > IDLE_STOP)
-    };
+/// Read some of a project's lights' headers, sized as interactive work: a
+/// view waits for them. It stops between lights once the server stops.
+fn read_headers(state: &AppState, path: &str, job: &Job, project: i32, lights: &[ProjectLight]) {
     let budget =
         crate::concurrency::plan_workers(None, &state.worker_policy(), Priority::Interactive, None);
     let lease = state.lease_workers(Priority::Interactive, budget.workers);
     let pool = match ComputePool::take("calibration-scope-headers", lease.workers) {
         Ok(pool) => pool,
         Err(error) => {
-            tracing::warn!("Could not read a project's light headers: {error}");
+            tracing::warn!(
+                "Could not read the light headers of project {project} in {path}: {error}"
+            );
             return;
         }
     };
-    pool.install(|| {
-        lights.par_iter().for_each(|light| {
-            if state.shutdown.is_stopping() || idle() {
-                return;
-            }
-            let meta = crate::commands::import::headers::read_frame_meta(&light.path);
-            READ.lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .entry(key.clone())
-                .or_default()
-                .insert(light.image_id, (light.path.clone(), meta));
-        })
+    let read: Vec<(i32, PathBuf, FrameMeta)> = pool.install(|| {
+        lights
+            .par_iter()
+            .filter(|_| !state.shutdown.is_stopping())
+            .map(|light| {
+                let meta = crate::commands::import::headers::read_frame_meta(&light.path);
+                (light.image_id, light.path.clone(), meta)
+            })
+            .collect()
     });
+    let mut queue = job.queue();
+    let headers = queue.read.entry(project).or_default();
+    for (image_id, path, meta) in read {
+        headers.insert(image_id, (path, meta));
+    }
 }
 
 /// Work out one project's scope at `revision`, and keep it. Blocking.
 fn work_out(
     state: &Arc<AppState>,
+    job: &Job,
     ctx: &DatabaseContext,
     project: i32,
     revision: Revision,
 ) -> anyhow::Result<Arc<ProjectScope>> {
-    let key = key(&ctx.database_path, project);
-    let lock = working_lock(&key);
+    let lock = working_lock(job, project);
     let _working = lock.lock().unwrap_or_else(|p| p.into_inner());
     // Another request may have worked it out while this one waited.
-    if let Some((kept_revision, scope)) = kept(&key)
+    if let Some((kept_revision, scope)) = kept(job, project)
         && kept_revision == revision
     {
         return Ok(scope);
@@ -274,59 +362,27 @@ fn work_out(
     let nights = crate::calibration::LightNights::load(&conn, None);
     let (lights, missing) = crate::calibration::project_lights(&conn, project, &tree, &nights)?;
     let headers = crate::server::calibration_health::kept_headers(&ctx.cache_dir_path, project);
-    let read = READ
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .get(&key)
-        .cloned()
-        .unwrap_or_default();
+    let read = job.queue().read.get(&project).cloned().unwrap_or_default();
     let (metas, unread, wanted) = light_headers(&lights, &headers, &read);
     let pending = wanted.len();
     if !wanted.is_empty() {
-        start_reading(state, &key, wanted);
+        start_reading(state, &ctx.database_path, project, wanted);
     }
     let mut scope = project_scope::project_scope(&conn, project, &metas, missing + unread)?;
     scope.pending = pending;
     scope.revision = revision.clone();
     let scope = Arc::new(scope);
-    keep(&key, revision, Arc::clone(&scope));
+    keep(job, project, revision, Arc::clone(&scope));
     Ok(scope)
 }
 
-/// Refresh a scope in the background, unless a refresh runs already.
+/// Refresh a scope in the background, unless a refresh is queued or runs.
 fn start_refresh(state: &Arc<AppState>, ctx: &Arc<DatabaseContext>, project: i32) {
-    let key = key(&ctx.database_path, project);
-    if !REFRESHING
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .insert(key.clone())
-    {
-        return;
-    }
-    let (state, ctx) = (Arc::clone(state), Arc::clone(ctx));
-    let spawned = std::thread::Builder::new()
-        .name("calibration-scope".into())
-        .spawn({
-            let key = key.clone();
-            move || {
-                let outcome = read_only(&ctx.database_path)
-                    .and_then(|conn| revision(&conn, &ctx, project))
-                    .and_then(|revision| work_out(&state, &ctx, project, revision));
-                if let Err(error) = outcome {
-                    tracing::warn!("Could not work out project {project}'s calibration: {error:#}");
-                }
-                REFRESHING
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .remove(&key);
-            }
-        });
-    if spawned.is_err() {
-        REFRESHING
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .remove(&key);
-    }
+    JOBS.request(state, &ctx.database_path, |queue| {
+        if queue.refreshing.insert(project) {
+            queue.refreshes.push_back((project, Arc::clone(ctx)));
+        }
+    });
 }
 
 /// One project's scope for a view: the kept one when current, the last
@@ -337,27 +393,27 @@ pub(crate) fn scope_of(
     ctx: &Arc<DatabaseContext>,
     project: i32,
 ) -> anyhow::Result<Arc<ProjectScope>> {
-    let key = key(&ctx.database_path, project);
+    let job = job(&ctx.database_path);
     let conn = read_only(&ctx.database_path)?;
-    let revision = revision(&conn, ctx, project)?;
+    let revision = revision(&conn, &job, ctx, project)?;
     drop(conn);
-    match kept(&key) {
+    match kept(&job, project) {
         Some((kept_revision, scope)) if kept_revision == revision => {
-            // Still waiting on headers: keep their job going, or start it
+            // Still waiting on headers: keep their read going, or start it
             // again after it stopped for want of a view.
-            if scope.pending > 0 && !touch_reading(&key) {
+            if scope.pending > 0 && !touch_reading(&job, project) {
                 start_refresh(state, ctx, project);
             }
             Ok(scope)
         }
         Some((_, scope)) => {
             start_refresh(state, ctx, project);
-            touch_reading(&key);
+            touch_reading(&job, project);
             let mut stale = (*scope).clone();
             stale.refreshing = true;
             Ok(Arc::new(stale))
         }
-        None => work_out(state, ctx, project, revision),
+        None => work_out(state, &job, ctx, project, revision),
     }
 }
 
@@ -411,33 +467,82 @@ mod tests {
 
     #[test]
     fn the_oldest_scope_goes_first_with_the_headers_read_for_it() {
-        let path = "kept-scope-test.sqlite";
+        let job = Job::default();
         for project in 0..KEPT_SCOPES as i32 {
-            keep(&key(path, project), "r".into(), Arc::default());
+            keep(&job, project, "r".into(), Arc::default());
         }
-        READ.lock()
-            .unwrap()
-            .entry(key(path, 1))
+        job.queue()
+            .read
+            .entry(1)
             .or_default()
             .insert(1, (PathBuf::from("a.fits"), FrameMeta::default()));
-        assert!(kept(&key(path, 0)).is_some(), "used again, so kept longest");
-        keep(&key(path, 999), "r".into(), Arc::default());
-        assert!(kept(&key(path, 0)).is_some());
-        assert!(
-            kept(&key(path, 1)).is_none(),
-            "the least recently used went"
-        );
-        assert_eq!(read_count(&key(path, 1)), 0, "and its headers with it");
+        assert!(kept(&job, 0).is_some(), "used again, so kept longest");
+        keep(&job, 999, "r".into(), Arc::default());
+        assert!(kept(&job, 0).is_some());
+        assert!(kept(&job, 1).is_none(), "the least recently used went");
+        assert_eq!(read_count(&job, 1), 0, "and its headers with it");
     }
 
-    #[test]
-    fn a_light_is_read_only_when_no_header_is_known_where_its_file_is() {
-        let light = |image_id: i32, path: &str| ProjectLight {
+    fn light(image_id: i32, path: &str) -> ProjectLight {
+        ProjectLight {
             image_id,
             path: PathBuf::from(path),
             night: "2026-09-10".into(),
             filter: "Ha".into(),
-        };
+        }
+    }
+
+    #[test]
+    fn refreshes_go_before_header_reads_which_run_in_chunks_until_no_view_asks() {
+        let state = AppState::new_for_test(Connection::open_in_memory().unwrap());
+        let ctx = Arc::new(DatabaseContext::new_for_test(
+            Connection::open_in_memory().unwrap(),
+        ));
+        let start = Instant::now();
+        let mut queue = Queue::default();
+        queue.reading.insert(
+            7,
+            Reading {
+                lights: (0..READ_CHUNK as i32 + 5)
+                    .map(|id| light(id, "a.fits"))
+                    .collect(),
+                total: READ_CHUNK + 5,
+                asked: start,
+            },
+        );
+        queue.refreshing.insert(7);
+        queue.refreshes.push_back((7, ctx));
+        let next = |queue: &mut Queue, now| ScopeWork::next(&state, "c", queue, now);
+        assert!(matches!(
+            next(&mut queue, start),
+            Step::Run(Item::Refresh(7, _))
+        ));
+        match next(&mut queue, start) {
+            Step::Run(Item::Read { project: 7, lights }) => assert_eq!(lights.len(), READ_CHUNK),
+            _ => panic!("the first chunk was not read"),
+        }
+        // No view has asked for a minute: the rest is dropped.
+        assert!(matches!(
+            next(&mut queue, start + IDLE_STOP + Duration::from_secs(1)),
+            Step::Exit
+        ));
+        assert!(!ScopeWork::has_work(&queue));
+    }
+
+    #[test]
+    fn a_failed_runner_forgets_the_work_in_hand() {
+        let ctx = Arc::new(DatabaseContext::new_for_test(
+            Connection::open_in_memory().unwrap(),
+        ));
+        let mut queue = Queue::default();
+        queue.refreshing.insert(3);
+        queue.refreshes.push_back((3, ctx));
+        ScopeWork::runner_failed(&mut queue, &mut ());
+        assert!(queue.refreshing.is_empty() && queue.refreshes.is_empty());
+    }
+
+    #[test]
+    fn a_light_is_read_only_when_no_header_is_known_where_its_file_is() {
         let readable = FrameMeta {
             readable: true,
             ..FrameMeta::default()

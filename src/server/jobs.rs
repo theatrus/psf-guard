@@ -85,6 +85,8 @@ pub enum RowKind {
     Catalog,
     Grading,
     Health,
+    Headers,
+    FlatUse,
 }
 
 /// The two lines a person can reorder. Each runs one job at a time.
@@ -296,6 +298,11 @@ pub struct DatabaseState {
     pub rejects: RemovalJobStatus,
     pub grading: crate::server::calibration_quality::CalibrationQualityProgress,
     pub health: crate::server::calibration_health::HealthProgress,
+    /// The Calibration page's light header reads: lights read, and lights
+    /// to read. `None` when none runs.
+    pub header_reads: Option<(usize, usize)>,
+    /// Whether what the flat groups feed is being worked out.
+    pub flat_use: bool,
 }
 
 /// A Target Scheduler sync or import job, as the rows need it.
@@ -736,6 +743,43 @@ fn health_row(db: &DatabaseState) -> JobRow {
             format!("health:{}", db.id),
             RowKind::Health,
             "Checking calibration health",
+            &db.name,
+        )
+    }
+    .automatic(true)
+}
+
+/// The Calibration page reading light headers the health pass has not kept:
+/// a view asked for them, so they are a person's work.
+fn headers_row(db: &DatabaseState, (read, total): (usize, usize)) -> JobRow {
+    JobRow {
+        detail: format!(
+            "{} of {} {}",
+            grouped(read.min(total)),
+            grouped(total),
+            plural(total, "header", "headers")
+        ),
+        percent: percent(read, total),
+        link: Some(RowLink::view(LinkView::Calibration, &db.id)),
+        ..JobRow::new(
+            format!("headers:{}", db.id),
+            RowKind::Headers,
+            "Reading light headers",
+            &db.name,
+        )
+    }
+}
+
+/// Working out what the flat groups feed, for the Calibration page and the
+/// Images filter: background work.
+fn flat_use_row(db: &DatabaseState) -> JobRow {
+    JobRow {
+        detail: "Matching lights to flat groups".into(),
+        link: Some(RowLink::view(LinkView::Calibration, &db.id)),
+        ..JobRow::new(
+            format!("flat-use:{}", db.id),
+            RowKind::FlatUse,
+            "Working out what the flat groups feed",
             &db.name,
         )
     }
@@ -1346,6 +1390,12 @@ pub fn rows(snapshot: &Snapshot, project_of: ProjectOf) -> Vec<JobRow> {
         if db.health.running && db.health.total > 0 {
             rows.push(health_row(db));
         }
+        if let Some(reads) = db.header_reads {
+            rows.push(headers_row(db, reads));
+        }
+        if db.flat_use {
+            rows.push(flat_use_row(db));
+        }
     }
     // Running builds first, then the line in order.
     let mut stacks: Vec<&StackActivityEntry> = snapshot.stacks.active.iter().collect();
@@ -1455,6 +1505,8 @@ fn snapshot(state: &Arc<AppState>, transfers: Vec<Value>, manages: bool) -> Snap
             rejects: crate::server::reject_removal::status(state, &ctx.database_path),
             grading: crate::server::calibration_quality::progress(&ctx.database_path),
             health: crate::server::calibration_health::progress(&ctx.database_path),
+            header_reads: crate::server::calibration_scope::header_reads(&ctx.database_path),
+            flat_use: crate::server::flat_group_use::refreshing(&ctx.database_path),
         })
         .collect();
     let backups_allowed = manages && crate::server::handlers::require_registry_path(state).is_ok();

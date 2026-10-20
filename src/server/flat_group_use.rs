@@ -17,19 +17,23 @@
 //! what is kept, marked `refreshing` (with `computed` false when nothing is
 //! kept yet), and the page asks again. The refresh reads its own read-only
 //! connection and matches lights on a pool sized at background priority
-//! ([`crate::concurrency`]), waiting while interactive work runs.
+//! ([`crate::concurrency`]), waiting while interactive work runs. One
+//! runner per catalog ([`CatalogJobs`]) runs the refreshes and keeps the
+//! answer.
 
 use crate::calibration::browse::{self, RecordedLibraryMaster};
 use crate::calibration::flat_groups::FlatBasis;
 use crate::calibration::project_scope::{master_frames, MasterFrames};
 use crate::calibration::{CalibrationKind, LibrarySnapshot};
 use crate::commands::import::headers::FrameMeta;
+use crate::concurrency::Stop;
 use crate::concurrency::{ComputePool, Priority};
 use crate::server::api::ApiResponse;
 use crate::server::database_context::DatabaseContext;
 use crate::server::extract::DbContext;
 use crate::server::flat_groups::FrameGroups;
 use crate::server::handlers::AppError;
+use crate::server::job_line::catalog::{CatalogJob, CatalogJobs, CatalogWork, Step};
 use crate::server::state::AppState;
 use axum::extract::{Query, State};
 use axum::Json;
@@ -37,8 +41,8 @@ use rayon::prelude::*;
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// How often a refresh looks again while interactive work runs.
@@ -387,108 +391,135 @@ impl Failure {
 const RETRY_FIRST: Duration = Duration::from_secs(10);
 const RETRY_MOST: Duration = Duration::from_secs(10 * 60);
 
-/// Answers by catalog path.
-static KEPT: LazyLock<Mutex<HashMap<String, Kept>>> = LazyLock::new(Mutex::default);
-/// Catalogs being refreshed in the background.
-static REFRESHING: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(Mutex::default);
-/// The last failure by catalog path, until an answer is worked out.
-static FAILED: LazyLock<Mutex<HashMap<String, Failure>>> = LazyLock::new(Mutex::default);
+/// Refreshes of what the flat groups feed, run on one thread per catalog.
+pub(crate) struct FlatGroupUse;
+
+type Job = CatalogJob<FlatGroupUse>;
+
+/// One catalog's answer and the refresh that keeps it current.
+#[derive(Default)]
+pub(crate) struct Queue {
+    /// The answer, with the revision it was worked out at.
+    kept: Option<Kept>,
+    /// The last failure, until an answer is worked out.
+    failed: Option<Failure>,
+    /// The refresh asked for, until the runner starts it.
+    pending: Option<Refresh>,
+    /// A refresh is queued or running.
+    refreshing: bool,
+}
+
+/// A refresh at one revision.
+pub(crate) struct Refresh {
+    revision: String,
+    ctx: Arc<DatabaseContext>,
+    work: Work,
+}
+
+impl CatalogWork for FlatGroupUse {
+    type Queue = Queue;
+    type Status = ();
+    type Item = Refresh;
+    const RUNNER: &'static str = "flat-group-use";
+    const SHUTDOWN_WAITS_FOR: Option<&'static str> = Some("flat group use");
+
+    fn next(_: &AppState, _: &str, queue: &mut Queue, _: Instant) -> Step<Refresh> {
+        queue.pending.take().map_or(Step::Exit, Step::Run)
+    }
+
+    fn run(state: &Arc<AppState>, path: &str, job: &Job, refresh: Refresh, _: &Stop) {
+        let outcome = (refresh.work)(state, &refresh.ctx);
+        let mut queue = job.queue();
+        settle(&mut queue, path, refresh.revision, outcome);
+        queue.refreshing = false;
+    }
+
+    fn has_work(queue: &Queue) -> bool {
+        queue.pending.is_some()
+    }
+
+    fn runner_failed(queue: &mut Queue, _: &mut ()) {
+        queue.pending = None;
+        queue.refreshing = false;
+    }
+}
+
+/// One job per catalog path.
+static JOBS: CatalogJobs<FlatGroupUse> = CatalogJobs::new();
+
+fn job(path: &str) -> Arc<Job> {
+    JOBS.job(path)
+}
 
 fn kept(path: &str) -> Option<Kept> {
-    KEPT.lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .get(path)
-        .cloned()
+    job(path).queue().kept.clone()
 }
 
 fn failure(path: &str) -> Option<Failure> {
-    FAILED
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .get(path)
-        .cloned()
+    job(path).queue().failed.clone()
+}
+
+/// Whether a refresh of what the flat groups feed in the catalog at `path`
+/// runs now.
+pub(crate) fn refreshing(path: &str) -> bool {
+    JOBS.existing(path).is_some_and(|job| job.queue().running())
 }
 
 /// Keep what one refresh came to: its answer, or its failure at `revision`.
-fn settle(path: &str, revision: String, outcome: anyhow::Result<FlatGroupUseView>) {
+fn settle(
+    queue: &mut Queue,
+    path: &str,
+    revision: String,
+    outcome: anyhow::Result<FlatGroupUseView>,
+) {
     match outcome {
         Ok(view) => {
-            KEPT.lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .insert(path.to_string(), (revision, Arc::new(view)));
-            FAILED
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .remove(path);
+            queue.kept = Some((revision, Arc::new(view)));
+            queue.failed = None;
         }
         Err(error) => {
             let error = format!("{error:#}");
-            let mut failed = FAILED.lock().unwrap_or_else(|p| p.into_inner());
-            let attempts = failed
-                .get(path)
+            let attempts = queue
+                .failed
+                .as_ref()
                 .filter(|last| last.revision == revision)
                 .map_or(1, |last| last.attempts + 1);
             tracing::warn!(
                 "Could not work out what the flat groups feed in {path} (attempt {attempts}): {error}"
             );
-            failed.insert(
-                path.to_string(),
-                Failure {
-                    revision,
-                    error,
-                    at: Instant::now(),
-                    attempts,
-                },
-            );
+            queue.failed = Some(Failure {
+                revision,
+                error,
+                at: Instant::now(),
+                attempts,
+            });
         }
     }
 }
 
 /// Work out the answer at `revision` in the background, unless a refresh
-/// runs or the server is stopping. Whether one runs now.
+/// is queued or runs, or the server is stopping. Whether one is queued or
+/// runs now.
 fn start_refresh(
     state: &Arc<AppState>,
     ctx: &Arc<DatabaseContext>,
     revision: String,
     work: Work,
 ) -> bool {
-    let path = ctx.database_path.clone();
     if state.shutdown.is_stopping() {
         return false;
     }
-    if !REFRESHING
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .insert(path.clone())
-    {
-        return true;
-    }
-    let (state, ctx) = (Arc::clone(state), Arc::clone(ctx));
-    let guard = state
-        .shutdown
-        .hold(format!("flat group use ({})", ctx.database_path));
-    let spawned = std::thread::Builder::new()
-        .name("flat-group-use".into())
-        .spawn({
-            let path = path.clone();
-            move || {
-                let _guard = guard;
-                settle(&path, revision, work(&state, &ctx));
-                REFRESHING
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .remove(&path);
-            }
-        });
-    if let Err(error) = spawned {
-        tracing::warn!("Could not start working out what the flat groups feed: {error}");
-        REFRESHING
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .remove(&path);
-        return false;
-    }
-    true
+    JOBS.request(state, &ctx.database_path, |queue| {
+        if !queue.refreshing {
+            queue.refreshing = true;
+            queue.pending = Some(Refresh {
+                revision,
+                ctx: Arc::clone(ctx),
+                work,
+            });
+        }
+        true
+    })
 }
 
 /// The kept answer when current. Otherwise the last one, or a pending one,
@@ -1015,17 +1046,41 @@ mod tests {
         panic!("timed out waiting until {what}");
     }
 
+    /// Holds a stand-in refresh until the test opens it.
+    #[derive(Clone, Default)]
+    struct Release(Arc<std::sync::atomic::AtomicBool>);
+
+    impl Release {
+        fn opened() -> Self {
+            let release = Self::default();
+            release.open();
+            release
+        }
+
+        fn open(&self) {
+            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+
+        fn is_open(&self) -> bool {
+            self.0.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    fn refresh_running(path: &str) -> bool {
+        job(path).queue().refreshing
+    }
+
     /// A stand-in for working the answer out: counts its calls, and waits
     /// for `release` before answering `outcome`.
     fn stand_in(
         calls: &Arc<std::sync::atomic::AtomicUsize>,
-        release: &Arc<std::sync::atomic::AtomicBool>,
+        release: &Release,
         fail: bool,
     ) -> Work {
-        let (calls, release) = (Arc::clone(calls), Arc::clone(release));
+        let (calls, release) = (Arc::clone(calls), release.clone());
         Arc::new(move |_, _| {
             calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            while !release.load(std::sync::atomic::Ordering::SeqCst) {
+            while !release.is_open() {
                 std::thread::sleep(Duration::from_millis(2));
             }
             anyhow::ensure!(!fail, "the catalog could not be read");
@@ -1039,12 +1094,12 @@ mod tests {
 
     #[test]
     fn the_first_answer_is_worked_out_once_in_the_background_and_kept() {
-        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use std::sync::atomic::{AtomicUsize, Ordering};
         let _lock = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let temp = tempfile::tempdir().unwrap();
         let (state, ctx) = on_disk(temp.path());
         let calls = Arc::new(AtomicUsize::new(0));
-        let release = Arc::new(AtomicBool::new(false));
+        let release = Release::default();
         let work = stand_in(&calls, &release, false);
 
         // Nothing kept: answered at once, pending, with one refresh started.
@@ -1057,11 +1112,9 @@ mod tests {
         std::thread::sleep(Duration::from_millis(30));
         assert_eq!(calls.load(Ordering::SeqCst), 1, "one refresh at a time");
 
-        release.store(true, Ordering::SeqCst);
+        release.open();
         wait_until("the answer is kept", || kept(&ctx.database_path).is_some());
-        wait_until("the refresh ends", || {
-            !REFRESHING.lock().unwrap().contains(&ctx.database_path)
-        });
+        wait_until("the refresh ends", || !refresh_running(&ctx.database_path));
         let answer = use_of_with(&state, &ctx, Arc::clone(&work)).unwrap();
         assert!(answer.computed && !answer.refreshing);
         assert_eq!(answer.lights, 3);
@@ -1074,12 +1127,12 @@ mod tests {
 
     #[test]
     fn a_stopping_server_starts_no_refresh() {
-        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use std::sync::atomic::{AtomicUsize, Ordering};
         let _lock = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let temp = tempfile::tempdir().unwrap();
         let (state, ctx) = on_disk(temp.path());
         let calls = Arc::new(AtomicUsize::new(0));
-        let release = Arc::new(AtomicBool::new(true));
+        let release = Release::opened();
         state.shutdown.begin();
         let answer = use_of_with(&state, &ctx, stand_in(&calls, &release, false)).unwrap();
         assert!(!answer.computed && !answer.refreshing);
@@ -1089,12 +1142,12 @@ mod tests {
 
     #[test]
     fn a_failed_refresh_is_said_and_tried_again_only_after_a_growing_wait() {
-        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use std::sync::atomic::{AtomicUsize, Ordering};
         let _lock = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let temp = tempfile::tempdir().unwrap();
         let (state, ctx) = on_disk(temp.path());
         let calls = Arc::new(AtomicUsize::new(0));
-        let release = Arc::new(AtomicBool::new(true));
+        let release = Release::opened();
         let work = stand_in(&calls, &release, true);
         let path = ctx.database_path.clone();
 
@@ -1104,9 +1157,7 @@ mod tests {
                 .refreshing
         );
         wait_until("the failure is kept", || failure(&path).is_some());
-        wait_until("the refresh ends", || {
-            !REFRESHING.lock().unwrap().contains(&path)
-        });
+        wait_until("the refresh ends", || !refresh_running(&path));
         // Polled again at once: the error, and no new attempt.
         let answer = use_of_with(&state, &ctx, Arc::clone(&work)).unwrap();
         assert!(!answer.refreshing);
@@ -1117,8 +1168,7 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 1);
 
         // Once the wait has passed it tries again, and waits longer after.
-        FAILED.lock().unwrap().get_mut(&path).unwrap().at =
-            Instant::now() - Duration::from_secs(3600);
+        job(&path).queue().failed.as_mut().unwrap().at = Instant::now() - Duration::from_secs(3600);
         assert!(
             use_of_with(&state, &ctx, Arc::clone(&work))
                 .unwrap()

@@ -1329,3 +1329,35 @@ fn calibration_health_is_listed_once_its_pass_has_projects_to_judge() {
         Some(RowLink::view(LinkView::Calibration, "a"))
     );
 }
+
+#[test]
+fn light_header_reads_are_a_persons_row_with_their_count() {
+    let rows = row_list(&with_db(DatabaseState {
+        header_reads: Some((32, 1_200)),
+        ..db("a", "Askar")
+    }));
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        (rows[0].title.as_str(), rows[0].detail.as_str()),
+        ("Reading light headers", "32 of 1,200 headers")
+    );
+    assert!(!rows[0].background, "a view asked for them");
+    assert_eq!(rows[0].key, "headers:a");
+    assert_eq!(
+        rows[0].link,
+        Some(RowLink::view(LinkView::Calibration, "a"))
+    );
+}
+
+#[test]
+fn working_out_flat_group_use_is_an_automatic_row_while_it_runs() {
+    assert!(row_list(&with_db(db("a", "Askar"))).is_empty());
+    let rows = row_list(&with_db(DatabaseState {
+        flat_use: true,
+        ..db("a", "Askar")
+    }));
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].title, "Working out what the flat groups feed");
+    assert!(rows[0].background);
+    assert_eq!(rows[0].key, "flat-use:a");
+}
