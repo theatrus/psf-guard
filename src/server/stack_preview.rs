@@ -1519,12 +1519,12 @@ impl StackPreviewManager {
     /// The stack worker, when nothing holds it: work that removes files a
     /// build may read takes it so none runs meanwhile.
     pub(crate) fn try_maintenance_permit(&self) -> Option<Lease> {
-        self.line.try_reserve_worker()
+        self.line.try_reserve_main()
     }
 
     /// [`Self::try_maintenance_permit`], waiting for the worker to come free.
     pub(crate) async fn acquire_maintenance_permit(&self) -> Result<Lease, String> {
-        Ok(self.line.reserve_worker().await)
+        Ok(self.line.reserve_main().await)
     }
 
     fn insert(&self, job: StackPreviewJob) -> bool {
@@ -1652,18 +1652,18 @@ impl StackPreviewManager {
         assert!(self
             .line
             .submit(
-                crate::server::job_line::testing::entry(job_id, Lane::Worker, stop),
+                crate::server::job_line::testing::entry(job_id, Lane::Main, stop),
                 None
             )
             .is_ok());
     }
 
-    /// Dispatch the worker lane once, as its dispatcher would: the entry
+    /// Dispatch the main lane once, as its dispatcher would: the entry
     /// that runs, or one settled because it was stopped while it waited.
     /// The lane is free again as soon as this returns.
     pub(super) async fn dispatch_next(&self) -> (bool, String) {
         use crate::server::job_line::Dispatch;
-        match self.line.next(Lane::Worker).await {
+        match self.line.next(Lane::Main).await {
             Dispatch::Run { id, .. } => (true, id),
             Dispatch::Stopped { id, .. } => (false, id),
         }
@@ -2086,7 +2086,7 @@ fn queue_preview_render(
         Ok(submission) => submit(
             state,
             &job_id,
-            Lane::Worker,
+            Lane::Main,
             None,
             cancel,
             Vec::new(),
@@ -3212,7 +3212,7 @@ fn enqueue_job(
         Ok(submission) => submit(
             &state,
             &job_id,
-            Lane::Worker,
+            Lane::Main,
             slot,
             cancel,
             holds,
@@ -3278,7 +3278,7 @@ pub(super) fn submit_entry(state: &Arc<AppState>, entry: Entry, before: Option<&
 static STACK_LINE: DispatchRules = DispatchRules {
     name: "stack",
     line: |state| &state.stack_previews.line,
-    lanes: &[Lane::Worker, Lane::Quick],
+    lanes: &[Lane::Main, Lane::Quick],
     turn: |state, id| {
         let automatic = state.stack_previews.is_automatic(id)
             || state.stack_previews.is_automatic_processing(id);
@@ -6125,7 +6125,7 @@ mod tests {
     async fn the_line_decides_which_waiting_build_runs_next() {
         let manager = StackPreviewManager::new();
         // Something holds the worker while three builds line up.
-        let busy = manager.line.reserve_worker().await;
+        let busy = manager.line.reserve_main().await;
         for job in ["a", "b", "c"] {
             manager.queue_test_build(job);
         }
@@ -7245,7 +7245,7 @@ mod tests {
     fn the_activity_endpoint_lists_a_processing_run_beside_builds() {
         let state = test_state();
         assert!(state.stack_previews.insert(running_build("held")));
-        let busy = state.stack_previews.line.try_reserve_worker().unwrap();
+        let busy = state.stack_previews.line.try_reserve_main().unwrap();
         let run_id = "f".repeat(64);
         state.stack_previews.queue_processing(
             &run_id,
@@ -7547,7 +7547,7 @@ mod tests {
         let cache = tempfile::tempdir().unwrap();
         let (state, applied) = processed_card(cache.path()).await;
         // A build holds the worker, so the re-apply waits in the line.
-        let busy = state.stack_previews.line.reserve_worker().await;
+        let busy = state.stack_previews.line.reserve_main().await;
         let second = "2".repeat(64);
         refresh(&state, cache.path(), &second, "rev-2");
         eventually("the re-apply is queued", || {
@@ -7620,7 +7620,7 @@ mod tests {
         let _policy = reapply_policy(true);
         let cache = tempfile::tempdir().unwrap();
         let (state, _) = processed_card(cache.path()).await;
-        let busy = state.stack_previews.line.reserve_worker().await;
+        let busy = state.stack_previews.line.reserve_main().await;
         let second = "2".repeat(64);
         refresh(&state, cache.path(), &second, "rev-2");
         eventually("the re-apply is queued", || {
@@ -7678,7 +7678,7 @@ mod tests {
         let _policy = reapply_policy(true);
         let cache = tempfile::tempdir().unwrap();
         let (state, _) = processed_card(cache.path()).await;
-        let busy = state.stack_previews.line.reserve_worker().await;
+        let busy = state.stack_previews.line.reserve_main().await;
         let second = "2".repeat(64);
         refresh(&state, cache.path(), &second, "rev-2");
         eventually("the re-apply is queued", || {
@@ -7756,7 +7756,7 @@ mod tests {
         let _policy = reapply_policy(true);
         let cache = tempfile::tempdir().unwrap();
         let (state, _) = processed_card(cache.path()).await;
-        let busy = state.stack_previews.line.reserve_worker().await;
+        let busy = state.stack_previews.line.reserve_main().await;
         let second = "2".repeat(64);
         refresh(&state, cache.path(), &second, "rev-2");
         eventually("the re-apply is queued", || {
@@ -7788,7 +7788,7 @@ mod tests {
         let cache = tempfile::tempdir().unwrap();
         let (state, _) = processed_card(cache.path()).await;
         // The person's next build holds the worker, and one more waits.
-        let busy = state.stack_previews.line.reserve_worker().await;
+        let busy = state.stack_previews.line.reserve_main().await;
         let person = state.begin_interactive_job();
         queued_build(&state, "later");
         let second = "2".repeat(64);
@@ -7833,7 +7833,7 @@ mod tests {
         let (state, _) = processed_card(cache.path()).await;
         // The person's build holds the worker, and their next one waits for
         // its turn.
-        let busy = state.stack_previews.line.reserve_worker().await;
+        let busy = state.stack_previews.line.reserve_main().await;
         let cancel = state.stack_previews.track_cancel("later");
         let (took, took_worker) = tokio::sync::oneshot::channel();
         let (release, released) = std::sync::mpsc::channel::<()>();
@@ -7842,7 +7842,7 @@ mod tests {
             &state,
             crate::server::job_line::testing::entry_running(
                 "later",
-                Lane::Worker,
+                Lane::Main,
                 cancel,
                 move || {
                     let _ = took.send(());
@@ -7901,7 +7901,7 @@ mod tests {
         let _policy = reapply_policy(true);
         let cache = tempfile::tempdir().unwrap();
         let (before, _) = processed_card(cache.path()).await;
-        let busy = before.stack_previews.line.reserve_worker().await;
+        let busy = before.stack_previews.line.reserve_main().await;
         let second = "2".repeat(64);
         rebuild(&before, cache.path(), &second, "rev-2");
         eventually("the re-apply is queued", || {
@@ -8383,7 +8383,7 @@ mod tests {
         let _policy = reapply_policy(true);
         let cache = tempfile::tempdir().unwrap();
         let (state, _) = processed_card(cache.path()).await;
-        let busy = state.stack_previews.line.reserve_worker().await;
+        let busy = state.stack_previews.line.reserve_main().await;
         refresh(&state, cache.path(), &"2".repeat(64), "rev-2");
         eventually("the re-apply is queued", || {
             the_automatic_run(&state).is_some()
@@ -8419,7 +8419,7 @@ mod tests {
         let _policy = reapply_policy(true);
         let cache = tempfile::tempdir().unwrap();
         let (state, _) = processed_card(cache.path()).await;
-        let busy = state.stack_previews.line.reserve_worker().await;
+        let busy = state.stack_previews.line.reserve_main().await;
         refresh(&state, cache.path(), &"2".repeat(64), "rev-2");
         eventually("the re-apply is queued", || {
             the_automatic_run(&state).is_some()
@@ -8703,7 +8703,7 @@ mod tests {
             assert!(manager
                 .line
                 .submit(
-                    crate::server::job_line::testing::entry(job_id, Lane::Worker, stop),
+                    crate::server::job_line::testing::entry(job_id, Lane::Main, stop),
                     Some("slot")
                 )
                 .is_ok());
@@ -8711,7 +8711,7 @@ mod tests {
         manager.release_place("slot");
         assert_eq!(manager.line.order(), ["red", "green", "last"]);
         // Work already in the line keeps its place.
-        let again = crate::server::job_line::testing::entry("last", Lane::Worker, Stop::new());
+        let again = crate::server::job_line::testing::entry("last", Lane::Main, Stop::new());
         assert!(manager.line.submit(again, Some("red")).is_err());
         assert_eq!(manager.line.order(), ["red", "green", "last"]);
     }
@@ -9129,7 +9129,7 @@ mod tests {
         stretch::write_json_atomic(&manifest_path(cache.path(), &job_id), &job).unwrap();
 
         // Another build holds the worker, so the render waits in line.
-        let busy = state.stack_previews.line.reserve_worker().await;
+        let busy = state.stack_previews.line.reserve_main().await;
         let first = build_again(&state, cache.path(), &job_id);
         assert_eq!(first.job.state, StackJobState::Queued);
         assert_eq!(first.job.groups[0].phase, PHASE_RENDER_QUEUED);
@@ -9194,7 +9194,7 @@ mod tests {
         let mut job = stack_on_disk(cache.path(), &job_id, "rev-1");
         job.groups[0].preview_stretch_version = Some("0.2.2".into());
         stretch::write_json_atomic(&manifest_path(cache.path(), &job_id), &job).unwrap();
-        let busy = state.stack_previews.line.reserve_worker().await;
+        let busy = state.stack_previews.line.reserve_main().await;
         build_again(&state, cache.path(), &job_id);
         assert!(state.stack_previews.request_cancel(&job_id));
         eventually("the render stops", || {
@@ -9256,7 +9256,7 @@ mod tests {
         let mut job = stack_on_disk(cache.path(), &job_id, "rev-1");
         job.groups[0].preview_stretch_version = Some("0.2.2".into());
         job.color_defaults = Some(color::StackColorProcessing::default());
-        let busy = state.stack_previews.line.reserve_worker().await;
+        let busy = state.stack_previews.line.reserve_main().await;
         let queued = queue_preview_render(&state, &ctx, &job, true, None).unwrap();
         assert!(!queued.automatic, "a person's build stays theirs");
         assert_eq!(
@@ -9364,7 +9364,7 @@ mod tests {
             let state = test_state();
             // A build holds the worker.
             assert!(state.stack_previews.insert(running_build("held")));
-            let busy = state.stack_previews.line.reserve_worker().await;
+            let busy = state.stack_previews.line.reserve_main().await;
 
             let source = processing_source(cache.path(), "queued-run");
             let outcome = stretch::apply_to_fits(
@@ -9468,7 +9468,7 @@ mod tests {
             let state = test_state();
             // Held at first, so the request answers at once instead of waiting
             // for the result.
-            let busy = state.stack_previews.line.reserve_worker().await;
+            let busy = state.stack_previews.line.reserve_main().await;
             let source = processing_source(cache.path(), "stopped-run");
             let outcome = stretch::apply_to_fits(
                 Arc::clone(&state),
@@ -9522,7 +9522,7 @@ mod tests {
             let cache = tempfile::tempdir().unwrap();
             let state = test_state();
             // Held at first, so both requests answer at once.
-            let busy = state.stack_previews.line.reserve_worker().await;
+            let busy = state.stack_previews.line.reserve_main().await;
             let start = |tools: &'static [&'static str], revision: &'static str, select| {
                 let state = Arc::clone(&state);
                 let root = cache.path().to_path_buf();
@@ -9651,7 +9651,7 @@ mod tests {
             let registry_dir = tempfile::tempdir().unwrap();
             let registry = registry_dir.path().join("reg.json");
             let (before, job_id) = state_with_stack_on_disk(cache.path(), &registry);
-            let busy = before.stack_previews.line.reserve_worker().await;
+            let busy = before.stack_previews.line.reserve_main().await;
             let stretch::StretchApplyOutcome::Pending { stretch_id } =
                 apply_on_disk(&before, &job_id, &["bxt", "nxt"], true)
                     .await

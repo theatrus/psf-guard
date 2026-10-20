@@ -2004,7 +2004,7 @@ fn submit_stretch_variant(
         Ok(submission) => super::submit(
             &state,
             &stretch_id,
-            super::Lane::Worker,
+            super::Lane::Main,
             None,
             cancel,
             Vec::new(),

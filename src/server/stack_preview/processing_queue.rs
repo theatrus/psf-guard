@@ -152,7 +152,7 @@ impl StackPreviewManager {
         );
         // Its place in line until the run itself joins and takes it.
         self.hold_place(run_id, Vec::new());
-        let waits = self.line_position(run_id) != Some(0) || self.line.worker_busy();
+        let waits = self.line_position(run_id) != Some(0) || self.line.main_busy();
         (cancel, waits)
     }
 
@@ -469,7 +469,7 @@ mod tests {
     #[test]
     fn waiting_runs_are_listed_in_line_order_and_leave_when_done() {
         let manager = StackPreviewManager::new();
-        let busy = manager.line.try_reserve_worker().unwrap();
+        let busy = manager.line.try_reserve_main().unwrap();
         let (_, waits) = manager.queue_processing(
             &"a".repeat(64),
             scope("R"),

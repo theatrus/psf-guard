@@ -2133,7 +2133,7 @@ pub(super) fn enqueue_color_job(
             let lane = if quick {
                 super::Lane::Quick
             } else {
-                super::Lane::Worker
+                super::Lane::Main
             };
             super::submit(
                 &state,
@@ -5183,7 +5183,7 @@ mod tests {
             rusqlite::Connection::open_in_memory().unwrap(),
         ));
         // A build holds the stack worker.
-        let busy = state.stack_previews.line.reserve_worker().await;
+        let busy = state.stack_previews.line.reserve_main().await;
         let quick = prepared_color(cache.path(), &"a".repeat(64), false, false, Some("inputs"));
         let slow = prepared_color(cache.path(), &"b".repeat(64), true, false, Some("other"));
         for prepared in [&quick, &slow] {

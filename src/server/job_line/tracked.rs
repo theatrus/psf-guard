@@ -110,6 +110,11 @@ impl Tracked {
         }
     }
 
+    pub(super) fn journal_of<T: DeserializeOwned>(&self, id: &str) -> Option<T> {
+        let value = self.jobs().get(id)?.journal.clone()?;
+        serde_json::from_value(value).ok()
+    }
+
     pub(super) fn journals<T: DeserializeOwned>(&self) -> Vec<(String, T)> {
         self.jobs()
             .iter()

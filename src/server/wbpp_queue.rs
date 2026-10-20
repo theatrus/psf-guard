@@ -7,23 +7,21 @@
 //! their place and runs of other databases start first. The job journal
 //! stores the queued runs, so a server restart restores the queue.
 
-use std::{
-    collections::HashMap,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc, Mutex, MutexGuard,
-    },
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
 };
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::job_line::{DispatchRules, Entry, JobLine, KeyHold, Lane, Lease, Task, Turn, Worker};
 use super::state::AppState;
 use super::wbpp_run::StartWbppRunRequest;
-use crate::concurrency::{Priority, Stop};
+use crate::concurrency::Priority;
 
-/// One run waiting to start.
-#[derive(Debug, Clone)]
+/// One run waiting to start. The line stores it as the run's tracked
+/// journal record.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueuedRun {
     pub id: String,
     pub db_id: String,
@@ -63,10 +61,9 @@ impl QueuedRun {
 
 #[derive(Default)]
 pub struct WbppQueue {
-    /// The order of the queued runs, and PixInsight as the worker lane.
+    /// The queued runs, in order, with each run's details as its tracked
+    /// journal record. PixInsight is the main lane.
     line: JobLine,
-    /// The queued runs by id. The line stores their order.
-    runs: Mutex<HashMap<String, QueuedRun>>,
     next_id: AtomicU64,
 }
 
@@ -75,7 +72,7 @@ pub struct WbppQueue {
 static WBPP_LINE: DispatchRules = DispatchRules {
     name: "WBPP",
     line: |state| &state.wbpp_queue.line,
-    lanes: &[Lane::Worker],
+    lanes: &[Lane::Main],
     turn: |_, _| Turn {
         priority: Priority::Interactive,
         pauses_background_work: false,
@@ -89,12 +86,6 @@ fn database_key(db_id: &str) -> String {
 }
 
 impl WbppQueue {
-    fn runs(&self) -> MutexGuard<'_, HashMap<String, QueuedRun>> {
-        self.runs
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
-
     /// Add a run to the back of the line. Returns its id and 1-based place.
     pub fn push(
         &self,
@@ -105,8 +96,7 @@ impl WbppQueue {
         now: i64,
     ) -> (String, usize) {
         let id = format!("q{}", self.next_id.fetch_add(1, Ordering::Relaxed) + 1);
-        self.runs().insert(
-            id.clone(),
+        self.submit(
             QueuedRun {
                 id: id.clone(),
                 db_id: db_id.to_string(),
@@ -116,17 +106,20 @@ impl WbppQueue {
                 queued_at: now,
                 request,
             },
+            None,
         );
-        self.submit(&id, db_id, None);
         self.line.ensure_dispatching(state, &WBPP_LINE);
         let position = self.line.position(&id).map_or(1, |index| index + 1);
         (id, position)
     }
 
-    fn submit(&self, id: &str, db_id: &str, before: Option<&str>) {
-        let task = Box::new(StartQueuedRun { id: id.to_string() });
+    fn submit(&self, run: QueuedRun, before: Option<&str>) {
+        let id = run.id.clone();
+        let stop = self.line.track(&id);
+        self.line.set_journal(&id, &run);
+        let task = Box::new(StartQueuedRun { id: id.clone() });
         let entry =
-            Entry::new(id, Lane::Worker, Stop::new(), task).blocked_by(vec![database_key(db_id)]);
+            Entry::new(&id, Lane::Main, stop, task).blocked_by(vec![database_key(&run.db_id)]);
         if self.line.submit(entry, before).is_err() {
             tracing::warn!(id, "A WBPP run with this id is already queued");
         }
@@ -135,23 +128,21 @@ impl WbppQueue {
     /// Put a run that could not start yet back at the front of the line,
     /// with its id unchanged.
     pub fn push_front(&self, run: QueuedRun) {
-        let (id, db_id) = (run.id.clone(), run.db_id.clone());
-        self.runs().insert(id.clone(), run);
         let first = self.line.order().into_iter().next();
-        self.submit(&id, &db_id, first.as_deref());
+        self.submit(run, first.as_deref());
     }
 
     /// Reserve PixInsight when it is free and no run is queued, so a run
     /// can start at once. PixInsight is free again when the lease is
     /// dropped.
     pub fn try_reserve_pixinsight(&self) -> Option<Lease> {
-        self.line.try_reserve_idle_worker()
+        self.line.try_reserve_idle_main()
     }
 
     /// Reserve PixInsight when it is free, even with runs queued: for a
     /// PixInsight process that outlived a server restart.
     pub fn try_reserve_pixinsight_now(&self) -> Option<Lease> {
-        self.line.try_reserve_worker()
+        self.line.try_reserve_main()
     }
 
     /// Block the database's queued runs until the returned hold is dropped:
@@ -163,33 +154,32 @@ impl WbppQueue {
     /// Take the run that the dispatcher starts out of the queue. `None`
     /// when the run was removed meanwhile.
     fn take(&self, id: &str) -> Option<QueuedRun> {
-        self.runs().remove(id)
+        let run = self.line.journal_of(id);
+        self.line.forget(id);
+        run
     }
 
     /// Take one database's queued run out of the line.
     pub fn remove(&self, db_id: &str, id: &str) -> Option<QueuedRun> {
-        let removed = {
-            let mut runs = self.runs();
-            if runs.get(id).is_none_or(|run| run.db_id != db_id) {
-                return None;
-            }
-            runs.remove(id)
-        };
+        let run: QueuedRun = self
+            .line
+            .journal_of(id)
+            .filter(|run: &QueuedRun| run.db_id == db_id)?;
         // The dispatcher removes the stopped entry from the line.
-        if let Some(stop) = self.line.stop_of(id) {
+        if let Some(stop) = self.line.stop_flag(id) {
             stop.request();
             self.line.changed();
         }
-        removed
+        self.line.forget(id);
+        Some(run)
     }
 
     /// The queued runs, next first.
     fn ordered(&self) -> Vec<QueuedRun> {
-        let order = self.line.order();
-        let runs = self.runs();
-        order
+        self.line
+            .order()
             .iter()
-            .filter_map(|id| runs.get(id).cloned())
+            .filter_map(|id| self.line.journal_of(id))
             .collect()
     }
 
@@ -217,7 +207,7 @@ impl WbppQueue {
     /// Move a queued run to `position` in the line (0 is next), clamped to
     /// the line. False when no such run is waiting.
     pub fn move_to(&self, id: &str, position: usize) -> bool {
-        self.runs().contains_key(id) && self.line.move_to(id, position)
+        self.line.stop_flag(id).is_some() && self.line.move_to(id, position)
     }
 
     /// Every queued run, with its database and place in the line.
@@ -235,7 +225,7 @@ impl WbppQueue {
     }
 
     pub fn len(&self) -> usize {
-        self.runs().len()
+        self.line.journals::<QueuedRun>().len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -382,7 +372,7 @@ mod tests {
         // The dispatcher passes over a's run and starts b's, which fails at
         // once: the test server has no PixInsight.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while queue.runs().contains_key(&other) {
+        while queue.line.stop_flag(&other).is_some() {
             assert!(
                 std::time::Instant::now() < deadline,
                 "b's run never started"

@@ -966,7 +966,7 @@ mod tests {
         let manager = Arc::new(StackPreviewManager::new());
         // B1 holds the worker. The person's re-apply run R waits in the
         // line, and they moved build B2 above it.
-        let busy = manager.line.try_reserve_worker().unwrap();
+        let busy = manager.line.try_reserve_main().unwrap();
         manager.queue_processing("r", scope("R"), "Stretch".into(), false, test_origin("r"));
         manager.record_reapply("R".into(), theirs("R", Some("r")));
         let b2 = waiting_build(&manager, "b2");
@@ -1006,7 +1006,7 @@ mod tests {
         let manager = Arc::new(manager);
         // Their re-apply of R runs, holding the worker; G waits for it, and
         // a build waits.
-        let running = manager.line.try_reserve_worker().unwrap();
+        let running = manager.line.try_reserve_main().unwrap();
         let (cancel, _) =
             manager.queue_processing("r", scope("R"), "Stretch".into(), false, test_origin("r"));
         manager.release_place("r");

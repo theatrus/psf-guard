@@ -15,7 +15,7 @@
 //!   ([`JobLine::hold_place`]). The place runs nothing and does not block
 //!   the entries behind it; the work it becomes takes the place.
 //! - Work about to join can have the next turn reserved for it
-//!   ([`JobLine::reserve_turn`]). A reserved turn blocks the worker lane,
+//!   ([`JobLine::reserve_turn`]). A reserved turn blocks the main lane,
 //!   but only for the time it was given, counted from when it first blocks
 //!   anything; the work that fills it takes its place.
 //! - Places and entries hold keys ([`Entry::holding`]), and an entry can be
@@ -47,9 +47,11 @@ pub use work::{Ending, LineWork, Needs, Submission, Task, Worker};
 /// Where an entry runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Lane {
-    /// The shared worker, one entry at a time in the line's order.
-    Worker,
-    /// Beside the worker, one entry at a time in the order they joined:
+    /// The line's ordered lane: one entry at a time, in the order a person
+    /// can change. For the stack line it is the stacking worker; for the
+    /// WBPP line, PixInsight.
+    Main,
+    /// Beside the main lane, one entry at a time in the order they joined:
     /// work short enough not to wait behind the line.
     Quick,
 }
@@ -97,7 +99,7 @@ impl Entry {
     }
 }
 
-/// A place in the worker lane's line.
+/// A place in the main lane's line.
 enum Place {
     /// For work still being prepared, holding `holds` meanwhile.
     Held {
@@ -137,17 +139,17 @@ impl Place {
 
 #[derive(Default)]
 struct LineState {
-    /// The worker lane's line, in the order it runs. A person can change it.
+    /// The main lane's line, in the order it runs. A person can change it.
     order: Vec<Place>,
     /// The quick lane's line, in the order entries joined.
     quick: VecDeque<Entry>,
-    worker_busy: bool,
+    main_busy: bool,
     quick_busy: bool,
     /// The keys the work running on each lane holds.
-    worker_holds: Vec<String>,
+    main_holds: Vec<String>,
     quick_holds: Vec<String>,
     /// The id of the entry running on each lane.
-    worker_running: Option<String>,
+    main_running: Option<String>,
     quick_running: Option<String>,
     /// Work waiting to reserve the worker outside the line. It goes before
     /// the line's next entry, as a reservation always has.
@@ -159,21 +161,21 @@ struct LineState {
 impl LineState {
     fn busy(&mut self, lane: Lane) -> &mut bool {
         match lane {
-            Lane::Worker => &mut self.worker_busy,
+            Lane::Main => &mut self.main_busy,
             Lane::Quick => &mut self.quick_busy,
         }
     }
 
     fn running_id(&mut self, lane: Lane) -> &mut Option<String> {
         match lane {
-            Lane::Worker => &mut self.worker_running,
+            Lane::Main => &mut self.main_running,
             Lane::Quick => &mut self.quick_running,
         }
     }
 
     fn running_holds(&mut self, lane: Lane) -> &mut Vec<String> {
         match lane {
-            Lane::Worker => &mut self.worker_holds,
+            Lane::Main => &mut self.main_holds,
             Lane::Quick => &mut self.quick_holds,
         }
     }
@@ -191,7 +193,7 @@ impl LineState {
                 .quick
                 .iter()
                 .any(|queued| other(&queued.id) && held(&queued.holds))
-            || held(&self.worker_holds)
+            || held(&self.main_holds)
             || held(&self.quick_holds)
             || keys.iter().any(|key| self.outside.contains_key(key))
     }
@@ -209,7 +211,7 @@ impl LineState {
     /// Take out the first entry of `lane` that was asked to stop.
     fn take_stopped(&mut self, lane: Lane) -> Option<Entry> {
         match lane {
-            Lane::Worker => {
+            Lane::Main => {
                 let index = self.order.iter().position(
                     |place| matches!(place, Place::Work(entry) if entry.stop.requested()),
                 )?;
@@ -388,7 +390,7 @@ impl<T> Reply<T> {
     }
 }
 
-/// A reservation waiting for the worker lane, counted until it is granted
+/// A reservation waiting for the main lane, counted until it is granted
 /// or its caller gives up.
 struct Reserving<'a>(&'a JobLine);
 
@@ -448,7 +450,7 @@ impl JobLine {
         self.wake();
     }
 
-    /// Hold a place in the worker lane's line for work still being
+    /// Hold a place in the main lane's line for work still being
     /// prepared, at the back, holding `holds` meanwhile. The place runs
     /// nothing and holds up nothing behind it; the work it becomes takes it.
     pub fn hold_place(&self, id: &str, holds: Vec<String>) {
@@ -464,7 +466,7 @@ impl JobLine {
         self.wake();
     }
 
-    /// Keep the next turn on the worker lane for work about to join under
+    /// Keep the next turn on the main lane for work about to join under
     /// another id: at the front, or just after `after` when it is in line.
     /// It holds the lane for `hold_for` from when it first holds anything
     /// up, and then the line moves on without it.
@@ -536,18 +538,18 @@ impl JobLine {
         }
     }
 
-    /// Reserve the worker lane when it is free and no work is queued on it,
+    /// Reserve the main lane when it is free and no work is queued on it,
     /// so the caller can start work without going ahead of queued work.
-    pub fn try_reserve_idle_worker(&self) -> Option<Lease> {
+    pub fn try_reserve_idle_main(&self) -> Option<Lease> {
         let mut state = self.lock();
-        if state.worker_busy || state.reservations > 0 || state.order.iter().any(Place::is_work) {
+        if state.main_busy || state.reservations > 0 || state.order.iter().any(Place::is_work) {
             return None;
         }
-        state.worker_busy = true;
-        Some(self.lease(Lane::Worker))
+        state.main_busy = true;
+        Some(self.lease(Lane::Main))
     }
 
-    /// Put work in its lane's line. On the worker lane it takes the place
+    /// Put work in its lane's line. On the main lane it takes the place
     /// held under its own id, or goes just before `before`, a place held
     /// for the request it came from, or at the back. Work already in line
     /// under the same id stays as it is, and this entry is handed back; the
@@ -557,7 +559,7 @@ impl JobLine {
         {
             let mut state = self.lock();
             match entry.lane {
-                Lane::Worker => match state.index_of(&entry.id) {
+                Lane::Main => match state.index_of(&entry.id) {
                     Some(index) => match &state.order[index] {
                         Place::Work(queued) => {
                             self.tracked.restore_stop(&entry.id, queued.stop.clone());
@@ -585,7 +587,7 @@ impl JobLine {
         Ok(())
     }
 
-    /// Move a place in the worker lane's line to `position` (0 is next),
+    /// Move a place in the main lane's line to `position` (0 is next),
     /// clamped to the line. False when it is not in that line.
     pub fn move_to(&self, id: &str, position: usize) -> bool {
         {
@@ -651,6 +653,11 @@ impl JobLine {
         self.tracked.update_journal(id, edit);
     }
 
+    /// The journal record of the tracked job `id`, when it has one.
+    pub fn journal_of<T: serde::de::DeserializeOwned>(&self, id: &str) -> Option<T> {
+        self.tracked.journal_of(id)
+    }
+
     /// The journal records of every tracked job that has one, by id.
     pub fn journals<T: serde::de::DeserializeOwned>(&self) -> Vec<(String, T)> {
         self.tracked.journals()
@@ -669,9 +676,9 @@ impl JobLine {
         {
             Some(Lane::Quick)
         } else if state.index_of(id).is_some()
-            || state.running_id(Lane::Worker).as_deref() == Some(id)
+            || state.running_id(Lane::Main).as_deref() == Some(id)
         {
-            Some(Lane::Worker)
+            Some(Lane::Main)
         } else {
             None
         }
@@ -696,12 +703,12 @@ impl JobLine {
             })
     }
 
-    /// A place's position in the worker lane's line, 0 next.
+    /// A place's position in the main lane's line, 0 next.
     pub fn position(&self, id: &str) -> Option<usize> {
         self.lock().index_of(id)
     }
 
-    /// The worker lane's line, in order: work, held places and reserved
+    /// The main lane's line, in order: work, held places and reserved
     /// turns.
     pub fn order(&self) -> Vec<String> {
         self.lock()
@@ -711,21 +718,21 @@ impl JobLine {
             .collect()
     }
 
-    /// Whether something holds the worker lane now.
-    pub fn worker_busy(&self) -> bool {
-        self.lock().worker_busy
+    /// Whether something holds the main lane now.
+    pub fn main_busy(&self) -> bool {
+        self.lock().main_busy
     }
 
-    /// The worker lane, when nothing holds it: work that must not run beside
+    /// The main lane, when nothing holds it: work that must not run beside
     /// any entry, such as removing files a build may read. It does not wait
     /// its turn in the line.
-    pub fn try_reserve_worker(&self) -> Option<Lease> {
+    pub fn try_reserve_main(&self) -> Option<Lease> {
         let mut state = self.lock();
-        if state.worker_busy {
+        if state.main_busy {
             return None;
         }
-        state.worker_busy = true;
-        Some(self.lease(Lane::Worker))
+        state.main_busy = true;
+        Some(self.lease(Lane::Main))
     }
 
     /// The quick lane, when nothing holds it, for tests that need it busy.
@@ -739,16 +746,16 @@ impl JobLine {
         Some(self.lease(Lane::Quick))
     }
 
-    /// [`Self::try_reserve_worker`], waiting for the worker lane to come
+    /// [`Self::try_reserve_main`], waiting for the main lane to come
     /// free.
-    pub async fn reserve_worker(&self) -> Lease {
+    pub async fn reserve_main(&self) -> Lease {
         // Counted while it waits, so the dispatcher leaves the lane to it.
         let _waiting = Reserving::new(self);
         loop {
             let notified = self.wakeup.notified();
             tokio::pin!(notified);
             notified.as_mut().enable();
-            if let Some(lease) = self.try_reserve_worker() {
+            if let Some(lease) = self.try_reserve_main() {
                 return lease;
             }
             notified.await;
@@ -765,7 +772,7 @@ impl JobLine {
                 task: entry.task,
             });
         }
-        if *state.busy(lane) || (lane == Lane::Worker && state.reservations > 0) {
+        if *state.busy(lane) || (lane == Lane::Main && state.reservations > 0) {
             return Err(None);
         }
         let entry = state.take_next(lane)?;
@@ -903,47 +910,47 @@ mod tests {
         let (sender, _) = std::sync::mpsc::channel();
         let line = JobLine::new();
         line.hold_place("slot", Vec::new());
-        line.submit(entry("after", Lane::Worker, &sender).0, None)
+        line.submit(entry("after", Lane::Main, &sender).0, None)
             .ok()
             .unwrap();
         // A held place holds up nothing behind it.
-        let first = line.next(Lane::Worker).await;
+        let first = line.next(Lane::Main).await;
         assert_eq!(id_of(&first), ("run", "after"));
         // The work a request became goes in its place, ahead of what came
         // after it; work prepared under the place's own id takes it.
-        line.submit(entry("b", Lane::Worker, &sender).0, Some("slot"))
+        line.submit(entry("b", Lane::Main, &sender).0, Some("slot"))
             .ok()
             .unwrap();
-        line.submit(entry("slot", Lane::Worker, &sender).0, None)
+        line.submit(entry("slot", Lane::Main, &sender).0, None)
             .ok()
             .unwrap();
-        line.submit(entry("c", Lane::Worker, &sender).0, None)
+        line.submit(entry("c", Lane::Main, &sender).0, None)
             .ok()
             .unwrap();
         assert_eq!(line.order(), ["b", "slot", "c"]);
         assert!(
-            line.submit(entry("c", Lane::Worker, &sender).0, None)
+            line.submit(entry("c", Lane::Main, &sender).0, None)
                 .is_err(),
             "already in line"
         );
         assert!(line.move_to("c", 0));
         assert_eq!(line.position("c"), Some(0));
-        assert!(line.worker_busy(), "the first entry holds the worker");
-        assert!(line.try_reserve_worker().is_none());
+        assert!(line.main_busy(), "the first entry holds the worker");
+        assert!(line.try_reserve_main().is_none());
         drop(first);
-        assert_eq!(id_of(&line.next(Lane::Worker).await), ("run", "c"));
+        assert_eq!(id_of(&line.next(Lane::Main).await), ("run", "c"));
     }
 
     #[tokio::test]
     async fn an_entry_stopped_while_it_waits_leaves_though_the_worker_is_busy() {
         let (sender, _) = std::sync::mpsc::channel();
         let line = JobLine::new();
-        let _busy = line.try_reserve_worker().unwrap();
-        let (waiting, stop) = entry("waits", Lane::Worker, &sender);
+        let _busy = line.try_reserve_main().unwrap();
+        let (waiting, stop) = entry("waits", Lane::Main, &sender);
         line.submit(waiting, None).ok().unwrap();
         stop.request();
         line.changed();
-        let dispatch = line.next(Lane::Worker).await;
+        let dispatch = line.next(Lane::Main).await;
         assert_eq!(id_of(&dispatch), ("stopped", "waits"));
         assert!(line.order().is_empty());
     }
@@ -952,7 +959,7 @@ mod tests {
     async fn a_reserved_turn_holds_the_worker_until_its_work_fills_it_or_it_runs_out() {
         let (sender, _) = std::sync::mpsc::channel();
         let line = Arc::new(JobLine::new());
-        line.submit(entry("waiting", Lane::Worker, &sender).0, None)
+        line.submit(entry("waiting", Lane::Main, &sender).0, None)
             .ok()
             .unwrap();
         // A turn kept for work about to join goes first, and holds the lane.
@@ -960,12 +967,12 @@ mod tests {
         assert_eq!(line.order(), ["kept", "waiting"]);
         let next = {
             let line = Arc::clone(&line);
-            tokio::spawn(async move { line.next(Lane::Worker).await })
+            tokio::spawn(async move { line.next(Lane::Main).await })
         };
         tokio::time::sleep(Duration::from_millis(30)).await;
         assert!(!next.is_finished(), "the kept turn holds the worker");
         // The work it was kept for joins at the back and takes the turn.
-        line.submit(entry("joined", Lane::Worker, &sender).0, None)
+        line.submit(entry("joined", Lane::Main, &sender).0, None)
             .ok()
             .unwrap();
         line.fill_reservation("kept", "joined");
@@ -976,7 +983,7 @@ mod tests {
         // first held anything up, and the line moves on.
         line.reserve_turn("lapses", Duration::from_millis(60), None);
         let started = Instant::now();
-        assert_eq!(id_of(&line.next(Lane::Worker).await), ("run", "waiting"));
+        assert_eq!(id_of(&line.next(Lane::Main).await), ("run", "waiting"));
         assert!(started.elapsed() >= Duration::from_millis(50));
         assert!(line.order().is_empty());
     }
@@ -986,7 +993,7 @@ mod tests {
         let (sender, _) = std::sync::mpsc::channel();
         let line = JobLine::new();
         for id in ["a", "theirs", "b"] {
-            line.submit(entry(id, Lane::Worker, &sender).0, None)
+            line.submit(entry(id, Lane::Main, &sender).0, None)
                 .ok()
                 .unwrap();
         }
@@ -1009,7 +1016,7 @@ mod tests {
         line.submit(
             Entry::new(
                 "build",
-                Lane::Worker,
+                Lane::Main,
                 queued.clone(),
                 Box::new(Probe(sender.clone(), "build".into())),
             ),
@@ -1024,7 +1031,7 @@ mod tests {
             .submit(
                 Entry::new(
                     "build",
-                    Lane::Worker,
+                    Lane::Main,
                     copy.clone(),
                     Box::new(Probe(sender, "build".into()))
                 ),
@@ -1058,14 +1065,14 @@ mod tests {
         line.submit(entry("quick", Lane::Quick, &sender).0, None)
             .ok()
             .unwrap();
-        line.submit(entry("worker", Lane::Worker, &sender).0, None)
+        line.submit(entry("worker", Lane::Main, &sender).0, None)
             .ok()
             .unwrap();
         assert_eq!(line.lane_of("quick"), Some(Lane::Quick));
         let running = line.next(Lane::Quick).await;
         assert_eq!(line.running_on(Lane::Quick).as_deref(), Some("quick"));
         assert_eq!(line.lane_of("quick"), Some(Lane::Quick));
-        assert_eq!(line.lane_of("worker"), Some(Lane::Worker));
+        assert_eq!(line.lane_of("worker"), Some(Lane::Main));
         drop(running);
         assert_eq!(line.lane_of("quick"), None);
         assert_eq!(line.running_on(Lane::Quick), None);
@@ -1079,7 +1086,7 @@ mod tests {
         line.hold_place("preparing", vec!["project".into()]);
         let building = Entry::new(
             "build",
-            Lane::Worker,
+            Lane::Main,
             Stop::new(),
             Box::new(Probe(sender.clone(), "build".into())),
         )
@@ -1101,7 +1108,7 @@ mod tests {
         };
         line.release_place("preparing");
         // The queued build holds its key, and holds it while it runs.
-        let running = line.next(Lane::Worker).await;
+        let running = line.next(Lane::Main).await;
         tokio::time::sleep(Duration::from_millis(20)).await;
         assert!(!waiting.is_finished());
         drop(running);
@@ -1113,7 +1120,7 @@ mod tests {
     async fn the_quick_lane_runs_beside_the_worker_in_the_order_joined() {
         let (sender, _) = std::sync::mpsc::channel();
         let line = Arc::new(JobLine::new());
-        let _worker = line.try_reserve_worker().unwrap();
+        let _worker = line.try_reserve_main().unwrap();
         for id in ["one", "two"] {
             line.submit(entry(id, Lane::Quick, &sender).0, None)
                 .ok()
@@ -1137,13 +1144,13 @@ mod tests {
     async fn a_reservation_waiting_for_the_worker_goes_before_the_line() {
         let (sender, _) = std::sync::mpsc::channel();
         let line = Arc::new(JobLine::new());
-        let busy = line.try_reserve_worker().unwrap();
-        line.submit(entry("queued", Lane::Worker, &sender).0, None)
+        let busy = line.try_reserve_main().unwrap();
+        line.submit(entry("queued", Lane::Main, &sender).0, None)
             .ok()
             .unwrap();
         let reserving = {
             let line = Arc::clone(&line);
-            tokio::spawn(async move { line.reserve_worker().await })
+            tokio::spawn(async move { line.reserve_main().await })
         };
         tokio::time::sleep(Duration::from_millis(20)).await;
         drop(busy);
@@ -1154,7 +1161,7 @@ mod tests {
             "the line waits for the reservation"
         );
         drop(reserved);
-        assert_eq!(id_of(&line.next(Lane::Worker).await), ("run", "queued"));
+        assert_eq!(id_of(&line.next(Lane::Main).await), ("run", "queued"));
     }
 
     #[test]
@@ -1163,7 +1170,7 @@ mod tests {
         let line = JobLine::new();
         line.hold_place("gone", Vec::new());
         line.hold_place("taken", Vec::new());
-        line.submit(entry("taken", Lane::Worker, &sender).0, None)
+        line.submit(entry("taken", Lane::Main, &sender).0, None)
             .ok()
             .unwrap();
         line.release_place("gone");

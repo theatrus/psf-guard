@@ -43,7 +43,7 @@ The stack line:
   it. The work it becomes takes the place, or goes just before it.
 - **Reserved turns.** `reserve_turn` keeps the next turn on the worker for
   work about to join, such as a person's re-apply after the build it
-  follows. The reservation blocks the worker lane only for the time it was
+  follows. The reservation blocks the main lane only for the time it was
   given, counted from when it first blocks anything; the work that fills it
   takes its place.
 - **Keys.** Places and entries hold keys, and an entry can be
@@ -67,6 +67,14 @@ The stack line:
   line, its lanes and how each entry runs (its priority, and whether
   background work pauses for it). `JobLine::ensure_dispatching` starts the
   lanes' dispatchers when work first joins.
+- **The line tracks each job.** From its request until it ends, a job has
+  a stop flag and, when the journal keeps it, a journal record stored as
+  JSON (`track`, `set_journal`, `journals`). A build is tracked while it is
+  prepared, before it has an entry, and while its results are published,
+  after its entry has left. The manager keeps only its build records.
+- **Two lanes per line.** `Main` is the ordered lane a person can reorder:
+  the stacking worker for the stack line, PixInsight for the WBPP line.
+  `Quick` runs short work beside it in the order it joined.
 - **Nothing hands out a bare `Arc`.** Stop flags are `concurrency::Stop`;
   an answer to whoever awaits a piece of work is a `job_line::Reply`, staged
   while the work's last steps run and delivered after them; the line's
@@ -83,7 +91,9 @@ queued, holding the lane's lease until the run ends; otherwise it joins
 the line, and the line's dispatcher starts it. A database's queued runs
 are blocked by its key while it copies masters, so runs of other databases
 go first. PixInsight runs as its own process, so a WBPP run does not pause
-background work.
+background work. Each queued run's details are its tracked journal
+record, so the line holds both the order of the queue and what each run
+is.
 
 The per-catalog jobs (`job_line::catalog`) are described under
 [Per-catalog jobs](#per-catalog-jobs).
@@ -421,7 +431,7 @@ work never comes. Step 4 depends on step 2.
   new frames are stacked?
 - Should a person's entry move ahead of automatic entries when it joins the
   line, rather than relying on the interruption alone?
-- Should `Quick` stay a lane, or become a rule the worker lane applies,
+- Should `Quick` stay a lane, or become a rule the main lane applies,
   "may run beside the current entry"?
 - Should the in-process worker go through the same lease and message path as
   a remote one, at a small cost, so the remote path is tested every day?
