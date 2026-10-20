@@ -27,7 +27,7 @@ These files explain contracts that span several modules or still have planned
 work. Historical checklists record delivery; they do not track current work.
 
 - [Background jobs and priority](design/background-jobs.md)
-- [One job line (proposed)](design/job-line.md)
+- [Job queues and proposed remote workers](design/job-line.md)
 - [Data transfer and remote sync](design/data-transfer.md)
 - [Multi-database architecture](design/multi-database.md)
 - [Director: goal-driven acquisition and phased plan](design/director.md)

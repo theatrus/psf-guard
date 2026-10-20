@@ -72,7 +72,7 @@
       },
       {
         "title": "Follow and stop background work",
-        "body": "The job list separates work you start from automatic work and shows queue positions and progress. Move to top makes a queued stack, processing or WBPP task run next. Stop processing, flat measuring or reject moves, follow each WBPP file copy, and resume processing after a restart."
+        "body": "The jobs list shows progress for previews, imports, exports, calibration checks and catalog upkeep as well as stacks. Stop an import to roll it back, or stop an export and keep completed files. Quality scans you start queue behind the current scan and run before database-wide analysis. Builds you start pause automatic builds, which resume from their checkpoints."
       },
       {
         "title": "Clearer help and status messages",
@@ -92,11 +92,23 @@
       },
       {
         "title": "Start stack builds without waiting for preparation",
-        "body": "Build stacks, Build current set and Build on a channel card appear immediately as Preparing stack build. PSF Guard prepares the frames in the background and then queues one build per channel. You can stop preparation before channel builds are queued. If the server restarts during preparation, start the build again. Calibration checks and exports also start sooner by reading the library once per request."
+        "body": "Build stacks, Build current set and Build on a channel card appear immediately as Preparing stack build. PSF Guard prepares the frames in the background and then queues one build per channel. You can stop preparation before channel builds are queued. Requests keep their queue position after a restart, including during preparation. Calibration checks and exports also start sooner by reading the library once per request."
       },
       {
         "title": "Process each channel after its build",
-        "body": "With Re-apply processing when a stack refreshes on, each channel’s saved processing runs after a build you start or take over, ahead of your other queued builds. Processing after automatic refreshes still waits for other work. Card previews refreshed after an engine update appear as soon as the refresh finishes."
+        "body": "With Re-apply processing when a stack refreshes on, each channel’s saved processing runs after a build you start or take over, ahead of your other queued builds. Processing after automatic refreshes waits behind your work and builds of the same target. Card previews refreshed after an engine update appear as soon as the refresh finishes."
+      },
+      {
+        "title": "Stack frames at different rotator angles",
+        "body": "Chosen by Seiza selects a reference from the largest orientation group, so a small group does not cause most frames to fail the rotation check. Adjust Orientation group margin in Settings → Stacking. If grading leaves fewer than two usable frames, the channel’s old stack is removed from its card and color source choices."
+      },
+      {
+        "title": "Queue color before channels finish",
+        "body": "Start a color preview while its channels are preparing or building. It waits for them, uses their new stacks and survives a server restart. Queued builds and color previews read the latest frames, grades and calibration when they start."
+      },
+      {
+        "title": "Change a transfer preview while it runs",
+        "body": "In Data Transfer and Remote PSF Guard, changing options stops the current preview. Preview the new choices immediately. A newer sync, import or export preview replaces one still running."
       }
     ]
   },
