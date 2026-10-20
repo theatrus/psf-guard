@@ -585,7 +585,12 @@ async fn the_newest_import_request_replaces_a_preview_and_stop_rolls_back() {
     let progress = wait_for_import(&state, &slug).await;
     assert_eq!(progress["stage"], "error", "{progress}");
     assert_eq!(progress["preview"], false);
-    assert!(progress["error"].as_str().unwrap().contains("stopped"));
+    // Stop reaches the run queued or under way, depending on whether its
+    // runner has taken it; both messages say the import stopped.
+    assert!(
+        progress["error"].as_str().unwrap().contains("stopped"),
+        "{progress}"
+    );
     let conn = rusqlite::Connection::open(&db_path).unwrap();
     let rows: i64 = conn
         .query_row("SELECT COUNT(*) FROM acquiredimage", [], |row| row.get(0))

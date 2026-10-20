@@ -273,7 +273,11 @@ pub fn stop(state: &AppState, ctx: &DatabaseContext) -> bool {
             job.stop(|queue| {
                 // A run its runner has not taken yet never starts.
                 if let Some(run) = queue.pending.take() {
-                    finish(&run.ctx.import_job, run.claim, Some("Stopped.".into()));
+                    finish(
+                        &run.ctx.import_job,
+                        run.claim,
+                        Some("The import stopped before it started.".into()),
+                    );
                 }
             });
             true

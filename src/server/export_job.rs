@@ -171,7 +171,10 @@ pub fn stop(state: &AppState, ctx: &DatabaseContext) -> bool {
             job.stop(|queue| {
                 // An export its runner has not taken yet never starts.
                 if let Some(run) = queue.pending.take() {
-                    finish(&run.ctx.export_job, Some("Stopped.".into()));
+                    finish(
+                        &run.ctx.export_job,
+                        Some("The export stopped before it started.".into()),
+                    );
                 }
             });
             true
