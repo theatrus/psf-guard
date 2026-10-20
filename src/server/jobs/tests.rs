@@ -1012,6 +1012,7 @@ fn a_preview_is_a_persons_work_that_stop_ends() {
         databases: vec![db("db-1", "Home")],
         previews: vec![crate::server::previews::PreviewRun {
             kind: crate::server::previews::PreviewKind::Sync,
+            key: "db-1".into(),
             db_id: "db-1".into(),
             label: "Previewing a pull from Rig".into(),
             started_at: 1800,
@@ -1027,7 +1028,7 @@ fn a_preview_is_a_persons_work_that_stop_ends() {
     assert!(!row.background && row.stoppable);
     assert_eq!(
         serde_json::to_value(row.control.unwrap()).unwrap(),
-        serde_json::json!({"kind": "preview", "preview": "sync", "db_id": "db-1"})
+        serde_json::json!({"kind": "preview", "preview": "sync", "key": "db-1"})
     );
 }
 

@@ -1330,6 +1330,7 @@ pub fn main() -> Result<()> {
                     reviewed_only: !all_grades,
                     dry_run,
                     with_image_data: !no_image_data,
+                    stop: crate::concurrency::Stop::new(),
                 }))?;
                 print_remote_summary(&outcome.summary);
                 println!(

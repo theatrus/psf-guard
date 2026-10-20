@@ -1337,9 +1337,9 @@ export const apiClient = {
 
   /** Stop a preview under way. The request that started it fails with a
    *  conflict. */
-  stopPreview: async (preview: import('./types').PreviewKind, dbId: string): Promise<void> => {
+  stopPreview: async (preview: import('./types').PreviewKind, key: string): Promise<void> => {
     const api = await getApi();
-    await api.post(`/previews/${preview}/${encodeURIComponent(dbId)}/stop`);
+    await api.post(`/previews/${preview}/${encodeURIComponent(key)}/stop`);
   },
 
   stopTsSync: async (id: string): Promise<void> => {

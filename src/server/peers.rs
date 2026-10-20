@@ -225,6 +225,13 @@ pub async fn check_peer(
 ///
 /// Defaults are the cautious ones — dry run, reviewed grades only — so an
 /// omitted field can never write more than the caller asked for.
+/// Resolves once `stop` is set, looking every tenth of a second.
+async fn stopped(stop: &crate::concurrency::Stop) {
+    while !stop.requested() {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+}
+
 pub async fn sync_with_peer(
     State(state): State<Arc<AppState>>,
     Path(db_id): Path<String>,
@@ -242,6 +249,21 @@ pub async fn sync_with_peer(
             )))
         }
     };
+    // A dry run is the page's preview: a newer one from the same database
+    // stops it. A sync that writes is a person's work.
+    let preview = request.dry_run.then(|| {
+        state.previews.peer_sync.start(
+            &state,
+            context.id.clone(),
+            format!("Previewing a sync with {}", peer.name),
+        )
+    });
+    let _person = (!request.dry_run)
+        .then(|| state.begin_named_interactive_job(format!("a sync with {}", peer.name)));
+    let stop = preview
+        .as_ref()
+        .map(|run| run.stop().clone())
+        .unwrap_or_default();
     // One write at a time, the same lock the local applies take, so a remote
     // pull cannot land in the middle of one.
     let _guard = if request.dry_run {
@@ -260,7 +282,7 @@ pub async fn sync_with_peer(
     } else {
         None
     };
-    let outcome = sync_remote(RemoteSyncOptions {
+    let sync = sync_remote(RemoteSyncOptions {
         direction,
         local_path: std::path::PathBuf::from(&context.database_path),
         local_id: context.id.clone(),
@@ -270,9 +292,24 @@ pub async fn sync_with_peer(
         reviewed_only: request.reviewed_only,
         dry_run: request.dry_run,
         with_image_data: request.with_image_data,
-    })
-    .await
-    .map_err(|error| AppError::BadRequest(format!("{error:#}")))?;
+        stop: stop.clone(),
+    });
+    // A stopped preview drops its request to the peer; its local merge sees
+    // the stop through SQLite.
+    let outcome = tokio::select! {
+        outcome = sync => outcome.map_err(|error| AppError::BadRequest(format!("{error:#}"))),
+        () = stopped(&stop) => Err(AppError::Conflict(
+            "This sync preview was stopped before it finished.".into(),
+        )),
+    };
+    if let Some(run) = &preview
+        && !run.is_latest()
+    {
+        return Err(AppError::Conflict(
+            "A newer preview of this sync replaced this one.".into(),
+        ));
+    }
+    let outcome = outcome?;
 
     if !request.dry_run && direction == RemoteDirection::Pull {
         // A pull just wrote rows this database serves; drop the caches built

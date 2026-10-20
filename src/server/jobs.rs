@@ -124,7 +124,7 @@ pub enum RowControl {
     TsSync { job_id: String },
     WbppRunning { db_id: String },
     WbppQueued { db_id: String, queue_id: String },
-    Preview { preview: PreviewKind, db_id: String },
+    Preview { preview: PreviewKind, key: String },
     Import { db_id: String },
     Export { db_id: String },
 }
@@ -1418,12 +1418,12 @@ fn preview_row(run: &PreviewRun, names: &HashMap<&str, &str>) -> JobRow {
     JobRow {
         control: Some(RowControl::Preview {
             preview: run.kind,
-            db_id: run.db_id.clone(),
+            key: run.key.clone(),
         }),
         stoppable: true,
         started_at: Some(run.started_at),
         ..JobRow::new(
-            format!("preview:{:?}:{}", run.kind, run.db_id),
+            format!("preview:{:?}:{}", run.kind, run.key),
             RowKind::Preview,
             run.label.clone(),
             names.get(run.db_id.as_str()).copied().unwrap_or(&run.db_id),

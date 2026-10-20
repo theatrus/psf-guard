@@ -12,7 +12,7 @@ export type ActivityControl =
   | { kind: 'ts-sync'; jobId: string }
   | { kind: 'wbpp-running'; dbId: string }
   | { kind: 'wbpp-queued'; dbId: string; queueId: string }
-  | { kind: 'preview'; preview: PreviewKind; dbId: string }
+  | { kind: 'preview'; preview: PreviewKind; key: string }
   | { kind: 'import'; dbId: string }
   | { kind: 'export'; dbId: string };
 
@@ -98,7 +98,7 @@ function controlOf(control: JobControl): ActivityControl {
     case 'wbpp-queued':
       return { kind: 'wbpp-queued', dbId: control.db_id, queueId: control.queue_id };
     case 'preview':
-      return { kind: 'preview', preview: control.preview, dbId: control.db_id };
+      return { kind: 'preview', preview: control.preview, key: control.key };
     default:
       return { kind: control.kind, dbId: control.db_id };
   }

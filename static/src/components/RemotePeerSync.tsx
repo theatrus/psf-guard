@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { apiClient } from '../api/client';
 import type { PeerCheck, RemoteSyncDirection, RemoteSyncResult } from '../api/types';
 import type { DbEntry } from '../utils/tauri';
@@ -62,10 +62,21 @@ export default function RemotePeerSync({ databases, disabled }: RemotePeerSyncPr
     databases.find((database) => database.id === localDbId) ?? databases[0];
   const busy = disabled || peers.isLoading;
 
-  /** Any change to what would be sent invalidates a preview taken before it. */
+  /** Counts sync requests, so a replaced preview's reply is ignored. */
+  const latestRun = useRef(0);
+  /** The database whose preview runs now, if one does. */
+  const previewing = useRef<string | null>(null);
+
+  /** Any change to what would be sent invalidates a preview taken before it,
+   *  and stops one still running. */
   const invalidatePreview = () => {
     setPreview(null);
     setMessage('');
+    if (previewing.current !== null) {
+      latestRun.current += 1;
+      void apiClient.stopPreview('peer_sync', previewing.current).catch(() => undefined);
+      previewing.current = null;
+    }
   };
 
   const addPeer = useMutation({
@@ -114,15 +125,22 @@ export default function RemotePeerSync({ databases, disabled }: RemotePeerSyncPr
   });
 
   const run = useMutation({
-    mutationFn: ({ dryRun }: { dryRun: boolean }) =>
-      apiClient.syncWithPeer(selectedDb!.id, {
+    mutationFn: ({ dryRun }: { dryRun: boolean; request: number }) => {
+      previewing.current = dryRun ? selectedDb!.id : null;
+      return apiClient.syncWithPeer(selectedDb!.id, {
         peer_id: selectedPeer!.id,
         direction,
         dry_run: dryRun,
         reviewed_only: !allGrades,
         with_image_data: true,
-      }),
-    onSuccess: (result) => {
+      });
+    },
+    onSettled: (_result, _error, { request }) => {
+      if (request === latestRun.current) previewing.current = null;
+    },
+    onSuccess: (result, { request }) => {
+      // A newer request replaced this one.
+      if (request !== latestRun.current) return;
       if (result.applied) {
         setPreview(null);
         setMessage(`Applied: ${summaryLine(result.summary)}.`);
@@ -133,12 +151,15 @@ export default function RemotePeerSync({ databases, disabled }: RemotePeerSyncPr
         setMessage('');
       }
     },
-    onError: (error: Error) => {
+    onError: (error: Error, { request }) => {
+      if (request !== latestRun.current) return;
       // A refused apply wrote nothing on either side; keep the preview so the
       // operator can read what it said and decide.
       setMessage(`Sync failed: ${error.message}`);
     },
   });
+  const startRun = (dryRun: boolean) => run.mutate({ dryRun, request: ++latestRun.current });
+  const applying = run.isPending && run.variables?.dryRun === false;
 
   if (databases.length === 0) {
     return (
@@ -322,8 +343,8 @@ export default function RemotePeerSync({ databases, disabled }: RemotePeerSyncPr
       <div className="remote-peer-run">
         <button
           type="button"
-          onClick={() => run.mutate({ dryRun: true })}
-          disabled={busy || !selectedPeer || !selectedDb || run.isPending}
+          onClick={() => startRun(true)}
+          disabled={busy || !selectedPeer || !selectedDb || applying}
         >
           {run.isPending ? 'Working…' : 'Preview changes'}
         </button>
@@ -331,7 +352,7 @@ export default function RemotePeerSync({ databases, disabled }: RemotePeerSyncPr
           <button
             type="button"
             className="save-button"
-            onClick={() => run.mutate({ dryRun: false })}
+            onClick={() => startRun(false)}
             disabled={run.isPending}
           >
             Apply this preview

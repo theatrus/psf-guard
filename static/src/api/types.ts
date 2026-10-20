@@ -2047,13 +2047,13 @@ export type JobControl =
   | { kind: 'ts-sync'; job_id: string }
   | { kind: 'wbpp-running'; db_id: string }
   | { kind: 'wbpp-queued'; db_id: string; queue_id: string }
-  | { kind: 'preview'; preview: PreviewKind; db_id: string }
+  | { kind: 'preview'; preview: PreviewKind; key: string }
   | { kind: 'import'; db_id: string }
   | { kind: 'export'; db_id: string };
 
 /** What a preview previews. Mirrors `PreviewKind` in
  *  `src/server/previews.rs`. */
-export type PreviewKind = 'sync' | 'import' | 'export';
+export type PreviewKind = 'sync' | 'import' | 'export' | 'peer_sync' | 'incoming';
 
 /** The view that shows what a job works on: `/{view}?db=…&project=…&target=…`,
  *  then `params` in order. */

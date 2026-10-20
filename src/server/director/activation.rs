@@ -1506,6 +1506,7 @@ pub(super) async fn send_planning(context: &DatabaseContext, peer: &PeerEntry) -
         reviewed_only: true,
         dry_run: false,
         with_image_data: false,
+        stop: crate::concurrency::Stop::new(),
     })
     .await
     {

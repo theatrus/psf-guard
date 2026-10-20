@@ -40,6 +40,38 @@ function withPeers(peers: unknown[]) {
 }
 
 describe('RemotePeerSync', () => {
+  it('stops a preview whose direction changed and ignores its late reply', async () => {
+    withPeers([peer]);
+    let answer: (() => void) | undefined;
+    const stops: string[] = [];
+    server.use(
+      http.post('/api/databases/local/sync/remote', async () => {
+        await new Promise<void>((resolve) => {
+          answer = resolve;
+        });
+        return HttpResponse.json(
+          { success: false, error: 'This sync preview was stopped before it finished.' },
+          { status: 409 }
+        );
+      }),
+      http.post('/api/previews/peer_sync/local/stop', ({ request }) => {
+        stops.push(new URL(request.url).pathname);
+        return HttpResponse.json({ success: true, data: true, error: null, status: 'ok' });
+      })
+    );
+
+    const user = userEvent.setup();
+    render(<RemotePeerSync databases={[local]} />, { wrapper: wrapper() });
+    await user.click(await screen.findByRole('button', { name: 'Preview changes' }));
+    expect(await screen.findByRole('button', { name: 'Working…' })).toBeEnabled();
+    await user.click(screen.getByRole('button', { name: 'Send planning' }));
+    await waitFor(() => expect(stops).toEqual(['/api/previews/peer_sync/local/stop']));
+
+    answer?.();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(screen.queryByText(/Sync failed/)).not.toBeInTheDocument();
+  });
+
   it('previews before it offers to apply', async () => {
     withPeers([peer]);
     let applied = false;
