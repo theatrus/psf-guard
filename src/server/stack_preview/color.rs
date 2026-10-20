@@ -1160,7 +1160,7 @@ pub(super) fn start_prepared_color(
     );
     // Real work is queued. A composition in the quick lane runs beside the
     // builds; one in the line takes the worker, so automatic work yields.
-    if !enqueue_color_job(Arc::clone(state), prepared, origin, placement.slot) && person {
+    if !enqueue_color_job(Arc::clone(state), prepared, request, origin, placement.slot) && person {
         super::interrupt_automatic(state);
     }
     Ok(response)
@@ -2074,6 +2074,7 @@ fn composition_label(
 pub(super) fn enqueue_color_job(
     state: Arc<AppState>,
     prepared: PreparedColorJob,
+    request: &StackColorRequest,
     origin: super::journal::JournaledStackJob,
     slot: Option<&str>,
 ) -> bool {
@@ -2091,9 +2092,15 @@ pub(super) fn enqueue_color_job(
         prepared.public.project_id, prepared.public.database_id
     ));
     let (failed_job, stopped_job) = (job_id.clone(), job_id.clone());
+    let spec = ColorRequest {
+        job_id: job_id.clone(),
+        database_id: prepared.public.database_id.clone(),
+        project_id: prepared.public.project_id,
+        request: request.clone(),
+    };
     let submission = super::Submission::<ColorWork>::new(
         "a color composition",
-        &prepared,
+        &spec,
         move |state, composed| {
             if let Err(error) = composed {
                 state.stack_previews.update_color(&failed_job, |job| {
@@ -2160,15 +2167,87 @@ pub(super) fn enqueue_color_job(
 struct ColorWork;
 
 impl super::LineWork for ColorWork {
-    type Spec = PreparedColorJob;
+    type Spec = ColorRequest;
     type Output = ();
-    /// It reads the channel stacks from this server's stack cache, records
-    /// its progress on the composition, and writes the color index itself.
+    /// It reads this server's catalog to prepare the composition at its
+    /// turn, reads the channel stacks from the stack cache, records its
+    /// progress on the composition, and writes the color index itself.
     const NEEDS: super::Needs = super::Needs::ThisServer;
 
-    fn execute(spec: PreparedColorJob, worker: &super::Worker<'_>) {
-        run_color_job(worker.server(), spec, worker.stop_flag().clone());
+    fn execute(spec: ColorRequest, worker: &super::Worker<'_>) {
+        let state = worker.server();
+        if let Some(prepared) = prepare_color_at_turn(&spec, state) {
+            run_color_job(state, prepared, worker.stop_flag().clone());
+        }
     }
+}
+
+/// A composition in the line: its request, prepared at its turn.
+#[derive(Serialize, Deserialize)]
+struct ColorRequest {
+    /// The id the composition was listed under when it was previewed.
+    job_id: String,
+    database_id: String,
+    project_id: i32,
+    request: StackColorRequest,
+}
+
+/// Prepare a composition again from its request, from the channel stacks
+/// as they are now. Returns the prepared composition when it is the one
+/// that was previewed. When its sources changed while it waited, the
+/// request becomes another composition: that one is queued, or a matching
+/// finished one is reused, and the previewed record points to it. A
+/// composition that cannot be prepared fails with the reason.
+fn prepare_color_at_turn(spec: &ColorRequest, state: &Arc<AppState>) -> Option<PreparedColorJob> {
+    let fail = |error: String| {
+        state.stack_previews.update_color(&spec.job_id, |job| {
+            job.state = StackJobState::Failed;
+            job.phase = "Could not be prepared".into();
+            job.error = Some(error);
+        });
+    };
+    let Some(ctx) = state.get_database(&spec.database_id) else {
+        fail("The database was removed while the composition waited".into());
+        return None;
+    };
+    let prepared = match prepare_color_job(&ctx, &state.astrometry, spec.project_id, &spec.request)
+    {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            fail(error.message());
+            return None;
+        }
+    };
+    if prepared.public.job_id == spec.job_id {
+        return Some(prepared);
+    }
+    let placement = super::build_set::Placement {
+        automatic: state.stack_previews.is_automatic(&spec.job_id),
+        slot: None,
+    };
+    match start_prepared_color(
+        state,
+        &ctx,
+        spec.project_id,
+        &spec.request,
+        prepared,
+        placement,
+    ) {
+        Ok(became) => {
+            tracing::info!(
+                job_id = spec.job_id,
+                became = became.job_id,
+                "A queued composition's sources changed while it waited; it runs as a new composition"
+            );
+            state.stack_previews.update_color(&spec.job_id, |job| {
+                job.state = StackJobState::Replaced;
+                job.replaced_by = vec![became.job_id.clone()];
+                job.phase = "Queued".into();
+            });
+        }
+        Err(error) => fail(error.message()),
+    }
+    None
 }
 
 /// The error a composition ends with when it is stopped, read back so the
@@ -5145,6 +5224,34 @@ mod tests {
         assert!(takes_quick_lane(&state, &quick));
     }
 
+    #[test]
+    fn a_composition_that_cannot_be_prepared_at_its_turn_fails_with_why() {
+        let cache = tempfile::tempdir().unwrap();
+        let state = Arc::new(AppState::new_for_test(
+            rusqlite::Connection::open_in_memory().unwrap(),
+        ));
+        let previewed = prepared_color(cache.path(), &"e".repeat(64), false, false, None);
+        assert!(state.stack_previews.insert_color(previewed.public.clone()));
+        let spec = ColorRequest {
+            job_id: previewed.public.job_id.clone(),
+            database_id: "removed".into(),
+            project_id: previewed.public.project_id,
+            request: test_request(),
+        };
+        assert!(prepare_color_at_turn(&spec, &state).is_none());
+        let job = state.stack_previews.get_color(&spec.job_id).unwrap();
+        assert_eq!(job.state, StackJobState::Failed);
+        assert_eq!(job.phase, "Could not be prepared");
+        assert_eq!(
+            job.error.as_deref(),
+            Some("The database was removed while the composition waited")
+        );
+    }
+
+    fn test_request() -> StackColorRequest {
+        serde_json::from_value(serde_json::json!({"target_id": 1, "kind": "rgb"})).unwrap()
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_composition_stopped_while_it_waits_for_the_quick_lane_ends_there() {
         let cache = tempfile::tempdir().unwrap();
@@ -5157,7 +5264,13 @@ mod tests {
         let job_id = waiting.public.job_id.clone();
         assert!(state.stack_previews.insert_color(waiting.public.clone()));
         let origin = super::super::processing_queue::test_origin("waiting");
-        assert!(enqueue_color_job(Arc::clone(&state), waiting, origin, None));
+        assert!(enqueue_color_job(
+            Arc::clone(&state),
+            waiting,
+            &test_request(),
+            origin,
+            None
+        ));
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         assert_eq!(
             state.stack_previews.get_color(&job_id).unwrap().state,
@@ -5190,8 +5303,20 @@ mod tests {
             assert!(state.stack_previews.insert_color(prepared.public.clone()));
         }
         let origin = |id: &str| super::super::processing_queue::test_origin(id);
-        enqueue_color_job(Arc::clone(&state), quick, origin("quick"), None);
-        enqueue_color_job(Arc::clone(&state), slow, origin("slow"), None);
+        enqueue_color_job(
+            Arc::clone(&state),
+            quick,
+            &test_request(),
+            origin("quick"),
+            None,
+        );
+        enqueue_color_job(
+            Arc::clone(&state),
+            slow,
+            &test_request(),
+            origin("slow"),
+            None,
+        );
         // The quick one starts at once. Its database is not configured, so it
         // ends there; what matters is that it did not wait for the build.
         let quick_id = "a".repeat(64);

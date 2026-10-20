@@ -1398,7 +1398,7 @@ fn enqueue_color_after(
         Some(&prepared.public.job_id),
         automatic,
     );
-    color::enqueue_color_job(Arc::clone(state), prepared, origin, None);
+    color::enqueue_color_job(Arc::clone(state), prepared, request, origin, None);
 }
 
 #[cfg(test)]

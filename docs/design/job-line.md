@@ -254,9 +254,10 @@ and prepared again at its turn:
   content id, and the preview's record points to it (`replaced_by`), as a
   record being prepared does now. A matching completed build is reused, as
   now.
-- **A color composition** joins blocked by its target's channel keys and
-  is prepared at its turn, from the stacks its channels made. The separate
-  wait task and the second trip through the preparation runner go away.
+- **A color composition** waits in the quick lane, blocked by its
+  target's channel keys, while its channels build. It is then previewed,
+  which picks its lane, and prepared again at its turn from the stacks
+  its channels made.
 
 A spec is then never older than the turn it runs in. Its cost is a second
 read of the catalog, which happens while the lane is held.
