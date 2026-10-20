@@ -152,31 +152,48 @@ paused, waits. Scan errors keep their own note above the list.
 
 ## A minimal job
 
-Modelled on `src/server/flat_measure.rs`.
+A job with one runner per catalog implements `CatalogWork`
+(`src/server/job_line/catalog.rs`) and stores its jobs in a
+`CatalogJobs`. Modelled on `src/server/flat_measure.rs`:
 
 ```rust
-#[derive(Default)]
-struct Job {
-    queue: Mutex<Queue>,            // merged requests, retries, what Stop paused
-    status: RwLock<MyJobStatus>,    // what the status route answers
-    cancelled: AtomicBool,
+pub(crate) struct MyJob;
+
+impl CatalogWork for MyJob {
+    type Queue = Queue;             // merged requests, retries, what Stop paused
+    type Status = MyJobStatus;      // what the status route answers
+    type Item = Scope;              // one pass
+    const RUNNER: &'static str = "my-job";
+    const SHUTDOWN_WAITS_FOR: Option<&'static str> = Some("my job");
+
+    fn next(_: &AppState, _: &str, queue: &mut Queue, now: Instant) -> Step<Scope> {
+        queue.take_due(now)         // Step::Run, Step::Sleep or Step::Exit
+    }
+
+    fn run(state: &Arc<AppState>, path: &str, job: &CatalogJob<Self>, scope: Scope, stop: &Stop) {
+        for frame in frames(path, &scope) {
+            if stop.requested() || state.shutdown.is_stopping() {
+                break;
+            }
+            step(state, job, &frame, Priority::Background);
+        }
+    }
+
+    fn runner_failed(queue: &mut Queue, status: &mut MyJobStatus) {
+        status.last_error = Some("my job stopped unexpectedly".into());
+    }
 }
-static JOBS: LazyLock<Mutex<HashMap<String, Arc<Job>>>> = LazyLock::new(Default::default);
+
+static JOBS: CatalogJobs<MyJob> = CatalogJobs::new();
 
 /// Called by a trigger (an import, a sync, a setting). Never does the work.
 pub fn queue(state: &Arc<AppState>, path: &str, scope: Scope) {
-    let job = job(path);
-    let mut queue = job.queue.lock().unwrap();
-    queue.pending.merge(scope);
-    if std::mem::replace(&mut queue.worker, true) {
-        return; // the runner serves this catalog already; it sees the merge
-    }
-    let (state, path) = (Arc::clone(state), path.to_string());
-    // The job's one runner. Its claim resets on a panic (`RunnerClaim`).
-    std::thread::spawn(move || serve(&state, &path, &job));
+    // Starts the catalog's runner thread unless one exists; a running one
+    // reads the merged scope at its next step.
+    JOBS.request(state, path, |queue| queue.merge(scope));
 }
 
-fn step(state: &AppState, job: &Job, frame: &Frame, priority: Priority) -> anyhow::Result<()> {
+fn step(state: &AppState, job: &CatalogJob<MyJob>, frame: &Frame, priority: Priority) {
     // The one yield point: a person's work first, and the job line shows
     // this job as waiting meanwhile.
     state.wait_for_interactive_work(POLL, |waiting_for| {
@@ -185,11 +202,16 @@ fn step(state: &AppState, job: &Job, frame: &Frame, priority: Priority) -> anyho
     // Leased for this step alone.
     let budget = concurrency::plan_workers(None, &state.worker_policy(), priority, Some(pixels));
     let lease = state.lease_workers(priority, budget.workers);
-    let pool = ComputePool::take("my-job", lease.workers)?;
-    pool.install(|| measure(frame));
-    Ok(())
+    if let Ok(pool) = ComputePool::take("my-job", lease.workers) {
+        pool.install(|| measure(frame));
+    }
 }
 ```
+
+`CatalogJobs` resets the runner state when the thread panics or cannot
+start, gives each item a fresh `Stop` that `CatalogJob::stop_running`
+requests, and makes shutdown wait for an item only when
+`SHUTDOWN_WAITS_FOR` is set.
 
 Then:
 
@@ -237,10 +259,12 @@ Then:
   rather than pausing it: the schedule tries again at its next time.
 - Calibration grading (`calibration_quality.rs`) is a Background runner per
   catalog with a status route, but it has no row in the job line yet.
-- Calibration health (`calibration_health.rs`), quality backfill and scans
-  (`spatial_scan.rs`), preview pre-generation (`preview_queue.rs`), stack
-  builds (`stack_preview.rs`) and WBPP runs (`wbpp_queue.rs`) predate this
-  record; check each before copying its shape.
-
-[One job line (proposed)](job-line.md) proposes a shared runner for these
-jobs and a single line for stack and WBPP work.
+- Calibration health (`calibration_health.rs`) runs on `CatalogJobs` like
+  grading, without a row in the job line.
+- Flat measuring, frame sites, the duplicate check, reject removal,
+  calibration grading and calibration health all run on `CatalogJobs`.
+- Quality backfill and scans (`spatial_scan.rs`) and preview pre-generation
+  (`preview_queue.rs`) predate this record; check each before copying its
+  shape.
+- Stack builds and WBPP runs wait in job lines rather than per-catalog
+  queues; see [One job line](job-line.md).

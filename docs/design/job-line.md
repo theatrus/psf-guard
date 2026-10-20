@@ -1,8 +1,7 @@
 # One job line
 
-Status: **Steps 1 to 6 built**: the stack line, the per-catalog jobs and the
-WBPP line. The header route (step 7) is in progress; remote work is
-proposed.
+Status: **Steps 1 to 7 built**: the stack line, the per-catalog jobs, the
+WBPP line and the header's jobs route. Remote work is proposed.
 Last updated: 2026-10-19
 
 This record proposes one shared shape for the server's queued work. It
@@ -383,10 +382,14 @@ own module.
 
 ## The header
 
-Later, one route lists every running and queued job as uniform rows: ID,
-kind, tier, state, scope, detail, progress, place in line, what it waits
-for, and the controls it offers. The eleven row builders become one. This
-is the largest frontend change, so it comes last and is optional.
+`GET /api/jobs` (`src/server/jobs.rs`) lists every running, queued and
+waiting job as uniform rows: key, kind, title, scope, detail, status, tier,
+progress, place in line, what the job waits for, the controls it offers,
+and a structured link to the view that shows it. The server builds the
+rows from the same in-memory state the per-job status routes read, and
+sorts them. The header reads this one route instead of a query per job
+kind and database, and maps each row with one function (`jobItem`). See
+[Background jobs](background-jobs.md#the-jobs-route).
 
 ## Migration
 
@@ -409,7 +412,7 @@ otherwise.
 5. **`CatalogJobs`.** *Built*, with all six per-catalog jobs on it.
 6. **WBPP as a second line.** *Built*, with PixInsight as its single lane
    and the dispatcher shared with the stack line.
-7. **The header route.** In progress.
+7. **The header route.** *Built.*
 8. **Remote workers** (later, its own design record): registration,
    scoped input access, upload by digest, and assignment by `needs`.
 
