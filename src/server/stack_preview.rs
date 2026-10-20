@@ -1075,7 +1075,7 @@ pub struct StackPreviewManager {
     /// Re-applies stopped to make way for a person's work, which wait again.
     yielded: Mutex<HashSet<String>>,
     /// Builds a person asked for that wait to be prepared, in click order.
-    preparing: Mutex<build_set::PreparationLine>,
+    preparing: build_set::PreparationLine,
     /// The longest the next turn is kept for a person's re-apply that has
     /// not joined the line yet, once that turn holds anything up.
     turn_held_for: std::time::Duration,
@@ -1094,7 +1094,7 @@ impl StackPreviewManager {
             completed_during_stop: Mutex::new(HashSet::new()),
             reapplies: Mutex::new(HashMap::new()),
             yielded: Mutex::new(HashSet::new()),
-            preparing: Mutex::new(build_set::PreparationLine::default()),
+            preparing: build_set::PreparationLine::default(),
             turn_held_for: reapply::TURN_HELD_FOR,
         }
     }
@@ -8930,12 +8930,7 @@ mod tests {
         .unwrap();
         assert_eq!(job, "restored");
         for _ in 0..500 {
-            let idle = state
-                .stack_previews
-                .preparing
-                .lock()
-                .unwrap()
-                .is_idle(&ctx.id);
+            let idle = state.stack_previews.preparing.is_idle(&ctx.id);
             if idle {
                 break;
             }
