@@ -13,6 +13,7 @@ pub mod calibration_scope;
 pub mod calibration_settings;
 pub mod catalog_install;
 pub mod catalog_jobs;
+pub mod catalog_refresh;
 pub mod catalog_upkeep;
 pub mod database_context;
 pub mod director;

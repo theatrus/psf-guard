@@ -977,8 +977,8 @@ impl DatabaseContext {
 
     /// Get the directory tree for file lookups. Never lets the request path
     /// pay for a full filesystem scan when *any* tree exists: a fresh tree is
-    /// served as-is, a stale one is served immediately while one background
-    /// thread revalidates (on a slow network mount a scan can take a minute —
+    /// served as-is, a stale one is served immediately while the database's
+    /// refresh runner revalidates it (on a slow network mount a scan can take a minute —
     /// blocking requests on it starves the UI). Only a cold cache (no tree at
     /// all) blocks, and then all concurrent callers share a single scan.
     pub fn get_directory_tree(&self) -> Result<Arc<DirectoryTree>> {
@@ -1005,40 +1005,51 @@ impl DatabaseContext {
         self.rebuild_directory_tree_internal()
     }
 
-    /// Kick a deduplicated background rebuild of the directory tree. No-op if
-    /// one is already running.
+    /// Ask for a background rebuild of the directory tree, on the
+    /// database's refresh runner. A request while one is queued or running
+    /// adds nothing.
     fn spawn_directory_tree_rebuild(&self) {
+        if let Some(state) = self.server.server() {
+            crate::server::catalog_refresh::request(&state, self, |queue| queue.tree = true);
+            return;
+        }
+        // A context no server works for, such as in a unit test: a thread
+        // of its own.
+        let ctx = self.clone();
+        std::thread::spawn(move || ctx.revalidate_directory_tree());
+    }
+
+    /// Rebuild a stale directory tree, unless another scan is under way or
+    /// refreshed it meanwhile.
+    pub(crate) fn revalidate_directory_tree(&self) {
         let Some(inflight) = self.try_mark_directory_tree_rebuild() else {
             return;
         };
-        let ctx = self.clone();
-        std::thread::spawn(move || {
-            let _build_guard = lock_recover(ctx.tree_build_lock.as_ref());
-            // Drop the in-flight marker before releasing the build lock. A
-            // waiter that acquires the lock next can then own the marker for
-            // its actual scan instead of observing the prior scanner's flag.
-            let _inflight = inflight;
+        let _build_guard = lock_recover(self.tree_build_lock.as_ref());
+        // Drop the in-flight marker before releasing the build lock. A
+        // waiter that acquires the lock next can then own the marker for its
+        // actual scan instead of observing the prior scanner's flag.
+        let _inflight = inflight;
+        {
+            let cache = self.directory_tree_cache.read().unwrap();
+            if let Some(ref tree) = *cache
+                && !tree.is_older_than(Duration::from_secs(300))
             {
-                let cache = ctx.directory_tree_cache.read().unwrap();
-                if let Some(ref tree) = *cache
-                    && !tree.is_older_than(Duration::from_secs(300))
-                {
-                    tracing::debug!(
-                        "🌳 Background directory tree rebuild skipped for db={}; another scan refreshed it",
-                        ctx.id
-                    );
-                    return;
-                }
-            }
-
-            if let Err(e) = ctx.rebuild_directory_tree_internal() {
-                tracing::warn!(
-                    "⚠️ Background directory tree rebuild failed for db={}: {}",
-                    ctx.id,
-                    e
+                tracing::debug!(
+                    "🌳 Background directory tree rebuild skipped for db={}; another scan refreshed it",
+                    self.id
                 );
+                return;
             }
-        });
+        }
+
+        if let Err(e) = self.rebuild_directory_tree_internal() {
+            tracing::warn!(
+                "⚠️ Background directory tree rebuild failed for db={}: {}",
+                self.id,
+                e
+            );
+        }
     }
 
     fn try_mark_directory_tree_rebuild(&self) -> Option<crate::concurrency::InFlightClaim> {
@@ -1739,30 +1750,19 @@ impl DatabaseContext {
         };
 
         if should_start_refresh {
-            let ctx = Arc::new(self.clone());
-
-            tokio::spawn(async move {
-                tracing::info!("🔄 Starting singleton cache refresh for db={}", ctx.id);
-
-                let refresh_result = ctx.refresh_cache_unified_internal().await;
-
-                {
-                    let mut cache = ctx.file_check_cache.write().unwrap();
-                    cache.mark_refresh_completed();
+            match self.server.server() {
+                Some(state) => {
+                    crate::server::catalog_refresh::request(&state, self, |queue| {
+                        queue.files = true
+                    });
                 }
-
-                match refresh_result {
-                    Ok((checked, found, missing, duration_ms)) => {
-                        tracing::info!(
-                            "✅ Singleton cache refresh for db={} completed: {} checked, {} found, {} missing in {}ms",
-                            ctx.id, checked, found, missing, duration_ms
-                        );
-                    }
-                    Err(e) => {
-                        tracing::error!("❌ Cache refresh for db={} failed: {:?}", ctx.id, e);
-                    }
+                None => {
+                    // A context no server works for, such as in a unit
+                    // test: a task of its own.
+                    let ctx = self.clone();
+                    tokio::spawn(async move { ctx.run_cache_refresh().await });
                 }
-            });
+            }
         }
 
         let cache = self.file_check_cache.read().unwrap();
@@ -1770,6 +1770,31 @@ impl DatabaseContext {
             RefreshStatus::InProgressServeStale
         } else {
             RefreshStatus::InProgressWait
+        }
+    }
+
+    /// Refresh the file caches, then mark the refresh finished. The caller
+    /// marked it started.
+    pub(crate) async fn run_cache_refresh(&self) {
+        tracing::info!("🔄 Starting singleton cache refresh for db={}", self.id);
+
+        let refresh_result = self.refresh_cache_unified_internal().await;
+
+        {
+            let mut cache = self.file_check_cache.write().unwrap();
+            cache.mark_refresh_completed();
+        }
+
+        match refresh_result {
+            Ok((checked, found, missing, duration_ms)) => {
+                tracing::info!(
+                    "✅ Singleton cache refresh for db={} completed: {} checked, {} found, {} missing in {}ms",
+                    self.id, checked, found, missing, duration_ms
+                );
+            }
+            Err(e) => {
+                tracing::error!("❌ Cache refresh for db={} failed: {:?}", self.id, e);
+            }
         }
     }
 

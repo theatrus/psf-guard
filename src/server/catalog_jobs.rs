@@ -23,6 +23,7 @@ pub struct CatalogJobRegistry {
     pub(crate) ts_sync: CatalogJobs<crate::server::ts_sync::TsSyncWork>,
     pub(crate) imports: CatalogJobs<crate::server::import_job::Imports>,
     pub(crate) exports: CatalogJobs<crate::server::export_job::Exports>,
+    pub(crate) catalog_refresh: CatalogJobs<crate::server::catalog_refresh::CatalogRefresh>,
 }
 
 #[cfg(test)]
