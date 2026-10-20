@@ -409,8 +409,9 @@ health, the duplicate check, reject removal, quality scans and the
 database-wide analysis, arrivals, the Calibration page's header reads,
 flat group use, catalog upkeep, the stack preparation line, Target
 Scheduler imports and syncs, backups (one runner, server-wide), imports
-and exports of frames, and a database's cache refreshes (the file cache
-and the stale folder index). Each job implements `CatalogWork`:
+and exports of frames, a database's cache refreshes (the file cache
+and the stale folder index), and preview pre-generation. Each job
+implements `CatalogWork`:
 
 ```rust
 trait CatalogWork {
@@ -549,19 +550,27 @@ work never comes. Step 4 depends on step 2.
 
 ## Not covered
 
-- Preview pre-generation (`preview_queue.rs`) is a bounded pool of
-  short tasks, not a line. It stays as it is.
+- The preview queue (`preview_queue.rs`) renders a preview someone opened,
+  on a bounded pool of short tasks, not a line. Preview pre-generation,
+  which writes previews before anyone opens them, is a catalog job
+  (`preview_pregeneration.rs`).
 - The automatic refresh scheduler decides *what* to queue and when. It
   stays separate and queues requests like any other caller; from step 9 the
   line, not the scheduler, decides when they run.
 
-## Open questions
+## Decisions on earlier open questions
 
-- Should `Target` waits also wait for an automatic refresh that is still
-  settling for that project, so a composition does not start just before
-  new frames are stacked?
-- Should `Quick` stay a lane, or become a rule the main lane applies,
-  "may run beside the current entry"?
-- Should the in-process worker go through the same lease and message path as
-  a remote one, at a small cost, so the remote path is tested every day?
-  This record assumes yes.
+- **A composition does not wait for a refresh that is still settling.**
+  While new frames settle before an automatic refresh, nothing in the line
+  holds the target's channel key, so a composition asked for then runs at
+  once from the current stacks. The refresh rebuilds the channels later and
+  the composition is made again. A result at once, sometimes made twice,
+  suits a person's click better than one that waits up to the settle delay.
+- **`Quick` stays a lane.** One lane with a "may run beside the current
+  entry" rule would behave the same. The two lanes are built and keep the
+  rule that short work never waits behind long work plain to see. Revisit
+  this if remote workers need another model.
+- **The in-process worker will use the remote path.** When remote workers
+  are built, the server's own worker takes its entries through the same
+  lease and message path, so every local run tests it. Until then it calls
+  the work directly.

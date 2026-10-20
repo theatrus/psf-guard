@@ -952,8 +952,8 @@ frames. PSF Guard records use itself because many mounts, NFS among them, do
 not record reads.
 
 Background preview pre-generation stops two points under the limit, where a
-cull would clear to, and checks before every image, so it never makes
-previews the next pass would delete and the next scan make again. It uses
+cull would clear to. It checks before every batch of images, so at most one
+batch's previews go past that point, for the next cull to delete. It uses
 the limit of the cache's volume, the lowest there when the volume holds other
 folders too. Previews someone opens are still made. A volume still over the
 limit once nothing more may go is reported in red. The sizes in Settings are
