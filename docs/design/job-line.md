@@ -558,13 +558,19 @@ work never comes. Step 4 depends on step 2.
   stays separate and queues requests like any other caller; from step 9 the
   line, not the scheduler, decides when they run.
 
-## Open questions
+## Decisions on earlier open questions
 
-- Should `Target` waits also wait for an automatic refresh that is still
-  settling for that project, so a composition does not start just before
-  new frames are stacked?
-- Should `Quick` stay a lane, or become a rule the main lane applies,
-  "may run beside the current entry"?
-- Should the in-process worker go through the same lease and message path as
-  a remote one, at a small cost, so the remote path is tested every day?
-  This record assumes yes.
+- **A composition does not wait for a refresh that is still settling.**
+  While new frames settle before an automatic refresh, nothing in the line
+  holds the target's channel key, so a composition asked for then runs at
+  once from the current stacks. The refresh rebuilds the channels later and
+  the composition is made again. A result at once, sometimes made twice,
+  suits a person's click better than one that waits up to the settle delay.
+- **`Quick` stays a lane.** One lane with a "may run beside the current
+  entry" rule would behave the same. The two lanes are built and keep the
+  rule that short work never waits behind long work plain to see. Revisit
+  this if remote workers need another model.
+- **The in-process worker will use the remote path.** When remote workers
+  are built, the server's own worker takes its entries through the same
+  lease and message path, so every local run tests it. Until then it calls
+  the work directly.
