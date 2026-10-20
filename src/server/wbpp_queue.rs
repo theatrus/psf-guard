@@ -19,7 +19,7 @@ use super::job_line::{
 };
 use super::state::AppState;
 use super::wbpp_run::StartWbppRunRequest;
-use crate::concurrency::Priority;
+use crate::concurrency::{Priority, Stop};
 
 /// One run waiting to start. The line stores it as the run's tracked
 /// journal record.
@@ -252,8 +252,8 @@ impl Task for StartQueuedRun {
 
     /// The dispatcher takes the future instead; this runs the same future
     /// on the calling thread for any other caller.
-    fn run(mut self: Box<Self>, state: &Arc<AppState>, _worker: &Worker<'_>) {
-        if let Some(work) = self.take_future(state) {
+    fn run(mut self: Box<Self>, state: &Arc<AppState>, worker: &Worker<'_>) {
+        if let Some(work) = self.take_future(state, worker.stop_flag()) {
             tokio::runtime::Handle::current().block_on(work);
         }
     }
@@ -261,12 +261,14 @@ impl Task for StartQueuedRun {
     /// The WBPP run as a future, which ends when the run ends, so
     /// PixInsight stays reserved for the whole run. `None`, and nothing
     /// runs, when the run was removed from the queue meanwhile.
-    fn take_future(&mut self, state: &Arc<AppState>) -> Option<TaskFuture> {
-        let state = Arc::clone(state);
+    /// The run's Stop is the entry's: Stop on the running run, or on the
+    /// entry while it waits, reaches the same flag.
+    fn take_future(&mut self, state: &Arc<AppState>, stop: &Stop) -> Option<TaskFuture> {
+        let (state, stop) = (Arc::clone(state), stop.clone());
         let id = std::mem::take(&mut self.id);
         Some(Box::pin(async move {
             if let Some(run) = state.wbpp_queue.take(&id) {
-                super::wbpp_run::start_queued(state, run).await;
+                super::wbpp_run::start_queued(state, run, stop).await;
             }
         }))
     }

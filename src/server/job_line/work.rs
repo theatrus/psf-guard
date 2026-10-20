@@ -96,8 +96,9 @@ pub trait Task: Send + 'static {
     /// The work as a future, for work that spends its time waiting on
     /// async I/O, such as a WBPP run that watches PixInsight for hours.
     /// When this returns a future, the dispatcher awaits it on the runtime
-    /// with the lane's lease held, and does not call [`Task::run`].
-    fn take_future(&mut self, _state: &Arc<AppState>) -> Option<TaskFuture> {
+    /// with the lane's lease held, and does not call [`Task::run`]. `stop`
+    /// is the entry's: Stop on the entry reaches the work through it.
+    fn take_future(&mut self, _state: &Arc<AppState>, _stop: &Stop) -> Option<TaskFuture> {
         None
     }
 }

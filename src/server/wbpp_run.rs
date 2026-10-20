@@ -220,12 +220,18 @@ fn begin_publish(
     Ok((PathBuf::from(&progress.output_dir), progress.project_id))
 }
 
-fn try_begin(store: &RwLock<WbppRunStore>, scope: String, options: WbppOptions) -> Option<Stop> {
+/// Mark a run as started on its database, stopped by `cancel`. False when
+/// the database already has a run or a copy under way.
+fn try_begin(
+    store: &RwLock<WbppRunStore>,
+    scope: String,
+    options: WbppOptions,
+    cancel: Stop,
+) -> bool {
     let mut s = store.write().unwrap();
     if s.progress.running || publish_running(&s.progress) {
-        return None;
+        return false;
     }
-    let cancel = Stop::new();
     s.progress = WbppRunProgress {
         running: true,
         stage: "planning".to_string(),
@@ -234,8 +240,8 @@ fn try_begin(store: &RwLock<WbppRunStore>, scope: String, options: WbppOptions) 
         started_at: Some(chrono::Utc::now().timestamp()),
         ..Default::default()
     };
-    s.cancel = Some(cancel.clone());
-    Some(cancel)
+    s.cancel = Some(cancel);
+    true
 }
 
 fn update(store: &RwLock<WbppRunStore>, apply: impl FnOnce(&mut WbppRunProgress)) {
@@ -833,7 +839,8 @@ pub async fn start_wbpp_run(
     // Detection awaits a blocking task. A copy may start on this database
     // meanwhile; the request then joins the line.
     if let Some(pixinsight) = pixinsight
-        && let Some(run) = prepare(Arc::clone(&state), ctx.0.clone(), req.clone()).await?
+        && let Some(run) =
+            prepare(Arc::clone(&state), ctx.0.clone(), req.clone(), Stop::new()).await?
     {
         tokio::spawn(async move {
             run.await;
@@ -963,6 +970,7 @@ async fn prepare(
     state: Arc<AppState>,
     ctx: Arc<crate::server::database_context::DatabaseContext>,
     req: StartWbppRunRequest,
+    cancel: Stop,
 ) -> Result<Option<PreparedRun>, AppError> {
     let (install, display, settings) = {
         let state = state.clone();
@@ -991,9 +999,9 @@ async fn prepare(
         _ => None,
     };
     let store = ctx.wbpp_run.clone();
-    let Some(cancel) = try_begin(&store, scope.clone(), req.options.clone()) else {
+    if !try_begin(&store, scope.clone(), req.options.clone(), cancel.clone()) {
         return Ok(None);
-    };
+    }
     store.write().unwrap().request = Some(req.clone());
 
     let work_dir = root.join(run_dir_name(&scope));
@@ -1144,7 +1152,8 @@ async fn prepare(
 /// Start a run that waited in the line, and return when it ends. A run that
 /// cannot start (its database removed, PixInsight missing) is recorded as a
 /// failed run on its database.
-pub(crate) async fn start_queued(state: Arc<AppState>, next: QueuedRun) {
+/// `stop` is the line entry's, so Stop on the entry reaches the run.
+pub(crate) async fn start_queued(state: Arc<AppState>, next: QueuedRun, stop: Stop) {
     let Some(ctx) = state.get_database(&next.db_id) else {
         tracing::info!(
             "🔭 Queued WBPP run {} dropped: database {} is gone",
@@ -1155,7 +1164,7 @@ pub(crate) async fn start_queued(state: Arc<AppState>, next: QueuedRun) {
     };
     let scope = next.scope.clone();
     let project_id = next.project_id;
-    match prepare(Arc::clone(&state), ctx.clone(), next.request.clone()).await {
+    match prepare(Arc::clone(&state), ctx.clone(), next.request.clone(), stop).await {
         Ok(Some(run)) => {
             tracing::info!("🔭 Queued WBPP run for db={} ({scope}) started", ctx.id);
             run.await;
@@ -1744,11 +1753,26 @@ mod tests {
     #[test]
     fn a_run_is_a_singleton_that_resets_prior_state() {
         let store = RwLock::new(WbppRunStore::default());
-        assert!(try_begin(&store, "project A".into(), WbppOptions::default()).is_some());
-        assert!(try_begin(&store, "project B".into(), WbppOptions::default()).is_none());
+        assert!(try_begin(
+            &store,
+            "project A".into(),
+            WbppOptions::default(),
+            Stop::new()
+        ));
+        assert!(!try_begin(
+            &store,
+            "project B".into(),
+            WbppOptions::default(),
+            Stop::new()
+        ));
         finish(&store, "error", Some("boom".into()));
         assert_eq!(progress_snapshot(&store).stage, "error");
-        assert!(try_begin(&store, "project B".into(), WbppOptions::default()).is_some());
+        assert!(try_begin(
+            &store,
+            "project B".into(),
+            WbppOptions::default(),
+            Stop::new()
+        ));
         let progress = progress_snapshot(&store);
         assert_eq!(progress.scope, "project B");
         assert!(progress.error.is_none());
@@ -1928,7 +1952,12 @@ mod tests {
         let (state, ctx) = state_with_management();
         // A run under way on this database, as PixInsight would leave it.
         let _pixinsight = state.wbpp_queue.try_reserve_pixinsight().unwrap();
-        try_begin(&ctx.wbpp_run, "Sh2 86".into(), WbppOptions::default()).unwrap();
+        assert!(try_begin(
+            &ctx.wbpp_run,
+            "Sh2 86".into(),
+            WbppOptions::default(),
+            Stop::new()
+        ));
         update(&ctx.wbpp_run, |progress| progress.project_id = Some(1));
 
         let queued = start_wbpp_run(
@@ -2020,7 +2049,12 @@ mod tests {
         assert!(!progress.running);
         assert!(progress.finished_at.is_some());
         // Never over a run under way.
-        try_begin(&store, "live".into(), WbppOptions::default()).unwrap();
+        assert!(try_begin(
+            &store,
+            "live".into(),
+            WbppOptions::default(),
+            Stop::new()
+        ));
         record_failed_launch(&store, "M31".into(), None, "x".into());
         assert_eq!(progress_snapshot(&store).scope, "live");
     }
@@ -2186,11 +2220,21 @@ mod tests {
                 1
             );
         });
-        assert!(try_begin(&store, "next".into(), WbppOptions::default()).is_none());
+        assert!(!try_begin(
+            &store,
+            "next".into(),
+            WbppOptions::default(),
+            Stop::new()
+        ));
         update(&store, |p| {
             p.publish.as_mut().unwrap().state = "complete".into()
         });
-        assert!(try_begin(&store, "next".into(), WbppOptions::default()).is_some());
+        assert!(try_begin(
+            &store,
+            "next".into(),
+            WbppOptions::default(),
+            Stop::new()
+        ));
     }
 
     #[test]

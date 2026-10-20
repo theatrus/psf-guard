@@ -74,7 +74,7 @@ async fn dispatch(state: Arc<AppState>, rules: &'static DispatchRules, lane: Lan
                 mut task,
                 lease,
             } => {
-                if let Some(work) = task.take_future(&state) {
+                if let Some(work) = task.take_future(&state, &stop) {
                     // Awaited on the runtime, which drops it when the
                     // server stops, as it drops other async work.
                     tokio::spawn(async move {
