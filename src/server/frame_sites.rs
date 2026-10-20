@@ -64,6 +64,9 @@ pub struct FrameSitesStatus {
     /// `idle`; `queued` while requests settle or a retry waits; `running`;
     /// or `stopped` when Stop paused it.
     pub state: String,
+    /// The pass's progress in words, such as `Reading frame sites · 812 of
+    /// 1,867 frames`, as pages and the header show it.
+    pub label: String,
     /// Whether a pass found frames to read and reads them: what the job
     /// line shows.
     pub active: bool,
@@ -232,7 +235,22 @@ pub fn status(path: &str) -> FrameSitesStatus {
     if !queue.running {
         status.active = false;
     }
+    status.label = label(status.done, status.total);
     status
+}
+
+/// `Reading frame sites · 812 of 1,867 frames`.
+pub fn label(done: usize, total: usize) -> String {
+    use crate::server::job_text::{grouped, plural};
+    if total == 0 {
+        return "Reading frame sites".to_string();
+    }
+    format!(
+        "Reading frame sites · {} of {} {}",
+        grouped(done.min(total)),
+        grouped(total),
+        plural(total, "frame", "frames")
+    )
 }
 
 /// Read the sites of the catalog at `path`'s frames that have none yet.

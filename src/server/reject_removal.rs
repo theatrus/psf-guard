@@ -138,6 +138,13 @@ pub struct RemovalJobStatus {
     /// `idle` before the first run, `running`, then `done`, `stopped` or
     /// `failed`.
     pub state: String,
+    /// What the run is, as pages and the header name it, such as
+    /// `Removing rejects`.
+    pub title: String,
+    /// The run's stage and count, such as `Moving to the trash 37 of 203`.
+    pub label: String,
+    /// 0–100 for the run's stage, or `None` before its size is known.
+    pub percent: Option<f64>,
     /// `preview`, `remove`, `restore` or `empty_trash`: what runs, or ran
     /// last.
     pub action: Option<String>,
@@ -242,7 +249,33 @@ pub fn status(path: &str) -> RemovalJobStatus {
     if status.state.is_empty() {
         status.state = "idle".into();
     }
+    status.title = title(status.action.as_deref()).into();
+    status.label = label(status.stage.as_deref(), status.done, status.total);
+    status.percent = crate::server::job_text::percent(status.done, status.total);
     status
+}
+
+/// What a run is, such as `Removing rejects`.
+pub fn title(action: Option<&str>) -> &'static str {
+    match action {
+        Some("remove") => "Removing rejects",
+        Some("restore") => "Restoring rejects",
+        Some("empty_trash") => "Emptying the reject trash",
+        _ => "Previewing reject removal",
+    }
+}
+
+/// A run's stage and count, such as `Moving to the trash 37 of 203`.
+pub fn label(stage: Option<&str>, done: usize, total: usize) -> String {
+    let verb = match stage {
+        Some("indexing") => "Indexing folders",
+        Some("checking") => "Checking files",
+        Some("moving") => "Moving to the trash",
+        Some("restoring") => "Restoring",
+        Some("deleting") => "Deleting",
+        _ => "Starting",
+    };
+    crate::server::job_text::stage_count(verb, done, total)
 }
 
 /// Stop the run between frames: the frames done stay done.

@@ -147,6 +147,7 @@ describe('Remove rejects', () => {
   it('follows a removal under way, and stops it between frames', async () => {
     let status: Record<string, unknown> = {
       state: 'running', action: 'remove', stage: 'moving', done: 37, total: 203, run: 4, started_at: 1,
+      title: 'Removing rejects', label: 'Moving to the trash 37 of 203', percent: (100 * 37) / 203,
       finished_at: null, plan: null, changed: false, outcome: null, error: null, priority: 'interactive',
     };
     const stops: string[] = [];

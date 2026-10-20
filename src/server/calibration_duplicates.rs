@@ -72,6 +72,13 @@ pub struct DuplicateJobStatus {
     /// `idle` before the first run, `running`, then `done`, `stopped` or
     /// `failed`.
     pub state: String,
+    /// What the run is, as pages and the header name it: `Checking for
+    /// duplicates` or `Repairing duplicates`.
+    pub title: String,
+    /// The run's stage and count, such as `Merging 37 of 203`.
+    pub label: String,
+    /// 0–100 for the run's stage, or `None` before its size is known.
+    pub percent: Option<f64>,
     /// `check` or `repair`: what runs, or ran last.
     pub action: Option<String>,
     /// [`STAGE_FILES`], [`STAGE_COPIES`] or [`STAGE_MERGING`], while it runs.
@@ -235,7 +242,29 @@ pub fn status(path: &str) -> DuplicateJobStatus {
     if status.state.is_empty() {
         status.state = "idle".into();
     }
+    status.title = title(status.action.as_deref()).into();
+    status.label = label(status.stage.as_deref(), status.done, status.total);
+    status.percent = crate::server::job_text::percent(status.done, status.total);
     status
+}
+
+/// What a run is: `Checking for duplicates` or `Repairing duplicates`.
+pub fn title(action: Option<&str>) -> &'static str {
+    if action == Some("repair") {
+        "Repairing duplicates"
+    } else {
+        "Checking for duplicates"
+    }
+}
+
+/// A run's stage and count, such as `Merging 37 of 203`.
+pub fn label(stage: Option<&str>, done: usize, total: usize) -> String {
+    let verb = match stage {
+        Some(STAGE_COPIES) => "Comparing copies",
+        Some(STAGE_MERGING) => "Merging",
+        _ => "Checking files",
+    };
+    crate::server::job_text::stage_count(verb, done, total)
 }
 
 /// Stop: a check ends at its next file, a repair at its next exposure,

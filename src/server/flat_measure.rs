@@ -40,6 +40,7 @@ use crate::server::api::ApiResponse;
 use crate::server::extract::DbContext;
 use crate::server::handlers::AppError;
 use crate::server::job_line::catalog::{CatalogJob, CatalogJobs, CatalogWork, Step};
+use crate::server::job_text::{joined, plural};
 use crate::server::state::AppState;
 use axum::extract::State;
 use axum::Json;
@@ -91,6 +92,9 @@ pub struct FlatMeasureStatus {
     /// `idle`; `queued` while requests settle, grading runs or a retry
     /// waits; `running`; or `stopped` when Stop left work paused.
     pub state: String,
+    /// The pass's step in words, such as `Measuring flats · 12 of 40
+    /// sessions`, as pages and the header show it.
+    pub label: String,
     /// Whether a pass found work and is doing it: what the job line shows.
     /// A pass with nothing to read never turns active.
     pub active: bool,
@@ -382,7 +386,51 @@ pub fn status(path: &str) -> FlatMeasureStatus {
     if queue.running.is_none() {
         status.active = false;
     }
+    status.label = label(status.stage.as_deref(), status.done, status.total);
     status
+}
+
+/// "Measuring flats · 12 of 40 sessions": the flat measuring pass's step.
+pub fn label(stage: Option<&str>, done: usize, total: usize) -> String {
+    use crate::calibration::flat_groups::job::{STAGE_COMPARING, STAGE_EVIDENCE};
+    let (verb, unit) = match stage {
+        Some(STAGE_COMPARING) => ("Comparing flats", "pair"),
+        Some(STAGE_EVIDENCE) => ("Reading lights shot during a change", "session"),
+        _ => ("Measuring flats", "session"),
+    };
+    if total == 0 {
+        return verb.to_string();
+    }
+    format!(
+        "{verb} · {} of {total} {}",
+        done.min(total),
+        plural(total, unit, &format!("{unit}s"))
+    )
+}
+
+/// `1 more rig to check · 2 rigs queued`: the rigs the pass checks after
+/// the current one (some may have nothing to measure), and the rigs the
+/// next pass takes.
+pub fn rigs_left(rigs_after: usize, next_pass: &[String]) -> Option<String> {
+    let rigs = |count: usize| plural(count, "rig", "rigs");
+    let after =
+        (rigs_after > 0).then(|| format!("{rigs_after} more {} to check", rigs(rigs_after)));
+    let next = if next_pass.iter().any(|rig| rig == "*") {
+        Some("every rig queued".to_string())
+    } else if !next_pass.is_empty() {
+        Some(format!(
+            "{} {} queued",
+            next_pass.len(),
+            rigs(next_pass.len())
+        ))
+    } else {
+        None
+    };
+    let text = joined([
+        after.as_deref().unwrap_or(""),
+        next.as_deref().unwrap_or(""),
+    ]);
+    (!text.is_empty()).then_some(text)
 }
 
 /// Whether a pass runs over the catalog at `path`.

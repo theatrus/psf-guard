@@ -29,6 +29,7 @@ pub mod frame_sites;
 pub mod handlers;
 pub mod import_job;
 pub mod job_line;
+pub mod job_text;
 pub mod jobs;
 pub mod master_cleanup;
 pub mod mcp;

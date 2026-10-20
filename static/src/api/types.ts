@@ -3405,6 +3405,12 @@ export interface CalibrationPlanChange {
 export interface CalibrationDuplicateStatus {
   /** `idle` before the first run. */
   state: 'idle' | 'running' | 'done' | 'stopped' | 'failed';
+  /** What the run is: `Checking for duplicates` or `Repairing duplicates`. */
+  title: string;
+  /** The stage and count, such as `Merging 37 of 203`. */
+  label: string;
+  /** 0–100 for the stage, or null before its size is known. */
+  percent: number | null;
   action: 'check' | 'repair' | null;
   /** `checking_files`, `comparing_copies` or `merging`, while it runs. */
   stage: string | null;
@@ -4500,6 +4506,12 @@ export interface RejectRemovalOutcome {
  *  read the image folders and move files, so each runs as a job. */
 export interface RejectRemovalStatus {
   state: 'idle' | 'running' | 'done' | 'stopped' | 'failed';
+  /** What the run is, such as `Removing rejects`. */
+  title: string;
+  /** The stage and count, such as `Moving to the trash 37 of 203`. */
+  label: string;
+  /** 0–100 for the stage, or null before its size is known. */
+  percent: number | null;
   action: 'preview' | 'remove' | 'restore' | 'empty_trash' | null;
   stage: 'indexing' | 'checking' | 'moving' | 'restoring' | 'deleting' | null;
   done: number;
@@ -4860,6 +4872,8 @@ export interface FrameSitesOutcome {
  *  frame imported before the catalog kept one. */
 export interface FrameSitesStatus {
   state: 'idle' | 'queued' | 'running' | 'stopped';
+  /** The progress in words, such as `Reading frame sites · 812 of 1,867 frames`. */
+  label: string;
   /** A pass is reading frames: what the job line shows. */
   active: boolean;
   done: number;
@@ -4881,6 +4895,8 @@ export interface FlatMeasureStatus {
   /** `queued` while requests settle, grading runs or a retry waits;
    *  `stopped` when Stop paused work. */
   state: 'idle' | 'queued' | 'running' | 'stopped';
+  /** The step in words, such as `Measuring flats · 12 of 40 sessions`. */
+  label: string;
   /** A pass found work and is doing it: what the job line shows. */
   active: boolean;
   rig_uuid: string | null;

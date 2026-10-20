@@ -544,7 +544,7 @@ describe('Flat groups in Frames', () => {
     FLAT_POLL_MS.running = 50;
     try {
       const running = { state: 'running', active: true, rig_uuid: 'rig', rig_name: 'UltraCat · ASI6200', priority: 'background' };
-      let progress: Record<string, unknown> = { ...running, stage: 'measuring flat sessions', done: 12, total: 40 };
+      let progress: Record<string, unknown> = { ...running, stage: 'measuring flat sessions', done: 12, total: 40, label: 'Measuring flats · 12 of 40 sessions' };
       server.use(http.get('/api/db/demo/calibrations/flat-measure', () => {
         seen.quality += 1;
         return ok({ ...IDLE_JOB, ...progress });
@@ -557,10 +557,10 @@ describe('Flat groups in Frames', () => {
 
       // Later stages name themselves; the live region changes with the
       // stage, not with each count.
-      progress = { ...running, stage: 'comparing flat sessions', done: 4, total: 9 };
+      progress = { ...running, stage: 'comparing flat sessions', done: 4, total: 9, label: 'Comparing flats · 4 of 9 pairs' };
       await waitFor(() => expect(screen.getByTestId('flat-groups-measuring')).toHaveTextContent('Comparing flats · 4 of 9 pairs'));
       expect(screen.getByTestId('flat-groups-status')).toHaveTextContent('Measuring flats: comparing flat sessions');
-      progress = { ...running, stage: 'reading lights shot during a change', done: 1, total: 2, waiting_for: 'a stack build' };
+      progress = { ...running, stage: 'reading lights shot during a change', done: 1, total: 2, waiting_for: 'a stack build', label: 'Reading lights shot during a change · 1 of 2 sessions' };
       await waitFor(() => expect(screen.getByTestId('flat-groups-measuring')).toHaveTextContent(
         'Reading lights shot during a change · 1 of 2 sessions · waiting for a stack build'));
 
@@ -579,7 +579,7 @@ describe('Flat groups in Frames', () => {
   });
 
   it('tells the server which rig the page shows, and leaves out another rig\'s pass', async () => {
-    const other = { state: 'running', active: true, rig_uuid: 'redcat', rig_name: 'RedCat', stage: 'measuring flat sessions', done: 2, total: 5 };
+    const other = { state: 'running', active: true, rig_uuid: 'redcat', rig_name: 'RedCat', stage: 'measuring flat sessions', done: 2, total: 5, label: 'Measuring flats · 2 of 5 sessions' };
     const seen = serve(VIEW, other);
     renderPage('/calibration?db=demo&calKind=flat&calRig=rig');
     await waitFor(() => expect(seen.groups).toBe(1));
@@ -588,7 +588,7 @@ describe('Flat groups in Frames', () => {
   });
 
   it('sends no hint for a viewer the server keeps from display calculations', async () => {
-    const seen = serve(VIEW, { state: 'running', active: true, rig_uuid: 'rig', stage: 'measuring flat sessions', done: 1, total: 4 });
+    const seen = serve(VIEW, { state: 'running', active: true, rig_uuid: 'rig', stage: 'measuring flat sessions', done: 1, total: 4, label: 'Measuring flats · 1 of 4 sessions' });
     renderPage('/calibration?db=demo&calKind=flat&calRig=rig', { canCompute: false, canWrite: false });
     expect(await screen.findByTestId('flat-groups-measuring')).toHaveTextContent('Measuring flats · 1 of 4 sessions');
     await waitFor(() => expect(seen.quality).toBeGreaterThan(0));
@@ -599,6 +599,7 @@ describe('Flat groups in Frames', () => {
     const seen = serve(VIEW, {
       state: 'running', active: true, rig_uuid: 'rig', rig_name: 'UltraCat · ASI6200',
       stage: 'measuring flat sessions', done: 12, total: 40, priority: 'background',
+      label: 'Measuring flats · 12 of 40 sessions',
     });
     renderPage('/calibration?db=demo&calKind=flat');
     expect(await screen.findByTestId('flat-groups-measuring')).toHaveTextContent('Measuring flats · 12 of 40 sessions');

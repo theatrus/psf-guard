@@ -725,7 +725,7 @@ fn frame_sites_show_progress_and_the_next_pass() {
     }))
     .is_empty());
     assert_eq!(
-        frame_sites_label(0, 1),
+        crate::server::frame_sites::label(0, 1),
         "Reading frame sites · 0 of 1 frame"
     );
 }
@@ -1071,18 +1071,18 @@ fn no_row_repeats_what_its_detail_says() {
 #[test]
 fn flat_rigs_left_counts_this_pass_and_the_next() {
     assert_eq!(
-        flat_rigs_left(2, &[]).as_deref(),
+        crate::server::flat_measure::rigs_left(2, &[]).as_deref(),
         Some("2 more rigs to check")
     );
     assert_eq!(
-        flat_rigs_left(1, &["x".into(), "y".into(), "z".into()]).as_deref(),
+        crate::server::flat_measure::rigs_left(1, &["x".into(), "y".into(), "z".into()]).as_deref(),
         Some("1 more rig to check · 3 rigs queued")
     );
     assert_eq!(
-        flat_rigs_left(0, &["*".into()]).as_deref(),
+        crate::server::flat_measure::rigs_left(0, &["*".into()]).as_deref(),
         Some("every rig queued")
     );
-    assert_eq!(flat_rigs_left(0, &[]), None);
+    assert_eq!(crate::server::flat_measure::rigs_left(0, &[]), None);
 }
 
 #[test]

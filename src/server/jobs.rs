@@ -16,6 +16,7 @@
 //! header refreshes a database's views when its work finishes, and keeps a
 //! note of a quality scan's frame errors once the scan ends.
 
+use crate::server::job_text::{grouped, joined, percent, plural};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -374,19 +375,6 @@ pub type ProjectOf<'a> = &'a dyn Fn(&str, i32) -> Option<i32>;
 // ---------------------------------------------------------------------------
 // Text helpers, shared by several rows.
 
-fn fraction(done: usize, total: usize) -> Option<f64> {
-    (total > 0).then(|| (done as f64 / total as f64 * 100.0).min(100.0))
-}
-
-/// Join the non-empty parts with ` · `.
-fn joined<'a>(parts: impl IntoIterator<Item = &'a str>) -> String {
-    parts
-        .into_iter()
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>()
-        .join(" · ")
-}
-
 /// `Waiting for a stack build · 2/8 targets`: what the job waits for, then
 /// the progress it had reached.
 fn waiting_detail(waiting_for: Option<&str>, progress: &str) -> String {
@@ -402,27 +390,6 @@ fn last_part(path: &str) -> &str {
     path.split(['/', '\\'])
         .rfind(|part| !part.is_empty())
         .unwrap_or(path)
-}
-
-/// A count with thousands separators, as `en-US` writes it: `1,867`.
-fn grouped(value: usize) -> String {
-    let digits = value.to_string();
-    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
-    for (index, digit) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(digit);
-    }
-    out
-}
-
-fn plural(count: usize, one: &str, many: &str) -> String {
-    if count == 1 {
-        one.to_string()
-    } else {
-        many.to_string()
-    }
 }
 
 /// A view at one target. When the target's project is unknown, the link
@@ -572,7 +539,7 @@ fn quality_rows(db: &DatabaseState, project_of: ProjectOf) -> Vec<JobRow> {
                     RowStatus::Running
                 },
                 waiting_for: scan_waits_for.clone(),
-                percent: fraction(scan.processed, scan.total),
+                percent: percent(scan.processed, scan.total),
                 hint: scan.current_file.clone(),
                 link: Some(link.clone()),
                 ..JobRow::new(key, RowKind::Quality, "Analyzing quality", &db.name)
@@ -589,7 +556,7 @@ fn quality_rows(db: &DatabaseState, project_of: ProjectOf) -> Vec<JobRow> {
     );
     let analysis = JobRow {
         detail: targets.clone(),
-        percent: fraction(backfill.processed_targets, backfill.total_targets),
+        percent: percent(backfill.processed_targets, backfill.total_targets),
         background: true,
         hint: scan.current_file.clone(),
         link: Some(link.clone()),
@@ -641,49 +608,6 @@ fn quality_rows(db: &DatabaseState, project_of: ProjectOf) -> Vec<JobRow> {
     }]
 }
 
-/// "Measuring flats · 12 of 40 sessions": the flat measuring pass's step.
-pub fn flat_measure_label(stage: Option<&str>, done: usize, total: usize) -> String {
-    use crate::calibration::flat_groups::job::{STAGE_COMPARING, STAGE_EVIDENCE};
-    let (verb, unit) = match stage {
-        Some(STAGE_COMPARING) => ("Comparing flats", "pair"),
-        Some(STAGE_EVIDENCE) => ("Reading lights shot during a change", "session"),
-        _ => ("Measuring flats", "session"),
-    };
-    if total == 0 {
-        return verb.to_string();
-    }
-    format!(
-        "{verb} · {} of {total} {}",
-        done.min(total),
-        plural(total, unit, &format!("{unit}s"))
-    )
-}
-
-/// `1 more rig to check · 2 rigs queued`: the rigs the pass checks after
-/// the current one (some may have nothing to measure), and the rigs the
-/// next pass takes.
-pub fn flat_rigs_left(rigs_after: usize, next_pass: &[String]) -> Option<String> {
-    let rigs = |count: usize| plural(count, "rig", "rigs");
-    let after =
-        (rigs_after > 0).then(|| format!("{rigs_after} more {} to check", rigs(rigs_after)));
-    let next = if next_pass.iter().any(|rig| rig == "*") {
-        Some("every rig queued".to_string())
-    } else if !next_pass.is_empty() {
-        Some(format!(
-            "{} {} queued",
-            next_pass.len(),
-            rigs(next_pass.len())
-        ))
-    } else {
-        None
-    };
-    let text = joined([
-        after.as_deref().unwrap_or(""),
-        next.as_deref().unwrap_or(""),
-    ]);
-    (!text.is_empty()).then_some(text)
-}
-
 /// Flat measuring, once a pass has found work. Always automatic: a page
 /// that shows the rig raises its priority, but no person started it.
 fn flats_row(db: &DatabaseState, flats: &FlatMeasureStatus) -> JobRow {
@@ -691,7 +615,7 @@ fn flats_row(db: &DatabaseState, flats: &FlatMeasureStatus) -> JobRow {
     if let Some(rig) = &flats.rig_uuid {
         link = link.param("calRig", rig.clone());
     }
-    let label = flat_measure_label(flats.stage.as_deref(), flats.done, flats.total);
+    let label = crate::server::flat_measure::label(flats.stage.as_deref(), flats.done, flats.total);
     let scope = joined([db.name.as_str(), flats.rig_name.as_deref().unwrap_or("")]);
     JobRow {
         // While it pauses for a person's work it is listed as waiting, as
@@ -706,8 +630,8 @@ fn flats_row(db: &DatabaseState, flats: &FlatMeasureStatus) -> JobRow {
             RowStatus::Running
         },
         waiting_for: flats.waiting_for.clone(),
-        percent: fraction(flats.done, flats.total),
-        remaining: flat_rigs_left(flats.rigs_after, &flats.next_pass),
+        percent: percent(flats.done, flats.total),
+        remaining: crate::server::flat_measure::rigs_left(flats.rigs_after, &flats.next_pass),
         stoppable: true,
         control: Some(RowControl::Flats {
             db_id: db.id.clone(),
@@ -723,23 +647,10 @@ fn flats_row(db: &DatabaseState, flats: &FlatMeasureStatus) -> JobRow {
     .automatic(true)
 }
 
-/// `Reading frame sites · 812 of 1,867 frames`.
-pub fn frame_sites_label(done: usize, total: usize) -> String {
-    if total == 0 {
-        return "Reading frame sites".to_string();
-    }
-    format!(
-        "Reading frame sites · {} of {} {}",
-        grouped(done.min(total)),
-        grouped(total),
-        plural(total, "frame", "frames")
-    )
-}
-
 /// Reading the sites of calibration frames imported before the catalog
 /// stored them, once a pass has frames to read. Automatic and stoppable.
 fn sites_row(db: &DatabaseState, sites: &FrameSitesStatus) -> JobRow {
-    let label = frame_sites_label(sites.done, sites.total);
+    let label = crate::server::frame_sites::label(sites.done, sites.total);
     JobRow {
         detail: match &sites.waiting_for {
             Some(what) => waiting_detail(Some(what.as_str()), &label),
@@ -751,7 +662,7 @@ fn sites_row(db: &DatabaseState, sites: &FrameSitesStatus) -> JobRow {
             RowStatus::Running
         },
         waiting_for: sites.waiting_for.clone(),
-        percent: fraction(sites.done, sites.total),
+        percent: percent(sites.done, sites.total),
         remaining: sites.next_pass.then(|| "another pass queued".to_string()),
         stoppable: true,
         control: Some(RowControl::Sites {
@@ -796,7 +707,7 @@ fn grading_row(db: &DatabaseState, interactive: Option<&str>) -> JobRow {
             RowStatus::Running
         },
         waiting_for,
-        percent: fraction(grading.done, grading.to_measure),
+        percent: percent(grading.done, grading.to_measure),
         link: Some(RowLink::view(LinkView::Calibration, &db.id)),
         ..JobRow::new(
             format!("grading:{}", db.id),
@@ -819,7 +730,7 @@ fn health_row(db: &DatabaseState) -> JobRow {
             grouped(health.total),
             plural(health.total, "project", "projects")
         ),
-        percent: fraction(health.judged, health.total),
+        percent: percent(health.judged, health.total),
         link: Some(RowLink::view(LinkView::Calibration, &db.id)),
         ..JobRow::new(
             format!("health:{}", db.id),
@@ -831,32 +742,18 @@ fn health_row(db: &DatabaseState) -> JobRow {
     .automatic(true)
 }
 
-/// "Checking files 812 of 2,140", "Merging 37 of 203": a stage's verb and
-/// its count, or the verb and an ellipsis before the count is known.
-fn stage_count(verb: &str, done: usize, total: usize) -> String {
-    if total == 0 {
-        return format!("{verb}…");
-    }
-    format!("{verb} {} of {}", grouped(done.min(total)), grouped(total))
-}
-
 /// The duplicate check or repair: a person's, or the check a page starts on
 /// its own, which runs as background work and is listed as waiting while it
 /// pauses for a person's work.
 fn duplicates_row(db: &DatabaseState, duplicates: &DuplicateJobStatus) -> JobRow {
-    use crate::server::calibration_duplicates::{STAGE_COPIES, STAGE_MERGING};
-    let verb = match duplicates.stage.as_deref() {
-        Some(STAGE_COPIES) => "Comparing copies",
-        Some(STAGE_MERGING) => "Merging",
-        _ => "Checking files",
-    };
-    let label = stage_count(verb, duplicates.done, duplicates.total);
+    use crate::server::calibration_duplicates as duplicate_job;
+    let label = duplicate_job::label(
+        duplicates.stage.as_deref(),
+        duplicates.done,
+        duplicates.total,
+    );
     let background = duplicates.priority.as_deref() == Some("background");
-    let title = if duplicates.action.as_deref() == Some("repair") {
-        "Repairing duplicates"
-    } else {
-        "Checking for duplicates"
-    };
+    let title = duplicate_job::title(duplicates.action.as_deref());
     JobRow {
         detail: match &duplicates.waiting_for {
             Some(what) => waiting_detail(Some(what.as_str()), &label),
@@ -868,7 +765,7 @@ fn duplicates_row(db: &DatabaseState, duplicates: &DuplicateJobStatus) -> JobRow
             RowStatus::Running
         },
         waiting_for: duplicates.waiting_for.clone(),
-        percent: fraction(duplicates.done, duplicates.total),
+        percent: percent(duplicates.done, duplicates.total),
         stoppable: true,
         control: Some(RowControl::Duplicates {
             db_id: db.id.clone(),
@@ -888,23 +785,11 @@ fn duplicates_row(db: &DatabaseState, duplicates: &DuplicateJobStatus) -> JobRow
 /// starts each from Settings › Databases, which is a dialog, so the row has
 /// no link.
 fn rejects_row(db: &DatabaseState, rejects: &RemovalJobStatus) -> JobRow {
-    let verb = match rejects.stage.as_deref() {
-        Some("indexing") => "Indexing folders",
-        Some("checking") => "Checking files",
-        Some("moving") => "Moving to the trash",
-        Some("restoring") => "Restoring",
-        Some("deleting") => "Deleting",
-        _ => "Starting",
-    };
-    let title = match rejects.action.as_deref() {
-        Some("remove") => "Removing rejects",
-        Some("restore") => "Restoring rejects",
-        Some("empty_trash") => "Emptying the reject trash",
-        _ => "Previewing reject removal",
-    };
+    use crate::server::reject_removal as removal_job;
+    let title = removal_job::title(rejects.action.as_deref());
     JobRow {
-        detail: stage_count(verb, rejects.done, rejects.total),
-        percent: fraction(rejects.done, rejects.total),
+        detail: removal_job::label(rejects.stage.as_deref(), rejects.done, rejects.total),
+        percent: percent(rejects.done, rejects.total),
         stoppable: true,
         control: Some(RowControl::Rejects {
             db_id: db.id.clone(),
@@ -1032,7 +917,7 @@ fn stack_row(entry: &StackActivityEntry) -> JobRow {
         percent: if queued {
             None
         } else {
-            fraction(entry.processed_units, entry.total_units)
+            percent(entry.processed_units, entry.total_units)
         },
         hint: Some(entry.detail.clone()),
         queue: Some(RowQueue::Stack),
