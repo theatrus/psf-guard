@@ -1085,6 +1085,12 @@ pub struct StackPreviewManager {
     line: crate::server::job_line::JobLine,
     /// What a server stop interrupted, for the journal's last write.
     stop_record: journal::StopRecord,
+    /// One look at a time for a re-apply to start.
+    reapply_looks: reapply::Looks,
+    /// Whether the journal put back what waited before the restart.
+    journal_restored: journal::Restored,
+    /// Builds a restart could not prepare yet, retried for a while.
+    deferred_restores: journal::DeferredRestores,
     /// Stretch, deconvolution and RC-Astro runs waiting in the line or
     /// running, by run id. The journal keeps them through the line's
     /// journal records.
@@ -1094,6 +1100,9 @@ pub struct StackPreviewManager {
     reapplies: Mutex<HashMap<String, reapply::Reapply>>,
     /// Re-applies stopped to make way for a person's work, which wait again.
     yielded: Mutex<HashSet<String>>,
+    /// Processing runs computing now, their progress, and failures kept for
+    /// the next poll.
+    stretch_runs: stretch::StretchRuns,
     /// Builds a person asked for that wait to be prepared, in click order.
     preparing: build_set::PreparationLine,
     /// The longest the next turn is kept for a person's re-apply that has
@@ -1110,6 +1119,10 @@ impl StackPreviewManager {
             latest_write: Mutex::new(()),
             line: crate::server::job_line::JobLine::new(),
             stop_record: journal::StopRecord::default(),
+            reapply_looks: reapply::Looks::default(),
+            journal_restored: journal::Restored::default(),
+            deferred_restores: journal::DeferredRestores::default(),
+            stretch_runs: stretch::StretchRuns::default(),
             processing: Mutex::new(HashMap::new()),
             reapplies: Mutex::new(HashMap::new()),
             yielded: Mutex::new(HashSet::new()),

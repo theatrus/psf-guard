@@ -362,7 +362,7 @@ impl StackPreviewManager {
     fn processing_entry(&self, run_id: &str, run: &ProcessingRun) -> StackActivityEntry {
         let progress = run
             .running
-            .then(|| super::stretch::run_progress(run_id))
+            .then(|| self.stretch_runs.progress(run_id))
             .flatten();
         let stage = progress
             .as_ref()
@@ -544,7 +544,9 @@ mod tests {
         );
         manager.release_place(&run_id);
         assert!(manager.start_processing(&run_id, &cancel));
-        super::super::stretch::report_progress(&run_id, "RC-Astro BlurXTerminator", 0.42);
+        manager
+            .stretch_runs
+            .report_progress(&run_id, "RC-Astro BlurXTerminator", 0.42);
         let entry = manager.active().remove(0);
         assert_eq!(entry.state, StackJobState::Running);
         assert_eq!(entry.detail, "BlurXTerminator");
@@ -571,7 +573,7 @@ mod tests {
             manager.processing_wait(&other).unwrap().describe(),
             "Waiting for BlurXTerminator on M44 · R to finish"
         );
-        super::super::stretch::clear_progress(&run_id);
+        manager.stretch_runs.clear_progress(&run_id);
         manager.finish_processing(&run_id);
         manager.finish_processing(&other);
     }

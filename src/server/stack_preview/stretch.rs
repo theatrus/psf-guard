@@ -443,20 +443,26 @@ pub(super) enum StretchApplyOutcome {
     },
 }
 
-/// One entry per stretch id being computed right now, so identical
-/// concurrent requests wait on the same run instead of starting duplicates.
-static IN_FLIGHT: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> =
-    std::sync::LazyLock::new(Default::default);
-/// The failure of a detached run, held for the next poll of that id.
-static FAILURES: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, String>>> =
-    std::sync::LazyLock::new(Default::default);
-/// Live progress of a running computation, served to the pending poll and
-/// the activity list: the step under way and, while an RC-Astro tool runs,
-/// the chain's overall fraction. A run still waiting for the worker has no
-/// entry here; the manager's line says what it waits for.
-static PROGRESS: std::sync::LazyLock<
-    std::sync::Mutex<std::collections::HashMap<String, PendingProgress>>,
-> = std::sync::LazyLock::new(Default::default);
+/// The processing runs being computed now, their live progress, and the
+/// failures of detached runs, by stretch id. Clones share the record.
+#[derive(Clone, Default)]
+pub(super) struct StretchRuns(std::sync::Arc<StretchRunRecord>);
+
+#[derive(Default)]
+struct StretchRunRecord {
+    /// One entry per stretch id being computed right now, so identical
+    /// concurrent requests wait on the same run instead of starting
+    /// duplicates.
+    in_flight: std::sync::Mutex<std::collections::HashSet<String>>,
+    /// The failure of a detached run, held for the next poll of that id.
+    failures: std::sync::Mutex<std::collections::HashMap<String, String>>,
+    /// Live progress of a running computation, served to the pending poll
+    /// and the activity list: the step under way and, while an RC-Astro
+    /// tool runs, the chain's overall fraction. A run still waiting for the
+    /// worker has no entry here; the manager's line shows what it waits
+    /// for.
+    progress: std::sync::Mutex<std::collections::HashMap<String, PendingProgress>>,
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct PendingProgress {
@@ -466,67 +472,87 @@ pub(super) struct PendingProgress {
     pub fraction: Option<f32>,
 }
 
-/// An RC-Astro tool's progress: its name and the chain's overall fraction.
-pub(super) fn report_progress(stretch_id: &str, stage: &str, fraction: f32) {
-    if let Ok(mut progress) = PROGRESS.lock() {
-        progress.insert(
-            stretch_id.to_string(),
-            PendingProgress {
-                stage: stage.to_string(),
-                fraction: Some(fraction),
-            },
-        );
+impl StretchRuns {
+    /// An RC-Astro tool's progress: its name and the chain's overall
+    /// fraction.
+    pub(super) fn report_progress(&self, stretch_id: &str, stage: &str, fraction: f32) {
+        if let Ok(mut progress) = self.0.progress.lock() {
+            progress.insert(
+                stretch_id.to_string(),
+                PendingProgress {
+                    stage: stage.to_string(),
+                    fraction: Some(fraction),
+                },
+            );
+        }
     }
-}
 
-/// A step that cannot say how far it has got. The fraction so far stays, so
-/// rendering after a finished chain still reads 100%.
-fn report_stage(stretch_id: &str, stage: &str) {
-    if let Ok(mut progress) = PROGRESS.lock() {
-        let fraction = progress.get(stretch_id).and_then(|entry| entry.fraction);
-        progress.insert(
-            stretch_id.to_string(),
-            PendingProgress {
-                stage: stage.to_string(),
-                fraction,
-            },
-        );
+    /// A step that cannot report how far it has got. The fraction so far
+    /// stays, so rendering after a finished chain still reads 100%.
+    fn report_stage(&self, stretch_id: &str, stage: &str) {
+        if let Ok(mut progress) = self.0.progress.lock() {
+            let fraction = progress.get(stretch_id).and_then(|entry| entry.fraction);
+            progress.insert(
+                stretch_id.to_string(),
+                PendingProgress {
+                    stage: stage.to_string(),
+                    fraction,
+                },
+            );
+        }
     }
-}
 
-/// The live progress of a running computation, if it has reported any.
-pub(super) fn run_progress(stretch_id: &str) -> Option<PendingProgress> {
-    PROGRESS.lock().ok()?.get(stretch_id).cloned()
-}
+    /// The live progress of a running computation, if it has reported any.
+    pub(super) fn progress(&self, stretch_id: &str) -> Option<PendingProgress> {
+        self.0.progress.lock().ok()?.get(stretch_id).cloned()
+    }
 
-#[cfg(test)]
-pub(super) fn clear_progress(stretch_id: &str) {
-    if let Ok(mut progress) = PROGRESS.lock() {
-        progress.remove(stretch_id);
+    #[cfg(test)]
+    pub(super) fn clear_progress(&self, stretch_id: &str) {
+        if let Ok(mut progress) = self.0.progress.lock() {
+            progress.remove(stretch_id);
+        }
+    }
+
+    /// Mark the run as computing. `None` when the same run computes already.
+    fn begin(&self, stretch_id: &str) -> Option<InFlightToken> {
+        let mut in_flight = self.0.in_flight.lock().ok()?;
+        in_flight
+            .insert(stretch_id.to_string())
+            .then(|| InFlightToken {
+                runs: self.clone(),
+                stretch_id: stretch_id.to_string(),
+            })
+    }
+
+    /// Keep a detached run's failure for the next poll of its id.
+    fn record_failure(&self, stretch_id: &str, message: String) {
+        if let Ok(mut failures) = self.0.failures.lock() {
+            failures.insert(stretch_id.to_string(), message);
+        }
+    }
+
+    /// The failure of a detached run, once.
+    fn take_failure(&self, stretch_id: &str) -> Option<String> {
+        self.0.failures.lock().ok()?.remove(stretch_id)
     }
 }
 
 /// Removes its id from the in-flight set (and its progress entry) on drop —
 /// panic or success alike.
-struct InFlightToken(String);
+struct InFlightToken {
+    runs: StretchRuns,
+    stretch_id: String,
+}
 
 impl Drop for InFlightToken {
     fn drop(&mut self) {
-        if let Ok(mut in_flight) = IN_FLIGHT.lock() {
-            in_flight.remove(&self.0);
+        if let Ok(mut in_flight) = self.runs.0.in_flight.lock() {
+            in_flight.remove(&self.stretch_id);
         }
-        if let Ok(mut progress) = PROGRESS.lock() {
-            progress.remove(&self.0);
+        if let Ok(mut progress) = self.runs.0.progress.lock() {
+            progress.remove(&self.stretch_id);
         }
-    }
-}
-
-fn try_begin_in_flight(stretch_id: &str) -> Option<InFlightToken> {
-    let mut in_flight = IN_FLIGHT.lock().ok()?;
-    if in_flight.insert(stretch_id.to_string()) {
-        Some(InFlightToken(stretch_id.to_string()))
-    } else {
-        None
     }
 }
 
@@ -1136,12 +1162,10 @@ pub(super) async fn apply_to_fits(
     }
     // A detached run for this exact request already failed: hand the reason
     // to this poll instead of computing again unasked.
-    if let Ok(mut failures) = FAILURES.lock()
-        && let Some(message) = failures.remove(&stretch_id)
-    {
+    if let Some(message) = state.stack_previews.stretch_runs.take_failure(&stretch_id) {
         return Err(AppError::BadRequest(message));
     }
-    let Some(token) = try_begin_in_flight(&stretch_id) else {
+    let Some(token) = state.stack_previews.stretch_runs.begin(&stretch_id) else {
         // The same request is already computing; the caller polls.
         return Ok(StretchApplyOutcome::Pending { stretch_id });
     };
@@ -1149,7 +1173,7 @@ pub(super) async fn apply_to_fits(
         // A server stop, and a restart until the job journal has put the
         // line back, leave a run between two servers. The page keeps
         // polling and finds it again once it is back.
-        if state.shutdown.is_stopping() || !super::journal::restored() {
+        if state.shutdown.is_stopping() || !state.stack_previews.journal_restored.is_done() {
             return Ok(StretchApplyOutcome::Pending { stretch_id });
         }
         return Err(AppError::BadRequest(
@@ -1194,9 +1218,7 @@ pub(super) async fn apply_to_fits(
         Err(_) => Ok(StretchApplyOutcome::Pending { stretch_id }),
         Ok(Ok(Some(response))) => Ok(StretchApplyOutcome::Ready(Box::new(response))),
         Ok(outcome) => {
-            if let Ok(mut failures) = FAILURES.lock()
-                && let Some(message) = failures.remove(&stretch_id)
-            {
+            if let Some(message) = state.stack_previews.stretch_runs.take_failure(&stretch_id) {
                 return Err(AppError::BadRequest(message));
             }
             Err(AppError::InternalError(match outcome {
@@ -1377,9 +1399,13 @@ async fn restore_processing(
             short_id(&stretch_id)
         )));
     }
-    let token = try_begin_in_flight(&stretch_id).ok_or_else(|| {
-        NotRestored::Skip(format!("{} is already running", short_id(&stretch_id)))
-    })?;
+    let token = state
+        .stack_previews
+        .stretch_runs
+        .begin(&stretch_id)
+        .ok_or_else(|| {
+            NotRestored::Skip(format!("{} is already running", short_id(&stretch_id)))
+        })?;
     let origin = JournaledStackJob::Processing {
         database_id: ctx.id.clone(),
         project_id,
@@ -1493,7 +1519,7 @@ pub(super) async fn start_reapply(
         update_carry(&selection_path, |_| ())?;
         return Ok(ReapplyStart::Done);
     }
-    let Some(token) = try_begin_in_flight(&stretch_id) else {
+    let Some(token) = state.stack_previews.stretch_runs.begin(&stretch_id) else {
         // A person's run of this very request is under way: it is the
         // re-apply.
         return Ok(ReapplyStart::Queued(stretch_id));
@@ -2064,10 +2090,11 @@ impl RunLog {
             super::reapply::RunOutcome::Interrupted
         } else {
             tracing::warn!("Stack stretch {} failed: {message}", self.run_id);
-            if !state.stack_previews.is_automatic_processing(&self.run_id)
-                && let Ok(mut failures) = FAILURES.lock()
-            {
-                failures.insert(self.run_id.clone(), message.clone());
+            if !state.stack_previews.is_automatic_processing(&self.run_id) {
+                state
+                    .stack_previews
+                    .stretch_runs
+                    .record_failure(&self.run_id, message.clone());
             }
             if by_stop {
                 super::reapply::RunOutcome::Stopped
@@ -2251,7 +2278,10 @@ fn render_fits_variant(
     stop: &RunStop,
     priority: crate::concurrency::Priority,
 ) -> Result<RenderedVariant, String> {
-    report_stage(stretch_id, "Reading the stack");
+    state
+        .stack_previews
+        .stretch_runs
+        .report_stage(stretch_id, "Reading the stack");
     let frame =
         crate::image_io::open_linear_frame(source_path).map_err(|error| error.to_string())?;
     let samples = frame.image.data.len();
@@ -2332,7 +2362,10 @@ fn render_fits_variant(
             })
         } else {
             stop.check()?;
-            report_stage(stretch_id, "Deconvolution");
+            state
+                .stack_previews
+                .stretch_runs
+                .report_stage(stretch_id, "Deconvolution");
             let (restored, result) = pool.install(|| apply_deconvolution(&frame.image, request))?;
             let parent = fits
                 .parent()
@@ -2386,7 +2419,12 @@ fn render_fits_variant(
                 schemas,
                 linear,
                 &frame.headers,
-                &mut |stage, fraction| report_progress(stretch_id, stage, fraction),
+                &mut |stage, fraction| {
+                    state
+                        .stack_previews
+                        .stretch_runs
+                        .report_progress(stretch_id, stage, fraction)
+                },
                 Some(&cancel),
                 &mut || stop.check(),
             )
@@ -2402,7 +2440,10 @@ fn render_fits_variant(
     let color_calibration = match color_calibration_plan {
         Some(plan) if source_transfer == StackStretchSourceTransfer::Linear => {
             stop.check()?;
-            report_stage(stretch_id, "Color calibration");
+            state
+                .stack_previews
+                .stretch_runs
+                .report_stage(stretch_id, "Color calibration");
             let open_catalog = || {
                 state
                     .astrometry
@@ -2421,7 +2462,10 @@ fn render_fits_variant(
         _ => None,
     };
     let linear = calibrated.as_ref().unwrap_or(linear);
-    report_stage(stretch_id, "Rendering preview");
+    state
+        .stack_previews
+        .stretch_runs
+        .report_stage(stretch_id, "Rendering preview");
     let normalized = if source_transfer == StackStretchSourceTransfer::Linear {
         Some(normalize_linear_image(linear)?)
     } else {
@@ -2817,7 +2861,7 @@ pub(super) fn pending_status(
             queue_position: wait.position,
         };
     }
-    let progress = run_progress(stretch_id);
+    let progress = manager.stretch_runs.progress(stretch_id);
     StretchPendingStatus {
         pending: true,
         stage: progress.as_ref().map(|progress| progress.stage.clone()),

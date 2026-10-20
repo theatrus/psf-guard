@@ -330,9 +330,34 @@ impl Journal {
     }
 }
 
-/// Builds a restart could not prepare yet, retried for a while and kept in
-/// the journal meanwhile.
-static DEFERRED: Mutex<Vec<(JournaledStackJob, Instant)>> = Mutex::new(Vec::new());
+/// Builds a restart could not prepare yet, with when the first try failed.
+/// They are retried for a while and kept in the journal meanwhile.
+#[derive(Default)]
+pub(super) struct DeferredRestores(Mutex<Vec<(JournaledStackJob, Instant)>>);
+
+impl DeferredRestores {
+    fn push(&self, job: JournaledStackJob, since: Instant) {
+        self.0.lock().unwrap().push((job, since));
+    }
+
+    fn take(&self) -> Vec<(JournaledStackJob, Instant)> {
+        std::mem::take(&mut *self.0.lock().unwrap())
+    }
+
+    fn is_empty(&self) -> bool {
+        self.0.lock().unwrap().is_empty()
+    }
+
+    /// The deferred builds, for the journal.
+    fn jobs(&self) -> Vec<JournaledStackJob> {
+        self.0
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(job, _)| job.clone())
+            .collect()
+    }
+}
 
 /// The journal's file for a registry: `<registry stem>.jobs.json` beside it.
 pub fn journal_path(registry_path: &Path) -> PathBuf {
@@ -376,7 +401,7 @@ pub fn snapshot(state: &AppState) -> Journal {
             .then_with(|| left.project_id.cmp(&right.project_id))
     });
     let mut stack = state.stack_previews.journal_entries();
-    stack.extend(DEFERRED.lock().unwrap().iter().map(|(job, _)| job.clone()));
+    stack.extend(state.stack_previews.deferred_restores.jobs());
     Journal {
         schema_version: SCHEMA_VERSION,
         stack,
@@ -502,18 +527,27 @@ pub(super) enum NotRestored {
 }
 
 /// False until [`restore`] has put the line back. Until then a poll for a
-/// processing run the server does not know may be for one about to return.
-static RESTORED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// processing run the server does not know may be for one about to return,
+/// and the refresh scheduler queues nothing ahead of the builds that waited
+/// before the restart. Tests start work without a restore, so a test
+/// manager starts restored.
+pub(super) struct Restored(std::sync::atomic::AtomicBool);
 
-/// Whether the journal has been restored since the server started.
-pub(super) fn restored() -> bool {
-    RESTORED.load(std::sync::atomic::Ordering::Relaxed)
+impl Default for Restored {
+    fn default() -> Self {
+        Self(std::sync::atomic::AtomicBool::new(cfg!(test)))
+    }
 }
 
-/// For tests that start work without a journal restore first.
-#[cfg(test)]
-pub(super) fn mark_restored() {
-    RESTORED.store(true, std::sync::atomic::Ordering::Relaxed);
+impl Restored {
+    /// Whether the journal has been restored since the server started.
+    pub(super) fn is_done(&self) -> bool {
+        self.0.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn mark_done(&self) {
+        self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 /// Put back what the journal kept: stack builds first, in their order, then
@@ -552,7 +586,10 @@ pub async fn restore(state: &Arc<AppState>) {
                 }
                 Err(NotRestored::Retry(reason)) => {
                     tracing::info!("A queued {noun} will be retried: {reason}");
-                    DEFERRED.lock().unwrap().push((job, Instant::now()));
+                    state
+                        .stack_previews
+                        .deferred_restores
+                        .push(job, Instant::now());
                 }
             }
         }
@@ -572,15 +609,14 @@ pub async fn restore(state: &Arc<AppState>) {
         }
         crate::server::wbpp_run::restore_queue(state, queued);
     }
-    super::automatic::mark_ready();
-    RESTORED.store(true, std::sync::atomic::Ordering::Relaxed);
+    state.stack_previews.journal_restored.mark_done();
     // Re-applies that were still settling come back from the selections
     // that remember them.
     {
         let state = Arc::clone(state);
         let _ = tokio::task::spawn_blocking(move || super::reapply::recover(&state)).await;
     }
-    if !DEFERRED.lock().unwrap().is_empty() {
+    if !state.stack_previews.deferred_restores.is_empty() {
         let state = Arc::clone(state);
         tokio::spawn(async move { retry_deferred(state).await });
     }
@@ -592,7 +628,7 @@ async fn retry_deferred(state: Arc<AppState>) {
         if !state.shutdown.sleep(RETRY_EVERY).await {
             return;
         }
-        let pending = std::mem::take(&mut *DEFERRED.lock().unwrap());
+        let pending = state.stack_previews.deferred_restores.take();
         if pending.is_empty() {
             return;
         }
@@ -606,7 +642,9 @@ async fn retry_deferred(state: Arc<AppState>) {
                 Err(NotRestored::Retry(reason)) if since.elapsed() >= RETRY_FOR => {
                     tracing::warn!("Gave up restoring a queued {noun}: {reason}")
                 }
-                Err(NotRestored::Retry(_)) => DEFERRED.lock().unwrap().push((job, since)),
+                Err(NotRestored::Retry(_)) => {
+                    state.stack_previews.deferred_restores.push(job, since)
+                }
             }
         }
     }

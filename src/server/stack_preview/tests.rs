@@ -2025,7 +2025,6 @@ fn reapply_policy(enabled: bool) -> PolicyTurn {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     reapply::configure(enabled);
-    journal::mark_restored();
     PolicyTurn { _guard: guard }
 }
 

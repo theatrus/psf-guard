@@ -187,8 +187,14 @@ pub(super) fn name_scheduled(
         .filter_map(|refresh| {
             let ctx = state.get_database(&refresh.database_id)?;
             let expected = match planning {
-                RefreshPlanning::Plan => Some(automatic::expected_channels(&ctx, &refresh)),
-                RefreshPlanning::CachedOnly => automatic::cached_expected_channels(&refresh),
+                RefreshPlanning::Plan => Some(automatic::expected_channels(
+                    &state.auto_stacks,
+                    &ctx,
+                    &refresh,
+                )),
+                RefreshPlanning::CachedOnly => {
+                    automatic::cached_expected_channels(&state.auto_stacks, &refresh)
+                }
             };
             // Not planned yet: a refresh due and waiting is listed, since
             // what it restacks cannot be told yet.

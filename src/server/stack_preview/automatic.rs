@@ -58,15 +58,6 @@ pub const RESUME_QUIET: Duration = Duration::from_secs(30);
 /// Granularity of journaled due times, in seconds.
 const JOURNAL_DUE_STEP: i64 = 30;
 
-/// False until the job journal has been restored, so the scheduler cannot
-/// queue a refresh ahead of the builds that were waiting before a restart.
-static READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-/// Let the scheduler start refreshes.
-pub fn mark_ready() {
-    READY.store(true, Ordering::Relaxed);
-}
-
 static ENABLED: AtomicBool = AtomicBool::new(false);
 static ARRIVAL_DELAY_MINUTES: AtomicU32 = AtomicU32::new(DEFAULT_ARRIVAL_DELAY_MINUTES);
 static GRADE_DELAY_MINUTES: AtomicU32 = AtomicU32::new(DEFAULT_GRADE_DELAY_MINUTES);
@@ -269,6 +260,8 @@ pub struct AutomaticStackRefresh {
     /// as waiting until their builds join the line, so the header does
     /// not lose them for the moment between.
     starting: Mutex<HashMap<RefreshKey, Pending>>,
+    /// The channels each waiting refresh expects to build, as last planned.
+    expected: Mutex<ExpectedCache>,
 }
 
 impl AutomaticStackRefresh {
@@ -506,7 +499,8 @@ pub fn spawn(state: Arc<AppState>) -> tokio::task::JoinHandle<()> {
 }
 
 async fn tick(state: &Arc<AppState>) {
-    if !READY.load(Ordering::Relaxed) {
+    // Nothing goes ahead of the builds that waited before a restart.
+    if !state.stack_previews.journal_restored.is_done() {
         return;
     }
     let now = Instant::now();
@@ -895,8 +889,6 @@ const EXPECTED_TTL: Duration = Duration::from_secs(60);
 
 type ExpectedKey = (String, Option<i32>, u64, bool, u32);
 type ExpectedCache = HashMap<ExpectedKey, (Instant, Vec<(String, String)>)>;
-static EXPECTED: std::sync::LazyLock<Mutex<ExpectedCache>> =
-    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// The cache key of a refresh's expected channels. A whole-database refresh
 /// is touched by every arrival, so its guess is kept a minute however often
@@ -914,9 +906,11 @@ fn expected_key(refresh: &ScheduledRefresh) -> ExpectedKey {
 /// [`expected_channels`] when it is cached and fresh, without planning.
 /// The jobs route reads this, so it never plans on a shared connection.
 pub(super) fn cached_expected_channels(
+    refreshes: &AutomaticStackRefresh,
     refresh: &ScheduledRefresh,
 ) -> Option<Vec<(String, String)>> {
-    EXPECTED
+    refreshes
+        .expected
         .lock()
         .unwrap()
         .get(&expected_key(refresh))
@@ -931,7 +925,9 @@ fn warm_expected_channels(state: &Arc<AppState>) {
         .auto_stacks
         .scheduled()
         .into_iter()
-        .filter(|refresh| refresh.waiting && cached_expected_channels(refresh).is_none())
+        .filter(|refresh| {
+            refresh.waiting && cached_expected_channels(&state.auto_stacks, refresh).is_none()
+        })
         .collect();
     if waiting.is_empty() {
         return;
@@ -940,7 +936,7 @@ fn warm_expected_channels(state: &Arc<AppState>) {
     tokio::task::spawn_blocking(move || {
         for refresh in waiting {
             if let Some(ctx) = state.get_database(&refresh.database_id) {
-                expected_channels(&ctx, &refresh);
+                expected_channels(&state.auto_stacks, &ctx, &refresh);
             }
         }
     });
@@ -950,10 +946,11 @@ fn warm_expected_channels(state: &Arc<AppState>) {
 /// time, for the header's queue, as (key, name). Empty when it expects to
 /// do nothing.
 pub(super) fn expected_channels(
+    refreshes: &AutomaticStackRefresh,
     ctx: &DatabaseContext,
     refresh: &ScheduledRefresh,
 ) -> Vec<(String, String)> {
-    if let Some(channels) = cached_expected_channels(refresh) {
+    if let Some(channels) = cached_expected_channels(refreshes, refresh) {
         return channels;
     }
     let key = expected_key(refresh);
@@ -980,7 +977,7 @@ pub(super) fn expected_channels(
         })
         .flat_map(|plan| plan.expected)
         .collect::<Vec<_>>();
-    let mut cache = EXPECTED.lock().unwrap();
+    let mut cache = refreshes.expected.lock().unwrap();
     cache.retain(|_, (at, _)| at.elapsed() < EXPECTED_TTL);
     cache.insert(key, (Instant::now(), channels.clone()));
     channels
@@ -1711,7 +1708,6 @@ mod tests {
             project_id: Some(1),
         };
         assert!(state.auto_stacks.run_now(&key));
-        mark_ready();
         tick(&state).await;
         let automatic_build = || {
             state

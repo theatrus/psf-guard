@@ -54,7 +54,8 @@ pub(super) const TURN_HELD_FOR: Duration = Duration::from_secs(60);
 /// One look for a re-apply to start at a time. A look a re-apply asked for
 /// runs after one under way rather than not at all: a person's keeps its
 /// turn until a look starts it.
-static STARTING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+#[derive(Default)]
+pub(super) struct Looks(tokio::sync::Mutex<()>);
 
 /// A re-apply waiting for its turn, or queued as a run.
 #[derive(Debug, Clone)]
@@ -431,20 +432,23 @@ pub(super) fn kick(state: &Arc<AppState>) {
 /// to do and no refresh of its project is still settling. One at a time:
 /// the run it queues keeps the next one waiting.
 pub(super) async fn start_due(state: Arc<AppState>) {
-    let _starting = STARTING.lock().await;
+    let _starting = state.stack_previews.reapply_looks.0.lock().await;
     start_waiting(&state).await;
 }
 
 /// The scheduler's periodic look: skipped while another is under way, such
 /// as one probing the tools, since the next tick looks again.
 pub(super) async fn look_unless_busy(state: Arc<AppState>) {
-    if let Ok(_starting) = STARTING.try_lock() {
+    if let Ok(_starting) = state.stack_previews.reapply_looks.0.try_lock() {
         start_waiting(&state).await;
     }
 }
 
 async fn start_waiting(state: &Arc<AppState>) {
-    if !enabled() || !super::journal::restored() || state.shutdown.is_stopping() {
+    if !enabled()
+        || !state.stack_previews.journal_restored.is_done()
+        || state.shutdown.is_stopping()
+    {
         return;
     }
     // An automatic one is probed and queued while no person's work runs;
