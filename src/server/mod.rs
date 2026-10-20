@@ -640,6 +640,10 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route(
             "/export/server",
             post(handlers::start_server_export_route).get(handlers::get_server_export_progress),
+        )
+        .route(
+            "/export/server/stop",
+            post(handlers::stop_server_export_route),
         );
 
     // Top-level API: global endpoints + nested per-DB routes.

@@ -979,6 +979,34 @@ fn an_import_shows_its_header_reads_and_stop() {
 }
 
 #[test]
+fn an_export_shows_its_files_placed_and_stop() {
+    let rows = row_list(&with_db(DatabaseState {
+        export: Some(crate::server::export_job::ExportJobProgress {
+            running: true,
+            stage: "placing".into(),
+            destination: "/exports/M31".into(),
+            scope: "project M31".into(),
+            total_files: 200,
+            placed_files: 50,
+            ..Default::default()
+        }),
+        ..db("db-1", "Home")
+    }));
+    let row = rows.iter().find(|row| row.kind == RowKind::Export).unwrap();
+    assert_eq!(row.title, "Exporting project M31");
+    assert_eq!(row.detail, "50 of 200 files placed");
+    assert_eq!(row.percent, Some(25.0));
+    assert_eq!(row.hint.as_deref(), Some("/exports/M31"));
+    assert!(!row.background && row.stoppable);
+    assert_eq!(
+        row.control,
+        Some(RowControl::Export {
+            db_id: "db-1".into()
+        })
+    );
+}
+
+#[test]
 fn a_preview_is_a_persons_work_that_stop_ends() {
     let row = row_list(&Snapshot {
         databases: vec![db("db-1", "Home")],

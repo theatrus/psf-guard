@@ -331,12 +331,11 @@ pub async fn export_local_route(
 /// to writes here when configuring the directory, so no management grant
 /// is needed. Reflinks where the filesystem supports it, copies elsewhere.
 pub async fn start_server_export_route(
+    State(state): State<Arc<AppState>>,
     ctx: DbContext,
     Json(req): Json<crate::server::api::ServerExportRequest>,
 ) -> Result<Json<ApiResponse<crate::server::api::ExportStatusResponse>>, AppError> {
-    use crate::commands::export::{
-        execute_plan_with, plan_export_in, sanitize_component, ExportOptions, Placement,
-    };
+    use crate::commands::export::{sanitize_component, ExportOptions, Placement};
     use crate::server::export_job;
 
     let Some(export_root) = ctx.0.export_dir.clone() else {
@@ -386,73 +385,130 @@ pub async fn start_server_export_route(
         )));
     }
 
-    let job_ctx = ctx.0.clone();
-    let job_store = store.clone();
-    tokio::task::spawn_blocking(move || {
-        let run = || -> anyhow::Result<()> {
-            let conn = open_scheduler_connection_with_flags(
-                &job_ctx.database_path,
-                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
-            )
-            .map_err(|e| anyhow::anyhow!("opening {}: {e}", job_ctx.database_path))?;
-            let tree = job_ctx.get_directory_tree()?;
-            let plan = plan_export_in(&conn, &tree, &options)?;
-            std::fs::create_dir_all(&dest)
-                .map_err(|e| anyhow::anyhow!("creating {}: {e}", dest.display()))?;
-            export_job::set_stage(&job_store, "placing");
-            export_job::set_placement_totals(&job_store, plan.items.len(), 0);
-            let summary =
-                execute_plan_with(&plan, &dest, placement, false, &mut |placed, total| {
-                    export_job::set_placement_totals(&job_store, total, placed);
-                });
-            if options.layout == crate::commands::export::ExportLayout::Wbpp {
-                use crate::commands::export::{wbpp, write_wbpp_scripts};
-                export_job::set_stage(&job_store, "scripts");
-                // With frames placed, a runner that cannot be written is
-                // worth logging but never worth failing over. A referenced
-                // export IS the runner, so there it is the failure.
-                let spec = wbpp::WbppScriptSpec {
-                    run: wbpp::WbppRun::default(),
-                    files: files.clone(),
-                    options: wbpp_options.clone(),
-                    bpp_main: None,
-                    stale_frames: Vec::new(),
-                };
-                if let Err(error) = write_wbpp_scripts(&plan, &dest, &spec) {
-                    if !placement.places_files() {
-                        return Err(error);
-                    }
-                    tracing::warn!("No WBPP runner script: {error}");
-                }
-            }
-            tracing::info!(
-                "📤 Server export db={}: planned={} reflinked={} copied={} symlinked={} referenced={} skipped={} missing={} uncalibrated={} errors={} -> {}",
-                job_ctx.id,
-                summary.planned,
-                summary.reflinked,
-                summary.copied,
-                summary.symlinked,
-                summary.referenced,
-                summary.skipped_existing,
-                summary.missing,
-                summary.uncalibrated,
-                summary.errors,
-                dest.display(),
-            );
-            export_job::complete_export(&job_store, summary);
-            Ok(())
-        };
-        if let Err(error) = run() {
-            tracing::warn!("Server export failed: {error:#}");
-            export_job::finish(&job_store, Some(format!("{error:#}")));
-        }
-    });
+    let run = export_job::ExportRun {
+        ctx: Arc::clone(&ctx.0),
+        dest,
+        options,
+        placement,
+        files,
+        wbpp_options,
+    };
+    state
+        .catalog_jobs
+        .exports
+        .request(&state, &ctx.0.id, |queue| queue.pending = Some(run));
 
     Ok(Json(ApiResponse::success(
         crate::server::api::ExportStatusResponse {
             started: true,
             progress: export_job::progress_snapshot(&store),
         },
+    )))
+}
+
+/// An export on the database's export runner: plan it, place its files,
+/// and write the WBPP runner when the layout asks for one. It is a person's
+/// work, which automatic work waits for. Stop ends it before the next file.
+pub(crate) fn run_server_export(
+    state: &Arc<AppState>,
+    run: crate::server::export_job::ExportRun,
+    stop: &crate::concurrency::Stop,
+) {
+    use crate::commands::export::{execute_plan_until, plan_export_in};
+    use crate::server::export_job;
+
+    let export_job::ExportRun {
+        ctx: job_ctx,
+        dest,
+        options,
+        placement,
+        files,
+        wbpp_options,
+    } = run;
+    let job_store = Arc::clone(&job_ctx.export_job);
+    let _person = state.begin_named_interactive_job(format!("an export from {}", job_ctx.name));
+    let keep_going = || !stop.requested() && !state.shutdown.is_stopping();
+    let run = || -> anyhow::Result<()> {
+        let conn = open_scheduler_connection_with_flags(
+            &job_ctx.database_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+        )
+        .map_err(|e| anyhow::anyhow!("opening {}: {e}", job_ctx.database_path))?;
+        let tree = job_ctx.get_directory_tree()?;
+        let plan = plan_export_in(&conn, &tree, &options)?;
+        anyhow::ensure!(
+            keep_going(),
+            "The export stopped before it placed any file."
+        );
+        std::fs::create_dir_all(&dest)
+            .map_err(|e| anyhow::anyhow!("creating {}: {e}", dest.display()))?;
+        export_job::set_stage(&job_store, "placing");
+        export_job::set_placement_totals(&job_store, plan.items.len(), 0);
+        let summary = execute_plan_until(
+            &plan,
+            &dest,
+            placement,
+            false,
+            &mut |placed, total| {
+                export_job::set_placement_totals(&job_store, total, placed);
+            },
+            &keep_going,
+        );
+        anyhow::ensure!(
+            !summary.stopped,
+            "The export stopped. The files placed stay, and the next export skips them."
+        );
+        if options.layout == crate::commands::export::ExportLayout::Wbpp {
+            use crate::commands::export::{wbpp, write_wbpp_scripts};
+            export_job::set_stage(&job_store, "scripts");
+            // With frames placed, a runner that cannot be written is worth
+            // logging but never worth failing over. A referenced export IS
+            // the runner, so there it is the failure.
+            let spec = wbpp::WbppScriptSpec {
+                run: wbpp::WbppRun::default(),
+                files: files.clone(),
+                options: wbpp_options.clone(),
+                bpp_main: None,
+                stale_frames: Vec::new(),
+            };
+            if let Err(error) = write_wbpp_scripts(&plan, &dest, &spec) {
+                if !placement.places_files() {
+                    return Err(error);
+                }
+                tracing::warn!("No WBPP runner script: {error}");
+            }
+        }
+        tracing::info!(
+            "📤 Server export db={}: planned={} reflinked={} copied={} symlinked={} referenced={} skipped={} missing={} uncalibrated={} errors={} -> {}",
+            job_ctx.id,
+            summary.planned,
+            summary.reflinked,
+            summary.copied,
+            summary.symlinked,
+            summary.referenced,
+            summary.skipped_existing,
+            summary.missing,
+            summary.uncalibrated,
+            summary.errors,
+            dest.display(),
+        );
+        export_job::complete_export(&job_store, summary);
+        Ok(())
+    };
+    if let Err(error) = run() {
+        tracing::warn!("Server export failed: {error:#}");
+        export_job::finish(&job_store, Some(format!("{error:#}")));
+    }
+}
+
+/// `POST /api/db/{db_id}/export/server/stop` — stop the database's export
+/// before its next file. Replies whether one was running.
+pub async fn stop_server_export_route(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+) -> Json<ApiResponse<bool>> {
+    Json(ApiResponse::success(crate::server::export_job::stop(
+        &state, &ctx,
     )))
 }
 

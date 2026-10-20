@@ -85,6 +85,7 @@ function runAction(action: ActivityAction): Promise<unknown> {
   if (control.kind === 'wbpp-running') return apiClient.cancelWbppRun(control.dbId);
   if (control.kind === 'preview') return apiClient.stopPreview(control.preview, control.dbId);
   if (control.kind === 'import') return apiClient.stopImport(control.dbId);
+  if (control.kind === 'export') return apiClient.stopServerExport(control.dbId);
   return apiClient.removeQueuedWbppRun(control.dbId, control.queueId);
 }
 

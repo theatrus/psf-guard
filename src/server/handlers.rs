@@ -12,9 +12,10 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
+pub(crate) use export_routes::run_server_export;
 pub use export_routes::{
     export_archive_route, export_local_route, get_server_export_progress,
-    start_server_export_route, CalibrationReportQuery, NightsQuery,
+    start_server_export_route, stop_server_export_route, CalibrationReportQuery, NightsQuery,
 };
 pub(crate) use image_files::find_fits_file_async;
 use image_files::{

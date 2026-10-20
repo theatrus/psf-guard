@@ -91,6 +91,7 @@ pub enum RowKind {
     Upkeep,
     Preview,
     Import,
+    Export,
 }
 
 /// The two lines a person can reorder. Each runs one job at a time.
@@ -125,6 +126,7 @@ pub enum RowControl {
     WbppQueued { db_id: String, queue_id: String },
     Preview { preview: PreviewKind, db_id: String },
     Import { db_id: String },
+    Export { db_id: String },
 }
 
 /// A view in the app.
@@ -313,6 +315,8 @@ pub struct DatabaseState {
     /// An import that writes, while it runs. A preview is listed with the
     /// previews.
     pub import: Option<crate::server::import_job::ImportJobProgress>,
+    /// An export into the export folder, while it runs.
+    pub export: Option<crate::server::export_job::ExportJobProgress>,
 }
 
 /// A Target Scheduler sync or import job, as the rows need it.
@@ -772,6 +776,41 @@ fn import_row(db: &DatabaseState, import: &crate::server::import_job::ImportJobP
                 "Importing new frames"
             } else {
                 "Importing frames"
+            },
+            &db.name,
+        )
+    }
+}
+
+/// An export into the database's export folder.
+fn export_row(db: &DatabaseState, export: &crate::server::export_job::ExportJobProgress) -> JobRow {
+    let detail = match export.stage.as_str() {
+        "placing" => format!(
+            "{} of {} {} placed",
+            grouped(export.placed_files.min(export.total_files)),
+            grouped(export.total_files),
+            plural(export.total_files, "file", "files")
+        ),
+        "scripts" => "Writing the WBPP runner".to_string(),
+        _ => "Planning the export".to_string(),
+    };
+    JobRow {
+        detail,
+        percent: (export.stage == "placing")
+            .then(|| percent(export.placed_files, export.total_files))
+            .flatten(),
+        hint: Some(export.destination.clone()),
+        control: Some(RowControl::Export {
+            db_id: db.id.clone(),
+        }),
+        stoppable: true,
+        ..JobRow::new(
+            format!("export:{}", db.id),
+            RowKind::Export,
+            if export.scope.is_empty() {
+                "Exporting frames".to_string()
+            } else {
+                format!("Exporting {}", export.scope)
             },
             &db.name,
         )
@@ -1479,6 +1518,9 @@ pub fn rows(snapshot: &Snapshot, project_of: ProjectOf) -> Vec<JobRow> {
         if let Some(import) = &db.import {
             rows.push(import_row(db, import));
         }
+        if let Some(export) = &db.export {
+            rows.push(export_row(db, export));
+        }
     }
     // Running builds first, then the line in order.
     let mut stacks: Vec<&StackActivityEntry> = snapshot.stacks.active.iter().collect();
@@ -1601,6 +1643,10 @@ fn snapshot(state: &Arc<AppState>, transfers: Vec<Value>, manages: bool) -> Snap
                 &ctx.import_job,
             ))
             .filter(|progress| progress.running && !progress.preview),
+            export: Some(crate::server::export_job::progress_snapshot(
+                &ctx.export_job,
+            ))
+            .filter(|progress| progress.running),
         })
         .collect();
     let backups_allowed = manages && crate::server::handlers::require_registry_path(state).is_ok();

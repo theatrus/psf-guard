@@ -21,6 +21,8 @@ pub enum PreviewKind {
     Sync,
     /// An import of frames into a database.
     Import,
+    /// An AstroBin export of a database's frames.
+    Export,
 }
 
 /// The previews under way, by kind. Each is keyed by the database whose
@@ -31,6 +33,8 @@ pub struct Previews {
     pub sync: LatestRequests<String>,
     /// Imports, by the database they import into.
     pub import: LatestRequests<String>,
+    /// AstroBin exports, by the database they export from.
+    pub export: LatestRequests<String>,
 }
 
 /// A preview under way, for the jobs route.
@@ -48,12 +52,13 @@ impl Previews {
         match kind {
             PreviewKind::Sync => &self.sync,
             PreviewKind::Import => &self.import,
+            PreviewKind::Export => &self.export,
         }
     }
 
     /// Every preview under way, oldest first within each kind.
     pub fn running(&self) -> Vec<PreviewRun> {
-        [PreviewKind::Sync, PreviewKind::Import]
+        [PreviewKind::Sync, PreviewKind::Import, PreviewKind::Export]
             .into_iter()
             .flat_map(|kind| {
                 self.of(kind).running().into_iter().map(

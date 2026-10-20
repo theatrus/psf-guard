@@ -2048,11 +2048,12 @@ export type JobControl =
   | { kind: 'wbpp-running'; db_id: string }
   | { kind: 'wbpp-queued'; db_id: string; queue_id: string }
   | { kind: 'preview'; preview: PreviewKind; db_id: string }
-  | { kind: 'import'; db_id: string };
+  | { kind: 'import'; db_id: string }
+  | { kind: 'export'; db_id: string };
 
 /** What a preview previews. Mirrors `PreviewKind` in
  *  `src/server/previews.rs`. */
-export type PreviewKind = 'sync' | 'import';
+export type PreviewKind = 'sync' | 'import' | 'export';
 
 /** The view that shows what a job works on: `/{view}?db=…&project=…&target=…`,
  *  then `params` in order. */
@@ -2067,7 +2068,7 @@ export interface JobLink {
 /** One job in the header's list, as `GET /api/jobs` returns it. */
 export interface JobRow {
   key: string;
-  kind: 'refresh' | 'quality' | 'flats' | 'sites' | 'duplicates' | 'rejects' | 'stack' | 'processing' | 'wbpp' | 'transfer' | 'backup' | 'catalog' | 'grading' | 'health' | 'headers' | 'flat_use' | 'upkeep' | 'preview' | 'import';
+  kind: 'refresh' | 'quality' | 'flats' | 'sites' | 'duplicates' | 'rejects' | 'stack' | 'processing' | 'wbpp' | 'transfer' | 'backup' | 'catalog' | 'grading' | 'health' | 'headers' | 'flat_use' | 'upkeep' | 'preview' | 'import' | 'export';
   title: string;
   scope: string;
   detail: string;
@@ -2397,6 +2398,8 @@ export interface AutoImportStatus {
 
 /** What one export placed, and how. */
 export interface ExportSummary {
+  /** Stopped before every planned file was placed. */
+  stopped?: boolean;
   planned: number;
   copied: number;
   linked: number;

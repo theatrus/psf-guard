@@ -1,16 +1,22 @@
-//! Singleton per-DB background export job.
+//! The export into a database's export folder: one at a time per database,
+//! on [`CatalogJobs`], with a progress record the page polls about once a
+//! second. Stop ends it before the next file; the files placed stay, and a
+//! later export skips them.
 //!
-//! Modeled on `import_job`: one job per database at a time, a serializable
-//! progress snapshot the frontend polls (~1s), and `try_begin` / `finish`
-//! guards so a panic can never wedge the singleton.
+//! [`CatalogJobs`]: crate::server::job_line::catalog::CatalogJobs
 //!
 //! Export stages: `planning` (catalog walk + calibration join) → `placing`
 //! (reflink-or-copy of every planned file) → `scripts` (WBPP runner) →
 //! `complete` / `error`.
 
 use crate::commands::export::ExportSummary;
+use crate::concurrency::Stop;
+use crate::server::database_context::DatabaseContext;
+use crate::server::job_line::catalog::{CatalogJob, CatalogWork, Step};
+use crate::server::state::AppState;
 use serde::Serialize;
 use std::sync::{Arc, RwLock};
+use std::time::Instant;
 
 /// Progress of the (singleton per-DB) export job.
 #[derive(Debug, Clone, Default, Serialize)]
@@ -91,6 +97,87 @@ pub fn finish(store: &RwLock<ExportJobStore>, error: Option<String>) {
 
 pub fn progress_snapshot(store: &RwLock<ExportJobStore>) -> ExportJobProgress {
     store.read().unwrap().progress.clone()
+}
+
+/// An export to run, until its runner takes it.
+pub(crate) struct ExportRun {
+    pub ctx: Arc<DatabaseContext>,
+    pub dest: std::path::PathBuf,
+    pub options: crate::commands::export::ExportOptions,
+    pub placement: crate::commands::export::Placement,
+    pub files: crate::commands::export::wbpp::WbppFiles,
+    pub wbpp_options: crate::commands::export::wbpp::WbppOptions,
+}
+
+/// Exports into the server's export folders, one runner per database.
+pub(crate) struct Exports;
+
+#[derive(Default)]
+pub(crate) struct Queue {
+    pub(crate) pending: Option<ExportRun>,
+    /// The record of the export under way, so a failed runner ends it.
+    current: Option<SharedExportJob>,
+}
+
+impl CatalogWork for Exports {
+    type Queue = Queue;
+    type Status = ();
+    type Item = ExportRun;
+    const RUNNER: &'static str = "export";
+    /// A stop ends the export before its next file.
+    const SHUTDOWN_WAITS_FOR: Option<&'static str> = Some("export");
+
+    fn next(_: &AppState, _: &str, queue: &mut Queue, _: Instant) -> Step<ExportRun> {
+        match queue.pending.take() {
+            Some(run) => {
+                queue.current = Some(Arc::clone(&run.ctx.export_job));
+                Step::Run(run)
+            }
+            None => {
+                queue.current = None;
+                Step::Exit
+            }
+        }
+    }
+
+    fn run(state: &Arc<AppState>, _: &str, _: &CatalogJob<Self>, run: ExportRun, stop: &Stop) {
+        crate::server::handlers::run_server_export(state, run, stop);
+    }
+
+    fn has_work(queue: &Queue) -> bool {
+        queue.pending.is_some()
+    }
+
+    fn runner_failed(queue: &mut Queue, _: &mut ()) {
+        let failed = queue.current.take().or_else(|| {
+            queue
+                .pending
+                .take()
+                .map(|run| Arc::clone(&run.ctx.export_job))
+        });
+        if let Some(store) = failed {
+            finish(&store, Some("The export stopped unexpectedly.".into()));
+        }
+    }
+}
+
+/// Stop the database's export before its next file. False when none runs.
+pub fn stop(state: &AppState, ctx: &DatabaseContext) -> bool {
+    if !progress_snapshot(&ctx.export_job).running {
+        return false;
+    }
+    match state.catalog_jobs.exports.existing(&ctx.id) {
+        Some(job) => {
+            job.stop(|queue| {
+                // An export its runner has not taken yet never starts.
+                if let Some(run) = queue.pending.take() {
+                    finish(&run.ctx.export_job, Some("Stopped.".into()));
+                }
+            });
+            true
+        }
+        None => false,
+    }
 }
 
 #[cfg(test)]

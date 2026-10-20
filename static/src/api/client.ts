@@ -1964,6 +1964,13 @@ export const apiClient = {
     return data.data;
   },
 
+  /** Stop the database's export before its next file. The files placed
+   *  stay, and the next export skips them. */
+  stopServerExport: async (dbId: string): Promise<void> => {
+    const apiInstance = await getApi();
+    await apiInstance.post(dbPath(dbId, '/export/server/stop'));
+  },
+
   /** Stop the database's import or import preview. An import that is
    *  writing rolls back. */
   stopImport: async (dbId: string): Promise<void> => {

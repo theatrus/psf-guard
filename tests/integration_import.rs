@@ -566,7 +566,10 @@ async fn the_newest_import_request_replaces_a_preview_and_stop_rolls_back() {
     )
     .await;
     let progress = &body["data"]["progress"];
-    assert!(progress["running"] == true && progress["preview"] == false, "{progress}");
+    assert!(
+        progress["running"] == true && progress["preview"] == false,
+        "{progress}"
+    );
     assert!(!import(true).await, "a preview never replaces an import");
 
     // Stop the import before it writes; the catalog stays as it was.
