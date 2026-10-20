@@ -97,11 +97,12 @@ impl CatalogWork for CalibrationQuality {
 
     fn run(state: &Arc<AppState>, path: &str, job: &Job, (): (), _: &Stop) {
         run_logged(state, path, job);
-        // Grades decide which calibration frames each project's lights use.
-        // When no other pass is pending, request a health pass.
-        if !state.shutdown.is_stopping() && !job.queue().pass_requested {
-            crate::server::calibration_health::request(state, path);
-        }
+    }
+
+    /// Grades decide which calibration frames each project's lights use, so
+    /// health is judged again after the last pass of a batch.
+    fn after_queue_empty(state: &Arc<AppState>, path: &str) {
+        crate::server::calibration_health::request(state, path);
     }
 
     fn has_work(queue: &Queue) -> bool {

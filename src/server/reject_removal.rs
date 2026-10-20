@@ -248,9 +248,10 @@ pub fn status(path: &str) -> RemovalJobStatus {
 /// Stop the run between frames: the frames done stay done.
 pub fn stop(path: &str) -> RemovalJobStatus {
     let job = job(path);
-    job.stop_running_or(|queue| {
-        // The run is pending and the runner thread has not started it:
-        // remove it, so it never starts.
+    job.stop(|queue| {
+        // A run that is pending, and not started by the runner thread, is
+        // removed so it never starts. The stop of a running run, or of one
+        // that is finishing, is requested as well.
         if queue.pending.take().is_some() {
             queue.run_active = false;
             job.update(|status| {

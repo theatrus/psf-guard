@@ -257,8 +257,7 @@ fn request(state: &Arc<AppState>, path: &str, ask: fn(&mut Queue, Instant)) {
 /// until a change, [`resume`], or the next start.
 pub fn cancel(path: &str) -> FrameSitesStatus {
     let job = job(path);
-    job.queue().stop();
-    job.stop_running();
+    job.stop(|queue| queue.stop());
     status(path)
 }
 

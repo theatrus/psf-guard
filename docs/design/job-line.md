@@ -54,10 +54,11 @@ The stack line:
   depends on the stacks those builds make.
 - **A last step that always runs.** A submission's `finally` runs however
   the entry ends, even when publishing or settling it panicked, and is told
-  which (`Ending`). It forgets the stop flag, releases compositions waiting
-  on the build's channels, leaves the quick lane and ends the server stop's
-  wait, so a panic cannot leave a build in the journal or a composition
-  waiting.
+  which (`Ending`). It stops tracking the job and ends the server stop's
+  wait, so a panic cannot leave a build in the journal. A composition
+  blocked by the build's channel keys runs once the build's entry leaves
+  the line, however it ends: the line wakes its dispatchers when an entry
+  ends or is settled after a stop.
 - **Reservations go first.** Work that takes the worker outside the line,
   such as an artifact search or removing calibration masters, is counted
   while it waits, and the dispatcher leaves the lane to it, as the old
@@ -170,7 +171,7 @@ Each entry has:
 | `id` | The ID a page follows. It never changes for the life of the entry. |
 | `kind` | Stack build, color composition, processing run, re-apply. |
 | `tier` | `Interactive` when a person asked for it, otherwise `Viewed` or `Background`. |
-| `lane` | `Worker` for the shared stacking worker, or `Quick` for a composition that runs beside it. |
+| `lane` | `Main` for the shared stacking worker, or `Quick` for a composition that runs beside it. |
 | `state` | See [States](#states). |
 | holds and blocks | The keys it holds, and the keys that block it. See [Waiting](#waiting). |
 | `needs` | What a worker must offer to run it: cores and memory, a GPU, PixInsight or an RC-Astro licence, and read access to its inputs. |

@@ -562,6 +562,7 @@ pub fn spawn(state: Arc<AppState>) -> tokio::task::JoinHandle<()> {
             // Refreshes first: a build they start keeps re-applies waiting.
             if ENABLED.load(Ordering::Relaxed) {
                 tick(&state).await;
+                warm_expected_channels(&state);
             }
             // Re-applying processing follows a person's rebuilds too, so it
             // looks whether automatic refreshes are on or not.
@@ -950,6 +951,54 @@ type ExpectedCache = HashMap<ExpectedKey, (Instant, Vec<(String, String)>)>;
 static EXPECTED: std::sync::LazyLock<Mutex<ExpectedCache>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// The cache key of a refresh's expected channels. A whole-database refresh
+/// is touched by every arrival, so its guess is kept a minute however often
+/// that happens; one project's is cheap to redo on each touch.
+fn expected_key(refresh: &ScheduledRefresh) -> ExpectedKey {
+    (
+        refresh.database_id.clone(),
+        refresh.project_id,
+        refresh.project_id.map_or(0, |_| refresh.touches),
+        BUILD_NEW_CHANNELS.load(Ordering::Relaxed),
+        NEW_CHANNEL_WINDOW_DAYS.load(Ordering::Relaxed),
+    )
+}
+
+/// [`expected_channels`] when it is cached and fresh, without planning.
+/// The jobs route reads this, so it never plans on a shared connection.
+pub(super) fn cached_expected_channels(
+    refresh: &ScheduledRefresh,
+) -> Option<Vec<(String, String)>> {
+    EXPECTED
+        .lock()
+        .unwrap()
+        .get(&expected_key(refresh))
+        .filter(|(at, _)| at.elapsed() < EXPECTED_TTL)
+        .map(|(_, channels)| channels.clone())
+}
+
+/// Work out the expected channels of each refresh that is due and waiting,
+/// on a blocking thread, so the jobs route finds them cached.
+fn warm_expected_channels(state: &Arc<AppState>) {
+    let waiting: Vec<ScheduledRefresh> = state
+        .auto_stacks
+        .scheduled()
+        .into_iter()
+        .filter(|refresh| refresh.waiting && cached_expected_channels(refresh).is_none())
+        .collect();
+    if waiting.is_empty() {
+        return;
+    }
+    let state = Arc::clone(state);
+    tokio::task::spawn_blocking(move || {
+        for refresh in waiting {
+            if let Some(ctx) = state.get_database(&refresh.database_id) {
+                expected_channels(&ctx, &refresh);
+            }
+        }
+    });
+}
+
 /// The channels a waiting refresh expects to restack or stack for the first
 /// time, for the header's queue, as (key, name). Empty when it expects to
 /// do nothing.
@@ -957,21 +1006,10 @@ pub(super) fn expected_channels(
     ctx: &DatabaseContext,
     refresh: &ScheduledRefresh,
 ) -> Vec<(String, String)> {
-    // A whole-database refresh is touched by every arrival, so its guess
-    // is kept a minute however often that happens; one project's is cheap
-    // to redo on each touch.
-    let key = (
-        refresh.database_id.clone(),
-        refresh.project_id,
-        refresh.project_id.map_or(0, |_| refresh.touches),
-        BUILD_NEW_CHANNELS.load(Ordering::Relaxed),
-        NEW_CHANNEL_WINDOW_DAYS.load(Ordering::Relaxed),
-    );
-    if let Some((at, channels)) = EXPECTED.lock().unwrap().get(&key)
-        && at.elapsed() < EXPECTED_TTL
-    {
-        return channels.clone();
+    if let Some(channels) = cached_expected_channels(refresh) {
+        return channels;
     }
+    let key = expected_key(refresh);
     // For a whole database, the guess plans only projects already stacked,
     // and not too many: it runs while the header asks what is queued, on the
     // database's shared connection. New channels elsewhere still stack when
@@ -1843,7 +1881,11 @@ mod tests {
                 total_units: 3,
             }),
         });
-        let listed = super::super::name_scheduled(&state, state.auto_stacks.scheduled());
+        let listed = super::super::name_scheduled(
+            &state,
+            state.auto_stacks.scheduled(),
+            super::super::RefreshPlanning::Plan,
+        );
         assert_eq!(listed.len(), 1);
         assert!(listed[0].waiting);
         assert_eq!(listed[0].channels, ["T · RGB"]);

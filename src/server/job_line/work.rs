@@ -7,7 +7,8 @@
 //! output: it writes the indexes and the catalog, and starts what follows.
 //!
 //! Today every worker is this server, and some kinds still read this
-//! server's catalog while they run; their [`LineWork::NEEDS`] says so. See
+//! server's catalog while they run; their [`LineWork::NEEDS`] is then
+//! [`Needs::ThisServer`]. See
 //! `docs/design/job-line.md`.
 
 use crate::concurrency::Stop;
@@ -23,7 +24,7 @@ use crate::server::state::AppState;
 /// The worker a kind of work can run on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Needs {
-    /// Any worker: the spec names every input.
+    /// Any worker: the spec lists every input.
     AnyWorker,
     /// This server: the work still reads its catalog or its caches while it
     /// runs.
@@ -61,8 +62,8 @@ impl<'a> Worker<'a> {
     ///
     /// # Panics
     ///
-    /// On a worker that is not this server: only work that needs this
-    /// server asks for it.
+    /// On a worker that is not this server. Only work whose
+    /// [`LineWork::NEEDS`] is [`Needs::ThisServer`] calls it.
     pub fn server(&self) -> &'a Arc<AppState> {
         self.server
             .expect("work that reads this server's state runs on this server")
@@ -92,7 +93,17 @@ pub trait Task: Send + 'static {
     fn run(self: Box<Self>, state: &Arc<AppState>, worker: &Worker<'_>);
     /// It was stopped before it ran.
     fn stopped(self: Box<Self>, state: &Arc<AppState>);
+    /// The work as a future, for work that spends its time waiting on
+    /// async I/O, such as a WBPP run that watches PixInsight for hours.
+    /// When this returns a future, the dispatcher awaits it on the runtime
+    /// with the lane's lease held, and does not call [`Task::run`].
+    fn take_future(&mut self, _state: &Arc<AppState>) -> Option<TaskFuture> {
+        None
+    }
 }
+
+/// Work a task runs on the async runtime; see [`Task::take_future`].
+pub type TaskFuture = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
 
 type Publish<W> = Box<dyn FnOnce(&Arc<AppState>, Result<<W as LineWork>::Output, String>) + Send>;
 type Settle = Box<dyn FnOnce(&Arc<AppState>) + Send>;
@@ -147,8 +158,8 @@ impl<W: LineWork> Submission<W> {
         })
     }
 
-    /// Ask `starts` on this server as the work's turn comes; when it says
-    /// no, the work is settled as stopped instead of run.
+    /// Call `starts` on this server when the work's turn comes. When it
+    /// returns false, the work is settled as stopped instead of run.
     pub fn starting_with(
         mut self,
         starts: impl FnOnce(&Arc<AppState>) -> bool + Send + 'static,
@@ -169,7 +180,7 @@ impl<W: LineWork> Submission<W> {
     }
 }
 
-/// Run a step that may panic, and say how it went.
+/// Run a step that may panic, and return how it ended.
 fn guarded(step: impl FnOnce(), on_success: Ending) -> Ending {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(step)) {
         Ok(()) => on_success,

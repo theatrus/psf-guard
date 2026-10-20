@@ -422,8 +422,7 @@ pub fn queue_all(state: &Arc<AppState>, scope: Scope) {
 /// [`resume`], or the next start.
 pub fn cancel(path: &str) -> FlatMeasureStatus {
     let job = job(path);
-    job.queue().stop();
-    job.stop_running();
+    job.stop(|queue| queue.stop());
     status(path)
 }
 

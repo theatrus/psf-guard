@@ -2081,7 +2081,7 @@ pub(super) fn enqueue_color_job(
     let quick = takes_quick_lane(&state, &prepared);
     // A composition stops while it waits for the worker, and while it runs
     // at its next channel or step; a running RC-Astro tool is killed.
-    let cancel = state.stack_previews.track_cancel(&job_id);
+    let cancel = state.stack_previews.track_job(&job_id);
     state.stack_previews.remember_origin(&job_id, origin);
     // A server stop waits for a running composition to reach its next stop
     // point; the journal brings it back, and its finished RC-Astro steps
@@ -2124,7 +2124,7 @@ pub(super) fn enqueue_color_job(
                         job.error = Some(format!("Color worker panicked: {error}"));
                     });
                 }
-                state.stack_previews.forget_cancel_of(&job_id, &cancel);
+                state.stack_previews.forget_job_of(&job_id, &cancel);
                 drop(work);
             })
     });
@@ -2150,7 +2150,7 @@ pub(super) fn enqueue_color_job(
                 job.state = StackJobState::Failed;
                 job.error = Some(error);
             });
-            state.stack_previews.forget_cancel_of(&job_id, &cancel);
+            state.stack_previews.forget_job_of(&job_id, &cancel);
         }
     }
     quick

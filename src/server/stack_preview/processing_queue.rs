@@ -135,7 +135,7 @@ impl StackPreviewManager {
         stoppable: bool,
         origin: super::journal::JournaledStackJob,
     ) -> (Stop, bool) {
-        let cancel = self.track_cancel(run_id);
+        let cancel = self.track_job(run_id);
         let automatic = origin.automatic();
         self.remember_origin(run_id, origin);
         self.processing.lock().unwrap().insert(
@@ -176,7 +176,7 @@ impl StackPreviewManager {
     pub(super) fn finish_processing(&self, run_id: &str) {
         self.processing.lock().unwrap().remove(run_id);
         self.release_place(run_id);
-        self.forget_cancel(run_id);
+        self.forget_job(run_id);
     }
 
     /// The run published its result. During a server stop this keeps it out

@@ -1133,11 +1133,11 @@ impl StackPreviewManager {
     }
 
     /// Track a job about to be queued, with a new stop flag.
-    fn track_cancel(&self, job_id: &str) -> Stop {
+    fn track_job(&self, job_id: &str) -> Stop {
         self.line.track(job_id)
     }
 
-    fn forget_cancel(&self, job_id: &str) {
+    fn forget_job(&self, job_id: &str) {
         self.line.forget(job_id);
     }
 
@@ -1145,7 +1145,7 @@ impl StackPreviewManager {
     /// is still this task's. A refresh that resumes a stopped build asks for
     /// the same job id, so the stopped task, finishing late, must not clear
     /// the new one's flag.
-    fn forget_cancel_of(&self, job_id: &str, flag: &Stop) {
+    fn forget_job_of(&self, job_id: &str, flag: &Stop) {
         self.line.forget_if_current(job_id, flag);
     }
 
@@ -1648,7 +1648,7 @@ impl StackPreviewManager {
     /// own flag.
     pub(super) fn queue_test_build(&self, job_id: &str) {
         let known = self.line.stop_flag(job_id);
-        let stop = known.unwrap_or_else(|| self.track_cancel(job_id));
+        let stop = known.unwrap_or_else(|| self.track_job(job_id));
         assert!(self
             .line
             .submit(
@@ -2050,7 +2050,7 @@ fn queue_preview_render(
         return None;
     }
     let job_id = finished.job_id.clone();
-    let cancel = state.stack_previews.track_cancel(&job_id);
+    let cancel = state.stack_previews.track_job(&job_id);
     let work = state.shutdown.hold(format!(
         "stack preview render for project {} (db={})",
         finished.project_id, finished.database_id
@@ -2078,7 +2078,7 @@ fn queue_preview_render(
     .map(|submission| {
         let (job_id, cancel) = (job_id.clone(), cancel.clone());
         submission.finally(move |state, _| {
-            state.stack_previews.forget_cancel_of(&job_id, &cancel);
+            state.stack_previews.forget_job_of(&job_id, &cancel);
             drop(work);
         })
     });
@@ -2095,7 +2095,7 @@ fn queue_preview_render(
         Err(error) => {
             tracing::warn!(job_id, "Stack preview render could not be queued: {error}");
             finish_preview_render(state, ctx, &job_id);
-            state.stack_previews.forget_cancel_of(&job_id, &cancel);
+            state.stack_previews.forget_job_of(&job_id, &cancel);
         }
     }
     state.stack_previews.get(&job_id)
@@ -2322,26 +2322,39 @@ pub async fn get_stack_activity(
 ) -> Json<ApiResponse<StackActivity>> {
     // Names of scheduled refreshes come from the catalogs: a short read
     // each, off the runtime.
-    let activity = tokio::task::spawn_blocking(move || stack_activity(&state))
-        .await
-        .unwrap_or_else(|_| StackActivity {
-            schema_version: 1,
-            active: Vec::new(),
-            scheduled: Vec::new(),
-            waiting_reapplies: Vec::new(),
-        });
+    let activity =
+        tokio::task::spawn_blocking(move || stack_activity(&state, RefreshPlanning::Plan))
+            .await
+            .unwrap_or_else(|_| StackActivity {
+                schema_version: 1,
+                active: Vec::new(),
+                scheduled: Vec::new(),
+                waiting_reapplies: Vec::new(),
+            });
     Json(ApiResponse::success(activity))
+}
+
+/// Whether listing stack work may plan a waiting refresh to learn which
+/// channels it would restack.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RefreshPlanning {
+    /// Plan on the database's shared connection when the cache has no
+    /// answer: the Stacks page's route.
+    Plan,
+    /// Read only what the refresh scheduler cached: the header's jobs
+    /// route, which must not wait for a shared connection.
+    CachedOnly,
 }
 
 /// The stack work queued, running or waiting on every database. Reads a
 /// short query per scheduled refresh to name its project, so call it off
 /// the async runtime.
-pub(crate) fn stack_activity(state: &Arc<AppState>) -> StackActivity {
+pub(crate) fn stack_activity(state: &Arc<AppState>, planning: RefreshPlanning) -> StackActivity {
     let scheduled = state.auto_stacks.scheduled();
     let scheduled = if scheduled.is_empty() {
         Vec::new()
     } else {
-        name_scheduled(state, scheduled)
+        name_scheduled(state, scheduled, planning)
     };
     let waiting_reapplies = waiting_reapplies(state, &scheduled);
     // Read after the refreshes and re-applies, so one that started
@@ -2470,6 +2483,7 @@ fn waiting_reapplies(
 fn name_scheduled(
     state: &AppState,
     scheduled: Vec<automatic::ScheduledRefresh>,
+    planning: RefreshPlanning,
 ) -> Vec<ScheduledRefreshView> {
     // Soonest first: a later refresh whose channels an earlier one of the
     // same database already restacks would find nothing left, so it is not
@@ -2479,7 +2493,14 @@ fn name_scheduled(
         .into_iter()
         .filter_map(|refresh| {
             let ctx = state.get_database(&refresh.database_id)?;
-            let expected = automatic::expected_channels(&ctx, &refresh);
+            let expected = match planning {
+                RefreshPlanning::Plan => Some(automatic::expected_channels(&ctx, &refresh)),
+                RefreshPlanning::CachedOnly => automatic::cached_expected_channels(&refresh),
+            };
+            // Not planned yet: a refresh due and waiting is listed, since
+            // what it restacks cannot be told yet.
+            let unknown = expected.is_none() && refresh.waiting;
+            let expected = expected.unwrap_or_default();
             let fresh = expected
                 .iter()
                 .filter(|(key, _)| claimed.insert((refresh.database_id.clone(), key.clone())))
@@ -2499,12 +2520,15 @@ fn name_scheduled(
             } else {
                 channels
             };
-            (fresh > 0 || (refresh.waiting && refresh.interrupted)).then_some((refresh, channels))
+            (fresh > 0 || unknown || (refresh.waiting && refresh.interrupted))
+                .then_some((refresh, channels))
         })
         .map(|(refresh, channels)| {
             let ctx = state.get_database(&refresh.database_id);
             let project_name = match (&ctx, refresh.project_id) {
-                (Some(ctx), Some(project_id)) => ctx.db().lock().ok().and_then(|conn| {
+                // Not waiting for the shared connection: a busy one leaves
+                // the name out, and the row shows the project's number.
+                (Some(ctx), Some(project_id)) => ctx.db().try_lock().ok().and_then(|conn| {
                     conn.query_row(
                         "SELECT name FROM project WHERE Id = ?1",
                         [project_id],
@@ -3152,7 +3176,7 @@ fn enqueue_job(
 ) {
     let job_id = prepared.public.job_id.clone();
     let database_id = prepared.public.database_id.clone();
-    let cancel = state.stack_previews.track_cancel(&job_id);
+    let cancel = state.stack_previews.track_job(&job_id);
     state.stack_previews.remember_origin(&job_id, origin);
     // A stop waits for the build to checkpoint, or to leave the line.
     let work = state.shutdown.hold(format!(
@@ -3191,7 +3215,7 @@ fn enqueue_job(
                         job.error = Some(format!("Stack worker panicked: {error}"));
                     });
                 }
-                state.stack_previews.forget_cancel_of(&job_id, &cancel);
+                state.stack_previews.forget_job_of(&job_id, &cancel);
                 drop(work);
             })
     });
@@ -3223,7 +3247,7 @@ fn enqueue_job(
                 job.state = StackJobState::Failed;
                 job.error = Some(error);
             });
-            state.stack_previews.forget_cancel_of(&job_id, &cancel);
+            state.stack_previews.forget_job_of(&job_id, &cancel);
         }
     }
 }
@@ -6172,7 +6196,7 @@ mod tests {
             job.project_id = project_id;
             job.state = state;
             assert!(manager.insert(job));
-            manager.track_cancel(job_id);
+            manager.track_job(job_id);
             manager.remember_origin(job_id, origin(project_id, false));
         }
         manager.queue_test_build("waiting");
@@ -6201,7 +6225,7 @@ mod tests {
         ] {
             manager.update(job_id, |job| job.state = state);
             manager.line.remove(job_id);
-            manager.forget_cancel(job_id);
+            manager.forget_job(job_id);
         }
         assert_eq!(
             manager.journal_entries(),
@@ -6215,14 +6239,14 @@ mod tests {
         let manager = StackPreviewManager::new();
         assert!(!manager.request_cancel("never-queued"));
 
-        let flag = manager.track_cancel("queued");
+        let flag = manager.track_job("queued");
         assert!(!flag.requested());
         assert!(manager.request_cancel("queued"));
         assert!(flag.requested());
 
         // A job that has left the queue cannot be cancelled again, so the
         // handler can answer "too late" instead of pretending it stopped.
-        manager.forget_cancel("queued");
+        manager.forget_job("queued");
         assert!(!manager.request_cancel("queued"));
     }
 
@@ -7834,7 +7858,7 @@ mod tests {
         // The person's build holds the worker, and their next one waits for
         // its turn.
         let busy = state.stack_previews.line.reserve_main().await;
-        let cancel = state.stack_previews.track_cancel("later");
+        let cancel = state.stack_previews.track_job("later");
         let (took, took_worker) = tokio::sync::oneshot::channel();
         let (release, released) = std::sync::mpsc::channel::<()>();
         let (done, later) = tokio::sync::oneshot::channel::<()>();
@@ -8158,7 +8182,7 @@ mod tests {
         let mut job = running_build("auto");
         job.automatic = true;
         assert!(manager.insert(job));
-        manager.track_cancel("auto");
+        manager.track_job("auto");
         // The person's Stop: the flag is set, the job still reads Running.
         assert!(manager.request_cancel("auto"));
         // The person's own build then interrupts automatic work.
@@ -8172,14 +8196,14 @@ mod tests {
     #[test]
     fn a_stopped_task_finishing_late_keeps_the_new_jobs_stop_flag() {
         let manager = StackPreviewManager::new();
-        let stopped = manager.track_cancel("same");
+        let stopped = manager.track_job("same");
         // A resumed refresh asks for the same job id.
-        let resumed = manager.track_cancel("same");
-        manager.forget_cancel_of("same", &stopped);
+        let resumed = manager.track_job("same");
+        manager.forget_job_of("same", &stopped);
         assert!(manager.request_cancel("same"), "the new flag was forgotten");
         assert!(resumed.requested());
         assert!(!stopped.requested());
-        manager.forget_cancel_of("same", &resumed);
+        manager.forget_job_of("same", &resumed);
         assert!(!manager.request_cancel("same"));
     }
 
@@ -8699,7 +8723,7 @@ mod tests {
         // The builds it becomes take its place, ahead of the one queued
         // after it, and the place goes once it is prepared.
         for job_id in ["red", "green"] {
-            let stop = manager.track_cancel(job_id);
+            let stop = manager.track_job(job_id);
             assert!(manager
                 .line
                 .submit(

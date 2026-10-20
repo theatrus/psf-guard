@@ -65,9 +65,18 @@ async fn dispatch(state: Arc<AppState>, rules: &'static DispatchRules, lane: Lan
             Dispatch::Run {
                 id,
                 stop,
-                task,
+                mut task,
                 lease,
             } => {
+                if let Some(work) = task.take_future(&state) {
+                    // Awaited on the runtime, which drops it when the
+                    // server stops, as it drops other async work.
+                    tokio::spawn(async move {
+                        work.await;
+                        drop(lease);
+                    });
+                    continue;
+                }
                 let turn = (rules.turn)(&state, &id);
                 let person = turn
                     .pauses_background_work

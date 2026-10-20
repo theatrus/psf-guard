@@ -45,9 +45,10 @@ pub fn enabled() -> bool {
 /// re-apply has a turn kept for it instead, and looks at once.
 const SETTLE: Duration = Duration::from_secs(3);
 
-/// The longest a turn is kept for a person's re-apply that has not queued
-/// its run yet, once that turn holds anything up. Probing the tools takes
-/// seconds; past this, the line moves on without it.
+/// The longest a turn is reserved for a person's re-apply that has not
+/// queued its run yet, counted from when an entry waits behind the turn.
+/// Probing the tools takes seconds; past this, the turn expires and the
+/// next entry runs.
 pub(super) const TURN_HELD_FOR: Duration = Duration::from_secs(60);
 
 /// One look for a re-apply to start at a time. A look a re-apply asked for

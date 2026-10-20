@@ -95,8 +95,20 @@ the job's own status route reads, and builds the row's title, scope,
 progress text, percent, tier, place in its line, what it waits for, the
 control its Stop and move buttons call, and a structured link to the view
 of its work. The server resolves a target's project for the link, so the
-client needs no target list. The route runs no slow query: the duplicate
-check's `stale` test, for one, stays in its own route.
+client needs no target list. The route never waits for a database's
+shared connection or plans work:
+
+- The project of a target is cached; an uncached one is read only when
+  the shared connection is free. Until then, the row links to the
+  database's images.
+- The channels a waiting stack refresh would restack come from a cache
+  that the refresh scheduler fills on its own thread. A waiting refresh
+  that is not planned yet is listed without them.
+- The project name of a waiting refresh is left out while the shared
+  connection is busy.
+- The duplicate check's `stale` test stays in its own route.
+- The route waits at most half a second for the Director's transfer list,
+  and otherwise lists the transfers of the last poll.
 
 The route also returns each database's `busy` and `scanning` state and its
 last scan's frame errors. The header uses them to read a database's views

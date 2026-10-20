@@ -27,8 +27,8 @@
 //!   run while its database copies masters.
 //!
 //! An entry stopped while it waits leaves at the next dispatch, with its
-//! [`Task::stopped`] run, whatever else is running. The line knows nothing
-//! of what its entries do. See `docs/design/job-line.md`.
+//! [`Task::stopped`] run, whatever else is running. The line stores no
+//! knowledge of what its entries do. See `docs/design/job-line.md`.
 
 use crate::concurrency::Stop;
 use std::collections::{HashMap, VecDeque};
@@ -42,7 +42,7 @@ mod dispatch;
 mod tracked;
 mod work;
 pub use dispatch::{DispatchRules, Turn};
-pub use work::{Ending, LineWork, Needs, Submission, Task, Worker};
+pub use work::{Ending, LineWork, Needs, Submission, Task, TaskFuture, Worker};
 
 /// Where an entry runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -227,9 +227,17 @@ impl LineState {
         }
     }
 
-    /// Take out the entry that runs next on `lane`, or say until when a
-    /// reserved turn holds the lane. Held places are passed over; a reserved
-    /// turn that ran out leaves.
+    /// Take out the entry that runs next on `lane`. When a reserved turn
+    /// blocks the lane, return when it expires instead. Held places and
+    /// blocked entries are passed over; a reserved turn that expired is
+    /// removed.
+    /// Whether an entry after `index` in the main lane's line could run.
+    fn runnable_after(&self, index: usize) -> bool {
+        self.order[index + 1..]
+            .iter()
+            .any(|place| matches!(place, Place::Work(entry) if !self.is_blocked(entry)))
+    }
+
     fn take_next(&mut self, lane: Lane) -> Result<Entry, Option<Instant>> {
         if lane == Lane::Quick {
             let index = (0..self.quick.len())
@@ -246,6 +254,11 @@ impl LineState {
                 index += 1;
                 continue;
             }
+            if matches!(self.order[index], Place::Reserved { .. }) && !self.runnable_after(index) {
+                // Nothing could run behind the reserved turn, so it blocks
+                // nothing yet and its time does not start.
+                return Err(None);
+            }
             match &mut self.order[index] {
                 Place::Held { .. } => index += 1,
                 Place::Reserved {
@@ -259,8 +272,8 @@ impl LineState {
                     }
                     tracing::warn!(
                         reserved = id.as_str(),
-                        "The next turn on the worker was kept for work that did not join \
-                         in time; the line moves on"
+                        "The work a turn on the main lane was reserved for did not join in \
+                         time; the reserved turn expired and the next entry runs"
                     );
                     self.order.remove(index);
                 }
@@ -278,8 +291,9 @@ impl LineState {
 #[derive(Default)]
 pub struct JobLine {
     state: Arc<Mutex<LineState>>,
-    /// Wakes the dispatchers when the line or a lane changes. Kept inside:
-    /// callers say what changed, not how to wake anyone.
+    /// Wakes the dispatchers when the line or a lane changes. Private:
+    /// callers report a change through [`JobLine::changed`] and the other
+    /// methods, which wake the dispatchers.
     wakeup: Arc<Notify>,
     /// The stop flags and journal records of the jobs this line tracks.
     tracked: tracked::Tracked,
@@ -468,8 +482,9 @@ impl JobLine {
 
     /// Keep the next turn on the main lane for work about to join under
     /// another id: at the front, or just after `after` when it is in line.
-    /// It holds the lane for `hold_for` from when it first holds anything
-    /// up, and then the line moves on without it.
+    /// It blocks the lane for `hold_for`, counted from when an entry that
+    /// could run waits behind it; then the turn expires and the next entry
+    /// runs.
     pub fn reserve_turn(&self, id: &str, hold_for: Duration, after: Option<&str>) {
         {
             let mut state = self.lock();
@@ -658,6 +673,12 @@ impl JobLine {
         self.tracked.journal_of(id)
     }
 
+    /// Stop tracking the job `id` and return its journal record. Of two
+    /// callers taking the same job, only one gets the record.
+    pub fn take_journal<T: serde::de::DeserializeOwned>(&self, id: &str) -> Option<T> {
+        self.tracked.take_journal(id)
+    }
+
     /// The journal records of every tracked job that has one, by id.
     pub fn journals<T: serde::de::DeserializeOwned>(&self) -> Vec<(String, T)> {
         self.tracked.journals()
@@ -767,6 +788,10 @@ impl JobLine {
     fn try_next(&self, lane: Lane) -> Result<Dispatch, Option<Instant>> {
         let mut state = self.lock();
         if let Some(entry) = state.take_stopped(lane) {
+            // The keys it held are free now: entries blocked by them, in
+            // either lane, may run.
+            drop(state);
+            self.wake();
             return Ok(Dispatch::Stopped {
                 id: entry.id,
                 task: entry.task,
@@ -869,7 +894,7 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
-    /// A task that says which way it ended.
+    /// A task that reports whether it ran or was stopped.
     struct Probe(std::sync::mpsc::Sender<(&'static str, String)>, String);
 
     impl Task for Probe {
@@ -979,8 +1004,8 @@ mod tests {
         assert_eq!(id_of(&next.await.unwrap()), ("run", "joined"));
         assert_eq!(line.order(), ["waiting"]);
 
-        // A kept turn whose work never joins runs out, counted from when it
-        // first held anything up, and the line moves on.
+        // A reserved turn whose work never joins expires, counted from when
+        // an entry waits behind it, and the next entry runs.
         line.reserve_turn("lapses", Duration::from_millis(60), None);
         let started = Instant::now();
         assert_eq!(id_of(&line.next(Lane::Main).await), ("run", "waiting"));
@@ -1076,6 +1101,56 @@ mod tests {
         drop(running);
         assert_eq!(line.lane_of("quick"), None);
         assert_eq!(line.running_on(Lane::Quick), None);
+    }
+
+    #[tokio::test]
+    async fn stopping_a_queued_entry_frees_the_entries_its_keys_blocked() {
+        let (sender, _) = std::sync::mpsc::channel();
+        let line = Arc::new(JobLine::new());
+        let _busy = line.try_reserve_main().unwrap();
+        let (build, stop) = entry("build", Lane::Main, &sender);
+        line.submit(build.holding(vec!["target 7".into()]), None)
+            .ok()
+            .unwrap();
+        let (compose, _) = entry("compose", Lane::Quick, &sender);
+        line.submit(compose.blocked_by(vec!["target 7".into()]), None)
+            .ok()
+            .unwrap();
+        // The quick dispatcher sleeps: the queued build holds the key.
+        let quick = {
+            let line = Arc::clone(&line);
+            tokio::spawn(async move { id_of(&line.next(Lane::Quick).await).1.to_string() })
+        };
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(!quick.is_finished());
+        // The build is stopped, and the main dispatcher settles it without
+        // any other change to the line.
+        stop.request();
+        assert_eq!(id_of(&line.next(Lane::Main).await), ("stopped", "build"));
+        let ran = tokio::time::timeout(Duration::from_secs(2), quick).await;
+        assert_eq!(
+            ran.expect("the composition was not woken").unwrap(),
+            "compose"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_reserved_turn_does_not_expire_while_nothing_waits_behind_it() {
+        let (sender, _) = std::sync::mpsc::channel();
+        let line = Arc::new(JobLine::new());
+        line.reserve_turn("kept", Duration::from_millis(40), None);
+        let next = {
+            let line = Arc::clone(&line);
+            tokio::spawn(async move { id_of(&line.next(Lane::Main).await).1.to_string() })
+        };
+        // Longer than the turn is reserved for, with nothing behind it.
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        assert_eq!(line.order(), ["kept"]);
+        line.submit(entry("joined", Lane::Main, &sender).0, None)
+            .ok()
+            .unwrap();
+        line.fill_reservation("kept", "joined");
+        assert_eq!(next.await.unwrap(), "joined");
     }
 
     #[tokio::test]

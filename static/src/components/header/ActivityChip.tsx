@@ -6,6 +6,8 @@ import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import { STACK_ACTIVITY_QUERY_KEY } from '../../hooks/useStackActivity';
 import { duplicatesKey } from '../calibration/duplicateJob';
+import { flatMeasureKey } from '../calibration/flatMeasureLabel';
+import { frameSitesKey } from '../calibration/frameSitesKey';
 import { rejectRemovalKey } from '../rejectRemovalJob';
 import {
   groupActivity,
@@ -351,15 +353,21 @@ export default function ActivityChip() {
         queryClient.setQueryData(duplicatesKey(variables.control.dbId), result);
       } else if (variables.control.kind === 'rejects') {
         queryClient.setQueryData(rejectRemovalKey(variables.control.dbId), result);
+      } else if (variables.control.kind === 'flats') {
+        // The Calibration page shows the paused rigs and Resume at once.
+        queryClient.setQueryData(flatMeasureKey(variables.control.dbId), result);
+      } else if (variables.control.kind === 'sites') {
+        queryClient.setQueryData(frameSitesKey(variables.control.dbId), result);
       }
     },
     onSettled: () => {
-      // Read at once, so a second click does not act on the old positions.
-      queryClient.invalidateQueries({ queryKey: JOBS_QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: STACK_ACTIVITY_QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: TRANSFER_QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: BACKUP_STATUS_QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: TS_SYNC_QUERY_KEY });
+      // The mutation stays pending, and the controls disabled, until the job
+      // list is read again: a second click then acts on the new positions.
+      return queryClient.invalidateQueries({ queryKey: JOBS_QUERY_KEY });
     },
   });
   const [pinned, setPinned] = useState(false);

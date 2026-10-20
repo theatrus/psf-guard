@@ -270,7 +270,7 @@ pub(super) fn queue(
              {MAX_REMEMBERED_JOBS} may be running or kept"
         )));
     }
-    let cancel = manager.track_cancel(&job_id);
+    let cancel = manager.track_job(&job_id);
     manager.remember_origin(
         &job_id,
         asked
@@ -495,7 +495,7 @@ fn wait_for_channels(state: &Arc<AppState>, mut preparation: Preparation) -> Opt
         preparation.job_id.clone(),
         super::Lane::Quick,
         preparation.cancel.clone(),
-        Box::new(ChannelsBuilt(preparation)),
+        Box::new(ChannelWait(preparation)),
     )
     .blocked_by(keys);
     super::submit_entry(state, entry, None);
@@ -506,9 +506,9 @@ fn wait_for_channels(state: &Arc<AppState>, mut preparation: Preparation) -> Opt
 /// When the line runs it, no build holds the channels, and the composition
 /// goes back to its catalog's preparation line to be prepared from the new
 /// stacks. A stopped composition goes back too, and preparation ends it.
-struct ChannelsBuilt(Preparation);
+struct ChannelWait(Preparation);
 
-impl super::Task for ChannelsBuilt {
+impl super::Task for ChannelWait {
     fn what(&self) -> &'static str {
         "a color composition"
     }
@@ -674,7 +674,7 @@ fn end_preparation(
     // What it became holds its place now; one prepared under the slot's
     // own id took it.
     manager.release_place(slot);
-    manager.forget_cancel_of(slot, &preparation.cancel);
+    manager.forget_job_of(slot, &preparation.cancel);
     {
         let mut line = manager.preparing.lock().unwrap();
         if line.by_request.get(&preparation.request_key) == Some(&preparation.job_id) {

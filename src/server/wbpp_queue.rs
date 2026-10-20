@@ -14,7 +14,9 @@ use std::sync::{
 
 use serde::{Deserialize, Serialize};
 
-use super::job_line::{DispatchRules, Entry, JobLine, KeyHold, Lane, Lease, Task, Turn, Worker};
+use super::job_line::{
+    DispatchRules, Entry, JobLine, KeyHold, Lane, Lease, Task, TaskFuture, Turn, Worker,
+};
 use super::state::AppState;
 use super::wbpp_run::StartWbppRunRequest;
 use crate::concurrency::Priority;
@@ -154,23 +156,26 @@ impl WbppQueue {
     /// Take the run that the dispatcher starts out of the queue. `None`
     /// when the run was removed meanwhile.
     fn take(&self, id: &str) -> Option<QueuedRun> {
-        let run = self.line.journal_of(id);
-        self.line.forget(id);
-        run
+        self.line.take_journal(id)
     }
 
-    /// Take one database's queued run out of the line.
+    /// Take one database's queued run out of the line. `None` when the run
+    /// belongs to another database, or already started.
     pub fn remove(&self, db_id: &str, id: &str) -> Option<QueuedRun> {
-        let run: QueuedRun = self
+        let theirs = self
             .line
-            .journal_of(id)
-            .filter(|run: &QueuedRun| run.db_id == db_id)?;
+            .journal_of::<QueuedRun>(id)
+            .is_some_and(|run| run.db_id == db_id);
+        if !theirs {
+            return None;
+        }
+        // Taken in one step, so the dispatcher cannot also start it.
+        let run: QueuedRun = self.line.take_journal(id)?;
         // The dispatcher removes the stopped entry from the line.
-        if let Some(stop) = self.line.stop_flag(id) {
+        if let Some(stop) = self.line.stop_of(id) {
             stop.request();
             self.line.changed();
         }
-        self.line.forget(id);
         Some(run)
     }
 
@@ -243,14 +248,25 @@ impl Task for StartQueuedRun {
         "a WBPP run"
     }
 
-    /// Runs on a blocking thread, and returns when the WBPP run ends, so
-    /// PixInsight stays reserved for the whole run.
-    fn run(self: Box<Self>, state: &Arc<AppState>, _worker: &Worker<'_>) {
-        let Some(run) = state.wbpp_queue.take(&self.id) else {
-            return;
-        };
-        tokio::runtime::Handle::current()
-            .block_on(super::wbpp_run::start_queued(Arc::clone(state), run));
+    /// The dispatcher takes the future instead; this runs the same future
+    /// on the calling thread for any other caller.
+    fn run(mut self: Box<Self>, state: &Arc<AppState>, _worker: &Worker<'_>) {
+        if let Some(work) = self.take_future(state) {
+            tokio::runtime::Handle::current().block_on(work);
+        }
+    }
+
+    /// The WBPP run as a future, which ends when the run ends, so
+    /// PixInsight stays reserved for the whole run. `None`, and nothing
+    /// runs, when the run was removed from the queue meanwhile.
+    fn take_future(&mut self, state: &Arc<AppState>) -> Option<TaskFuture> {
+        let state = Arc::clone(state);
+        let id = std::mem::take(&mut self.id);
+        Some(Box::pin(async move {
+            if let Some(run) = state.wbpp_queue.take(&id) {
+                super::wbpp_run::start_queued(state, run).await;
+            }
+        }))
     }
 
     fn stopped(self: Box<Self>, state: &Arc<AppState>) {

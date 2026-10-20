@@ -429,6 +429,42 @@ describe('ActivityChip', () => {
     await waitFor(() => expect(calls).toContain('cancel R'));
   });
 
+  it('keeps the move buttons disabled until the job list is read again', async () => {
+    let rows = [
+      stackRow('R', 'running', 1, 4),
+      stackRow('B', 'queued', 0, 0, 0),
+      stackRow('G', 'queued', 0, 0, 1),
+    ];
+    let release: (() => void) | null = null;
+    let moved = false;
+    server.use(
+      http.get('/api/jobs', async () => {
+        // The first read after the move waits until the test releases it.
+        if (moved && release === null) {
+          await new Promise<void>((resolve) => { release = resolve; });
+        }
+        return ok({ jobs: rows, databases: [askar()] });
+      }),
+      http.post('/api/stack-activity/:jobId/move', () => {
+        moved = true;
+        rows = [stackRow('R', 'running', 1, 4), stackRow('G', 'queued', 0, 0, 0), stackRow('B', 'queued', 0, 0, 1)];
+        return ok({ schema_version: 1, active: [] });
+      })
+    );
+    renderChip();
+    await userEvent.click(await screen.findByRole('button', { name: /Background jobs/ }));
+    const list = await screen.findByRole('region', { name: 'Background jobs' });
+    await userEvent.click(within(list).getByRole('button', { name: 'Run Stacking: Alpha M44 · G earlier' }));
+    await waitFor(() => expect(release).not.toBeNull());
+    // The move answered, but the list still shows the old order: the
+    // controls stay disabled.
+    expect(within(list).getByRole('button', { name: 'Run Stacking: Alpha M44 · B later' })).toBeDisabled();
+    act(() => release!());
+    await waitFor(() =>
+      expect(within(list).getByRole('button', { name: 'Run Stacking: Alpha M44 · G later' })).toBeEnabled()
+    );
+  });
+
   it.each(['mono', 'processing'] as const)('moves a user-started %s task straight to the top across both headings', async (kind) => {
     const promoted = (position: number): JobRow => ({
       ...stackRow('G', 'queued', 0, 0, position),

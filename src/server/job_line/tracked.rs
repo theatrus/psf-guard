@@ -115,6 +115,13 @@ impl Tracked {
         serde_json::from_value(value).ok()
     }
 
+    /// Stop tracking the job `id` and return its journal record, in one
+    /// step: two callers cannot both take the same job.
+    pub(super) fn take_journal<T: DeserializeOwned>(&self, id: &str) -> Option<T> {
+        let job = self.jobs().remove(id)?;
+        serde_json::from_value(job.journal?).ok()
+    }
+
     pub(super) fn journals<T: DeserializeOwned>(&self) -> Vec<(String, T)> {
         self.jobs()
             .iter()

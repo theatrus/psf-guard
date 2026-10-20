@@ -852,7 +852,7 @@ fn processing_row(entry: &StackActivityEntry) -> JobRow {
     let operation = processing.map(|run| run.operation.as_str());
     let waiting_for = processing.and_then(|run| run.waiting_for.as_deref());
     // The title is the operation. The detail is what a queued run waits
-    // for, or the step under way when the title does not already say it;
+    // for, or the step under way when the title does not already show it;
     // the client adds when the run started, since a tool can take many
     // minutes.
     let started_at = processing
@@ -1501,7 +1501,10 @@ fn snapshot(state: &Arc<AppState>, transfers: Vec<Value>, manages: bool) -> Snap
     let backups_allowed = manages && crate::server::handlers::require_registry_path(state).is_ok();
     Snapshot {
         databases,
-        stacks: crate::server::stack_preview::stack_activity(state),
+        stacks: crate::server::stack_preview::stack_activity(
+            state,
+            crate::server::stack_preview::RefreshPlanning::CachedOnly,
+        ),
         wbpp: crate::server::wbpp_run::wbpp_activity(state),
         transfers,
         ts_sync: if manages {
@@ -1517,11 +1520,20 @@ fn snapshot(state: &Arc<AppState>, transfers: Vec<Value>, manages: bool) -> Snap
     }
 }
 
-/// Projects of targets read before, by database id and target id. A
-/// target's project never changes, so each lookup is cached for the life of
-/// the server.
-static TARGET_PROJECTS: std::sync::LazyLock<std::sync::Mutex<HashMap<(String, i32), i32>>> =
-    std::sync::LazyLock::new(Default::default);
+/// What the jobs route keeps between polls, for the life of the server
+/// state.
+#[derive(Default)]
+pub struct JobsCache {
+    /// Projects of targets read before, by database id and target id. A
+    /// target's project never changes.
+    target_projects: std::sync::Mutex<HashMap<(String, i32), i32>>,
+    /// The transfer list of the last poll that read it in time.
+    transfers: std::sync::Mutex<Vec<Value>>,
+}
+
+/// How long a poll waits for the Director's transfer list before it uses
+/// the last list it read.
+const TRANSFERS_WAIT: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// The project of each target the rows link to. A target not cached yet is
 /// read from the database's `target` table only when the shared connection
@@ -1547,7 +1559,9 @@ fn project_lookup(state: &AppState, snapshot: &Snapshot) -> HashMap<(String, i32
             wanted.push((run.db_id.clone(), target));
         }
     }
-    let mut cached = TARGET_PROJECTS
+    let mut cached = state
+        .jobs_cache
+        .target_projects
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut projects = HashMap::new();
@@ -1582,7 +1596,7 @@ fn project_lookup(state: &AppState, snapshot: &Snapshot) -> HashMap<(String, i32
     projects
 }
 
-/// Build the response from the server's state. `manages` says whether the
+/// Build the response from the server's state. `manages` is whether the
 /// request may see backups and Target Scheduler syncs: an editor's request
 /// on a server that allows database management.
 fn build(state: &Arc<AppState>, transfers: Vec<Value>, manages: bool) -> JobsResponse {
@@ -1608,7 +1622,29 @@ pub async fn get_jobs(
         .as_ref()
         .is_none_or(|Extension(access)| access.role == AccessRole::ReadWrite);
     let manages = editor && state.database_management_allowed();
-    let transfers = crate::server::director::transfer_jobs(&state).await;
+    let transfers = match tokio::time::timeout(
+        TRANSFERS_WAIT,
+        crate::server::director::transfer_jobs(&state),
+    )
+    .await
+    {
+        Ok(transfers) => {
+            *state
+                .jobs_cache
+                .transfers
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = transfers.clone();
+            transfers
+        }
+        // The Director's store is busy: the transfer rows of the last
+        // poll stand in.
+        Err(_) => state
+            .jobs_cache
+            .transfers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone(),
+    };
     let response = tokio::task::spawn_blocking(move || build(&state, transfers, manages))
         .await
         .unwrap_or_else(|error| {
