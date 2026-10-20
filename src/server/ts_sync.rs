@@ -483,7 +483,7 @@ pub fn spawn(state: Arc<AppState>) {
                             &runner,
                             Work::Sync {
                                 job_id: job.id,
-                                entry,
+                                entry: Box::new(entry),
                                 settings,
                             },
                         );
@@ -523,7 +523,7 @@ pub(crate) enum Work {
     },
     Sync {
         job_id: String,
-        entry: DbEntry,
+        entry: Box<DbEntry>,
         settings: Settings,
     },
 }
