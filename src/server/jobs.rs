@@ -1517,8 +1517,16 @@ fn snapshot(state: &Arc<AppState>, transfers: Vec<Value>, manages: bool) -> Snap
     }
 }
 
-/// The project of each target the rows link to, read once per route call
-/// from the database's `target` table.
+/// Projects of targets read before, by database id and target id. A
+/// target's project never changes, so each lookup is cached for the life of
+/// the server.
+static TARGET_PROJECTS: std::sync::LazyLock<std::sync::Mutex<HashMap<(String, i32), i32>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// The project of each target the rows link to. A target not cached yet is
+/// read from the database's `target` table only when the shared connection
+/// is free: the header's poll never waits for other work. A row whose
+/// project is not known links to the database's images instead.
 fn project_lookup(state: &AppState, snapshot: &Snapshot) -> HashMap<(String, i32), i32> {
     let mut wanted: Vec<(String, i32)> = Vec::new();
     for db in &snapshot.databases {
@@ -1539,16 +1547,24 @@ fn project_lookup(state: &AppState, snapshot: &Snapshot) -> HashMap<(String, i32
             wanted.push((run.db_id.clone(), target));
         }
     }
+    let mut cached = TARGET_PROJECTS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut projects = HashMap::new();
     for (db_id, target) in wanted {
-        if projects.contains_key(&(db_id.clone(), target)) {
+        let key = (db_id.clone(), target);
+        if projects.contains_key(&key) {
+            continue;
+        }
+        if let Some(project) = cached.get(&key) {
+            projects.insert(key, *project);
             continue;
         }
         let Some(ctx) = state.get_database(&db_id) else {
             continue;
         };
         let conn = ctx.db();
-        let Ok(conn) = conn.lock() else {
+        let Ok(conn) = conn.try_lock() else {
             continue;
         };
         let project = conn
@@ -1559,7 +1575,8 @@ fn project_lookup(state: &AppState, snapshot: &Snapshot) -> HashMap<(String, i32
             )
             .ok();
         if let Some(project) = project {
-            projects.insert((db_id, target), project);
+            cached.insert(key.clone(), project);
+            projects.insert(key, project);
         }
     }
     projects
