@@ -55,8 +55,8 @@ fn pre_generation_warms_the_key_the_request_path_looks_up() {
             "one.fits",
             "screen",
             true,
-            crate::server::PREGENERATE_MIDTONE,
-            crate::server::PREGENERATE_SHADOW,
+            crate::server::preview_pregeneration::MIDTONE,
+            crate::server::preview_pregeneration::SHADOW,
             color,
             None,
         );

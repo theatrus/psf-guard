@@ -95,6 +95,7 @@ pub enum RowKind {
     Export,
     ArtifactSearch,
     PlanningPush,
+    Pregeneration,
 }
 
 /// The two lines a person can reorder. Each runs one job at a time.
@@ -130,6 +131,7 @@ pub enum RowControl {
     Preview { preview: PreviewKind, key: String },
     Import { db_id: String },
     Export { db_id: String },
+    Pregeneration { db_id: String },
     CatalogInstall,
 }
 
@@ -321,6 +323,7 @@ pub struct DatabaseState {
     pub import: Option<crate::server::import_job::ImportJobProgress>,
     /// An export into the export folder, while it runs.
     pub export: Option<crate::server::export_job::ExportJobProgress>,
+    pub pregeneration: crate::server::preview_pregeneration::PregenerationStatus,
 }
 
 /// A Target Scheduler sync or import job, as the rows need it.
@@ -828,6 +831,38 @@ fn export_row(db: &DatabaseState, export: &crate::server::export_job::ExportJobP
 /// reading the readout modes of calibration frames that lack them, or
 /// pairing calibrated copies with their lights. Always automatic. Reading
 /// readout modes gets a row only once it has frames to read.
+/// Preview pre-generation, once a pass has previews to write: always
+/// automatic. A pass that finds every preview written gets no row. While it
+/// waits for a person's work, the row shows what for.
+fn pregeneration_row(db: &DatabaseState) -> JobRow {
+    let pass = &db.pregeneration;
+    let label = crate::server::preview_pregeneration::label(pass.done, pass.total);
+    JobRow {
+        detail: match &pass.waiting_for {
+            Some(what) => waiting_detail(Some(what.as_str()), &label),
+            None => label,
+        },
+        status: if pass.waiting_for.is_some() {
+            RowStatus::Waiting
+        } else {
+            RowStatus::Running
+        },
+        waiting_for: pass.waiting_for.clone(),
+        percent: percent(pass.done, pass.total),
+        stoppable: true,
+        control: Some(RowControl::Pregeneration {
+            db_id: db.id.clone(),
+        }),
+        ..JobRow::new(
+            format!("pregeneration:{}", db.id),
+            RowKind::Pregeneration,
+            "Generating previews",
+            &db.name,
+        )
+    }
+    .automatic(true)
+}
+
 fn upkeep_row(db: &DatabaseState) -> Option<JobRow> {
     use crate::server::catalog_upkeep::UpkeepStage;
     let upkeep = &db.upkeep;
@@ -1577,6 +1612,9 @@ pub fn rows(snapshot: &Snapshot, project_of: ProjectOf) -> Vec<JobRow> {
         if let Some(export) = &db.export {
             rows.push(export_row(db, export));
         }
+        if db.pregeneration.active && db.pregeneration.total > 0 {
+            rows.push(pregeneration_row(db));
+        }
     }
     // Running builds first, then the line in order.
     let mut stacks: Vec<&StackActivityEntry> = snapshot.stacks.active.iter().collect();
@@ -1722,6 +1760,7 @@ fn snapshot(state: &Arc<AppState>, transfers: Vec<Value>, manages: bool) -> Snap
                 &ctx.export_job,
             ))
             .filter(|progress| progress.running),
+            pregeneration: crate::server::preview_pregeneration::status(state, &ctx.id),
         })
         .collect();
     let backups_allowed = manages && crate::server::handlers::require_registry_path(state).is_ok();

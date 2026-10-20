@@ -1978,6 +1978,13 @@ export const apiClient = {
     await apiInstance.post(dbPath(dbId, '/export/server/stop'));
   },
 
+  /** Stop the database's preview pre-generation. No further pass runs for
+   *  the database until the server restarts. */
+  stopPregeneration: async (dbId: string): Promise<void> => {
+    const apiInstance = await getApi();
+    await apiInstance.post(dbPath(dbId, '/preview-pregeneration/stop'));
+  },
+
   /** Stop the database's import or import preview. An import that is
    *  writing rolls back. */
   stopImport: async (dbId: string): Promise<void> => {

@@ -15,6 +15,7 @@ export type ActivityControl =
   | { kind: 'preview'; preview: PreviewKind; key: string }
   | { kind: 'import'; dbId: string }
   | { kind: 'export'; dbId: string }
+  | { kind: 'pregeneration'; dbId: string }
   | { kind: 'catalog-install' };
 
 /** The two lines a person can reorder. Each runs one job at a time. */

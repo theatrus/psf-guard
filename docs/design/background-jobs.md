@@ -294,6 +294,14 @@ Then:
 - Exports into the export folder (`export_job.rs`) run on `CatalogJobs`,
   one runner per database, as a person's work, with a row and Stop, which
   ends the export before its next file.
+- Preview pre-generation (`preview_pregeneration.rs`) runs on
+  `CatalogJobs`, one runner per database, at `Background`. A timer
+  requests a pass for every database at start and every five minutes. A
+  pass lists the images whose enabled previews are missing or past the
+  cache expiry and renders them in batches on leased workers. Before each
+  batch it waits for a person's work, and it ends when the cache volume
+  nears its limit. A pass with previews to write has a row with Stop;
+  after Stop, no pass runs for that database until the server restarts.
 - A star catalog installation (`catalog_install.rs`) is one download
   server-wide. It holds the server stop's wait, ends when the server stops,
   and its row has Stop.
@@ -345,8 +353,9 @@ Then:
   reports and cache sizes on `AppState` (`CacheBudget`). The limits a
   person sets are a process-wide setting, applied from the registry like
   the calibration and stacking settings.
-- Preview pre-generation (`preview_queue.rs`) is a bounded pool of short
-  tasks and stays as it is, and so does the director's sky-image
-  generation, which renders on demand for display like an image preview.
+- The preview queue (`preview_queue.rs`), which renders a preview someone
+  opened, is a bounded pool of short tasks and stays as it is. So does the
+  director's sky-image generation, which renders on demand for display
+  like an image preview.
 - Stack builds and WBPP runs wait in job lines rather than per-catalog
   queues; see [One job line](job-line.md).

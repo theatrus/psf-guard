@@ -952,7 +952,7 @@ frames. PSF Guard records use itself because many mounts, NFS among them, do
 not record reads.
 
 Background preview pre-generation stops two points under the limit, where a
-cull would clear to, and checks before every image, so it never makes
+cull would clear to, and checks before every batch of images, so it never makes
 previews the next pass would delete and the next scan make again. It uses
 the limit of the cache's volume, the lowest there when the volume holds other
 folders too. Previews someone opens are still made. A volume still over the

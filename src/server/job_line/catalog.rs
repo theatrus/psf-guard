@@ -4,7 +4,8 @@
 //! calibration grading and health, the duplicate check, reject removal,
 //! quality scans, arrivals, the Calibration page's header reads, flat group
 //! use, catalog upkeep, the stack preparation line, Target Scheduler imports
-//! and syncs, and backups. The registry of them is
+//! and syncs, backups, imports and exports of frames, cache refreshes, and
+//! preview pre-generation. The registry of them is
 //! `crate::server::catalog_jobs::CatalogJobRegistry`, on `AppState`. The
 //! queue stores merged requests, retries that are due later, and work that
 //! Stop paused. While a catalog's queue has work, one runner thread

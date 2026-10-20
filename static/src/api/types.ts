@@ -2050,6 +2050,7 @@ export type JobControl =
   | { kind: 'preview'; preview: PreviewKind; key: string }
   | { kind: 'import'; db_id: string }
   | { kind: 'export'; db_id: string }
+  | { kind: 'pregeneration'; db_id: string }
   | { kind: 'catalog-install' };
 
 /** What a preview previews. Mirrors `PreviewKind` in
@@ -2069,7 +2070,7 @@ export interface JobLink {
 /** One job in the header's list, as `GET /api/jobs` returns it. */
 export interface JobRow {
   key: string;
-  kind: 'refresh' | 'quality' | 'flats' | 'sites' | 'duplicates' | 'rejects' | 'stack' | 'processing' | 'wbpp' | 'transfer' | 'backup' | 'catalog' | 'grading' | 'health' | 'headers' | 'flat_use' | 'upkeep' | 'preview' | 'import' | 'export' | 'artifact_search' | 'planning_push';
+  kind: 'refresh' | 'quality' | 'flats' | 'sites' | 'duplicates' | 'rejects' | 'stack' | 'processing' | 'wbpp' | 'transfer' | 'backup' | 'catalog' | 'grading' | 'health' | 'headers' | 'flat_use' | 'upkeep' | 'preview' | 'import' | 'export' | 'artifact_search' | 'planning_push' | 'pregeneration';
   title: string;
   scope: string;
   detail: string;

@@ -409,8 +409,9 @@ health, the duplicate check, reject removal, quality scans and the
 database-wide analysis, arrivals, the Calibration page's header reads,
 flat group use, catalog upkeep, the stack preparation line, Target
 Scheduler imports and syncs, backups (one runner, server-wide), imports
-and exports of frames, and a database's cache refreshes (the file cache
-and the stale folder index). Each job implements `CatalogWork`:
+and exports of frames, a database's cache refreshes (the file cache
+and the stale folder index), and preview pre-generation. Each job
+implements `CatalogWork`:
 
 ```rust
 trait CatalogWork {
@@ -549,8 +550,10 @@ work never comes. Step 4 depends on step 2.
 
 ## Not covered
 
-- Preview pre-generation (`preview_queue.rs`) is a bounded pool of
-  short tasks, not a line. It stays as it is.
+- The preview queue (`preview_queue.rs`) renders a preview someone opened,
+  on a bounded pool of short tasks, not a line. Preview pre-generation,
+  which writes previews before anyone opens them, is a catalog job
+  (`preview_pregeneration.rs`).
 - The automatic refresh scheduler decides *what* to queue and when. It
   stays separate and queues requests like any other caller; from step 9 the
   line, not the scheduler, decides when they run.

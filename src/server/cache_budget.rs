@@ -103,6 +103,18 @@ pub fn limit_for(kind: StorageKind) -> u8 {
     LIMITS[kind as usize].load(Ordering::Relaxed)
 }
 
+impl CacheBudget {
+    /// Let background work write previews into `dir` however full its
+    /// volume is, so a test does not depend on the disk it runs on.
+    #[cfg(test)]
+    pub(crate) fn lift_limit_for_test(&self, dir: &Path) {
+        std::fs::create_dir_all(dir).unwrap();
+        if let Some(device) = device_of(dir) {
+            self.volume_limits.lock().unwrap().insert(device, 100);
+        }
+    }
+}
+
 /// Whether background work may write previews into this cache: its volume
 /// must sit below the band a cull clears, so pre-generation never makes
 /// previews the next pass would delete. A preview someone opens is made

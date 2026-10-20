@@ -731,6 +731,56 @@ fn frame_sites_show_progress_and_the_next_pass() {
 }
 
 #[test]
+fn preview_pregeneration_shows_a_pass_with_previews_to_write() {
+    use crate::server::preview_pregeneration::PregenerationStatus;
+    let writing = PregenerationStatus {
+        active: true,
+        total: 4000,
+        done: 812,
+        ..PregenerationStatus::default()
+    };
+    let rows = row_list(&with_db(DatabaseState {
+        pregeneration: writing.clone(),
+        ..db("astro", "Observatory")
+    }));
+    assert_eq!(rows[0].key, "pregeneration:astro");
+    assert_eq!(rows[0].title, "Generating previews");
+    assert_eq!(rows[0].detail, "812 of 4,000 images");
+    assert!(rows[0].automatic && rows[0].stoppable);
+    assert_eq!(
+        rows[0].control,
+        Some(RowControl::Pregeneration {
+            db_id: "astro".into()
+        })
+    );
+
+    let waiting = row_list(&with_db(DatabaseState {
+        pregeneration: PregenerationStatus {
+            waiting_for: Some("a stack build".into()),
+            ..writing.clone()
+        },
+        ..db("astro", "Observatory")
+    }));
+    assert_eq!(waiting[0].status, RowStatus::Waiting);
+    assert_eq!(
+        waiting[0].detail,
+        "Waiting for a stack build · 812 of 4,000 images"
+    );
+
+    // A pass still checking which images need previews, or one that found
+    // none, has no row.
+    assert!(row_list(&with_db(DatabaseState {
+        pregeneration: PregenerationStatus {
+            total: 0,
+            done: 0,
+            ..writing
+        },
+        ..db("astro", "Observatory")
+    }))
+    .is_empty());
+}
+
+#[test]
 fn reject_removal_shows_its_stage_and_a_stop() {
     let removing = RemovalJobStatus {
         state: "running".into(),

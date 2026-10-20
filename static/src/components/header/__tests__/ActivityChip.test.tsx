@@ -429,6 +429,30 @@ describe('ActivityChip', () => {
     await waitFor(() => expect(calls).toContain('cancel R'));
   });
 
+  it('stops preview pre-generation from its row after asking', async () => {
+    const calls: string[] = [];
+    let rows = [row({
+      key: 'pregeneration:askar', kind: 'pregeneration', title: 'Generating previews', scope: 'Askar',
+      detail: '812 of 4,000 images', percent: 20.3, automatic: true, background: true, stoppable: true,
+      control: { kind: 'pregeneration', db_id: 'askar' },
+    })];
+    mockJobs(() => rows);
+    server.use(http.post('/api/db/:db/preview-pregeneration/stop', ({ params }) => {
+      calls.push(`stop ${params.db}`);
+      rows = [];
+      return ok(true);
+    }));
+    renderChip();
+    await userEvent.click(await screen.findByRole('button', { name: /Background jobs/ }));
+    const list = await screen.findByRole('region', { name: 'Background jobs' });
+    expect(within(list).getByText('812 of 4,000 images')).toBeInTheDocument();
+
+    await userEvent.click(within(list).getByRole('button', { name: 'Stop Generating previews: Askar' }));
+    expect(calls).toEqual([]);
+    await userEvent.click(within(list).getByRole('button', { name: 'Stop it' }));
+    await waitFor(() => expect(calls).toEqual(['stop askar']));
+  });
+
   it('keeps the move buttons disabled until the job list is read again', async () => {
     let rows = [
       stackRow('R', 'running', 1, 4),

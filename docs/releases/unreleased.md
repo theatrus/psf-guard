@@ -21,6 +21,11 @@
   calibration frames, and pairing calibrated copies with their lights. A
   database you add or change gets its query indexes and readout modes at
   once, rather than at the next server start.
+- On a server started with preview pre-generation, the background jobs list
+  shows **Generating previews** for a database while it writes previews,
+  with how many images it has done. **Stop** ends it for that database
+  until the server restarts. While a job you started runs, pre-generation
+  now waits and continues where it was, instead of skipping that round.
 - When Seiza chooses a stack's reference frame and the plate solves show
   frames at more than one rotator angle, the reference now comes from the
   largest group. Before, a reference from a small group could reject every
