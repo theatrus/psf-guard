@@ -1,7 +1,9 @@
 # One job line
 
-Status: **Steps 1 to 7 built**: the stack line, the per-catalog jobs, the
-WBPP line and the header's jobs route. Remote work is proposed.
+Status: **Steps 1 to 10 built**: the stack line, the per-catalog jobs, the
+WBPP line, the header's jobs route, requests carried in the line, priority
+in the line, and the quality scans on `CatalogJobs`. Remote work is
+proposed.
 Last updated: 2026-10-19
 
 This record proposes one shared shape for the server's queued work. It
@@ -318,18 +320,23 @@ person's or automatic.
   lane, behind other people's entries. **Move to top** still moves any
   entry.
 - **Preemption.** When a person's entry joins a lane on which automatic
-  work runs, the line stops the automatic entry at its checkpoint and puts
-  its request back in the line, ahead of the other automatic entries. It is
-  prepared again at its turn, and its checkpoint lets the build resume
-  where it stopped. The header lists it as queued automatic work.
-- **Work elsewhere.** An automatic entry does not start while a person's
-  work holds the interactive guard elsewhere on the server, such as a
-  quality scan, as the refresh scheduler's hold does now.
+  work runs, the line stops the automatic entry at its checkpoint and marks
+  it preempted (`take_preempted`). Its kind puts its request back in the
+  line, ahead of the other automatic entries (`first_automatic`): a build,
+  a composition, or a re-render of stale previews. It is prepared again at
+  its turn, and its checkpoint lets the build resume where it stopped. The
+  header lists it as queued automatic work. Adopting automatic work
+  (`set_tier`) moves it ahead and exempts it from preemption.
+- **Work elsewhere.** The dispatcher passes over automatic entries while a
+  person's work holds the interactive guard anywhere on the server, such as
+  a quality scan (`DispatchRules::automatic_may_start`).
 
-This replaces `cancel_automatic`, the refresh scheduler's list of
+This replaced `cancel_automatic`, the refresh scheduler's list of
 interrupted builds, and its hold of due refreshes: a due refresh puts its
-requests in the line, and the line decides when they run. Re-applies of
-processing yield the same way.
+requests in the line at once, and the line decides when they run. The
+scheduler's 30-second quiet period after a person's work is gone: a
+person's next build that joins after automatic work started preempts it.
+Re-applies of processing still yield outside the line, as before.
 
 Preparation keeps one runner per catalog on this server. A long preparation
 in one catalog then does not hold up another, as now.
@@ -447,14 +454,16 @@ otherwise.
 6. **WBPP as a second line.** *Built*, with PixInsight as its single lane
    and the dispatcher shared with the stack line.
 7. **The header route.** *Built.*
-8. **Requests in the line.** Preview a request when it is asked for, and
-   prepare it at its turn. See [Requests and specs](#requests-and-specs).
-9. **Priority in the line.** Tiers order the line, a person's entry
-   preempts running automatic work back into the line, and the refresh
-   scheduler queues its requests rather than holding them. See
-   [Coordinator and workers](#coordinator-and-workers).
-10. **The remaining background work.** Quality scans and backfill on
-    `CatalogJobs`, and header rows for calibration grading and health.
+8. **Requests in the line.** *Built:* builds and compositions carry their
+   request and are prepared again at their turn. See
+   [Requests and specs](#requests-and-specs).
+9. **Priority in the line.** *Built.* See
+   [Coordinator and workers](#coordinator-and-workers). Re-applies of
+   processing still step aside outside the line, as before, and wait in
+   their own list until their turn.
+10. **The remaining background work.** *Built:* quality scans and the
+    database-wide analysis run on `CatalogJobs`, and calibration grading
+    and health have header rows.
 11. **Remote workers** (later, its own design record): registration,
     scoped input access, upload by digest, and assignment by `needs`.
 
