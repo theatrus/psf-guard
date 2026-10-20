@@ -304,8 +304,8 @@ impl CatalogWork for FlatMeasure {
 
     /// A pass waits while grading runs, because grades decide which flats
     /// are in use.
-    fn next(_: &AppState, path: &str, queue: &mut Queue, now: Instant) -> Step<Scope> {
-        let grading = crate::server::calibration_quality::busy(path);
+    fn next(state: &AppState, path: &str, queue: &mut Queue, now: Instant) -> Step<Scope> {
+        let grading = crate::server::calibration_quality::busy(state, path);
         let step = next_step(queue, now, grading);
         if let Step::Run(scope) = &step {
             queue.running = Some(scope.clone());

@@ -25,7 +25,7 @@ use crate::concurrency::{ComputePool, Priority, Stop};
 use crate::server::api::ApiResponse;
 use crate::server::extract::DbContext;
 use crate::server::handlers::AppError;
-use crate::server::job_line::catalog::{CatalogJob, CatalogJobs, CatalogWork, Step};
+use crate::server::job_line::catalog::{CatalogJob, CatalogWork, Step};
 use crate::server::state::AppState;
 use axum::extract::{Path, Query, State};
 use axum::Json;
@@ -35,7 +35,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// The kept results, below the database's cache folder.
@@ -198,9 +198,6 @@ type Job = CatalogJob<CalibrationHealth>;
 pub(crate) struct Queue {
     /// Whether a pass was requested after the last pass started.
     pass_requested: bool,
-    /// The server of the last request, so a finished directory refresh can
-    /// request another pass.
-    last_server: Weak<AppState>,
     views: ViewAsks,
 }
 
@@ -287,8 +284,8 @@ pub struct WorkDone {
 
 /// What the passes over the catalog at `path` have done since the server
 /// started: the work a pass skipped shows here.
-pub fn work_done(path: &str) -> WorkDone {
-    job(path).status().work
+pub fn work_done(state: &AppState, path: &str) -> WorkDone {
+    job(state, path).status().work
 }
 
 /// How far a pass over a catalog has got, for its row in the job list.
@@ -304,34 +301,34 @@ pub struct HealthProgress {
 }
 
 /// How far the pass over the catalog at `path` has got.
-pub fn progress(path: &str) -> HealthProgress {
-    let (judged, total) = job(path).status().progress;
+pub fn progress(state: &AppState, path: &str) -> HealthProgress {
+    let (judged, total) = job(state, path).status().progress;
     HealthProgress {
-        running: running(path),
+        running: running(state, path),
         judged,
         total,
     }
 }
 
-/// One job per catalog file, whichever database context asks.
-static JOBS: CatalogJobs<CalibrationHealth> = CatalogJobs::new();
-
-fn job(path: &str) -> Arc<Job> {
-    JOBS.job(path)
+/// The job of the catalog file at `path`, whichever database context asks.
+fn job(state: &AppState, path: &str) -> Arc<Job> {
+    state.catalog_jobs.calibration_health.job(path)
 }
 
-fn running(path: &str) -> bool {
-    job(path).queue().has_runner()
+fn running(state: &AppState, path: &str) -> bool {
+    job(state, path).queue().has_runner()
 }
 
 /// Work out the health of every project in the catalog at `path` whose key
 /// changed, on a thread of its own. A request while a pass runs makes it
 /// run once more when it ends.
 pub fn request(state: &Arc<AppState>, path: &str) {
-    JOBS.request(state, path, |queue| {
-        queue.last_server = Arc::downgrade(state);
-        queue.pass_requested = true;
-    });
+    // A directory refresh of the catalog then asks this server again.
+    state.link_contexts(path);
+    state
+        .catalog_jobs
+        .calibration_health
+        .request(state, path, |queue| queue.pass_requested = true);
 }
 
 /// Every database's projects, after the calibration settings changed.
@@ -344,12 +341,14 @@ pub fn request_all(state: &Arc<AppState>) {
 /// A directory refresh of the catalog at `path` finished: a light's file
 /// may have turned up, gone or moved. Only a catalog a server has asked
 /// about is looked at again; the server start asks about each anyway.
-pub fn tree_published(path: &str) {
-    let state = JOBS
+pub fn tree_published(state: &Arc<AppState>, path: &str) {
+    if state
+        .catalog_jobs
+        .calibration_health
         .existing(path)
-        .and_then(|job| job.queue().last_server.upgrade());
-    if let Some(state) = state {
-        request(&state, path);
+        .is_some()
+    {
+        request(state, path);
     }
 }
 
@@ -525,9 +524,9 @@ fn catch_up(state: &Arc<AppState>, ctx: &DbContext, behind: bool) {
         return;
     }
     let path = &ctx.database_path;
-    let grading = crate::server::calibration_quality::running(path);
+    let grading = crate::server::calibration_quality::running(state, path);
     {
-        let job = job(path);
+        let job = job(state, path);
         let mut queue = job.queue();
         let now = Instant::now();
         if !queue.views.may_ask(grading, now) {
@@ -593,7 +592,7 @@ pub async fn get_health(
         .collect();
     Ok(Json(ApiResponse::success(CalibrationHealthResponse {
         projects,
-        running: running(&ctx.database_path),
+        running: running(&state, &ctx.database_path),
     })))
 }
 
@@ -616,7 +615,7 @@ pub async fn get_project_health(
     Ok(Json(ApiResponse::success(ProjectHealthResponse {
         computed_at: kept.as_ref().map(|kept| kept.computed_at),
         health: kept.map(|kept| kept.health),
-        running: running(&ctx.database_path),
+        running: running(&state, &ctx.database_path),
     })))
 }
 
@@ -711,7 +710,7 @@ pub async fn get_light_marks(
     Ok(Json(ApiResponse::success(LightMarksResponse {
         lights,
         stale_projects,
-        running: running(&ctx.database_path),
+        running: running(&state, &ctx.database_path),
     })))
 }
 

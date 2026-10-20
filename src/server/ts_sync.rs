@@ -8,7 +8,7 @@ use super::{
     handlers::{require_database_management_allowed, require_registry_path, AppError},
     state::AppState,
 };
-use crate::server::job_line::catalog::{CatalogJob, CatalogJobs, CatalogWork, Step};
+use crate::server::job_line::catalog::{CatalogJob, CatalogWork, Step};
 use crate::{
     db_registry::{DbEntry, DbRegistry},
     ts_sync::Settings,
@@ -607,20 +607,14 @@ impl CatalogWork for TsSyncWork {
     }
 }
 
-static JOBS: CatalogJobs<TsSyncWork> = CatalogJobs::new();
-
-/// The key of a runner: the server's sync manager and the runner's name, so
-/// two servers in one process, as tests run them, keep apart.
-fn runner_key(state: &AppState, runner: &str) -> String {
-    format!("{:p}:{runner}", &state.ts_sync as *const Manager)
-}
-
 /// Queue `work` on `runner`. Call from the async runtime: the work's async
 /// steps run on it.
 fn queue_work(state: &Arc<AppState>, runner: &str, work: Work) {
     let runtime = tokio::runtime::Handle::current();
     let job_id = work.job_id().to_string();
-    JOBS.request(state, &runner_key(state, runner), |queue| {
+    // Each server state has its own runners, so two servers in one
+    // process keep apart.
+    state.catalog_jobs.ts_sync.request(state, runner, |queue| {
         queue.server = Arc::downgrade(state);
         queue.pending = Some(work);
         queue.runtime = Some(runtime);

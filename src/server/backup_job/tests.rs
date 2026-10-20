@@ -142,7 +142,10 @@ fn a_second_run_is_refused_while_one_runs() {
         start(&fixture.state, manual(BackupScope::Meta, Some(folder))),
         Err(StartError::Busy)
     ));
-    fixture.state.backups.stop();
+    fixture
+        .state
+        .backups
+        .stop(&fixture.state.catalog_jobs.backups);
     wait_for_the_run(&fixture.state);
 }
 
@@ -170,7 +173,10 @@ fn stop_ends_the_run_and_leaves_nothing_behind() {
         assert!(began.elapsed() < Duration::from_secs(30));
         std::thread::sleep(Duration::from_millis(5));
     }
-    assert!(fixture.state.backups.stop());
+    assert!(fixture
+        .state
+        .backups
+        .stop(&fixture.state.catalog_jobs.backups));
     assert!(fixture.state.backups.job().unwrap().stopping);
     let last = wait_for_the_run(&fixture.state);
     assert_eq!(last.outcome, Outcome::Stopped);
@@ -306,7 +312,10 @@ fn a_stopped_scheduled_run_waits_for_the_next_slot() {
     };
     schedule(&fixture, settings.clone());
     assert!(tick(&fixture.state, now));
-    fixture.state.backups.stop();
+    fixture
+        .state
+        .backups
+        .stop(&fixture.state.catalog_jobs.backups);
     assert_eq!(wait_for_the_run(&fixture.state).outcome, Outcome::Stopped);
     assert!(
         !tick(&fixture.state, Utc::now()),
@@ -536,7 +545,10 @@ fn stop_ends_a_scheduled_run_that_waits_for_interactive_work() {
     let stack_build = fixture.state.begin_named_interactive_job("Stack build");
     assert!(tick(&fixture.state, now));
     std::thread::sleep(Duration::from_millis(300));
-    assert!(fixture.state.backups.stop());
+    assert!(fixture
+        .state
+        .backups
+        .stop(&fixture.state.catalog_jobs.backups));
     let began = std::time::Instant::now();
     while fixture.state.backups.job().is_some() && began.elapsed() < Duration::from_secs(3) {
         std::thread::sleep(Duration::from_millis(20));
@@ -753,7 +765,10 @@ fn a_stopped_or_failed_run_is_remembered_across_a_restart() {
     };
     schedule(&fixture, settings.clone());
     assert!(tick(&fixture.state, now));
-    fixture.state.backups.stop();
+    fixture
+        .state
+        .backups
+        .stop(&fixture.state.catalog_jobs.backups);
     assert_eq!(wait_for_the_run(&fixture.state).outcome, Outcome::Stopped);
     assert!(state_path_for(&fixture.registry).is_file());
     // A new server reads the same registry folder.

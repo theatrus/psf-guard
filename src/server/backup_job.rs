@@ -1,7 +1,7 @@
 //! Backups from Settings › Backups and on a schedule.
 //!
-//! One backup runs at a time, server-wide, on one runner of [`CatalogJobs`]
-//! keyed by the server's backup manager. A handler only checks the request
+//! One backup runs at a time, server-wide, on the server's one backup
+//! runner ([`RUNNER_KEY`] in its catalog jobs). A handler only checks the request
 //! and queues the run; the plan, the copies and the archive are made on the
 //! runner. A scheduled run is
 //! `Background` work: before each file and each SQLite step it waits while a
@@ -254,13 +254,14 @@ impl BackupManager {
         self.inner.lock().unwrap().last.clone()
     }
 
-    /// Ask the run under way to stop. False when none runs.
-    pub fn stop(&self) -> bool {
+    /// Ask the run under way to stop. False when none runs. `runners` is
+    /// the server's backup runners, which hold a run not taken yet.
+    pub(crate) fn stop(&self, runners: &CatalogJobs<Backups>) -> bool {
         let mut inner = self.inner.lock().unwrap();
         match inner.job.as_mut() {
             Some(job) => {
                 job.stopping = true;
-                if let Some(runner) = JOBS.existing(&self.runner_key()) {
+                if let Some(runner) = runners.existing(RUNNER_KEY) {
                     // A run the runner has not taken yet starts stopped.
                     runner.stop(|queue| {
                         if let Some(pending) = &mut queue.pending {
@@ -272,12 +273,6 @@ impl BackupManager {
             }
             None => false,
         }
-    }
-
-    /// The key of this server's backup runner: the manager's address, so
-    /// two servers in one process, as tests run them, keep apart.
-    fn runner_key(&self) -> String {
-        format!("{:p}", self as *const Self)
     }
 
     #[cfg(test)]
@@ -428,16 +423,19 @@ pub fn start(state: &Arc<AppState>, request: RunRequest) -> Result<JobStatus, St
         }
         inner.job = Some(status.clone());
     }
-    JOBS.request(state, &state.backups.runner_key(), |queue| {
-        queue.server = Arc::downgrade(state);
-        queue.pending = Some(PendingRun {
-            request,
-            registry_path,
-            destination,
-            location,
-            stopped: false,
+    state
+        .catalog_jobs
+        .backups
+        .request(state, RUNNER_KEY, |queue| {
+            queue.server = Arc::downgrade(state);
+            queue.pending = Some(PendingRun {
+                request,
+                registry_path,
+                destination,
+                location,
+                stopped: false,
+            });
         });
-    });
     Ok(status)
 }
 
@@ -504,7 +502,9 @@ impl CatalogWork for Backups {
     }
 }
 
-static JOBS: CatalogJobs<Backups> = CatalogJobs::new();
+/// The key of the server's one backup runner. Each server state has its
+/// own catalog jobs, so two servers in one process keep apart.
+const RUNNER_KEY: &str = "backups";
 
 /// Free the slot of the run that ended, so the next run can start. A run
 /// that ended without recording how it went, as on a panic, is recorded as
@@ -1058,7 +1058,7 @@ pub async fn stop_backup(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ApiResponse<BackupJobView>>, AppError> {
     require_backups(&state)?;
-    state.backups.stop();
+    state.backups.stop(&state.catalog_jobs.backups);
     Ok(Json(ApiResponse::success(BackupJobView {
         job: state.backups.job(),
         last_run: state.backups.last_run(),

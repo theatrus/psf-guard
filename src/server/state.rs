@@ -821,6 +821,16 @@ impl AppState {
     }
 
     /// Get every configured database context.
+    /// Link every context of the catalog at `path` to this server, so a
+    /// directory refresh the context finishes reaches this server's jobs.
+    pub fn link_contexts(self: &Arc<Self>, path: &str) {
+        for ctx in self.all_databases() {
+            if ctx.database_path == path {
+                ctx.server.attach(self);
+            }
+        }
+    }
+
     pub fn all_databases(&self) -> Vec<Arc<DatabaseContext>> {
         self.databases.read().unwrap().values().cloned().collect()
     }

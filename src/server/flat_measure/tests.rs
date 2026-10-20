@@ -699,7 +699,7 @@ fn rigs_that_find_their_sites_are_graded_and_planned_again() {
     let path = library.path.as_str();
     sites_found(&state, path, Vec::new());
     assert!(job(&state, path).queue().pending.is_empty());
-    assert!(!crate::server::calibration_quality::progress(path).running);
+    assert!(!crate::server::calibration_quality::progress(&state, path).running);
     sites_found(&state, path, vec![library.a.clone()]);
     assert_eq!(
         job(&state, path).queue().pending,
@@ -707,7 +707,7 @@ fn rigs_that_find_their_sites_are_graded_and_planned_again() {
     );
     // Grading ran, or is running, for the catalog.
     let started = std::time::Instant::now();
-    while crate::server::calibration_quality::progress(path)
+    while crate::server::calibration_quality::progress(&state, path)
         .finished_at
         .is_none()
     {

@@ -264,11 +264,14 @@ async fn health_is_shown_only_once_worked_out_and_while_it_still_holds() {
 
     // A pass with nothing changed judges nothing again.
     wait_for_quiet(&server).await;
-    let work = calibration_health::work_done(&server.database);
+    let work = calibration_health::work_done(&server.state, &server.database);
     assert_eq!((work.projects, work.headers_read), (1, 2));
     calibration_health::request(&server.state, &server.database);
     wait_for_quiet(&server).await;
-    assert_eq!(calibration_health::work_done(&server.database), work);
+    assert_eq!(
+        calibration_health::work_done(&server.state, &server.database),
+        work
+    );
 
     // A light rejected since, as the CLI does it: the kept result no longer
     // holds, so it is not shown until the next pass replaces it. The view
@@ -301,7 +304,7 @@ async fn health_is_shown_only_once_worked_out_and_while_it_still_holds() {
     assert_eq!(body["data"]["stale_projects"], json!([]));
     // The light still judged kept its header: nothing was read again.
     wait_for_quiet(&server).await;
-    let after = calibration_health::work_done(&server.database);
+    let after = calibration_health::work_done(&server.state, &server.database);
     assert_eq!(after.projects, work.projects + 1);
     assert_eq!(after.headers_read, work.headers_read);
 }

@@ -1547,11 +1547,11 @@ fn snapshot(state: &Arc<AppState>, transfers: Vec<Value>, manages: bool) -> Snap
             sites: crate::server::frame_sites::status(state, &ctx.database_path),
             duplicates: crate::server::calibration_duplicates::status(state, &ctx.database_path),
             rejects: crate::server::reject_removal::status(state, &ctx.database_path),
-            grading: crate::server::calibration_quality::progress(&ctx.database_path),
-            health: crate::server::calibration_health::progress(&ctx.database_path),
-            header_reads: crate::server::calibration_scope::header_reads(&ctx.database_path),
-            flat_use: crate::server::flat_group_use::refreshing(&ctx.database_path),
-            upkeep: crate::server::catalog_upkeep::status(&ctx.database_path),
+            grading: crate::server::calibration_quality::progress(state, &ctx.database_path),
+            health: crate::server::calibration_health::progress(state, &ctx.database_path),
+            header_reads: crate::server::calibration_scope::header_reads(state, &ctx.database_path),
+            flat_use: crate::server::flat_group_use::refreshing(state, &ctx.database_path),
+            upkeep: crate::server::catalog_upkeep::status(state, &ctx.database_path),
         })
         .collect();
     let backups_allowed = manages && crate::server::handlers::require_registry_path(state).is_ok();

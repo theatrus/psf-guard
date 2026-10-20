@@ -3947,9 +3947,7 @@ pub async fn start_quality_backfill_route(
     Ok(Json(ApiResponse::success(QualityBackfillStatusResponse {
         started,
         progress: crate::server::quality_backfill::snapshot(&ctx.quality_backfill),
-        analyze_new_frames: ctx
-            .analyze_new_frames
-            .load(std::sync::atomic::Ordering::Relaxed),
+        analyze_new_frames: ctx.analyze_new_frames.is_on(),
     })))
 }
 
@@ -3980,11 +3978,9 @@ pub async fn update_analyze_new_frames(
     .await?;
     // The live context, which a database edit may have replaced meanwhile.
     if let Some(live) = state.get_database(&db_id) {
-        live.analyze_new_frames
-            .store(request.enabled, std::sync::atomic::Ordering::Relaxed);
+        live.analyze_new_frames.set(request.enabled);
     }
-    ctx.analyze_new_frames
-        .store(request.enabled, std::sync::atomic::Ordering::Relaxed);
+    ctx.analyze_new_frames.set(request.enabled);
     if request.enabled {
         // Frames already waiting are analyzed as if they had just arrived.
         crate::server::quality_arrival::note_arrival(&state, &ctx.id);
@@ -4076,9 +4072,7 @@ pub async fn get_quality_backfill_progress(
     Ok(Json(ApiResponse::success(QualityBackfillStatusResponse {
         started: progress.running,
         progress,
-        analyze_new_frames: ctx
-            .analyze_new_frames
-            .load(std::sync::atomic::Ordering::Relaxed),
+        analyze_new_frames: ctx.analyze_new_frames.is_on(),
     })))
 }
 

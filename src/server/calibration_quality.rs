@@ -22,7 +22,7 @@ use crate::concurrency::{ComputePool, Priority, Stop};
 use crate::server::api::ApiResponse;
 use crate::server::extract::DbContext;
 use crate::server::handlers::AppError;
-use crate::server::job_line::catalog::{CatalogJob, CatalogJobs, CatalogWork, Settling, Step};
+use crate::server::job_line::catalog::{CatalogJob, CatalogWork, Settling, Step};
 use crate::server::state::AppState;
 use axum::Json;
 use rayon::prelude::*;
@@ -121,20 +121,18 @@ impl CatalogWork for CalibrationQuality {
     }
 }
 
-/// One job per catalog file, whichever database context asks: a database
-/// edit replaces its context, and two passes over one file would measure
-/// every frame twice.
-static JOBS: CatalogJobs<CalibrationQuality> = CatalogJobs::new();
-
-fn job(path: &str) -> Arc<Job> {
-    JOBS.job(path)
+/// The job of the catalog file at `path`, whichever database context
+/// asks: a database edit replaces its context, and two passes over one file
+/// would measure every frame twice.
+fn job(state: &AppState, path: &str) -> Arc<Job> {
+    state.catalog_jobs.calibration_quality.job(path)
 }
 
 /// Whether a grading pass runs over the catalog at `path`. It commits
 /// grades in batches, and each batch changes every project's calibration
 /// health key.
-pub fn running(path: &str) -> bool {
-    let job = job(path);
+pub fn running(state: &AppState, path: &str) -> bool {
+    let job = job(state, path);
     let queue = job.queue();
     queue.running() || queue.pass_requested
 }
@@ -142,21 +140,24 @@ pub fn running(path: &str) -> bool {
 /// Whether grading runs over the catalog at `path`, or waits for uploads
 /// to it to stop: flat measuring waits for it, since grades decide which
 /// flats are in use.
-pub fn busy(path: &str) -> bool {
-    let job = job(path);
+pub fn busy(state: &AppState, path: &str) -> bool {
+    let job = job(state, path);
     let queue = job.queue();
     queue.running() || queue.pass_requested || queue.uploads.is_pending()
 }
 
 /// Where grading stands for the catalog at `path`.
-pub fn progress(path: &str) -> CalibrationQualityProgress {
-    job(path).status()
+pub fn progress(state: &AppState, path: &str) -> CalibrationQualityProgress {
+    job(state, path).status()
 }
 
 /// Measure what is new in the catalog at `path` and grade it, on a thread
 /// of its own.
 pub fn request(state: &Arc<AppState>, path: &str) {
-    JOBS.request(state, path, |queue| queue.pass_requested = true);
+    state
+        .catalog_jobs
+        .calibration_quality
+        .request(state, path, |queue| queue.pass_requested = true);
 }
 
 /// Grade every database's library again, after a grade limit changed. A
@@ -173,7 +174,10 @@ pub fn request_all(state: &Arc<AppState>) {
 /// that follows judges again. The pass starts once uploads to it pause for
 /// [`UPLOAD_SETTLE`]; each new frame before then pushes it back.
 pub fn note_upload(state: &Arc<AppState>, path: &str) {
-    JOBS.request(state, path, |queue| queue.uploads.touch(Instant::now()));
+    state
+        .catalog_jobs
+        .calibration_quality
+        .request(state, path, |queue| queue.uploads.touch(Instant::now()));
 }
 
 fn run_logged(state: &AppState, path: &str, job: &Job) {
@@ -296,6 +300,7 @@ pub struct CalibrationQualityResponse {
 /// `GET /api/db/{db}/calibrations/quality` — the grading job's progress and
 /// how the library's frames are graded.
 pub async fn get_progress(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     ctx: DbContext,
 ) -> Result<Json<ApiResponse<CalibrationQualityResponse>>, AppError> {
     let path = ctx.database_path.clone();
@@ -313,7 +318,7 @@ pub async fn get_progress(
     .map_err(|error| AppError::InternalError(format!("counting calibration grades: {error}")))?
     .map_err(|error| AppError::InternalError(format!("counting calibration grades: {error:#}")))?;
     Ok(Json(ApiResponse::success(CalibrationQualityResponse {
-        progress: progress(&path),
+        progress: progress(&state, &path),
         counts,
     })))
 }
@@ -360,9 +365,9 @@ mod tests {
         );
         // The catalog's runner waits for the uploads to settle; grading
         // counts as busy meanwhile, and as not yet running.
-        assert!(busy(&path));
-        assert!(!running(&path));
-        assert!(job(&path).queue().has_runner());
+        assert!(busy(&state, &path));
+        assert!(!running(&state, &path));
+        assert!(job(&state, &path).queue().has_runner());
     }
 
     #[test]
@@ -408,10 +413,11 @@ mod tests {
     fn a_request_runs_the_pass_in_the_background() {
         let temp = tempfile::tempdir().unwrap();
         let path = dark_catalog(temp.path());
-        request(&Arc::new(test_state()), &path);
+        let state = Arc::new(test_state());
+        request(&state, &path);
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
-            let progress = progress(&path);
+            let progress = progress(&state, &path);
             if !progress.running
                 && let Some(graded) = &progress.last_graded
             {

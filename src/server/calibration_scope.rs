@@ -29,7 +29,7 @@ use crate::server::api::ApiResponse;
 use crate::server::database_context::DatabaseContext;
 use crate::server::extract::DbContext;
 use crate::server::handlers::AppError;
-use crate::server::job_line::catalog::{CatalogJob, CatalogJobs, CatalogWork, Step};
+use crate::server::job_line::catalog::{CatalogJob, CatalogWork, Step};
 use crate::server::state::AppState;
 use axum::extract::{Query, State};
 use axum::Json;
@@ -165,17 +165,15 @@ impl CatalogWork for ScopeWork {
     }
 }
 
-/// One job per catalog path.
-static JOBS: CatalogJobs<ScopeWork> = CatalogJobs::new();
-
-fn job(path: &str) -> Arc<Job> {
-    JOBS.job(path)
+/// The job of the catalog at `path`.
+fn job(state: &AppState, path: &str) -> Arc<Job> {
+    state.catalog_jobs.calibration_scope.job(path)
 }
 
 /// How far the header reads of the catalog at `path` have got: lights read
 /// and lights to read, across its projects. `None` when none runs.
-pub(crate) fn header_reads(path: &str) -> Option<(usize, usize)> {
-    let job = JOBS.existing(path)?;
+pub(crate) fn header_reads(state: &AppState, path: &str) -> Option<(usize, usize)> {
+    let job = state.catalog_jobs.calibration_scope.existing(path)?;
     let queue = job.queue();
     let (left, total) = queue
         .reading
@@ -292,7 +290,8 @@ fn touch_reading(job: &Job, project: i32) -> bool {
 /// Read the headers of `lights` in the background, unless a read for this
 /// project runs already, which is marked as wanted now instead.
 fn start_reading(state: &Arc<AppState>, path: &str, project: i32, lights: Vec<ProjectLight>) {
-    JOBS.request(state, path, |queue| match queue.reading.get_mut(&project) {
+    let scopes = &state.catalog_jobs.calibration_scope;
+    scopes.request(state, path, |queue| match queue.reading.get_mut(&project) {
         Some(reading) => reading.asked = Instant::now(),
         None => {
             let total = lights.len();
@@ -378,7 +377,8 @@ fn work_out(
 
 /// Refresh a scope in the background, unless a refresh is queued or runs.
 fn start_refresh(state: &Arc<AppState>, ctx: &Arc<DatabaseContext>, project: i32) {
-    JOBS.request(state, &ctx.database_path, |queue| {
+    let scopes = &state.catalog_jobs.calibration_scope;
+    scopes.request(state, &ctx.database_path, |queue| {
         if queue.refreshing.insert(project) {
             queue.refreshes.push_back((project, Arc::clone(ctx)));
         }
@@ -393,7 +393,7 @@ pub(crate) fn scope_of(
     ctx: &Arc<DatabaseContext>,
     project: i32,
 ) -> anyhow::Result<Arc<ProjectScope>> {
-    let job = job(&ctx.database_path);
+    let job = job(state, &ctx.database_path);
     let conn = read_only(&ctx.database_path)?;
     let revision = revision(&conn, &job, ctx, project)?;
     drop(conn);

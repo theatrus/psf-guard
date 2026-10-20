@@ -16,7 +16,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 use std::time::Instant;
 
 use rusqlite::Connection;
@@ -27,7 +27,7 @@ use crate::concurrency::{LiveSetting, Stop};
 use crate::directory_tree::DirectoryTree;
 use crate::frame_derivatives::FileStamp;
 use crate::server::database_context::{db_open_flags, INDEX_BUILD_BUSY_TIMEOUT};
-use crate::server::job_line::catalog::{CatalogJob, CatalogJobs, CatalogWork, Step};
+use crate::server::job_line::catalog::{CatalogJob, CatalogWork, Step};
 use crate::server::state::AppState;
 
 /// One catalog's upkeep as a job with one runner per catalog.
@@ -46,8 +46,6 @@ pub(crate) struct Queue {
     /// The files whose pairing was checked, with what they were then, so
     /// the next pass reads only what changed.
     checked: HashMap<PathBuf, FileStamp>,
-    /// The server that last asked, so a published tree can ask for pairing.
-    server: Weak<AppState>,
 }
 
 /// Copies to pair in a published directory tree.
@@ -138,17 +136,19 @@ impl CatalogWork for CatalogUpkeep {
     }
 }
 
-static JOBS: CatalogJobs<CatalogUpkeep> = CatalogJobs::new();
-
 /// Build the catalog's query indexes and read the readout modes it lacks,
 /// on its runner. The server start asks for every catalog, and each change
 /// to the registered databases for the catalog it opened.
 pub(crate) fn start(state: &Arc<AppState>, path: &str) {
-    JOBS.request(state, path, |queue| {
-        queue.server = Arc::downgrade(state);
-        queue.indexes = true;
-        queue.readout_modes = true;
-    });
+    // A directory refresh of the catalog then asks this server for pairing.
+    state.link_contexts(path);
+    state
+        .catalog_jobs
+        .catalog_upkeep
+        .request(state, path, |queue| {
+            queue.indexes = true;
+            queue.readout_modes = true;
+        });
 }
 
 /// A directory refresh of the catalog at `path` published `tree`: pair the
@@ -156,6 +156,7 @@ pub(crate) fn start(state: &Arc<AppState>, path: &str) {
 /// `import_lock`. Only a catalog whose upkeep a server started is paired;
 /// the server start starts every catalog's.
 pub(crate) fn tree_published(
+    state: &Arc<AppState>,
     path: &str,
     tree: Arc<DirectoryTree>,
     enabled: LiveSetting,
@@ -164,13 +165,11 @@ pub(crate) fn tree_published(
     if !enabled.is_on() {
         return;
     }
-    let Some(state) = JOBS
-        .existing(path)
-        .and_then(|job| job.queue().server.upgrade())
-    else {
+    let upkeep = &state.catalog_jobs.catalog_upkeep;
+    if upkeep.existing(path).is_none() {
         return;
-    };
-    JOBS.request(&state, path, |queue| {
+    }
+    upkeep.request(state, path, |queue| {
         queue.pairing = Some(Pairing {
             tree,
             enabled,
@@ -180,8 +179,11 @@ pub(crate) fn tree_published(
 }
 
 /// Where the upkeep of the catalog at `path` stands.
-pub(crate) fn status(path: &str) -> UpkeepStatus {
-    JOBS.existing(path)
+pub(crate) fn status(state: &AppState, path: &str) -> UpkeepStatus {
+    state
+        .catalog_jobs
+        .catalog_upkeep
+        .existing(path)
         .map(|job| job.status())
         .unwrap_or_default()
 }
@@ -291,8 +293,8 @@ mod tests {
         ))
     }
 
-    fn wait_for_runner_to_exit(path: &str) {
-        let job = JOBS.job(path);
+    fn wait_for_runner_to_exit(state: &AppState, path: &str) {
+        let job = state.catalog_jobs.catalog_upkeep.job(path);
         for _ in 0..400 {
             if !job.queue().has_runner() {
                 return;
@@ -334,17 +336,35 @@ mod tests {
         let lock = Arc::new(TokioMutex::new(()));
 
         // No server has started this catalog's upkeep: nothing is queued.
-        tree_published(&path, tree(), LiveSetting::new(true), Arc::clone(&lock));
-        assert!(JOBS.existing(&path).is_none());
+        tree_published(
+            &state,
+            &path,
+            tree(),
+            LiveSetting::new(true),
+            Arc::clone(&lock),
+        );
+        assert!(state.catalog_jobs.catalog_upkeep.existing(&path).is_none());
 
         start(&state, &path);
-        wait_for_runner_to_exit(&path);
-        tree_published(&path, tree(), LiveSetting::new(true), Arc::clone(&lock));
-        wait_for_runner_to_exit(&path);
-        assert_eq!(status(&path).stage, UpkeepStage::Idle);
+        wait_for_runner_to_exit(&state, &path);
+        tree_published(
+            &state,
+            &path,
+            tree(),
+            LiveSetting::new(true),
+            Arc::clone(&lock),
+        );
+        wait_for_runner_to_exit(&state, &path);
+        assert_eq!(status(&state, &path).stage, UpkeepStage::Idle);
         // Turned off in Settings, a refresh pairs nothing.
-        tree_published(&path, tree(), LiveSetting::new(false), lock);
-        assert!(JOBS.job(&path).queue().pairing.is_none());
+        tree_published(&state, &path, tree(), LiveSetting::new(false), lock);
+        assert!(state
+            .catalog_jobs
+            .catalog_upkeep
+            .job(&path)
+            .queue()
+            .pairing
+            .is_none());
     }
 
     #[test]

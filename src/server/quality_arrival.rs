@@ -17,10 +17,9 @@
 
 use crate::concurrency::Stop;
 use crate::server::database_context::DatabaseContext;
-use crate::server::job_line::catalog::{CatalogJob, CatalogJobs, CatalogWork, Settling, Step};
+use crate::server::job_line::catalog::{CatalogJob, CatalogWork, Settling, Step};
 use crate::server::state::AppState;
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -83,22 +82,23 @@ impl CatalogWork for Arrivals {
     }
 }
 
-/// One job per database id.
-static JOBS: CatalogJobs<Arrivals> = CatalogJobs::new();
-
 /// Frames arrived in a database. Cheap: the scan is queued later, if the
 /// database asks for it.
 pub fn note_arrival(state: &Arc<AppState>, database_id: &str) {
-    JOBS.request(state, database_id, |queue| {
-        queue.arrivals.touch(Instant::now());
-    });
+    // One job per database id.
+    state
+        .catalog_jobs
+        .arrivals
+        .request(state, database_id, |queue| {
+            queue.arrivals.touch(Instant::now());
+        });
 }
 
 /// Frames that arrived while the server was down raised no arrival: every
 /// database that analyzes new frames is looked at once arrivals settle.
 pub fn note_start(state: &Arc<AppState>) {
     for ctx in state.all_databases() {
-        if ctx.analyze_new_frames.load(Ordering::Relaxed) {
+        if ctx.analyze_new_frames.is_on() {
             note_arrival(state, &ctx.id);
         }
     }
@@ -111,7 +111,7 @@ fn queue_scan(state: &Arc<AppState>, database_id: &str, job: &Job) {
     let Some(ctx) = state.get_database(database_id) else {
         return;
     };
-    if !ctx.analyze_new_frames.load(Ordering::Relaxed) {
+    if !ctx.analyze_new_frames.is_on() {
         return;
     }
     let retry = || job.queue().retry_at = Some(Instant::now() + RETRY);

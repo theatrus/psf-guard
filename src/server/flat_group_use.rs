@@ -33,7 +33,7 @@ use crate::server::database_context::DatabaseContext;
 use crate::server::extract::DbContext;
 use crate::server::flat_groups::FrameGroups;
 use crate::server::handlers::AppError;
-use crate::server::job_line::catalog::{CatalogJob, CatalogJobs, CatalogWork, Step};
+use crate::server::job_line::catalog::{CatalogJob, CatalogWork, Step};
 use crate::server::state::AppState;
 use axum::extract::{Query, State};
 use axum::Json;
@@ -444,25 +444,27 @@ impl CatalogWork for FlatGroupUse {
     }
 }
 
-/// One job per catalog path.
-static JOBS: CatalogJobs<FlatGroupUse> = CatalogJobs::new();
-
-fn job(path: &str) -> Arc<Job> {
-    JOBS.job(path)
+/// The job of the catalog at `path`.
+fn job(state: &AppState, path: &str) -> Arc<Job> {
+    state.catalog_jobs.flat_group_use.job(path)
 }
 
-fn kept(path: &str) -> Option<Kept> {
-    job(path).queue().kept.clone()
+fn kept(state: &AppState, path: &str) -> Option<Kept> {
+    job(state, path).queue().kept.clone()
 }
 
-fn failure(path: &str) -> Option<Failure> {
-    job(path).queue().failed.clone()
+fn failure(state: &AppState, path: &str) -> Option<Failure> {
+    job(state, path).queue().failed.clone()
 }
 
 /// Whether a refresh of what the flat groups feed in the catalog at `path`
 /// runs now.
-pub(crate) fn refreshing(path: &str) -> bool {
-    JOBS.existing(path).is_some_and(|job| job.queue().running())
+pub(crate) fn refreshing(state: &AppState, path: &str) -> bool {
+    state
+        .catalog_jobs
+        .flat_group_use
+        .existing(path)
+        .is_some_and(|job| job.queue().running())
 }
 
 /// Keep what one refresh came to: its answer, or its failure at `revision`.
@@ -509,7 +511,8 @@ fn start_refresh(
     if state.shutdown.is_stopping() {
         return false;
     }
-    JOBS.request(state, &ctx.database_path, |queue| {
+    let uses = &state.catalog_jobs.flat_group_use;
+    uses.request(state, &ctx.database_path, |queue| {
         if !queue.refreshing {
             queue.refreshing = true;
             queue.pending = Some(Refresh {
@@ -533,13 +536,13 @@ fn use_of_with(
     work: Work,
 ) -> anyhow::Result<FlatGroupUseView> {
     let revision = revision(&read_only(&ctx.database_path)?, ctx)?;
-    let kept = kept(&ctx.database_path);
+    let kept = kept(state, &ctx.database_path);
     if let Some((kept_revision, view)) = &kept
         && *kept_revision == revision
     {
         return Ok((**view).clone());
     }
-    let failed = failure(&ctx.database_path).filter(|failed| failed.revision == revision);
+    let failed = failure(state, &ctx.database_path).filter(|failed| failed.revision == revision);
     let waiting = failed
         .as_ref()
         .is_some_and(|failed| failed.at.elapsed() < failed.wait());
@@ -1066,8 +1069,8 @@ mod tests {
         }
     }
 
-    fn refresh_running(path: &str) -> bool {
-        job(path).queue().refreshing
+    fn refresh_running(state: &AppState, path: &str) -> bool {
+        job(state, path).queue().refreshing
     }
 
     /// A stand-in for working the answer out: counts its calls, and waits
@@ -1113,8 +1116,12 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 1, "one refresh at a time");
 
         release.open();
-        wait_until("the answer is kept", || kept(&ctx.database_path).is_some());
-        wait_until("the refresh ends", || !refresh_running(&ctx.database_path));
+        wait_until("the answer is kept", || {
+            kept(&state, &ctx.database_path).is_some()
+        });
+        wait_until("the refresh ends", || {
+            !refresh_running(&state, &ctx.database_path)
+        });
         let answer = use_of_with(&state, &ctx, Arc::clone(&work)).unwrap();
         assert!(answer.computed && !answer.refreshing);
         assert_eq!(answer.lights, 3);
@@ -1156,8 +1163,8 @@ mod tests {
                 .unwrap()
                 .refreshing
         );
-        wait_until("the failure is kept", || failure(&path).is_some());
-        wait_until("the refresh ends", || !refresh_running(&path));
+        wait_until("the failure is kept", || failure(&state, &path).is_some());
+        wait_until("the refresh ends", || !refresh_running(&state, &path));
         // Polled again at once: the error, and no new attempt.
         let answer = use_of_with(&state, &ctx, Arc::clone(&work)).unwrap();
         assert!(!answer.refreshing);
@@ -1168,17 +1175,18 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 1);
 
         // Once the wait has passed it tries again, and waits longer after.
-        job(&path).queue().failed.as_mut().unwrap().at = Instant::now() - Duration::from_secs(3600);
+        job(&state, &path).queue().failed.as_mut().unwrap().at =
+            Instant::now() - Duration::from_secs(3600);
         assert!(
             use_of_with(&state, &ctx, Arc::clone(&work))
                 .unwrap()
                 .refreshing
         );
         wait_until("the second failure", || {
-            failure(&path).is_some_and(|failed| failed.attempts == 2)
+            failure(&state, &path).is_some_and(|failed| failed.attempts == 2)
         });
         assert_eq!(calls.load(Ordering::SeqCst), 2);
-        let failed = failure(&path).unwrap();
+        let failed = failure(&state, &path).unwrap();
         assert_eq!(failed.wait(), RETRY_FIRST * 2);
         assert_eq!(
             Failure {

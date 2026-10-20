@@ -16,7 +16,6 @@ use rusqlite::{Connection, OpenFlags};
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex as TokioMutex;
@@ -297,6 +296,30 @@ pub(crate) fn error_is_sqlite_operational_failure(err: &anyhow::Error) -> bool {
     })
 }
 
+/// A weak link from a database context to the server that serves it, so
+/// work the context finishes on its own, such as a directory refresh, can
+/// reach that server's jobs without keeping the server alive.
+#[derive(Clone, Default)]
+pub struct ServerLink(Arc<std::sync::Mutex<std::sync::Weak<crate::server::state::AppState>>>);
+
+impl ServerLink {
+    /// Link the context to `state`, replacing any earlier server.
+    pub fn attach(&self, state: &Arc<crate::server::state::AppState>) {
+        *self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Arc::downgrade(state);
+    }
+
+    /// The linked server, while it is running.
+    pub fn server(&self) -> Option<Arc<crate::server::state::AppState>> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .upgrade()
+    }
+}
+
 /// All per-database state for the running server.
 pub struct DatabaseContext {
     /// Canonical id used in URLs and on disk. URL-safe slug, e.g. `imaging-rig`
@@ -323,8 +346,11 @@ pub struct DatabaseContext {
     /// What every import from the image folders leaves out.
     pub scan_rules: crate::commands::import::scan_rules::ScanRules,
     /// Scan frames that arrive by sync, upload or auto-import for quality.
-    /// Shared so Settings can change it on the live context.
-    pub analyze_new_frames: Arc<AtomicBool>,
+    /// Settings changes it on the live context.
+    pub analyze_new_frames: crate::concurrency::LiveSetting,
+    /// The server whose jobs work for this catalog, once one has started
+    /// work for it. A finished directory refresh tells those jobs.
+    pub server: ServerLink,
     /// Pair calibrated and registered copies with their lights, on import
     /// and in the background pass. Settings changes it on the live context.
     pub pair_calibrated_copies: crate::concurrency::LiveSetting,
@@ -654,9 +680,7 @@ impl DatabaseContext {
         // Not validated here either: a bad pattern fails the import that
         // uses it, with the pattern in the error, rather than the open.
         context.scan_rules = entry.scan_rules.clone().unwrap_or_default();
-        context
-            .analyze_new_frames
-            .store(entry.analyze_new_frames, Ordering::Relaxed);
+        context.analyze_new_frames.set(entry.analyze_new_frames);
         context
             .pair_calibrated_copies
             .set(entry.pair_calibrated_copies);
@@ -772,7 +796,8 @@ impl DatabaseContext {
             process_dir,
             autoimport: None,
             scan_rules: Default::default(),
-            analyze_new_frames: Arc::new(AtomicBool::new(false)),
+            analyze_new_frames: crate::concurrency::LiveSetting::new(false),
+            server: ServerLink::default(),
             pair_calibrated_copies: crate::concurrency::LiveSetting::new(true),
             scan_calibrated_copies: crate::concurrency::LiveSetting::new(false),
             cache_dir_path,
@@ -1045,13 +1070,16 @@ impl DatabaseContext {
             stats.format_age()
         );
 
-        crate::server::catalog_upkeep::tree_published(
-            &self.database_path,
-            Arc::clone(&tree),
-            self.pair_calibrated_copies.clone(),
-            Arc::clone(&self.image_import_mutex),
-        );
-        crate::server::calibration_health::tree_published(&self.database_path);
+        if let Some(state) = self.server.server() {
+            crate::server::catalog_upkeep::tree_published(
+                &state,
+                &self.database_path,
+                Arc::clone(&tree),
+                self.pair_calibrated_copies.clone(),
+                Arc::clone(&self.image_import_mutex),
+            );
+            crate::server::calibration_health::tree_published(&state, &self.database_path);
+        }
         Ok(tree)
     }
 
@@ -1934,7 +1962,9 @@ impl DatabaseContext {
             let mut cache = self.file_check_cache.write().unwrap();
             cache.refresh_progress.complete_directory();
             drop(cache);
-            crate::server::calibration_health::tree_published(&self.database_path);
+            if let Some(state) = self.server.server() {
+                crate::server::calibration_health::tree_published(&state, &self.database_path);
+            }
         } else {
             tracing::debug!(
                 "🌳 Directory tree cache became fresh while refresh waited for db={}",
@@ -2003,7 +2033,8 @@ impl DatabaseContext {
             process_dir: None,
             autoimport: None,
             scan_rules: Default::default(),
-            analyze_new_frames: Arc::new(AtomicBool::new(false)),
+            analyze_new_frames: crate::concurrency::LiveSetting::new(false),
+            server: ServerLink::default(),
             pair_calibrated_copies: crate::concurrency::LiveSetting::new(true),
             scan_calibrated_copies: crate::concurrency::LiveSetting::new(false),
             cache_dir_path: PathBuf::from("/tmp/psf-guard-test"),
@@ -2054,6 +2085,7 @@ impl Clone for DatabaseContext {
             autoimport: self.autoimport.clone(),
             scan_rules: self.scan_rules.clone(),
             analyze_new_frames: self.analyze_new_frames.clone(),
+            server: self.server.clone(),
             pair_calibrated_copies: self.pair_calibrated_copies.clone(),
             scan_calibrated_copies: self.scan_calibrated_copies.clone(),
             cache_dir_path: self.cache_dir_path.clone(),
