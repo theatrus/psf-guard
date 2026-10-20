@@ -70,6 +70,9 @@ export default function SchedulerSyncControls({
   const [applying, setApplying] = useState(false);
   /** Counts preview requests, so a replaced request's reply is ignored. */
   const latestPreview = useRef(0);
+  /** The stop sent for a replaced preview. The next preview waits for it,
+   *  so a late stop never reaches the new one. */
+  const pendingStop = useRef<Promise<unknown>>(Promise.resolve());
   const running = applying || previewingDbId !== null;
   const [message, setMessage] = useState('');
   const recoveryAttempted = useRef(false);
@@ -103,7 +106,7 @@ export default function SchedulerSyncControls({
       // The inputs changed: the preview under way answers a question no one
       // asks any more.
       latestPreview.current += 1;
-      void apiClient.stopPreview('sync', previewingDbId).catch(() => undefined);
+      pendingStop.current = apiClient.stopPreview('sync', previewingDbId).catch(() => undefined);
       setPreviewingDbId(null);
     }
   };
@@ -189,6 +192,8 @@ export default function SchedulerSyncControls({
         sessionStorage.removeItem(STORED_PREVIEW_KEY);
         setPending(null);
       }
+      await pendingStop.current;
+      if (request !== latestPreview.current) return;
       const response = await apiClient.previewDatabaseSync(localDbId, {
         peer_db_id: peerDbId,
         kind,
@@ -196,7 +201,14 @@ export default function SchedulerSyncControls({
         with_image_data: withImageData,
         reviewed_only: kind === 'push_grades',
       });
-      if (request !== latestPreview.current) return;
+      if (request !== latestPreview.current) {
+        // Replaced, but finished before its stop arrived: the server kept
+        // it, and no one will apply it.
+        void apiClient
+          .deleteDatabaseSyncPreview(localDbId, response.preview_id)
+          .catch(() => undefined);
+        return;
+      }
       setPending({
         localDbId,
         previewId: response.preview_id,

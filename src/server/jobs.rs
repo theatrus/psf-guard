@@ -753,10 +753,6 @@ fn grading_row(db: &DatabaseState, interactive: Option<&str>) -> JobRow {
     .automatic(true)
 }
 
-/// The catalog's upkeep while it runs: building PSF Guard's query indexes,
-/// reading the readout modes of calibration frames that lack them, or
-/// pairing calibrated copies with their lights. Always automatic. Reading
-/// readout modes gets a row only once it has frames to read.
 /// An import that writes. A scheduled one is automatic work.
 fn import_row(db: &DatabaseState, import: &crate::server::import_job::ImportJobProgress) -> JobRow {
     let automatic = import.trigger == "automatic";
@@ -828,6 +824,10 @@ fn export_row(db: &DatabaseState, export: &crate::server::export_job::ExportJobP
     }
 }
 
+/// The catalog's upkeep while it runs: building PSF Guard's query indexes,
+/// reading the readout modes of calibration frames that lack them, or
+/// pairing calibrated copies with their lights. Always automatic. Reading
+/// readout modes gets a row only once it has frames to read.
 fn upkeep_row(db: &DatabaseState) -> Option<JobRow> {
     use crate::server::catalog_upkeep::UpkeepStage;
     let upkeep = &db.upkeep;
@@ -1422,8 +1422,6 @@ fn backup_row(job: &BackupJob) -> JobRow {
     .automatic(scheduled)
 }
 
-/// A Seiza catalog installation a person started in Settings › Catalogs.
-/// Settings is a dialog, not a view, so the row has no link.
 /// A source-frame search for an artifact, in the stack line. Stop ends it
 /// before its next frame.
 fn artifact_search_row(
@@ -1485,6 +1483,8 @@ fn preview_row(run: &PreviewRun, names: &HashMap<&str, &str>) -> JobRow {
     }
 }
 
+/// A Seiza catalog installation a person started in Settings › Catalogs.
+/// Settings is a dialog, not a view, so the row has no link.
 fn catalog_install_row(progress: &CatalogInstallProgress) -> JobRow {
     let percent = match progress.bytes_total {
         Some(total) if total > 0 => {

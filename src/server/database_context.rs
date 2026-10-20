@@ -1010,7 +1010,11 @@ impl DatabaseContext {
     /// adds nothing.
     fn spawn_directory_tree_rebuild(&self) {
         if let Some(state) = self.server.server() {
-            crate::server::catalog_refresh::request(&state, self, |queue| queue.tree = true);
+            crate::server::catalog_refresh::request(
+                &state,
+                self,
+                crate::server::catalog_refresh::Refresh::Tree,
+            );
             return;
         }
         // A context no server works for, such as in a unit test: a thread
@@ -1752,9 +1756,11 @@ impl DatabaseContext {
         if should_start_refresh {
             match self.server.server() {
                 Some(state) => {
-                    crate::server::catalog_refresh::request(&state, self, |queue| {
-                        queue.files = true
-                    });
+                    crate::server::catalog_refresh::request(
+                        &state,
+                        self,
+                        crate::server::catalog_refresh::Refresh::Files,
+                    );
                 }
                 None => {
                     // A context no server works for, such as in a unit

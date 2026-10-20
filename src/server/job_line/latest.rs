@@ -71,6 +71,22 @@ impl<K: Clone + Eq + Hash> LatestRequests<K> {
     /// still under way for the same key is asked to stop.
     pub fn start(&self, state: &AppState, key: K, label: impl Into<String>) -> LatestRun<K> {
         let label = label.into();
+        let person = state.begin_named_interactive_job(label.clone());
+        self.start_run(key, label, Some(person))
+    }
+
+    /// [`Self::start`] for a request that no one on this server made, such
+    /// as a sync another server pushes: background work keeps running.
+    pub fn start_unattended(&self, key: K, label: impl Into<String>) -> LatestRun<K> {
+        self.start_run(key, label.into(), None)
+    }
+
+    fn start_run(
+        &self,
+        key: K,
+        label: String,
+        person: Option<InteractiveJobGuard>,
+    ) -> LatestRun<K> {
         let number = self.0.next.fetch_add(1, Ordering::Relaxed);
         let stop = Stop::new();
         let previous = self.runs().insert(
@@ -90,7 +106,7 @@ impl<K: Clone + Eq + Hash> LatestRequests<K> {
             key,
             number,
             stop,
-            _person: state.begin_named_interactive_job(label),
+            _person: person,
         }
     }
 
@@ -133,7 +149,8 @@ pub struct LatestRun<K: Clone + Eq + Hash> {
     key: K,
     number: u64,
     stop: Stop,
-    _person: InteractiveJobGuard,
+    /// Held while a person waits for the run.
+    _person: Option<InteractiveJobGuard>,
 }
 
 impl<K: Clone + Eq + Hash> LatestRun<K> {

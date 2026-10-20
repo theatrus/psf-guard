@@ -299,6 +299,10 @@ async fn resend(state: Arc<AppState>, service: Arc<Service>, peer_id: &str) -> V
     };
     let mut sent = Vec::new();
     for context in databases {
+        // A stopping server sends nothing more; the next contact resends.
+        if state.shutdown.is_stopping() {
+            break;
+        }
         let Some((push, waiting)) =
             send_and_record(&state, &service, &context, &peer, vec![], true).await
         else {

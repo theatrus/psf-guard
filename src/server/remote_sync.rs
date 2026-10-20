@@ -587,8 +587,8 @@ async fn create_preview_inner(
     }
 
     // A newer push from the same source replaces this preview.
-    let run = state.previews.incoming.start(
-        &state,
+    // Another server asked for it: work here does not wait for it.
+    let run = state.previews.incoming.start_unattended(
         crate::server::previews::incoming_key(&catalog.id, &source_id),
         format!("Previewing a sync from {source_id}"),
     );

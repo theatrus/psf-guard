@@ -460,7 +460,9 @@ A preview of a sync, an import or an export is cheap next to a stack
 build, and a person waits for each one. Previews never wait in a line.
 `job_line::latest::LatestRequests` runs them: a request starts at once, as
 a person's work holding the interactive guard, and a newer request for the
-same subject stops the one before it. The older run sees its stop and ends
+same subject stops the one before it. A sync another server pushes here is
+no one's work on this server: it starts without the guard
+(`start_unattended`), so background work keeps running. The older run sees its stop and ends
 early, and its result is dropped (`LatestRun::is_latest`). The registry is
 `AppState.previews`:
 
@@ -468,15 +470,19 @@ early, and its result is dropped (`LatestRun::is_latest`). The registry is
 |---|---|---|
 | Sync between databases | the local database | the snapshot copy checks it; the dry run's SQLite connections are interrupted (`Stop::interrupts`) |
 | Import | the database | header reads stop at the next file; the rolled-back transaction is interrupted |
-| AstroBin export | the database | its result is dropped |
+| AstroBin export | the database | it ends once the folder index is read; a stopped or replaced run's result is dropped |
 | Sync with another server | the local database | the request to the peer is dropped; the local merge is interrupted |
 | Sync pushed here | the catalog and the source that sent it | as a sync between databases |
 
 An import that writes replaces an import preview. A preview never
-replaces an import that writes: it is refused while one runs. The pages
+replaces an import that writes: it is refused while one runs. An import
+preview claims the database's import record and starts its run under the
+record's lock, so two previews asked for at once run in the order they
+claimed it. The pages
 keep their inputs live while a preview runs: a changed input stops the
-preview (`POST /api/previews/{kind}/{key}/stop`), and the page ignores a
-replaced request's reply. The header lists previews under way with Stop.
+preview (`POST /api/previews/{kind}/{key}/stop`), the next preview waits
+until that stop is answered, and the page ignores a replaced request's
+reply. A replaced sync preview the server kept anyway is deleted. The header lists previews under way with Stop.
 
 The director's activation preview stays as it is: it runs on in-memory
 copies in moments, and the dialog already keeps only the reply for its

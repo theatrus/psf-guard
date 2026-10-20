@@ -57,6 +57,9 @@ export default function AstroBinExportDialog({ request, onClose }: Props) {
     queryKey: ['astrobin-export', request.dbId, params],
     queryFn: () => apiClient.getAstroBinExport(request.dbId, params),
     staleTime: 60_000,
+    // Each request is a preview that pauses background work while it runs:
+    // ask again only when the options change.
+    refetchInterval: false,
   });
   const filterMap = useQuery({
     queryKey: ['db', request.dbId, 'astrobin-filters'],

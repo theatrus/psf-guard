@@ -66,6 +66,9 @@ export default function RemotePeerSync({ databases, disabled }: RemotePeerSyncPr
   const latestRun = useRef(0);
   /** The database whose preview runs now, if one does. */
   const previewing = useRef<string | null>(null);
+  /** The stop sent for a replaced preview. The next run waits for it, so a
+   *  late stop never reaches the new preview. */
+  const pendingStop = useRef<Promise<unknown>>(Promise.resolve());
 
   /** Any change to what would be sent invalidates a preview taken before it,
    *  and stops one still running. */
@@ -74,7 +77,9 @@ export default function RemotePeerSync({ databases, disabled }: RemotePeerSyncPr
     setMessage('');
     if (previewing.current !== null) {
       latestRun.current += 1;
-      void apiClient.stopPreview('peer_sync', previewing.current).catch(() => undefined);
+      pendingStop.current = apiClient
+        .stopPreview('peer_sync', previewing.current)
+        .catch(() => undefined);
       previewing.current = null;
     }
   };
@@ -125,15 +130,18 @@ export default function RemotePeerSync({ databases, disabled }: RemotePeerSyncPr
   });
 
   const run = useMutation({
-    mutationFn: ({ dryRun }: { dryRun: boolean; request: number }) => {
-      previewing.current = dryRun ? selectedDb!.id : null;
-      return apiClient.syncWithPeer(selectedDb!.id, {
+    mutationFn: async ({ dryRun }: { dryRun: boolean; request: number }) => {
+      const dbId = selectedDb!.id;
+      const body = {
         peer_id: selectedPeer!.id,
         direction,
         dry_run: dryRun,
         reviewed_only: !allGrades,
         with_image_data: true,
-      });
+      };
+      await pendingStop.current;
+      previewing.current = dryRun ? dbId : null;
+      return apiClient.syncWithPeer(dbId, body);
     },
     onSettled: (_result, _error, { request }) => {
       if (request === latestRun.current) previewing.current = null;

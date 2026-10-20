@@ -81,7 +81,23 @@ pub fn try_begin(
     image_dirs: Vec<String>,
     preview: bool,
 ) -> Option<Claim> {
+    claim(&mut store.write().unwrap(), image_dirs, preview)
+}
+
+/// Claim the record for a preview and call `start` in one step, under the
+/// record's lock. Two previews asked for at once then claim the record and
+/// start their runs in the same order, so the newest one runs.
+pub fn try_begin_preview<R>(
+    store: &RwLock<ImportJobStore>,
+    image_dirs: Vec<String>,
+    start: impl FnOnce() -> R,
+) -> Option<(Claim, R)> {
     let mut s = store.write().unwrap();
+    let claim = claim(&mut s, image_dirs, true)?;
+    Some((claim, start()))
+}
+
+fn claim(s: &mut ImportJobStore, image_dirs: Vec<String>, preview: bool) -> Option<Claim> {
     if s.progress.running && !s.progress.preview {
         return None;
     }

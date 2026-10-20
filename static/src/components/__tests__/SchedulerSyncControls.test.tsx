@@ -224,6 +224,40 @@ describe('SchedulerSyncControls', () => {
     expect(screen.queryByText(/Preview failed/)).not.toBeInTheDocument();
   });
 
+  it('sends the next preview only once the stop of the last one is answered', async () => {
+    const order: string[] = [];
+    let answerStop: (() => void) | undefined;
+    let previews = 0;
+    server.use(
+      http.post('/api/databases/local/sync/preview', async () => {
+        previews += 1;
+        order.push(`preview ${previews}`);
+        if (previews === 1) await new Promise(() => undefined);
+        return HttpResponse.json({ success: false, error: 'recorded' }, { status: 400 });
+      }),
+      http.post('/api/previews/sync/local/stop', async () => {
+        await new Promise<void>(resolve => {
+          answerStop = resolve;
+        });
+        order.push('stop');
+        return HttpResponse.json({ success: true, data: true, error: null, status: 'ready' });
+      })
+    );
+
+    const user = userEvent.setup();
+    render(<SchedulerSyncControls databases={[local, telescope]} />, { wrapper: wrapper() });
+    await user.click(screen.getByRole('button', { name: 'Send planning' }));
+    await user.click(screen.getByRole('button', { name: 'Preview changes' }));
+    await vi.waitFor(() => expect(order).toEqual(['preview 1']));
+    await user.click(screen.getByRole('button', { name: 'Send reviewed grades' }));
+    await user.click(screen.getByRole('button', { name: 'Preview changes' }));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    // The new preview waits for the stop.
+    expect(order).toEqual(['preview 1']);
+    answerStop?.();
+    await vi.waitFor(() => expect(order).toEqual(['preview 1', 'stop', 'preview 2']));
+  });
+
   it('offers a full pull with image data by default', async () => {
     let body: Record<string, unknown> | null = null;
     server.use(

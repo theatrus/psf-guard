@@ -161,6 +161,7 @@ async fn build(
     state: &AppState,
     ctx: &DbContext,
     query: AstroBinExportQuery,
+    stop: crate::concurrency::Stop,
 ) -> Result<AstroBinExport, AppError> {
     if query.project_id.is_none() && query.target_id.is_none() {
         return Err(AppError::BadRequest(
@@ -187,6 +188,7 @@ async fn build(
             .then(|| ctx.get_directory_tree())
             .transpose()
             .map_err(|error| anyhow::anyhow!("indexing image folders: {error}"))?;
+        anyhow::ensure!(!stop.requested(), "the export preview was stopped");
         let conn = open_scheduler_connection_with_flags(
             &database_path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
@@ -213,12 +215,18 @@ pub async fn get_astrobin_export(
         ctx.id.clone(),
         format!("Previewing an AstroBin export from {}", ctx.name),
     );
-    let export = build(&state, &ctx, query).await?;
+    let export = build(&state, &ctx, query, run.stop().clone()).await;
     if !run.is_latest() {
         return Err(AppError::Conflict(
             "A newer AstroBin export preview replaced this one.".into(),
         ));
     }
+    if run.stop().requested() {
+        return Err(AppError::Conflict(
+            "This AstroBin export preview was stopped before it finished.".into(),
+        ));
+    }
+    let export = export?;
     Ok(Json(ApiResponse::success(export)))
 }
 
@@ -228,7 +236,7 @@ pub async fn get_astrobin_csv(
     ctx: DbContext,
     Query(query): Query<AstroBinExportQuery>,
 ) -> Result<axum::response::Response, AppError> {
-    let export = build(&state, &ctx, query).await?;
+    let export = build(&state, &ctx, query, crate::concurrency::Stop::new()).await?;
     axum::response::Response::builder()
         .header(header::CONTENT_TYPE, "text/csv; charset=utf-8")
         .header(

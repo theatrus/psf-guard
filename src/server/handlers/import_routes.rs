@@ -325,15 +325,13 @@ fn start_import_preview(
     let Some(runtime) = state.runtime() else {
         return false;
     };
-    let Some(claim) = job::try_begin(&ctx.import_job, dirs.clone(), true) else {
+    let label = format!("Previewing an import into {}", ctx.name);
+    let Some((claim, run)) = job::try_begin_preview(&ctx.import_job, dirs.clone(), || {
+        state.previews.import.start(state, ctx.id.clone(), label)
+    }) else {
         return false;
     };
     job::set_trigger(&ctx.import_job, claim, "manual");
-    let run = state.previews.import.start(
-        state,
-        ctx.id.clone(),
-        format!("Previewing an import into {}", ctx.name),
-    );
     let state = Arc::clone(state);
     runtime.spawn(async move {
         // The rolled-back transaction still takes the catalog's write lock.
