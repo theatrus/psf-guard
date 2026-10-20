@@ -41,6 +41,7 @@ pub mod preview_queue;
 pub mod processing_setups;
 pub mod quality_arrival;
 pub mod quality_backfill;
+pub mod quality_scans;
 pub mod reject_removal;
 pub mod remote_audit;
 pub mod remote_sync;

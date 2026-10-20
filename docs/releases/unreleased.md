@@ -6,6 +6,13 @@
 
 ## Changes
 
+- A quality scan you start while another scan runs on the same database
+  now waits its turn and starts on its own, instead of not starting. Scans
+  you start run before the database-wide quality analysis, which pauses its
+  current target for them and scans that target again afterwards.
+- The background jobs list in the header now shows calibration grading
+  while it measures new calibration frames, and calibration health checks
+  while they work through your projects.
 - When Seiza chooses a stack's reference frame and the plate solves show
   frames at more than one rotator angle, the reference now comes from the
   largest group. Before, a reference from a small group could reject every

@@ -137,6 +137,18 @@ GET  /api/db/{db_id}/analysis/quality-scan
 GET  /api/db/{db_id}/analysis/sequence?target_id=...&weight_pointing=...
 ```
 
+The POST queues the scan and returns at once with `started: true`; it
+returns `started: false` only while the server shuts down. Each database
+runs one scan at a time. Scans that people request run in the order they
+were requested, before the database-wide analysis. A request for a target
+and filter that are already queued joins that scan. Until the scan finds
+the frames that need computing, its progress shows `running: true` with the
+stage `preparing`. A scan that finds no such frames finishes without
+measuring anything, and the GET then shows `running: false`. A request
+during the analysis stops the analysis's current target scan at its next
+frame; that target is scanned again after the request's scan, reusing what
+was already measured.
+
 The rotation skew tolerance is fixed at 2° (the analyzer's
 `rotation_skew_tolerance_deg`); no request or setting changes it yet.
 

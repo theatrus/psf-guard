@@ -196,8 +196,21 @@ impl<W: CatalogWork> CatalogJob<W> {
     /// runner thread cannot start or finish an item in between. Returns
     /// false when no item was running.
     pub fn stop(&self, edit: impl FnOnce(&mut W::Queue)) -> bool {
+        self.stop_if(|queue| {
+            edit(queue);
+            true
+        })
+    }
+
+    /// Request a stop of the running item when `test`, called with the
+    /// queue under the queue lock, returns true. The test can read what
+    /// runs from the queue, such as to stop only automatic work. Returns
+    /// false when no stop was requested.
+    pub fn stop_if(&self, test: impl FnOnce(&mut W::Queue) -> bool) -> bool {
         let mut queued = self.lock();
-        edit(&mut queued.queue);
+        if !test(&mut queued.queue) {
+            return false;
+        }
         if let Some(stop) = &queued.current_stop {
             stop.request();
             true
@@ -403,6 +416,18 @@ mod tests {
         assert!(!job.queue().running());
         assert!(!job.stop(|_| {}), "no item is running");
         assert_eq!(COUNTING.catalogs(), ["catalog.sqlite"]);
+    }
+
+    #[test]
+    fn stop_if_requests_the_running_items_stop_only_when_the_test_passes() {
+        let job = CatalogJob::<Counting>::default();
+        let stop = Stop::new();
+        job.lock().current_stop = Some(stop.clone());
+        assert!(!job.stop_if(|queue| !queue.is_empty()));
+        assert!(!stop.requested(), "the test failed: nothing is stopped");
+        job.queue().push(3);
+        assert!(job.stop_if(|queue| !queue.is_empty()));
+        assert!(stop.requested());
     }
 
     #[test]

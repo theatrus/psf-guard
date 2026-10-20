@@ -270,13 +270,22 @@ Then:
   SQLite steps; a run a person starts does not wait. Stop ends the run
   rather than pausing it: the schedule tries again at its next time.
 - Calibration grading (`calibration_quality.rs`) is a Background runner per
-  catalog with a status route, but it has no row in the job line yet.
+  catalog. Its row in the job line appears once a pass has frames to
+  measure; a pass that only regrades the library is quick and gets none.
 - Calibration health (`calibration_health.rs`) runs on `CatalogJobs` like
-  grading, without a row in the job line.
+  grading. Its row appears once a pass has projects to judge.
+- Quality scans and the database-wide analysis (`quality_scans.rs`) share
+  one runner per catalog, since they share the database's scanner. A
+  person's scans run first, at `Interactive`, in the order requested. The
+  analysis then scans its targets one at a time at `Background`. A person's
+  request stops the analysis's current target scan at its next frame and
+  puts that target back at the front of the analysis. The runner gathers
+  the frames that need computing, so the start route only checks that the
+  target exists and returns at once.
 - Flat measuring, frame sites, the duplicate check, reject removal,
-  calibration grading and calibration health all run on `CatalogJobs`.
-- Quality backfill and scans (`spatial_scan.rs`) and preview pre-generation
-  (`preview_queue.rs`) predate this record; check each before copying its
-  shape.
+  calibration grading, calibration health and quality scans all run on
+  `CatalogJobs`.
+- Preview pre-generation (`preview_queue.rs`) is a bounded pool of short
+  tasks and stays as it is.
 - Stack builds and WBPP runs wait in job lines rather than per-catalog
   queues; see [One job line](job-line.md).

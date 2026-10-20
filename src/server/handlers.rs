@@ -3781,74 +3781,6 @@ fn run_import_blocking(
     Ok(outcome)
 }
 
-/// Run (or wait for) the quality scan for one database target. The scan is a
-/// per-DB singleton, so this retries while a previous target's scan is still
-/// running, then waits for its own scan to complete.
-async fn run_quality_scan_for_target(
-    state: &Arc<AppState>,
-    ctx: &Arc<DatabaseContext>,
-    target_id: i32,
-    force: bool,
-    fill_metadata: bool,
-) {
-    use crate::server::spatial_scan;
-
-    let poll = tokio::time::Duration::from_millis(1500);
-    loop {
-        let response = start_spatial_scan_with_priority(
-            State(state.clone()),
-            DbContext(ctx.clone()),
-            Json(SpatialScanRequest {
-                target_id,
-                filter_name: None,
-                force: false,
-                force_spatial: force,
-                force_astrometry: force,
-                force_satellites: false,
-                fill_metadata: Some(fill_metadata),
-            }),
-            crate::concurrency::Priority::Background,
-            false,
-        )
-        .await;
-        match response {
-            Ok(Json(body)) => {
-                let Some(data) = body.data else { return };
-                if data.started {
-                    break; // our scan launched; wait for it below
-                }
-                if !data.progress.running {
-                    return; // nothing to compute for this target
-                }
-                // Another scan (previous target) still running — wait, retry.
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "📥 Backfill scan for db={} target={} not started: {:?}",
-                    ctx.id,
-                    target_id,
-                    e
-                );
-                return;
-            }
-        }
-        if !state.shutdown.sleep(poll).await {
-            return;
-        }
-    }
-
-    // The scan holds the stop itself until it has saved what it measured.
-    loop {
-        if !state.shutdown.sleep(poll).await {
-            return;
-        }
-        let (progress, _) = spatial_scan::progress_snapshot(&ctx.spatial_metrics);
-        if !progress.running {
-            break;
-        }
-    }
-}
-
 /// Write scan-measured star count and HFR into `acquiredimage.metadata` for
 /// frames that imported without them, so an imported catalog carries the same
 /// star metadata a N.I.N.A. catalog does. `pending` is `(image id, filename,
@@ -3968,6 +3900,8 @@ fn fill_missing_star_metadata(
     filled
 }
 
+/// Queue the database-wide quality analysis of `target_ids`. False when an
+/// analysis is already queued or running, or the server is shutting down.
 pub(crate) fn spawn_quality_backfill(
     state: &Arc<AppState>,
     ctx: Arc<DatabaseContext>,
@@ -3975,44 +3909,7 @@ pub(crate) fn spawn_quality_backfill(
     force: bool,
     fill_metadata: bool,
 ) -> bool {
-    use crate::server::quality_backfill as job;
-
-    if state.shutdown.is_stopping() {
-        return false;
-    }
-    if !job::try_begin(&ctx.quality_backfill, force, target_ids.len()) {
-        return false;
-    }
-    if target_ids.is_empty() {
-        return true;
-    }
-
-    let state = Arc::clone(state);
-    tokio::spawn(async move {
-        tracing::info!(
-            "📐 Database quality {} started for db={} ({} targets)",
-            if force { "rescan" } else { "backfill" },
-            ctx.id,
-            target_ids.len()
-        );
-        for target_id in target_ids {
-            // The next start's backfill picks up the targets left.
-            if state.shutdown.is_stopping() {
-                return;
-            }
-            job::begin_target(&ctx.quality_backfill, target_id);
-            run_quality_scan_for_target(&state, &ctx, target_id, force, fill_metadata).await;
-            job::finish_target(&ctx.quality_backfill);
-        }
-        job::finish(&ctx.quality_backfill);
-        // Scores changed under the remembered stacks; refresh them.
-        state.auto_stacks.touch_database(
-            &ctx.id,
-            crate::server::stack_preview::automatic::RefreshReason::Arrival,
-        );
-        tracing::info!("📐 Database quality work finished for db={}", ctx.id);
-    });
-    true
+    crate::server::quality_scans::queue_analysis(state, &ctx, target_ids, force, fill_metadata)
 }
 
 pub async fn start_quality_backfill_route(
@@ -8307,32 +8204,58 @@ mod cached_pixel_source_tests {
 
 /// POST /api/db/{db_id}/analysis/spatial-scan
 ///
-/// Start a background scan computing spatial occlusion metrics from the FITS
-/// files of a target's images. Singleton per database: if a scan is already
-/// running (or nothing needs computing) this returns `started: false` with
-/// the current progress. Poll GET on the same path for progress.
+/// Queue a person's quality scan of a target's frames on the database's
+/// quality scan runner, and return at once. Scans a person requested run
+/// before the database-wide analysis. `started` is false only while the
+/// server shuts down. The progress shows the scan as preparing until the
+/// runner has found the frames that need computing; a scan that finds none
+/// finishes without measuring. Poll GET on the same path for progress.
 pub async fn start_spatial_scan(
     State(state): State<Arc<AppState>>,
     ctx: DbContext,
     Json(req): Json<SpatialScanRequest>,
 ) -> Result<Json<ApiResponse<SpatialScanStatusResponse>>, AppError> {
-    start_spatial_scan_with_priority(
-        State(state),
-        ctx,
-        Json(req),
-        crate::concurrency::Priority::Interactive,
-        true,
-    )
-    .await
+    // One indexed lookup, so a request for a target that is not there fails
+    // at once; the runner reads the target's frames later.
+    {
+        let conn = ctx.db();
+        let conn = conn.lock().map_err(AppError::db)?;
+        let found = Database::new(&conn)
+            .get_targets_by_ids(&[req.target_id])
+            .map_err(AppError::db)?;
+        if found.is_empty() {
+            return Err(AppError::BadRequest(format!(
+                "Target {} not found",
+                req.target_id
+            )));
+        }
+    }
+    let started = crate::server::quality_scans::queue_scan(&state, &ctx.0, req);
+    let (progress, cached_count) =
+        crate::server::spatial_scan::progress_snapshot(&ctx.spatial_metrics);
+    Ok(Json(ApiResponse::success(SpatialScanStatusResponse {
+        started,
+        progress,
+        cached_count,
+        scope: None,
+    })))
 }
 
-async fn start_spatial_scan_with_priority(
-    State(state): State<Arc<AppState>>,
-    ctx: DbContext,
-    Json(req): Json<SpatialScanRequest>,
+/// Scan one target's frames for quality on the calling thread, the quality
+/// scan runner's: gather the frames that need spatial, astrometry or
+/// satellite work, then measure them. `stop`
+/// ends the scan at its next frame; what was measured is still saved.
+/// Returns false when no frame needed computing.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn scan_target(
+    state: &Arc<AppState>,
+    ctx: &Arc<DatabaseContext>,
+    req: &SpatialScanRequest,
     priority: crate::concurrency::Priority,
     include_satellites: bool,
-) -> Result<Json<ApiResponse<SpatialScanStatusResponse>>, AppError> {
+    stop: &crate::concurrency::Stop,
+    runtime: &tokio::runtime::Handle,
+) -> Result<bool, AppError> {
     use crate::server::spatial_scan as scan;
 
     scan::ensure_loaded(&ctx.spatial_metrics, &ctx.cache_dir_path);
@@ -8345,6 +8268,8 @@ async fn start_spatial_scan_with_priority(
     // Collect this target's images together with schema-adaptive intended
     // framing. Unsupported coordinate epochs are deliberately omitted from
     // absolute grading, though the solver may still use FITS hints.
+    // One target's rows, read on the runner thread; the request that queued
+    // the scan does not wait for them.
     let (candidates, mapped_sources) = {
         let conn = ctx.db();
         let conn = conn.lock().map_err(AppError::db)?;
@@ -8399,13 +8324,10 @@ async fn start_spatial_scan_with_priority(
     let force_astrometry = req.force || req.force_astrometry;
     let force_satellites = req.force || req.force_satellites;
     // A measurement taken from a file that has changed since — a copy still
-    // arriving when it was scanned, a frame replaced — says nothing about the
-    // pixels there now, so it is measured again. Off the async threads: each
-    // check reads the file's metadata, which can wait on a network mount.
-    // Skipped while a scan runs: this request cannot start another, and a
-    // backfill polls here until the running one finishes.
-    let scan_running = ctx.spatial_metrics.read().unwrap().progress.running;
-    let changed_sources: std::collections::HashSet<i32> = if force_spatial || scan_running {
+    // arriving when it was scanned, a frame replaced — does not describe the
+    // pixels there now, so it is measured again. Each check reads the file's
+    // metadata, which can wait on a network mount.
+    let changed_sources: std::collections::HashSet<i32> = if force_spatial {
         Default::default()
     } else {
         let checks: Vec<_> = candidates
@@ -8425,25 +8347,23 @@ async fn start_spatial_scan_with_priority(
                 Some((img.clone(), target_name.clone(), file_only, measured_from))
             })
             .collect();
-        let check_ctx = ctx.0.clone();
-        tokio::task::spawn_blocking(move || {
-            checks
-                .into_iter()
-                .filter(|(img, target_name, file_only, measured_from)| {
-                    // A changed file, or the option to measure calibrated
-                    // copies turned on or off, both mean another source.
-                    quality_scan_source(&check_ctx, img, target_name, file_only)
-                        .ok()
-                        .and_then(|(_, revision)| revision)
-                        .is_some_and(|now| now != *measured_from)
-                })
-                .map(|(img, ..)| img.id)
-                .collect()
-        })
-        .await
-        .unwrap_or_default()
+        checks
+            .into_iter()
+            .filter(|(img, target_name, file_only, measured_from)| {
+                // A changed file, or the option to measure calibrated
+                // copies turned on or off, both mean another source.
+                quality_scan_source(ctx, img, target_name, file_only)
+                    .ok()
+                    .and_then(|(_, revision)| revision)
+                    .is_some_and(|now| now != *measured_from)
+            })
+            .map(|(img, ..)| img.id)
+            .collect()
     };
     for (img, target_name, expected) in candidates {
+        if stop.requested() {
+            break;
+        }
         let Some(file_only) = filename_from_metadata(&img.metadata) else {
             continue;
         };
@@ -8517,42 +8437,25 @@ async fn start_spatial_scan_with_priority(
         }
     }
 
-    if work.is_empty() {
+    if work.is_empty() || stop.requested() {
         // Nothing to compute, but cached measurements may still be missing
         // from imported rows (e.g. a catalog scanned before write-back
-        // existed) — heal them without forcing a rescan.
+        // existed): fill them in without forcing a rescan.
         if !star_fill.is_empty() {
-            let fill_ctx = ctx.0.clone();
-            let _ = tokio::task::spawn_blocking(move || {
-                fill_missing_star_metadata(&fill_ctx, &star_fill)
-            })
-            .await;
+            fill_missing_star_metadata(ctx, &star_fill);
         }
-        let (progress, cached_count) = scan::progress_snapshot(&ctx.spatial_metrics);
-        return Ok(Json(ApiResponse::success(SpatialScanStatusResponse {
-            started: false,
-            progress,
-            cached_count,
-            scope: None,
-        })));
+        scan::end_preparing(&ctx.spatial_metrics);
+        return Ok(false);
     }
 
-    if !scan::try_begin_scan(
+    scan::begin_scan(
         &ctx.spatial_metrics,
         req.target_id,
         req.filter_name.clone(),
         work.iter().filter(|item| item.4).count(),
         skipped_cached,
         priority == crate::concurrency::Priority::Background,
-    ) {
-        let (progress, cached_count) = scan::progress_snapshot(&ctx.spatial_metrics);
-        return Ok(Json(ApiResponse::success(SpatialScanStatusResponse {
-            started: false,
-            progress,
-            cached_count,
-            scope: None,
-        })));
-    }
+    );
 
     tracing::info!(
         "📐 Quality scan started for db={} target={} ({} images, {} spatial cached)",
@@ -8562,28 +8465,20 @@ async fn start_spatial_scan_with_priority(
         skipped_cached
     );
 
-    let ctx_arc = ctx.0.clone();
+    let ctx_arc = Arc::clone(ctx);
     let target_id = req.target_id;
     let worker_policy = state.worker_policy();
     let astrometry = Arc::clone(&state.astrometry);
-    let runtime_handle = tokio::runtime::Handle::current();
-    // Mark this as an interactive job for its whole lifetime so background
-    // pre-generation yields cores + memory to it. Moved into the blocking task
-    // and dropped when the scan returns (or panics).
-    let interactive_guard = (priority == crate::concurrency::Priority::Interactive)
+    let runtime_handle = runtime.clone();
+    // A person's scan is interactive work for its whole run, so background
+    // pre-generation yields cores and memory to it. Dropped when the scan
+    // returns or panics.
+    let _interactive_guard = (priority == crate::concurrency::Priority::Interactive)
         .then(|| state.begin_named_interactive_job("a quality scan"));
-    let scheduling_state = Arc::clone(&state);
-    // A stop waits for the frames in hand and the save of what was measured.
-    let held = state.shutdown.hold(format!(
-        "quality scan for target {} (db={})",
-        req.target_id, ctx.id
-    ));
-    tokio::task::spawn_blocking(move || {
-        let _held = held;
-        let _interactive_guard = interactive_guard;
-        // Any panic below would be silently swallowed by tokio (the join
-        // handle is dropped) and leave the singleton wedged at running=true;
-        // catch it and always finalize.
+    let scheduling_state = Arc::clone(state);
+    {
+        // A panic below would leave the scan marked running; it is caught,
+        // and the scan is always finalized.
         let scan_body = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             // Resolve FITS paths first; unresolvable files count as errors.
             let mut items = Vec::with_capacity(work.len());
@@ -8675,6 +8570,9 @@ async fn start_spatial_scan_with_priority(
             // While it waits, the scan's status names what it waits for, so
             // the header lists it as waiting rather than stalled.
             let wait_for_turn = || {
+                if stop.requested() {
+                    return false;
+                }
                 if priority != crate::concurrency::Priority::Background {
                     return !scheduling_state.shutdown.is_stopping();
                 }
@@ -8841,15 +8739,8 @@ async fn start_spatial_scan_with_priority(
                 target_id
             );
         }
-    });
-
-    let (progress, cached_count) = scan::progress_snapshot(&ctx.spatial_metrics);
-    Ok(Json(ApiResponse::success(SpatialScanStatusResponse {
-        started: true,
-        progress,
-        cached_count,
-        scope: None,
-    })))
+    }
+    Ok(true)
 }
 
 /// GET /api/db/{db_id}/analysis/spatial-scan — progress + store size.

@@ -231,6 +231,9 @@ impl CatalogWork for CalibrationHealth {
     }
 
     fn run(state: &Arc<AppState>, path: &str, job: &Job, (): (), _: &Stop) {
+        // The count is the new pass's from its start: a pass with nothing
+        // to judge shows no progress from an earlier one.
+        job.update(|status| status.progress = (0, 0));
         let failed = run_pass(state, path, job)
             .inspect_err(|error| {
                 tracing::info!(
@@ -286,6 +289,28 @@ pub struct WorkDone {
 /// started: the work a pass skipped shows here.
 pub fn work_done(path: &str) -> WorkDone {
     job(path).status().work
+}
+
+/// How far a pass over a catalog has got, for its row in the job list.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct HealthProgress {
+    /// Whether a pass runs or is queued.
+    pub running: bool,
+    /// Projects judged so far in this pass.
+    pub judged: usize,
+    /// Projects whose health this pass works out again; 0 until the pass
+    /// has found them, and when it finds none.
+    pub total: usize,
+}
+
+/// How far the pass over the catalog at `path` has got.
+pub fn progress(path: &str) -> HealthProgress {
+    let (judged, total) = job(path).status().progress;
+    HealthProgress {
+        running: running(path),
+        judged,
+        total,
+    }
 }
 
 /// One job per catalog file, whichever database context asks.

@@ -1234,3 +1234,98 @@ async fn the_route_lists_a_queued_wbpp_run_and_each_database() {
     assert_eq!(json["control"]["kind"], "wbpp-queued");
     assert_eq!(json["link"]["view"], "stacks");
 }
+
+#[test]
+fn a_queued_scan_says_it_finds_its_frames_first() {
+    let rows = row_list(&with_db(DatabaseState {
+        scan: scan(0, 0, crate::server::spatial_scan::STAGE_PREPARING),
+        ..db("a", "Askar")
+    }));
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].detail, "Finding frames to analyze");
+    assert_eq!(rows[0].percent, None);
+}
+
+#[test]
+fn calibration_grading_is_listed_once_it_measures_frames() {
+    use crate::server::calibration_quality::CalibrationQualityProgress;
+    let grading = |stage: &str, done: usize, to_measure: usize| CalibrationQualityProgress {
+        running: true,
+        stage: Some(stage.into()),
+        to_measure,
+        done,
+        ..CalibrationQualityProgress::default()
+    };
+    // A pass that only regrades the library is quick: no row.
+    assert!(row_list(&with_db(DatabaseState {
+        grading: grading("grading", 0, 0),
+        ..db("a", "Askar")
+    }))
+    .is_empty());
+    let rows = row_list(&with_db(DatabaseState {
+        grading: grading("measuring", 3, 1_200),
+        ..db("a", "Askar")
+    }));
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        (
+            rows[0].title.as_str(),
+            rows[0].scope.as_str(),
+            rows[0].detail.as_str()
+        ),
+        (
+            "Grading calibration frames",
+            "Askar",
+            "Measuring 3 of 1,200 frames"
+        )
+    );
+    assert_eq!(rows[0].percent, Some(0.25));
+    assert!(rows[0].background && rows[0].automatic);
+    assert_eq!(
+        rows[0].link,
+        Some(RowLink::view(LinkView::Calibration, "a"))
+    );
+    // While a person's work runs, the row waits for it.
+    let mut snapshot = with_db(DatabaseState {
+        grading: grading("waiting", 3, 1_200),
+        ..db("a", "Askar")
+    });
+    snapshot.interactive = Some("a stack build".into());
+    let waiting = row_list(&snapshot);
+    assert_eq!(waiting[0].status, RowStatus::Waiting);
+    assert_eq!(waiting[0].waiting_for.as_deref(), Some("a stack build"));
+    assert_eq!(
+        waiting[0].detail,
+        "Waiting for a stack build · Measuring 3 of 1,200 frames"
+    );
+}
+
+#[test]
+fn calibration_health_is_listed_once_its_pass_has_projects_to_judge() {
+    use crate::server::calibration_health::HealthProgress;
+    let health = |judged: usize, total: usize| HealthProgress {
+        running: true,
+        judged,
+        total,
+    };
+    assert!(row_list(&with_db(DatabaseState {
+        health: health(0, 0),
+        ..db("a", "Askar")
+    }))
+    .is_empty());
+    let rows = row_list(&with_db(DatabaseState {
+        health: health(1, 4),
+        ..db("a", "Askar")
+    }));
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        (rows[0].title.as_str(), rows[0].detail.as_str()),
+        ("Checking calibration health", "1 of 4 projects")
+    );
+    assert_eq!(rows[0].percent, Some(25.0));
+    assert!(rows[0].background);
+    assert_eq!(
+        rows[0].link,
+        Some(RowLink::view(LinkView::Calibration, "a"))
+    );
+}

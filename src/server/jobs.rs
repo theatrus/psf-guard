@@ -82,6 +82,8 @@ pub enum RowKind {
     Transfer,
     Backup,
     Catalog,
+    Grading,
+    Health,
 }
 
 /// The two lines a person can reorder. Each runs one job at a time.
@@ -291,6 +293,8 @@ pub struct DatabaseState {
     pub sites: FrameSitesStatus,
     pub duplicates: DuplicateJobStatus,
     pub rejects: RemovalJobStatus,
+    pub grading: crate::server::calibration_quality::CalibrationQualityProgress,
+    pub health: crate::server::calibration_health::HealthProgress,
 }
 
 /// A Target Scheduler sync or import job, as the rows need it.
@@ -337,6 +341,8 @@ pub struct Snapshot {
     pub ts_sync: Vec<TsSyncJob>,
     pub backup: Option<BackupJob>,
     pub catalog_install: Option<CatalogInstallProgress>,
+    /// The person's work that background jobs wait for, if any runs.
+    pub interactive: Option<String>,
 }
 
 impl Default for Snapshot {
@@ -357,6 +363,7 @@ impl Default for Snapshot {
             ts_sync: Vec::new(),
             backup: None,
             catalog_install: None,
+            interactive: None,
         }
     }
 }
@@ -543,7 +550,11 @@ fn quality_rows(db: &DatabaseState, project_of: ProjectOf) -> Vec<JobRow> {
             project_of,
         )
     };
-    let frames = format!("{verb} {}/{} frames", scan.processed, scan.total);
+    let frames = if scan.stage == crate::server::spatial_scan::STAGE_PREPARING {
+        "Finding frames to analyze".to_string()
+    } else {
+        format!("{verb} {}/{} frames", scan.processed, scan.total)
+    };
     // An automatic scan paused for a person's work.
     let scan_waits_for = (scan.running && scan.automatic)
         .then(|| scan.waiting_for.clone())
@@ -751,6 +762,69 @@ fn sites_row(db: &DatabaseState, sites: &FrameSitesStatus) -> JobRow {
             format!("sites:{}", db.id),
             RowKind::Sites,
             "Reading frame sites",
+            &db.name,
+        )
+    }
+    .automatic(true)
+}
+
+/// Calibration grading, once a pass has frames to measure: always
+/// automatic. A pass that only regrades the library is quick, and gets no
+/// row. While it waits for a person's work, the row shows what for.
+fn grading_row(db: &DatabaseState, interactive: Option<&str>) -> JobRow {
+    let grading = &db.grading;
+    let waiting = grading.stage.as_deref() == Some("waiting");
+    let label = match grading.stage.as_deref() {
+        Some("grading") => "Grading the library".to_string(),
+        _ => format!(
+            "Measuring {} of {} {}",
+            grouped(grading.done.min(grading.to_measure)),
+            grouped(grading.to_measure),
+            plural(grading.to_measure, "frame", "frames")
+        ),
+    };
+    let waiting_for = waiting.then(|| interactive.map(str::to_string)).flatten();
+    JobRow {
+        detail: if waiting {
+            waiting_detail(waiting_for.as_deref(), &label)
+        } else {
+            label
+        },
+        status: if waiting {
+            RowStatus::Waiting
+        } else {
+            RowStatus::Running
+        },
+        waiting_for,
+        percent: fraction(grading.done, grading.to_measure),
+        link: Some(RowLink::view(LinkView::Calibration, &db.id)),
+        ..JobRow::new(
+            format!("grading:{}", db.id),
+            RowKind::Grading,
+            "Grading calibration frames",
+            &db.name,
+        )
+    }
+    .automatic(true)
+}
+
+/// Working out calibration health, once a pass has projects to judge:
+/// always automatic.
+fn health_row(db: &DatabaseState) -> JobRow {
+    let health = &db.health;
+    JobRow {
+        detail: format!(
+            "{} of {} {}",
+            grouped(health.judged.min(health.total)),
+            grouped(health.total),
+            plural(health.total, "project", "projects")
+        ),
+        percent: fraction(health.judged, health.total),
+        link: Some(RowLink::view(LinkView::Calibration, &db.id)),
+        ..JobRow::new(
+            format!("health:{}", db.id),
+            RowKind::Health,
+            "Checking calibration health",
             &db.name,
         )
     }
@@ -1381,6 +1455,12 @@ pub fn rows(snapshot: &Snapshot, project_of: ProjectOf) -> Vec<JobRow> {
         if db.rejects.state == "running" {
             rows.push(rejects_row(db, &db.rejects));
         }
+        if db.grading.running && db.grading.to_measure > 0 {
+            rows.push(grading_row(db, snapshot.interactive.as_deref()));
+        }
+        if db.health.running && db.health.total > 0 {
+            rows.push(health_row(db));
+        }
     }
     // Running builds first, then the line in order.
     let mut stacks: Vec<&StackActivityEntry> = snapshot.stacks.active.iter().collect();
@@ -1488,6 +1568,8 @@ fn snapshot(state: &Arc<AppState>, transfers: Vec<Value>, manages: bool) -> Snap
             sites: crate::server::frame_sites::status(&ctx.database_path),
             duplicates: crate::server::calibration_duplicates::status(&ctx.database_path),
             rejects: crate::server::reject_removal::status(&ctx.database_path),
+            grading: crate::server::calibration_quality::progress(&ctx.database_path),
+            health: crate::server::calibration_health::progress(&ctx.database_path),
         })
         .collect();
     let backups_allowed = manages && crate::server::handlers::require_registry_path(state).is_ok();
@@ -1509,6 +1591,7 @@ fn snapshot(state: &Arc<AppState>, transfers: Vec<Value>, manages: bool) -> Snap
         },
         backup: backups_allowed.then(|| state.backups.job()).flatten(),
         catalog_install: Some(state.catalog_install.status().progress),
+        interactive: state.interactive_job_name(),
     }
 }
 

@@ -69,6 +69,18 @@ describe('header items from the jobs route', () => {
     expect(jobItem(row({ key: 'p', detail: 'Waiting for a stack build' })).detail).toBe('Waiting for a stack build');
   });
 
+  it('lists calibration grading and health as automatic rows that open Calibration', () => {
+    for (const [kind, title] of [['grading', 'Grading calibration frames'], ['health', 'Checking calibration health']] as const) {
+      const item = jobItem(row({
+        key: `${kind}:astro`, kind, title, scope: 'Astro', detail: '3 of 10 projects', percent: 30,
+        background: true, automatic: true, link: { view: 'calibration', db: 'astro' },
+      }));
+      expect(item).toMatchObject({ kind, title, scope: 'Astro', percent: 30 });
+      expect(item.href).toBe('/calibration?db=astro');
+      expect(tierOf(item)).toBe('automatic');
+    }
+  });
+
   it('files a row by its tier', () => {
     expect(tierOf(jobItem(row({ key: 'a' })))).toBe('person');
     expect(tierOf(jobItem(row({ key: 'b', background: true })))).toBe('automatic');
