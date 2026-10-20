@@ -952,11 +952,11 @@ next time someone opens the image and a master is built again from its
 frames. PSF Guard records use itself because many mounts, NFS among them, do
 not record reads.
 
-Background preview pre-generation stops two points under the limit, where a
-cull would clear to. It checks before every batch of images, so at most one
-batch's previews go past that point, for the next cull to delete. It uses
-the limit of the cache's volume, the lowest there when the volume holds other
-folders too. Previews someone opens are still made. A volume still over the
+Background preview pre-generation checks disk use before each batch and stops
+when use reaches two percentage points below the limit. A batch already
+rendering can exceed that threshold; the next cleanup may delete those previews.
+On a volume shared with stacks or calibration masters, pre-generation uses the
+lowest configured limit. Previews someone opens are still made. A volume still over the
 limit once nothing more may go is reported in red. The sizes in Settings are
 measured at most hourly, and after a cull. On a file system that keeps snapshots,
 deleted previews free no space until the snapshot goes, so each pass culls

@@ -617,6 +617,10 @@ waiting for. Stack builds, quality scans, flat measuring, catalog installs,
 backups, transfers, and WBPP copies report here. The list also shows previews,
 imports, exports, calibration health checks and catalog upkeep. Stop an import
 to roll it back; stopping an export keeps completed files for the next attempt.
+When server preview pre-generation is enabled, **Generating previews** shows
+its progress. **Stop** disables pre-generation for that database until restart;
+previews you open still generate as needed. Pre-generation waits for jobs you
+start, then continues from where it paused.
 
 Work you start takes priority over automatic analysis and preview generation.
 Use Stop, queue controls, or transfer Pause and Retry where the job offers
