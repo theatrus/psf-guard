@@ -581,8 +581,16 @@ you start, ahead of your other queued builds.
 
 Build requests appear immediately as **Preparing stack build** while PSF Guard
 reads the frames and matches calibration in the background. You can stop
-preparation before channel builds are queued. If the server restarts during
-preparation, start the build again.
+preparation before channel builds are queued. Requests keep their place after
+a restart, including those still being prepared. Queued builds use the latest
+frames, grades and calibration when they start. Builds you start take priority
+over automatic builds, which pause and resume from their checkpoints.
+
+With **Chosen by Seiza**, the reference comes from the largest orientation
+group when plate solves show several rotator angles. Adjust **Orientation
+group margin** in **Settings → Stacking** if frames near the rotation limit
+are still rejected. A color preview can wait for its target’s channel builds
+and then use their new stacks.
 
 Short color compositions you start can run alongside stack builds. They reuse
 prepared channels, or need no deconvolution or RC-Astro and no other composition
@@ -606,7 +614,13 @@ Open the header's jobs chip to see running, queued, waiting, and
 needs-attention work. The list separates **Started by you** from **Automatic**
 and shows progress and queue positions. A waiting job explains what it is
 waiting for. Stack builds, quality scans, flat measuring, catalog installs,
-backups, transfers, and WBPP copies report here.
+backups, transfers, and WBPP copies report here. The list also shows previews,
+imports, exports, calibration health checks and catalog upkeep. Stop an import
+to roll it back; stopping an export keeps completed files for the next attempt.
+When server preview pre-generation is enabled, **Generating previews** shows
+its progress. **Stop** disables pre-generation for that database until restart;
+previews you open still generate as needed. Pre-generation waits for jobs you
+start, then continues from where it paused.
 
 Work you start takes priority over automatic analysis and preview generation.
 Use Stop, queue controls, or transfer Pause and Retry where the job offers

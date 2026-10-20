@@ -153,9 +153,10 @@ chosen. Any single choice can also be changed on its own.
   would keep the most others within that limit, measured from each frame's
   cached plate solve or, failing that, the WCS in its header. Seiza's score
   then chooses among those frames. A frame counts toward a group only when its
-  rotation is at least the margin inside the limit, because registration
-  measures rotation separately from the plate solve. The default is 1°, and
-  the setting accepts 0° to 5°. The card notes when the orientation group
+  rotation is within the limit minus the margin. The default 1° margin counts
+  frames within 9°. Registration measures rotation separately from the plate
+  solve, so increase the margin if it still rejects frames near the limit.
+  The setting accepts 0° to 5°. The card notes when the orientation group
   decided the reference. Frames without a solve are never the reference while
   groups are compared. A changed margin marks stacks with a chosen reference
   out of date; it does not affect Best graded.
@@ -735,23 +736,23 @@ background work that yields to anything you start. A
 first stack this way gets no first color preview; once one is composed, it
 follows its channels.
 
-A refresh still settling is not in the header's queue or its job count: it
-is not work yet. Once it is due, the scheduler plans it at its next look,
-within 15 seconds, when nothing you started has run for the last 30
+A refresh waiting for its delay does not appear in the header's jobs list
+or count. Once it is due, the scheduler checks within 15 seconds. It plans
+the refresh when nothing you started has run for the last 30
 seconds, no automatic build is already queued or running, and no quality
-analysis of its database runs. Planning reads every light's header, so it
-stays off your time. The refresh then puts one build per channel in the
-line, marked `automatic`. The line runs automatic builds after every build
+analysis of its database runs. Planning reads every light's header in the
+background. The refresh then queues one build per channel, marked
+`automatic`. Automatic builds run after every build
 you queued, one at a time, and starts none while work you started runs
 anywhere on the server, such as a quality scan. The header lists them as
 queued under **Automatic**. Until a due refresh is planned, the header
 lists it as **Refreshing stacks**, marked **waiting**, with what it waits
 for, and counts it with an hourglass beside the running count.
 
-A build you start stops a running automatic build at its checkpoint. The
-automatic build goes back in the line, ahead of the other automatic builds,
-and resumes from its checkpoint after your work when no frame or grade
-changed meanwhile; otherwise it restacks what changed. An automatic build
+A build you start pauses a running automatic build at its checkpoint. The
+automatic build returns to the queue ahead of other automatic builds.
+It resumes from its checkpoint after your work. If frames or grades changed,
+PSF Guard rebuilds the affected results. An automatic build
 you stop yourself stays stopped. A refresh is never listed twice: once its
 builds are in the line, its row becomes those builds. A refresh that would find only cache hits does
 not start a build, nor does one whose channels an earlier refresh of the same
@@ -951,11 +952,11 @@ next time someone opens the image and a master is built again from its
 frames. PSF Guard records use itself because many mounts, NFS among them, do
 not record reads.
 
-Background preview pre-generation stops two points under the limit, where a
-cull would clear to. It checks before every batch of images, so at most one
-batch's previews go past that point, for the next cull to delete. It uses
-the limit of the cache's volume, the lowest there when the volume holds other
-folders too. Previews someone opens are still made. A volume still over the
+Background preview pre-generation checks disk use before each batch and stops
+when use reaches two percentage points below the limit. A batch already
+rendering can exceed that threshold; the next cleanup may delete those previews.
+On a volume shared with stacks or calibration masters, pre-generation uses the
+lowest configured limit. Previews someone opens are still made. A volume still over the
 limit once nothing more may go is reported in red. The sizes in Settings are
 measured at most hourly, and after a cull. On a file system that keeps snapshots,
 deleted previews free no space until the snapshot goes, so each pass culls

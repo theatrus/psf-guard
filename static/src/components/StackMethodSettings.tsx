@@ -177,11 +177,11 @@ function RotationMarginField({
         <span>
           Degrees, 0 to {maximum}
           <small>
-            Seiza rejects a frame rotated more than 10° from the reference. A plate-solved frame
-            joins the reference&apos;s orientation group only when its rotation is at least this
-            many degrees inside that limit, because registration measures rotation separately
-            from the plate solve. Raise the margin if frames near the edge of the group are still
-            rejected for rotation. Used only when Seiza chooses the reference.
+            Seiza rejects frames rotated more than 10° from the reference, allowing for meridian
+            flips. This margin narrows the angle used to choose the largest orientation group:
+            the default 1° margin counts frames within 9°. Registration measures rotation
+            separately from the plate solve. Increase the margin if frames near the limit are
+            still rejected. Applies only to Chosen by Seiza.
           </small>
         </span>
       </label>
