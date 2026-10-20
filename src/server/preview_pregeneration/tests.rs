@@ -1,5 +1,5 @@
 use super::*;
-use crate::preview_format::PreviewFormat;
+use crate::preview_format::{PreviewEncoding, PreviewFormat};
 use std::io::Write;
 
 fn write_fits(path: &std::path::Path) {
@@ -109,13 +109,40 @@ fn a_pass_writes_the_preview_the_viewer_asks_for_once() {
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].file_only, "frame.fits");
     let rows = image_rows(&ctx, &pending).unwrap();
-    let rendered = render(&ctx, &pending[0], &rows[&1], state.preview_encoding());
+    let rendered = render(&state, &ctx, &pending[0], &rows[&1]);
     assert_eq!((rendered.written, rendered.failed), (1, 0));
     let names = written(&ctx);
     assert_eq!(names.len(), 1, "{names:?}");
     assert!(names[0].ends_with(".jpg"), "{names:?}");
 
     assert!(pending_images(&state, &ctx).unwrap().is_empty());
+}
+
+/// A quality scan rewrites an image's metadata, which the cache key
+/// includes. A batch builds the key from the row it reads, so a preview
+/// listed before the scan lands under the key the viewer asks for after it.
+#[test]
+fn a_batch_writes_under_the_key_of_the_current_row() {
+    let temp = tempfile::tempdir().unwrap();
+    let (state, ctx) = catalog(temp.path());
+    let pending = pending_images(&state, &ctx).unwrap();
+    assert_eq!(pending.len(), 1);
+
+    ctx.db()
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE acquiredimage SET metadata = ?1 WHERE Id = 1",
+            [r#"{"FileName": "C:\\lights\\frame.fits", "StarCount": 412, "HFR": 2.1}"#],
+        )
+        .unwrap();
+    let rows = image_rows(&ctx, &pending).unwrap();
+    let rendered = render(&state, &ctx, &pending[0], &rows[&1]);
+    assert_eq!((rendered.written, rendered.failed), (1, 0));
+    assert!(
+        pending_images(&state, &ctx).unwrap().is_empty(),
+        "the preview is under the key of the rewritten row"
+    );
 }
 
 /// The runner writes the catalog's previews and reports them in its status.
@@ -149,13 +176,14 @@ fn a_pass_waits_for_a_persons_work_and_stop_ends_it() {
     assert_eq!(status(&state, &ctx.id).total, 1);
 
     assert!(stop(&state, &ctx.id));
-    wait_until("the pass ends", || !status(&state, &ctx.id).active);
+    let job = state.catalog_jobs.pregeneration.job(&ctx.id);
+    wait_until("the runner exits", || !job.queue().has_runner());
     assert_eq!(status(&state, &ctx.id).written, 0);
     assert!(written(&ctx).is_empty());
 
     drop(person);
+    assert!(!status(&state, &ctx.id).active);
     request(&state, &ctx.id);
-    let job = state.catalog_jobs.pregeneration.job(&ctx.id);
     assert!(!job.queue().has_runner(), "no pass runs after Stop");
     assert!(!stop(&state, &ctx.id), "nothing runs to stop");
 }

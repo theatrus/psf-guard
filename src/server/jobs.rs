@@ -827,10 +827,6 @@ fn export_row(db: &DatabaseState, export: &crate::server::export_job::ExportJobP
     }
 }
 
-/// The catalog's upkeep while it runs: building PSF Guard's query indexes,
-/// reading the readout modes of calibration frames that lack them, or
-/// pairing calibrated copies with their lights. Always automatic. Reading
-/// readout modes gets a row only once it has frames to read.
 /// Preview pre-generation, once a pass has previews to write: always
 /// automatic. A pass that finds every preview written gets no row. While it
 /// waits for a person's work, the row shows what for.
@@ -863,6 +859,10 @@ fn pregeneration_row(db: &DatabaseState) -> JobRow {
     .automatic(true)
 }
 
+/// The catalog's upkeep while it runs: building PSF Guard's query indexes,
+/// reading the readout modes of calibration frames that lack them, or
+/// pairing calibrated copies with their lights. Always automatic. Reading
+/// readout modes gets a row only once it has frames to read.
 fn upkeep_row(db: &DatabaseState) -> Option<JobRow> {
     use crate::server::catalog_upkeep::UpkeepStage;
     let upkeep = &db.upkeep;

@@ -298,9 +298,10 @@ Then:
   `CatalogJobs`, one runner per database, at `Background`. A timer
   requests a pass for every database at start and every five minutes. A
   pass lists the images whose enabled previews are missing or past the
-  cache expiry and renders them in batches on leased workers. Before each
-  batch it waits for a person's work, and it ends when the cache volume
-  nears its limit. A pass with previews to write has a row with Stop;
+  cache expiry and renders them in batches on leased workers, building
+  each image's cache paths again from its current row. Images not yet
+  started step aside for a person's work, and the pass waits before its
+  next batch; it ends when the cache volume nears its limit. A pass with previews to write has a row with Stop;
   after Stop, no pass runs for that database until the server restarts.
 - A star catalog installation (`catalog_install.rs`) is one download
   server-wide. It holds the server stop's wait, ends when the server stops,

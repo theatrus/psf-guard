@@ -23,7 +23,6 @@ use serde::Serialize;
 
 use crate::concurrency::{ComputePool, Priority, Stop};
 use crate::models::AcquiredImage;
-use crate::preview_format::PreviewEncoding;
 use crate::server::database_context::DatabaseContext;
 use crate::server::handlers;
 use crate::server::job_line::catalog::{CatalogJob, CatalogWork, Step};
@@ -263,29 +262,34 @@ fn run(
         ctx.id,
         budget.rationale
     );
-    let encoding = state.preview_encoding();
-    for batch in pending.chunks(budget.workers.max(1) * 2) {
+    let batch_size = budget.workers.max(1) * 2;
+    let mut pending: std::collections::VecDeque<Pending> = pending.into();
+    while !pending.is_empty() {
         if !may_continue(state, ctx, job, stop) {
             break;
         }
+        let batch: Vec<Pending> = pending.drain(..batch_size.min(pending.len())).collect();
         // Leased per batch, so a pass that waits for a person's work holds
         // no workers.
         let lease = state.lease_workers(Priority::Background, budget.workers.min(batch.len()));
         let pool = ComputePool::take("preview-pregeneration", lease.workers)?;
-        let rows = image_rows(ctx, batch)?;
+        let rows = image_rows(ctx, &batch)?;
         let rendered: Vec<Option<Rendered>> = pool.install(|| {
             batch
                 .par_iter()
                 .map(|image| {
-                    // Stop and a server stop reach the images of the batch
-                    // that have not started.
-                    if stop.requested() || state.shutdown.is_stopping() {
+                    // An image that has not started steps aside for Stop, a
+                    // server stop, or a person's work.
+                    if stop.requested()
+                        || state.shutdown.is_stopping()
+                        || state.interactive_job_active()
+                    {
                         return None;
                     }
                     // An image deleted since the pass listed it needs no
                     // preview.
                     Some(match rows.get(&image.image_id) {
-                        Some(row) => render(ctx, image, row, encoding),
+                        Some(row) => render(state, ctx, image, row),
                         None => Rendered::default(),
                     })
                 })
@@ -298,13 +302,20 @@ fn run(
                 status.failed += image.failed;
             }
         });
+        // Images that stepped aside go first in the next batch.
+        for (image, rendered) in batch.into_iter().zip(rendered).rev() {
+            if rendered.is_none() {
+                pending.push_front(image);
+            }
+        }
     }
     Ok(())
 }
 
 /// Whether the pass starts its next batch. It waits while a person's work
 /// runs, and ends on Stop, at server shutdown, or when the cache volume
-/// nears its limit.
+/// nears its limit. A batch in progress can still pass the limit by the
+/// previews it writes.
 fn may_continue(state: &AppState, ctx: &DatabaseContext, job: &Job, stop: &Stop) -> bool {
     let running = state.wait_for_interactive_work_unless(
         POLL,
@@ -324,23 +335,11 @@ struct Pending {
     image_id: i32,
     file_only: String,
     target_name: String,
-    /// Each preview to write: where it goes and how to render it.
-    previews: Vec<(PathBuf, GenKind)>,
 }
 
 /// The catalog's images whose enabled previews are missing or older than
-/// the cache expiry. The cache paths are the ones the request path builds,
-/// so the viewer finds what this writes.
+/// the cache expiry.
 fn pending_images(state: &AppState, ctx: &DatabaseContext) -> anyhow::Result<Vec<Pending>> {
-    let config = &state.pregeneration_config;
-    let encoding = state.preview_encoding();
-    // Warm whichever rendition this server serves by default.
-    let color = state.preview_color_default();
-    let sizes = [
-        ("screen", config.screen_enabled),
-        ("large", config.large_enabled),
-        ("original", config.original_enabled),
-    ];
     // `with_db` reopens the connection when the scheduler database was
     // replaced under it, so a pass after a replacement still runs.
     let images = ctx.with_db(|db| {
@@ -352,75 +351,97 @@ fn pending_images(state: &AppState, ctx: &DatabaseContext) -> anyhow::Result<Vec
         let Some(file_only) = file_name(&image) else {
             continue;
         };
-        let revision = match handlers::rendered_artifact_mapping_revision(ctx, &image) {
-            Ok(revision) => revision,
-            Err(error) => {
-                tracing::debug!(
-                    "🎨 Image {} (db={}) is left out of pre-generation: {error:?}",
-                    image.id,
-                    ctx.id
-                );
-                continue;
-            }
-        };
-        let path = |category: &str, key: &str| {
-            handlers::artifact_cache_path(ctx, category, key, encoding)
-                .map_err(|error| anyhow::anyhow!("{error:?}"))
-        };
-        let mut previews = Vec::new();
-        for (size, _) in sizes.iter().filter(|(_, enabled)| *enabled) {
-            let key = handlers::preview_cache_key(
-                &image,
-                &file_only,
-                size,
-                true,
-                MIDTONE,
-                SHADOW,
-                color,
-                revision.as_deref(),
-            );
-            let cache_path = path("previews", &key)?;
-            if needs_writing(&cache_path, config.cache_expiry) {
-                previews.push((
-                    cache_path,
-                    GenKind::Preview {
-                        midtone: MIDTONE,
-                        shadow: SHADOW,
-                        max_dimensions: max_dimensions_for_size(size),
-                        color,
-                    },
-                ));
-            }
-        }
-        if config.annotated_enabled {
-            let key = handlers::annotated_cache_key(
-                &image,
-                &file_only,
-                ANNOTATED_SIZE,
-                ANNOTATED_MAX_STARS,
-                revision.as_deref(),
-            );
-            let cache_path = path("annotated", &key)?;
-            if needs_writing(&cache_path, config.cache_expiry) {
-                previews.push((
-                    cache_path,
-                    GenKind::Annotated {
-                        max_stars: ANNOTATED_MAX_STARS,
-                        size: ANNOTATED_SIZE.to_string(),
-                    },
-                ));
-            }
-        }
-        if !previews.is_empty() {
+        if !previews_to_write(state, ctx, &image, &file_only)?.is_empty() {
             pending.push(Pending {
                 image_id: image.id,
                 file_only,
                 target_name,
-                previews,
             });
         }
     }
     Ok(pending)
+}
+
+/// The image's enabled previews that are missing or older than the cache
+/// expiry: where each goes and how to render it. The cache paths are the
+/// ones the request path builds from the same row, so the viewer finds what
+/// this writes. They depend on the row's metadata, which a quality scan
+/// rewrites, so a batch builds them again from the row it reads.
+fn previews_to_write(
+    state: &AppState,
+    ctx: &DatabaseContext,
+    image: &AcquiredImage,
+    file_only: &str,
+) -> anyhow::Result<Vec<(PathBuf, GenKind)>> {
+    let config = &state.pregeneration_config;
+    let encoding = state.preview_encoding();
+    // Warm whichever rendition this server serves by default.
+    let color = state.preview_color_default();
+    let revision = match handlers::rendered_artifact_mapping_revision(ctx, image) {
+        Ok(revision) => revision,
+        Err(error) => {
+            tracing::debug!(
+                "🎨 Image {} (db={}) is left out of pre-generation: {error:?}",
+                image.id,
+                ctx.id
+            );
+            return Ok(Vec::new());
+        }
+    };
+    let path = |category: &str, key: &str| {
+        handlers::artifact_cache_path(ctx, category, key, encoding)
+            .map_err(|error| anyhow::anyhow!("{error:?}"))
+    };
+    let sizes = [
+        ("screen", config.screen_enabled),
+        ("large", config.large_enabled),
+        ("original", config.original_enabled),
+    ];
+    let mut previews = Vec::new();
+    for (size, _) in sizes.iter().filter(|(_, enabled)| *enabled) {
+        let key = handlers::preview_cache_key(
+            image,
+            file_only,
+            size,
+            true,
+            MIDTONE,
+            SHADOW,
+            color,
+            revision.as_deref(),
+        );
+        let cache_path = path("previews", &key)?;
+        if needs_writing(&cache_path, config.cache_expiry) {
+            previews.push((
+                cache_path,
+                GenKind::Preview {
+                    midtone: MIDTONE,
+                    shadow: SHADOW,
+                    max_dimensions: max_dimensions_for_size(size),
+                    color,
+                },
+            ));
+        }
+    }
+    if config.annotated_enabled {
+        let key = handlers::annotated_cache_key(
+            image,
+            file_only,
+            ANNOTATED_SIZE,
+            ANNOTATED_MAX_STARS,
+            revision.as_deref(),
+        );
+        let cache_path = path("annotated", &key)?;
+        if needs_writing(&cache_path, config.cache_expiry) {
+            previews.push((
+                cache_path,
+                GenKind::Annotated {
+                    max_stars: ANNOTATED_MAX_STARS,
+                    size: ANNOTATED_SIZE.to_string(),
+                },
+            ));
+        }
+    }
+    Ok(previews)
 }
 
 /// The frame's file name, from the `FileName` in its metadata.
@@ -470,12 +491,29 @@ fn image_rows(
     Ok(rows.into_iter().map(|row| (row.id, row)).collect())
 }
 
+/// Write the image's previews that are still missing, with cache paths
+/// built from its current row.
 fn render(
+    state: &AppState,
     ctx: &DatabaseContext,
     image: &Pending,
     row: &AcquiredImage,
-    encoding: PreviewEncoding,
 ) -> Rendered {
+    let previews = match previews_to_write(state, ctx, row, &image.file_only) {
+        Ok(previews) if previews.is_empty() => return Rendered::default(),
+        Ok(previews) => previews,
+        Err(error) => {
+            tracing::warn!(
+                "⚠️ Pre-generation could not place the previews of image {} (db={}): {error:#}",
+                image.image_id,
+                ctx.id
+            );
+            return Rendered {
+                written: 0,
+                failed: 1,
+            };
+        }
+    };
     let fits_path = match handlers::find_fits_file(ctx, row, &image.target_name, &image.file_only) {
         Ok(path) => path,
         Err(error) => {
@@ -486,18 +524,19 @@ fn render(
             );
             return Rendered {
                 written: 0,
-                failed: image.previews.len(),
+                failed: previews.len(),
             };
         }
     };
+    let encoding = state.preview_encoding();
     let mut rendered = Rendered::default();
-    for (cache_path, kind) in &image.previews {
+    for (cache_path, kind) in previews {
         // Written to a temporary file and renamed, so a viewer's poll never
         // reads a half-written preview.
         let job = GenJob {
             fits_path: fits_path.clone(),
             cache_path: cache_path.clone(),
-            kind: kind.clone(),
+            kind,
             encoding,
         };
         match crate::server::preview_queue::generate(&job) {

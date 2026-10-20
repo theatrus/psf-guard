@@ -1196,7 +1196,7 @@ async fn run_server_internal(
     quality_arrival::note_start(&state);
     frame_sites::spawn_away_watch(&state);
 
-    // Write previews ahead of the viewer where the server was started so.
+    // Start preview pre-generation when the server was started with it on.
     preview_pregeneration::spawn(&state);
 
     // Per-DB routes — nested under /api/db/{db_id}/.
