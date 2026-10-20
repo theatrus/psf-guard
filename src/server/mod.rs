@@ -1180,7 +1180,7 @@ async fn run_server_internal(
     // Remove superseded stacks in every database, not only those building.
     tokio::spawn(stack_preview::run_janitor(Arc::clone(&state)));
     // Scan newly arrived frames where a database asks for it.
-    tokio::spawn(quality_arrival::run(Arc::clone(&state)));
+    quality_arrival::note_start(&state);
     frame_sites::spawn_away_watch(&state);
 
     // Start background image pre-generation if enabled

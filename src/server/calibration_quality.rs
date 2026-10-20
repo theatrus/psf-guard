@@ -22,14 +22,13 @@ use crate::concurrency::{ComputePool, Priority, Stop};
 use crate::server::api::ApiResponse;
 use crate::server::extract::DbContext;
 use crate::server::handlers::AppError;
-use crate::server::job_line::catalog::{CatalogJob, CatalogJobs, CatalogWork, Step};
+use crate::server::job_line::catalog::{CatalogJob, CatalogJobs, CatalogWork, Settling, Step};
 use crate::server::state::AppState;
 use axum::Json;
 use rayon::prelude::*;
 use rusqlite::{Connection, OpenFlags};
 use serde::Serialize;
-use std::collections::HashMap;
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// How long the pass waits after the last calibration frame a remote client
@@ -71,10 +70,14 @@ pub(crate) struct CalibrationQuality;
 
 type Job = CatalogJob<CalibrationQuality>;
 
-/// Whether a pass was requested after the last pass started.
+/// What waits for a pass of one catalog.
 #[derive(Debug, Default)]
 pub(crate) struct Queue {
+    /// Whether a pass was requested after the last pass started.
     pass_requested: bool,
+    /// Frames uploaded to the catalog: a pass runs once uploads pause for
+    /// [`UPLOAD_SETTLE`].
+    uploads: Settling,
 }
 
 impl CatalogWork for CalibrationQuality {
@@ -86,13 +89,15 @@ impl CatalogWork for CalibrationQuality {
     const SHUTDOWN_WAITS_FOR: Option<&'static str> = Some("calibration grading");
 
     /// A pass measures only the frames that existed when it started, so a
-    /// request during a pass starts one more pass after it ends.
-    fn next(_: &AppState, _: &str, queue: &mut Queue, _: Instant) -> Step<()> {
+    /// request during a pass starts one more pass after it ends. Uploads
+    /// start a pass once they pause for [`UPLOAD_SETTLE`].
+    fn next(_: &AppState, _: &str, queue: &mut Queue, now: Instant) -> Step<()> {
         if std::mem::take(&mut queue.pass_requested) {
-            Step::Run(())
-        } else {
-            Step::Exit
+            // The pass reads every frame the uploads brought as well.
+            queue.uploads = Settling::default();
+            return Step::Run(());
         }
+        queue.uploads.step(now, UPLOAD_SETTLE, None)
     }
 
     fn run(state: &Arc<AppState>, path: &str, job: &Job, (): (), _: &Stop) {
@@ -106,7 +111,7 @@ impl CatalogWork for CalibrationQuality {
     }
 
     fn has_work(queue: &Queue) -> bool {
-        queue.pass_requested
+        queue.pass_requested || queue.uploads.is_pending()
     }
 
     fn runner_failed(_: &mut Queue, progress: &mut CalibrationQualityProgress) {
@@ -129,18 +134,18 @@ fn job(path: &str) -> Arc<Job> {
 /// grades in batches, and each batch changes every project's calibration
 /// health key.
 pub fn running(path: &str) -> bool {
-    job(path).queue().has_runner()
+    let job = job(path);
+    let queue = job.queue();
+    queue.running() || queue.pass_requested
 }
 
 /// Whether grading runs over the catalog at `path`, or waits for uploads
 /// to it to stop: flat measuring waits for it, since grades decide which
 /// flats are in use.
 pub fn busy(path: &str) -> bool {
-    running(path)
-        || UPLOADS
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .contains_key(path)
+    let job = job(path);
+    let queue = job.queue();
+    queue.running() || queue.pass_requested || queue.uploads.is_pending()
 }
 
 /// Where grading stands for the catalog at `path`.
@@ -163,50 +168,12 @@ pub fn request_all(state: &Arc<AppState>) {
     }
 }
 
-/// Catalogs with uploaded frames waiting for a pass, and when the last one
-/// came.
-static UPLOADS: LazyLock<Mutex<HashMap<String, Instant>>> = LazyLock::new(Default::default);
-
 /// A frame reached the catalog at `path` by remote upload: a calibration
 /// frame to grade, or a light whose project's calibration health the pass
 /// that follows judges again. The pass starts once uploads to it pause for
 /// [`UPLOAD_SETTLE`]; each new frame before then pushes it back.
 pub fn note_upload(state: &Arc<AppState>, path: &str) {
-    let uploads = || UPLOADS.lock().unwrap_or_else(|p| p.into_inner());
-    if uploads().insert(path.to_string(), Instant::now()).is_some() {
-        // A thread already waits for this catalog.
-        return;
-    }
-    let state = Arc::clone(state);
-    let path = path.to_string();
-    std::thread::spawn(move || {
-        loop {
-            // The lock is let go before the wait, or every upload in the
-            // meantime would block behind it.
-            let wait = upload_wait(&mut uploads(), &path, Instant::now());
-            match wait {
-                Some(wait) => std::thread::sleep(wait),
-                None => break,
-            }
-        }
-        request(&state, &path);
-    });
-}
-
-/// How much longer uploads to `path` must stay quiet before its pass, or
-/// `None` once they have, which clears the entry for the next upload.
-fn upload_wait(
-    uploads: &mut HashMap<String, Instant>,
-    path: &str,
-    now: Instant,
-) -> Option<Duration> {
-    let quiet = now.saturating_duration_since(*uploads.get(path)?);
-    if quiet >= UPLOAD_SETTLE {
-        uploads.remove(path);
-        None
-    } else {
-        Some(UPLOAD_SETTLE - quiet)
-    }
+    JOBS.request(state, path, |queue| queue.uploads.touch(Instant::now()));
 }
 
 fn run_logged(state: &AppState, path: &str, job: &Job) {
@@ -379,18 +346,23 @@ mod tests {
     }
 
     #[test]
-    fn a_waiting_upload_does_not_hold_up_the_next() {
+    fn an_upload_starts_a_pass_once_uploads_pause() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("uploads.sqlite");
         let path = path.to_string_lossy();
         let state = Arc::new(test_state());
-        note_upload(&state, &path);
-        // Give the waiting thread time to start its wait.
-        std::thread::sleep(Duration::from_millis(200));
         let started = Instant::now();
         note_upload(&state, &path);
-        assert!(started.elapsed() < Duration::from_secs(5));
-        assert!(UPLOADS.lock().unwrap().contains_key(path.as_ref()));
+        note_upload(&state, &path);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "a note never waits"
+        );
+        // The catalog's runner waits for the uploads to settle; grading
+        // counts as busy meanwhile, and as not yet running.
+        assert!(busy(&path));
+        assert!(!running(&path));
+        assert!(job(&path).queue().has_runner());
     }
 
     #[test]
@@ -457,6 +429,7 @@ mod tests {
         let state = test_state();
         let mut queue = Queue {
             pass_requested: true,
+            ..Queue::default()
         };
         let next = |queue: &mut Queue| CalibrationQuality::next(&state, "c", queue, Instant::now());
         assert_eq!(next(&mut queue), Step::Run(()));
@@ -469,24 +442,25 @@ mod tests {
 
     #[test]
     fn uploads_wait_for_the_catalog_to_go_quiet() {
+        let state = test_state();
         let start = Instant::now();
-        let mut uploads = HashMap::from([("a.sqlite".to_string(), start)]);
-        assert_eq!(
-            upload_wait(&mut uploads, "a.sqlite", start),
-            Some(UPLOAD_SETTLE)
-        );
+        let mut queue = Queue::default();
+        queue.uploads.touch(start);
+        let next = |queue: &mut Queue, now| CalibrationQuality::next(&state, "a", queue, now);
+        assert_eq!(next(&mut queue, start), Step::Sleep(UPLOAD_SETTLE));
         // A frame a minute later pushes the pass back.
         let later = start + Duration::from_secs(60);
-        uploads.insert("a.sqlite".into(), later);
+        queue.uploads.touch(later);
         assert_eq!(
-            upload_wait(&mut uploads, "a.sqlite", start + UPLOAD_SETTLE),
-            Some(Duration::from_secs(60))
+            next(&mut queue, start + UPLOAD_SETTLE),
+            Step::Sleep(Duration::from_secs(60))
         );
-        assert_eq!(
-            upload_wait(&mut uploads, "a.sqlite", later + UPLOAD_SETTLE),
-            None
-        );
-        assert!(uploads.is_empty(), "the next upload starts a new wait");
-        assert_eq!(upload_wait(&mut uploads, "other.sqlite", later), None);
+        assert_eq!(next(&mut queue, later + UPLOAD_SETTLE), Step::Run(()));
+        assert_eq!(next(&mut queue, later + UPLOAD_SETTLE), Step::Exit);
+        // A pass requested meanwhile also reads the uploaded frames.
+        queue.uploads.touch(later);
+        queue.pass_requested = true;
+        assert_eq!(next(&mut queue, later), Step::Run(()));
+        assert!(!queue.uploads.is_pending());
     }
 }

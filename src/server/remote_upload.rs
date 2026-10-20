@@ -259,7 +259,7 @@ pub async fn upload_image(
         &ctx.id,
         crate::server::stack_preview::automatic::RefreshReason::Arrival,
     );
-    crate::server::quality_arrival::note_arrival(&ctx.id);
+    crate::server::quality_arrival::note_arrival(&state, &ctx.id);
     // Once the batch stops arriving, a new calibration frame is graded
     // before a stack or an export relies on it, and every project's
     // calibration health is judged again, as after an import.

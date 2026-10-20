@@ -1263,7 +1263,7 @@ pub(crate) async fn execute_scheduler_sync_paths(
             &destination_id_for_cache,
             crate::server::stack_preview::automatic::RefreshReason::Sync,
         );
-        crate::server::quality_arrival::note_arrival(&destination_id_for_cache);
+        crate::server::quality_arrival::note_arrival(&state, &destination_id_for_cache);
         // Synced calibration frames are graded, and then every project's
         // calibration health is judged again.
         if let Some(destination) = state.get_database(&destination_id_for_cache) {
@@ -3669,7 +3669,7 @@ pub(crate) fn spawn_import_job_with_trigger(
             && !target_ids.is_empty()
             && spawn_quality_backfill(&state, ctx.clone(), target_ids, false, fill_metadata);
         if !queued && !dry_run && imported_any {
-            crate::server::quality_arrival::note_arrival(&ctx.id);
+            crate::server::quality_arrival::note_arrival(&state, &ctx.id);
         }
     });
     true
@@ -3977,7 +3977,7 @@ pub async fn update_analyze_new_frames(
         .store(request.enabled, std::sync::atomic::Ordering::Relaxed);
     if request.enabled {
         // Frames already waiting are analyzed as if they had just arrived.
-        crate::server::quality_arrival::note_arrival(&ctx.id);
+        crate::server::quality_arrival::note_arrival(&state, &ctx.id);
     }
     get_quality_backfill_progress(ctx).await
 }

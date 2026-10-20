@@ -599,7 +599,7 @@ fn synchronize(state: &Arc<AppState>, job: &str, catalog: &str, settings: &Setti
         context.register_remote_image_arrivals(&report.arrivals);
         let _ = context.ensure_cache_available();
         if report.inserted > 0 || report.updated > 0 {
-            super::quality_arrival::note_arrival(job);
+            super::quality_arrival::note_arrival(state, job);
             state
                 .auto_stacks
                 .touch_database(job, super::stack_preview::automatic::RefreshReason::Sync);

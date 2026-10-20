@@ -292,7 +292,7 @@ pub async fn sync_with_peer(
             &context.id,
             crate::server::stack_preview::automatic::RefreshReason::Sync,
         );
-        crate::server::quality_arrival::note_arrival(&context.id);
+        crate::server::quality_arrival::note_arrival(&state, &context.id);
         crate::server::calibration_quality::request(&state, &context.database_path);
         let (flat_state, path) = (Arc::clone(&state), context.database_path.clone());
         let _ = tokio::task::spawn_blocking(move || {
