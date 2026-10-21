@@ -93,7 +93,7 @@ install -Dpm0644 packaging/rpm/systemd/psf-guard-server.conf \
 %config(noreplace) %{_sysconfdir}/%{name}/server.conf
 
 %changelog
-* Sat Oct 17 2026 Yann Ramin <github@theatr.us> - 0.12.0-1
+* Tue Oct 20 2026 Yann Ramin <github@theatr.us> - 0.12.0-1
 - Add measured flat matching, calibration review, new stack processing,
   scheduled backups, and Target Scheduler imports into owned catalogs
 - Deprecate direct Target Scheduler access; support continues through 0.12
