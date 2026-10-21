@@ -49,7 +49,7 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn a_reserved_listener_serves_http_before_and_after_restart() {
         let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         socket.set_nonblocking(true).unwrap();

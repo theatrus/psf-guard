@@ -789,7 +789,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn fixed_port_restarts_keep_the_http_api_and_mcp_together() {
         let dir = tempdir().unwrap();
         let registry_path = dir.path().join("config.json");
