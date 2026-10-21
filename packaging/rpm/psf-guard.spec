@@ -8,7 +8,7 @@
 %global rustflags_debuginfo 0
 
 Name:           psf-guard
-Version:        0.11.0
+Version:        0.11.1
 Release:        1%{?dist}
 Summary:        Astronomical image analysis and quality assessment tool for N.I.N.A.
 
@@ -93,6 +93,9 @@ install -Dpm0644 packaging/rpm/systemd/psf-guard-server.conf \
 %config(noreplace) %{_sysconfdir}/%{name}/server.conf
 
 %changelog
+* Wed Oct 21 2026 Yann Ramin <github@theatr.us> - 0.11.1-1
+- Show completed stack previews on the desktop Sky map
+
 * Sun Oct 11 2026 Yann Ramin <github@theatr.us> - 0.11.0-1
 - Planning: frame targets and mosaics on the sky, set exposure plans per rig, and write them into each rig's Target Scheduler database
 - Stacks has a view of its own: noise-weighted channel stacks, colour composed after the last channel, and WBPP runs from the same page
