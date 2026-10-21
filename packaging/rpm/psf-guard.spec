@@ -95,6 +95,7 @@ install -Dpm0644 packaging/rpm/systemd/psf-guard-server.conf \
 %changelog
 * Wed Oct 21 2026 Yann Ramin <github@theatr.us> - 0.11.1-1
 - Show completed stack previews on the desktop Sky map
+- Backport the HTTPS certificate fixes from 0.12.1
 
 * Sun Oct 11 2026 Yann Ramin <github@theatr.us> - 0.11.0-1
 - Planning: frame targets and mosaics on the sky, set exposure plans per rig, and write them into each rig's Target Scheduler database
