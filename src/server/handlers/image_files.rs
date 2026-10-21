@@ -170,6 +170,8 @@ pub(super) async fn find_fits_file_on_blocking_pool(
 /// A delayed remote row needs stronger identity proof than an ordinary local
 /// catalog lookup. Its file may still be in flight, and an older capture with
 /// the same basename may already be present below another configured root.
+/// Under either policy, several files of one capture are copies of the frame
+/// (a copy between image folders, for example), and the largest is used.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum FileResolutionPolicy {
     Ordinary,
@@ -290,6 +292,8 @@ pub(super) fn find_fits_file_inner(
             tracing::debug!("  📁 Path {}: {:?}", idx + 1, path);
             if let Some(path) = existing_file_under_configured_root(path, canonical_roots) {
                 tracing::info!("✅ Found file at path {}: {:?}", idx + 1, path);
+                let path =
+                    most_complete_of_listed_copies(ctx, image, filename, path, canonical_roots);
                 ctx.record_resolved_image_file(image, &path);
                 return Ok(path);
             }
@@ -313,9 +317,9 @@ pub(super) fn find_fits_file_inner(
             .unwrap_or_default(),
     );
     // Some copy tools flatten the remote hierarchy directly into an image
-    // root. Treat those as basename candidates, never exact-path hits. An
-    // ordinary catalog accepts only one contained candidate; a delayed remote
-    // lookup additionally requires matching capture headers.
+    // root. Treat those as basename candidates, never exact-path hits. Several
+    // candidates count as copies of the frame only when their capture headers
+    // say so; a delayed remote lookup requires matching headers even for one.
     resolution_candidates.extend(ctx.image_dir_paths.iter().map(|root| root.join(filename)));
     if !allow_tree_build {
         let cache = ctx.directory_tree_cache.read().unwrap();
@@ -352,10 +356,10 @@ pub(super) fn find_fits_file_inner(
     resolution_candidates.extend(tree_candidates);
     let resolved = match policy {
         FileResolutionPolicy::Ordinary => {
-            unique_contained_file(filename, resolution_candidates, canonical_roots)?
+            contained_frame_file(image, filename, resolution_candidates, canonical_roots)?
         }
         FileResolutionPolicy::DelayedRemote => {
-            unique_header_matched_file(image, filename, resolution_candidates, canonical_roots)?
+            header_matched_frame_file(image, filename, resolution_candidates, canonical_roots)?
         }
     };
     if let Some(path) = resolved {
@@ -593,79 +597,205 @@ pub(super) fn canonical_file_under_roots(
     is_configured.then(|| candidate.to_path_buf())
 }
 
-pub(super) fn unique_contained_file(
-    filename: &str,
-    candidates: Vec<PathBuf>,
-    canonical_roots: &[PathBuf],
-) -> Result<Option<PathBuf>, AppError> {
-    let mut resolved: Option<(PathBuf, PathBuf)> = None;
+/// The distinct files among `candidates` that exist under a configured root,
+/// in the order they were listed. Two paths to one file (a symlink, or the
+/// same file reached through two candidate lists) count once.
+fn distinct_contained_files(candidates: Vec<PathBuf>, canonical_roots: &[PathBuf]) -> Vec<PathBuf> {
+    let mut identities: Vec<PathBuf> = Vec::new();
+    let mut files = Vec::new();
     for candidate in candidates {
         let Some(candidate) = existing_file_under_configured_root(&candidate, canonical_roots)
         else {
             continue;
         };
         let identity = std::fs::canonicalize(&candidate).unwrap_or_else(|_| candidate.clone());
-        match resolved.as_ref() {
-            None => resolved = Some((identity, candidate)),
-            Some((known, _)) if known == &identity => {}
-            Some(_) => {
-                tracing::warn!(
-                    "Refusing multiple files named {} in configured image directories",
-                    filename
-                );
-                return Err(AppError::Conflict(format!(
-                    "{filename} matches multiple files in configured image directories"
-                )));
-            }
+        if !identities.contains(&identity) {
+            identities.push(identity);
+            files.push(candidate);
         }
     }
-    Ok(resolved.map(|(_, path)| path))
+    files
 }
 
-pub(super) fn unique_header_matched_file(
+/// The files among several whose header can be read. A file whose header
+/// cannot be read, such as a copy that has only just started, cannot be
+/// rendered, so it gives way to any readable file. When no header can be
+/// read, every file is kept and later steps decide.
+fn readable_files(files: Vec<PathBuf>) -> Vec<PathBuf> {
+    let readable: Vec<PathBuf> = files
+        .iter()
+        .filter(|path| crate::commands::import::headers::read_frame_meta(path).readable)
+        .cloned()
+        .collect();
+    if readable.is_empty() {
+        files
+    } else {
+        readable
+    }
+}
+
+/// Whether every file's headers record the same capture: a readable
+/// DATE-OBS within the capture-identity tolerance of the first file's, and
+/// the same filter. Such files are copies of one frame.
+fn files_share_one_capture(files: &[PathBuf]) -> bool {
+    let metas: Vec<_> = files
+        .iter()
+        .map(|path| crate::commands::import::headers::read_frame_meta(path))
+        .collect();
+    let Some(first) = metas.first() else {
+        return false;
+    };
+    let Some(first_timestamp) = first.timestamp.filter(|_| first.readable) else {
+        return false;
+    };
+    metas.iter().all(|meta| {
+        let same_time = meta.readable
+            && meta.timestamp.is_some_and(|timestamp| {
+                timestamp.abs_diff(first_timestamp) <= CAPTURE_IDENTITY_TIME_TOLERANCE_SECS
+            });
+        let same_filter = match (first.filter.as_deref(), meta.filter.as_deref()) {
+            (Some(expected), Some(actual)) => crate::utils::filter_names_match(expected, actual),
+            (None, None) => true,
+            _ => false,
+        };
+        same_time && same_filter
+    })
+}
+
+/// The most complete of several copies of one frame: the largest file. A
+/// copy still being written between image folders is shorter than its
+/// source, while finished copies are the same size. A tie goes to the copy
+/// listed first.
+fn most_complete_copy(image_id: i32, filename: &str, copies: Vec<PathBuf>) -> Option<PathBuf> {
+    let size = |path: &PathBuf| std::fs::metadata(path).map(|meta| meta.len()).unwrap_or(0);
+    let largest = copies.iter().map(size).max()?;
+    let chosen = copies.iter().find(|path| size(path) == largest)?.clone();
+    if copies.len() > 1 {
+        tracing::info!(
+            image_id,
+            copies = copies.len(),
+            chosen = %chosen.display(),
+            "{filename} has {} copies of one capture in the image directories; using the largest",
+            copies.len()
+        );
+    }
+    Some(chosen)
+}
+
+/// `found`, or a more complete copy of it: another file of the same name
+/// under the image roots, as the last directory scan listed it, that records
+/// the image's capture (or, when no file matches the image's capture, the
+/// capture `found` records). A frame being copied into its final folder is
+/// found there by the layout probes before the copy is complete, while the
+/// complete file is still in the folder it is copied from. Files of a
+/// different capture are left out: a file in the frame's own target folder
+/// is better evidence than a name.
+fn most_complete_of_listed_copies(
+    ctx: &DatabaseContext,
+    image: &crate::models::AcquiredImage,
+    filename: &str,
+    found: PathBuf,
+    canonical_roots: &[PathBuf],
+) -> PathBuf {
+    let listed: Vec<PathBuf> = {
+        let cache = ctx.directory_tree_cache.read().unwrap();
+        cache
+            .as_ref()
+            .and_then(|tree| tree.find_file(filename))
+            .cloned()
+            .unwrap_or_default()
+    };
+    let mut candidates = vec![found.clone()];
+    candidates.extend(listed);
+    let files = distinct_contained_files(candidates, canonical_roots);
+    if files.len() <= 1 {
+        return found;
+    }
+    let files = readable_files(files);
+    let matching: Vec<PathBuf> = files
+        .iter()
+        .filter(|path| basename_headers_match(path, image))
+        .cloned()
+        .collect();
+    let copies = if !matching.is_empty() {
+        matching
+    } else if files.contains(&found) {
+        files
+            .into_iter()
+            .filter(|path| {
+                *path == found || files_share_one_capture(&[found.clone(), path.clone()])
+            })
+            .collect()
+    } else {
+        return found;
+    };
+    most_complete_copy(image.id, filename, copies).unwrap_or(found)
+}
+
+/// Resolve an ordinary catalog's basename candidates. One file is the frame.
+/// Several files are copies of the frame when their capture headers match
+/// the image, or, when the image records no usable capture identity, when
+/// they all record the same capture; then the most complete copy is used.
+/// Several files of different captures that neither rule tells apart are
+/// refused, since showing the wrong frame is worse than showing none.
+pub(super) fn contained_frame_file(
     image: &crate::models::AcquiredImage,
     filename: &str,
     candidates: Vec<PathBuf>,
     canonical_roots: &[PathBuf],
 ) -> Result<Option<PathBuf>, AppError> {
-    let mut validated: Option<(PathBuf, PathBuf)> = None;
-    let candidates: Vec<PathBuf> = candidates
-        .into_iter()
-        .filter(|candidate| candidate.is_file())
+    let mut files = distinct_contained_files(candidates, canonical_roots);
+    if files.len() <= 1 {
+        return Ok(files.pop());
+    }
+    let files = readable_files(files);
+    let matching: Vec<PathBuf> = files
+        .iter()
+        .filter(|path| basename_headers_match(path, image))
+        .cloned()
         .collect();
-    if candidates.is_empty() {
-        return Ok(None);
-    }
-    for candidate in candidates {
-        let Some(candidate) = canonical_file_under_roots(&candidate, canonical_roots) else {
-            continue;
-        };
-        if !basename_headers_match(&candidate, image) {
-            tracing::debug!(
-                "Ignoring path whose capture headers disagree for image {}: {:?}",
-                image.id,
-                candidate
-            );
-            continue;
-        }
-        let identity = std::fs::canonicalize(&candidate).unwrap_or_else(|_| candidate.clone());
-        match validated.as_ref() {
-            None => validated = Some((identity, candidate)),
-            Some((known, _)) if known == &identity => {}
-            Some(_) => {
-                tracing::warn!(
-                    "Refusing multiple header-matched files named {} for image {}",
-                    filename,
-                    image.id
-                );
-                return Err(AppError::Conflict(format!(
-                    "{filename} matches multiple files with the same capture time and filter"
-                )));
-            }
-        }
-    }
+    let copies = if !matching.is_empty() {
+        matching
+    } else if files_share_one_capture(&files) {
+        files
+    } else {
+        tracing::warn!(
+            image_id = image.id,
+            "Refusing {} files named {} that hold different captures",
+            files.len(),
+            filename
+        );
+        return Err(AppError::Conflict(format!(
+            "{filename} matches multiple files in configured image directories"
+        )));
+    };
+    Ok(most_complete_copy(image.id, filename, copies))
+}
 
-    Ok(validated.map(|(_, path)| path))
+/// Resolve a delayed remote row's candidates: only files whose capture
+/// headers match the image count. Several such files are copies of the
+/// frame, and the most complete copy is used.
+pub(super) fn header_matched_frame_file(
+    image: &crate::models::AcquiredImage,
+    filename: &str,
+    candidates: Vec<PathBuf>,
+    canonical_roots: &[PathBuf],
+) -> Result<Option<PathBuf>, AppError> {
+    let copies: Vec<PathBuf> = distinct_contained_files(candidates, canonical_roots)
+        .into_iter()
+        .filter(|candidate| {
+            let matches = basename_headers_match(candidate, image);
+            if !matches {
+                tracing::debug!(
+                    "Ignoring path whose capture headers disagree for image {}: {:?}",
+                    image.id,
+                    candidate
+                );
+            }
+            matches
+        })
+        .collect();
+    Ok(most_complete_copy(image.id, filename, copies))
 }
 
 pub(super) fn basename_headers_match(path: &FsPath, image: &crate::models::AcquiredImage) -> bool {

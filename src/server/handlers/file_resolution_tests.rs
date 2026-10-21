@@ -687,8 +687,37 @@ fn expired_remote_arrival_stops_polling_but_keeps_strict_identity() {
     );
 }
 
+/// A copy that is still being written: the same header, and only part of
+/// the data.
+fn write_partial_copy(source: &Path, copy: &Path) {
+    std::fs::create_dir_all(copy.parent().unwrap()).unwrap();
+    let bytes = std::fs::read(source).unwrap();
+    std::fs::write(copy, &bytes[..2880 + 100]).unwrap();
+}
+
 #[test]
-fn ordinary_basename_fallback_rejects_ambiguity() {
+fn ordinary_basename_fallback_uses_the_file_of_the_images_capture() {
+    let temp = tempfile::tempdir().unwrap();
+    let (ctx, image_root) = context(&temp);
+    write_fits(
+        &image_root.join("archive-a/repeated.fits"),
+        "OIII",
+        "2026-07-24T06:00:00",
+    );
+    let correct = image_root.join("archive-b/repeated.fits");
+    write_fits(&correct, "Ha", "2026-07-24T05:00:00");
+    ctx.get_directory_tree().unwrap();
+    let mut image = image("repeated.fits", "Ha");
+    image.metadata = r#"{"FileName":"repeated.fits"}"#.into();
+
+    assert_eq!(
+        find_fits_file(&ctx, &image, "M 31", "repeated.fits").unwrap(),
+        correct
+    );
+}
+
+#[test]
+fn ordinary_basename_fallback_rejects_captures_it_cannot_tell_apart() {
     let temp = tempfile::tempdir().unwrap();
     let (ctx, image_root) = context(&temp);
     write_fits(
@@ -698,8 +727,8 @@ fn ordinary_basename_fallback_rejects_ambiguity() {
     );
     write_fits(
         &image_root.join("archive-b/repeated.fits"),
-        "Ha",
-        "2026-07-24T05:00:00",
+        "SII",
+        "2026-07-24T07:00:00",
     );
     ctx.get_directory_tree().unwrap();
     let mut image = image("repeated.fits", "Ha");
@@ -709,12 +738,132 @@ fn ordinary_basename_fallback_rejects_ambiguity() {
         Err(AppError::Conflict(message)) => {
             assert!(message.contains("matches multiple files"), "{message}");
         }
-        _ => panic!("ordinary basename ambiguity must be refused"),
+        _ => panic!("two captures that the image cannot tell apart must be refused"),
     }
 }
 
 #[test]
-fn delayed_basename_fallback_requires_one_header_match() {
+fn ordinary_lookup_uses_one_of_two_finished_copies() {
+    let temp = tempfile::tempdir().unwrap();
+    let (ctx, roots) = context_with_roots(&temp, &["incoming", "archive"]);
+    let incoming = roots[0].join("frame_0001.fits");
+    let archived = roots[1].join("M 31/LIGHT/frame_0001.fits");
+    write_fits(&incoming, "Ha", "2026-07-24T05:00:00");
+    write_fits(&archived, "Ha", "2026-07-24T05:00:00");
+    ctx.get_directory_tree().unwrap();
+    let image = image("frame_0001.fits", "Ha");
+
+    let resolved = find_fits_file(&ctx, &image, "M 31", "frame_0001.fits").unwrap();
+    assert!(
+        resolved == incoming || resolved == archived,
+        "{}",
+        resolved.display()
+    );
+}
+
+#[test]
+fn ordinary_lookup_uses_the_complete_copy_while_another_is_written() {
+    let temp = tempfile::tempdir().unwrap();
+    let (ctx, roots) = context_with_roots(&temp, &["incoming", "archive"]);
+    let complete = roots[0].join("frame_0001.fits");
+    let partial = roots[1].join("M 31/LIGHT/frame_0001.fits");
+    write_fits(&complete, "Ha", "2026-07-24T05:00:00");
+    write_partial_copy(&complete, &partial);
+    ctx.get_directory_tree().unwrap();
+    let image = image("frame_0001.fits", "Ha");
+
+    assert_eq!(
+        find_fits_file(&ctx, &image, "M 31", "frame_0001.fits").unwrap(),
+        complete
+    );
+
+    // The finished copy in the archive, with the incoming copy still there.
+    write_fits(&partial, "Ha", "2026-07-24T05:00:00");
+    write_partial_copy(&partial, &complete);
+    assert_eq!(
+        find_fits_file(&ctx, &image, "M 31", "frame_0001.fits").unwrap(),
+        partial
+    );
+}
+
+#[test]
+fn a_copy_that_has_only_just_started_gives_way_to_the_complete_file() {
+    let temp = tempfile::tempdir().unwrap();
+    let (ctx, roots) = context_with_roots(&temp, &["incoming", "archive"]);
+    let complete = roots[0].join("frame_0001.fits");
+    let started = roots[1].join("M 31/LIGHT/frame_0001.fits");
+    write_fits(&complete, "Ha", "2026-07-24T05:00:00");
+    std::fs::create_dir_all(started.parent().unwrap()).unwrap();
+    std::fs::write(&started, b"").unwrap();
+    ctx.get_directory_tree().unwrap();
+    let image = image("frame_0001.fits", "Ha");
+
+    // Found first by the target-folder layout probe.
+    assert_eq!(
+        find_fits_file(&ctx, &image, "M 31", "frame_0001.fits").unwrap(),
+        complete
+    );
+
+    // Found by name only, for an image without a capture time.
+    let mut untimed = image.clone();
+    untimed.acquired_date = None;
+    untimed.metadata = r#"{"FileName":"frame_0001.fits"}"#.into();
+    assert_eq!(
+        find_fits_file(&ctx, &untimed, "Elsewhere", "frame_0001.fits").unwrap(),
+        complete
+    );
+}
+
+#[test]
+fn ordinary_lookup_keeps_the_target_folder_file_over_another_capture_of_that_name() {
+    let temp = tempfile::tempdir().unwrap();
+    let (ctx, roots) = context_with_roots(&temp, &["incoming", "archive"]);
+    let other_capture = roots[0].join("frame_0001.fits");
+    let in_target_folder = roots[1].join("M 31/LIGHT/frame_0001.fits");
+    let mut other_bytes = Vec::new();
+    write_fits(&other_capture, "OIII", "2026-07-24T06:00:00");
+    other_bytes.extend(std::fs::read(&other_capture).unwrap());
+    other_bytes.extend([0u8; 2880]);
+    std::fs::write(&other_capture, other_bytes).unwrap();
+    write_fits(&in_target_folder, "Ha", "2026-07-24T05:00:00");
+    ctx.get_directory_tree().unwrap();
+    let image = image("frame_0001.fits", "Ha");
+
+    assert_eq!(
+        find_fits_file(&ctx, &image, "M 31", "frame_0001.fits").unwrap(),
+        in_target_folder
+    );
+}
+
+#[test]
+fn ordinary_lookup_without_a_capture_time_uses_copies_of_one_capture() {
+    let temp = tempfile::tempdir().unwrap();
+    let (ctx, roots) = context_with_roots(&temp, &["incoming", "archive"]);
+    let complete = roots[0].join("frame_0001.fits");
+    let partial = roots[1].join("M 31/LIGHT/frame_0001.fits");
+    write_fits(&complete, "Ha", "2026-07-24T05:00:00");
+    write_partial_copy(&complete, &partial);
+    ctx.get_directory_tree().unwrap();
+    let mut image = image("frame_0001.fits", "Ha");
+    image.acquired_date = None;
+    image.metadata = r#"{"FileName":"frame_0001.fits"}"#.into();
+
+    assert_eq!(
+        find_fits_file(&ctx, &image, "M 31", "frame_0001.fits").unwrap(),
+        complete
+    );
+
+    write_fits(&partial, "OIII", "2026-07-24T06:00:00");
+    match find_fits_file(&ctx, &image, "M 31", "frame_0001.fits") {
+        Err(AppError::Conflict(message)) => {
+            assert!(message.contains("matches multiple files"), "{message}");
+        }
+        _ => panic!("two captures and no capture time must be refused"),
+    }
+}
+
+#[test]
+fn delayed_basename_fallback_uses_header_matched_copies() {
     let temp = tempfile::tempdir().unwrap();
     let (ctx, image_root) = context(&temp);
     let wrong = image_root.join("archive-a/repeated.fits");
@@ -729,13 +878,21 @@ fn delayed_basename_fallback_requires_one_header_match() {
         correct
     );
 
+    // A partial copy of the right capture beside the complete one.
+    write_partial_copy(&correct, &wrong);
+    assert_eq!(
+        find_fits_file_cached(&ctx, &image, "M 31", "repeated.fits").unwrap(),
+        correct
+    );
+
+    // Two finished copies of the right capture.
     write_fits(&wrong, "Ha", "2026-07-24T05:00:00");
-    match find_fits_file_cached(&ctx, &image, "M 31", "repeated.fits") {
-        Err(AppError::Conflict(message)) => {
-            assert!(message.contains("matches multiple files"), "{message}");
-        }
-        _ => panic!("two header-matched basenames must be refused"),
-    }
+    let resolved = find_fits_file_cached(&ctx, &image, "M 31", "repeated.fits").unwrap();
+    assert!(
+        resolved == wrong || resolved == correct,
+        "{}",
+        resolved.display()
+    );
 }
 
 #[test]
@@ -757,7 +914,7 @@ fn delayed_basename_fallback_rejects_a_timestamp_mismatch() {
 }
 
 #[test]
-fn delayed_metadata_suffix_requires_one_header_matched_path_across_roots() {
+fn delayed_metadata_suffix_uses_header_matched_paths_across_roots() {
     let temp = tempfile::tempdir().unwrap();
     let (ctx, roots) = context_with_roots(&temp, &["images-a", "images-b"]);
     ctx.get_directory_tree().unwrap();
@@ -772,11 +929,19 @@ fn delayed_metadata_suffix_requires_one_header_matched_path_across_roots() {
         second
     );
 
+    // Two copies of the same capture: the complete one, then either.
+    write_partial_copy(&second, &first);
+    assert_eq!(
+        find_fits_file_cached(&ctx, &image, "M 31", "repeated.fits").unwrap(),
+        second
+    );
     write_fits(&first, "Ha", "2026-07-24T05:00:00");
-    assert!(matches!(
-        find_fits_file_cached(&ctx, &image, "M 31", "repeated.fits"),
-        Err(AppError::Conflict(_))
-    ));
+    let resolved = find_fits_file_cached(&ctx, &image, "M 31", "repeated.fits").unwrap();
+    assert!(
+        resolved == first || resolved == second,
+        "{}",
+        resolved.display()
+    );
 }
 
 #[test]

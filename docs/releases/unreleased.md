@@ -6,4 +6,9 @@
 
 ## Changes
 
-_No changes yet._
+- Previews no longer fail when a frame is in two image folders, such as
+  while it is copied from an incoming folder to its final folder. PSF Guard
+  reads the largest copy of the frame, so a copy that is still being written
+  is not used. Files of the same name that hold different captures still
+  show an error. See
+  [Frames in more than one folder](../IMPORTING.md#frames-in-more-than-one-folder).
