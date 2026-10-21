@@ -40,6 +40,7 @@ A same-name replacement file is therefore never graded from stale WCS.
 | **Pointing jump** | A short run leaves one framing cluster and later returns to it | Total score is capped at 0.30; rejection is recommended |
 | **Pointing drift** | A robust Theil-Sen trend within one contiguous framing segment exceeds the field/scatter threshold after detrending | Affected tail frames are capped at 0.30; rejection is recommended |
 | **Rotation skew** | A run of frames sits more than 2° from the rotation the rotator held, and is either shorter than three frames or an excursion that returns to the held angle; compared modulo a half turn so a meridian flip is the same framing. Or, however long the run, the field turned more than 5° from the framing the rest of the target shares while the rotator's reported angle (N.I.N.A. `RotatorPosition`) did not turn with it: a slip, a lost sync, or a camera turned by hand. A turn the rotator reported is framing someone chose; a reading that moves while the field holds still changes nothing in the pixels; and a rotator N.I.N.A. records as disconnected gives no reading | Total score is capped at 0.30; rejection is recommended; stack previews leave the frame out |
+| **Rotation off plan** (raised as Rotation skew) | The solved field rotation sits more than 5° from the rotation Target Scheduler planned for the target, compared modulo a half turn so a meridian flip matches the plan. It applies however many frames share the angle, so a whole night or a whole target shot at the wrong angle is flagged | Total score is capped at 0.30; rejection is recommended; stack previews leave the frame out |
 | **Plate solve failed** | Pixels decoded and the configured solver had enough information, but no field matched (or too few stars were detected) | Modest score reduction; no automatic rejection unless independent cloud, obstruction, or tracking evidence corroborates it |
 | **Solve unavailable** | Missing catalogs/index, decode error, unsupported image, cancellation, or internal/resource failure | Operational error only; no quality flag or automatic grade |
 
@@ -62,14 +63,27 @@ three is deliberate framing; a run that leaves the held angle and comes back
 to it is an excursion, not framing, like a pointing jump. A shorter run is
 skew: PSF Guard measures it
 against the nearest held framing and flags it, because such a frame overlaps
-the rest less and crops the stack. When Target Scheduler recorded a planned
-rotation for the target, the sequence response also carries it beside the
-solved value, with their difference modulo a half turn
-(`planned_rotation_offset_deg`, sign-corrected for a mirrored field). A
-recorded rotation of exactly 0 counts as no plan, since Target Scheduler and
-PSF Guard's import both store 0 for a target nobody rotated. The difference
-is for display: capture software records rotation by its own convention, so
-it flags nothing.
+the rest less and crops the stack.
+
+When Target Scheduler recorded a planned rotation for the target, each
+solved frame is also compared with it. The sequence response carries the
+planned rotation beside the solved one, with their difference modulo a half
+turn (`planned_rotation_offset_deg`, sign-corrected for a mirrored field).
+A difference above 5° flags the frame Rotation skew with the reason
+**Rotation off plan**, and the card's badge shows the offset as `off plan`.
+Target Scheduler's planned rotation, N.I.N.A.'s rotator angle and the solved
+rotation use the same convention: the position angle of image up, east of
+north. Fresh solves of on-plan frames from four rigs sat within 1.6° of
+their plans, on both sides of the meridian. A recorded rotation of exactly 0
+counts as no plan, since Target Scheduler and PSF Guard's import both store
+0 for a target nobody rotated.
+
+Target Scheduler keeps only the current plan. If you change a target's
+rotation after shooting part of it, the frames shot at the earlier angle are
+flagged off plan. Stack previews leave a flagged frame out even when its
+grade is Accepted. When the angle you shot is the framing you want, set the
+target's rotation to that angle, and the next analysis stops flagging the
+frames.
 
 ## Where the intended target comes from
 

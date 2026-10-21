@@ -113,10 +113,14 @@ pub struct PointingQuality {
     /// The rotation the scheduler planned for the target, as recorded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub planned_rotation_deg: Option<f64>,
-    /// Solved minus planned rotation, modulo a half turn. Display only:
-    /// capture software records rotation by its own convention.
+    /// Solved minus planned rotation, modulo a half turn so a meridian flip
+    /// matches the plan, sign-corrected for a mirrored field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub planned_rotation_offset_deg: Option<f64>,
+    /// The solved rotation sits more than `PLANNED_ROTATION_MIN_DEG` from
+    /// the planned rotation, so the frame is flagged Rotation skew.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub rotation_off_plan: bool,
     /// Set when the field turned away from the target's usual framing while
     /// the rotator reported no matching turn: how far the solved rotation
     /// sits from the reported angle beyond this rig's usual offset, modulo a
@@ -356,6 +360,11 @@ const ROTATOR_MIN_FRAMES: usize = 5;
 /// tolerance on purpose: across five catalogs, frames between 2° and 3° were
 /// marginal and harmless, while every real slip sat 10° or more away.
 const ROTATOR_SLIP_MIN_DEG: f64 = 5.0;
+/// How far a frame's solved rotation may sit from the target's planned
+/// rotation, modulo a half turn, before it counts as off plan. Fresh solves
+/// of on-plan frames from four rigs sat within 1.6° of their plans, and
+/// frames shot at the wrong angle sat 5° to 90° away.
+const PLANNED_ROTATION_MIN_DEG: f64 = 5.0;
 
 impl TargetContext {
     fn from_images(images: &[ImageMetrics], rotation_tolerance_deg: f64) -> Self {
@@ -2443,6 +2452,7 @@ impl SequenceAnalyzer {
                             wrap_half_turn(solved - planned)
                         },
                     ),
+                    rotation_off_plan: false,
                     matched_stars: a.matched_stars,
                     rms_arcsec: a.rms_arcsec,
                     error: a.error.clone(),
@@ -2778,6 +2788,20 @@ impl SequenceAnalyzer {
             }
         }
 
+        // A frame shot at another angle than the target's planned rotation
+        // is skew however many frames share that angle: a whole night or a
+        // whole target can be off plan. The offset is taken modulo a half
+        // turn, so a meridian flip matches the plan.
+        for pointing in quality.iter_mut().flatten() {
+            if pointing
+                .planned_rotation_offset_deg
+                .is_some_and(|offset| offset.abs() > PLANNED_ROTATION_MIN_DEG)
+            {
+                pointing.rotation_off_plan = true;
+                push_issue(&mut pointing.flags, IssueCategory::RotationSkew);
+            }
+        }
+
         quality
     }
 
@@ -2853,6 +2877,24 @@ impl SequenceAnalyzer {
                     )),
                     Some(format!(
                         "[Auto] Astrometry: Rotator slip - score {:.2}; field {skew:+.1}° from the rotator's angle",
+                        result.quality_score
+                    )),
+                )
+            } else if let Some((offset, planned)) = pointing
+                .planned_rotation_offset_deg
+                .zip(pointing.planned_rotation_deg)
+                .filter(|_| pointing.rotation_off_plan)
+            {
+                (
+                    Some(IssueCategory::RotationSkew),
+                    Some(format!(
+                        "Solved field rotation sits {offset:+.1}° from the {planned:.1}° rotation \
+                         planned for the target, so this frame does not match the planned \
+                         framing. A meridian flip turns the field by a half turn and still \
+                         matches the plan."
+                    )),
+                    Some(format!(
+                        "[Auto] Astrometry: Rotation off plan - score {:.2}; {offset:+.1}° from the planned {planned:.1}°",
                         result.quality_score
                     )),
                 )
@@ -6047,6 +6089,127 @@ mod tests {
         let pointing = sequence.images[0].pointing.as_ref().unwrap();
         assert_eq!(pointing.planned_rotation_deg, Some(30.0));
         assert!((pointing.planned_rotation_offset_deg.unwrap() - 2.0).abs() < 1e-9);
+        assert!(!pointing.rotation_off_plan);
+        assert!(!sequence.images[0]
+            .flags
+            .contains(&IssueCategory::RotationSkew));
+    }
+
+    /// Frames of one target, each solved at its rotation, planned at `planned`.
+    fn planned_frames(planned: f64, rotations: &[f64]) -> Vec<ImageMetrics> {
+        rotations
+            .iter()
+            .enumerate()
+            .map(|(i, rotation)| {
+                let mut image =
+                    make_full_image(i as i32, i as i64 * 300, 500.0, 2.5, 1000.0, 20.0, 0.4);
+                image.astrometry = Some(AstrometryFrameMetrics {
+                    planned_rotation_deg: Some(planned),
+                    ..rotated_astrometry(*rotation)
+                });
+                image
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_target_shot_entirely_off_its_planned_rotation_is_flagged() {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        // Every frame agrees with the others, so no frame is skew against its
+        // segment, but the whole night sits 45° from the plan.
+        let images = planned_frames(30.0, &[75.0, 75.1, 74.9, 75.0, 75.05, 74.95]);
+        let sequence = &analyzer.analyze(&images, 1, "target", "L")[0];
+        for result in &sequence.images {
+            let pointing = result.pointing.as_ref().unwrap();
+            assert!(pointing.rotation_off_plan, "frame {}", result.image_id);
+            assert!(result.flags.contains(&IssueCategory::RotationSkew));
+            assert_eq!(result.category, Some(IssueCategory::RotationSkew));
+            assert!(result.quality_score <= 0.30);
+            let reason = result.regrade_reason.as_deref().unwrap_or_default();
+            assert!(
+                reason.contains("Rotation off plan") && reason.contains("from the planned 30.0°"),
+                "{reason}"
+            );
+        }
+        let detail = sequence.images[0].details.as_deref().unwrap_or_default();
+        assert!(detail.contains("+45.0°"), "{detail}");
+    }
+
+    #[test]
+    fn a_meridian_flip_matches_the_planned_rotation() {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        // Planned at 45°: the field reads 225° after the flip, a half turn on.
+        let images = planned_frames(45.0, &[45.2, 44.9, 45.0, 225.1, 224.8, 225.3]);
+        let sequence = &analyzer.analyze(&images, 1, "target", "L")[0];
+        for result in &sequence.images {
+            assert!(!result.pointing.as_ref().unwrap().rotation_off_plan);
+            assert!(
+                !result.flags.contains(&IssueCategory::RotationSkew),
+                "frame {}: {:?}",
+                result.image_id,
+                result.flags
+            );
+        }
+    }
+
+    #[test]
+    fn a_frame_is_off_plan_only_beyond_five_degrees() {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        let near = planned_frames(30.0, &[34.0, 34.0, 34.0]);
+        let sequence = &analyzer.analyze(&near, 1, "target", "L")[0];
+        assert!(sequence
+            .images
+            .iter()
+            .all(|result| !result.flags.contains(&IssueCategory::RotationSkew)));
+
+        let off = planned_frames(30.0, &[24.5, 24.5, 24.5]);
+        let sequence = &analyzer.analyze(&off, 1, "target", "L")[0];
+        assert!(sequence.images.iter().all(|result| result
+            .pointing
+            .as_ref()
+            .unwrap()
+            .rotation_off_plan));
+    }
+
+    #[test]
+    fn a_mirrored_field_is_compared_with_the_plan_in_sky_handedness() {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        let mirrored = |rotation: f64| {
+            let mut images = planned_frames(30.0, &[rotation, rotation, rotation]);
+            for image in &mut images {
+                image.astrometry.as_mut().unwrap().field_mirrored = Some(true);
+            }
+            images
+        };
+        // A mirrored field at -30° is the planned 30° on the sky.
+        let sequence = &analyzer.analyze(&mirrored(-30.0), 1, "target", "L")[0];
+        assert!(
+            !sequence.images[0]
+                .pointing
+                .as_ref()
+                .unwrap()
+                .rotation_off_plan
+        );
+        // At +30° it sits 60° from the plan.
+        let sequence = &analyzer.analyze(&mirrored(30.0), 1, "target", "L")[0];
+        assert!(
+            sequence.images[0]
+                .pointing
+                .as_ref()
+                .unwrap()
+                .rotation_off_plan
+        );
+    }
+
+    #[test]
+    fn a_planned_rotation_of_zero_flags_nothing() {
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig::default());
+        let images = planned_frames(0.0, &[47.0, 47.0, 47.0]);
+        let sequence = &analyzer.analyze(&images, 1, "target", "L")[0];
+        assert!(sequence
+            .images
+            .iter()
+            .all(|result| !result.flags.contains(&IssueCategory::RotationSkew)));
     }
 
     #[test]

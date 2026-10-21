@@ -1061,7 +1061,7 @@ pub(super) fn prepare_whole(
     let flat_star_masking = crate::calibration::flat_star_masking_enabled();
     let scoring = StackScoringSettings::from_overrides(&request.scoring);
     let requested = request.image_ids.iter().copied().collect::<HashSet<_>>();
-    let (project_images, expected_by_image, mapped_sources, exposure_groups) = {
+    let (project_images, framing_by_image, mapped_sources, exposure_groups) = {
         let conn = ctx.db();
         let conn = conn.lock().map_err(AppError::db)?;
         let db = Database::new(&conn);
@@ -1096,27 +1096,35 @@ pub(super) fn prepare_whole(
             })
             .collect::<Vec<_>>();
         let mut resolver = FramingResolver::new(&conn).map_err(AppError::db)?;
-        let expected = relevant
+        let framing = relevant
             .iter()
             .map(|(image, _, _)| {
-                resolver
-                    .expected_for_grading(&conn, image)
-                    .map(|value| (image.id, value))
+                let expected = resolver.expected_for_grading(&conn, image)?;
+                let planned_rotation = resolver
+                    .expected_framing(&conn, image)?
+                    .and_then(|framing| framing.rotation_deg);
+                Ok((
+                    image.id,
+                    GradingFraming {
+                        expected,
+                        planned_rotation,
+                    },
+                ))
             })
-            .collect::<Result<HashMap<_, _>, _>>()
+            .collect::<rusqlite::Result<HashMap<_, _>>>()
             .map_err(AppError::db)?;
         let mapped_sources = crate::server::remote_upload::mapped_light_sources(
             &conn,
             &ctx.image_dir_paths,
             relevant.iter().map(|(image, _, _)| image),
         )?;
-        (relevant, expected, mapped_sources, exposure_groups)
+        (relevant, framing, mapped_sources, exposure_groups)
     };
 
     let quality = quality_results(
         ctx,
         &project_images,
-        &expected_by_image,
+        &framing_by_image,
         &mapped_sources,
         &scoring,
     );
@@ -1303,7 +1311,9 @@ pub(super) fn prepare_whole(
                 quality_score: Some(scored.quality_score),
                 path,
                 source_fingerprint,
-                expected_target: expected_by_image.get(&image.id).copied().flatten(),
+                expected_target: framing_by_image
+                    .get(&image.id)
+                    .and_then(|framing| framing.expected),
                 exposure_seconds,
             });
         }
@@ -1531,10 +1541,18 @@ pub(super) fn exclusion_reason(
     }
 }
 
+/// What grading compares a light's fresh solve with: the target it should
+/// point at, and the rotation planned for the target.
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) struct GradingFraming {
+    pub expected: Option<(f64, f64)>,
+    pub planned_rotation: Option<f64>,
+}
+
 pub(super) fn quality_results(
     ctx: &DatabaseContext,
     images: &[(AcquiredImage, String, String)],
-    expected_by_image: &HashMap<i32, Option<(f64, f64)>>,
+    framing_by_image: &HashMap<i32, GradingFraming>,
     mapped_sources: &crate::server::remote_upload::MappedLightSources,
     scoring: &StackScoringSettings,
 ) -> Vec<ImageQualityResult> {
@@ -1562,6 +1580,7 @@ pub(super) fn quality_results(
             let mut value = extract_light_metrics(image);
             let mapped_source = mapped_sources.get(&image.id);
             let mapped_source_revision = mapped_sources.quality_revision(image.id);
+            let framing = framing_by_image.get(&image.id).copied().unwrap_or_default();
             crate::server::handlers::merge_spatial_metrics(
                 &mut value,
                 &ctx.spatial_metrics,
@@ -1573,10 +1592,10 @@ pub(super) fn quality_results(
                 &ctx.cache_dir_path,
                 &image.metadata,
                 &ctx.astrometry_evidence,
-                expected_by_image.get(&image.id).copied().flatten(),
-                // The planned rotation is display only; the rotation-skew flag
-                // comes from the solved rotations alone and still excludes here.
-                None,
+                framing.expected,
+                // A frame shot off the planned rotation is flagged Rotation
+                // skew and left out, as in the Sequence view.
+                framing.planned_rotation,
                 mapped_source.map(|source| source.path.as_path()),
                 mapped_sources.is_invalid(image.id),
             );

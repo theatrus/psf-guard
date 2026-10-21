@@ -2,17 +2,33 @@ import { useCallback, useEffect, type CSSProperties } from 'react';
 import { useInView } from 'react-intersection-observer';
 import type { CalibrationLightMark, Image, ImageCopy, ImageQualityResult } from '../api/types';
 
-/** How far a skewed frame turned, and against what. A rotator slip is
- *  measured against the angle the rotator reported; its own run agrees with
- *  itself, so the segment skew would read near zero. */
+/** How far a skewed frame turned, against what, and the badge's label. A
+ *  rotator slip is measured against the angle the rotator reported, and a
+ *  frame off plan against the planned rotation; in both cases its own run
+ *  agrees with itself, so the segment skew would read near zero. */
 function rotationSkew(
   pointing: ImageQualityResult['pointing']
-): { degrees: number; against: string } | null {
+): { degrees: number; against: string; label: string } | null {
   if (pointing?.rotator_skew_deg != null) {
-    return { degrees: pointing.rotator_skew_deg, against: 'from the angle the rotator reported' };
+    return {
+      degrees: pointing.rotator_skew_deg,
+      against: 'from the angle the rotator reported',
+      label: 'rotation',
+    };
+  }
+  if (pointing?.rotation_off_plan && pointing.planned_rotation_offset_deg != null) {
+    return {
+      degrees: pointing.planned_rotation_offset_deg,
+      against: `from the ${pointing.planned_rotation_deg?.toFixed(1) ?? '?'}° planned for the target`,
+      label: 'off plan',
+    };
   }
   if (pointing?.rotation_skew_deg != null) {
-    return { degrees: pointing.rotation_skew_deg, against: 'from the rest of the framing segment' };
+    return {
+      degrees: pointing.rotation_skew_deg,
+      against: 'from the rest of the framing segment',
+      label: 'rotation',
+    };
   }
   return null;
 }
@@ -346,7 +362,7 @@ export default function ImageCard({
                 className="analysis-signal danger"
                 title={`Solved field rotation ${quality?.pointing?.field_rotation_deg?.toFixed(1) ?? '?'}°, ${signed} ${skew.against}`}
               >
-                rotation {signed}
+                {skew.label} {signed}
               </span>
             );
           })()}
