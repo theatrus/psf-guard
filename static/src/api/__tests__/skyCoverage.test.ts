@@ -40,7 +40,9 @@ describe('Sky coverage preview URLs', () => {
     let requestedOrigin: string | undefined;
     server.use(http.get('*/api/db/:dbId/sky/coverage', ({ request }) => {
       requestedOrigin = new URL(request.url).origin;
-      return HttpResponse.json({ success: true, data: coverage });
+      return HttpResponse.json({ success: true, data: coverage }, {
+        headers: { 'Access-Control-Allow-Origin': '*' },
+      });
     }));
 
     const { apiClient } = await import('../client');
