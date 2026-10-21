@@ -28,91 +28,35 @@
     "highlights": [
       {
         "title": "Keep your catalog separate from Target Scheduler",
-        "body": "Import a local Target Scheduler file into a PSF Guard-owned catalog, or pair the PSF Guard Sync plugin without a local TS file. Capture imports keep local grades and measurements. Grade writeback reports conflicts instead of overwriting TS edits. You can also import a standalone catalog copy or choose its storage path."
+        "body": "Import a Target Scheduler database into a PSF Guard catalog, or pair the PSF Guard Sync plugin. Keep captures, plans and grades in sync, with grade conflicts reported for review."
       },
       {
         "title": "Inspect calibration frames and masters",
-        "body": "The Calibration page shows each frame’s grade, the inputs to each master and the projects they serve. Keep a frame out, use it anyway, compare it with its session, or repair duplicate records without deleting files."
+        "body": "Review calibration grades, compare frames with their sessions, trace master inputs and repair duplicate records. Keep a frame out or use it anyway without deleting its file."
       },
       {
-        "title": "Match flats by what they measure",
-        "body": "Group flats across nights by their measured pattern and dust changes. Inspect disks, donuts and vignetting, split or join groups, and choose which side of a change supplies a light’s flats."
+        "title": "Match flats by their measured pattern",
+        "body": "Group flats across nights by measured light patterns and dust changes. Inspect dust and vignetting, split or join groups, and choose which side of a change supplies a light’s flats."
       },
       {
-        "title": "Stretch stacks and calibrate colour with Gaia",
-        "body": "Median anchor and Layered stretches join Auto MTF, which stays the default. Install Gaia colors in Settings › Catalogs to calibrate RGB, LRGB and one-shot-colour stacks against star colours. Stacks keep their processing when they rebuild."
-      },
-      {
-        "title": "Keep stacks through engine updates",
-        "body": "From 0.12 on, Seiza updates that leave stacking output unchanged reuse completed stacks and calibration masters. If only the display stretch or one-shot-color calibration is out of date, Build current set refreshes the card preview from the saved FITS. The stack, processing and downloads stay available. Queued previews show Waiting to render preview on the card and in the job list."
-      },
-      {
-        "title": "Combine WBPP masters in color",
-        "body": "Combine channel stacks gives WBPP masters their own card, including projects split by exposure. Source labels show the sub-exposure when known. Use Custom combination to choose between several masters of one filter or to mix WBPP and PSF Guard sources."
-      },
-      {
-        "title": "Adjust color while stacks build",
-        "body": "Changes to a color card's stretch, calibration or crop can run alongside stack builds when they reuse prepared channels. Compositions you start that need no deconvolution or RC-Astro can also run this way, unless another composition is preparing the same uncached inputs. After a build you start, each target's color can compose once its own channels finish. Other color work stays in the build queue."
+        "title": "Stretch stacks and combine color",
+        "body": "Use Median anchor or Layered alongside the default Auto MTF stretch. Install Gaia colors to calibrate RGB, LRGB and one-shot-color stacks. Combine WBPP masters in their own color card. Rebuilt stacks keep your processing choices."
       },
       {
         "title": "Plan mosaics across rigs",
-        "body": "Place and turn panels one at a time, keep panels already shot in place, and frame rigs separately. Activation previews show what each rig will shoot, and a site that missed an activation can receive it again. Planning explains why a catalog is unavailable and offers Retry planning. With Snap on, a panel dragged along its row stays in that row beside diagonal neighbours."
+        "body": "Place and rotate panels separately, preserve panels already captured and preview what each rig will shoot. Resend an activation to a site that missed it. In the Starfront collaboration beta, deliver accepted lights with calibration frames or completed stacks."
       },
       {
         "title": "Back up now or on a schedule",
-        "body": "Back up settings, accounts, plans and catalogs to one archive. Download it in a browser, save it to a folder, or schedule daily or weekly backups with retention limits. Settings keeps the last result after a restart."
+        "body": "Save settings, accounts, plans and catalogs in one archive. Download it, save it to a folder, or schedule daily or weekly backups with retention limits."
       },
       {
-        "title": "Review images on a laptop or phone",
-        "body": "Browse by each rig’s observing night, show newest frames first and select Sequence frames by score, stars or HFR. View choices follow signed-in accounts. A smaller phone header and grading bar leave more room for images."
+        "title": "Review images on any screen",
+        "body": "Browse by each rig’s observing night, select Sequence frames by score, stars or HFR, and keep charts in view. Compact phone layouts leave more room for images. Desktop Zoom in and Zoom out resize the whole UI."
       },
       {
-        "title": "Resize the desktop UI",
-        "body": "Choose Zoom in, Zoom out or Reset to 100% from the menu. Cmd/Ctrl with +, − or 0 changes the whole UI from 50% to 200%, including Settings. The app remembers the scale on this device; image zoom stays separate."
-      },
-      {
-        "title": "Follow and stop background work",
-        "body": "The jobs list shows progress for previews, imports, exports, calibration checks and catalog upkeep as well as stacks. Stop an import to roll it back, or stop an export and keep completed files. Quality scans you start queue behind the current scan and run before database-wide analysis. Builds you start pause automatic builds, which resume from their checkpoints."
-      },
-      {
-        "title": "Clearer help and status messages",
-        "body": "Import settings, satellite results, planning help and collaboration messages explain what PSF Guard does and what you can do next. The import preview explains that Skip processed files also skips calibrated and registered copies when pairing is off."
-      },
-      {
-        "title": "Scroll through server information",
-        "body": "Server information scrolls its database list while its heading and close controls stay visible. Database IDs, files and image folders have separate labels; long paths wrap. Server details and the database list have separate loading and error messages. Retry reloads only the failed request."
-      },
-      {
-        "title": "Load the current UI after signing in",
-        "body": "Successful browser sign-ins reload the current URL to load the server's current UI after an update. PSF Guard checks that the session was saved before reloading. Failed sign-ins stay on the login form."
-      },
-      {
-        "title": "Keep Sequence charts in view",
-        "body": "The summary, suspect pills and score chart stay below the toolbar while you browse frames. On short windows, they scroll with the page to leave room for frames. Click a Solved pointing point, or focus it and press Enter, to move to its frame without changing your selection. Collapse the chart from its heading; PSF Guard remembers the choice in this browser."
-      },
-      {
-        "title": "Start stack builds without waiting for preparation",
-        "body": "Build stacks, Build current set and Build on a channel card appear immediately as Preparing stack build. PSF Guard prepares the frames in the background and then queues one build per channel. You can stop preparation before channel builds are queued. Requests keep their queue position after a restart, including during preparation. Calibration checks and exports also start sooner by reading the library once per request."
-      },
-      {
-        "title": "Process each channel after its build",
-        "body": "With Re-apply processing when a stack refreshes on, each channel’s saved processing runs after a build you start or take over, ahead of your other queued builds. Processing after automatic refreshes waits behind your work and builds of the same target. Card previews refreshed after an engine update appear as soon as the refresh finishes."
-      },
-      {
-        "title": "Stack frames at different rotator angles",
-        "body": "Chosen by Seiza selects a reference from the largest orientation group, so a small group does not cause most frames to fail the rotation check. Adjust Orientation group margin in Settings → Stacking. If grading leaves fewer than two usable frames, the channel’s old stack is removed from its card and color source choices."
-      },
-      {
-        "title": "Queue color before channels finish",
-        "body": "Start a color preview while its channels are preparing or building. It waits for them, uses their new stacks and survives a server restart. Queued builds and color previews read the latest frames, grades and calibration when they start."
-      },
-      {
-        "title": "Change a transfer preview while it runs",
-        "body": "In Data Transfer and Remote PSF Guard, changing options stops the current preview. Preview the new choices immediately. A newer sync, import or export preview replaces one still running."
-      },
-      {
-        "title": "Follow and pause preview pre-generation",
-        "body": "When preview pre-generation is enabled on the server, Generating previews shows progress for each database. Pause holds pre-generation for that database until you choose Resume or the server restarts; previews you open still generate as needed. Pre-generation waits while your jobs run, then continues from where it paused."
+        "title": "Control background work",
+        "body": "Follow progress and reorder queued builds in the header’s jobs list. Pause automatic quality analysis, preview pre-generation, flat measuring or frame-site reading until Resume or a server restart. Builds and color requests survive restarts, and work you start takes priority."
       }
     ]
   },
