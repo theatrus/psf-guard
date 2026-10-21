@@ -1,5 +1,16 @@
 [
   {
+    "version": "0.12.1",
+    "deprecations": [],
+    "upgradeNotes": [],
+    "highlights": [
+      {
+        "title": "Safer HTTPS connections",
+        "body": "PSF Guard no longer trusts HTTPS certificates issued through emSign intermediate certificates that browsers have stopped trusting. This covers update checks, sync and catalog downloads."
+      }
+    ]
+  },
+  {
     "version": "0.12.0",
     "deprecations": [
       {

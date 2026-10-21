@@ -8,7 +8,7 @@
 %global rustflags_debuginfo 0
 
 Name:           psf-guard
-Version:        0.12.0
+Version:        0.12.1
 Release:        1%{?dist}
 Summary:        Astronomical image analysis and quality assessment tool for N.I.N.A.
 
@@ -93,6 +93,10 @@ install -Dpm0644 packaging/rpm/systemd/psf-guard-server.conf \
 %config(noreplace) %{_sysconfdir}/%{name}/server.conf
 
 %changelog
+* Wed Oct 21 2026 Yann Ramin <github@theatr.us> - 0.12.1-1
+- Stop trusting HTTPS certificates issued through distrusted emSign
+  intermediates (RUSTSEC-2026-0382, RUSTSEC-2026-0383)
+
 * Tue Oct 20 2026 Yann Ramin <github@theatr.us> - 0.12.0-1
 - Add measured flat matching, calibration review, new stack processing,
   scheduled backups, and Target Scheduler imports into owned catalogs
