@@ -4142,8 +4142,12 @@ export interface ImageQualityResult {
     rotation_skew_deg?: number;
     /** The rotation Target Scheduler planned for the target, as recorded. */
     planned_rotation_deg?: number;
-    /** Solved minus planned rotation, modulo a half turn; display only. */
+    /** Solved minus planned rotation, modulo a half turn, so a meridian
+     *  flip matches the plan. */
     planned_rotation_offset_deg?: number;
+    /** The solved rotation sits more than 5° from the planned rotation, so
+     *  the frame is flagged `rotation_skew`. */
+    rotation_off_plan?: boolean;
     /** Set when the field turned away from the target's framing while the
      *  rotator reported no such turn: degrees from the reported angle. */
     rotator_skew_deg?: number;

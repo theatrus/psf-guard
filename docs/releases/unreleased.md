@@ -12,3 +12,12 @@
   is not used. Files of the same name that hold different captures still
   show an error. See
   [Frames in more than one folder](../IMPORTING.md#frames-in-more-than-one-folder).
+- Quality analysis flags frames shot at a different angle than the target's
+  planned rotation. A frame whose solved rotation sits more than 5° from the
+  plan is flagged Rotation skew with the reason **Rotation off plan**, its
+  score is capped at 0.30, rejection is recommended, and stack previews leave
+  it out. A meridian flip still matches the plan. This catches a whole night
+  or a whole target shot at the wrong angle, which the existing rotation
+  checks could not see. If a target's frames are flagged because the plan
+  changed after they were shot, set the target's rotation to the angle you
+  want.

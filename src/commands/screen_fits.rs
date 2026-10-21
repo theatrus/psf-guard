@@ -34,7 +34,9 @@ use std::sync::Mutex;
 
 /// Maximum |DATE-OBS - acquireddate| for matching a raw FITS file to a TS row.
 const MATCH_TOLERANCE_SECS: i64 = 600;
-type RegradeAstrometryMatch = (i32, Option<i64>, Option<(f64, f64)>);
+/// A catalog light a frame may match: its id, capture time, expected
+/// target, and the rotation planned for its target.
+type RegradeAstrometryMatch = (i32, Option<i64>, Option<(f64, f64)>, Option<f64>);
 
 #[derive(Debug, Clone)]
 pub struct ScreenOptions {
@@ -345,10 +347,14 @@ fn enrich_astrometry_for_regrade(
             continue;
         };
         let expected = resolver.expected_for_grading(&conn, &image)?;
+        let planned_rotation = resolver
+            .expected_framing(&conn, &image)?
+            .and_then(|framing| framing.rotation_deg);
         by_basename.entry(basename.to_string()).or_default().push((
             image.id,
             image.acquired_date,
             expected,
+            planned_rotation,
         ));
     }
 
@@ -374,22 +380,24 @@ fn enrich_astrometry_for_regrade(
     let prediction_cache = Path::new(&options.cache_dir).join(database_slug);
     // Match first so the progress denominator reflects real solve work, then
     // solve the unambiguous matches serially (solving is memory-heavy).
-    type MatchedRecord = (usize, i32, Option<(f64, f64)>);
+    type MatchedRecord = (usize, i32, Option<(f64, f64)>, Option<f64>);
     let matched: Vec<MatchedRecord> = records
         .iter()
         .enumerate()
         .filter_map(|(idx, record)| {
             let file = record.path.file_name()?.to_str()?;
-            let [(image_id, acquired, expected)] = by_basename.get(file).map(Vec::as_slice)?
+            let [(image_id, acquired, expected, planned_rotation)] =
+                by_basename.get(file).map(Vec::as_slice)?
             else {
                 return None;
             };
             matches!((record.timestamp, *acquired), (Some(ours), Some(theirs)) if (ours - theirs).abs() <= MATCH_TOLERANCE_SECS)
-                .then_some((idx, *image_id, *expected))
+                .then_some((idx, *image_id, *expected, *planned_rotation))
         })
         .collect();
     let total_matched = matched.len();
-    for (attempted, (idx, image_id, expected)) in matched.into_iter().enumerate() {
+    for (attempted, (idx, image_id, expected, planned_rotation)) in matched.into_iter().enumerate()
+    {
         let record = &mut records[idx];
         let file = record
             .path
@@ -401,6 +409,9 @@ fn enrich_astrometry_for_regrade(
             Ok(analysis) => {
                 record.astrometry =
                     crate::sequence_analysis::astrometry_metrics_from_analysis(&analysis);
+                if let Some(astrometry) = record.astrometry.as_mut() {
+                    astrometry.planned_rotation_deg = planned_rotation;
+                }
                 match satellite_context.cached_for_exposure(&record.path) {
                     Ok(Some(snapshot)) => {
                         match crate::satellites::predict_tracks(

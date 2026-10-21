@@ -200,4 +200,41 @@ describe('ImageCard quality reason', () => {
       'Solved field rotation 10.9°, +10.2° from the angle the rotator reported'
     );
   });
+
+  it('measures a frame shot off plan against the planned rotation', () => {
+    render(
+      <ImageCard
+        dbId="db"
+        image={image}
+        isSelected={false}
+        onClick={() => {}}
+        onDoubleClick={() => {}}
+        quality={{
+          ...quality,
+          quality_score: 0.3,
+          category: 'rotation_skew',
+          flags: ['rotation_skew'],
+          pointing: {
+            pixel_solved: true,
+            solve_failed: false,
+            image_quality_evidence: true,
+            expected_target: true,
+            flags: ['rotation_skew'],
+            field_rotation_deg: 179.8,
+            rotation_skew_deg: 0.1,
+            planned_rotation_deg: 270,
+            planned_rotation_offset_deg: 89.8,
+            rotation_off_plan: true,
+          },
+        }}
+        selectionEffects={false}
+      />
+    );
+
+    const badge = screen.getByText('off plan +89.8°');
+    expect(badge).toHaveAttribute(
+      'title',
+      'Solved field rotation 179.8°, +89.8° from the 270.0° planned for the target'
+    );
+  });
 });
