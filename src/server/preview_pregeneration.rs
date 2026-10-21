@@ -8,10 +8,11 @@
 //! background workers. Before each batch the pass waits while a person's
 //! work runs, and the pass ends when the cache volume nears its limit.
 //!
-//! The header lists a pass that has previews to write. Stop ends the pass,
-//! and no further pass runs for that catalog until the server restarts. A
-//! preview someone opens is still made at once by the preview queue
-//! (`preview_queue.rs`).
+//! The header lists a pass that has previews to write. Pause ends the pass
+//! after its current batch, and no further pass runs for that catalog until
+//! Resume or until the server restarts. Resume starts a new pass, which
+//! skips the previews already written. A preview someone opens is still
+//! made at once by the preview queue (`preview_queue.rs`).
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -48,8 +49,6 @@ const ANNOTATED_MAX_STARS: usize = 1000;
 pub(crate) struct Queue {
     /// A pass waits to run.
     pending: bool,
-    /// Stop ended a pass: no further pass runs until the server restarts.
-    stopped: bool,
 }
 
 /// Where a catalog's pre-generation stands, for the header.
@@ -128,7 +127,8 @@ pub fn spawn(state: &Arc<AppState>) {
 }
 
 /// Request a pass for the catalog with database id `catalog`. Nothing
-/// happens while a pass runs, or after Stop.
+/// happens while a pass runs. While the job is paused, the pass runs at
+/// Resume.
 pub fn request(state: &Arc<AppState>, catalog: &str) {
     if state.shutdown.is_stopping() {
         return;
@@ -137,26 +137,7 @@ pub fn request(state: &Arc<AppState>, catalog: &str) {
     if jobs.job(catalog).queue().running() {
         return;
     }
-    jobs.request(state, catalog, |queue| {
-        if !queue.stopped {
-            queue.pending = true;
-        }
-    });
-}
-
-/// Stop the catalog's pass, and start no further pass for it until the
-/// server restarts. Returns true when a pass was running.
-pub fn stop(state: &AppState, catalog: &str) -> bool {
-    state
-        .catalog_jobs
-        .pregeneration
-        .existing(catalog)
-        .is_some_and(|job| {
-            job.stop(|queue| {
-                queue.pending = false;
-                queue.stopped = true;
-            })
-        })
+    jobs.request(state, catalog, |queue| queue.pending = true);
 }
 
 /// Where the catalog's pre-generation stands.
@@ -180,17 +161,6 @@ pub fn label(done: usize, total: usize) -> String {
     )
 }
 
-/// `POST /api/db/{db}/preview-pregeneration/stop`: stop the database's pass.
-/// Returns true when a pass was running.
-pub async fn post_stop(
-    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
-    ctx: crate::server::extract::DbContext,
-) -> axum::Json<crate::server::api::ApiResponse<bool>> {
-    axum::Json(crate::server::api::ApiResponse::success(stop(
-        &state, &ctx.id,
-    )))
-}
-
 fn run_logged(state: &Arc<AppState>, catalog: &str, job: &Job, stop: &Stop) {
     let Some(ctx) = state.get_database(catalog) else {
         return;
@@ -212,7 +182,7 @@ fn run_logged(state: &Arc<AppState>, catalog: &str, job: &Job, stop: &Stop) {
                     ctx.id,
                     status.written,
                     status.failed,
-                    if stop.requested() { "; stopped" } else { "" }
+                    if stop.requested() { "; paused" } else { "" }
                 );
             }
         }
@@ -220,6 +190,10 @@ fn run_logged(state: &Arc<AppState>, catalog: &str, job: &Job, stop: &Stop) {
             "🎨 Preview pre-generation failed (db={}): {error:#}",
             ctx.id
         ),
+    }
+    // Paused: a new pass runs at Resume and skips the previews written.
+    if stop.requested() && !state.shutdown.is_stopping() {
+        job.queue().pending = true;
     }
     job.update(|status| {
         status.active = false;
@@ -278,8 +252,8 @@ fn run(
             batch
                 .par_iter()
                 .map(|image| {
-                    // An image that has not started steps aside for Stop, a
-                    // server stop, or a person's work.
+                    // An image that has not started steps aside for a pause,
+                    // a server stop, or a person's work.
                     if stop.requested()
                         || state.shutdown.is_stopping()
                         || state.interactive_job_active()
@@ -313,7 +287,7 @@ fn run(
 }
 
 /// Whether the pass starts its next batch. It waits while a person's work
-/// runs, and ends on Stop, at server shutdown, or when the cache volume
+/// runs, and ends on a pause, at server shutdown, or when the cache volume
 /// nears its limit. A batch in progress can still pass the limit by the
 /// previews it writes.
 fn may_continue(state: &AppState, ctx: &DatabaseContext, job: &Job, stop: &Stop) -> bool {

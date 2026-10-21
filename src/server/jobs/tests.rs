@@ -5,6 +5,14 @@ fn no_projects(_: &str, _: i32) -> Option<i32> {
     None
 }
 
+fn pause(db_id: &str, job: PausableJob, paused: bool) -> RowPause {
+    RowPause {
+        db_id: db_id.into(),
+        job,
+        paused,
+    }
+}
+
 fn db(id: &str, name: &str) -> DatabaseState {
     DatabaseState {
         id: id.into(),
@@ -610,7 +618,7 @@ fn a_reapply_after_a_persons_build_is_their_work() {
 }
 
 #[test]
-fn flat_measuring_is_automatic_with_its_rig_progress_stop_and_link() {
+fn flat_measuring_is_automatic_with_its_rig_progress_pause_and_link() {
     let measuring = FlatMeasureStatus {
         state: "running".into(),
         active: true,
@@ -631,7 +639,8 @@ fn flat_measuring_is_automatic_with_its_rig_progress_stop_and_link() {
     assert_eq!(row.scope, "Observatory · C925 · ASI2600");
     assert_eq!(row.detail, "Measuring flats · 12 of 40 sessions");
     assert_eq!(row.percent, Some(30.0));
-    assert!(row.automatic && row.background && row.stoppable);
+    assert!(row.automatic && row.background && !row.stoppable);
+    assert_eq!(row.pause, Some(pause("astro", PausableJob::Flats, false)));
     assert_eq!(
         row.link,
         Some(
@@ -641,7 +650,7 @@ fn flat_measuring_is_automatic_with_its_rig_progress_stop_and_link() {
         )
     );
 
-    // A pass that is settling, stopped or has nothing to read is not listed.
+    // A pass that is settling or has nothing to read is not listed.
     for status in [
         FlatMeasureStatus::default(),
         FlatMeasureStatus {
@@ -694,12 +703,10 @@ fn frame_sites_show_progress_and_the_next_pass() {
     }));
     assert_eq!(rows[0].key, "sites:astro");
     assert_eq!(rows[0].detail, "Reading frame sites · 812 of 1,867 frames");
-    assert!(rows[0].automatic && rows[0].stoppable);
+    assert!(rows[0].automatic && !rows[0].stoppable);
     assert_eq!(
-        rows[0].control,
-        Some(RowControl::Sites {
-            db_id: "astro".into()
-        })
+        rows[0].pause,
+        Some(pause("astro", PausableJob::Sites, false))
     );
     assert_eq!(rows[0].remaining, None);
 
@@ -746,12 +753,10 @@ fn preview_pregeneration_shows_a_pass_with_previews_to_write() {
     assert_eq!(rows[0].key, "pregeneration:astro");
     assert_eq!(rows[0].title, "Generating previews");
     assert_eq!(rows[0].detail, "812 of 4,000 images");
-    assert!(rows[0].automatic && rows[0].stoppable);
+    assert!(rows[0].automatic && !rows[0].stoppable);
     assert_eq!(
-        rows[0].control,
-        Some(RowControl::Pregeneration {
-            db_id: "astro".into()
-        })
+        rows[0].pause,
+        Some(pause("astro", PausableJob::Pregeneration, false))
     );
 
     let waiting = row_list(&with_db(DatabaseState {
@@ -1575,4 +1580,60 @@ fn catalog_upkeep_is_listed_while_it_runs() {
     let rows = row_list(&with_db(upkeep(UpkeepStage::BuildingIndexes, 0, 0)));
     assert_eq!(rows[0].title, "Building query indexes");
     assert_eq!(rows[0].key, "upkeep:a");
+}
+
+/// A paused job keeps its row, listed as paused with Resume, and the
+/// progress its pass had reached.
+#[test]
+fn a_paused_job_keeps_a_row_with_resume() {
+    use crate::server::preview_pregeneration::PregenerationStatus;
+    let rows = row_list(&with_db(DatabaseState {
+        pregeneration: PregenerationStatus {
+            total: 300,
+            done: 32,
+            ..PregenerationStatus::default()
+        },
+        paused: vec![PausableJob::Pregeneration, PausableJob::Flats],
+        ..db("astro", "Observatory")
+    }));
+    let keys: Vec<&str> = rows.iter().map(|row| row.key.as_str()).collect();
+    assert_eq!(keys, ["flats:astro", "pregeneration:astro"]);
+    for row in &rows {
+        assert_eq!(row.status, RowStatus::Paused);
+        assert!(row.pause.as_ref().unwrap().paused);
+    }
+    assert_eq!(rows[0].detail, "Paused");
+    assert_eq!(rows[0].percent, None);
+    assert_eq!(rows[1].detail, "Paused · 32 of 300 images");
+}
+
+/// A paused analysis keeps its row with Resume; a person's scan still runs
+/// beside it, and the database does not count as busy.
+#[test]
+fn a_paused_analysis_lists_a_persons_scan_beside_it() {
+    let snapshot = with_db(DatabaseState {
+        scan: scan(3, 10, "spatial"),
+        backfill: backfill(3, 40),
+        paused: vec![PausableJob::Quality],
+        ..db("astro", "Observatory")
+    });
+    let rows = row_list(&snapshot);
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].key, "scan:astro");
+    assert_eq!(rows[0].pause, None, "a person's scan has no Pause");
+    assert_eq!(rows[1].key, "backfill:astro");
+    assert_eq!(rows[1].detail, "Paused · 3/40 targets");
+    assert_eq!(rows[1].hint, None, "the file is the person's scan's");
+    assert_eq!(
+        rows[1].pause,
+        Some(pause("astro", PausableJob::Quality, true))
+    );
+
+    let idle = with_db(DatabaseState {
+        backfill: backfill(0, 40),
+        paused: vec![PausableJob::Quality],
+        ..db("astro", "Observatory")
+    });
+    let databases = databases(&idle, &no_projects);
+    assert!(!databases[0].busy && !databases[0].scanning);
 }

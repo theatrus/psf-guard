@@ -162,9 +162,11 @@ fn a_requested_pass_runs_on_the_catalog_runner() {
 }
 
 /// A pass waits while a person's work runs, and the status shows what for.
-/// Stop ends it without writing, and no further pass runs.
+/// A pause ends it without writing, and no further pass runs until Resume,
+/// which writes the previews.
 #[test]
-fn a_pass_waits_for_a_persons_work_and_stop_ends_it() {
+fn a_pass_waits_for_a_persons_work_and_a_pause_holds_it_until_resume() {
+    use crate::server::catalog_jobs::PausableJob;
     let temp = tempfile::tempdir().unwrap();
     let (state, ctx) = catalog(temp.path());
     let person = state.begin_named_interactive_job("a stack build");
@@ -175,7 +177,7 @@ fn a_pass_waits_for_a_persons_work_and_stop_ends_it() {
     });
     assert_eq!(status(&state, &ctx.id).total, 1);
 
-    assert!(stop(&state, &ctx.id));
+    assert!(state.catalog_jobs.pause(PausableJob::Pregeneration, &ctx));
     let job = state.catalog_jobs.pregeneration.job(&ctx.id);
     wait_until("the runner exits", || !job.queue().has_runner());
     assert_eq!(status(&state, &ctx.id).written, 0);
@@ -184,6 +186,13 @@ fn a_pass_waits_for_a_persons_work_and_stop_ends_it() {
     drop(person);
     assert!(!status(&state, &ctx.id).active);
     request(&state, &ctx.id);
-    assert!(!job.queue().has_runner(), "no pass runs after Stop");
-    assert!(!stop(&state, &ctx.id), "nothing runs to stop");
+    assert!(!job.queue().has_runner(), "no pass runs while paused");
+
+    assert!(state
+        .catalog_jobs
+        .resume(&state, PausableJob::Pregeneration, &ctx));
+    wait_until("the pass after Resume writes the preview", || {
+        written(&ctx).len() == 1 && !job.queue().has_runner()
+    });
+    assert!(!state.catalog_jobs.paused(PausableJob::Pregeneration, &ctx));
 }

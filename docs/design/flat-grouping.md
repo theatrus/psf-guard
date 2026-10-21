@@ -748,14 +748,12 @@ opens the rig's own value or the global one.
     yet, or a pass that ended in an error (as a busy catalog), is tried
     again after `RETRY_FIRST` (1 min), doubling to `RETRY_MAX` (30 min), at
     most `RETRY_LIMIT` (6) times; a new change to the rig starts again.
-  - **Stop** (`POST …/flat-measure/cancel`) ends the pass at its next step
-    and pauses what ran and waited. A rig's stopped work resumes when that
-    rig's flats change (an import, sync, forget, override or repair that
-    names it), with **Resume now** on the Frames page (`POST
-    …/flat-measure/resume`), or at the next start. New lights alone, as a
-    remote upload, resume nothing, and neither does a page's look. A
-    change that arrives after Stop but before the pass notices keeps its
-    work in line rather than stopped.
+  - **Pause** (`POST …/jobs/flats/pause`) ends the pass at its next step
+    and puts its rigs back in line. Nothing runs until **Resume**, in the
+    job line or on the Frames page (`POST …/jobs/flats/resume`), or the
+    next start; changes that arrive meanwhile wait in line, and a page's
+    look queues nothing. See
+    [Pause](background-jobs.md#pause).
   - **Start** and adding a database queue every rig: only unfinished or
     stale work is done, and a catalog that is up to date reads no pixel.
   - **Settings**: a change to `flat_grouping`, `flat_split_dust_pct`,

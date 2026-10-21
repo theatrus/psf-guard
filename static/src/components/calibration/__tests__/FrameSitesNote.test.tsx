@@ -21,21 +21,21 @@ const status = (state: FrameSitesStatus['state']): FrameSitesStatus => ({
 });
 
 describe('FrameSitesNote', () => {
-  it('says reading frame sites is stopped and takes it up again on Resume', async () => {
+  it('says reading frame sites is paused and resumes it on request', async () => {
     let resumed = 0;
     server.use(
       http.get('/api/db/demo/calibrations/frame-sites', () =>
-        HttpResponse.json({ success: true, data: status(resumed ? 'queued' : 'stopped'), error: null })),
-      http.post('/api/db/demo/calibrations/frame-sites/resume', () => {
+        HttpResponse.json({ success: true, data: status(resumed ? 'queued' : 'paused'), error: null })),
+      http.post('/api/db/demo/jobs/sites/resume', () => {
         resumed += 1;
-        return HttpResponse.json({ success: true, data: status('queued'), error: null });
+        return HttpResponse.json({ success: true, data: true, error: null });
       }),
     );
     render(<FrameSitesNote dbId="demo" />, { wrapper: wrapper() });
-    expect(await screen.findByTestId('frame-sites-stopped')).toHaveTextContent('Reading frame sites is stopped');
+    expect(await screen.findByTestId('frame-sites-paused')).toHaveTextContent('Reading frame sites is paused until you resume it');
     fireEvent.click(screen.getByTestId('frame-sites-resume'));
     await waitFor(() => expect(resumed).toBe(1));
-    await waitFor(() => expect(screen.queryByTestId('frame-sites-stopped')).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId('frame-sites-paused')).toBeNull());
   });
 
   it('says nothing while the job runs, waits or rests', async () => {

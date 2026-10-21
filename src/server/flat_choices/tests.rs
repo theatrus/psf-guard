@@ -100,7 +100,7 @@ async fn every_choice_waits_for_the_database_management_gate() {
         crate::server::flat_measure::status(&state, path).rigs,
         ["rig"]
     );
-    crate::server::flat_measure::cancel(&state, path);
+    state.catalog_jobs.flat_measure.job(path).pause();
 
     let Json(lights) = put_light_choices(State(Arc::clone(&state)), ctx(), Json(reset_light()))
         .await

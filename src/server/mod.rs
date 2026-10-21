@@ -291,27 +291,10 @@ pub fn api_router(state: Arc<AppState>) -> Router {
             "/calibrations/flat-measure/watch",
             post(flat_measure::post_watch),
         )
-        .route(
-            "/calibrations/flat-measure/resume",
-            post(flat_measure::post_resume),
-        )
-        .route(
-            "/calibrations/flat-measure/cancel",
-            post(flat_measure::post_cancel),
-        )
-        .route(
-            "/preview-pregeneration/stop",
-            post(preview_pregeneration::post_stop),
-        )
         .route("/calibrations/frame-sites", get(frame_sites::get_status))
-        .route(
-            "/calibrations/frame-sites/cancel",
-            post(frame_sites::post_cancel),
-        )
-        .route(
-            "/calibrations/frame-sites/resume",
-            post(frame_sites::post_resume),
-        )
+        .route("/jobs/paused", get(catalog_jobs::get_paused))
+        .route("/jobs/{job}/pause", post(catalog_jobs::post_pause))
+        .route("/jobs/{job}/resume", post(catalog_jobs::post_resume))
         .route(
             "/calibrations/flat-groups/ratio",
             get(flat_groups::get_ratio_picture),

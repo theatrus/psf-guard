@@ -1,11 +1,9 @@
-import type { JobControl, JobLink, JobRow, PreviewKind } from '../../api/types';
+import type { JobControl, JobLink, JobRow, PausableJob, PreviewKind } from '../../api/types';
 import type { TransferJob } from '../../api/transferTypes';
 
 /** The route a row's Stop and move buttons call. */
 export type ActivityControl =
   | { kind: 'stack'; jobId: string }
-  | { kind: 'flats'; dbId: string }
-  | { kind: 'sites'; dbId: string }
   | { kind: 'duplicates'; dbId: string }
   | { kind: 'rejects'; dbId: string }
   | { kind: 'backup' }
@@ -15,8 +13,15 @@ export type ActivityControl =
   | { kind: 'preview'; preview: PreviewKind; key: string }
   | { kind: 'import'; dbId: string }
   | { kind: 'export'; dbId: string }
-  | { kind: 'pregeneration'; dbId: string }
   | { kind: 'catalog-install' };
+
+/** The job a row's Pause or Resume button calls. */
+export interface ActivityPause {
+  dbId: string;
+  job: PausableJob;
+  /** A person paused the job: the row shows Resume instead of Pause. */
+  paused: boolean;
+}
 
 /** The two lines a person can reorder. Each runs one job at a time. */
 export type ActivityQueue = 'stack' | 'wbpp';
@@ -26,9 +31,10 @@ export type ActivityQueue = 'stack' | 'wbpp';
  * transfer to review. `running`: at work now. `queued`: in a line a person
  * can reorder. `waiting`: work paused for other work, such as automatic
  * work behind a build a person started, or a transfer that is paused or
- * waiting for its retry.
+ * waiting for its retry. `paused`: automatic work a person paused until
+ * Resume or the next start.
  */
-export type ActivityStatus = 'attention' | 'running' | 'queued' | 'waiting';
+export type ActivityStatus = 'attention' | 'running' | 'queued' | 'waiting' | 'paused';
 
 /**
  * Who the work is for, as in the server's priority tiers. `person`: work a
@@ -75,6 +81,8 @@ export interface ActivityItem {
   /** Whether Stop can end it while it runs. A stretch or deconvolution
    *  run cannot: it finishes in moments. */
   stoppable?: boolean;
+  /** Pause or Resume, for automatic work a person can pause. */
+  pause?: ActivityPause;
   /** The view showing what the job works on, scoped by URL. */
   href?: string;
 }
@@ -140,6 +148,7 @@ export function jobItem(row: JobRow): ActivityItem {
     position: row.position,
     control: row.control ? controlOf(row.control) : undefined,
     stoppable: row.stoppable,
+    pause: row.pause ? { dbId: row.pause.db_id, job: row.pause.job, paused: row.pause.paused } : undefined,
     href: row.link ? linkPath(row.link) : undefined,
   };
 }
@@ -199,6 +208,8 @@ export interface ActivitySummary {
   waiting: number;
   /** Jobs in a line a person can reorder, such as builds they requested. */
   queued: number;
+  /** Automatic work a person paused. */
+  paused: number;
   /** The mean progress of the running jobs that report one, or null. */
   percent: number | null;
 }
@@ -212,6 +223,7 @@ export function summarize(items: ActivityItem[]): ActivitySummary {
     running: running.length,
     waiting: items.filter((item) => item.status === 'waiting').length,
     queued: items.filter((item) => item.status === 'queued').length,
+    paused: items.filter((item) => item.status === 'paused').length,
     percent: measured.length > 0
       ? measured.reduce((sum, item) => sum + (item.percent ?? 0), 0) / measured.length
       : null,

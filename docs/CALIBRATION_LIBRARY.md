@@ -91,11 +91,11 @@ report opens the lights Images shows under that date.
 An import records each frame's site from its header, and its rig's. For
 frames imported before, the server's **Reading frame sites** job reads
 their headers: a row in the job line (`Reading frame sites · 812 of 1,867
-frames`) with Stop, started when the server starts and after an import, a
+frames`) with Pause, started when the server starts and after an import, a
 hundred headers between commits, stepping aside while your own work runs
-and saying what it waits for. Stop pauses it until frames are imported or
-the server starts again; while it is stopped, Calibration says so and offers
-**Resume now**. A frame whose file is away while others are read is marked
+and saying what it waits for. **Pause** holds it until you choose **Resume**
+or the server restarts; while it is paused, Calibration says so and shows
+**Resume**. A frame whose file is away while others are read is marked
 and tried again a week later (the server looks hourly for frames that are
 due), or when an import brings it. Files that cannot be read before any
 other file of the pass is are held back unmarked, and marked once one is
@@ -643,10 +643,9 @@ sessions`, then the pairs it compares, then the lights it reads.
   folders do not show yet, or a catalog busy with another writer leave the
   rig to be tried again: after a minute, then less often, up to every half
   hour.
-- **Stop** pauses measuring. Frames says so, and it resumes when those
-  flats change (an import, sync, forget or keep-out choice), with **Resume
-  now**, or when the server starts again. New lights alone do not resume
-  it.
+- **Pause** holds measuring until you choose **Resume**, in the job line or
+  on Frames, or until the server restarts. Frames says it is paused. Flats
+  that change meanwhile are measured after Resume.
 - **Settings.** A changed dust or light-pattern limit regroups from the
   stored numbers at once, without grading again. A rig switched from **By
   time only** to **By measurement** is measured then, and only that rig.

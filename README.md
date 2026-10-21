@@ -618,12 +618,16 @@ backups, transfers, and WBPP copies report here. The list also shows previews,
 imports, exports, calibration health checks and catalog upkeep. Stop an import
 to roll it back; stopping an export keeps completed files for the next attempt.
 When server preview pre-generation is enabled, **Generating previews** shows
-its progress. **Stop** disables pre-generation for that database until restart;
-previews you open still generate as needed. Pre-generation waits for jobs you
-start, then continues from where it paused.
+its progress; previews you open still generate as needed. Pre-generation waits
+for jobs you start, then continues from where it paused.
+
+**Pause** holds a database's quality analysis, preview pre-generation, flat
+measuring or frame-site reading until you choose **Resume** or the server
+restarts. The row stays in the list while the job is paused. Quality scans you
+start still run while the analysis is paused.
 
 Work you start takes priority over automatic analysis and preview generation.
-Use Stop, queue controls, or transfer Pause and Retry where the job offers
+Use Stop, Pause, queue controls, or transfer Pause and Retry where the job offers
 them. **Move to top** makes a queued stack, processing or WBPP task run next
 after the current task finishes. A task waiting for review stays visible until
 you address it. Configure

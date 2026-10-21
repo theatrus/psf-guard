@@ -7,16 +7,22 @@
 //! and syncs, backups, imports and exports of frames, cache refreshes, and
 //! preview pre-generation. The registry of them is
 //! `crate::server::catalog_jobs::CatalogJobRegistry`, on `AppState`. The
-//! queue stores merged requests, retries that are due later, and work that
-//! Stop paused. While a catalog's queue has work, one runner thread
-//! processes it one item at a time; the thread exits when the queue is
-//! empty.
+//! queue stores merged requests and retries that are due later. While a
+//! catalog's queue has work, one runner thread processes it one item at a
+//! time; the thread exits when the queue is empty.
 //!
 //! [`CatalogJobs`] implements the shared parts: the job of each catalog,
 //! starting the runner thread, the stop flag of the item that is running,
-//! and recovery when a runner thread panics or cannot start. Each job
-//! implements [`CatalogWork`] to define its queue, when an item is due, and
-//! how to run it.
+//! pausing, and recovery when a runner thread panics or cannot start. Each
+//! job implements [`CatalogWork`] to define its queue, when an item is due,
+//! and how to run it.
+//!
+//! **Pause.** [`CatalogJob::pause`] holds a catalog's automatic work until
+//! [`CatalogJobs::resume`] or the server stops; a pause is not stored. The
+//! running item is asked to stop, and the job puts what it had left back in
+//! its queue. Requests that arrive while the job is paused are queued but
+//! start nothing. Work a person asked for still runs
+//! ([`CatalogWork::next_while_paused`]).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Condvar, LazyLock, Mutex, MutexGuard, RwLock};
@@ -88,7 +94,7 @@ impl Settling {
 
 /// One kind of background job that runs one thread per catalog.
 pub trait CatalogWork: Sized + Send + Sync + 'static {
-    /// The pending work: merged requests, retries and work that Stop paused.
+    /// The pending work: merged requests and retries.
     type Queue: Default + Send;
     /// Progress and results for the status routes, apart from the queue.
     type Status: Default + Clone + Send + Sync;
@@ -113,8 +119,10 @@ pub trait CatalogWork: Sized + Send + Sync + 'static {
     ) -> Step<Self::Item>;
 
     /// Run one item. When [`Self::SHUTDOWN_WAITS_FOR`] is set, server
-    /// shutdown waits for this call to return. [`CatalogJob::stop`]
-    /// requests `stop`.
+    /// shutdown waits for this call to return. [`CatalogJob::stop`] and
+    /// [`CatalogJob::pause`] request `stop`. An item of a job that can be
+    /// paused puts what it had left back in the queue when `stop` is
+    /// requested outside server shutdown.
     fn run(
         state: &Arc<AppState>,
         catalog: &str,
@@ -129,8 +137,34 @@ pub trait CatalogWork: Sized + Send + Sync + 'static {
         true
     }
 
+    /// The runner thread's next step while the job is paused: work a person
+    /// asked for, which a pause does not hold. By default nothing runs, and
+    /// the runner thread exits.
+    fn next_while_paused(
+        _state: &AppState,
+        _catalog: &str,
+        _queue: &mut Self::Queue,
+        _now: Instant,
+    ) -> Step<Self::Item> {
+        Step::Exit
+    }
+
+    /// Whether the queue has work a person asked for, which runs while the
+    /// job is paused.
+    fn has_work_while_paused(_queue: &Self::Queue) -> bool {
+        false
+    }
+
+    /// Whether a pause stops the running item. False while the item is
+    /// work a person asked for.
+    fn pause_stops(_queue: &Self::Queue) -> bool {
+        true
+    }
+
     /// Called on the runner thread after it found the queue empty and
-    /// exited, outside the queue lock; not during server shutdown. A job
+    /// exited, outside the queue lock; not during server shutdown, and not
+    /// when a pause ended the runner, so a job that can be paused must not
+    /// rely on it. A job
     /// that hands its results to another job requests that job here, once
     /// per batch of items.
     fn after_queue_empty(_state: &Arc<AppState>, _catalog: &str) {}
@@ -157,6 +191,8 @@ struct Queued<Q> {
     runner_active: bool,
     /// The stop flag of the running item, when an item is running.
     current_stop: Option<Stop>,
+    /// Whether a person paused the job's automatic work.
+    paused: bool,
 }
 
 impl<Q: Default> Default for Queued<Q> {
@@ -165,6 +201,7 @@ impl<Q: Default> Default for Queued<Q> {
             queue: Q::default(),
             runner_active: false,
             current_stop: None,
+            paused: false,
         }
     }
 }
@@ -205,6 +242,11 @@ impl<Q> QueueGuard<'_, Q> {
     /// sleeping until one is due.
     pub fn has_runner(&self) -> bool {
         self.0.runner_active
+    }
+
+    /// Whether a person paused the job.
+    pub fn paused(&self) -> bool {
+        self.0.paused
     }
 }
 
@@ -261,6 +303,31 @@ impl<W: CatalogWork> CatalogJob<W> {
             edit(queue);
             true
         })
+    }
+
+    /// Pause the job: no automatic item starts until
+    /// [`CatalogJobs::resume`] or the server stops, and the running item is
+    /// asked to stop unless [`CatalogWork::pause_stops`] says otherwise. A
+    /// runner thread that sleeps until work is due wakes and exits. Returns
+    /// false when the job was paused already.
+    pub fn pause(&self) -> bool {
+        let mut queued = self.lock();
+        if queued.paused {
+            return false;
+        }
+        queued.paused = true;
+        if W::pause_stops(&queued.queue)
+            && let Some(stop) = &queued.current_stop
+        {
+            stop.request();
+        }
+        self.wake.notify_all();
+        true
+    }
+
+    /// Whether a person paused the job.
+    pub fn is_paused(&self) -> bool {
+        self.lock().paused
     }
 
     /// Request a stop of the running item when `test`, called with the
@@ -320,16 +387,36 @@ impl<W: CatalogWork> CatalogJobs<W> {
         catalog: &str,
         edit: impl FnOnce(&mut W::Queue) -> R,
     ) -> R {
+        self.change(state, catalog, |queued| edit(&mut queued.queue))
+    }
+
+    /// End a pause of the catalog's job, and start a runner thread when its
+    /// queue has work. Returns false when the job was not paused.
+    pub fn resume(&self, state: &Arc<AppState>, catalog: &str) -> bool {
+        self.change(state, catalog, |queued| std::mem::take(&mut queued.paused))
+    }
+
+    /// Change the catalog's job under its lock, then start a runner thread
+    /// when none exists and the job has work it may run.
+    fn change<R>(
+        &self,
+        state: &Arc<AppState>,
+        catalog: &str,
+        edit: impl FnOnce(&mut Queued<W::Queue>) -> R,
+    ) -> R {
         let job = self.job(catalog);
         let (result, start) = {
             let mut queued = job.lock();
-            let result = edit(&mut queued.queue);
+            let result = edit(&mut queued);
             // A runner that sleeps until queued work is due reads the change
             // now.
             job.wake.notify_all();
-            let start = !queued.runner_active
-                && !state.shutdown.is_stopping()
-                && W::has_work(&queued.queue);
+            let has_work = if queued.paused {
+                W::has_work_while_paused(&queued.queue)
+            } else {
+                W::has_work(&queued.queue)
+            };
+            let start = !queued.runner_active && !state.shutdown.is_stopping() && has_work;
             if start {
                 queued.runner_active = true;
             }
@@ -390,8 +477,9 @@ impl<W: CatalogWork> Drop for PanicGuard<'_, W> {
 }
 
 /// The runner thread of a catalog. It runs each item when it is due,
-/// sleeps while queued work is not due, and exits when the queue is empty
-/// or the server shuts down.
+/// sleeps while queued work is not due, and exits when the queue is empty,
+/// when the job is paused with nothing a person asked for, or when the
+/// server shuts down.
 fn run_queue<W: CatalogWork>(state: &Arc<AppState>, catalog: &str, job: &CatalogJob<W>) {
     let mut guard = PanicGuard { job, exited: false };
     loop {
@@ -402,12 +490,21 @@ fn run_queue<W: CatalogWork>(state: &Arc<AppState>, catalog: &str, job: &Catalog
                 guard.exited = true;
                 return;
             }
-            match W::next(state, catalog, &mut queued.queue, Instant::now()) {
+            let paused = queued.paused;
+            let step = if paused {
+                W::next_while_paused(state, catalog, &mut queued.queue, Instant::now())
+            } else {
+                W::next(state, catalog, &mut queued.queue, Instant::now())
+            };
+            match step {
                 Step::Exit => {
                     queued.runner_active = false;
                     guard.exited = true;
                     drop(queued);
-                    W::after_queue_empty(state, catalog);
+                    // A paused queue still holds its work.
+                    if !paused {
+                        W::after_queue_empty(state, catalog);
+                    }
                     return;
                 }
                 Step::Sleep(wait) => {
@@ -635,6 +732,112 @@ mod tests {
             Step::Run(())
         );
         assert!(!settling.is_pending(), "running clears it");
+    }
+
+    /// Queues a person's numbers and automatic numbers. A pause holds only
+    /// the automatic ones.
+    struct Held;
+
+    #[derive(Default)]
+    struct HeldQueue {
+        person: Vec<u32>,
+        automatic: Vec<u32>,
+    }
+
+    impl CatalogWork for Held {
+        type Queue = HeldQueue;
+        type Status = Vec<u32>;
+        type Item = u32;
+        const RUNNER: &'static str = "held";
+        const SHUTDOWN_WAITS_FOR: Option<&'static str> = None;
+
+        fn next(_: &AppState, _: &str, queue: &mut HeldQueue, _: Instant) -> Step<u32> {
+            let item = queue.person.pop().or_else(|| queue.automatic.pop());
+            item.map_or(Step::Exit, Step::Run)
+        }
+
+        fn next_while_paused(
+            _: &AppState,
+            _: &str,
+            queue: &mut HeldQueue,
+            _: Instant,
+        ) -> Step<u32> {
+            queue.person.pop().map_or(Step::Exit, Step::Run)
+        }
+
+        fn has_work(queue: &HeldQueue) -> bool {
+            !queue.person.is_empty() || !queue.automatic.is_empty()
+        }
+
+        fn has_work_while_paused(queue: &HeldQueue) -> bool {
+            !queue.person.is_empty()
+        }
+
+        fn run(_: &Arc<AppState>, _: &str, job: &CatalogJob<Self>, item: u32, _: &Stop) {
+            job.update(|done| done.push(item));
+        }
+
+        fn runner_failed(_: &mut HeldQueue, _: &mut Vec<u32>) {}
+    }
+
+    fn wait_for(what: &str, done: impl Fn() -> bool) {
+        let started = Instant::now();
+        while !done() {
+            assert!(started.elapsed() < Duration::from_secs(2), "{what}");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn a_pause_holds_automatic_work_until_resume() {
+        let jobs = CatalogJobs::<Held>::new();
+        let state = Arc::new(AppState::new_for_test(
+            rusqlite::Connection::open_in_memory().unwrap(),
+        ));
+        let job = jobs.job("c");
+        assert!(job.pause());
+        assert!(!job.pause(), "the job is paused already");
+
+        jobs.request(&state, "c", |queue| queue.automatic.push(1));
+        assert!(!job.queue().has_runner(), "a paused job starts nothing");
+
+        // A person's work still runs.
+        jobs.request(&state, "c", |queue| queue.person.push(2));
+        wait_for("the person's item runs", || {
+            job.status() == [2] && !job.queue().has_runner()
+        });
+        assert_eq!(job.queue().automatic, [1], "the automatic item is kept");
+
+        assert!(jobs.resume(&state, "c"));
+        wait_for("the automatic item runs after Resume", || {
+            job.status() == [2, 1]
+        });
+        assert!(!job.is_paused());
+        assert!(!jobs.resume(&state, "c"), "the job was not paused");
+    }
+
+    #[test]
+    fn a_pause_stops_the_running_item_and_wakes_a_sleeping_runner() {
+        let job = CatalogJob::<Counting>::default();
+        let stop = Stop::new();
+        job.lock().current_stop = Some(stop.clone());
+        assert!(job.pause());
+        assert!(stop.requested());
+        assert!(job.is_paused() && job.queue().paused());
+
+        // A runner that sleeps until its item is due exits at once.
+        let jobs = CatalogJobs::<Sleeper>::new();
+        let state = Arc::new(AppState::new_for_test(
+            rusqlite::Connection::open_in_memory().unwrap(),
+        ));
+        jobs.request(&state, "c", |queue| {
+            *queue = Some((Instant::now() + Duration::from_secs(3600), 1))
+        });
+        let sleeping = jobs.job("c");
+        assert!(sleeping.queue().has_runner());
+        assert!(sleeping.pause());
+        wait_for("the paused runner exits", || !sleeping.queue().has_runner());
+        assert!(sleeping.queue().is_some(), "the item is kept");
     }
 
     #[test]

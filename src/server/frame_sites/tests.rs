@@ -32,15 +32,10 @@ fn requests_settle_and_unfinished_passes_wait_longer_each_time() {
     assert_eq!(queue.attempts, 0);
 }
 
-/// The hourly watch neither undoes Stop nor resets a retry in flight.
+/// The hourly watch does not reset a retry in flight.
 #[test]
-fn the_watch_respects_stop_and_a_waiting_retry() {
+fn the_watch_respects_a_waiting_retry() {
     let now = Instant::now();
-    let mut queue = Queue::default();
-    queue.add(now);
-    queue.stop();
-    queue.nudge(now);
-    assert!(queue.stopped && !queue.pending, "Stop holds");
     // A retry waits after an unfinished pass: the watch leaves it be.
     let mut queue = Queue::default();
     queue.add(now);
@@ -57,33 +52,21 @@ fn the_watch_respects_stop_and_a_waiting_retry() {
     assert_eq!(queue.next_step(now + SETTLE), Step::Run(()));
 }
 
-/// A stopped job is not started by the watch's request either.
+/// A paused job is not started by the watch's request; Resume runs the
+/// pass it queued.
 #[test]
-fn the_watch_starts_no_runner_for_a_stopped_job() {
+fn the_watch_starts_no_runner_for_a_paused_job() {
     let temp = tempfile::tempdir().unwrap();
     let (path, _files) = library(temp.path(), 1);
     let state = test_state();
-    {
-        let job = job(&state, &path);
-        let mut queue = job.queue();
-        queue.stopped = true;
-    }
+    assert!(job(&state, &path).pause());
     nudge(&state, &path);
-    let job = job(&state, &path);
-    let queue = job.queue();
-    assert!(!queue.has_runner() && !queue.pending && queue.stopped);
-}
-
-#[test]
-fn stop_pauses_until_resume_or_a_change() {
-    let now = Instant::now();
-    let mut queue = Queue::default();
-    queue.add(now);
-    queue.stop();
-    assert!(queue.stopped);
-    assert_eq!(queue.next_step(now + SETTLE), Step::Exit);
-    queue.add(now);
-    assert!(!queue.stopped);
+    assert!(!job(&state, &path).queue().has_runner());
+    assert_eq!(status(&state, &path).state, "paused");
+    assert!(state.catalog_jobs.frame_sites.resume(&state, &path));
+    wait_until("the pass ran after Resume", || {
+        !job(&state, &path).queue().has_runner() && status(&state, &path).last.is_some()
+    });
 }
 
 /// Frames that come while a pass runs are another pass, and the status
@@ -271,10 +254,10 @@ fn a_failed_runner_reports_an_error() {
     assert!(status.last_error.is_some());
 }
 
-/// Stop during a pass ends it at its next chunk and pauses it, unless a
-/// change came after the Stop.
+/// A pause during a pass ends it at its next chunk, and the pass runs
+/// again at Resume.
 #[test]
-fn stop_during_a_pass_pauses_it_unless_a_change_came_after() {
+fn a_pause_during_a_pass_runs_it_again_at_resume() {
     let _settings = crate::calibration::tests::POLICY_LOCK
         .lock()
         .unwrap_or_else(|p| p.into_inner());
@@ -283,21 +266,13 @@ fn stop_during_a_pass_pauses_it_unless_a_change_came_after() {
     let state = test_state();
     let job = Job::default();
     job.queue().running = true;
-    let stopped = Stop::new();
-    stopped.request();
-    run_logged(&state, &path, &job, &stopped);
-    assert!(job.queue().stopped);
+    let paused = Stop::new();
+    paused.request();
+    run_logged(&state, &path, &job, &paused);
     assert_eq!(job.status().last.as_ref().unwrap().done, 0);
-    // Stopped, then an import: the import's request runs.
-    let job = Job::default();
-    {
-        let mut queue = job.queue();
-        queue.running = true;
-        queue.pending = true;
-    }
-    run_logged(&state, &path, &job, &stopped);
     let queue = job.queue();
-    assert!(!queue.stopped && queue.pending);
+    assert!(!queue.running && queue.pending, "the pass waits for Resume");
+    assert_eq!(queue.attempts, 0, "a pause is not a failed try");
 }
 
 /// Frames marked away come due a week on, for the watch to queue.

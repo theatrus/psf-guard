@@ -75,6 +75,16 @@ pub struct DatabaseArgs {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct PauseArgs {
+    /// Database id (slug) or name, as `list_databases` reports it.
+    pub database: String,
+    /// `quality`: the database-wide quality analysis, which also scans new
+    /// frames. `pregeneration`: preview pre-generation. `flats`: flat
+    /// measuring. `sites`: reading the sites of calibration frames.
+    pub job: crate::server::catalog_jobs::PausableJob,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ImageListArgs {
     /// Database id (slug) or name.
     pub database: String,
@@ -678,6 +688,23 @@ impl PsfGuardMcp {
         })
     }
 
+    /// `POST /db/{db}/jobs/{job}/pause` or `/resume`, as `action` says.
+    async fn pause_or_resume(
+        &self,
+        ctx: &RequestContext<RoleServer>,
+        args: &PauseArgs,
+        action: &str,
+    ) -> ToolResult {
+        let db = database!(self, &args.database);
+        let job = serde_json::to_value(args.job).unwrap_or_default();
+        let path = format!(
+            "/db/{}/jobs/{}/{action}",
+            api::encode(&db.id),
+            job.as_str().unwrap_or_default()
+        );
+        self.answer(ctx, Method::POST, &path, None).await
+    }
+
     /// A stack job of this project, with a pointer to `list_stacks` when it
     /// is not one.
     async fn stack_job(
@@ -1167,7 +1194,7 @@ impl PsfGuardMcp {
     // ---------- Jobs ----------
 
     #[tool(
-        description = "Progress of every background job of a database: import, quality backfill, quality scan, WBPP run, calibration grading, flat measuring (rig, stage, stopped rigs, retry), reading frame sites, the calibration duplicate check or repair (its plan counted; get_calibration_duplicates lists it), and reject removal (preview, remove, restore or empty trash; get_reject_removal has its preview and outcome). A job's `waiting_for` names the person's work it steps aside for, as the job line shows it waiting. Poll this after starting one."
+        description = "Progress of every background job of a database: import, quality backfill, quality scan, WBPP run, calibration grading, flat measuring (rig, stage, retry), reading frame sites, the calibration duplicate check or repair (its plan counted; get_calibration_duplicates lists it), and reject removal (preview, remove, restore or empty trash; get_reject_removal has its preview and outcome). `paused` lists the jobs pause_job paused. A job's `waiting_for` names the person's work it steps aside for, as the job line shows it waiting. Poll this after starting one."
     )]
     async fn get_jobs(
         &self,
@@ -1198,7 +1225,30 @@ impl PsfGuardMcp {
             "frame_sites": self.optional(&ctx, &format!("{base}/calibrations/frame-sites")).await,
             "calibration_duplicates": duplicates,
             "reject_removal": self.optional(&ctx, &format!("{base}/rejects/removal")).await,
+            "paused": self.optional(&ctx, &format!("{base}/jobs/paused")).await,
         })))
+    }
+
+    #[tool(
+        description = "Pause one of a database's automatic jobs: `quality` (the database-wide quality analysis, which also scans new frames), `pregeneration` (preview pre-generation), `flats` (flat measuring) or `sites` (reading frame sites). The running pass stops at its next step and keeps what it has done; new work waits. A pause lasts until resume_job or until the server restarts. A quality scan a person asks for still runs. Needs write access."
+    )]
+    async fn pause_job(
+        &self,
+        Parameters(args): Parameters<PauseArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        self.pause_or_resume(&ctx, &args, "pause").await
+    }
+
+    #[tool(
+        description = "Resume a job that pause_job paused; the work it held starts. Needs write access. Follow it with get_jobs."
+    )]
+    async fn resume_job(
+        &self,
+        Parameters(args): Parameters<PauseArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        self.pause_or_resume(&ctx, &args, "resume").await
     }
 
     #[tool(

@@ -11,7 +11,12 @@ export function useQualityBackfillStatus(dbId: string | null | undefined) {
     queryKey,
     queryFn: () => apiClient.getQualityBackfillStatus(dbId!),
     enabled: !!dbId,
-    refetchInterval: (query) => (query.state.data?.progress.running ? 1000 : false),
+    // A paused analysis changes only at Resume, which the header can send.
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      if (!data?.progress.running) return false;
+      return data.paused ? 5000 : 1000;
+    },
     refetchIntervalInBackground: true,
   });
   const isRunning = statusQuery.data?.progress.running ?? false;
@@ -44,6 +49,10 @@ export function useQualityBackfill(dbId: string | null | undefined) {
       }),
     onSuccess: (status) => queryClient.setQueryData(queryKey, status),
   });
+  const resumeMutation = useMutation({
+    mutationFn: () => apiClient.resumeJob(dbId!, 'quality'),
+    onSettled: () => queryClient.invalidateQueries({ queryKey }),
+  });
   const newFramesMutation = useMutation({
     mutationFn: (enabled: boolean) => apiClient.setAnalyzeNewFrames(dbId!, enabled),
     onSuccess: (status) => queryClient.setQueryData(queryKey, status),
@@ -52,8 +61,11 @@ export function useQualityBackfill(dbId: string | null | undefined) {
   return {
     ...status,
     isStarting: startMutation.isPending,
-    error: startMutation.error ?? newFramesMutation.error ?? status.error,
+    error: startMutation.error ?? resumeMutation.error ?? newFramesMutation.error ?? status.error,
     start: startMutation.mutate,
+    isPaused: status.status?.paused ?? false,
+    resume: resumeMutation.mutate,
+    isResuming: resumeMutation.isPending,
     analyzeNewFrames: status.status?.analyze_new_frames ?? false,
     setAnalyzeNewFrames: newFramesMutation.mutate,
     isSavingNewFrames: newFramesMutation.isPending,

@@ -109,7 +109,7 @@ read, below `/api`, as you.
 | `get_light_flat_options` | The changes some lights were shot during, with each change's key and the sides already chosen | yes, as in the app |
 | `get_calibration_duplicates` | The duplicate check or repair, and its plan a page at a time, with the plan's `token` | |
 | `get_sky_coverage` | Every target's footprint and exposure by filter | |
-| `get_jobs` | One database's jobs: import, quality backfill and scan, WBPP, calibration grading, flat measuring, frame sites, the duplicate check or repair, and reject removal, each with what it waits for | |
+| `get_jobs` | One database's jobs: import, quality backfill and scan, WBPP, calibration grading, flat measuring, frame sites, the duplicate check or repair, and reject removal, each with what it waits for, and the jobs that are paused | |
 | `get_reject_removal` | The reject removal job: what it does and how far, the latest preview with its `digest`, and the last outcome | |
 | `astrobin_csv` | The AstroBin acquisition CSV for a project or target | |
 | `grade_images` | Set `accepted`, `rejected` or `pending` with a reason; returns the grades it replaced | yes |
@@ -156,8 +156,7 @@ read, below `/api`, as you.
 | `set_calibration_frame_choice` | Use anyway, keep out, or clear the choice on calibration frames | yes |
 | `set_flat_group_override` | Split a flat family's groups at a session, join two groups, or reset the choice | yes, plus management |
 | `set_light_flat_choice` | Put lights before or after a change, give them one group's flats, or reset their choices | yes, plus management |
-| `cancel_flat_measuring`, `resume_flat_measuring` | Pause flat measuring, or take up what was paused | yes |
-| `cancel_frame_sites`, `resume_frame_sites` | Pause reading frame sites, or take it up again | yes |
+| `pause_job`, `resume_job` | Pause the quality analysis, preview pre-generation, flat measuring or reading frame sites for a database, until Resume or until the server restarts; or resume it | yes |
 | `check_calibration_duplicates` | Check the library for exposures recorded more than once; writes nothing | read access, as in the app |
 | `repair_calibration_duplicates` | Merge them, with the token of a check | yes, plus management |
 | `cancel_calibration_duplicates` | Stop the check or repair; a repair rolls back whole | yes |

@@ -89,8 +89,11 @@ pub(super) fn automatic_work_waits_for(
         })
         .or_else(|| {
             let ctx = state.get_database(database_id)?;
-            crate::server::quality_backfill::snapshot(&ctx.quality_backfill)
-                .running
+            // A paused analysis holds no refresh.
+            let paused = state
+                .catalog_jobs
+                .paused(crate::server::catalog_jobs::PausableJob::Quality, &ctx);
+            (crate::server::quality_backfill::snapshot(&ctx.quality_backfill).running && !paused)
                 .then(|| format!("the quality analysis of {}", ctx.name))
         })
 }

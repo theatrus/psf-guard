@@ -111,8 +111,8 @@
         "body": "In Data Transfer and Remote PSF Guard, changing options stops the current preview. Preview the new choices immediately. A newer sync, import or export preview replaces one still running."
       },
       {
-        "title": "Follow and stop preview pre-generation",
-        "body": "When preview pre-generation is enabled on the server, Generating previews shows progress for each database. Stop disables pre-generation for that database until the server restarts; previews you open still generate as needed. Pre-generation waits while your jobs run, then continues from where it paused."
+        "title": "Follow and pause preview pre-generation",
+        "body": "When preview pre-generation is enabled on the server, Generating previews shows progress for each database. Pause holds pre-generation for that database until you choose Resume or the server restarts; previews you open still generate as needed. Pre-generation waits while your jobs run, then continues from where it paused."
       }
     ]
   },

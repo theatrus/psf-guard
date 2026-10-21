@@ -30,6 +30,7 @@ use crate::server::auth::{AccessRole, RequestAccess};
 use crate::server::backup_job::{JobStatus as BackupJob, Location};
 use crate::server::calibration_duplicates::DuplicateJobStatus;
 use crate::server::catalog_install::{CatalogInstallPreset, CatalogInstallProgress};
+use crate::server::catalog_jobs::PausableJob;
 use crate::server::flat_measure::FlatMeasureStatus;
 use crate::server::frame_sites::FrameSitesStatus;
 use crate::server::previews::{PreviewKind, PreviewRun};
@@ -56,6 +57,8 @@ pub enum RowStatus {
     Queued,
     /// Paused for other work, or waiting for a retry.
     Waiting,
+    /// Paused by a person until Resume or the next start.
+    Paused,
 }
 
 impl RowStatus {
@@ -65,6 +68,7 @@ impl RowStatus {
             Self::Running => 1,
             Self::Queued => 2,
             Self::Waiting => 3,
+            Self::Paused => 4,
         }
     }
 }
@@ -120,8 +124,6 @@ impl RowQueue {
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum RowControl {
     Stack { job_id: String },
-    Flats { db_id: String },
-    Sites { db_id: String },
     Duplicates { db_id: String },
     Rejects { db_id: String },
     Backup,
@@ -131,8 +133,17 @@ pub enum RowControl {
     Preview { preview: PreviewKind, key: String },
     Import { db_id: String },
     Export { db_id: String },
-    Pregeneration { db_id: String },
     CatalogInstall,
+}
+
+/// The job a row's Pause or Resume button calls
+/// (`POST /api/db/{db_id}/jobs/{job}/pause` or `/resume`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RowPause {
+    pub db_id: String,
+    pub job: PausableJob,
+    /// Whether a person paused the job: the row offers Resume.
+    pub paused: bool,
 }
 
 /// A view in the app.
@@ -214,6 +225,9 @@ pub struct JobRow {
     pub control: Option<RowControl>,
     /// Whether Stop can end the job while it runs.
     pub stoppable: bool,
+    /// Pause or Resume, for automatic work a person can pause.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pause: Option<RowPause>,
     /// Text for the row's corner in place of the status, such as
     /// "Retry scheduled".
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -253,6 +267,7 @@ impl JobRow {
             position: None,
             control: None,
             stoppable: false,
+            pause: None,
             state_label: None,
             transfer: None,
             link: None,
@@ -264,6 +279,30 @@ impl JobRow {
     fn automatic(mut self, automatic: bool) -> Self {
         self.automatic = automatic;
         self.background = automatic;
+        self
+    }
+
+    /// Give the row Pause for `job` in the database `db`, or Resume while a
+    /// person has paused it. A paused row shows `progress`, the progress the
+    /// job had reached.
+    fn pausable(mut self, db: &DatabaseState, job: PausableJob, progress: &str) -> Self {
+        let paused = db.paused.contains(&job);
+        self.pause = Some(RowPause {
+            db_id: db.id.clone(),
+            job,
+            paused,
+        });
+        if paused {
+            self.status = RowStatus::Paused;
+            self.detail = joined(["Paused", progress]);
+            self.waiting_for = None;
+            self.remaining = None;
+            // A person's scan may run beside a paused analysis.
+            self.hint = None;
+            if progress.is_empty() {
+                self.percent = None;
+            }
+        }
         self
     }
 }
@@ -324,6 +363,8 @@ pub struct DatabaseState {
     /// An export into the export folder, while it runs.
     pub export: Option<crate::server::export_job::ExportJobProgress>,
     pub pregeneration: crate::server::preview_pregeneration::PregenerationStatus,
+    /// The jobs a person paused for this database.
+    pub paused: Vec<PausableJob>,
 }
 
 /// A Target Scheduler sync or import job, as the rows need it.
@@ -584,13 +625,18 @@ fn quality_rows(db: &DatabaseState, project_of: ProjectOf) -> Vec<JobRow> {
             .automatic(scan.automatic)
         })
     };
-    if !backfill.running {
+    let paused = db.paused.contains(&PausableJob::Quality);
+    if !backfill.running && !paused {
         return scan_row(format!("scan:{}", db.id)).into_iter().collect();
     }
-    let targets = format!(
-        "{}/{} targets",
-        backfill.processed_targets, backfill.total_targets
-    );
+    let targets = if backfill.running {
+        format!(
+            "{}/{} targets",
+            backfill.processed_targets, backfill.total_targets
+        )
+    } else {
+        String::new()
+    };
     let analysis = JobRow {
         detail: targets.clone(),
         percent: percent(backfill.processed_targets, backfill.total_targets),
@@ -603,7 +649,13 @@ fn quality_rows(db: &DatabaseState, project_of: ProjectOf) -> Vec<JobRow> {
             "Analyzing database quality",
             &db.name,
         )
-    };
+    }
+    .pausable(db, PausableJob::Quality, &targets);
+    if paused {
+        // A person's scan still runs; an analysis target stops.
+        let person = scan_row(format!("scan:{}", db.id)).filter(|_| !scan.automatic);
+        return person.into_iter().chain([analysis]).collect();
+    }
     if scan.running && !scan.automatic {
         // A person's scan uses the scanner; the analysis waits for it.
         let waiting_for = "a quality scan";
@@ -653,6 +705,13 @@ fn flats_row(db: &DatabaseState, flats: &FlatMeasureStatus) -> JobRow {
         link = link.param("calRig", rig.clone());
     }
     let label = crate::server::flat_measure::label(flats.stage.as_deref(), flats.done, flats.total);
+    // A paused pass clears its stage: only a pass at work has a step to
+    // show.
+    let progress = if flats.active {
+        label.clone()
+    } else {
+        String::new()
+    };
     let scope = joined([db.name.as_str(), flats.rig_name.as_deref().unwrap_or("")]);
     JobRow {
         // While it pauses for a person's work it is listed as waiting, as
@@ -669,10 +728,6 @@ fn flats_row(db: &DatabaseState, flats: &FlatMeasureStatus) -> JobRow {
         waiting_for: flats.waiting_for.clone(),
         percent: percent(flats.done, flats.total),
         remaining: crate::server::flat_measure::rigs_left(flats.rigs_after, &flats.next_pass),
-        stoppable: true,
-        control: Some(RowControl::Flats {
-            db_id: db.id.clone(),
-        }),
         link: Some(link),
         ..JobRow::new(
             format!("flats:{}", db.id),
@@ -682,12 +737,20 @@ fn flats_row(db: &DatabaseState, flats: &FlatMeasureStatus) -> JobRow {
         )
     }
     .automatic(true)
+    .pausable(db, PausableJob::Flats, &progress)
 }
 
 /// Reading the sites of calibration frames imported before the catalog
-/// stored them, once a pass has frames to read. Automatic and stoppable.
+/// stored them, once a pass has frames to read, or while a person has
+/// paused it. Automatic.
 fn sites_row(db: &DatabaseState, sites: &FrameSitesStatus) -> JobRow {
     let label = crate::server::frame_sites::label(sites.done, sites.total);
+    // The pass a pause ended, if it had frames left.
+    let progress = if sites.done < sites.total {
+        label.clone()
+    } else {
+        String::new()
+    };
     JobRow {
         detail: match &sites.waiting_for {
             Some(what) => waiting_detail(Some(what.as_str()), &label),
@@ -701,10 +764,6 @@ fn sites_row(db: &DatabaseState, sites: &FrameSitesStatus) -> JobRow {
         waiting_for: sites.waiting_for.clone(),
         percent: percent(sites.done, sites.total),
         remaining: sites.next_pass.then(|| "another pass queued".to_string()),
-        stoppable: true,
-        control: Some(RowControl::Sites {
-            db_id: db.id.clone(),
-        }),
         link: Some(RowLink::view(LinkView::Calibration, &db.id)),
         ..JobRow::new(
             format!("sites:{}", db.id),
@@ -714,6 +773,7 @@ fn sites_row(db: &DatabaseState, sites: &FrameSitesStatus) -> JobRow {
         )
     }
     .automatic(true)
+    .pausable(db, PausableJob::Sites, &progress)
 }
 
 /// Calibration grading, once a pass has frames to measure: always
@@ -833,6 +893,12 @@ fn export_row(db: &DatabaseState, export: &crate::server::export_job::ExportJobP
 fn pregeneration_row(db: &DatabaseState) -> JobRow {
     let pass = &db.pregeneration;
     let label = crate::server::preview_pregeneration::label(pass.done, pass.total);
+    // The pass a pause ended, if it had images left.
+    let progress = if pass.done < pass.total {
+        label.clone()
+    } else {
+        String::new()
+    };
     JobRow {
         detail: match &pass.waiting_for {
             Some(what) => waiting_detail(Some(what.as_str()), &label),
@@ -845,10 +911,6 @@ fn pregeneration_row(db: &DatabaseState) -> JobRow {
         },
         waiting_for: pass.waiting_for.clone(),
         percent: percent(pass.done, pass.total),
-        stoppable: true,
-        control: Some(RowControl::Pregeneration {
-            db_id: db.id.clone(),
-        }),
         ..JobRow::new(
             format!("pregeneration:{}", db.id),
             RowKind::Pregeneration,
@@ -857,6 +919,7 @@ fn pregeneration_row(db: &DatabaseState) -> JobRow {
         )
     }
     .automatic(true)
+    .pausable(db, PausableJob::Pregeneration, &progress)
 }
 
 /// The catalog's upkeep while it runs: building PSF Guard's query indexes,
@@ -1579,10 +1642,11 @@ pub fn rows(snapshot: &Snapshot, project_of: ProjectOf) -> Vec<JobRow> {
             rows.push(refresh_row(db, refresh));
         }
         rows.extend(quality_rows(db, project_of));
-        if db.flats.active {
+        // A paused job keeps its row, so Resume is at hand.
+        if db.flats.active || db.paused.contains(&PausableJob::Flats) {
             rows.push(flats_row(db, &db.flats));
         }
-        if db.sites.active {
+        if db.sites.active || db.paused.contains(&PausableJob::Sites) {
             rows.push(sites_row(db, &db.sites));
         }
         if db.duplicates.state == "running" {
@@ -1612,7 +1676,9 @@ pub fn rows(snapshot: &Snapshot, project_of: ProjectOf) -> Vec<JobRow> {
         if let Some(export) = &db.export {
             rows.push(export_row(db, export));
         }
-        if db.pregeneration.active && db.pregeneration.total > 0 {
+        if (db.pregeneration.active && db.pregeneration.total > 0)
+            || db.paused.contains(&PausableJob::Pregeneration)
+        {
             rows.push(pregeneration_row(db));
         }
     }
@@ -1693,12 +1759,17 @@ pub fn rows(snapshot: &Snapshot, project_of: ProjectOf) -> Vec<JobRow> {
     rows
 }
 
+/// Whether the quality analysis runs: queued, and not paused.
+fn analysis_runs(db: &DatabaseState) -> bool {
+    db.backfill.running && !db.paused.contains(&PausableJob::Quality)
+}
+
 /// Whether work that changes the database's images, metrics or grades runs.
 /// A duplicate check and a removal preview change nothing.
 fn database_busy(db: &DatabaseState) -> bool {
     db.refresh.is_some()
         || db.scan.running
-        || db.backfill.running
+        || analysis_runs(db)
         || db.flats.active
         || db.sites.active
         || (db.duplicates.state == "running" && db.duplicates.action.as_deref() == Some("repair"))
@@ -1714,7 +1785,7 @@ pub fn databases(snapshot: &Snapshot, project_of: ProjectOf) -> Vec<DatabaseJobs
             id: db.id.clone(),
             name: db.name.clone(),
             busy: database_busy(db),
-            scanning: db.scan.running || db.backfill.running,
+            scanning: db.scan.running || analysis_runs(db),
             scan: ScanResult {
                 errors: db.scan.errors,
                 last_error: db.scan.last_error.clone(),
@@ -1761,6 +1832,7 @@ fn snapshot(state: &Arc<AppState>, transfers: Vec<Value>, manages: bool) -> Snap
             ))
             .filter(|progress| progress.running),
             pregeneration: crate::server::preview_pregeneration::status(state, &ctx.id),
+            paused: state.catalog_jobs.paused_jobs(ctx),
         })
         .collect();
     let backups_allowed = manages && crate::server::handlers::require_registry_path(state).is_ok();

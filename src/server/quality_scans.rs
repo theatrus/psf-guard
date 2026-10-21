@@ -10,6 +10,9 @@
 //! scan stops at its next frame, keeps what it measured, and its target
 //! goes back to the front of the analysis.
 //!
+//! A pause holds the analysis, and with it the scans of new frames; the
+//! target being scanned goes back to the front. A person's scans still run.
+//!
 //! The runner gathers the frames that need computing (see
 //! [`crate::server::handlers::scan_target`]), so a request only checks that
 //! its target exists, and returns at once.
@@ -86,18 +89,8 @@ impl CatalogWork for QualityScans {
     const SHUTDOWN_WAITS_FOR: Option<&'static str> = None;
 
     fn next(_: &AppState, _: &str, queue: &mut Queue, _: Instant) -> Step<Item> {
-        if let Some(scan) = queue.scans.pop_front() {
-            queue.analysis_running = false;
-            queue.running_ctx = Some(Arc::clone(&scan.ctx));
-            // The previous scan may have just finished: the progress shows
-            // this one from now on, while its frames are gathered.
-            spatial_scan::begin_preparing(
-                &scan.ctx.spatial_metrics,
-                scan.request.target_id,
-                scan.request.filter_name.clone(),
-                false,
-            );
-            return Step::Run(Item::Scan(scan));
+        if let Some(step) = next_person_scan(queue) {
+            return step;
         }
         let Some(analysis) = &mut queue.analysis else {
             queue.analysis_running = false;
@@ -160,6 +153,24 @@ impl CatalogWork for QualityScans {
         !queue.scans.is_empty() || queue.analysis.is_some()
     }
 
+    /// A pause holds the analysis; a person's scans still run.
+    fn next_while_paused(_: &AppState, _: &str, queue: &mut Queue, _: Instant) -> Step<Item> {
+        next_person_scan(queue).unwrap_or_else(|| {
+            queue.analysis_running = false;
+            queue.running_ctx = None;
+            Step::Exit
+        })
+    }
+
+    fn has_work_while_paused(queue: &Queue) -> bool {
+        !queue.scans.is_empty()
+    }
+
+    /// A pause stops an analysis target, not a person's scan.
+    fn pause_stops(queue: &Queue) -> bool {
+        queue.analysis_running
+    }
+
     /// Finish the progress the failed thread left running: the item it ran,
     /// the queued scans shown as preparing, and the analysis, whose targets
     /// left are dropped.
@@ -177,10 +188,26 @@ impl CatalogWork for QualityScans {
     }
 }
 
+/// The next scan a person requested, if one waits.
+fn next_person_scan(queue: &mut Queue) -> Option<Step<Item>> {
+    let scan = queue.scans.pop_front()?;
+    queue.analysis_running = false;
+    queue.running_ctx = Some(Arc::clone(&scan.ctx));
+    // The previous scan may have just finished: the progress shows this one
+    // from now on, while its frames are gathered.
+    spatial_scan::begin_preparing(
+        &scan.ctx.spatial_metrics,
+        scan.request.target_id,
+        scan.request.filter_name.clone(),
+        false,
+    );
+    Some(Step::Run(Item::Scan(scan)))
+}
+
 /// The key of the job that scans for `ctx`: its scan progress store. A
 /// database's contexts share one store, and the store shows one scan at a
 /// time.
-fn scanner(ctx: &DatabaseContext) -> String {
+pub(crate) fn scanner(ctx: &DatabaseContext) -> String {
     format!("{:p}", Arc::as_ptr(&ctx.spatial_metrics))
 }
 
@@ -373,9 +400,9 @@ fn run_analysis_target(
             ctx.id
         );
     }
-    // Stopped for a person's scan: the target is scanned again after it,
-    // and what this scan measured is reused then. At shutdown the next
-    // start's analysis scans the targets left.
+    // Stopped for a person's scan or a pause: the target is scanned again
+    // after the scan or at Resume, and what this scan measured is reused
+    // then. At shutdown the next start's analysis scans the targets left.
     if stop.requested() && !state.shutdown.is_stopping() {
         if let Some(analysis) = job.queue().analysis.as_mut() {
             analysis.targets.push_front(target_id);
