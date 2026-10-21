@@ -34,6 +34,7 @@ pub mod import_job;
 pub mod job_line;
 pub mod job_text;
 pub mod jobs;
+pub(crate) mod listener;
 pub mod master_cleanup;
 pub mod mcp;
 pub mod mosaic_scope;
@@ -881,7 +882,7 @@ pub fn api_router(state: Arc<AppState>) -> Router {
 async fn run_server_internal(
     config: ServerConfig,
     shutdown_rx: Option<oneshot::Receiver<()>>,
-    listener: Option<tokio::net::TcpListener>,
+    listener: Option<listener::SharedTcpListener>,
     ready: Option<oneshot::Sender<()>>,
 ) -> anyhow::Result<()> {
     let anonymous_access_trusted =
@@ -1227,7 +1228,9 @@ async fn run_server_internal(
     // Create listener
     let listener = match listener {
         Some(listener) => listener,
-        None => tokio::net::TcpListener::bind(format!("{}:{}", config.host, config.port)).await?,
+        None => listener::SharedTcpListener::new(
+            tokio::net::TcpListener::bind(format!("{}:{}", config.host, config.port)).await?,
+        )?,
     };
 
     tracing::info!(
@@ -1330,7 +1333,7 @@ pub async fn run_server_with_shutdown(
 pub(crate) async fn run_server_on_listener(
     config: ServerConfig,
     shutdown_rx: oneshot::Receiver<()>,
-    listener: tokio::net::TcpListener,
+    listener: listener::SharedTcpListener,
     ready: oneshot::Sender<()>,
 ) -> anyhow::Result<()> {
     run_server_internal(config, Some(shutdown_rx), Some(listener), Some(ready)).await

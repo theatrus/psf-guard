@@ -1,6 +1,7 @@
 use crate::cli::PregenerationConfig;
 use crate::db_registry::{DbEntry, DbRegistry};
 use crate::desktop_server::Settings as DesktopSettings;
+use crate::server::listener::SharedTcpListener;
 use crate::server::shutdown::Shutdown;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -23,7 +24,7 @@ struct ServerState {
     status: Arc<Mutex<DesktopServerStatus>>,
     /// Keep the binding while a fixed-port server drains and restarts, so
     /// another process cannot take the port between server instances.
-    listener: Arc<Mutex<Option<std::net::TcpListener>>>,
+    listener: Arc<Mutex<Option<SharedTcpListener>>>,
     /// Serialize settings saves and restarts; two restarts must never launch
     /// servers which write the same job journal at once.
     lifecycle: Arc<tokio::sync::Mutex<()>>,
@@ -48,7 +49,7 @@ struct DesktopServerStatus {
 }
 
 struct ReadyListener {
-    listener: std::net::TcpListener,
+    listener: SharedTcpListener,
     ready: oneshot::Sender<()>,
 }
 
@@ -91,12 +92,12 @@ impl ServerState {
 
     async fn start_server(
         &self,
-        listener: std::net::TcpListener,
+        listener: SharedTcpListener,
         registry: DbRegistry,
         base: TauriServerConfig,
     ) -> Result<String, String> {
         let port = listener.local_addr().map_err(|e| e.to_string())?.port();
-        let server_listener = listener.try_clone().map_err(|e| e.to_string())?;
+        let server_listener = listener.clone();
         *self.listener.lock().unwrap() = Some(listener);
         let url = format!("http://127.0.0.1:{port}");
         {
@@ -181,15 +182,14 @@ impl ServerState {
                 .filter(|listener| {
                     listener.local_addr().ok().map(|address| address.port()) == settings.server_port
                 })
-                .map(std::net::TcpListener::try_clone)
-                .transpose()
-                .map_err(|e| format!("Could not retain the desktop server socket: {e}"))?
+                .cloned()
         } else {
             None
         };
         let listener = match retained {
             Some(listener) => listener,
-            None => settings.bind().map_err(|e| format!("{e:#}"))?,
+            None => SharedTcpListener::from_std(settings.bind().map_err(|e| format!("{e:#}"))?)
+                .map_err(|e| format!("Could not prepare the desktop server socket: {e}"))?,
         };
         self.stop_server(RESTART_WAIT).await?;
         self.status.lock().unwrap().server_port = settings.server_port;
@@ -295,6 +295,15 @@ pub fn main() {
             let base = server_config.clone();
             rt.spawn(async move {
                 let _guard = state.lifecycle.lock().await;
+                let listener = match SharedTcpListener::from_std(listener) {
+                    Ok(listener) => listener,
+                    Err(error) => {
+                        state.note_error(&format!(
+                            "Could not prepare the desktop server socket: {error}"
+                        ));
+                        return;
+                    }
+                };
                 if let Err(error) = state.start_server(listener, initial_registry, base).await {
                     state.note_error(&error);
                 }
@@ -558,7 +567,7 @@ async fn start_server_for_tauri(
     stop: Arc<Shutdown>,
 ) -> anyhow::Result<()> {
     let port = socket.listener.local_addr()?.port();
-    let listener = tokio::net::TcpListener::from_std(socket.listener)?;
+    let listener = socket.listener;
     if databases.is_empty() {
         println!("No databases configured — open settings to add one.");
     } else {
@@ -803,7 +812,11 @@ mod tests {
             storage: crate::server::storage::StorageConfig::defaulting_to(dir.path().join("cache")),
         };
         let url = state
-            .start_server(listener, registry, base.clone())
+            .start_server(
+                SharedTcpListener::from_std(listener).unwrap(),
+                registry,
+                base.clone(),
+            )
             .await
             .unwrap();
         state.save_port(Some(port)).await.unwrap();
@@ -814,7 +827,11 @@ mod tests {
             Some(port)
         );
 
-        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
         for restart in [false, true] {
             if restart {
                 assert_eq!(state.restart(base.clone()).await.unwrap(), url);
