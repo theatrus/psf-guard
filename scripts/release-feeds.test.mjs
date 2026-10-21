@@ -18,9 +18,11 @@ const execFileAsync = promisify(execFile);
 
 test('0.11 maintenance releases preserve the current release aliases', async () => {
   const releaseWorkflow = await readFile(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8');
+  const rpmWorkflow = await readFile(new URL('../.github/workflows/rpm.yml', import.meta.url), 'utf8');
   const dockerWorkflow = await readFile(new URL('../.github/workflows/docker.yml', import.meta.url), 'utf8');
   const mergeJob = dockerWorkflow.split('\n  merge:')[1].split('\n  retag-latest:')[0];
   assert.match(releaseWorkflow, /make_latest: false/);
+  assert.match(rpmWorkflow, /make_latest: false/);
   assert.match(mergeJob, /flavor: latest=false/);
   assert.match(mergeJob, /type=semver,pattern=\{\{version\}\}/);
   assert.match(mergeJob, /type=semver,pattern=\{\{major\}\}\.\{\{minor\}\}/);

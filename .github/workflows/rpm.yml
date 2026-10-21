@@ -85,5 +85,7 @@ jobs:
         with:
           files: out/psf-guard-[0-9]*.x86_64.rpm
           fail_on_unmatched_files: true
+          # RPM can create the release before the desktop jobs finish.
+          make_latest: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
