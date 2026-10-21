@@ -491,6 +491,19 @@ The same run is available to scripts and agents as `POST
 /api/db/{db}/autoimport/run`, and the settings travel with the database
 entry in the registry as `autoimport`.
 
+### Frames in more than one folder
+
+A frame can be in two image folders at once, for example while a script
+copies it from an incoming folder to its final folder. PSF Guard treats
+files of the same name as copies of one frame when their headers record the
+frame's capture time and filter. Previews, quality scans and stacks then
+read the largest copy, because a copy that is still being written is shorter
+than the file it comes from.
+
+Files of the same name that hold different captures are not guessed at. When
+the frame's catalog row cannot tell them apart, the image shows an error
+that gives the file name, and you can remove or rename the extra file.
+
 ## Organize projects and targets
 
 Library's **Edit** actions rename projects and targets, move a whole target
