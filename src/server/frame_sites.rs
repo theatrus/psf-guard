@@ -17,7 +17,9 @@
 //!   most every [`crate::calibration::night::SITE_FLUSH_EVERY`] and once
 //!   when the pass ends, so flat measuring does not wait for the whole pass
 //!   and one that ends early has handed on what it placed.
-//! - **Stop** pauses until the next change, Resume, or the next start.
+//! - **Pause** holds the job until Resume or the next start, and a pass
+//!   paused midway runs again at Resume (see
+//!   [`crate::server::job_line::catalog`]).
 //! - **Background.** Before each chunk it waits for interactive work a
 //!   person started, and says what it waits for.
 //! - **Tracked.** [`status`] feeds the header's job line.
@@ -62,7 +64,7 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(2);
 #[derive(Debug, Clone, Default, Serialize, PartialEq)]
 pub struct FrameSitesStatus {
     /// `idle`; `queued` while requests settle or a retry waits; `running`;
-    /// or `stopped` when Stop paused it.
+    /// or `paused` while a person paused the job.
     pub state: String,
     /// The pass's progress in words, such as `Reading frame sites · 812 of
     /// 1,867 frames`, as pages and the header show it.
@@ -95,7 +97,6 @@ pub(crate) struct Queue {
     /// When a pass that could not finish is tried again.
     due: Option<Instant>,
     attempts: u32,
-    stopped: bool,
 }
 
 fn backoff(attempt: u32) -> Duration {
@@ -106,20 +107,19 @@ fn backoff(attempt: u32) -> Duration {
 
 impl Queue {
     /// The hourly watch's request: frames marked away are due again. It
-    /// respects Stop, and leaves a retry in flight and its tries alone.
+    /// leaves a retry in flight and its tries alone.
     fn nudge(&mut self, now: Instant) {
-        if self.stopped || self.running || self.due.is_some() {
+        if self.running || self.due.is_some() {
             return;
         }
         self.pending = true;
         self.last = Some(now);
     }
 
-    /// A change, a start or Resume: tries start again and Stop is undone.
+    /// A change or a start: tries start again.
     fn add(&mut self, now: Instant) {
         self.pending = true;
         self.last = Some(now);
-        self.stopped = false;
         self.attempts = 0;
         self.due = None;
     }
@@ -157,14 +157,6 @@ impl Queue {
         }
         self.due = Some(now + backoff(self.attempts));
         true
-    }
-
-    fn stop(&mut self) {
-        self.stopped = self.pending || self.running || self.due.is_some() || self.stopped;
-        self.pending = false;
-        self.due = None;
-        self.last = None;
-        self.attempts = 0;
     }
 }
 
@@ -222,10 +214,10 @@ pub fn status(state: &AppState, path: &str) -> FrameSitesStatus {
     status.next_pass = queue.running && queue.pending;
     status.state = if queue.running {
         "running"
+    } else if queue.paused() {
+        "paused"
     } else if queue.pending || queue.due.is_some() {
         "queued"
-    } else if queue.stopped {
-        "stopped"
     } else {
         "idle"
     }
@@ -256,8 +248,8 @@ pub fn queue(state: &Arc<AppState>, path: &str) {
     request(state, path, Queue::add);
 }
 
-/// [`queue`] for the hourly watch: nothing while Stop holds, or while a
-/// retry waits, whose tries it leaves alone ([`Queue::nudge`]).
+/// [`queue`] for the hourly watch: nothing while a retry waits, whose tries
+/// it leaves alone ([`Queue::nudge`]).
 pub fn nudge(state: &Arc<AppState>, path: &str) {
     request(state, path, Queue::nudge);
 }
@@ -272,22 +264,6 @@ fn request(state: &Arc<AppState>, path: &str, ask: fn(&mut Queue, Instant)) {
         .request(state, path, |queue| ask(queue, Instant::now()));
 }
 
-/// Stop: the running pass ends at its next chunk, and nothing more runs
-/// until a change, [`resume`], or the next start.
-pub fn cancel(state: &AppState, path: &str) -> FrameSitesStatus {
-    job(state, path).stop(|queue| queue.stop());
-    status(state, path)
-}
-
-/// Take up what Stop paused.
-pub fn resume(state: &Arc<AppState>, path: &str) -> FrameSitesStatus {
-    let stopped = std::mem::take(&mut job(state, path).queue().stopped);
-    if stopped {
-        queue(state, path);
-    }
-    status(state, path)
-}
-
 fn run_logged(state: &Arc<AppState>, path: &str, job: &Job, stop: &Stop) {
     job.update(|status| {
         *status = FrameSitesStatus {
@@ -297,7 +273,8 @@ fn run_logged(state: &Arc<AppState>, path: &str, job: &Job, stop: &Stop) {
         };
     });
     let result = run(state, path, job, stop);
-    let cancelled = stop.requested();
+    // Only a pause stops a pass: it runs again at Resume.
+    let paused = stop.requested();
     let unfinished = match &result {
         Ok(outcome) => outcome.volume_away || outcome.error.is_some(),
         Err(_) => true,
@@ -305,10 +282,8 @@ fn run_logged(state: &Arc<AppState>, path: &str, job: &Job, stop: &Stop) {
     {
         let mut queue = job.queue();
         queue.running = false;
-        if cancelled && !queue.pending {
-            queue.stopped = true;
-        } else if cancelled {
-            // A change came after Stop: it runs.
+        if paused {
+            queue.pending = true;
         } else if unfinished {
             queue.retry(Instant::now());
         } else {
@@ -335,9 +310,13 @@ fn run_logged(state: &Arc<AppState>, path: &str, job: &Job, stop: &Stop) {
                 .unwrap_or_default(),
         ),
         Ok(_) => {}
+        Err(error) if paused => tracing::info!(
+            "Reading calibration frame sites in {path} ended at a pause: {error:#}. It runs \
+             again at Resume."
+        ),
         Err(error) => tracing::info!(
-            "Paused reading calibration frame sites in {path}: {error:#}. It is tried again \
-             shortly."
+            "Could not finish reading calibration frame sites in {path}: {error:#}. It is \
+             tried again shortly."
         ),
     }
     job.update(|status| {
@@ -457,23 +436,6 @@ pub async fn get_status(
     ctx: DbContext,
 ) -> Json<ApiResponse<FrameSitesStatus>> {
     Json(ApiResponse::success(status(&state, &ctx.database_path)))
-}
-
-/// `POST /api/db/{db}/calibrations/frame-sites/cancel` — Stop.
-pub async fn post_cancel(
-    State(state): State<Arc<AppState>>,
-    ctx: DbContext,
-) -> Json<ApiResponse<FrameSitesStatus>> {
-    Json(ApiResponse::success(cancel(&state, &ctx.database_path)))
-}
-
-/// `POST /api/db/{db}/calibrations/frame-sites/resume` — take up what
-/// Stop paused.
-pub async fn post_resume(
-    State(state): State<Arc<AppState>>,
-    ctx: DbContext,
-) -> Json<ApiResponse<FrameSitesStatus>> {
-    Json(ApiResponse::success(resume(&state, &ctx.database_path)))
 }
 
 #[cfg(test)]

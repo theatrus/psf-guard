@@ -1149,17 +1149,14 @@ mod tests {
             "/db/test/calibrations/flat-measure/watch",
             false,
         ));
-        for action in ["cancel", "resume"] {
-            assert!(requires_write(
-                &Method::POST,
-                &format!("/db/test/calibrations/flat-measure/{action}"),
-                true,
-            ));
-            assert!(requires_write(
-                &Method::POST,
-                &format!("/db/test/calibrations/frame-sites/{action}"),
-                true,
-            ));
+        for action in ["pause", "resume"] {
+            for job in ["quality", "pregeneration", "flats", "sites"] {
+                assert!(requires_write(
+                    &Method::POST,
+                    &format!("/db/test/jobs/{job}/{action}"),
+                    true,
+                ));
+            }
         }
         // Any reader may check for duplicates, as any reader could load
         // the list; the repair and Stop are an editor's.

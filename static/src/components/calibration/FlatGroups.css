@@ -23,7 +23,7 @@
 }
 
 .flat-rig-summary .link-button,
-.flat-measure-stopped .link-button {
+.flat-measure-paused .link-button {
   padding: 0;
   border: 0;
   background: none;
@@ -34,12 +34,12 @@
 }
 
 .flat-rig-summary .link-button:focus-visible,
-.flat-measure-stopped .link-button:focus-visible {
+.flat-measure-paused .link-button:focus-visible {
   outline: 2px solid var(--state-focus-border);
   outline-offset: 2px;
 }
 
-.flat-measure-stopped .link-button:disabled {
+.flat-measure-paused .link-button:disabled {
   cursor: default;
   opacity: 0.6;
 }

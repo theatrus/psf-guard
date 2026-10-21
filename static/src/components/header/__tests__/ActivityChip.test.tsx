@@ -429,28 +429,46 @@ describe('ActivityChip', () => {
     await waitFor(() => expect(calls).toContain('cancel R'));
   });
 
-  it('stops preview pre-generation from its row after asking', async () => {
+  it('pauses preview pre-generation at once, keeps the row, and resumes it', async () => {
     const calls: string[] = [];
-    let rows = [row({
+    const writing = row({
       key: 'pregeneration:askar', kind: 'pregeneration', title: 'Generating previews', scope: 'Askar',
-      detail: '812 of 4,000 images', percent: 20.3, automatic: true, background: true, stoppable: true,
-      control: { kind: 'pregeneration', db_id: 'askar' },
-    })];
+      detail: '812 of 4,000 images', percent: 20.3, automatic: true, background: true,
+      pause: { db_id: 'askar', job: 'pregeneration', paused: false },
+    });
+    let rows = [writing];
     mockJobs(() => rows);
-    server.use(http.post('/api/db/:db/preview-pregeneration/stop', ({ params }) => {
-      calls.push(`stop ${params.db}`);
-      rows = [];
-      return ok(true);
-    }));
+    server.use(
+      http.post('/api/db/:db/jobs/:job/pause', ({ params }) => {
+        calls.push(`pause ${params.db} ${params.job}`);
+        rows = [{
+          ...writing, status: 'paused', detail: 'Paused · 812 of 4,000 images',
+          pause: { db_id: 'askar', job: 'pregeneration', paused: true },
+        }];
+        return ok(true);
+      }),
+      http.post('/api/db/:db/jobs/:job/resume', ({ params }) => {
+        calls.push(`resume ${params.db} ${params.job}`);
+        rows = [writing];
+        return ok(true);
+      }),
+    );
     renderChip();
     await userEvent.click(await screen.findByRole('button', { name: /Background jobs/ }));
     const list = await screen.findByRole('region', { name: 'Background jobs' });
     expect(within(list).getByText('812 of 4,000 images')).toBeInTheDocument();
+    expect(within(list).queryByRole('button', { name: /^Stop/ })).toBeNull();
 
-    await userEvent.click(within(list).getByRole('button', { name: 'Stop Generating previews: Askar' }));
-    expect(calls).toEqual([]);
-    await userEvent.click(within(list).getByRole('button', { name: 'Stop it' }));
-    await waitFor(() => expect(calls).toEqual(['stop askar']));
+    // Pausing keeps the work, so it does not ask first.
+    await userEvent.click(within(list).getByRole('button', { name: 'Pause Generating previews: Askar' }));
+    await waitFor(() => expect(calls).toEqual(['pause askar pregeneration']));
+    expect(await within(list).findByText('Paused · 812 of 4,000 images')).toBeInTheDocument();
+    // The chip counts it as paused, not as waiting for other work.
+    expect(screen.getByRole('button', { name: /Background jobs: 1 paused/ })).toBeInTheDocument();
+
+    await waitFor(() => expect(within(list).getByRole('button', { name: 'Resume Generating previews: Askar' })).toBeEnabled());
+    await userEvent.click(within(list).getByRole('button', { name: 'Resume Generating previews: Askar' }));
+    await waitFor(() => expect(calls).toEqual(['pause askar pregeneration', 'resume askar pregeneration']));
   });
 
   it('keeps the move buttons disabled until the job list is read again', async () => {

@@ -489,26 +489,30 @@ async fn an_agent_reads_flat_groups_and_its_flat_choices_wait_for_database_manag
     .unwrap();
     assert_eq!(lights["lights"], 1, "{lights}");
 
-    // The reset queued the rig's lights; Stop pauses it, Resume takes it up.
-    let stopped = tool(&app, "cancel_flat_measuring", json!({ "database": db }))
+    // The reset queued the rig's lights; a pause holds it, Resume takes it
+    // up, and get_jobs lists what is paused.
+    let paused = tool(&app, "pause_job", json!({ "database": db, "job": "flats" }))
         .await
         .unwrap();
-    assert_eq!(stopped["state"], "stopped", "{stopped}");
-    tool(&app, "resume_flat_measuring", json!({ "database": db }))
+    assert_eq!(paused, json!(true), "{paused}");
+    let flats = tool(&app, "get_jobs", json!({ "database": db }))
         .await
         .unwrap();
-    tool(&app, "cancel_flat_measuring", json!({ "database": db }))
-        .await
-        .unwrap();
-    tool(&app, "cancel_frame_sites", json!({ "database": db }))
-        .await
-        .unwrap();
-    tool(&app, "resume_frame_sites", json!({ "database": db }))
-        .await
-        .unwrap();
-    tool(&app, "cancel_frame_sites", json!({ "database": db }))
-        .await
-        .unwrap();
+    assert_eq!(flats["paused"], json!(["flats"]), "{flats}");
+    assert_eq!(flats["flat_measure"]["state"], "paused", "{flats}");
+    let resumed = tool(
+        &app,
+        "resume_job",
+        json!({ "database": db, "job": "flats" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(resumed, json!(true), "{resumed}");
+    for job in ["flats", "sites"] {
+        tool(&app, "pause_job", json!({ "database": db, "job": job }))
+            .await
+            .unwrap();
+    }
 
     let jobs = tool(&app, "get_jobs", json!({ "database": db }))
         .await
@@ -530,7 +534,8 @@ async fn an_agent_reads_flat_groups_and_its_flat_choices_wait_for_database_manag
             "{job} unavailable: {jobs}"
         );
     }
-    assert_eq!(jobs["flat_measure"]["state"], "stopped", "{jobs}");
+    assert_eq!(jobs["flat_measure"]["state"], "paused", "{jobs}");
+    assert_eq!(jobs["paused"], json!(["flats", "sites"]), "{jobs}");
 
     // A kind the account does not know is refused, not filtered to nothing.
     let unknown = tool(
@@ -654,10 +659,8 @@ async fn a_read_only_token_reads_and_checks_but_does_not_choose() {
             "get_light_flat_options",
             json!({ "database": db, "image_ids": [7] }),
         ),
-        ("cancel_flat_measuring", json!({ "database": db })),
-        ("resume_flat_measuring", json!({ "database": db })),
-        ("cancel_frame_sites", json!({ "database": db })),
-        ("resume_frame_sites", json!({ "database": db })),
+        ("pause_job", json!({ "database": db, "job": "flats" })),
+        ("resume_job", json!({ "database": db, "job": "sites" })),
         ("cancel_calibration_duplicates", json!({ "database": db })),
         (
             "repair_calibration_duplicates",
@@ -678,7 +681,11 @@ async fn a_read_only_token_reads_and_checks_but_does_not_choose() {
     .await
     .unwrap();
     assert_eq!(chosen["updated"], 1, "{chosen}");
-    crate::server::flat_measure::cancel(&state, &state.all_databases()[0].database_path);
+    state
+        .catalog_jobs
+        .flat_measure
+        .job(&state.all_databases()[0].database_path)
+        .pause();
 }
 
 /// A server with a database registry, so backups can run.

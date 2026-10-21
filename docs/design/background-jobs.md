@@ -172,7 +172,7 @@ A job with one runner per catalog implements `CatalogWork`
 pub(crate) struct MyJob;
 
 impl CatalogWork for MyJob {
-    type Queue = Queue;             // merged requests, retries, what Stop paused
+    type Queue = Queue;             // merged requests and retries
     type Status = MyJobStatus;      // what the status route answers
     type Item = Scope;              // one pass
     const RUNNER: &'static str = "my-job";
@@ -221,14 +221,15 @@ fn step(state: &AppState, job: &CatalogJob<MyJob>, frame: &Frame, priority: Prio
 ```
 
 `CatalogJobs` resets the runner state when the thread panics or cannot
-start, gives each item a fresh `Stop` that `CatalogJob::stop_running`
-requests, and makes shutdown wait for an item only when
+start, gives each item a fresh `Stop` that `CatalogJob::stop` and
+`CatalogJob::pause` request, and makes shutdown wait for an item only when
 `SHUTDOWN_WAITS_FOR` is set.
 
 Then:
 
-- a status route, and Stop and Resume routes when the job can stop between
-  steps. Stop pauses; it does not forget;
+- a status route, and Stop for work a person started that can end
+  between steps;
+- for long automatic work, a pause (see [Pause](#pause));
 - work a pass could not finish (files away, a busy catalog) goes back in
   line with a growing wait, not to the next restart;
 - a row builder in `src/server/jobs.rs` with a title, scope, progress,
@@ -241,13 +242,39 @@ Then:
 - a status that turns visible only once the job has found work, so a pass
   with nothing to do never flashes in the job line.
 
+## Pause
+
+A person can pause the long automatic jobs of one database from their
+header row: the quality analysis (with the scans of new frames it runs),
+preview pre-generation, flat measuring and reading frame sites. They are
+listed in `PausableJob` (`src/server/catalog_jobs.rs`).
+
+- `CatalogJob::pause` marks the job paused and requests the running item's
+  stop. The item puts what it had left back in its queue, so nothing is
+  lost: the analysis's target goes back to the front, a flat pass's scope
+  goes back in line, and a frame-sites or pre-generation pass is queued
+  again.
+- While the job is paused, the runner thread runs only what
+  `CatalogWork::next_while_paused` returns, and exits when that is nothing.
+  Requests are queued but start no thread. The quality scans return a
+  person's scan here, and `pause_stops` keeps a pause from stopping one.
+- `CatalogJobs::resume` clears the mark and starts a runner when the queue
+  has work. A pass at Resume skips what was done before the pause, since
+  each job reads only what is still missing.
+- A pause is not stored: the server starts with nothing paused.
+- `POST /api/db/{db}/jobs/{job}/pause` and `/resume` call them, and `GET
+  …/jobs/paused` lists what is paused. A paused job keeps its row in
+  `GET /api/jobs`, listed as waiting with the label "Paused", and its
+  `pause` field tells the header to show Pause or Resume. The MCP tools are
+  `pause_job` and `resume_job`.
+
 ## Jobs today, and the gaps
 
 - Flat measuring (`flat_measure.rs`) follows all of it.
 - Reading frame sites (`frame_sites.rs`) follows it for one catalog-wide
   scope: queued at start, after imports and hourly when frames marked away
   come due, retried while the server runs when the volume is away or a pass
-  fails, Stop and Resume (a note on Calibration while stopped), a row in
+  fails, Pause and Resume (a note on Calibration while paused), a row in
   the job line, a wait for interactive work before each chunk, and what it
   placed handed on at most every 45 s.
 - The duplicate check and repair (`calibration_duplicates.rs`) follow it.
@@ -301,8 +328,9 @@ Then:
   cache expiry and renders them in batches on leased workers, building
   each image's cache paths again from its current row. Images not yet
   started step aside for a person's work, and the pass waits before its
-  next batch; it ends when the cache volume nears its limit. A pass with previews to write has a row with Stop;
-  after Stop, no pass runs for that database until the server restarts.
+  next batch; it ends when the cache volume nears its limit. A pass with
+  previews to write has a row with Pause; while paused, no pass runs for
+  that database until Resume or until the server restarts.
 - A star catalog installation (`catalog_install.rs`) is one download
   server-wide. It holds the server stop's wait, ends when the server stops,
   and its row has Stop.
@@ -319,9 +347,10 @@ Then:
   person's scans run first, at `Interactive`, in the order requested. The
   analysis then scans its targets one at a time at `Background`. A person's
   request stops the analysis's current target scan at its next frame and
-  puts that target back at the front of the analysis. The runner gathers
-  the frames that need computing, so the start route only checks that the
-  target exists and returns at once.
+  puts that target back at the front of the analysis. A pause holds the
+  analysis but not a person's scans. The runner gathers the frames that
+  need computing, so the start route only checks that the target exists
+  and returns at once.
 - Calibration grading also waits on `CatalogJobs` for remote uploads to
   pause ([`Settling`](../../src/server/job_line/catalog.rs)) before its
   pass, and counts as busy meanwhile, so flat measuring waits for it.

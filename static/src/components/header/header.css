@@ -155,7 +155,8 @@
   color: var(--color-text-secondary);
 }
 
-.activity-count[data-job-state='waiting'] {
+.activity-count[data-job-state='waiting'],
+.activity-count[data-job-state='paused'] {
   color: var(--state-waiting-fg);
 }
 
@@ -382,20 +383,24 @@ div.activity-error {
 
 /* Automatic work that stepped aside for a person's: it resumes on its own,
    so it is marked with a quiet edge, not dimmed or coloured as a problem. */
-.activity-row[data-job-state='waiting'] {
+.activity-row[data-job-state='waiting'],
+.activity-row[data-job-state='paused'] {
   box-shadow: inset 3px 0 0 var(--state-waiting-border);
 }
 
-.activity-row[data-job-state='waiting'] .activity-row-state {
+.activity-row[data-job-state='waiting'] .activity-row-state,
+.activity-row[data-job-state='paused'] .activity-row-state {
   color: var(--state-waiting-fg);
 }
 
 /* What it waits for is the point of the row: it wraps rather than clips. */
-.activity-row[data-job-state='waiting'] .activity-row-detail {
+.activity-row[data-job-state='waiting'] .activity-row-detail,
+.activity-row[data-job-state='paused'] .activity-row-detail {
   white-space: normal;
 }
 
-.activity-row[data-job-state='waiting'] .activity-row-fill {
+.activity-row[data-job-state='waiting'] .activity-row-fill,
+.activity-row[data-job-state='paused'] .activity-row-fill {
   background: var(--state-waiting-fill);
 }
 

@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { ArrowUpToLine, Hourglass, ListOrdered, Play, TriangleAlert } from 'lucide-react';
+import { ArrowUpToLine, Hourglass, ListOrdered, Pause, Play, TriangleAlert } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import { STACK_ACTIVITY_QUERY_KEY } from '../../hooks/useStackActivity';
@@ -16,6 +16,7 @@ import {
   tierOf,
   type ActivityControl,
   type ActivityItem,
+  type ActivityPause,
   type ActivityQueue,
   type ActivityStatus,
   type ActivitySummary,
@@ -65,10 +66,15 @@ function ProgressRing({ percent, idle }: { percent: number | null; idle: boolean
 type ActivityAction =
   | { type: 'transfer'; job: TransferJob; action: TransferAction }
   | { type: 'move'; control: ActivityControl; position: number }
-  | { type: 'stop'; control: ActivityControl };
+  | { type: 'stop'; control: ActivityControl }
+  | { type: 'pause'; pause: ActivityPause };
 
 function runAction(action: ActivityAction): Promise<unknown> {
   if (action.type === 'transfer') return apiClient.collaborationWork(action.job.connection_id, { operation: 'transfer_control', id: action.job.id, revision: action.job.revision, action: action.action });
+  if (action.type === 'pause') {
+    const { dbId, job, paused } = action.pause;
+    return paused ? apiClient.resumeJob(dbId, job) : apiClient.pauseJob(dbId, job);
+  }
   const { control } = action;
   if (action.type === 'move') {
     if (control.kind === 'stack') return apiClient.moveStackJob(control.jobId, action.position);
@@ -76,8 +82,6 @@ function runAction(action: ActivityAction): Promise<unknown> {
     return Promise.resolve();
   }
   if (control.kind === 'stack') return apiClient.cancelStackJob(control.jobId);
-  if (control.kind === 'flats') return apiClient.cancelFlatMeasure(control.dbId);
-  if (control.kind === 'sites') return apiClient.cancelFrameSites(control.dbId);
   if (control.kind === 'duplicates') return apiClient.stopCalibrationDuplicates(control.dbId);
   if (control.kind === 'rejects') return apiClient.stopRejectRemoval(control.dbId);
   if (control.kind === 'backup') return apiClient.stopBackup();
@@ -86,7 +90,6 @@ function runAction(action: ActivityAction): Promise<unknown> {
   if (control.kind === 'preview') return apiClient.stopPreview(control.preview, control.key);
   if (control.kind === 'import') return apiClient.stopImport(control.dbId);
   if (control.kind === 'export') return apiClient.stopServerExport(control.dbId);
-  if (control.kind === 'pregeneration') return apiClient.stopPregeneration(control.dbId);
   if (control.kind === 'catalog-install') return apiClient.stopCatalogInstall();
   return apiClient.removeQueuedWbppRun(control.dbId, control.queueId);
 }
@@ -141,6 +144,7 @@ function ScanErrorRow({
 function stateText(item: ActivityItem): ReactNode {
   if (item.stateLabel) return item.stateLabel;
   if (item.status === 'attention') return 'needs attention';
+  if (item.status === 'paused') return 'paused';
   if (item.status === 'queued') return queueText(item);
   if (item.status === 'waiting') {
     return (
@@ -158,6 +162,7 @@ const COUNT_ICONS = {
   running: Play,
   queued: ListOrdered,
   waiting: Hourglass,
+  paused: Pause,
 } as const;
 
 /** A count in words: `3 running`, `1 needs attention`. */
@@ -189,6 +194,7 @@ function JobCounts({ summary }: { summary: ActivitySummary }) {
       <JobCount count={summary.running} state="running" />
       <JobCount count={summary.queued} state="queued" />
       <JobCount count={summary.waiting} state="waiting" />
+      <JobCount count={summary.paused} state="paused" />
       <JobCount count={summary.attention} state="attention" />
     </span>
   );
@@ -202,8 +208,9 @@ function ActivityRow({ item, controls }: { item: ActivityItem; controls: RowCont
   const inLine = queued && item.position != null && !!item.queue;
   const last = item.queue ? controls.lengths[item.queue] - 1 : 0;
   const name = `${item.title}: ${item.scope}`;
-  // Waiting work keeps a still bar at how far it had got.
-  const bar = item.status === 'running' || (item.status === 'waiting' && item.percent != null);
+  // Waiting and paused work keeps a still bar at how far it had got.
+  const bar = item.status === 'running'
+    || ((item.status === 'waiting' || item.status === 'paused') && item.percent != null);
   return (
     <li
       className="activity-row"
@@ -247,6 +254,22 @@ function ActivityRow({ item, controls }: { item: ActivityItem; controls: RowCont
           <div className="activity-row-actions">
             <TransferControls job={item.transfer} busy={controls.busy}
               run={action => controls.run({ type: 'transfer', job: item.transfer!, action })} />
+          </div>
+        )}
+        {item.pause && controls.allowed(item) && (
+          <div className="activity-row-actions">
+            <button
+              type="button"
+              aria-label={`${item.pause.paused ? 'Resume' : 'Pause'} ${name}`}
+              title={item.pause.paused
+                ? 'Start the paused work again'
+                : 'Pause until you resume it or the server restarts'}
+              disabled={controls.busy}
+              // Pausing keeps the work, so it does not ask first.
+              onClick={() => controls.run({ type: 'pause', pause: item.pause! })}
+            >
+              {item.pause.paused ? 'Resume' : 'Pause'}
+            </button>
           </div>
         )}
         {allowed && control && (queued || (item.status === 'running' && item.stoppable)) && (
@@ -351,6 +374,13 @@ export default function ActivityChip() {
     // jobs read it at once; the header reads the job list again.
     onSuccess: (result, variables) => {
       if (variables.type === 'transfer') return;
+      if (variables.type === 'pause') {
+        // The Calibration page shows whether its jobs are paused.
+        const { dbId, job } = variables.pause;
+        if (job === 'flats') queryClient.invalidateQueries({ queryKey: flatMeasureKey(dbId) });
+        if (job === 'sites') queryClient.invalidateQueries({ queryKey: frameSitesKey(dbId) });
+        return;
+      }
       if (!result || typeof result !== 'object') return;
       if (variables.control.kind === 'stack') {
         queryClient.setQueryData(STACK_ACTIVITY_QUERY_KEY, result);
@@ -358,11 +388,6 @@ export default function ActivityChip() {
         queryClient.setQueryData(duplicatesKey(variables.control.dbId), result);
       } else if (variables.control.kind === 'rejects') {
         queryClient.setQueryData(rejectRemovalKey(variables.control.dbId), result);
-      } else if (variables.control.kind === 'flats') {
-        // The Calibration page shows the paused rigs and Resume at once.
-        queryClient.setQueryData(flatMeasureKey(variables.control.dbId), result);
-      } else if (variables.control.kind === 'sites') {
-        queryClient.setQueryData(frameSitesKey(variables.control.dbId), result);
       }
     },
     onSettled: () => {
@@ -451,13 +476,14 @@ export default function ActivityChip() {
   };
 
   const percent = summary.percent == null ? null : Math.round(summary.percent);
-  const { running, waiting, queued, attention } = summary;
+  const { running, waiting, queued, paused, attention } = summary;
   const groups = groupActivity(items);
   const label = [
     percent != null ? `${percent}% done` : running > 0 ? 'Working' : '',
     running > 0 ? `${running} running` : '',
     queued > 0 ? `${queued} queued` : '',
     waiting > 0 ? `${waiting} waiting` : '',
+    paused > 0 ? `${paused} paused` : '',
     attention > 0 ? countName(attention, 'attention') : '',
     scanError ? 'a quality scan had errors' : '',
   ].filter(Boolean).join(', ');

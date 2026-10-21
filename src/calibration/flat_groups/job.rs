@@ -120,28 +120,6 @@ impl Rigs {
             }
         };
     }
-
-    /// Those of these rigs that `others` names too.
-    pub fn within(&self, others: &Rigs) -> Rigs {
-        match (self, others) {
-            (Rigs::None, _) | (_, Rigs::None) => Rigs::None,
-            (Rigs::All, others) => others.clone(),
-            (mine, Rigs::All) => mine.clone(),
-            (Rigs::Some(mine), Rigs::Some(theirs)) => Rigs::of(mine.intersection(theirs).cloned()),
-        }
-    }
-
-    /// These rigs less those `others` names. Every rig less some stays every
-    /// rig: the set cannot say which are left, and a pass over a rig with
-    /// nothing to do reads nothing.
-    pub fn without(&self, others: &Rigs) -> Rigs {
-        match (self, others) {
-            (_, Rigs::All) | (Rigs::None, _) => Rigs::None,
-            (Rigs::All, _) => Rigs::All,
-            (mine, Rigs::None) => mine.clone(),
-            (Rigs::Some(mine), Rigs::Some(theirs)) => Rigs::of(mine.difference(theirs).cloned()),
-        }
-    }
 }
 
 /// Which work a pass does, and for which rigs. A rig's flats are measured,
@@ -184,14 +162,6 @@ impl Scope {
     pub fn merge(&mut self, other: Scope) {
         self.flats.merge(other.flats);
         self.lights.merge(other.lights);
-    }
-
-    /// This scope less what `other` already covers.
-    pub fn without(&self, other: &Scope) -> Scope {
-        Scope {
-            flats: self.flats.without(&other.flats),
-            lights: self.lights.without(&other.lights),
-        }
     }
 
     /// Whether this rig's flat sessions are measured and compared.

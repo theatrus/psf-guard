@@ -133,3 +133,32 @@ describe('QualityBackfillControls without database management', () => {
     expect(screen.getByText(/needs database management/i)).toBeInTheDocument();
   });
 });
+
+describe('QualityBackfillControls while the analysis is paused', () => {
+  it('says the analysis is paused and resumes it on request', async () => {
+    let resumed = 0;
+    const paused = (running: boolean) => ({
+      ...idleStatus,
+      data: {
+        ...idleStatus.data,
+        started: running,
+        paused: running && resumed === 0,
+        progress: { ...idleStatus.data.progress, running, total_targets: 40, processed_targets: 3 },
+      },
+    });
+    server.use(
+      http.get('/api/db/:dbId/analysis/quality-backfill', () => HttpResponse.json(paused(true))),
+      http.post('/api/db/:dbId/jobs/quality/resume', () => {
+        resumed += 1;
+        return HttpResponse.json({ success: true, data: true, error: null });
+      }),
+    );
+    const user = userEvent.setup();
+    render(<QualityBackfillControls dbId="test" />, { wrapper: wrapper() });
+    const note = await screen.findByTestId('quality-backfill-paused');
+    expect(note).toHaveTextContent('The quality analysis is paused at 3/40 targets until you resume it or the server restarts.');
+    await user.click(screen.getByRole('button', { name: 'Resume' }));
+    await waitFor(() => expect(resumed).toBe(1));
+    expect(await screen.findByText(/Analyzing quality in the background/)).toBeInTheDocument();
+  });
+});

@@ -1711,6 +1711,9 @@ pub async fn start_quality_backfill_route(
         started,
         progress: crate::server::quality_backfill::snapshot(&ctx.quality_backfill),
         analyze_new_frames: ctx.analyze_new_frames.is_on(),
+        paused: state
+            .catalog_jobs
+            .paused(crate::server::catalog_jobs::PausableJob::Quality, &ctx),
     })))
 }
 
@@ -1748,7 +1751,7 @@ pub async fn update_analyze_new_frames(
         // Frames already waiting are analyzed as if they had just arrived.
         crate::server::quality_arrival::note_arrival(&state, &ctx.id);
     }
-    get_quality_backfill_progress(ctx).await
+    get_quality_backfill_progress(State(state), ctx).await
 }
 
 #[derive(Debug, Serialize)]
@@ -1829,6 +1832,7 @@ pub async fn update_calibrated_copies(
 }
 
 pub async fn get_quality_backfill_progress(
+    State(state): State<Arc<AppState>>,
     ctx: DbContext,
 ) -> Result<Json<ApiResponse<QualityBackfillStatusResponse>>, AppError> {
     let progress = crate::server::quality_backfill::snapshot(&ctx.quality_backfill);
@@ -1836,6 +1840,9 @@ pub async fn get_quality_backfill_progress(
         started: progress.running,
         progress,
         analyze_new_frames: ctx.analyze_new_frames.is_on(),
+        paused: state
+            .catalog_jobs
+            .paused(crate::server::catalog_jobs::PausableJob::Quality, &ctx),
     })))
 }
 

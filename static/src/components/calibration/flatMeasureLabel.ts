@@ -24,10 +24,9 @@ export function flatMeasurePollMs(status: FlatMeasureStatus | undefined): number
   return FLAT_MEASURE_POLL_MS.idle;
 }
 
-/** Whether Stop paused this rig's work, or any rig's when none is named. */
-export function stoppedRig(status: FlatMeasureStatus | undefined, rig?: string): boolean {
-  const stopped = status?.stopped ?? [];
-  return stopped.length > 0 && (!rig || stopped.includes(rig) || stopped.includes('*'));
+/** Whether a person paused flat measuring. */
+export function measuringPaused(status: FlatMeasureStatus | undefined): boolean {
+  return status?.state === 'paused';
 }
 
 /** Whether the job is measuring this rig now, or any rig when none is named. */

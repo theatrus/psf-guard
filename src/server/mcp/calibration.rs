@@ -399,54 +399,6 @@ impl PsfGuardMcp {
     // ---------- Calibration jobs ----------
 
     #[tool(
-        description = "Stop flat measuring for a database: what runs and waits is paused until those rigs' flats change, resume_flat_measuring, or the next start. Needs write access."
-    )]
-    async fn cancel_flat_measuring(
-        &self,
-        Parameters(args): Parameters<CalibrationJobArgs>,
-        ctx: RequestContext<RoleServer>,
-    ) -> ToolResult {
-        let path = attempt!(self.db_path(&args.database, "/calibrations/flat-measure/cancel"));
-        self.answer(&ctx, Method::POST, &path, None).await
-    }
-
-    #[tool(
-        description = "Resume the flat measuring that cancel_flat_measuring paused. Flat measuring starts on its own after an import, sync or change; this takes up only what was stopped. Needs write access. Follow it with get_jobs."
-    )]
-    async fn resume_flat_measuring(
-        &self,
-        Parameters(args): Parameters<CalibrationJobArgs>,
-        ctx: RequestContext<RoleServer>,
-    ) -> ToolResult {
-        let path = attempt!(self.db_path(&args.database, "/calibrations/flat-measure/resume"));
-        self.answer(&ctx, Method::POST, &path, None).await
-    }
-
-    #[tool(
-        description = "Stop reading frame sites for a database (the job that finds where older calibration frames were shot, so their nights split at local noon). Paused until the next change, resume_frame_sites, or the next start. Needs write access."
-    )]
-    async fn cancel_frame_sites(
-        &self,
-        Parameters(args): Parameters<CalibrationJobArgs>,
-        ctx: RequestContext<RoleServer>,
-    ) -> ToolResult {
-        let path = attempt!(self.db_path(&args.database, "/calibrations/frame-sites/cancel"));
-        self.answer(&ctx, Method::POST, &path, None).await
-    }
-
-    #[tool(
-        description = "Resume reading frame sites after cancel_frame_sites. Needs write access. Follow it with get_jobs."
-    )]
-    async fn resume_frame_sites(
-        &self,
-        Parameters(args): Parameters<CalibrationJobArgs>,
-        ctx: RequestContext<RoleServer>,
-    ) -> ToolResult {
-        let path = attempt!(self.db_path(&args.database, "/calibrations/frame-sites/resume"));
-        self.answer(&ctx, Method::POST, &path, None).await
-    }
-
-    #[tool(
         description = "Where the calibration duplicate check or repair stands, and the latest plan: exposures the library records more than once, what a repair would merge, the masters it would remove, and the plan's `token`. `stale` means the library changed since the check; check again. Lists the plan's exposures a page at a time."
     )]
     async fn get_calibration_duplicates(

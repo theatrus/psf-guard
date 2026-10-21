@@ -40,8 +40,8 @@ describe('header items from the jobs route', () => {
       control: { kind: 'stack', jobId: 'R' },
     });
     expect(item.href).toBeUndefined();
-    expect(jobItem(row({ key: 'f', control: { kind: 'flats', db_id: 'astro' } })).control)
-      .toEqual({ kind: 'flats', dbId: 'astro' });
+    expect(jobItem(row({ key: 'f', pause: { db_id: 'astro', job: 'flats', paused: true } })).pause)
+      .toEqual({ dbId: 'astro', job: 'flats', paused: true });
     expect(jobItem(row({ key: 'b', control: { kind: 'backup' } })).control).toEqual({ kind: 'backup' });
     expect(jobItem(row({ key: 't', control: { kind: 'ts-sync', job_id: 'import:a' } })).control)
       .toEqual({ kind: 'ts-sync', jobId: 'import:a' });
@@ -106,8 +106,8 @@ describe('the job list by tier', () => {
     // The flat list is the groups in turn, and the chip counts them all.
     expect(items).toEqual([...groups[0].items, ...groups[1].items]);
     // Waiting work's progress does not count toward the chip's.
-    expect(summarize(items)).toEqual({ count: 6, attention: 1, running: 2, waiting: 1, queued: 2, percent: 37.5 });
-    expect(summarize([])).toEqual({ count: 0, attention: 0, running: 0, waiting: 0, queued: 0, percent: null });
+    expect(summarize(items)).toEqual({ count: 6, attention: 1, running: 2, waiting: 1, queued: 2, paused: 0, percent: 37.5 });
+    expect(summarize([])).toEqual({ count: 0, attention: 0, running: 0, waiting: 0, queued: 0, paused: 0, percent: null });
   });
 
   it("shows a queued row's place in the whole line, under either heading", () => {

@@ -229,3 +229,54 @@ async fn the_scan_route_queues_and_answers_at_once() {
     .unwrap();
     assert!(!response.data.unwrap().started);
 }
+
+/// A pause holds the analysis, but a person's scan still runs; Resume
+/// scans the analysis's targets.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pause_holds_the_analysis_but_not_a_persons_scan() {
+    let directory = tempfile::tempdir().unwrap();
+    let (state, ctx) = catalog(directory.path());
+    let jobs = &state.catalog_jobs;
+    assert!(jobs.pause(crate::server::catalog_jobs::PausableJob::Quality, &ctx));
+    assert!(queue_analysis(&state, &ctx, vec![1, 2], false, false));
+    let job = jobs.quality_scans.job(&scanner(&ctx));
+    assert!(!job.queue().has_runner(), "the paused analysis waits");
+
+    assert!(queue_scan(&state, &ctx, request(1)));
+    until("the person's scan runs", || {
+        !job.queue().has_runner()
+            && !spatial_scan::progress_snapshot(&ctx.spatial_metrics)
+                .0
+                .running
+    })
+    .await;
+    assert_eq!(
+        quality_backfill::snapshot(&ctx.quality_backfill).processed_targets,
+        0,
+        "the analysis is still held"
+    );
+
+    assert!(jobs.resume(
+        &state,
+        crate::server::catalog_jobs::PausableJob::Quality,
+        &ctx
+    ));
+    until("the analysis finishes after Resume", || {
+        !quality_backfill::snapshot(&ctx.quality_backfill).running
+    })
+    .await;
+    assert_eq!(
+        quality_backfill::snapshot(&ctx.quality_backfill).processed_targets,
+        2
+    );
+}
+
+/// A pause stops an analysis target, which goes back to the front, but not
+/// a person's scan.
+#[tokio::test]
+async fn a_pause_stops_an_analysis_target_but_not_a_persons_scan() {
+    let mut queue = Queue::default();
+    assert!(!QualityScans::pause_stops(&queue), "a person's scan runs");
+    queue.analysis_running = true;
+    assert!(QualityScans::pause_stops(&queue));
+}

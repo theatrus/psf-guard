@@ -461,7 +461,11 @@ pub(super) const READABLE_ROUTES: &[(&str, &str)] = &[
     ),
     (
         "/db/{db}/calibrations/flat-measure",
-        "Flat measuring progress: rig, stage, stopped rigs, retry",
+        "Flat measuring progress: rig, stage, retry, and whether it is paused",
+    ),
+    (
+        "/db/{db}/jobs/paused",
+        "The jobs a person paused for the database: quality, pregeneration, flats, sites",
     ),
     (
         "/db/{db}/calibrations/frame-sites",

@@ -399,7 +399,7 @@ fn a_pass_over_one_rig_leaves_another_rigs_rows() {
 }
 
 // ---------------------------------------------------------------------------
-// The runner: retries, Stop, grading, triggers.
+// The runner: retries, pauses, grading, triggers.
 
 #[test]
 fn a_rig_left_unfinished_is_tried_again_later_and_less_often() {
@@ -496,58 +496,32 @@ fn an_unreadable_session_is_queued_again() {
     assert_eq!(now.state, "queued", "{now:?}");
     assert_eq!(now.rigs, std::slice::from_ref(&library.a));
     assert!(now.retry_at.is_some());
-    cancel(&state, &path);
+    state.catalog_jobs.flat_measure.job(&path).pause();
 }
 
-/// Stop pauses what runs and what waits; a change to a rig's flats resumes
-/// that rig, a start every rig.
+/// A pause during a pass puts its scope back in line, and the pass after
+/// Resume measures it all.
 #[test]
-fn a_stopped_pass_resumes_when_its_flats_change() {
+fn a_paused_pass_goes_back_in_line_for_resume() {
     let _settings = settings_lock();
     let library = library();
     let state = test_state();
     let job = Job::default();
     let scope = Scope::everything();
-    // Stop arrives as the pass starts.
+    // The pause arrives as the pass starts.
     job.queue().running = Some(scope.clone());
-    job.queue().stop();
-    let stop = Stop::new();
-    stop.request();
-    let result = Ok(library.pass_until(&state, &job, scope.clone(), &stop));
+    let paused = Stop::new();
+    paused.request();
+    let result = Ok(library.pass_until(&state, &job, scope.clone(), &paused));
     let outcome = result.as_ref().unwrap();
     assert!(outcome.stopped);
-    assert_eq!(outcome.frames_read, 0, "nothing read after Stop");
+    assert_eq!(outcome.frames_read, 0, "nothing read after the pause");
     settle_outcome(&job, &scope, &result, Instant::now(), true);
-    {
-        let mut queue = job.queue();
-        assert_eq!(queue.stopped, Scope::everything(), "paused, not forgotten");
-        assert_eq!(queue.take_ready(Instant::now()), Ready::Idle);
-    }
-    // A page's look does not resume it; new lights do not either.
-    let now = Instant::now();
-    job.queue()
-        .add(Scope::flats(Rigs::of(["x"])), now, Trigger::Look);
-    job.queue()
-        .add(Scope::lights(Rigs::All), now, Trigger::Change);
-    assert_eq!(job.queue().stopped, Scope::everything());
-    // A change to one rig's flats takes that rig up, and the rest stays
-    // stopped.
-    job.queue().pending = Scope::default();
-    job.queue()
-        .add(Scope::flats(Rigs::of(["x"])), now, Trigger::Change);
-    assert_eq!(
-        job.queue().pending,
-        Scope {
-            flats: Rigs::of(["x"]),
-            lights: Rigs::of(["x"]),
-        }
+    assert!(
+        job.queue().attempts.is_empty(),
+        "a pause is not a failed try"
     );
-    assert_eq!(job.queue().stopped, Scope::everything());
-    // A start takes up every rig.
-    job.queue().pending = Scope::default();
-    job.queue().add(Scope::everything(), now, Trigger::Change);
-    assert!(job.queue().stopped.is_empty());
-    let resumed = match job.queue().take_ready(now + FLAT_MEASURE_SETTLE) {
+    let resumed = match job.queue().take_ready(Instant::now()) {
         Ready::Run(scope) => scope,
         other => panic!("{other:?}"),
     };
@@ -606,7 +580,7 @@ async fn forgetting_through_the_route_queues_its_rig() {
     .unwrap();
     let queued = status(&state, &path);
     assert_eq!(queued.rigs, std::slice::from_ref(&library.b), "{queued:?}");
-    cancel(&state, &path);
+    state.catalog_jobs.flat_measure.job(&path).pause();
 }
 
 // ---------------------------------------------------------------------------
@@ -721,18 +695,19 @@ fn rigs_that_find_their_sites_are_graded_and_planned_again() {
 }
 
 /// A page's look queues a check of its rig at most every
-/// [`WATCH_RECHECK`], never one Stop paused, and none for a rig the catalog
-/// does not record.
+/// [`WATCH_RECHECK`], none while the job is paused, and none for a rig the
+/// catalog does not record.
 #[test]
 fn a_page_looking_at_a_rig_asks_for_a_check_now_and_then() {
     let library = library();
     let state = Arc::new(test_state());
     let path = library.path.as_str();
-    // Rig B is paused: a look queues nothing, though it lifts the rig.
-    job(&state, path).queue().stopped = Scope::flats(Rigs::of([library.b.clone()]));
+    // The job is paused: a look queues nothing, though it lifts the rig.
+    assert!(job(&state, path).pause());
     watch(&state, path, &library.b);
     assert!(job(&state, path).queue().pending.is_empty());
     assert!(watched(&state, path, &library.b));
+    assert!(state.catalog_jobs.flat_measure.resume(&state, path));
     // Rig A is idle: one check, then none until WATCH_RECHECK.
     watch(&state, path, &library.a);
     let first = job(&state, path).queue().pending.clone();
@@ -752,7 +727,7 @@ fn a_page_looking_at_a_rig_asks_for_a_check_now_and_then() {
         "a look that queued nothing is not counted"
     );
     drop(queue);
-    cancel(&state, path);
+    state.catalog_jobs.flat_measure.job(path).pause();
 }
 
 #[test]
@@ -764,24 +739,23 @@ fn every_rig_counts_as_changed_when_a_state_cannot_be_read() {
     assert_eq!(changed_rigs(Some(&state), Some(&gone)), Rigs::of(["a"]));
 }
 
+/// Requests that come while the job is paused wait for Resume, and the
+/// status lists their rigs.
 #[test]
-fn stop_pauses_waiting_work_and_resume_takes_it_up() {
+fn a_pause_holds_requests_until_resume() {
     let state = Arc::new(test_state());
-    let path = "/stopped/catalog.sqlite";
+    let path = "/paused/catalog.sqlite";
     let job = job(&state, path);
-    job.queue().add(
-        Scope::flats(Rigs::of(["a"])),
-        Instant::now(),
-        Trigger::Change,
-    );
-    let stopped = cancel(&state, path);
-    assert_eq!(stopped.state, "stopped");
-    assert_eq!(stopped.stopped, ["a"]);
-    assert!(stopped.rigs.is_empty());
-    let resumed = resume(&state, path);
-    assert!(resumed.stopped.is_empty());
-    assert_eq!(resumed.rigs, ["a"]);
-    cancel(&state, path);
+    assert!(job.pause());
+    queue(&state, path, Scope::flats(Rigs::of(["a"])));
+    assert!(!job.queue().has_runner(), "the request waits for Resume");
+    let paused = status(&state, path);
+    assert_eq!(paused.state, "paused");
+    assert_eq!(paused.rigs, ["a"]);
+    assert!(state.catalog_jobs.flat_measure.resume(&state, path));
+    assert!(job.queue().has_runner());
+    assert_eq!(status(&state, path).state, "queued");
+    job.pause();
 }
 
 // ---------------------------------------------------------------------------
@@ -823,47 +797,6 @@ fn excluding_every_flat_of_a_rig_drops_its_responses() {
     );
 }
 
-/// Stop during a pass, then a change before the pass notices: the change
-/// takes the work back into line, and the pass ending does not file it as
-/// stopped again.
-#[test]
-fn a_change_after_stop_leaves_nothing_stopped() {
-    let job = Job::default();
-    let scope = Scope::flats(Rigs::of(["a"]));
-    job.queue().running = Some(scope.clone());
-    job.queue().stop();
-    job.queue()
-        .add(scope.clone(), Instant::now(), Trigger::Change);
-    let result = Ok(PassOutcome {
-        stopped: true,
-        ..Default::default()
-    });
-    settle_outcome(&job, &scope, &result, Instant::now(), true);
-    let queue = job.queue();
-    assert!(!queue.pending.is_empty(), "the change queued it");
-    assert!(
-        queue.stopped.is_empty(),
-        "stopped as well: {:?}",
-        queue.stopped
-    );
-}
-
-/// A light arriving (a remote upload, every few minutes on an imaging night)
-/// does not resume flat measuring the person stopped.
-#[test]
-fn a_new_light_does_not_resume_stopped_flats() {
-    let mut queue = Queue {
-        stopped: Scope::flats(Rigs::of(["a"])),
-        ..Default::default()
-    };
-    queue.add(Scope::lights(Rigs::All), Instant::now(), Trigger::Change);
-    assert_eq!(
-        queue.stopped,
-        Scope::flats(Rigs::of(["a"])),
-        "Stop lasted one upload"
-    );
-}
-
 /// Rig ids a page posts that the catalog does not record leave no trace,
 /// and old looks are pruned.
 #[test]
@@ -873,13 +806,13 @@ fn looks_are_pruned() {
     for index in 0..500 {
         watch(&state, path, &format!("rig-{index}"));
     }
-    cancel(&state, path);
+    state.catalog_jobs.flat_measure.job(path).pause();
     let kept = job(&state, path).queue().looks.len();
     assert!(kept < 500, "{kept} looks kept");
 }
 
 /// A pass that ends in an error (as a busy catalog) tries its rigs again;
-/// one Stop ended files them as stopped instead.
+/// one a pause ended puts them back in line for Resume instead.
 #[test]
 fn a_pass_that_fails_is_tried_again() {
     let now = Instant::now();
@@ -909,11 +842,11 @@ fn a_pass_that_fails_is_tried_again() {
         false,
     );
     assert!(job.queue().due.contains_key(EVERY_RIG));
-    // Stopped by Stop: paused, not retried.
+    // Ended by a pause: back in line, not retried.
     let job = Job::default();
     settle_outcome(&job, &scope, &Err(anyhow::anyhow!("busy")), now, true);
     assert!(job.queue().due.is_empty());
-    assert_eq!(job.queue().stopped, scope);
+    assert_eq!(job.queue().pending, scope);
 }
 
 /// The rig a page shows is measured first.
@@ -1046,7 +979,7 @@ async fn a_keep_out_choice_through_the_route_queues_its_rig() {
     .unwrap();
     let queued = status(&state, &path);
     assert_eq!(queued.rigs, std::slice::from_ref(&library.a), "{queued:?}");
-    cancel(&state, &path);
+    state.catalog_jobs.flat_measure.job(&path).pause();
 }
 
 /// A session's dust is measured with the pedestal taken out: a bias that

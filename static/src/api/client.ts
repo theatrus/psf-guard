@@ -112,6 +112,7 @@ import type { GuidFillReport, GuidReport,
   FlatSessionPlace,
   FlatMeasureStatus,
   FrameSitesStatus,
+  PausableJob,
   FlatRatioPreviewDescriptor,
   GenerationStatus,
   AstrometryAnalysis,
@@ -1962,12 +1963,21 @@ export const apiClient = {
     return data.data;
   },
 
-  resumeFlatMeasure: async (dbId: string): Promise<FlatMeasureStatus> => {
+  /** Pause one of the database's automatic jobs until Resume or until the
+   *  server restarts. Resolves to false when it was paused already. */
+  pauseJob: async (dbId: string, job: PausableJob): Promise<boolean> => {
     const apiInstance = await getApi();
-    const { data } = await apiInstance.post<ApiResponse<FlatMeasureStatus>>(
-      dbPath(dbId, '/calibrations/flat-measure/resume')
-    );
-    if (!data.data) throw new Error(data.error || 'Failed to resume flat measuring');
+    const { data } = await apiInstance.post<ApiResponse<boolean>>(dbPath(dbId, `/jobs/${job}/pause`));
+    if (data.data == null) throw new Error(data.error || 'Failed to pause the job');
+    return data.data;
+  },
+
+  /** Resume a paused job; the work it held starts. Resolves to false when
+   *  it was not paused. */
+  resumeJob: async (dbId: string, job: PausableJob): Promise<boolean> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<boolean>>(dbPath(dbId, `/jobs/${job}/resume`));
+    if (data.data == null) throw new Error(data.error || 'Failed to resume the job');
     return data.data;
   },
 
@@ -1978,27 +1988,11 @@ export const apiClient = {
     await apiInstance.post(dbPath(dbId, '/export/server/stop'));
   },
 
-  /** Stop the database's preview pre-generation. No further pass runs for
-   *  the database until the server restarts. */
-  stopPregeneration: async (dbId: string): Promise<void> => {
-    const apiInstance = await getApi();
-    await apiInstance.post(dbPath(dbId, '/preview-pregeneration/stop'));
-  },
-
   /** Stop the database's import or import preview. An import that is
    *  writing rolls back. */
   stopImport: async (dbId: string): Promise<void> => {
     const apiInstance = await getApi();
     await apiInstance.post(dbPath(dbId, '/import/stop'));
-  },
-
-  cancelFlatMeasure: async (dbId: string): Promise<FlatMeasureStatus> => {
-    const apiInstance = await getApi();
-    const { data } = await apiInstance.post<ApiResponse<FlatMeasureStatus>>(
-      dbPath(dbId, '/calibrations/flat-measure/cancel')
-    );
-    if (!data.data) throw new Error(data.error || 'Failed to stop flat measuring');
-    return data.data;
   },
 
   /** Where reading frame sites stands, for the job line. */
@@ -2008,24 +2002,6 @@ export const apiClient = {
       dbPath(dbId, '/calibrations/frame-sites')
     );
     if (!data.data) throw new Error(data.error || 'Failed to read frame site progress');
-    return data.data;
-  },
-
-  resumeFrameSites: async (dbId: string): Promise<FrameSitesStatus> => {
-    const apiInstance = await getApi();
-    const { data } = await apiInstance.post<ApiResponse<FrameSitesStatus>>(
-      dbPath(dbId, '/calibrations/frame-sites/resume')
-    );
-    if (!data.data) throw new Error(data.error || 'Failed to resume reading frame sites');
-    return data.data;
-  },
-
-  cancelFrameSites: async (dbId: string): Promise<FrameSitesStatus> => {
-    const apiInstance = await getApi();
-    const { data } = await apiInstance.post<ApiResponse<FrameSitesStatus>>(
-      dbPath(dbId, '/calibrations/frame-sites/cancel')
-    );
-    if (!data.data) throw new Error(data.error || 'Failed to stop reading frame sites');
     return data.data;
   },
 

@@ -2039,8 +2039,6 @@ export interface WbppActivity {
  *  in `src/server/jobs.rs`. */
 export type JobControl =
   | { kind: 'stack'; job_id: string }
-  | { kind: 'flats'; db_id: string }
-  | { kind: 'sites'; db_id: string }
   | { kind: 'duplicates'; db_id: string }
   | { kind: 'rejects'; db_id: string }
   | { kind: 'backup' }
@@ -2050,8 +2048,20 @@ export type JobControl =
   | { kind: 'preview'; preview: PreviewKind; key: string }
   | { kind: 'import'; db_id: string }
   | { kind: 'export'; db_id: string }
-  | { kind: 'pregeneration'; db_id: string }
   | { kind: 'catalog-install' };
+
+/** The automatic jobs a person can pause. Mirrors `PausableJob` in
+ *  `src/server/catalog_jobs.rs`. */
+export type PausableJob = 'quality' | 'pregeneration' | 'flats' | 'sites';
+
+/** The job a row's Pause or Resume button calls. Mirrors `RowPause` in
+ *  `src/server/jobs.rs`. */
+export interface JobPause {
+  db_id: string;
+  job: PausableJob;
+  /** A person paused the job: the row shows Resume instead of Pause. */
+  paused: boolean;
+}
 
 /** What a preview previews. Mirrors `PreviewKind` in
  *  `src/server/previews.rs`. */
@@ -2074,7 +2084,7 @@ export interface JobRow {
   title: string;
   scope: string;
   detail: string;
-  status: 'attention' | 'running' | 'queued' | 'waiting';
+  status: 'attention' | 'running' | 'queued' | 'waiting' | 'paused';
   /** Automatic or database-wide work, listed after a person's work. */
   background: boolean;
   automatic: boolean;
@@ -2086,6 +2096,8 @@ export interface JobRow {
   position?: number;
   control?: JobControl;
   stoppable: boolean;
+  /** Pause or Resume, for automatic work a person can pause. */
+  pause?: JobPause;
   state_label?: string;
   transfer?: import('./transferTypes').TransferJob;
   link?: JobLink;
@@ -4235,6 +4247,8 @@ export interface QualityBackfillStatus {
   progress: QualityBackfillProgress;
   /** Frames arriving by sync, upload or auto-import are analyzed too. */
   analyze_new_frames?: boolean;
+  /** A person paused the analysis: it resumes at Resume or the next start. */
+  paused?: boolean;
 }
 
 /** Calibrated and registered copies paired with their lights. */
@@ -4885,7 +4899,8 @@ export interface FrameSitesOutcome {
 /** The frame-sites job of one catalog: reads the site of each calibration
  *  frame imported before the catalog kept one. */
 export interface FrameSitesStatus {
-  state: 'idle' | 'queued' | 'running' | 'stopped';
+  /** `paused` while a person paused the job. */
+  state: 'idle' | 'queued' | 'running' | 'paused';
   /** The progress in words, such as `Reading frame sites · 812 of 1,867 frames`. */
   label: string;
   /** A pass is reading frames: what the job line shows. */
@@ -4907,8 +4922,8 @@ export interface FrameSitesStatus {
  *  evidence, one rig at a time. */
 export interface FlatMeasureStatus {
   /** `queued` while requests settle, grading runs or a retry waits;
-   *  `stopped` when Stop paused work. */
-  state: 'idle' | 'queued' | 'running' | 'stopped';
+   *  `paused` while a person paused the job. */
+  state: 'idle' | 'queued' | 'running' | 'paused';
   /** The step in words, such as `Measuring flats · 12 of 40 sessions`. */
   label: string;
   /** A pass found work and is doing it: what the job line shows. */
@@ -4927,8 +4942,6 @@ export interface FlatMeasureStatus {
   /** While a pass runs, the rigs asked for since it began, or due a
    *  retry, which the next pass takes; `*` for every rig. */
   next_pass?: string[];
-  /** Rigs Stop paused; `*` for every rig. */
-  stopped: string[];
   /** When the next retry of unfinished work is due, Unix seconds. */
   retry_at: number | null;
   /** `viewed` while a page shows the rig. */

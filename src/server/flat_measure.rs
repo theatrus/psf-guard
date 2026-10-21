@@ -15,9 +15,9 @@
 //!   folders do not show yet, an error such as a busy catalog) is tried
 //!   again after [`RETRY_FIRST`], doubling up to [`RETRY_MAX`], at most
 //!   [`RETRY_LIMIT`] times; a new change to the rig starts again.
-//! - **Stop** pauses: what was waiting or running is kept as stopped until
-//!   those rigs' flats change, Resume, or the next start. New lights alone
-//!   resume nothing.
+//! - **Pause** holds every rig's work until Resume or the next start. A
+//!   pass paused midway puts its rigs back in line, and changes that come
+//!   meanwhile wait with them (see [`crate::server::job_line::catalog`]).
 //! - **Prioritised.** A pass runs at [`Priority::Background`]. While a page
 //!   shows a rig's flats ([`watch`]) that rig goes first and runs at
 //!   [`Priority::Viewed`]: workers borrowed from the background share,
@@ -90,7 +90,7 @@ const EVERY_RIG: &str = "*";
 #[derive(Debug, Clone, Default, Serialize, PartialEq)]
 pub struct FlatMeasureStatus {
     /// `idle`; `queued` while requests settle, grading runs or a retry
-    /// waits; `running`; or `stopped` when Stop left work paused.
+    /// waits; `running`; or `paused` while a person paused the job.
     pub state: String,
     /// The pass's step in words, such as `Measuring flats · 12 of 40
     /// sessions`, as pages and the header show it.
@@ -113,8 +113,6 @@ pub struct FlatMeasureStatus {
     /// While a pass runs, the rigs asked for since it began, or whose retry
     /// is due by now, which the next pass takes; `*` for every rig.
     pub next_pass: Vec<String>,
-    /// Rigs Stop paused.
-    pub stopped: Vec<String>,
     /// When the next retry is due, Unix seconds.
     pub retry_at: Option<i64>,
     /// `background` or `viewed`, while running.
@@ -142,8 +140,6 @@ pub(crate) struct Queue {
     due: BTreeMap<String, Instant>,
     /// Tries so far, per rig.
     attempts: BTreeMap<String, u32>,
-    /// What Stop paused.
-    stopped: Scope,
     /// Rigs a page shows, and when it last said so.
     watches: HashMap<String, Instant>,
     /// When a page's look last queued a check of a rig.
@@ -168,11 +164,10 @@ enum Ready {
 /// Where a trigger comes from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Trigger {
-    /// A change to the catalog, a start or Resume: the tries of the rigs
-    /// whose flats it names start again, and their stopped work resumes.
+    /// A change to the catalog or a start: the tries of the rigs whose
+    /// flats it names start again.
     Change,
-    /// A page showing a rig asks for a check: it respects Stop and the
-    /// retry wait.
+    /// A page showing a rig asks for a check: it respects the retry wait.
     Look,
 }
 
@@ -193,9 +188,8 @@ fn backoff(attempt: u32) -> Duration {
 impl Queue {
     fn add(&mut self, scope: Scope, now: Instant, trigger: Trigger) {
         if trigger == Trigger::Change {
-            // A change to rigs' flats starts their tries again and resumes
-            // what Stop paused for them. New lights alone do neither: one
-            // remote upload must not undo a person's Stop.
+            // A change to rigs' flats starts their tries again. New lights
+            // alone do not.
             match &scope.flats {
                 Rigs::All => {
                     self.attempts.clear();
@@ -209,16 +203,6 @@ impl Queue {
                 }
                 Rigs::None => {}
             }
-            let named = &scope.flats;
-            let resumed = Scope {
-                flats: self.stopped.flats.within(named),
-                lights: self.stopped.lights.within(named),
-            };
-            self.stopped = self.stopped.without(&Scope {
-                flats: named.clone(),
-                lights: named.clone(),
-            });
-            self.pending.merge(resumed);
         }
         self.pending.merge(scope);
         self.last = Some(now);
@@ -273,20 +257,6 @@ impl Queue {
         }
         self.last = None;
         Ready::Run(std::mem::take(&mut self.pending))
-    }
-
-    /// Stop: what waits, what runs and what would be tried again is paused.
-    fn stop(&mut self) {
-        let mut stopped = std::mem::take(&mut self.pending);
-        if let Some(running) = &self.running {
-            stopped.merge(running.clone());
-        }
-        for key in std::mem::take(&mut self.due).into_keys() {
-            stopped.merge(scope_of(&key));
-        }
-        self.attempts.clear();
-        self.last = None;
-        self.stopped.merge(stopped);
     }
 }
 
@@ -376,14 +346,13 @@ pub fn status(state: &AppState, path: &str) -> FlatMeasureStatus {
         waiting.merge(running.clone());
     }
     status.rigs = rig_list(&waiting);
-    status.stopped = rig_list(&queue.stopped);
     status.retry_at = queue.due.values().min().map(|at| unix_at(*at));
     status.state = if queue.running.is_some() {
         "running"
+    } else if queue.paused() {
+        "paused"
     } else if !status.rigs.is_empty() {
         "queued"
-    } else if !status.stopped.is_empty() {
-        "stopped"
     } else {
         "idle"
     }
@@ -445,9 +414,8 @@ pub fn running(state: &AppState, path: &str) -> bool {
 
 /// Queue flat measuring for the catalog at `path`: `scope` names the rigs
 /// whose flats or lights changed. Requests merge; the pass starts once they
-/// pause for [`FLAT_MEASURE_SETTLE`] and grading is done. A change to rigs'
-/// flats also resumes what Stop paused for them; every rig's (a start) all
-/// of it.
+/// pause for [`FLAT_MEASURE_SETTLE`] and grading is done. While the job is
+/// paused, the requests wait for Resume.
 pub fn queue(state: &Arc<AppState>, path: &str, scope: Scope) {
     enqueue(state, path, scope, Trigger::Change);
 }
@@ -471,21 +439,6 @@ pub fn queue_all(state: &Arc<AppState>, scope: Scope) {
     for ctx in state.all_databases() {
         queue(state, &ctx.database_path, scope.clone());
     }
-}
-
-/// Stop: the running pass ends at its next step, and what it and the
-/// waiting requests had left is paused until those flats change,
-/// [`resume`], or the next start.
-pub fn cancel(state: &AppState, path: &str) -> FlatMeasureStatus {
-    job(state, path).stop(|queue| queue.stop());
-    status(state, path)
-}
-
-/// Take up what Stop paused.
-pub fn resume(state: &Arc<AppState>, path: &str) -> FlatMeasureStatus {
-    let stopped = std::mem::take(&mut job(state, path).queue().stopped);
-    queue(state, path, stopped);
-    status(state, path)
 }
 
 /// The runner's choice, given the queue and whether grading is busy: a pass
@@ -512,6 +465,7 @@ fn run_logged(state: &Arc<AppState>, path: &str, job: &Job, scope: Scope, stop: 
         };
     });
     let result = run(state, path, job, &scope, stop);
+    // Only a pause stops a pass.
     let changed = settle_outcome(job, &scope, &result, Instant::now(), stop.requested());
     match &result {
         Ok(outcome) => {
@@ -526,8 +480,11 @@ fn run_logged(state: &Arc<AppState>, path: &str, job: &Job, scope: Scope, stop: 
                 );
             }
         }
+        Err(error) if stop.requested() => tracing::info!(
+            "Measuring flats in {path} ended at a pause: {error:#}. It runs again at Resume."
+        ),
         Err(error) => tracing::info!(
-            "Paused measuring flats in {path}: {error:#}. It is tried again shortly."
+            "Could not finish measuring flats in {path}: {error:#}. It is tried again shortly."
         ),
     }
     job.update(|status| {
@@ -553,15 +510,16 @@ fn run_logged(state: &Arc<AppState>, path: &str, job: &Job, scope: Scope, stop: 
     }
 }
 
-/// Put what a pass left behind back in line: Stop's share as stopped, rigs
-/// it could not finish (or, on an error, its whole scope) as retries.
-/// Returns whether the pass changed anything health reads.
+/// Put what a pass left behind back in line: a paused pass's whole scope
+/// for Resume, and rigs it could not finish (or, on an error, its whole
+/// scope) as retries. Returns whether the pass changed anything health
+/// reads.
 fn settle_outcome(
     job: &Job,
     scope: &Scope,
     result: &anyhow::Result<PassOutcome>,
     now: Instant,
-    cancelled: bool,
+    paused: bool,
 ) -> bool {
     let mut queue = job.queue();
     queue.running = None;
@@ -574,10 +532,10 @@ fn settle_outcome(
         }
     };
     match result {
-        Ok(outcome) if outcome.stopped && cancelled => {
-            // A change since Stop may have put some of it back in line.
-            let rest = scope.without(&queue.pending);
-            queue.stopped.merge(rest);
+        Ok(outcome) if outcome.stopped && paused => {
+            // What it measured is stored: at Resume the pass reads only what
+            // is left.
+            queue.pending.merge(scope.clone());
             outcome.measured + outcome.compared + outcome.evidence > 0
         }
         Ok(outcome) => {
@@ -594,9 +552,8 @@ fn settle_outcome(
             }
             outcome.measured + outcome.compared + outcome.evidence > 0
         }
-        Err(_) if cancelled => {
-            let rest = scope.without(&queue.pending);
-            queue.stopped.merge(rest);
+        Err(_) if paused => {
+            queue.pending.merge(scope.clone());
             true
         }
         Err(_) => {
@@ -758,8 +715,8 @@ fn catalog_has_rig(job: &Job, path: &str, rig: &str) -> bool {
 
 /// A page shows the flats of `rig` in the catalog at `path`. For
 /// [`WATCH_TTL`] that rig goes first and runs in the viewed tier; and, at
-/// most every [`WATCH_RECHECK`], a check of it is queued, unless Stop
-/// paused it, a retry waits or a pass runs. A rig the catalog does not
+/// most every [`WATCH_RECHECK`], a check of it is queued, unless the job is
+/// paused, a retry waits or a pass runs. A rig the catalog does not
 /// record is ignored. Reads the catalog's rigs: call it off the request
 /// path.
 pub fn watch(state: &Arc<AppState>, path: &str, rig: &str) {
@@ -777,7 +734,7 @@ pub fn watch(state: &Arc<AppState>, path: &str, rig: &str) {
         if queue.looks.contains_key(rig) {
             return;
         }
-        let paused = queue.stopped.reads_lights(rig);
+        let paused = queue.paused();
         let waiting = queue.due.contains_key(rig) || queue.due.contains_key(EVERY_RIG);
         if paused || waiting || queue.running.is_some() {
             return;
@@ -1100,24 +1057,6 @@ pub async fn post_watch(
     .await
     .map_err(|error| AppError::InternalError(format!("noting the rig in view: {error}")))?;
     Ok(Json(ApiResponse::success(status(&state, &path))))
-}
-
-/// `POST /api/db/{db}/calibrations/flat-measure/cancel` — Stop: what runs
-/// and waits is paused until those flats change, Resume, or the next start.
-pub async fn post_cancel(
-    State(state): State<Arc<AppState>>,
-    ctx: DbContext,
-) -> Json<ApiResponse<FlatMeasureStatus>> {
-    Json(ApiResponse::success(cancel(&state, &ctx.database_path)))
-}
-
-/// `POST /api/db/{db}/calibrations/flat-measure/resume` — take up what Stop
-/// paused.
-pub async fn post_resume(
-    State(state): State<Arc<AppState>>,
-    ctx: DbContext,
-) -> Json<ApiResponse<FlatMeasureStatus>> {
-    Json(ApiResponse::success(resume(&state, &ctx.database_path)))
 }
 
 #[cfg(test)]

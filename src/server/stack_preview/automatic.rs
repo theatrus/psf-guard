@@ -538,8 +538,12 @@ async fn tick(state: &Arc<AppState>) {
             continue;
         };
         // A quality scan rewrites the scores a refresh would stack by;
-        // let it finish, and its end touches the database again.
-        if crate::server::quality_backfill::snapshot(&ctx.quality_backfill).running {
+        // let it finish, and its end touches the database again. A paused
+        // analysis rewrites nothing until Resume, so the refresh runs.
+        let paused = state
+            .catalog_jobs
+            .paused(crate::server::catalog_jobs::PausableJob::Quality, &ctx);
+        if crate::server::quality_backfill::snapshot(&ctx.quality_backfill).running && !paused {
             refreshes.hold(key, pending);
             continue;
         }

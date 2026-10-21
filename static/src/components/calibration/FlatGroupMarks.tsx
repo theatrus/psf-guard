@@ -10,7 +10,7 @@ import type {
 } from '../../api/types';
 import type { FlatMark, FlatSessionPlace } from './flatGroupIndex';
 import { editFlatLimits } from './flatLimitsLink';
-import { FLAT_STAGES, flatMeasureKey, stoppedRig } from './flatMeasureLabel';
+import { FLAT_STAGES, flatMeasureKey, measuringPaused } from './flatMeasureLabel';
 import {
   eventSeenIn,
   eventSideLabel,
@@ -43,25 +43,25 @@ export function MeasuringNote({ progress, showRig }: { progress: FlatMeasureStat
   );
 }
 
-/** Stop in the job line paused measuring: say how it comes back, and offer
- *  to take it up now. */
-function StoppedNote({ dbId }: { dbId: string }) {
+/** Pause in the job line holds measuring: say how long, and offer to
+ *  resume it now. */
+function PausedNote({ dbId }: { dbId: string }) {
   const access = useAccess();
   const queryClient = useQueryClient();
   const resume = useMutation({
-    mutationFn: () => apiClient.resumeFlatMeasure(dbId),
-    onSuccess: (status) => queryClient.setQueryData(flatMeasureKey(dbId), status),
+    mutationFn: () => apiClient.resumeJob(dbId, 'flats'),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: flatMeasureKey(dbId) }),
   });
   return (
-    <p className="calibration-muted flat-measure-stopped" data-testid="flat-measure-stopped">
-      Flat measuring is stopped. It resumes when these flats change, or when the server starts
-      again.
+    <p className="calibration-muted flat-measure-paused" data-testid="flat-measure-paused">
+      Flat measuring is paused until you resume it or the server restarts. New and changed flats
+      are measured then.
       {access.canWrite && (
         <>
           {' '}
           <button type="button" className="link-button" data-testid="flat-measure-resume"
             disabled={resume.isPending} onClick={() => resume.mutate()}>
-            Resume now
+            Resume
           </button>
         </>
       )}
@@ -118,12 +118,12 @@ export function FlatGroupsSummary({ dbId, view, error, rigs, progress, measuring
   }
   if (!view) return live;
   const showName = rigs.length > 1;
-  const stopped = !measuring && stoppedRig(progress, rigs.length === 1 ? rigs[0].rig_uuid : undefined);
+  const paused = !measuring && measuringPaused(progress);
   return (
     <section className="flat-groups-summary" aria-label="Flat groups" data-testid="flat-groups-summary">
       {live}
       {measuring && progress && <MeasuringNote progress={progress} showRig={showName} />}
-      {stopped && <StoppedNote dbId={dbId} />}
+      {paused && <PausedNote dbId={dbId} />}
       {!view.available && (
         <p className="calibration-muted">This catalog cannot be written, so flats are grouped by time.</p>
       )}

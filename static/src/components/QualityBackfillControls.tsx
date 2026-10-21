@@ -1,3 +1,4 @@
+import { useAccess } from '../auth/access';
 import { useQualityBackfill } from '../hooks/useQualityBackfill';
 import { setStarMetadataFill, useStarMetadataFill } from '../hooks/useStarMetadataFill';
 
@@ -10,6 +11,7 @@ export default function QualityBackfillControls({
   canManage?: boolean;
 }) {
   const job = useQualityBackfill(dbId);
+  const { canWrite } = useAccess();
   const progress = job.status?.progress;
   // One preference for every analyze action (scan, backfill, import), so the
   // checkbox here is also the remembered default.
@@ -34,6 +36,26 @@ export default function QualityBackfillControls({
       </small>
     </div>
   );
+
+  if (job.isRunning && progress && job.isPaused) {
+    return (
+      <>
+        <div className="quality-backfill-status" data-testid="quality-backfill-paused">
+          The quality analysis is paused at {progress.processed_targets}/{progress.total_targets}{' '}
+          targets until you resume it or the server restarts.{' '}
+          <button
+            type="button"
+            className="browse-button"
+            onClick={() => job.resume()}
+            disabled={job.isResuming || !canWrite}
+          >
+            Resume
+          </button>
+        </div>
+        {arrivals}
+      </>
+    );
+  }
 
   if (job.isRunning && progress) {
     return (

@@ -111,7 +111,7 @@ interface Seen {
 
 const IDLE_JOB = {
   state: 'idle', active: false, rig_uuid: null, rig_name: null, stage: null, done: 0, total: 0, rigs: [],
-  stopped: [], retry_at: null, priority: null, waiting_for: null, workers: 0, started_at: null, finished_at: null,
+  retry_at: null, priority: null, waiting_for: null, workers: 0, started_at: null, finished_at: null,
   last: null, last_error: null,
 };
 
@@ -145,15 +145,15 @@ function serve(view: FlatGroupsView = VIEW, progress: Record<string, unknown> = 
     }),
     http.get('/api/db/demo/calibrations/flat-measure', () => {
       seen.quality += 1;
-      return ok({ ...IDLE_JOB, ...progress });
+      return ok({ ...IDLE_JOB, ...(seen.resumed > 0 ? {} : progress) });
     }),
     http.post('/api/db/demo/calibrations/flat-measure/watch', async ({ request }) => {
       seen.watch.push(((await request.json()) as { rig: string }).rig);
       return ok({ ...IDLE_JOB, ...progress });
     }),
-    http.post('/api/db/demo/calibrations/flat-measure/resume', () => {
+    http.post('/api/db/demo/jobs/flats/resume', () => {
       seen.resumed += 1;
-      return ok({ ...IDLE_JOB });
+      return ok(true);
     }),
     http.post('/api/db/demo/calibrations/generation-status', () => ok({ statuses: [] })),
   );
@@ -607,13 +607,13 @@ describe('Flat groups in Frames', () => {
     expect(seen.watch).toEqual([]);
   });
 
-  it('says Stop paused measuring, how it comes back, and resumes it on request', async () => {
-    const seen = serve(VIEW, { state: 'stopped', stopped: ['rig'] });
+  it('says measuring is paused, for how long, and resumes it on request', async () => {
+    const seen = serve(VIEW, { state: 'paused', rigs: ['rig'] });
     renderPage('/calibration?db=demo&calKind=flat&calRig=rig');
-    const note = await screen.findByTestId('flat-measure-stopped');
-    expect(note).toHaveTextContent('Flat measuring is stopped. It resumes when these flats change, or when the server starts again.');
+    const note = await screen.findByTestId('flat-measure-paused');
+    expect(note).toHaveTextContent('Flat measuring is paused until you resume it or the server restarts.');
     fireEvent.click(screen.getByTestId('flat-measure-resume'));
     await waitFor(() => expect(seen.resumed).toBe(1));
-    await waitFor(() => expect(screen.queryByTestId('flat-measure-stopped')).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId('flat-measure-paused')).toBeNull());
   });
 });

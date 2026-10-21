@@ -2,7 +2,17 @@
 //! live as long as the server state they work for, so a server started
 //! again in the same process, as the desktop app does, starts with none.
 
-use crate::server::job_line::catalog::CatalogJobs;
+use std::sync::Arc;
+
+use axum::extract::{Path, State};
+use axum::Json;
+use serde::{Deserialize, Serialize};
+
+use crate::server::api::ApiResponse;
+use crate::server::database_context::DatabaseContext;
+use crate::server::extract::DbContext;
+use crate::server::job_line::catalog::{CatalogJobs, CatalogWork};
+use crate::server::state::AppState;
 
 #[derive(Default)]
 pub struct CatalogJobRegistry {
@@ -25,6 +35,121 @@ pub struct CatalogJobRegistry {
     pub(crate) exports: CatalogJobs<crate::server::export_job::Exports>,
     pub(crate) catalog_refresh: CatalogJobs<crate::server::catalog_refresh::CatalogRefresh>,
     pub(crate) pregeneration: CatalogJobs<crate::server::preview_pregeneration::Pregeneration>,
+}
+
+/// The automatic jobs a person can pause from the header. A pause holds the
+/// job's automatic work in one catalog until Resume or until the server
+/// stops; it is not stored. Work a person asked for, such as a quality scan
+/// of one target, still runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PausableJob {
+    /// The database-wide quality analysis, which also scans new frames.
+    Quality,
+    Pregeneration,
+    Flats,
+    Sites,
+}
+
+impl PausableJob {
+    pub const ALL: [Self; 4] = [Self::Quality, Self::Pregeneration, Self::Flats, Self::Sites];
+}
+
+impl CatalogJobRegistry {
+    /// Pause `job` for the database `ctx`. Returns false when it was paused
+    /// already.
+    pub(crate) fn pause(&self, job: PausableJob, ctx: &DatabaseContext) -> bool {
+        fn pause<W: CatalogWork>(jobs: &CatalogJobs<W>, catalog: &str) -> bool {
+            jobs.job(catalog).pause()
+        }
+        let catalog = catalog_of(job, ctx);
+        match job {
+            PausableJob::Quality => pause(&self.quality_scans, &catalog),
+            PausableJob::Pregeneration => pause(&self.pregeneration, &catalog),
+            PausableJob::Flats => pause(&self.flat_measure, &catalog),
+            PausableJob::Sites => pause(&self.frame_sites, &catalog),
+        }
+    }
+
+    /// End a pause of `job` for the database `ctx`; the work it held starts.
+    /// Returns false when the job was not paused.
+    pub(crate) fn resume(
+        &self,
+        state: &Arc<AppState>,
+        job: PausableJob,
+        ctx: &DatabaseContext,
+    ) -> bool {
+        let catalog = catalog_of(job, ctx);
+        match job {
+            PausableJob::Quality => self.quality_scans.resume(state, &catalog),
+            PausableJob::Pregeneration => self.pregeneration.resume(state, &catalog),
+            PausableJob::Flats => self.flat_measure.resume(state, &catalog),
+            PausableJob::Sites => self.frame_sites.resume(state, &catalog),
+        }
+    }
+
+    /// Whether `job` is paused for the database `ctx`.
+    pub(crate) fn paused(&self, job: PausableJob, ctx: &DatabaseContext) -> bool {
+        fn paused<W: CatalogWork>(jobs: &CatalogJobs<W>, catalog: &str) -> bool {
+            jobs.existing(catalog).is_some_and(|job| job.is_paused())
+        }
+        let catalog = catalog_of(job, ctx);
+        match job {
+            PausableJob::Quality => paused(&self.quality_scans, &catalog),
+            PausableJob::Pregeneration => paused(&self.pregeneration, &catalog),
+            PausableJob::Flats => paused(&self.flat_measure, &catalog),
+            PausableJob::Sites => paused(&self.frame_sites, &catalog),
+        }
+    }
+
+    /// The jobs paused for the database `ctx`.
+    pub(crate) fn paused_jobs(&self, ctx: &DatabaseContext) -> Vec<PausableJob> {
+        PausableJob::ALL
+            .into_iter()
+            .filter(|job| self.paused(*job, ctx))
+            .collect()
+    }
+}
+
+/// The key of `ctx`'s catalog in the job's registry.
+fn catalog_of(job: PausableJob, ctx: &DatabaseContext) -> String {
+    match job {
+        PausableJob::Quality => crate::server::quality_scans::scanner(ctx),
+        PausableJob::Pregeneration => ctx.id.clone(),
+        PausableJob::Flats | PausableJob::Sites => ctx.database_path.clone(),
+    }
+}
+
+/// `GET /api/db/{db}/jobs/paused`: the jobs a person paused for the
+/// database.
+pub async fn get_paused(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+) -> Json<ApiResponse<Vec<PausableJob>>> {
+    Json(ApiResponse::success(state.catalog_jobs.paused_jobs(&ctx)))
+}
+
+/// `POST /api/db/{db}/jobs/{job}/pause`: pause the job for the database
+/// until Resume or until the server stops. Returns false when it was
+/// paused already.
+pub async fn post_pause(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+    Path((_db_id, job)): Path<(String, PausableJob)>,
+) -> Json<ApiResponse<bool>> {
+    Json(ApiResponse::success(state.catalog_jobs.pause(job, &ctx)))
+}
+
+/// `POST /api/db/{db}/jobs/{job}/resume`: end a pause; the work it held
+/// starts. Returns false when the job was not paused.
+pub async fn post_resume(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+    Path((_db_id, job)): Path<(String, PausableJob)>,
+) -> Json<ApiResponse<bool>> {
+    Json(ApiResponse::success(
+        state.catalog_jobs.resume(&state, job, &ctx),
+    ))
 }
 
 #[cfg(test)]

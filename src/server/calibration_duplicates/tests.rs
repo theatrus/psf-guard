@@ -182,7 +182,12 @@ async fn a_repair_needs_management_and_the_previewed_plan() {
         crate::server::flat_measure::status(&fixture.state, fixture.path()).rigs,
         ["rig"]
     );
-    crate::server::flat_measure::cancel(&fixture.state, fixture.path());
+    fixture
+        .state
+        .catalog_jobs
+        .flat_measure
+        .job(fixture.path())
+        .pause();
     assert!(fixture.images.join("drop").join(NAME).is_file());
 
     // The plan the token named is gone: a repair with it changes nothing.
@@ -215,7 +220,12 @@ async fn a_changed_plan_says_what_changed() {
     let applied = fixture.repair(&fresh.token).await.unwrap();
     let applied = fixture.finished(applied.run).await;
     assert_eq!(applied.repaired.unwrap().outcome.rows_removed, 1);
-    crate::server::flat_measure::cancel(&fixture.state, fixture.path());
+    fixture
+        .state
+        .catalog_jobs
+        .flat_measure
+        .job(fixture.path())
+        .pause();
 }
 
 #[tokio::test]
@@ -293,7 +303,12 @@ async fn a_repair_waits_for_no_stack_build_but_not_for_another_repair() {
         .await
         .expect("the repair runs while a stack build holds the worker");
     assert_eq!(applied.repaired.unwrap().outcome.rows_removed, 1);
-    crate::server::flat_measure::cancel(&fixture.state, fixture.path());
+    fixture
+        .state
+        .catalog_jobs
+        .flat_measure
+        .job(fixture.path())
+        .pause();
 }
 
 #[test]
