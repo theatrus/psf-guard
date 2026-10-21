@@ -62,8 +62,12 @@ Each item has a short `title` and plain-text `body`. Use an empty array when a
 section has nothing to say. Put removals and deprecated features in
 `deprecations`, with the replacement and any deadline. Put required steps and
 changed defaults in `upgradeNotes`. Choose a few main features for
-`highlights`; leave the full account in the Markdown release notes. The
-release version check rejects a tag without matching highlights.
+`highlights`; aim for six to eight short items and leave the full account in
+feature-grouped Markdown release notes. Combine entries that describe the same
+feature, and remove older claims that later changes replaced. Keep deprecations
+and upgrade steps ahead of feature highlights. Use absolute, versioned links to
+repository guides: this Markdown also becomes the GitHub release body.
+The release version check rejects a tag without matching highlights.
 
 Open the notes with a plain sentence that says what the release does. That
 first sentence becomes the summary in `notice.json`, which is the single line
