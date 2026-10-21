@@ -3184,7 +3184,15 @@ export const apiClient = {
       dbPath(dbId, '/sky/coverage')
     );
     if (!data.data) throw new Error('Failed to get sky coverage');
-    return data.data;
+    return {
+      ...data.data,
+      targets: data.data.targets.map((target) => ({
+        ...target,
+        preview: target.preview
+          ? { ...target.preview, url: withServerUrl(target.preview.url) }
+          : target.preview,
+      })),
+    };
   },
 
   getOverallStats: async (dbId: string): Promise<OverallStats> => {

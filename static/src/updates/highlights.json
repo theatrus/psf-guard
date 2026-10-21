@@ -1,5 +1,28 @@
 [
   {
+    "version": "0.12.2",
+    "deprecations": [],
+    "upgradeNotes": [],
+    "highlights": [
+      {
+        "title": "Stack previews on the desktop Sky map",
+        "body": "Completed mono and colour stacks now appear in Sky when Stacks when zoomed is on and you zoom past 3×. Existing stacks work without rebuilding them."
+      },
+      {
+        "title": "Windows desktop startup",
+        "body": "The app finishes starting instead of remaining on Checking access. Its local server keeps one socket across restarts."
+      },
+      {
+        "title": "Frames copied between image folders",
+        "body": "Previews work while the same frame is in two image folders. PSF Guard reads the largest copy with matching capture headers and still refuses files of different captures."
+      },
+      {
+        "title": "Frames off the planned rotation",
+        "body": "Quality analysis flags fresh solves more than 5° from the target's planned rotation and leaves those frames out of stack previews. Meridian flips still match. If the plan changed after capture, set the target's rotation to the angle you want."
+      }
+    ]
+  },
+  {
     "version": "0.12.1",
     "deprecations": [],
     "upgradeNotes": [],
