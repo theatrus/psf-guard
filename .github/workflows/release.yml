@@ -626,6 +626,8 @@ jobs:
       with:
         files: release-assets/*
         draft: false
+        # The 0.11 maintenance line must not replace the current 0.12 release.
+        make_latest: false
         prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
         generate_release_notes: true
         name: PSF Guard ${{ github.ref_name }}
