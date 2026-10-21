@@ -1,5 +1,16 @@
 [
   {
+    "version": "0.12.2",
+    "deprecations": [],
+    "upgradeNotes": [],
+    "highlights": [
+      {
+        "title": "Stack previews on the desktop Sky map",
+        "body": "Completed mono and colour stacks now appear in Sky when Stacks when zoomed is on and you zoom past 3×. Existing stacks work without rebuilding them."
+      }
+    ]
+  },
+  {
     "version": "0.12.1",
     "deprecations": [],
     "upgradeNotes": [],
