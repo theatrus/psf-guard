@@ -75,7 +75,10 @@ jobs:
         security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
         security default-keychain -s build.keychain
         security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
-        security set-keychain-settings -t 3600 -u build.keychain
+        # A locked keychain makes codesign wait for a password prompt that
+        # never comes on CI. Keep it unlocked for the job's six-hour limit;
+        # the macOS build step also unlocks it again before signing.
+        security set-keychain-settings -t 21600 -u build.keychain
         security import certificate.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
         security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" build.keychain
         security find-identity -v -p codesigning build.keychain
@@ -495,15 +498,22 @@ jobs:
         fi
         echo "OK: installer, msi and CLI signed as StackFoundry LLC; .sig is current"
 
+    # The keychain is unlocked again here because the CLI build before this
+    # step can take most of an hour on a slow runner. The timeout fails a
+    # signing hang in two hours instead of six; the build itself takes under
+    # one.
     - name: Build Tauri desktop app (macOS)
       if: matrix.os == 'macos-latest'
+      timeout-minutes: 120
       env:
         APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
         APPLE_API_KEY_PATH: AuthKey_${{ secrets.APPLE_API_KEY }}.p8
+        KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       run: |
+        security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
         bash scripts/package-macos.sh --config "${{ runner.temp }}/psf-guard-updater.json"
 
     # Tauri notarizes and staples the app before it creates the DMG. The disk
