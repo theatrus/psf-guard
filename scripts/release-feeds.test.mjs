@@ -30,6 +30,15 @@ test('0.11 maintenance releases preserve the current release aliases', async () 
   assert.doesNotMatch(mergeJob, /type=raw,value=latest/);
 });
 
+test('keeps macOS signing available after a long CLI build', async () => {
+  const releaseWorkflow = await readFile(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8');
+  assert.match(releaseWorkflow, /set-keychain-settings -t 21600/);
+  const desktopStep = releaseWorkflow.split('- name: Build Tauri desktop app (macOS)')[1].split('\n    # Tauri notarizes')[0];
+  assert.match(desktopStep, /timeout-minutes: 120/);
+  assert.match(desktopStep, /KEYCHAIN_PASSWORD: \$\{\{ secrets.KEYCHAIN_PASSWORD \}\}/);
+  assert.match(desktopStep, /security unlock-keychain -p "\$KEYCHAIN_PASSWORD" build.keychain/);
+});
+
 test('labels macOS artifacts as Apple Silicon', async () => {
   const releaseWorkflow = await readFile(
     new URL('../.github/workflows/release.yml', import.meta.url),
