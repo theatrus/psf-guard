@@ -96,6 +96,7 @@ install -Dpm0644 packaging/rpm/systemd/psf-guard-server.conf \
 * Wed Oct 21 2026 Yann Ramin <github@theatr.us> - 0.12.2-1
 - Show completed stack previews on the desktop Sky map
 - Fix Windows desktop startup and keep its server socket reserved across restarts
+- Resolve matching frame copies while files move between image folders
 
 * Wed Oct 21 2026 Yann Ramin <github@theatr.us> - 0.12.1-1
 - Stop trusting HTTPS certificates issued through distrusted emSign

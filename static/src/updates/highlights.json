@@ -11,6 +11,10 @@
       {
         "title": "Windows desktop startup",
         "body": "The app finishes starting instead of remaining on Checking access. Its local server keeps one socket across restarts."
+      },
+      {
+        "title": "Frames copied between image folders",
+        "body": "Previews work while the same frame is in two image folders. PSF Guard reads the largest copy with matching capture headers and still refuses files of different captures."
       }
     ]
   },
