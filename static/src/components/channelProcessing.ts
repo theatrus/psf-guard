@@ -51,22 +51,33 @@ export function channelProcessingFrom(
   return result;
 }
 
-/** The draft with each channel's deconvolution and RC-Astro steps in its
- *  input. A channel showing neither keeps the draft's own. */
-export function withChannelProcessing(
+/** The draft set to use its own deconvolution and RC-Astro steps, starting
+ *  from what each channel card shows, so switching from following the cards
+ *  loses nothing. An input whose card shows neither gets none. */
+export function ownFromChannels(
   draft: StackColorProcessing,
   channels: ChannelProcessing,
   roles: StackColorRole[]
 ): StackColorProcessing {
-  const input_deconvolutions = { ...draft.input_deconvolutions };
-  const input_rc_astro = { ...draft.input_rc_astro };
+  const input_deconvolutions: StackColorProcessing['input_deconvolutions'] = {};
+  const input_rc_astro: NonNullable<StackColorProcessing['input_rc_astro']> = {};
   for (const role of roles) {
     const channel = channels[role];
-    if (!channel) continue;
-    if (channel.deconvolution) input_deconvolutions[role] = structuredClone(channel.deconvolution);
-    else delete input_deconvolutions[role];
-    if (channel.rc_astro) input_rc_astro[role] = structuredClone(channel.rc_astro);
-    else delete input_rc_astro[role];
+    if (channel?.deconvolution) input_deconvolutions[role] = structuredClone(channel.deconvolution);
+    if (channel?.rc_astro) input_rc_astro[role] = structuredClone(channel.rc_astro);
   }
-  return { ...draft, input_deconvolutions, input_rc_astro };
+  return { ...draft, input_processing: 'own', input_deconvolutions, input_rc_astro };
+}
+
+/** A channel card's deconvolution and RC-Astro steps in words, in the order
+ *  they run: `deconvolution, BlurXTerminator`. Null when it shows neither. */
+export function channelToolsLabel(
+  channel: ChannelPixelProcessing | undefined,
+  toolName: (tool: string) => string
+): string | null {
+  const parts = [
+    ...(channel?.deconvolution ? ['deconvolution'] : []),
+    ...(channel?.rc_astro?.steps.map((step) => toolName(step.tool)) ?? []),
+  ];
+  return parts.length > 0 ? parts.join(', ') : null;
 }

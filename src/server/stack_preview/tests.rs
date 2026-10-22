@@ -2150,6 +2150,96 @@ async fn processed_card(cache: &FsPath) -> (Arc<AppState>, String) {
     (state, applied)
 }
 
+/// A color input reading the stack `job_id` at `revision`.
+fn color_input(
+    role: color::StackColorRole,
+    job_id: &str,
+    revision: &str,
+) -> color::StackColorSource {
+    color::StackColorSource {
+        role,
+        filter_name: "R".into(),
+        label: "R".into(),
+        exposure_group: None,
+        job_id: job_id.into(),
+        group_index: 0,
+        artifact_revision: revision.into(),
+        accepted_frames: 1,
+        wbpp: false,
+        total_exposure_seconds: None,
+        reference_image_id: None,
+        sky_orientation: None,
+        registration_transform: None,
+    }
+}
+
+fn deconvolved(fwhm: f32) -> stretch::StackViewProcessingRequest {
+    let mut request = mtf_request(0.3);
+    request.deconvolution = Some(seiza_deconvolution::DeconvolutionConfig::conservative(fwhm));
+    request
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_color_build_takes_what_each_channel_card_applied() {
+    use color::StackColorRole::{Green, Red};
+    let _policy = reapply_policy(false);
+    let cache = tempfile::tempdir().unwrap();
+    let state = state_on_disk(cache.path(), None);
+    let red = "1".repeat(64);
+    let green = "2".repeat(64);
+    persist_latest_groups(cache.path(), &stack_on_disk(cache.path(), &red, "rev-1")).unwrap();
+    stack_on_disk(cache.path(), &green, "rev-g");
+    apply_and_wait(&state, &red, deconvolved(2.0)).await;
+
+    let inputs = [
+        color_input(Red, &red, "rev-1"),
+        color_input(Green, &green, "rev-g"),
+    ];
+    let cards = color::channel_card_processing(cache.path(), &inputs).unwrap();
+    assert_eq!(
+        cards[&Red].deconvolution,
+        Some(seiza_deconvolution::DeconvolutionConfig::conservative(2.0))
+    );
+    assert_eq!(cards[&Red].rc_astro, None);
+    // Green's card shows no processing: its input runs no tools.
+    assert_eq!(cards[&Green], color::FollowedChannelProcessing::default());
+    // Another revision of Red is another stack, with its own card.
+    let other_revision = [color_input(Red, &red, "rev-0")];
+    assert_eq!(
+        color::channel_card_processing(cache.path(), &other_revision).unwrap()[&Red],
+        color::FollowedChannelProcessing::default()
+    );
+
+    // The card applies other settings: what the build took no longer
+    // matches, which makes it out of date.
+    apply_and_wait(&state, &red, deconvolved(3.0)).await;
+    assert_ne!(
+        color::channel_card_processing(cache.path(), &inputs).unwrap(),
+        cards
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_refreshed_stack_shows_its_carried_processing_to_color_builds() {
+    let _policy = reapply_policy(true);
+    let cache = tempfile::tempdir().unwrap();
+    let state = state_on_disk(cache.path(), None);
+    let first = "1".repeat(64);
+    persist_latest_groups(cache.path(), &stack_on_disk(cache.path(), &first, "rev-1")).unwrap();
+    apply_and_wait(&state, &first, deconvolved(2.0)).await;
+    let second = "2".repeat(64);
+    refresh(&state, cache.path(), &second, "rev-2");
+
+    // Whether the re-apply has run yet or not, the new stack's card shows
+    // the same settings, so a color build of it takes them.
+    let inputs = [color_input(color::StackColorRole::Red, &second, "rev-2")];
+    let cards = color::channel_card_processing(cache.path(), &inputs).unwrap();
+    assert_eq!(
+        cards[&color::StackColorRole::Red].deconvolution,
+        Some(seiza_deconvolution::DeconvolutionConfig::conservative(2.0))
+    );
+}
+
 fn the_automatic_run(state: &AppState) -> Option<StackActivityEntry> {
     state
         .stack_previews

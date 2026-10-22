@@ -1780,17 +1780,7 @@ pub(super) fn selected_or_carried(
     if let Some(selected) = selected_processing(stack_root, source_key, source_revision)? {
         return Ok(Some(selected));
     }
-    let carried = {
-        let _guard = SELECTION_LOCK
-            .lock()
-            .map_err(|error| AppError::InternalError(error.to_string()))?;
-        read_selection(&selection_path(stack_root, source_key, source_revision))
-            .and_then(|selection| selection.carried)
-    };
-    let Some(carried) = carried.filter(|carried| carried.state != CarryState::Stopped) else {
-        return Ok(None);
-    };
-    let Some(mut shown) = read_cached_manifest(stack_root, &carried.from_stretch_id) else {
+    let Some((carried, mut shown)) = shown_carry(stack_root, source_key, source_revision)? else {
         return Ok(None);
     };
     let state = match carried.state {
@@ -1812,6 +1802,50 @@ pub(super) fn selected_or_carried(
         error: carried.error,
     });
     Ok(Some(shown))
+}
+
+/// The key a mono stack group's processing selection is filed under: one
+/// key per group of a build, whatever its revision.
+pub(super) fn mono_source_key(job_id: &str, group_index: usize) -> String {
+    format!("mono:{job_id}:{group_index}")
+}
+
+/// The previous revision's result that a revision shows while its carried
+/// re-apply is pending, with the carry that brought it. `None` once the
+/// carry stopped or its result is gone.
+fn shown_carry(
+    stack_root: &FsPath,
+    source_key: &str,
+    source_revision: &str,
+) -> Result<Option<(CarriedProcessing, StackStretchPreview)>, AppError> {
+    let carried = {
+        let _guard = SELECTION_LOCK
+            .lock()
+            .map_err(|error| AppError::InternalError(error.to_string()))?;
+        read_selection(&selection_path(stack_root, source_key, source_revision))
+            .and_then(|selection| selection.carried)
+    };
+    Ok(carried
+        .filter(|carried| carried.state != CarryState::Stopped)
+        .and_then(|carried| {
+            read_cached_manifest(stack_root, &carried.from_stretch_id).map(|shown| (carried, shown))
+        }))
+}
+
+/// The view processing a stack's card shows for this revision: the selected
+/// result's request, or the carried result's while its re-apply is
+/// pending. `None` when the card shows no processing. A color build that
+/// follows the channel cards takes each input's deconvolution and RC-Astro
+/// steps from here.
+pub(super) fn applied_request(
+    stack_root: &FsPath,
+    source_key: &str,
+    source_revision: &str,
+) -> Result<Option<StackViewProcessingRequest>, AppError> {
+    if let Some(selected) = selected_processing(stack_root, source_key, source_revision)? {
+        return Ok(selected.request);
+    }
+    Ok(shown_carry(stack_root, source_key, source_revision)?.and_then(|(_, shown)| shown.request))
 }
 
 /// The first twelve characters of a run id, enough to tell runs apart in

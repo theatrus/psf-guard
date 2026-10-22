@@ -36,6 +36,7 @@ work. Historical checklists record delivery; they do not track current work.
 - [Reject archive safety model](design/reject-archive.md)
 - [Reject removal](design/reject-removal.md)
 - [Calibrated subs](design/calibrated-subs.md)
+- [Color previews and channel processing](design/color-channel-processing.md)
 - [Flat grouping](design/flat-grouping.md)
 - [Multi-rig views (proposed)](design/multi-rig-views.md)
 

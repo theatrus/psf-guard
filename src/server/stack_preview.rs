@@ -2410,7 +2410,7 @@ fn stack_processing_source(
         .filter(|group| group.index == group_index && group.state == StackGroupState::Ready)
         .ok_or(AppError::NotFound)?;
     Ok(stretch::StretchSource {
-        key: format!("mono:{job_id}:{}", group.index),
+        key: stretch::mono_source_key(job_id, group.index),
         revision: job.artifact_revision,
         path: fits_path(&ctx.stack_root, job_id, group.index),
         scope: processing_queue::ProcessingScope {

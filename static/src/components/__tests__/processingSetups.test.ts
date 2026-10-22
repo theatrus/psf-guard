@@ -69,6 +69,17 @@ describe('colorSetupForRoles', () => {
     expect(mapped.output_stretches).toEqual(setup.output_stretches);
   });
 
+  it('keeps whether the inputs follow the channel cards', () => {
+    const following = { ...shoSetup(), input_processing: 'channels' as const };
+    expect(colorSetupForRoles(following, ['ha', 'oiii', 'sii']).input_processing).toBe('channels');
+    // A setup saved before the choice existed sets its inputs' tools itself.
+    expect(colorSetupForRoles(shoSetup(), ['ha', 'oiii', 'sii']).input_processing).toBeUndefined();
+    // The built-in pipelines follow the cards, as a new build does.
+    for (const setup of builtinColorSetups) {
+      expect(setup.settings(['red', 'green', 'blue']).input_processing).toBe('channels');
+    }
+  });
+
   it('tolerates a setup with no role-keyed fields at all', () => {
     const empty = {
       background_extraction: null,

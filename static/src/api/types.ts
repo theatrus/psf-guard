@@ -1350,7 +1350,13 @@ export interface StackColorSourceReference {
 
 export type StackColorInputSources = Partial<Record<StackColorRole, StackColorSourceReference>>;
 
+/** Where a color build's inputs take their deconvolution and RC-Astro steps
+ *  from: what each channel card applied, or the build's own settings.
+ *  Absent means `own`, as processing saved before the choice existed. */
+export type StackColorInputProcessing = 'own' | 'channels';
+
 export interface StackColorProcessing {
+  input_processing?: StackColorInputProcessing;
   background_extraction: StackBackgroundExtraction | null;
   input_deconvolutions: Partial<Record<StackColorRole, StackDeconvolutionConfig>>;
   input_rc_astro?: Partial<Record<StackColorRole, RcAstroProcessing>>;
@@ -1603,6 +1609,13 @@ export interface StackColorJob {
     stars_fits_url?: string | null;
   }>>;
   resolved_output_stretches: unknown[];
+  /** For a build that follows the channel cards: what each card had applied
+   *  when the build was prepared. A card that changed since makes the build
+   *  out of date. */
+  followed_channel_processing?: Partial<Record<StackColorRole, {
+    deconvolution?: StackDeconvolutionConfig;
+    rc_astro?: RcAstroProcessing;
+  }>>;
   resolved_backgrounds: Partial<Record<StackColorRole, StackBackgroundFit>>;
   resolved_background_protection: Partial<Record<StackColorRole, StackBackgroundProtection>>;
   background_protection_fallbacks: Partial<Record<StackColorRole, string>>;
