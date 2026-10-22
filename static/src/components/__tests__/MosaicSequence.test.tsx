@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, onTestFinished } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, useLocation } from 'react-router-dom';
@@ -29,6 +29,25 @@ function Location() {
   return <output data-testid="location">{location.pathname}{location.search}</output>;
 }
 
+/** The requests the view has made: which have finished, and whether any is
+ *  still under way. Stops recording when the test ends. */
+function recordRequests() {
+  const finished: string[] = [];
+  let pending = 0;
+  const start = () => { pending += 1; };
+  const end = ({ request }: { request: Request }) => {
+    pending -= 1;
+    finished.push(new URL(request.url).pathname + new URL(request.url).search);
+  };
+  server.events.on('request:start', start);
+  server.events.on('request:end', end);
+  onTestFinished(() => {
+    server.events.removeListener('request:start', start);
+    server.events.removeListener('request:end', end);
+  });
+  return { finished, idle: () => pending === 0 };
+}
+
 function mount(route: string) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   const Wrapper = ({ children }: { children: ReactNode }) => (
@@ -53,6 +72,7 @@ describe("a mosaic's sequence", () => {
         ],
       } })),
     );
+    const requests = recordRequests();
     mount('/sequence?db=test&project=1&mosaic=1');
 
     const frames = await screen.findByRole('list', { name: 'Frames in capture order' });
@@ -69,5 +89,13 @@ describe("a mosaic's sequence", () => {
     fireEvent.click(within(screen.getByRole('group', { name: "Open a panel's sequence" })).getByRole('button', { name: /r1c2/ }));
     expect(screen.getByTestId('location')).toHaveTextContent('target=21');
     expect(screen.getByTestId('location')).not.toHaveTextContent('mosaic=1');
+    // The panel's view loads its own frames and analysis. Wait for those
+    // requests: a response that arrives after the test file ends can log
+    // while Vitest closes the worker, which fails the run with "Closing rpc
+    // while onUserConsoleLog was pending".
+    await waitFor(() => {
+      expect(requests.finished.some((url) => url.startsWith('/api/db/test/analysis/sequence?target_id=21'))).toBe(true);
+      expect(requests.idle()).toBe(true);
+    });
   });
 });

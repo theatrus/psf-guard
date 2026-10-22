@@ -122,10 +122,15 @@ jobs:
         cache: 'npm'
         cache-dependency-path: static/package-lock.json
 
+    # On Windows, `npm ci` sometimes fails while node-gyp builds
+    # better-sqlite3: the download of the Node headers stops ("Completion
+    # callback never invoked"), and npm then cannot remove the half-written
+    # packages (EPERM). A second try from an empty node_modules gets past it.
     - name: Install npm dependencies and build frontend
+      shell: bash
       run: |
         cd static
-        npm ci
+        npm ci || { echo "npm ci failed; trying once more"; rm -rf node_modules || true; npm ci; }
         npm run build
 
     # Prebuilt binary rather than a from-source build; this step alone was
@@ -500,8 +505,8 @@ jobs:
 
     # The keychain is unlocked again here because the CLI build before this
     # step can take most of an hour on a slow runner. The timeout fails a
-    # signing hang in two hours instead of six; the build itself takes under
-    # one.
+    # signing hang in two hours instead of six; the slowest macOS app builds
+    # took 67 minutes.
     - name: Build Tauri desktop app (macOS)
       if: matrix.os == 'macos-latest'
       timeout-minutes: 120
