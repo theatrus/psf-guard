@@ -650,7 +650,13 @@ matches project and target names. Both live in the URL (`show`, `q`), a
 clears both. When the server runs with database management, a row's state
 pill is a select: choosing Active, Inactive, Draft or Closed writes that
 project row in Target Scheduler at once, the same edit the plan editor
-makes. The plans with nothing captured yet follow Show and search too.
+makes. Each project in the archive has **Reopen**, which sets it Inactive in
+its database: the project returns to the list, and Target Scheduler does not
+select it until you set it Active. The plans with nothing captured yet follow
+Show and search too; one that is Closed on every rig appears when Show is
+Closed. A plan that is Closed on any rig has **Reopen**, which sets its
+project Inactive on each rig where it is Closed and reports the result for
+each.
 
 The header's project picker follows the same rule. A project that lives in
 several databases under one GUID is one row there, badged with its rig count

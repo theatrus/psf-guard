@@ -376,3 +376,32 @@ a.library-name:hover, a.library-family-name:hover { text-decoration: underline; 
 .expand-toggle.expanded {
   transform: rotate(90deg);
 }
+
+/* Reopen on a Closed project or plan: sets it Inactive. */
+.library-reopen {
+  flex: 0 0 auto;
+  padding: 4px 10px;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.78rem;
+}
+
+.library-reopen:hover:not(:disabled) {
+  border-color: var(--color-border-tertiary);
+  color: var(--color-text-primary);
+}
+
+.library-reopen:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.library-reopen:focus-visible,
+.library-plans-notice:focus-visible {
+  outline: 2px solid var(--state-focus-border);
+  outline-offset: 2px;
+}

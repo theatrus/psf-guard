@@ -10,12 +10,19 @@ interface PlanRowProps {
   canWrite: boolean;
   editing: boolean;
   onRename: () => void;
+  /** The rigs where the plan's project is Closed. Reopen, offered while
+   *  there is one, sets the project Inactive on each. */
+  reopenOn?: string[];
+  onReopen?: () => void;
+  reopening?: boolean;
+  /** Another plan is reopening. */
+  reopenDisabled?: boolean;
 }
 
 /** A plan with nothing captured yet, as a Library row: its name opens the
  *  workspace, then how far planning has come and each rig with its project
  *  state there, or that no database takes it yet. */
-export default function PlanRow({ row, href, canWrite, editing, onRename }: PlanRowProps) {
+export default function PlanRow({ row, href, canWrite, editing, onRename, reopenOn = [], onReopen, reopening = false, reopenDisabled = false }: PlanRowProps) {
   const name = row.project.name;
   return <ProjectRow className="director-plan-row" testId="plan-row">
     <Link className="library-name plan-row-name" to={href} aria-label={`Open ${name}`}>{name}</Link>
@@ -29,6 +36,9 @@ export default function PlanRow({ row, href, canWrite, editing, onRename }: Plan
           <DbPill name={link.catalog_name} title={`Rig ${link.rig.name}`} /><StatePill state={link.source_state} />
         </span>)}
     <span className="library-pill">No frames yet</span>
+    {canWrite && onReopen && reopenOn.length > 0 && <button type="button" className="library-reopen" disabled={editing || reopenDisabled}
+      title={`Set ${name} to Inactive on ${reopenOn.join(' and ')}, where it is Closed. Target Scheduler does not select it until it is set to Active.`}
+      aria-label={`Reopen ${name}`} onClick={onReopen}>{reopening ? 'Reopening...' : 'Reopen'}</button>}
     {canWrite && <button type="button" className="library-planning" disabled={editing} title={`Rename ${name}`} aria-label={`Rename ${name}`} onClick={onRename}><Pencil size={14} /></button>}
   </ProjectRow>;
 }

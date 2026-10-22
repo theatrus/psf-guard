@@ -46,6 +46,7 @@ import { keepScoringInScope, useDbProjectTarget, useUrlParams } from '../hooks/u
 import { imageDetailPath } from '../utils/imageDetailRoutes';
 import {
   groupProjectsByActivity,
+  INACTIVE_PROJECT_STATE,
   isArchivedProject,
   isRecentProject,
   projectMatchesSearch,
@@ -160,26 +161,34 @@ export default function Overview() {
   // Moving targets and exposures edits catalog rows: an editor's work.
   const organizeAllowed = canWrite;
   // A project's Target Scheduler state, written straight into its database.
-  const [stateNotice, setStateNotice] = useState('');
+  // The notice shows where the change was made: a project reopened from the
+  // archive leaves it, and the list's top may be out of view.
+  const [stateNotice, setStateNotice] = useState<{ text: string; inArchive: boolean } | null>(null);
   const [pendingStates, setPendingStates] = useState<Record<string, number>>({});
   useEffect(() => {
     if (!stateNotice) return;
-    const timer = window.setTimeout(() => setStateNotice(''), 8000);
+    const timer = window.setTimeout(() => setStateNotice(null), 8000);
     return () => window.clearTimeout(timer);
   }, [stateNotice]);
-  const changeState = async (project: WithDb<ProjectOverview>, state: number) => {
+  // Reopen takes the row, and its button, out of the archive: focus moves to
+  // the notice, so a screen reader reads it and focus stays on the page.
+  const archiveNotice = useRef<HTMLParagraphElement>(null);
+  useEffect(() => {
+    if (stateNotice?.inArchive) archiveNotice.current?.focus();
+  }, [stateNotice]);
+  const changeState = async (project: WithDb<ProjectOverview>, state: number, inArchive = false) => {
     const key = projectKey(project.db_id, project.id);
     if (key in pendingStates) return;
     setPendingStates((current) => ({ ...current, [key]: state }));
     try {
       await apiClient.updateProject(project.db_id, project.id, { state });
-      setStateNotice(`${project.display_name} is now ${stateLabel(state)} on ${project.db_name}.`);
+      setStateNotice({ text: `${project.display_name} is now ${stateLabel(state)} on ${project.db_name}.`, inArchive });
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['db', project.db_id] }),
         queryClient.invalidateQueries({ queryKey: ['directorPlans'] }),
       ]);
     } catch (error) {
-      setStateNotice(error instanceof Error ? error.message : 'Could not change the project state.');
+      setStateNotice({ text: error instanceof Error ? error.message : 'Could not change the project state.', inArchive });
     } finally {
       setPendingStates((current) => { const next = { ...current }; delete next[key]; return next; });
     }
@@ -933,7 +942,7 @@ export default function Overview() {
               <button type="button" className="library-link-button" onClick={() => updateParams({ show: null, q: null })}>Show all</button>
             </p>
           )}
-          {stateNotice && <p className="library-narrowed" role="status">{stateNotice}</p>}
+          {stateNotice && !stateNotice.inArchive && <p className="library-narrowed" role="status">{stateNotice.text}</p>}
 
           {activeProjectGroups.length === 0 && archivedProjects.length === 0 && show !== 'unlinked' && (
             <div className="empty-state">
@@ -1682,6 +1691,8 @@ export default function Overview() {
 
           <LibraryPlans search={projectSearch} show={show} listed={projectKeys} dbFilter={dbFilter} incomplete={projectsIncomplete} />
 
+          {/* Outside the archive: reopening its last project removes it. */}
+          {stateNotice?.inArchive && <p ref={archiveNotice} tabIndex={-1} className="library-narrowed" role="status">{stateNotice.text}</p>}
           {archivedProjects.length > 0 && (
             <section className="project-archive">
               <button
@@ -1704,29 +1715,46 @@ export default function Overview() {
                   {archivedProjects.map((project) => {
                     const key = projectKey(project.db_id, project.id);
                     const isCurrent = key === currentProjectKey;
+                    const reopening = key in pendingStates;
                     return (
-                      <button
+                      <div
                         key={key}
                         ref={isCurrent ? revealProject : undefined}
                         data-project-key={key}
                         data-current-project={isCurrent ? 'true' : undefined}
-                        type="button"
-                        className="project-archive-item"
-                        aria-current={isCurrent ? 'true' : undefined}
-                        onClick={() => project.has_files && handleSelectProject(project)}
-                        disabled={!project.has_files}
+                        className={`project-archive-item${isCurrent ? ' is-current' : ''}`}
                       >
-                        <span>
-                          <strong>{project.display_name}</strong>
-                          <small>{project.db_name}</small>
-                        </span>
-                        <span>
-                          {project.total_images} images
-                          {project.date_range.latest
-                            ? ` · ${formatRelativeTime(project.date_range.latest, relativeNow)}`
-                            : ''}
-                        </span>
-                      </button>
+                        <button
+                          type="button"
+                          className="project-archive-open"
+                          aria-current={isCurrent ? 'true' : undefined}
+                          onClick={() => project.has_files && handleSelectProject(project)}
+                          disabled={!project.has_files}
+                        >
+                          <span>
+                            <strong>{project.display_name}</strong>
+                            <small>{project.db_name}</small>
+                          </span>
+                          <span>
+                            {project.total_images} images
+                            {project.date_range.latest
+                              ? ` · ${formatRelativeTime(project.date_range.latest, relativeNow)}`
+                              : ''}
+                          </span>
+                        </button>
+                        {organizeAllowed && (
+                          <button
+                            type="button"
+                            className="library-reopen"
+                            disabled={reopening}
+                            aria-label={`Reopen ${project.display_name} on ${project.db_name}`}
+                            title={`Set ${project.display_name} to Inactive on ${project.db_name}. Target Scheduler does not select it until it is set to Active.`}
+                            onClick={() => void changeState(project, INACTIVE_PROJECT_STATE, true)}
+                          >
+                            {reopening ? 'Reopening...' : 'Reopen'}
+                          </button>
+                        )}
+                      </div>
                     );
                   })}
                 </div>
