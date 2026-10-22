@@ -27,6 +27,9 @@
 //! project it merged into first. An index or selection that cannot be read
 //! stops the sweep: everything it names would otherwise look unreferenced.
 //!
+//! A final pass's scratch folder goes when the pass ends. One a crash left
+//! behind goes after the day-long grace: no pass runs that long.
+//!
 //! Resume checkpoints are superseded in place per target/channel. One no
 //! build has written or resumed from for 30 days goes, like an unused master:
 //! the stack it led to is kept, and only a later build of the same group
@@ -80,6 +83,34 @@ fn old_enough(path: &Path, now: SystemTime, age: Duration) -> bool {
         .ok()
         .and_then(|modified| now.duration_since(modified).ok())
         .is_some_and(|elapsed| elapsed >= age)
+}
+
+/// Remove what a final pass that never finished left in the scratch folder:
+/// anything older than the grace, since a running pass is not that old.
+fn prune_scratch(scratch: &Path, now: SystemTime) -> usize {
+    let Ok(entries) = std::fs::read_dir(scratch) else {
+        return 0;
+    };
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !old_enough(&path, now, UNREFERENCED_GRACE) {
+            continue;
+        }
+        let result = if path.is_dir() {
+            std::fs::remove_dir_all(&path)
+        } else {
+            std::fs::remove_file(&path)
+        };
+        match result {
+            Ok(()) => removed += 1,
+            Err(error) => tracing::warn!(
+                "Failed to remove stale final-pass scratch {}: {error}",
+                path.display()
+            ),
+        }
+    }
+    removed
 }
 
 fn prune_directories(root: &Path, keep: &HashSet<String>, now: SystemTime) -> usize {
@@ -225,6 +256,7 @@ pub(super) fn prune(stack_root: &Path, keep: &KeepSet, stacking_version: &str) {
         &keep.artifact_search_ids,
         now,
     );
+    let removed_scratch = prune_scratch(&crate::server::storage::stack_scratch(stack_root), now);
     if removed_mono
         + removed_color
         + removed_inputs
@@ -232,6 +264,7 @@ pub(super) fn prune(stack_root: &Path, keep: &KeepSet, stacking_version: &str) {
         + removed_reference_scores
         + removed_processing
         + removed_searches
+        + removed_scratch
         > 0
     {
         tracing::info!(
@@ -242,6 +275,7 @@ pub(super) fn prune(stack_root: &Path, keep: &KeepSet, stacking_version: &str) {
             removed_reference_scores,
             removed_processing,
             removed_searches,
+            removed_scratch,
             "Pruned superseded stack cache entries"
         );
     }
@@ -421,6 +455,25 @@ mod tests {
             racing.exists(),
             "a directory inside the grace period may still be in use"
         );
+    }
+
+    #[test]
+    fn final_pass_scratch_goes_only_once_no_pass_can_still_be_using_it() {
+        let cache = tempfile::tempdir().unwrap();
+        let scratch = cache.path().join("stack-scratch");
+        let left = scratch.join(".seiza-reintegrate-4242-Ab3xYz");
+        let running = scratch.join(".seiza-reintegrate-4343-Cd4zWx");
+        for directory in [&left, &running] {
+            fs::create_dir_all(directory).unwrap();
+            fs::write(directory.join("frame-0.f32"), b"samples").unwrap();
+        }
+        age(&left, 25 * 60 * 60);
+        age(&running, 60);
+
+        prune(cache.path(), &keep(&[]), "test");
+
+        assert!(!left.exists(), "a crashed pass's scratch must be swept");
+        assert!(running.exists(), "a running pass's scratch must stay");
     }
 
     #[test]

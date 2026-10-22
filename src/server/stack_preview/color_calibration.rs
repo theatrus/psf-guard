@@ -330,6 +330,7 @@ pub(super) fn calibrate_channels(
     wcs: &seiza::Wcs,
     catalog: &seiza::catalog::PhotometryCatalog,
     settings: &StackColorCalibration,
+    clipped: Option<&LinearImage>,
 ) -> StackColorCalibrationOutcome {
     let [red, green, blue] = channels;
     let mut rgb = match interleave(red, green, blue) {
@@ -348,6 +349,7 @@ pub(super) fn calibrate_channels(
         &settings.options(),
     );
     if outcome.calibration().is_some() {
+        neutralize_clipped(&mut rgb, clipped);
         for (channel, image) in [red, green, blue].into_iter().enumerate() {
             for (sample, pixel) in image.data.iter_mut().zip(rgb.data.as_chunks::<3>().0) {
                 *sample = pixel[channel];
@@ -438,10 +440,13 @@ pub(super) fn calibration_outdated(
 
 /// Calibrate a linear RGB stack, as a one-shot-color camera made it, on its
 /// own grid. Returns the calibrated copy, or `None` when calibration did
-/// not run, with what happened.
+/// not run, with what happened. `clipped`, the stack's clipped map on the
+/// same grid, renders the calibrated copy's clipped pixels neutral, so the
+/// channels' gains do not tint a clipped star core.
 pub(super) fn calibrate_stack(
     plan: &ColorCalibrationPlan,
     image: &LinearImage,
+    clipped: Option<&LinearImage>,
     open_catalog: &dyn Fn() -> Result<std::sync::Arc<seiza::catalog::PhotometryCatalog>, String>,
 ) -> (Option<LinearImage>, StackColorCalibrationOutcome) {
     use StackColorCalibrationSkipReason as Reason;
@@ -500,9 +505,22 @@ pub(super) fn calibrate_stack(
     )
     .into();
     if outcome.is_calibrated() {
+        neutralize_clipped(&mut calibrated, clipped);
         (Some(calibrated), outcome)
     } else {
         (None, outcome)
+    }
+}
+
+/// Render neutral the pixels of calibrated RGB `image` that `clipped` marks,
+/// when there is a map. One that does not fit the image, as a stack whose
+/// map was written for another grid, is logged and left out: the image
+/// stays calibrated, only its clipped cores keep the gains' tint.
+pub(super) fn neutralize_clipped(image: &mut LinearImage, clipped: Option<&LinearImage>) {
+    if let Some(clipped) = clipped
+        && let Err(error) = seiza_stacking::neutralize_clipped(image, clipped)
+    {
+        tracing::warn!("Not rendering clipped pixels neutral: {error}");
     }
 }
 
@@ -712,6 +730,7 @@ pub(super) mod tests {
             &placement.wcs_on(None).unwrap(),
             &catalog,
             &StackColorCalibration::default(),
+            None,
         );
         let StackColorCalibrationOutcome::Calibrated(report) = outcome else {
             panic!("{outcome:?}");
@@ -745,6 +764,7 @@ pub(super) mod tests {
             &placement.wcs_on(None).unwrap(),
             &catalog,
             &StackColorCalibration::default(),
+            None,
         );
         let StackColorCalibrationOutcome::Skipped(skip) = outcome else {
             panic!("{outcome:?}");
@@ -785,6 +805,7 @@ pub(super) mod tests {
         let (calibrated, outcome) = calibrate_stack(
             &source.plan(StackColorCalibration::default()),
             &stack,
+            None,
             &open,
         );
         let StackColorCalibrationOutcome::Calibrated(report) = &outcome else {
@@ -792,7 +813,39 @@ pub(super) mod tests {
         };
         assert!((report.gains[0] - 1.0 / 0.6).abs() < 0.03, "{report:?}");
         assert!((report.gains[2] - 1.0 / 1.4).abs() < 0.03, "{report:?}");
-        assert_ne!(calibrated.unwrap(), stack);
+        let calibrated = calibrated.unwrap();
+        assert_ne!(calibrated, stack);
+
+        // A clipped map renders its fully clipped pixel neutral, at its
+        // brightest channel, and leaves every other pixel as calibrated.
+        let brightest = (0..stack.width * stack.height)
+            .max_by(|&a, &b| stack.data[3 * a].total_cmp(&stack.data[3 * b]))
+            .unwrap();
+        let mut map = vec![0.0_f32; stack.width * stack.height];
+        map[brightest] = 1.0;
+        let map = LinearImage::new(stack.width, stack.height, 1, map).unwrap();
+        let (neutral, _) = calibrate_stack(
+            &source.plan(StackColorCalibration::default()),
+            &stack,
+            Some(&map),
+            &open,
+        );
+        let neutral = neutral.unwrap();
+        let pixel = |image: &LinearImage, at: usize| -> [f32; 3] {
+            image.data[3 * at..3 * at + 3].try_into().unwrap()
+        };
+        let before = pixel(&calibrated, brightest);
+        let top = before.iter().copied().fold(f32::MIN, f32::max);
+        assert_ne!(before, [top; 3], "the test pixel must start tinted");
+        for value in pixel(&neutral, brightest) {
+            assert!(
+                (value - top).abs() <= 1.0e-5 * top.abs(),
+                "{value} against {top}"
+            );
+        }
+        for at in (0..stack.width * stack.height).filter(|&at| at != brightest) {
+            assert_eq!(pixel(&neutral, at), pixel(&calibrated, at), "pixel {at}");
+        }
         let mut unlinked = outcome;
         mark_stretched_separately(&mut unlinked);
         let StackColorCalibrationOutcome::Calibrated(report) = unlinked else {
@@ -812,6 +865,7 @@ pub(super) mod tests {
         let (calibrated, outcome) = calibrate_stack(
             &unsolved.plan(StackColorCalibration::default()),
             &stack,
+            None,
             &unopened,
         );
         assert!(calibrated.is_none());

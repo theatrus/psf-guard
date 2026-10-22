@@ -708,8 +708,9 @@ pub enum StackActivityKind {
     Processing,
 }
 
-/// How far the final rejection pass has read: each admitted frame once per
-/// pass, three passes.
+/// How far the final rejection pass has got: reading each admitted frame
+/// once, then integrating, two stages. A pass with no room for its scratch
+/// files reads each frame once per pass instead, three passes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FinalPassProgress {
     /// 1-based.
@@ -731,8 +732,8 @@ impl FinalPassProgress {
 }
 
 /// Work done and to do in one channel, in frame reads: the live pass reads
-/// each eligible frame once, and a final pass three more times per admitted
-/// frame. Until the final pass starts its size is estimated from the
+/// each eligible frame once, and a final pass reads each admitted frame once
+/// more and integrates it, weighed as a second read. Until the final pass starts its size is estimated from the
 /// eligible frames, so the share only steps forward when frames drop out.
 /// `Master flat L · reading frame 12/40`, or `Master dark · integrating
 /// frame 3/8`: the master, Seiza's stage, and the step under way.
@@ -792,7 +793,7 @@ pub(crate) fn use_session(
 fn group_work(group: &StackGroupStatus, reintegrates: bool) -> (usize, usize) {
     let live = group.eligible_frames;
     let estimate = if reintegrates && live >= 3 {
-        3 * live
+        2 * live
     } else {
         0
     };
@@ -2951,6 +2952,72 @@ fn fits_path(stack_root: &FsPath, job_id: &str, group_index: usize) -> PathBuf {
 /// rest of the job.
 fn snr_path(stack_root: &FsPath, job_id: &str, group_index: usize) -> PathBuf {
     stack_dir(stack_root, job_id).join(format!("group-{group_index}-snr.json"))
+}
+
+/// Where a group's raw frames clipped, as a mono FITS beside its stack on
+/// the same grid: each pixel's clipped share of its observations, between 0
+/// and 1. Absent when nothing clipped, the sensor's saturation level is
+/// unknown, or the stack was built before PSF Guard kept it. It lives inside the job
+/// directory, so the cache janitor sweeps it with the rest of the job.
+fn clipped_path(stack_root: &FsPath, job_id: &str, group_index: usize) -> PathBuf {
+    clipped_path_beside(&fits_path(stack_root, job_id, group_index))
+}
+
+/// The clipped map beside the stack FITS at `fits`: `group-2.fits` keeps
+/// it in `group-2-clipped.fits`. A processing run knows only its stack's
+/// FITS, so it finds the map this way.
+fn clipped_path_beside(fits: &FsPath) -> PathBuf {
+    let stem = fits.file_stem().unwrap_or_default().to_string_lossy();
+    fits.with_file_name(format!("{stem}-clipped.fits"))
+}
+
+/// Write `clipped` to `path` through a temporary file, or remove what is
+/// there when there is no map, so a stale one never outlives its stack.
+fn write_clipped(
+    path: &FsPath,
+    clipped: Option<&seiza_stacking::LinearImage>,
+) -> Result<(), String> {
+    let Some(clipped) = clipped else {
+        return match std::fs::remove_file(path) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(format!(
+                "Cannot remove the stale clipped map {}: {error}",
+                path.display()
+            )),
+            _ => Ok(()),
+        };
+    };
+    let temporary = path.with_extension(format!("{}.tmp.fits", std::process::id()));
+    seiza_stacking::write_processed_image_fits_f32(&temporary, clipped, &[], &[])
+        .map_err(|error| error.to_string())?;
+    std::fs::rename(&temporary, path).map_err(|error| error.to_string())
+}
+
+/// The clipped map [`write_clipped`] wrote at `path`, or `None` when there
+/// is none. One that cannot be read is logged and treated as absent: the
+/// stack still calibrates, only without rendering clipped cores neutral.
+fn read_clipped(path: &FsPath) -> Option<seiza_stacking::LinearImage> {
+    if !path.exists() {
+        return None;
+    }
+    // Read as written: the map holds fractions, not samples a stack scales.
+    match seiza_stacking::FitsFrame::open(path) {
+        Ok(frame) if frame.image.channels == 1 => Some(frame.image),
+        Ok(frame) => {
+            tracing::warn!(
+                "Ignoring clipped map {}: it has {} channels, not one",
+                path.display(),
+                frame.image.channels
+            );
+            None
+        }
+        Err(error) => {
+            tracing::warn!(
+                "Ignoring unreadable clipped map {}: {error}",
+                path.display()
+            );
+            None
+        }
+    }
 }
 
 /// The exposure the accumulator has taken so far. Turned-away frames carry no

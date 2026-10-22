@@ -2484,8 +2484,15 @@ fn render_fits_variant(
                     .gaia_photometry_catalog()
                     .map(|(catalog, _)| catalog)
             };
-            let (image, mut outcome) = pool
-                .install(|| super::color_calibration::calibrate_stack(plan, linear, &open_catalog));
+            let clipped = super::read_clipped(&super::clipped_path_beside(source_path));
+            let (image, mut outcome) = pool.install(|| {
+                super::color_calibration::calibrate_stack(
+                    plan,
+                    linear,
+                    clipped.as_ref(),
+                    &open_catalog,
+                )
+            });
             // An unlinked stretch pulls each channel to its own median.
             if config.color_strategy == seiza_stretch::ColorStrategy::Unlinked {
                 super::color_calibration::mark_stretched_separately(&mut outcome);

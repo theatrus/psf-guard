@@ -3095,6 +3095,15 @@ fn compose_color(
             }
             progress.finish(StackColorProgressPhase::RegisteringSources);
         }
+        let clipped = clipped_on_reference(
+            stack_root,
+            &job.sources,
+            &registered_transforms,
+            (
+                images[&reference_role].width,
+                images[&reference_role].height,
+            ),
+        );
 
         let options = if let Some(processing) = &job.processing {
             if reused_inputs {
@@ -3307,6 +3316,7 @@ fn compose_color(
                     placement,
                     &plan.settings,
                     &mut images,
+                    clipped.as_ref(),
                     &open_catalog,
                 ));
             }
@@ -3542,6 +3552,7 @@ fn compose_color(
                         &plan.settings,
                         image,
                         composition.region,
+                        clipped.as_ref(),
                         channel_stages,
                         &processing.output_stretches,
                         &open_catalog,
@@ -3717,6 +3728,7 @@ fn calibrate_registered_channels(
     placement: &color_calibration::StarPlacement,
     settings: &StackColorCalibration,
     images: &mut BTreeMap<StackColorRole, LinearImage>,
+    clipped: Option<&LinearImage>,
     open_catalog: OpenCatalog<'_>,
 ) -> StackColorCalibrationOutcome {
     use color_calibration::StackColorCalibrationSkipReason as Reason;
@@ -3761,6 +3773,7 @@ fn calibrate_registered_channels(
         &wcs,
         &catalog,
         settings,
+        clipped,
     );
     images.insert(StackColorRole::Red, red);
     images.insert(StackColorRole::Green, green);
@@ -3836,11 +3849,13 @@ fn stretch_linear_composition(
 /// survives, and when it cannot calibrate they stretch each channel on its
 /// own, as they would have without calibration. One linked stretch of
 /// uncalibrated channels would show the camera's color cast.
+#[allow(clippy::too_many_arguments)]
 fn calibrate_and_stretch_composition(
     placement: &color_calibration::StarPlacement,
     settings: &StackColorCalibration,
     image: LinearImage,
     crop: ReferenceRegion,
+    clipped: Option<&LinearImage>,
     channel_stages: &[super::stretch::StackStretchRequest],
     output_stages: &[super::stretch::StackStretchRequest],
     open_catalog: OpenCatalog<'_>,
@@ -3881,6 +3896,14 @@ fn calibrate_and_stretch_composition(
         }
     };
     let gaia = seiza_stacking::GaiaColors::Catalog(&catalog);
+    // The map is on the registered grid; the composition is its crop.
+    let clipped = clipped.and_then(|clipped| match clipped.crop(crop) {
+        Ok(clipped) => Some(clipped),
+        Err(error) => {
+            tracing::warn!("Not rendering clipped pixels neutral: {error}");
+            None
+        }
+    });
     let Some(stack) = stack else {
         let mut image = image;
         let outcome = seiza_stacking::calibrate_color_image(
@@ -3889,15 +3912,24 @@ fn calibrate_and_stretch_composition(
             gaia,
             &settings.options(),
         );
+        if outcome.calibration().is_some() {
+            color_calibration::neutralize_clipped(&mut image, clipped.as_ref());
+        }
         return Ok(StretchedComposition {
             image,
             calibration: Some(outcome.into()),
             plans: Vec::new(),
         });
     };
-    let result =
-        seiza_stacking::calibrate_and_stretch(image, Some(&wcs), gaia, &settings.options(), &stack)
-            .map_err(|error| error.to_string())?;
+    let result = seiza_stacking::calibrate_and_stretch(
+        image,
+        Some(&wcs),
+        gaia,
+        &settings.options(),
+        &stack,
+        clipped.as_ref(),
+    )
+    .map_err(|error| error.to_string())?;
     Ok(StretchedComposition {
         image: result.image,
         calibration: Some(result.calibration.into()),
@@ -4069,6 +4101,65 @@ fn registered_channel_headers(
         seiza_fits::HeaderValue::String(filter_name.into()),
     ));
     headers
+}
+
+/// Where the channels' raw frames clipped, on the reference channel's grid:
+/// each channel stack's clipped map carried through the transform that
+/// registered the channel, and at each pixel the largest share any channel
+/// clipped, since a core clipped in one channel is tinted all the same.
+/// Luminance is left out: it carries no colour for the gains to tint.
+/// `None` when no channel kept a map, as a stack built before PSF Guard
+/// kept them or a WBPP import.
+fn clipped_on_reference(
+    stack_root: &FsPath,
+    sources: &[StackColorSource],
+    registered: &BTreeMap<StackColorRole, seiza_stacking::SimilarityTransform>,
+    (width, height): (usize, usize),
+) -> Option<LinearImage> {
+    let mut combined: Option<LinearImage> = None;
+    for source in sources
+        .iter()
+        .filter(|source| source.role != StackColorRole::Luminance)
+    {
+        let Some(map) = super::read_clipped(&super::clipped_path(
+            stack_root,
+            &source.job_id,
+            source.group_index,
+        )) else {
+            continue;
+        };
+        let Some(&transform) = registered.get(&source.role) else {
+            continue;
+        };
+        let map = if transform == seiza_stacking::SimilarityTransform::IDENTITY
+            && (map.width, map.height) == (width, height)
+        {
+            map
+        } else {
+            match resample_to_reference(&map, width, height, transform) {
+                Ok(map) => map,
+                Err(error) => {
+                    tracing::warn!(
+                        "Leaving out the {} channel's clipped map: {error}",
+                        source.role.label()
+                    );
+                    continue;
+                }
+            }
+        };
+        match &mut combined {
+            None => combined = Some(map),
+            Some(combined) => {
+                for (share, &other) in combined.data.iter_mut().zip(&map.data) {
+                    // A pixel a channel does not reach is NaN there.
+                    if other.is_finite() && (share.is_nan() || *share < other) {
+                        *share = other;
+                    }
+                }
+            }
+        }
+    }
+    combined
 }
 
 fn load_source_frame(stack_root: &FsPath, source: &StackColorSource) -> Result<FitsFrame, String> {
@@ -6893,6 +6984,62 @@ mod tests {
         LinearImage::new(width, height, 1, vec![value; width * height]).unwrap()
     }
 
+    /// Each channel's clipped map reaches the reference grid through the
+    /// transform that registered the channel, and where several clipped the
+    /// largest share wins. Luminance carries no colour and is left out, and
+    /// a channel without a map adds nothing.
+    #[test]
+    fn channels_clipped_maps_meet_on_the_reference_grid_at_their_largest_share() {
+        let root = tempfile::tempdir().unwrap();
+        let (width, height) = (16, 12);
+        let write = |job: &str, at: (usize, usize), share: f32| {
+            let mut data = vec![0.0; width * height];
+            data[at.1 * width + at.0] = share;
+            let path = super::super::clipped_path(root.path(), job, 0);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let map = LinearImage::new(width, height, 1, data).unwrap();
+            super::super::write_clipped(&path, Some(&map)).unwrap();
+        };
+        write("red", (5, 5), 0.4);
+        write("green", (5, 5), 0.9);
+        write("blue", (3, 2), 1.0);
+        write("luminance", (8, 8), 1.0);
+        let sources = [
+            channel(StackColorRole::Luminance, "L", "luminance", false),
+            channel(StackColorRole::Red, "R", "red", false),
+            channel(StackColorRole::Green, "G", "green", false),
+            channel(StackColorRole::Blue, "B", "blue", false),
+            channel(StackColorRole::Ha, "Ha", "unclipped", false),
+        ];
+        let identity = seiza_stacking::SimilarityTransform::IDENTITY;
+        let shifted = seiza_stacking::SimilarityTransform {
+            translation_x: 2.0,
+            ..identity
+        };
+        let registered = BTreeMap::from([
+            (StackColorRole::Luminance, identity),
+            (StackColorRole::Red, identity),
+            (StackColorRole::Green, identity),
+            (StackColorRole::Blue, shifted),
+            (StackColorRole::Ha, identity),
+        ]);
+        let map = clipped_on_reference(root.path(), &sources, &registered, (width, height))
+            .expect("three colour channels kept maps");
+        let at = |x: usize, y: usize| map.data[y * width + x];
+        assert_eq!(at(5, 5), 0.9);
+        assert_eq!(at(5, 2), 1.0, "blue's core moves with its registration");
+        assert_eq!(at(3, 2), 0.0);
+        assert_eq!(at(8, 8), 0.0, "luminance is left out");
+        assert!(map.data.iter().all(|share| share.is_finite()));
+        assert!(clipped_on_reference(
+            root.path(),
+            &[channel(StackColorRole::Red, "R", "unclipped", false)],
+            &registered,
+            (width, height),
+        )
+        .is_none());
+    }
+
     #[test]
     fn a_calibration_that_cannot_run_leaves_the_channels_alone() {
         use super::super::color_calibration::{plan, StackColorCalibrationSkipReason};
@@ -6937,6 +7084,7 @@ mod tests {
                 placement,
                 &settings,
                 &mut images,
+                None,
                 &gone
             )),
             StackColorCalibrationSkipReason::NoGaiaCatalog
@@ -6960,6 +7108,7 @@ mod tests {
                 stale.placement.as_ref().unwrap(),
                 &settings,
                 &mut images,
+                None,
                 &unopened
             )),
             StackColorCalibrationSkipReason::Failed
@@ -6988,6 +7137,7 @@ mod tests {
                 width: 64,
                 height: 48,
             },
+            None,
             std::slice::from_ref(&auto),
             &[],
             &gone,
