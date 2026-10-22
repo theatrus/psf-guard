@@ -19,4 +19,12 @@
 ignore = [
     "RUSTSEC-2026-0194",
     "RUSTSEC-2026-0195",
+    # Same updater-only exception as 0.12: application archive imports use
+    # zip 9. zip 4 remains in tauri-plugin-updater, which extracts signed
+    # update payloads. Upstream fixed this in plugins-workspace#3698, but
+    # tauri-plugin-updater 2.14.1 is not published yet. Remove these once a
+    # released updater eliminates zip 4 from Cargo.lock.
+    "RUSTSEC-2026-0367",
+    "RUSTSEC-2026-0368",
+    "RUSTSEC-2026-0369",
 ]

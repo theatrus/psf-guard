@@ -2582,7 +2582,7 @@ export interface SkyFootprint {
 
 /** The latest stack preview of a target, for drawing inside its field. */
 export interface SkyPreview {
-  /** Same-origin URL of the preview PNG. */
+  /** Preview PNG URL, resolved against the backend by the API client. */
   url: string;
   /** The pixel grid the preview covers, in the stack's output orientation. */
   width: number;

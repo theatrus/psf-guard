@@ -16,6 +16,29 @@ import { writeUpdaterConfig } from './write-updater-config.mjs';
 
 const execFileAsync = promisify(execFile);
 
+test('0.11 maintenance releases preserve the current release aliases', async () => {
+  const releaseWorkflow = await readFile(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8');
+  const rpmWorkflow = await readFile(new URL('../.github/workflows/rpm.yml', import.meta.url), 'utf8');
+  const dockerWorkflow = await readFile(new URL('../.github/workflows/docker.yml', import.meta.url), 'utf8');
+  const mergeJob = dockerWorkflow.split('\n  merge:')[1].split('\n  retag-latest:')[0];
+  assert.match(releaseWorkflow, /make_latest: false/);
+  assert.match(rpmWorkflow, /make_latest: false/);
+  assert.match(mergeJob, /flavor: latest=false/);
+  assert.match(mergeJob, /type=semver,pattern=\{\{version\}\}/);
+  assert.match(mergeJob, /type=semver,pattern=\{\{major\}\}\.\{\{minor\}\}/);
+  assert.doesNotMatch(mergeJob, /type=semver,pattern=\{\{major\}\}\s*$/m);
+  assert.doesNotMatch(mergeJob, /type=raw,value=latest/);
+});
+
+test('keeps macOS signing available after a long CLI build', async () => {
+  const releaseWorkflow = await readFile(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8');
+  assert.match(releaseWorkflow, /set-keychain-settings -t 21600/);
+  const desktopStep = releaseWorkflow.split('- name: Build Tauri desktop app (macOS)')[1].split('\n    # Tauri notarizes')[0];
+  assert.match(desktopStep, /timeout-minutes: 120/);
+  assert.match(desktopStep, /KEYCHAIN_PASSWORD: \$\{\{ secrets.KEYCHAIN_PASSWORD \}\}/);
+  assert.match(desktopStep, /security unlock-keychain -p "\$KEYCHAIN_PASSWORD" build.keychain/);
+});
+
 test('labels macOS artifacts as Apple Silicon', async () => {
   const releaseWorkflow = await readFile(
     new URL('../.github/workflows/release.yml', import.meta.url),

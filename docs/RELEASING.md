@@ -4,6 +4,11 @@ This guide covers a normal PSF Guard desktop, CLI, package, and server release.
 Prepare the release in a pull request. Do not tag until that exact pull request
 has merged and all required checks have passed.
 
+The `release/v0.11` branch ships maintenance releases. Its GitHub releases
+stay off `latest`, and its Docker tags update only the full version and the
+`0.11` alias. Keep the shared `0` and `latest` aliases on the current 0.12
+line. Versioned updater and notice files still ship with each release.
+
 ## 1. Check the release boundary
 
 1. Fetch `origin/main` and the tags.
