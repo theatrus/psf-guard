@@ -98,7 +98,7 @@ pub(super) fn integrate(
                 )
             });
         match banded {
-            Err(error) if is_scratch_failure(&error) => {
+            Err(error) if is_scratch_failure(&error, scratch) => {
                 tracing::warn!("Final pass reading every frame on each pass instead: {error}")
             }
             result => return result,
@@ -110,12 +110,20 @@ pub(super) fn integrate(
     })
 }
 
-/// Whether `error` says the scratch files could not be kept, which the
-/// whole-frame passes get by without, rather than that a frame could not be
-/// read or the pass was stopped. Seiza names the scratch directory, and
-/// PSF Guard's own, whenever one fails.
-fn is_scratch_failure(error: &seiza_stacking::Error) -> bool {
-    !matches!(error, seiza_stacking::Error::Cancelled) && error.to_string().contains("scratch")
+/// Whether `error` says the scratch files in `scratch` could not be kept,
+/// which the whole-frame passes get by without, rather than that a frame
+/// could not be read or the pass was stopped: Seiza's own words when it
+/// cannot make its directory or keep a frame there, PSF Guard's when it
+/// cannot make the folder, and a frame that could not be read back from
+/// below `scratch`.
+fn is_scratch_failure(error: &seiza_stacking::Error, scratch: &std::path::Path) -> bool {
+    if matches!(error, seiza_stacking::Error::Cancelled) {
+        return false;
+    }
+    let message = error.to_string();
+    message.contains("scratch directory")
+        || message.contains("final pass's scratch folder")
+        || (message.contains(" back from ") && message.contains(&*scratch.to_string_lossy()))
 }
 
 /// The weights the live pass gave each admitted frame, in replay order, or
@@ -539,6 +547,33 @@ mod tests {
             assert_eq!(bits(&whole), bits(&banded));
             assert_eq!(whole.snapshot.coverage, banded.snapshot.coverage);
         }
+    }
+
+    /// Only the scratch files' own failures send the pass to its three
+    /// loads per frame; a source that cannot be read stays an error even
+    /// when its path says scratch.
+    #[test]
+    fn only_scratch_failures_fall_back_to_three_passes() {
+        let scratch = std::path::Path::new("/stacks/stack-scratch");
+        let error = |message: &str| seiza_stacking::Error::Stack(message.into());
+        for message in [
+            "cannot initialize replay scratch directory /stacks/stack-scratch (an existing writable directory is required): No space left on device",
+            "cannot keep registered frame 3 in the chosen scratch directory",
+            "cannot read admitted frame 2 back from /stacks/stack-scratch/.seiza-reintegrate-41-Ab3/frame-1.f32: unexpected end of file",
+            "Cannot make the final pass's scratch folder /stacks/stack-scratch: Permission denied",
+        ] {
+            assert!(is_scratch_failure(&error(message), scratch), "{message}");
+        }
+        for message in [
+            "Image 7 changed during stacking; rebuild the stack",
+            "cannot read /Volumes/scratch/lights/m31-0001.fits: unexpected end of file",
+        ] {
+            assert!(!is_scratch_failure(&error(message), scratch), "{message}");
+        }
+        assert!(!is_scratch_failure(
+            &seiza_stacking::Error::Cancelled,
+            scratch
+        ));
     }
 
     #[test]

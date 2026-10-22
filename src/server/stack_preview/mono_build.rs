@@ -1225,18 +1225,19 @@ pub(super) fn run_group(
         // tinted by the channels' gains.
         let clipped = stacker.clipped_fraction();
         // Seiza reads each frame once and then runs its three passes band
-        // by band: two stages. Only when it has no room for its scratch
-        // files does it read every frame on each of three passes.
-        let mut passes = 2;
+        // by band: two stages. Without room for its scratch files it reads
+        // every frame on each of three passes instead.
+        let passes = std::cell::Cell::new(2);
         let mut report_pass = |pass: seiza_stacking::BatchStackPass, index: usize, count: usize| {
             let pass = match pass {
                 seiza_stacking::BatchStackPass::Estimate => 1,
                 seiza_stacking::BatchStackPass::Refine => {
-                    passes = 3;
+                    passes.set(3);
                     2
                 }
-                seiza_stacking::BatchStackPass::Integrate => passes,
+                seiza_stacking::BatchStackPass::Integrate => passes.get(),
             };
+            let passes = passes.get();
             state.stack_previews.update(job_id, |job| {
                 let group = &mut job.groups[group.index];
                 group.phase = format!(
@@ -1287,6 +1288,7 @@ pub(super) fn run_group(
                 .is_none_or(|room| needed.saturating_add(needed / 10) <= room)
                 .then_some(scratch);
             if scratch.is_none() {
+                passes.set(3);
                 tracing::warn!(
                     job_id,
                     group_index = group.index,
