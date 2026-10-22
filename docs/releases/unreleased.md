@@ -6,6 +6,13 @@
 
 ## Changes
 
+- BlurXTerminator, NoiseXTerminator and StarXTerminator no longer turn a
+  stack upside down. RC-Astro read a stack without a row order, such as a WBPP
+  master, as bottom-up and returned it flipped, so a color preview built from
+  it misaligned that channel. Color previews that used RC-Astro show as out of
+  date; build them again. A channel card that already shows a flipped result
+  keeps it until you apply its processing again.
+
 - A mono stack's card shows a processing run you started, such as
   BlurXTerminator, after you leave **Stacks** and come back. **Apply
   processing** shows the run's progress and stays disabled until it ends,
