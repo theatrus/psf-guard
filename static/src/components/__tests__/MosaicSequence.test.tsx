@@ -1,5 +1,5 @@
 import { describe, expect, it, onTestFinished } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import type { ReactNode } from 'react';
@@ -93,8 +93,12 @@ describe("a mosaic's sequence", () => {
     // requests: a response that arrives after the test file ends can log
     // while Vitest closes the worker, which fails the run with "Closing rpc
     // while onUserConsoleLog was pending".
-    await waitFor(() => {
+    // A finished request can start another on the next tick, so the view
+    // counts as quiet only when it stays idle across one.
+    await waitFor(async () => {
       expect(requests.finished.some((url) => url.startsWith('/api/db/test/analysis/sequence?target_id=21'))).toBe(true);
+      expect(requests.idle()).toBe(true);
+      await act(async () => {});
       expect(requests.idle()).toBe(true);
     });
   });

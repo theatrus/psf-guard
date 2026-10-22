@@ -423,7 +423,9 @@ impl StackPreviewManager {
             total_units,
             created_unix_seconds: run.created_unix_seconds,
             automatic: run.automatic,
-            queue_position: None,
+            // The run's place in the line, as a waiting run's 202 answer
+            // carries it.
+            queue_position: wait.as_ref().and_then(|wait| wait.position),
             progress_label: run.running.then_some(progress_label).flatten(),
             processing: Some(ProcessingActivity {
                 operation: run.operation.clone(),
@@ -512,6 +514,20 @@ mod tests {
             "Stretch".into(),
             false,
             test_origin(&"b".repeat(64)),
+        );
+        // Each run's own entry carries its place in the line.
+        let mut positions = manager
+            .processing_activity()
+            .into_iter()
+            .map(|entry| (entry.label, entry.queue_position))
+            .collect::<Vec<_>>();
+        positions.sort();
+        assert_eq!(
+            positions,
+            [
+                ("M44 · G".to_string(), Some(1)),
+                ("M44 · R".to_string(), Some(0))
+            ]
         );
         let active = manager.active();
         assert_eq!(active.len(), 2);
