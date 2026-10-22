@@ -255,10 +255,17 @@ async fn spatial_scan_runs_and_reports_missing_files_as_errors() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json["data"]["started"], true);
-    // The route queues the scan and answers before the runner has found
-    // its frames: a page polls the progress from here.
-    assert_eq!(json["data"]["progress"]["running"], true);
-    assert_eq!(json["data"]["progress"]["target_id"], 1);
+    // The route queues the scan and reads its progress after: a page polls
+    // from here. Usually the runner is still preparing, but with no image
+    // dirs the scan has nothing to read, and on a fast machine it can
+    // finish before the route reads the progress. Either is this scan.
+    let progress = &json["data"]["progress"];
+    assert_eq!(progress["target_id"], 1, "{progress}");
+    assert!(
+        progress["running"] == true
+            || (progress["stage"] == "complete" && progress["finished_at"].is_i64()),
+        "{progress}"
+    );
 
     // The test context has no image dirs, so every file resolution fails and
     // the scan finishes quickly. Poll until done.
