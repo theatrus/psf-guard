@@ -34,7 +34,7 @@ import StackStretchControls from './StackStretchControls';
 import StackColorCalibrationLine from './StackColorCalibrationLine';
 import { calibrationOutdated } from './stackCalibrationStale';
 import { isSkyOriented } from './stackOrientation';
-import { carriedLabel } from './stackProcessingLabel';
+import { carriedLabel, processingRunFor, runProgress } from './stackProcessingLabel';
 import { useAccess } from '../auth/access';
 import { STACK_ACTIVITY_QUERY_KEY, useStackActivity } from '../hooks/useStackActivity';
 import { JOBS_QUERY_KEY } from '../api/jobs';
@@ -755,6 +755,32 @@ export default function StackPreviewPanel({
   const processingByArtifact = new Map(processingArtifacts.map((artifact, index) =>
     [artifactStretchKey(artifact), processingQueries[index]] as const
   ));
+
+  // A processing run a person asked for keeps going on the server when the
+  // page closes. When one on a shown channel ends, read that channel's
+  // processing again, as the request that started it would have.
+  const processingRunChannels = useRef(new Map<string, { jobId: string; groupIndex: number }>());
+  useEffect(() => {
+    const seen = processingRunChannels.current;
+    const runs = new Map<string, { jobId: string; groupIndex: number }>();
+    for (const artifact of processingArtifacts) {
+      const run = processingRunFor(active, dbId, artifact.jobId, artifact.group.index);
+      if (run) runs.set(run.job_id, { jobId: artifact.jobId, groupIndex: artifact.group.index });
+    }
+    for (const [runId, channel] of seen) {
+      if (runs.has(runId)) continue;
+      queryClient.invalidateQueries({
+        predicate: (query) => {
+          const key = query.queryKey;
+          return key[0] === 'db' && key[1] === dbId && key[2] === 'project' && key[3] === projectId
+            && key[4] === 'stack-processing'
+            && typeof key[5] === 'string'
+            && key[5].startsWith(`${channel.jobId}:${channel.groupIndex}:`);
+        },
+      });
+    }
+    processingRunChannels.current = runs;
+  }, [active, dbId, processingArtifacts, projectId, queryClient]);
   const stretches: Record<string, StackStretchPreview | undefined> = Object.fromEntries(
     [...processingByArtifact].map(([key, query]) => [key, query.data ?? undefined])
   );
@@ -1380,6 +1406,12 @@ export default function StackPreviewPanel({
                         channels={artifact.group.output_channels === 3 ? 3 : 1}
                         disabled={!canCompute || running || processingQuery?.isPending || !!processingQuery?.error}
                         applied={appliedStretch}
+                        serverRun={(() => {
+                          const run = processingRunFor(
+                            active, dbId, artifact.jobId, artifact.group.index
+                          );
+                          return run ? runProgress(run) : null;
+                        })()}
                         apply={(request, onProgress, signal) => {
                           let listed = false;
                           return apiClient.applyStackStretch(

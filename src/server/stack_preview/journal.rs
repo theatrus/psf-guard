@@ -244,6 +244,18 @@ impl JournaledStackJob {
         matches!(self, Self::Processing { .. })
     }
 
+    /// The stack build and channel group a processing run processes.
+    pub(super) fn processed_group(&self) -> Option<(&str, usize)> {
+        match self {
+            Self::Processing {
+                job_id,
+                group_index,
+                ..
+            } => Some((job_id.as_str(), *group_index)),
+            _ => None,
+        }
+    }
+
     /// What it is, for the log.
     fn noun(&self) -> &'static str {
         if self.is_processing() {

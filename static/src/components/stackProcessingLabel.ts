@@ -29,6 +29,47 @@ export function carriedLabel(
   return `${lead} · ${status}`;
 }
 
+/**
+ * The processing run a person asked for on one channel of a stack build,
+ * while it waits or runs on the server, from the background jobs. A page
+ * that was closed and opened again finds it here, since only the request
+ * that started it follows it otherwise. Runs the server re-applies after a
+ * refresh are left out: the card's reprocessing line shows those.
+ */
+export function processingRunFor(
+  active: StackActivityEntry[],
+  dbId: string,
+  jobId: string,
+  groupIndex: number
+): StackActivityEntry | undefined {
+  return active.find((entry) =>
+    entry.kind === 'processing'
+    && !entry.automatic
+    && entry.database_id === dbId
+    && entry.processing?.stack_job_id === jobId
+    && entry.processing?.group_index === groupIndex
+  );
+}
+
+/** A processing run's activity entry as the progress Apply processing shows. */
+export function runProgress(entry: StackActivityEntry): StackStretchPendingProgress {
+  const processing = entry.processing;
+  if (entry.state === 'queued') {
+    return {
+      pending: true,
+      queued: true,
+      stage: entry.detail || undefined,
+      waiting_for: processing?.waiting_for ?? undefined,
+      queue_position: entry.queue_position ?? undefined,
+    };
+  }
+  return {
+    pending: true,
+    stage: processing?.stage ?? undefined,
+    fraction: processing?.fraction ?? undefined,
+  };
+}
+
 /** A tool's name as people say it: "RC-Astro BlurXTerminator" is "BlurXTerminator". */
 export function toolName(stage: string): string {
   return stage.replace(/^RC-Astro /, '');

@@ -6,4 +6,8 @@
 
 ## Changes
 
-- No unreleased changes yet.
+- A mono stack's card shows a processing run you started, such as
+  BlurXTerminator, after you leave **Stacks** and come back. **Apply
+  processing** shows the run's progress and stays disabled until it ends,
+  and then the card shows the result. Before, the card showed no run while
+  the background jobs list still showed it.

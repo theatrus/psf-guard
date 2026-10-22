@@ -1953,6 +1953,8 @@ fn the_activity_endpoint_lists_a_processing_run_beside_builds() {
             "processing": {
                 "operation": "BlurXTerminator",
                 "channel": "R",
+                "stack_job_id": "e".repeat(64),
+                "group_index": 0,
                 "waiting_for": "the stack build of Target 42 · Ha",
                 "stoppable": true,
             },
@@ -4035,6 +4037,12 @@ mod processing_runs {
         assert_eq!(queued.label, "Target 42 · R");
         let processing = queued.processing.as_ref().unwrap();
         assert_eq!(processing.operation, "BlurXTerminator");
+        // The card of the stack's channel finds the run by its build and group.
+        assert_eq!(
+            processing.stack_job_id.as_deref(),
+            Some("e".repeat(64).as_str())
+        );
+        assert_eq!(processing.group_index, Some(0));
         assert_eq!(
             processing.waiting_for.as_deref(),
             Some("the stack build of Target 42 · Ha")

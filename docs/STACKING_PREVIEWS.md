@@ -403,7 +403,8 @@ automatic refreshes under `scheduled`, each due one not yet planned marked
 and re-applies of processing waiting for their turn under
 `waiting_reapplies`. A processing run is an entry
 of `kind` `processing` whose `job_id` is its stretch id; its `processing`
-object carries `operation`, `channel`, `stoppable`, and, while it waits,
+object carries `operation`, `channel`, `stoppable`, the stack build and group
+it processes as `stack_job_id` and `group_index`, and, while it waits,
 `waiting_for`, or, once it runs, `stage`, `fraction` and
 `started_unix_seconds`.
 `POST /api/stack-activity/scheduled/run-now` starts one within seconds and
@@ -1306,6 +1307,13 @@ how many runs are ahead of it. Once it runs, the button shows the step under
 way and, while an RC-Astro tool works, the chain's share done:
 `Applying… 42% · BlurXTerminator`. The server log says when a run queues,
 when it starts and how long it waited, and when it finishes.
+
+The run continues on the server when you leave **Stacks**. When you return
+while it waits or runs, the channel's card shows the same progress on
+**Apply processing**, which stays disabled until the run ends; then the card
+shows the result. A run the server re-applies after a stack refresh shows on
+the card's reprocessing line instead (see Re-apply processing when a stack
+refreshes).
 
 The header's background jobs chip counts processing runs and lists them
 beside builds: what the run does (`BlurXTerminator`, `Deconvolution`,
