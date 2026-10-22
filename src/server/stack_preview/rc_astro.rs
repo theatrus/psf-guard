@@ -113,6 +113,10 @@ struct CachedRcAstro {
     rc_astro_id: String,
     config: RcAstroProcessing,
     result: StackRcAstroResult,
+    /// Written after PSF Guard told rc-astro the rows are top-down, so they
+    /// are in the order they were stored. See `exchange_headers`.
+    #[serde(default)]
+    rows_as_stored: bool,
 }
 
 /// What `GET /api/tools/rc-astro` reports: whether the CLI is installed and
@@ -481,8 +485,23 @@ fn cached_prefix_manifest(
         && cached.rc_astro_id == rc_astro_id
         && &cached.config == prefix
         && rc_astro_fits_path(stack_root, rc_astro_id).is_file()
-        && (!cached.result.has_stars || rc_astro_stars_path(stack_root, rc_astro_id).is_file()))
+        && (!cached.result.has_stars || rc_astro_stars_path(stack_root, rc_astro_id).is_file())
+        && (cached.rows_as_stored || stored_top_down(&rc_astro_fits_path(stack_root, rc_astro_id))))
     .then_some(cached)
+}
+
+/// Whether a result written before `rows_as_stored` has its rows in order:
+/// only when its stack said `ROWORDER = 'TOP-DOWN'`, which the result kept.
+/// rc-astro reversed the rows of every other stack, so that result runs
+/// again.
+fn stored_top_down(fits: &FsPath) -> bool {
+    crate::image_io::read_header(fits).is_ok_and(|headers| {
+        headers.iter().any(|(key, value)| {
+            key == "ROWORDER"
+                && matches!(value, seiza_fits::HeaderValue::String(order)
+                    if order.trim().eq_ignore_ascii_case("TOP-DOWN"))
+        })
+    })
 }
 
 /// Whether a whole chain's result is in the cache, without reading its
@@ -566,6 +585,7 @@ fn persist_prefix(
             rc_astro_id: rc_astro_id.into(),
             config: prefix.clone(),
             result: result.clone(),
+            rows_as_stored: true,
         },
     )
 }
@@ -676,6 +696,7 @@ fn apply_rc_astro_with_runner(
         }
     }
 
+    let exchange_headers = exchange_headers(reference_headers);
     let total_steps = ordered.len().max(1);
     for (index, step) in ordered.iter().enumerate().skip(resume_at) {
         // Each finished step is already persisted below, so stopping here
@@ -729,7 +750,7 @@ fn apply_rc_astro_with_runner(
             schema,
             &request,
             &padded,
-            reference_headers,
+            &exchange_headers,
             &mut step_progress,
         )?;
         restore_coverage(&current, &mut processed.image)?;
@@ -778,6 +799,26 @@ fn apply_rc_astro_with_runner(
         stars,
         result,
     })
+}
+
+/// The headers for the file rc-astro reads. rc-astro reads a FITS without
+/// `ROWORDER`, or one that says `BOTTOM-UP`, as bottom-up and writes its
+/// result top-down, which reverses the rows in the file. PSF Guard reads
+/// rows in the order they are stored, so the exchange file always says
+/// `TOP-DOWN`, and the result comes back with its rows where they were.
+/// A WBPP master carries no `ROWORDER`; N.I.N.A. frames say `TOP-DOWN`.
+fn exchange_headers(
+    reference_headers: &[(String, seiza_fits::HeaderValue)],
+) -> Vec<(String, seiza_fits::HeaderValue)> {
+    reference_headers
+        .iter()
+        .filter(|(key, _)| !key.eq_ignore_ascii_case("ROWORDER"))
+        .cloned()
+        .chain(std::iter::once((
+            "ROWORDER".to_string(),
+            seiza_fits::HeaderValue::String("TOP-DOWN".into()),
+        )))
+        .collect()
 }
 
 fn restore_coverage(input: &LinearImage, output: &mut LinearImage) -> Result<(), String> {
@@ -944,6 +985,105 @@ mod tests {
                     assert!(stars.data[index].is_nan());
                 }
             }
+        }
+    }
+
+    #[test]
+    fn rc_astro_reads_the_rows_in_the_order_they_are_stored() {
+        let cache = tempfile::tempdir().unwrap();
+        let config = RcAstroProcessing {
+            steps: vec![step("nxt")],
+        };
+        let schemas = vec![("nxt".into(), schema("nxt", "2.6.6", 3))];
+        let source = LinearImage::new(2, 2, 1, vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+        // A WBPP master has no ROWORDER, and another camera's stack may say
+        // BOTTOM-UP: rc-astro would reverse the rows of either.
+        for reference in [
+            Vec::new(),
+            vec![(
+                "ROWORDER".to_string(),
+                seiza_fits::HeaderValue::String("BOTTOM-UP".into()),
+            )],
+        ] {
+            let ids = rc_astro_chain_ids(
+                "db",
+                &format!("mono:{}", reference.len()),
+                "revision",
+                &config,
+                &schemas,
+                None,
+            )
+            .unwrap();
+            let mut sent = Vec::new();
+            apply_rc_astro_with_runner(
+                cache.path(),
+                &ids,
+                &config,
+                &schemas,
+                &source,
+                &reference,
+                &mut |_, _| {},
+                &mut || Ok(()),
+                &mut |_schema: &ExternalToolSchema,
+                      _request: &ExternalToolRequest,
+                      input: &LinearImage,
+                      headers: &[(String, seiza_fits::HeaderValue)],
+                      _progress: &mut dyn FnMut(f32)| {
+                    sent = headers
+                        .iter()
+                        .filter(|(key, _)| key == "ROWORDER")
+                        .map(|(_, value)| value.clone())
+                        .collect();
+                    Ok(seiza_stacking::ProcessedStackImage {
+                        image: input.clone(),
+                        stars: None,
+                        device: None,
+                        warnings: Vec::new(),
+                    })
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                sent,
+                [seiza_fits::HeaderValue::String("TOP-DOWN".into())],
+                "{reference:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_earlier_result_serves_only_when_its_stack_said_top_down() {
+        let cache = tempfile::tempdir().unwrap();
+        let config = RcAstroProcessing {
+            steps: vec![step("nxt")],
+        };
+        let image = LinearImage::new(2, 2, 1, vec![1.0, 2.0, 3.0, 4.0]).unwrap();
+        let result = StackRcAstroResult {
+            cli_version: "2.6.6".into(),
+            steps: Vec::new(),
+            has_stars: false,
+        };
+        let top_down = vec![(
+            "ROWORDER".to_string(),
+            seiza_fits::HeaderValue::String("TOP-DOWN".into()),
+        )];
+        for (id, headers, served) in [
+            ("a".repeat(64), top_down, true),
+            ("b".repeat(64), Vec::new(), false),
+        ] {
+            persist_prefix(cache.path(), &id, &config, &image, None, &result, &headers).unwrap();
+            assert!(cached_prefix_manifest(cache.path(), &id, &config).is_some());
+            // Rewrite the manifest as a release before the fix wrote it.
+            let path = rc_astro_manifest_path(cache.path(), &id);
+            let mut manifest: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            manifest.as_object_mut().unwrap().remove("rows_as_stored");
+            std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+            assert_eq!(
+                cached_prefix_manifest(cache.path(), &id, &config).is_some(),
+                served,
+                "{headers:?}"
+            );
         }
     }
 

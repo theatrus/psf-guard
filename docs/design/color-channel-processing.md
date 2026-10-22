@@ -124,7 +124,11 @@ Identity and caches:
   `COLOR_CHANNEL_TOOLS_VERSION`, and the job records it in
   `channel_tools_version`. A finished job with tools and an older version is
   out of date ("deconvolution and RC-Astro now run on each channel's own
-  stack"); the next build runs them in the new order once.
+  stack"); the next build runs them in the new order once. Version 2 came
+  when rc-astro stopped reversing the rows of stacks without
+  `ROWORDER = 'TOP-DOWN'`, such as WBPP masters: a version 1 build with
+  RC-Astro is out of date ("RC-Astro could return a channel upside down"),
+  and one with deconvolution alone is not.
   `STACK_COLOR_CACHE_VERSION` is unchanged: the latest-color index filters
   on it, and bumping it would hide every earlier color preview.
 - The job lists its channels' deconvolution ids in `input_deconvolution_ids`.

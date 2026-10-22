@@ -48,11 +48,13 @@ use crate::server::state::AppState;
 
 const STACK_COLOR_CACHE_VERSION: u32 = 15;
 const COLOR_INPUT_CACHE_VERSION: u32 = 4;
-/// Where a build's deconvolution and RC-Astro tools run. 1: on each channel's
-/// own stack, before background extraction and registration, in the cache
-/// its channel card uses. Builds with tools from before (0, after
-/// registration) are out of date; builds without tools keep their ids.
-const COLOR_CHANNEL_TOOLS_VERSION: u32 = 1;
+/// Where a build's deconvolution and RC-Astro tools run, and how. 1: on each
+/// channel's own stack, before background extraction and registration, in
+/// the cache its channel card uses. 2: rc-astro keeps the rows in the order
+/// they are stored. Builds with tools from before (0, after registration)
+/// and builds with RC-Astro from version 1 are out of date; builds without
+/// tools keep their ids.
+const COLOR_CHANNEL_TOOLS_VERSION: u32 = 2;
 const SEIZA_BACKGROUND_VERSION: &str = env!("PSF_GUARD_SEIZA_BACKGROUND_VERSION");
 const MAX_REGISTRATION_RMS_PIXELS: f64 = 2.0;
 const COLOR_BYTES_PER_PIXEL: u64 = 64;
@@ -5036,17 +5038,26 @@ fn color_artifacts_exist(stack_root: &FsPath, job_id: &str) -> bool {
         && color_fits_path(stack_root, job_id).is_file()
 }
 
-/// Whether a build ran deconvolution or RC-Astro somewhere other than on each
-/// channel's own stack: a build from before the tools moved there, which ran
-/// them after registration. A build without tools never is.
-fn ran_tools_elsewhere(job: &StackColorJob) -> bool {
-    job.processing.as_ref().is_some_and(|processing| {
-        !processing.input_deconvolutions.is_empty()
-            || processing
-                .input_rc_astro
-                .values()
-                .any(|config| !config.steps.is_empty())
-    }) && job.channel_tools_version != COLOR_CHANNEL_TOOLS_VERSION
+/// Why a build's channel tools are out of date: it ran them after
+/// registration, before they moved to each channel's own stack, or it ran
+/// RC-Astro before rc-astro kept the rows in order, so a channel from a
+/// stack without `ROWORDER = 'TOP-DOWN'` came back upside down. A build
+/// without tools never is.
+fn outdated_channel_tools(job: &StackColorJob) -> Option<&'static str> {
+    let processing = job.processing.as_ref()?;
+    let rc_astro = processing
+        .input_rc_astro
+        .values()
+        .any(|config| !config.steps.is_empty());
+    if !rc_astro && processing.input_deconvolutions.is_empty() {
+        return None;
+    }
+    match job.channel_tools_version {
+        COLOR_CHANNEL_TOOLS_VERSION => None,
+        0 => Some("deconvolution and RC-Astro now run on each channel's own stack"),
+        _ if rc_astro => Some("RC-Astro could return a channel upside down"),
+        _ => None,
+    }
 }
 
 /// Why the color catalog would mark `job` out of date, against its
@@ -5092,10 +5103,8 @@ fn color_job_outdated_reason(
     {
         return Ok(Some("the color processing version changed".into()));
     }
-    if ran_tools_elsewhere(job) {
-        return Ok(Some(
-            "deconvolution and RC-Astro now run on each channel's own stack".into(),
-        ));
+    if let Some(reason) = outdated_channel_tools(job) {
+        return Ok(Some(reason.into()));
     }
     if !job.sources.iter().all(|source| {
         source_is_current(source, job.target_id, latest)
@@ -6076,7 +6085,7 @@ mod tests {
         let value = serde_json::to_value(&saved).unwrap();
         assert!(value.get("channel_tools_version").is_none(), "{value}");
         assert!(value.get("input_deconvolution_ids").is_none(), "{value}");
-        assert!(!ran_tools_elsewhere(&saved), "no tools");
+        assert_eq!(outdated_channel_tools(&saved), None, "no tools");
 
         let mut processing = StackColorProcessing::default();
         processing.input_deconvolutions.insert(
@@ -6084,9 +6093,41 @@ mod tests {
             seiza_deconvolution::DeconvolutionConfig::conservative(2.0),
         );
         saved.processing = Some(processing);
-        assert!(ran_tools_elsewhere(&saved), "tools after registration");
+        assert_eq!(
+            outdated_channel_tools(&saved),
+            Some("deconvolution and RC-Astro now run on each channel's own stack"),
+            "tools after registration"
+        );
         saved.channel_tools_version = COLOR_CHANNEL_TOOLS_VERSION;
-        assert!(!ran_tools_elsewhere(&saved), "tools on the channel stacks");
+        assert_eq!(
+            outdated_channel_tools(&saved),
+            None,
+            "tools on the channel stacks"
+        );
+    }
+
+    #[test]
+    fn a_build_with_rc_astro_from_before_the_row_order_fix_is_out_of_date() {
+        let mut saved = running_color_job(&"a".repeat(64), StackJobState::Completed);
+        let mut processing = StackColorProcessing::default();
+        processing.input_deconvolutions.insert(
+            StackColorRole::Red,
+            seiza_deconvolution::DeconvolutionConfig::conservative(2.0),
+        );
+        saved.processing = Some(processing);
+        saved.channel_tools_version = 1;
+        // Deconvolution never went through rc-astro, so its rows were right.
+        assert_eq!(outdated_channel_tools(&saved), None);
+        saved.processing.as_mut().unwrap().input_rc_astro.insert(
+            StackColorRole::Green,
+            serde_json::from_value(serde_json::json!({"steps": [{"tool": "bxt"}]})).unwrap(),
+        );
+        assert_eq!(
+            outdated_channel_tools(&saved),
+            Some("RC-Astro could return a channel upside down")
+        );
+        saved.channel_tools_version = COLOR_CHANNEL_TOOLS_VERSION;
+        assert_eq!(outdated_channel_tools(&saved), None);
     }
 
     #[test]

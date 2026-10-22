@@ -1237,7 +1237,11 @@ step, reuses every artifact before the change instead of rerunning the whole
 chain. Runs use the tool's saved compute device (GPU where
 supported, CPU fallback) and PSF Guard exchanges 32-bit-float FITS
 normalized to the unit scale the tools expect, restoring the physical scale
-afterward. Find the CLI on `PATH`, or set its path in the `PSF_GUARD_RC_ASTRO`
+afterward. The exchange file always says `ROWORDER = 'TOP-DOWN'`: rc-astro
+reverses the rows of a file without `ROWORDER`, such as a WBPP master, or one
+that says `BOTTOM-UP`, and PSF Guard keeps rows in the order they are stored.
+A result cached before PSF Guard did this is used again only when its stack
+said `TOP-DOWN`; any other runs again. Find the CLI on `PATH`, or set its path in the `PSF_GUARD_RC_ASTRO`
 environment variable for service units with a minimal `PATH`.
 `GET /api/tools/rc-astro` reports the probe the UI uses.
 
