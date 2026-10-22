@@ -596,8 +596,10 @@ fn read_median(path: &Path) -> Result<Plane> {
         "a session median of the wrong length"
     );
     let data = bytes[16..]
-        .chunks_exact(4)
-        .map(|chunk| f32::from_le_bytes(chunk.try_into().expect("four bytes")))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|chunk| f32::from_le_bytes(*chunk))
         .collect();
     Ok(Plane {
         width,

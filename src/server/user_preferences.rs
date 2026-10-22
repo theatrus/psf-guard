@@ -163,6 +163,9 @@ fn too_large() -> Response {
         .into_response()
 }
 
+// The error is the response the route returns at once; boxing it would add
+// an allocation and nothing else.
+#[allow(clippy::result_large_err)]
 async fn save(
     state: &Arc<AppState>,
     access: &RequestAccess,

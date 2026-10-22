@@ -36,14 +36,13 @@ async fn the_plugin_pulls_a_program_built_from_activation_and_its_own_equipment(
     let instance = a.f.state.director.as_ref().unwrap().instance_id;
     let catalog = {
         let store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
-        let mut found = None;
-        // The rig binding minted the rig id from the catalog id; find the catalog that maps to it.
-        for id in [a.rig] {
-            if store.catalog_rig(id).unwrap().is_some() {
-                found = Some(id);
-            }
-        }
-        found.expect("catalog bound to rig")
+        // The rig binding minted the rig id from the catalog id, so the
+        // catalog has the rig's id.
+        assert!(
+            store.catalog_rig(a.rig).unwrap().is_some(),
+            "catalog bound to rig"
+        );
+        a.rig
     };
     let path = format!(
         "/rigs/{}/program?coordinator_instance_id={instance}&catalog_id={catalog}",

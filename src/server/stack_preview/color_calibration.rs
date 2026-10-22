@@ -349,7 +349,7 @@ pub(super) fn calibrate_channels(
     );
     if outcome.calibration().is_some() {
         for (channel, image) in [red, green, blue].into_iter().enumerate() {
-            for (sample, pixel) in image.data.iter_mut().zip(rgb.data.chunks_exact(3)) {
+            for (sample, pixel) in image.data.iter_mut().zip(rgb.data.as_chunks::<3>().0) {
                 *sample = pixel[channel];
             }
         }
