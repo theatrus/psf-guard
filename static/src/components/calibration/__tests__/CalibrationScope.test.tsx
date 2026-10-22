@@ -2,7 +2,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { configure, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { createMemoryRouter, RouterProvider, useLocation, useSearchParams } from 'react-router-dom';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { apiClient } from '../../../api/client';
 import { server } from '../../../test/msw-server';
 import CalibrationPage from '../CalibrationPage';
 import { listFilters } from '../useCalibrationUrlState';
@@ -27,16 +28,36 @@ function project(id: number, profile: string, name: string) {
   return { id, profile_id: profile, profile_name: profile, name, display_name: name, description: null, has_files: true, state: 1, latest_image_date: null };
 }
 
+/** The lists the page asked for, oldest first, each as its query params.
+ *  Read from the API client's calls, so they are in the order the page
+ *  made them: requests in flight together can reach the mock server in
+ *  another order, and a stale request handled last would read as the
+ *  page's latest. */
 interface Seen {
-  sessions: URLSearchParams[];
-  masters: URLSearchParams[];
-  groups: URLSearchParams[];
+  readonly sessions: URLSearchParams[];
+  readonly masters: URLSearchParams[];
+  readonly groups: URLSearchParams[];
+}
+
+function asParams(values: object): URLSearchParams {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(values)) {
+    if (value !== undefined && value !== null && value !== '') params.set(key, String(value));
+  }
+  return params;
 }
 
 /** Demo holds M 44 (7) and Heart (8); M 44's lights use the Askar only,
  *  unless `spans` says otherwise, and Heart's the C925. Other holds Iris (9). */
 function serve({ spans = ['askar'] }: { spans?: string[] } = {}): Seen {
-  const seen: Seen = { sessions: [], masters: [], groups: [] };
+  const sessions = vi.spyOn(apiClient, 'getCalibrationSessions');
+  const masters = vi.spyOn(apiClient, 'getLibraryCalibrationMasters');
+  const groups = vi.spyOn(apiClient, 'getFlatGroups');
+  const seen: Seen = {
+    get sessions() { return sessions.mock.calls.map(([, filters]) => asParams(filters)); },
+    get masters() { return masters.mock.calls.map(([, project]) => asParams({ project })); },
+    get groups() { return groups.mock.calls.map(([, project]) => asParams({ project })); },
+  };
   const database = (id: string, name: string) =>
     ({ id, name, database_path: `/${id}.sqlite`, image_directories: [], remote_image_upload: { enabled: false } });
   server.use(
@@ -57,7 +78,6 @@ function serve({ spans = ['askar'] }: { spans?: string[] } = {}): Seen {
     }),
     http.get('/api/db/:db/calibrations/sessions', ({ request }) => {
       const params = new URL(request.url).searchParams;
-      seen.sessions.push(params);
       const sessions = params.get('project') ? [session('s1', 'askar')] : [session('s1', 'askar'), session('s2', 'askar')];
       return ok({
         sessions, total: sessions.length, page: 0, per_page: 50, frames: sessions.length * 3,
@@ -66,15 +86,9 @@ function serve({ spans = ['askar'] }: { spans?: string[] } = {}): Seen {
       });
     }),
     http.get('/api/db/:db/calibrations/frames', () => ok({ frames: [], total: 0, page: 0, per_page: 500 })),
-    http.get('/api/db/:db/calibrations/flat-groups', ({ request }) => {
-      seen.groups.push(new URL(request.url).searchParams);
-      return ok({ available: true, rigs: [] });
-    }),
+    http.get('/api/db/:db/calibrations/flat-groups', () => ok({ available: true, rigs: [] })),
     http.get('/api/db/:db/calibrations/quality', () => ok({ progress: { running: false, stage: null, finished_at: null } })),
-    http.get('/api/db/:db/calibrations/masters', ({ request }) => {
-      seen.masters.push(new URL(request.url).searchParams);
-      return ok({ masters: [], notes: [] });
-    }),
+    http.get('/api/db/:db/calibrations/masters', () => ok({ masters: [], notes: [] })),
     http.post('/api/db/:db/calibrations/generation-status', () => ok({ statuses: [] })),
   );
   return seen;
@@ -106,6 +120,7 @@ function Header() {
 
 const pages: { client: QueryClient; unmount: () => void }[] = [];
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const { client, unmount } of pages.splice(0)) {
     unmount();
     await client.cancelQueries();
