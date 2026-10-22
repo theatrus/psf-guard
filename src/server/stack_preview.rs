@@ -1729,6 +1729,15 @@ struct PreparedFrame {
 /// N.I.N.A. and PSF Guard's own importer spell this differently, and a value
 /// can arrive as a number or as text, so take the first that reads as a finite
 /// positive number.
+/// A temporary file's tag, unique to this write: the process id and a
+/// counter. Two writers of one cache entry, such as a channel card and a
+/// color build in the quick lane, never write the same temporary file.
+fn temporary_tag() -> String {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let next = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{}-{next}", std::process::id())
+}
+
 fn exposure_seconds_from_metadata(metadata_json: &str) -> f64 {
     crate::server::exposure_groups::exposure_seconds_from_metadata(metadata_json).unwrap_or(0.0)
 }

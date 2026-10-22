@@ -466,6 +466,42 @@ fn refresh_manifest_mtime(manifest_path: &FsPath) {
     }
 }
 
+/// One prefix's manifest, when the prefix is complete in the cache: the
+/// manifest matches the id and the steps, and the processed FITS (and the
+/// stars FITS, when it has one) are written. `persist_prefix` writes the
+/// manifest last, so a prefix still being written does not count.
+fn cached_prefix_manifest(
+    stack_root: &FsPath,
+    rc_astro_id: &str,
+    prefix: &RcAstroProcessing,
+) -> Option<CachedRcAstro> {
+    let bytes = std::fs::read(rc_astro_manifest_path(stack_root, rc_astro_id)).ok()?;
+    let cached = serde_json::from_slice::<CachedRcAstro>(&bytes).ok()?;
+    (cached.schema_version == RC_ASTRO_CACHE_VERSION
+        && cached.rc_astro_id == rc_astro_id
+        && &cached.config == prefix
+        && rc_astro_fits_path(stack_root, rc_astro_id).is_file()
+        && (!cached.result.has_stars || rc_astro_stars_path(stack_root, rc_astro_id).is_file()))
+    .then_some(cached)
+}
+
+/// Whether a whole chain's result is in the cache, without reading its
+/// pixels: the test `apply_rc_astro` uses before it runs a tool.
+pub(super) fn rc_astro_chain_cached(
+    stack_root: &FsPath,
+    chain_ids: &[String],
+    config: &RcAstroProcessing,
+) -> bool {
+    let ordered = config.ordered();
+    let whole = RcAstroProcessing {
+        steps: ordered.iter().map(|step| (*step).clone()).collect(),
+    };
+    chain_ids.len() == ordered.len()
+        && chain_ids
+            .last()
+            .is_some_and(|id| cached_prefix_manifest(stack_root, id, &whole).is_some())
+}
+
 /// Load one cached prefix, or say why it does not serve. A hit refreshes
 /// the manifest mtime.
 fn load_cached_prefix(
@@ -475,18 +511,8 @@ fn load_cached_prefix(
 ) -> Option<(LinearImage, Option<LinearImage>, StackRcAstroResult)> {
     let fits = rc_astro_fits_path(stack_root, rc_astro_id);
     let stars_fits = rc_astro_stars_path(stack_root, rc_astro_id);
-    let manifest_path = rc_astro_manifest_path(stack_root, rc_astro_id);
-    let bytes = std::fs::read(&manifest_path).ok()?;
-    let cached = serde_json::from_slice::<CachedRcAstro>(&bytes).ok()?;
-    if cached.schema_version != RC_ASTRO_CACHE_VERSION
-        || cached.rc_astro_id != rc_astro_id
-        || &cached.config != prefix
-        || !fits.is_file()
-        || (cached.result.has_stars && !stars_fits.is_file())
-    {
-        return None;
-    }
-    refresh_manifest_mtime(&manifest_path);
+    let cached = cached_prefix_manifest(stack_root, rc_astro_id, prefix)?;
+    refresh_manifest_mtime(&rc_astro_manifest_path(stack_root, rc_astro_id));
     let processed = crate::image_io::open_linear_frame(&fits).ok()?.image;
     let stars = if cached.result.has_stars {
         Some(crate::image_io::open_linear_frame(&stars_fits).ok()?.image)
@@ -513,14 +539,9 @@ fn persist_prefix(
         .parent()
         .ok_or_else(|| "RC-Astro FITS path has no parent".to_string())?;
     std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    // The temp name carries a process-wide counter besides the pid: two
-    // writers within one process must never interleave into one temp file.
-    static TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let unique = format!(
-        "{}-{}",
-        std::process::id(),
-        TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    );
+    // Two writers within one process must never interleave into one temp
+    // file.
+    let unique = super::temporary_tag();
     let temporary = fits.with_extension(format!("{unique}.tmp.fits"));
     let mut cards = rc_astro_cards();
     cards.extend(

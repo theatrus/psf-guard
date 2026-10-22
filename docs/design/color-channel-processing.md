@@ -102,7 +102,12 @@ sharpened, denoised channels, and alignment resamples sharpened stars.
 
 Registration is measured on the unprocessed stacks, before the tools, and the
 transform is applied to the processed ones. A tool setting therefore never
-moves a channel, and the transform is the one a build without tools finds.
+moves a channel. Every build now registers before background extraction,
+with or without tools. A build without tools whose prepared inputs were
+cached before this change keeps the transform it measured after background
+extraction; it can differ by a fraction of a pixel from what a fresh build
+measures. A test with a 3000 ADU gradient across one channel checks that
+registration before extraction still finds the shift within the RMS limit.
 
 Card runs and color builds that run tools both use the stack line, which has
 one worker, so the same tool never runs twice at once. A color build whose

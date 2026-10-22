@@ -670,30 +670,37 @@ impl PreparedColorJob {
     }
 
     /// Whether every channel's tool results are cached: a card or an
-    /// earlier build ran the same settings on the same stack.
+    /// earlier build ran the same settings on the same stack. A channel
+    /// whose whole RC-Astro chain is cached needs no deconvolution, since
+    /// the chain's result already includes it.
     fn channel_tools_cached(&self) -> bool {
         let processing = self.public.processing.as_ref();
-        let deconvolved =
+        let roles = self
+            .public
+            .input_deconvolution_ids
+            .keys()
+            .chain(self.rc_astro_chains.keys())
+            .collect::<std::collections::BTreeSet<_>>();
+        roles.into_iter().all(|role| {
+            if let Some(chain) = self.rc_astro_chains.get(role) {
+                return processing
+                    .and_then(|processing| processing.input_rc_astro.get(role))
+                    .is_some_and(|config| {
+                        super::rc_astro::rc_astro_chain_cached(&self.stack_root, chain, config)
+                    });
+            }
             self.public
                 .input_deconvolution_ids
-                .iter()
-                .all(|(role, deconvolution_id)| {
-                    processing
-                        .and_then(|processing| processing.input_deconvolutions.get(role))
-                        .is_some_and(|request| {
-                            super::stretch::deconvolution_cached(
-                                &self.stack_root,
-                                deconvolution_id,
-                                *request,
-                            )
-                        })
-                });
-        deconvolved
-            && self.rc_astro_chains.values().all(|chain| {
-                chain.last().is_some_and(|id| {
-                    super::rc_astro::rc_astro_fits_path(&self.stack_root, id).is_file()
+                .get(role)
+                .zip(processing.and_then(|processing| processing.input_deconvolutions.get(role)))
+                .is_some_and(|(deconvolution_id, request)| {
+                    super::stretch::deconvolution_cached(
+                        &self.stack_root,
+                        deconvolution_id,
+                        *request,
+                    )
                 })
-            })
+        })
     }
 }
 
@@ -2742,6 +2749,35 @@ fn run_channel_tools(
                 })?;
             stop.check()?;
             let role_label = source.role.label();
+            // A cached RC-Astro result already includes the deconvolution
+            // under it, so the deconvolution need not run, or even be
+            // cached, again.
+            let chain_cached = rc_astro_chains
+                .get(&source.role)
+                .zip(processing.and_then(|processing| processing.input_rc_astro.get(&source.role)))
+                .is_some_and(|(chain, config)| {
+                    super::rc_astro::rc_astro_chain_cached(stack_root, chain, config)
+                });
+            if chain_cached {
+                progress.begin(
+                    StackColorProgressPhase::DeconvolvingInputs,
+                    format!("Reusing {role_label} RC-Astro result, deconvolution included"),
+                    Some(source.role),
+                    None,
+                );
+                if let Some(result) =
+                    super::stretch::deconvolution_result(stack_root, deconvolution_id, request)
+                {
+                    resolved_deconvolutions.insert(source.role, result.clone());
+                    state.stack_previews.update_color(&job.job_id, |current| {
+                        current
+                            .resolved_input_deconvolutions
+                            .insert(source.role, result);
+                    });
+                }
+                progress.advance(StackColorProgressPhase::DeconvolvingInputs, 1);
+                continue;
+            }
             let frame = frames
                 .get_mut(&source.role)
                 .ok_or_else(|| format!("{role_label} source was not loaded"))?;
@@ -4354,7 +4390,7 @@ fn store_cached_color_inputs(
             .parent()
             .ok_or_else(|| "Color input FITS path has no parent".to_string())?;
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-        let temporary = destination.with_extension(format!("{}.tmp.fits", temporary_tag()));
+        let temporary = destination.with_extension(format!("{}.tmp.fits", super::temporary_tag()));
         write_processed_image_fits_f32(&temporary, image, reference_headers, &[])
             .map_err(|error| error.to_string())?;
         std::fs::rename(&temporary, &destination).map_err(|error| error.to_string())?;
@@ -5110,20 +5146,12 @@ fn current_latest_colors(mut latest: LatestStackColorPreviews) -> LatestStackCol
     latest
 }
 
-/// A temporary file's tag, unique to this write, so a composition in the
-/// quick lane and one in the line never write the same temporary file.
-fn temporary_tag() -> String {
-    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let next = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    format!("{}-{next}", std::process::id())
-}
-
 fn write_json_atomic(path: &FsPath, value: &impl Serialize) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or_else(|| "Color manifest path has no parent".to_string())?;
     std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    let temporary = path.with_extension(format!("{}.tmp", temporary_tag()));
+    let temporary = path.with_extension(format!("{}.tmp", super::temporary_tag()));
     let bytes = serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?;
     std::fs::write(&temporary, bytes).map_err(|error| error.to_string())?;
     std::fs::rename(&temporary, path).map_err(|error| error.to_string())
@@ -6036,6 +6064,172 @@ mod tests {
                 seiza_deconvolution::DeconvolutionConfig::conservative(2.0),
             );
         assert!(!retuned.runs_quickly());
+    }
+
+    #[test]
+    fn registration_before_background_extraction_finds_a_shift_under_a_steep_gradient() {
+        use StackColorRole::{Blue, Green, Red};
+        let cache = tempfile::tempdir().unwrap();
+        let root = cache.path();
+        let state = Arc::new(AppState::new_for_test(
+            rusqlite::Connection::open_in_memory().unwrap(),
+        ));
+        let (red, green, blue) = ("1".repeat(64), "2".repeat(64), "3".repeat(64));
+        star_stack(root, &red, (0, 0), 100.0, 0);
+        star_stack(root, &green, (3, 2), 110.0, 0);
+        star_stack(root, &blue, (1, 4), 90.0, 0);
+        // Green carries a steep gradient, light pollution low in the sky:
+        // from nothing at the left edge to 3000 ADU at the right, brighter
+        // than most of its stars.
+        let path = super::super::fits_path(root, &green, 0);
+        let mut frame = crate::image_io::open_linear_frame(&path).unwrap().image;
+        let width = frame.width;
+        for (index, value) in frame.data.iter_mut().enumerate() {
+            *value += 3000.0 * (index % width) as f32 / width as f32;
+        }
+        write_processed_image_fits_f32(&path, &frame, &[], &[]).unwrap();
+        let sources = vec![
+            channel(Red, "R", &red, false),
+            channel(Green, "G", &green, false),
+            channel(Blue, "B", &blue, false),
+        ];
+
+        // Registration runs on the stack as it came, gradient and all; the
+        // build fails if its RMS passes MAX_REGISTRATION_RMS_PIXELS.
+        let built = compose_rgb(
+            &state,
+            root,
+            &sources,
+            extracted(1.0),
+            (&"a".repeat(64), &"e".repeat(64)),
+            &BTreeMap::new(),
+        );
+        let transform = built
+            .sources
+            .iter()
+            .find(|source| source.role == Green)
+            .and_then(|source| source.registration_transform)
+            .unwrap();
+        let (x, y) = (transform.translation_x, transform.translation_y);
+        assert!(
+            (x.abs() - 3.0).abs() < 0.2 && (y.abs() - 2.0).abs() < 0.2,
+            "{x} {y}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_composition_whose_rc_astro_chain_a_card_finished_runs_quickly_and_deconvolves_nothing() {
+        use StackColorRole::{Blue, Green, Red};
+        let tool = super::super::rc_astro::test_tool::install(false);
+        let cache = tempfile::tempdir().unwrap();
+        let root = cache.path();
+        let state = Arc::new(AppState::new_for_test(
+            rusqlite::Connection::open_in_memory().unwrap(),
+        ));
+        let (red, green, blue) = ("1".repeat(64), "2".repeat(64), "3".repeat(64));
+        star_stack(root, &red, (0, 0), 100.0, 0);
+        star_stack(root, &green, (2, 1), 110.0, 0);
+        star_stack(root, &blue, (1, 2), 90.0, 0);
+        let sources = vec![
+            channel(Red, "R", &red, false),
+            channel(Green, "G", &green, false),
+            channel(Blue, "B", &blue, false),
+        ];
+        let deconvolution = seiza_deconvolution::DeconvolutionConfig::conservative(2.0);
+        let bxt: super::super::rc_astro::RcAstroProcessing =
+            serde_json::from_value(serde_json::json!({"steps": [{"tool": "bxt"}]})).unwrap();
+        let schemas = BTreeMap::from([(Red, super::super::rc_astro::schemas_for(&bxt).unwrap())]);
+        let mut processing = extracted(1.0);
+        processing.input_deconvolutions.insert(Red, deconvolution);
+        processing.input_rc_astro.insert(Red, bxt.clone());
+        let tools = channel_tools("db", &processing, &sources, &schemas).unwrap();
+        let chain = tools.rc_astro_chains[&Red].clone();
+        let deconvolution_id = tools.deconvolution_ids[&Red].clone();
+        let prepared = || {
+            let mut public = running_color_job(&"a".repeat(64), StackJobState::Queued);
+            public.sources = sources.clone();
+            public.processing = Some(processing.clone());
+            public.linear_input_id = Some("unprepared".into());
+            public.input_deconvolution_ids = tools.deconvolution_ids.clone();
+            PreparedColorJob {
+                public,
+                stack_root: root.to_path_buf(),
+                background_regions: BTreeMap::new(),
+                rc_astro_schemas: schemas.clone(),
+                rc_astro_chains: tools.rc_astro_chains.clone(),
+                color_calibration: None,
+            }
+        };
+        assert!(!prepared().runs_quickly());
+
+        // A card mid-write: the processed FITS is there, the manifest that
+        // `persist_prefix` writes last is not. Composing would run the tool,
+        // so it is not quick.
+        let processed = super::super::rc_astro::rc_astro_fits_path(root, chain.last().unwrap());
+        std::fs::create_dir_all(processed.parent().unwrap()).unwrap();
+        std::fs::write(&processed, b"partial").unwrap();
+        assert!(!prepared().runs_quickly());
+        std::fs::remove_file(&processed).unwrap();
+
+        // The card deconvolves Red's stack and runs BlurXTerminator on it.
+        let red_stack =
+            crate::image_io::open_linear_frame(super::super::fits_path(root, &red, 0)).unwrap();
+        let (restored, result) =
+            super::super::stretch::apply_deconvolution(&red_stack.image, deconvolution).unwrap();
+        super::super::stretch::store_deconvolution(
+            root,
+            &deconvolution_id,
+            &restored,
+            &red_stack.headers,
+            &result,
+        )
+        .unwrap();
+        super::super::rc_astro::apply_rc_astro(
+            root,
+            &chain,
+            &bxt,
+            &schemas[&Red],
+            &restored,
+            &red_stack.headers,
+            &mut |_, _| {},
+            None,
+            &mut || Ok(()),
+        )
+        .unwrap();
+        assert_eq!(tool.invocations(), 1);
+        assert!(prepared().runs_quickly());
+
+        // The janitor pruned the deconvolution. The chain's result already
+        // includes it, so composing stays quick and deconvolves nothing.
+        std::fs::remove_dir_all(
+            crate::server::storage::stack_folder(
+                root,
+                crate::server::storage::stack_kind::DECONVOLUTION,
+            )
+            .join(&deconvolution_id),
+        )
+        .unwrap();
+        assert!(prepared().runs_quickly());
+        let built = compose_rgb(
+            &state,
+            root,
+            &sources,
+            processing.clone(),
+            (&"b".repeat(64), &"e".repeat(64)),
+            &schemas,
+        );
+        assert_eq!(
+            phase_label(&built, StackColorProgressPhase::DeconvolvingInputs),
+            "Reusing R RC-Astro result, deconvolution included"
+        );
+        assert!(!super::super::stretch::deconvolution_cached(
+            root,
+            &deconvolution_id,
+            deconvolution
+        ));
+        assert!(built.resolved_input_rc_astro.contains_key(&Red));
+        assert_eq!(tool.invocations(), 1);
     }
 
     #[test]

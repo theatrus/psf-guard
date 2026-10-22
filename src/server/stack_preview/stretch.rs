@@ -2560,7 +2560,23 @@ pub(super) fn cached_deconvolution(
 ) -> Result<Option<(FitsFrame, StackDeconvolutionResult)>, String> {
     touch_dir(&deconvolution_dir(stack_root, deconvolution_id));
     let fits = deconvolution_fits_path(stack_root, deconvolution_id);
-    let cached = std::fs::read(deconvolution_manifest_path(stack_root, deconvolution_id))
+    let Some(result) =
+        deconvolution_result(stack_root, deconvolution_id, request).filter(|_| fits.is_file())
+    else {
+        return Ok(None);
+    };
+    let frame = crate::image_io::open_linear_frame(&fits).map_err(|error| error.to_string())?;
+    Ok(Some((frame, result)))
+}
+
+/// What a cached deconvolution did, read from its manifest alone. The
+/// restored FITS may be gone.
+pub(super) fn deconvolution_result(
+    stack_root: &FsPath,
+    deconvolution_id: &str,
+    request: DeconvolutionConfig,
+) -> Option<StackDeconvolutionResult> {
+    std::fs::read(deconvolution_manifest_path(stack_root, deconvolution_id))
         .ok()
         .and_then(|bytes| serde_json::from_slice::<CachedDeconvolution>(&bytes).ok())
         .filter(|cached| {
@@ -2568,19 +2584,11 @@ pub(super) fn cached_deconvolution(
                 && cached.algorithm_version == ALGORITHM_VERSION
                 && cached.deconvolution_id == deconvolution_id
                 && cached.config == request
-                && fits.is_file()
-        });
-    let Some(cached) = cached else {
-        return Ok(None);
-    };
-    let frame = crate::image_io::open_linear_frame(&fits).map_err(|error| error.to_string())?;
-    Ok(Some((
-        frame,
-        StackDeconvolutionResult {
+        })
+        .map(|cached| StackDeconvolutionResult {
             config: cached.config,
             channels: cached.channels,
-        },
-    )))
+        })
 }
 
 /// Whether a stack's deconvolution is in the shared cache, without reading
@@ -2591,15 +2599,7 @@ pub(super) fn deconvolution_cached(
     request: DeconvolutionConfig,
 ) -> bool {
     deconvolution_fits_path(stack_root, deconvolution_id).is_file()
-        && std::fs::read(deconvolution_manifest_path(stack_root, deconvolution_id))
-            .ok()
-            .and_then(|bytes| serde_json::from_slice::<CachedDeconvolution>(&bytes).ok())
-            .is_some_and(|cached| {
-                cached.schema_version == DECONVOLUTION_CACHE_VERSION
-                    && cached.algorithm_version == ALGORITHM_VERSION
-                    && cached.deconvolution_id == deconvolution_id
-                    && cached.config == request
-            })
+        && deconvolution_result(stack_root, deconvolution_id, request).is_some()
 }
 
 /// File a stack's deconvolution in the cache a channel card and a color
@@ -2616,7 +2616,7 @@ pub(super) fn store_deconvolution(
         .parent()
         .ok_or_else(|| "Processed stack FITS path has no parent".to_string())?;
     std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    let temporary = fits.with_extension(format!("{}.tmp.fits", std::process::id()));
+    let temporary = fits.with_extension(format!("{}.tmp.fits", super::temporary_tag()));
     write_processed_image_fits_f32(
         &temporary,
         restored,
