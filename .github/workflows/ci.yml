@@ -65,7 +65,7 @@ jobs:
       shell: bash
 
     - name: Install Rust
-      uses: dtolnay/rust-toolchain@1.97.1
+      uses: dtolnay/rust-toolchain@1.99.1
       with:
         toolchain: ${{ steps.rust-toolchain.outputs.channel }}
         components: rustfmt, clippy
@@ -274,7 +274,7 @@ jobs:
       shell: bash
 
     - name: Install Rust
-      uses: dtolnay/rust-toolchain@1.97.1
+      uses: dtolnay/rust-toolchain@1.99.1
       with:
         toolchain: ${{ steps.rust-toolchain.outputs.channel }}
         components: rustfmt, clippy

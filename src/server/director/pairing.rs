@@ -50,6 +50,9 @@ pub(super) fn no_store(response: impl IntoResponse) -> Response {
 
 /// Called before anonymous-loopback or cookie fallbacks. `true` means this
 /// request has its own narrowly scoped authorization, not operator authority.
+// The error is the response the auth middleware returns at once; boxing it
+// would add an allocation and nothing else.
+#[allow(clippy::result_large_err)]
 pub(in crate::server) async fn authorize(
     state: &Arc<AppState>,
     path: &str,

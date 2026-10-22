@@ -107,7 +107,9 @@ impl ColorFrame {
     /// autostretch goes wrong.
     pub fn luminance(&self) -> Vec<u16> {
         self.data
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|pixel| {
                 ((u32::from(pixel[0]) + 2 * u32::from(pixel[1]) + u32::from(pixel[2])) / 4) as u16
             })
@@ -118,7 +120,9 @@ impl ColorFrame {
     /// single-channel data.
     pub fn channel(&self, index: usize) -> Vec<u16> {
         self.data
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|pixel| pixel[index])
             .collect()
     }

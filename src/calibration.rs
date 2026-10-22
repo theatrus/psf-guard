@@ -11337,7 +11337,9 @@ pub(crate) mod tests {
     fn replace_test_fits_filter(path: &Path, filter_card: &str) {
         let mut bytes = std::fs::read(path).unwrap();
         let card = bytes[..2880]
-            .chunks_exact_mut(80)
+            .as_chunks_mut::<80>()
+            .0
+            .iter_mut()
             .find(|card| card.starts_with(b"FILTER  ="))
             .unwrap();
         card.fill(b' ');
