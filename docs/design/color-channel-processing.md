@@ -1,8 +1,8 @@
 # Color previews and channel processing
 
-Status: **Step 1 built**: color previews follow each channel card's
-deconvolution and RC-Astro steps by default. Step 2 is decided after a
-comparison on a real stack, and comes in a later change. Step 3 is planned.
+Status: **Steps 1 and 2 built**: color previews follow each channel card's
+deconvolution and RC-Astro steps by default, and run them on each channel's
+own stack in the card's cache. Step 3 is planned.
 Last updated: 2026-10-22
 
 A channel card can run deconvolution and the RC-Astro tools
@@ -21,22 +21,24 @@ This record covers three steps:
    its card and every color preview built from it.
 3. RC-Astro tools can run on the composed color image.
 
-## Today's color pipeline
+## The color pipeline
 
 For each input, a color build runs, in order:
 
-1. background extraction on the channel in its own frame, with one surface
+1. registration onto the reference channel (R for RGB, L for LRGB, H-alpha
+   for narrowband), measured on the stacks as they came;
+2. deconvolution and RC-Astro tools on the channel's own stack, in its
+   channel card's cache (step 2);
+3. background extraction on the channel in its own frame, with one surface
    model shared by all channels;
-2. registration onto the reference channel (R for RGB, L for LRGB, H-alpha
-   for narrowband);
-3. deconvolution and RC-Astro tools on the registered linear channel;
-4. normalization and the input's stretch stages;
-5. composition, then the RGB output stages.
+4. resampling onto the reference with the transform from step 1;
+5. normalization and the input's stretch stages;
+6. composition, then the RGB output stages.
 
-A channel card runs its tools on the channel's own stack, before any of
-this. Its results are filed under the stack (`mono:{job}:{group}`); a color
-input's are filed under the color input (`color-input:{input}:{role}`), so
-nothing is shared.
+Before step 2, a build ran background extraction first, then registered and
+resampled, then ran the tools on the registered channel. Those results were
+filed under the color input (`color-input:{input}:{role}`) and the card's
+under the stack (`mono:{job}:{group}`), so nothing was shared.
 
 ## Step 1: follow the channel cards (built)
 
@@ -81,26 +83,91 @@ each input lane names what its card applied in place of the tool editors.
 Choosing **Set in this build** starts the build's own settings from what the
 cards show, so nothing is lost. Named color setups store the choice.
 
-## Step 2: share each channel's tools (decided)
+## Step 2: share each channel's tools (built)
 
-Decided: run each input's tools on the channel's own stack, before background
-extraction and registration, sharing the channel card's cache. Implementation
-comes in a later change.
+Each input's tools run on the channel's own stack, before background
+extraction and alignment, with the ids the channel card uses:
 
-One BlurXTerminator or NoiseXTerminator run then serves the card and every
-color preview that uses that stack, and a change to background extraction no
-longer reruns every channel's tools. Background extraction then fits
-sharpened, denoised channels, and registration resamples sharpened stars.
-Every color preview with tools rebuilds once after the change.
+- deconvolution: `deconvolution_cache_id(db, mono_source_key(job, group),
+  revision, config)`, stored as the card stores it (`deconvolution/<id>/`);
+- RC-Astro: `rc_astro_chain_ids(db, mono_source_key(job, group), revision,
+  config, schemas, deconvolution_id)`, one cached result per chain prefix.
 
-### The comparison
+Whichever runs first, card or color build, stores the result and the other
+reads it. This holds for `own` and `channels` alike: both end as
+`input_deconvolutions` and `input_rc_astro`, so equal settings give equal
+ids. One BlurXTerminator or NoiseXTerminator run serves the card and every
+color preview that uses that stack. Background extraction now fits
+sharpened, denoised channels, and alignment resamples sharpened stars.
+
+Registration is measured on the unprocessed stacks, before the tools, and the
+transform is applied to the processed ones. A tool setting therefore never
+moves a channel. Every build now registers before background extraction,
+with or without tools. A build without tools whose prepared inputs were
+cached before this change keeps the transform it measured after background
+extraction; it can differ by a fraction of a pixel from what a fresh build
+measures. A test with a 3000 ADU gradient across one channel checks that
+registration before extraction still finds the shift within the RMS limit.
+
+Card runs and color builds that run tools both use the stack line, which has
+one worker, so the same tool never runs twice at once. A color build whose
+channel results are all cached already runs in the quick lane: it reads
+files and runs no tool.
+
+Identity and caches:
+
+- `color_input_cache_id` hashes each processed channel's id (the last
+  RC-Astro step, or the deconvolution) in place of the tool settings. With no
+  tools it hashes nothing new, so color previews without tools keep their ids
+  and caches.
+- With tools, the job id and the input id also hash
+  `COLOR_CHANNEL_TOOLS_VERSION`, and the job records it in
+  `channel_tools_version`. A finished job with tools and an older version is
+  out of date ("deconvolution and RC-Astro now run on each channel's own
+  stack"); the next build runs them in the new order once.
+  `STACK_COLOR_CACHE_VERSION` is unchanged: the latest-color index filters
+  on it, and bumping it would hide every earlier color preview.
+- The job lists its channels' deconvolution ids in `input_deconvolution_ids`.
+  The cache janitor keeps those, as it already kept `input_rc_astro_ids`.
+- The journal stores the color request, and a restart prepares the job again,
+  so a resumed build gets the new ids. RC-Astro steps a stopped build
+  finished stay cached, and so does a finished deconvolution.
+
+The progress ledger follows the new order: loading, registration,
+deconvolution, RC-Astro, background, then **Aligning channels to the
+reference** (`aligning_sources`, one unit per non-reference channel).
+
+### The result in PSF Guard
+
+Teddy Bear on starfront-redcat61 again: the H-alpha, OIII and SII WBPP
+masters as R, G and B, OIII turned 1.7° and shifted (23.4, −11.7) pixels,
+and Seiza deconvolution (`conservative(5.0)`) on OIII. PSF Guard's own color
+build ran the new order; the old order (register, resample, deconvolve) ran
+on the same stacks in the same test. Both were normalized as a color input
+and measured on the central 5448×3376 pixels. Registration found the same
+transform in both.
+
+| Deconvolution | Order | Stars | HFR | FWHM | Background σ |
+|---|---|---|---|---|---|
+| none | | 3054 | 2.740 | 6.449 | 0.00222 |
+| conservative | before | 3160 | 2.696 | 6.346 | 0.00223 |
+| conservative | now | 3172 | 2.696 | 6.346 | 0.00225 |
+| strong (30 iterations, amount 1, max correction 4) | before | 872 | 1.981 | 4.663 | 0.00244 |
+| strong | now | 1299 | 2.024 | 4.765 | 0.00232 |
+
+With the default settings the orders match. With strong settings the old
+order is 0.04 HFR sharper, but it detects 427 fewer stars and leaves more
+background noise, as in the comparison below. A second build with other
+settings read OIII's deconvolution back ("Reusing G deconvolution").
+
+### The comparison that chose the order
 
 Teddy Bear on starfront-redcat61: the WBPP OIII master registered to the
 H-alpha master after a synthetic 1.7° turn and a (23.4, −11.7) pixel shift,
 measured on the central 2400×2400 pixels. RC-Astro ran through its CLI on
 supergateway with default BlurXTerminator and NoiseXTerminator settings.
-A registers and then runs the tools, as color previews do today; B runs the
-tools and then registers.
+A registers and then runs the tools, as color previews did before step 2; B
+runs the tools and then registers.
 
 | Tools | Order | Stars | HFR | FWHM | Ring dip | Background σ |
 |---|---|---|---|---|---|---|

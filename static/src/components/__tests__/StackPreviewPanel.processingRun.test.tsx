@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import { MemoryRouter } from 'react-router-dom';
@@ -147,6 +148,57 @@ describe('StackPreviewPanel with a processing run asked for before the page open
     await waitFor(() => expect(reads.count).toBeGreaterThan(readsWhileRunning));
     await waitFor(() => expect(screen.getByAltText('Sh2 86 Ha stack preview'))
       .toHaveAttribute('src', '/api/db/test/stack-previews/stretch/blurx-done/preview'));
+  });
+
+  it('reads the color previews again when a run ends, so one following the card shows it is out of date', async () => {
+    let active: StackActivityEntry[] = [run(0)];
+    let stretch: StackStretchPreview | null = null;
+    mockCard(() => stretch, () => active, { count: 0 });
+    let colorReads = 0;
+    server.use(
+      http.get('/api/db/:dbId/projects/:projectId/stack-previews/color', () => {
+        colorReads += 1;
+        return ok({ schema_version: 1, database_id: 'test', project_id: 1, targets: [], jobs: [] });
+      }),
+    );
+    renderPanel();
+    await screen.findByRole('button', { name: 'Applying… 42% · BlurXTerminator' });
+    await waitFor(() => expect(colorReads).toBeGreaterThan(0));
+    const readsWhileRunning = colorReads;
+
+    stretch = preview('blurx-done');
+    active = [];
+    await screen.findByRole('button', { name: 'Apply processing' }, { timeout: 5000 });
+    await waitFor(() => expect(colorReads).toBeGreaterThan(readsWhileRunning));
+  });
+
+  it('after Apply, reads the color previews and the job line again at once', async () => {
+    const user = userEvent.setup();
+    mockCard(() => null, () => [], { count: 0 });
+    let colorReads = 0;
+    let activityReads = 0;
+    server.use(
+      http.get('/api/db/:dbId/projects/:projectId/stack-previews/color', () => {
+        colorReads += 1;
+        return ok({ schema_version: 1, database_id: 'test', project_id: 1, targets: [], jobs: [] });
+      }),
+      http.get('/api/stack-activity', () => {
+        activityReads += 1;
+        return ok({ schema_version: 1, active: [] });
+      }),
+      http.post('/api/db/test/stack-previews/stack-job/0/stretch', () => ok(preview('applied'))),
+    );
+    renderPanel();
+    const apply = await screen.findByRole('button', { name: 'Apply processing' });
+    await waitFor(() => expect(colorReads).toBeGreaterThan(0));
+    await waitFor(() => expect(activityReads).toBeGreaterThan(0));
+    const [colorBefore, activityBefore] = [colorReads, activityReads];
+
+    await user.click(apply);
+    await waitFor(() => expect(screen.getByAltText('Sh2 86 Ha stack preview'))
+      .toHaveAttribute('src', '/api/db/test/stack-previews/stretch/applied/preview'));
+    await waitFor(() => expect(colorReads).toBeGreaterThan(colorBefore));
+    await waitFor(() => expect(activityReads).toBeGreaterThan(activityBefore));
   });
 
   it('leaves the card alone for a run on another group or one the server re-applies', async () => {

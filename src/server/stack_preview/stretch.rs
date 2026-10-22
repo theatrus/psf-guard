@@ -20,7 +20,7 @@ use seiza_deconvolution::{
     deconvolve_masked, ChannelDiagnostics, DeconvolutionConfig, ALGORITHM_VERSION,
 };
 use seiza_fits::{HeaderValue, WriteHeaderCard};
-use seiza_stacking::{write_processed_image_fits_f32, LinearImage};
+use seiza_stacking::{write_processed_image_fits_f32, FitsFrame, LinearImage};
 use seiza_stretch::{
     ColorStrategy, ImageShape, RobustStatistics, StretchAnalysis, StretchConfig, StretchModel,
     StretchParams, StretchPlan,
@@ -170,7 +170,7 @@ pub(super) fn deconvolution_version() -> String {
     format!("algorithm-{ALGORITHM_VERSION}")
 }
 
-fn deconvolution_cache_id(
+pub(super) fn deconvolution_cache_id(
     database_id: &str,
     source_key: &str,
     source_revision: &str,
@@ -2372,28 +2372,10 @@ fn render_fits_variant(
     let deconvolution = if let Some(request) = deconvolution_request {
         let deconvolution_id = deconvolution_id
             .ok_or_else(|| "Deconvolution cache identity is missing".to_string())?;
-        // In use from now: the janitor keeps a deconvolution a week past its
-        // last use, and the stretch that will name it has no manifest yet.
-        touch_dir(&deconvolution_dir(stack_root, deconvolution_id));
-        let fits = deconvolution_fits_path(stack_root, deconvolution_id);
-        let manifest = deconvolution_manifest_path(stack_root, deconvolution_id);
-        let cached = std::fs::read(&manifest)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice::<CachedDeconvolution>(&bytes).ok())
-            .filter(|cached| {
-                cached.schema_version == DECONVOLUTION_CACHE_VERSION
-                    && cached.algorithm_version == ALGORITHM_VERSION
-                    && cached.deconvolution_id == deconvolution_id
-                    && cached.config == request
-                    && fits.is_file()
-            });
-        if let Some(cached) = cached {
-            cached_processed =
-                Some(crate::image_io::open_linear_frame(&fits).map_err(|error| error.to_string())?);
-            Some(StackDeconvolutionResult {
-                config: cached.config,
-                channels: cached.channels,
-            })
+        if let Some((frame, result)) = cached_deconvolution(stack_root, deconvolution_id, request)?
+        {
+            cached_processed = Some(frame);
+            Some(result)
         } else {
             stop.check()?;
             state
@@ -2401,28 +2383,12 @@ fn render_fits_variant(
                 .stretch_runs
                 .report_stage(stretch_id, "Deconvolution");
             let (restored, result) = pool.install(|| apply_deconvolution(&frame.image, request))?;
-            let parent = fits
-                .parent()
-                .ok_or_else(|| "Processed stack FITS path has no parent".to_string())?;
-            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-            let temporary = fits.with_extension(format!("{}.tmp.fits", std::process::id()));
-            write_processed_image_fits_f32(
-                &temporary,
+            store_deconvolution(
+                stack_root,
+                deconvolution_id,
                 &restored,
                 &frame.headers,
-                &deconvolution_cards(request),
-            )
-            .map_err(|error| error.to_string())?;
-            std::fs::rename(&temporary, &fits).map_err(|error| error.to_string())?;
-            write_json_atomic(
-                &manifest,
-                &CachedDeconvolution {
-                    schema_version: DECONVOLUTION_CACHE_VERSION,
-                    deconvolution_id: deconvolution_id.into(),
-                    algorithm_version: ALGORITHM_VERSION,
-                    config: request,
-                    channels: result.channels.clone(),
-                },
+                &result,
             )?;
             processed = Some(restored);
             Some(result)
@@ -2580,6 +2546,95 @@ fn render_fits_variant(
             .flatten(),
         color_calibration,
     })
+}
+
+/// A stack's deconvolution from the cache a channel card and a color build
+/// share, when it is there: the restored image and what deconvolution did.
+/// Marks the entry as used now: the janitor keeps a deconvolution a week
+/// past its last use, and the result that will name it may not be written
+/// yet.
+pub(super) fn cached_deconvolution(
+    stack_root: &FsPath,
+    deconvolution_id: &str,
+    request: DeconvolutionConfig,
+) -> Result<Option<(FitsFrame, StackDeconvolutionResult)>, String> {
+    touch_dir(&deconvolution_dir(stack_root, deconvolution_id));
+    let fits = deconvolution_fits_path(stack_root, deconvolution_id);
+    let Some(result) =
+        deconvolution_result(stack_root, deconvolution_id, request).filter(|_| fits.is_file())
+    else {
+        return Ok(None);
+    };
+    let frame = crate::image_io::open_linear_frame(&fits).map_err(|error| error.to_string())?;
+    Ok(Some((frame, result)))
+}
+
+/// What a cached deconvolution did, read from its manifest alone. The
+/// restored FITS may be gone.
+pub(super) fn deconvolution_result(
+    stack_root: &FsPath,
+    deconvolution_id: &str,
+    request: DeconvolutionConfig,
+) -> Option<StackDeconvolutionResult> {
+    std::fs::read(deconvolution_manifest_path(stack_root, deconvolution_id))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<CachedDeconvolution>(&bytes).ok())
+        .filter(|cached| {
+            cached.schema_version == DECONVOLUTION_CACHE_VERSION
+                && cached.algorithm_version == ALGORITHM_VERSION
+                && cached.deconvolution_id == deconvolution_id
+                && cached.config == request
+        })
+        .map(|cached| StackDeconvolutionResult {
+            config: cached.config,
+            channels: cached.channels,
+        })
+}
+
+/// Whether a stack's deconvolution is in the shared cache, without reading
+/// its pixels.
+pub(super) fn deconvolution_cached(
+    stack_root: &FsPath,
+    deconvolution_id: &str,
+    request: DeconvolutionConfig,
+) -> bool {
+    deconvolution_fits_path(stack_root, deconvolution_id).is_file()
+        && deconvolution_result(stack_root, deconvolution_id, request).is_some()
+}
+
+/// File a stack's deconvolution in the cache a channel card and a color
+/// build share, so the next one that asks for it reads it.
+pub(super) fn store_deconvolution(
+    stack_root: &FsPath,
+    deconvolution_id: &str,
+    restored: &LinearImage,
+    source_headers: &[(String, HeaderValue)],
+    result: &StackDeconvolutionResult,
+) -> Result<(), String> {
+    let fits = deconvolution_fits_path(stack_root, deconvolution_id);
+    let parent = fits
+        .parent()
+        .ok_or_else(|| "Processed stack FITS path has no parent".to_string())?;
+    std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    let temporary = fits.with_extension(format!("{}.tmp.fits", super::temporary_tag()));
+    write_processed_image_fits_f32(
+        &temporary,
+        restored,
+        source_headers,
+        &deconvolution_cards(result.config),
+    )
+    .map_err(|error| error.to_string())?;
+    std::fs::rename(&temporary, &fits).map_err(|error| error.to_string())?;
+    write_json_atomic(
+        &deconvolution_manifest_path(stack_root, deconvolution_id),
+        &CachedDeconvolution {
+            schema_version: DECONVOLUTION_CACHE_VERSION,
+            deconvolution_id: deconvolution_id.into(),
+            algorithm_version: ALGORITHM_VERSION,
+            config: result.config,
+            channels: result.channels.clone(),
+        },
+    )
 }
 
 pub(super) fn apply_deconvolution(

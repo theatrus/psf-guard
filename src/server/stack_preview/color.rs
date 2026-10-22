@@ -48,6 +48,11 @@ use crate::server::state::AppState;
 
 const STACK_COLOR_CACHE_VERSION: u32 = 15;
 const COLOR_INPUT_CACHE_VERSION: u32 = 4;
+/// Where a build's deconvolution and RC-Astro tools run. 1: on each channel's
+/// own stack, before background extraction and registration, in the cache
+/// its channel card uses. Builds with tools from before (0, after
+/// registration) are out of date; builds without tools keep their ids.
+const COLOR_CHANNEL_TOOLS_VERSION: u32 = 1;
 const SEIZA_BACKGROUND_VERSION: &str = env!("PSF_GUARD_SEIZA_BACKGROUND_VERSION");
 const MAX_REGISTRATION_RMS_PIXELS: f64 = 2.0;
 const COLOR_BYTES_PER_PIXEL: u64 = 64;
@@ -347,6 +352,10 @@ pub struct StackBackgroundExtraction {
     pub protect_catalog_emission: bool,
 }
 
+fn is_zero(value: &u32) -> bool {
+    *value == 0
+}
+
 const fn full_background_strength() -> f64 {
     1.0
 }
@@ -374,6 +383,9 @@ pub enum StackColorProgressPhase {
     RegisteringSources,
     DeconvolvingInputs,
     RcAstroInputs,
+    /// Resampling each channel onto the reference with the transform
+    /// registration measured.
+    AligningSources,
     NormalizingInputs,
     CalibratingColor,
     StretchingInputs,
@@ -506,6 +518,15 @@ pub struct StackColorJob {
     pub resolved_input_rc_astro: BTreeMap<StackColorRole, StackColorRcAstroResult>,
     #[serde(default)]
     pub input_rc_astro_ids: BTreeMap<StackColorRole, String>,
+    /// Each input's deconvolution in the cache its channel card uses, so the
+    /// janitor keeps it while the build is kept.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub input_deconvolution_ids: BTreeMap<StackColorRole, String>,
+    /// Where the build ran its deconvolution and RC-Astro tools: see
+    /// `COLOR_CHANNEL_TOOLS_VERSION`. 0 for a build without tools, and for
+    /// one from before tools ran on the channel stacks.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub channel_tools_version: u32,
     /// For a build that follows the channel cards: what each card had
     /// applied, one entry per input, including inputs whose card had
     /// nothing. A card that has changed since makes the build out of date.
@@ -617,6 +638,7 @@ pub(super) struct PreparedColorJob {
     pub(super) stack_root: PathBuf,
     background_regions: BTreeMap<StackColorRole, Vec<ProtectedRegion>>,
     rc_astro_schemas: BTreeMap<StackColorRole, Vec<(String, seiza_stacking::ExternalToolSchema)>>,
+    /// Each input's RC-Astro chain in the cache its channel card uses.
     rc_astro_chains: BTreeMap<StackColorRole, Vec<String>>,
     color_calibration: Option<ColorCalibrationPlan>,
 }
@@ -641,14 +663,44 @@ impl PreparedColorJob {
     }
 
     /// Whether the composition prepares nothing at length: its inputs are
-    /// cached, or it asks for neither deconvolution nor RC-Astro.
+    /// cached, or every channel's deconvolution and RC-Astro result is in
+    /// the cache its channel card uses (or it asks for none).
     pub(super) fn runs_quickly(&self) -> bool {
-        let deconvolves = self
+        self.inputs_cached() || self.channel_tools_cached()
+    }
+
+    /// Whether every channel's tool results are cached: a card or an
+    /// earlier build ran the same settings on the same stack. A channel
+    /// whose whole RC-Astro chain is cached needs no deconvolution, since
+    /// the chain's result already includes it.
+    fn channel_tools_cached(&self) -> bool {
+        let processing = self.public.processing.as_ref();
+        let roles = self
             .public
-            .processing
-            .as_ref()
-            .is_some_and(|processing| !processing.input_deconvolutions.is_empty());
-        self.inputs_cached() || (!deconvolves && self.rc_astro_chains.is_empty())
+            .input_deconvolution_ids
+            .keys()
+            .chain(self.rc_astro_chains.keys())
+            .collect::<std::collections::BTreeSet<_>>();
+        roles.into_iter().all(|role| {
+            if let Some(chain) = self.rc_astro_chains.get(role) {
+                return processing
+                    .and_then(|processing| processing.input_rc_astro.get(role))
+                    .is_some_and(|config| {
+                        super::rc_astro::rc_astro_chain_cached(&self.stack_root, chain, config)
+                    });
+            }
+            self.public
+                .input_deconvolution_ids
+                .get(role)
+                .zip(processing.and_then(|processing| processing.input_deconvolutions.get(role)))
+                .is_some_and(|(deconvolution_id, request)| {
+                    super::stretch::deconvolution_cached(
+                        &self.stack_root,
+                        deconvolution_id,
+                        *request,
+                    )
+                })
+        })
     }
 }
 
@@ -711,16 +763,13 @@ fn color_progress(
     } else {
         channel_count
     };
+    // In the order they run: the tools work on each channel's own stack,
+    // before background extraction and alignment.
     let definitions = [
         (
             StackColorProgressPhase::LoadingSources,
             "Loading source stacks",
             channel_count,
-        ),
-        (
-            StackColorProgressPhase::BackgroundPreparation,
-            "Background preparation",
-            background_units,
         ),
         (
             StackColorProgressPhase::RegisteringSources,
@@ -729,13 +778,23 @@ fn color_progress(
         ),
         (
             StackColorProgressPhase::DeconvolvingInputs,
-            "Deconvolving input channels",
+            "Deconvolving channel stacks",
             deconvolution_units,
         ),
         (
             StackColorProgressPhase::RcAstroInputs,
-            "Processing input channels with RC-Astro",
+            "Processing channel stacks with RC-Astro",
             rc_astro_units,
+        ),
+        (
+            StackColorProgressPhase::BackgroundPreparation,
+            "Background preparation",
+            background_units,
+        ),
+        (
+            StackColorProgressPhase::AligningSources,
+            "Aligning channels to the reference",
+            channel_count.saturating_sub(1),
         ),
         (
             StackColorProgressPhase::NormalizingInputs,
@@ -1113,6 +1172,8 @@ pub(super) fn preparing_color_job(
         resolved_input_deconvolutions: BTreeMap::new(),
         resolved_input_rc_astro: BTreeMap::new(),
         input_rc_astro_ids: BTreeMap::new(),
+        input_deconvolution_ids: BTreeMap::new(),
+        channel_tools_version: 0,
         followed_channel_processing: BTreeMap::new(),
         resolved_output_stretches: Vec::new(),
         resolved_backgrounds: BTreeMap::new(),
@@ -1417,6 +1478,19 @@ fn validate_request(request: &StackColorRequest) -> Result<(), AppError> {
     }
 }
 
+/// Why an input's RC-Astro steps cannot run. Steps taken from a channel
+/// card were not set in this build, so the message says which card's.
+fn refused_rc_astro_steps(role: StackColorRole, follows_cards: bool, error: String) -> AppError {
+    AppError::BadRequest(if follows_cards {
+        format!(
+            "The {} channel card's RC-Astro steps cannot run: {error}",
+            role.label()
+        )
+    } else {
+        error
+    })
+}
+
 pub(super) fn prepare_color_job(
     ctx: &crate::server::database_context::DatabaseContext,
     astrometry: &crate::astrometry::AstrometryContext,
@@ -1442,10 +1516,12 @@ pub(super) fn prepare_color_job(
     let mut rc_astro_schemas = BTreeMap::new();
     if let Some(processing) = &mut request.processing {
         resolve_color_calibration(request.kind, processing);
+        let follows_cards = processing.input_processing == ColorInputProcessing::Channels;
         for (role, config) in &mut processing.input_rc_astro {
-            let schemas = super::rc_astro::schemas_for(config).map_err(AppError::BadRequest)?;
-            *config = super::rc_astro::normalize_against_schemas(config, &schemas)
-                .map_err(AppError::BadRequest)?;
+            let refused = |error| refused_rc_astro_steps(*role, follows_cards, error);
+            let schemas = super::rc_astro::schemas_for(config).map_err(refused)?;
+            *config =
+                super::rc_astro::normalize_against_schemas(config, &schemas).map_err(refused)?;
             rc_astro_schemas.insert(*role, schemas);
         }
     }
@@ -1475,7 +1551,19 @@ pub(super) fn prepare_color_job(
         background_protection_summary.insert(role, protection.summary);
     }
     let label = composition_label(request.kind, request.palette).to_string();
-    let mut linear_input_id = request
+    // Each input's tools run on its channel's own stack, under the ids its
+    // channel card uses, so one run serves the card and every build.
+    let ChannelTools {
+        deconvolution_ids,
+        rc_astro_chains,
+    } = request
+        .processing
+        .as_ref()
+        .map(|processing| channel_tools(&ctx.id, processing, &sources, &rc_astro_schemas))
+        .transpose()?
+        .unwrap_or_default();
+    let processed_channels = processed_channel_ids(&deconvolution_ids, &rc_astro_chains);
+    let linear_input_id = request
         .processing
         .as_ref()
         .map(|processing| {
@@ -1486,38 +1574,19 @@ pub(super) fn prepare_color_job(
                 processing,
                 &sources,
                 &background_protection_summary,
+                &processed_channels,
             )
         })
         .transpose()?;
-    // Each channel's chain keys on that channel's own inputs, never on
-    // RC-Astro or display stretches: changing a later tool or a stretch
-    // reuses the matching chain prefix, and another channel's new frames
-    // reuse it whole.
-    let mut rc_astro_chains = BTreeMap::new();
-    if let (Some(processing), Some(upstream_id)) = (&request.processing, &linear_input_id) {
-        rc_astro_chains = color_rc_astro_chains(
-            &ctx.id,
-            project_id,
-            request.target_id,
-            request.kind,
-            processing,
-            &sources,
-            &background_protection_summary,
-            &rc_astro_schemas,
-        )?;
-        if !rc_astro_chains.is_empty() {
-            linear_input_id = Some(rc_astro_input_cache_id(upstream_id, &rc_astro_chains)?);
-        }
-    }
     let job_id = color_job_id(&ColorJobIdentity {
         database_id: &ctx.id,
         project_id,
         request: &request,
         label: &label,
-        rc_astro_input_id: (!rc_astro_chains.is_empty()).then(|| {
+        channel_tools_input_id: (!processed_channels.is_empty()).then(|| {
             linear_input_id
                 .as_deref()
-                .expect("RC-Astro requires processed inputs")
+                .expect("channel tools require processed inputs")
         }),
         background_protection: &background_protection_summary,
         color_calibration_basis: color_calibration_basis.as_ref(),
@@ -1566,6 +1635,12 @@ pub(super) fn prepare_color_job(
                 .iter()
                 .filter_map(|(role, chain)| chain.last().map(|id| (*role, id.clone())))
                 .collect(),
+            input_deconvolution_ids: deconvolution_ids,
+            channel_tools_version: if processed_channels.is_empty() {
+                0
+            } else {
+                COLOR_CHANNEL_TOOLS_VERSION
+            },
             followed_channel_processing,
             resolved_output_stretches: Vec::new(),
             resolved_backgrounds: BTreeMap::new(),
@@ -1630,8 +1705,8 @@ struct ColorJobIdentity<'a> {
     project_id: i32,
     request: &'a StackColorRequest,
     label: &'a str,
-    /// The prepared inputs' identity, when RC-Astro chains feed them.
-    rc_astro_input_id: Option<&'a str>,
+    /// The prepared inputs' identity, when channel tools feed them.
+    channel_tools_input_id: Option<&'a str>,
     background_protection: &'a BTreeMap<StackColorRole, StackBackgroundProtection>,
     color_calibration_basis: Option<&'a StackColorCalibrationBasis>,
     sources: &'a [StackColorSource],
@@ -1647,7 +1722,11 @@ fn color_job_id(identity: &ColorJobIdentity<'_>) -> Result<String, AppError> {
     hasher.update(STACK_COLOR_CACHE_VERSION.to_le_bytes());
     hasher.update(SEIZA_STACKING_OUTPUT_VERSION.as_bytes());
     hasher.update(SEIZA_BACKGROUND_VERSION.as_bytes());
-    if let Some(input_id) = identity.rc_astro_input_id {
+    // Only a build with tools adds these, so a build without them keeps its
+    // id across the change to where tools run.
+    if let Some(input_id) = identity.channel_tools_input_id {
+        hasher.update(b"channel-tools");
+        hasher.update(COLOR_CHANNEL_TOOLS_VERSION.to_le_bytes());
         hasher.update(input_id.as_bytes());
     }
     if request
@@ -1843,126 +1922,83 @@ fn reference_role(kind: StackColorKind) -> StackColorRole {
     }
 }
 
-/// What one channel's registered, deconvolved pixels depend on, and nothing
-/// else: its own stack, the reference stack it registers onto, and its own
-/// deconvolution. Background extraction picks one model for every channel,
-/// so with it on, every channel's stack and protection count too.
-///
-/// RC-Astro chains cache under this, so a new frame in one channel reruns
-/// the tools on that channel alone.
-#[allow(clippy::too_many_arguments)]
-fn color_role_input_id(
-    database_id: &str,
-    project_id: i32,
-    target_id: i32,
-    role: StackColorRole,
-    reference_role: StackColorRole,
-    processing: &StackColorProcessing,
-    sources: &[StackColorSource],
-    resolved_background_protection: &BTreeMap<StackColorRole, StackBackgroundProtection>,
-) -> Result<String, AppError> {
-    fn encode(value: &impl Serialize) -> Result<Vec<u8>, AppError> {
-        serde_json::to_vec(value).map_err(|error| {
-            AppError::InternalError(format!("Failed to encode color input processing: {error}"))
-        })
-    }
-    let mut hasher = Sha256::new();
-    hasher.update(b"color-role-input");
-    hasher.update(database_id.as_bytes());
-    hasher.update(project_id.to_le_bytes());
-    hasher.update(target_id.to_le_bytes());
-    hasher.update(COLOR_INPUT_CACHE_VERSION.to_le_bytes());
-    hasher.update(SEIZA_STACKING_OUTPUT_VERSION.as_bytes());
-    hasher.update([role as u8, reference_role as u8]);
-    let hash_source = |hasher: &mut Sha256, source: &StackColorSource| {
-        hasher.update([source.role as u8]);
-        hasher.update(source.filter_name.as_bytes());
-        hasher.update(source.job_id.as_bytes());
-        hasher.update(source.group_index.to_le_bytes());
-        hasher.update(source.artifact_revision.as_bytes());
-    };
-    if let Some(extraction) = &processing.background_extraction {
-        hasher.update(SEIZA_BACKGROUND_VERSION.as_bytes());
-        hasher.update(encode(&(extraction, resolved_background_protection))?);
-        for source in sources {
-            hash_source(&mut hasher, source);
-        }
-    } else {
-        for source in sources
-            .iter()
-            .filter(|source| source.role == role || source.role == reference_role)
-        {
-            hash_source(&mut hasher, source);
-        }
-    }
-    if let Some(deconvolution) = processing.input_deconvolutions.get(&role) {
-        hasher.update(seiza_deconvolution::ALGORITHM_VERSION.to_le_bytes());
-        hasher.update(encode(deconvolution)?);
-    }
-    let mut id = String::with_capacity(64);
-    for byte in hasher.finalize() {
-        write!(&mut id, "{byte:02x}").expect("writing to a String cannot fail");
-    }
-    Ok(id)
+/// Each input's deconvolution and RC-Astro chain, under the ids its channel
+/// card uses: the channel's own stack (`mono:{job}:{group}` at its
+/// revision) and the settings. Neither background extraction, registration
+/// nor another channel enters them, so a new frame in one channel reruns the
+/// tools on that channel alone, and a card that ran the same settings has
+/// done the work already.
+#[derive(Debug, Default)]
+struct ChannelTools {
+    deconvolution_ids: BTreeMap<StackColorRole, String>,
+    rc_astro_chains: BTreeMap<StackColorRole, Vec<String>>,
 }
 
-#[allow(clippy::too_many_arguments)]
-fn color_rc_astro_chains(
+fn channel_tools(
     database_id: &str,
-    project_id: i32,
-    target_id: i32,
-    kind: StackColorKind,
     processing: &StackColorProcessing,
     sources: &[StackColorSource],
-    resolved_background_protection: &BTreeMap<StackColorRole, StackBackgroundProtection>,
     schemas: &BTreeMap<StackColorRole, Vec<(String, seiza_stacking::ExternalToolSchema)>>,
-) -> Result<BTreeMap<StackColorRole, Vec<String>>, AppError> {
-    processing
-        .input_rc_astro
-        .iter()
-        .map(|(role, config)| {
-            let schemas = schemas.get(role).ok_or_else(|| {
+) -> Result<ChannelTools, AppError> {
+    let mut tools = ChannelTools::default();
+    for source in sources {
+        let key = super::stretch::mono_source_key(&source.job_id, source.group_index);
+        let deconvolution_id = processing
+            .input_deconvolutions
+            .get(&source.role)
+            .map(|config| {
+                super::stretch::deconvolution_cache_id(
+                    database_id,
+                    &key,
+                    &source.artifact_revision,
+                    config,
+                )
+            })
+            .transpose()?;
+        if let Some(config) = processing
+            .input_rc_astro
+            .get(&source.role)
+            .filter(|config| !config.steps.is_empty())
+        {
+            let schemas = schemas.get(&source.role).ok_or_else(|| {
                 AppError::InternalError("RC-Astro input schemas are missing".into())
             })?;
-            let input_id = color_role_input_id(
-                database_id,
-                project_id,
-                target_id,
-                *role,
-                reference_role(kind),
-                processing,
-                sources,
-                resolved_background_protection,
-            )?;
             let chain = super::rc_astro::rc_astro_chain_ids(
                 database_id,
-                &format!("color-input:{input_id}:{}", role.label()),
-                &input_id,
+                &key,
+                &source.artifact_revision,
                 config,
                 schemas,
-                None,
+                deconvolution_id.as_deref(),
             )?;
-            Ok((*role, chain))
-        })
-        .collect()
-}
-
-fn rc_astro_input_cache_id(
-    upstream_id: &str,
-    chains: &BTreeMap<StackColorRole, Vec<String>>,
-) -> Result<String, AppError> {
-    let mut hasher = Sha256::new();
-    hasher.update(upstream_id.as_bytes());
-    hasher.update(
-        serde_json::to_vec(chains).map_err(|error| AppError::InternalError(error.to_string()))?,
-    );
-    let mut id = String::with_capacity(64);
-    for byte in hasher.finalize() {
-        write!(&mut id, "{byte:02x}").expect("writing to a String cannot fail");
+            tools.rc_astro_chains.insert(source.role, chain);
+        }
+        if let Some(id) = deconvolution_id {
+            tools.deconvolution_ids.insert(source.role, id);
+        }
     }
-    Ok(id)
+    Ok(tools)
 }
 
+/// The id of each processed channel stack: its RC-Astro chain's last step,
+/// which already names any deconvolution before it, or else its
+/// deconvolution. Channels without tools are left out.
+fn processed_channel_ids(
+    deconvolution_ids: &BTreeMap<StackColorRole, String>,
+    rc_astro_chains: &BTreeMap<StackColorRole, Vec<String>>,
+) -> BTreeMap<StackColorRole, String> {
+    let mut ids = deconvolution_ids.clone();
+    for (role, chain) in rc_astro_chains {
+        if let Some(last) = chain.last() {
+            ids.insert(*role, last.clone());
+        }
+    }
+    ids
+}
+
+/// What a build's prepared inputs depend on. `processed_channels` names
+/// each channel stack's tool results; a build without tools hashes nothing
+/// for them, so it keeps its id.
 fn color_input_cache_id(
     database_id: &str,
     project_id: i32,
@@ -1970,6 +2006,7 @@ fn color_input_cache_id(
     processing: &StackColorProcessing,
     sources: &[StackColorSource],
     resolved_background_protection: &BTreeMap<StackColorRole, StackBackgroundProtection>,
+    processed_channels: &BTreeMap<StackColorRole, String>,
 ) -> Result<String, AppError> {
     let mut hasher = Sha256::new();
     hasher.update(database_id.as_bytes());
@@ -1999,6 +2036,13 @@ fn color_input_cache_id(
         hasher.update(source.job_id.as_bytes());
         hasher.update(source.group_index.to_le_bytes());
         hasher.update(source.artifact_revision.as_bytes());
+    }
+    if !processed_channels.is_empty() {
+        hasher.update(b"channel-tools");
+        hasher.update(COLOR_CHANNEL_TOOLS_VERSION.to_le_bytes());
+        hasher.update(serde_json::to_vec(processed_channels).map_err(|error| {
+            AppError::InternalError(format!("Failed to encode channel tools: {error}"))
+        })?);
     }
     let mut id = String::with_capacity(64);
     for byte in hasher.finalize() {
@@ -2679,6 +2723,194 @@ fn refit_channel_background(
     Ok(fit)
 }
 
+/// Run each channel's deconvolution and RC-Astro tools on its own stack and
+/// put the result in its place. Deconvolution comes from, or goes to, the
+/// cache its channel card uses (`input_deconvolution_ids`); RC-Astro caches
+/// each step under the card's chain ids. A channel without tools is left as
+/// it is.
+#[allow(clippy::too_many_arguments)]
+fn run_channel_tools(
+    state: &Arc<AppState>,
+    job: &StackColorJob,
+    stack_root: &FsPath,
+    pool: &crate::concurrency::ComputePool,
+    frames: &mut BTreeMap<StackColorRole, FitsFrame>,
+    rc_astro_schemas: &BTreeMap<StackColorRole, Vec<(String, seiza_stacking::ExternalToolSchema)>>,
+    rc_astro_chains: &BTreeMap<StackColorRole, Vec<String>>,
+    resolved_deconvolutions: &mut BTreeMap<
+        StackColorRole,
+        super::stretch::StackDeconvolutionResult,
+    >,
+    resolved_rc_astro: &mut BTreeMap<StackColorRole, StackColorRcAstroResult>,
+    progress: &ColorProgressTracker<'_>,
+    stop: &ColorStop,
+) -> Result<(), String> {
+    let processing = job.processing.as_ref();
+    if job.input_deconvolution_ids.is_empty() {
+        progress.skip(
+            StackColorProgressPhase::DeconvolvingInputs,
+            "Input deconvolution skipped (disabled)",
+        );
+    } else {
+        for source in &job.sources {
+            let Some(deconvolution_id) = job.input_deconvolution_ids.get(&source.role) else {
+                continue;
+            };
+            let request = processing
+                .and_then(|processing| processing.input_deconvolutions.get(&source.role))
+                .copied()
+                .ok_or_else(|| {
+                    format!("{} deconvolution settings are missing", source.role.label())
+                })?;
+            stop.check()?;
+            let role_label = source.role.label();
+            // A cached RC-Astro result already includes the deconvolution
+            // under it, so the deconvolution need not run, or even be
+            // cached, again.
+            let chain_cached = rc_astro_chains
+                .get(&source.role)
+                .zip(processing.and_then(|processing| processing.input_rc_astro.get(&source.role)))
+                .is_some_and(|(chain, config)| {
+                    super::rc_astro::rc_astro_chain_cached(stack_root, chain, config)
+                });
+            if chain_cached {
+                progress.begin(
+                    StackColorProgressPhase::DeconvolvingInputs,
+                    format!("Reusing {role_label} RC-Astro result, deconvolution included"),
+                    Some(source.role),
+                    None,
+                );
+                if let Some(result) =
+                    super::stretch::deconvolution_result(stack_root, deconvolution_id, request)
+                {
+                    resolved_deconvolutions.insert(source.role, result.clone());
+                    state.stack_previews.update_color(&job.job_id, |current| {
+                        current
+                            .resolved_input_deconvolutions
+                            .insert(source.role, result);
+                    });
+                }
+                progress.advance(StackColorProgressPhase::DeconvolvingInputs, 1);
+                continue;
+            }
+            let frame = frames
+                .get_mut(&source.role)
+                .ok_or_else(|| format!("{role_label} source was not loaded"))?;
+            let result = if let Some((cached, result)) =
+                super::stretch::cached_deconvolution(stack_root, deconvolution_id, request)?
+            {
+                progress.begin(
+                    StackColorProgressPhase::DeconvolvingInputs,
+                    format!("Reusing {role_label} deconvolution"),
+                    Some(source.role),
+                    None,
+                );
+                validate_mono(&cached.image, source.role)?;
+                frame.image = cached.image;
+                result
+            } else {
+                progress.begin(
+                    StackColorProgressPhase::DeconvolvingInputs,
+                    format!("Deconvolving {role_label}"),
+                    Some(source.role),
+                    None,
+                );
+                let (restored, result) = pool
+                    .install(|| super::stretch::apply_deconvolution(&frame.image, request))
+                    .map_err(|error| format!("Failed to deconvolve {role_label}: {error}"))?;
+                super::stretch::store_deconvolution(
+                    stack_root,
+                    deconvolution_id,
+                    &restored,
+                    &frame.headers,
+                    &result,
+                )?;
+                frame.image = restored;
+                result
+            };
+            resolved_deconvolutions.insert(source.role, result.clone());
+            state.stack_previews.update_color(&job.job_id, |current| {
+                current
+                    .resolved_input_deconvolutions
+                    .insert(source.role, result);
+            });
+            progress.advance(StackColorProgressPhase::DeconvolvingInputs, 1);
+        }
+        progress.finish(StackColorProgressPhase::DeconvolvingInputs);
+    }
+
+    if rc_astro_chains.is_empty() {
+        progress.skip(
+            StackColorProgressPhase::RcAstroInputs,
+            "RC-Astro input processing skipped (disabled)",
+        );
+        return Ok(());
+    }
+    for source in &job.sources {
+        let Some(chain) = rc_astro_chains.get(&source.role) else {
+            continue;
+        };
+        let config = processing
+            .and_then(|processing| processing.input_rc_astro.get(&source.role))
+            .ok_or_else(|| format!("{} RC-Astro settings are missing", source.role.label()))?;
+        let schemas = rc_astro_schemas
+            .get(&source.role)
+            .ok_or_else(|| "RC-Astro tool schemas are missing".to_string())?;
+        let frame = frames
+            .get_mut(&source.role)
+            .ok_or_else(|| format!("{} source was not loaded", source.role.label()))?;
+        let steps = config.steps.len();
+        let outcome = pool.install(|| {
+            super::rc_astro::apply_rc_astro(
+                stack_root,
+                chain,
+                config,
+                schemas,
+                &frame.image,
+                &frame.headers,
+                &mut |label, fraction| {
+                    let percent = (fraction.clamp(0.0, 1.0) * 100.0).round() as u8;
+                    progress.begin(
+                        StackColorProgressPhase::RcAstroInputs,
+                        format!("{}: {label} ({percent}%)", source.role.label()),
+                        Some(source.role),
+                        None,
+                    );
+                    progress.partial(steps, fraction);
+                },
+                // A stop kills the tool in hand; the steps it finished stay
+                // cached for the next composition and the channel's card.
+                Some(&stop.signal()),
+                &mut || stop.check(),
+            )
+        })?;
+        let id = chain
+            .last()
+            .ok_or_else(|| "RC-Astro chain is empty".to_string())?;
+        let result = StackColorRcAstroResult {
+            fits_url: format!(
+                "/api/db/{}/stack-previews/rc-astro/{id}/fits",
+                job.database_id
+            ),
+            stars_fits_url: outcome.result.has_stars.then(|| {
+                format!(
+                    "/api/db/{}/stack-previews/rc-astro/{id}/fits?stars=true",
+                    job.database_id
+                )
+            }),
+            result: outcome.result,
+        };
+        frame.image = outcome.image;
+        resolved_rc_astro.insert(source.role, result.clone());
+        state.stack_previews.update_color(&job.job_id, |current| {
+            current.resolved_input_rc_astro.insert(source.role, result);
+        });
+        progress.advance(StackColorProgressPhase::RcAstroInputs, steps);
+    }
+    progress.finish(StackColorProgressPhase::RcAstroInputs);
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn compose_color(
     state: &Arc<AppState>,
@@ -2855,6 +3087,117 @@ fn compose_color(
         progress.finish(StackColorProgressPhase::LoadingSources);
     }
 
+    // Registration is measured on the stacks as they came, so the transform
+    // does not depend on any tool's settings. It is applied after background
+    // extraction, which fits each channel in its own frame.
+    if reused_inputs {
+        progress.reuse(
+            StackColorProgressPhase::RegisteringSources,
+            "Reused registered input channels",
+        );
+    } else {
+        progress.begin(
+            StackColorProgressPhase::RegisteringSources,
+            format!("Using {} as registration reference", reference_role.label()),
+            Some(reference_role),
+            None,
+        );
+        let registrar = pool
+            .install(|| Registrar::new(&reference.image, RegistrationOptions::default()))
+            .map_err(|error| error.to_string())?;
+        progress.advance(StackColorProgressPhase::RegisteringSources, 1);
+        state.stack_previews.update_color(&job.job_id, |current| {
+            current.processed_channels = 1;
+        });
+        for source in job
+            .sources
+            .iter()
+            .filter(|source| source.role != reference_role)
+        {
+            stop.check()?;
+            progress.begin(
+                StackColorProgressPhase::RegisteringSources,
+                format!("Registering {}", source.role.label()),
+                Some(source.role),
+                None,
+            );
+            let frame = frames
+                .get(&source.role)
+                .ok_or_else(|| format!("{} source was not loaded", source.role.label()))?;
+            let registration =
+                pool.install(|| registrar.register(&frame.image))
+                    .map_err(|error| {
+                        format!(
+                            "Failed to register {} to {}: {error}",
+                            source.role.label(),
+                            reference_role.label()
+                        )
+                    })?;
+            if registration.rms_error_pixels > MAX_REGISTRATION_RMS_PIXELS {
+                return Err(format!(
+                    "{} registration RMS {:.3}px exceeds {:.3}px",
+                    source.role.label(),
+                    registration.rms_error_pixels,
+                    MAX_REGISTRATION_RMS_PIXELS
+                ));
+            }
+            tracing::info!(
+                "Stack color {} registered {}: {:.3}px RMS, {:.1}px drift, {} stars",
+                job.job_id,
+                source.role.label(),
+                registration.rms_error_pixels,
+                registration.drift_pixels,
+                registration.matched_stars
+            );
+            registered_transforms.insert(source.role, registration.transform);
+            state.stack_previews.update_color(&job.job_id, |current| {
+                if let Some(current_source) = current
+                    .sources
+                    .iter_mut()
+                    .find(|current_source| current_source.role == source.role)
+                {
+                    current_source.registration_transform = Some(registration.transform);
+                }
+                current.processed_channels += 1;
+            });
+            progress.advance(StackColorProgressPhase::RegisteringSources, 1);
+        }
+        progress.finish(StackColorProgressPhase::RegisteringSources);
+    }
+
+    // Each channel's deconvolution and RC-Astro tools run on its own stack,
+    // in the cache its channel card uses: whichever asks first does the
+    // work, and the other reads the result.
+    if reused_inputs {
+        progress.reuse(
+            StackColorProgressPhase::DeconvolvingInputs,
+            "Reused prepared deconvolution",
+        );
+        progress.reuse(
+            StackColorProgressPhase::RcAstroInputs,
+            "Reused RC-Astro input processing",
+        );
+    } else {
+        frames.insert(reference_role, reference);
+        let ran = run_channel_tools(
+            state,
+            job,
+            stack_root,
+            &pool,
+            &mut frames,
+            rc_astro_schemas,
+            rc_astro_chains,
+            &mut resolved_deconvolutions,
+            &mut resolved_rc_astro,
+            &progress,
+            stop,
+        );
+        reference = frames
+            .remove(&reference_role)
+            .ok_or_else(|| format!("{} source was not loaded", reference_role.label()))?;
+        ran?;
+    }
+
     if reused_inputs {
         progress.reuse(
             StackColorProgressPhase::BackgroundPreparation,
@@ -2985,11 +3328,6 @@ fn compose_color(
         );
     }
 
-    let mut source_headers = frames
-        .iter()
-        .map(|(role, frame)| (*role, frame.headers.clone()))
-        .collect::<BTreeMap<_, _>>();
-    source_headers.insert(reference_role, reference.headers.clone());
     pool.install(|| {
         let reference_headers = reference.headers;
         let reference_image = reference.image;
@@ -3008,24 +3346,10 @@ fn compose_color(
         if reused_inputs {
             images.extend(frames.into_iter().map(|(role, frame)| (role, frame.image)));
             progress.reuse(
-                StackColorProgressPhase::RegisteringSources,
-                "Reused registered input channels",
+                StackColorProgressPhase::AligningSources,
+                "Reused aligned input channels",
             );
         } else {
-            progress.begin(
-                StackColorProgressPhase::RegisteringSources,
-                format!("Using {} as registration reference", reference_role.label()),
-                Some(reference_role),
-                None,
-            );
-            let registrar =
-                Registrar::new(&images[&reference_role], RegistrationOptions::default())
-                    .map_err(|error| error.to_string())?;
-            progress.advance(StackColorProgressPhase::RegisteringSources, 1);
-            state.stack_previews.update_color(&job.job_id, |current| {
-                current.processed_channels = 1;
-            });
-
             for source in job
                 .sources
                 .iter()
@@ -3033,42 +3357,27 @@ fn compose_color(
             {
                 stop.check()?;
                 progress.begin(
-                    StackColorProgressPhase::RegisteringSources,
-                    format!("Registering {}", source.role.label()),
+                    StackColorProgressPhase::AligningSources,
+                    format!(
+                        "Aligning {} to {}",
+                        source.role.label(),
+                        reference_role.label()
+                    ),
                     Some(source.role),
                     None,
                 );
                 let frame = frames
                     .remove(&source.role)
                     .ok_or_else(|| format!("{} source was not loaded", source.role.label()))?;
-                let registration = registrar.register(&frame.image).map_err(|error| {
-                    format!(
-                        "Failed to register {} to {}: {error}",
-                        source.role.label(),
-                        reference_role.label()
-                    )
-                })?;
-                if registration.rms_error_pixels > MAX_REGISTRATION_RMS_PIXELS {
-                    return Err(format!(
-                        "{} registration RMS {:.3}px exceeds {:.3}px",
-                        source.role.label(),
-                        registration.rms_error_pixels,
-                        MAX_REGISTRATION_RMS_PIXELS
-                    ));
-                }
-                tracing::info!(
-                    "Stack color {} registered {}: {:.3}px RMS, {:.1}px drift, {} stars",
-                    job.job_id,
-                    source.role.label(),
-                    registration.rms_error_pixels,
-                    registration.drift_pixels,
-                    registration.matched_stars
-                );
+                let transform = registered_transforms
+                    .get(&source.role)
+                    .copied()
+                    .ok_or_else(|| format!("{} was not registered", source.role.label()))?;
                 let aligned = resample_to_reference(
                     &frame.image,
                     images[&reference_role].width,
                     images[&reference_role].height,
-                    registration.transform,
+                    transform,
                 )
                 .map_err(|error| {
                     format!(
@@ -3077,23 +3386,10 @@ fn compose_color(
                         reference_role.label()
                     )
                 })?;
-                registered_transforms.insert(source.role, registration.transform);
-                state.stack_previews.update_color(&job.job_id, |current| {
-                    if let Some(current_source) = current
-                        .sources
-                        .iter_mut()
-                        .find(|current_source| current_source.role == source.role)
-                    {
-                        current_source.registration_transform = Some(registration.transform);
-                    }
-                });
                 images.insert(source.role, aligned);
-                progress.advance(StackColorProgressPhase::RegisteringSources, 1);
-                state.stack_previews.update_color(&job.job_id, |current| {
-                    current.processed_channels += 1;
-                });
+                progress.advance(StackColorProgressPhase::AligningSources, 1);
             }
-            progress.finish(StackColorProgressPhase::RegisteringSources);
+            progress.finish(StackColorProgressPhase::AligningSources);
         }
         // Only a composition that will be calibrated reads the maps.
         let mut clipped = color_calibration
@@ -3114,130 +3410,10 @@ fn compose_color(
         let options = if let Some(processing) = &job.processing {
             if reused_inputs {
                 progress.reuse(
-                    StackColorProgressPhase::DeconvolvingInputs,
-                    "Reused prepared deconvolution",
-                );
-                progress.reuse(
-                    StackColorProgressPhase::RcAstroInputs,
-                    "Reused RC-Astro input processing",
-                );
-                progress.reuse(
                     StackColorProgressPhase::NormalizingInputs,
                     "Reused normalized input channels",
                 );
             } else {
-                if processing.input_deconvolutions.is_empty() {
-                    progress.skip(
-                        StackColorProgressPhase::DeconvolvingInputs,
-                        "Input deconvolution skipped (disabled)",
-                    );
-                } else {
-                    for source in &job.sources {
-                        let Some(request) =
-                            processing.input_deconvolutions.get(&source.role).copied()
-                        else {
-                            continue;
-                        };
-                        stop.check()?;
-                        progress.begin(
-                            StackColorProgressPhase::DeconvolvingInputs,
-                            format!("Deconvolving {}", source.role.label()),
-                            Some(source.role),
-                            None,
-                        );
-                        let image = images.remove(&source.role).ok_or_else(|| {
-                            format!("{} registered image is missing", source.role.label())
-                        })?;
-                        let role_label = source.role.label();
-                        let (restored, result) = super::stretch::apply_deconvolution(
-                            &image, request,
-                        )
-                        .map_err(|error| format!("Failed to deconvolve {role_label}: {error}"))?;
-                        images.insert(source.role, restored);
-                        resolved_deconvolutions.insert(source.role, result.clone());
-                        state.stack_previews.update_color(&job.job_id, |current| {
-                            current
-                                .resolved_input_deconvolutions
-                                .insert(source.role, result);
-                        });
-                        progress.advance(StackColorProgressPhase::DeconvolvingInputs, 1);
-                    }
-                    progress.finish(StackColorProgressPhase::DeconvolvingInputs);
-                }
-
-                if processing.input_rc_astro.is_empty() {
-                    progress.skip(
-                        StackColorProgressPhase::RcAstroInputs,
-                        "RC-Astro input processing skipped (disabled)",
-                    );
-                } else {
-                    for source in &job.sources {
-                        let Some(config) = processing.input_rc_astro.get(&source.role) else {
-                            continue;
-                        };
-                        let image = images.get(&source.role).ok_or_else(|| {
-                            format!("{} registered image is missing", source.role.label())
-                        })?;
-                        let chain = rc_astro_chains
-                            .get(&source.role)
-                            .ok_or_else(|| "RC-Astro chain identity is missing".to_string())?;
-                        let schemas = rc_astro_schemas
-                            .get(&source.role)
-                            .ok_or_else(|| "RC-Astro tool schemas are missing".to_string())?;
-                        let headers = registered_channel_headers(
-                            &reference_headers,
-                            &source_headers[&source.role],
-                            &source.filter_name,
-                        );
-                        let steps = config.steps.len();
-                        let outcome = super::rc_astro::apply_rc_astro(
-                            stack_root,
-                            chain,
-                            config,
-                            schemas,
-                            image,
-                            &headers,
-                            &mut |label, fraction| {
-                                let percent = (fraction.clamp(0.0, 1.0) * 100.0).round() as u8;
-                                progress.begin(
-                                    StackColorProgressPhase::RcAstroInputs,
-                                    format!("{}: {label} ({percent}%)", source.role.label()),
-                                    Some(source.role),
-                                    None,
-                                );
-                                progress.partial(steps, fraction);
-                            },
-                            // A stop kills the tool in hand; the steps it
-                            // finished stay cached for the next composition.
-                            Some(&stop.signal()),
-                            &mut || stop.check(),
-                        )?;
-                        let id = chain
-                            .last()
-                            .ok_or_else(|| "RC-Astro chain is empty".to_string())?;
-                        let result = StackColorRcAstroResult {
-                            fits_url: format!(
-                                "/api/db/{}/stack-previews/rc-astro/{id}/fits",
-                                job.database_id
-                            ),
-                            stars_fits_url: outcome.result.has_stars.then(|| {
-                                format!(
-                                    "/api/db/{}/stack-previews/rc-astro/{id}/fits?stars=true",
-                                    job.database_id
-                                )
-                            }),
-                            result: outcome.result,
-                        };
-                        images.insert(source.role, outcome.image);
-                        resolved_rc_astro.insert(source.role, result.clone());
-                        state.stack_previews.update_color(&job.job_id, |current| {
-                            current.resolved_input_rc_astro.insert(source.role, result);
-                        });
-                        progress.advance(StackColorProgressPhase::RcAstroInputs, steps);
-                    }
-                    progress.finish(StackColorProgressPhase::RcAstroInputs);
-                }
-
                 progress.begin(
                     StackColorProgressPhase::NormalizingInputs,
                     "Normalizing input channels",
@@ -4070,53 +4246,6 @@ fn color_calibration_cards(
     ]
 }
 
-fn registered_channel_headers(
-    reference: &[(String, seiza_fits::HeaderValue)],
-    source: &[(String, seiza_fits::HeaderValue)],
-    filter_name: &str,
-) -> Vec<(String, seiza_fits::HeaderValue)> {
-    // Registered pixels use the reference grid but retain their own channel's
-    // acquisition metadata, never the reference channel's filter or exposure.
-    let wcs_key = |key: &str| {
-        matches!(
-            key,
-            "CRPIX1"
-                | "CRPIX2"
-                | "CRVAL1"
-                | "CRVAL2"
-                | "CTYPE1"
-                | "CTYPE2"
-                | "CUNIT1"
-                | "CUNIT2"
-                | "CDELT1"
-                | "CDELT2"
-                | "CROTA1"
-                | "CROTA2"
-                | "WCSAXES"
-                | "RADESYS"
-                | "EQUINOX"
-                | "LONPOLE"
-                | "LATPOLE"
-                | "SKYORIEN"
-        ) || [
-            "CD1_", "CD2_", "PC1_", "PC2_", "PV1_", "PV2_", "A_", "B_", "AP_", "BP_",
-        ]
-        .iter()
-        .any(|prefix| key.starts_with(prefix))
-    };
-    let mut headers = source
-        .iter()
-        .filter(|(key, _)| !wcs_key(key) && key != "FILTER")
-        .cloned()
-        .collect::<Vec<_>>();
-    headers.extend(reference.iter().filter(|(key, _)| wcs_key(key)).cloned());
-    headers.push((
-        "FILTER".into(),
-        seiza_fits::HeaderValue::String(filter_name.into()),
-    ));
-    headers
-}
-
 /// Where the channels' raw frames clipped, on the reference channel's grid:
 /// each channel stack's clipped map carried through the transform that
 /// registered the channel, and at each pixel the largest share any channel
@@ -4276,7 +4405,7 @@ fn store_cached_color_inputs(
             .parent()
             .ok_or_else(|| "Color input FITS path has no parent".to_string())?;
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-        let temporary = destination.with_extension(format!("{}.tmp.fits", temporary_tag()));
+        let temporary = destination.with_extension(format!("{}.tmp.fits", super::temporary_tag()));
         write_processed_image_fits_f32(&temporary, image, reference_headers, &[])
             .map_err(|error| error.to_string())?;
         std::fs::rename(&temporary, &destination).map_err(|error| error.to_string())?;
@@ -4907,6 +5036,45 @@ fn color_artifacts_exist(stack_root: &FsPath, job_id: &str) -> bool {
         && color_fits_path(stack_root, job_id).is_file()
 }
 
+/// Whether a build ran deconvolution or RC-Astro somewhere other than on each
+/// channel's own stack: a build from before the tools moved there, which ran
+/// them after registration. A build without tools never is.
+fn ran_tools_elsewhere(job: &StackColorJob) -> bool {
+    job.processing.as_ref().is_some_and(|processing| {
+        !processing.input_deconvolutions.is_empty()
+            || processing
+                .input_rc_astro
+                .values()
+                .any(|config| !config.steps.is_empty())
+    }) && job.channel_tools_version != COLOR_CHANNEL_TOOLS_VERSION
+}
+
+/// Why the color catalog would mark `job` out of date, against its
+/// project's latest stacks.
+#[cfg(test)]
+pub(super) fn outdated_reason(
+    ctx: &crate::server::database_context::DatabaseContext,
+    astrometry: &crate::astrometry::AstrometryContext,
+    job: &StackColorJob,
+) -> Result<Option<String>, AppError> {
+    let latest = load_latest_stacks(ctx, job.project_id)?;
+    color_job_outdated_reason(ctx, astrometry, job, &latest)
+}
+
+/// Empty files where a finished build leaves its preview and FITS, so a
+/// test's job counts as built.
+#[cfg(test)]
+pub(super) fn write_placeholder_artifacts(stack_root: &FsPath, job_id: &str) {
+    for path in [
+        color_preview_path(stack_root, job_id),
+        color_original_preview_path(stack_root, job_id),
+        color_fits_path(stack_root, job_id),
+    ] {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, b"").unwrap();
+    }
+}
+
 fn color_job_outdated_reason(
     ctx: &crate::server::database_context::DatabaseContext,
     astrometry: &crate::astrometry::AstrometryContext,
@@ -4923,6 +5091,11 @@ fn color_job_outdated_reason(
             && job.deconvolution_version != super::stretch::deconvolution_version())
     {
         return Ok(Some("the color processing version changed".into()));
+    }
+    if ran_tools_elsewhere(job) {
+        return Ok(Some(
+            "deconvolution and RC-Astro now run on each channel's own stack".into(),
+        ));
     }
     if !job.sources.iter().all(|source| {
         source_is_current(source, job.target_id, latest)
@@ -5014,20 +5187,12 @@ fn current_latest_colors(mut latest: LatestStackColorPreviews) -> LatestStackCol
     latest
 }
 
-/// A temporary file's tag, unique to this write, so a composition in the
-/// quick lane and one in the line never write the same temporary file.
-fn temporary_tag() -> String {
-    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let next = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    format!("{}-{next}", std::process::id())
-}
-
 fn write_json_atomic(path: &FsPath, value: &impl Serialize) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or_else(|| "Color manifest path has no parent".to_string())?;
     std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    let temporary = path.with_extension(format!("{}.tmp", temporary_tag()));
+    let temporary = path.with_extension(format!("{}.tmp", super::temporary_tag()));
     let bytes = serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?;
     std::fs::write(&temporary, bytes).map_err(|error| error.to_string())?;
     std::fs::rename(&temporary, path).map_err(|error| error.to_string())
@@ -5106,145 +5271,159 @@ mod tests {
     };
 
     #[test]
-    fn registered_rc_astro_inputs_keep_their_own_filter_and_reference_grid() {
-        use seiza_fits::HeaderValue::{Float, String as Text};
-        let reference = vec![
-            ("FILTER".into(), Text("Ha".into())),
-            ("EXPTIME".into(), Float(300.0)),
-            ("DATE-OBS".into(), Text("2026-01-01".into())),
-            ("CRPIX1".into(), Float(10.0)),
-            ("CRPIX2".into(), Float(20.0)),
-            ("CRVAL1".into(), Float(30.0)),
-            ("CRVAL2".into(), Float(40.0)),
-            ("CTYPE1".into(), Text("RA---TAN".into())),
-            ("CTYPE2".into(), Text("DEC--TAN".into())),
-            ("CD1_1".into(), Float(0.001)),
-        ];
-        let source = vec![
-            ("FILTER".into(), Text("OIII".into())),
-            ("EXPTIME".into(), Float(600.0)),
-            ("DATE-OBS".into(), Text("2026-01-02".into())),
-            ("CRPIX1".into(), Float(99.0)),
-            ("PC1_1".into(), Float(9.0)),
-        ];
-        let headers = registered_channel_headers(&reference, &source, "OIII");
-        let cache = tempfile::tempdir().unwrap();
-        let path = cache.path().join("processed.fits");
-        write_processed_image_fits_f32(
-            &path,
-            &LinearImage::new(2, 2, 1, vec![10.0; 4]).unwrap(),
-            &headers,
-            &[],
-        )
-        .unwrap();
-        let image = crate::image_io::open_linear_frame(&path).unwrap();
-        let header = |key: &str| {
-            image
-                .headers
-                .iter()
-                .find(|(name, _)| name == key)
-                .map(|(_, value)| value)
-        };
-        assert_eq!(header("FILTER"), Some(&Text("OIII".into())));
-        assert_eq!(header("EXPTIME"), Some(&Float(600.0)));
-        assert_eq!(header("DATE-OBS"), Some(&Text("2026-01-02".into())));
-        assert_eq!(header("CRPIX1"), Some(&Float(10.0)));
-        assert_eq!(header("CD1_1"), Some(&Float(0.001)));
-        assert!(header("PC1_1").is_none());
-    }
-
-    #[test]
-    fn color_rc_astro_validation_rejects_foreign_roles_and_keeps_processing_identity() {
+    fn color_rc_astro_validation_rejects_foreign_roles() {
         let request: StackColorRequest = serde_json::from_value(serde_json::json!({
             "target_id":1,"kind":"rgb","processing":{"input_rc_astro":{"ha":{"steps":[{"tool":"bxt"}]}}}
         })).unwrap();
         assert!(validate_request(&request).is_err());
-        let first = BTreeMap::from([(StackColorRole::Red, vec!["bxt-v1".into(), "nxt-v1".into()])]);
-        let changed =
-            BTreeMap::from([(StackColorRole::Red, vec!["bxt-v1".into(), "nxt-v2".into()])]);
-        assert_ne!(
-            rc_astro_input_cache_id("input", &first).unwrap(),
-            rc_astro_input_cache_id("input", &changed).unwrap()
-        );
-        assert_ne!(
-            rc_astro_input_cache_id("input", &first).unwrap(),
-            rc_astro_input_cache_id("different-background", &first).unwrap()
-        );
     }
 
     #[test]
-    fn a_channel_rc_astro_input_keys_on_what_changes_its_pixels() {
+    fn a_refused_rc_astro_step_from_a_card_says_which_card() {
+        let message = |follows_cards| match refused_rc_astro_steps(
+            StackColorRole::Oiii,
+            follows_cards,
+            "no schema for RC-Astro tool \"sxt\"".into(),
+        ) {
+            AppError::BadRequest(message) => message,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(
+            message(true),
+            "The OIII channel card's RC-Astro steps cannot run: no schema for RC-Astro tool \"sxt\""
+        );
+        assert_eq!(message(false), "no schema for RC-Astro tool \"sxt\"");
+    }
+
+    fn rc_astro_schema(tool: &str) -> seiza_stacking::ExternalToolSchema {
+        serde_json::from_value(serde_json::json!({
+            "schema_version": 6,
+            "cli_version": "2.6.6",
+            "key": tool,
+            "name": format!("RC-Astro {tool}"),
+            "ml_version": 4,
+            "licensed": true,
+            "license_message": null,
+            "parameters": [],
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_channels_tools_key_on_its_own_stack_with_the_ids_its_card_uses() {
+        use StackColorRole::{Ha, Oiii, Sii};
         let narrowband = |oiii: &str| {
             vec![
-                channel(StackColorRole::Ha, "Ha", "ha-1", false),
-                channel(StackColorRole::Oiii, "OIII", oiii, false),
-                channel(StackColorRole::Sii, "SII", "sii-1", false),
+                channel(Ha, "Ha", "ha-1", false),
+                channel(Oiii, "OIII", oiii, false),
+                channel(Sii, "SII", "sii-1", false),
             ]
         };
-        let plain = StackColorProcessing::default();
-        let id = |role, processing: &StackColorProcessing, sources: &[StackColorSource]| {
-            color_role_input_id(
-                "db",
-                1,
-                7,
-                role,
-                StackColorRole::Ha,
-                processing,
-                sources,
-                &BTreeMap::new(),
-            )
-            .unwrap()
+        let deconvolution = seiza_deconvolution::DeconvolutionConfig::conservative(2.5);
+        let bxt: super::super::rc_astro::RcAstroProcessing =
+            serde_json::from_value(serde_json::json!({"steps": [{"tool": "bxt"}]})).unwrap();
+        let processing = |background: bool| {
+            let mut processing: StackColorProcessing = serde_json::from_value(if background {
+                serde_json::json!({
+                    "background_extraction": {"config": {}, "protect_catalog_emission": false},
+                    "input_stretches": {},
+                    "output_stretches": []
+                })
+            } else {
+                serde_json::json!({"input_stretches": {}, "output_stretches": []})
+            })
+            .unwrap();
+            processing.input_deconvolutions.insert(Sii, deconvolution);
+            processing.input_deconvolutions.insert(Oiii, deconvolution);
+            processing.input_rc_astro.insert(Sii, bxt.clone());
+            processing
+        };
+        let schemas = BTreeMap::from([(Sii, vec![("bxt".to_string(), rc_astro_schema("bxt"))])]);
+        let tools = |processing: &StackColorProcessing, sources: &[StackColorSource]| {
+            channel_tools("db", processing, sources, &schemas).unwrap()
         };
         let before = narrowband("oiii-1");
-        let after = narrowband("oiii-2");
-        // New OIII frames: SII registers onto the same H-alpha from the same
-        // stack, so its RC-Astro chain is reused; OIII's reruns.
-        assert_eq!(
-            id(StackColorRole::Sii, &plain, &before),
-            id(StackColorRole::Sii, &plain, &after)
-        );
-        assert_eq!(
-            id(StackColorRole::Ha, &plain, &before),
-            id(StackColorRole::Ha, &plain, &after)
-        );
-        assert_ne!(
-            id(StackColorRole::Oiii, &plain, &before),
-            id(StackColorRole::Oiii, &plain, &after)
-        );
-        // A new reference moves every channel's registered pixels.
-        let mut new_reference = narrowband("oiii-1");
-        new_reference[0] = channel(StackColorRole::Ha, "Ha", "ha-2", false);
-        assert_ne!(
-            id(StackColorRole::Sii, &plain, &before),
-            id(StackColorRole::Sii, &plain, &new_reference)
-        );
-        // Another channel's deconvolution leaves this one alone; its own
-        // does not.
-        let mut deconvolved = StackColorProcessing::default();
-        deconvolved.input_deconvolutions.insert(
-            StackColorRole::Oiii,
-            seiza_deconvolution::DeconvolutionConfig::conservative(2.5),
-        );
-        assert_eq!(
-            id(StackColorRole::Sii, &plain, &before),
-            id(StackColorRole::Sii, &deconvolved, &before)
-        );
-        assert_ne!(
-            id(StackColorRole::Oiii, &plain, &before),
-            id(StackColorRole::Oiii, &deconvolved, &before)
-        );
-        // Background extraction fits one model for every channel, so any
-        // channel's new frames move all of them.
-        let extracted: StackColorProcessing = serde_json::from_value(serde_json::json!({
-            "background_extraction": {"config": {}, "protect_catalog_emission": false},
-            "input_stretches": {},
-            "output_stretches": []
-        }))
+        let plain = tools(&processing(false), &before);
+
+        // The ids are the card's: the channel's own stack and the settings.
+        let sii = &before[2];
+        let card_key = super::super::stretch::mono_source_key(&sii.job_id, sii.group_index);
+        let card_deconvolution = super::super::stretch::deconvolution_cache_id(
+            "db",
+            &card_key,
+            &sii.artifact_revision,
+            &deconvolution,
+        )
         .unwrap();
-        assert_ne!(
-            id(StackColorRole::Sii, &extracted, &before),
-            id(StackColorRole::Sii, &extracted, &after)
+        assert_eq!(plain.deconvolution_ids[&Sii], card_deconvolution);
+        assert_eq!(
+            plain.rc_astro_chains[&Sii],
+            super::super::rc_astro::rc_astro_chain_ids(
+                "db",
+                &card_key,
+                &sii.artifact_revision,
+                &bxt,
+                &schemas[&Sii],
+                Some(&card_deconvolution),
+            )
+            .unwrap()
         );
+        // A channel without tools has no entry.
+        assert!(!plain.deconvolution_ids.contains_key(&Ha));
+        assert!(!plain.rc_astro_chains.contains_key(&Oiii));
+
+        // Background extraction fits after the tools, so it moves none of them.
+        let extracted = tools(&processing(true), &before);
+        assert_eq!(extracted.deconvolution_ids, plain.deconvolution_ids);
+        assert_eq!(extracted.rc_astro_chains, plain.rc_astro_chains);
+
+        // New OIII frames rerun OIII's tools alone, even with background
+        // extraction fitting one model across the channels.
+        let after = tools(&processing(true), &narrowband("oiii-2"));
+        assert_eq!(after.deconvolution_ids[&Sii], plain.deconvolution_ids[&Sii]);
+        assert_eq!(after.rc_astro_chains[&Sii], plain.rc_astro_chains[&Sii]);
+        assert_ne!(
+            after.deconvolution_ids[&Oiii],
+            plain.deconvolution_ids[&Oiii]
+        );
+
+        // A new reference stack moves no other channel's tools either: they
+        // run before registration.
+        let mut new_reference = narrowband("oiii-1");
+        new_reference[0] = channel(Ha, "Ha", "ha-2", false);
+        let moved = tools(&processing(false), &new_reference);
+        assert_eq!(moved.deconvolution_ids, plain.deconvolution_ids);
+        assert_eq!(moved.rc_astro_chains, plain.rc_astro_chains);
+
+        // A channel's processed stack is named by its chain's last step,
+        // which already names the deconvolution before it.
+        let processed = processed_channel_ids(&plain.deconvolution_ids, &plain.rc_astro_chains);
+        assert_eq!(
+            processed[&Sii],
+            *plain.rc_astro_chains[&Sii].last().unwrap()
+        );
+        assert_eq!(processed[&Oiii], plain.deconvolution_ids[&Oiii]);
+        assert!(!processed.contains_key(&Ha));
+    }
+
+    #[test]
+    fn prepared_inputs_key_on_the_processed_channels_only_when_there_are_tools() {
+        use StackColorRole::{Blue, Green, Red};
+        let sources = vec![
+            channel(Red, "R", "red", false),
+            channel(Green, "G", "green", false),
+            channel(Blue, "B", "blue", false),
+        ];
+        let processing = StackColorProcessing::default();
+        let protection = BTreeMap::new();
+        let id = |processed: &BTreeMap<StackColorRole, String>| {
+            color_input_cache_id("db", 2, 3, &processing, &sources, &protection, processed).unwrap()
+        };
+        let none = id(&BTreeMap::new());
+        let deconvolved = id(&BTreeMap::from([(Red, "decon-1".to_string())]));
+        let retuned = id(&BTreeMap::from([(Red, "decon-2".to_string())]));
+        assert_ne!(none, deconvolved);
+        assert_ne!(deconvolved, retuned);
     }
 
     #[test]
@@ -5423,6 +5602,9 @@ mod tests {
                 seiza_deconvolution::DeconvolutionConfig::conservative(3.1),
             );
             public.processing = Some(processing);
+            public
+                .input_deconvolution_ids
+                .insert(StackColorRole::Red, "d".repeat(64));
         }
         let mut rc_astro_chains = BTreeMap::new();
         if rc_astro {
@@ -5470,6 +5652,642 @@ mod tests {
         write_cached_inputs(root, "inputs");
         assert!(prepared_color(root, "deconvolve", true, false, Some("inputs")).runs_quickly());
         assert!(prepared_color(root, "rc-astro", false, true, Some("inputs")).runs_quickly());
+    }
+
+    /// A star field every channel shares, shifted by `(dx, dy)` pixels as
+    /// another channel's stack would be, written where a stack build leaves
+    /// its group's FITS. The first `uncovered` columns are `NaN`.
+    fn star_stack(
+        stack_root: &FsPath,
+        job_id: &str,
+        (dx, dy): (usize, usize),
+        level: f32,
+        uncovered: usize,
+    ) {
+        let (width, height) = (512usize, 384usize);
+        // A little deterministic noise, so the background has a spread.
+        let mut data = (0..width * height)
+            .map(|index| level + ((index * 7_919) % 23) as f32 * 0.4)
+            .collect::<Vec<_>>();
+        for star in 0..120usize {
+            let cx = 14 + dx + (star * 83 + 29) % (width - 40);
+            let cy = 14 + dy + (star * 47 + 17) % (height - 40);
+            let amplitude = 900.0 + ((star * 137) % 4_000) as f32;
+            let sigma = 1.15 + (star % 4) as f32 * 0.16;
+            for oy in -5i32..=5 {
+                for ox in -5i32..=5 {
+                    let radius = (ox * ox + oy * oy) as f32;
+                    let x = (cx as i32 + ox) as usize;
+                    let y = (cy as i32 + oy) as usize;
+                    data[y * width + x] += amplitude * (-radius / (2.0 * sigma * sigma)).exp();
+                }
+            }
+        }
+        for row in data.chunks_mut(width) {
+            row[..uncovered].fill(f32::NAN);
+        }
+        let path = super::super::fits_path(stack_root, job_id, 0);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        write_processed_image_fits_f32(
+            &path,
+            &LinearImage::new(width, height, 1, data).unwrap(),
+            &[],
+            &[],
+        )
+        .unwrap();
+    }
+
+    /// Background extraction at `strength`, without catalog protection.
+    fn extracted(strength: f64) -> StackColorProcessing {
+        StackColorProcessing {
+            background_extraction: Some(StackBackgroundExtraction {
+                config: BackgroundConfig::default(),
+                correction_mode: CorrectionMode::Subtract,
+                strength,
+                protect_catalog_emission: false,
+            }),
+            ..StackColorProcessing::default()
+        }
+    }
+
+    /// Run an RGB build of `sources` with `processing` as the stack line
+    /// does, with the tool ids `prepare_color_job` would give it, and return
+    /// the finished job.
+    fn compose_rgb(
+        state: &Arc<AppState>,
+        root: &FsPath,
+        sources: &[StackColorSource],
+        processing: StackColorProcessing,
+        (job_id, input_id): (&str, &str),
+        rc_astro_schemas: &BTreeMap<
+            StackColorRole,
+            Vec<(String, seiza_stacking::ExternalToolSchema)>,
+        >,
+    ) -> StackColorJob {
+        let tools = channel_tools("db", &processing, sources, rc_astro_schemas).unwrap();
+        let mut job = running_color_job(job_id, StackJobState::Running);
+        job.kind = StackColorKind::Rgb;
+        job.palette = None;
+        job.sources = sources.to_vec();
+        job.progress = color_progress(sources.len(), Some(&processing));
+        job.processing = Some(processing);
+        job.linear_input_id = Some(input_id.into());
+        job.input_deconvolution_ids = tools.deconvolution_ids;
+        job.input_rc_astro_ids = tools
+            .rc_astro_chains
+            .iter()
+            .map(|(role, chain)| (*role, chain.last().unwrap().clone()))
+            .collect();
+        job.channel_tools_version = COLOR_CHANNEL_TOOLS_VERSION;
+        assert!(state.stack_previews.insert_color(job.clone()));
+        let stop = ColorStop {
+            cancel: Stop::new(),
+        };
+        compose_color(
+            state,
+            &job,
+            &BTreeMap::new(),
+            root,
+            rc_astro_schemas,
+            &tools.rc_astro_chains,
+            None,
+            &stop,
+        )
+        .unwrap();
+        state.stack_previews.get_color(job_id).unwrap()
+    }
+
+    fn phase_label(job: &StackColorJob, phase: StackColorProgressPhase) -> String {
+        job.progress
+            .phases
+            .iter()
+            .find(|entry| entry.phase == phase)
+            .map(|entry| entry.label.clone())
+            .unwrap()
+    }
+
+    #[test]
+    fn a_color_build_runs_channel_tools_before_registration_and_shares_them() {
+        use StackColorRole::{Blue, Green, Red};
+        let cache = tempfile::tempdir().unwrap();
+        let root = cache.path();
+        let state = Arc::new(AppState::new_for_test(
+            rusqlite::Connection::open_in_memory().unwrap(),
+        ));
+        let (red, green, blue) = ("1".repeat(64), "2".repeat(64), "3".repeat(64));
+        star_stack(root, &red, (0, 0), 100.0, 0);
+        // Green's stack has an uncovered strip down its left edge, as an
+        // oriented stack can.
+        star_stack(root, &green, (3, 2), 110.0, 10);
+        star_stack(root, &blue, (1, 4), 90.0, 0);
+        let deconvolution = seiza_deconvolution::DeconvolutionConfig::conservative(2.0);
+        let sources = vec![
+            channel(Red, "R", &red, false),
+            channel(Green, "G", &green, false),
+            channel(Blue, "B", &blue, false),
+        ];
+        let card_id = |source: &StackColorSource| {
+            super::super::stretch::deconvolution_cache_id(
+                "db",
+                &super::super::stretch::mono_source_key(&source.job_id, source.group_index),
+                &source.artifact_revision,
+                &deconvolution,
+            )
+            .unwrap()
+        };
+
+        // Blue's card deconvolved its stack first, the way the card does.
+        let blue_stack =
+            crate::image_io::open_linear_frame(super::super::fits_path(root, &blue, 0)).unwrap();
+        let (restored, blue_card) =
+            super::super::stretch::apply_deconvolution(&blue_stack.image, deconvolution).unwrap();
+        super::super::stretch::store_deconvolution(
+            root,
+            &card_id(&sources[2]),
+            &restored,
+            &blue_stack.headers,
+            &blue_card,
+        )
+        .unwrap();
+
+        // The first build deconvolves Red's and Green's own stacks into
+        // their cards' caches, and reads Blue's.
+        let mut processing = extracted(1.0);
+        for role in [Red, Green, Blue] {
+            processing.input_deconvolutions.insert(role, deconvolution);
+        }
+        let input_id = "e".repeat(64);
+        let first = compose_rgb(
+            &state,
+            root,
+            &sources,
+            processing,
+            (&"a".repeat(64), &input_id),
+            &BTreeMap::new(),
+        );
+        assert_eq!(
+            phase_label(&first, StackColorProgressPhase::DeconvolvingInputs),
+            "Reusing B deconvolution"
+        );
+        assert_eq!(
+            serde_json::to_value(&first.resolved_input_deconvolutions[&Blue]).unwrap(),
+            serde_json::to_value(&blue_card).unwrap()
+        );
+        for source in &sources[..2] {
+            assert!(super::super::stretch::deconvolution_cached(
+                root,
+                &card_id(source),
+                deconvolution
+            ));
+        }
+        // Registration measured on the stacks as they came still finds each
+        // channel's shift from Red.
+        let shift = |job: &StackColorJob, role| {
+            let transform = job
+                .sources
+                .iter()
+                .find(|source| source.role == role)
+                .and_then(|source| source.registration_transform)
+                .unwrap();
+            (transform.translation_x, transform.translation_y)
+        };
+        let (gx, gy) = shift(&first, Green);
+        assert!(
+            (gx.abs() - 3.0).abs() < 0.2 && (gy.abs() - 2.0).abs() < 0.2,
+            "{gx} {gy}"
+        );
+        let (bx, by) = shift(&first, Blue);
+        assert!(
+            (bx.abs() - 1.0).abs() < 0.2 && (by.abs() - 4.0).abs() < 0.2,
+            "{bx} {by}"
+        );
+        assert!(color_artifacts_exist(root, &first.job_id));
+
+        // Green's uncovered strip stays a gap through deconvolution and
+        // alignment, near the left edge; the middle of the field is data.
+        let green_input =
+            crate::image_io::open_linear_frame(color_input_fits_path(root, &input_id, Green))
+                .unwrap()
+                .image;
+        let (width, height) = (green_input.width, green_input.height);
+        let gaps: Vec<(usize, usize)> = green_input
+            .data
+            .iter()
+            .enumerate()
+            .filter(|(_, value)| !value.is_finite())
+            .map(|(index, _)| (index % width, index / width))
+            .collect();
+        assert!(gaps.iter().any(|&(x, _)| (8..16).contains(&x)));
+        assert!(
+            gaps.iter()
+                .all(|&(x, y)| x < 16 || x + 6 >= width || y < 6 || y + 6 >= height),
+            "a gap left the edges: {:?}",
+            gaps.iter()
+                .find(|&&(x, y)| !(x < 16 || x + 6 >= width || y < 6 || y + 6 >= height))
+        );
+        let row = green_input.height / 2;
+        assert!(green_input.data[row * width + 16..row * width + width - 16]
+            .iter()
+            .all(|value| value.is_finite()));
+
+        // Other background settings fit after the tools: the next build
+        // reads Red's deconvolution back instead of running it again.
+        let mut processing = extracted(0.5);
+        processing.input_deconvolutions.insert(Red, deconvolution);
+        let second = compose_rgb(
+            &state,
+            root,
+            &sources,
+            processing,
+            (&"b".repeat(64), &"f".repeat(64)),
+            &BTreeMap::new(),
+        );
+        assert_eq!(
+            phase_label(&second, StackColorProgressPhase::DeconvolvingInputs),
+            "Reusing R deconvolution"
+        );
+        assert_eq!(
+            serde_json::to_value(&second.resolved_input_deconvolutions[&Red]).unwrap(),
+            serde_json::to_value(&first.resolved_input_deconvolutions[&Red]).unwrap()
+        );
+        assert_eq!(
+            phase_label(&second, StackColorProgressPhase::AligningSources),
+            "Aligning B to R"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn one_rc_astro_run_serves_a_color_build_and_the_channel_card() {
+        use StackColorRole::{Blue, Green, Red};
+        let tool = super::super::rc_astro::test_tool::install(false);
+        let cache = tempfile::tempdir().unwrap();
+        let root = cache.path();
+        let state = Arc::new(AppState::new_for_test(
+            rusqlite::Connection::open_in_memory().unwrap(),
+        ));
+        let (red, green, blue) = ("1".repeat(64), "2".repeat(64), "3".repeat(64));
+        star_stack(root, &red, (0, 0), 100.0, 0);
+        star_stack(root, &green, (2, 1), 110.0, 0);
+        star_stack(root, &blue, (1, 2), 90.0, 0);
+        let sources = vec![
+            channel(Red, "R", &red, false),
+            channel(Green, "G", &green, false),
+            channel(Blue, "B", &blue, false),
+        ];
+        let bxt: super::super::rc_astro::RcAstroProcessing =
+            serde_json::from_value(serde_json::json!({"steps": [{"tool": "bxt"}]})).unwrap();
+        let schemas = BTreeMap::from([(Red, super::super::rc_astro::schemas_for(&bxt).unwrap())]);
+        let with_bxt = |strength| {
+            let mut processing = extracted(strength);
+            processing.input_rc_astro.insert(Red, bxt.clone());
+            processing
+        };
+
+        // The color build runs BlurXTerminator on Red's own stack.
+        let first = compose_rgb(
+            &state,
+            root,
+            &sources,
+            with_bxt(1.0),
+            (&"a".repeat(64), &"e".repeat(64)),
+            &schemas,
+        );
+        assert_eq!(tool.invocations(), 1);
+        assert!(first.resolved_input_rc_astro.contains_key(&Red));
+
+        // The card runs the same chain on the same stack: it reads the
+        // result, and the tool does not start again.
+        let red_stack =
+            crate::image_io::open_linear_frame(super::super::fits_path(root, &red, 0)).unwrap();
+        let card_chain = super::super::rc_astro::rc_astro_chain_ids(
+            "db",
+            &super::super::stretch::mono_source_key(&red, 0),
+            &sources[0].artifact_revision,
+            &bxt,
+            &schemas[&Red],
+            None,
+        )
+        .unwrap();
+        assert_eq!(first.input_rc_astro_ids[&Red], *card_chain.last().unwrap());
+        super::super::rc_astro::apply_rc_astro(
+            root,
+            &card_chain,
+            &bxt,
+            &schemas[&Red],
+            &red_stack.image,
+            &red_stack.headers,
+            &mut |_, _| {},
+            None,
+            &mut || Ok(()),
+        )
+        .unwrap();
+        assert_eq!(tool.invocations(), 1);
+
+        // Another background setting: the next build reads it too.
+        compose_rgb(
+            &state,
+            root,
+            &sources,
+            with_bxt(0.5),
+            (&"b".repeat(64), &"f".repeat(64)),
+            &schemas,
+        );
+        assert_eq!(tool.invocations(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_color_build_reads_the_rc_astro_result_its_channel_card_stored() {
+        use StackColorRole::{Blue, Green, Red};
+        let tool = super::super::rc_astro::test_tool::install(false);
+        let cache = tempfile::tempdir().unwrap();
+        let root = cache.path();
+        let state = Arc::new(AppState::new_for_test(
+            rusqlite::Connection::open_in_memory().unwrap(),
+        ));
+        let (red, green, blue) = ("1".repeat(64), "2".repeat(64), "3".repeat(64));
+        star_stack(root, &red, (0, 0), 100.0, 0);
+        star_stack(root, &green, (2, 1), 110.0, 0);
+        star_stack(root, &blue, (1, 2), 90.0, 0);
+        let sources = vec![
+            channel(Red, "R", &red, false),
+            channel(Green, "G", &green, false),
+            channel(Blue, "B", &blue, false),
+        ];
+        let bxt: super::super::rc_astro::RcAstroProcessing =
+            serde_json::from_value(serde_json::json!({"steps": [{"tool": "bxt"}]})).unwrap();
+        let schemas = BTreeMap::from([(Green, super::super::rc_astro::schemas_for(&bxt).unwrap())]);
+
+        // Green's card runs BlurXTerminator on its stack first.
+        let green_stack =
+            crate::image_io::open_linear_frame(super::super::fits_path(root, &green, 0)).unwrap();
+        let card_chain = super::super::rc_astro::rc_astro_chain_ids(
+            "db",
+            &super::super::stretch::mono_source_key(&green, 0),
+            &sources[1].artifact_revision,
+            &bxt,
+            &schemas[&Green],
+            None,
+        )
+        .unwrap();
+        super::super::rc_astro::apply_rc_astro(
+            root,
+            &card_chain,
+            &bxt,
+            &schemas[&Green],
+            &green_stack.image,
+            &green_stack.headers,
+            &mut |_, _| {},
+            None,
+            &mut || Ok(()),
+        )
+        .unwrap();
+        assert_eq!(tool.invocations(), 1);
+
+        // A color build with the same settings on Green's own stack reads
+        // the card's result.
+        let mut processing = extracted(1.0);
+        processing.input_rc_astro.insert(Green, bxt.clone());
+        let build = compose_rgb(
+            &state,
+            root,
+            &sources,
+            processing,
+            (&"a".repeat(64), &"e".repeat(64)),
+            &schemas,
+        );
+        assert_eq!(tool.invocations(), 1);
+        let id = card_chain.last().unwrap();
+        assert_eq!(build.input_rc_astro_ids[&Green], *id);
+        assert_eq!(
+            build.resolved_input_rc_astro[&Green].fits_url,
+            format!(
+                "/api/db/{}/stack-previews/rc-astro/{id}/fits",
+                build.database_id
+            )
+        );
+    }
+
+    #[test]
+    fn a_build_with_tools_from_before_the_move_is_out_of_date_and_one_without_is_not() {
+        // An earlier release wrote neither field.
+        let mut saved = running_color_job(&"a".repeat(64), StackJobState::Completed);
+        let value = serde_json::to_value(&saved).unwrap();
+        assert!(value.get("channel_tools_version").is_none(), "{value}");
+        assert!(value.get("input_deconvolution_ids").is_none(), "{value}");
+        assert!(!ran_tools_elsewhere(&saved), "no tools");
+
+        let mut processing = StackColorProcessing::default();
+        processing.input_deconvolutions.insert(
+            StackColorRole::Red,
+            seiza_deconvolution::DeconvolutionConfig::conservative(2.0),
+        );
+        saved.processing = Some(processing);
+        assert!(ran_tools_elsewhere(&saved), "tools after registration");
+        saved.channel_tools_version = COLOR_CHANNEL_TOOLS_VERSION;
+        assert!(!ran_tools_elsewhere(&saved), "tools on the channel stacks");
+    }
+
+    #[test]
+    fn a_composition_whose_channel_tools_a_card_ran_runs_quickly() {
+        let cache = tempfile::tempdir().unwrap();
+        let root = cache.path();
+        let prepared = prepared_color(root, "deconvolve", true, false, Some("unprepared"));
+        assert!(!prepared.runs_quickly());
+        // The channel card deconvolved the same stack with the same settings.
+        let request = seiza_deconvolution::DeconvolutionConfig::conservative(3.1);
+        super::super::stretch::store_deconvolution(
+            root,
+            &"d".repeat(64),
+            &LinearImage::new(2, 2, 1, vec![1.0; 4]).unwrap(),
+            &[],
+            &super::super::stretch::StackDeconvolutionResult {
+                config: request,
+                channels: Vec::new(),
+            },
+        )
+        .unwrap();
+        assert!(prepared_color(root, "deconvolve", true, false, Some("unprepared")).runs_quickly());
+        // Other settings are another result, still to compute.
+        let mut retuned = prepared_color(root, "deconvolve", true, false, Some("unprepared"));
+        retuned
+            .public
+            .processing
+            .as_mut()
+            .unwrap()
+            .input_deconvolutions
+            .insert(
+                StackColorRole::Red,
+                seiza_deconvolution::DeconvolutionConfig::conservative(2.0),
+            );
+        assert!(!retuned.runs_quickly());
+    }
+
+    #[test]
+    fn registration_before_background_extraction_finds_a_shift_under_a_steep_gradient() {
+        use StackColorRole::{Blue, Green, Red};
+        let cache = tempfile::tempdir().unwrap();
+        let root = cache.path();
+        let state = Arc::new(AppState::new_for_test(
+            rusqlite::Connection::open_in_memory().unwrap(),
+        ));
+        let (red, green, blue) = ("1".repeat(64), "2".repeat(64), "3".repeat(64));
+        star_stack(root, &red, (0, 0), 100.0, 0);
+        star_stack(root, &green, (3, 2), 110.0, 0);
+        star_stack(root, &blue, (1, 4), 90.0, 0);
+        // Green carries a steep gradient, light pollution low in the sky:
+        // from nothing at the left edge to 3000 ADU at the right, brighter
+        // than most of its stars.
+        let path = super::super::fits_path(root, &green, 0);
+        let mut frame = crate::image_io::open_linear_frame(&path).unwrap().image;
+        let width = frame.width;
+        for (index, value) in frame.data.iter_mut().enumerate() {
+            *value += 3000.0 * (index % width) as f32 / width as f32;
+        }
+        write_processed_image_fits_f32(&path, &frame, &[], &[]).unwrap();
+        let sources = vec![
+            channel(Red, "R", &red, false),
+            channel(Green, "G", &green, false),
+            channel(Blue, "B", &blue, false),
+        ];
+
+        // Registration runs on the stack as it came, gradient and all; the
+        // build fails if its RMS passes MAX_REGISTRATION_RMS_PIXELS.
+        let built = compose_rgb(
+            &state,
+            root,
+            &sources,
+            extracted(1.0),
+            (&"a".repeat(64), &"e".repeat(64)),
+            &BTreeMap::new(),
+        );
+        let transform = built
+            .sources
+            .iter()
+            .find(|source| source.role == Green)
+            .and_then(|source| source.registration_transform)
+            .unwrap();
+        let (x, y) = (transform.translation_x, transform.translation_y);
+        assert!(
+            (x.abs() - 3.0).abs() < 0.2 && (y.abs() - 2.0).abs() < 0.2,
+            "{x} {y}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_composition_whose_rc_astro_chain_a_card_finished_runs_quickly_and_deconvolves_nothing() {
+        use StackColorRole::{Blue, Green, Red};
+        let tool = super::super::rc_astro::test_tool::install(false);
+        let cache = tempfile::tempdir().unwrap();
+        let root = cache.path();
+        let state = Arc::new(AppState::new_for_test(
+            rusqlite::Connection::open_in_memory().unwrap(),
+        ));
+        let (red, green, blue) = ("1".repeat(64), "2".repeat(64), "3".repeat(64));
+        star_stack(root, &red, (0, 0), 100.0, 0);
+        star_stack(root, &green, (2, 1), 110.0, 0);
+        star_stack(root, &blue, (1, 2), 90.0, 0);
+        let sources = vec![
+            channel(Red, "R", &red, false),
+            channel(Green, "G", &green, false),
+            channel(Blue, "B", &blue, false),
+        ];
+        let deconvolution = seiza_deconvolution::DeconvolutionConfig::conservative(2.0);
+        let bxt: super::super::rc_astro::RcAstroProcessing =
+            serde_json::from_value(serde_json::json!({"steps": [{"tool": "bxt"}]})).unwrap();
+        let schemas = BTreeMap::from([(Red, super::super::rc_astro::schemas_for(&bxt).unwrap())]);
+        let mut processing = extracted(1.0);
+        processing.input_deconvolutions.insert(Red, deconvolution);
+        processing.input_rc_astro.insert(Red, bxt.clone());
+        let tools = channel_tools("db", &processing, &sources, &schemas).unwrap();
+        let chain = tools.rc_astro_chains[&Red].clone();
+        let deconvolution_id = tools.deconvolution_ids[&Red].clone();
+        let prepared = || {
+            let mut public = running_color_job(&"a".repeat(64), StackJobState::Queued);
+            public.sources = sources.clone();
+            public.processing = Some(processing.clone());
+            public.linear_input_id = Some("unprepared".into());
+            public.input_deconvolution_ids = tools.deconvolution_ids.clone();
+            PreparedColorJob {
+                public,
+                stack_root: root.to_path_buf(),
+                background_regions: BTreeMap::new(),
+                rc_astro_schemas: schemas.clone(),
+                rc_astro_chains: tools.rc_astro_chains.clone(),
+                color_calibration: None,
+            }
+        };
+        assert!(!prepared().runs_quickly());
+
+        // A card mid-write: the processed FITS is there, the manifest that
+        // `persist_prefix` writes last is not. Composing would run the tool,
+        // so it is not quick.
+        let processed = super::super::rc_astro::rc_astro_fits_path(root, chain.last().unwrap());
+        std::fs::create_dir_all(processed.parent().unwrap()).unwrap();
+        std::fs::write(&processed, b"partial").unwrap();
+        assert!(!prepared().runs_quickly());
+        std::fs::remove_file(&processed).unwrap();
+
+        // The card deconvolves Red's stack and runs BlurXTerminator on it.
+        let red_stack =
+            crate::image_io::open_linear_frame(super::super::fits_path(root, &red, 0)).unwrap();
+        let (restored, result) =
+            super::super::stretch::apply_deconvolution(&red_stack.image, deconvolution).unwrap();
+        super::super::stretch::store_deconvolution(
+            root,
+            &deconvolution_id,
+            &restored,
+            &red_stack.headers,
+            &result,
+        )
+        .unwrap();
+        super::super::rc_astro::apply_rc_astro(
+            root,
+            &chain,
+            &bxt,
+            &schemas[&Red],
+            &restored,
+            &red_stack.headers,
+            &mut |_, _| {},
+            None,
+            &mut || Ok(()),
+        )
+        .unwrap();
+        assert_eq!(tool.invocations(), 1);
+        assert!(prepared().runs_quickly());
+
+        // The janitor pruned the deconvolution. The chain's result already
+        // includes it, so composing stays quick and deconvolves nothing.
+        std::fs::remove_dir_all(
+            crate::server::storage::stack_folder(
+                root,
+                crate::server::storage::stack_kind::DECONVOLUTION,
+            )
+            .join(&deconvolution_id),
+        )
+        .unwrap();
+        assert!(prepared().runs_quickly());
+        let built = compose_rgb(
+            &state,
+            root,
+            &sources,
+            processing.clone(),
+            (&"b".repeat(64), &"e".repeat(64)),
+            &schemas,
+        );
+        assert_eq!(
+            phase_label(&built, StackColorProgressPhase::DeconvolvingInputs),
+            "Reusing R RC-Astro result, deconvolution included"
+        );
+        assert!(!super::super::stretch::deconvolution_cached(
+            root,
+            &deconvolution_id,
+            deconvolution
+        ));
+        assert!(built.resolved_input_rc_astro.contains_key(&Red));
+        assert_eq!(tool.invocations(), 1);
     }
 
     #[test]
@@ -5668,6 +6486,8 @@ mod tests {
             resolved_input_deconvolutions: BTreeMap::new(),
             resolved_input_rc_astro: BTreeMap::new(),
             input_rc_astro_ids: BTreeMap::new(),
+            input_deconvolution_ids: BTreeMap::new(),
+            channel_tools_version: 0,
             followed_channel_processing: BTreeMap::new(),
             resolved_output_stretches: Vec::new(),
             resolved_backgrounds: BTreeMap::new(),
@@ -5872,7 +6692,7 @@ mod tests {
                 project_id: 3,
                 request: &request,
                 label: "RGB",
-                rc_astro_input_id: None,
+                channel_tools_input_id: None,
                 background_protection: &protection,
                 color_calibration_basis: None,
                 sources: &sources,
@@ -6861,8 +7681,24 @@ mod tests {
 
         let progress = color_progress(3, Some(&processing));
 
-        assert_eq!(progress.phases.len(), 14);
-        assert_eq!(progress.total_units, 26);
+        assert_eq!(progress.phases.len(), 15);
+        // Aligning resamples the two channels that are not the reference.
+        assert_eq!(progress.total_units, 28);
+        // The tools run on each channel's own stack, before background
+        // extraction and alignment.
+        let order: Vec<_> = progress.phases.iter().map(|phase| phase.phase).collect();
+        assert_eq!(
+            order[..7],
+            [
+                StackColorProgressPhase::LoadingSources,
+                StackColorProgressPhase::RegisteringSources,
+                StackColorProgressPhase::DeconvolvingInputs,
+                StackColorProgressPhase::RcAstroInputs,
+                StackColorProgressPhase::BackgroundPreparation,
+                StackColorProgressPhase::AligningSources,
+                StackColorProgressPhase::NormalizingInputs,
+            ]
+        );
         assert!(progress.phases.iter().any(|phase| {
             phase.phase == StackColorProgressPhase::CalibratingColor && phase.total_units == 1
         }));
@@ -6959,7 +7795,7 @@ mod tests {
                 project_id: 3,
                 request,
                 label: "RGB",
-                rc_astro_input_id: None,
+                channel_tools_input_id: None,
                 background_protection: &protection,
                 color_calibration_basis: basis,
                 sources: &sources,
@@ -7277,17 +8113,35 @@ mod tests {
                 color_strategy: seiza_stretch::ColorStrategy::Linked,
             });
         let protection = BTreeMap::new();
-        let first_id = color_input_cache_id("db", 2, 3, &first, &sources, &protection).unwrap();
-        let changed_stretch_id =
-            color_input_cache_id("db", 2, 3, &changed_stretch, &sources, &protection).unwrap();
+        let first_id =
+            color_input_cache_id("db", 2, 3, &first, &sources, &protection, &BTreeMap::new())
+                .unwrap();
+        let changed_stretch_id = color_input_cache_id(
+            "db",
+            2,
+            3,
+            &changed_stretch,
+            &sources,
+            &protection,
+            &BTreeMap::new(),
+        )
+        .unwrap();
         let mut changed_linear = first;
         changed_linear
             .input_deconvolutions
             .get_mut(&StackColorRole::Green)
             .unwrap()
             .amount = 0.5;
-        let changed_linear_id =
-            color_input_cache_id("db", 2, 3, &changed_linear, &sources, &protection).unwrap();
+        let changed_linear_id = color_input_cache_id(
+            "db",
+            2,
+            3,
+            &changed_linear,
+            &sources,
+            &protection,
+            &BTreeMap::new(),
+        )
+        .unwrap();
         let changed_protection = BTreeMap::from([(
             StackColorRole::Red,
             StackBackgroundProtection {
@@ -7298,9 +8152,16 @@ mod tests {
                 region_fingerprint: "changed-region".into(),
             },
         )]);
-        let changed_protection_id =
-            color_input_cache_id("db", 2, 3, &changed_stretch, &sources, &changed_protection)
-                .unwrap();
+        let changed_protection_id = color_input_cache_id(
+            "db",
+            2,
+            3,
+            &changed_stretch,
+            &sources,
+            &changed_protection,
+            &BTreeMap::new(),
+        )
+        .unwrap();
 
         assert_eq!(first_id, changed_stretch_id);
         assert_ne!(first_id, changed_linear_id);

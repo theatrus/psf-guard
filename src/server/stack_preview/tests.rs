@@ -1977,7 +1977,17 @@ async fn eventually(what: &str, mut check: impl FnMut() -> bool) {
 /// One finished mono stack of target 42's R channel in project 7, on
 /// disk as a server finds it.
 fn stack_on_disk(cache: &FsPath, job_id: &str, revision: &str) -> StackPreviewJob {
-    let mut job = completed_job(job_id, vec![ready_group(42, "R", 1)]);
+    channel_stack_on_disk(cache, job_id, "R", revision)
+}
+
+/// As [`stack_on_disk`], for target 42's `filter` channel.
+fn channel_stack_on_disk(
+    cache: &FsPath,
+    job_id: &str,
+    filter: &str,
+    revision: &str,
+) -> StackPreviewJob {
+    let mut job = completed_job(job_id, vec![ready_group(42, filter, 1)]);
     job.database_id = "test".into();
     job.artifact_revision = revision.into();
     let manifest = manifest_path(cache, job_id);
@@ -2218,6 +2228,88 @@ async fn a_color_build_takes_what_each_channel_card_applied() {
         color::channel_card_processing(cache.path(), &inputs).unwrap(),
         cards
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_color_build_following_the_cards_records_them_and_goes_out_of_date_when_one_changes() {
+    use color::StackColorRole::{Blue, Green, Red};
+    let _policy = reapply_policy(false);
+    let cache = tempfile::tempdir().unwrap();
+    let state = state_on_disk(cache.path(), None);
+    let (red, green, blue) = ("1".repeat(64), "2".repeat(64), "3".repeat(64));
+    for (job_id, filter) in [(&red, "R"), (&green, "G"), (&blue, "B")] {
+        let job = channel_stack_on_disk(cache.path(), job_id, filter, &format!("rev-{filter}"));
+        persist_latest_groups(cache.path(), &job).unwrap();
+    }
+    apply_and_wait(&state, &red, deconvolved(2.0)).await;
+    let ctx = state.get_database("test").unwrap();
+    // The latest stacks are read against the project's exposure groups.
+    {
+        let db = ctx.db();
+        let conn = db.lock().unwrap();
+        crate::ts_schema::apply_schema(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO project(Id,name,profileId,guid) VALUES(7,'Project','profile','project-7');
+            CREATE TABLE psf_guard_project_processing(project_key TEXT PRIMARY KEY,
+                split_exposure_groups INTEGER NOT NULL,split_chosen INTEGER);
+            INSERT INTO psf_guard_project_processing VALUES('guid:project-7',0,1);",
+        )
+        .unwrap();
+    }
+    let request: color::StackColorRequest = serde_json::from_value(serde_json::json!({
+        "target_id": 42,
+        "kind": "rgb",
+        "processing": {
+            "input_processing": "channels",
+            "input_stretches": {},
+            "output_stretches": [],
+        },
+    }))
+    .unwrap();
+    let prepare = || {
+        color::prepare_color_job(&ctx, &state.astrometry, 7, &request)
+            .unwrap()
+            .public
+    };
+
+    // The build records what each card applied, including cards that
+    // applied nothing, and runs Red's deconvolution.
+    let built = prepare();
+    let deconvolution = seiza_deconvolution::DeconvolutionConfig::conservative(2.0);
+    assert_eq!(
+        built.followed_channel_processing[&Red].deconvolution,
+        Some(deconvolution)
+    );
+    assert_eq!(
+        built.followed_channel_processing[&Green],
+        color::FollowedChannelProcessing::default()
+    );
+    assert_eq!(
+        built.followed_channel_processing[&Blue],
+        color::FollowedChannelProcessing::default()
+    );
+    assert_eq!(
+        built.processing.as_ref().unwrap().input_deconvolutions[&Red],
+        deconvolution
+    );
+
+    // While the cards are as the build read them, it stays current.
+    color::write_placeholder_artifacts(cache.path(), &built.job_id);
+    assert_eq!(
+        color::outdated_reason(&ctx, &state.astrometry, &built).unwrap(),
+        None
+    );
+
+    // Red's card applies other settings: the build is out of date, and the
+    // next build is another job.
+    apply_and_wait(&state, &red, deconvolved(3.0)).await;
+    assert_eq!(
+        color::outdated_reason(&ctx, &state.astrometry, &built)
+            .unwrap()
+            .as_deref(),
+        Some("a channel card's deconvolution or RC-Astro steps changed")
+    );
+    assert_ne!(prepare().job_id, built.job_id);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

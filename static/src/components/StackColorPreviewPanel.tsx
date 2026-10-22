@@ -18,7 +18,11 @@ import StackPreviewInspector from './StackPreviewInspector';
 import CalibrationMasterButton from './CalibrationMasterInspector';
 import StackColorProcessingControls from './StackColorProcessingControls';
 import StackColorCalibrationLine from './StackColorCalibrationLine';
-import { appliedProcessingQueryKey, channelProcessingFrom } from './channelProcessing';
+import {
+  appliedProcessingQueryKey,
+  channelProcessingFrom,
+  colorCatalogQueryPrefix,
+} from './channelProcessing';
 import {
   processingForColorBuild,
 } from './stackColorProcessing';
@@ -95,7 +99,7 @@ const roleLabels: Record<string, string> = {
 };
 
 function catalogQueryKey(dbId: string, projectId: number, sourceRevision: string) {
-  return ['db', dbId, 'project', projectId, 'stack-color', 'catalog', sourceRevision] as const;
+  return [...colorCatalogQueryPrefix(dbId, projectId), sourceRevision] as const;
 }
 
 function jobQueryKey(dbId: string, projectId: number, jobId: string | null) {
@@ -428,6 +432,7 @@ function ColorCard({
         deconvolutions={artifact?.resolved_input_deconvolutions ?? {}}
         rcAstro={artifact?.resolved_input_rc_astro ?? {}}
         channelProcessing={channelProcessing}
+        followed={artifact?.followed_channel_processing}
         disabled={!canCompute || busy || unavailable}
         applyError={startError?.processing ? startError.message : null}
         onApply={onProcessingApply}
@@ -537,7 +542,7 @@ export default function StackColorPreviewPanel({
       queryClient.invalidateQueries({ queryKey: JOBS_QUERY_KEY });
       if (terminalStates.has(job.state)) {
         queryClient.invalidateQueries({
-          queryKey: ['db', operation.dbId, 'project', operation.projectId, 'stack-color', 'catalog'],
+          queryKey: colorCatalogQueryPrefix(operation.dbId, operation.projectId),
         });
       }
       if (operation.dbId !== dbId || operation.projectId !== projectId) return;

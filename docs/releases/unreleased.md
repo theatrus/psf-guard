@@ -36,3 +36,11 @@
   neutral, in one-shot-color stacks and in RGB, LRGB and narrowband
   compositions. Stacks built before this change calibrate as before until
   they rebuild.
+- A color preview now runs each channel's deconvolution and RC-Astro steps on
+  the channel's own stack, before background extraction and alignment, and
+  shares the results with the channel card. When a card and a color preview use
+  the same settings on the same stack, BlurXTerminator, NoiseXTerminator or
+  StarXTerminator runs once, and changing background extraction or a stretch no
+  longer reruns them. A color preview that uses deconvolution or RC-Astro
+  shows as out of date and runs its tools in the new order the next time you
+  build it.

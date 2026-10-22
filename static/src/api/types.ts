@@ -1525,6 +1525,7 @@ export type StackColorProgressPhase =
   | 'background_preparation'
   | 'registering_sources'
   | 'deconvolving_inputs'
+  | 'aligning_sources'
   | 'normalizing_inputs'
   | 'calibrating_color'
   | 'stretching_inputs'

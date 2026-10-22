@@ -39,12 +39,12 @@ describe('StackColorProcessingControls', () => {
     const mode = screen.getByRole('radiogroup', { name: 'Deconvolution and RC-Astro steps' });
     expect(within(mode).getByRole('radio', { name: 'From each channel card' })).toBeChecked();
     expect(await screen.findByText(
-      'Each input runs what its channel card applied: Hα: BlurXTerminator. ' +
+      'Each input runs the steps its channel card applied (Hα: BlurXTerminator). ' +
       'Changing a card makes this preview out of date.'
     )).toBeInTheDocument();
     // Each lane says what its card applied, in place of the tool editors.
     const ha = screen.getByRole('region', { name: 'Hα input stretch stack' });
-    expect(within(ha).getByText('From its channel card: BlurXTerminator')).toBeInTheDocument();
+    expect(within(ha).getByText('From its channel card: BlurXTerminator.')).toBeInTheDocument();
     expect(within(ha).queryByRole('region', { name: 'Hα input deconvolution' })).not.toBeInTheDocument();
     const oiii = screen.getByRole('region', { name: 'OIII input stretch stack' });
     expect(within(oiii).getByText('Its channel card applied no deconvolution or RC-Astro steps.'))
@@ -77,10 +77,59 @@ describe('StackColorProcessingControls', () => {
       .toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Apply processing stack' }));
     expect(onApply).toHaveBeenCalledWith(expect.objectContaining({
-      input_processing: 'own',
       input_rc_astro: { ha: { steps: [{ tool: 'bxt', parameters: {} }] } },
       input_deconvolutions: {},
     }));
+    // Own settings leave the field out, as the server reads it.
+    expect(onApply.mock.calls[0][0]).not.toHaveProperty('input_processing');
+  });
+
+  it('shows what a build that followed the cards ran, and what a card applies now', async () => {
+    const user = userEvent.setup();
+    server.use(
+      http.get('/api/tools/rc-astro', () => HttpResponse.json({ success: true, data: {
+        available: true, tools: [
+          { key: 'bxt', name: 'BlurXTerminator', licensed: true,
+            cli_version: '2.6.6', ml_version: 3, schema_version: 6, parameters: [] },
+          { key: 'nxt', name: 'NoiseXTerminator', licensed: true,
+            cli_version: '2.6.6', ml_version: 3, schema_version: 6, parameters: [] },
+        ],
+      }, error: null }))
+    );
+    const roles = ['ha', 'oiii', 'sii'] as const;
+    const deconvolution = { ...defaultDeconvolutionConfig(), psf_fwhm_pixels: 3.25 };
+    const bxt = { steps: [{ tool: 'bxt', parameters: {} }] };
+    renderWithQueries(<StackColorProcessingControls label="SHO" roles={[...roles]}
+      applied={defaultColorProcessing([...roles])}
+      followed={{ ha: { rc_astro: bxt }, oiii: { deconvolution }, sii: {} }}
+      backgrounds={{}} protections={{}} fallbacks={{}}
+      deconvolutions={{ oiii: { config: deconvolution, channels: [] } }}
+      channelProcessing={{
+        // Hα's card added NoiseXTerminator after the build.
+        ha: { rc_astro: { steps: [...bxt.steps, { tool: 'nxt', parameters: {} }] } },
+        oiii: { deconvolution },
+        // SII's card took BlurXTerminator with other settings.
+        sii: { rc_astro: bxt },
+      }}
+      disabled={false} onApply={vi.fn()} />);
+    await user.click(screen.getByText('Processing stack'));
+    const ha = screen.getByRole('region', { name: 'Hα input stretch stack' });
+    expect(await within(ha).findByText(
+      'From its channel card: BlurXTerminator. ' +
+      'The card now applies: BlurXTerminator, NoiseXTerminator.'
+    )).toBeInTheDocument();
+    // OIII's card is unchanged: the lane shows what ran, with the measured
+    // PSF its deconvolution used, read-only.
+    const oiii = screen.getByRole('region', { name: 'OIII input stretch stack' });
+    expect(within(oiii).getByText('From its channel card: deconvolution.')).toBeInTheDocument();
+    const summary = within(oiii).getByRole('region', { name: 'OIII input deconvolution' });
+    expect(summary).toHaveTextContent('PSF FWHM 3.25 px');
+    expect(within(summary).queryByRole('checkbox')).not.toBeInTheDocument();
+    const sii = screen.getByRole('region', { name: 'SII input stretch stack' });
+    expect(within(sii).getByText(
+      'Its channel card applied no deconvolution or RC-Astro steps. ' +
+      'The card now applies: BlurXTerminator.'
+    )).toBeInTheDocument();
   });
 
   it('says the inputs run no tools when no channel card applied any', async () => {

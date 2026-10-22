@@ -316,7 +316,9 @@ pub fn plan_with(
             "This database's Target Scheduler schema has no image GUIDs; removal needs them to restore frames."
         );
     }
-    crate::db::record_rejection_times(conn).context("dating rejected frames")?;
+    // Stamp new rejects with the preview's clock, so the stamps and the
+    // cutoff below share one reading.
+    crate::db::record_rejection_times_at(conn, options.now).context("dating rejected frames")?;
     let exposure = if has_column(conn, "acquiredimage", "exposureId") {
         "ai.exposureId"
     } else {
@@ -399,13 +401,13 @@ pub fn plan_with(
             );
             continue;
         };
-        // A reject first recorded while this preview ran can carry a stamp a
-        // second past `now`, the clock read when the run began; it is no
-        // younger than the moment the preview saw it.
-        let rejected_at = row.rejected_at.unwrap_or(options.now).min(options.now);
-        if rejected_at > cutoff {
+        // New rejects are stamped with `now` above. A stamp past it (another
+        // machine's clock, or one set back since) still counts as no younger
+        // than now against the cutoff; the date it qualifies keeps the stamp.
+        let stamped = row.rejected_at.unwrap_or(options.now);
+        if stamped.min(options.now) > cutoff {
             plan.waiting += 1;
-            let eligible = rejected_at + i64::from(options.min_age_days) * DAY;
+            let eligible = stamped + i64::from(options.min_age_days) * DAY;
             plan.next_eligible_at = Some(
                 plan.next_eligible_at
                     .map_or(eligible, |at| at.min(eligible)),
@@ -1944,6 +1946,34 @@ mod tests {
         let preview = plan(&c.conn, &c.images(), &options(&protected, 0)).unwrap();
         assert_eq!(preview.waiting, 0);
         assert!(preview.frames.iter().any(|frame| frame.guid == "g2"));
+
+        // With a grace period it waits from its own stamp, not from now.
+        let waiting = plan(&c.conn, &c.images(), &options(&protected, 7)).unwrap();
+        assert_eq!(waiting.next_eligible_at, Some(NOW + 1 + 7 * DAY));
+    }
+
+    #[test]
+    fn a_new_reject_is_dated_by_the_preview_clock() {
+        let c = catalog();
+        // Frame 2 has no date yet: the preview records one.
+        c.conn
+            .execute(
+                "DELETE FROM psf_guard_rejected_at WHERE acquired_image_guid = 'g2'",
+                [],
+            )
+            .unwrap();
+        let protected = BTreeSet::new();
+        let waiting = plan(&c.conn, &c.images(), &options(&protected, 7)).unwrap();
+        let stamped: i64 = c
+            .conn
+            .query_row(
+                "SELECT rejected_at FROM psf_guard_rejected_at WHERE acquired_image_guid = 'g2'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stamped, NOW);
+        assert_eq!(waiting.next_eligible_at, Some(NOW + 7 * DAY));
     }
 
     #[test]
