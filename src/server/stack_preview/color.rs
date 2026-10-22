@@ -3095,15 +3095,21 @@ fn compose_color(
             }
             progress.finish(StackColorProgressPhase::RegisteringSources);
         }
-        let clipped = clipped_on_reference(
-            stack_root,
-            &job.sources,
-            &registered_transforms,
-            (
-                images[&reference_role].width,
-                images[&reference_role].height,
-            ),
-        );
+        // Only a composition that will be calibrated reads the maps.
+        let mut clipped = color_calibration
+            .is_some()
+            .then(|| {
+                clipped_on_reference(
+                    stack_root,
+                    &job.sources,
+                    &registered_transforms,
+                    (
+                        images[&reference_role].width,
+                        images[&reference_role].height,
+                    ),
+                )
+            })
+            .flatten();
 
         let options = if let Some(processing) = &job.processing {
             if reused_inputs {
@@ -3276,6 +3282,14 @@ fn compose_color(
             }
 
             stop.check()?;
+            // A starless channel has nebula where the clipped cores were,
+            // which rendering them neutral would grey out.
+            if resolved_rc_astro
+                .values()
+                .any(|rc_astro| rc_astro.result.removed_stars())
+            {
+                clipped = None;
+            }
             // Calibration needs one stretch for every channel, after it:
             // three stretches of their own pull each channel to the same
             // median and undo it. When the composed channels share their

@@ -1273,6 +1273,27 @@ pub(super) fn run_group(
             reintegrate
         };
         let integrated = if reintegrate {
+            // The final pass keeps each admitted frame in a scratch file,
+            // four bytes a sample, when the stack folder's disk has room for
+            // all of them and a margin; otherwise it reads every frame on
+            // each pass instead.
+            let scratch = crate::server::storage::stack_scratch(stack_root);
+            let view = stacker.view();
+            let needed = (view.width * view.height * view.channels) as u64
+                * 4
+                * u64::from(accepted_frames);
+            let room = crate::server::cache_budget::available_bytes(stack_root);
+            let scratch = room
+                .is_none_or(|room| needed.saturating_add(needed / 10) <= room)
+                .then_some(scratch);
+            if scratch.is_none() {
+                tracing::warn!(
+                    job_id,
+                    group_index = group.index,
+                    needed_mib = needed / (1024 * 1024),
+                    "Final pass reading every frame on each pass: the stack folder's disk is short of room for its scratch files"
+                );
+            }
             // The live accumulator is no longer needed. Release it before
             // revisiting early transients.
             drop(stacker);
@@ -1288,7 +1309,7 @@ pub(super) fn run_group(
                 method,
                 &plan,
                 &session_cosmetics,
-                &crate::server::storage::stack_scratch(stack_root),
+                scratch.as_deref(),
                 cancel,
                 &mut report_pass,
             );
@@ -1470,11 +1491,13 @@ pub(super) fn run_group(
             &output_cards,
         )
         .map_err(|error| error.to_string())?;
-        std::fs::rename(&fits_temporary, &fits_destination).map_err(|error| error.to_string())?;
+        // The map goes first, so a stack is never published beside an
+        // earlier build's map.
         write_clipped(
             &clipped_path(stack_root, job_id, group.index),
             clipped.as_ref(),
         )?;
+        std::fs::rename(&fits_temporary, &fits_destination).map_err(|error| error.to_string())?;
         render_group_previews(
             state,
             &ctx,

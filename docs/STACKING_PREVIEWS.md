@@ -376,8 +376,9 @@ the bar keeps moving through the final pass instead of sitting at 100%. While
 that pass runs the build's line reads, for example, `Rejecting transients ·
 pass 2/2 · frame 4/14`. The final pass keeps each frame it reads in a scratch
 file below the stack folder, `stack-scratch`, four bytes per sample per frame
-(twelve per pixel in colour), until it ends. Should that folder lack the room,
-the pass fails rather than falling back to reading every frame three times.
+(twelve per pixel in colour), until it ends. When its disk lacks the room, or
+a scratch file cannot be written, the pass reads every frame on each of three
+passes instead, and the progress line counts three passes.
 
 Builds wait in a line of their own, and the line, not the order they were
 asked for, decides what runs next. In the queue, **↑** and **↓** move a
@@ -1703,7 +1704,11 @@ at half. A composition takes, at each pixel, the largest share any colour
 channel clipped, carried through that channel's registration; luminance does
 not count. A stack built before PSF Guard kept the map, a WBPP stack, or a
 sensor whose saturation level is unknown has no map, and its cores calibrate
-as before.
+as before. A starless image, from StarXTerminator in the stack's or a channel's
+RC-Astro steps, is not rendered neutral: its clipped cores became nebula. A
+composition whose channels share their stretch is rendered neutral even when
+calibration cannot run, since Seiza does so before it stretches; elsewhere
+only a calibrated image is.
 
 PSF Guard hands the shared stages to Seiza as per-channel stretches. Once
 Seiza has calibrated, it links them, so the balance survives. When

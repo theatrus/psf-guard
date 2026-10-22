@@ -26,7 +26,8 @@
   than 9.9 GB. While it runs, the pass keeps a scratch copy of each frame in
   `stack-scratch` below the stack folder, four bytes per sample per frame,
   and removes it when it ends. The progress line counts two stages, reading
-  and integrating, instead of three passes.
+  and integrating, instead of three passes. When that disk is short of room,
+  the pass reads every frame three times as before.
 - Stacks move to Seiza stacking 0.44, so each stack rebuilds once the next time
   it is opened or refreshed. Mosaic backgrounds no longer copy the first
   frames' skies, and mosaics fit their lens more often.

@@ -16,6 +16,13 @@ use seiza_stacking::{
     ImpulseFilterOptions, LinearImage, ReferenceRegion, RegisteredFrameMapping,
 };
 
+/// Integrate the admitted frames again with Seiza's three-pass rejection.
+///
+/// With `scratch`, each frame is loaded once into a scratch file there and
+/// the passes read the files back band by band. Without it, or when the
+/// scratch files cannot be kept, as when the disk fills, each frame is
+/// loaded again for each pass instead: slower and in more memory, but the
+/// same stack to the bit.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn integrate(
     group: &PreparedGroup,
@@ -23,65 +30,92 @@ pub(super) fn integrate(
     method: super::StackMethod,
     plan: &crate::calibration::CalibrationPlan,
     cosmetics: &SessionCosmetics,
-    scratch: &std::path::Path,
+    scratch: Option<&std::path::Path>,
     cancel: &Stop,
-    progress: impl FnMut(BatchStackPass, usize, usize),
+    mut progress: impl FnMut(BatchStackPass, usize, usize),
 ) -> seiza_stacking::Result<BatchStackResult> {
     let admitted = ledger
         .iter()
         .enumerate()
         .filter(|(_, frame)| frame.admitted())
         .collect::<Vec<_>>();
-    std::fs::create_dir_all(scratch).map_err(|error| {
-        seiza_stacking::Error::Stack(format!(
-            "Cannot make the final pass's scratch folder {}: {error}",
-            scratch.display()
-        ))
-    })?;
     let options = BatchStackOptions {
         cancel: Some(cancel.clone().into()),
         frame_weights: replay_weights(method.weighting, &admitted)?,
-        scratch_directory: Some(scratch.to_path_buf()),
         ..BatchStackOptions::default()
     };
-    seiza_stacking::integrate_registered_frames_banded(
-        admitted.len(),
-        &options,
-        |index| {
-            let (source_index, record) = admitted[index];
-            let source = &group.frames[source_index];
-            if super::source_fingerprint(&source.path) != source.source_fingerprint {
-                return Err(seiza_stacking::Error::Stack(format!(
-                    "Image {} changed during stacking; rebuild the stack",
-                    source.image_id
-                )));
+    let load = |index: usize| {
+        let (source_index, record) = admitted[index];
+        let source = &group.frames[source_index];
+        if super::source_fingerprint(&source.path) != source.source_fingerprint {
+            return Err(seiza_stacking::Error::Stack(format!(
+                "Image {} changed during stacking; rebuild the stack",
+                source.image_id
+            )));
+        }
+        let frame = crate::image_io::open_linear_frame(&source.path)
+            .map_err(|error| seiza_stacking::Error::Stack(error.to_string()))?;
+        let mapping = record.decision.registered_mapping.as_ref().ok_or_else(|| {
+            seiza_stacking::Error::Stack("An admitted frame has no registered mapping".into())
+        })?;
+        let session = plan.assignments[source_index];
+        let masters = (!record.calibration_bypassed).then_some(&plan.sessions[session].masters);
+        let cosmetic = cosmetics.for_frame(session, record.calibration_bypassed);
+        let image = prepare_registered_frame(
+            frame,
+            masters,
+            &plan.sessions[session].match_tolerances,
+            cosmetic,
+            mapping,
+            method.seiza_interpolation(),
+        )?;
+        if super::source_fingerprint(&source.path) != source.source_fingerprint {
+            return Err(seiza_stacking::Error::Stack(format!(
+                "Image {} changed while being read; rebuild the stack",
+                source.image_id
+            )));
+        }
+        Ok(image)
+    };
+    if let Some(scratch) = scratch {
+        let banded = std::fs::create_dir_all(scratch)
+            .map_err(|error| {
+                seiza_stacking::Error::Stack(format!(
+                    "Cannot make the final pass's scratch folder {}: {error}",
+                    scratch.display()
+                ))
+            })
+            .and_then(|()| {
+                let options = BatchStackOptions {
+                    scratch_directory: Some(scratch.to_path_buf()),
+                    ..options.clone()
+                };
+                seiza_stacking::integrate_registered_frames_banded(
+                    admitted.len(),
+                    &options,
+                    load,
+                    &mut progress,
+                )
+            });
+        match banded {
+            Err(error) if is_scratch_failure(&error) => {
+                tracing::warn!("Final pass reading every frame on each pass instead: {error}")
             }
-            let frame = crate::image_io::open_linear_frame(&source.path)
-                .map_err(|error| seiza_stacking::Error::Stack(error.to_string()))?;
-            let mapping = record.decision.registered_mapping.as_ref().ok_or_else(|| {
-                seiza_stacking::Error::Stack("An admitted frame has no registered mapping".into())
-            })?;
-            let session = plan.assignments[source_index];
-            let masters = (!record.calibration_bypassed).then_some(&plan.sessions[session].masters);
-            let cosmetic = cosmetics.for_frame(session, record.calibration_bypassed);
-            let image = prepare_registered_frame(
-                frame,
-                masters,
-                &plan.sessions[session].match_tolerances,
-                cosmetic,
-                mapping,
-                method.seiza_interpolation(),
-            )?;
-            if super::source_fingerprint(&source.path) != source.source_fingerprint {
-                return Err(seiza_stacking::Error::Stack(format!(
-                    "Image {} changed while being read; rebuild the stack",
-                    source.image_id
-                )));
-            }
-            Ok(image)
-        },
-        progress,
-    )
+            result => return result,
+        }
+    }
+    seiza_stacking::integrate_registered_frames(admitted.len(), &options, |pass, index| {
+        progress(pass, index, admitted.len());
+        load(index)
+    })
+}
+
+/// Whether `error` says the scratch files could not be kept, which the
+/// whole-frame passes get by without, rather than that a frame could not be
+/// read or the pass was stopped. Seiza names the scratch directory, and
+/// PSF Guard's own, whenever one fails.
+fn is_scratch_failure(error: &seiza_stacking::Error) -> bool {
+    !matches!(error, seiza_stacking::Error::Cancelled) && error.to_string().contains("scratch")
 }
 
 /// The weights the live pass gave each admitted frame, in replay order, or
@@ -435,7 +469,7 @@ mod tests {
             StackMethod::classic(),
             &plan,
             &SessionCosmetics::none(plan.sessions.len()),
-            &directory.path().join("scratch"),
+            Some(&directory.path().join("scratch")),
             &crate::concurrency::Stop::new(),
             |pass, index, count| progress.push((pass, index, count)),
         )
@@ -455,6 +489,58 @@ mod tests {
         assert_eq!(scratch.count(), 0);
     }
 
+    /// Without a scratch folder, or with one that cannot be made, the pass
+    /// reads every frame on each of three passes instead, to the same stack.
+    #[test]
+    fn a_final_pass_without_scratch_reads_each_frame_per_pass_to_the_same_stack() {
+        let directory = tempfile::tempdir().unwrap();
+        let (group, ledger) = fixture(directory.path());
+        let plan = crate::calibration::CalibrationPlan::without_calibration(group.frames.len());
+        let cosmetics = SessionCosmetics::none(plan.sessions.len());
+        let run = |scratch: Option<&std::path::Path>| {
+            let mut progress = Vec::new();
+            let result = integrate(
+                &group,
+                &ledger,
+                StackMethod::classic(),
+                &plan,
+                &cosmetics,
+                scratch,
+                &crate::concurrency::Stop::new(),
+                |pass, index, count| progress.push((pass, index, count)),
+            )
+            .unwrap();
+            (result, progress)
+        };
+        let (banded, _) = run(Some(&directory.path().join("scratch")));
+        let three_passes = [
+            BatchStackPass::Estimate,
+            BatchStackPass::Refine,
+            BatchStackPass::Integrate,
+        ]
+        .into_iter()
+        .flat_map(|pass| (0..4).map(move |index| (pass, index, 4)))
+        .collect::<Vec<_>>();
+        // A file where the folder should be: making it fails.
+        let blocked = directory.path().join("blocked");
+        std::fs::write(&blocked, b"not a folder").unwrap();
+        for scratch in [None, Some(blocked.as_path())] {
+            let (whole, progress) = run(scratch);
+            assert_eq!(progress, three_passes);
+            let bits = |result: &BatchStackResult| {
+                result
+                    .snapshot
+                    .image
+                    .data
+                    .iter()
+                    .map(|value| value.to_bits())
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(bits(&whole), bits(&banded));
+            assert_eq!(whole.snapshot.coverage, banded.snapshot.coverage);
+        }
+    }
+
     #[test]
     fn replay_refuses_changed_files_and_honors_cancellation() {
         let directory = tempfile::tempdir().unwrap();
@@ -469,7 +555,7 @@ mod tests {
             StackMethod::classic(),
             &plan,
             &none,
-            &directory.path().join("scratch"),
+            Some(&directory.path().join("scratch")),
             &cancel,
             |_, _, _| {},
         )
@@ -483,7 +569,7 @@ mod tests {
                 StackMethod::classic(),
                 &plan,
                 &none,
-                &directory.path().join("scratch"),
+                Some(&directory.path().join("scratch")),
                 &cancel,
                 |_, _, _| {}
             ),
@@ -518,7 +604,7 @@ mod tests {
             },
             &plan,
             &none,
-            &directory.path().join("scratch"),
+            Some(&directory.path().join("scratch")),
             &cancel,
             |_, _, _| {},
         )
@@ -538,7 +624,7 @@ mod tests {
             StackMethod::classic(),
             &plan,
             &none,
-            &directory.path().join("scratch"),
+            Some(&directory.path().join("scratch")),
             &cancel,
             |_, _, _| {},
         )
@@ -569,7 +655,7 @@ mod tests {
             },
             &plan,
             &SessionCosmetics::none(plan.sessions.len()),
-            &directory.path().join("scratch"),
+            Some(&directory.path().join("scratch")),
             &crate::concurrency::Stop::new(),
             |_, _, _| {},
         )

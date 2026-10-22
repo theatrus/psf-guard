@@ -669,6 +669,12 @@ impl Usage {
     }
 }
 
+/// Bytes free to this process on the volume holding `path`, when the
+/// platform says.
+pub(crate) fn available_bytes(path: &Path) -> Option<u64> {
+    volume_usage(path).map(|usage| usage.available)
+}
+
 #[cfg(unix)]
 fn volume_usage(path: &Path) -> Option<Usage> {
     use std::os::unix::ffi::OsStrExt;
