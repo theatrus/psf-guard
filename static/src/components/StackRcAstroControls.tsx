@@ -1,4 +1,11 @@
-import { rangeProblem, useRcAstroCapabilities } from './rcAstroSchema';
+import {
+  defaultParameters,
+  isCorrectOnly,
+  offersCorrectOnly,
+  rangeProblem,
+  useRcAstroCapabilities,
+  bxtCorrectOnly,
+} from './rcAstroSchema';
 import type {
   ExternalToolParameter,
   ExternalToolSchema,
@@ -25,12 +32,20 @@ export default function StackRcAstroControls({
   config,
   result,
   disabled,
+  toolKeys,
+  defaultsFor = defaultParameters,
+  heading = 'RC-Astro tools',
   onChange,
 }: {
   label: string;
   config: RcAstroProcessing | null | undefined;
   result?: StackRcAstroResult;
   disabled: boolean;
+  /** The tools offered, by key; every tool the server reports when absent. */
+  toolKeys?: readonly string[];
+  /** The parameters a tool starts with when it is turned on. */
+  defaultsFor?: (schema: ExternalToolSchema) => Record<string, RcAstroParameterValue>;
+  heading?: string;
   onChange: (config: RcAstroProcessing | null) => void;
 }) {
   const capabilities = useRcAstroCapabilities();
@@ -40,7 +55,7 @@ export default function StackRcAstroControls({
       return (
         <section className="stack-rc-astro-controls" aria-label={`${label} RC-Astro tools`}>
           <header>
-            <strong>RC-Astro tools</strong>
+            <strong>{heading}</strong>
             <span>{capabilities.isPending ? 'Checking tools' : 'Unavailable'}</span>
           </header>
           <p>{capabilities.data?.error ?? capabilities.error?.message ??
@@ -66,7 +81,9 @@ export default function StackRcAstroControls({
     }
     return null;
   }
-  const tools = capabilities.data.tools;
+  const tools = capabilities.data.tools.filter(
+    (schema) => !toolKeys || toolKeys.includes(schema.key)
+  );
 
   const stepFor = (tool: string) => config?.steps.find((step) => step.tool === tool);
 
@@ -83,7 +100,7 @@ export default function StackRcAstroControls({
   return (
     <section className="stack-rc-astro-controls" aria-label={`${label} RC-Astro tools`}>
       <header>
-        <strong>RC-Astro tools</strong>
+        <strong>{heading}</strong>
         <span>
           {config?.steps.length
             ? `${config.steps.length} step(s) · linear, before stretch`
@@ -102,12 +119,13 @@ export default function StackRcAstroControls({
           parameters={stepFor(schema.key)?.parameters}
           disabled={disabled}
           onToggle={(enabled) =>
-            setStep(schema.key, enabled ? defaultParameters(schema) : null)
+            setStep(schema.key, enabled ? defaultsFor(schema) : null)
           }
           onParameter={(name, value) => {
-            const current = stepFor(schema.key)?.parameters ?? defaultParameters(schema);
+            const current = stepFor(schema.key)?.parameters ?? defaultsFor(schema);
             setStep(schema.key, { ...current, [name]: value });
           }}
+          onParameters={(parameters) => setStep(schema.key, parameters)}
         />
       ))}
       {config?.steps.filter((step) => !tools.some((tool) => tool.key === step.tool)).map((step) => (
@@ -139,16 +157,6 @@ function ResultDiagnostics({ result }: { result: StackRcAstroResult }) {
   );
 }
 
-/** What a freshly enabled tool asks for: star removal keeps the stars. */
-function defaultParameters(schema: ExternalToolSchema): Record<string, RcAstroParameterValue> {
-  if (schema.key === 'sxt') {
-    const stars = schema.parameters.find(
-      (parameter) => parameter.name === 'stars' || parameter.name === 'difference'
-    );
-    if (stars?.flag) return { [stars.name]: true };
-  }
-  return {};
-}
 
 function ToolSection({
   schema,
@@ -156,14 +164,17 @@ function ToolSection({
   disabled,
   onToggle,
   onParameter,
+  onParameters,
 }: {
   schema: ExternalToolSchema;
   parameters: Record<string, RcAstroParameterValue> | undefined;
   disabled: boolean;
   onToggle: (enabled: boolean) => void;
   onParameter: (name: string, value: RcAstroParameterValue) => void;
+  onParameters: (parameters: Record<string, RcAstroParameterValue>) => void;
 }) {
   const enabled = parameters !== undefined;
+  const correctOnly = enabled && offersCorrectOnly(schema) && isCorrectOnly(parameters);
   return (
     <div className="stack-rc-astro-tool">
       <label>
@@ -179,6 +190,22 @@ function ToolSection({
       </label>
       {enabled && (
         <div className="stack-rc-astro-fields">
+          {offersCorrectOnly(schema) && (
+            <label className="stack-stretch-field stack-rc-astro-switch"
+              title="Correct star shapes and color fringes without sharpening">
+              <input
+                type="checkbox"
+                checked={correctOnly}
+                disabled={disabled || !schema.licensed}
+                onChange={(event) => onParameters(event.target.checked
+                  ? { ...parameters, ...bxtCorrectOnly }
+                  : Object.fromEntries(Object.entries(parameters)
+                    .filter(([name]) => !(name in bxtCorrectOnly))))}
+                aria-label="Correct only"
+              />
+              <span>Correct only</span>
+            </label>
+          )}
           {schema.parameters
             .filter((parameter) => parameter.flag !== null)
             .map((parameter) => (
@@ -186,7 +213,8 @@ function ToolSection({
                 key={parameter.name}
                 parameter={parameter}
                 value={parameters[parameter.name]}
-                disabled={disabled || !schema.licensed}
+                disabled={disabled || !schema.licensed ||
+                  (correctOnly && parameter.name in bxtCorrectOnly)}
                 onChange={(value) => onParameter(parameter.name, value)}
               />
             ))}

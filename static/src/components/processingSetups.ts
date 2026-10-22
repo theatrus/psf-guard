@@ -128,6 +128,9 @@ export function colorSetupForRoles(
       false,
       () => undefined
     ),
+    ...(settings.color_rc_astro?.steps.length
+      ? { color_rc_astro: structuredClone(settings.color_rc_astro) }
+      : {}),
     // A setup saved from a narrowband card says nothing of calibration, so
     // an RGB card keeps the default; a narrowband card never calibrates.
     ...(colorCalibrationApplies(roles)

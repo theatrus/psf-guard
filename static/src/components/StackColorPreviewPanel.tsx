@@ -431,6 +431,7 @@ function ColorCard({
         fallbacks={artifact?.background_protection_fallbacks ?? {}}
         deconvolutions={artifact?.resolved_input_deconvolutions ?? {}}
         rcAstro={artifact?.resolved_input_rc_astro ?? {}}
+        colorRcAstro={artifact?.resolved_color_rc_astro}
         channelProcessing={channelProcessing}
         followed={artifact?.followed_channel_processing}
         disabled={!canCompute || busy || unavailable}
@@ -485,8 +486,9 @@ export default function StackColorPreviewPanel({
   const queryClient = useQueryClient();
   const [watchedJobIds, setWatchedJobIds] = useState<string[]>([]);
   // The card that asked for each composition still being prepared, which
-  // names no channel stacks yet to match a card by.
-  const preparingCards = useRef(new Map<string, string>());
+  // names no channel stacks yet to match a card by, and whether it came
+  // from **Apply processing stack**.
+  const preparingCards = useRef(new Map<string, { card: string; processing: boolean }>());
   const [paletteByCard, setPaletteByCard] = useState<Record<string, StackNarrowbandPalette>>({});
   const [cropByCard, setCropByCard] = useState<Record<string, StackColorCrop>>({});
   const [sourcesByCard, setSourcesByCard] = useState<Record<string, Partial<Record<StackColorRole, string>>>>({});
@@ -546,7 +548,12 @@ export default function StackColorPreviewPanel({
         });
       }
       if (operation.dbId !== dbId || operation.projectId !== projectId) return;
-      if (job.state === 'preparing') preparingCards.current.set(job.job_id, operation.cardKey);
+      if (job.state === 'preparing') {
+        preparingCards.current.set(job.job_id, {
+          card: operation.cardKey,
+          processing: operation.operationKey.endsWith(':processing'),
+        });
+      }
       setSavedByCard((current) => {
         const next = { ...current };
         delete next[operation.cardKey];
@@ -687,6 +694,18 @@ export default function StackColorPreviewPanel({
   void channelBuildRunning;
   const error = statusError ?? catalog.error;
 
+  // Why a composition this page asked for could not be prepared, on a card
+  // that still shows its previous preview, placed as a refused start is:
+  // beside **Apply processing stack** when it came from there, at the top
+  // of the card otherwise. A card without a preview shows it in place of
+  // the image.
+  const preparationFailure = (job: StackColorJob | undefined): CardStartError | undefined => {
+    const asked = job && preparingCards.current.get(job.job_id);
+    return job?.state === 'failed' && asked && job.error
+      ? { message: job.error, processing: asked.processing }
+      : undefined;
+  };
+
   const newestWatched = (
     targetId: number,
     kind: StackColorKind,
@@ -716,10 +735,14 @@ export default function StackColorPreviewPanel({
     // One still being prepared names no stacks yet: it shows on the card
     // that asked for it, or, picked up from the header, on the plain card.
     const preparingMatches = (job: StackColorJob) => {
-      const asked = preparingCards.current.get(job.job_id);
+      const asked = preparingCards.current.get(job.job_id)?.card;
       return asked === undefined ? !exposureSet : asked === key;
     };
-    const matchesFamily = (job: StackColorJob) => job.state === 'preparing' ? preparingMatches(job) : (!exposureSet && (!aware
+    // One this page asked for that failed while it was prepared lists no
+    // source stacks yet, and the card that asked for it shows why.
+    const unprepared = (job: StackColorJob) => job.state === 'preparing'
+      || (job.state === 'failed' && preparingCards.current.has(job.job_id));
+    const matchesFamily = (job: StackColorJob) => unprepared(job) ? preparingMatches(job) : (!exposureSet && (!aware
       || (candidates.length === 0 && (!selectedSaved || selectedSaved.job_id === job.job_id)))) || (family.complete
       && job.sources.length === roles.length
       && family.sources.every((source) => job.sources.some((previous) => sameColorSourceFamily(source, previous))));
@@ -855,7 +878,7 @@ export default function StackColorPreviewPanel({
           inputSources: sources.inputSources,
         })}
         onInspect={setInspector}
-        startError={startErrorByCard[key]}
+        startError={startErrorByCard[key] ?? (artifact ? preparationFailure(watched) : undefined)}
         onProcessingApply={(processing) => startColor({
           dbId, projectId,
           targetId: target.target_id, kind, palette, force: false,

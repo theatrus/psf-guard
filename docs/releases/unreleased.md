@@ -6,6 +6,20 @@
 
 ## Changes
 
+- A color preview can run BlurXTerminator and NoiseXTerminator on its color
+  channels together. In **Processing stack**, turn the tools on under
+  **RC-Astro on the color channels together**. They run on the aligned channels before color
+  calibration and the stretches. BlurXTerminator starts in **Correct only**
+  mode, which corrects star shapes and color fringes without sharpening, and
+  NoiseXTerminator reduces color noise. Changing a stretch or calibration
+  afterward does not run the tools again. Every BlurXTerminator section now
+  offers **Correct only**.
+- A color card that cannot prepare a build now shows why, for example when
+  RC-Astro is not installed or BlurXTerminator is not licensed on the server.
+  The message appears beside **Apply processing stack** when the build came
+  from there, and at the top of the card otherwise. Before, the card kept
+  showing its previous preview without a message.
+
 - BlurXTerminator, NoiseXTerminator and StarXTerminator no longer turn a
   stack upside down. RC-Astro read a stack without a row order, such as a WBPP
   master, as bottom-up and returned it flipped, so a color preview built from

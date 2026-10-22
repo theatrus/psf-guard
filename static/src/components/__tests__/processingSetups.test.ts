@@ -36,6 +36,14 @@ describe('colorSetupForRoles', () => {
     const mapped = colorSetupForRoles(setup, ['red', 'green', 'blue', 'ha']);
     expect(mapped.input_rc_astro).toEqual({ ha: chain });
   });
+
+  it('carries the RC-Astro steps on the color channels together', () => {
+    const setup = shoSetup();
+    const tools: RcAstroProcessing = { steps: [{ tool: 'nxt', parameters: {} }] };
+    setup.color_rc_astro = tools;
+    expect(colorSetupForRoles(setup, ['ha', 'oiii']).color_rc_astro).toEqual(tools);
+    expect(colorSetupForRoles(shoSetup(), ['ha', 'oiii'])).not.toHaveProperty('color_rc_astro');
+  });
   it('keeps matching channels and defaults the missing ones', () => {
     const mapped = colorSetupForRoles(shoSetup(), ['red', 'green', 'blue', 'ha']);
     // ha matches by name and keeps its stages and deconvolution.

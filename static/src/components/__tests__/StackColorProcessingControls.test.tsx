@@ -276,4 +276,124 @@ describe('StackColorProcessingControls', () => {
       }),
     }));
   });
+
+  it('runs BlurXTerminator in Correct only mode on the color channels together', async () => {
+    const user = userEvent.setup();
+    const onApply = vi.fn();
+    const parameter = (name: string, type: 'float' | 'bool') => ({
+      name, flag: `--${name}`, label: name, description: name,
+      kind: type === 'bool'
+        ? { type, default: false }
+        : { type, default: 0, min: -1, max: 8 },
+    });
+    server.use(
+      http.get('/api/tools/rc-astro', () => HttpResponse.json({ success: true, data: {
+        available: true, tools: [
+          { key: 'bxt', name: 'BlurXTerminator', licensed: true,
+            cli_version: '2.6.6', ml_version: 3, schema_version: 6,
+            parameters: [
+              ...['ss', 'sn', 'ash', 'nsd'].map((name) => parameter(name, 'float')),
+              ...['ansp', 'lp'].map((name) => parameter(name, 'bool')),
+            ] },
+          { key: 'nxt', name: 'NoiseXTerminator', licensed: true,
+            cli_version: '2.6.6', ml_version: 3, schema_version: 6, parameters: [] },
+          { key: 'sxt', name: 'StarXTerminator', licensed: true,
+            cli_version: '2.6.6', ml_version: 3, schema_version: 6, parameters: [] },
+        ],
+      }, error: null }))
+    );
+    const roles = ['red', 'green', 'blue'] as const;
+    const applied = defaultColorProcessing([...roles]);
+    renderWithQueries(<StackColorProcessingControls label="RGB" roles={[...roles]}
+      applied={applied}
+      backgrounds={{}} protections={{}} fallbacks={{}} deconvolutions={{}}
+      disabled={false} onApply={onApply} />);
+    await user.click(screen.getByText('Processing stack'));
+    const together = await screen.findByRole('region', { name: 'RC-Astro on the color channels together' });
+    expect(within(together).queryByRole('checkbox', { name: 'StarXTerminator' })).toBeNull();
+
+    // Turning a tool on and off again leaves nothing to apply.
+    await user.click(within(together).getByRole('checkbox', { name: 'NoiseXTerminator' }));
+    await user.click(within(together).getByRole('checkbox', { name: 'NoiseXTerminator' }));
+    expect(screen.getByRole('button', { name: 'Apply processing stack' })).toBeDisabled();
+
+    await user.click(within(together).getByRole('checkbox', { name: 'BlurXTerminator' }));
+    expect(within(together).getByRole('checkbox', { name: 'Correct only' })).toBeChecked();
+    await user.click(within(together).getByRole('checkbox', { name: 'NoiseXTerminator' }));
+    await user.click(screen.getByRole('button', { name: 'Apply processing stack' }));
+    expect(onApply).toHaveBeenCalledWith(expect.objectContaining({
+      color_rc_astro: { steps: [
+        { tool: 'bxt', parameters: { ss: 0, sn: 0, ash: 0, nsd: 0, ansp: true, lp: false } },
+        { tool: 'nxt', parameters: {} },
+      ] },
+    }));
+  });
+
+  it('starts BlurXTerminator with its defaults where Correct only cannot be sent', async () => {
+    const user = userEvent.setup();
+    const onApply = vi.fn();
+    server.use(
+      http.get('/api/tools/rc-astro', () => HttpResponse.json({ success: true, data: {
+        available: true, tools: [
+          { key: 'bxt', name: 'BlurXTerminator', licensed: true,
+            cli_version: '2.6.6', ml_version: 3, schema_version: 6,
+            parameters: [{ name: 'ss', flag: '--ss', label: 'ss', description: 'ss',
+              kind: { type: 'float', default: 0.5, min: 0, max: 0.7 } }] },
+        ],
+      }, error: null }))
+    );
+    const roles = ['red', 'green', 'blue'] as const;
+    renderWithQueries(<StackColorProcessingControls label="RGB" roles={[...roles]}
+      applied={defaultColorProcessing([...roles])}
+      backgrounds={{}} protections={{}} fallbacks={{}} deconvolutions={{}}
+      disabled={false} onApply={onApply} />);
+    await user.click(screen.getByText('Processing stack'));
+    const together = await screen.findByRole('region', { name: 'RC-Astro on the color channels together' });
+    await user.click(within(together).getByRole('checkbox', { name: 'BlurXTerminator' }));
+    expect(within(together).queryByRole('checkbox', { name: 'Correct only' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Apply processing stack' }));
+    expect(onApply).toHaveBeenCalledWith(expect.objectContaining({
+      color_rc_astro: { steps: [{ tool: 'bxt', parameters: {} }] },
+    }));
+  });
+
+  it('counts an applied color-channel chain edited and changed back as unchanged', async () => {
+    const user = userEvent.setup();
+    const parameter = (name: string, type: 'float' | 'bool') => ({
+      name, flag: `--${name}`, label: name, description: name,
+      kind: type === 'bool' ? { type, default: false } : { type, default: 0, min: -1, max: 8 },
+    });
+    server.use(
+      http.get('/api/tools/rc-astro', () => HttpResponse.json({ success: true, data: {
+        available: true, tools: [
+          { key: 'bxt', name: 'BlurXTerminator', licensed: true,
+            cli_version: '2.6.6', ml_version: 3, schema_version: 6,
+            parameters: [
+              ...['ss', 'sn', 'ash', 'nsd'].map((name) => parameter(name, 'float')),
+              ...['ansp', 'lp'].map((name) => parameter(name, 'bool')),
+            ] },
+        ],
+      }, error: null }))
+    );
+    const roles = ['red', 'green', 'blue'] as const;
+    // The server writes parameters in name order, and the field after the
+    // inputs' own tools.
+    const applied = {
+      ...defaultColorProcessing([...roles]),
+      color_rc_astro: { steps: [{ tool: 'bxt', parameters:
+        { ansp: true, ash: 0, lp: false, nsd: 0, sn: 0, ss: 0 } }] },
+    };
+    renderWithQueries(<StackColorProcessingControls label="RGB" roles={[...roles]}
+      applied={applied}
+      backgrounds={{}} protections={{}} fallbacks={{}} deconvolutions={{}}
+      disabled={false} onApply={vi.fn()} />);
+    await user.click(screen.getByText('Processing stack'));
+    const together = await screen.findByRole('region', { name: 'RC-Astro on the color channels together' });
+    const correctOnly = within(together).getByRole('checkbox', { name: 'Correct only' });
+    expect(correctOnly).toBeChecked();
+    await user.click(correctOnly);
+    expect(screen.getByRole('button', { name: 'Apply processing stack' })).toBeEnabled();
+    await user.click(correctOnly);
+    expect(screen.getByRole('button', { name: 'Apply processing stack' })).toBeDisabled();
+  });
 });

@@ -1670,6 +1670,31 @@ RC-Astro keep their cached results.
 
 ![RC-Astro tools configured on a linear red input before its display stretch](stack-rc-astro-color-desktop.png)
 
+### RC-Astro on the color channels together
+
+**RC-Astro on the color channels together** in the **Processing stack** editor runs
+BlurXTerminator and NoiseXTerminator on the aligned, normalized channels as
+one three-channel image, after alignment and before color calibration and the
+stretches. It is off by default and is shown when the server has RC-Astro.
+
+- BlurXTerminator starts in **Correct only** mode, which corrects star shapes
+  and the color fringes left where the channels' stars differ, without
+  sharpening. Sharpen each channel on its card or in its input lane instead.
+- NoiseXTerminator reduces color noise, which a run on one channel cannot see.
+- StarXTerminator is not offered here; it runs on channel stacks.
+
+The image is the channels the composition colors with: R, G and B for RGB and
+LRGB, whose luminance is left out, and H-alpha, OIII and SII for a narrowband
+palette. A palette without SII sends OIII twice and keeps one copy. Each step's
+result is cached under the prepared channels and the tool settings, so a
+change to calibration, a stretch or the crop reuses it. **Processed color
+channels FITS** downloads the result as a three-channel FITS.
+
+**Correct only** in any BlurXTerminator section sets Sharpen Stars, Sharpen
+Nonstellar, Adjust Star Halos and Nonstellar PSF Diameter to 0, with
+automatic nonstellar PSF on and lunar/planetary mode off. These are the values
+rc-astro's own `--correct-only` switch uses, and they give the same pixels.
+
 Every intermediate remains `f32`, and each automatic stage resolves against
 the preceding stage's output. These are sequential transfer passes, not pixel
 values added together. Seiza receives the independently prepared channels as

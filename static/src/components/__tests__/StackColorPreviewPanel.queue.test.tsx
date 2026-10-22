@@ -87,4 +87,22 @@ describe('a color composition being prepared', () => {
     await waitFor(() => expect(build).toBeEnabled());
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
+
+  it('shows why one could not be prepared', async () => {
+    let stage: 'preparing' | 'failed' = 'preparing';
+    mount(() => ok(stage === 'preparing' ? preparing : {
+      ...preparing, state: 'failed', phase: 'Could not be prepared', preparing: undefined,
+      error: 'RC-Astro on the color channels cannot run: rc-astro is not installed on this server',
+    }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Build RGB color preview' }));
+    const build = await screen.findByRole('button', { name: 'Build RGB color preview' });
+    await waitFor(() => expect(build).toHaveTextContent('Preparing…'));
+    stage = 'failed';
+    // The card has no preview yet, so the reason shows once, in its place.
+    const message = 'RC-Astro on the color channels cannot run: rc-astro is not installed on this server';
+    expect(await screen.findByText(message, {}, { timeout: 3000 }))
+      .toHaveClass('stack-preview-placeholder', 'error');
+    expect(screen.getAllByText(message)).toHaveLength(1);
+    await waitFor(() => expect(screen.getByRole('button', { name: /RGB color preview/ })).toBeEnabled());
+  });
 });

@@ -1,8 +1,9 @@
 # Color previews and channel processing
 
-Status: **Steps 1 and 2 built**: color previews follow each channel card's
-deconvolution and RC-Astro steps by default, and run them on each channel's
-own stack in the card's cache. Step 3 is planned.
+Status: **Built**: color previews follow each channel card's deconvolution
+and RC-Astro steps by default, run them on each channel's own stack in the
+card's cache, and can run BlurXTerminator and NoiseXTerminator on the color
+channels together.
 Last updated: 2026-10-22
 
 A channel card can run deconvolution and the RC-Astro tools
@@ -19,7 +20,7 @@ This record covers three steps:
 1. Color previews take each input's tools from its channel card by default.
 2. A channel's tools run once, on the channel's own stack, and serve both
    its card and every color preview built from it.
-3. RC-Astro tools can run on the composed color image.
+3. BlurXTerminator and NoiseXTerminator can run on the color channels together.
 
 ## The color pipeline
 
@@ -32,8 +33,10 @@ For each input, a color build runs, in order:
 3. background extraction on the channel in its own frame, with one surface
    model shared by all channels;
 4. resampling onto the reference with the transform from step 1;
-5. normalization and the input's stretch stages;
-6. composition, then the RGB output stages.
+5. normalization;
+6. RC-Astro on the color channels together, when set (step 3);
+7. color calibration and the input's stretch stages;
+8. composition, then the RGB output stages.
 
 Before step 2, a build ran background extraction first, then registered and
 resampled, then ran the tools on the registered channel. Those results were
@@ -190,11 +193,68 @@ detected 205 fewer stars.
 This is one target, one channel and a small rotation. A larger turn, or a
 channel with more resampling, could favour registering first.
 
-## Step 3: RC-Astro on the composed image (planned)
+## Step 3: RC-Astro on the color channels together (built)
 
-An optional RC-Astro stage on the linear RGB composition, before the output
-stretch. BlurXTerminator's correct-only mode fixes star colour fringes left
-by channel registration or the optics, and NoiseXTerminator on the color
-image also reduces color noise, which per-channel runs cannot. It is a stage
-of its own, so a build can run a tool per channel, on the composition, or
-both.
+`StackColorProcessing.color_rc_astro` runs BlurXTerminator and
+NoiseXTerminator on the aligned, normalized linear channels as one
+three-channel image, after normalization and before color calibration, the
+input stretches and composition. A build can run a tool per channel, on the
+channels together, or both. A record without the field is written without
+it, so earlier builds keep their ids.
+
+**Why before composition.** The plan was the composed RGB image before the
+output stretch, but the composition is linear only when calibration runs and
+the channels share their stretch. A narrowband palette composes channels each
+stretched on its own, and LRGB mixes in luminance. The aligned channels are
+linear for every kind, and fringes and color noise are differences between
+them, which the tools see there. RGB and LRGB send R, G and B (luminance has
+no color); narrowband sends H-alpha, OIII and SII, and a palette without SII
+sends OIII twice and keeps the first copy, since the tools take one channel
+or three. StarXTerminator is refused: a starless color image needs its own
+stars path through calibration and the stretches.
+
+**Identity.** `color_rc_astro_chain_ids` keys the chain on
+`color-channels:{linear_input_id}` and the roles sent, with the usual per-step
+ids. The prepared inputs' id covers everything before the tools, so changing
+calibration, a stretch, the crop or the palette's mix reuses the result. The
+job id hashes the chain's last id, which carries the CLI and model versions;
+a build without the field hashes nothing new. The job records
+`color_rc_astro_id` and `resolved_color_rc_astro`; the janitor keeps the
+result while the build is kept, and a missing result makes the build out of
+date. A build whose chain is not cached runs in the stack line, not the
+quick lane. Progress shows **Processing the color channels with RC-Astro**
+after normalization, one unit per step.
+
+**Correct only.** rc-astro's schema lists BlurXTerminator's `--correct-only`
+switch without a type, so Seiza drops it and PSF Guard cannot send it. The
+switch sets `ss`, `sn`, `ash` and `nsd` to 0, `ansp` on and `lp` off; sending
+those values gave identical pixels to `--correct-only` on a 1200×1200 RGB
+crop. The UI offers **Correct only** wherever the schema has all six, and
+BlurXTerminator on the color channels starts with it on when it is offered.
+
+### The comparison
+
+Teddy Bear on starfront-redcat61: the R, G and B WBPP masters (already
+registered by WBPP), a 2000×2000 crop near the top-left corner where the
+refractor's off-axis stars are worst, each channel normalized as PSF Guard
+normalizes a color input. rc-astro 2.6.6 ran on supergateway with default
+settings except Correct only. 1605 isolated stars on G; centroid offsets
+between channels in pixels, FWHM from second moments, spread = (largest −
+smallest channel FWHM) / mean, color noise = standard deviation of R−G and
+B−G over star-free 32×32 tiles.
+
+| Run | R–B | R–G | G–B | FWHM R | FWHM G | FWHM B | Spread | Noise R−G | Noise B−G |
+|---|---|---|---|---|---|---|---|---|---|
+| none | 0.177 | 0.133 | 0.172 | 3.46 | 3.32 | 3.89 | 0.159 | 0.00119 | 0.00121 |
+| BXT correct only, together | 0.152 | 0.097 | 0.140 | 3.19 | 3.22 | 3.67 | 0.123 | 0.00119 | 0.00121 |
+| BXT correct only, per channel | 0.185 | 0.137 | 0.141 | 3.20 | 3.15 | 3.68 | 0.150 | 0.00119 | 0.00121 |
+| BXT default, together | 0.144 | 0.087 | 0.128 | 2.95 | 3.01 | 3.52 | 0.144 | 0.00119 | 0.00121 |
+| BXT default, per channel | 0.158 | 0.108 | 0.134 | 2.90 | 2.98 | 3.49 | 0.154 | 0.00120 | 0.00121 |
+| NXT, together | 0.099 | 0.095 | 0.101 | 3.19 | 2.86 | 3.13 | 0.120 | 0.00056 | 0.00014 |
+| NXT, per channel | 0.144 | 0.122 | 0.139 | 3.23 | 2.74 | 3.00 | 0.173 | 0.00058 | 0.00021 |
+
+Run on the channels together, Correct only brought the channels' star
+centroids closer (R–G 0.133 to 0.097 pixels) and their sizes closer
+(spread 0.159 to 0.123); run per channel it moved neither. NoiseXTerminator
+together removed more B−G noise than per channel. This is one target and one
+optical system.

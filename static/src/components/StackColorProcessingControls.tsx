@@ -9,10 +9,18 @@ import type {
   StackColorRole,
   StackDeconvolutionResult,
   StackStretchRequest,
+  ExternalToolSchema,
+  RcAstroParameterValue,
 } from '../api/types';
 import StackDeconvolutionControls, { StackDeconvolutionSummary } from './StackDeconvolutionControls';
 import StackRcAstroControls from './StackRcAstroControls';
-import { rcAstroProblem, useRcAstroCapabilities } from './rcAstroSchema';
+import {
+  bxtCorrectOnly,
+  defaultParameters,
+  offersCorrectOnly,
+  rcAstroProblem,
+  useRcAstroCapabilities,
+} from './rcAstroSchema';
 import { validateDeconvolution } from './stackDeconvolution';
 import StackStretchStageEditor from './StackStretchStageEditor';
 import { defaultStretchRequest, stretchModelLabels } from './stackStretchModels';
@@ -60,10 +68,34 @@ function hasInvalidNumbers(processing: StackColorProcessing): boolean {
     (value) => typeof value === 'number' && !Number.isFinite(value)
   )) || Object.values(processing.input_deconvolutions).some((config) =>
     config && Object.values(config).some((value) => !Number.isFinite(value))
-  ) || Object.values(processing.input_rc_astro ?? {}).some((config) =>
-    config?.steps.some((step) => Object.values(step.parameters).some((value) =>
-      typeof value === 'number' && !Number.isFinite(value)
-    ))
+  ) || [...Object.values(processing.input_rc_astro ?? {}), processing.color_rc_astro]
+    .some((config) =>
+      config?.steps.some((step) => Object.values(step.parameters).some((value) =>
+        typeof value === 'number' && !Number.isFinite(value)
+      ))
+    );
+}
+
+/** The tools that run on the color channels together: star removal runs on
+ *  the channel stacks only. */
+const colorChannelTools = ['bxt', 'nxt'] as const;
+
+/** On the color channels, BlurXTerminator starts in Correct only mode when
+ *  the installed tool can run it: it fixes star shapes and color fringes,
+ *  and each channel's own run can sharpen. */
+function colorChannelDefaults(
+  schema: ExternalToolSchema
+): Record<string, RcAstroParameterValue> {
+  return offersCorrectOnly(schema) ? { ...bxtCorrectOnly } : defaultParameters(schema);
+}
+
+/** JSON with object keys sorted, so a draft compares equal to what the
+ *  server applied whatever order its edits left the keys in. */
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(value, (_key, inner: unknown) =>
+    inner && typeof inner === 'object' && !Array.isArray(inner)
+      ? Object.fromEntries(Object.entries(inner).sort(([left], [right]) => left.localeCompare(right)))
+      : inner
   );
 }
 
@@ -542,7 +574,7 @@ function channelProcessingSummary(
 
 export default function StackColorProcessingControls({
   label, roles, applied, backgrounds, protections, fallbacks, deconvolutions, rcAstro = {},
-  channelProcessing = {}, followed, disabled, applyError, onApply,
+  colorRcAstro, channelProcessing = {}, followed, disabled, applyError, onApply,
 }: {
   label: string;
   roles: StackColorRole[];
@@ -552,6 +584,8 @@ export default function StackColorProcessingControls({
   fallbacks: Partial<Record<StackColorRole, string>>;
   deconvolutions: Partial<Record<StackColorRole, StackDeconvolutionResult>>;
   rcAstro?: StackColorJob['resolved_input_rc_astro'];
+  /** What RC-Astro did on the color channels together. */
+  colorRcAstro?: StackColorJob['resolved_color_rc_astro'];
   /** The deconvolution and RC-Astro steps each channel card shows, which
    *  "Use each channel's processing" copies into the inputs. */
   channelProcessing?: ChannelProcessing;
@@ -563,7 +597,8 @@ export default function StackColorProcessingControls({
   applyError?: string | null;
   onApply: (processing: StackColorProcessing) => void;
 }) {
-  const rcAstroTools = useRcAstroCapabilities().data?.tools;
+  const rcAstroCapabilities = useRcAstroCapabilities().data;
+  const rcAstroTools = rcAstroCapabilities?.tools;
   const calibrates = colorCalibrationApplies(roles);
   const defaults = useMemo(() => defaultColorProcessing(roles), [roles]);
   const baseline = applied
@@ -572,7 +607,7 @@ export default function StackColorProcessingControls({
     : defaults;
   const [draft, setDraft] = useState<StackColorProcessing>(() => cloneProcessing(baseline));
   const [error, setError] = useState<string | null>(null);
-  const changed = JSON.stringify(draft) !== JSON.stringify(baseline);
+  const changed = canonicalJson(draft) !== canonicalJson(baseline);
   const toolName = (tool: string) => rcAstroTools?.find((schema) => schema.key === tool)?.name ?? tool;
   const channelSummary = channelProcessingSummary(channelProcessing, roles, toolName);
   const followsCards = draft.input_processing === 'channels';
@@ -612,6 +647,15 @@ export default function StackColorProcessingControls({
     else delete input_rc_astro[role];
     return { ...current, input_rc_astro };
   });
+  // Off leaves the field out, as the server writes it, so a draft turned on
+  // and off again matches what was applied.
+  const updateColorRcAstro = (config: StackColorProcessing['color_rc_astro']) =>
+    setDraft((current) => {
+      if (config) return { ...current, color_rc_astro: config };
+      const next = { ...current };
+      delete next.color_rc_astro;
+      return next;
+    });
   const submit = () => {
     if (hasInvalidNumbers(draft)) {
       setError('Enter a finite value for every processing parameter');
@@ -640,6 +684,11 @@ export default function StackColorProcessingControls({
         }
       }
     }
+    const colorProblem = rcAstroProblem(draft.color_rc_astro, rcAstroTools);
+    if (colorProblem) {
+      setError(`Color channels: ${colorProblem}`);
+      return;
+    }
     setError(null);
     onApply(cloneProcessing(draft));
   };
@@ -657,6 +706,8 @@ export default function StackColorProcessingControls({
                 (count, config) => count + (config?.steps.length ?? 0), 0
               ) || 'off'}
             </>}
+          {!!draft.color_rc_astro?.steps.length &&
+            ` · Color RC-Astro ${draft.color_rc_astro.steps.length}`}
           {calibrates && ` · Calibration ${draft.color_calibration?.enabled === false ? 'off' : 'on'}`}
           {' · '}{roles.map((role) => `${roleLabels[role]} ${draft.input_stretches[role]?.length ?? 0}`).join(' · ')}
           {' · '}RGB {draft.output_stretches.length}</small>
@@ -728,6 +779,31 @@ export default function StackColorProcessingControls({
             ...current, background_extraction,
           }))}
         />
+        {(rcAstroCapabilities?.available || !!draft.color_rc_astro?.steps.length ||
+          colorRcAstro) && (
+          <section className="stack-color-channel-tools" aria-label="RC-Astro on the color channels together">
+            <StackRcAstroControls
+              label="Color channels"
+              heading="RC-Astro on the color channels together"
+              config={draft.color_rc_astro}
+              result={colorRcAstro ?? undefined}
+              disabled={disabled}
+              toolKeys={colorChannelTools}
+              defaultsFor={colorChannelDefaults}
+              onChange={updateColorRcAstro}
+            />
+            <span className="processing-setups-hint">
+              Runs on the aligned color channels together, before color calibration and
+              the stretches. Correct only fixes star shapes and color fringes;
+              NoiseXTerminator also reduces color noise.
+            </span>
+            {colorRcAstro && (
+              <div className="stack-stretch-actions">
+                <a href={colorRcAstro.fits_url} download>Processed color channels FITS</a>
+              </div>
+            )}
+          </section>
+        )}
         {calibrates && (
           <ColorCalibrationSwitch
             calibration={draft.color_calibration}
