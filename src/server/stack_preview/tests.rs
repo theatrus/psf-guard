@@ -618,30 +618,31 @@ fn the_final_pass_keeps_the_progress_moving() {
     group.eligible_frames = 10;
     group.processed_frames = 4;
     group.state = StackGroupState::Running;
-    // Calibration settled, then 4 of 10 frames registered, with 30
-    // final reads still to come.
-    assert_eq!(group_work(&group, true), (14, 50));
+    // Calibration settled, then 4 of 10 frames registered, with 20
+    // final reads still to come: each frame read once, then integrated.
+    assert_eq!(group_work(&group, true), (14, 40));
     assert_eq!(group_work(&group, false), (14, 20));
-    // The live pass is done and pass 2 has read 3 of 8 admitted frames.
+    // The live pass is done, all 8 admitted frames are read, and 3 of
+    // them integrated.
     group.processed_frames = 10;
     group.final_pass = Some(FinalPassProgress {
         pass: 2,
-        passes: 3,
+        passes: 2,
         frame: 3,
         frames: 8,
     });
-    assert_eq!(group_work(&group, true), (31, 44));
+    assert_eq!(group_work(&group, true), (31, 36));
     group.state = StackGroupState::Ready;
-    assert_eq!(group_work(&group, true), (44, 44));
+    assert_eq!(group_work(&group, true), (36, 36));
 
     let mut job = completed_job("final", vec![group]);
     job.state = StackJobState::Running;
     job.groups[0].state = StackGroupState::Running;
     let entry = mono_activity(&job);
-    assert_eq!((entry.processed_units, entry.total_units), (31, 44));
+    assert_eq!((entry.processed_units, entry.total_units), (31, 36));
     assert_eq!(
         entry.progress_label.as_deref(),
-        Some("Rejecting transients · pass 2/3 · frame 3/8")
+        Some("Rejecting transients · pass 2/2 · frame 3/8")
     );
 }
 
@@ -687,7 +688,7 @@ fn a_master_build_names_itself_and_its_frame_in_the_queue() {
     assert_eq!(entry.detail, "Building calibration masters");
     // The first master is a little past half way: about half of the half
     // of the calibration share the first build covers.
-    assert_eq!((entry.processed_units, entry.total_units), (2, 50));
+    assert_eq!((entry.processed_units, entry.total_units), (2, 40));
     assert_eq!(
         entry.progress_label.as_deref(),
         Some("Master dark · integrating frame 4/20")
@@ -707,7 +708,7 @@ fn a_master_build_names_itself_and_its_frame_in_the_queue() {
         Some("Master flat L · reading frame 7/30")
     );
     // A third build starts with three quarters of the share behind it.
-    assert_eq!((entry.processed_units, entry.total_units), (7, 50));
+    assert_eq!((entry.processed_units, entry.total_units), (7, 40));
 }
 
 #[test]
@@ -4512,4 +4513,31 @@ fn only_a_color_stack_preview_goes_out_of_date_with_the_calibration() {
         preview_calibration_outdated(&uncalibrated, || panic!("nothing to compare")),
         None
     );
+}
+
+/// A clipped map sits beside its stack, `group-2-clipped.fits` for
+/// `group-2.fits`, reads back as written, and a rebuild that clipped
+/// nothing removes the old one; a missing or multi-channel map reads as
+/// none.
+#[test]
+fn a_clipped_map_lives_beside_its_stack_and_goes_when_nothing_clipped() {
+    let root = tempfile::tempdir().unwrap();
+    let path = clipped_path(root.path(), "job", 2);
+    assert_eq!(path, clipped_path_beside(&fits_path(root.path(), "job", 2)));
+    assert_eq!(path.file_name().unwrap(), "group-2-clipped.fits");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    assert!(read_clipped(&path).is_none());
+
+    let map =
+        seiza_stacking::LinearImage::new(3, 2, 1, vec![0.0, 0.25, 1.0, 0.5, 0.0, 0.75]).unwrap();
+    write_clipped(&path, Some(&map)).unwrap();
+    assert_eq!(read_clipped(&path).unwrap(), map);
+
+    write_clipped(&path, None).unwrap();
+    assert!(!path.exists());
+    write_clipped(&path, None).unwrap();
+
+    let rgb = seiza_stacking::LinearImage::new(1, 1, 3, vec![1.0, 1.0, 1.0]).unwrap();
+    write_clipped(&path, Some(&rgb)).unwrap();
+    assert!(read_clipped(&path).is_none());
 }

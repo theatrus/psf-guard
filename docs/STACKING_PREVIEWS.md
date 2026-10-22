@@ -370,10 +370,15 @@ go there: a build or WBPP run opens its target's stacks, a quality scan the
 target's sequence, and a catalog refresh the database's images.
 
 The overall percent and each build's bar count frame reads: the live pass
-reads each eligible frame once, and the final rejection pass three more times
-per admitted frame, so the bar keeps moving through the final pass instead of
-sitting at 100%. While that pass runs the build's line reads, for example,
-`Rejecting transients · pass 2/3 · frame 4/14`.
+reads each eligible frame once, and the final rejection pass reads each
+admitted frame once more and then integrates it, counted as a second read, so
+the bar keeps moving through the final pass instead of sitting at 100%. While
+that pass runs the build's line reads, for example, `Rejecting transients ·
+pass 2/2 · frame 4/14`. The final pass keeps each frame it reads in a scratch
+file below the stack folder, `stack-scratch`, four bytes per sample per frame
+(twelve per pixel in colour), until it ends. When its disk lacks the room, or
+a scratch file cannot be written, the pass reads every frame on each of three
+passes instead, and the progress line counts three passes.
 
 Builds wait in a line of their own, and the line, not the order they were
 asked for, decides what runs next. In the queue, **↑** and **↓** move a
@@ -1689,6 +1694,21 @@ Where calibration runs depends on the stretches:
   configured, which pulls it toward its own median and undoes most of the
   calibration. The card adds `channels stretched separately` to its
   calibration line. Give the channels the same stretch to keep the balance.
+
+Bright star cores clip in the raw frames, at a different level in each
+channel once the stack scales them, so calibration's gains would tint them
+cyan or blue. Each stack therefore keeps where its frames clipped, in
+`group-N-clipped.fits` beside its FITS. After calibrating, Seiza renders those
+pixels neutral, from none where under 5% of a pixel's frames clipped to fully
+at half. A composition takes, at each pixel, the largest share any colour
+channel clipped, carried through that channel's registration; luminance does
+not count. A stack built before PSF Guard kept the map, a WBPP stack, or a
+sensor whose saturation level is unknown has no map, and its cores calibrate
+as before. A starless image, from StarXTerminator in the stack's or a channel's
+RC-Astro steps, is not rendered neutral: its clipped cores became nebula. A
+composition whose channels share their stretch is rendered neutral even when
+calibration cannot run, since Seiza does so before it stretches; elsewhere
+only a calibrated image is.
 
 PSF Guard hands the shared stages to Seiza as per-channel stretches. Once
 Seiza has calibrated, it links them, so the balance survives. When

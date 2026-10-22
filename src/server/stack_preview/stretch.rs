@@ -2484,8 +2484,21 @@ fn render_fits_variant(
                     .gaia_photometry_catalog()
                     .map(|(catalog, _)| catalog)
             };
-            let (image, mut outcome) = pool
-                .install(|| super::color_calibration::calibrate_stack(plan, linear, &open_catalog));
+            // A starless image has nebula where the clipped cores were, which
+            // rendering them neutral would grey out.
+            let clipped = rc_astro_outcome
+                .as_ref()
+                .is_none_or(|outcome| !outcome.result.removed_stars())
+                .then(|| super::read_clipped(&super::clipped_path_beside(source_path)))
+                .flatten();
+            let (image, mut outcome) = pool.install(|| {
+                super::color_calibration::calibrate_stack(
+                    plan,
+                    linear,
+                    clipped.as_ref(),
+                    &open_catalog,
+                )
+            });
             // An unlinked stretch pulls each channel to its own median.
             if config.color_strategy == seiza_stretch::ColorStrategy::Unlinked {
                 super::color_calibration::mark_stretched_separately(&mut outcome);

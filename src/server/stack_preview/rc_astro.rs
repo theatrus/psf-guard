@@ -99,6 +99,14 @@ pub struct StackRcAstroResult {
     pub has_stars: bool,
 }
 
+impl StackRcAstroResult {
+    /// Whether StarXTerminator ran, so the result is starless, whether or
+    /// not it kept the stars as an image of their own.
+    pub fn removed_stars(&self) -> bool {
+        self.steps.iter().any(|step| step.tool == "sxt")
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct CachedRcAstro {
     schema_version: u32,
@@ -1498,5 +1506,27 @@ fi
         // the variable.
         unsafe { std::env::set_var("PSF_GUARD_RC_ASTRO", &path) };
         FakeTool { dir, _lock: lock }
+    }
+
+    #[test]
+    fn a_chain_with_star_removal_reports_a_starless_result() {
+        use crate::server::stack_preview::rc_astro::{RcAstroStepResult, StackRcAstroResult};
+        let result = |tools: &[&str], has_stars: bool| StackRcAstroResult {
+            cli_version: "test".into(),
+            steps: tools
+                .iter()
+                .map(|tool| RcAstroStepResult {
+                    tool: (*tool).into(),
+                    name: (*tool).into(),
+                    ml_version: None,
+                    device: None,
+                    warnings: Vec::new(),
+                })
+                .collect(),
+            has_stars,
+        };
+        assert!(result(&["bxt", "sxt"], true).removed_stars());
+        assert!(result(&["sxt"], false).removed_stars());
+        assert!(!result(&["bxt", "nxt"], false).removed_stars());
     }
 }

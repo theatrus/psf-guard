@@ -1219,21 +1219,34 @@ pub(super) fn run_group(
         let reference_headers = stacker.reference_headers().to_vec();
         let accepted_frames = stacker.view().accepted_frames;
         let rejected_frames = stacker.view().rejected_frames;
-        let report_pass = |pass: seiza_stacking::BatchStackPass, index: usize, count: usize| {
+        // Where the raw frames clipped, which only the live stacker knows;
+        // the final pass integrates on the same grid. Colour calibration
+        // renders those pixels neutral, so a clipped star core is not
+        // tinted by the channels' gains.
+        let clipped = stacker.clipped_fraction();
+        // Seiza reads each frame once and then runs its three passes band
+        // by band: two stages. Without room for its scratch files it reads
+        // every frame on each of three passes instead.
+        let passes = std::cell::Cell::new(2);
+        let mut report_pass = |pass: seiza_stacking::BatchStackPass, index: usize, count: usize| {
             let pass = match pass {
                 seiza_stacking::BatchStackPass::Estimate => 1,
-                seiza_stacking::BatchStackPass::Refine => 2,
-                seiza_stacking::BatchStackPass::Integrate => 3,
+                seiza_stacking::BatchStackPass::Refine => {
+                    passes.set(3);
+                    2
+                }
+                seiza_stacking::BatchStackPass::Integrate => passes.get(),
             };
+            let passes = passes.get();
             state.stack_previews.update(job_id, |job| {
                 let group = &mut job.groups[group.index];
                 group.phase = format!(
-                    "Rejecting transients: pass {pass}/3, frame {}/{count}",
+                    "Rejecting transients: pass {pass}/{passes}, frame {}/{count}",
                     index + 1
                 );
                 group.final_pass = Some(FinalPassProgress {
                     pass,
-                    passes: 3,
+                    passes,
                     frame: index + 1,
                     frames: count,
                 });
@@ -1261,6 +1274,28 @@ pub(super) fn run_group(
             reintegrate
         };
         let integrated = if reintegrate {
+            // The final pass keeps each admitted frame in a scratch file,
+            // four bytes a sample, when the stack folder's disk has room for
+            // all of them and a margin; otherwise it reads every frame on
+            // each pass instead.
+            let scratch = crate::server::storage::stack_scratch(stack_root);
+            let view = stacker.view();
+            let needed = (view.width * view.height * view.channels) as u64
+                * 4
+                * u64::from(accepted_frames);
+            let room = crate::server::cache_budget::available_bytes(stack_root);
+            let scratch = room
+                .is_none_or(|room| needed.saturating_add(needed / 10) <= room)
+                .then_some(scratch);
+            if scratch.is_none() {
+                passes.set(3);
+                tracing::warn!(
+                    job_id,
+                    group_index = group.index,
+                    needed_mib = needed / (1024 * 1024),
+                    "Final pass reading every frame on each pass: the stack folder's disk is short of room for its scratch files"
+                );
+            }
             // The live accumulator is no longer needed. Release it before
             // revisiting early transients.
             drop(stacker);
@@ -1276,8 +1311,9 @@ pub(super) fn run_group(
                 method,
                 &plan,
                 &session_cosmetics,
+                scratch.as_deref(),
                 cancel,
-                report_pass,
+                &mut report_pass,
             );
             let result = match result {
                 Ok(result) => result,
@@ -1329,7 +1365,7 @@ pub(super) fn run_group(
         // shared north-up grid that a mosaic needs. The one correction it still
         // makes is a half turn when the reference sits on the thinner side of a
         // flip, so the result faces the way most of the night was shot.
-        let (image, sky_orientation, mut output_cards) = if north_up {
+        let (image, clipped, sky_orientation, mut output_cards) = if north_up {
             let (source_wcs, orientation_source) =
                 resolve_stack_wcs(state, &ctx, &group.frames[0], &reference_headers)?;
             let orientation = seiza_stacking::SkyOrientationPlan::new(
@@ -1341,6 +1377,10 @@ pub(super) fn run_group(
             let oriented = orientation
                 .apply(&integrated)
                 .map_err(|error| error.to_string())?;
+            let clipped = clipped
+                .map(|clipped| orientation.apply(&clipped))
+                .transpose()
+                .map_err(|error| error.to_string())?;
             let record = StackSkyOrientation {
                 convention: seiza_stacking::SKY_ORIENTATION_NAME.into(),
                 version: seiza_stacking::SKY_ORIENTATION_VERSION,
@@ -1349,7 +1389,7 @@ pub(super) fn run_group(
                 output_height: orientation.output_height(),
                 source_to_output: orientation.source_to_output(),
             };
-            (oriented, record, orientation.fits_header_cards())
+            (oriented, clipped, record, orientation.fits_header_cards())
         } else {
             let (turn, decided_by) = half_turn_decision(anchor, &orientation_vote);
             tracing::info!(
@@ -1366,12 +1406,14 @@ pub(super) fn run_group(
             if turn {
                 (
                     half_turn(integrated),
+                    clipped.map(half_turn),
                     StackSkyOrientation::source_frame_half_turn(width, height, decided_by),
                     Vec::new(),
                 )
             } else {
                 (
                     integrated,
+                    clipped,
                     StackSkyOrientation::source_frame(width, height, decided_by),
                     Vec::new(),
                 )
@@ -1451,8 +1493,22 @@ pub(super) fn run_group(
             &output_cards,
         )
         .map_err(|error| error.to_string())?;
+        // The map goes first, so a stack is never published beside an
+        // earlier build's map.
+        write_clipped(
+            &clipped_path(stack_root, job_id, group.index),
+            clipped.as_ref(),
+        )?;
         std::fs::rename(&fits_temporary, &fits_destination).map_err(|error| error.to_string())?;
-        render_group_previews(state, &ctx, stack_root, job_id, group.index, &image)?;
+        render_group_previews(
+            state,
+            &ctx,
+            stack_root,
+            job_id,
+            group.index,
+            &image,
+            clipped.as_ref(),
+        )?;
         let snr_url = state.stack_previews.get(job_id).and_then(|current| {
             publish_snr_artifact(
                 &snr_path(stack_root, job_id, group.index),
@@ -1476,7 +1532,9 @@ pub(super) fn run_group(
 /// the stretch release that rendered them. A one-shot-color stack's preview
 /// is color calibrated against Gaia first, as its processing is by default;
 /// the FITS stays as integrated. A build renders the image it just
-/// integrated, and a preview refresh the FITS that build wrote.
+/// integrated, and a preview refresh the FITS that build wrote. `clipped`,
+/// the stack's clipped map, keeps a calibrated preview's clipped star cores
+/// neutral.
 pub(super) fn render_group_previews(
     state: &AppState,
     ctx: &DatabaseContext,
@@ -1484,6 +1542,7 @@ pub(super) fn render_group_previews(
     job_id: &str,
     group_index: usize,
     image: &seiza_stacking::LinearImage,
+    clipped: Option<&seiza_stacking::LinearImage>,
 ) -> Result<(), String> {
     let calibrated = if image.channels == 3 {
         let status = state
@@ -1503,7 +1562,8 @@ pub(super) fn render_group_previews(
                 .gaia_photometry_catalog()
                 .map(|(catalog, _)| catalog)
         };
-        let (calibrated, outcome) = color_calibration::calibrate_stack(&plan, image, &open_catalog);
+        let (calibrated, outcome) =
+            color_calibration::calibrate_stack(&plan, image, clipped, &open_catalog);
         let basis = source.basis();
         state.stack_previews.update(job_id, |job| {
             job.groups[group_index].color_calibration = Some(outcome);

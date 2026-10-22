@@ -197,7 +197,18 @@ pub(super) fn render_stale_previews(
                 pool.install(|| {
                     let frame = crate::image_io::open_linear_frame(&fits)
                         .map_err(|error| error.to_string())?;
-                    render_group_previews(state, ctx, &ctx.stack_root, job_id, index, &frame.image)
+                    let clipped = (frame.image.channels == 3)
+                        .then(|| read_clipped(&clipped_path(&ctx.stack_root, job_id, index)))
+                        .flatten();
+                    render_group_previews(
+                        state,
+                        ctx,
+                        &ctx.stack_root,
+                        job_id,
+                        index,
+                        &frame.image,
+                        clipped.as_ref(),
+                    )
                 })
             });
         let revision = new_artifact_revision();

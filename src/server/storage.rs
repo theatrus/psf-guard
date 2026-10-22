@@ -3,7 +3,8 @@
 //! A database keeps three roots on [`DatabaseContext`]:
 //! - `cache_dir_path`: per-image results (previews, star lists, astrometry,
 //!   satellites, spatial metrics, stats);
-//! - `stack_root`: [`STACKS`], [`STACK_PROCESSING`] and [`WBPP_RUNS`];
+//! - `stack_root`: [`STACKS`], [`STACK_PROCESSING`], [`STACK_SCRATCH`] and
+//!   [`WBPP_RUNS`];
 //! - `calibration_root`: [`CALIBRATION_MASTERS`].
 //!
 //! Every path below a root goes through this module, so a folder name lives
@@ -20,6 +21,9 @@ pub const STACK_PROCESSING: &str = "stack-processing";
 /// WBPP work folders when neither the settings nor the database name one,
 /// below the stack root.
 pub const WBPP_RUNS: &str = "wbpp";
+/// Scratch files a stack's final pass keeps while it runs, below the stack
+/// root: one folder per pass, which Seiza removes when the pass ends.
+pub const STACK_SCRATCH: &str = "stack-scratch";
 /// Built calibration masters, below the calibration root.
 pub const CALIBRATION_MASTERS: &str = "calibration-masters";
 
@@ -52,6 +56,11 @@ pub fn stacks(stack_root: &Path) -> PathBuf {
 /// `<stack_root>/stack-previews/<kind>`, for one of [`stack_kind`].
 pub fn stack_folder(stack_root: &Path, kind: &str) -> PathBuf {
     stacks(stack_root).join(kind)
+}
+
+/// `<stack_root>/stack-scratch`.
+pub fn stack_scratch(stack_root: &Path) -> PathBuf {
+    stack_root.join(STACK_SCRATCH)
 }
 
 /// `<stack_root>/stack-processing`.
