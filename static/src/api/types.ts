@@ -1019,6 +1019,10 @@ export interface StackProcessingActivity {
   operation: string;
   /** The channel it works on, such as "R". */
   channel: string;
+  /** The stack build and channel group it processes. The channel name
+   *  alone can match several groups of one build. */
+  stack_job_id?: string;
+  group_index?: number;
   /** The step under way while it runs. */
   stage?: string | null;
   /** How far it has got, 0..1, when its step can say. */

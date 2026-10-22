@@ -31,6 +31,12 @@ interface StackStretchControlsProps {
   ) => Promise<StackStretchPreview>;
   onApplied: (preview: StackStretchPreview) => Promise<void> | void;
   onRevert: () => Promise<void>;
+  /**
+   * The channel's processing run on the server while it waits or runs,
+   * including one asked for before the page was last opened. Apply
+   * processing stays busy and shows its progress until it ends.
+   */
+  serverRun?: StackStretchPendingProgress | null;
 }
 
 function requestForPreview(
@@ -58,6 +64,7 @@ export default function StackStretchControls({
   apply,
   onApplied,
   onRevert,
+  serverRun = null,
 }: StackStretchControlsProps) {
   const [request, setRequest] = useState<StackViewProcessingRequest>(() =>
     requestForPreview(applied, displayReferred)
@@ -68,6 +75,8 @@ export default function StackStretchControls({
   const [pendingProgress, setPendingProgress] =
     useState<StackStretchPendingProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // This page's own request, or a run already on the server for the channel.
+  const busy = pending || serverRun !== null;
   const operation = useRef<AbortController | null>(null);
   const selected = useRef({ id: applied?.stretch_id, displayReferred });
   useEffect(() => () => operation.current?.abort(), []);
@@ -151,7 +160,7 @@ export default function StackStretchControls({
           kind="view"
           builtins={builtinViewSetups(displayReferred)}
           current={() => request}
-          disabled={disabled || pending}
+          disabled={disabled || busy}
           onApply={(settings) => {
             setRequest({
               deconvolution: null,
@@ -165,7 +174,7 @@ export default function StackStretchControls({
           label={label}
           config={request.deconvolution}
           result={applied?.deconvolution ?? undefined}
-          disabled={disabled || pending || displayReferred}
+          disabled={disabled || busy || displayReferred}
           onChange={(deconvolution) => setRequest((current) => ({
             ...current,
             deconvolution,
@@ -175,7 +184,7 @@ export default function StackStretchControls({
           label={label}
           config={request.rc_astro}
           result={applied?.rc_astro ?? undefined}
-          disabled={disabled || pending || displayReferred}
+          disabled={disabled || busy || displayReferred}
           onChange={(rc_astro) => setRequest((current) => ({
             ...current,
             rc_astro,
@@ -184,7 +193,7 @@ export default function StackStretchControls({
         {channels === 3 && !displayReferred && (
           <ColorCalibrationSwitch
             calibration={request.color_calibration}
-            disabled={disabled || pending}
+            disabled={disabled || busy}
             onChange={(color_calibration) => setRequest((current) => ({
               ...current,
               color_calibration,
@@ -195,7 +204,7 @@ export default function StackStretchControls({
           label={label}
           channels={channels}
           request={request}
-          disabled={disabled || pending}
+          disabled={disabled || busy}
           onChange={(stretch) => setRequest((current) => ({ ...current, ...stretch }))}
         />
         {(['linear', 'asinh', 'mtf', 'ghs'] as string[]).includes(request.model.type) && (
@@ -216,13 +225,17 @@ export default function StackStretchControls({
         <div className="stack-stretch-actions">
           <button
             type="button"
-            disabled={disabled || pending}
+            disabled={disabled || busy}
             onClick={submit}
-            aria-busy={pending && !reverting}
+            aria-busy={busy && !reverting}
           >
-            {pending && !reverting ? applyingLabel(pendingProgress) : 'Apply processing'}
+            {pending && !reverting
+              ? applyingLabel(pendingProgress)
+              : serverRun
+                ? applyingLabel(serverRun)
+                : 'Apply processing'}
           </button>
-          <button type="button" disabled={disabled || pending || !applied} onClick={revert}>
+          <button type="button" disabled={disabled || busy || !applied} onClick={revert}>
             {reverting ? 'Reverting...' : 'Revert processing'}
           </button>
         </div>

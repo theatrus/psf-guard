@@ -1348,6 +1348,69 @@ test('says what a processing run waits for, then its progress, and lists it in t
   expect(posts.slice(1).every((poll) => poll === 'true')).toBe(true);
 });
 
+test('shows a processing run asked for before the page opened, then its result', async ({
+  page,
+}, testInfo) => {
+  // A person applied BlurXTerminator, left Stacks, and came back: this page
+  // never sent the request, so the card learns of the run from the
+  // background jobs alone. No rc-astro is installed here, so the activity
+  // and job list are stubbed; the card's own stack is real.
+  test.setTimeout(90_000);
+  seedSyntheticColorStacks(dbId, 2, true);
+  const redJob = (2).toString(16).padStart(64, '0');
+  const runId = 'd'.repeat(64);
+  let running = true;
+  const run = {
+    kind: 'processing', job_id: runId, database_id: dbId, project_id: 2, target_id: 2,
+    state: 'running', label: 'Beta Field · R', detail: 'BlurXTerminator',
+    processed_units: 420, total_units: 1000, created_unix_seconds: 1_760_000_100,
+    queue_position: null, progress_label: 'BlurXTerminator · 42%', automatic: false,
+    processing: {
+      operation: 'BlurXTerminator', channel: 'R', stoppable: true,
+      stack_job_id: redJob, group_index: 0,
+      stage: 'BlurXTerminator', fraction: 0.42, started_unix_seconds: 1_760_000_200,
+    },
+  };
+  await page.route('**/api/stack-activity', (route) => route.fulfill({
+    json: { success: true, data: { schema_version: 1, active: running ? [run] : [] }, error: null },
+  }));
+  await stubJobs(page, () => (running ? [jobRow({
+    key: `stack:${runId}`, kind: 'processing', title: 'BlurXTerminator', scope: 'Beta Field · R',
+    detail: '', status: 'running', percent: 42, queue: 'stack', stoppable: true,
+    control: { kind: 'stack', job_id: runId }, started_at: 1_760_000_200,
+    link: { view: 'stacks', db: dbId, project: 2, target: 2 },
+  })] : []));
+  let savedReads = 0;
+  await page.route(`**/stack-previews/${redJob}/0/stretch*`, (route) => {
+    if (route.request().method() === 'GET') savedReads += 1;
+    return route.continue();
+  });
+
+  await page.setViewportSize({ width: 1440, height: 1100 });
+  await page.goto(`/#/stacks?db=${encodeURIComponent(dbId)}&project=2&target=2`);
+  const card = page.locator('.stack-preview-card').filter({
+    has: page.locator('.stack-preview-channel', { hasText: /^R$/ }),
+  });
+  await expect(card).toBeVisible({ timeout: 15_000 });
+  const controls = card.locator('.stack-stretch-controls');
+  await controls.locator('summary').click();
+  const apply = controls.locator('.stack-stretch-actions button').first();
+  await expect(apply).toHaveText('Applying… 42% · BlurXTerminator', { timeout: 15_000 });
+  await expect(apply).toBeDisabled();
+  await expect(apply).toHaveAttribute('aria-busy', 'true');
+  await expect(controls).toHaveAttribute('open', '');
+  // The viewport, not the card: the card is taller than the window, and
+  // the header's job chip shows the same run.
+  await page.screenshot({ path: testInfo.outputPath('processing-run-after-return.png') });
+  const readsWhileRunning = savedReads;
+
+  // The run ends: the card reads the channel's saved processing again.
+  running = false;
+  await expect(apply).toHaveText('Apply processing', { timeout: 15_000 });
+  await expect(apply).toBeEnabled();
+  await expect.poll(() => savedReads, { timeout: 15_000 }).toBeGreaterThan(readsWhileRunning);
+});
+
 test('composes cached channel stacks into RGB, LRGB, and selectable narrowband previews', async ({
   page,
 }) => {

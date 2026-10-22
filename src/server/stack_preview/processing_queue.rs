@@ -44,6 +44,10 @@ impl ProcessingScope {
 #[derive(Debug, Clone)]
 pub(super) struct ProcessingRun {
     scope: ProcessingScope,
+    /// The stack build and channel group it processes, so the channel's
+    /// card can show the run wherever it was asked for.
+    stack_job_id: Option<String>,
+    group_index: Option<usize>,
     operation: String,
     stoppable: bool,
     /// Re-applied by the server after the stack refreshed.
@@ -61,6 +65,12 @@ pub struct ProcessingActivity {
     pub operation: String,
     /// The channel it works on, such as `R`.
     pub channel: String,
+    /// The stack build and channel group it processes. The channel name
+    /// alone can match several groups of one build.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stack_job_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_index: Option<usize>,
     /// The step under way while it runs, such as `BlurXTerminator`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stage: Option<String>,
@@ -137,11 +147,17 @@ impl StackPreviewManager {
     ) -> (Stop, bool) {
         let cancel = self.track_job(run_id);
         let automatic = origin.automatic();
+        let (stack_job_id, group_index) = origin
+            .processed_group()
+            .map(|(job_id, group_index)| (Some(job_id.to_string()), Some(group_index)))
+            .unwrap_or_default();
         self.remember_origin(run_id, origin);
         self.processing.lock().unwrap().insert(
             run_id.to_string(),
             ProcessingRun {
                 scope,
+                stack_job_id,
+                group_index,
                 operation,
                 stoppable,
                 automatic,
@@ -412,6 +428,8 @@ impl StackPreviewManager {
             processing: Some(ProcessingActivity {
                 operation: run.operation.clone(),
                 channel: run.scope.channel.clone(),
+                stack_job_id: run.stack_job_id.clone(),
+                group_index: run.group_index,
                 stage,
                 fraction,
                 waiting_for: wait.and_then(|wait| wait.holder),
