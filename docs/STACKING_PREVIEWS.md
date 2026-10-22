@@ -1481,8 +1481,10 @@ when either condition holds:
 
 - PSF Guard has cached the prepared channels, including any deconvolution and
   RC-Astro results, with the same inputs and preparation settings.
-- The composition needs no deconvolution or RC-Astro, and no other queued or
-  running composition is preparing the same inputs.
+- Every channel's deconvolution and RC-Astro results are already cached, or
+  the composition needs none, and no other queued or running composition is
+  preparing the same inputs. A channel card that ran the same settings on the
+  same stack counts: the composition reads the card's results.
 
 For example, change a color card's stretch, color calibration or crop and click
 **Apply processing stack**. PSF Guard reuses compatible prepared channels.
@@ -1497,7 +1499,7 @@ for the composition ahead**. The composition and stack build share CPU and memor
 
 These compositions still use the build queue:
 
-- Compositions that need new deconvolution or RC-Astro results.
+- Compositions that need deconvolution or RC-Astro results that are not cached.
 - Compositions whose prepared inputs are not cached when another queued or
   running composition is preparing those same inputs.
 - Automatic compositions after automatic stack refreshes. Starting one of
@@ -1542,7 +1544,19 @@ when a multi-band filter name is ambiguous. Choose a known-role stack under
 **Custom combination**, or rename ambiguous Target Scheduler filters to make
 their roles explicit before building color.
 
-Before registration, PSF Guard uses `seiza-background` to fit and correct each
+PSF Guard prepares the channels of a color preview in this order:
+
+1. Load each channel's stack.
+2. Measure how each channel registers onto the reference stack: R for RGB, L
+   for LRGB, or H-alpha for narrowband. The measurement uses the stacks as
+   they came, so no tool setting changes it.
+3. Run each channel's deconvolution and RC-Astro steps on its own stack, the
+   same way and in the same cache as its channel card.
+4. Fit and correct each channel's background.
+5. Resample each channel onto the reference with the transform from step 2.
+6. Normalize each channel, apply its stretches, and compose.
+
+PSF Guard uses `seiza-background` to fit and correct each
 linear channel independently. Background extraction is enabled for new UI
 builds and defaults to additive subtraction, which removes the fitted gradient
 while preserving that channel's robust sky reference level. Multiplicative
@@ -1576,17 +1590,15 @@ before it fits the background. The manifest records the reference image,
 catalog version, object names, region count, and a geometry fingerprint. These
 values form part of the cache key and stale check, so a new solve or catalog
 projection cannot reuse or present a fit made with stale bounds. After
-correction, each non-reference stack is registered to R for RGB, L for LRGB, or
-H-alpha for narrowband, using the same bounded Seiza star/similarity
+correction, each non-reference stack is resampled onto the reference with
+the transform measured by the same bounded Seiza star/similarity
 registration used by the Seiza color CLI.
 
 The **Processing stack** editor exposes correction mode and strength, automatic
 or fixed surface selection, sample-grid density and radius, sample-search
 steps, sample and fit rejection thresholds, rejection passes, border exclusion,
-and model-specific controls. After registration it applies optional per-role
-deconvolution and RC-Astro tools while each physical input is still linear,
-then robustly
-normalizes the result and applies that role's ordered stretch stages before
+and model-specific controls. After alignment PSF Guard robustly normalizes
+each input and applies that role's ordered stretch stages before
 composition. Which deconvolution and RC-Astro steps each input runs is set
 under **Deconvolution and RC-Astro**, described below. Expand those input lanes
 or RGB output to add, edit, remove, and reorder Seiza
@@ -1606,12 +1618,20 @@ input FITS downloads remain available; star removal preserves a separate
 stars FITS as well as the starless channel used for composition. Named color
 setups include these tool steps.
 
-A channel's tools cache by what that channel's registered pixels depend on:
-its own stack, the reference stack it registers onto (red for RGB, L for LRGB,
-H-alpha for narrowband), and its own deconvolution. New frames in OIII rerun
-the tools on OIII alone; H-alpha and SII reuse theirs. A new reference stack
-reruns every channel. With background extraction on, every channel's tools
-rerun, since one background model is fitted across all of them.
+A channel's tools run on that channel's own stack, before background
+extraction and alignment, and use the same cache as its channel card. The
+results depend only on the stack and the tool settings:
+
+- When a card and a color preview use the same settings on the same stack,
+  the tools run once. Whichever runs first stores the result, and the other
+  reads it. This holds whether the input follows its card or sets its own
+  steps.
+- New frames in OIII rerun the tools on OIII alone; H-alpha and SII reuse
+  theirs. A new reference stack reruns no other channel's tools.
+- Changing background extraction or a stretch reruns no tools.
+
+The background fit, alignment and normalization still run again whenever an
+input changes, but they take seconds where a tool can take minutes.
 
 ### Deconvolution and RC-Astro on color inputs
 
@@ -1630,10 +1650,14 @@ each input's deconvolution and RC-Astro steps come from:
   input lane. Choosing it starts from what the cards show, so nothing you tuned
   on the cards is lost.
 
-Color previews made before this choice existed keep their own settings. The
-cards give settings, not pixels: the color input runs them on the registered
-channel, as the card ran them on the stack, so each tool runs again for the
-color preview.
+Color previews made before this choice existed keep their own settings. When
+an input's settings match its card's, the color preview uses the card's
+results and runs no tool again.
+
+Color previews built before tools ran on each channel's own stack ran them
+after registration. Such a preview shows as out of date, and the next build
+runs its tools in the new order once. Previews without deconvolution or
+RC-Astro keep their cached results.
 
 ![RC-Astro tools configured on a linear red input before its display stretch](stack-rc-astro-color-desktop.png)
 
@@ -1656,13 +1680,14 @@ applying the same pipeline restores its prior artifact. Artifacts from before
 background extraction are rebuilt with the new additive default; a current
 artifact whose extraction was explicitly disabled keeps that choice.
 
-PSF Guard caches each set of prepared linear inputs after background
-correction, registration, optional deconvolution and RC-Astro, and
+PSF Guard caches each set of prepared linear inputs after optional
+deconvolution and RC-Astro, background correction, alignment, and
 normalization. Input or
 output stretch edits reuse those FITS files, so they do not repeat source
-loading, background fits, registration, or deconvolution. Registered channels
-may contain `NaN` at uncovered borders; the processing pipeline preserves
-that mask through deconvolution and RC-Astro instead of treating gaps as data.
+loading, tools, background fits, or registration. Aligned channels may
+contain `NaN` at uncovered borders. The tools run before alignment, so they
+never see the borders alignment adds; normalization and the stretches keep the mask
+instead of treating gaps as data.
 
 ### Color calibration
 
@@ -1814,9 +1839,10 @@ samples, and 95 of 96 SII samples. The rejected locations contain excess noise
 or nebular structure that should not influence the fitted sky surface.
 
 Color cards retain the compact loading/status strip directly below the image.
-Its determinate total covers source loading, one background fit and one
-correction per channel, channel registration, every enabled linear-input
-deconvolution, per-input normalization, every input stretch stage, composition,
+Its determinate total covers, in order, source loading, channel registration,
+every enabled channel deconvolution, every RC-Astro step, one background fit
+and one correction per channel, aligning each channel to the reference,
+per-input normalization, every input stretch stage, composition,
 every output stretch stage, FITS writing, full-size rendering, screen rendering,
 and artifact publication. When extraction or deconvolution is disabled, its
 phase is retained as explicitly skipped. **Pipeline phases** preserves each

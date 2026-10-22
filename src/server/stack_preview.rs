@@ -1439,11 +1439,16 @@ impl StackPreviewManager {
         let mut color_job_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut color_input_ids: std::collections::HashSet<String> =
             std::collections::HashSet::new();
+        // A color build's channel deconvolutions sit in the cache the channel
+        // cards use; the build keeps them as a selection would.
+        let mut color_deconvolution_ids: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
         for job in self.color_jobs.lock().unwrap().values() {
             color_job_ids.insert(job.job_id.clone());
             if let Some(input_id) = &job.linear_input_id {
                 color_input_ids.insert(input_id.clone());
             }
+            color_deconvolution_ids.extend(job.input_deconvolution_ids.values().cloned());
         }
         let stacks = stacks(stack_root);
         for latest in try_read_indices::<LatestStackPreviews>(&stacks, "latest-project-")?
@@ -1466,9 +1471,11 @@ impl StackPreviewManager {
                 if let Some(input_id) = job.linear_input_id {
                     color_input_ids.insert(input_id);
                 }
+                color_deconvolution_ids.extend(job.input_deconvolution_ids.into_values());
             }
         }
-        let (stretch_ids, deconvolution_ids) = stretch::kept_processing(stack_root)?;
+        let (stretch_ids, mut deconvolution_ids) = stretch::kept_processing(stack_root)?;
+        deconvolution_ids.extend(color_deconvolution_ids);
         let mut artifact_search_ids: std::collections::HashSet<String> =
             self.artifact_jobs.lock().unwrap().keys().cloned().collect();
         artifact_search_ids.extend(artifact::kept_searches(

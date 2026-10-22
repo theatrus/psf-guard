@@ -1442,7 +1442,7 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
   await expect(rgbCard.locator('.stack-preview-progress')).toHaveAttribute(
     'data-stack-color-state', 'completed', { timeout: 90_000 }
   );
-  await expect(rgbCard.locator('.stack-preview-progress')).toContainText('24/24 steps');
+  await expect(rgbCard.locator('.stack-preview-progress')).toContainText('26/26 steps');
   await expect(rgbCard.getByRole('img', { name: /RGB color stack preview/i })).toBeVisible();
   // The synthetic stacks have neither a solved reference frame nor Gaia
   // colors to calibrate against; the card says so and keeps the preview.
@@ -1501,10 +1501,10 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
     'data-stack-color-state', 'completed', { timeout: 90_000 }
   );
   await expect.poll(() => rgbImage.getAttribute('src')).not.toBe(defaultRgbSrc);
-  await expect(rgbCard.locator('.stack-preview-progress')).toContainText('26/26 steps');
+  await expect(rgbCard.locator('.stack-preview-progress')).toContainText('28/28 steps');
   const phaseDetails = rgbCard.locator('.stack-color-phase-details');
   await phaseDetails.locator('summary').click();
-  await expect(phaseDetails.locator('li')).toHaveCount(14);
+  await expect(phaseDetails.locator('li')).toHaveCount(15);
   await expect(phaseDetails.locator('li[data-phase="calibrating_color"]'))
     .toHaveAttribute('data-phase-state', 'skipped');
   await expect(phaseDetails.locator('li[data-phase="rc_astro_inputs"]'))
@@ -1539,9 +1539,10 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
   );
   for (const phase of [
     'loading_sources',
-    'background_preparation',
     'registering_sources',
     'deconvolving_inputs',
+    'background_preparation',
+    'aligning_sources',
     'normalizing_inputs',
   ]) {
     await expect(phaseDetails.locator(`li[data-phase="${phase}"]`))
@@ -1553,7 +1554,7 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
   await expect(lrgbCard.locator('.stack-preview-progress')).toHaveAttribute(
     'data-stack-color-state', 'completed', { timeout: 90_000 }
   );
-  await expect(lrgbCard.locator('.stack-preview-progress')).toContainText('30/30 steps');
+  await expect(lrgbCard.locator('.stack-preview-progress')).toContainText('33/33 steps');
   const lrgbImage = lrgbCard.getByRole('img', { name: /LRGB color stack preview/i });
   await expect(lrgbImage).toBeVisible();
   const lrgbFits = lrgbCard.getByRole('link', { name: 'Download LRGB RGB FITS' });
@@ -1584,7 +1585,7 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
   await expect(narrowbandCard.locator('.stack-preview-progress')).toHaveAttribute(
     'data-stack-color-state', 'completed', { timeout: 90_000 }
   );
-  await expect(narrowbandCard.locator('.stack-preview-progress')).toContainText('18/18 steps');
+  await expect(narrowbandCard.locator('.stack-preview-progress')).toContainText('19/19 steps');
   await expect(narrowbandCard.locator('.stack-color-calibration')).toHaveCount(0);
   await expect(
     narrowbandCard.getByRole('img', { name: /Foraxx HOO color stack preview/i })
