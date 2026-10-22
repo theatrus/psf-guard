@@ -503,6 +503,92 @@ test('retains RC-Astro color steps in saved setups on desktop and mobile', async
   await mobileTools.screenshot({ path: testInfo.outputPath('rc-astro-color-mobile.png') });
 });
 
+test('runs RC-Astro on the color channels together', async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  seedSyntheticColorStacks(dbId, 2);
+  const float = (name: string, label: string, max: number) => ({
+    name, flag: `--${name}`, label, description: label,
+    kind: { type: 'float', default: 0.5, min: name === 'ash' ? -0.5 : 0, max },
+  });
+  const flag = (name: string, label: string, fallback: boolean) => ({
+    name, flag: `--${name}`, label, description: label, kind: { type: 'bool', default: fallback },
+  });
+  const tool = (key: string, name: string, parameters: unknown[]) => ({
+    schema_version: 6, cli_version: '2.6.6', key, name, ml_version: 4, licensed: true,
+    license_message: 'Test capability fixture', parameters,
+  });
+  await page.route('**/api/tools/rc-astro', (route) => route.fulfill({ json: {
+    success: true,
+    data: {
+      available: true,
+      executable: 'e2e-capabilities-fixture',
+      tools: [
+        tool('bxt', 'RC-Astro BlurXTerminator', [
+          float('ss', 'Sharpen Stars', 0.7), float('ash', 'Adjust Star Halos', 0.5),
+          float('nsd', 'Nonstellar PSF Diameter', 8), flag('ansp', 'Auto Nonstellar PSF', true),
+          float('sn', 'Sharpen Nonstellar', 1), flag('lp', 'Lunar/Planetary', false),
+        ]),
+        tool('nxt', 'RC-Astro NoiseXTerminator', [float('dn', 'Denoise', 1)]),
+        tool('sxt', 'RC-Astro StarXTerminator', [flag('stars', 'Generate Star Image', false)]),
+      ],
+    }, error: null,
+  } }));
+  await page.setViewportSize({ width: 1440, height: 1100 });
+  await page.goto(`/#/stacks?db=${encodeURIComponent(dbId)}&project=2`);
+  const card = page.locator('.stack-color-card[data-color-kind="rgb"]');
+  await card.getByRole('button', { name: 'Build RGB color preview' }).click();
+  await expect(card.locator('.stack-preview-progress')).toHaveAttribute(
+    'data-stack-color-state', 'completed', { timeout: 90_000 }
+  );
+  // The build ran no RC-Astro on the channels together.
+  const phaseDetails = card.locator('.stack-color-phase-details');
+  await phaseDetails.locator('summary').click();
+  await expect(phaseDetails.locator('li[data-phase="rc_astro_color"]'))
+    .toHaveAttribute('data-phase-state', 'skipped');
+
+  const processing = card.locator('.stack-color-processing');
+  await processing.locator('summary').click();
+  const together = processing.getByRole('region', { name: 'RC-Astro on the color channels together' });
+  await expect(together.getByRole('checkbox', { name: 'RC-Astro StarXTerminator' })).toHaveCount(0);
+  await together.getByRole('checkbox', { name: 'RC-Astro BlurXTerminator' }).check();
+  await expect(together.getByRole('checkbox', { name: 'Correct only' })).toBeChecked();
+  await expect(together.getByRole('spinbutton', { name: 'Sharpen Stars' })).toBeDisabled();
+  await together.getByRole('checkbox', { name: 'RC-Astro NoiseXTerminator' }).check();
+  await expect(processing.locator('summary')).toContainText('Color RC-Astro 2');
+  await together.evaluate((element) => element.scrollIntoView({ block: 'center' }));
+  await together.screenshot({ path: testInfo.outputPath('color-channels-together-desktop.png') });
+
+  // This server has no rc-astro: preparing the build fails before anything
+  // runs, and the refusal shows beside Apply, saying which step.
+  await processing.getByRole('button', { name: 'Apply processing stack' }).click();
+  await expect(processing.getByRole('alert')).toHaveText(
+    'RC-Astro on the color channels cannot run: rc-astro is not installed on this server',
+    { timeout: 30_000 }
+  );
+  await expect(card.locator('.stack-color-image img')).toBeVisible();
+  const refusal = processing.getByRole('alert');
+  await refusal.evaluate((element) => element.scrollIntoView({ block: 'center' }));
+  await expect(refusal).toBeInViewport();
+  const refusalBox = (await refusal.boundingBox())!;
+  const actionsBox = (await processing.getByRole('button', { name: 'Apply processing stack' })
+    .boundingBox())!;
+  await page.screenshot({
+    path: testInfo.outputPath('color-channels-refusal.png'),
+    clip: {
+      x: refusalBox.x - 8, y: refusalBox.y - 8, width: refusalBox.width + 16,
+      height: actionsBox.y + actionsBox.height - refusalBox.y + 16,
+    },
+  });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(together.getByRole('checkbox', { name: 'Correct only' })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await together.evaluate((element) => element.scrollIntoView({ block: 'center' }));
+  expect(await together.evaluate((element) => element.scrollWidth <= element.clientWidth + 1))
+    .toBe(true);
+  await together.screenshot({ path: testInfo.outputPath('color-channels-together-mobile.png') });
+});
+
 test.beforeEach(async ({ request }, testInfo) => {
   await resetDatabases(request);
   // Setups are global and survive a database reset.
@@ -1508,7 +1594,7 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
   await expect(rgbCard.locator('.stack-preview-progress')).toContainText('28/28 steps');
   const phaseDetails = rgbCard.locator('.stack-color-phase-details');
   await phaseDetails.locator('summary').click();
-  await expect(phaseDetails.locator('li')).toHaveCount(15);
+  await expect(phaseDetails.locator('li')).toHaveCount(16);
   await expect(phaseDetails.locator('li[data-phase="calibrating_color"]'))
     .toHaveAttribute('data-phase-state', 'skipped');
   await expect(phaseDetails.locator('li[data-phase="rc_astro_inputs"]'))

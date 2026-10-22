@@ -296,6 +296,10 @@ const normalizeColorJob = (job: StackColorJob): StackColorJob => ({
       stars_fits_url: result.stars_fits_url ? withServerUrl(result.stars_fits_url) : null,
     }])
   ),
+  resolved_color_rc_astro: job.resolved_color_rc_astro
+    ? { ...job.resolved_color_rc_astro,
+        fits_url: withServerUrl(job.resolved_color_rc_astro.fits_url) }
+    : null,
 });
 
 /** No answer from the server, or a gateway's while it is down. Not a

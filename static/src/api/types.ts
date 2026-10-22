@@ -1360,6 +1360,9 @@ export interface StackColorProcessing {
   background_extraction: StackBackgroundExtraction | null;
   input_deconvolutions: Partial<Record<StackColorRole, StackDeconvolutionConfig>>;
   input_rc_astro?: Partial<Record<StackColorRole, RcAstroProcessing>>;
+  /** BlurXTerminator and NoiseXTerminator on the aligned linear color
+   *  channels together, before calibration and any stretch. */
+  color_rc_astro?: RcAstroProcessing | null;
   input_stretches: Partial<Record<StackColorRole, StackStretchRequest[]>>;
   output_stretches: StackStretchRequest[];
   /** RGB and LRGB only; the server calibrates when this is absent. */
@@ -1527,6 +1530,7 @@ export type StackColorProgressPhase =
   | 'deconvolving_inputs'
   | 'aligning_sources'
   | 'normalizing_inputs'
+  | 'rc_astro_color'
   | 'calibrating_color'
   | 'stretching_inputs'
   | 'rc_astro_inputs'
@@ -1609,6 +1613,11 @@ export interface StackColorJob {
     fits_url: string;
     stars_fits_url?: string | null;
   }>>;
+  /** The RC-Astro result on the color channels together. */
+  resolved_color_rc_astro?: StackRcAstroResult & {
+    fits_url: string;
+    stars_fits_url?: string | null;
+  } | null;
   resolved_output_stretches: unknown[];
   /** For a build that follows the channel cards: what each card had applied
    *  when the build was prepared. A card that changed since makes the build

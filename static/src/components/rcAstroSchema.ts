@@ -50,3 +50,37 @@ export function rcAstroProblem(
   }
   return null;
 }
+
+/**
+ * BlurXTerminator's Correct only mode as parameter values. rc-astro's schema
+ * lists the `--correct-only` switch without a type, so PSF Guard cannot send
+ * it. The switch sets these values, and sending them gives the same pixels.
+ */
+export const bxtCorrectOnly: Record<string, RcAstroParameterValue> = {
+  ss: 0, sn: 0, ash: 0, nsd: 0, ansp: true, lp: false,
+};
+
+/** Whether a schema can express Correct only: it has every pinned
+ *  parameter, each settable from the CLI. */
+export function offersCorrectOnly(schema: ExternalToolSchema): boolean {
+  return schema.key === 'bxt' && Object.keys(bxtCorrectOnly).every((name) =>
+    schema.parameters.some((parameter) => parameter.name === name && parameter.flag !== null)
+  );
+}
+
+export function isCorrectOnly(parameters: Record<string, RcAstroParameterValue>): boolean {
+  return Object.entries(bxtCorrectOnly).every(([name, value]) => parameters[name] === value);
+}
+
+/** What a freshly enabled tool asks for: star removal keeps the stars. */
+export function defaultParameters(
+  schema: ExternalToolSchema
+): Record<string, RcAstroParameterValue> {
+  if (schema.key === 'sxt') {
+    const stars = schema.parameters.find(
+      (parameter) => parameter.name === 'stars' || parameter.name === 'difference'
+    );
+    if (stars?.flag) return { [stars.name]: true };
+  }
+  return {};
+}

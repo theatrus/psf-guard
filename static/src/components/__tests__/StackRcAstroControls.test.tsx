@@ -203,4 +203,76 @@ describe('StackRcAstroControls', () => {
     fireEvent.click(configured);
     expect(onChange).toHaveBeenCalledWith(null);
   });
+
+  it('sets the pinned values for Correct only and locks those fields', async () => {
+    const float = (name: string, label: string, max: number, fallback: number) => ({
+      name, flag: `--${name}`, label, description: label,
+      kind: { type: 'float' as const, default: fallback, min: name === 'ash' ? -0.5 : 0, max },
+    });
+    const flag = (name: string, label: string, fallback: boolean) => ({
+      name, flag: `--${name}`, label, description: label,
+      kind: { type: 'bool' as const, default: fallback },
+    });
+    server.use(http.get('/api/tools/rc-astro', () => ok({
+      ...capabilities,
+      tools: [{
+        ...capabilities.tools[0],
+        parameters: [
+          float('ss', 'Sharpen Stars', 0.7, 0.5),
+          float('ash', 'Adjust Star Halos', 0.5, 0),
+          float('nsd', 'Nonstellar PSF Diameter', 8, 0),
+          flag('ansp', 'Auto Nonstellar PSF', true),
+          float('sn', 'Sharpen Nonstellar', 1, 0.5),
+          flag('lp', 'Lunar/Planetary', false),
+          float('overlap', 'Tile Overlap', 0.5, 0.2),
+        ],
+      }, capabilities.tools[1]],
+    })));
+    const onChange = vi.fn();
+    const config: RcAstroProcessing = { steps: [{ tool: 'bxt', parameters: { overlap: 0.3 } }] };
+    const { rerender } = render(
+      <StackRcAstroControls label="Color channels" config={config} disabled={false}
+        toolKeys={['bxt', 'nxt']} onChange={onChange} />,
+      { wrapper: wrapper() }
+    );
+
+    // Star removal is not offered where the caller leaves it out.
+    expect(await screen.findByRole('checkbox', { name: 'RC-Astro BlurXTerminator' }))
+      .toBeChecked();
+    expect(screen.queryByRole('checkbox', { name: 'RC-Astro StarXTerminator' })).toBeNull();
+
+    const correctOnly = screen.getByRole('checkbox', { name: 'Correct only' });
+    expect(correctOnly).not.toBeChecked();
+    fireEvent.click(correctOnly);
+    const pinned = { ss: 0, sn: 0, ash: 0, nsd: 0, ansp: true, lp: false };
+    expect(onChange).toHaveBeenLastCalledWith({
+      steps: [{ tool: 'bxt', parameters: { overlap: 0.3, ...pinned } }],
+    } satisfies RcAstroProcessing);
+
+    rerender(
+      <StackRcAstroControls label="Color channels"
+        config={{ steps: [{ tool: 'bxt', parameters: { overlap: 0.3, ...pinned } }] }}
+        disabled={false} toolKeys={['bxt', 'nxt']} onChange={onChange} />
+    );
+    expect(screen.getByRole('checkbox', { name: 'Correct only' })).toBeChecked();
+    expect(screen.getByRole('spinbutton', { name: 'Sharpen Stars' })).toBeDisabled();
+    expect(screen.getByRole('spinbutton', { name: 'Tile Overlap' })).toBeEnabled();
+
+    // Turning it off returns the pinned fields to the tool's defaults.
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Correct only' }));
+    expect(onChange).toHaveBeenLastCalledWith({
+      steps: [{ tool: 'bxt', parameters: { overlap: 0.3 } }],
+    } satisfies RcAstroProcessing);
+  });
+
+  it('offers no Correct only when the schema lacks a pinned parameter', async () => {
+    server.use(http.get('/api/tools/rc-astro', () => ok(capabilities)));
+    render(
+      <StackRcAstroControls label="Sh2 157 R" config={{ steps: [{ tool: 'bxt', parameters: {} }] }}
+        disabled={false} onChange={() => {}} />,
+      { wrapper: wrapper() }
+    );
+    await screen.findByRole('spinbutton', { name: 'Sharpen Stars' });
+    expect(screen.queryByRole('checkbox', { name: 'Correct only' })).toBeNull();
+  });
 });
