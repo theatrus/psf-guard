@@ -87,7 +87,8 @@ fn canonical_settings(
             // Every pipeline field is optional, so a foreign object would
             // otherwise parse as an empty pipeline and save silently. A
             // non-empty object must mention at least one pipeline field.
-            const COLOR_KEYS: [&str; 5] = [
+            const COLOR_KEYS: [&str; 6] = [
+                "input_processing",
                 "background_extraction",
                 "input_deconvolutions",
                 "input_rc_astro",
@@ -308,6 +309,23 @@ mod tests {
             )
             .is_err());
         }
+    }
+
+    #[test]
+    fn color_setups_keep_whether_inputs_follow_the_channel_cards() {
+        let following = canonical_settings(
+            ProcessingSetupKind::Color,
+            serde_json::json!({"input_processing": "channels"}),
+        )
+        .unwrap();
+        assert_eq!(following["input_processing"], "channels");
+        // A setup saved before the choice existed keeps its own tools.
+        let own = canonical_settings(
+            ProcessingSetupKind::Color,
+            serde_json::json!({"input_deconvolutions": {}}),
+        )
+        .unwrap();
+        assert!(own.get("input_processing").is_none(), "{own}");
     }
 
     #[test]

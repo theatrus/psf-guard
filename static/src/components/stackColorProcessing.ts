@@ -54,8 +54,11 @@ export function colorCalibrationApplies(roles: StackColorRole[]): boolean {
   return (['red', 'green', 'blue'] as const).every((role) => roles.includes(role));
 }
 
+/** A new color build's processing. Its inputs run the deconvolution and
+ *  RC-Astro steps their channel cards applied. */
 export function defaultColorProcessing(roles: StackColorRole[]): StackColorProcessing {
   return {
+    input_processing: 'channels',
     background_extraction: defaultBackgroundExtraction(),
     input_deconvolutions: {},
     input_rc_astro: {},

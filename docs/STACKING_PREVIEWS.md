@@ -1412,8 +1412,10 @@ it was saved from, and applying it to a card with different channels matches
 channels by name: the rest fall back to the default input stretch, except that
 one treatment shared by several saved channels follows the setup to every
 channel. Deconvolution and RC-Astro steps never follow a setup onto a channel
-it did not include; these remain opt-in per channel. Saved tool settings remain
-visible and removable when a server lacks that tool or its license.
+it did not include; these remain opt-in per channel. A color setup also keeps
+whether its inputs take these steps from each channel card; one saved before
+that choice existed sets them itself. Saved tool settings remain visible and
+removable when a server lacks that tool or its license.
 
 The built-in setups are derived from the editors' own defaults and cannot be
 deleted. In **Settings → Setups**, **Export all** downloads every saved setup
@@ -1580,15 +1582,16 @@ and model-specific controls. After registration it applies optional per-role
 deconvolution and RC-Astro tools while each physical input is still linear,
 then robustly
 normalizes the result and applies that role's ordered stretch stages before
-composition. Deconvolution is independently opt-in for L/R/G/B or
-H-alpha/OIII/SII and is off for every role by default. Expand those input lanes
+composition. Which deconvolution and RC-Astro steps each input runs is set
+under **Deconvolution and RC-Astro**, described below. Expand those input lanes
 or RGB output to add, edit, remove, and reorder Seiza
 identity, linear, asinh, percentile-asinh, MTF, GHS, Auto-MTF, median anchor,
 and layered stages.
 **Apply processing stack** starts a new cached color job; **Revert edits**
 returns to the last rendered pipeline and **Reset defaults** restores additive
-background extraction, deconvolution and RC-Astro off, color calibration on
-for RGB and LRGB, one Auto-MTF stage per input, and no post-composition stage.
+background extraction, deconvolution and RC-Astro steps from each channel card,
+color calibration on for RGB and LRGB, one Auto-MTF stage per input, and no
+post-composition stage.
 
 Each color input offers the same BlurXTerminator, NoiseXTerminator, and
 StarXTerminator controls as mono view processing. Tools run before that
@@ -1605,12 +1608,27 @@ the tools on OIII alone; H-alpha and SII reuse theirs. A new reference stack
 reruns every channel. With background extraction on, every channel's tools
 rerun, since one background model is fitted across all of them.
 
-**Use each channel's processing** sets each input's deconvolution and
-RC-Astro steps to what that channel's card shows, so the composition gets what
-you tuned on the cards: a card showing only deconvolution clears the input's
-RC-Astro steps, and the reverse. A channel whose card shows neither keeps its
-input as it was. The copy is the settings, not the pixels: the color input runs
-them on the registered channel, as the card ran them on the stack.
+### Deconvolution and RC-Astro on color inputs
+
+**Deconvolution and RC-Astro** in the **Processing stack** editor chooses where
+each input's deconvolution and RC-Astro steps come from:
+
+- **From each channel card** is the default for a new color preview and for
+  **Reset defaults**. Each input runs what its channel's card applied to the
+  stack the preview uses: a card showing BlurXTerminator gives that input
+  BlurXTerminator, and a card showing only a stretch gives it no tools. Each
+  input lane names what its card applied. The server reads the cards when the
+  preview is built, so an automatic rebuild after new frames follows the cards
+  too. A card that applies other steps afterward makes the preview out of
+  date; build it again to use them.
+- **Set in this build** shows the deconvolution and RC-Astro controls in each
+  input lane. Choosing it starts from what the cards show, so nothing you tuned
+  on the cards is lost.
+
+Color previews made before this choice existed keep their own settings. The
+cards give settings, not pixels: the color input runs them on the registered
+channel, as the card ran them on the stack, so each tool runs again for the
+color preview.
 
 ![RC-Astro tools configured on a linear red input before its display stretch](stack-rc-astro-color-desktop.png)
 

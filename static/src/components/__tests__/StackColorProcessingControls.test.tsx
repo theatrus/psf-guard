@@ -20,7 +20,38 @@ function renderWithQueries(element: ReactElement) {
 }
 
 describe('StackColorProcessingControls', () => {
-  it("copies each channel card's deconvolution and RC-Astro steps into its input", async () => {
+  it("follows each channel card's deconvolution and RC-Astro steps by default", async () => {
+    const user = userEvent.setup();
+    const onApply = vi.fn();
+    server.use(
+      http.get('/api/tools/rc-astro', () => HttpResponse.json({ success: true, data: {
+        available: true, tools: [{ key: 'bxt', name: 'BlurXTerminator', licensed: true,
+          cli_version: '2.6.6', ml_version: 3, schema_version: 6, parameters: [] }],
+      }, error: null }))
+    );
+    const roles = ['ha', 'oiii'] as const;
+    renderWithQueries(<StackColorProcessingControls label="HOO" roles={[...roles]}
+      applied={null}
+      backgrounds={{}} protections={{}} fallbacks={{}} deconvolutions={{}}
+      channelProcessing={{ ha: { rc_astro: { steps: [{ tool: 'bxt', parameters: {} }] } } }}
+      disabled={false} onApply={onApply} />);
+    await user.click(screen.getByText('Processing stack'));
+    const mode = screen.getByRole('radiogroup', { name: 'Deconvolution and RC-Astro steps' });
+    expect(within(mode).getByRole('radio', { name: 'From each channel card' })).toBeChecked();
+    expect(await screen.findByText(
+      'Each input runs what its channel card applied: Hα: BlurXTerminator. ' +
+      'Changing a card makes this preview out of date.'
+    )).toBeInTheDocument();
+    // Each lane says what its card applied, in place of the tool editors.
+    const ha = screen.getByRole('region', { name: 'Hα input stretch stack' });
+    expect(within(ha).getByText('From its channel card: BlurXTerminator')).toBeInTheDocument();
+    expect(within(ha).queryByRole('region', { name: 'Hα input deconvolution' })).not.toBeInTheDocument();
+    const oiii = screen.getByRole('region', { name: 'OIII input stretch stack' });
+    expect(within(oiii).getByText('Its channel card applied no deconvolution or RC-Astro steps.'))
+      .toBeInTheDocument();
+  });
+
+  it('starts its own settings from what the channel cards applied', async () => {
     const user = userEvent.setup();
     const onApply = vi.fn();
     server.use(
@@ -32,8 +63,7 @@ describe('StackColorProcessingControls', () => {
     const roles = ['ha', 'oiii'] as const;
     const deconvolution = defaultDeconvolutionConfig();
     const applied = defaultColorProcessing([...roles]);
-    // OIII already deconvolves in the color input; its card shows nothing,
-    // so the copy leaves it alone.
+    // The last build ran OIII's own deconvolution; OIII's card has none now.
     applied.input_deconvolutions = { oiii: deconvolution };
     renderWithQueries(<StackColorProcessingControls label="HOO" roles={[...roles]}
       applied={applied}
@@ -41,26 +71,45 @@ describe('StackColorProcessingControls', () => {
       channelProcessing={{ ha: { rc_astro: { steps: [{ tool: 'bxt', parameters: {} }] } } }}
       disabled={false} onApply={onApply} />);
     await user.click(screen.getByText('Processing stack'));
-    expect(await screen.findByText(
-      "Sets each input's deconvolution and RC-Astro steps to what its channel card shows: Hα: BlurXTerminator."
-    )).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: "Use each channel's processing" }));
+    await user.click(screen.getByRole('radio', { name: 'Set in this build' }));
+    expect(screen.getByRole('radio', { name: 'Set in this build' })).toBeChecked();
+    expect(screen.getByText('Each input runs the deconvolution and RC-Astro steps set in its lane below.'))
+      .toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Apply processing stack' }));
     expect(onApply).toHaveBeenCalledWith(expect.objectContaining({
+      input_processing: 'own',
       input_rc_astro: { ha: { steps: [{ tool: 'bxt', parameters: {} }] } },
-      input_deconvolutions: { oiii: deconvolution },
+      input_deconvolutions: {},
     }));
   });
 
-  it('offers no copy when no channel card shows pixel processing', async () => {
+  it('says the inputs run no tools when no channel card applied any', async () => {
     const user = userEvent.setup();
     renderWithQueries(<StackColorProcessingControls label="RGB" roles={['red', 'green', 'blue']}
       applied={defaultColorProcessing(['red', 'green', 'blue'])}
       backgrounds={{}} protections={{}} fallbacks={{}} deconvolutions={{}}
       disabled={false} onApply={vi.fn()} />);
     await user.click(screen.getByText('Processing stack'));
-    expect(screen.getByRole('button', { name: "Use each channel's processing" })).toBeDisabled();
-    expect(screen.getByText('No channel card shows deconvolution or RC-Astro steps.')).toBeInTheDocument();
+    expect(screen.getByText(
+      'No channel card has deconvolution or RC-Astro steps applied, so the inputs run none.'
+    )).toBeInTheDocument();
+    expect(screen.getByText(/Tools from channel cards/)).toBeInTheDocument();
+  });
+
+  it('keeps the own settings of processing saved before following the cards existed', async () => {
+    const user = userEvent.setup();
+    const saved = defaultColorProcessing(['red', 'green', 'blue']);
+    delete saved.input_processing;
+    saved.input_deconvolutions = { red: defaultDeconvolutionConfig() };
+    renderWithQueries(<StackColorProcessingControls label="RGB" roles={['red', 'green', 'blue']}
+      applied={saved}
+      backgrounds={{}} protections={{}} fallbacks={{}} deconvolutions={{}}
+      channelProcessing={{ green: { deconvolution: defaultDeconvolutionConfig() } }}
+      disabled={false} onApply={vi.fn()} />);
+    await user.click(screen.getByText('Processing stack'));
+    expect(screen.getByRole('radio', { name: 'Set in this build' })).toBeChecked();
+    const red = screen.getByRole('region', { name: 'R input deconvolution' });
+    expect(within(red).getByRole('checkbox', { name: 'Deconvolution' })).toBeChecked();
   });
 
   it('edits and saves RC-Astro steps for the selected input channel', async () => {
@@ -82,6 +131,7 @@ describe('StackColorProcessingControls', () => {
       backgrounds={{}} protections={{}} fallbacks={{}} deconvolutions={{}}
       disabled={false} onApply={onApply} />);
     await user.click(screen.getByText('Processing stack'));
+    await user.click(screen.getByRole('radio', { name: 'Set in this build' }));
     const red = screen.getByRole('region', { name: 'R input stretch stack' });
     await user.click(await within(red).findByRole('checkbox', { name: 'NoiseXTerminator' }));
     await user.click(screen.getByRole('button', { name: 'Apply processing stack' }));
@@ -121,6 +171,7 @@ describe('StackColorProcessingControls', () => {
       <StackColorProcessingControls {...props} roles={[...props.roles]} />
     );
     await user.click(screen.getByText('Processing stack'));
+    await user.click(screen.getByRole('radio', { name: 'Set in this build' }));
     const red = screen.getByRole('region', { name: 'R input stretch stack' });
     await user.click(await within(red).findByRole('checkbox', { name: 'RC-Astro BlurXTerminator' }));
     const stars = within(red).getByRole('spinbutton', { name: 'Sharpen Stars' });

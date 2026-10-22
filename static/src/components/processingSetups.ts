@@ -104,6 +104,8 @@ export function colorSetupForRoles(
   roles: StackColorRole[]
 ): StackColorProcessing {
   return {
+    // A setup saved before the choice existed sets its inputs' tools itself.
+    ...(settings.input_processing === 'channels' ? { input_processing: 'channels' as const } : {}),
     background_extraction: settings.background_extraction ?? null,
     output_stretches: settings.output_stretches ?? [],
     input_stretches: mapRoleEntries<StackStretchRequest[]>(

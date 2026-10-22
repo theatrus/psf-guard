@@ -344,6 +344,7 @@ test('refuses RC-Astro values past the tool range beside Apply, where the server
   });
   const processing = card.locator('.stack-color-processing');
   await processing.locator('summary').click();
+  await processing.getByRole('radio', { name: 'Set in this build' }).click();
   const red = processing.getByRole('region', { name: 'R input stretch stack' });
   await red.getByRole('checkbox', { name: 'RC-Astro BlurXTerminator' }).check();
   await red.getByRole('spinbutton', { name: 'Sharpen Stars' }).fill('0.9');
@@ -365,7 +366,7 @@ test('refuses RC-Astro values past the tool range beside Apply, where the server
   await processing.screenshot({ path: testInfo.outputPath('rc-astro-server-refusal.png') });
 });
 
-test("copies a channel card's deconvolution into its color input", async ({ page }, testInfo) => {
+test("follows the channel cards, and starts its own settings from a card's deconvolution", async ({ page }, testInfo) => {
   test.setTimeout(180_000);
   seedSyntheticColorStacks(dbId, 2);
   await page.setViewportSize({ width: 1440, height: 1100 });
@@ -402,18 +403,24 @@ test("copies a channel card's deconvolution into its color input", async ({ page
   );
   const processing = card.locator('.stack-color-processing');
   await processing.locator('summary').click();
+  // A new build follows the cards. The route above stands in for R's card
+  // in the browser only, so the server's build found nothing to run.
   const channels = processing.getByRole('group', { name: 'Channel processing' });
+  await expect(channels.getByRole('radio', { name: 'From each channel card' }))
+    .toHaveAttribute('aria-checked', 'true');
   await expect(channels).toContainText(
-    "Sets each input's deconvolution and RC-Astro steps to what its channel card shows: R: deconvolution."
+    'Each input runs what its channel card applied: R: deconvolution.'
   );
   const redLane = processing.getByRole('region', { name: 'R input stretch stack' });
+  await expect(redLane).toContainText('From its channel card: deconvolution');
+  await processing.screenshot({ path: testInfo.outputPath('color-follows-channel-cards.png') });
+  // Setting the tools here starts from what the cards show.
+  await channels.getByRole('radio', { name: 'Set in this build' }).click();
   const redDeconvolution = redLane.getByRole('region', { name: 'R input deconvolution' });
-  await expect(redDeconvolution.getByRole('checkbox', { name: 'Deconvolution' })).not.toBeChecked();
-  await processing.getByRole('button', { name: "Use each channel's processing" }).click();
   await expect(redDeconvolution.getByRole('checkbox', { name: 'Deconvolution' })).toBeChecked();
   await expect(redDeconvolution.getByRole('spinbutton', { name: 'Deconvolution Iterations' }))
     .toHaveValue('1');
-  // Only R's card deconvolves, so G and B are left as they were.
+  // G's and B's cards show no tools, so their inputs get none.
   await expect(processing.getByRole('region', { name: 'G input deconvolution' })
     .getByRole('checkbox', { name: 'Deconvolution' })).not.toBeChecked();
   await processing.screenshot({ path: testInfo.outputPath('color-channel-processing.png') });
@@ -455,6 +462,7 @@ test('retains RC-Astro color steps in saved setups on desktop and mobile', async
   );
   const processing = card.locator('.stack-color-processing');
   await processing.locator('summary').click();
+  await processing.getByRole('radio', { name: 'Set in this build' }).click();
   const red = processing.getByRole('region', { name: 'R input stretch stack' });
   await red.getByRole('checkbox', { name: 'RC-Astro BlurXTerminator' }).check();
   await red.getByRole('spinbutton', { name: 'Sharpen Stars' }).fill('0.2');
@@ -1474,6 +1482,8 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
     .toContainText('1 stage');
   await expect(rgbProcessing.getByRole('region', { name: 'B input stretch stack' }))
     .toContainText('1 stage');
+  // A new build follows the channel cards; set G's deconvolution here.
+  await rgbProcessing.getByRole('radio', { name: 'Set in this build' }).click();
   const greenLane = rgbProcessing.getByRole('region', { name: 'G input stretch stack' });
   const greenDeconvolution = greenLane.getByRole('region', { name: 'G input deconvolution' });
   await expect(greenDeconvolution.getByRole('checkbox', { name: 'Deconvolution' }))

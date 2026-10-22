@@ -133,7 +133,7 @@ fn kept_turn(channel: &str) -> String {
 }
 
 fn source_key(job_id: &str, group_index: usize) -> String {
-    format!("mono:{job_id}:{group_index}")
+    super::stretch::mono_source_key(job_id, group_index)
 }
 
 /// `M44 · R`, or `M44 · R · 300 s` with an exposure band.

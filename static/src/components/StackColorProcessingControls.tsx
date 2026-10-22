@@ -25,7 +25,8 @@ import {
 import ColorCalibrationSwitch from './ColorCalibrationSwitch';
 import ProcessingSetupsBar from './ProcessingSetupsBar';
 import { builtinColorSetups, colorSetupForRoles } from './processingSetups';
-import { withChannelProcessing, type ChannelProcessing } from './channelProcessing';
+import { channelToolsLabel, ownFromChannels, type ChannelProcessing } from './channelProcessing';
+import './toolbar/toolbar.css';
 
 const roleLabels: Record<StackColorRole, string> = {
   luminance: 'L', red: 'R', green: 'G', blue: 'B', ha: 'Hα', oiii: 'OIII', sii: 'SII',
@@ -381,12 +382,16 @@ function BackgroundControls({
 }
 
 function StageLane({
-  label, stages, channels, deconvolution, deconvolutionResult, rcAstro, rcAstroResult, disabled,
-  onChange, onDeconvolutionChange, onRcAstroChange,
+  label, stages, channels, deconvolution, deconvolutionResult, rcAstro, rcAstroResult, inherited,
+  disabled, onChange, onDeconvolutionChange, onRcAstroChange,
 }: {
   label: string;
   stages: StackStretchRequest[];
   channels: 1 | 3;
+  /** While the build follows the channel cards: what this input's card
+   *  applied, in words, shown in place of the tool editors. Null when the
+   *  card applied no tools. */
+  inherited?: string | null;
   deconvolution?: StackColorProcessing['input_deconvolutions'][StackColorRole];
   deconvolutionResult?: StackDeconvolutionResult;
   rcAstro?: NonNullable<StackColorProcessing['input_rc_astro']>[StackColorRole];
@@ -419,6 +424,13 @@ function StageLane({
         <strong>{label}</strong>
         <span>{stages.length} stage{stages.length === 1 ? '' : 's'}</span>
       </header>
+      {inherited !== undefined && (
+        <p className="processing-setups-hint">
+          {inherited
+            ? `From its channel card: ${inherited}`
+            : 'Its channel card applied no deconvolution or RC-Astro steps.'}
+        </p>
+      )}
       {onDeconvolutionChange && (
         <StackDeconvolutionControls
           label={label}
@@ -488,13 +500,8 @@ function channelProcessingSummary(
   toolName: (tool: string) => string
 ): string {
   return roles.flatMap((role) => {
-    const channel = channels[role];
-    if (!channel) return [];
-    const parts = [
-      ...(channel.deconvolution ? ['deconvolution'] : []),
-      ...(channel.rc_astro?.steps.map((step) => toolName(step.tool)) ?? []),
-    ];
-    return [`${roleLabels[role]}: ${parts.join(', ')}`];
+    const tools = channelToolsLabel(channels[role], toolName);
+    return tools ? [`${roleLabels[role]}: ${tools}`] : [];
   }).join(' · ');
 }
 
@@ -528,10 +535,9 @@ export default function StackColorProcessingControls({
   const [draft, setDraft] = useState<StackColorProcessing>(() => cloneProcessing(baseline));
   const [error, setError] = useState<string | null>(null);
   const changed = JSON.stringify(draft) !== JSON.stringify(baseline);
-  const channelSummary = channelProcessingSummary(
-    channelProcessing, roles,
-    (tool) => rcAstroTools?.find((schema) => schema.key === tool)?.name ?? tool
-  );
+  const toolName = (tool: string) => rcAstroTools?.find((schema) => schema.key === tool)?.name ?? tool;
+  const channelSummary = channelProcessingSummary(channelProcessing, roles, toolName);
+  const followsCards = draft.input_processing === 'channels';
 
   const updateInput = (role: StackColorRole, stages: StackStretchRequest[]) => setDraft((current) => ({
     ...current,
@@ -565,18 +571,22 @@ export default function StackColorProcessingControls({
       setError(backgroundError);
       return;
     }
-    for (const config of Object.values(draft.input_deconvolutions)) {
-      const deconvolutionError = validateDeconvolution(config);
-      if (deconvolutionError) {
-        setError(deconvolutionError);
-        return;
+    // Following the cards, the server takes each input's tools from its
+    // card, so the build's own tool settings are not checked or used.
+    if (!followsCards) {
+      for (const config of Object.values(draft.input_deconvolutions)) {
+        const deconvolutionError = validateDeconvolution(config);
+        if (deconvolutionError) {
+          setError(deconvolutionError);
+          return;
+        }
       }
-    }
-    for (const role of roles) {
-      const problem = rcAstroProblem(draft.input_rc_astro?.[role], rcAstroTools);
-      if (problem) {
-        setError(`${roleLabels[role]}: ${problem}`);
-        return;
+      for (const role of roles) {
+        const problem = rcAstroProblem(draft.input_rc_astro?.[role], rcAstroTools);
+        if (problem) {
+          setError(`${roleLabels[role]}: ${problem}`);
+          return;
+        }
       }
     }
     setError(null);
@@ -588,10 +598,14 @@ export default function StackColorProcessingControls({
       <summary>
         <span>Processing stack</span>
         <small>BG {draft.background_extraction ? draft.background_extraction.correction_mode : 'off'}
-          {' · '}DC {Object.keys(draft.input_deconvolutions).length || 'off'}
-          {' · '}RC-Astro {Object.values(draft.input_rc_astro ?? {}).reduce(
-            (count, config) => count + (config?.steps.length ?? 0), 0
-          ) || 'off'}
+          {followsCards
+            ? ' · Tools from channel cards'
+            : <>
+              {' · '}DC {Object.keys(draft.input_deconvolutions).length || 'off'}
+              {' · '}RC-Astro {Object.values(draft.input_rc_astro ?? {}).reduce(
+                (count, config) => count + (config?.steps.length ?? 0), 0
+              ) || 'off'}
+            </>}
           {calibrates && ` · Calibration ${draft.color_calibration?.enabled === false ? 'off' : 'on'}`}
           {' · '}{roles.map((role) => `${roleLabels[role]} ${draft.input_stretches[role]?.length ?? 0}`).join(' · ')}
           {' · '}RGB {draft.output_stretches.length}</small>
@@ -614,22 +628,43 @@ export default function StackColorProcessingControls({
         />
         <div className="processing-channel-bar" role="group" aria-label="Channel processing">
           <div className="processing-setups-row">
-            <span className="processing-setups-label">Channel cards</span>
-            <button
-              type="button"
-              disabled={disabled || !channelSummary}
-              onClick={() => {
-                setDraft((current) => withChannelProcessing(current, channelProcessing, roles));
-                setError(null);
-              }}
-            >
-              Use each channel's processing
-            </button>
+            <span className="processing-setups-label">Deconvolution and RC-Astro</span>
+            <div className="tool-segmented" role="radiogroup" aria-label="Deconvolution and RC-Astro steps">
+              <button
+                type="button"
+                role="radio"
+                aria-checked={followsCards}
+                disabled={disabled}
+                onClick={() => {
+                  setDraft((current) => ({ ...current, input_processing: 'channels' }));
+                  setError(null);
+                }}
+              >
+                From each channel card
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={!followsCards}
+                disabled={disabled}
+                onClick={() => {
+                  if (followsCards) {
+                    setDraft((current) => ownFromChannels(current, channelProcessing, roles));
+                  }
+                  setError(null);
+                }}
+              >
+                Set in this build
+              </button>
+            </div>
           </div>
           <span className="processing-setups-hint">
-            {channelSummary
-              ? `Sets each input's deconvolution and RC-Astro steps to what its channel card shows: ${channelSummary}.`
-              : 'No channel card shows deconvolution or RC-Astro steps.'}
+            {!followsCards
+              ? 'Each input runs the deconvolution and RC-Astro steps set in its lane below.'
+              : channelSummary
+                ? `Each input runs what its channel card applied: ${channelSummary}. ` +
+                  'Changing a card makes this preview out of date.'
+                : 'No channel card has deconvolution or RC-Astro steps applied, so the inputs run none.'}
           </span>
         </div>
         <BackgroundControls
@@ -662,10 +697,12 @@ export default function StackColorProcessingControls({
               deconvolutionResult={deconvolutions[role]}
               rcAstro={draft.input_rc_astro?.[role]}
               rcAstroResult={rcAstro[role]}
+              inherited={followsCards ? channelToolsLabel(channelProcessing[role], toolName) : undefined}
               disabled={disabled}
               onChange={(stages) => updateInput(role, stages)}
-              onDeconvolutionChange={(config) => updateDeconvolution(role, config)}
-              onRcAstroChange={(config) => updateRcAstro(role, config)}
+              onDeconvolutionChange={followsCards ? undefined
+                : (config) => updateDeconvolution(role, config)}
+              onRcAstroChange={followsCards ? undefined : (config) => updateRcAstro(role, config)}
             />
           ))}
           <StageLane

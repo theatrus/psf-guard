@@ -270,8 +270,44 @@ pub struct StackColorSourceRef {
     pub artifact_revision: String,
 }
 
+/// Where a color build's inputs take their deconvolution and RC-Astro steps
+/// from.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ColorInputProcessing {
+    /// The build's own `input_deconvolutions` and `input_rc_astro`. Processing
+    /// saved before this choice existed reads as this, so its builds keep
+    /// their results.
+    #[default]
+    Own,
+    /// What each input's channel card has applied to the stack the build
+    /// uses, read when the build is prepared. The build's own settings are
+    /// replaced with it.
+    Channels,
+}
+
+impl ColorInputProcessing {
+    fn is_own(&self) -> bool {
+        *self == Self::Own
+    }
+}
+
+/// What one channel card had applied when a build that follows the cards was
+/// prepared: the settings its input ran with.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct FollowedChannelProcessing {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deconvolution: Option<seiza_deconvolution::DeconvolutionConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rc_astro: Option<super::rc_astro::RcAstroProcessing>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct StackColorProcessing {
+    /// Whether the inputs' deconvolution and RC-Astro steps are the build's
+    /// own or follow each channel's card.
+    #[serde(default, skip_serializing_if = "ColorInputProcessing::is_own")]
+    pub input_processing: ColorInputProcessing,
     /// Optional smooth background correction applied to each linear channel
     /// independently before cross-channel registration.
     #[serde(default)]
@@ -470,6 +506,11 @@ pub struct StackColorJob {
     pub resolved_input_rc_astro: BTreeMap<StackColorRole, StackColorRcAstroResult>,
     #[serde(default)]
     pub input_rc_astro_ids: BTreeMap<StackColorRole, String>,
+    /// For a build that follows the channel cards: what each card had
+    /// applied, one entry per input, including inputs whose card had
+    /// nothing. A card that has changed since makes the build out of date.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub followed_channel_processing: BTreeMap<StackColorRole, FollowedChannelProcessing>,
     #[serde(default)]
     pub resolved_output_stretches: Vec<serde_json::Value>,
     #[serde(default)]
@@ -1072,6 +1113,7 @@ pub(super) fn preparing_color_job(
         resolved_input_deconvolutions: BTreeMap::new(),
         resolved_input_rc_astro: BTreeMap::new(),
         input_rc_astro_ids: BTreeMap::new(),
+        followed_channel_processing: BTreeMap::new(),
         resolved_output_stretches: Vec::new(),
         resolved_backgrounds: BTreeMap::new(),
         resolved_background_protection: BTreeMap::new(),
@@ -1382,6 +1424,21 @@ pub(super) fn prepare_color_job(
     request: &StackColorRequest,
 ) -> Result<PreparedColorJob, AppError> {
     let mut request = request.clone();
+    let latest = load_latest_stacks(ctx, project_id)?;
+    let targets = collect_sources(&ctx.stack_root, &latest);
+    let target = targets.get(&request.target_id).ok_or_else(|| {
+        AppError::BadRequest("No completed channel stacks are available for that target".into())
+    })?;
+    let sources = select_sources(target, &request)?;
+    // Following the cards needs the stacks chosen first: each input takes
+    // what its card applied to that exact stack revision.
+    let mut followed_channel_processing = BTreeMap::new();
+    if let Some(processing) = &mut request.processing
+        && processing.input_processing == ColorInputProcessing::Channels
+    {
+        followed_channel_processing = channel_card_processing(&ctx.stack_root, &sources)?;
+        follow_channel_cards(processing, &followed_channel_processing);
+    }
     let mut rc_astro_schemas = BTreeMap::new();
     if let Some(processing) = &mut request.processing {
         resolve_color_calibration(request.kind, processing);
@@ -1392,12 +1449,6 @@ pub(super) fn prepare_color_job(
             rc_astro_schemas.insert(*role, schemas);
         }
     }
-    let latest = load_latest_stacks(ctx, project_id)?;
-    let targets = collect_sources(&ctx.stack_root, &latest);
-    let target = targets.get(&request.target_id).ok_or_else(|| {
-        AppError::BadRequest("No completed channel stacks are available for that target".into())
-    })?;
-    let sources = select_sources(target, &request)?;
     let source_family_key = source_family_key(&sources);
     let color_calibration = request
         .processing
@@ -1515,6 +1566,7 @@ pub(super) fn prepare_color_job(
                 .iter()
                 .filter_map(|(role, chain)| chain.last().map(|id| (*role, id.clone())))
                 .collect(),
+            followed_channel_processing,
             resolved_output_stretches: Vec::new(),
             resolved_backgrounds: BTreeMap::new(),
             resolved_background_protection: background_protection_summary,
@@ -1608,6 +1660,11 @@ fn color_job_id(identity: &ColorJobIdentity<'_>) -> Result<String, AppError> {
     hasher.update(serde_json::to_vec(&request.crop).map_err(|error| {
         AppError::InternalError(format!("Failed to encode color crop mode: {error}"))
     })?);
+    // A build that follows the cards is a job of its own even when its tools
+    // match a build's own settings: a finished job is reused as it stands,
+    // and it records whether it follows the cards. The color inputs and
+    // RC-Astro chains key on the tools alone, so switching only composes
+    // again.
     hasher.update(serde_json::to_vec(&request.processing).map_err(|error| {
         AppError::InternalError(format!(
             "Failed to encode color processing options: {error}"
@@ -1635,6 +1692,49 @@ fn color_job_id(identity: &ColorJobIdentity<'_>) -> Result<String, AppError> {
         write!(&mut job_id, "{byte:02x}").expect("writing to a String cannot fail");
     }
     Ok(job_id)
+}
+
+/// What each input's channel card has applied to the stack revision a build
+/// uses: its deconvolution and RC-Astro steps. An input whose card shows no
+/// processing, or only a stretch, gets an empty entry, so a card that later
+/// adds a tool makes the build out of date.
+pub(super) fn channel_card_processing(
+    stack_root: &FsPath,
+    sources: &[StackColorSource],
+) -> Result<BTreeMap<StackColorRole, FollowedChannelProcessing>, AppError> {
+    sources
+        .iter()
+        .map(|source| {
+            let applied = super::stretch::applied_request(
+                stack_root,
+                &super::stretch::mono_source_key(&source.job_id, source.group_index),
+                &source.artifact_revision,
+            )?;
+            let followed = applied
+                .map(|request| FollowedChannelProcessing {
+                    deconvolution: request.deconvolution,
+                    rc_astro: request.rc_astro.filter(|config| !config.steps.is_empty()),
+                })
+                .unwrap_or_default();
+            Ok((source.role, followed))
+        })
+        .collect()
+}
+
+/// Replace the inputs' deconvolution and RC-Astro steps with what their
+/// channel cards applied. An input whose card applied neither gets none.
+pub(super) fn follow_channel_cards(
+    processing: &mut StackColorProcessing,
+    followed: &BTreeMap<StackColorRole, FollowedChannelProcessing>,
+) {
+    processing.input_deconvolutions = followed
+        .iter()
+        .filter_map(|(role, card)| card.deconvolution.map(|config| (*role, config)))
+        .collect();
+    processing.input_rc_astro = followed
+        .iter()
+        .filter_map(|(role, card)| card.rc_astro.clone().map(|config| (*role, config)))
+        .collect();
 }
 
 /// Spell a request's color calibration out, so the job and its cache key
@@ -4725,6 +4825,17 @@ fn color_job_outdated_reason(
     }) {
         return Ok(Some("one or more source channel stacks changed".into()));
     }
+    if job
+        .processing
+        .as_ref()
+        .is_some_and(|processing| processing.input_processing == ColorInputProcessing::Channels)
+        && channel_card_processing(&ctx.stack_root, &job.sources)?
+            != job.followed_channel_processing
+    {
+        return Ok(Some(
+            "a channel card's deconvolution or RC-Astro steps changed".into(),
+        ));
+    }
     if job.processing.as_ref().is_some_and(|processing| {
         processing
             .background_extraction
@@ -5452,6 +5563,7 @@ mod tests {
             resolved_input_deconvolutions: BTreeMap::new(),
             resolved_input_rc_astro: BTreeMap::new(),
             input_rc_astro_ids: BTreeMap::new(),
+            followed_channel_processing: BTreeMap::new(),
             resolved_output_stretches: Vec::new(),
             resolved_backgrounds: BTreeMap::new(),
             resolved_background_protection: BTreeMap::new(),
@@ -5552,6 +5664,171 @@ mod tests {
         // Nothing changed: nothing to compose.
         previous.sources[0] = channel(Red, "R", "new-r", false);
         assert!(plan_after_build(7, &target, &[previous], Some(&defaults())).is_empty());
+    }
+
+    fn deconvolution(fwhm: f32) -> seiza_deconvolution::DeconvolutionConfig {
+        seiza_deconvolution::DeconvolutionConfig::conservative(fwhm)
+    }
+
+    fn rc_astro_chain() -> super::super::rc_astro::RcAstroProcessing {
+        serde_json::from_value(serde_json::json!({
+            "steps": [{"tool": "bxt", "parameters": {"sharpen_stars": 0.25}}]
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn processing_saved_before_the_choice_keeps_its_own_settings() {
+        // A record from an earlier release has no `input_processing`.
+        let saved: StackColorProcessing = serde_json::from_value(serde_json::json!({
+            "background_extraction": null,
+            "input_deconvolutions": {"red": deconvolution(2.5)},
+            "input_stretches": {},
+            "output_stretches": [],
+        }))
+        .unwrap();
+        assert_eq!(saved.input_processing, ColorInputProcessing::Own);
+        assert!(saved
+            .input_deconvolutions
+            .contains_key(&StackColorRole::Red));
+        // Written back, it is the record it was: its job id is unchanged.
+        let written = serde_json::to_value(&saved).unwrap();
+        assert!(written.get("input_processing").is_none(), "{written}");
+
+        let following = StackColorProcessing {
+            input_processing: ColorInputProcessing::Channels,
+            ..saved
+        };
+        assert_eq!(
+            serde_json::to_value(&following).unwrap()["input_processing"],
+            "channels"
+        );
+    }
+
+    #[test]
+    fn following_the_cards_replaces_each_inputs_own_tools() {
+        use StackColorRole::{Blue, Green, Red};
+        let mut processing = StackColorProcessing {
+            input_processing: ColorInputProcessing::Channels,
+            input_deconvolutions: BTreeMap::from([(Blue, deconvolution(4.0))]),
+            input_rc_astro: BTreeMap::from([(Red, rc_astro_chain())]),
+            ..defaults()
+        };
+        let followed = BTreeMap::from([
+            (
+                Red,
+                FollowedChannelProcessing {
+                    deconvolution: Some(deconvolution(2.5)),
+                    rc_astro: None,
+                },
+            ),
+            (
+                Green,
+                FollowedChannelProcessing {
+                    deconvolution: None,
+                    rc_astro: Some(rc_astro_chain()),
+                },
+            ),
+            (Blue, FollowedChannelProcessing::default()),
+        ]);
+        follow_channel_cards(&mut processing, &followed);
+        assert_eq!(
+            processing.input_deconvolutions,
+            BTreeMap::from([(Red, deconvolution(2.5))]),
+            "Blue's card applied nothing, so its own deconvolution goes too"
+        );
+        assert_eq!(
+            processing.input_rc_astro,
+            BTreeMap::from([(Green, rc_astro_chain())]),
+            "Red's card has no RC-Astro steps, so its own chain goes"
+        );
+    }
+
+    #[test]
+    fn the_job_id_follows_the_tools_and_whether_they_come_from_the_cards() {
+        let sources = vec![
+            channel(StackColorRole::Red, "R", "red", false),
+            channel(StackColorRole::Green, "G", "green", false),
+            channel(StackColorRole::Blue, "B", "blue", false),
+        ];
+        let protection = BTreeMap::new();
+        let id = |processing: StackColorProcessing| {
+            let request = StackColorRequest {
+                target_id: 7,
+                kind: StackColorKind::Rgb,
+                palette: None,
+                force: false,
+                crop: StackColorCrop::None,
+                processing: Some(processing),
+                input_sources: BTreeMap::new(),
+            };
+            color_job_id(&ColorJobIdentity {
+                database_id: "db",
+                project_id: 3,
+                request: &request,
+                label: "RGB",
+                rc_astro_input_id: None,
+                background_protection: &protection,
+                color_calibration_basis: None,
+                sources: &sources,
+            })
+            .unwrap()
+        };
+        let with = |input_processing, fwhm| StackColorProcessing {
+            input_processing,
+            input_deconvolutions: BTreeMap::from([(StackColorRole::Red, deconvolution(fwhm))]),
+            ..defaults()
+        };
+        // A finished job is reused as it stands, and it records whether it
+        // follows the cards, so the two choices are two jobs.
+        assert_ne!(
+            id(with(ColorInputProcessing::Own, 2.5)),
+            id(with(ColorInputProcessing::Channels, 2.5))
+        );
+        // An own build written before the choice existed keeps its id: the
+        // field is left out of `own` records.
+        assert_eq!(
+            id(with(ColorInputProcessing::Own, 2.5)),
+            id(StackColorProcessing {
+                input_deconvolutions: BTreeMap::from([(StackColorRole::Red, deconvolution(2.5))]),
+                ..defaults()
+            })
+        );
+        // A card applying other settings makes another preview.
+        assert_ne!(
+            id(with(ColorInputProcessing::Channels, 2.5)),
+            id(with(ColorInputProcessing::Channels, 3.0))
+        );
+    }
+
+    #[test]
+    fn a_refreshed_color_preview_still_follows_the_cards() {
+        use StackColorRole::{Blue, Green, Red};
+        let mut previous = running_color_job("old-rgb", StackJobState::Completed);
+        previous.kind = StackColorKind::Rgb;
+        previous.palette = None;
+        previous.target_id = 7;
+        previous.sources = vec![
+            channel(Red, "R", "old-r", false),
+            channel(Green, "G", "g", false),
+            channel(Blue, "B", "b", false),
+        ];
+        previous.processing = Some(StackColorProcessing {
+            input_processing: ColorInputProcessing::Channels,
+            ..defaults()
+        });
+        let target = sources(vec![
+            channel(Red, "R", "new-r", false),
+            channel(Green, "G", "g", false),
+            channel(Blue, "B", "b", false),
+        ]);
+        let requests = plan_after_build(7, &target, &[previous], Some(&defaults()));
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            requests[0].processing.as_ref().unwrap().input_processing,
+            ColorInputProcessing::Channels,
+            "the refresh reads the cards again when it is prepared"
+        );
     }
 
     #[test]
@@ -6436,6 +6713,7 @@ mod tests {
     #[test]
     fn progress_ledger_accounts_for_every_pipeline_phase() {
         let processing = StackColorProcessing {
+            input_processing: ColorInputProcessing::Own,
             background_extraction: Some(StackBackgroundExtraction {
                 config: BackgroundConfig::default(),
                 correction_mode: CorrectionMode::Subtract,
