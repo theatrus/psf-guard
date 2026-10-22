@@ -42,6 +42,12 @@ fn request(target_id: i32) -> SpatialScanRequest {
     }
 }
 
+/// Whether a scan just queued shows as this scan: still running, or
+/// already finished.
+fn settled_or_running(progress: &spatial_scan::SpatialScanProgress) -> bool {
+    progress.running || (progress.stage == "complete" && progress.finished_at.is_some())
+}
+
 async fn until(what: &str, done: impl Fn() -> bool) {
     for _ in 0..500 {
         if done() {
@@ -57,9 +63,15 @@ async fn a_queued_scan_shows_as_preparing_and_finishes_when_nothing_needs_comput
     let directory = tempfile::tempdir().unwrap();
     let (state, ctx) = catalog(directory.path());
     assert!(queue_scan(&state, &ctx, request(1)));
-    // The route answers before the runner reads the catalog.
+    // The route usually answers before the runner reads the catalog. This
+    // catalog is empty, so on a fast machine the scan can finish first;
+    // either is this scan.
     let (progress, _) = spatial_scan::progress_snapshot(&ctx.spatial_metrics);
-    assert!(progress.running);
+    assert!(
+        settled_or_running(&progress),
+        "{}",
+        serde_json::to_string(&progress).unwrap()
+    );
     assert_eq!(progress.target_id, Some(1));
     let job = state.catalog_jobs.quality_scans.job(&scanner(&ctx));
     until("the runner never exited", || !job.queue().has_runner()).await;
@@ -214,7 +226,13 @@ async fn the_scan_route_queues_and_answers_at_once() {
     .unwrap();
     let data = response.data.unwrap();
     assert!(data.started);
-    assert!(data.progress.running, "a page polls from the answer on");
+    // A page polls from the answer on. The empty catalog can let the scan
+    // finish before the route reads its progress.
+    assert!(
+        settled_or_running(&data.progress),
+        "{}",
+        serde_json::to_string(&data.progress).unwrap()
+    );
     assert_eq!(data.progress.target_id, Some(2));
     let job = state.catalog_jobs.quality_scans.job(&scanner(&ctx));
     until("the runner never exited", || !job.queue().has_runner()).await;
