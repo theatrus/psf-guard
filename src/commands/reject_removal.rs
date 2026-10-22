@@ -399,7 +399,10 @@ pub fn plan_with(
             );
             continue;
         };
-        let rejected_at = row.rejected_at.unwrap_or(options.now);
+        // A reject first recorded while this preview ran can carry a stamp a
+        // second past `now`, the clock read when the run began; it is no
+        // younger than the moment the preview saw it.
+        let rejected_at = row.rejected_at.unwrap_or(options.now).min(options.now);
         if rejected_at > cutoff {
             plan.waiting += 1;
             let eligible = rejected_at + i64::from(options.min_age_days) * DAY;
@@ -1925,6 +1928,22 @@ mod tests {
         assert!(batches(&c.conn).unwrap().is_empty());
         ensure_schema(&c.conn).unwrap();
         assert!(has_column(&c.conn, "psf_guard_removed_image", "purged_at"));
+    }
+
+    #[test]
+    fn a_reject_stamped_after_the_preview_began_qualifies_with_no_grace_period() {
+        let c = catalog();
+        // Recorded a second after the preview read its clock.
+        c.conn
+            .execute(
+                "UPDATE psf_guard_rejected_at SET rejected_at = ?1 WHERE acquired_image_guid = 'g2'",
+                [NOW + 1],
+            )
+            .unwrap();
+        let protected = BTreeSet::new();
+        let preview = plan(&c.conn, &c.images(), &options(&protected, 0)).unwrap();
+        assert_eq!(preview.waiting, 0);
+        assert!(preview.frames.iter().any(|frame| frame.guid == "g2"));
     }
 
     #[test]
