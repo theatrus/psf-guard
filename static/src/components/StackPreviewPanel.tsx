@@ -27,7 +27,10 @@ import CalibrationMasterButton from './CalibrationMasterInspector';
 import StackSnrCurve from './StackSnrCurve';
 import ScoringChangedNote from './ScoringChangedNote';
 import StackColorPreviewPanel from './StackColorPreviewPanel';
-import { appliedProcessingQueryKey as channelProcessingQueryKey } from './channelProcessing';
+import {
+  appliedProcessingQueryKey as channelProcessingQueryKey,
+  colorCatalogQueryPrefix,
+} from './channelProcessing';
 import { colorSourceKey } from './stackColorSources';
 import { defaultColorProcessing } from './stackColorProcessing';
 import StackStretchControls from './StackStretchControls';
@@ -769,6 +772,8 @@ export default function StackPreviewPanel({
     }
     for (const [runId, channel] of seen) {
       if (runs.has(runId)) continue;
+      // A color preview that follows the channel card is out of date now.
+      queryClient.invalidateQueries({ queryKey: colorCatalogQueryPrefix(dbId, projectId) });
       queryClient.invalidateQueries({
         predicate: (query) => {
           const key = query.queryKey;
@@ -1430,12 +1435,21 @@ export default function StackPreviewPanel({
                               signal,
                               revision: artifact.artifactRevision,
                             }
-                          );
+                          ).finally(() => {
+                            // The run has left the line, finished or not;
+                            // the header stops showing it at once.
+                            queryClient.invalidateQueries({ queryKey: STACK_ACTIVITY_QUERY_KEY });
+                          });
                         }}
                         onApplied={async (preview) => {
                           const queryKey = appliedProcessingQueryKey(dbId, projectId, artifact);
                           await queryClient.cancelQueries({ queryKey });
                           queryClient.setQueryData(queryKey, preview);
+                          // A color preview that follows this card shows
+                          // it is out of date without waiting for a poll.
+                          queryClient.invalidateQueries({
+                            queryKey: colorCatalogQueryPrefix(dbId, projectId),
+                          });
                         }}
                         onRevert={async () => {
                           await apiClient.clearStackStretch(
@@ -1444,6 +1458,9 @@ export default function StackPreviewPanel({
                           const queryKey = appliedProcessingQueryKey(dbId, projectId, artifact);
                           await queryClient.cancelQueries({ queryKey });
                           queryClient.setQueryData(queryKey, null);
+                          queryClient.invalidateQueries({
+                            queryKey: colorCatalogQueryPrefix(dbId, projectId),
+                          });
                           // The next star removal starts on the starless
                           // view, not wherever this one was left.
                           setStarsView((current) => {

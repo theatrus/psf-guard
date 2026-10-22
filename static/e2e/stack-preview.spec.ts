@@ -409,10 +409,14 @@ test("follows the channel cards, and starts its own settings from a card's decon
   await expect(channels.getByRole('radio', { name: 'From each channel card' }))
     .toHaveAttribute('aria-checked', 'true');
   await expect(channels).toContainText(
-    'Each input runs what its channel card applied: R: deconvolution.'
+    'Each input runs the steps its channel card applied (R: deconvolution).'
   );
+  // The lane shows what the build ran, and what the card shows since.
   const redLane = processing.getByRole('region', { name: 'R input stretch stack' });
-  await expect(redLane).toContainText('From its channel card: deconvolution');
+  await expect(redLane).toContainText(
+    'Its channel card applied no deconvolution or RC-Astro steps. ' +
+    'The card now applies: deconvolution.'
+  );
   await processing.screenshot({ path: testInfo.outputPath('color-follows-channel-cards.png') });
   // Setting the tools here starts from what the cards show.
   await channels.getByRole('radio', { name: 'Set in this build' }).click();

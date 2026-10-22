@@ -44,10 +44,23 @@ describe('channel processing', () => {
       red: { deconvolution },
       green: { rc_astro: { steps: [{ tool: 'nxt', parameters: {} }] } },
     }, ['red', 'green', 'blue']);
-    expect(own.input_processing).toBe('own');
+    // Without the field the server reads `own`, as a draft saved before the
+    // choice existed does.
+    expect(own).not.toHaveProperty('input_processing');
     expect(own.input_deconvolutions).toEqual({ red: deconvolution });
     expect(own.input_rc_astro).toEqual({ green: { steps: [{ tool: 'nxt', parameters: {} }] } });
     expect(own.input_stretches).toEqual(draft.input_stretches);
+  });
+
+  it('turns own → channels → own back into the same draft', () => {
+    const deconvolution = defaultDeconvolutionConfig();
+    const own = defaultColorProcessing(['red', 'green', 'blue']);
+    delete own.input_processing;
+    own.input_deconvolutions = { red: deconvolution };
+    const channels = { red: { deconvolution } };
+    const back = ownFromChannels({ ...own, input_processing: 'channels' }, channels,
+      ['red', 'green', 'blue']);
+    expect(JSON.stringify(back)).toBe(JSON.stringify(own));
   });
 
   it("names a card's tools in the order they run", () => {

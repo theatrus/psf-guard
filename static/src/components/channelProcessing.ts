@@ -22,6 +22,13 @@ export function appliedProcessingQueryKey(
   ] as const;
 }
 
+/** Every color catalog query of a project. A color preview that follows the
+ *  channel cards goes out of date when a card's processing changes, so the
+ *  stacks panel marks these stale when a card applies or reverts. */
+export function colorCatalogQueryPrefix(dbId: string, projectId: number) {
+  return ['db', dbId, 'project', projectId, 'stack-color', 'catalog'] as const;
+}
+
 /** The pixel processing a channel card shows: its deconvolution and its
  *  RC-Astro steps. Stretches stay with the card; a color input has its own. */
 export interface ChannelPixelProcessing {
@@ -66,7 +73,11 @@ export function ownFromChannels(
     if (channel?.deconvolution) input_deconvolutions[role] = structuredClone(channel.deconvolution);
     if (channel?.rc_astro) input_rc_astro[role] = structuredClone(channel.rc_astro);
   }
-  return { ...draft, input_processing: 'own', input_deconvolutions, input_rc_astro };
+  // A draft without `input_processing` reads as `own`, as the server reads
+  // it; leaving the field out keeps own → channels → own an unchanged draft.
+  const next: StackColorProcessing = { ...draft, input_deconvolutions, input_rc_astro };
+  delete next.input_processing;
+  return next;
 }
 
 /** A channel card's deconvolution and RC-Astro steps in words, in the order

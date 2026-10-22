@@ -1478,6 +1478,19 @@ fn validate_request(request: &StackColorRequest) -> Result<(), AppError> {
     }
 }
 
+/// Why an input's RC-Astro steps cannot run. Steps taken from a channel
+/// card were not set in this build, so the message says which card's.
+fn refused_rc_astro_steps(role: StackColorRole, follows_cards: bool, error: String) -> AppError {
+    AppError::BadRequest(if follows_cards {
+        format!(
+            "The {} channel card's RC-Astro steps cannot run: {error}",
+            role.label()
+        )
+    } else {
+        error
+    })
+}
+
 pub(super) fn prepare_color_job(
     ctx: &crate::server::database_context::DatabaseContext,
     astrometry: &crate::astrometry::AstrometryContext,
@@ -1503,10 +1516,12 @@ pub(super) fn prepare_color_job(
     let mut rc_astro_schemas = BTreeMap::new();
     if let Some(processing) = &mut request.processing {
         resolve_color_calibration(request.kind, processing);
+        let follows_cards = processing.input_processing == ColorInputProcessing::Channels;
         for (role, config) in &mut processing.input_rc_astro {
-            let schemas = super::rc_astro::schemas_for(config).map_err(AppError::BadRequest)?;
-            *config = super::rc_astro::normalize_against_schemas(config, &schemas)
-                .map_err(AppError::BadRequest)?;
+            let refused = |error| refused_rc_astro_steps(*role, follows_cards, error);
+            let schemas = super::rc_astro::schemas_for(config).map_err(refused)?;
+            *config =
+                super::rc_astro::normalize_against_schemas(config, &schemas).map_err(refused)?;
             rc_astro_schemas.insert(*role, schemas);
         }
     }
@@ -5034,6 +5049,32 @@ fn ran_tools_elsewhere(job: &StackColorJob) -> bool {
     }) && job.channel_tools_version != COLOR_CHANNEL_TOOLS_VERSION
 }
 
+/// Why the color catalog would mark `job` out of date, against its
+/// project's latest stacks.
+#[cfg(test)]
+pub(super) fn outdated_reason(
+    ctx: &crate::server::database_context::DatabaseContext,
+    astrometry: &crate::astrometry::AstrometryContext,
+    job: &StackColorJob,
+) -> Result<Option<String>, AppError> {
+    let latest = load_latest_stacks(ctx, job.project_id)?;
+    color_job_outdated_reason(ctx, astrometry, job, &latest)
+}
+
+/// Empty files where a finished build leaves its preview and FITS, so a
+/// test's job counts as built.
+#[cfg(test)]
+pub(super) fn write_placeholder_artifacts(stack_root: &FsPath, job_id: &str) {
+    for path in [
+        color_preview_path(stack_root, job_id),
+        color_original_preview_path(stack_root, job_id),
+        color_fits_path(stack_root, job_id),
+    ] {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, b"").unwrap();
+    }
+}
+
 fn color_job_outdated_reason(
     ctx: &crate::server::database_context::DatabaseContext,
     astrometry: &crate::astrometry::AstrometryContext,
@@ -5235,6 +5276,23 @@ mod tests {
             "target_id":1,"kind":"rgb","processing":{"input_rc_astro":{"ha":{"steps":[{"tool":"bxt"}]}}}
         })).unwrap();
         assert!(validate_request(&request).is_err());
+    }
+
+    #[test]
+    fn a_refused_rc_astro_step_from_a_card_says_which_card() {
+        let message = |follows_cards| match refused_rc_astro_steps(
+            StackColorRole::Oiii,
+            follows_cards,
+            "no schema for RC-Astro tool \"sxt\"".into(),
+        ) {
+            AppError::BadRequest(message) => message,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(
+            message(true),
+            "The OIII channel card's RC-Astro steps cannot run: no schema for RC-Astro tool \"sxt\""
+        );
+        assert_eq!(message(false), "no schema for RC-Astro tool \"sxt\"");
     }
 
     fn rc_astro_schema(tool: &str) -> seiza_stacking::ExternalToolSchema {

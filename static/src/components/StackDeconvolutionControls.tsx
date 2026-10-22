@@ -88,19 +88,50 @@ export default function StackDeconvolutionControls({
             onChange={(max_correction) => update({ max_correction })} />
         </div>
       )}
-      {result && result.channels.length > 0 && (
-        <div className="stack-deconvolution-diagnostics">
-          {result.channels.map((channel, index) => (
-            <span key={index}>
-              {result.channels.length > 1 && <strong>Channel {index + 1}</strong>}
-              Peak {channel.input_peak.toPrecision(4)} → {channel.output_peak.toPrecision(4)}
-              <small>
-                flux Δ {(channel.output_flux - channel.input_flux).toExponential(2)}
-              </small>
-            </span>
-          ))}
-        </div>
-      )}
+      {result && <DeconvolutionDiagnostics result={result} />}
+    </section>
+  );
+}
+
+function DeconvolutionDiagnostics({ result }: { result: StackDeconvolutionResult }) {
+  if (result.channels.length === 0) return null;
+  return (
+    <div className="stack-deconvolution-diagnostics">
+      {result.channels.map((channel, index) => (
+        <span key={index}>
+          {result.channels.length > 1 && <strong>Channel {index + 1}</strong>}
+          Peak {channel.input_peak.toPrecision(4)} → {channel.output_peak.toPrecision(4)}
+          <small>
+            flux Δ {(channel.output_flux - channel.input_flux).toExponential(2)}
+          </small>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+/** What a deconvolution ran with and did, read-only: for an input whose
+ *  steps come from its channel card, where the settings are the card's. */
+export function StackDeconvolutionSummary({
+  label,
+  result,
+}: {
+  label: string;
+  result: StackDeconvolutionResult;
+}) {
+  const { config } = result;
+  return (
+    <section className="stack-deconvolution-controls" aria-label={`${label} deconvolution`}>
+      <header>
+        <strong>Deconvolution</strong>
+        <span>From the channel card</span>
+      </header>
+      <p>
+        PSF FWHM {config.psf_fwhm_pixels.toFixed(2)} px · {config.iterations} iterations ·
+        amount {config.amount} · noise fraction {config.noise_fraction} · max correction{' '}
+        {config.max_correction}
+      </p>
+      <DeconvolutionDiagnostics result={result} />
     </section>
   );
 }

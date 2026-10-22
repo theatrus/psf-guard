@@ -1641,11 +1641,16 @@ each input's deconvolution and RC-Astro steps come from:
 - **From each channel card** is the default for a new color preview and for
   **Reset defaults**. Each input runs what its channel's card applied to the
   stack the preview uses: a card showing BlurXTerminator gives that input
-  BlurXTerminator, and a card showing only a stretch gives it no tools. Each
-  input lane names what its card applied. The server reads the cards when the
+  BlurXTerminator, and a card showing only a stretch gives it no tools. The
+  server reads the cards when the
   preview is built, so an automatic rebuild after new frames follows the cards
-  too. A card that applies other steps afterward makes the preview out of
-  date; build it again to use them.
+  too. When **Re-apply processing when a stack refreshes** is off, a refreshed
+  stack's card shows no processing, so the automatic rebuild runs no
+  deconvolution or RC-Astro on that channel. Apply the steps on the card again,
+  then build the color preview. A card that applies other steps afterward
+  makes the preview out of date; build it again to use them. Each input lane
+  shows what its card had applied when the preview was built and, when the
+  card has changed since, what it applies now.
 - **Set in this build** shows the deconvolution and RC-Astro controls in each
   input lane. Choosing it starts from what the cards show, so nothing you tuned
   on the cards is lost.
