@@ -1,8 +1,8 @@
 # Color previews and channel processing
 
 Status: **Step 1 built**: color previews follow each channel card's
-deconvolution and RC-Astro steps by default. Step 2 is planned, pending a
-comparison on real stacks. Step 3 is planned.
+deconvolution and RC-Astro steps by default. Step 2 is decided after a
+comparison on a real stack, and comes in a later change. Step 3 is planned.
 Last updated: 2026-10-22
 
 A channel card can run deconvolution and the RC-Astro tools
@@ -17,8 +17,8 @@ nothing unless the person remembered to copy.
 This record covers three steps:
 
 1. Color previews take each input's tools from its channel card by default.
-2. A channel's tools run once and serve both its card and every color
-   preview built from it.
+2. A channel's tools run once, on the channel's own stack, and serve both
+   its card and every color preview built from it.
 3. RC-Astro tools can run on the composed color image.
 
 ## Today's color pipeline
@@ -81,21 +81,43 @@ each input lane names what its card applied in place of the tool editors.
 Choosing **Set in this build** starts the build's own settings from what the
 cards show, so nothing is lost. Named color setups store the choice.
 
-## Step 2: share each channel's tools (planned)
+## Step 2: share each channel's tools (decided)
 
-Pending a comparison on real stacks.
+Decided: run each input's tools on the channel's own stack, before background
+extraction and registration, sharing the channel card's cache. Implementation
+comes in a later change.
 
-Run each input's tools on the channel's own linear stack, before background
-extraction and registration, and file the result under the same key as the
-channel card. One BlurXTerminator or NoiseXTerminator run then serves the
-card and every color preview that uses that stack, and a change to background
-extraction no longer reruns every channel's tools.
+One BlurXTerminator or NoiseXTerminator run then serves the card and every
+color preview that uses that stack, and a change to background extraction no
+longer reruns every channel's tools. Background extraction then fits
+sharpened, denoised channels, and registration resamples sharpened stars.
+Every color preview with tools rebuilds once after the change.
 
-The cost is a different order: background extraction would fit sharpened,
-denoised channels, and registration would resample sharpened stars. Before
-building it, run an existing color target both ways and compare star shapes
-and the background in the composite. Every color preview with tools would
-rebuild once after the change.
+### The comparison
+
+Teddy Bear on starfront-redcat61: the WBPP OIII master registered to the
+H-alpha master after a synthetic 1.7° turn and a (23.4, −11.7) pixel shift,
+measured on the central 2400×2400 pixels. RC-Astro ran through its CLI on
+supergateway with default BlurXTerminator and NoiseXTerminator settings.
+A registers and then runs the tools, as color previews do today; B runs the
+tools and then registers.
+
+| Tools | Order | Stars | HFR | FWHM | Ring dip | Background σ |
+|---|---|---|---|---|---|---|
+| none | | 234 | 2.695 | | | |
+| BlurXTerminator | A | 139 | 2.630 | 6.191 | 2.62σ | 1.02 |
+| BlurXTerminator | B | 184 | 2.595 | 6.108 | 2.07σ | 1.01 |
+| BlurX + NoiseX | A | 135 | 2.631 | | 1.32σ | 0.78 |
+| BlurX + NoiseX | B | 182 | 2.557 | | 0.81σ | 0.80 |
+
+B gave tighter stars, weaker rings around them and more detected stars, with
+the same background noise. Seiza's own deconvolution on the full frames
+agreed: with light settings the two orders matched; with strong settings A
+was sharper by 0.06 HFR, but its halos were about twice as bright and it
+detected 205 fewer stars.
+
+This is one target, one channel and a small rotation. A larger turn, or a
+channel with more resampling, could favour registering first.
 
 ## Step 3: RC-Astro on the composed image (planned)
 
