@@ -85,10 +85,15 @@ jobs:
         key: test
         save-if: ${{ github.ref == 'refs/heads/main' }}
 
+    # On Windows, `npm ci` sometimes fails while node-gyp builds
+    # better-sqlite3: the download of the Node headers stops ("Completion
+    # callback never invoked"), and npm then cannot remove the half-written
+    # packages (EPERM). A second try from an empty node_modules gets past it.
     - name: Install npm dependencies and build frontend
+      shell: bash
       run: |
         cd static
-        npm ci
+        npm ci || { echo "npm ci failed; trying once more"; rm -rf node_modules || true; npm ci; }
         npm run build
 
     - name: Run frontend tests
@@ -247,7 +252,10 @@ jobs:
         security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
         security default-keychain -s build.keychain
         security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
-        security set-keychain-settings -t 3600 -u build.keychain
+        # A locked keychain makes codesign wait for a password prompt that
+        # never comes on CI. Keep it unlocked for the job's six-hour limit;
+        # the macOS build step also unlocks it again before signing.
+        security set-keychain-settings -t 21600 -u build.keychain
         security import certificate.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
         security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" build.keychain
         security find-identity -v -p codesigning build.keychain
@@ -277,10 +285,15 @@ jobs:
         key: tauri
         save-if: ${{ github.ref == 'refs/heads/main' }}
 
+    # On Windows, `npm ci` sometimes fails while node-gyp builds
+    # better-sqlite3: the download of the Node headers stops ("Completion
+    # callback never invoked"), and npm then cannot remove the half-written
+    # packages (EPERM). A second try from an empty node_modules gets past it.
     - name: Install npm dependencies and build frontend
+      shell: bash
       run: |
         cd static
-        npm ci
+        npm ci || { echo "npm ci failed; trying once more"; rm -rf node_modules || true; npm ci; }
         npm run build
 
     # Downloads the prebuilt cargo-tauri binary (tauri-cli carries binstall
@@ -318,13 +331,19 @@ jobs:
       if: matrix.os == 'macos-latest' && github.event_name == 'pull_request'
       run: bash scripts/build-macos.sh tauri build --no-bundle
 
+    # The keychain is unlocked again here because the compile before signing
+    # can take over an hour on a slow runner. The timeout fails a signing
+    # hang in two hours instead of six; the slowest builds took 67 minutes.
     - name: Build Tauri desktop app (macOS, signed and notarized)
       if: matrix.os == 'macos-latest' && github.event_name != 'pull_request'
+      timeout-minutes: 120
       env:
         APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
         APPLE_API_KEY_PATH: AuthKey_${{ secrets.APPLE_API_KEY }}.p8
+        KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
       run: |
+        security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
         bash scripts/package-macos.sh
 
     - name: Upload Tauri artifacts (Ubuntu)
