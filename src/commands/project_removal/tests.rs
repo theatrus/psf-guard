@@ -1298,3 +1298,164 @@ fn held_deletions_wait_for_a_later_sync() {
     let summary = sync_pull(&source, &local, &pull_options(false)).unwrap();
     assert_eq!(summary.project.deleted, 1);
 }
+
+/// Give Empty's target the rows that refer to it: order and cadence items,
+/// flat history, and Planning's records keyed by its GUID.
+fn add_target_side_rows(conn: &Connection) {
+    conn.execute_batch(
+        r#"INSERT INTO overrideexposureorderitem (Id, targetid, "order", action, referenceIdx) VALUES (3, 30, 0, 0, 0);
+           INSERT INTO filtercadenceitem (Id, targetid, "order", next, action, referenceIdx) VALUES (3, 30, 0, 1, 0, 0);
+           INSERT INTO flathistory (Id, targetId, profileId) VALUES (3, 30, 'p');
+           INSERT INTO psf_guard_director_target VALUES ('tg-empty', 'pg-empty');
+           INSERT INTO psf_guard_director_plan VALUES ('eg-empty', 'tg-empty');
+           INSERT INTO psf_guard_scheduler_flat_history VALUES ('r3', 'tg-empty');"#,
+    )
+    .unwrap();
+}
+
+fn assert_target_kept(conn: &Connection, changes: &[String]) {
+    assert_eq!(
+        count(
+            conn,
+            "SELECT COUNT(*) FROM target WHERE Id = 30 AND guid = 'tg-empty' AND projectid = 2"
+        ),
+        1,
+        "{changes:?}"
+    );
+    assert_eq!(
+        count(conn, "SELECT COUNT(*) FROM project WHERE guid = 'pg-empty'"),
+        0,
+        "{changes:?}"
+    );
+    for (table, column) in [
+        ("overrideexposureorderitem", "targetid = 30"),
+        ("filtercadenceitem", "targetid = 30"),
+        ("flathistory", "targetId = 30"),
+        ("exposureplan", "targetid = 30"),
+        ("psf_guard_director_target", "target_guid = 'tg-empty'"),
+        ("psf_guard_director_plan", "target_guid = 'tg-empty'"),
+        (
+            "psf_guard_scheduler_flat_history",
+            "target_guid = 'tg-empty'",
+        ),
+    ] {
+        assert_eq!(
+            count(
+                conn,
+                &format!("SELECT COUNT(*) FROM {table} WHERE {column}")
+            ),
+            1,
+            "{table} lost the moved target's row"
+        );
+    }
+}
+
+/// A source catalog that moved a target out of a project and then deleted
+/// the project: a sync re-parents the target here, with its Id and every
+/// row that refers to it, before it deletes the project.
+#[test]
+fn a_target_moved_out_of_a_project_the_source_deleted_keeps_its_id_and_rows() {
+    use crate::commands::sync::{sync_planning, PlanningOptions, SyncDestination};
+
+    let source = catalog();
+    add_empty_project(&source);
+    source
+        .execute("UPDATE target SET projectid = 2 WHERE Id = 30", [])
+        .unwrap();
+    delete(&source, 3);
+
+    let local = catalog();
+    add_empty_project(&local);
+    add_target_side_rows(&local);
+    let summary = sync_pull(&source, &local, &pull_options(false)).unwrap();
+    assert_eq!(summary.project.deleted, 1, "{:?}", summary.changes);
+    assert_target_kept(&local, &summary.changes);
+
+    let rig = catalog();
+    add_empty_project(&rig);
+    add_target_side_rows(&rig);
+    let pushed = sync_planning(
+        &source,
+        &rig,
+        &PlanningOptions {
+            dry_run: false,
+            project_filter: None,
+            destination: SyncDestination::Scheduler,
+            deletions: Default::default(),
+        },
+    )
+    .unwrap();
+    assert_eq!(pushed.project.deleted, 1, "{:?}", pushed.changes);
+    assert_target_kept(&rig, &pushed.changes);
+}
+
+/// When a target the source has under another project cannot move here,
+/// the project it is under stays.
+#[test]
+fn a_project_stays_while_a_target_cannot_move_out_of_it() {
+    let source = catalog();
+    add_empty_project(&source);
+    source
+        .execute("UPDATE target SET projectid = 2 WHERE Id = 30", [])
+        .unwrap();
+    delete(&source, 3);
+    let local = catalog();
+    add_empty_project(&local);
+    // A filter that leaves out the target's new project.
+    let mut options = pull_options(false);
+    options.project_filter = Some("Empty".into());
+    let summary = sync_pull(&source, &local, &options).unwrap();
+    assert!(summary.changes.contains(
+        &"keep project \"Empty\": deleted in the source catalog, but its target \"Empty\" could not move to its project in the source".to_string()
+    ), "{:?}", summary.changes);
+    assert_eq!(
+        count(&local, "SELECT COUNT(*) FROM project WHERE Id = 3"),
+        1
+    );
+}
+
+/// After a planning sync the rig has the target under its new project, but
+/// its earlier frames keep the old project's Id. They arrive with their
+/// target, under its project here, and none is recorded as removed.
+#[test]
+fn frames_follow_their_target_out_of_a_deleted_project() {
+    let rig = catalog();
+    rig.execute_batch(
+        "UPDATE target SET projectid = 2 WHERE Id = 10;
+         INSERT INTO acquiredimage (Id, projectId, targetId, acquireddate, filtername, gradingStatus, metadata, guid, exposureId, profileId)
+           VALUES (9, 1, 10, 1759309000, 'L', 0, '{\"FileName\":\"M31_L_009.fits\"}', 'g9', 100, 'p');",
+    )
+    .unwrap();
+    let local = catalog();
+    local
+        .execute_batch(
+            "UPDATE target SET projectid = 2 WHERE Id = 10;
+             UPDATE acquiredimage SET projectId = 2 WHERE targetId = 10;",
+        )
+        .unwrap();
+    delete(&local, 1);
+
+    let summary = sync_pull(&rig, &local, &pull_options(false)).unwrap();
+    assert_eq!(
+        count(
+            &local,
+            "SELECT COUNT(*) FROM acquiredimage WHERE guid IN ('g1','g2','g3','g9') AND projectId = 2 AND targetId = 10"
+        ),
+        4,
+        "{:?}",
+        summary.changes
+    );
+    assert_eq!(summary.acquiredimage.skipped, 0, "{:?}", summary.changes);
+    assert_eq!(
+        count(
+            &local,
+            "SELECT COUNT(*) FROM psf_guard_removed_project_frame"
+        ),
+        0
+    );
+    for name in ["m31_l_001.fits", "m31_l_009.fits"] {
+        assert!(deleted_project_frames_named(&local, name)
+            .unwrap()
+            .is_empty());
+    }
+}

@@ -197,6 +197,13 @@ allowed back at once; they stay that way.
   deleted, upserts the target with that project, and brings its exposure
   plans and frames under it. Its frames are not added to the deletion's
   frame tombstones.
+- **Frames follow their target.** A frame whose own project is left out
+  but whose target arrives, because the target's project arrives or the
+  target was moved here, arrives with the target, under the target's
+  project here. This covers a rig whose target a planning sync moved while
+  its earlier frames kept the old project's Id. No such frame, and no frame
+  whose GUID this catalog already has, is added to the frame tombstones,
+  so its upload is not refused.
 - **Imports.** `reject_removal::removed_file_names` also returns the
   deleted project's file names, its lights' and their calibrated copies',
   so a folder import or autoimport of the files left on disk skips them;
@@ -212,10 +219,18 @@ while it is Active.
 
 A sync applies the source catalog's deletions to its destination, in every
 direction that writes project rows: a full pull, the automatic arrival
-sync, a pull from a peer and a planning push (`apply_source_deletions`,
-which `sync_structure` in `src/commands/sync/pull.rs` runs first). For
-each GUID in the source's `psf_guard_removed_project` that is not allowed
-back and that the source has no project for:
+sync, a pull from a peer and a planning push (`apply_source_deletions` in
+`src/commands/sync/pull.rs`). `sync_structure` follows the source's Allow
+again first, so a project allowed back returns in the same sync, and
+deletes last, after the targets and exposure plans are synced. A target
+the source moved out of the deleted project into another one is then
+already under its new project here, with its Id and every row that refers
+to it: order and cadence items, flat history, and Planning's
+`psf_guard_director_target`, `psf_guard_director_plan` and
+`psf_guard_scheduler_flat_history` rows. `delete_project_rows` leaves a
+moved target's `psf_guard_director_target` row alone. For each GUID in the
+source's `psf_guard_removed_project` that is not allowed back and that
+the source has no project for:
 
 - When the destination has a project with that GUID and nothing was
   captured for it there (no `acquiredimage` row with its project Id or on
@@ -231,6 +246,11 @@ back and that the source has no project for:
   (an allowed-back row for the GUID dated after the source's
   `removed_at`), the project stays: that choice is newer. See
   [Allowing a project back](#allowing-a-project-back).
+- When one of its targets here is a target the source has under another
+  project, the sync could not move it (a name filter left that project
+  out, for one), and the project stays: `keep project "M31": deleted in
+  the source catalog, but its target "M31" could not move to its project
+  in the source`.
 - When the project belongs to a collaboration here, it stays: its plan
   came from a collaboration, or one of its frames or removed rejects was
   reported to one. The server passes those GUIDs to the sync
@@ -314,7 +334,8 @@ upload without `DATE-OBS`, cannot show the upload is the removed frame, so
 the upload imports. When only the name matches, the upload imports as a
 new frame (`ImportOptions::admit_removed_names`). A folder import still
 skips removed names by name alone. A 410 is not a failure worth retrying: the
-N.I.N.A. plugin retries only on no response, 408, 409, 429 and 5xx.
+N.I.N.A. plugin retries automatically only on no response, 408, 409, 429
+and 5xx.
 
 ### The N.I.N.A. plugin
 
@@ -324,10 +345,17 @@ Plugin versions with project deletion support
 ([theatrus/psf-guard-nina-plugin#26](https://github.com/theatrus/psf-guard-nina-plugin/pull/26))
 ask for `include_project_tombstones` when the server advertises
 `project_tombstones_v1`, and delete a frameless project on the rig when
-PSF Guard deleted it. Older plugin versions do not: their rig keeps the
-project, and the next pull leaves it out of PSF Guard again. Older
-plugins also show an upload refused with 410, for a deleted project's or
-a removed reject's file, as a blocked job.
+PSF Guard deleted it. They run the deletions after the target upserts, so
+a target PSF Guard moved out of a deleted project is re-parented on the
+rig, and they keep the old project while a target the source has under a
+live project cannot move, as PSF Guard's own sync does. They hold an
+upload refused with 410 (a deleted project's or a removed reject's file)
+as refused: **Retry refused uploads** sends it again after you allow the
+project back or restore the frame, and **Forget refused uploads** drops
+the held uploads while the image files stay on disk. Older plugin
+versions do not delete projects: their rig keeps the project, and the
+next pull leaves it out of PSF Guard again. They show a refused upload as
+a blocked job.
 
 ## Allowing a project back
 

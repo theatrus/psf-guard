@@ -1038,10 +1038,12 @@ pub(crate) fn delete_project_rows(
         }
     }
     if let Some(guid) = guid {
-        // Planning's rows for targets deleted by hand before this.
+        // Planning's rows for targets deleted by hand before this. A target
+        // moved to another project keeps its row.
         if table_exists(tx, "psf_guard_director_target") {
             tx.execute(
-                "DELETE FROM psf_guard_director_target WHERE lower(project_guid) = lower(?1)",
+                "DELETE FROM psf_guard_director_target WHERE lower(project_guid) = lower(?1)
+                   AND target_guid NOT IN (SELECT guid FROM target WHERE guid IS NOT NULL)",
                 [guid],
             )?;
         }

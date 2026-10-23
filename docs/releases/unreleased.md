@@ -90,10 +90,12 @@
 - An upload of a frame from a project deleted in the receiving catalog is
   refused with a message that explains how to allow the project back. An
   upload of a frame removed as a reject is refused with a message that
-  explains how to restore it. The updated N.I.N.A. plugin keeps such an
-  upload in its queue, marked as refused; once you allow the project back
-  or restore the frame, **Retry blocked** in the plugin sends it again.
-  Older plugins show these uploads as blocked jobs. A different
+  explains how to restore it. The updated N.I.N.A. plugin holds such an
+  upload as refused. After you allow the project back or restore the
+  frame, click **Retry refused uploads** in the plugin to send it again,
+  or click **Forget refused uploads** to drop the held uploads; the image
+  files stay on disk. Older plugins show these uploads as blocked jobs. A
+  different
   frame that only shares a deleted frame's file name, such as
   `0001.fits` from another target, uploads as usual.
 
