@@ -40,10 +40,11 @@ Under **Plans with nothing captured yet**, each plan has a delete button
 beside **Rename**, for editors on a server with database management. The
 dialog lists the plan's project in each database it links, with its
 targets and exposure plans. **Delete plan** deletes each project as the
-Library's Delete does, one database at a time, then the plan. The projects
-have no frames, so none is listed under **Deleted projects**, and a catalog
-that syncs from Target Scheduler gets its project back on its next sync. The
-plan's deletion removes its links,
+Library's Delete does, one database at a time, then the plan. Each
+deletion writes a tombstone with `origin` `local`, so later syncs leave the
+project out. The projects have no frames, so none is listed under
+**Deleted projects** until a sync leaves it out. The plan's deletion
+removes its links,
 preferences, framing and plan drafts, activation record and draft imports
 (`MetaStore::delete_plan`).
 
