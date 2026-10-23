@@ -208,6 +208,18 @@ pub(super) fn classify_sync_snapshot_failure(error: anyhow::Error, source_path: 
 #[cfg(test)]
 mod scheduler_sync_error_tests;
 
+/// What one scheduler sync produced, for the work the server does after it.
+struct SyncRun {
+    response: SchedulerSyncResponse,
+    /// The destination fingerprint a preview recorded.
+    fingerprint: Option<String>,
+    /// Frames the sync inserted or updated, whose files may arrive later.
+    changed_images: Vec<crate::commands::sync::ChangedAcquiredImage>,
+    /// GUIDs of the destination projects the sync deleted because the
+    /// source catalog deleted them.
+    deleted_projects: Vec<String>,
+}
+
 pub(crate) async fn execute_scheduler_sync_paths(
     state: &Arc<AppState>,
     source_path: PathBuf,
@@ -234,6 +246,16 @@ pub(crate) async fn execute_scheduler_sync_paths(
         ));
     }
     let fingerprint_queries = crate::server::sync_preview::fingerprint_queries(&req);
+    // A planning push into a registered catalog writes a PSF Guard catalog,
+    // which records a project it deletes as a tombstone. A push into a
+    // Target Scheduler file (a `ts:` connection, Director file delivery)
+    // writes no PSF Guard table there.
+    let destination_is_catalog = state.get_database(&destination_id).is_some();
+    let planning_destination = if destination_is_catalog && !scoped_planning {
+        crate::commands::sync::SyncDestination::Catalog
+    } else {
+        crate::commands::sync::SyncDestination::Scheduler
+    };
     let kind = req.kind;
     let dry_run = req.dry_run;
     let project = req.project;
@@ -264,244 +286,277 @@ pub(crate) async fn execute_scheduler_sync_paths(
         None
     };
 
-    let response = tokio::task::spawn_blocking(
-        move || -> anyhow::Result<(
+    let response = tokio::task::spawn_blocking(move || -> anyhow::Result<SyncRun> {
+        let source_canon =
+            std::fs::canonicalize(&source_path).unwrap_or_else(|_| source_path.clone());
+        let destination_canon =
+            std::fs::canonicalize(&destination_path).unwrap_or_else(|_| destination_path.clone());
+        anyhow::ensure!(
+            source_canon != destination_canon,
+            "The two configured entries point to the same database file."
+        );
+
+        let (source, destination) =
+            open_scheduler_sync_connections(&source_path, &destination_path)?;
+        let preview_stop = guard_mode.preview_stop().cloned();
+        if let Some(stop) = &preview_stop {
+            stop.interrupts(&source);
+            stop.interrupts(&destination);
+        }
+        // An interrupted statement fails with SQLite's interrupt error;
+        // a preview reports that it stopped instead.
+        let stopped = |error: anyhow::Error| match &preview_stop {
+            Some(stop) if stop.requested() => anyhow::Error::new(PreviewStopped),
+            _ => error,
+        };
+
+        let run = |transaction: Option<&Transaction<'_>>| -> anyhow::Result<(
             SchedulerSyncResponse,
-            Option<String>,
             Vec<crate::commands::sync::ChangedAcquiredImage>,
+            Vec<String>,
         )> {
-            let source_canon =
-                std::fs::canonicalize(&source_path).unwrap_or_else(|_| source_path.clone());
-            let destination_canon = std::fs::canonicalize(&destination_path)
-                .unwrap_or_else(|_| destination_path.clone());
-            anyhow::ensure!(
-                source_canon != destination_canon,
-                "The two configured entries point to the same database file."
-            );
-
-            let (source, destination) =
-                open_scheduler_sync_connections(&source_path, &destination_path)?;
-            let preview_stop = guard_mode.preview_stop().cloned();
-            if let Some(stop) = &preview_stop {
-                stop.interrupts(&source);
-                stop.interrupts(&destination);
-            }
-            // An interrupted statement fails with SQLite's interrupt error;
-            // a preview reports that it stopped instead.
-            let stopped = |error: anyhow::Error| match &preview_stop {
-                Some(stop) if stop.requested() => anyhow::Error::new(PreviewStopped),
-                _ => error,
-            };
-
-            let run = |transaction: Option<&Transaction<'_>>| -> anyhow::Result<(
-                SchedulerSyncResponse,
-                Vec<crate::commands::sync::ChangedAcquiredImage>,
-            )> {
-                    let (response, changed_image_ids) = match kind {
-                        SchedulerSyncKind::Pull => {
-                            let options = PullOptions {
-                                dry_run,
-                                with_image_data,
-                                project_filter: project.clone(),
-                            };
-                        let mut summary = match transaction {
-                                Some(transaction) => {
-                                    sync_pull_in_transaction(&source, transaction, &options)?
-                                }
-                                None => sync_pull(&source, &destination, &options)?,
-                            };
-                        let changed_images = std::mem::take(&mut summary.changed_acquiredimages);
-                            (SchedulerSyncResponse {
-                                kind,
-                                dry_run,
-                                source_db_id: source_id,
-                                destination_db_id: destination_id,
-                                exposuretemplate: (&summary.exposuretemplate).into(),
-                                project: (&summary.project).into(),
-                                ruleweight: (&summary.ruleweight).into(),
-                                target: (&summary.target).into(),
-                                exposureplan: (&summary.exposureplan).into(),
-                                acquiredimage: Some((&summary.acquiredimage).into()),
-                                imagedata: summary
-                                    .imagedata_synced
-                                    .then(|| (&summary.imagedata).into()),
-                                grades: None,
-                                calibration: Some(SchedulerSyncCalibrationCounts {
-                                    frames: (&summary.calibration_frames).into(),
-                                    grades: (&summary.calibration_grades).into(),
-                                    kept_out: summary.calibration_choices.kept_out,
-                                    used_anyway: summary.calibration_choices.used_anyway,
-                                    cleared: summary.calibration_choices.cleared,
-                                    flat_groups: summary.calibration_choices.flat_groups,
-                                    flat_lights: summary.calibration_choices.flat_lights,
-                                }),
-                                grade_filled: summary.grade_filled,
-                                grade_preserved: summary.grade_preserved,
-                                adopted: summary.adopted,
-                                imagedata_bytes: summary.imagedata_bytes,
-                                total_inserted: summary.total_inserted(),
-                                total_updated: summary.total_updated(),
-                                changes: capped_change_lines(summary.changes),
-                            }, changed_images)
-                        }
-                        SchedulerSyncKind::PushPlanning => {
-                            let options = PlanningOptions {
-                                dry_run,
-                                project_filter: project.clone(),
-                            };
-                            let summary = match transaction {
-                                Some(transaction) => {
-                                    sync_planning_in_transaction(&source, transaction, &options)?
-                                }
-                                None => sync_planning(&source, &destination, &options)?,
-                            };
-                            (SchedulerSyncResponse {
-                                kind,
-                                dry_run,
-                                source_db_id: source_id,
-                                destination_db_id: destination_id,
-                                exposuretemplate: (&summary.exposuretemplate).into(),
-                                project: (&summary.project).into(),
-                                ruleweight: (&summary.ruleweight).into(),
-                                target: (&summary.target).into(),
-                                exposureplan: (&summary.exposureplan).into(),
-                                acquiredimage: None,
-                                imagedata: None,
-                                grades: None,
-                                calibration: None,
-                                grade_filled: 0,
-                                grade_preserved: 0,
-                                adopted: 0,
-                                imagedata_bytes: 0,
-                                total_inserted: summary.total_inserted(),
-                                total_updated: summary.total_updated(),
-                                changes: capped_change_lines(summary.changes),
-                            }, Vec::new())
-                        }
-                        SchedulerSyncKind::PushGrades => {
-                            let options = SyncGradesOptions {
-                                status_filter,
-                                reviewed_only,
-                                project_filter: project.clone(),
-                                target_filter: target.clone(),
-                                dry_run,
-                            };
-                            let summary = match transaction {
-                                Some(transaction) => {
-                                    sync_grades_in_transaction(&source, transaction, &options)?
-                                }
-                                None => sync_grades(&source, &destination, &options)?,
-                            };
-                            (SchedulerSyncResponse {
-                                kind,
-                                dry_run,
-                                source_db_id: source_id,
-                                destination_db_id: destination_id,
-                                exposuretemplate: SchedulerSyncTableCounts::default(),
-                                project: SchedulerSyncTableCounts::default(),
-                                ruleweight: SchedulerSyncTableCounts::default(),
-                                target: SchedulerSyncTableCounts::default(),
-                                exposureplan: SchedulerSyncTableCounts::default(),
-                                acquiredimage: None,
-                                imagedata: None,
-                                grades: Some(SchedulerSyncGradeCounts {
-                                    source_considered: summary.source_considered,
-                                    source_no_guid: summary.source_no_guid,
-                                    matched: summary.matched,
-                                    changed: summary.changed,
-                                    unchanged: summary.unchanged,
-                                    unmatched_source: summary.unmatched_source,
-                                    destination_only: summary.dest_only,
-                                    duplicate_guids: summary.duplicate_guids,
-                                    transitions: summary.transitions,
-                                }),
-                                calibration: None,
-                                grade_filled: 0,
-                                grade_preserved: 0,
-                                adopted: 0,
-                                imagedata_bytes: 0,
-                                total_inserted: 0,
-                                total_updated: summary.changed,
-                                changes: capped_change_lines(
-                                    summary
-                                        .changes
-                                        .iter()
-                                        .map(|change| {
-                                            let reason = change
-                                                .reason
-                                                .as_deref()
-                                                .map(|reason| format!(" ({reason})"))
-                                                .unwrap_or_default();
-                                            format!(
-                                                "grade {}: {} → {}{}",
-                                                change.guid,
-                                                grade_label(change.from),
-                                                grade_label(change.to),
-                                                reason,
-                                            )
-                                        })
-                                        .collect(),
-                                ),
-                            }, Vec::new())
-                        }
+            let (response, changed_image_ids, deleted_projects) = match kind {
+                SchedulerSyncKind::Pull => {
+                    let options = PullOptions {
+                        dry_run,
+                        with_image_data,
+                        project_filter: project.clone(),
                     };
-                    Ok((response, changed_image_ids))
-                };
+                    let mut summary = match transaction {
+                        Some(transaction) => {
+                            sync_pull_in_transaction(&source, transaction, &options)?
+                        }
+                        None => sync_pull(&source, &destination, &options)?,
+                    };
+                    let changed_images = std::mem::take(&mut summary.changed_acquiredimages);
+                    let deleted_projects = std::mem::take(&mut summary.deleted_project_guids);
+                    (
+                        SchedulerSyncResponse {
+                            kind,
+                            dry_run,
+                            source_db_id: source_id,
+                            destination_db_id: destination_id,
+                            exposuretemplate: (&summary.exposuretemplate).into(),
+                            project: (&summary.project).into(),
+                            ruleweight: (&summary.ruleweight).into(),
+                            target: (&summary.target).into(),
+                            exposureplan: (&summary.exposureplan).into(),
+                            acquiredimage: Some((&summary.acquiredimage).into()),
+                            imagedata: summary
+                                .imagedata_synced
+                                .then(|| (&summary.imagedata).into()),
+                            grades: None,
+                            calibration: Some(SchedulerSyncCalibrationCounts {
+                                frames: (&summary.calibration_frames).into(),
+                                grades: (&summary.calibration_grades).into(),
+                                kept_out: summary.calibration_choices.kept_out,
+                                used_anyway: summary.calibration_choices.used_anyway,
+                                cleared: summary.calibration_choices.cleared,
+                                flat_groups: summary.calibration_choices.flat_groups,
+                                flat_lights: summary.calibration_choices.flat_lights,
+                            }),
+                            grade_filled: summary.grade_filled,
+                            grade_preserved: summary.grade_preserved,
+                            adopted: summary.adopted,
+                            imagedata_bytes: summary.imagedata_bytes,
+                            total_inserted: summary.total_inserted(),
+                            total_updated: summary.total_updated(),
+                            changes: capped_change_lines(summary.changes),
+                        },
+                        changed_images,
+                        deleted_projects,
+                    )
+                }
+                SchedulerSyncKind::PushPlanning => {
+                    let options = PlanningOptions {
+                        dry_run,
+                        project_filter: project.clone(),
+                        destination: planning_destination,
+                    };
+                    let mut summary = match transaction {
+                        Some(transaction) => {
+                            sync_planning_in_transaction(&source, transaction, &options)?
+                        }
+                        None => sync_planning(&source, &destination, &options)?,
+                    };
+                    let deleted_projects = std::mem::take(&mut summary.deleted_project_guids);
+                    (
+                        SchedulerSyncResponse {
+                            kind,
+                            dry_run,
+                            source_db_id: source_id,
+                            destination_db_id: destination_id,
+                            exposuretemplate: (&summary.exposuretemplate).into(),
+                            project: (&summary.project).into(),
+                            ruleweight: (&summary.ruleweight).into(),
+                            target: (&summary.target).into(),
+                            exposureplan: (&summary.exposureplan).into(),
+                            acquiredimage: None,
+                            imagedata: None,
+                            grades: None,
+                            calibration: None,
+                            grade_filled: 0,
+                            grade_preserved: 0,
+                            adopted: 0,
+                            imagedata_bytes: 0,
+                            total_inserted: summary.total_inserted(),
+                            total_updated: summary.total_updated(),
+                            changes: capped_change_lines(summary.changes),
+                        },
+                        Vec::new(),
+                        deleted_projects,
+                    )
+                }
+                SchedulerSyncKind::PushGrades => {
+                    let options = SyncGradesOptions {
+                        status_filter,
+                        reviewed_only,
+                        project_filter: project.clone(),
+                        target_filter: target.clone(),
+                        dry_run,
+                    };
+                    let summary = match transaction {
+                        Some(transaction) => {
+                            sync_grades_in_transaction(&source, transaction, &options)?
+                        }
+                        None => sync_grades(&source, &destination, &options)?,
+                    };
+                    (
+                        SchedulerSyncResponse {
+                            kind,
+                            dry_run,
+                            source_db_id: source_id,
+                            destination_db_id: destination_id,
+                            exposuretemplate: SchedulerSyncTableCounts::default(),
+                            project: SchedulerSyncTableCounts::default(),
+                            ruleweight: SchedulerSyncTableCounts::default(),
+                            target: SchedulerSyncTableCounts::default(),
+                            exposureplan: SchedulerSyncTableCounts::default(),
+                            acquiredimage: None,
+                            imagedata: None,
+                            grades: Some(SchedulerSyncGradeCounts {
+                                source_considered: summary.source_considered,
+                                source_no_guid: summary.source_no_guid,
+                                matched: summary.matched,
+                                changed: summary.changed,
+                                unchanged: summary.unchanged,
+                                unmatched_source: summary.unmatched_source,
+                                destination_only: summary.dest_only,
+                                duplicate_guids: summary.duplicate_guids,
+                                transitions: summary.transitions,
+                            }),
+                            calibration: None,
+                            grade_filled: 0,
+                            grade_preserved: 0,
+                            adopted: 0,
+                            imagedata_bytes: 0,
+                            total_inserted: 0,
+                            total_updated: summary.changed,
+                            changes: capped_change_lines(
+                                summary
+                                    .changes
+                                    .iter()
+                                    .map(|change| {
+                                        let reason = change
+                                            .reason
+                                            .as_deref()
+                                            .map(|reason| format!(" ({reason})"))
+                                            .unwrap_or_default();
+                                        format!(
+                                            "grade {}: {} → {}{}",
+                                            change.guid,
+                                            grade_label(change.from),
+                                            grade_label(change.to),
+                                            reason,
+                                        )
+                                    })
+                                    .collect(),
+                            ),
+                        },
+                        Vec::new(),
+                        Vec::new(),
+                    )
+                }
+            };
+            Ok((response, changed_image_ids, deleted_projects))
+        };
 
-            let fingerprint = |destination: &Connection| {
-                if scoped_planning {
-                    crate::server::sync_preview::planning_destination_fingerprint(&source, destination)
+        let fingerprint = |destination: &Connection| {
+            if scoped_planning {
+                crate::server::sync_preview::planning_destination_fingerprint(&source, destination)
+            } else {
+                crate::server::sync_preview::connection_fingerprint(
+                    destination,
+                    &fingerprint_queries,
+                )
+            }
+        };
+        match guard_mode {
+            SyncGuardMode::None => {
+                let (response, changed_images, deleted_projects) = run(None)?;
+                Ok(SyncRun {
+                    response,
+                    fingerprint: None,
+                    changed_images,
+                    deleted_projects,
+                })
+            }
+            SyncGuardMode::Preview { .. } | SyncGuardMode::PlanningPreview { .. } => {
+                // A pull or planning preview writes, then rolls back; a
+                // grade preview only reads.
+                let behavior = if matches!(kind, SchedulerSyncKind::PushGrades) {
+                    TransactionBehavior::Deferred
                 } else {
-                    crate::server::sync_preview::connection_fingerprint(destination, &fingerprint_queries)
-                }
-            };
-            match guard_mode {
-                SyncGuardMode::None => {
-                    let (response, changed_image_ids) = run(None)?;
-                    Ok((response, None, changed_image_ids))
-                }
-                SyncGuardMode::Preview { .. } | SyncGuardMode::PlanningPreview { .. } => {
-                    // A pull or planning preview writes, then rolls back; a
-                    // grade preview only reads.
-                    let behavior = if matches!(kind, SchedulerSyncKind::PushGrades) {
-                        TransactionBehavior::Deferred
-                    } else {
-                        TransactionBehavior::Immediate
-                    };
-                    let transaction = Transaction::new_unchecked(&destination, behavior)
-                        .map_err(|error| stopped(error.into()))?;
-                    let fingerprint = fingerprint(&transaction).map_err(stopped)?;
-                    // Dropping the transaction rolls it back, stopped or not.
-                    let (response, _) = run(Some(&transaction)).map_err(stopped)?;
-                    transaction.rollback()?;
-                    Ok((response, Some(fingerprint), Vec::new()))
-                }
-                SyncGuardMode::Apply { destination_fingerprint }
-                | SyncGuardMode::PlanningApply { destination_fingerprint } => {
-                    let transaction =
-                        Transaction::new_unchecked(&destination, TransactionBehavior::Immediate)?;
-                    let fingerprint = fingerprint(&transaction)?;
-                    if fingerprint != destination_fingerprint {
-                        return Err(StaleSyncPreview.into());
-                    }
-                    let (response, changed_image_ids) = run(Some(&transaction))?;
-                    transaction.commit()?;
-                    Ok((response, None, changed_image_ids))
-                }
+                    TransactionBehavior::Immediate
+                };
+                let transaction = Transaction::new_unchecked(&destination, behavior)
+                    .map_err(|error| stopped(error.into()))?;
+                let fingerprint = fingerprint(&transaction).map_err(stopped)?;
+                // Dropping the transaction rolls it back, stopped or not.
+                let (response, _, _) = run(Some(&transaction)).map_err(stopped)?;
+                transaction.rollback()?;
+                Ok(SyncRun {
+                    response,
+                    fingerprint: Some(fingerprint),
+                    changed_images: Vec::new(),
+                    deleted_projects: Vec::new(),
+                })
             }
-        },
-    )
+            SyncGuardMode::Apply {
+                destination_fingerprint,
+            }
+            | SyncGuardMode::PlanningApply {
+                destination_fingerprint,
+            } => {
+                let transaction =
+                    Transaction::new_unchecked(&destination, TransactionBehavior::Immediate)?;
+                let fingerprint = fingerprint(&transaction)?;
+                if fingerprint != destination_fingerprint {
+                    return Err(StaleSyncPreview.into());
+                }
+                let (response, changed_images, deleted_projects) = run(Some(&transaction))?;
+                transaction.commit()?;
+                Ok(SyncRun {
+                    response,
+                    fingerprint: None,
+                    changed_images,
+                    deleted_projects,
+                })
+            }
+        }
+    })
     .await
     .map_err(|error| AppError::InternalError(format!("scheduler sync task failed: {error}")))?
     .map_err(|error| {
-        classify_scheduler_sync_failure(
-            &error,
-            &source_path_for_error,
-            &destination_path_for_error,
-        )
+        classify_scheduler_sync_failure(&error, &source_path_for_error, &destination_path_for_error)
     })?;
 
-    let (response, fingerprint, changed_images) = response;
+    let SyncRun {
+        response,
+        fingerprint,
+        changed_images,
+        deleted_projects,
+    } = response;
     let new_lights = !changed_images.is_empty();
     if !dry_run
         && let Some(destination_ctx) = state.get_database(&destination_id_for_cache)
@@ -519,6 +574,16 @@ pub(crate) async fn execute_scheduler_sync_paths(
             destination_id_for_cache,
             error
         );
+    }
+    if !dry_run && destination_is_catalog && !deleted_projects.is_empty() {
+        // Planning forgets each project the sync deleted, after the commit,
+        // as it does after Delete project in the Library.
+        crate::server::project_removal::forget_synced_deletions(
+            state,
+            &destination_id_for_cache,
+            &deleted_projects,
+        )
+        .await;
     }
     if !dry_run {
         state.auto_stacks.touch_database(

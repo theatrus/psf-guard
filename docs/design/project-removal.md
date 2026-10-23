@@ -221,19 +221,30 @@ has no project for:
 `sync_structure` takes the kind of destination explicitly
 (`SyncDestination`):
 
-- **Catalog**: a full pull, the arrival sync and a pull from a peer write a
-  PSF Guard catalog. The sync also records the deletion there as a
+- **Catalog**: the destination is a PSF Guard catalog: a full pull, the
+  arrival sync, a pull from a peer, a merge or planning push a peer sends
+  to this server, and a planning push from Settings into another
+  registered catalog. The sync also records the deletion there as a
   tombstone with no frames, so a later sync from a rig that still has the
   project leaves it out. That tombstone is not listed until such a sync
   leaves the project out.
-- **Scheduler**: a planning push writes a rig's Target Scheduler database.
-  Only the rows go; the sync writes no PSF Guard table there. A peer that
-  receives a planning push treats its own catalog the same way.
+- **Scheduler**: the destination is a Target Scheduler file: a planning
+  push into a `ts:` connection, Director file delivery, and `psf-guard sync
+  planning`. Only the rows go; the sync writes no PSF Guard table there.
+
+`execute_scheduler_sync_paths` decides between them for a planning push:
+a destination that is a registered catalog is **Catalog**, anything else
+(a `ts:` connection) is **Scheduler**, and a Director delivery is always
+**Scheduler**. A pull always writes a catalog.
 
 Everything runs inside the caller's transaction, so a dry run deletes and
-records nothing. After a sync deletes a project, Planning still links it
-until the plan is changed: unlike **Delete project**, a sync does not run
-`MetaStore::forget_source_project`.
+records nothing. The summary lists the GUIDs of the projects it deleted.
+After the commit, each server path that writes a catalog (the Settings and
+remote Sync routes through `execute_scheduler_sync_paths`, the automatic
+Target Scheduler sync and a pull from a peer) has Planning forget them
+through `forget_synced_deletions`, which calls the same
+`forget_source_project` as **Delete project**. A failure is logged, and
+the plan then still links a project that is gone.
 
 ### Peers
 
@@ -250,8 +261,10 @@ nothing. See
 
 An upload of a light whose file name a project deletion lists is refused
 with `410 Gone` and a message that names the project and explains how to
-allow it back (**Deleted projects**, **Allow again**). The receive
-directory is not written. A 410 is not a failure worth retrying: the
+allow it back (**Deleted projects**, **Allow again**). An upload of a
+light removed as a reject is refused with `410 Gone` too, with a message
+that explains how to bring the frame back (**Purge rejects**, **Restore**).
+The receive directory is not written. A 410 is not a failure worth retrying: the
 N.I.N.A. plugin retries only on no response, 408, 409, 429 and 5xx.
 
 ### The N.I.N.A. plugin
@@ -297,11 +310,8 @@ the new plan to it with **Attach a project from another database**.
 - A frame recorded under another project on one of the deleted project's
   targets is deleted with it, and its GUID is tombstoned. While the source
   still has the frame, each pull lists it as skipped.
-- Remote image intake reads the project tombstones only; an upload of a
-  removed reject's file is still refused with a generic 400.
-- A sync that deletes a project does not update Planning or the server's
-  caches; nothing was captured for the project, so only Planning's link is
-  left.
+- A sync that deletes a project clears no cache files: nothing was
+  captured for the project in the destination.
 - There is no restore of the deleted rows. The tombstones keep the frame
   Ids and names, not the rows; Allow again lets a sync or import add the
   project anew.

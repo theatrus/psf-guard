@@ -46,7 +46,7 @@ pub struct TableCounts {
 /// The kind of database a sync writes, which decides what it may record
 /// there about a project it deletes because the source deleted it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum SyncDestination {
+pub enum SyncDestination {
     /// A PSF Guard catalog that a pull fills. A deletion is also recorded
     /// as a tombstone, so a later sync from a rig does not bring the
     /// project back.
@@ -96,6 +96,10 @@ pub struct PullSummary {
     pub(crate) changed_acquiredimages: Vec<ChangedAcquiredImage>,
     /// Per-entity trace lines (for `--verbose`).
     pub changes: Vec<String>,
+    /// GUIDs of the destination projects this pull deleted because the
+    /// source catalog deleted them. The server tells Planning to forget
+    /// them once the transaction commits.
+    pub deleted_project_guids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1234,6 +1238,9 @@ pub(super) struct StructureSync {
     /// Source project ids selected by a project filter, less projects
     /// deleted here. `None` means all.
     pub selected_project_ids: Option<HashSet<i64>>,
+    /// GUIDs of the destination projects deleted because the source
+    /// catalog deleted them.
+    pub deleted_project_guids: Vec<String>,
 }
 
 /// is true, existing destination `acquired`/`accepted` counts stay unchanged
@@ -1410,6 +1417,7 @@ pub(super) fn sync_structure(
         target_map: tgt_map,
         plan_map: plan.id_map,
         selected_project_ids: included_projects,
+        deleted_project_guids: deleted.guids,
     })
 }
 
@@ -1419,6 +1427,8 @@ struct SourceDeletions {
     projects: usize,
     targets: usize,
     exposure_plans: usize,
+    /// The deleted projects' GUIDs.
+    guids: Vec<String>,
 }
 
 fn exposures(count: usize) -> String {
@@ -1508,6 +1518,7 @@ fn delete_projects_deleted_in_source(
             project_removal::record_sync_deletion(tx, &plan, now)?;
         }
         project_removal::delete_project_rows(tx, &plan)?;
+        deleted.guids.push(deletion.guid.clone());
         deleted.projects += 1;
         deleted.targets += plan.targets;
         deleted.exposure_plans += plan.exposure_plans;
@@ -1598,6 +1609,7 @@ pub(crate) fn sync_arrivals(
         SyncDestination::Catalog,
         &mut summary.changes,
     )?;
+    summary.deleted_project_guids = structure.deleted_project_guids.clone();
     upsert_acquired_images(
         src,
         tx,
@@ -1651,6 +1663,7 @@ pub(crate) fn sync_pull_in_transaction(
     summary.ruleweight = structure.ruleweight;
     summary.target = structure.target;
     summary.exposureplan = structure.exposureplan;
+    summary.deleted_project_guids = structure.deleted_project_guids.clone();
 
     // 6. acquiredimage (grade fill-if-pending; remap proj/tgt/exposureId)
     let img_map = upsert_acquired_images(

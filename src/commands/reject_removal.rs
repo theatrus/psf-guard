@@ -191,6 +191,19 @@ pub fn removed_file_names(conn: &Connection) -> Result<HashSet<String>> {
     Ok(names)
 }
 
+/// Whether a removed reject's file has this name (compared in lower case),
+/// so an upload of it is refused rather than bringing the frame back.
+pub fn is_removed_reject_file(conn: &Connection, file_name: &str) -> Result<bool> {
+    if !table_exists(conn, "psf_guard_removed_image") {
+        return Ok(false);
+    }
+    Ok(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM psf_guard_removed_image WHERE lower(file_name) = lower(?1))",
+        [file_name],
+        |row| row.get(0),
+    )?)
+}
+
 /// Which frames a run may take: one project, one target, or the database.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Scope {

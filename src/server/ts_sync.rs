@@ -757,6 +757,17 @@ fn synchronize(state: &Arc<AppState>, job: &str, catalog: &str, settings: &Setti
         None => (None, None),
     };
     let report = crate::ts_sync::synchronize(&mut local, &snapshot, destination.as_mut())?;
+    // Planning forgets each project the sync deleted, as after Delete
+    // project in the Library. This runner thread waits for it.
+    if !report.deleted_project_guids.is_empty()
+        && let Some(runtime) = state.runtime()
+    {
+        runtime.block_on(super::project_removal::forget_synced_deletions(
+            state,
+            job,
+            &report.deleted_project_guids,
+        ));
+    }
     if let Some(context) = state.get_database(job) {
         context.register_remote_image_arrivals(&report.arrivals);
         let _ = context.ensure_cache_available();

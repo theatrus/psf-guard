@@ -64,6 +64,9 @@ pub struct RemoteSyncOptions {
 pub struct RemoteSyncOutcome {
     pub applied: bool,
     pub summary: BTreeMap<String, i64>,
+    /// GUIDs of the local projects a pull deleted because the peer's
+    /// catalog deleted them. The server tells Planning to forget them.
+    pub deleted_project_guids: Vec<String>,
     pub peer_product: String,
     pub peer_catalog: String,
 }
@@ -88,8 +91,13 @@ pub async fn sync_remote(options: RemoteSyncOptions) -> Result<RemoteSyncOutcome
         client.base_url()
     );
 
+    let mut deleted_project_guids = Vec::new();
     let summary = match options.direction {
-        RemoteDirection::Pull => pull_from(&client, &catalog, &options).await?,
+        RemoteDirection::Pull => {
+            let (summary, deleted) = pull_from(&client, &catalog, &options).await?;
+            deleted_project_guids = deleted;
+            summary
+        }
         RemoteDirection::PushPlanning | RemoteDirection::PushGrades => {
             // Only the optional tables the peer reads: an older peer refuses
             // a bundle with a table it does not know.
@@ -105,6 +113,7 @@ pub async fn sync_remote(options: RemoteSyncOptions) -> Result<RemoteSyncOutcome
     Ok(RemoteSyncOutcome {
         applied: !options.dry_run,
         summary,
+        deleted_project_guids,
         peer_product,
         peer_catalog: catalog,
     })
@@ -117,7 +126,7 @@ async fn pull_from(
     client: &SyncClient,
     catalog: &str,
     options: &RemoteSyncOptions,
-) -> Result<BTreeMap<String, i64>> {
+) -> Result<(BTreeMap<String, i64>, Vec<String>)> {
     use crate::commands::sync::{require_pull_capable, sync_pull, PullOptions};
 
     let bundle = client.export(catalog, SyncOperation::Merge, false).await?;
@@ -164,7 +173,13 @@ async fn pull_from(
                 project_filter: None,
             },
         )?;
-        Ok(pull_summary(&summary))
+        // A dry run rolled its deletions back.
+        let deleted = if dry_run {
+            Vec::new()
+        } else {
+            summary.deleted_project_guids.clone()
+        };
+        Ok((pull_summary(&summary), deleted))
     })
     .await
     .context("the merge task")?

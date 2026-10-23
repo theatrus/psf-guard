@@ -404,10 +404,11 @@ has a non-empty GUID. A reader must tolerate more columns.
   a preview shows each deletion before Apply. A bundle without the table
   deletes nothing, so older clients see no change.
 
-A merge into a PSF Guard catalog records each deletion as a tombstone there,
-so a later sync from a rig does not bring the project back. A planning push
-writes no tombstone, since its destination is normally a rig's Target
-Scheduler database. See [Project removal](project-removal.md#deleting-in-other-catalogs-and-rigs).
+A merge or planning push into a PSF Guard catalog records each deletion as
+a tombstone there, so a later sync from a rig does not bring the project
+back, and Planning forgets the project after the commit. A planning push
+into a Target Scheduler file (a `ts:` connection or Director file delivery)
+deletes only the rows. See [Project removal](project-removal.md#deleting-in-other-catalogs-and-rigs).
 
 ### Scheduler flat coverage
 
@@ -626,8 +627,9 @@ elsewhere remains a conflict.
 
 A light whose file name a project deletion in this catalog lists is refused
 with `410 Gone` and an error message, in the standard error envelope, that
-names the project and explains how to allow it back. A client must not
-retry a 410.
+names the project and explains how to allow it back. A light removed from
+the catalog as a reject is refused with `410 Gone` and its own message,
+which explains how to restore it. A client must not retry a 410.
 
 Identical retries are idempotent. The response returns the resolved database,
 frame kind, and either the project, target, and image IDs for a light or the

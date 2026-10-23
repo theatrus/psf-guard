@@ -365,6 +365,7 @@ pub(super) fn prepare(
             &PlanningOptions {
                 dry_run: true,
                 project_filter: None,
+                destination: crate::commands::sync::SyncDestination::Scheduler,
             },
         )?;
         let result = SchedulerSyncResponse {

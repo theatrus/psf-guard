@@ -746,6 +746,7 @@ fn a_planning_push_deletes_a_project_the_source_deleted_when_the_rig_has_no_fram
     let options = |dry_run| PlanningOptions {
         dry_run,
         project_filter: None,
+        destination: crate::commands::sync::SyncDestination::Scheduler,
     };
     let preview = sync_planning(&source, &rig, &options(true)).unwrap();
     assert_eq!(preview.project.deleted, 1);

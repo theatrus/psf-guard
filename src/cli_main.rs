@@ -1546,6 +1546,9 @@ pub fn main() -> Result<()> {
                     &PlanningOptions {
                         dry_run,
                         project_filter: project,
+                        // `--to` names a Target Scheduler file: a project the
+                        // source deleted only loses its rows there.
+                        destination: crate::commands::sync::SyncDestination::Scheduler,
                     },
                 )?;
 

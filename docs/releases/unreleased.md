@@ -75,11 +75,13 @@
   syncs with another PSF Guard server that runs this version. A project
   with frames in the destination stays, and the preview says how many
   exposures it has there. The preview and the result show how many
-  projects the transfer deletes. When a pull leaves out new frames of a
+  projects the transfer deletes. A plan that linked a deleted project no
+  longer plans work for that rig. When a pull leaves out new frames of a
   deleted project, imports and uploads of those files are skipped too.
 - An upload of a frame from a project deleted in the receiving catalog is
-  refused with a message that explains how to allow the project back. The
-  N.I.N.A. plugin does not retry it.
+  refused with a message that explains how to allow the project back. An
+  upload of a frame removed as a reject is refused with a message that
+  explains how to restore it. The N.I.N.A. plugin does not retry either.
 
 - A color preview can run BlurXTerminator and NoiseXTerminator on its color
   channels together. In **Processing stack**, turn the tools on under

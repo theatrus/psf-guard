@@ -16,6 +16,10 @@ pub struct PlanningOptions {
     pub dry_run: bool,
     /// Restrict the push to projects whose names contain this text.
     pub project_filter: Option<String>,
+    /// What the push writes: a Target Scheduler database, where a project
+    /// the source deleted only loses its rows, or a registered PSF Guard
+    /// catalog, where the deletion is also recorded as a tombstone.
+    pub destination: SyncDestination,
 }
 
 /// Outcome of a planning settings push.
@@ -28,6 +32,9 @@ pub struct PlanningSummary {
     pub exposureplan: TableCounts,
     /// Per-entity trace lines for verbose CLI output.
     pub changes: Vec<String>,
+    /// GUIDs of the destination projects this push deleted because the
+    /// source catalog deleted them.
+    pub deleted_project_guids: Vec<String>,
 }
 
 impl PlanningSummary {
@@ -89,11 +96,10 @@ pub(crate) fn sync_planning_in_transaction(
         opts.project_filter.as_deref(),
         &["acquired", "accepted"],
         false,
-        // A planning push writes a rig's Target Scheduler database: a
-        // project the source deleted goes, and no tombstone is written.
-        SyncDestination::Scheduler,
+        opts.destination,
         &mut summary.changes,
     )?;
+    summary.deleted_project_guids = structure.deleted_project_guids;
 
     summary.exposuretemplate = structure.exposuretemplate;
     summary.project = structure.project;
@@ -154,6 +160,7 @@ mod tests {
         PlanningOptions {
             dry_run: false,
             project_filter: None,
+            destination: SyncDestination::Scheduler,
         }
     }
 
@@ -218,6 +225,7 @@ mod tests {
             &PlanningOptions {
                 dry_run: true,
                 project_filter: None,
+                destination: SyncDestination::Scheduler,
             },
         )
         .unwrap();
@@ -243,6 +251,7 @@ mod tests {
             &PlanningOptions {
                 dry_run: false,
                 project_filter: Some("Orion".into()),
+                destination: SyncDestination::Scheduler,
             },
         )
         .unwrap();

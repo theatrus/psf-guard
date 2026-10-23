@@ -1221,10 +1221,12 @@ async fn a_merge_with_deleted_projects_deletes_the_destinations_frameless_copy()
     assert_eq!(recorded, 1, "a pulled-into catalog records the deletion");
 }
 
-/// A planning push with the deleted projects deletes the frameless copy
-/// and, as for a rig's Target Scheduler database, records nothing.
+/// A planning push from a peer with the deleted projects deletes the
+/// frameless copy. The destination is a registered PSF Guard catalog, so
+/// it records the deletion, hidden from Deleted projects, and a later sync
+/// from a rig does not bring the project back.
 #[tokio::test]
-async fn a_planning_push_with_deleted_projects_deletes_without_a_tombstone() {
+async fn a_planning_push_from_a_peer_deletes_and_records_the_deletion() {
     let harness = Harness::new(
         &format!("{OBSERVED}{DELETED_IN_SOURCE}"),
         EMPTY_IN_DESTINATION,
@@ -1233,16 +1235,21 @@ async fn a_planning_push_with_deleted_projects_deletes_without_a_tombstone() {
     let preview_id = harness.preview("push_planning", bundle).await;
     let (status, applied) = harness.apply(&preview_id).await;
     assert_eq!(status, StatusCode::OK, "{applied:#}");
+    assert_eq!(
+        applied["data"]["summary"]["project_deleted"], 1,
+        "{applied:#}"
+    );
     let destination = harness.destination();
     assert_eq!(count(&destination, "project"), 1, "M42 arrives, Empty goes");
-    let tombstones: i64 = destination
+    let (recorded, listed): (i64, i64) = destination
         .query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE name = 'psf_guard_removed_project'",
+            "SELECT COUNT(*), COUNT(left_out_at) FROM psf_guard_removed_project
+             WHERE project_guid = 'empty-guid' AND frames = 0 AND allowed_back_at IS NULL",
             [],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .unwrap();
-    assert_eq!(tombstones, 0);
+    assert_eq!((recorded, listed), (1, 0));
 }
 
 /// A grade push carrying the table is refused: only merge and planning

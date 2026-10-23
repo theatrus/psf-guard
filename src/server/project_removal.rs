@@ -129,6 +129,29 @@ fn planning_guid(plan: &project_removal::RemovalPlan) -> Option<Uuid> {
         .and_then(|guid| Uuid::parse_str(guid).ok())
 }
 
+/// Make Planning forget the projects a sync deleted from catalog `db_id`
+/// because their source catalog deleted them, as it forgets a project the
+/// Library deletes. Runs after the sync's transaction commits. A failure is
+/// logged; the plan then still links a project that is gone, as after a
+/// Delete project whose Planning step failed.
+pub(crate) async fn forget_synced_deletions(state: &Arc<AppState>, db_id: &str, guids: &[String]) {
+    let Some(service) = state.director.clone() else {
+        return;
+    };
+    for guid in guids {
+        let Ok(guid) = Uuid::parse_str(guid) else {
+            continue;
+        };
+        if let Err(error) = service
+            .clone()
+            .forget_source_project(state.all_databases(), db_id.to_string(), guid)
+            .await
+        {
+            tracing::warn!(db = %db_id, %guid, "A sync deleted a project but its plan still links it: {error}");
+        }
+    }
+}
+
 /// Plan the deletion on a read-only connection.
 async fn read_plan(
     ctx: &DbContext,

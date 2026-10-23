@@ -195,3 +195,141 @@ async fn deleting_needs_database_management() {
         catalog_call(&a.f.state, "POST", "/deleted-projects/1/allow", Value::Null).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 }
+
+/// A pull from a catalog that deleted the activated project deletes the
+/// rig catalog's copy, which has no frames, and the plan forgets the rig as
+/// it does after Delete project.
+#[tokio::test]
+async fn a_sync_that_deletes_an_activated_project_takes_it_out_of_its_plan() {
+    let a = activated().await;
+    let (_, preview) = call(
+        &a.f.app,
+        "POST",
+        &format!("/projects/{}/activation/preview", a.project),
+        json!({}),
+        None,
+    )
+    .await;
+    let (status, applied) = call(
+        &a.f.app,
+        "POST",
+        &format!("/projects/{}/activation/apply", a.project),
+        json!({"preview_digest": preview["data"]["preview_digest"]}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    let guid: String =
+        a.db.query_row("SELECT guid FROM project", [], |row| row.get(0))
+            .unwrap();
+    let linked = |plans: &Value| {
+        plans["data"]["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["project"]["id"] == a.project.to_string())
+            .unwrap()["links"]
+            .clone()
+    };
+    let (_, plans) = call(&a.f.app, "GET", "/plans", Value::Null, None).await;
+    assert_ne!(linked(&plans), json!([]), "{plans}");
+
+    // Another catalog that deleted the project.
+    let source_path = a.f._dir.path().join("deleted-there.sqlite");
+    let source = crate::ts_schema::create_fresh_db(&source_path).unwrap();
+    crate::commands::project_removal::ensure_schema(&source).unwrap();
+    source
+        .execute(
+            "INSERT INTO psf_guard_removed_project (project_id, project_guid, name, removed_at, frames)
+             VALUES (1, ?1, 'Heart Nebula', 1, 0)",
+            [&guid],
+        )
+        .unwrap();
+    drop(source);
+    let rig_path: String =
+        a.db.query_row("PRAGMA database_list", [], |row| row.get(2))
+            .unwrap();
+    let (result, _) = crate::server::handlers::execute_scheduler_sync_paths(
+        &a.f.state,
+        source_path,
+        rig_path.into(),
+        "deleted-there".into(),
+        "rig".into(),
+        crate::server::api::SchedulerSyncRequest {
+            peer_db_id: "deleted-there".into(),
+            kind: crate::server::api::SchedulerSyncKind::Pull,
+            dry_run: false,
+            with_image_data: Some(false),
+            project: None,
+            target: None,
+            status: None,
+            reviewed_only: true,
+        },
+        crate::server::handlers::SyncGuardMode::None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.project.deleted, 1, "{:?}", result.changes);
+    let left: i64 =
+        a.db.query_row("SELECT COUNT(*) FROM project", [], |row| row.get(0))
+            .unwrap();
+    assert_eq!(left, 0);
+    let (_, plans) = call(&a.f.app, "GET", "/plans", Value::Null, None).await;
+    assert_eq!(linked(&plans), json!([]), "{plans}");
+}
+
+/// A planning push into a Target Scheduler file (a `ts:` connection) deletes
+/// a project the source catalog deleted and writes no PSF Guard table
+/// there.
+#[tokio::test]
+async fn a_planning_push_into_a_ts_file_deletes_without_a_tombstone() {
+    let a = activated().await;
+    let source_path = a.f._dir.path().join("planning-source.sqlite");
+    let source = crate::ts_schema::create_fresh_db(&source_path).unwrap();
+    crate::commands::project_removal::ensure_schema(&source).unwrap();
+    source
+        .execute(
+            "INSERT INTO psf_guard_removed_project (project_id, project_guid, name, removed_at, frames)
+             VALUES (1, 'gone-guid', 'Gone', 1, 0)",
+            [],
+        )
+        .unwrap();
+    drop(source);
+    let ts_path = a.f._dir.path().join("TargetScheduler-copy.sqlite");
+    let ts = crate::ts_schema::create_fresh_db(&ts_path).unwrap();
+    ts.execute(
+        "INSERT INTO project (profileId, name, guid) VALUES ('profile-a', 'Gone', 'gone-guid')",
+        [],
+    )
+    .unwrap();
+    let (result, _) = crate::server::handlers::execute_scheduler_sync_paths(
+        &a.f.state,
+        source_path,
+        ts_path,
+        "rig".into(),
+        "ts:rig".into(),
+        crate::server::api::SchedulerSyncRequest {
+            peer_db_id: "ts:rig".into(),
+            kind: crate::server::api::SchedulerSyncKind::PushPlanning,
+            dry_run: false,
+            with_image_data: None,
+            project: None,
+            target: None,
+            status: None,
+            reviewed_only: true,
+        },
+        crate::server::handlers::SyncGuardMode::None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.project.deleted, 1, "{:?}", result.changes);
+    let (projects, tombstone_tables): (i64, i64) = ts
+        .query_row(
+            "SELECT (SELECT COUNT(*) FROM project),
+                    (SELECT COUNT(*) FROM sqlite_master WHERE name = 'psf_guard_removed_project')",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!((projects, tombstone_tables), (0, 0));
+}

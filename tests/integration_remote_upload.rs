@@ -1707,3 +1707,55 @@ async fn a_light_of_a_deleted_project_is_refused_as_gone() {
     assert_eq!(image_count(&fixture.database_a), 0);
     assert!(fixture.images_a.join("m31-001.fits").is_file());
 }
+
+/// A light removed from this catalog as a reject is refused with 410 and a
+/// message of its own, not the generic import failure.
+#[tokio::test]
+async fn a_removed_rejects_light_is_refused_as_gone() {
+    let fixture = Fixture::new();
+    let first = fits_bytes("M 31", "2026-07-24T05:00:00");
+    let (status, body) = upload(
+        fixture.state.clone(),
+        "catalog-a",
+        "catalog-a",
+        TOKEN_A,
+        "m31-001.fits",
+        &first,
+        &sha256(&first),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // What a reject removal leaves: the row goes, a tombstone keeps its name.
+    let connection = rusqlite::Connection::open(&fixture.database_a).unwrap();
+    psf_guard::commands::reject_removal::ensure_schema(&connection).unwrap();
+    connection
+        .execute_batch(
+            "INSERT INTO psf_guard_removed_image
+               (acquired_image_guid, acquired_image_id, project_id, target_id, file_name, batch_id,
+                removed_at, trash_until, rows_json, files_json)
+             SELECT guid, Id, projectId, targetId, 'm31-001.fits', 'b', 1, 2, '{}', '[]' FROM acquiredimage;
+             DELETE FROM acquiredimage;",
+        )
+        .unwrap();
+    drop(connection);
+
+    let (status, body) = upload(
+        fixture.state.clone(),
+        "catalog-a",
+        "catalog-a",
+        TOKEN_A,
+        "m31-001.fits",
+        &first,
+        &sha256(&first),
+    )
+    .await;
+    assert_eq!(status, StatusCode::GONE, "{body}");
+    let message = body["error"].as_str().unwrap();
+    assert!(
+        message.contains("removed from this catalog as a reject"),
+        "{message}"
+    );
+    assert!(message.contains("Purge rejects"), "{message}");
+    assert_eq!(image_count(&fixture.database_a), 0);
+}

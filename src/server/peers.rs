@@ -309,6 +309,14 @@ pub async fn sync_with_peer(
         // from the old contents.
         context.clear_directory_tree_cache();
         let _ = context.ensure_cache_available();
+        // Planning forgets each project the pull deleted because the peer's
+        // catalog deleted it.
+        crate::server::project_removal::forget_synced_deletions(
+            &state,
+            &context.id,
+            &outcome.deleted_project_guids,
+        )
+        .await;
     }
     // The peer answered; an activation that missed it goes once this sync
     // lets go of the apply lock. Not after a pull that wrote: the site's

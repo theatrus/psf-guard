@@ -145,6 +145,10 @@ pub fn initialize(conn: &Connection) -> Result<()> {
 pub struct Report {
     #[serde(skip)]
     pub(crate) arrivals: Vec<crate::commands::sync::ChangedAcquiredImage>,
+    /// GUIDs of the catalog's projects this sync deleted because the
+    /// source deleted them. Planning forgets them after the commit.
+    #[serde(skip)]
+    pub(crate) deleted_project_guids: Vec<String>,
     pub inserted: usize,
     pub updated: usize,
     pub grades_written: usize,
@@ -224,6 +228,7 @@ pub fn synchronize(
     report.inserted = summary.acquiredimage.inserted;
     report.updated = summary.acquiredimage.updated;
     report.arrivals = summary.changed_acquiredimages;
+    report.deleted_project_guids = summary.deleted_project_guids;
     let after = grades(&tx)?;
     for (guid, source) in &incoming {
         if !dirty.contains(guid)
