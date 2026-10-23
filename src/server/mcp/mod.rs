@@ -478,7 +478,11 @@ pub struct TargetChangesArgs {
     pub database: String,
     pub target_id: i32,
     /// Only the fields to change: `name`, `active`, `ra_hours`,
-    /// `dec_degrees`, `rotation`, `roi`, `project_id`, `epoch_code`.
+    /// `dec_degrees`, `rotation`, `roi`, `project_id`, `epoch_code`. A new
+    /// `project_id` moves the target with its frames, exposure plans and
+    /// stack previews. A target with frames moves only to a project of its
+    /// own profile, and the destination must not have a target of the same
+    /// name.
     pub changes: Value,
 }
 
@@ -1787,7 +1791,7 @@ impl PsfGuardMcp {
     }
 
     #[tool(
-        description = "Change a target: send only the fields to change (active, coordinates in RA hours and Dec degrees, rotation, name, project). Needs write access."
+        description = "Change a target: send only the fields to change (active, coordinates in RA hours and Dec degrees, rotation, name, project). A new project moves the target with its frames, exposure plans and stack previews; a target with frames stays within its Target Scheduler profile. Needs write access."
     )]
     async fn update_target(
         &self,

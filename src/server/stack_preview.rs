@@ -2651,6 +2651,16 @@ fn persist_latest_groups_with_exposures(
     job: &StackPreviewJob,
     current: Option<&ProjectExposureGroups>,
 ) -> Result<MovedCards, String> {
+    with_index_lock(stack_root, || {
+        persist_latest_groups_locked(stack_root, job, current)
+    })
+}
+
+fn persist_latest_groups_locked(
+    stack_root: &FsPath,
+    job: &StackPreviewJob,
+    current: Option<&ProjectExposureGroups>,
+) -> Result<MovedCards, String> {
     let in_project = |group: &&StackGroupStatus| {
         current.is_none_or(|current| group_matches_project_exposures(group, current))
     };
@@ -2868,25 +2878,102 @@ pub fn move_project_stacks(ctx: &DatabaseContext, from: i32, to: i32) {
 /// Drop a deleted project's stack indices at once: Target Scheduler gives
 /// its Id to the next project, which must not inherit them before the sweep.
 pub fn forget_project_stacks(ctx: &DatabaseContext, project_id: i32) {
-    janitor::drop_project_indices(&ctx.stack_root, project_id);
+    with_index_lock(&ctx.stack_root, || {
+        janitor::drop_project_indices(&ctx.stack_root, project_id)
+    });
+}
+
+/// Run `change` while no other read, change and write of this database's
+/// stack indices runs. Builds, WBPP imports, color previews, target and
+/// project moves and the sweep each rewrite a whole index file, so two at
+/// once would lose one's change. Nothing inside `change` may take the lock
+/// again.
+pub(crate) fn with_index_lock<T>(stack_root: &FsPath, change: impl FnOnce() -> T) -> T {
+    static LOCKS: std::sync::LazyLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> =
+        std::sync::LazyLock::new(Default::default);
+    let lock = LOCKS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .entry(stack_root.to_path_buf())
+        .or_default()
+        .clone();
+    let _guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    change()
+}
+
+/// Move a target's stacks to the project it moved to, so its stack previews
+/// stay with it. Returns how many index entries moved.
+pub fn move_target_stacks(ctx: &DatabaseContext, target_id: i32, from: i32, to: i32) -> usize {
+    janitor::move_target_indices(&ctx.stack_root, target_id, from, to)
+}
+
+/// Remove a merged-away target's stacks from its project's indices.
+/// Returns how many index entries were removed.
+pub fn drop_merged_target_stacks(ctx: &DatabaseContext, project: i32, target_id: i32) -> usize {
+    janitor::drop_target_entries(&ctx.stack_root, project, target_id)
+}
+
+/// Each target's project and name, by target ID.
+type TargetsById = HashMap<i32, (i32, String)>;
+
+/// Each target's project and name, for moving stacks after their target.
+/// A target without a project is left out.
+fn targets_by_id(conn: &rusqlite::Connection) -> rusqlite::Result<TargetsById> {
+    let mut statement = conn.prepare("SELECT Id, projectid, name FROM target")?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, i32>(0)?,
+            row.get::<_, Option<i32>>(1)?,
+            row.get::<_, Option<String>>(2)?,
+        ))
+    })?;
+    let mut targets = HashMap::new();
+    for row in rows {
+        if let (id, Some(project), name) = row? {
+            targets.insert(id, (project, name.unwrap_or_default()));
+        }
+    }
+    Ok(targets)
 }
 
 fn sweep_database(state: &AppState, ctx: &DatabaseContext) {
     // The shared request connection is only borrowed when it is free.
-    let live_projects: Option<std::collections::HashSet<i32>> = {
+    let (live_projects, projects_of_targets): (
+        Option<std::collections::HashSet<i32>>,
+        Option<TargetsById>,
+    ) = {
         let connection = ctx.db();
         let Ok(connection) = connection.try_lock() else {
             return;
         };
-        connection
+        let live = connection
             .prepare("SELECT Id FROM project")
             .and_then(|mut statement| {
                 statement
                     .query_map([], |row| row.get::<_, i32>(0))?
                     .collect::<rusqlite::Result<_>>()
             })
-            .ok()
+            .ok();
+        let targets = targets_by_id(&connection)
+            .inspect_err(|error| {
+                tracing::warn!(db = %ctx.id, "Could not read targets for the stack sweep: {error}")
+            })
+            .ok();
+        (live, targets)
     };
+    // A build that finished while its target moved wrote to the old
+    // project's index.
+    let rehomed = projects_of_targets
+        .as_ref()
+        .map(|targets| janitor::rehome_moved_target_entries(&ctx.stack_root, targets))
+        .unwrap_or(0);
+    if rehomed > 0 {
+        tracing::info!(
+            db = %ctx.id,
+            stack_entries = rehomed,
+            "Moved stack previews to the projects their targets moved to"
+        );
+    }
     let orphaned = live_projects
         .as_ref()
         .map(|live| janitor::drop_orphaned_indices(&ctx.stack_root, live))

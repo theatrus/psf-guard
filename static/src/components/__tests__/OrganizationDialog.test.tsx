@@ -272,4 +272,132 @@ describe('OrganizationDialog', () => {
     expect(requests).toEqual([{ kind: 'merge_targets', source_target_id: 11, destination_target_id: 21 }]);
     expect(screen.getByRole('region', { name: 'Change preview' })).toHaveTextContent('The source target will be removed');
   });
+  describe('moving a whole target', () => {
+    const targetScope: OrganizationScope = {
+      kind: 'move_target',
+      dbId: DB_ID,
+      sourceTargetId: 11,
+      sourceTargetName: 'Original field',
+      sourceProjectId: 1,
+    };
+    const targetPreview: OrganizationPreview = {
+      ...preview,
+      destination_project_id: 3,
+      destination_project_name: 'Another telescope',
+      destination_target_id: 11,
+      destination_target_name: 'Original field',
+      images_moved: 0,
+      exposure_plans_moved: 3,
+      exposure_plans_created: 0,
+      profile_change: { from_profile_id: 'c925', to_profile_id: 'ultracat' },
+      exposure_templates_reused: 1,
+      exposure_templates_copied: 2,
+      exposure_template_changes: [
+        { source_template_name: 'Ha 300', destination_template_name: 'Ha 300 s', reused: true },
+        { source_template_name: 'OIII 300', destination_template_name: 'OIII 300', reused: false },
+      ],
+      planning_panel_id: 'r1c2',
+      warnings: ['A Planning plan activated this target as one of its panels.'],
+    };
+
+    it('offers every other project, marks other profiles, and applies the previewed move', async () => {
+      const previews: unknown[] = [];
+      const applies: unknown[] = [];
+      server.use(
+        http.post('/api/db/:dbId/organization/preview', async ({ request }) => {
+          previews.push(await request.json());
+          return ok(targetPreview);
+        }),
+        http.post('/api/db/:dbId/organization/apply', async ({ request }) => {
+          applies.push(await request.json());
+          return ok({ source_project_id: 1, project_id: 3, target_id: 11, images_moved: 0 });
+        }),
+      );
+      const { onClose, onApplied } = openDialog(targetScope);
+      const dialog = screen.getByRole('dialog', { name: 'Move target' });
+      await within(dialog).findByRole('option', { name: 'Another telescope · profile ultracat' });
+      expect(within(dialog).getByRole('option', { name: 'M 44 collection' })).toBeInTheDocument();
+      expect(within(dialog).queryByRole('option', { name: 'Original import' })).not.toBeInTheDocument();
+      expect(within(dialog).getByRole('option', { name: 'New project...' })).toBeInTheDocument();
+      expect(screen.queryByLabelText('Destination target')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Preview move' })).toBeDisabled();
+
+      await userEvent.selectOptions(screen.getByLabelText('Destination project'), '3');
+      await userEvent.click(screen.getByRole('button', { name: 'Preview move' }));
+      await screen.findByRole('button', { name: 'Apply move' });
+      const summary = screen.getByRole('region', { name: 'Change preview' });
+      expect(summary).toHaveTextContent('Another telescope');
+      expect(summary).toHaveTextContent('c925 to ultracat');
+      expect(summary).toHaveTextContent('Exposure templates reused1');
+      expect(summary).toHaveTextContent('Exposure templates copied2');
+      expect(summary).toHaveTextContent('PlanningAfter the move, the plan no longer manages this target.');
+      expect(summary).not.toHaveTextContent('r1c2');
+      expect(summary).toHaveTextContent('Ha 300 uses Ha 300 s');
+      expect(summary).toHaveTextContent('OIII 300 is copied to profile ultracat');
+      expect(summary).toHaveTextContent('A Planning plan activated this target as one of its panels.');
+      expect(applies).toEqual([]);
+
+      await userEvent.click(screen.getByRole('button', { name: 'Apply move' }));
+      await waitFor(() => expect(onApplied).toHaveBeenCalledOnce());
+      expect(onClose).toHaveBeenCalledOnce();
+      const operation = { kind: 'move_target', target_id: 11, destination: { project_id: 3 } };
+      expect(previews).toEqual([operation]);
+      expect(applies).toEqual([{ operation, expected_fingerprint: targetPreview.fingerprint }]);
+    });
+
+    it('marks a Closed destination project', async () => {
+      server.use(http.get('/api/db/:dbId/organization/destinations', () => ok({
+        projects: [...projects, { id: 4, profile_id: 'c925', name: 'Last winter', state: 3 }],
+        targets,
+      })));
+      openDialog(targetScope);
+      expect(await screen.findByRole('option', { name: 'Last winter · Closed' })).toBeInTheDocument();
+      expect(screen.getByRole('option', { name: 'M 44 collection' })).toBeInTheDocument();
+    });
+
+    it('moves a target to a new project by name', async () => {
+      const previews: unknown[] = [];
+      server.use(http.post('/api/db/:dbId/organization/preview', async ({ request }) => {
+        previews.push(await request.json());
+        return ok({
+          ...targetPreview,
+          destination_project_id: null,
+          destination_project_name: 'Spring campaign',
+          profile_change: null,
+          exposure_templates_reused: 0,
+          exposure_templates_copied: 0,
+          exposure_template_changes: [],
+          planning_panel_id: null,
+          warnings: [],
+        });
+      }));
+      openDialog(targetScope);
+      await screen.findByRole('option', { name: 'M 44 collection' });
+      await userEvent.selectOptions(screen.getByLabelText('Destination project'), 'new');
+      expect(screen.getByRole('button', { name: 'Preview move' })).toBeDisabled();
+      await userEvent.type(screen.getByLabelText('New project name'), '  Spring campaign ');
+      await userEvent.click(screen.getByRole('button', { name: 'Preview move' }));
+      await screen.findByRole('button', { name: 'Apply move' });
+      expect(previews).toEqual([
+        { kind: 'move_target', target_id: 11, destination: { new_project_name: 'Spring campaign' } },
+      ]);
+      const summary = screen.getByRole('region', { name: 'Change preview' });
+      expect(summary).toHaveTextContent('Spring campaign (new project)');
+      expect(summary).not.toHaveTextContent('Exposure templates');
+    });
+
+    it('shows why the server refuses a move', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      server.use(http.post('/api/db/:dbId/organization/preview', () => HttpResponse.json(
+        { success: false, data: null, error: 'Original field has 2 captured frames from Target Scheduler profile c925.' },
+        { status: 400 },
+      )));
+      openDialog(targetScope);
+      await screen.findByRole('option', { name: 'Another telescope · profile ultracat' });
+      await userEvent.selectOptions(screen.getByLabelText('Destination project'), '3');
+      await userEvent.click(screen.getByRole('button', { name: 'Preview move' }));
+      expect(await screen.findByRole('alert')).toHaveTextContent('2 captured frames');
+      expect(screen.queryByRole('button', { name: 'Apply move' })).not.toBeInTheDocument();
+    });
+  });
 });

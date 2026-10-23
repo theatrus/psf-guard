@@ -236,6 +236,50 @@ fn project_key(conn: &Connection, project_id: i32) -> Result<String, AppError> {
     }
 }
 
+/// Give a new project the processing settings of the project it was copied
+/// from: exposure grouping and process folder. Nothing happens when the
+/// source project has none stored.
+pub(crate) fn copy_project_settings(
+    conn: &Connection,
+    from_project: i32,
+    to_project: i32,
+) -> Result<(), AppError> {
+    let exists: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
+            [SETTINGS_TABLE],
+            |row| row.get(0),
+        )
+        .map_err(AppError::db)?;
+    if !exists {
+        return Ok(());
+    }
+    let from_key = project_key(conn, from_project)?;
+    let to_key = project_key(conn, to_project)?;
+    let mut statement = conn
+        .prepare("PRAGMA table_info(psf_guard_project_processing)")
+        .map_err(AppError::db)?;
+    let others = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(AppError::db)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(AppError::db)?
+        .into_iter()
+        .filter(|column| column != "project_key")
+        .map(|column| format!("\"{}\"", column.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(", ");
+    conn.execute(
+        &format!(
+            "INSERT OR REPLACE INTO psf_guard_project_processing (project_key, {others})
+             SELECT ?2, {others} FROM psf_guard_project_processing WHERE project_key = ?1"
+        ),
+        params![from_key, to_key],
+    )
+    .map_err(AppError::db)?;
+    Ok(())
+}
+
 pub fn load_settings(
     conn: &Connection,
     project_id: i32,

@@ -24,7 +24,9 @@
 //! artifact search goes with the stack it searched. Index files of projects
 //! the catalog no longer has go too, so their stacks follow (see
 //! [`drop_orphaned_indices`]); a merged project's indices move to the
-//! project it merged into first. An index or selection that cannot be read
+//! project it merged into first, and a moved target's entries move to its
+//! new project's indices (again in each sweep, see
+//! [`rehome_moved_target_entries`]). An index or selection that cannot be read
 //! stops the sweep: everything it names would otherwise look unreferenced.
 //!
 //! A final pass's scratch folder goes when the pass ends. One a crash left
@@ -304,6 +306,12 @@ pub(super) fn drop_project_indices(stack_root: &Path, project_id: i32) -> usize 
 /// or deleted), so the stacks they name stop being referenced. `live` is
 /// every project id the catalog holds.
 pub(super) fn drop_orphaned_indices(stack_root: &Path, live: &HashSet<i32>) -> usize {
+    super::with_index_lock(stack_root, || {
+        drop_orphaned_indices_locked(stack_root, live)
+    })
+}
+
+fn drop_orphaned_indices_locked(stack_root: &Path, live: &HashSet<i32>) -> usize {
     use crate::server::storage::{stack_folder, stack_kind, stacks};
     let mut removed = 0;
     for (folder, prefix) in [
@@ -343,9 +351,16 @@ pub(super) fn drop_orphaned_indices(stack_root: &Path, live: &HashSet<i32>) -> u
 
 /// Move a merged project's stack indices onto the project it merged into,
 /// so its stacks stay referenced. Entries join the destination's own;
-/// a destination entry naming the same job wins. An index that cannot be
-/// read is left where it is, so nothing it names is lost.
+/// when both list the same job, the index keeps the destination's entry.
+/// An index that cannot be read is left where it is, so nothing it names is
+/// lost.
 pub fn move_project_indices(stack_root: &Path, from: i32, to: i32) {
+    super::with_index_lock(stack_root, || {
+        move_project_indices_locked(stack_root, from, to)
+    });
+}
+
+fn move_project_indices_locked(stack_root: &Path, from: i32, to: i32) {
     use crate::server::storage::{stack_folder, stack_kind, stacks};
     for (folder, prefix, list) in [
         (stacks(stack_root), "latest-project-", "groups"),
@@ -416,6 +431,292 @@ pub fn move_project_indices(stack_root: &Path, from: i32, to: i32) {
             );
         }
     }
+}
+
+/// The three kinds of stack index: folder, file prefix, entry list, and how
+/// an entry identifies its target.
+fn index_kinds(
+    stack_root: &Path,
+) -> [(std::path::PathBuf, &'static str, &'static str, TargetOf); 3] {
+    use crate::server::storage::{stack_folder, stack_kind, stacks};
+    [
+        (
+            stacks(stack_root),
+            "latest-project-",
+            "groups",
+            group_target,
+        ),
+        (stacks(stack_root), "wbpp-project-", "groups", group_target),
+        (
+            stack_folder(stack_root, stack_kind::COLOR),
+            "latest-project-",
+            "jobs",
+            color_target,
+        ),
+    ]
+}
+
+type TargetOf = fn(&serde_json::Value) -> Option<i64>;
+
+/// A mono or WBPP entry's target.
+fn group_target(entry: &serde_json::Value) -> Option<i64> {
+    entry["group"]["target_id"].as_i64()
+}
+
+/// A color entry's target.
+fn color_target(entry: &serde_json::Value) -> Option<i64> {
+    entry["target_id"].as_i64()
+}
+
+/// The target name an entry recorded when it was built.
+fn entry_target_name(entry: &serde_json::Value) -> Option<&str> {
+    entry["group"]["target_name"]
+        .as_str()
+        .or_else(|| entry["target_name"].as_str())
+}
+
+/// Whether two target names are the same, ignoring case and surrounding
+/// spaces.
+fn same_target_name(left: &str, right: &str) -> bool {
+    left.trim().to_lowercase() == right.trim().to_lowercase()
+}
+
+/// The identity the index writers replace an entry by: for a mono or WBPP
+/// stack its target, filter, exposure group and WBPP exposure; for a color
+/// preview its target, kind, palette and source family.
+fn entry_identity(entry: &serde_json::Value) -> String {
+    if entry.get("group").is_some() {
+        serde_json::json!([
+            entry["group"]["target_id"],
+            entry["group"]["filter_name"],
+            entry["group"]["exposure_group"]["key"],
+            entry["wbpp"]["exposure_seconds"],
+        ])
+        .to_string()
+    } else {
+        serde_json::json!([
+            entry["target_id"],
+            entry["kind"],
+            entry["palette"],
+            entry["source_family_key"],
+        ])
+        .to_string()
+    }
+}
+
+/// The project ID in an index file name, such as 7 in `latest-project-7.json`.
+fn index_project(name: &str, prefix: &str) -> Option<i32> {
+    name.strip_prefix(prefix)?
+        .strip_suffix(".json")?
+        .parse()
+        .ok()
+}
+
+/// Move one target's entries from a project's stack indices to another
+/// project's, after the target itself moved there. Each entry joins the
+/// destination's list. When the destination already has an entry of the same
+/// identity (see [`entry_identity`]), the index keeps the one built later.
+/// An index that cannot be read is left as it is. Returns how many entries
+/// left the source.
+pub fn move_target_indices(stack_root: &Path, target_id: i32, from: i32, to: i32) -> usize {
+    super::with_index_lock(stack_root, || {
+        move_target_indices_locked(stack_root, target_id, from, to)
+    })
+}
+
+fn move_target_indices_locked(stack_root: &Path, target_id: i32, from: i32, to: i32) -> usize {
+    use serde_json::Value;
+    let read =
+        |path: &Path| -> Option<Value> { serde_json::from_slice(&std::fs::read(path).ok()?).ok() };
+    let write = |folder: &Path, name: &str, value: &Value| -> std::io::Result<()> {
+        let staged = folder.join(format!(".{name}.moving"));
+        let written = serde_json::to_vec(value)
+            .map_err(std::io::Error::other)
+            .and_then(|bytes| std::fs::write(&staged, bytes))
+            .and_then(|()| std::fs::rename(&staged, folder.join(name)));
+        if written.is_err() {
+            let _ = std::fs::remove_file(&staged);
+        }
+        written
+    };
+    let mut moved_entries = 0;
+    for (folder, prefix, list, target_of) in index_kinds(stack_root) {
+        let source_name = format!("{prefix}{from}.json");
+        let destination_name = format!("{prefix}{to}.json");
+        let source_path = folder.join(&source_name);
+        let destination_path = folder.join(&destination_name);
+        if !source_path.exists() {
+            continue;
+        }
+        let Some(mut source) = read(&source_path) else {
+            tracing::warn!(
+                "Left {} as it is: it could not be read",
+                source_path.display()
+            );
+            continue;
+        };
+        let Some(entries) = source[list].as_array().cloned() else {
+            continue;
+        };
+        let (mut moving, kept): (Vec<Value>, Vec<Value>) = entries
+            .into_iter()
+            .partition(|entry| target_of(entry) == Some(i64::from(target_id)));
+        if moving.is_empty() {
+            continue;
+        }
+        for entry in &mut moving {
+            // A color job records its project too.
+            if let Some(project) = entry.get_mut("project_id") {
+                *project = to.into();
+            }
+        }
+        let mut destination = if destination_path.exists() {
+            let Some(destination) = read(&destination_path) else {
+                tracing::warn!(
+                    "Left the stacks of target {target_id} in {}: {} could not be read",
+                    source_path.display(),
+                    destination_path.display()
+                );
+                continue;
+            };
+            destination
+        } else {
+            let mut empty = source.clone();
+            empty["project_id"] = to.into();
+            empty[list] = Value::Array(Vec::new());
+            empty
+        };
+        if !destination[list].is_array() {
+            destination[list] = Value::Array(Vec::new());
+        }
+        let count = moving.len();
+        if let Some(entries) = destination[list].as_array_mut() {
+            for entry in moving {
+                let identity = entry_identity(&entry);
+                let built = |entry: &Value| entry["created_unix_seconds"].as_i64().unwrap_or(0);
+                match entries
+                    .iter_mut()
+                    .find(|existing| entry_identity(existing) == identity)
+                {
+                    Some(existing) if built(&entry) > built(existing) => *existing = entry,
+                    Some(_) => {}
+                    None => entries.push(entry),
+                }
+            }
+        }
+        // The destination first: should the source then fail to write, its
+        // entries are listed twice rather than lost.
+        if let Err(error) = write(&folder, &destination_name, &destination) {
+            tracing::warn!(
+                "Could not move the stacks of target {target_id} to {}: {error}",
+                destination_path.display()
+            );
+            continue;
+        }
+        source[list] = Value::Array(kept);
+        if let Err(error) = write(&folder, &source_name, &source) {
+            tracing::warn!(
+                "Moved the stacks of target {target_id} to {} but could not remove them from {}: {error}",
+                destination_path.display(),
+                source_path.display()
+            );
+        }
+        moved_entries += count;
+    }
+    moved_entries
+}
+
+/// Remove a merged-away target's entries from its project's stack indices.
+/// The target no longer exists, so its stacks have no card to show, and
+/// the catalog can give its ID to a new target later. Returns how many
+/// entries were removed.
+pub fn drop_target_entries(stack_root: &Path, project: i32, target_id: i32) -> usize {
+    super::with_index_lock(stack_root, || {
+        let mut removed = 0;
+        for (folder, prefix, list, target_of) in index_kinds(stack_root) {
+            let path = folder.join(format!("{prefix}{project}.json"));
+            let Some(mut index) = std::fs::read(&path)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+            else {
+                continue;
+            };
+            let Some(entries) = index[list].as_array_mut() else {
+                continue;
+            };
+            let before = entries.len();
+            entries.retain(|entry| target_of(entry) != Some(i64::from(target_id)));
+            let dropped = before - entries.len();
+            if dropped == 0 {
+                continue;
+            }
+            let staged = folder.join(format!(".{prefix}{project}.json.dropping"));
+            let written = serde_json::to_vec(&index)
+                .map_err(std::io::Error::other)
+                .and_then(|bytes| std::fs::write(&staged, bytes))
+                .and_then(|()| std::fs::rename(&staged, &path));
+            match written {
+                Ok(()) => removed += dropped,
+                Err(error) => {
+                    let _ = std::fs::remove_file(&staged);
+                    tracing::warn!(
+                        "Could not remove the stacks of merged target {target_id} from {}: {error}",
+                        path.display()
+                    );
+                }
+            }
+        }
+        removed
+    })
+}
+
+/// Move each index entry whose target now belongs to another project to
+/// that project's indices. A target move does this at once; the sweep does
+/// it again for an entry a build wrote to the old project's index while the
+/// target moved. `targets` maps each target the catalog has to its project
+/// and name. An entry moves only when the name it recorded is the target's
+/// current name: the catalog can give a deleted target's ID to a new
+/// target, and the old target's stacks must not move to the new one's
+/// project. Entries of other targets stay where they are. Returns how many
+/// entries moved.
+pub(super) fn rehome_moved_target_entries(
+    stack_root: &Path,
+    targets: &std::collections::HashMap<i32, (i32, String)>,
+) -> usize {
+    let mut moves = std::collections::BTreeSet::new();
+    for (folder, prefix, list, target_of) in index_kinds(stack_root) {
+        let Ok(files) = std::fs::read_dir(&folder) else {
+            continue;
+        };
+        for file in files.flatten() {
+            let name = file.file_name();
+            let Some(project) = name.to_str().and_then(|name| index_project(name, prefix)) else {
+                continue;
+            };
+            let Some(index) = std::fs::read(file.path())
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+            else {
+                continue;
+            };
+            for entry in index[list].as_array().into_iter().flatten() {
+                let Some(target) = target_of(entry).and_then(|id| i32::try_from(id).ok()) else {
+                    continue;
+                };
+                if let Some((current, name)) = targets.get(&target)
+                    && *current != project
+                    && entry_target_name(entry)
+                        .is_some_and(|recorded| same_target_name(recorded, name))
+                {
+                    moves.insert((target, project, *current));
+                }
+            }
+        }
+    }
+    moves
+        .into_iter()
+        .map(|(target, from, to)| move_target_indices(stack_root, target, from, to))
+        .sum()
 }
 
 #[cfg(test)]
@@ -715,5 +1016,255 @@ mod tests {
         assert_eq!(read("wbpp-project-1.json")["project_id"], 1);
         assert!(!stacks.join("latest-project-2.json").exists());
         assert!(!stacks.join("wbpp-project-2.json").exists());
+    }
+
+    /// A mono or WBPP index entry for one target and filter.
+    fn mono(job: &str, index: u32, target: i32, filter: &str, built: i64) -> serde_json::Value {
+        serde_json::json!({"job_id": job, "created_unix_seconds": built,
+            "group": {"index": index, "target_id": target, "target_name": format!("Target {target}"),
+                "filter_name": filter}})
+    }
+
+    fn write_index(path: &Path, project: i32, list: &str, entries: Vec<serde_json::Value>) {
+        fs::write(
+            path,
+            serde_json::to_vec(
+                &serde_json::json!({"project_id": project, "database_id": "db", list: entries}),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn jobs(path: &Path, list: &str) -> Vec<String> {
+        let index: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        index[list]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| {
+                format!(
+                    "{}/{}",
+                    entry["job_id"].as_str().unwrap(),
+                    entry["group"]["filter_name"].as_str().unwrap_or("-")
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_moved_targets_entries_move_to_its_new_projects_indices() {
+        let cache = tempfile::tempdir().unwrap();
+        let stacks = cache.path().join("stack-previews");
+        fs::create_dir_all(stacks.join("color")).unwrap();
+        // Job "a" built targets 7 and 8; job "b" built target 7's Ha.
+        write_index(
+            &stacks.join("latest-project-2.json"),
+            2,
+            "groups",
+            vec![
+                mono("a", 0, 7, "L", 100),
+                mono("a", 1, 8, "L", 100),
+                mono("b", 0, 7, "Ha", 200),
+            ],
+        );
+        // Project 5 has an older build of target 7's L, and another target.
+        write_index(
+            &stacks.join("latest-project-5.json"),
+            5,
+            "groups",
+            vec![mono("old", 0, 7, "L", 50), mono("c", 0, 9, "L", 300)],
+        );
+        write_index(
+            &stacks.join("wbpp-project-2.json"),
+            2,
+            "groups",
+            vec![mono("w", 0, 7, "L", 100)],
+        );
+        write_index(
+            &stacks.join("color/latest-project-2.json"),
+            2,
+            "jobs",
+            vec![
+                serde_json::json!({"job_id": "rgb", "project_id": 2, "target_id": 7, "kind": "rgb"}),
+                serde_json::json!({"job_id": "other", "project_id": 2, "target_id": 8, "kind": "rgb"}),
+            ],
+        );
+
+        let moved = move_target_indices(cache.path(), 7, 2, 5);
+
+        assert_eq!(moved, 4);
+        assert_eq!(
+            jobs(&stacks.join("latest-project-2.json"), "groups"),
+            ["a/L"]
+        );
+        assert_eq!(
+            jobs(&stacks.join("latest-project-5.json"), "groups"),
+            ["a/L", "c/L", "b/Ha"],
+            "the later build of target 7's L replaces the older one"
+        );
+        let wbpp: serde_json::Value =
+            serde_json::from_slice(&fs::read(stacks.join("wbpp-project-5.json")).unwrap()).unwrap();
+        assert_eq!(
+            (wbpp["project_id"].clone(), wbpp["database_id"].clone()),
+            (5.into(), "db".into())
+        );
+        assert_eq!(jobs(&stacks.join("wbpp-project-5.json"), "groups"), ["w/L"]);
+        assert!(jobs(&stacks.join("wbpp-project-2.json"), "groups").is_empty());
+        let color: serde_json::Value =
+            serde_json::from_slice(&fs::read(stacks.join("color/latest-project-5.json")).unwrap())
+                .unwrap();
+        assert_eq!(color["project_id"], 5);
+        assert_eq!(color["jobs"][0]["job_id"], "rgb");
+        assert_eq!(color["jobs"][0]["project_id"], 5);
+        assert_eq!(
+            jobs(&stacks.join("color/latest-project-2.json"), "jobs"),
+            ["other/-"]
+        );
+
+        // An unreadable destination leaves the source as it was.
+        fs::write(stacks.join("latest-project-6.json"), "{not json").unwrap();
+        assert_eq!(move_target_indices(cache.path(), 8, 2, 6), 1);
+        assert_eq!(
+            jobs(&stacks.join("latest-project-2.json"), "groups"),
+            ["a/L"]
+        );
+        assert_eq!(
+            jobs(&stacks.join("color/latest-project-6.json"), "jobs"),
+            ["other/-"]
+        );
+    }
+
+    #[test]
+    fn a_target_moved_away_and_back_keeps_its_latest_builds() {
+        let cache = tempfile::tempdir().unwrap();
+        let stacks = cache.path().join("stack-previews");
+        fs::create_dir_all(&stacks).unwrap();
+        write_index(
+            &stacks.join("latest-project-1.json"),
+            1,
+            "groups",
+            vec![mono("first", 0, 7, "L", 100)],
+        );
+        move_target_indices(cache.path(), 7, 1, 2);
+        // A build that started before the move finishes into project 1.
+        write_index(
+            &stacks.join("latest-project-1.json"),
+            1,
+            "groups",
+            vec![mono("late", 0, 7, "L", 200)],
+        );
+        // In project 2, a new Ha build.
+        write_index(
+            &stacks.join("latest-project-2.json"),
+            2,
+            "groups",
+            vec![mono("first", 0, 7, "L", 100), mono("ha", 0, 7, "Ha", 150)],
+        );
+        assert_eq!(move_target_indices(cache.path(), 7, 2, 1), 2);
+        assert_eq!(
+            jobs(&stacks.join("latest-project-1.json"), "groups"),
+            ["late/L", "ha/Ha"],
+            "the later L build stays; the older one coming back does not replace it"
+        );
+        assert!(jobs(&stacks.join("latest-project-2.json"), "groups").is_empty());
+    }
+
+    #[test]
+    fn the_sweep_moves_entries_a_build_wrote_after_its_target_moved() {
+        let cache = tempfile::tempdir().unwrap();
+        let stacks = cache.path().join("stack-previews");
+        fs::create_dir_all(stacks.join("color")).unwrap();
+        // Target 7 is in project 2 now; a build wrote it to project 1's index.
+        write_index(
+            &stacks.join("latest-project-1.json"),
+            1,
+            "groups",
+            vec![
+                mono("late", 0, 7, "L", 200),
+                mono("stays", 0, 8, "L", 200),
+                mono("gone", 0, 99, "L", 1),
+            ],
+        );
+        write_index(
+            &stacks.join("color/latest-project-1.json"),
+            1,
+            "jobs",
+            vec![
+                serde_json::json!({"job_id": "rgb", "project_id": 1, "target_id": 7,
+                "target_name": " target 7 ", "kind": "rgb"}),
+            ],
+        );
+        let targets = std::collections::HashMap::from([
+            (7, (2, "Target 7".to_string())),
+            (8, (1, "Target 8".to_string())),
+        ]);
+
+        assert_eq!(rehome_moved_target_entries(cache.path(), &targets), 2);
+
+        assert_eq!(
+            jobs(&stacks.join("latest-project-1.json"), "groups"),
+            ["stays/L", "gone/L"],
+            "an entry of a target the catalog no longer has stays"
+        );
+        assert_eq!(
+            jobs(&stacks.join("latest-project-2.json"), "groups"),
+            ["late/L"]
+        );
+        assert_eq!(
+            jobs(&stacks.join("color/latest-project-2.json"), "jobs"),
+            ["rgb/-"]
+        );
+        assert_eq!(rehome_moved_target_entries(cache.path(), &targets), 0);
+    }
+
+    #[test]
+    fn the_sweep_leaves_a_deleted_targets_stacks_when_a_new_target_reuses_its_id() {
+        let cache = tempfile::tempdir().unwrap();
+        let stacks = cache.path().join("stack-previews");
+        fs::create_dir_all(&stacks).unwrap();
+        // Target 50 ("Target 50") was deleted; a new target in project 2
+        // got its ID.
+        write_index(
+            &stacks.join("latest-project-1.json"),
+            1,
+            "groups",
+            vec![mono("old", 0, 50, "L", 100)],
+        );
+        let targets = std::collections::HashMap::from([(50, (2, "NGC 891".to_string()))]);
+        assert_eq!(rehome_moved_target_entries(cache.path(), &targets), 0);
+        assert_eq!(
+            jobs(&stacks.join("latest-project-1.json"), "groups"),
+            ["old/L"]
+        );
+        assert!(!stacks.join("latest-project-2.json").exists());
+    }
+
+    #[test]
+    fn a_merged_away_targets_entries_are_removed() {
+        let cache = tempfile::tempdir().unwrap();
+        let stacks = cache.path().join("stack-previews");
+        fs::create_dir_all(stacks.join("color")).unwrap();
+        write_index(
+            &stacks.join("latest-project-1.json"),
+            1,
+            "groups",
+            vec![mono("merged", 0, 7, "L", 100), mono("kept", 0, 8, "L", 100)],
+        );
+        write_index(
+            &stacks.join("color/latest-project-1.json"),
+            1,
+            "jobs",
+            vec![
+                serde_json::json!({"job_id": "rgb", "project_id": 1, "target_id": 7, "kind": "rgb"}),
+            ],
+        );
+        assert_eq!(drop_target_entries(cache.path(), 1, 7), 2);
+        assert_eq!(
+            jobs(&stacks.join("latest-project-1.json"), "groups"),
+            ["kept/L"]
+        );
+        assert!(jobs(&stacks.join("color/latest-project-1.json"), "jobs").is_empty());
+        assert_eq!(drop_target_entries(cache.path(), 1, 7), 0);
     }
 }

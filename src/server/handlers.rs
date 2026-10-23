@@ -1503,10 +1503,13 @@ pub async fn fill_guids_route(
     })))
 }
 
-/// `PUT /api/db/{db_id}/targets/{target_id}` — rename a target and/or move it
-/// to another project (same profile; images follow the target).
+/// `PUT /api/db/{db_id}/targets/{target_id}` — rename a target, change its
+/// scheduler fields, and/or move it to another project. A move follows the
+/// rules of the Library's previewed move (see `organization::MoveTarget`):
+/// frames, exposure plans and stack previews go with the target, and a
+/// target with frames stays within its profile.
 pub async fn update_target_route(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     ctx: DbContext,
     Path((_db_id, target_id)): Path<(String, i32)>,
     Json(req): Json<UpdateTargetRequest>,
@@ -1525,35 +1528,75 @@ pub async fn update_target_route(
         ));
     }
 
-    let conn = ctx.db();
-    let conn = conn.lock().map_err(AppError::db)?;
-    let db = Database::new(&conn);
-
-    if let Some(name) = &req.name {
-        let name = name.trim();
-        if name.is_empty() {
+    use rusqlite::OptionalExtension;
+    let requested_project = req.project_id;
+    let name = match &req.name {
+        Some(name) if name.trim().is_empty() => {
             return Err(AppError::BadRequest("name must not be empty".into()));
         }
-        if !db.rename_target(target_id, name).map_err(AppError::db)? {
+        Some(name) => Some(name.trim().to_string()),
+        None => None,
+    };
+    // The request's own changes: a new name and the scheduler fields.
+    let edit = move |conn: &rusqlite::Connection| -> Result<(), AppError> {
+        let db = Database::new(conn);
+        if let Some(name) = &name
+            && !db.rename_target(target_id, name).map_err(AppError::db)?
+        {
             return Err(AppError::BadRequest(format!(
                 "target {} not found",
                 target_id
             )));
         }
-    }
+        crate::server::scheduler::update_target_fields(&db, target_id, &req)
+    };
 
-    let mut images_moved = 0usize;
-    if let Some(project_id) = req.project_id {
-        images_moved = db
-            .move_target(target_id, project_id)
-            .map_err(|e| AppError::BadRequest(e.to_string()))?;
-    }
+    let current_project = {
+        let conn = ctx.db();
+        let conn = conn.lock().map_err(AppError::db)?;
+        conn.query_row(
+            "SELECT projectid FROM target WHERE Id = ?",
+            [target_id],
+            |row| row.get::<_, i32>(0),
+        )
+        .optional()
+        .map_err(AppError::db)?
+    };
+    let Some(current_project) = current_project else {
+        return Err(AppError::BadRequest(format!(
+            "target {} not found",
+            target_id
+        )));
+    };
 
-    crate::server::scheduler::update_target_fields(&db, target_id, &req)?;
-
+    // Naming the target's own project leaves it where it is, as before.
+    let Some(project_id) = requested_project.filter(|project| *project != current_project) else {
+        // One transaction, so a refused field change also leaves the name.
+        let conn = ctx.db();
+        let conn = conn.lock().map_err(AppError::db)?;
+        let tx = conn.unchecked_transaction().map_err(AppError::db)?;
+        edit(&tx)?;
+        tx.commit().map_err(AppError::db)?;
+        return Ok(Json(ApiResponse::success(serde_json::json!({
+            "updated": true,
+            "images_moved": 0,
+        }))));
+    };
+    // A move runs the edit, the move's checks and the move in one
+    // transaction, so a refused move leaves the name and fields unchanged.
+    let context = ctx.0.clone();
+    let moved = tokio::task::spawn_blocking(move || {
+        crate::server::organization::move_target_to_project(&context, target_id, project_id, edit)
+    })
+    .await
+    .map_err(|error| AppError::InternalError(format!("target move: {error}")))??;
+    state.auto_stacks.touch_database(
+        &ctx.id,
+        crate::server::stack_preview::automatic::RefreshReason::Sync,
+    );
     Ok(Json(ApiResponse::success(serde_json::json!({
         "updated": true,
-        "images_moved": images_moved,
+        "images_moved": moved.images_moved,
     }))))
 }
 

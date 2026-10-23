@@ -43,6 +43,11 @@ export type OrganizationOperation =
         | { target_id: number }
         | { project_id: number; new_target_name: string }
         | { new_project_name: string; new_target_name: string };
+    }
+  | {
+      kind: 'move_target';
+      target_id: number;
+      destination: { project_id: number } | { new_project_name: string };
     };
 
 export interface OrganizationPreview {
@@ -59,16 +64,30 @@ export interface OrganizationPreview {
   exposure_plans_moved: number;
   exposure_plans_created: number;
   warnings: string[];
+  /** Set when a moved target changes Target Scheduler profile. */
+  profile_change?: { from_profile_id: string; to_profile_id: string } | null;
+  exposure_templates_reused?: number;
+  exposure_templates_copied?: number;
+  /** Each exposure template of a target that changes profile, and the template its plans use there. */
+  exposure_template_changes?: {
+    source_template_name: string;
+    destination_template_name: string;
+    reused: boolean;
+  }[];
+  /** Set when a Planning plan manages the moved target; the move ends that. */
+  planning_panel_id?: string | null;
 }
 
 export interface OrganizationResult {
+  source_project_id?: number;
   project_id: number;
   target_id: number;
   images_moved: number;
 }
 
 export interface OrganizationDestinations {
-  projects: { id: number; name: string; profile_id: string }[];
+  /** `state` is the Target Scheduler state: 0 Draft, 1 Active, 2 Inactive, 3 Closed. */
+  projects: { id: number; name: string; profile_id: string; state?: number | null }[];
   targets: { id: number; name: string; project_id: number }[];
 }
 

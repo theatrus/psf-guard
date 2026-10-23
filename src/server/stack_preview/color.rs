@@ -5467,6 +5467,10 @@ fn persist_color_manifest(stack_root: &FsPath, job: &StackColorJob) -> Result<()
 }
 
 fn persist_latest_color(stack_root: &FsPath, job: &StackColorJob) -> Result<(), String> {
+    super::with_index_lock(stack_root, || persist_latest_color_locked(stack_root, job))
+}
+
+fn persist_latest_color_locked(stack_root: &FsPath, job: &StackColorJob) -> Result<(), String> {
     let path = latest_color_path(stack_root, job.project_id);
     let mut latest = std::fs::read(&path)
         .ok()

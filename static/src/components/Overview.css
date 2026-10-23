@@ -1269,7 +1269,7 @@
   }
 }
 
-/* Organize (rename / move / merge) inline editor */
+/* Organize (rename / merge, and the start of a target move) inline editor */
 .organize-panel {
   display: flex;
   flex-wrap: wrap;
@@ -1304,7 +1304,8 @@
 }
 
 .organize-save,
-.organize-cancel {
+.organize-cancel,
+.organize-move {
   padding: 4px 10px;
   border-radius: 4px;
   border: 1px solid var(--color-border-tertiary);
@@ -1333,9 +1334,17 @@
 
 .organize-save:disabled,
 .organize-cancel:disabled,
-.organize-delete:disabled {
+.organize-delete:disabled,
+.organize-move:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+.organize-save:focus-visible,
+.organize-cancel:focus-visible,
+.organize-move:focus-visible {
+  outline: 2px solid var(--state-focus-border);
+  outline-offset: 2px;
 }
 
 .organize-error {

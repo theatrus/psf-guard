@@ -525,13 +525,16 @@ at a time; a selection spanning targets must be moved separately.
 
 ![Exposure move preview on a phone](exposure-move-phone.png)
 
-Organization stays within one database and one Target Scheduler profile.
+Merging targets and moving exposures stay within one database and one Target
+Scheduler profile. A target move stays within one database.
 These controls require an editor account; they edit catalog rows, so they do
 not need database management. A preview changes nothing. If relevant catalog records
 change before Apply, PSF Guard asks for a fresh preview.
 
 Image files, capture metadata, grades, rejection reasons, and image GUIDs do
 not change. Merging moves the source exposure plans with their identities.
+Removed rejects of the source target return to the destination target when
+you restore them, and the source target's stack previews are removed.
 Splitting creates separate inactive plans for the moved exposures and updates
 the source and destination counts. New targets are inactive, and new projects
 start in the Inactive state; activate and configure their plans separately
@@ -542,6 +545,64 @@ structure can restore the grouping held by that source database. Make the
 same organizational change in the authoritative scheduler when that grouping
 must survive a subsequent sync. Importing already cataloged files skips them
 and keeps their current grouping.
+
+### Move a target to another project
+
+1. In Library, click **Edit** beside the target.
+2. Click **Move to another project...**. When you typed a new name in the
+   panel, PSF Guard saves it first.
+3. Under **Destination project**, choose a project, or choose **New project...**
+   and enter a name. Projects of another Target Scheduler profile show the
+   first eight characters of their profile beside the name, and Closed
+   projects show **Closed**.
+4. Click **Preview move**. The preview shows the destination, how many
+   exposures and exposure plans move, and any profile change.
+5. Click **Apply move**.
+
+The target keeps its name, framing, exposure plans, flat history and
+exposure order. Its exposures and its stack previews move with it. Removed
+rejects of the target return to the new project when you restore them. A
+new project copies the settings of the target's current project, including
+its stack settings, belongs to the same profile, and starts in the Inactive
+state.
+
+PSF Guard refuses a move in these cases:
+
+- **The destination project already has a target of the same name.** Use
+  **Merge target** to combine the two targets instead.
+- **The target has exposures and the destination project belongs to another
+  profile.** Each exposure's profile selects its calibration frames and its
+  rig's nights, so a target with exposures can move only within its profile.
+  Removed rejects that you can still restore count as exposures; a removed
+  reject whose files were deleted when the trash was emptied does not. To move the
+  target, first move its exposures to another target of the same profile
+  with **Move exposures**.
+
+A target without exposures can move to a project of any profile. Each of its
+exposure plans then uses an exposure template of the destination profile:
+a template with the same filter, gain, offset, binning and readout mode when
+the profile has one, or otherwise a copy of the target's template. The
+preview lists each template and whether it is reused or copied. A plan
+without its own exposure uses its template's default exposure; when the move
+reuses a template, PSF Guard writes the old template's default exposure into
+the plan, so the plan's exposure does not change. A blank default counts as
+60 seconds.
+
+The Library lists only projects with exposures. When you move a target
+without exposures into a project without exposures, the preview explains
+where to find it: with Planning on, the project appears under Plans with
+nothing captured yet; otherwise it appears once an exposure arrives.
+
+When a Planning plan activated the target as one of its panels, the preview
+shows that the plan will no longer manage the target after the move. The plan's
+next activation can add a new target for that panel to the old project. When
+the target is part of an open collaboration assignment, the move ends the
+target's part in it.
+
+Stack previews built before the move still record the old project in their
+job details. Their cards, previews and FITS files show in the new project,
+but the job details of such a stack cannot be opened from the new project.
+The same applies after you merge projects.
 
 ## Fill or refresh quality data
 

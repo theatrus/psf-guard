@@ -6,6 +6,25 @@
 
 ## Changes
 
+- You can move a target to any project in its database, or to a new one.
+  In Library, click **Edit** beside the target, then **Move to another
+  project...**, choose the destination, and click **Preview move**. Its
+  exposures, exposure plans and stack previews move with it, and a new
+  project copies the current project's settings and starts Inactive. A target
+  without exposures can also move to a project of another Target Scheduler
+  profile; its exposure plans then use that profile's matching exposure
+  templates, or copies of their own. A target with exposures stays within its
+  profile, and a destination that already has a target of the same name
+  refers you to **Merge target**. Before, **Move to:** moved the target at once,
+  only within its profile, and left its stack previews behind.
+- A restored reject returns to its target's current project, and a reject
+  removed before **Merge target** returns to the destination target. Before,
+  such a reject came back to its old project or to the merged-away target.
+- **Merge target** removes the merged-away target's stack previews, since
+  that target no longer exists.
+- Editing a target's name together with an invalid value, such as an RA of
+  25 hours, now changes nothing. Before, the new name was saved.
+
 - You can reopen an archived project from the Library. Open **Archived
   projects** and click **Reopen** beside the project. PSF Guard sets it
   Inactive in Target Scheduler, so it returns to the project list but is not

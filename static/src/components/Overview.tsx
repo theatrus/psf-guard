@@ -82,7 +82,7 @@ import './Overview.css';
 /// Inline edit state for correcting imported groupings.
 type Organizing =
   | { kind: 'project'; dbId: string; id: number; name: string; mergeInto: string }
-  | { kind: 'target'; dbId: string; id: number; name: string; moveTo: string };
+  | { kind: 'target'; dbId: string; id: number; projectId: number; name: string };
 
 function recentImageKey(dbId: string, projectId: number, imageId: number): string {
   return `${dbId}:${projectId}:${imageId}`;
@@ -344,7 +344,7 @@ export default function Overview() {
     }
   };
 
-  // Persist an organize edit (rename / move / merge), then refresh this DB's
+  // Persist an organize edit (rename, or a project merge), then refresh this DB's
   // overview queries so the new grouping shows up.
   const saveOrganize = async () => {
     if (!organizing) return;
@@ -370,11 +370,10 @@ export default function Overview() {
           await apiClient.updateProject(organizing.dbId, organizing.id, organizing.name.trim());
         }
       } else {
-        const req: { name?: string; project_id?: number } = {};
-        if (organizing.name.trim()) req.name = organizing.name.trim();
-        if (organizing.moveTo !== '') req.project_id = Number(organizing.moveTo);
-        if (req.name !== undefined || req.project_id !== undefined) {
-          await apiClient.updateTarget(organizing.dbId, organizing.id, req);
+        // Moving a target goes through Move to another project..., which
+        // previews the change first.
+        if (organizing.name.trim()) {
+          await apiClient.updateTarget(organizing.dbId, organizing.id, { name: organizing.name.trim() });
         }
       }
       queryClient.invalidateQueries({ queryKey: ['db', organizing.dbId] });
@@ -384,6 +383,37 @@ export default function Overview() {
     } finally {
       setOrganizeBusy(false);
     }
+  };
+
+  // Open the move preview for the target being edited. A name typed in the
+  // panel is saved first, so the move does not discard it.
+  const moveTargetAfterRename = async (currentName: string) => {
+    if (!organizing || organizing.kind !== 'target') return;
+    const edited = organizing;
+    const name = edited.name.trim();
+    let targetName = currentName;
+    if (name && name !== currentName) {
+      setOrganizeBusy(true);
+      setOrganizeError('');
+      try {
+        await apiClient.updateTarget(edited.dbId, edited.id, { name });
+        targetName = name;
+        void queryClient.invalidateQueries({ queryKey: ['db', edited.dbId] });
+      } catch (err) {
+        setOrganizeError(err instanceof Error ? err.message : String(err));
+        return;
+      } finally {
+        setOrganizeBusy(false);
+      }
+    }
+    setOrganizing(null);
+    setOrganizationScope({
+      kind: 'move_target',
+      dbId: edited.dbId,
+      sourceTargetId: edited.id,
+      sourceTargetName: targetName,
+      sourceProjectId: edited.projectId,
+    });
   };
 
   // Group targets by (db_id, project_id) since project IDs collide across DBs.
@@ -1558,6 +1588,7 @@ export default function Overview() {
                                 <button
                                   type="button"
                                   className="target-settings-button"
+                                  aria-label={`Edit target ${target.name}`}
                                   title="Rename this target or move it to another project"
                                   onClick={() => {
                                     setOrganizeError('');
@@ -1565,8 +1596,8 @@ export default function Overview() {
                                       kind: 'target',
                                       dbId: target.db_id,
                                       id: target.id,
+                                      projectId: target.project_id,
                                       name: target.name,
-                                      moveTo: '',
                                     });
                                   }}
                                 >
@@ -1633,25 +1664,18 @@ export default function Overview() {
                                     if (e.key === 'Escape') setOrganizing(null);
                                   }}
                                   placeholder="Target name"
+                                  aria-label="Target name"
                                   autoFocus
                                 />
-                                <select
-                                  className="organize-select"
-                                  value={organizing.moveTo}
-                                  onChange={(e) =>
-                                    setOrganizing({ ...organizing, moveTo: e.target.value })
-                                  }
-                                  title="Move this target and its images to another project"
+                                <button
+                                  type="button"
+                                  className="organize-move"
+                                  title="Preview moving this target, its exposures and its exposure plans to another project or a new one"
+                                  disabled={organizeBusy}
+                                  onClick={() => void moveTargetAfterRename(target.name)}
                                 >
-                                  <option value="">(keep project)</option>
-                                  {dbProjects
-                                    .filter((candidate) => candidate.id !== target.project_id)
-                                    .map((candidate) => (
-                                      <option key={candidate.id} value={candidate.id}>
-                                        Move to: {candidate.display_name}
-                                      </option>
-                                    ))}
-                                </select>
+                                  Move to another project...
+                                </button>
                                 <button
                                   className="organize-save"
                                   onClick={saveOrganize}

@@ -1100,57 +1100,6 @@ impl<'a> Database<'a> {
             .optional()?)
     }
 
-    /// Move a target — and every acquired image referencing it — to another
-    /// project. Both projects must belong to the same profile: exposure
-    /// plans/templates and per-image profileIds are profile-scoped in TS, so
-    /// a cross-profile move would strand them (upstream handles that case by
-    /// copy-and-delete, which is out of scope here).
-    ///
-    /// Returns the number of images that moved with the target.
-    pub fn move_target(&self, target_id: i32, new_project_id: i32) -> Result<usize> {
-        use rusqlite::OptionalExtension;
-
-        let source_project: Option<i32> = self
-            .conn
-            .query_row(
-                "SELECT projectid FROM target WHERE Id = ?",
-                params![target_id],
-                |row| row.get(0),
-            )
-            .optional()?;
-        let Some(source_project) = source_project else {
-            anyhow::bail!("target {} not found", target_id);
-        };
-        if source_project == new_project_id {
-            return Ok(0);
-        }
-
-        let dest_profile = self
-            .project_profile(new_project_id)?
-            .ok_or_else(|| anyhow::anyhow!("project {} not found", new_project_id))?;
-        let source_profile = self.project_profile(source_project)?.unwrap_or_default();
-        if dest_profile != source_profile {
-            anyhow::bail!(
-                "cannot move a target across profiles ({} → {}): exposure plans and \
-                 templates are profile-scoped",
-                source_profile,
-                dest_profile
-            );
-        }
-
-        let tx = self.conn.unchecked_transaction()?;
-        tx.execute(
-            "UPDATE target SET projectid = ? WHERE Id = ?",
-            params![new_project_id, target_id],
-        )?;
-        let images = tx.execute(
-            "UPDATE acquiredimage SET projectId = ? WHERE targetId = ?",
-            params![new_project_id, target_id],
-        )?;
-        tx.commit()?;
-        Ok(images)
-    }
-
     /// Merge one project into another (same profile): every target and
     /// acquired image moves to `into_project_id`, then the emptied source
     /// project and its rule weights are deleted.
