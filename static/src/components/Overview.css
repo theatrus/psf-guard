@@ -349,7 +349,7 @@
   cursor: default;
 }
 
-.project-archive-item > .library-reopen {
+.project-archive-item > .library-row-button:last-child {
   margin-right: 8px;
 }
 
@@ -1250,6 +1250,23 @@
     align-items: flex-start;
     flex-direction: column;
   }
+
+  /* Reopen and Delete wrap to a line of their own below the name. */
+  .project-archive-item {
+    flex-wrap: wrap;
+  }
+
+  .project-archive-item > .project-archive-open {
+    flex-basis: 100%;
+  }
+
+  .project-archive-open + .library-row-button {
+    margin-left: 11px;
+  }
+
+  .project-archive-item > .library-row-button {
+    margin-bottom: 8px;
+  }
 }
 
 /* Organize (rename / move / merge) inline editor */
@@ -1303,8 +1320,20 @@
   color: var(--color-text-on-fill);
 }
 
+/* Opens the delete dialog; the deletion itself is confirmed there. */
+.organize-delete {
+  padding: 4px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--color-border-error);
+  cursor: pointer;
+  font-size: 12px;
+  background: var(--color-bg-primary);
+  color: var(--color-error);
+}
+
 .organize-save:disabled,
-.organize-cancel:disabled {
+.organize-cancel:disabled,
+.organize-delete:disabled {
   opacity: 0.5;
   cursor: default;
 }

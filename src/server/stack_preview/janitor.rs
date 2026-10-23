@@ -281,6 +281,25 @@ pub(super) fn prune(stack_root: &Path, keep: &KeepSet, stacking_version: &str) {
     }
 }
 
+/// Remove one project's stack indices. The stacks they name are pruned once
+/// nothing else references them.
+pub(super) fn drop_project_indices(stack_root: &Path, project_id: i32) -> usize {
+    use crate::server::storage::{stack_folder, stack_kind, stacks};
+    [
+        (stacks(stack_root), "latest-project-"),
+        (stacks(stack_root), "wbpp-project-"),
+        (
+            stack_folder(stack_root, stack_kind::COLOR),
+            "latest-project-",
+        ),
+    ]
+    .into_iter()
+    .filter(|(folder, prefix)| {
+        std::fs::remove_file(folder.join(format!("{prefix}{project_id}.json"))).is_ok()
+    })
+    .count()
+}
+
 /// Remove the stack indices of projects the catalog no longer has (merged
 /// or deleted), so the stacks they name stop being referenced. `live` is
 /// every project id the catalog holds.

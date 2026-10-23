@@ -245,6 +245,46 @@ impl Service {
             .map_err(|error| format!("{error:?}"))
     }
 
+    /// The plan that links a catalog's project, for a deletion preview.
+    /// `None` too when another registered file with the same catalog
+    /// identity stands for the catalog in Planning.
+    pub(crate) async fn source_project_plan(
+        self: Arc<Self>,
+        catalogs: Vec<Arc<DatabaseContext>>,
+        slug: String,
+        source_project_guid: Uuid,
+    ) -> Result<Option<psf_guard_director_meta::merge::SourcePlan>, String> {
+        let instance = self.instance_id;
+        self.query(move |store| {
+            let Some(catalog) = planning_identity(instance, &catalogs, &slug) else {
+                return Ok(None);
+            };
+            store.source_project_plan(catalog, source_project_guid)
+        })
+        .await
+        .map_err(|error| format!("{error:?}"))
+    }
+
+    /// Forget a catalog's project that was deleted there: its link to a plan
+    /// and the plan's work for that rig. Returns the plan, if one linked it.
+    /// A copy of a catalog that another file stands for changes nothing.
+    pub(crate) async fn forget_source_project(
+        self: Arc<Self>,
+        catalogs: Vec<Arc<DatabaseContext>>,
+        slug: String,
+        source_project_guid: Uuid,
+    ) -> Result<Option<Uuid>, String> {
+        let instance = self.instance_id;
+        self.run(move |store| {
+            let Some(catalog) = planning_identity(instance, &catalogs, &slug) else {
+                return Ok(None);
+            };
+            store.forget_source_project(catalog, source_project_guid)
+        })
+        .await
+        .map_err(|error| format!("{error:?}"))
+    }
+
     /// A read on a pooled read-only connection: it runs beside any write
     /// and beside other reads, and sees the last committed state.
     async fn query<T: Send + 'static>(
@@ -465,6 +505,21 @@ fn reviewed_identity(
         },
         true,
     ))
+}
+
+/// The identity Planning knows the catalog `slug` by, or `None` when an
+/// earlier file with the same identity stands for it.
+fn planning_identity(
+    instance: Uuid,
+    catalogs: &[Arc<DatabaseContext>],
+    slug: &str,
+) -> Option<Uuid> {
+    let catalog = catalogs.iter().find(|catalog| catalog.id == slug)?;
+    let identity = identity_of(instance, &catalog.database_path).id;
+    identified_catalogs(catalogs, instance)
+        .get(identity)
+        .is_some_and(|chosen| chosen.id == slug)
+        .then_some(identity)
 }
 
 /// The identity a file carries, or the one it would be given.

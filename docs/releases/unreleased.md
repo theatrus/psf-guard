@@ -12,6 +12,17 @@
   scheduled until you set it Active. A plan with nothing captured yet has
   **Reopen** while it is Closed on any rig; it sets the project Inactive on
   each of those rigs. Reopen appears for accounts that can edit.
+- You can delete a project from a database. In the Library, open the
+  project's **Edit project** panel and click **Delete project...**, or click
+  **Delete** beside an archived project. The dialog
+  shows how many targets, exposure plans and frames go, and asks you to type
+  the project's name when it has frames. Frame records and grades leave the
+  catalog; the image files stay on disk. Later syncs and imports leave the
+  project out until you click **Allow again** under **Deleted projects** in
+  the Library. A plan that linked the project no longer plans work for that
+  rig. Deleting needs a server started with `--allow-database-management`.
+  Restoring removed rejects no longer puts back a frame whose project was
+  deleted.
 
 - A color preview can run BlurXTerminator and NoiseXTerminator on its color
   channels together. In **Processing stack**, turn the tools on under

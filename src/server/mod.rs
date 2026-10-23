@@ -46,6 +46,7 @@ pub mod preview_pregeneration;
 pub mod preview_queue;
 pub mod previews;
 pub mod processing_setups;
+pub mod project_removal;
 pub mod quality_arrival;
 pub mod quality_backfill;
 pub mod quality_scans;
@@ -345,6 +346,15 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route(
             "/projects/{project_id}/merge",
             post(handlers::merge_project_route),
+        )
+        .route(
+            "/projects/{project_id}/removal",
+            get(project_removal::preview).post(project_removal::remove),
+        )
+        .route("/deleted-projects", get(project_removal::deleted))
+        .route(
+            "/deleted-projects/{id}/allow",
+            post(project_removal::allow_back),
         )
         .route(
             "/projects/{project_id}/scheduler",

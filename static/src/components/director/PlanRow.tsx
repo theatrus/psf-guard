@@ -36,7 +36,7 @@ export default function PlanRow({ row, href, canWrite, editing, onRename, reopen
           <DbPill name={link.catalog_name} title={`Rig ${link.rig.name}`} /><StatePill state={link.source_state} />
         </span>)}
     <span className="library-pill">No frames yet</span>
-    {canWrite && onReopen && reopenOn.length > 0 && <button type="button" className="library-reopen" disabled={editing || reopenDisabled}
+    {canWrite && onReopen && reopenOn.length > 0 && <button type="button" className="library-row-button" disabled={editing || reopenDisabled}
       title={`Set ${name} to Inactive on ${reopenOn.join(' and ')}, where it is Closed. Target Scheduler does not select it until it is set to Active.`}
       aria-label={`Reopen ${name}`} onClick={onReopen}>{reopening ? 'Reopening...' : 'Reopen'}</button>}
     {canWrite && <button type="button" className="library-planning" disabled={editing} title={`Rename ${name}`} aria-label={`Rename ${name}`} onClick={onRename}><Pencil size={14} /></button>}

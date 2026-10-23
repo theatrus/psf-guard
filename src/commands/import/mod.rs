@@ -2359,6 +2359,53 @@ mod tests {
         assert_eq!(known.len(), 1);
     }
 
+    /// A deleted project stays deleted when its folder is imported again:
+    /// neither its lights nor the calibrated copies paired with them come
+    /// back, as lights or as copies.
+    #[test]
+    fn importing_a_deleted_projects_files_again_brings_nothing_back() {
+        use crate::image_io::FrameKind;
+        let mut conn = fresh_conn();
+        let raw = timed("M31", "Ha", 1_000_000);
+        let files = || {
+            vec![
+                raw.clone(),
+                copy_of(&raw, "_c", FrameKind::Calibrated),
+                copy_of(&raw, "_c_r", FrameKind::Registered),
+            ]
+        };
+        import_frames(&mut conn, files(), &ImportOptions::default()).unwrap();
+        let project: i64 = conn
+            .query_row("SELECT Id FROM project", [], |row| row.get(0))
+            .unwrap();
+        let none = std::collections::BTreeSet::new();
+        let plan = crate::commands::project_removal::plan(&conn, project, &none)
+            .unwrap()
+            .unwrap();
+        crate::commands::project_removal::remove(&conn, project, &plan.digest, &none, 1).unwrap();
+
+        let again = import_frames(&mut conn, files(), &ImportOptions::default()).unwrap();
+        assert_eq!(again.imported, 0, "{again:?}");
+        assert_eq!(again.derivatives.paired, 0);
+        let rows: i64 = conn
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM project) + (SELECT COUNT(*) FROM acquiredimage)",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(rows, 0);
+        let paths: Vec<PathBuf> = files().into_iter().map(|frame| frame.path).collect();
+        assert_eq!(known_files(&conn, &paths).unwrap().len(), 3);
+
+        // Allowed back, the next import adds the light again with its copies.
+        let deletion = crate::commands::project_removal::deletions(&conn).unwrap()[0].id;
+        assert!(crate::commands::project_removal::allow_back(&conn, deletion, 2).unwrap());
+        assert!(known_files(&conn, &paths).unwrap().is_empty());
+        let back = import_frames(&mut conn, files(), &ImportOptions::default()).unwrap();
+        assert_eq!((back.imported, back.derivatives.paired), (1, 2), "{back:?}");
+    }
+
     #[test]
     fn a_raw_and_its_copies_in_one_run_make_one_light() {
         use crate::image_io::FrameKind;

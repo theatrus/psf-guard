@@ -12,6 +12,7 @@ pub mod flat_groups;
 pub mod import;
 pub mod list_projects;
 pub mod list_targets;
+pub mod project_removal;
 pub mod read_fits;
 pub mod regrade;
 pub mod reject_archive;

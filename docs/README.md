@@ -35,6 +35,7 @@ work. Historical checklists record delivery; they do not track current work.
 - [AstroCollab and Starfront interoperability (proposed)](design/collaboration.md)
 - [Reject archive safety model](design/reject-archive.md)
 - [Reject removal](design/reject-removal.md)
+- [Project removal](design/project-removal.md)
 - [Calibrated subs](design/calibrated-subs.md)
 - [Color previews and channel processing](design/color-channel-processing.md)
 - [Flat grouping](design/flat-grouping.md)

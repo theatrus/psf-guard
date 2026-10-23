@@ -82,6 +82,9 @@ import type { GuidFillReport, GuidReport,
   ProjectOverview,
   TargetOverview,
   ProjectSchedulerDetails,
+  DeletedProject,
+  ProjectRemovalOutcome,
+  ProjectRemovalPreview,
   ProjectSchedulerUpdate,
   TargetSchedulerUpdate,
   CreateExposurePlanRequest,
@@ -2312,6 +2315,44 @@ export const apiClient = {
     >(dbPath(dbId, `/projects/${projectId}/merge`), { into_project_id: intoProjectId });
     if (!data.data) throw new Error(data.error || 'Failed to merge project');
     return data.data;
+  },
+
+  /** What deleting a project would take from its catalog. */
+  getProjectRemoval: async (dbId: string, projectId: number): Promise<ProjectRemovalPreview> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<ProjectRemovalPreview>>(
+      dbPath(dbId, `/projects/${projectId}/removal`)
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to read what deleting the project removes');
+    return data.data;
+  },
+
+  /** Delete a project as previewed; a changed project answers with a new preview. */
+  removeProject: async (dbId: string, projectId: number, digest: string): Promise<ProjectRemovalOutcome> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<ProjectRemovalOutcome>>(
+      dbPath(dbId, `/projects/${projectId}/removal`),
+      { digest }
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to delete the project');
+    return data.data;
+  },
+
+  /** Deleted projects that syncs and imports leave out, newest first. */
+  getDeletedProjects: async (dbId: string): Promise<DeletedProject[]> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<DeletedProject[]>>(dbPath(dbId, '/deleted-projects'));
+    if (!data.data) throw new Error(data.error || 'Failed to list deleted projects');
+    return data.data;
+  },
+
+  /** Let the next sync or import add a deleted project back. */
+  allowDeletedProjectBack: async (dbId: string, deletionId: number): Promise<void> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<{ allowed: boolean }>>(
+      dbPath(dbId, `/deleted-projects/${deletionId}/allow`)
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to allow the project back');
   },
 
   getOrganizationDestinations: async (dbId: string): Promise<OrganizationDestinations> => {

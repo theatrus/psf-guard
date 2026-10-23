@@ -77,3 +77,59 @@ test('Reopen moves an archived project back to the list as Inactive', async ({ p
   await expect(page.locator('.project-archive')).toHaveCount(0);
   expect(projectState(databasePath, 2)).toBe(2);
 });
+
+function count(databasePath: string, sql: string): number {
+  const database = new Database(databasePath, { readonly: true });
+  try {
+    return (database.prepare(sql).get() as { n: number }).n;
+  } finally {
+    database.close();
+  }
+}
+
+test('Delete removes an archived project after its name is typed, until it is allowed again', async ({ page, request }) => {
+  const databasePath = catalogWithClosedBeta();
+  await register(request, databasePath);
+
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: 'Open Project Alpha image grid' })).toBeVisible({ timeout: 15_000 });
+  await page.getByRole('button', { name: /Archived projects.*1/ }).click();
+  await page.getByRole('button', { name: 'Delete Project Beta from Lifecycle rig' }).click();
+
+  const dialog = page.getByRole('dialog', { name: 'Delete Project Beta' });
+  await expect(dialog.getByText('1 target and 0 exposure plans')).toBeVisible();
+  await expect(dialog.getByText(/^1 frame \(0 accepted, 0 rejected, 1 pending\)/)).toContainText('The image files stay on disk.');
+  const confirm = dialog.getByRole('button', { name: 'Delete project' });
+  await expect(confirm).toBeDisabled();
+  await dialog.getByRole('textbox', { name: /Type Project Beta/ }).fill('Project Beta');
+  await confirm.click();
+
+  await expect(page.getByRole('status').filter({ hasText: 'Deleted Project Beta from Lifecycle rig, with 1 target and 1 frame.' })).toBeVisible();
+  await expect(page.locator('.project-archive-item').filter({ hasText: 'Project Beta' })).toHaveCount(0);
+  expect(count(databasePath, "SELECT COUNT(*) AS n FROM project WHERE name = 'Project Beta'")).toBe(0);
+  expect(count(databasePath, 'SELECT COUNT(*) AS n FROM acquiredimage WHERE projectId = 2')).toBe(0);
+  expect(count(databasePath, 'SELECT COUNT(*) AS n FROM acquiredimage WHERE projectId = 1')).toBeGreaterThan(0);
+  expect(count(databasePath, 'SELECT COUNT(*) AS n FROM psf_guard_removed_project_frame')).toBe(1);
+
+  const deleted = page.getByRole('region', { name: 'Deleted projects' });
+  await deleted.getByRole('button', { name: /Deleted projects/ }).click();
+  await deleted.getByRole('button', { name: 'Allow Project Beta back on Lifecycle rig' }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'Project Beta can come back to Lifecycle rig' })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Deleted projects' })).toHaveCount(0);
+  expect(count(databasePath, 'SELECT COUNT(*) AS n FROM psf_guard_removed_project_frame')).toBe(0);
+});
+
+test('Edit project opens the delete dialog, and Cancel deletes nothing', async ({ page, request }) => {
+  const databasePath = catalogWithClosedBeta();
+  await register(request, databasePath);
+
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: 'Open Project Alpha image grid' })).toBeVisible({ timeout: 15_000 });
+  await page.getByRole('button', { name: 'Edit project' }).first().click();
+  await page.getByRole('button', { name: 'Delete project...' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Delete Project Alpha' });
+  await expect(dialog.getByRole('textbox', { name: /Type Project Alpha/ })).toBeVisible();
+  await dialog.getByRole('button', { name: 'Cancel' }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(count(databasePath, "SELECT COUNT(*) AS n FROM project WHERE name = 'Project Alpha'")).toBe(1);
+});

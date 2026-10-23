@@ -377,8 +377,8 @@ a.library-name:hover, a.library-family-name:hover { text-decoration: underline; 
   transform: rotate(90deg);
 }
 
-/* Reopen on a Closed project or plan: sets it Inactive. */
-.library-reopen {
+/* A small action on a Library row: Reopen, Delete, Allow again. */
+.library-row-button {
   flex: 0 0 auto;
   padding: 4px 10px;
   border: 1px solid var(--color-border-secondary);
@@ -390,18 +390,47 @@ a.library-name:hover, a.library-family-name:hover { text-decoration: underline; 
   font-size: 0.78rem;
 }
 
-.library-reopen:hover:not(:disabled) {
+.library-row-button:hover:not(:disabled) {
   border-color: var(--color-border-tertiary);
   color: var(--color-text-primary);
 }
 
-.library-reopen:disabled {
+.library-row-button:disabled {
   cursor: default;
   opacity: 0.6;
 }
 
-.library-reopen:focus-visible,
+.library-row-button:focus-visible,
 .library-plans-notice:focus-visible {
   outline: 2px solid var(--state-focus-border);
   outline-offset: 2px;
+}
+
+/* Delete on an archived row: it deletes the project from its database. */
+.library-row-button.library-row-delete {
+  color: var(--color-error);
+}
+
+.library-row-button.library-row-delete:hover:not(:disabled) {
+  border-color: var(--color-border-error);
+  color: var(--color-error);
+}
+
+/* A deleted project's name, database, date and frame count. */
+.deleted-project-text {
+  display: grid;
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
+  padding: 9px 11px;
+}
+
+.deleted-project-text small,
+.deleted-projects-help {
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+}
+
+.deleted-projects-help {
+  margin: 6px 8px 0;
 }

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { setDisplayPreferences } from '../../hooks/useDisplayPreferences';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import type { ReactNode } from 'react';
@@ -151,6 +151,8 @@ describe('Overview return scope', () => {
     render(<Overview />, { wrapper: wrapper('/?db=test&project=9') });
 
     fireEvent.click(await screen.findByRole('button', { name: 'Reopen Old survey on Demo catalog' }));
+    // Deleting needs a server that allows database changes; this one does not.
+    expect(screen.queryByRole('button', { name: /^Delete Old survey/ })).not.toBeInTheDocument();
     expect(await screen.findByRole('status')).toHaveTextContent('Old survey is now Inactive on Demo catalog.');
     expect(screen.getByRole('status')).toHaveFocus();
     expect(writes).toEqual([{ state: INACTIVE_PROJECT_STATE }]);
@@ -160,5 +162,70 @@ describe('Overview return scope', () => {
     // The notice outlasts the archive it came from, and keeps focus.
     expect(screen.getByRole('status')).toHaveTextContent('Old survey is now Inactive on Demo catalog.');
     expect(screen.getByRole('status')).toHaveFocus();
+  });
+
+  it('deletes an archived project after its preview, and says what went', async () => {
+    let deleted = false;
+    useOverviewData([project(1, 'Sh2 86')]);
+    server.use(
+      http.get('/api/info', () => ok({ version: 'test', cache_directory: '/tmp', allow_database_management: true })),
+      http.get('/api/db/:dbId/projects/overview', () => ok(deleted
+        ? [project(1, 'Sh2 86')]
+        : [project(1, 'Sh2 86'), project(9, 'Old survey', CLOSED_PROJECT_STATE)])),
+      http.get('/api/db/:dbId/deleted-projects', () => ok(deleted
+        ? [{ id: 1, project_id: 9, name: 'Old survey', removed_at: 1_705_400_000, frames: 0 }]
+        : [])),
+      http.get('/api/db/:dbId/projects/9/removal', () => ok({
+        project_id: 9, name: 'Old survey', guid: null, state: 3, targets: 1, exposure_plans: 2,
+        frames: { total: 0, accepted: 0, rejected: 0, pending: 0 }, protected_frames: 0,
+        digest: 'd', linked_plan: null, synced_from: null, allowed: true,
+      })),
+      http.post('/api/db/:dbId/projects/9/removal', () => {
+        deleted = true;
+        return ok({ state: 'removed', name: 'Old survey', targets: 1, exposure_plans: 2, frames: 0, plan: null, plan_error: null });
+      }),
+    );
+    Element.prototype.scrollIntoView = vi.fn();
+
+    render(<Overview />, { wrapper: wrapper('/?db=test&project=9') });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete Old survey from Demo catalog' }));
+    expect(await screen.findByText('1 target and 2 exposure plans')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete project' }));
+    const notice = await screen.findByText('Deleted Old survey from Demo catalog, with 1 target and 0 frames.');
+    await waitFor(() => expect(notice).toHaveFocus());
+    await waitFor(() => expect(document.querySelector('.project-archive-item [aria-current]')).toBeNull());
+    // It is listed among the deleted projects, which syncs and imports leave out.
+    expect(await screen.findByRole('button', { name: /Deleted projects/ })).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('moves focus to the notice after a deletion from the Edit project panel', async () => {
+    let deleted = false;
+    useOverviewData([project(1, 'Sh2 86'), project(2, 'NGC 6820')]);
+    server.use(
+      http.get('/api/info', () => ok({ version: 'test', cache_directory: '/tmp', allow_database_management: true })),
+      http.get('/api/db/:dbId/projects/overview', () => ok(deleted ? [project(1, 'Sh2 86')] : [project(1, 'Sh2 86'), project(2, 'NGC 6820')])),
+      http.get('/api/db/:dbId/deleted-projects', () => ok([])),
+      http.get('/api/db/:dbId/projects/2/removal', () => ok({
+        project_id: 2, name: 'NGC 6820', guid: null, state: 1, targets: 1, exposure_plans: 1,
+        frames: { total: 10, accepted: 5, rejected: 2, pending: 3 }, protected_frames: 0,
+        digest: 'd', linked_plan: null, synced_from: null, allowed: true,
+      })),
+      http.post('/api/db/:dbId/projects/2/removal', () => {
+        deleted = true;
+        return ok({ state: 'removed', name: 'NGC 6820', targets: 1, exposure_plans: 1, frames: 10, plan: null, plan_error: null });
+      }),
+    );
+    Element.prototype.scrollIntoView = vi.fn();
+
+    render(<Overview />, { wrapper: wrapper('/?db=test&project=2') });
+
+    const card = (await screen.findByText('NGC 6820')).closest('.project-card') as HTMLElement;
+    fireEvent.click(within(card).getByRole('button', { name: /Edit project/ }));
+    fireEvent.click(within(card).getByRole('button', { name: 'Delete project...' }));
+    fireEvent.change(await screen.findByRole('textbox', { name: /Type NGC 6820/ }), { target: { value: 'NGC 6820' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Delete project' }));
+    const notice = await screen.findByText('Deleted NGC 6820 from Demo catalog, with 1 target and 10 frames. The image files are still on disk.');
+    await waitFor(() => expect(notice).toHaveFocus());
   });
 });
