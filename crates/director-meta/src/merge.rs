@@ -242,6 +242,87 @@ impl MetaStore {
     }
 }
 
+impl MetaStore {
+    /// Each database project a plan links: its catalog and source GUID.
+    pub fn plan_links(&self, plan: Uuid) -> Result<Vec<(Uuid, Uuid)>, Error> {
+        valid_id(plan)?;
+        let mut statement = self.connection.prepare(
+            "SELECT catalog_id, source_project_guid FROM project_catalog
+             WHERE project_id=?1 ORDER BY catalog_id",
+        )?;
+        let links = statement
+            .query_map([plan.to_string()], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        links
+            .iter()
+            .map(|(catalog, guid)| Ok((parse_id(catalog)?, parse_id(guid)?)))
+            .collect()
+    }
+
+    /// Whether a plan came from a collaboration.
+    pub fn plan_from_collaboration(&self, plan: Uuid) -> Result<bool, Error> {
+        valid_id(plan)?;
+        Ok(self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM collaboration_project WHERE project_id=?1)",
+            [plan.to_string()],
+            |row| row.get(0),
+        )?)
+    }
+
+    /// Delete a plan: its database links, preferences and place in project
+    /// orders, framing and plan drafts, activation record and draft
+    /// imports. The projects in the rig databases are the caller's to
+    /// delete first; `expected` lists the links the caller handled. A plan
+    /// from a collaboration, or one that links a project not in
+    /// `expected`, is refused with [`Error::Conflict`].
+    pub fn delete_plan(&mut self, plan: Uuid, expected: &[(Uuid, Uuid)]) -> Result<(), Error> {
+        valid_id(plan)?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if read_named(&tx, Kind::Project, plan)?.is_none() {
+            return Err(Error::NotFound);
+        }
+        let id = plan.to_string();
+        let imported: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM collaboration_project WHERE project_id=?1)",
+            [&id],
+            |row| row.get(0),
+        )?;
+        if imported {
+            return Err(Error::Conflict);
+        }
+        let mut statement = tx.prepare(
+            "SELECT catalog_id, source_project_guid FROM project_catalog WHERE project_id=?1",
+        )?;
+        let links = statement
+            .query_map([&id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(statement);
+        for (catalog, guid) in links {
+            if !expected.contains(&(parse_id(&catalog)?, parse_id(&guid)?)) {
+                return Err(Error::Conflict);
+            }
+        }
+        tx.execute(
+            "DELETE FROM project_profile WHERE EXISTS(
+                SELECT 1 FROM project_catalog link
+                WHERE link.project_id=?1 AND link.catalog_id=project_profile.catalog_id
+                  AND link.source_project_guid=project_profile.source_project_guid)",
+            [&id],
+        )?;
+        tx.execute("DELETE FROM project_catalog WHERE project_id=?1", [&id])?;
+        super::preferences::forget_project(&tx, plan)?;
+        retire(&tx, plan)?;
+        tx.commit()?;
+        Ok(())
+    }
+}
+
 /// The plan that links a database's project, as [`MetaStore::source_project_plan`]
 /// reads it.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

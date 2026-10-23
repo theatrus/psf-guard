@@ -1,7 +1,7 @@
 # Project removal
 
-Status: **Implemented** for one catalog's project. Deleting a plan with
-nothing captured, across its rigs, is the next step.
+Status: **Implemented**, for one catalog's project and for a plan with
+nothing captured across its databases.
 Last updated: 2026-10-22
 
 A person can delete a project from a catalog: its targets, exposure plans
@@ -25,12 +25,50 @@ explains why the project cannot be deleted.
 | POST | `/api/db/{db}/projects/{id}/removal` | `{digest}`. Returns `{state: "removed", …}` with the counts and the plan that no longer links the database, or `{state: "changed", preview}` when the project changed since the preview. `403` without database management, `409` for frames reported to a collaboration or a plan from one, `404` for a project that is gone |
 | GET | `/api/db/{db}/deleted-projects` | Deleted projects that syncs and imports leave out, newest first: `id`, `project_id`, `name`, `removed_at`, `frames` |
 | POST | `/api/db/{db}/deleted-projects/{id}/allow` | Lets the next sync or import add the project back. `403` without database management |
+| GET | `/api/director/v1/projects/{id}/deletion` | A plan's deletion preview: `name`, each linked database (`catalog_slug`, `catalog_name`, its `project` with `targets`, `exposure_plans`, `frames` and `digest`, or `problem` when it cannot be read) and `refusal` |
+| POST | `/api/director/v1/projects/{id}/deletion` | `{digests: {project GUID: digest}}`. Returns `{state: "deleted", name, databases}`, `{state: "changed", preview, deleted}` when the plan or a project changed, or `{state: "stopped", error, deleted}`. `422` with the refusal, `403` without database management |
 
 The preview reads on a read-only connection. Neither route runs as a job:
 the deletion is one transaction of set-based statements, like a project
 merge. Target Scheduler has no index on `imagedata.acquiredimageid`, so a
 statement for each frame would scan the thumbnails once per frame; one
 statement scans them once.
+
+## Deleting a plan
+
+Under **Plans with nothing captured yet**, each plan has a delete button
+beside **Rename**, for editors on a server with database management. The
+dialog lists the plan's project in each database it links, with its
+targets and exposure plans. **Delete plan** deletes each project as the
+Library's Delete does, one database at a time, then the plan. The projects
+have no frames, so none is listed under **Deleted projects**, and a catalog
+that syncs from Target Scheduler gets its project back on its next sync. The
+plan's deletion removes its links,
+preferences, framing and plan drafts, activation record and draft imports
+(`MetaStore::delete_plan`).
+
+The plan stays when:
+
+- a rig captured frames for it: delete that project from the Library
+  first, where the frames are counted and the name is typed;
+- a linked database is not registered on this server, or cannot be read;
+- the plan came from a collaboration.
+
+The deletion holds the turn at the rig databases that discovery, plan
+listings and activation take, and the sync lock activation holds, so no
+activation writes the plan's rigs or links meanwhile. Every project needs
+the digest of the preview the person saw before anything is deleted.
+`MetaStore::delete_plan` refuses a plan that links a project the deletion
+did not handle, or one that came from a collaboration.
+
+When a project changed after the preview, the deletion stops there and
+answers `changed` with a new preview. When deleting fails, it answers
+`stopped` with the error. Either way the projects already deleted stay
+deleted and are listed, and the plan forgets them, so it does not list
+databases where its project is gone. Deleting the plan also takes it out of
+every saved project order. A database the plan links but this server does
+not have keeps the plan, and the refusal names its rig; so does a database
+with two projects under the plan's GUID.
 
 ## Decisions
 
@@ -44,7 +82,7 @@ These were settled with the owner on 2026-10-22.
 - **The plan drops the rig.** A plan that linked the project keeps its
   framing and its other databases, and drops the work it planned for this
   rig. A plan with no database left moves to Plans with nothing captured
-  yet, where a later step deletes it.
+  yet, where it can be deleted.
 
 ## What goes
 
@@ -157,4 +195,4 @@ the new plan to it with **Attach a project from another database**.
   Ids and names, not the rows; Allow again lets a sync or import add the
   project anew.
 - When Planning cannot forget the project, nothing retries it. Deleting
-  the plan (the next step) removes the link.
+  the plan removes the link.

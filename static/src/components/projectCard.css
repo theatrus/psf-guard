@@ -290,6 +290,8 @@
 .project-header .library-expand { align-self: center; }
 .projects-list:not(.is-compact) .library-row { border-radius: 8px; }
 .library-expand:hover, .library-planning:hover { border-color: var(--color-border-tertiary); color: var(--color-text-primary); }
+/* Deletes a plan and its projects, after a dialog. */
+.library-planning.library-planning-delete:hover { border-color: var(--color-border-error); color: var(--color-error); }
 .library-view { min-height: 26px; padding: 0 9px; border: 1px solid transparent; border-radius: 999px; background: transparent; color: var(--color-text-secondary); cursor: pointer; font: inherit; font-size: 12px; flex: 0 0 auto; }
 .library-view:hover:not(:disabled) { border-color: var(--color-border-tertiary); color: var(--color-text-primary); }
 .library-view:disabled { cursor: default; opacity: 0.6; }

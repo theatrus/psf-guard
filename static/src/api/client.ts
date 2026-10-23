@@ -13,7 +13,7 @@ import { getServerUrl } from '../utils/tauri';
 import { BUILD_HEADER, noteServerBuild } from '../updates/pageBuild';
 import type { DirectorAdoptionPlan, DirectorAdoptionReport, DirectorCollection, DirectorCutoutRequest, DirectorCutoutResult, DirectorDiscovery, DirectorFramingDraft, DirectorFramingDraftView, DirectorFramingPreview, DirectorFramingRequest, DirectorIdentity, DirectorIdentityPage, DirectorMappingPage, DirectorFeasibility, DirectorMosaicPreview, DirectorResolvedName,
   DirectorSkyMarks,
-  DirectorSkyMarksQuery, DirectorActivation, DirectorActivationPushReport, DirectorActivationReport, DirectorPlanDraft, DirectorPlanList, DirectorPlanView, DirectorRigStatusView, DirectorRigProfileSummary, DirectorTemplateList, DirectorStatus, DirectorRigPlan, DirectorRigProfileEdit, DirectorRigProfileView, DirectorRigReport, DirectorSurvey, DirectorNameSearch, DirectorLibraryTemplate, DirectorAttached, DirectorTakenValues, DirectorRigScheduling, DirectorPlanProgress } from './directorTypes';
+  DirectorSkyMarksQuery, DirectorActivation, DirectorActivationPushReport, DirectorActivationReport, DirectorPlanDraft, DirectorPlanList, DirectorPlanView, DirectorRigStatusView, DirectorRigProfileSummary, DirectorTemplateList, DirectorStatus, DirectorRigPlan, DirectorRigProfileEdit, DirectorRigProfileView, DirectorRigReport, DirectorSurvey, DirectorNameSearch, DirectorLibraryTemplate, DirectorAttached, DirectorTakenValues, DirectorRigScheduling, DirectorPlanProgress, DirectorPlanDeletion, DirectorPlanDeletionOutcome } from './directorTypes';
 import type { GuidFillReport, GuidReport,
   ProjectMosaic,
   ProjectProcessingSettings,
@@ -556,6 +556,23 @@ export const apiClient = {
     const api = await getApi();
     const { data } = await api.delete<ApiResponse<{ deleted: boolean }>>(`/director/v1/templates/${encodeURIComponent(id)}`, { params: { revision } });
     if (!data.data) throw new Error(data.error || 'Failed to delete the template');
+  },
+
+  /** What deleting a plan would delete, and why it cannot be, if so. */
+  getDirectorPlanDeletion: async (projectId: string): Promise<DirectorPlanDeletion> => {
+    const api = await getApi();
+    const { data } = await api.get<ApiResponse<DirectorPlanDeletion>>(`/director/v1/projects/${encodeURIComponent(projectId)}/deletion`);
+    if (!data.data) throw new Error(data.error || 'Failed to read what deleting the plan removes');
+    return data.data;
+  },
+
+  /** Delete a plan and its project in each database, as previewed. */
+  deleteDirectorPlan: async (projectId: string, digests: Record<string, string>): Promise<DirectorPlanDeletionOutcome> => {
+    const api = await getApi();
+    const { data } = await api.post<ApiResponse<DirectorPlanDeletionOutcome>>(
+      `/director/v1/projects/${encodeURIComponent(projectId)}/deletion`, { digests });
+    if (!data.data) throw new Error(data.error || 'Failed to delete the plan');
+    return data.data;
   },
 
   /** Move every database link of another plan onto this one and retire it. */

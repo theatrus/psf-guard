@@ -651,3 +651,24 @@ export interface DirectorFeasibility {
   rigs: DirectorRigFeasibility[];
   warnings: string[];
 }
+
+/** What deleting a plan would delete: each linked database's project, and
+ *  why the plan cannot be deleted, if it cannot. */
+export interface DirectorPlanDeletion {
+  name: string;
+  databases: {
+    /** The project's GUID, which the delete keys its digest by. */
+    source_project_guid: string;
+    catalog_slug: string | null;
+    catalog_name: string | null;
+    /** The Target Scheduler database this catalog copies from. */
+    synced_from: string | null;
+    project: { id: number; name: string; state: number | null; targets: number; exposure_plans: number; frames: number; digest: string } | null;
+    problem: string | null;
+  }[];
+  refusal: string | null;
+}
+export type DirectorPlanDeletionOutcome =
+  | { state: 'deleted'; name: string; databases: string[] }
+  | { state: 'changed'; preview: DirectorPlanDeletion; deleted: string[] }
+  | { state: 'stopped'; error: string; deleted: string[] };

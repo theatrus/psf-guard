@@ -222,4 +222,28 @@ describe("The Library's plans with nothing captured yet", () => {
     mount(true, { show: 'closed' });
     expect(await screen.findByRole('button', { name: 'Reopen M31' })).toBeInTheDocument();
   });
+
+  it('offers Delete only to editors on a server that allows database changes, and reports it', async () => {
+    let gone = false;
+    server.use(
+      http.get('/api/director/v1/plans', () => HttpResponse.json(ok(list(gone ? [] : [row()])))),
+      http.get('/api/info', () => HttpResponse.json(ok({ version: 't', cache_directory: '/tmp', allow_database_management: true }))),
+      http.get(`/api/director/v1/projects/${record.id}/deletion`, () => HttpResponse.json(ok({ name: 'M31', databases: [], refusal: null }))),
+      http.post(`/api/director/v1/projects/${record.id}/deletion`, () => {
+        gone = true;
+        return HttpResponse.json(ok({ state: 'deleted', name: 'M31', databases: [] }));
+      }),
+    );
+    const view = mount(false);
+    expect(await screen.findByRole('link', { name: 'Open M31' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Delete M31' })).not.toBeInTheDocument();
+    view.unmount();
+    mount(true);
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete M31' }));
+    await screen.findByText('its Framing, Exposures and Priority settings, and its activation record');
+    fireEvent.click(screen.getByRole('button', { name: 'Delete plan' }));
+    const notice = await screen.findByText('Deleted the plan M31.');
+    await waitFor(() => expect(notice).toHaveFocus());
+    await waitFor(() => expect(screen.queryByRole('link', { name: 'Open M31' })).not.toBeInTheDocument());
+  });
 });

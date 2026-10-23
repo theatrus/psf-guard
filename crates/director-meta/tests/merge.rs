@@ -251,3 +251,32 @@ fn forgetting_a_deleted_project_drops_its_link_and_keeps_the_plan() {
         .unwrap()
         .is_none());
 }
+
+#[test]
+fn deleting_a_plan_removes_it_and_its_links() {
+    let (_dir, path) = scratch();
+    let mut store = MetaStore::create(&path).unwrap();
+    let instance = store.instance_id();
+    let plan = store.create_project(Uuid::new_v4(), "Heart").unwrap().id;
+    let guid = Uuid::new_v4();
+    let catalog = linked(&mut store, instance, plan, guid, "C925");
+    store
+        .save_framing_draft(&draft(plan, "IC 1805"), 0)
+        .unwrap();
+    let kept = store.create_project(Uuid::new_v4(), "Kept").unwrap().id;
+
+    assert_eq!(store.plan_links(plan).unwrap(), [(catalog, guid)]);
+    // A link the caller did not handle keeps the plan.
+    assert!(matches!(store.delete_plan(plan, &[]), Err(Error::Conflict)));
+    assert!(store.project(plan).unwrap().is_some());
+    store.delete_plan(plan, &[(catalog, guid)]).unwrap();
+    assert!(store.project(plan).unwrap().is_none());
+    assert!(store.framing_draft(plan).unwrap().is_none());
+    assert!(store.plan_links(plan).unwrap().is_empty());
+    assert_eq!(store.linked_project(catalog, guid).unwrap(), None);
+    assert!(store.project(kept).unwrap().is_some());
+    assert!(matches!(store.delete_plan(plan, &[]), Err(Error::NotFound)));
+    // A plan without any database goes too.
+    store.delete_plan(kept, &[]).unwrap();
+    assert!(store.project(kept).unwrap().is_none());
+}

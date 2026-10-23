@@ -265,7 +265,7 @@ pub async fn remove(
 /// and pixel evidence, its stack indices, the file lookups and the
 /// navigation counts. Target Scheduler gives a deleted row's Id to the next
 /// row, which must not inherit any of them.
-fn after_removal(
+pub(crate) fn after_removal(
     context: &DatabaseContext,
     conn: &rusqlite::Connection,
     project_id: i64,
