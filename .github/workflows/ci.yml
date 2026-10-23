@@ -206,13 +206,38 @@ jobs:
     - name: Make binary executable
       run: chmod +x "${{ runner.temp }}/psf-guard-bin/psf-guard"
 
+    # The specs share one set of servers and reset its database list, so a
+    # run takes one test at a time (workers: 1). Shards side by side, each
+    # with servers of its own on its own ports and tmp directory, use the rest
+    # of a 32-vCPU runner: four here, one on a fork's 4-vCPU hosted runner.
+    # Playwright shards by file, so stack-preview.spec.ts (~5 min) sets the
+    # floor. Specs reach at most 8 ports above PSF_GUARD_E2E_PORT.
     - name: Run Playwright tests
       env:
         PSF_GUARD_E2E_BINARY: ${{ runner.temp }}/psf-guard-bin/psf-guard
         CI: 'true'
+        SHARDS: ${{ github.event.pull_request.head.repo.fork && '1' || '4' }}
       run: |
         cd static
-        npx playwright test
+        pids=()
+        for i in $(seq "$SHARDS"); do
+          PSF_GUARD_E2E_PORT=$((13000 + 20 * i)) PSF_GUARD_E2E_TMP="$RUNNER_TEMP/e2e-$i" \
+            npx playwright test --shard="$i/$SHARDS" --output="test-results/shard-$i" \
+            > "$RUNNER_TEMP/e2e-$i.log" 2>&1 &
+          pids+=($!)
+        done
+        failed=0
+        for i in $(seq "$SHARDS"); do
+          status=0; wait "${pids[$((i - 1))]}" || status=$?
+          echo "::group::shard $i/$SHARDS (exit $status)"
+          cat "$RUNNER_TEMP/e2e-$i.log"
+          echo "::endgroup::"
+          if [ "$status" -ne 0 ]; then
+            failed=1
+            grep -E '^\s+[0-9]+\) |failed|passed \(' "$RUNNER_TEMP/e2e-$i.log" || true
+          fi
+        done
+        exit "$failed"
 
     - name: Run isolated Director UI tests
       env:
