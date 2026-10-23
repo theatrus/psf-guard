@@ -1,5 +1,11 @@
 name: Security audit
 
+# Linux (x64 and arm64) and Windows jobs run on ephemeral 32-core runners
+# (tfinfra roots/github-runners, docs/github-runners-plan.md). macOS, releases,
+# and every pull request from a fork stay on GitHub's runners: a fork's code
+# never runs on ours. Job names are unchanged, so the required checks still
+# match.
+
 on:
   schedule:
     - cron: '0 0 * * MON'  # Weekly on Monday
@@ -14,7 +20,7 @@ on:
 
 jobs:
   security_audit:
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || fromJSON('["self-hosted","linux","ghr-linux-x64"]') }}
     steps:
       - uses: actions/checkout@v7
       

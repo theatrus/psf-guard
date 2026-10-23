@@ -136,10 +136,11 @@ tauri = [
 [profile.release]
 # Enable maximum optimizations for performance
 opt-level = 3
-# Enable link-time optimization
-lto = true
-# Set number of codegen units to 1 for better optimization
-codegen-units = 1
+# Thin LTO over 16 codegen units. Fat LTO with one unit ran the final link on
+# a single core for minutes, in every release build and every CI job that
+# builds release; thin LTO keeps most of its gain and links in parallel.
+lto = "thin"
+codegen-units = 16
 # Enable panic unwinding to be optimized away in release builds
 panic = 'abort'
 # Allow aggressive loop optimizations and auto-vectorization
