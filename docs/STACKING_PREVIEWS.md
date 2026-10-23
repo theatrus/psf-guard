@@ -117,7 +117,7 @@ chosen. Any single choice can also be changed on its own.
 | Resampling | Lanczos-3 | Bilinear |
 | Bayer drizzle | Off | On |
 
-- **Final pass.** Reintegrate reads every admitted frame three more times and
+- **Final pass.** Reintegrate reads every admitted frame again and
   rejects outliers against all the others. A satellite trail in the reference
   or in the first few frames, which online rejection cannot revisit, is
   removed too. Draft publishes the live stack as it stands. It is much faster,
@@ -220,7 +220,7 @@ reference — beside a ledger of every frame it integrated or turned away. A
 later build of the same target and channel whose frame set only grew reopens
 that checkpoint and registers just the new frames. The card marks restored
 work as `resumed` in its frame counter. Final transient rejection still reads
-every admitted frame three times using the saved registration mappings; it does not
+every admitted frame again using the saved registration mappings; it does not
 repeat star detection or registration. Adding a night therefore avoids the
 old frames' registration cost, but still needs their source files for the
 completed integration.

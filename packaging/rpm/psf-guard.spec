@@ -8,7 +8,7 @@
 %global rustflags_debuginfo 0
 
 Name:           psf-guard
-Version:        0.12.2
+Version:        0.12.3
 Release:        1%{?dist}
 Summary:        Astronomical image analysis and quality assessment tool for N.I.N.A.
 
@@ -97,6 +97,10 @@ install -Dpm0644 packaging/rpm/systemd/psf-guard-server.conf \
 %config(noreplace) %{_sysconfdir}/%{name}/server.conf
 
 %changelog
+* Fri Oct 23 2026 Yann Ramin <github@theatr.us> - 0.12.3-1
+- Add project and plan removal, collaboration exit, and color-channel processing
+- Fix stack orientation, clipped star colors, and large-file downloads
+
 * Wed Oct 21 2026 Yann Ramin <github@theatr.us> - 0.12.2-1
 - Show completed stack previews on the desktop Sky map
 - Fix Windows desktop startup and keep its server socket reserved across restarts

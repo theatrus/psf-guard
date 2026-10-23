@@ -1,5 +1,53 @@
 [
   {
+    "version": "0.12.3",
+    "deprecations": [],
+    "upgradeNotes": [
+      {
+        "title": "Allow time for stack rebuilds",
+        "body": "Stacks rebuild once when next opened or refreshed. Color previews using deconvolution or RC-Astro also need a rebuild. If a channel card still shows an upside-down RC-Astro result, apply its processing again."
+      },
+      {
+        "title": "Existing color previews keep their settings",
+        "body": "New color previews follow each channel card’s deconvolution and RC-Astro settings. Existing previews keep their own choices. Choose From each channel card under Deconvolution and RC-Astro to follow the cards."
+      },
+      {
+        "title": "Update the N.I.N.A. plugin for project deletion",
+        "body": "Deleting projects on a rig needs a plugin version with project deletion support. Older plugins keep the rig’s project. Sync also keeps projects with captured frames or collaboration assignments in the destination."
+      }
+    ],
+    "highlights": [
+      {
+        "title": "Move targets with a preview",
+        "body": "Move a target to another project in its database, or create a project for it. Its exposures, exposure plans and stack previews move together. New projects start Inactive."
+      },
+      {
+        "title": "Reopen or delete projects and plans",
+        "body": "Reopen an archived project as Inactive, or delete its catalog records while keeping image files on disk. Deleted projects stay out of imports and sync until you choose Allow again. You can also delete plans with nothing captured."
+      },
+      {
+        "title": "Leave a collaboration",
+        "body": "Leave collaboration ends assignments, cancels unfinished transfers and stops nightly intake for the plan. Your local plan, frames and grades stay. Send pending reports with Check in first: leaving deletes unsent reports."
+      },
+      {
+        "title": "Share processing between channel and color previews",
+        "body": "Each color input runs deconvolution and RC-Astro on its own stack before alignment. Matching settings reuse the channel card’s results; changing background extraction or a stretch no longer reruns those tools."
+      },
+      {
+        "title": "Process color channels together",
+        "body": "Run BlurXTerminator and NoiseXTerminator on aligned color channels before color calibration and stretching. BlurXTerminator starts in Correct only mode to correct star shapes and color fringes without sharpening."
+      },
+      {
+        "title": "Faster stacking and neutral star cores",
+        "body": "The final stacking pass reads each frame once when scratch space is available and uses less memory. Color calibration keeps clipped star cores neutral instead of tinting them cyan or blue."
+      },
+      {
+        "title": "Clearer progress and more reliable downloads",
+        "body": "Mono processing progress returns when you reopen Stacks, color build failures explain the problem, and RC-Astro keeps stacks the right way up. Large-file downloads use larger reads to reduce streaming overhead."
+      }
+    ]
+  },
+  {
     "version": "0.12.2",
     "deprecations": [],
     "upgradeNotes": [],
