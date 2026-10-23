@@ -4633,3 +4633,18 @@ fn a_clipped_map_lives_beside_its_stack_and_goes_when_nothing_clipped() {
     write_clipped(&path, Some(&rgb)).unwrap();
     assert!(read_clipped(&path).is_none());
 }
+
+#[test]
+fn the_sweep_reads_targets_and_skips_one_without_a_project() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE target (Id INTEGER PRIMARY KEY, name TEXT, projectid INTEGER);
+         INSERT INTO target VALUES (1, 'M31', 4), (2, 'Stray', NULL), (3, NULL, 5);",
+    )
+    .unwrap();
+    let targets = targets_by_id(&conn).unwrap();
+    assert_eq!(
+        targets,
+        HashMap::from([(1, (4, "M31".to_string())), (3, (5, String::new()))])
+    );
+}

@@ -1670,7 +1670,7 @@ export default function Overview() {
                                 <button
                                   type="button"
                                   className="organize-move"
-                                  title="Preview moving this target, its frames and its exposure plans to another project or a new one"
+                                  title="Preview moving this target, its exposures and its exposure plans to another project or a new one"
                                   disabled={organizeBusy}
                                   onClick={() => void moveTargetAfterRename(target.name)}
                                 >

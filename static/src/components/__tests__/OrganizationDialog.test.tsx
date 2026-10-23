@@ -330,10 +330,10 @@ describe('OrganizationDialog', () => {
       expect(summary).toHaveTextContent('c925 to ultracat');
       expect(summary).toHaveTextContent('Exposure templates reused1');
       expect(summary).toHaveTextContent('Exposure templates copied2');
-      expect(summary).toHaveTextContent('PlanningThe plan no longer manages this target');
+      expect(summary).toHaveTextContent('PlanningAfter the move, the plan no longer manages this target.');
       expect(summary).not.toHaveTextContent('r1c2');
       expect(summary).toHaveTextContent('Ha 300 uses Ha 300 s');
-      expect(summary).toHaveTextContent('OIII 300 is copied to the new profile');
+      expect(summary).toHaveTextContent('OIII 300 is copied to profile ultracat');
       expect(summary).toHaveTextContent('A Planning plan activated this target as one of its panels.');
       expect(applies).toEqual([]);
 

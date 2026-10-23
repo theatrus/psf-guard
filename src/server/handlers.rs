@@ -1571,9 +1571,12 @@ pub async fn update_target_route(
 
     // Naming the target's own project leaves it where it is, as before.
     let Some(project_id) = requested_project.filter(|project| *project != current_project) else {
+        // One transaction, so a refused field change also leaves the name.
         let conn = ctx.db();
         let conn = conn.lock().map_err(AppError::db)?;
-        edit(&conn)?;
+        let tx = conn.unchecked_transaction().map_err(AppError::db)?;
+        edit(&tx)?;
+        tx.commit().map_err(AppError::db)?;
         return Ok(Json(ApiResponse::success(serde_json::json!({
             "updated": true,
             "images_moved": 0,

@@ -533,6 +533,8 @@ change before Apply, PSF Guard asks for a fresh preview.
 
 Image files, capture metadata, grades, rejection reasons, and image GUIDs do
 not change. Merging moves the source exposure plans with their identities.
+Removed rejects of the source target return to the destination target when
+you restore them, and the source target's stack previews are removed.
 Splitting creates separate inactive plans for the moved exposures and updates
 the source and destination counts. New targets are inactive, and new projects
 start in the Inactive state; activate and configure their plans separately
@@ -571,7 +573,8 @@ PSF Guard refuses a move in these cases:
 - **The target has exposures and the destination project belongs to another
   profile.** Each exposure's profile selects its calibration frames and its
   rig's nights, so a target with exposures can move only within its profile.
-  Removed rejects that you can still restore count as exposures. To move the
+  Removed rejects that you can still restore count as exposures; a removed
+  reject whose files were deleted when the trash was emptied does not. To move the
   target, first move its exposures to another target of the same profile
   with **Move exposures**.
 
@@ -582,7 +585,8 @@ the profile has one, or otherwise a copy of the target's template. The
 preview lists each template and whether it is reused or copied. A plan
 without its own exposure uses its template's default exposure; when the move
 reuses a template, PSF Guard writes the old template's default exposure into
-the plan, so the plan's exposure does not change.
+the plan, so the plan's exposure does not change. A blank default counts as
+60 seconds.
 
 The Library lists only projects with exposures. When you move a target
 without exposures into a project without exposures, the preview explains

@@ -2907,11 +2907,40 @@ pub fn move_target_stacks(ctx: &DatabaseContext, target_id: i32, from: i32, to: 
     janitor::move_target_indices(&ctx.stack_root, target_id, from, to)
 }
 
+/// Remove a merged-away target's stacks from its project's indices.
+/// Returns how many index entries were removed.
+pub fn drop_merged_target_stacks(ctx: &DatabaseContext, project: i32, target_id: i32) -> usize {
+    janitor::drop_target_entries(&ctx.stack_root, project, target_id)
+}
+
+/// Each target's project and name, by target ID.
+type TargetsById = HashMap<i32, (i32, String)>;
+
+/// Each target's project and name, for moving stacks after their target.
+/// A target without a project is left out.
+fn targets_by_id(conn: &rusqlite::Connection) -> rusqlite::Result<TargetsById> {
+    let mut statement = conn.prepare("SELECT Id, projectid, name FROM target")?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, i32>(0)?,
+            row.get::<_, Option<i32>>(1)?,
+            row.get::<_, Option<String>>(2)?,
+        ))
+    })?;
+    let mut targets = HashMap::new();
+    for row in rows {
+        if let (id, Some(project), name) = row? {
+            targets.insert(id, (project, name.unwrap_or_default()));
+        }
+    }
+    Ok(targets)
+}
+
 fn sweep_database(state: &AppState, ctx: &DatabaseContext) {
     // The shared request connection is only borrowed when it is free.
     let (live_projects, projects_of_targets): (
         Option<std::collections::HashSet<i32>>,
-        Option<HashMap<i32, i32>>,
+        Option<TargetsById>,
     ) = {
         let connection = ctx.db();
         let Ok(connection) = connection.try_lock() else {
@@ -2925,12 +2954,9 @@ fn sweep_database(state: &AppState, ctx: &DatabaseContext) {
                     .collect::<rusqlite::Result<_>>()
             })
             .ok();
-        let targets = connection
-            .prepare("SELECT Id, projectid FROM target")
-            .and_then(|mut statement| {
-                statement
-                    .query_map([], |row| Ok((row.get::<_, i32>(0)?, row.get::<_, i32>(1)?)))?
-                    .collect::<rusqlite::Result<_>>()
+        let targets = targets_by_id(&connection)
+            .inspect_err(|error| {
+                tracing::warn!(db = %ctx.id, "Could not read targets for the stack sweep: {error}")
             })
             .ok();
         (live, targets)

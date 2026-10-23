@@ -51,7 +51,7 @@ export default function OrganizationDialog({ scope, onClose, onApplied }: Props)
   });
   const sourceProject = destinations.data?.projects.find(project => project.id === scope.sourceProjectId);
   // A whole target can move to a project of any profile; the server refuses
-  // a profile change for a target with frames and explains why.
+  // a profile change for a target with exposures and explains why.
   const compatibleProjects = destinations.data?.projects.filter(
     project => sourceProject && (movingTarget
       ? project.id !== sourceProject.id
@@ -235,7 +235,7 @@ export default function OrganizationDialog({ scope, onClose, onApplied }: Props)
             <dt>Exposure templates reused</dt><dd>{summary.exposure_templates_reused ?? 0}</dd>
             <dt>Exposure templates copied</dt><dd>{summary.exposure_templates_copied ?? 0}</dd>
           </>}
-          {summary.planning_panel_id && <><dt>Planning</dt><dd>The plan no longer manages this target</dd></>}
+          {summary.planning_panel_id && <><dt>Planning</dt><dd>After the move, the plan no longer manages this target.</dd></>}
         </dl>
         {(summary.exposure_template_changes?.length ?? 0) > 0 && <>
           <h4>Exposure templates</h4>
@@ -244,7 +244,7 @@ export default function OrganizationDialog({ scope, onClose, onApplied }: Props)
               <li key={`${index}:${change.source_template_name}`}>
                 {change.reused
                   ? `${change.source_template_name} uses ${change.destination_template_name}`
-                  : `${change.source_template_name} is copied to the new profile`}
+                  : `${change.source_template_name} is copied to profile ${profileTag(summary.profile_change?.to_profile_id ?? '')}`}
               </li>
             ))}
           </ul>

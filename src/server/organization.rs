@@ -289,6 +289,18 @@ fn after_apply(
     if let Err(error) = context.refresh_organization_navigation(conn) {
         tracing::warn!(db = %context.id, "Organization succeeded but navigation refresh failed: {error}");
     }
+    if let OrganizationOperation::MergeTargets {
+        source_target_id, ..
+    } = operation
+    {
+        let dropped = crate::server::stack_preview::drop_merged_target_stacks(
+            context,
+            result.source_project_id,
+            *source_target_id,
+        );
+        tracing::info!(db = %context.id, target_id = source_target_id, stack_entries = dropped,
+            "Removed a merged target's stack previews");
+    }
     if matches!(operation, OrganizationOperation::MoveTarget { .. })
         && result.source_project_id != result.project_id
     {
@@ -911,8 +923,15 @@ fn restorable_removed_rejects(conn: &Connection, target_id: i32) -> Result<usize
     } else {
         ""
     };
+    // As Restore decides: a frame whose files were deleted from the trash
+    // cannot come back, unless it had no files.
+    let files = if has_column(conn, REMOVED_IMAGE_TABLE, "files_deleted_at")? {
+        " AND (files_deleted_at IS NULL OR files_json = '[]')"
+    } else {
+        ""
+    };
     conn.query_row(
-        &format!("SELECT COUNT(*) FROM psf_guard_removed_image WHERE target_id = ?{purged}"),
+        &format!("SELECT COUNT(*) FROM psf_guard_removed_image WHERE target_id = ?{purged}{files}"),
         [target_id],
         |row| row.get::<_, i64>(0),
     )
@@ -1015,8 +1034,9 @@ fn plan_template_moves(
             .map_err(AppError::db)
         };
         let source_default_exposure = if has_default {
+            // A blank default reads as 60 seconds, as in the scheduler view.
             conn.query_row(
-                "SELECT defaultexposure FROM exposuretemplate WHERE Id = ?",
+                "SELECT COALESCE(defaultexposure, 60) FROM exposuretemplate WHERE Id = ?",
                 [source_template_id],
                 |row| row.get::<_, Option<f64>>(0),
             )
@@ -1361,6 +1381,16 @@ fn apply_plan(
                 }
             }
             remap_exposure_order(tx, target_id, &destination_plans)?;
+            // Removed rejects of the source come back to the destination.
+            if has_column(tx, REMOVED_IMAGE_TABLE, "target_id")?
+                && has_column(tx, REMOVED_IMAGE_TABLE, "project_id")?
+            {
+                tx.execute(
+                    "UPDATE psf_guard_removed_image SET target_id = ?, project_id = ? WHERE target_id = ?",
+                    params![target_id, project_id, plan.source.id],
+                )
+                .map_err(AppError::db)?;
+            }
             tx.execute("DELETE FROM target WHERE Id = ?", [plan.source.id])
                 .map_err(AppError::db)?;
         }
@@ -2538,9 +2568,27 @@ mod tests {
             message.contains("has 1 exposure, including 1 removed reject you can still restore"),
             "{message}"
         );
-        // Once its saved rows are purged, a removed reject cannot come back.
-        conn.execute("UPDATE psf_guard_removed_image SET purged_at = 3", [])
-            .unwrap();
+        // A removed reject without files still comes back after the trash
+        // is emptied.
+        conn.execute(
+            "UPDATE psf_guard_removed_image SET files_deleted_at = 3",
+            [],
+        )
+        .unwrap();
+        bad_request(plan_organization(&conn, &move_target(5, Some(3), None)));
+        // Once its files are deleted from the trash, it cannot come back.
+        conn.execute(
+            "UPDATE psf_guard_removed_image SET files_json = '[{\"trash\":\"t\",\"original\":\"o\"}]'",
+            [],
+        )
+        .unwrap();
+        plan_organization(&conn, &move_target(5, Some(3), None)).unwrap();
+        // Nor once its saved rows are purged.
+        conn.execute(
+            "UPDATE psf_guard_removed_image SET files_deleted_at = NULL, purged_at = 3",
+            [],
+        )
+        .unwrap();
         plan_organization(&conn, &move_target(5, Some(3), None)).unwrap();
 
         removed_reject(&conn, "removed-1", 1, 1);
@@ -2731,6 +2779,42 @@ mod tests {
         assert_eq!(
             one::<i64>(&conn, "SELECT projectid FROM target WHERE Id = 1"),
             2
+        );
+    }
+
+    #[test]
+    fn a_blank_default_exposure_is_written_as_60_seconds() {
+        let mut conn = catalog();
+        add_frameless_target(&conn);
+        conn.execute_batch(
+            "UPDATE exposuretemplate SET defaultexposure = NULL WHERE Id = 1;
+             UPDATE exposureplan SET exposure = 0 WHERE Id = 20;",
+        )
+        .unwrap();
+        preview_and_apply(&mut conn, move_target(5, Some(3), None));
+        assert_eq!(
+            one::<f64>(&conn, "SELECT exposure FROM exposureplan WHERE Id = 20"),
+            60.0
+        );
+    }
+
+    #[test]
+    fn a_target_merge_points_removed_rejects_at_the_destination() {
+        let mut conn = catalog();
+        removed_reject(&conn, "removed-1", 1, 1);
+        preview_and_apply(
+            &mut conn,
+            OrganizationOperation::MergeTargets {
+                source_target_id: 1,
+                destination_target_id: 3,
+            },
+        );
+        assert_eq!(
+            one::<String>(
+                &conn,
+                "SELECT target_id || '/' || project_id FROM psf_guard_removed_image"
+            ),
+            "3/2"
         );
     }
 }
@@ -2929,5 +3013,44 @@ mod http_tests {
         assert_eq!(target(&rig).0, 1);
         assert_eq!(index_jobs(&rig, 1), ["sii"]);
         assert!(index_jobs(&rig, 2).is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn put_refuses_invalid_fields_without_renaming() {
+        let rig = rig();
+        let (status, body) = send(
+            &rig.app,
+            "PUT",
+            "/api/db/rig/targets/1",
+            json!({ "name": "Renamed", "ra_hours": 25.0 }),
+        )
+        .await;
+        assert_eq!(status, 400, "{body}");
+        assert_eq!(target(&rig), (1, "Bubble Nebula".to_string()));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_target_merge_removes_the_merged_targets_stack_previews() {
+        let rig = rig();
+        let operation = json!({ "kind": "merge_targets", "source_target_id": 1,
+            "destination_target_id": 2 });
+        let (status, preview) = send(
+            &rig.app,
+            "POST",
+            "/api/db/rig/organization/preview",
+            operation.clone(),
+        )
+        .await;
+        assert_eq!(status, 200, "{preview}");
+        let fingerprint = preview["data"]["fingerprint"].as_str().unwrap();
+        let (status, result) = send(
+            &rig.app,
+            "POST",
+            "/api/db/rig/organization/apply",
+            json!({ "operation": operation, "expected_fingerprint": fingerprint }),
+        )
+        .await;
+        assert_eq!(status, 200, "{result}");
+        assert!(index_jobs(&rig, 1).is_empty());
     }
 }
