@@ -1179,5 +1179,39 @@ async fn leaving_declines_the_task_and_stops_nightly_intake() {
     .await;
     assert_eq!(status, StatusCode::OK, "{status_body}");
     assert_eq!(status_body["data"]["projects"], json!([]));
+
+    // Importing the project again rejoins the plan rather than conflicting.
+    let (status, again) = call(
+        &app,
+        "POST",
+        &route,
+        json!({"operation":"preview","task":"000000000004","night":observing_night()}),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(
+        again["data"]["preview"]["rejoins"],
+        "M31 halo in narrowband"
+    );
+    let digest = again["data"]["preview"]["review_digest"].clone();
+    let (status, rejoined) = call(
+        &app,
+        "POST",
+        &route,
+        json!({"operation":"apply","task":"000000000004","night":observing_night(),"review_digest":digest}),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{rejoined}");
+    assert_eq!(rejoined["data"]["plan"]["project_id"], plan.to_string());
+    let imported = state
+        .director
+        .clone()
+        .unwrap()
+        .query(move |s| s.plan_from_collaboration(plan))
+        .await
+        .unwrap();
+    assert!(imported);
     remote.abort();
 }

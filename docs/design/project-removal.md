@@ -64,6 +64,8 @@ collaboration records in the same transaction that deletes the plan, as
 plan's tasks at the coordinator. The deleted projects take their
 `psf_guard_collaboration_plan` rows with them, so no assignment needs ending.
 Deleting such a plan needs an interactive editor, as joining a project does.
+When a project changes part way, the plan stays in its collaboration and
+forgets the projects already deleted, as for any plan.
 
 The deletion holds, in this order, the collaboration gate that nightly
 intake, automatic reports and every interactive collaboration operation

@@ -71,6 +71,18 @@ describe('Collaboration work transfer', () => {
     await waitFor(() => expect(requests.at(-1)).toEqual({ operation: 'apply', task: share.task_id, night: { night: '2026-10-05', moon: 0.12, moon_up: 0.3 }, review_digest: 'review-current' }));
     expect(await screen.findByText('Imported as an inactive project draft')).toBeVisible();
   });
+  it('says when an import rejoins a plan that left the project', async () => {
+    server.use(http.post('/api/director/v1/collaboration/connection/work', async ({ request }) => {
+      const body = await request.json() as Record<string, unknown>;
+      return HttpResponse.json({ success: true, data: body.operation === 'tonight'
+        ? { night: { night: '2026-10-05', moon: 0.12, moon_up: 0.3 }, shares: [share] }
+        : { preview: { review_digest: 'review', action: 'create', acquisition_enabled: false, rejoins: 'M31 halo' }, plan: { project_id: 'project', night: '2026-10-05', share } } });
+    }));
+    setup();
+    await userEvent.click(screen.getByRole('button', { name: "Pull tonight's work" }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Review import' }));
+    expect(await screen.findByRole('note')).toHaveTextContent('This import rejoins your plan M31 halo, which left this project. The plan keeps its framing, exposures and recipes.');
+  });
   it('offers a date-only override and clears a stale import review when it changes', async () => {
     const requests: Record<string, unknown>[] = [];
     server.use(http.post('/api/director/v1/collaboration/connection/work', async ({ request }) => {

@@ -690,6 +690,8 @@ export interface DirectorCollaborationLeave {
   name: string;
   /** Null for a plan of its own. */
   collaboration: DirectorPlanCollaboration | null;
+  /** Linked databases leaving cannot reach: their assignments stay open. */
+  warnings: string[];
   refusal: string | null;
 }
 export interface DirectorCollaborationLeft {
@@ -698,6 +700,8 @@ export interface DirectorCollaborationLeft {
   collaboration: DirectorPlanCollaboration;
   /** Open assignments ended in the rig databases. */
   assignments_ended: number;
+  /** Linked databases whose assignments could not be ended. */
+  warnings: string[];
   coordinator: DirectorCoordinatorOutcome;
 }
 export interface DirectorPlanDeletion {

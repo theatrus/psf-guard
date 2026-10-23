@@ -69,6 +69,7 @@ export default function CollaborationLeaveDialog({ planId, onClose, onLeft }: Pr
         {left.assignments_ended > 0 && ` Ended ${left.assignments_ended.toLocaleString()} open assignment${left.assignments_ended === 1 ? '' : 's'}.`}
         {' '}{coordinatorResult(left.coordinator)}
       </p>}
+      {left && left.warnings.map(warning => <p key={warning} className="project-delete-error" role="alert">{warning}</p>)}
       {!left && preview?.collaboration && (
         <>
           <p><strong>{preview.name}</strong> comes from {collaborationName(preview.collaboration)}. Leaving makes it a plan of your own. PSF Guard:</p>
@@ -76,6 +77,7 @@ export default function CollaborationLeaveDialog({ planId, onClose, onLeft }: Pr
             {leaveChanges(preview.collaboration).map(change => <li key={change}>{change}</li>)}
           </ul>
           <p>{coordinatorPlan(preview.collaboration)}</p>
+          {preview.warnings.map(warning => <p key={warning} className="project-delete-error" role="note">{warning}</p>)}
           <p className="project-delete-note">
             The plan keeps its framing, exposures, priorities and activation record. Its rig projects keep their
             targets, frames and grades, and the targets stay scheduled until you change them.

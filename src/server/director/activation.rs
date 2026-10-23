@@ -1990,6 +1990,9 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
         ],
     )?;
     let (project_row_id, _) = project_row(tx, &project_guid)?.ok_or(Error::Internal)?;
+    if inputs.collaboration.is_none() {
+        collaboration_activation::end_left(tx, &project_guid, inputs.now)?;
+    }
     if let Some(assignment) = inputs.collaboration {
         let new_assignment = assignment.prepare(tx, &project_guid, inputs.now)?;
         let minimum = assignment

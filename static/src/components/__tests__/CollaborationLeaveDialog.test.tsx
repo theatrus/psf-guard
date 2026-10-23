@@ -40,11 +40,11 @@ describe('Leaving a collaboration', () => {
     const changes: unknown[] = [];
     server.use(
       http.get(assignments, () => ok(assignmentsLeft)),
-      http.get(leavePath, () => ok({ name: 'M31', collaboration, refusal: null })),
+      http.get(leavePath, () => ok({ name: 'M31', collaboration, warnings: [], refusal: null })),
       http.post(leavePath, () => {
         assignmentsLeft = { imports: [] };
         return ok({
-          state: 'left', name: 'M31', collaboration, assignments_ended: 6,
+          state: 'left', name: 'M31', collaboration, assignments_ended: 6, warnings: [],
           coordinator: { host: 'collab.example', declined: [], problems: ['The saved sign-in for Community is missing.'] },
         });
       }),
@@ -68,14 +68,35 @@ describe('Leaving a collaboration', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
 
-  it('explains a refusal and keeps Leave collaboration disabled', async () => {
+  it('leaves even when a linked database cannot be reached, and says what stays open', async () => {
+    const warning = 'The database for RedCat is not registered on this server, so the plan\'s assignments there stay open. PSF Guard no longer counts frames toward them. To end them, register the database again in Settings if it is missing, then activate the plan.';
     server.use(
       http.get(assignments, () => ok(imported)),
-      http.get(leavePath, () => ok({ name: 'M31', collaboration, refusal: 'The database for RedCat is not registered on this server. Register it again in Settings, then leave the collaboration.' })),
+      http.get(leavePath, () => ok({ name: 'M31', collaboration, warnings: [warning], refusal: null })),
+      http.post(leavePath, () => ok({
+        state: 'left', name: 'M31', collaboration, assignments_ended: 0, warnings: [warning],
+        coordinator: { host: 'collab.example', declined: ['000000000004'], problems: [] },
+      })),
     );
     mount(true);
     fireEvent.click(await screen.findByRole('button', { name: 'Leave collaboration' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('The database for RedCat is not registered on this server.');
+    const dialog = await screen.findByRole('dialog');
+    expect(await within(dialog).findByText(/The database for RedCat is not registered/)).toHaveTextContent(warning);
+    const leave = within(dialog).getByRole('button', { name: 'Leave collaboration' });
+    expect(leave).toBeEnabled();
+    fireEvent.click(leave);
+    expect(await screen.findByText(/collab.example declined the plan's task\./)).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent(warning);
+  });
+
+  it('explains why a plan of its own has nothing to leave', async () => {
+    server.use(
+      http.get(assignments, () => ok(imported)),
+      http.get(leavePath, () => ok({ name: 'M31', collaboration: null, warnings: [], refusal: 'This plan did not come from a collaboration.' })),
+    );
+    mount(true);
+    fireEvent.click(await screen.findByRole('button', { name: 'Leave collaboration' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('This plan did not come from a collaboration.');
     expect(within(screen.getByRole('dialog')).getByRole('button', { name: 'Leave collaboration' })).toBeDisabled();
   });
 });

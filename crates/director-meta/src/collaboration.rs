@@ -93,6 +93,10 @@ pub struct ImportPreview {
     pub review_digest: String,
     /// Imported snapshots and draft intent never activate a rig.
     pub acquisition_enabled: bool,
+    /// The name of the plan that left this remote project, when importing
+    /// links that plan to it again rather than creating one. The plan keeps
+    /// its framing, objectives and recipes.
+    pub rejoins: Option<String>,
 }
 
 fn valid_time(now: u64) -> Result<(), Error> {
@@ -170,13 +174,14 @@ impl MetaStore {
             params![plan.source().base_url(), plan.share().project_id], |r| r.get(0),
         ).optional()?;
         if mapped.is_none() {
-            if read_named(&tx, Kind::Project, project)?.is_some() {
-                return Err(Error::Conflict);
+            // A plan that left this project rejoins it, as the preview said;
+            // otherwise the import creates the plan.
+            if reviewed.rejoins.is_none() {
+                tx.execute(
+                    "INSERT INTO global_project(id,name,revision) VALUES(?1,?2,1)",
+                    params![project.to_string(), name],
+                )?;
             }
-            tx.execute(
-                "INSERT INTO global_project(id,name,revision) VALUES(?1,?2,1)",
-                params![project.to_string(), name],
-            )?;
             tx.execute(
                 "INSERT INTO collaboration_project VALUES(?1,?2,?3)",
                 params![
@@ -385,6 +390,7 @@ fn preview(conn: &Connection, plan: &PreparedImport, rig: Uuid) -> Result<Import
             return Err(Error::Conflict);
         }
     }
+    let rejoins = rejoins(conn, plan)?;
     let current = existing.as_ref().map_or(0, |i| i.revision);
     let local_plan = super::plan::read_plan(conn, plan.project_id())?;
     let framing = super::framing::read_draft(conn, plan.project_id())?;
@@ -395,6 +401,7 @@ fn preview(conn: &Connection, plan: &PreparedImport, rig: Uuid) -> Result<Import
         existing.as_ref().map(|i| i.plan.digest()),
         local_plan.map(|p| p.revision),
         framing.map(|f| f.revision),
+        &rejoins,
     ))
     .map_err(|_| Error::InvalidInput)?;
     Ok(ImportPreview {
@@ -409,7 +416,43 @@ fn preview(conn: &Connection, plan: &PreparedImport, rig: Uuid) -> Result<Import
         expected_revision: current,
         review_digest: digest(&key),
         acquisition_enabled: false,
+        rejoins,
     })
+}
+
+/// The plan an import would link to its remote project again: the plan
+/// with the import's project ID when it has no collaboration link, as after
+/// it left the collaboration. `None` when the import creates the plan or the
+/// link already exists. A link to another plan, or the plan linked to
+/// another remote project, is refused with [`Error::Conflict`].
+fn rejoins(conn: &Connection, plan: &PreparedImport) -> Result<Option<String>, Error> {
+    let project = plan.project_id().to_string();
+    let mapped: Option<String> = conn
+        .query_row(
+            "SELECT project_id FROM collaboration_project WHERE base_url=?1 AND remote_project_id=?2",
+            params![plan.source().base_url(), plan.share().project_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if let Some(mapped) = mapped {
+        return if mapped == project {
+            Ok(None)
+        } else {
+            Err(Error::Conflict)
+        };
+    }
+    let Some(existing) = read_named(conn, Kind::Project, plan.project_id())? else {
+        return Ok(None);
+    };
+    let linked: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM collaboration_project WHERE project_id=?1)",
+        [&project],
+        |r| r.get(0),
+    )?;
+    if linked {
+        return Err(Error::Conflict);
+    }
+    Ok(Some(existing.name))
 }
 
 pub(crate) fn read_import(conn: &Connection, id: Uuid) -> Result<Option<Imported>, Error> {

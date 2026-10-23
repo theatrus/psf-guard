@@ -133,8 +133,10 @@ async fn read_preview(
         // for the dialog. A database that cannot be read is a problem the
         // links below report.
         let open = super::collaboration_leave::read_assignments(&identified, linked, &imports)
-            .map(|found| found.iter().map(|(_, open)| open).sum())
-            .unwrap_or(0);
+            .0
+            .iter()
+            .map(|(_, open)| open)
+            .sum();
         let read = links
             .into_iter()
             .map(|(catalog, guid, rig)| read_link(&identified, catalog, guid, rig))
@@ -293,7 +295,7 @@ async fn forget(service: &Arc<Service>, gone: Vec<(Uuid, Uuid)>) -> bool {
         .clone()
         .run(move |store| {
             for (catalog, guid) in gone {
-                store.forget_source_project(catalog, guid)?;
+                store.forget_deleted_plan_project(catalog, guid)?;
             }
             Ok(())
         })

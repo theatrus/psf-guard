@@ -103,9 +103,12 @@ pub(super) fn current(
             .collect::<rusqlite::Result<Vec<_>>>()?;
         for (id, source_digest) in rows {
             let import_id = Uuid::parse_str(&id).map_err(|_| Error::Invalid)?;
-            let imported = store
-                .collaboration_import(import_id)?
-                .ok_or(Error::Missing)?;
+            // A row whose import is gone was left open in a database the
+            // plan could not reach when it left its collaboration; it is no
+            // assignment.
+            let Some(imported) = store.collaboration_import(import_id)? else {
+                continue;
+            };
             if imported.rig_id != binding.rig.id
                 || visits
                     .insert(
@@ -124,6 +127,25 @@ pub(super) fn current(
         }
     }
     Ok(visits.into_values().collect())
+}
+
+/// End the open assignments of an ordinary plan's targets in one rig
+/// database: rows a database kept when the plan left its collaboration
+/// while that database could not be written. Activation is where they end.
+pub(super) fn end_left(tx: &Connection, project: &str, now: u64) -> rusqlite::Result<()> {
+    let tables: i64 = tx.query_row(
+        "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN (?1,'psf_guard_director_target')",
+        [TABLE],
+        |r| r.get(0),
+    )?;
+    if tables == 2 {
+        tx.execute(
+            "UPDATE psf_guard_collaboration_plan SET end_at_ms=?2 WHERE end_at_ms IS NULL
+             AND target_guid IN (SELECT target_guid FROM psf_guard_director_target WHERE project_guid=?1)",
+            params![project, (now / 1000 * 1000) as i64],
+        )?;
+    }
+    Ok(())
 }
 
 pub(super) struct Admitted {

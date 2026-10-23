@@ -89,6 +89,8 @@ pub(super) struct LeavePreview {
     name: String,
     /// `None` for a plan of its own.
     collaboration: Option<CollaborationView>,
+    /// Linked databases leaving cannot reach: their assignments stay open.
+    warnings: Vec<String>,
     /// Why the plan cannot leave, or `None` when it can.
     refusal: Option<String>,
 }
@@ -101,6 +103,8 @@ pub(super) enum LeaveOutcome {
         collaboration: CollaborationView,
         /// Open assignments ended in the rig databases.
         assignments_ended: usize,
+        /// Linked databases whose assignments could not be ended.
+        warnings: Vec<String>,
         coordinator: remote::Told,
     },
 }
@@ -121,23 +125,36 @@ pub(super) fn linked_databases(
     Ok(databases)
 }
 
-/// Each linked database with how many of the imports' assignments are open
-/// there, or why a database could not be read.
+/// What leaving does in a database it cannot reach: the warning the dialog
+/// and the result show.
+fn unreachable(database: &str, why: &str) -> String {
+    format!(
+        "{database} {why}, so the plan's assignments there stay open. PSF Guard no longer counts \
+         frames toward them. To end them, register the database again in Settings if it is \
+         missing, then activate the plan."
+    )
+}
+
+/// The linked databases that can be read, with how many of the imports'
+/// assignments are open in each, and a warning for each one that cannot.
 pub(super) fn read_assignments(
     identified: &IdentifiedCatalogs,
     databases: Vec<(Uuid, Option<String>)>,
     imports: &[Uuid],
-) -> Result<Vec<(Arc<DatabaseContext>, usize)>, String> {
-    let imports = serde_json::to_string(imports).map_err(|error| error.to_string())?;
+) -> (Vec<(Arc<DatabaseContext>, usize)>, Vec<String>) {
+    let imports = serde_json::to_string(imports).unwrap_or_else(|_| "[]".into());
     let mut found = Vec::new();
+    let mut warnings = Vec::new();
     for (catalog, rig) in databases {
         let Some(context) = identified.get(catalog).cloned() else {
-            return Err(match rig {
-                Some(rig) => format!(
-                    "The database for {rig} is not registered on this server. Register it again in Settings, then leave the collaboration."
-                ),
-                None => "A database this plan links is not registered on this server. Register it again in Settings, then leave the collaboration.".into(),
-            });
+            warnings.push(unreachable(
+                &match rig {
+                    Some(rig) => format!("The database for {rig}"),
+                    None => "A database this plan links".into(),
+                },
+                "is not registered on this server",
+            ));
+            continue;
         };
         let open = (|| -> rusqlite::Result<usize> {
             let conn = open_scheduler_connection_with_flags(
@@ -146,11 +163,16 @@ pub(super) fn read_assignments(
             )
             .map_err(|_| rusqlite::Error::InvalidQuery)?;
             open_assignments(&conn, &imports)
-        })()
-        .map_err(|error| format!("{} could not be read: {error}", context.name))?;
-        found.push((context, open));
+        })();
+        match open {
+            Ok(open) => found.push((context, open)),
+            Err(error) => warnings.push(unreachable(
+                &context.name,
+                &format!("could not be read ({error})"),
+            )),
+        }
     }
-    Ok(found)
+    (found, warnings)
 }
 
 fn has_table(conn: &rusqlite::Connection) -> rusqlite::Result<bool> {
@@ -231,6 +253,7 @@ async fn read_preview(
             LeavePreview {
                 name: plan.name,
                 collaboration: None,
+                warnings: Vec::new(),
                 refusal: Some("This plan did not come from a collaboration.".into()),
             },
             Vec::new(),
@@ -240,7 +263,7 @@ async fn read_preview(
     let catalogs = state.all_databases();
     let instance = service.instance_id;
     let imports = collaboration.import_ids.clone();
-    let read = blocking(move || {
+    let (found, warnings) = blocking(move || {
         read_assignments(
             &identified_catalogs(&catalogs, instance),
             databases,
@@ -248,23 +271,15 @@ async fn read_preview(
         )
     })
     .await?;
-    let (contexts, open, refusal) = match read {
-        Ok(found) => {
-            let open = found.iter().map(|(_, open)| open).sum();
-            (
-                found.into_iter().map(|(context, _)| context).collect(),
-                open,
-                None,
-            )
-        }
-        Err(problem) => (Vec::new(), 0, Some(problem)),
-    };
+    let open = found.iter().map(|(_, open)| open).sum();
+    let contexts = found.into_iter().map(|(context, _)| context).collect();
     let view = view(state, service.clone(), &collaboration, open).await;
     Ok((
         LeavePreview {
             name: plan.name,
             collaboration: Some(view),
-            refusal,
+            warnings,
+            refusal: None,
         },
         contexts,
         Some(collaboration),
@@ -304,21 +319,28 @@ pub(super) async fn leave(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_millis() as u64)
         .unwrap_or(0);
-    let ended = blocking(move || -> Result<usize, String> {
+    // A person can always leave: a database that cannot be written keeps
+    // its open rows, and the result says so.
+    let mut warnings = preview.warnings;
+    let (ended, unwritten) = blocking(move || {
         let mut ended = 0;
+        let mut unwritten = Vec::new();
         for context in contexts {
-            ended += end_assignments(&context, &imports, now)
-                .map_err(|error| format!("{}: {error}", context.name))?;
+            match end_assignments(&context, &imports, now) {
+                Ok(count) => ended += count,
+                Err(error) => unwritten.push(unreachable(
+                    &context.name,
+                    &format!("could not be written ({error})"),
+                )),
+            }
         }
-        Ok(ended)
+        (ended, unwritten)
     })
-    .await?
-    .map_err(|error| {
-        tracing::warn!(plan = %id, %error, "Could not end a plan's collaboration assignments");
-        Error::Refused(format!(
-            "The plan's assignments could not be ended, so it is still in the collaboration. {error}"
-        ))
-    })?;
+    .await?;
+    for warning in &unwritten {
+        tracing::warn!(plan = %id, %warning, "Left a collaboration with assignments still open");
+    }
+    warnings.extend(unwritten);
     let left = match service
         .clone()
         .run(move |store| store.leave_collaboration(id))
@@ -340,6 +362,7 @@ pub(super) async fn leave(
         name: preview.name,
         collaboration: view,
         assignments_ended: ended,
+        warnings,
         coordinator,
     })))
 }

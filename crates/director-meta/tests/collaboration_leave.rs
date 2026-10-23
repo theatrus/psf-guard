@@ -242,3 +242,32 @@ fn deleting_an_imported_plan_leaves_its_collaboration_unless_frames_were_reporte
     assert_eq!(s.delete_plan(p.project_id(), &[]).unwrap(), None);
     assert!(s.project(p.project_id()).unwrap().is_none());
 }
+
+#[test]
+fn importing_a_project_again_rejoins_the_plan_that_left_it() {
+    let (_dir, mut s, rig) = store();
+    let p = import();
+    apply(&mut s, &p, rig);
+    let plan = s.project(p.project_id()).unwrap().unwrap();
+    s.rename_project(plan.id, plan.revision, "My M31").unwrap();
+    let framing = s.framing_draft(p.project_id()).unwrap().unwrap().revision;
+    s.leave_collaboration(p.project_id()).unwrap();
+
+    let preview = s.preview_collaboration_import(&p, rig).unwrap();
+    assert_eq!(preview.rejoins.as_deref(), Some("My M31"));
+    s.apply_collaboration_import(&p, rig, &preview.review_digest, 6000)
+        .unwrap();
+    assert!(s.plan_from_collaboration(p.project_id()).unwrap());
+    assert!(s.collaboration_import(p.import_id()).unwrap().is_some());
+    // The plan keeps its own name and framing.
+    assert_eq!(s.project(p.project_id()).unwrap().unwrap().name, "My M31");
+    assert_eq!(
+        s.framing_draft(p.project_id()).unwrap().unwrap().revision,
+        framing
+    );
+    // Once linked, a later import is an ordinary refresh.
+    assert_eq!(
+        s.preview_collaboration_import(&p, rig).unwrap().rejoins,
+        None
+    );
+}

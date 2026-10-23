@@ -57,7 +57,10 @@
   so, and you should leave or decline the project on the coordinator's site
   too. The plan stays as a plan of your own, with its framing, exposures,
   rig projects, frames and grades, so you can rename, attach, detach or
-  delete it like any other plan.
+  delete it like any other plan. A database the plan links that is missing
+  or cannot be written does not stop you leaving; the dialog warns that its
+  assignments stay open until you register it again and activate the plan.
+  Joining and importing the project again later rejoins the same plan.
 - A plan from a collaboration with nothing captured can now be deleted under
   **Plans with nothing captured yet**. Deleting it leaves the collaboration
   first, as **Leave collaboration** does. A plan with frames reported to the

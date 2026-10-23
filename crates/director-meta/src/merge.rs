@@ -200,6 +200,27 @@ impl MetaStore {
         catalog: Uuid,
         source_project_guid: Uuid,
     ) -> Result<Option<Uuid>, Error> {
+        self.forget(catalog, source_project_guid, false)
+    }
+
+    /// [`MetaStore::forget_source_project`] for a plan deletion that stopped
+    /// part way: the projects it deleted are forgotten even when the plan
+    /// came from a collaboration, so the plan that stays does not list
+    /// databases where its project is gone.
+    pub fn forget_deleted_plan_project(
+        &mut self,
+        catalog: Uuid,
+        source_project_guid: Uuid,
+    ) -> Result<Option<Uuid>, Error> {
+        self.forget(catalog, source_project_guid, true)
+    }
+
+    fn forget(
+        &mut self,
+        catalog: Uuid,
+        source_project_guid: Uuid,
+        imported_allowed: bool,
+    ) -> Result<Option<Uuid>, Error> {
         valid_id(catalog)?;
         valid_id(source_project_guid)?;
         let tx = self
@@ -220,7 +241,7 @@ impl MetaStore {
             [plan.to_string()],
             |row| row.get(0),
         )?;
-        if imported {
+        if imported && !imported_allowed {
             return Err(Error::Conflict);
         }
         let link = params![catalog.to_string(), source_project_guid.to_string()];

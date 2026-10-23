@@ -257,55 +257,73 @@ use psf_guard_director_interop::collaboration::PreparedImport;
 /// Import the fixtures' nightly share and activate it on the rig: the rig's
 /// database then has a project with six collaboration assignments.
 async fn imported(a: &super::activation::Activated) -> PreparedImport {
+    let p = import_for(a, a.rig, "000000000001");
+    activate_imports(a, &[&p]).await;
+    assert_eq!(open_assignments(&a.db), 6);
+    p
+}
+
+/// Import the fixtures' share for `rig` as `agent`, with one OIII recipe
+/// for the rig. Agents on one server share the plan.
+fn import_for(a: &super::activation::Activated, rig: Uuid, agent: &str) -> PreparedImport {
     use psf_guard_director_interop::{astrocollab::Source, collaboration::prepare_import};
     use psf_guard_director_meta::plan::{Contribution, TemplateChoice};
-    let p = {
-        let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
-        let source = Source::new("https://collab.example", "000000000001", false).unwrap();
-        let p = prepare_import(
-            include_bytes!(
-                "../../../../../crates/director-interop/tests/fixtures/starfront-tonight.json"
-            ),
-            &source,
-            "2026-10-05",
-            "000000000004",
-        )
+    let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+    let source = Source::new("https://collab.example", agent, false).unwrap();
+    let mut wire: Value = serde_json::from_slice(include_bytes!(
+        "../../../../../crates/director-interop/tests/fixtures/starfront-tonight.json"
+    ))
+    .unwrap();
+    wire["tasks"][0]["agent"] = json!(agent);
+    wire["task"]["agent"] = json!(agent);
+    let p = prepare_import(
+        &serde_json::to_vec(&wire).unwrap(),
+        &source,
+        "2026-10-05",
+        "000000000004",
+    )
+    .unwrap();
+    let preview = store.preview_collaboration_import(&p, rig).unwrap();
+    store
+        .apply_collaboration_import(&p, rig, &preview.review_digest, 1000)
         .unwrap();
-        let preview = store.preview_collaboration_import(&p, a.rig).unwrap();
-        store
-            .apply_collaboration_import(&p, a.rig, &preview.review_digest, 1000)
-            .unwrap();
-        let mut plan = store.plan_draft(p.project_id()).unwrap().unwrap();
-        plan.contributions.push(Contribution {
-            id: Uuid::new_v4(),
-            objective_id: plan.objectives[0].id,
-            rig_id: a.rig,
-            template: TemplateChoice {
-                template_guid: None,
-                template_id: None,
-                name: "O 300".into(),
-                filter_name: "OIII".into(),
-                gain: Some(100),
-                offset: Some(30),
-                bin: Some(1),
-                readout_mode: None,
-                moon: None,
-            },
-            exposure_seconds: 300.0,
-            panel_ids: vec![],
-            enabled: true,
-            goal: None,
-        });
-        store.save_plan_draft(&plan, plan.revision).unwrap();
-        p
-    };
-    let visit = json!([{"import_id": p.import_id(), "source_digest": p.digest()}]);
-    let project = p.project_id();
+    let mut plan = store.plan_draft(p.project_id()).unwrap().unwrap();
+    plan.contributions.push(Contribution {
+        id: Uuid::new_v4(),
+        objective_id: plan.objectives[0].id,
+        rig_id: rig,
+        template: TemplateChoice {
+            template_guid: None,
+            template_id: None,
+            name: "O 300".into(),
+            filter_name: "OIII".into(),
+            gain: Some(100),
+            offset: Some(30),
+            bin: Some(1),
+            readout_mode: None,
+            moon: None,
+        },
+        exposure_seconds: 300.0,
+        panel_ids: vec![],
+        enabled: true,
+        goal: None,
+    });
+    store.save_plan_draft(&plan, plan.revision).unwrap();
+    p
+}
+
+/// Activate the plan of `imports` with each import as its rig's assignment.
+async fn activate_imports(a: &super::activation::Activated, imports: &[&PreparedImport]) {
+    let visits: Vec<Value> = imports
+        .iter()
+        .map(|p| json!({"import_id": p.import_id(), "source_digest": p.digest()}))
+        .collect();
+    let project = imports[0].project_id();
     let (status, preview) = call(
         &a.f.app,
         "POST",
         &format!("/projects/{project}/activation/preview"),
-        json!({"collaboration": visit}),
+        json!({"collaboration": visits}),
         None,
     )
     .await;
@@ -314,13 +332,11 @@ async fn imported(a: &super::activation::Activated) -> PreparedImport {
         &a.f.app,
         "POST",
         &format!("/projects/{project}/activation/apply"),
-        json!({"preview_digest": preview["data"]["preview_digest"], "collaboration": visit}),
+        json!({"preview_digest": preview["data"]["preview_digest"], "collaboration": visits}),
         None,
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{applied}");
-    assert_eq!(open_assignments(&a.db), 6);
-    p
 }
 
 fn open_assignments(db: &Connection) -> i64 {
@@ -484,4 +500,105 @@ async fn a_plan_with_reported_frames_stays_until_it_leaves_the_collaboration() {
     assert_eq!(status, StatusCode::OK, "{deleted}");
     assert_eq!(deleted["data"]["state"], "deleted");
     assert_eq!(deleted["data"].get("coordinator"), None);
+}
+
+/// An imported plan on two rigs whose second project changed after the
+/// preview: the first rig's project is deleted, and the answer is `changed`
+/// with a preview that no longer lists the first database, as for any plan.
+/// The plan stays in its collaboration.
+#[tokio::test]
+async fn a_change_part_way_keeps_an_imported_plan_without_the_deleted_project() {
+    let a = activated().await;
+    let (other_rig, _other_db) = add_rig(&a.f, "rig-b").await;
+    let first = import_for(&a, a.rig, "000000000001");
+    let second = import_for(&a, other_rig, "000000000009");
+    activate_imports(&a, &[&first, &second]).await;
+    let path = format!("/projects/{}/deletion", first.project_id());
+    let (_, preview) = call(&a.f.app, "GET", &path, Value::Null, None).await;
+    assert_eq!(preview["data"]["refusal"], Value::Null, "{preview}");
+    let databases = preview["data"]["databases"].as_array().unwrap().clone();
+    assert_eq!(databases.len(), 2, "{preview}");
+    let guid = |index: usize| {
+        databases[index]["source_project_guid"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let digests = json!({"digests": {guid(0): databases[0]["project"]["digest"], guid(1): "old"}});
+    let (status, outcome) = call(&a.f.app, "POST", &path, digests, None).await;
+    assert_eq!(status, StatusCode::OK, "{outcome}");
+    assert_eq!(outcome["data"]["state"], "changed", "{outcome}");
+    assert_eq!(
+        outcome["data"]["deleted"],
+        json!([databases[0]["catalog_name"]])
+    );
+    let left = outcome["data"]["preview"]["databases"].as_array().unwrap();
+    assert_eq!(left.len(), 1, "{outcome}");
+    assert_eq!(left[0]["catalog_slug"], databases[1]["catalog_slug"]);
+    assert_eq!(
+        outcome["data"]["preview"]["collaboration"]["imports"], 2,
+        "{outcome}"
+    );
+}
+
+/// Leaving does not wait for a database that is not registered: the
+/// assignments elsewhere end, that database's stay open and the result
+/// says so. Registering it again and activating the plan ends them.
+#[tokio::test]
+async fn leaving_with_an_unregistered_database_warns_and_activation_ends_its_assignments() {
+    let a = activated().await;
+    let p = imported(&a).await;
+    let context = a.f.state.databases.write().unwrap().remove("rig").unwrap();
+    let leave = format!("/projects/{}/collaboration/leave", p.project_id());
+    let warning = "The database for RedCat rig is not registered on this server, so the plan's assignments there stay open. PSF Guard no longer counts frames toward them. To end them, register the database again in Settings if it is missing, then activate the plan.";
+    let (status, preview) = call(&a.f.app, "GET", &leave, Value::Null, None).await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(preview["data"]["refusal"], Value::Null);
+    assert_eq!(preview["data"]["warnings"], json!([warning]));
+    let (status, left) = call(&a.f.app, "POST", &leave, Value::Null, None).await;
+    assert_eq!(status, StatusCode::OK, "{left}");
+    assert_eq!(left["data"]["state"], "left");
+    assert_eq!(left["data"]["assignments_ended"], 0);
+    assert_eq!(left["data"]["warnings"], json!([warning]));
+    assert_eq!(open_assignments(&a.db), 6);
+
+    // Plan deletion still needs the database.
+    let (_, deletion) = call(
+        &a.f.app,
+        "GET",
+        &format!("/projects/{}/deletion", p.project_id()),
+        Value::Null,
+        None,
+    )
+    .await;
+    assert!(deletion["data"]["refusal"]
+        .as_str()
+        .unwrap()
+        .starts_with("The database for RedCat rig is not registered on this server."));
+
+    a.f.state
+        .databases
+        .write()
+        .unwrap()
+        .insert("rig".into(), context);
+    let project = p.project_id();
+    let (status, preview) = call(
+        &a.f.app,
+        "POST",
+        &format!("/projects/{project}/activation/preview"),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    let (status, applied) = call(
+        &a.f.app,
+        "POST",
+        &format!("/projects/{project}/activation/apply"),
+        json!({"preview_digest": preview["data"]["preview_digest"]}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    assert_eq!(open_assignments(&a.db), 0);
 }
