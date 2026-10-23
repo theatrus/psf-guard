@@ -129,6 +129,17 @@ pub(super) fn current(
     Ok(visits.into_values().collect())
 }
 
+/// The latest end time a row may have and still reopen for a revision
+/// imported at `imported_at_ms`. Ends are whole seconds, rounded down, while
+/// import times have milliseconds: a row ended in the second the revision
+/// was imported, as when a revision is activated and replaced within one
+/// second, must not count as ended before it. A full second earlier is.
+pub(super) fn reopen_cutoff(imported_at_ms: u64) -> i64 {
+    i64::try_from(imported_at_ms)
+        .unwrap_or(i64::MAX)
+        .saturating_sub(1000)
+}
+
 /// End the open assignments of an ordinary plan's targets in one rig
 /// database: rows a database kept when the plan left its collaboration
 /// while that database could not be written. Activation is where they end.
@@ -277,7 +288,7 @@ impl Admitted {
         // revision back with a new time. They reopen from now, so frames
         // captured while the plan was its own do not count. A revision
         // superseded by a newer one keeps its old time, and its rows stay
-        // ended.
+        // ended. See `reopen_cutoff` for the margin.
         let reopened = tx.execute(
             "UPDATE psf_guard_collaboration_plan SET end_at_ms=NULL, start_at_ms=?4
              WHERE import_id=?2 AND source_digest=?3 AND end_at_ms IS NOT NULL AND end_at_ms<=?5
@@ -287,7 +298,7 @@ impl Admitted {
                 self.visit.import_id.to_string(),
                 self.visit.source_digest,
                 (now / 1000 * 1000) as i64,
-                i64::try_from(self.revision_imported_at_ms).unwrap_or(i64::MAX)
+                reopen_cutoff(self.revision_imported_at_ms)
             ],
         )?;
         let previous: Option<Option<i64>> = tx.query_row(
@@ -528,4 +539,23 @@ pub(super) fn matching<'a>(
                 && a.end_at_ms.is_none_or(|end| time < end)
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reopen_cutoff;
+
+    /// A row ended in the same second as the import does not reopen; one a
+    /// full second earlier does.
+    #[test]
+    fn only_rows_ended_a_second_before_the_import_reopen() {
+        let ended = |now_ms: u64| (now_ms / 1000 * 1000) as i64;
+        // Ended at 12.900 s (stored 12.000), imported at 12.950 s.
+        assert!(ended(12_900) > reopen_cutoff(12_950));
+        // Imported at 12.999 s: the end is not a full second before.
+        assert!(ended(12_900) > reopen_cutoff(12_999));
+        // Imported at 13.000 s or later: reopens.
+        assert!(ended(12_900) <= reopen_cutoff(13_000));
+        assert_eq!(reopen_cutoff(500), -500);
+    }
 }

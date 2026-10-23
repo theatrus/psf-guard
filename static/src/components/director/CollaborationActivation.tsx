@@ -24,12 +24,14 @@ export default function CollaborationActivation({ projectId, value, onChange, di
     if (!leaving && left) status.current?.focus();
   }, [leaving, left]);
   const dialog = leaving && <CollaborationLeaveDialog planId={projectId} onClose={() => setLeaving(false)} onLeft={outcome => { setLeft(outcome); onChange([]); }} />;
-  const summary = left && <p ref={status} tabIndex={-1} role="status">{leftSummary(left)}</p>;
+  // Shown once the dialog closes, which shows the same result until then.
+  const summary = left && !leaving && <p ref={status} tabIndex={-1} role="status">{leftSummary(left)}</p>;
   if (query.isError) return <p role="alert">Collaboration assignments could not be loaded: {query.error.message}</p>;
-  // The dialog keeps its place in the tree when the assignments go, so it
-  // can still show what leaving did.
-  if (!query.data?.imports.length) return <>{summary}{dialog}</>;
-  return <><fieldset disabled={disabled} className="collaboration-activation"><legend>Collaboration assignments <EarlyBeta note={COLLABORATION_BETA} /></legend>
+  // The status line and the dialog keep their places in the tree whether or
+  // not the assignments are still listed, so the dialog can show what
+  // leaving did and focus can move even before the list refreshes.
+  if (!query.data?.imports.length) return <>{summary}{null}{dialog}</>;
+  return <>{summary}<fieldset disabled={disabled} className="collaboration-activation"><legend>Collaboration assignments <EarlyBeta note={COLLABORATION_BETA} /></legend>
     {query.data.imports.map(i => {
       const selected = value.find(v => v.import_id === i.import_id);
       return <div key={i.import_id}>

@@ -677,7 +677,9 @@ async fn a_rejoined_plan_activates_its_assignments_again() {
             |row| row.get(0),
         )
         .unwrap();
-    let again = import_task(&a, a.rig, "000000000001", "000000000004", now_ms());
+    // A person rejoins seconds later at the soonest; reopening needs the
+    // import a full second after the rows ended.
+    let again = import_task(&a, a.rig, "000000000001", "000000000004", now_ms() + 2_000);
     assert_eq!(again.import_id(), p.import_id());
     activate_imports(&a, &[&again]).await;
     assert_eq!(open_assignments(&a.db), 6);

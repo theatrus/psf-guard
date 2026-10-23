@@ -110,10 +110,18 @@ impl MetaStore {
         import: Uuid,
         panel: u32,
     ) -> Result<BTreeMap<Uuid, BTreeSet<Option<String>>>, Error> {
-        let mut stmt = self.connection.prepare("SELECT image.value,CASE WHEN json_extract(t.payload,'$.state')='complete' THEN COALESCE(json_extract(d.request,'$.source_versions.' || image.value),'') ELSE NULL END FROM collaboration_transfer t JOIN collaboration_transfer_definition d ON d.id=t.id, json_each(d.request,'$.selection.image_guids') image WHERE t.connection_id=?1 AND json_extract(d.request,'$.selection.import_id')=?2 AND json_extract(d.request,'$.selection.panel')=?3 AND json_extract(d.request,'$.output') IS NULL")?;
+        // A transfer that leaving the collaboration cancelled reserves
+        // nothing: after a rejoin its frames may be queued again.
+        let mut stmt = self.connection.prepare("SELECT image.value,CASE WHEN json_extract(t.payload,'$.state')='complete' THEN COALESCE(json_extract(d.request,'$.source_versions.' || image.value),'') ELSE NULL END FROM collaboration_transfer t JOIN collaboration_transfer_definition d ON d.id=t.id, json_each(d.request,'$.selection.image_guids') image WHERE t.connection_id=?1 AND json_extract(d.request,'$.selection.import_id')=?2 AND json_extract(d.request,'$.selection.panel')=?3 AND json_extract(d.request,'$.output') IS NULL
+            AND NOT (json_extract(t.payload,'$.state')='cancelled' AND json_extract(t.payload,'$.error') IS ?4)")?;
         let images = stmt
             .query_map(
-                params![connection.to_string(), import.to_string(), panel],
+                params![
+                    connection.to_string(),
+                    import.to_string(),
+                    panel,
+                    super::collaboration_leave::LEFT_COLLABORATION
+                ],
                 |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)),
             )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -167,6 +175,15 @@ impl MetaStore {
             .map(|p| serde_json::from_str(&p).map_err(|_| Error::CorruptDatabase))
             .collect()
     }
+    /// Whether a transfer with this ID exists that a new request for it
+    /// would return rather than replace: any transfer except one that
+    /// leaving the collaboration cancelled.
+    pub fn transfer_kept(&self, id: Uuid) -> Result<bool, Error> {
+        Ok(self
+            .transfer(id)?
+            .is_some_and(|job| !left_collaboration(&job)))
+    }
+
     pub fn transfer_revision(&self, id: Uuid) -> Result<Option<u64>, Error> {
         let value = self
             .connection
@@ -234,9 +251,7 @@ impl MetaStore {
         // has the same ID: it replaces the transfer leaving cancelled.
         let mut replacing = false;
         if let Some(existing) = self.transfer(id)? {
-            if existing.state != State::Cancelled
-                || existing.error.as_deref() != Some(super::collaboration_leave::LEFT_COLLABORATION)
-            {
+            if !left_collaboration(&existing) {
                 return Ok(existing);
             }
             replacing = true;
@@ -537,6 +552,12 @@ impl MetaStore {
         }
         Ok(())
     }
+}
+
+/// A transfer that leaving the collaboration cancelled.
+fn left_collaboration(job: &Job) -> bool {
+    job.state == State::Cancelled
+        && job.error.as_deref() == Some(super::collaboration_leave::LEFT_COLLABORATION)
 }
 
 fn checkpoint(job: &Job) -> Result<String, Error> {

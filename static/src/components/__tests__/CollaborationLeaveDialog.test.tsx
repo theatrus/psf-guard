@@ -108,4 +108,28 @@ describe('Leaving a collaboration', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('This plan did not come from a collaboration.');
     expect(within(screen.getByRole('dialog')).getByRole('button', { name: 'Leave collaboration' })).toBeDisabled();
   });
+
+  it('moves focus to the status line even when the assignments are still listed', async () => {
+    server.use(
+      http.get(assignments, () => ok(imported)),
+      http.get(leavePath, () => ok({ name: 'M31', collaboration, warnings: [], refusal: null })),
+      http.post(leavePath, () => ok({
+        state: 'left', name: 'M31', collaboration, assignments_ended: 6, warnings: [],
+        coordinator: { host: 'collab.example', tasks: 1, declined: ['000000000004'], problems: [] },
+      })),
+    );
+    mount(true);
+    fireEvent.click(await screen.findByRole('button', { name: 'Leave collaboration' }));
+    const dialog = await screen.findByRole('dialog');
+    await within(dialog).findByText(/comes from the collaboration/);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Leave collaboration' }));
+    await within(dialog).findByRole('button', { name: 'Close' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    // The assignments still show, as the refresh returned them again.
+    expect(screen.getByText(/RedCat · 2026-10-05/)).toBeInTheDocument();
+    const status = screen.getByRole('status');
+    expect(status).toHaveTextContent("M31 left the collaboration at collab.example (M31 halo, project 000000000002). It is now a plan of your own. Ended 6 open assignments. collab.example declined the plan's task.");
+    await waitFor(() => expect(status).toHaveFocus());
+  });
 });

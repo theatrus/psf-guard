@@ -552,7 +552,10 @@ needs database management and an interactive editor, as joining does. The
 plan, its framing, objectives, recipes, links, activation record, rig
 projects, frames and grades stay. The POST runs in its own task, so a
 browser that goes away cannot stop it between steps or before the
-coordinator is told. In order, the server:
+coordinator is told. A Leave or Delete plan retried after such a disconnect
+then shows the plan as already left, or gone; the first run's outcome,
+including which tasks the coordinator declined, is in the server log. In
+order, the server:
 
 1. in one meta-store transaction (`MetaStore::leave_collaboration`):
    cancels unfinished `collaboration_transfer` jobs whose selection names
@@ -606,11 +609,14 @@ no longer protected from reject removal or from the Library's project
 deletion, as no correction will be sent; the dialog says so.
 
 `MetaStore::create_transfer` refuses a request whose selection names an
-import that is not stored, so the transfer worker cannot queue files for an
-import left between its scan and its request. A transfer ID derives from
-the request, so the same request after a rejoin has the same ID: it
-replaces a transfer that leaving cancelled (its error is
-`LEFT_COLLABORATION`), while a transfer a person cancelled stays cancelled.
+import that is not stored; the automatic transfer pass skips such a cohort
+and carries on. A transfer ID derives from the request, so the same request
+after a rejoin has the same ID: it replaces a transfer that leaving
+cancelled (its error is `LEFT_COLLABORATION`), while a transfer a person
+cancelled stays cancelled. The automatic pass queues a cohort unless a
+transfer for it is kept (`MetaStore::transfer_kept`), and a transfer that
+leaving cancelled reserves none of its frames, so the cohort queues again
+after a rejoin.
 
 Nightly intake imports only shares whose project is in the policy's
 `project_ids`, so the pruned policy cannot import the plan again. When the
@@ -630,8 +636,11 @@ some other way.
 
 Rejoining re-inserts the import's revisions with a new import time. When a
 rejoined revision is activated, `Admitted::prepare` reopens its rows that
-ended before that time, which only leaving can do, from the activation's
-cutover: frames captured while the plan was its own do not count. A
+ended at least a full second before that time, which only leaving can do,
+from the activation's cutover: frames captured while the plan was its own do
+not count. Ends are whole seconds and import times have milliseconds, so
+the margin keeps a revision activated and replaced within one second
+ended. A
 revision replaced by a newer one keeps its old import time, so its rows stay
 ended and activating it is refused as superseded.
 
