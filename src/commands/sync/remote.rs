@@ -59,13 +59,18 @@ pub struct RemoteSyncOptions {
     /// Interrupts the local merge of a pull. The caller drops the future to
     /// stop a request to the peer.
     pub stop: crate::concurrency::Stop,
+    /// For a pull: what may stop it from deleting a local project the
+    /// peer's catalog deleted, including the deletions its preview listed.
+    pub deletions: crate::commands::sync::SourceDeletionRules,
 }
 
 pub struct RemoteSyncOutcome {
     pub applied: bool,
     pub summary: BTreeMap<String, i64>,
-    /// GUIDs of the local projects a pull deleted because the peer's
-    /// catalog deleted them. The server tells Planning to forget them.
+    /// GUIDs of the local projects a pull deleted, or for a dry run would
+    /// delete, because the peer's catalog deleted them. The server tells
+    /// Planning to forget the ones an apply deleted, and holds an apply to
+    /// the ones its preview listed.
     pub deleted_project_guids: Vec<String>,
     pub peer_product: String,
     pub peer_catalog: String,
@@ -143,11 +148,12 @@ async fn pull_from(
         .suffix(".sqlite")
         .tempfile()
         .context("creating a staging file for the peer's bundle")?;
-    let (local_path, dry_run, with_image_data, stop) = (
+    let (local_path, dry_run, with_image_data, stop, deletions) = (
         options.local_path.clone(),
         options.dry_run,
         options.with_image_data,
         options.stop.clone(),
+        options.deletions.clone(),
     );
     // Staging and merging are SQLite work: off the async runtime.
     tokio::task::spawn_blocking(move || {
@@ -171,15 +177,14 @@ async fn pull_from(
                 dry_run,
                 with_image_data,
                 project_filter: None,
+                deletions,
             },
         )?;
-        // A dry run rolled its deletions back.
-        let deleted = if dry_run {
-            Vec::new()
-        } else {
-            summary.deleted_project_guids.clone()
-        };
-        Ok((pull_summary(&summary), deleted))
+        // A preview's list is what it would delete; an apply's, what it did.
+        Ok((
+            pull_summary(&summary),
+            summary.deleted_project_guids.clone(),
+        ))
     })
     .await
     .context("the merge task")?

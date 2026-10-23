@@ -434,6 +434,7 @@ fn a_sync_does_not_bring_a_deleted_project_back() {
         dry_run: false,
         with_image_data: false,
         project_filter: None,
+        deletions: Default::default(),
     };
     let left_out = |local: &Connection| {
         assert_eq!(
@@ -495,7 +496,7 @@ fn a_sync_does_not_bring_a_deleted_project_back() {
     let local = catalog();
     delete(&local, 1);
     let tx = Transaction::new_unchecked(&local, TransactionBehavior::Immediate).unwrap();
-    let arrivals = sync_arrivals(&source, &tx, &HashSet::new()).unwrap();
+    let arrivals = sync_arrivals(&source, &tx, &HashSet::new(), &Default::default()).unwrap();
     tx.commit().unwrap();
     left_out(&local);
     assert_eq!(arrivals.acquiredimage.skipped, 0, "{:?}", arrivals.changes);
@@ -531,6 +532,7 @@ fn a_deleted_project_can_be_allowed_back() {
         dry_run: false,
         with_image_data: false,
         project_filter: None,
+        deletions: Default::default(),
     };
     sync_pull(&source, &local, &options).unwrap();
     assert_eq!(
@@ -563,6 +565,7 @@ fn pull_options(dry_run: bool) -> PullOptions {
         dry_run,
         with_image_data: false,
         project_filter: None,
+        deletions: Default::default(),
     }
 }
 
@@ -635,15 +638,18 @@ fn an_unshot_project_stays_deleted_and_is_listed_once_a_sync_leaves_it_out() {
 /// A table from before syncs recorded leaving a project out gains the
 /// column, and lists deletions with frames meanwhile.
 #[test]
-fn an_older_tombstone_table_gains_the_left_out_column() {
+fn an_older_tombstone_table_gains_the_new_columns() {
     let conn = catalog();
-    conn.execute_batch(&SCHEMA.replace(",\n    left_out_at INTEGER", ""))
-        .unwrap();
-    assert!(!has_column(
-        &conn,
-        "psf_guard_removed_project",
-        "left_out_at"
-    ));
+    // The tables as the first release of project removal made them.
+    conn.execute_batch(
+        "CREATE TABLE psf_guard_removed_project (id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL,
+           project_guid TEXT, name TEXT NOT NULL, removed_at INTEGER NOT NULL, frames INTEGER NOT NULL,
+           allowed_back_at INTEGER);
+         CREATE TABLE psf_guard_removed_project_frame (removal_id INTEGER NOT NULL,
+           acquired_image_id INTEGER NOT NULL, acquired_image_guid TEXT, project_id INTEGER NOT NULL,
+           project_guid TEXT, file_name TEXT, removed_at INTEGER NOT NULL);",
+    )
+    .unwrap();
     conn.execute(
         "INSERT INTO psf_guard_removed_project (project_id, project_guid, name, removed_at, frames)
          VALUES (5, 'pg-old', 'Old', 1, 2)",
@@ -651,12 +657,25 @@ fn an_older_tombstone_table_gains_the_left_out_column() {
     )
     .unwrap();
     assert_eq!(deletions(&conn).unwrap().len(), 1);
+    assert!(deleted_project_frames_named(&conn, "a.fits")
+        .unwrap()
+        .is_empty());
     ensure_schema(&conn).unwrap();
-    assert!(has_column(
-        &conn,
-        "psf_guard_removed_project",
-        "left_out_at"
-    ));
+    for (table, column) in [
+        ("psf_guard_removed_project", "left_out_at"),
+        ("psf_guard_removed_project", "origin"),
+        ("psf_guard_removed_project", "left_out_source_frames"),
+        ("psf_guard_removed_project_frame", "acquired_at"),
+    ] {
+        assert!(has_column(&conn, table, column), "{table}.{column}");
+    }
+    assert_eq!(
+        count(
+            &conn,
+            "SELECT COUNT(*) FROM psf_guard_removed_project WHERE origin = 'local'"
+        ),
+        1
+    );
     assert_eq!(deletions(&conn).unwrap().len(), 1);
 }
 
@@ -699,10 +718,8 @@ fn a_pull_records_the_files_of_frames_it_leaves_out() {
         0
     );
     assert_eq!(
-        deleted_project_of_file(&local, "M31_L_007.fits")
-            .unwrap()
-            .as_deref(),
-        Some("M31")
+        deleted_project_frames_named(&local, "M31_L_007.fits").unwrap(),
+        [("M31".to_string(), Some(1759302000))]
     );
 
     sync_pull(&source, &local, &pull_options(false)).unwrap();
@@ -711,9 +728,9 @@ fn a_pull_records_the_files_of_frames_it_leaves_out() {
     // Allow again clears them with the rest.
     let listed = deletions(&local).unwrap();
     assert!(allow_back(&local, listed[0].id, NOW + 5).unwrap());
-    assert!(deleted_project_of_file(&local, "m31_l_007.fits")
+    assert!(deleted_project_frames_named(&local, "m31_l_007.fits")
         .unwrap()
-        .is_none());
+        .is_empty());
 }
 
 /// A planning push into a rig's Target Scheduler database deletes a
@@ -747,6 +764,7 @@ fn a_planning_push_deletes_a_project_the_source_deleted_when_the_rig_has_no_fram
         dry_run,
         project_filter: None,
         destination: crate::commands::sync::SyncDestination::Scheduler,
+        deletions: Default::default(),
     };
     let preview = sync_planning(&source, &rig, &options(true)).unwrap();
     assert_eq!(preview.project.deleted, 1);
@@ -866,4 +884,235 @@ fn a_pull_deletes_a_project_the_source_catalog_deleted() {
         count(&local, "SELECT COUNT(*) FROM project WHERE Id = 3"),
         1
     );
+}
+
+fn deletion_row(conn: &Connection) -> (Option<String>, Option<i64>, String) {
+    conn.query_row(
+        "SELECT project_guid, allowed_back_at, origin FROM psf_guard_removed_project
+         WHERE lower(project_guid) = 'pg-empty' ORDER BY id DESC LIMIT 1",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )
+    .unwrap()
+}
+
+/// Allow again in one catalog is not undone by a sync with a catalog that
+/// deleted the project after the first deletion, and it carries to that
+/// catalog. A deletes Empty; B pulls from A and deletes it too; A allows it
+/// back and a rig brings it back to A. A pulls from B, B pushes planning to
+/// A: Empty stays in A. B pulls from A: B's deletion is allowed back, and
+/// Empty comes back to B.
+#[test]
+fn allow_again_survives_a_round_trip_between_catalogs() {
+    use crate::commands::sync::{sync_planning, PlanningOptions, SyncDestination};
+
+    let empty_in =
+        |conn: &Connection| count(conn, "SELECT COUNT(*) FROM project WHERE guid = 'pg-empty'");
+    let rig = catalog();
+    add_empty_project(&rig);
+    let a = catalog();
+    add_empty_project(&a);
+    let b = catalog();
+    add_empty_project(&b);
+
+    delete(&a, 3);
+    assert_eq!(
+        deletion_row(&a),
+        (Some("pg-empty".into()), None, "local".into())
+    );
+    sync_pull(&a, &b, &pull_options(false)).unwrap();
+    assert_eq!(empty_in(&b), 0);
+    assert_eq!(
+        deletion_row(&b),
+        (Some("pg-empty".into()), None, "sync".into())
+    );
+
+    let id = count(&a, "SELECT id FROM psf_guard_removed_project");
+    let allowed_at = unix_now() + 60;
+    assert!(allow_back(&a, id, allowed_at).unwrap());
+    // Allow again keeps the GUID, so syncs can pass the choice on.
+    assert_eq!(
+        deletion_row(&a),
+        (Some("pg-empty".into()), Some(allowed_at), "local".into())
+    );
+    assert!(removed_project_guids(&a).unwrap().is_empty());
+    sync_pull(&rig, &a, &pull_options(false)).unwrap();
+    assert_eq!(empty_in(&a), 1, "the rig brings it back");
+
+    let summary = sync_pull(&b, &a, &pull_options(false)).unwrap();
+    assert_eq!(empty_in(&a), 1, "{:?}", summary.changes);
+    assert!(
+        summary.changes.contains(
+            &"keep project \"Empty\": deleted in the source catalog, but it was allowed back here after that"
+                .to_string()
+        ),
+        "{:?}",
+        summary.changes
+    );
+    let pushed = sync_planning(
+        &b,
+        &a,
+        &PlanningOptions {
+            dry_run: false,
+            project_filter: None,
+            destination: SyncDestination::Catalog,
+            deletions: Default::default(),
+        },
+    )
+    .unwrap();
+    assert_eq!(empty_in(&a), 1, "{:?}", pushed.changes);
+
+    let summary = sync_pull(&a, &b, &pull_options(false)).unwrap();
+    assert!(
+        summary.changes.contains(
+            &"allow project \"Empty\" back: allowed back in the source catalog".to_string()
+        ),
+        "{:?}",
+        summary.changes
+    );
+    assert_eq!(
+        deletion_row(&b),
+        (Some("pg-empty".into()), Some(allowed_at), "sync".into())
+    );
+    assert_eq!(empty_in(&b), 1, "back in B with the same pull");
+}
+
+/// A deletion made here after the source allowed the project back stands.
+#[test]
+fn a_later_deletion_here_outlasts_an_older_allow_again() {
+    let source = catalog();
+    add_empty_project(&source);
+    delete(&source, 3);
+    let id = count(&source, "SELECT id FROM psf_guard_removed_project");
+    assert!(allow_back(&source, id, NOW + 10).unwrap());
+
+    let local = catalog();
+    add_empty_project(&local);
+    let digest = plan(&local, 3, &BTreeSet::new()).unwrap().unwrap().digest;
+    remove(&local, 3, &digest, &BTreeSet::new(), NOW + 20).unwrap();
+    sync_pull(&source, &local, &pull_options(false)).unwrap();
+    assert_eq!(deletion_row(&local).1, None);
+}
+
+/// A project a collaboration's plan holds, or whose removed reject was
+/// reported to a collaboration, stays when its source deletes it.
+#[test]
+fn a_collaboration_keeps_a_project_its_source_deleted() {
+    let source = catalog();
+    add_empty_project(&source);
+    delete(&source, 3);
+    let kept = "keep project \"Empty\": deleted in the source catalog, but it belongs to a collaboration here".to_string();
+
+    let local = catalog();
+    add_empty_project(&local);
+    let mut options = pull_options(false);
+    options
+        .deletions
+        .protected_projects
+        .insert("pg-empty".into());
+    let summary = sync_pull(&source, &local, &options).unwrap();
+    assert!(summary.changes.contains(&kept), "{:?}", summary.changes);
+    assert_eq!(
+        count(&local, "SELECT COUNT(*) FROM project WHERE Id = 3"),
+        1
+    );
+
+    // A reported reject whose files are gone, so Restore cannot bring it back.
+    local
+        .execute(
+            "INSERT INTO psf_guard_removed_image
+               (acquired_image_guid, acquired_image_id, project_id, target_id, batch_id,
+                removed_at, trash_until, files_deleted_at, rows_json, files_json)
+             VALUES ('reported', 95, 3, 30, 'b', 1, 2, 3, '{}', '[]')",
+            [],
+        )
+        .unwrap();
+    let mut options = pull_options(false);
+    options.deletions.protected_frames.insert("reported".into());
+    let summary = sync_pull(&source, &local, &options).unwrap();
+    assert!(summary.changes.contains(&kept), "{:?}", summary.changes);
+    assert_eq!(
+        count(&local, "SELECT COUNT(*) FROM project WHERE Id = 3"),
+        1
+    );
+}
+
+/// An apply that reads its source again deletes only what its preview
+/// listed.
+#[test]
+fn an_apply_deletes_only_what_its_preview_listed() {
+    let source = catalog();
+    add_empty_project(&source);
+    delete(&source, 3);
+    let local = catalog();
+    add_empty_project(&local);
+
+    let preview = sync_pull(&source, &local, &pull_options(true)).unwrap();
+    assert_eq!(preview.deleted_project_guids, ["pg-empty"]);
+
+    let mut options = pull_options(false);
+    options.deletions.previewed = Some(HashSet::new());
+    let summary = sync_pull(&source, &local, &options).unwrap();
+    assert!(summary.changes.contains(
+        &"keep project \"Empty\": deleted in the source catalog, but it was not in the preview; preview again".to_string()
+    ), "{:?}", summary.changes);
+    assert_eq!(
+        count(&local, "SELECT COUNT(*) FROM project WHERE Id = 3"),
+        1
+    );
+
+    options.deletions.previewed = Some(preview.deleted_project_guids.into_iter().collect());
+    let summary = sync_pull(&source, &local, &options).unwrap();
+    assert_eq!(summary.deleted_project_guids, ["pg-empty"]);
+    assert_eq!(
+        count(&local, "SELECT COUNT(*) FROM project WHERE Id = 3"),
+        0
+    );
+}
+
+/// An arrival sync reads a left-out project's frames again only when the
+/// source's frames for it changed.
+#[test]
+fn left_out_frames_are_read_again_only_when_they_change() {
+    let source = catalog();
+    let local = catalog();
+    delete(&local, 1);
+    let frames = || {
+        count(
+            &local,
+            "SELECT COUNT(*) FROM psf_guard_removed_project_frame",
+        )
+    };
+    let signature = || {
+        local
+            .query_row(
+                "SELECT left_out_source_frames FROM psf_guard_removed_project",
+                [],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .unwrap()
+    };
+    sync_pull(&source, &local, &pull_options(false)).unwrap();
+    assert_eq!(signature().as_deref(), Some("3:3"));
+    let before = frames();
+    // Not read again: a frame tombstone deleted by hand stays deleted.
+    local
+        .execute(
+            "DELETE FROM psf_guard_removed_project_frame WHERE file_name = 'm31_l_003.fits'",
+            [],
+        )
+        .unwrap();
+    sync_pull(&source, &local, &pull_options(false)).unwrap();
+    assert_eq!(frames(), before - 1);
+    // A new frame at the source: read again, and the missing name returns.
+    source
+        .execute(
+            "INSERT INTO acquiredimage (Id, projectId, targetId, acquireddate, filtername, gradingStatus, metadata, guid, profileId)
+             VALUES (8, 1, 10, 1759303000, 'L', 0, '{\"FileName\":\"M31_L_008.fits\"}', 'g8', 'p')",
+            [],
+        )
+        .unwrap();
+    sync_pull(&source, &local, &pull_options(false)).unwrap();
+    assert_eq!(signature().as_deref(), Some("4:8"));
+    assert_eq!(frames(), before + 1);
 }

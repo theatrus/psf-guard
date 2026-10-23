@@ -265,6 +265,25 @@ impl Service {
         .map_err(|error| format!("{error:?}"))
     }
 
+    /// GUIDs of a catalog's projects whose plan came from a collaboration,
+    /// lower case. Empty when another registered file stands for the
+    /// catalog in Planning.
+    pub(crate) async fn collaboration_source_projects(
+        self: Arc<Self>,
+        catalogs: Vec<Arc<DatabaseContext>>,
+        slug: String,
+    ) -> Result<std::collections::BTreeSet<String>, String> {
+        let instance = self.instance_id;
+        self.query(move |store| {
+            let Some(catalog) = planning_identity(instance, &catalogs, &slug) else {
+                return Ok(Default::default());
+            };
+            store.collaboration_source_projects(catalog)
+        })
+        .await
+        .map_err(|error| format!("{error:?}"))
+    }
+
     /// Forget a catalog's project that was deleted there: its link to a plan
     /// and the plan's work for that rig. Returns the plan, if one linked it.
     /// A copy of a catalog that another file stands for changes nothing.

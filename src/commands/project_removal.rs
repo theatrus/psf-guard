@@ -25,7 +25,9 @@ const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS psf_guard_removed_project (
     removed_at INTEGER NOT NULL,
     frames INTEGER NOT NULL,
     allowed_back_at INTEGER,
-    left_out_at INTEGER
+    left_out_at INTEGER,
+    origin TEXT NOT NULL DEFAULT 'local',
+    left_out_source_frames TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_psf_guard_removed_project_id
     ON psf_guard_removed_project(project_id);
@@ -36,7 +38,8 @@ CREATE TABLE IF NOT EXISTS psf_guard_removed_project_frame (
     project_id INTEGER NOT NULL,
     project_guid TEXT,
     file_name TEXT,
-    removed_at INTEGER NOT NULL
+    removed_at INTEGER NOT NULL,
+    acquired_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_psf_guard_removed_project_frame_guid
     ON psf_guard_removed_project_frame(acquired_image_guid);
@@ -47,13 +50,28 @@ CREATE INDEX IF NOT EXISTS idx_psf_guard_removed_project_frame_removal
 pub fn ensure_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch(SCHEMA)
         .context("creating the removed project tables")?;
-    // Tables from before syncs recorded leaving a project out lack the column.
-    if !has_column(conn, "psf_guard_removed_project", "left_out_at") {
-        conn.execute(
-            "ALTER TABLE psf_guard_removed_project ADD COLUMN left_out_at INTEGER",
-            [],
-        )
-        .context("adding psf_guard_removed_project.left_out_at")?;
+    // Tables from before these columns were added lack them.
+    for (table, column, definition) in [
+        ("psf_guard_removed_project", "left_out_at", "INTEGER"),
+        (
+            "psf_guard_removed_project",
+            "origin",
+            "TEXT NOT NULL DEFAULT 'local'",
+        ),
+        (
+            "psf_guard_removed_project",
+            "left_out_source_frames",
+            "TEXT",
+        ),
+        ("psf_guard_removed_project_frame", "acquired_at", "INTEGER"),
+    ] {
+        if !has_column(conn, table, column) {
+            conn.execute(
+                &format!("ALTER TABLE {table} ADD COLUMN {column} {definition}"),
+                [],
+            )
+            .with_context(|| format!("adding {table}.{column}"))?;
+        }
     }
     Ok(())
 }
@@ -86,15 +104,16 @@ fn has_column(conn: &Connection, table: &str, column: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// GUIDs of deleted projects, lower case, so a catalog pull leaves them and
-/// everything under them out. Empty when no project was ever deleted.
+/// GUIDs of deleted projects not allowed back, lower case, so a catalog
+/// pull leaves them and everything under them out. Empty when no project
+/// was ever deleted.
 pub fn removed_project_guids(conn: &Connection) -> Result<BTreeSet<String>> {
     if !table_exists(conn, "psf_guard_removed_project") {
         return Ok(BTreeSet::new());
     }
     let mut statement = conn.prepare(
         "SELECT lower(project_guid) FROM psf_guard_removed_project
-         WHERE project_guid IS NOT NULL AND project_guid <> ''",
+         WHERE project_guid IS NOT NULL AND project_guid <> '' AND allowed_back_at IS NULL",
     )?;
     let guids = statement
         .query_map([], |row| row.get::<_, String>(0))?
@@ -168,30 +187,91 @@ pub fn deletions(conn: &Connection) -> Result<Vec<Deletion>> {
     Ok(deletions)
 }
 
-/// Let syncs and imports add a deleted project back: its GUID and its
-/// frames' tombstones go, so the next sync or import of its files adds it
-/// as a new project. The deletion's date stays, so a reject removed from
-/// the project before it was deleted still cannot be restored into a
-/// project that took its Id. Returns false when there is no such deletion.
+/// Let syncs and imports add a deleted project back: the deletion is dated
+/// allowed back and its frames' tombstones go, so the next sync or import
+/// of its files adds it as a new project. The row keeps its GUID and
+/// dates: a sync passes them on, so a catalog that deleted the project
+/// after this one allows it back too, and one that deleted it before does
+/// not delete it here again. The deletion's date also keeps Restore in
+/// reject removal from putting a reject removed before it into a project
+/// that took its Id. Returns false when there is no such deletion.
 pub fn allow_back(conn: &Connection, id: i64, now: i64) -> Result<bool> {
     if !table_exists(conn, "psf_guard_removed_project") {
         return Ok(false);
     }
     let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
-    let changed = tx.execute(
-        "UPDATE psf_guard_removed_project SET project_guid = NULL, allowed_back_at = ?2
+    let allowed = allow_removal_back(&tx, id, now)?;
+    tx.commit()?;
+    Ok(allowed)
+}
+
+/// Date one standing deletion allowed back and delete its frame
+/// tombstones. Returns false when it was already allowed back.
+fn allow_removal_back(conn: &Connection, id: i64, allowed_back_at: i64) -> Result<bool> {
+    let changed = conn.execute(
+        "UPDATE psf_guard_removed_project SET allowed_back_at = ?2
          WHERE id = ?1 AND allowed_back_at IS NULL",
-        params![id, now],
+        params![id, allowed_back_at],
     )?;
     if changed == 0 {
         return Ok(false);
     }
-    tx.execute(
+    conn.execute(
         "DELETE FROM psf_guard_removed_project_frame WHERE removal_id = ?1",
         [id],
     )?;
-    tx.commit()?;
     Ok(true)
+}
+
+/// Follow another catalog's Allow again: each standing deletion here of
+/// the project with this GUID (lower case) made before `allowed_back_at`
+/// is allowed back as of that date. A deletion made here later stands.
+/// Returns how many deletions were allowed back.
+pub(crate) fn follow_allow_back(
+    conn: &Connection,
+    project_guid: &str,
+    allowed_back_at: i64,
+) -> Result<usize> {
+    if !table_exists(conn, "psf_guard_removed_project") {
+        return Ok(0);
+    }
+    let mut statement = conn.prepare(
+        "SELECT id FROM psf_guard_removed_project
+         WHERE lower(project_guid) = ?1 AND allowed_back_at IS NULL AND removed_at < ?2",
+    )?;
+    let ids = statement
+        .query_map(params![project_guid, allowed_back_at], |row| {
+            row.get::<_, i64>(0)
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut allowed = 0;
+    for id in ids {
+        if allow_removal_back(conn, id, allowed_back_at)? {
+            allowed += 1;
+        }
+    }
+    Ok(allowed)
+}
+
+/// Whether this catalog allowed the project with this GUID (lower case)
+/// back after `removed_at`, the date another catalog deleted it. Such a
+/// deletion is older than the choice made here to keep the project. With
+/// no date, any Allow again here counts.
+pub(crate) fn allowed_back_after(
+    conn: &Connection,
+    project_guid: &str,
+    removed_at: Option<i64>,
+) -> Result<bool> {
+    if !table_exists(conn, "psf_guard_removed_project") {
+        return Ok(false);
+    }
+    Ok(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM psf_guard_removed_project
+                       WHERE lower(project_guid) = ?1 AND allowed_back_at IS NOT NULL
+                         AND (?2 IS NULL OR allowed_back_at > ?2))",
+        params![project_guid, removed_at],
+        |row| row.get(0),
+    )?)
 }
 
 /// Record that a sync left out the deleted project with this GUID (lower
@@ -213,49 +293,69 @@ pub(crate) struct LeftOutFrame {
     pub guid: Option<String>,
     /// Lower-case file name, without its folder.
     pub file_name: String,
+    /// Capture time, Unix seconds.
+    pub acquired_at: Option<i64>,
 }
 
 /// Add the frames a sync left out with the deleted project that has this
 /// GUID (lower case) to its frame tombstones, so an upload or import of
-/// their files is skipped as removed. A frame already listed, by GUID or
-/// file name, is not added again. Returns how many were added.
+/// their files is skipped as removed. `signature` describes the source's
+/// frames for the project (count and highest Id); when it matches the last
+/// sync's, nothing is read again. A frame already listed, by GUID or file
+/// name, is not added again. Returns how many were added.
 pub(crate) fn add_left_out_frames(
     conn: &Connection,
     project_guid: &str,
-    frames: &[LeftOutFrame],
+    signature: &str,
+    frames: impl FnOnce() -> Result<Vec<LeftOutFrame>>,
     now: i64,
 ) -> Result<usize> {
-    if frames.is_empty() {
-        return Ok(0);
-    }
-    let removal: Option<(i64, i64)> = conn
+    let removal: Option<(i64, i64, Option<String>)> = conn
         .query_row(
-            "SELECT id, project_id FROM psf_guard_removed_project
+            "SELECT id, project_id, left_out_source_frames FROM psf_guard_removed_project
              WHERE lower(project_guid) = ?1 AND allowed_back_at IS NULL
              ORDER BY removed_at DESC, id DESC LIMIT 1",
             [project_guid],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .optional()?;
-    let Some((removal, project_id)) = removal else {
+    let Some((removal, project_id, seen)) = removal else {
         return Ok(0);
     };
-    let mut listed = conn.prepare(
-        "SELECT EXISTS(SELECT 1 FROM psf_guard_removed_project_frame
-                       WHERE removal_id = ?1
-                         AND ((?2 IS NOT NULL AND acquired_image_guid = ?2) OR file_name = ?3))",
-    )?;
+    if seen.as_deref() == Some(signature) {
+        return Ok(0);
+    }
+    let frames = frames()?;
+    let mut guids = std::collections::HashSet::new();
+    let mut names = std::collections::HashSet::new();
+    {
+        let mut listed = conn.prepare(
+            "SELECT acquired_image_guid, file_name FROM psf_guard_removed_project_frame
+             WHERE removal_id = ?1",
+        )?;
+        for row in listed.query_map([removal], |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, Option<String>>(1)?,
+            ))
+        })? {
+            let (guid, name) = row?;
+            guids.extend(guid);
+            names.extend(name);
+        }
+    }
     // Acquired image Id 0: the frame never had a row in this catalog.
     let mut insert = conn.prepare(
         "INSERT INTO psf_guard_removed_project_frame
-            (removal_id, acquired_image_id, acquired_image_guid, project_id, project_guid, file_name, removed_at)
-         VALUES (?1, 0, ?2, ?3, ?4, ?5, ?6)",
+            (removal_id, acquired_image_id, acquired_image_guid, project_id, project_guid,
+             file_name, removed_at, acquired_at)
+         VALUES (?1, 0, ?2, ?3, ?4, ?5, ?6, ?7)",
     )?;
     let mut added = 0;
     for frame in frames {
-        if listed.query_row(params![removal, frame.guid, frame.file_name], |row| {
-            row.get::<_, bool>(0)
-        })? {
+        let known = frame.guid.as_ref().is_some_and(|guid| guids.contains(guid))
+            || names.contains(&frame.file_name);
+        if known {
             continue;
         }
         insert.execute(params![
@@ -264,11 +364,27 @@ pub(crate) fn add_left_out_frames(
             project_id,
             project_guid,
             frame.file_name,
-            now
+            now,
+            frame.acquired_at
         ])?;
+        guids.extend(frame.guid);
+        names.insert(frame.file_name);
         added += 1;
     }
+    conn.execute(
+        "UPDATE psf_guard_removed_project SET left_out_source_frames = ?2 WHERE id = ?1",
+        params![removal, signature],
+    )?;
     Ok(added)
+}
+
+/// What another catalog's tombstones say about one project.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SourceDeletionState {
+    /// Deleted there, and not allowed back. The date is when, if known.
+    Standing { removed_at: Option<i64> },
+    /// Deleted there once, then allowed back on this date.
+    AllowedBack { allowed_back_at: i64 },
 }
 
 /// A project another catalog deleted, from that catalog's tombstones.
@@ -277,45 +393,82 @@ pub(crate) struct SourceDeletion {
     /// Lower case.
     pub guid: String,
     pub name: String,
+    pub state: SourceDeletionState,
 }
 
-/// The projects a sync source deleted and has not allowed back. A peer's
-/// bundle carries only `project_guid` and `name`, already without the
-/// projects allowed back; a local catalog's table has every column.
+/// What a sync source's tombstones say about each project it deleted. A
+/// peer's bundle carries `project_guid`, `name`, `removed_at` and
+/// `allowed_back_at`; a local catalog's table has every column. A project
+/// deleted more than once is standing if any deletion stands, and
+/// otherwise allowed back as of its latest Allow again.
 pub(crate) fn source_deletions(src: &Connection) -> Result<Vec<SourceDeletion>> {
-    if !table_exists(src, "psf_guard_removed_project")
-        || !has_column(src, "psf_guard_removed_project", "project_guid")
-    {
+    let table = "psf_guard_removed_project";
+    if !table_exists(src, table) || !has_column(src, table, "project_guid") {
         return Ok(Vec::new());
     }
-    let name = if has_column(src, "psf_guard_removed_project", "name") {
-        "name"
-    } else {
-        "NULL"
-    };
-    let allowed = if has_column(src, "psf_guard_removed_project", "allowed_back_at") {
-        "AND allowed_back_at IS NULL"
-    } else {
-        ""
+    let column = |name: &'static str| {
+        if has_column(src, table, name) {
+            name
+        } else {
+            "NULL"
+        }
     };
     let mut statement = src.prepare(&format!(
-        "SELECT lower(trim(project_guid)), {name} FROM psf_guard_removed_project
-         WHERE project_guid IS NOT NULL AND trim(project_guid) <> '' {allowed}"
+        "SELECT lower(trim(project_guid)), {}, {}, {} FROM {table}
+         WHERE project_guid IS NOT NULL AND trim(project_guid) <> ''",
+        column("name"),
+        column("removed_at"),
+        column("allowed_back_at"),
     ))?;
-    let mut seen = BTreeSet::new();
-    let mut deletions = Vec::new();
+    let mut by_guid: std::collections::BTreeMap<String, SourceDeletion> = Default::default();
     for row in statement.query_map([], |row| {
-        Ok(SourceDeletion {
-            guid: row.get(0)?,
-            name: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-        })
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, Option<String>>(1)?,
+            row.get::<_, Option<i64>>(2)?,
+            row.get::<_, Option<i64>>(3)?,
+        ))
     })? {
-        let deletion = row?;
-        if seen.insert(deletion.guid.clone()) {
-            deletions.push(deletion);
-        }
+        let (guid, name, removed_at, allowed_back_at) = row?;
+        let state = match allowed_back_at {
+            None => SourceDeletionState::Standing { removed_at },
+            Some(allowed_back_at) => SourceDeletionState::AllowedBack { allowed_back_at },
+        };
+        let entry = by_guid.entry(guid.clone()).or_insert(SourceDeletion {
+            guid,
+            name: name.clone().unwrap_or_default(),
+            state: state.clone(),
+        });
+        entry.state = match (&entry.state, state) {
+            (
+                SourceDeletionState::Standing { removed_at: kept },
+                SourceDeletionState::Standing { removed_at },
+            ) => SourceDeletionState::Standing {
+                removed_at: (*kept).max(removed_at),
+            },
+            (SourceDeletionState::Standing { .. }, SourceDeletionState::AllowedBack { .. }) => {
+                entry.state.clone()
+            }
+            (
+                SourceDeletionState::AllowedBack { .. },
+                standing @ SourceDeletionState::Standing { .. },
+            ) => {
+                if let Some(name) = name {
+                    entry.name = name;
+                }
+                standing
+            }
+            (
+                SourceDeletionState::AllowedBack {
+                    allowed_back_at: kept,
+                },
+                SourceDeletionState::AllowedBack { allowed_back_at },
+            ) => SourceDeletionState::AllowedBack {
+                allowed_back_at: (*kept).max(allowed_back_at),
+            },
+        };
     }
-    Ok(deletions)
+    Ok(by_guid.into_values().collect())
 }
 
 /// Rejects removed from the project, or from its targets, that Restore can
@@ -343,6 +496,29 @@ pub(crate) fn restorable_rejects(conn: &Connection, project_id: i64) -> Result<u
     )? as usize)
 }
 
+/// Removed rejects of the project, or of its targets, whose GUIDs are
+/// among `reported`: frames reported to a collaboration.
+pub(crate) fn reported_rejects(
+    conn: &Connection,
+    project_id: i64,
+    reported: &BTreeSet<String>,
+) -> Result<usize> {
+    if reported.is_empty() || !table_exists(conn, "psf_guard_removed_image") {
+        return Ok(0);
+    }
+    let mut statement = conn.prepare(
+        "SELECT acquired_image_guid FROM psf_guard_removed_image
+         WHERE project_id = ?1 OR target_id IN (SELECT Id FROM target WHERE projectid = ?1)",
+    )?;
+    let mut count = 0;
+    for guid in statement.query_map([project_id], |row| row.get::<_, String>(0))? {
+        if reported.contains(&guid?) {
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
 /// Record, in a PSF Guard catalog, a project a sync deleted because its
 /// source catalog deleted it, so a later sync from a rig does not bring it
 /// back. Nothing was captured for it here, so Deleted projects does not
@@ -351,8 +527,8 @@ pub(crate) fn record_sync_deletion(conn: &Connection, plan: &RemovalPlan, now: i
     ensure_schema(conn)?;
     conn.execute(
         "INSERT INTO psf_guard_removed_project
-            (project_id, project_guid, name, removed_at, frames, allowed_back_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, NULL)",
+            (project_id, project_guid, name, removed_at, frames, allowed_back_at, origin)
+         VALUES (?1, ?2, ?3, ?4, ?5, NULL, 'sync')",
         params![
             plan.project_id,
             plan.guid.as_deref().filter(|_| plan.unique_guid),
@@ -396,24 +572,33 @@ pub fn removed_file_names(conn: &Connection) -> Result<Vec<String>> {
     Ok(names)
 }
 
-/// The name of the deleted project whose frame tombstones list this file
-/// name (compared in lower case), or `None` when no deletion lists it.
-pub fn deleted_project_of_file(conn: &Connection, file_name: &str) -> Result<Option<String>> {
+/// The deleted projects, not allowed back, whose frame tombstones list
+/// this file name (compared in lower case), with each frame's capture
+/// time when it was recorded.
+pub fn deleted_project_frames_named(
+    conn: &Connection,
+    file_name: &str,
+) -> Result<Vec<(String, Option<i64>)>> {
     if !table_exists(conn, "psf_guard_removed_project_frame")
         || !table_exists(conn, "psf_guard_removed_project")
     {
-        return Ok(None);
+        return Ok(Vec::new());
     }
-    Ok(conn
-        .query_row(
-            "SELECT removal.name FROM psf_guard_removed_project_frame frame
-             JOIN psf_guard_removed_project removal ON removal.id = frame.removal_id
-             WHERE frame.file_name = lower(?1) AND removal.allowed_back_at IS NULL
-             ORDER BY removal.removed_at DESC LIMIT 1",
-            [file_name],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()?)
+    let acquired_at = if has_column(conn, "psf_guard_removed_project_frame", "acquired_at") {
+        "frame.acquired_at"
+    } else {
+        "NULL"
+    };
+    let mut statement = conn.prepare(&format!(
+        "SELECT removal.name, {acquired_at} FROM psf_guard_removed_project_frame frame
+         JOIN psf_guard_removed_project removal ON removal.id = frame.removal_id
+         WHERE frame.file_name = lower(?1) AND removal.allowed_back_at IS NULL
+         ORDER BY removal.removed_at DESC"
+    ))?;
+    let frames = statement
+        .query_map([file_name], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(frames)
 }
 
 /// Frames by grade.
@@ -463,6 +648,8 @@ struct FrameRow {
     target_id: Option<i64>,
     grade: i64,
     file_name: Option<String>,
+    /// Capture time, Unix seconds.
+    acquired_at: Option<i64>,
 }
 
 /// A deleted frame, for the cache files the server deletes after it.
@@ -566,8 +753,13 @@ pub fn plan(
     } else {
         "NULL"
     };
+    let acquired_date = if has_column(conn, "acquiredimage", "acquireddate") {
+        "acquireddate"
+    } else {
+        "NULL"
+    };
     let mut statement = conn.prepare(&format!(
-        "SELECT Id, {frame_guid}, targetId, gradingStatus, metadata, projectId
+        "SELECT Id, {frame_guid}, targetId, gradingStatus, metadata, projectId, {acquired_date}
          FROM acquiredimage
          WHERE projectId = ?1 OR targetId IN (SELECT Id FROM target WHERE projectid = ?1)
          ORDER BY Id"
@@ -588,6 +780,7 @@ pub fn plan(
                     .and_then(reject_archive::parse_filename_from_metadata)
                     .filter(|name| !name.is_empty())
                     .map(|name| name.to_lowercase()),
+                acquired_at: row.get::<_, Option<i64>>(6).ok().flatten(),
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -679,8 +872,8 @@ pub fn remove(
     // projects until a sync leaves it out.
     tx.execute(
         "INSERT INTO psf_guard_removed_project
-            (project_id, project_guid, name, removed_at, frames, allowed_back_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, NULL)",
+            (project_id, project_guid, name, removed_at, frames, allowed_back_at, origin)
+         VALUES (?1, ?2, ?3, ?4, ?5, NULL, 'local')",
         params![
             project_id,
             tombstone_guid,
@@ -693,8 +886,9 @@ pub fn remove(
     {
         let mut tombstone = tx.prepare(
             "INSERT INTO psf_guard_removed_project_frame
-                (removal_id, acquired_image_id, acquired_image_guid, project_id, project_guid, file_name, removed_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                (removal_id, acquired_image_id, acquired_image_guid, project_id, project_guid,
+                 file_name, removed_at, acquired_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         )?;
         for frame in &plan.frame_rows {
             tombstone.execute(params![
@@ -704,7 +898,8 @@ pub fn remove(
                 project_id,
                 tombstone_guid,
                 frame.file_name,
-                now
+                now,
+                frame.acquired_at
             ])?;
         }
     }
@@ -713,8 +908,10 @@ pub fn remove(
     if table_exists(&tx, "psf_guard_frame_derivative") {
         tx.execute(
             "INSERT INTO psf_guard_removed_project_frame
-                (removal_id, acquired_image_id, acquired_image_guid, project_id, project_guid, file_name, removed_at)
-             SELECT ?4, frame.acquired_image_id, copy.acquired_image_guid, ?1, ?2, lower(copy.file_name), ?3
+                (removal_id, acquired_image_id, acquired_image_guid, project_id, project_guid,
+                 file_name, removed_at, acquired_at)
+             SELECT ?4, frame.acquired_image_id, copy.acquired_image_guid, ?1, ?2, lower(copy.file_name), ?3,
+                    frame.acquired_at
              FROM psf_guard_frame_derivative copy
              JOIN psf_guard_removed_project_frame frame
                ON frame.removal_id = ?4 AND frame.acquired_image_guid = copy.acquired_image_guid",

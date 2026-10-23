@@ -74,14 +74,26 @@
   pulls, to a planning push into a rig's Target Scheduler database, and to
   syncs with another PSF Guard server that runs this version. A project
   with frames in the destination stays, and the preview says how many
-  exposures it has there. The preview and the result show how many
+  exposures it has there. So does a project that belongs to a
+  collaboration. A pull from a peer deletes only the projects its preview
+  listed. The preview and the result show how many
   projects the transfer deletes. A plan that linked a deleted project no
   longer plans work for that rig. When a pull leaves out new frames of a
   deleted project, imports and uploads of those files are skipped too.
+- **Allow again** now holds across syncs. When another catalog deleted a
+  project because yours did, a sync from that catalog no longer deletes
+  the project again after you click **Allow again**. When that catalog
+  syncs from yours, it allows the project back too.
+- To delete projects on a rig that the N.I.N.A. plugin serves, update the
+  plugin to a version with project deletion support. Older plugins keep
+  the project on the rig.
 - An upload of a frame from a project deleted in the receiving catalog is
   refused with a message that explains how to allow the project back. An
   upload of a frame removed as a reject is refused with a message that
-  explains how to restore it. The N.I.N.A. plugin does not retry either.
+  explains how to restore it. The updated N.I.N.A. plugin records these
+  uploads as skipped; older plugins show them as blocked jobs. A different
+  frame that only shares a deleted frame's file name, such as
+  `0001.fits` from another target, uploads as usual.
 
 - A color preview can run BlurXTerminator and NoiseXTerminator on its color
   channels together. In **Processing stack**, turn the tools on under

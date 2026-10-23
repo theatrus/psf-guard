@@ -1070,19 +1070,24 @@ async fn an_upload_only_key_cannot_reach_the_sync_protocol() {
     }
 }
 
-/// The source catalog deleted M31 (with frames) and Empty (without); a
-/// third deletion was allowed back.
+const EMPTY_GUID: &str = "5e5e5e5e-0000-4000-8000-000000000005";
+
+/// The source catalog deleted Empty, which had no frames, and allowed
+/// another deletion back. Rows without a valid UUID never travel.
 const DELETED_IN_SOURCE: &str = "
      CREATE TABLE psf_guard_removed_project (id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL,
        project_guid TEXT, name TEXT NOT NULL, removed_at INTEGER NOT NULL, frames INTEGER NOT NULL,
-       allowed_back_at INTEGER, left_out_at INTEGER);
-     INSERT INTO psf_guard_removed_project VALUES
-       (1, 5, 'empty-guid', 'Empty', 1, 0, NULL, NULL),
-       (2, 6, NULL, 'Allowed back', 1, 4, 2, NULL),
-       (3, 7, '', 'No GUID', 1, 0, NULL, NULL);";
+       allowed_back_at INTEGER, left_out_at INTEGER, origin TEXT NOT NULL DEFAULT 'local');
+     INSERT INTO psf_guard_removed_project (id, project_id, project_guid, name, removed_at, frames, allowed_back_at) VALUES
+       (1, 5, '5e5e5e5e-0000-4000-8000-000000000005', 'Empty', 100, 0, NULL),
+       (2, 6, '6e6e6e6e-0000-4000-8000-000000000006', 'Allowed back', 100, 4, 200),
+       (3, 7, NULL, 'From before', 100, 0, 100),
+       (4, 8, '', 'No GUID', 100, 0, NULL),
+       (5, 9, 'not-a-uuid', 'Not a UUID', 100, 0, NULL);";
 
 /// The destination still has Empty, with nothing captured for it.
-const EMPTY_IN_DESTINATION: &str = "INSERT INTO project VALUES (5,'p','Empty','',1,1,'empty-guid');
+const EMPTY_IN_DESTINATION: &str =
+    "INSERT INTO project VALUES (5,'p','Empty','',1,1,'5e5e5e5e-0000-4000-8000-000000000005');
      INSERT INTO target VALUES (50,'Empty',1,1.0,2.0,0,5,'empty-target');";
 
 impl Harness {
@@ -1159,15 +1164,22 @@ async fn exports_carry_deleted_projects_only_when_asked() {
             .iter()
             .map(|column| column["name"].as_str().unwrap())
             .collect();
-        assert_eq!(columns, ["project_guid", "name"], "{operation}");
+        assert_eq!(
+            columns,
+            ["project_guid", "name", "removed_at", "allowed_back_at"],
+            "{operation}"
+        );
         let rows = table["rows"].as_array().unwrap();
         assert_eq!(
             rows.len(),
-            1,
-            "only deletions that keep a GUID out: {table:#}"
+            2,
+            "rows with a UUID, standing or allowed back: {table:#}"
         );
-        assert_eq!(rows[0]["values"][0]["value"], "empty-guid");
+        assert_eq!(rows[0]["values"][0]["value"], EMPTY_GUID);
         assert_eq!(rows[0]["values"][1]["value"], "Empty");
+        assert_eq!(rows[0]["values"][2]["value"], "100");
+        assert_eq!(rows[0]["values"][3]["kind"], "null");
+        assert_eq!(rows[1]["values"][3]["value"], "200");
     }
     // A grade push never carries it.
     let bundle = harness.export_with("push_grades", Some(true)).await;
@@ -1192,7 +1204,7 @@ async fn a_merge_with_deleted_projects_deletes_the_destinations_frameless_copy()
         harness
             .destination()
             .query_row(
-                "SELECT COUNT(*) FROM project WHERE guid = 'empty-guid'",
+                "SELECT COUNT(*) FROM project WHERE guid = '5e5e5e5e-0000-4000-8000-000000000005'",
                 [],
                 |row| row.get::<_, i64>(0),
             )
@@ -1213,7 +1225,7 @@ async fn a_merge_with_deleted_projects_deletes_the_destinations_frameless_copy()
     let recorded: i64 = harness
         .destination()
         .query_row(
-            "SELECT COUNT(*) FROM psf_guard_removed_project WHERE project_guid = 'empty-guid'",
+            "SELECT COUNT(*) FROM psf_guard_removed_project WHERE project_guid = '5e5e5e5e-0000-4000-8000-000000000005' AND origin = 'sync'",
             [],
             |row| row.get(0),
         )
@@ -1244,7 +1256,7 @@ async fn a_planning_push_from_a_peer_deletes_and_records_the_deletion() {
     let (recorded, listed): (i64, i64) = destination
         .query_row(
             "SELECT COUNT(*), COUNT(left_out_at) FROM psf_guard_removed_project
-             WHERE project_guid = 'empty-guid' AND frames = 0 AND allowed_back_at IS NULL",
+             WHERE project_guid = '5e5e5e5e-0000-4000-8000-000000000005' AND frames = 0 AND allowed_back_at IS NULL AND origin = 'sync'",
             [],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )

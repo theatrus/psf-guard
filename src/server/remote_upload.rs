@@ -324,24 +324,17 @@ fn publish_and_import(
             "{filename} is already registered as a light in this database"
         )));
     }
-    // A light of a project deleted from this catalog stays out. 410, not a
-    // failure worth retrying: sending it again cannot succeed until someone
-    // allows the project back.
-    if calibration_kind.is_none()
-        && existing_resolution.is_none()
-        && let Some(project) =
-            crate::commands::project_removal::deleted_project_of_file(&connection, &filename)
-                .map_err(AppError::db)?
-    {
-        return Err(deleted_project_refusal(&filename, &project));
-    }
-    // A removed reject stays out too, on the same terms.
-    if calibration_kind.is_none()
-        && existing_resolution.is_none()
-        && crate::commands::reject_removal::is_removed_reject_file(&connection, &filename)
-            .map_err(AppError::db)?
-    {
-        return Err(removed_reject_refusal(&filename));
+    // A light of a project deleted from this catalog, or removed as a
+    // reject, stays out: 410, not a failure worth retrying. A tombstone
+    // with the same file name but another capture time is another frame
+    // (N.I.N.A. file patterns reuse names across targets), which imports.
+    let mut admit_removed_name = false;
+    if calibration_kind.is_none() && existing_resolution.is_none() {
+        match removed_light(&connection, &filename, frame.timestamp)? {
+            RemovedLight::NotRemoved => {}
+            RemovedLight::SameNameOnly => admit_removed_name = true,
+            RemovedLight::Refused(refusal) => return Err(refusal),
+        }
     }
 
     // Retries follow the path already registered in this catalog before they
@@ -447,6 +440,7 @@ fn publish_and_import(
             vec![frame.clone()],
             &ImportOptions {
                 pair_derivatives,
+                admit_removed_names: admit_removed_name,
                 ..ImportOptions::default()
             },
         ) {
@@ -573,6 +567,51 @@ fn publish_and_import(
             import: outcome,
         },
         light_mapping_changed,
+    })
+}
+
+/// What this catalog's tombstones say about an uploaded light.
+enum RemovedLight {
+    NotRemoved,
+    /// A removed frame has the same file name, but another capture time.
+    SameNameOnly,
+    Refused(AppError),
+}
+
+/// Whether a project deletion or a reject removal took out this light: a
+/// tombstone with its file name and a capture time within
+/// [`CAPTURE_IDENTITY_TIME_TOLERANCE_SECS`] of the upload's. A tombstone
+/// without a time, from before times were recorded, or an upload without
+/// one, matches by name alone.
+fn removed_light(
+    connection: &rusqlite::Connection,
+    filename: &str,
+    timestamp: Option<i64>,
+) -> Result<RemovedLight, AppError> {
+    let same_frame = |acquired_at: Option<i64>| match (acquired_at, timestamp) {
+        (Some(expected), Some(actual)) => {
+            expected.abs_diff(actual) <= CAPTURE_IDENTITY_TIME_TOLERANCE_SECS
+        }
+        _ => true,
+    };
+    let deleted =
+        crate::commands::project_removal::deleted_project_frames_named(connection, filename)
+            .map_err(AppError::db)?;
+    if let Some((project, _)) = deleted.iter().find(|(_, at)| same_frame(*at)) {
+        return Ok(RemovedLight::Refused(deleted_project_refusal(
+            filename, project,
+        )));
+    }
+    let rejects =
+        crate::commands::reject_removal::removed_reject_capture_times(connection, filename)
+            .map_err(AppError::db)?;
+    if rejects.iter().any(|at| same_frame(*at)) {
+        return Ok(RemovedLight::Refused(removed_reject_refusal(filename)));
+    }
+    Ok(if deleted.is_empty() && rejects.is_empty() {
+        RemovedLight::NotRemoved
+    } else {
+        RemovedLight::SameNameOnly
     })
 }
 

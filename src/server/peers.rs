@@ -81,6 +81,11 @@ pub struct RemoteSyncRequest {
     pub reviewed_only: bool,
     #[serde(default = "default_true")]
     pub with_image_data: bool,
+    /// For a pull that writes: the project GUIDs its preview listed for
+    /// deletion (`deleted_projects` of the dry run). An apply reads the
+    /// peer again, so it deletes only these; absent means none.
+    #[serde(default)]
+    pub previewed_deletions: Vec<String>,
 }
 
 fn default_true() -> bool {
@@ -93,6 +98,10 @@ pub struct RemoteSyncResult {
     pub peer_product: String,
     pub peer_catalog: String,
     pub summary: BTreeMap<String, i64>,
+    /// For a pull: the GUIDs of local projects it deleted, or for a
+    /// preview would delete, because the peer's catalog deleted them. The
+    /// page sends a preview's list back with the apply.
+    pub deleted_projects: Vec<String>,
 }
 
 pub async fn list_peers(
@@ -275,6 +284,24 @@ pub async fn sync_with_peer(
     } else {
         None
     };
+    // What keeps a pull from deleting a local project the peer deleted.
+    // An apply reads the peer again, so it holds to the preview's list.
+    let deletions = if direction == RemoteDirection::Pull {
+        let mut rules =
+            crate::server::project_removal::sync_deletion_rules(&state, Some(&context.id)).await?;
+        if !request.dry_run {
+            rules.previewed = Some(
+                request
+                    .previewed_deletions
+                    .iter()
+                    .map(|guid| guid.trim().to_ascii_lowercase())
+                    .collect(),
+            );
+        }
+        rules
+    } else {
+        Default::default()
+    };
     let sync = sync_remote(RemoteSyncOptions {
         direction,
         local_path: std::path::PathBuf::from(&context.database_path),
@@ -286,6 +313,7 @@ pub async fn sync_with_peer(
         dry_run: request.dry_run,
         with_image_data: request.with_image_data,
         stop: stop.clone(),
+        deletions,
     });
     // A stopped preview drops its request to the peer; its local merge sees
     // the stop through SQLite.
@@ -348,6 +376,7 @@ pub async fn sync_with_peer(
         peer_product: outcome.peer_product,
         peer_catalog: outcome.peer_catalog,
         summary: outcome.summary,
+        deleted_projects: outcome.deleted_project_guids,
     })))
 }
 

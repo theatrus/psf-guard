@@ -256,6 +256,17 @@ pub(crate) async fn execute_scheduler_sync_paths(
     } else {
         crate::commands::sync::SyncDestination::Scheduler
     };
+    // What keeps the sync from deleting a project its source deleted. A
+    // grade push deletes nothing.
+    let deletions = if matches!(req.kind, SchedulerSyncKind::PushGrades) {
+        crate::commands::sync::SourceDeletionRules::default()
+    } else {
+        crate::server::project_removal::sync_deletion_rules(
+            state,
+            destination_is_catalog.then_some(destination_id.as_str()),
+        )
+        .await?
+    };
     let kind = req.kind;
     let dry_run = req.dry_run;
     let project = req.project;
@@ -321,6 +332,7 @@ pub(crate) async fn execute_scheduler_sync_paths(
                         dry_run,
                         with_image_data,
                         project_filter: project.clone(),
+                        deletions: deletions.clone(),
                     };
                     let mut summary = match transaction {
                         Some(transaction) => {
@@ -372,6 +384,7 @@ pub(crate) async fn execute_scheduler_sync_paths(
                         dry_run,
                         project_filter: project.clone(),
                         destination: planning_destination,
+                        deletions: deletions.clone(),
                     };
                     let mut summary = match transaction {
                         Some(transaction) => {

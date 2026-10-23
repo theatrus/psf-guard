@@ -87,9 +87,13 @@ const OPTIONAL_MERGE_TABLES: &[&str] = &[FRAME_DERIVATIVES_TABLE, PROJECT_TOMBST
 const OPTIONAL_PLANNING_TABLES: &[&str] = &[PROJECT_TOMBSTONES_TABLE];
 
 const FRAME_DERIVATIVES_TABLE: &str = "psf_guard_frame_derivative";
-/// Projects the sending catalog deleted. A bundle carries only the
-/// `project_guid` and `name` columns, and only deletions not allowed back.
+/// Projects the sending catalog deleted, standing or allowed back. A
+/// bundle carries only the `project_guid` (a UUID), `name`, `removed_at`
+/// and `allowed_back_at` columns.
 const PROJECT_TOMBSTONES_TABLE: &str = "psf_guard_removed_project";
+/// The columns of [`PROJECT_TOMBSTONES_TABLE`] a bundle carries.
+const PROJECT_TOMBSTONE_COLUMNS: &[&str] =
+    &["project_guid", "name", "removed_at", "allowed_back_at"];
 
 /// The capability that says a peer reads and writes pairing records.
 pub const FRAME_DERIVATIVES_CAPABILITY: &str = "frame_derivatives_v1";
@@ -1511,17 +1515,24 @@ pub(crate) fn export_bundle(
             continue;
         }
         let table = if *name == PROJECT_TOMBSTONES_TABLE {
-            // A receiver needs the GUID and a name for its change lines;
-            // a deletion allowed back keeps nothing out.
-            read_bundle_columns(
+            // Deletions and their Allow again, so a receiver follows both.
+            // A receiver matches projects by GUID, so a row without a
+            // valid UUID tells it nothing.
+            let mut table = read_bundle_columns(
                 &connection,
                 name,
-                Some(&["project_guid", "name"]),
-                Some(
-                    "allowed_back_at IS NULL AND project_guid IS NOT NULL \
-                     AND trim(project_guid) <> ''",
-                ),
-            )?
+                Some(PROJECT_TOMBSTONE_COLUMNS),
+                Some("project_guid IS NOT NULL"),
+            )?;
+            let guid = table
+                .columns
+                .iter()
+                .position(|column| column.name.eq_ignore_ascii_case("project_guid"));
+            table.rows.retain(|row| {
+                guid.and_then(|guid| row.values[guid].value.as_deref())
+                    .is_some_and(|value| Uuid::parse_str(value.trim()).is_ok())
+            });
+            table
         } else {
             read_bundle_table(&connection, name, None)?
         };

@@ -5,7 +5,7 @@
 //! image data, or grades. Existing telescope plan progress (`acquired` and
 //! `accepted`) stays unchanged; a new plan starts with both counts at zero.
 
-use super::pull::{sync_structure, SyncDestination};
+use super::pull::{sync_structure, SourceDeletionContext, SourceDeletionRules, SyncDestination};
 use super::{require_planning_capable, TableCounts};
 use anyhow::{Context, Result};
 use rusqlite::{Connection, Transaction, TransactionBehavior};
@@ -20,6 +20,8 @@ pub struct PlanningOptions {
     /// the source deleted only loses its rows, or a registered PSF Guard
     /// catalog, where the deletion is also recorded as a tombstone.
     pub destination: SyncDestination,
+    /// What may stop the push from deleting a project its source deleted.
+    pub deletions: SourceDeletionRules,
 }
 
 /// Outcome of a planning settings push.
@@ -96,7 +98,10 @@ pub(crate) fn sync_planning_in_transaction(
         opts.project_filter.as_deref(),
         &["acquired", "accepted"],
         false,
-        opts.destination,
+        SourceDeletionContext {
+            destination: opts.destination,
+            rules: &opts.deletions,
+        },
         &mut summary.changes,
     )?;
     summary.deleted_project_guids = structure.deleted_project_guids;
@@ -161,6 +166,7 @@ mod tests {
             dry_run: false,
             project_filter: None,
             destination: SyncDestination::Scheduler,
+            deletions: SourceDeletionRules::default(),
         }
     }
 
@@ -226,6 +232,7 @@ mod tests {
                 dry_run: true,
                 project_filter: None,
                 destination: SyncDestination::Scheduler,
+                deletions: SourceDeletionRules::default(),
             },
         )
         .unwrap();
@@ -252,6 +259,7 @@ mod tests {
                 dry_run: false,
                 project_filter: Some("Orion".into()),
                 destination: SyncDestination::Scheduler,
+                deletions: SourceDeletionRules::default(),
             },
         )
         .unwrap();

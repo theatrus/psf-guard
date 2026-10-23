@@ -191,17 +191,35 @@ pub fn removed_file_names(conn: &Connection) -> Result<HashSet<String>> {
     Ok(names)
 }
 
-/// Whether a removed reject's file has this name (compared in lower case),
-/// so an upload of it is refused rather than bringing the frame back.
-pub fn is_removed_reject_file(conn: &Connection, file_name: &str) -> Result<bool> {
+/// The capture time (Unix seconds) of each removed reject whose file has
+/// this name, compared in lower case: `None` when its saved rows no longer
+/// say, as after a purge. An upload of the same frame is refused rather
+/// than bringing it back.
+pub fn removed_reject_capture_times(
+    conn: &Connection,
+    file_name: &str,
+) -> Result<Vec<Option<i64>>> {
     if !table_exists(conn, "psf_guard_removed_image") {
-        return Ok(false);
+        return Ok(Vec::new());
     }
-    Ok(conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM psf_guard_removed_image WHERE lower(file_name) = lower(?1))",
-        [file_name],
-        |row| row.get(0),
-    )?)
+    let mut statement = conn.prepare(
+        "SELECT rows_json FROM psf_guard_removed_image WHERE lower(file_name) = lower(?1)",
+    )?;
+    let rows = statement
+        .query_map([file_name], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows
+        .iter()
+        .map(|rows| {
+            serde_json::from_str::<RowSnapshot>(rows)
+                .ok()
+                .and_then(|rows| {
+                    rows.acquiredimage
+                        .get("acquireddate")
+                        .and_then(Json::as_i64)
+                })
+        })
+        .collect())
 }
 
 /// Which frames a run may take: one project, one target, or the database.
@@ -2183,6 +2201,7 @@ mod tests {
                 dry_run: false,
                 with_image_data: true,
                 project_filter: None,
+                deletions: Default::default(),
             },
         )
         .unwrap();

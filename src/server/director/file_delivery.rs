@@ -366,6 +366,7 @@ pub(super) fn prepare(
                 dry_run: true,
                 project_filter: None,
                 destination: crate::commands::sync::SyncDestination::Scheduler,
+                deletions: Default::default(),
             },
         )?;
         let result = SchedulerSyncResponse {

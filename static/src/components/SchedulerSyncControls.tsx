@@ -29,8 +29,6 @@ const operationLabel = (kind: SchedulerSyncKind) => {
   }
 };
 
-/** The Keep out and Use anyway choices a pull carries: each changes which
- * frames the destination's masters take, so the preview says so. */
 const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? '' : 's'}`;
 
 /** Projects the source catalog deleted that the transfer deletes here
@@ -47,6 +45,8 @@ const deletedProjectsLine = (result: SchedulerSyncResponse) => {
   }. Nothing was captured for ${projects === 1 ? 'it' : 'them'} in the destination.`;
 };
 
+/** The Keep out and Use anyway choices a pull carries: each changes which
+ * frames the destination's masters take, so the preview says so. */
 const calibrationChoiceLine = (result: SchedulerSyncResponse) => {
   const calibration = result.calibration;
   if (!calibration) return null;

@@ -27,6 +27,8 @@ pub struct PullOptions {
     /// Restrict the pull to projects whose name matches (substring); cascades to
     /// their targets, plans, and images.
     pub project_filter: Option<String>,
+    /// What may stop the pull from deleting a project its source deleted.
+    pub deletions: SourceDeletionRules,
 }
 
 /// Insert/update/unchanged counters for one table.
@@ -54,6 +56,29 @@ pub enum SyncDestination {
     /// A rig's Target Scheduler database that a planning push writes. The
     /// rows are deleted and no PSF Guard table is written.
     Scheduler,
+}
+
+/// What may stop a sync from deleting a destination project that its
+/// source catalog deleted, beyond the frames captured for it there.
+#[derive(Debug, Clone, Default)]
+pub struct SourceDeletionRules {
+    /// GUIDs (lower case) of destination projects whose plan came from a
+    /// collaboration. They stay.
+    pub protected_projects: HashSet<String>,
+    /// GUIDs of frames reported to a collaboration. A project with one,
+    /// among its frames or its removed rejects, stays.
+    pub protected_frames: std::collections::BTreeSet<String>,
+    /// When set, the only project GUIDs (lower case) this run may delete:
+    /// the ones its preview listed. Set by an apply that reads its source
+    /// again rather than the previewed copy.
+    pub previewed: Option<HashSet<String>>,
+}
+
+/// Where a sync writes and what may stop it from deleting a project.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct SourceDeletionContext<'a> {
+    pub destination: SyncDestination,
+    pub rules: &'a SourceDeletionRules,
 }
 
 /// Outcome of a pull.
@@ -1264,9 +1289,16 @@ pub(super) fn sync_structure(
     project_filter: Option<&str>,
     excluded_plan_counts: &[&str],
     preserve_existing: bool,
-    destination: SyncDestination,
+    deletions: SourceDeletionContext<'_>,
     changes: &mut Vec<String>,
 ) -> Result<StructureSync> {
+    let destination = deletions.destination;
+    let now = crate::commands::project_removal::unix_now();
+    // Projects the source deleted, deleted here too when nothing was
+    // captured for them here; and deletions the source allowed back,
+    // allowed back here too. First, so a project allowed back here comes
+    // back in this same sync.
+    let deleted = apply_source_deletions(src, tx, project_filter, deletions, now, changes)?;
     let included_projects: Option<HashSet<i64>> = match project_filter {
         Some(sub) => {
             let mut stmt = src.prepare("SELECT Id FROM project WHERE name LIKE ?1")?;
@@ -1323,21 +1355,23 @@ pub(super) fn sync_structure(
         }
         Some(kept)
     };
-    let now = crate::commands::project_removal::unix_now();
     for (guid, source_project) in &left_out {
         // Deleted projects lists a deletion once a sync has left it out.
         crate::commands::project_removal::mark_left_out(tx, guid, now)?;
         // The frames of a deleted project that still arrive from a rig:
-        // an upload or import of their files is skipped as removed.
+        // an upload or import of their files is skipped as removed. They
+        // are read again only when the source's frames for it changed.
         if destination == SyncDestination::Catalog {
-            let frames = left_out_frames(src, *source_project)?;
-            crate::commands::project_removal::add_left_out_frames(tx, guid, &frames, now)?;
+            let signature = left_out_signature(src, *source_project)?;
+            crate::commands::project_removal::add_left_out_frames(
+                tx,
+                guid,
+                &signature,
+                || left_out_frames(src, *source_project),
+                now,
+            )?;
         }
     }
-    // Projects the source deleted, deleted here too when nothing was
-    // captured for them here.
-    let deleted =
-        delete_projects_deleted_in_source(src, tx, project_filter, destination, now, changes)?;
     let included_targets: Option<HashSet<i64>> = match &included_projects {
         Some(projs) => Some(child_ids(src, "target", "projectid", projs)?),
         None => None,
@@ -1439,27 +1473,35 @@ fn exposures(count: usize) -> String {
     }
 }
 
-/// Delete each destination project that the source catalog deleted and has
-/// not allowed back, when nothing was captured for it in the destination:
-/// no frames on the project or its targets, and no removed rejects that
-/// Restore can bring back. A project with frames here stays, with a change
-/// line that says why. In a PSF Guard catalog the deletion is recorded as a
-/// tombstone; in a Target Scheduler database only the rows go.
-fn delete_projects_deleted_in_source(
+/// Apply the source catalog's tombstones to the destination.
+///
+/// - A project the source deleted, and has not allowed back, is deleted
+///   here when nothing was captured for it here: no frames on the project
+///   or its targets, and no removed rejects that Restore can bring back.
+///   It stays, with a change line that says why, when it has frames here,
+///   belongs to a collaboration, was allowed back here after the source
+///   deleted it, or was not in the preview of a run limited to it.
+/// - A deletion the source allowed back is allowed back here too, when it
+///   was made here before that.
+///
+/// In a PSF Guard catalog a deletion is recorded as a tombstone; in a
+/// Target Scheduler database only the rows go.
+fn apply_source_deletions(
     src: &Connection,
     tx: &Transaction,
     project_filter: Option<&str>,
-    destination: SyncDestination,
+    context: SourceDeletionContext<'_>,
     now: i64,
     changes: &mut Vec<String>,
 ) -> Result<SourceDeletions> {
-    use crate::commands::project_removal;
+    use crate::commands::project_removal::{self, SourceDeletionState};
 
     let mut deleted = SourceDeletions::default();
     let deletions = project_removal::source_deletions(src)?;
     if deletions.is_empty() || !super::table_has_column(tx, "project", "guid") {
         return Ok(deleted);
     }
+    let rules = context.rules;
     // A source that has the project again does not mean to delete it.
     let mut live_statement = src.prepare(
         "SELECT lower(trim(guid)) FROM project WHERE guid IS NOT NULL AND trim(guid) <> ''",
@@ -1470,6 +1512,18 @@ fn delete_projects_deleted_in_source(
     let filter = project_filter.map(str::to_lowercase);
     let mut find = tx.prepare("SELECT Id FROM project WHERE lower(trim(guid)) = ?1")?;
     for deletion in deletions {
+        let removed_at = match deletion.state {
+            SourceDeletionState::AllowedBack { allowed_back_at } => {
+                if project_removal::follow_allow_back(tx, &deletion.guid, allowed_back_at)? > 0 {
+                    changes.push(format!(
+                        "allow project \"{}\" back: allowed back in the source catalog",
+                        deletion.name
+                    ));
+                }
+                continue;
+            }
+            SourceDeletionState::Standing { removed_at } => removed_at,
+        };
         if live.contains(&deletion.guid) {
             continue;
         }
@@ -1488,7 +1542,7 @@ fn delete_projects_deleted_in_source(
                 continue;
             }
         };
-        let Some(plan) = project_removal::plan(tx, id, &std::collections::BTreeSet::new())? else {
+        let Some(plan) = project_removal::plan(tx, id, &rules.protected_frames)? else {
             continue;
         };
         if filter
@@ -1497,24 +1551,47 @@ fn delete_projects_deleted_in_source(
         {
             continue;
         }
+        let keep = |reason: String| {
+            format!(
+                "keep project \"{}\": deleted in the source catalog, but {reason}",
+                plan.name
+            )
+        };
+        if project_removal::allowed_back_after(tx, &deletion.guid, removed_at)? {
+            changes.push(keep("it was allowed back here after that".into()));
+            continue;
+        }
         if plan.frames.total > 0 {
-            changes.push(format!(
-                "keep project \"{}\": deleted in the source catalog, but it has {} here",
-                plan.name,
+            changes.push(keep(format!(
+                "it has {} here",
                 exposures(plan.frames.total)
-            ));
+            )));
             continue;
         }
         let rejects = project_removal::restorable_rejects(tx, id)?;
         if rejects > 0 {
-            changes.push(format!(
-                "keep project \"{}\": deleted in the source catalog, but it has {} here that Restore can bring back",
-                plan.name,
+            changes.push(keep(format!(
+                "it has {} here that Restore can bring back",
                 exposures(rejects).replacen("exposure", "removed exposure", 1)
-            ));
+            )));
             continue;
         }
-        if destination == SyncDestination::Catalog {
+        if rules.protected_projects.contains(&deletion.guid)
+            || plan.protected_frames > 0
+            || project_removal::reported_rejects(tx, id, &rules.protected_frames)? > 0
+        {
+            changes.push(keep("it belongs to a collaboration here".into()));
+            continue;
+        }
+        if rules
+            .previewed
+            .as_ref()
+            .is_some_and(|previewed| !previewed.contains(&deletion.guid))
+        {
+            changes.push(keep("it was not in the preview; preview again".into()));
+            continue;
+        }
+        if context.destination == SyncDestination::Catalog {
             project_removal::record_sync_deletion(tx, &plan, now)?;
         }
         project_removal::delete_project_rows(tx, &plan)?;
@@ -1528,6 +1605,17 @@ fn delete_projects_deleted_in_source(
         ));
     }
     Ok(deleted)
+}
+
+/// The count and highest Id of a source project's frames, so a sync reads
+/// the frames of a deleted project again only when they changed.
+fn left_out_signature(src: &Connection, source_project: i64) -> Result<String> {
+    let (count, highest): (i64, Option<i64>) = src.query_row(
+        "SELECT COUNT(*), MAX(Id) FROM acquiredimage WHERE projectId = ?1",
+        [source_project],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    Ok(format!("{count}:{}", highest.unwrap_or_default()))
 }
 
 /// The frames a source has for one of its projects, as frame tombstones
@@ -1545,20 +1633,26 @@ fn left_out_frames(
     } else {
         "NULL"
     };
+    let acquired_date = if super::table_has_column(src, "acquiredimage", "acquireddate") {
+        "acquireddate"
+    } else {
+        "NULL"
+    };
     let mut statement = src.prepare(&format!(
-        "SELECT {guid}, metadata FROM acquiredimage WHERE projectId = ?1 ORDER BY Id"
+        "SELECT {guid}, metadata, {acquired_date} FROM acquiredimage WHERE projectId = ?1 ORDER BY Id"
     ))?;
     let frames = statement
         .query_map([source_project], |row| {
             Ok((
                 row.get::<_, Option<String>>(0)?,
                 row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<i64>>(2).ok().flatten(),
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(frames
         .into_iter()
-        .filter_map(|(guid, metadata)| {
+        .filter_map(|(guid, metadata, acquired_at)| {
             let file_name = metadata
                 .as_deref()
                 .and_then(crate::commands::reject_archive::parse_filename_from_metadata)
@@ -1567,6 +1661,7 @@ fn left_out_frames(
             Some(crate::commands::project_removal::LeftOutFrame {
                 guid: guid.filter(|guid| !guid.is_empty()),
                 file_name,
+                acquired_at,
             })
         })
         .collect())
@@ -1596,6 +1691,7 @@ pub(crate) fn sync_arrivals(
     src: &Connection,
     tx: &Transaction<'_>,
     dirty_grades: &HashSet<String>,
+    deletions: &SourceDeletionRules,
 ) -> Result<PullSummary> {
     require_pull_capable(src)?;
     require_pull_capable(tx)?;
@@ -1606,7 +1702,10 @@ pub(crate) fn sync_arrivals(
         None,
         &["accepted"],
         true,
-        SyncDestination::Catalog,
+        SourceDeletionContext {
+            destination: SyncDestination::Catalog,
+            rules: deletions,
+        },
         &mut summary.changes,
     )?;
     summary.deleted_project_guids = structure.deleted_project_guids.clone();
@@ -1655,7 +1754,10 @@ pub(crate) fn sync_pull_in_transaction(
         opts.project_filter.as_deref(),
         &["accepted"],
         false,
-        SyncDestination::Catalog,
+        SourceDeletionContext {
+            destination: SyncDestination::Catalog,
+            rules: &opts.deletions,
+        },
         &mut summary.changes,
     )?;
     summary.exposuretemplate = structure.exposuretemplate;
@@ -1813,6 +1915,7 @@ mod tests {
             dry_run: false,
             with_image_data: false,
             project_filter: None,
+            deletions: Default::default(),
         }
     }
 

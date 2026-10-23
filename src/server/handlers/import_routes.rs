@@ -141,6 +141,7 @@ pub async fn start_import_route(
         light_filter: Default::default(),
         // A person asked for this import, and previews it first.
         new_targets: crate::commands::import::NewTargets::Create,
+        admit_removed_names: false,
     };
     let started = spawn_import_job(
         &state,

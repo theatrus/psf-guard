@@ -113,10 +113,11 @@ GUID, target, exposure plan and frame row Ids). The frames are the
 project's and any recorded under another project on one of its targets.
 
 1. Tombstones: a `psf_guard_removed_project` row (Id, GUID, name, date,
-   frame count, and `left_out_at`, the first time a sync left the project
-   out) and, under its Id, a `psf_guard_removed_project_frame` row for each
-   frame's Id, GUID and lower-case file name, and for each calibrated copy
-   paired with a frame.
+   frame count, `origin` `local`, and `left_out_at`, the first time a sync
+   left the project out) and, under its Id, a
+   `psf_guard_removed_project_frame` row for each frame's Id, GUID,
+   lower-case file name and capture time (`acquired_at`, from
+   `acquireddate`), and for each calibrated copy paired with a frame.
 2. Each frame's `imagedata`, `psf_guard_remote_image_file`,
    `psf_guard_flat_light_angle`, `psf_guard_frame_derivative`,
    `psf_guard_archive`, `psf_guard_rejected_at`, `psf_guard_ts_sync_grade`,
@@ -180,10 +181,13 @@ allowed back at once; they stay that way.
   first time. A dry run does this inside the transaction it rolls back, so
   a preview changes nothing.
 - **Frames that still arrive.** A pull into a catalog adds the left-out
-  frames' GUIDs and lower-case file names (the basename of the metadata
-  `FileName`) to the deletion's frame tombstones, when they are not there
-  yet, inside the sync's transaction. An upload or import of those files is
-  then skipped as removed.
+  frames' GUIDs, lower-case file names (the basename of the metadata
+  `FileName`) and capture times to the deletion's frame tombstones, when
+  they are not there yet, inside the sync's transaction. An upload or
+  import of those files is then skipped as removed. The deletion records
+  the count and highest Id of the source's frames for the project
+  (`left_out_source_frames`); a later sync reads the frames again only when
+  they change, so the automatic sync does not parse them every time.
 - **Imports.** `reject_removal::removed_file_names` also returns the
   deleted project's file names, its lights' and their calibrated copies',
   so a folder import or autoimport of the files left on disk skips them;
@@ -199,10 +203,10 @@ while it is Active.
 
 A sync applies the source catalog's deletions to its destination, in every
 direction that writes project rows: a full pull, the automatic arrival
-sync, a pull from a peer and a planning push (`sync_structure` in
-`src/commands/sync/pull.rs`). For each GUID in the source's
-`psf_guard_removed_project` that is not allowed back and that the source
-has no project for:
+sync, a pull from a peer and a planning push (`apply_source_deletions`,
+which `sync_structure` in `src/commands/sync/pull.rs` runs first). For
+each GUID in the source's `psf_guard_removed_project` that is not allowed
+back and that the source has no project for:
 
 - When the destination has a project with that GUID and nothing was
   captured for it there (no `acquiredimage` row with its project Id or on
@@ -214,6 +218,20 @@ has no project for:
 - When the destination has frames for it, the project stays and the sync
   reports `keep project "M31": deleted in the source catalog, but it has 3
   exposures here`. A removed reject keeps it too, with its own line.
+- When this catalog allowed the project back after the source deleted it
+  (an allowed-back row for the GUID dated after the source's
+  `removed_at`), the project stays: that choice is newer. See
+  [Allowing a project back](#allowing-a-project-back).
+- When the project belongs to a collaboration here, it stays: its plan
+  came from a collaboration, or one of its frames or removed rejects was
+  reported to one. The server passes those GUIDs to the sync
+  (`SourceDeletionRules`, from `sync_deletion_rules`), as **Delete
+  project** refuses such a project.
+- When the run was limited to the deletions its preview listed and this
+  one was not among them, the project stays ("not in the preview; preview
+  again"). A pull from a peer applies a fresh export rather than the one it
+  previewed, so the page sends back the preview's `deleted_projects` with
+  the apply.
 - When two projects in the destination have the GUID, neither is deleted
   and the sync reports a skip line. A project filter limits deletions to
   destination projects whose names match it.
@@ -225,9 +243,9 @@ has no project for:
   arrival sync, a pull from a peer, a merge or planning push a peer sends
   to this server, and a planning push from Settings into another
   registered catalog. The sync also records the deletion there as a
-  tombstone with no frames, so a later sync from a rig that still has the
-  project leaves it out. That tombstone is not listed until such a sync
-  leaves the project out.
+  tombstone with no frames and `origin` `sync`, so a later sync from a rig
+  that still has the project leaves it out. That tombstone is not listed
+  until such a sync leaves the project out.
 - **Scheduler**: the destination is a Target Scheduler file: a planning
   push into a `ts:` connection, Director file delivery, and `psf-guard sync
   planning`. Only the rows go; the sync writes no PSF Guard table there.
@@ -249,43 +267,78 @@ the plan then still links a project that is gone.
 ### Peers
 
 A remote PSF Guard reads deletions from the `psf_guard_removed_project`
-table of a merge or planning bundle, carrying only `project_guid` and
-`name` and only deletions not allowed back. A peer that reads it
-advertises `project_tombstones_v1`; a client pushes the table only to a
-peer that advertises it, and an export includes it only when the request
-sets `include_project_tombstones`. A bundle without the table deletes
-nothing. See
+table of a merge or planning bundle: `project_guid` (a UUID), `name`,
+`removed_at` and `allowed_back_at`, for standing deletions and ones
+allowed back. A peer that reads it advertises `project_tombstones_v1`; a
+client pushes the table only to a peer that advertises it, and an export
+includes it only when the request sets `include_project_tombstones`. A
+bundle without the table deletes nothing. See
 [Data transfer](data-transfer.md#deleted-projects).
 
 ### Uploads
 
-An upload of a light whose file name a project deletion lists is refused
-with `410 Gone` and a message that names the project and explains how to
-allow it back (**Deleted projects**, **Allow again**). An upload of a
-light removed as a reject is refused with `410 Gone` too, with a message
-that explains how to bring the frame back (**Purge rejects**, **Restore**).
-The receive directory is not written. A 410 is not a failure worth retrying: the
+An upload of a light that a project deletion took out is refused with
+`410 Gone` and a message that names the project and explains how to allow
+it back (**Deleted projects**, **Allow again**). An upload of a light
+removed as a reject is refused with `410 Gone` too, with a message that
+explains how to bring the frame back (**Purge rejects**, **Restore**). The
+receive directory is not written.
+
+A tombstone matches an upload by file name and by capture time within 2 s
+(`CAPTURE_IDENTITY_TIME_TOLERANCE_SECS`): N.I.N.A. file patterns such as
+`$$TARGETNAME$$\$$FRAMENR$$` reuse `0001.fits` across targets. A project
+deletion's time is its frame tombstone's `acquired_at`; a reject's comes
+from the saved row in `rows_json`. A tombstone without a time (written
+before times were recorded, or a purged reject) and an upload without
+`DATE-OBS` match by name alone. When only the name matches, the upload
+imports as a new frame (`ImportOptions::admit_removed_names`). A folder
+import still skips removed names by name alone. A 410 is not a failure worth retrying: the
 N.I.N.A. plugin retries only on no response, 408, 409, 429 and 5xx.
 
 ### The N.I.N.A. plugin
 
 The plugin applies a planning or merge bundle to its rig's Target
 Scheduler database itself, so PSF Guard's sync engine does not run there.
-To delete a project on its rig, the plugin must ask for
-`include_project_tombstones` on an export, read `project_guid` and `name`
-from `psf_guard_removed_project`, and delete a project it has with that
-GUID when nothing was captured for it, as described above. Until it does,
-a rig that the plugin serves keeps a project deleted in PSF Guard, and the
-next pull leaves it out of PSF Guard again.
+Plugin versions with project deletion support
+([theatrus/psf-guard-nina-plugin#26](https://github.com/theatrus/psf-guard-nina-plugin/pull/26))
+ask for `include_project_tombstones` when the server advertises
+`project_tombstones_v1`, and delete a frameless project on the rig when
+PSF Guard deleted it. Older plugin versions do not: their rig keeps the
+project, and the next pull leaves it out of PSF Guard again. Older
+plugins also show an upload refused with 410, for a deleted project's or
+a removed reject's file, as a blocked job.
 
 ## Allowing a project back
 
 The Library lists deleted projects under **Deleted projects**. **Allow
-again** clears the deletion's GUID and its frames' tombstones, so the next
-sync, or an import of the files, adds the project as a new project. Grades
-and measurements do not come back with it. The deletion's row stays, with
-its date, so Restore in reject removal still refuses a reject removed from
-the old project: Target Scheduler may have given its Id to a new project.
+again** dates the deletion allowed back (`allowed_back_at`) and deletes its
+frames' tombstones, so the next sync, or an import of the files, adds the
+project as a new project. Grades and measurements do not come back with
+it. The deletion's row stays, with its GUID and dates: Restore in reject
+removal still refuses a reject removed from the old project, since Target
+Scheduler may have given its Id to a new project, and syncs pass the
+choice on. Every reader that means "deleted now" reads only rows with
+`allowed_back_at IS NULL`.
+
+Syncs carry Allow again between catalogs by comparing dates:
+
+- A source's standing deletion is not applied here when this catalog
+  allowed the project back after the source's `removed_at`. Otherwise a
+  catalog that followed the deletion would undo Allow again on the next
+  sync.
+- A source's deletion that was allowed back allows back each standing
+  deletion here of the same GUID made before the source's
+  `allowed_back_at`, with that date, and deletes its frame tombstones. The
+  sync reports `allow project "M31" back: allowed back in the source
+  catalog`. It deletes and creates no project itself; the project returns
+  with the same sync or the next one, from whichever source still has it.
+- A deletion made here after the source's Allow again stands.
+
+For example, catalog A deletes P and B pulls from A, deleting its copy.
+A then allows P back and a rig brings P back to A. When A pulls from B, or
+B pushes planning to A, P stays in A: A's Allow again is newer than B's
+deletion. When B pulls from A, B's deletion is allowed back and P returns
+to B.
 
 The plan listing adopts the returning project into a plan of its own, since
 its old plan no longer links the database. To rejoin the old plan, attach

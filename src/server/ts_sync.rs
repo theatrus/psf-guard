@@ -756,12 +756,20 @@ fn synchronize(state: &Arc<AppState>, job: &str, catalog: &str, settings: &Setti
         Some(Err(error)) => (None, Some(error)),
         None => (None, None),
     };
-    let report = crate::ts_sync::synchronize(&mut local, &snapshot, destination.as_mut())?;
+    let runtime = state
+        .runtime()
+        .context("The TS sync has no runtime to read Planning on.")?;
+    let deletions = runtime
+        .block_on(super::project_removal::sync_deletion_rules(
+            state,
+            Some(job),
+        ))
+        .map_err(|error| anyhow::anyhow!(error.message()))?;
+    let report =
+        crate::ts_sync::synchronize_with(&mut local, &snapshot, destination.as_mut(), &deletions)?;
     // Planning forgets each project the sync deleted, as after Delete
     // project in the Library. This runner thread waits for it.
-    if !report.deleted_project_guids.is_empty()
-        && let Some(runtime) = state.runtime()
-    {
+    if !report.deleted_project_guids.is_empty() {
         runtime.block_on(super::project_removal::forget_synced_deletions(
             state,
             job,

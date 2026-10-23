@@ -189,6 +189,23 @@ impl MetaStore {
         }))
     }
 
+    /// GUIDs of a catalog's projects linked to a plan imported from a
+    /// collaboration, in lower case. A sync must not delete them.
+    pub fn collaboration_source_projects(
+        &self,
+        catalog: Uuid,
+    ) -> Result<std::collections::BTreeSet<String>, Error> {
+        let mut statement = self.connection.prepare(
+            "SELECT lower(pc.source_project_guid) FROM project_catalog pc
+             WHERE pc.catalog_id = ?1
+               AND EXISTS(SELECT 1 FROM collaboration_project cp WHERE cp.project_id = pc.project_id)",
+        )?;
+        let guids = statement
+            .query_map([catalog.to_string()], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(guids)
+    }
+
     /// Forget one database's project after it was deleted there: its link,
     /// the plan's work for that database's rig, and the rig in the plan's
     /// activation record, so the next activation does not create the

@@ -386,9 +386,17 @@ unasked. A bundle without the table leaves the receiver's records alone.
 
 `project_tombstones_v1` advertises that a peer reads the projects a catalog
 deleted. Merge and planning bundles may carry the
-`psf_guard_removed_project` table with the columns `project_guid` (TEXT)
-and `name` (TEXT), one row for each deletion that was not allowed back and
-has a non-empty GUID. A reader must tolerate more columns.
+`psf_guard_removed_project` table with these columns, one row for each
+deletion whose GUID is a valid UUID, standing or allowed back:
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `project_guid` | TEXT | The project's GUID, a UUID |
+| `name` | TEXT | The project's name, for change lines |
+| `removed_at` | INTEGER | When the catalog deleted it, Unix seconds |
+| `allowed_back_at` | INTEGER or NULL | When the catalog allowed it back; NULL while the deletion stands |
+
+A reader must tolerate more columns.
 
 - **Exports.** `POST /api/sync/v1/exports` takes
   `include_project_tombstones` (bool, default false). The export includes
@@ -403,12 +411,24 @@ has a non-empty GUID. A reader must tolerate more columns.
   receiver deletes only projects with nothing captured in its catalog, and
   a preview shows each deletion before Apply. A bundle without the table
   deletes nothing, so older clients see no change.
+- **Allow again.** A standing deletion is not applied where the receiver
+  allowed the project back after `removed_at`. A deletion allowed back
+  allows back the receiver's standing deletions of the GUID made before
+  `allowed_back_at`. See
+  [Allowing a project back](project-removal.md#allowing-a-project-back).
 
 A merge or planning push into a PSF Guard catalog records each deletion as
 a tombstone there, so a later sync from a rig does not bring the project
 back, and Planning forgets the project after the commit. A planning push
 into a Target Scheduler file (a `ts:` connection or Director file delivery)
-deletes only the rows. See [Project removal](project-removal.md#deleting-in-other-catalogs-and-rigs).
+deletes only the rows.
+
+A pull from a peer previews one export and applies another, fetched when
+the apply runs. So that Apply changes no more than the preview showed, the
+dry run returns `deleted_projects`, the GUIDs it would delete, and the
+apply request sends them back as `previewed_deletions`. The apply deletes
+only those; a project the peer deleted after the preview stays, with a
+change line, until the next preview lists it.
 
 ### Scheduler flat coverage
 
@@ -625,11 +645,13 @@ missing, the unique basename must also resolve by `OBJECT` or coordinates to
 that row's target. A supplied time, filter, object, or coordinate that resolves
 elsewhere remains a conflict.
 
-A light whose file name a project deletion in this catalog lists is refused
-with `410 Gone` and an error message, in the standard error envelope, that
+A light that a project deletion in this catalog took out (same file name,
+and a capture time within 2 s when both are known) is refused with
+`410 Gone` and an error message, in the standard error envelope, that
 names the project and explains how to allow it back. A light removed from
 the catalog as a reject is refused with `410 Gone` and its own message,
-which explains how to restore it. A client must not retry a 410.
+which explains how to restore it. A client must not retry a 410. A frame
+that only shares a removed frame's file name imports as usual.
 
 Identical retries are idempotent. The response returns the resolved database,
 frame kind, and either the project, target, and image IDs for a light or the

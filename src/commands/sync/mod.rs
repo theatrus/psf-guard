@@ -25,7 +25,8 @@ pub use grades::{sync_grades, GradeChange, SyncGradesOptions, SyncSummary};
 pub(crate) use planning::sync_planning_in_transaction;
 pub use planning::{sync_planning, PlanningOptions, PlanningSummary};
 pub use pull::{
-    calibration_choice_line, sync_pull, PullOptions, PullSummary, SyncDestination, TableCounts,
+    calibration_choice_line, sync_pull, PullOptions, PullSummary, SourceDeletionRules,
+    SyncDestination, TableCounts,
 };
 pub(crate) use pull::{sync_arrivals, sync_pull_in_transaction, ChangedAcquiredImage};
 pub use remote::{

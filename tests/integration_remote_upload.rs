@@ -1758,4 +1758,94 @@ async fn a_removed_rejects_light_is_refused_as_gone() {
     );
     assert!(message.contains("Purge rejects"), "{message}");
     assert_eq!(image_count(&fixture.database_a), 0);
+
+    // A reject's capture time comes from its saved rows; a purged one has
+    // none and matches by name.
+    let connection = rusqlite::Connection::open(&fixture.database_a).unwrap();
+    connection
+        .execute(
+            "UPDATE psf_guard_removed_image SET rows_json = '{\"acquiredimage\":{\"acquireddate\":1784869200}}'",
+            [],
+        )
+        .unwrap();
+    assert_eq!(
+        psf_guard::commands::reject_removal::removed_reject_capture_times(
+            &connection,
+            "M31-001.FITS"
+        )
+        .unwrap(),
+        [Some(1_784_869_200)]
+    );
+}
+
+/// N.I.N.A. file patterns reuse a name such as `0001.fits` across targets.
+/// A tombstone refuses only the frame it recorded: same name and a capture
+/// time within 2 s. Another frame with that name imports.
+#[tokio::test]
+async fn a_frame_that_only_shares_a_deleted_frames_name_imports() {
+    let fixture = Fixture::with_placement(RemoteImageUploadPlacement::TargetTree);
+    let deleted = fits_bytes("M 31", "2026-07-24T05:00:00");
+    let (status, body) = upload(
+        fixture.state.clone(),
+        "catalog-a",
+        "catalog-a",
+        TOKEN_A,
+        "0001.fits",
+        &deleted,
+        &sha256(&deleted),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let project_id = body["data"]["resolution"]["project_id"].as_i64().unwrap();
+    let connection = rusqlite::Connection::open(&fixture.database_a).unwrap();
+    let plan =
+        psf_guard::commands::project_removal::plan(&connection, project_id, &Default::default())
+            .unwrap()
+            .unwrap();
+    psf_guard::commands::project_removal::remove(
+        &connection,
+        project_id,
+        &plan.digest,
+        &Default::default(),
+        1_790_000_000,
+    )
+    .unwrap();
+    assert_eq!(
+        psf_guard::commands::project_removal::deleted_project_frames_named(
+            &connection,
+            "0001.fits"
+        )
+        .unwrap(),
+        [("M 31".to_string(), Some(1_784_869_200))]
+    );
+    drop(connection);
+
+    // The deleted frame itself, a second later in its header: refused.
+    let again = fits_bytes("M 31", "2026-07-24T05:00:01");
+    let (status, body) = upload(
+        fixture.state.clone(),
+        "catalog-a",
+        "catalog-a",
+        TOKEN_A,
+        "0001.fits",
+        &again,
+        &sha256(&again),
+    )
+    .await;
+    assert_eq!(status, StatusCode::GONE, "{body}");
+
+    // Another target's first frame, the next night: imported.
+    let other = fits_bytes("M 42", "2026-07-25T05:00:00");
+    let (status, body) = upload(
+        fixture.state.clone(),
+        "catalog-a",
+        "catalog-a",
+        TOKEN_A,
+        "0001.fits",
+        &other,
+        &sha256(&other),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(image_count(&fixture.database_a), 1);
 }
