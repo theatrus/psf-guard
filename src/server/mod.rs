@@ -22,6 +22,7 @@ pub mod export_job;
 pub mod export_settings;
 pub mod exposure_groups;
 pub mod extract;
+pub mod file_body;
 pub mod flat_choices;
 pub mod flat_group_use;
 pub mod flat_groups;

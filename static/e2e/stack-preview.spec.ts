@@ -5,6 +5,11 @@ import type { StackCalibrationMasters } from '../src/api/types';
 import { registerFixtureDb, resetDatabases, waitForCacheReady, openSettings } from './helpers';
 import { jobRow, stubJobs } from './jobRows';
 
+// A stack FITS runs to hundreds of megabytes (244 MB for the three-frame
+// build), so its download gets longer than the 5 s action timeout that an
+// ordinary API request has; that limit failed one on CI (2026-10-23).
+const FITS_DOWNLOAD = { timeout: 60_000 };
+
 let dbId: string;
 
 /**
@@ -653,7 +658,7 @@ test('inspects exact calibration masters across mono sessions and color channels
     });
     expect(pixels.levels).toBeGreaterThan(32);
     expect(pixels.mono).toBe(true);
-    const download = await request.get(master.fits_url!);
+    const download = await request.get(master.fits_url!, FITS_DOWNLOAD);
     expect(download.ok()).toBe(true);
     const original = fs.readFileSync(path.join(process.env.PSF_GUARD_E2E_TMP!, 'cache', dbId, 'calibration-masters', master.label));
     expect(Buffer.compare(await download.body(), original)).toBe(0);
@@ -779,7 +784,7 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
   expect(fitsHead.headers()['content-type']).toContain('application/fits');
   expect(fitsHead.headers()['content-disposition']).toMatch(/attachment; filename=.*\.fits/);
   expect(Number(fitsHead.headers()['content-length'])).toBeGreaterThan(10_000_000);
-  const fitsResponse = await page.request.get(fitsHref!);
+  const fitsResponse = await page.request.get(fitsHref!, FITS_DOWNLOAD);
   const fitsHeaderText = (await fitsResponse.body()).subarray(0, 2880).toString('ascii');
   expect(fitsHeaderText).toContain('STACKCNT');
   expect(fitsHeaderText).toContain('STACKREJ');
@@ -888,7 +893,7 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
   expect(deconvolvedFitsHref).toMatch(
     /\/stack-previews\/stretch\/[a-f0-9]{64}\/fits$/
   );
-  const deconvolvedResponse = await page.request.get(deconvolvedFitsHref!);
+  const deconvolvedResponse = await page.request.get(deconvolvedFitsHref!, FITS_DOWNLOAD);
   expect(deconvolvedResponse.status()).toBe(200);
   const deconvolvedHeader = (await deconvolvedResponse.body())
     .subarray(0, 2880)
@@ -1538,7 +1543,7 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
   // colors to calibrate against; the card says so and keeps the preview.
   await expect(rgbCard.locator('.stack-color-calibration')).toContainText('Not color calibrated');
   const rgbFits = rgbCard.getByRole('link', { name: 'Download RGB FITS' });
-  const rgbResponse = await page.request.get((await rgbFits.getAttribute('href'))!);
+  const rgbResponse = await page.request.get((await rgbFits.getAttribute('href'))!, FITS_DOWNLOAD);
   expect(rgbResponse.status()).toBe(200);
   const rgbHeader = (await rgbResponse.body()).subarray(0, 2880).toString('ascii');
   expect(rgbHeader).toContain('COLORSPC');
@@ -1648,7 +1653,7 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
   const lrgbImage = lrgbCard.getByRole('img', { name: /LRGB color stack preview/i });
   await expect(lrgbImage).toBeVisible();
   const lrgbFits = lrgbCard.getByRole('link', { name: 'Download LRGB RGB FITS' });
-  const lrgbResponse = await page.request.get((await lrgbFits.getAttribute('href'))!);
+  const lrgbResponse = await page.request.get((await lrgbFits.getAttribute('href'))!, FITS_DOWNLOAD);
   expect(lrgbResponse.status()).toBe(200);
   const lrgbHeader = (await lrgbResponse.body()).subarray(0, 2880).toString('ascii');
   expect(lrgbHeader).toContain('COLORSPC');
@@ -1683,7 +1688,7 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
   const foraxxFits = narrowbandCard.getByRole('link', {
     name: 'Download Foraxx HOO RGB FITS',
   });
-  const foraxxResponse = await page.request.get((await foraxxFits.getAttribute('href'))!);
+  const foraxxResponse = await page.request.get((await foraxxFits.getAttribute('href'))!, FITS_DOWNLOAD);
   expect(foraxxResponse.status()).toBe(200);
   const foraxxHeader = (await foraxxResponse.body()).subarray(0, 2880).toString('ascii');
   expect(foraxxHeader).toContain('FORAXX-HOO');

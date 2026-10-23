@@ -1736,7 +1736,7 @@ pub async fn get_wbpp_run_file(
     let file = tokio::fs::File::open(&path)
         .await
         .map_err(|e| AppError::InternalError(format!("opening {}: {e}", path.display())))?;
-    let body = axum::body::Body::from_stream(tokio_util::io::ReaderStream::new(file));
+    let body = crate::server::file_body::file_body(file);
     axum::response::Response::builder()
         .header(header::CONTENT_TYPE, content_type)
         .header(
