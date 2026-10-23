@@ -17,6 +17,9 @@
   profile, and a destination that already has a target of the same name
   refers you to **Merge target**. Before, **Move to:** moved the target at once,
   only within its profile, and left its stack previews behind.
+- A restored reject returns to its target's current project. Before, a reject
+  removed before its target moved, or before its project was merged, came
+  back to the old project.
 
 - You can reopen an archived project from the Library. Open **Archived
   projects** and click **Reopen** beside the project. PSF Guard sets it

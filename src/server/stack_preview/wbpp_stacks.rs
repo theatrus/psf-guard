@@ -247,8 +247,10 @@ pub fn import_masters(
     let _guard = IMPORT_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let mut index = load_index(ctx, project_id);
     let now = chrono::Utc::now().timestamp();
+    // The index changes once every master is in the store, so other index
+    // writers wait only for that.
+    let mut entries = Vec::new();
     for (path, name) in masters {
         let label = path
             .file_name()
@@ -361,29 +363,36 @@ pub fn import_masters(
             }),
             group,
         };
-        let same = |existing: &LatestStackPreviewGroup| {
-            existing.group.target_id == entry.group.target_id
-                && existing.group.filter_name == entry.group.filter_name
-                && existing
+        entries.push(entry);
+        outcome.imported.push(label);
+    }
+    super::with_index_lock(stack_root, || {
+        let mut index = load_index(ctx, project_id);
+        for entry in entries {
+            let exposure = |group: &LatestStackPreviewGroup| {
+                group
                     .wbpp
                     .as_ref()
                     .and_then(|source| source.exposure_seconds)
-                    == name.exposure_seconds
-        };
-        match index.groups.iter_mut().find(|existing| same(existing)) {
-            Some(existing) => *existing = entry,
-            None => index.groups.push(entry),
+            };
+            match index.groups.iter_mut().find(|existing| {
+                existing.group.target_id == entry.group.target_id
+                    && existing.group.filter_name == entry.group.filter_name
+                    && exposure(existing) == exposure(&entry)
+            }) {
+                Some(existing) => *existing = entry,
+                None => index.groups.push(entry),
+            }
         }
-        outcome.imported.push(label);
-    }
-    index.groups.sort_by(|left, right| {
-        left.group
-            .target_name
-            .cmp(&right.group.target_name)
-            .then_with(|| left.group.filter_name.cmp(&right.group.filter_name))
-    });
-    index.updated_unix_seconds = now;
-    super::stretch::write_json_atomic(&wbpp_index_path(stack_root, project_id), &index)?;
+        index.groups.sort_by(|left, right| {
+            left.group
+                .target_name
+                .cmp(&right.group.target_name)
+                .then_with(|| left.group.filter_name.cmp(&right.group.filter_name))
+        });
+        index.updated_unix_seconds = now;
+        super::stretch::write_json_atomic(&wbpp_index_path(stack_root, project_id), &index)
+    })?;
     Ok(outcome)
 }
 

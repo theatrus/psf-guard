@@ -13,8 +13,9 @@ export type OrganizationScope = {
   sourceProjectId: number;
 } & ({ kind: 'merge_targets' } | { kind: 'move_images'; imageIds: number[] } | { kind: 'move_target' });
 
-/** A profile ID as the Library shows it beside a project name. */
+/** A profile ID shortened to its first eight characters, enough to tell profiles apart. */
 const profileTag = (profileId: string) => profileId.slice(0, 8);
+const CLOSED = 3;
 
 const TITLES: Record<OrganizationScope['kind'], string> = {
   merge_targets: 'Merge targets',
@@ -56,10 +57,15 @@ export default function OrganizationDialog({ scope, onClose, onApplied }: Props)
       ? project.id !== sourceProject.id
       : project.profile_id === sourceProject.profile_id),
   ) ?? [];
-  const projectLabel = (project: { name: string; profile_id: string }) =>
-    movingTarget && sourceProject && project.profile_id !== sourceProject.profile_id
-      ? `${project.name} · profile ${profileTag(project.profile_id)}`
-      : project.name;
+  const projectLabel = (project: { name: string; profile_id: string; state?: number | null }) => {
+    if (!movingTarget) return project.name;
+    let label = project.name;
+    if (sourceProject && project.profile_id !== sourceProject.profile_id) {
+      label += ` · profile ${profileTag(project.profile_id)}`;
+    }
+    if (project.state === CLOSED) label += ' · Closed';
+    return label;
+  };
   const destinationTargets = destinations.data?.targets.filter(
     target => target.project_id === Number(projectId) && target.id !== scope.sourceTargetId,
   ) ?? [];
@@ -229,8 +235,20 @@ export default function OrganizationDialog({ scope, onClose, onApplied }: Props)
             <dt>Exposure templates reused</dt><dd>{summary.exposure_templates_reused ?? 0}</dd>
             <dt>Exposure templates copied</dt><dd>{summary.exposure_templates_copied ?? 0}</dd>
           </>}
-          {summary.planning_panel_id && <><dt>Planning panel</dt><dd>{summary.planning_panel_id}</dd></>}
+          {summary.planning_panel_id && <><dt>Planning</dt><dd>The plan no longer manages this target</dd></>}
         </dl>
+        {(summary.exposure_template_changes?.length ?? 0) > 0 && <>
+          <h4>Exposure templates</h4>
+          <ul className="organization-templates">
+            {summary.exposure_template_changes!.map((change, index) => (
+              <li key={`${index}:${change.source_template_name}`}>
+                {change.reused
+                  ? `${change.source_template_name} uses ${change.destination_template_name}`
+                  : `${change.source_template_name} is copied to the new profile`}
+              </li>
+            ))}
+          </ul>
+        </>}
         {merging && <p>The source target will be removed. The destination keeps its name and framing.</p>}
         {summary.warnings.length > 0 && <ul>{summary.warnings.map(warning => <li key={warning}>{warning}</li>)}</ul>}
       </section>}

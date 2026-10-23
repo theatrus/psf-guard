@@ -385,6 +385,37 @@ export default function Overview() {
     }
   };
 
+  // Open the move preview for the target being edited. A name typed in the
+  // panel is saved first, so the move does not discard it.
+  const moveTargetAfterRename = async (currentName: string) => {
+    if (!organizing || organizing.kind !== 'target') return;
+    const edited = organizing;
+    const name = edited.name.trim();
+    let targetName = currentName;
+    if (name && name !== currentName) {
+      setOrganizeBusy(true);
+      setOrganizeError('');
+      try {
+        await apiClient.updateTarget(edited.dbId, edited.id, { name });
+        targetName = name;
+        void queryClient.invalidateQueries({ queryKey: ['db', edited.dbId] });
+      } catch (err) {
+        setOrganizeError(err instanceof Error ? err.message : String(err));
+        return;
+      } finally {
+        setOrganizeBusy(false);
+      }
+    }
+    setOrganizing(null);
+    setOrganizationScope({
+      kind: 'move_target',
+      dbId: edited.dbId,
+      sourceTargetId: edited.id,
+      sourceTargetName: targetName,
+      sourceProjectId: edited.projectId,
+    });
+  };
+
   // Group targets by (db_id, project_id) since project IDs collide across DBs.
   const targetsByProject = useMemo(() => {
     const map: Record<string, WithDb<TargetOverview>[]> = {};
@@ -1641,16 +1672,7 @@ export default function Overview() {
                                   className="organize-move"
                                   title="Preview moving this target, its frames and its exposure plans to another project or a new one"
                                   disabled={organizeBusy}
-                                  onClick={() => {
-                                    setOrganizing(null);
-                                    setOrganizationScope({
-                                      kind: 'move_target',
-                                      dbId: organizing.dbId,
-                                      sourceTargetId: organizing.id,
-                                      sourceTargetName: target.name,
-                                      sourceProjectId: organizing.projectId,
-                                    });
-                                  }}
+                                  onClick={() => void moveTargetAfterRename(target.name)}
                                 >
                                   Move to another project...
                                 </button>

@@ -88,6 +88,10 @@ pub struct OrganizationPreview {
     /// Exposure templates copied into the destination profile for a moved
     /// target's exposure plans.
     pub exposure_templates_copied: usize,
+    /// For a target that changes profile: each exposure template its plans
+    /// use, and the destination profile's template they will use instead.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub exposure_template_changes: Vec<OrganizationTemplateChange>,
     /// The Planning panel a moved target was activated as, when a plan
     /// manages it. The move ends that management.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -98,6 +102,15 @@ pub struct OrganizationPreview {
 pub struct OrganizationProfileChange {
     pub from_profile_id: String,
     pub to_profile_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OrganizationTemplateChange {
+    pub source_template_name: String,
+    pub destination_template_name: String,
+    /// True when the destination profile already has a matching template;
+    /// false when the move copies the source template there.
+    pub reused: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -120,6 +133,8 @@ pub struct OrganizationProject {
     pub id: i32,
     pub name: String,
     pub profile_id: String,
+    /// Target Scheduler state: 0 Draft, 1 Active, 2 Inactive, 3 Closed.
+    pub state: Option<i32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -150,8 +165,15 @@ pub async fn destinations(
 }
 
 fn destination_choices(conn: &Connection) -> Result<OrganizationDestinations, AppError> {
+    let state = if has_column(conn, "project", "state")? {
+        "state"
+    } else {
+        "NULL"
+    };
     let mut stmt = conn
-        .prepare("SELECT Id, name, profileId FROM project ORDER BY name, Id")
+        .prepare(&format!(
+            "SELECT Id, name, profileId, {state} FROM project ORDER BY name, Id"
+        ))
         .map_err(AppError::db)?;
     let projects = stmt
         .query_map([], |row| {
@@ -159,6 +181,7 @@ fn destination_choices(conn: &Connection) -> Result<OrganizationDestinations, Ap
                 id: row.get(0)?,
                 name: row.get(1)?,
                 profile_id: row.get(2)?,
+                state: row.get(3)?,
             })
         })
         .map_err(AppError::db)?
@@ -225,12 +248,15 @@ pub async fn apply(
 }
 
 /// Move a target to another project without a separate preview, for
-/// `PUT /targets/{id}` with a `project_id`. The same checks as a previewed
-/// move apply. The caller refreshes the automatic stacks.
+/// `PUT /targets/{id}` with a `project_id`. `edit` makes the request's other
+/// changes, such as a new name, first. The edit, the checks of a previewed
+/// move and the move run in one transaction, so a refused move changes
+/// nothing. The caller refreshes the automatic stacks.
 pub(crate) fn move_target_to_project(
     context: &DatabaseContext,
     target_id: i32,
     project_id: i32,
+    edit: impl FnOnce(&Connection) -> Result<(), AppError>,
 ) -> Result<OrganizationResult, AppError> {
     let _organization_guard = context.organization_mutex.lock().map_err(AppError::db)?;
     let mut conn = open_scheduler_connection(&context.database_path).map_err(AppError::db)?;
@@ -241,13 +267,14 @@ pub(crate) fn move_target_to_project(
             new_project_name: None,
         },
     };
-    let expected_fingerprint = plan_organization(&conn, &operation)?.preview.fingerprint;
-    let request = OrganizationApplyRequest {
-        operation,
-        expected_fingerprint,
-    };
-    let result = apply_organization(&mut conn, &request)?;
-    after_apply(context, &conn, &request.operation, &result);
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(AppError::db)?;
+    edit(&tx)?;
+    let plan = plan_organization(&tx, &operation)?;
+    let result = apply_plan(&tx, &operation, &plan)?;
+    tx.commit().map_err(AppError::db)?;
+    after_apply(context, &conn, &operation, &result);
     Ok(result)
 }
 
@@ -312,12 +339,21 @@ struct OrganizationPlan {
 #[derive(Debug, Clone, PartialEq)]
 struct TemplateMove {
     source_template_id: i64,
+    source_name: String,
     destination_template_id: Option<i64>,
+    destination_name: Option<String>,
     exposure_plan_ids: Vec<i64>,
+    /// The source template's default exposure, used by its plans whose own
+    /// exposure is blank or not positive.
+    source_default_exposure: Option<f64>,
+    /// The plans of this template that use the template's default exposure.
+    default_exposure_plan_ids: Vec<i64>,
 }
 
 const DIRECTOR_TARGET_TABLE: &str = "psf_guard_director_target";
 const DIRECTOR_PLAN_TABLE: &str = "psf_guard_director_plan";
+const COLLABORATION_PLAN_TABLE: &str = "psf_guard_collaboration_plan";
+const REMOVED_IMAGE_TABLE: &str = "psf_guard_removed_image";
 
 fn invalid(message: impl Into<String>) -> AppError {
     AppError::BadRequest(message.into())
@@ -374,8 +410,8 @@ fn columns(conn: &Connection, table: &str) -> Result<Vec<String>, AppError> {
         .map_err(AppError::db)
 }
 
-/// A profile ID as the Library shows it beside a project name: its first
-/// eight characters.
+/// A profile ID shortened to its first eight characters, enough to tell
+/// profiles apart in a message.
 fn profile_tag(profile_id: &str) -> String {
     profile_id.chars().take(8).collect()
 }
@@ -446,6 +482,7 @@ fn plan_organization(
         profile_change: None,
         exposure_templates_reused: 0,
         exposure_templates_copied: 0,
+        exposure_template_changes: Vec::new(),
         planning_panel_id: None,
     };
     let destination_target = match operation {
@@ -576,6 +613,7 @@ fn plan_organization(
     let mut source_plan_counts = BTreeMap::new();
     let mut template_moves = Vec::new();
     let mut target_guid = None;
+    let mut evidence = String::new();
     let rows = stmt
         .query_map([source.id], |row| {
             Ok((
@@ -646,85 +684,20 @@ fn plan_organization(
             }
         }
         OrganizationOperation::MoveTarget { .. } => {
-            preview.exposure_plans_moved = count_rows(conn, "exposureplan", "targetid", source.id)?;
-            if destination_profile_id != source.profile_id {
-                if !images.is_empty() {
-                    return Err(invalid(format!(
-                        "{} has {} captured frame{} from Target Scheduler profile {}, and {} belongs to profile {}. \
-                         A target with frames can only move to a project of its own profile, because each frame's \
-                         profile selects its calibration frames and nights. Choose a project of profile {}, or move \
-                         the frames with Move exposures.",
-                        source.name,
-                        images.len(),
-                        if images.len() == 1 { "" } else { "s" },
-                        profile_tag(&source.profile_id),
-                        preview.destination_project_name,
-                        profile_tag(&destination_profile_id),
-                        profile_tag(&source.profile_id),
-                    )));
-                }
-                template_moves = plan_template_moves(conn, source.id, &destination_profile_id)?;
-                preview.exposure_templates_reused = template_moves
-                    .iter()
-                    .filter(|template| template.destination_template_id.is_some())
-                    .count();
-                preview.exposure_templates_copied =
-                    template_moves.len() - preview.exposure_templates_reused;
-                preview.profile_change = Some(OrganizationProfileChange {
-                    from_profile_id: source.profile_id.clone(),
-                    to_profile_id: destination_profile_id.clone(),
-                });
-                preview.warnings.push(format!(
-                    "The target moves from profile {} to profile {}. Its exposure plans use exposure templates of profile {}: \
-                     matching templates are reused, and the others are copied.",
-                    profile_tag(&source.profile_id),
-                    profile_tag(&destination_profile_id),
-                    profile_tag(&destination_profile_id)
-                ));
-            }
-            preview.warnings.push(
-                "The target keeps its name, framing, exposure plans, flat history and exposure order. \
-                 Its frames and stack previews move with it."
-                    .into(),
-            );
-            if preview.destination_project_id.is_none() {
-                preview.warnings.push(format!(
-                    "The new project copies the settings of {} and starts inactive.",
-                    source.project_name
-                ));
-            }
-            target_guid = if has_column(conn, "target", "guid")? {
-                conn.query_row("SELECT guid FROM target WHERE Id = ?", [source.id], |row| {
-                    row.get::<_, Option<String>>(0)
-                })
-                .map_err(AppError::db)?
-                .filter(|guid| !guid.is_empty())
-            } else {
-                None
-            };
-            if let Some(guid) = &target_guid
-                && has_table(conn, DIRECTOR_TARGET_TABLE)?
-            {
-                preview.planning_panel_id = conn
-                    .query_row(
-                        "SELECT panel_id FROM psf_guard_director_target WHERE target_guid = ?",
-                        [guid],
-                        |row| row.get(0),
-                    )
-                    .optional()
-                    .map_err(AppError::db)?;
-            }
-            if let Some(panel) = &preview.planning_panel_id {
-                preview.warnings.push(format!(
-                    "A Planning plan activated this target as panel {panel}. After the move, the plan no longer \
-                     manages it, and the plan's next activation can add a new target for that panel to {}.",
-                    source.project_name
-                ));
-            }
+            let target_move = plan_target_move(
+                conn,
+                &source,
+                images.len(),
+                &destination_profile_id,
+                &mut preview,
+            )?;
+            template_moves = target_move.template_moves;
+            target_guid = target_move.target_guid;
+            evidence = target_move.evidence;
         }
     }
     let extra = format!(
-        "{destination_profile_id}\u{0}{template_moves:?}\u{0}{:?}",
+        "{destination_profile_id}\u{0}{template_moves:?}\u{0}{:?}\u{0}{evidence}",
         preview.planning_panel_id
     );
     preview.fingerprint = fingerprint(conn, operation, &source, &preview, extra.as_bytes())?;
@@ -737,6 +710,214 @@ fn plan_organization(
         destination_profile_id,
         target_guid,
     })
+}
+
+/// What a target move does besides moving the target and its exposures.
+struct TargetMovePlan {
+    template_moves: Vec<TemplateMove>,
+    target_guid: Option<String>,
+    /// Counts the preview depends on, for the fingerprint.
+    evidence: String,
+}
+
+fn plural(count: usize, one: &str, many: &str) -> String {
+    format!("{count} {}", if count == 1 { one } else { many })
+}
+
+/// Check a target move and describe it in `preview`: the profile rule, the
+/// exposure templates a profile change maps, and what the move ends in
+/// Planning and collaboration.
+fn plan_target_move(
+    conn: &Connection,
+    source: &TargetIdentity,
+    exposures: usize,
+    destination_profile_id: &str,
+    preview: &mut OrganizationPreview,
+) -> Result<TargetMovePlan, AppError> {
+    preview.exposure_plans_moved = count_rows(conn, "exposureplan", "targetid", source.id)?;
+    let removed_rejects = restorable_removed_rejects(conn, source.id)?;
+    let mut template_moves = Vec::new();
+    if destination_profile_id != source.profile_id {
+        let total = exposures + removed_rejects;
+        if total > 0 {
+            let removed = if removed_rejects == 0 {
+                String::new()
+            } else {
+                format!(
+                    ", including {} you can still restore",
+                    plural(removed_rejects, "removed reject", "removed rejects")
+                )
+            };
+            return Err(invalid(format!(
+                "{} has {}{removed}, captured with Target Scheduler profile {}. {} belongs to profile {}. \
+                 A target with exposures can move only to a project of its own profile, because each exposure's \
+                 profile selects its calibration frames and nights. To move this target, first move its exposures \
+                 to another target of profile {} with Move exposures.",
+                source.name,
+                plural(total, "exposure", "exposures"),
+                profile_tag(&source.profile_id),
+                preview.destination_project_name,
+                profile_tag(destination_profile_id),
+                profile_tag(&source.profile_id),
+            )));
+        }
+        template_moves = plan_template_moves(conn, source.id, destination_profile_id)?;
+        preview.exposure_templates_reused = template_moves
+            .iter()
+            .filter(|template| template.destination_template_id.is_some())
+            .count();
+        preview.exposure_templates_copied =
+            template_moves.len() - preview.exposure_templates_reused;
+        preview.exposure_template_changes = template_moves
+            .iter()
+            .map(|template| OrganizationTemplateChange {
+                source_template_name: template.source_name.clone(),
+                destination_template_name: template
+                    .destination_name
+                    .clone()
+                    .unwrap_or_else(|| template.source_name.clone()),
+                reused: template.destination_template_id.is_some(),
+            })
+            .collect();
+        preview.profile_change = Some(OrganizationProfileChange {
+            from_profile_id: source.profile_id.clone(),
+            to_profile_id: destination_profile_id.to_string(),
+        });
+        preview.warnings.push(format!(
+            "The target moves from profile {} to profile {}. Its exposure plans use exposure templates of profile {}: \
+             matching templates are reused, and the others are copied.",
+            profile_tag(&source.profile_id),
+            profile_tag(destination_profile_id),
+            profile_tag(destination_profile_id)
+        ));
+        let defaulted: usize = template_moves
+            .iter()
+            .filter(|template| {
+                template.destination_template_id.is_some()
+                    && template.source_default_exposure.is_some()
+            })
+            .map(|template| template.default_exposure_plan_ids.len())
+            .sum();
+        if defaulted > 0 {
+            preview.warnings.push(format!(
+                "{} the default exposure of {}. The move writes that exposure into {}, so it stays the same \
+                 with the destination profile's template.",
+                plural(defaulted, "exposure plan uses", "exposure plans use"),
+                if defaulted == 1 { "its template" } else { "their templates" },
+                if defaulted == 1 { "the plan" } else { "each plan" },
+            ));
+        }
+    }
+    preview.warnings.push(
+        "The target keeps its name, framing, exposure plans, flat history and exposure order. \
+         Its exposures and stack previews move with it."
+            .into(),
+    );
+    if removed_rejects > 0 {
+        preview.warnings.push(format!(
+            "This target has {}. Restoring {} returns {} to {}.",
+            plural(removed_rejects, "removed reject", "removed rejects"),
+            if removed_rejects == 1 { "it" } else { "them" },
+            if removed_rejects == 1 { "it" } else { "them" },
+            preview.destination_project_name
+        ));
+    }
+    let destination_has_exposures = match preview.destination_project_id {
+        Some(project_id) => conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM acquiredimage WHERE projectId = ?)",
+                [project_id],
+                |row| row.get::<_, bool>(0),
+            )
+            .map_err(AppError::db)?,
+        None => false,
+    };
+    if preview.destination_project_id.is_none() {
+        preview.warnings.push(format!(
+            "The new project copies the settings of {}, including its stack settings, and starts inactive.",
+            source.project_name
+        ));
+    }
+    if exposures == 0 && !destination_has_exposures {
+        preview.warnings.push(format!(
+            "{} has no exposures, and the Library lists only projects with exposures. With Planning on, {} \
+             appears under Plans with nothing captured yet. Otherwise it appears once an exposure arrives.",
+            preview.destination_project_name, preview.destination_project_name
+        ));
+    }
+    let target_guid = if has_column(conn, "target", "guid")? {
+        conn.query_row("SELECT guid FROM target WHERE Id = ?", [source.id], |row| {
+            row.get::<_, Option<String>>(0)
+        })
+        .map_err(AppError::db)?
+        .filter(|guid| !guid.is_empty())
+    } else {
+        None
+    };
+    let mut open_assignments = 0usize;
+    if let Some(guid) = &target_guid {
+        if has_table(conn, DIRECTOR_TARGET_TABLE)? {
+            preview.planning_panel_id = conn
+                .query_row(
+                    "SELECT panel_id FROM psf_guard_director_target WHERE target_guid = ?",
+                    [guid],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(AppError::db)?;
+        }
+        if has_table(conn, COLLABORATION_PLAN_TABLE)? {
+            open_assignments = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM psf_guard_collaboration_plan
+                     WHERE target_guid = ? COLLATE NOCASE AND end_at_ms IS NULL",
+                    [guid],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map_err(AppError::db)? as usize;
+        }
+    }
+    if preview.planning_panel_id.is_some() {
+        preview.warnings.push(format!(
+            "A Planning plan activated this target as one of its panels. After the move, the plan no longer \
+             manages the target, and the plan's next activation can add a new target for that panel to {}.",
+            source.project_name
+        ));
+    }
+    if open_assignments > 0 {
+        preview.warnings.push(
+            "The target is part of an open collaboration assignment. The move ends the target's part in it; \
+             the assignment's other targets are not changed."
+                .into(),
+        );
+    }
+    Ok(TargetMovePlan {
+        template_moves,
+        target_guid,
+        evidence: format!(
+            "{removed_rejects}\u{0}{open_assignments}\u{0}{destination_has_exposures}"
+        ),
+    })
+}
+
+/// Removed rejects of a target that Restore can still bring back: their
+/// saved rows have not been purged.
+fn restorable_removed_rejects(conn: &Connection, target_id: i32) -> Result<usize, AppError> {
+    if !has_column(conn, REMOVED_IMAGE_TABLE, "target_id")? {
+        return Ok(0);
+    }
+    let purged = if has_column(conn, REMOVED_IMAGE_TABLE, "purged_at")? {
+        " AND purged_at IS NULL"
+    } else {
+        ""
+    };
+    conn.query_row(
+        &format!("SELECT COUNT(*) FROM psf_guard_removed_image WHERE target_id = ?{purged}"),
+        [target_id],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|count| count as usize)
+    .map_err(AppError::db)
 }
 
 /// For a target that moves to another profile: each exposure template its
@@ -799,6 +980,7 @@ fn plan_template_moves(
             .collect::<Vec<_>>()
             .join(" AND ")
     );
+    let has_default = has_column(conn, "exposuretemplate", "defaultexposure")?;
     let mut moves = Vec::new();
     for (source_template_id, exposure_plan_ids) in plans_by_template {
         let settings: Vec<Value> = conn
@@ -823,10 +1005,46 @@ fn plan_template_moves(
             })
             .optional()
             .map_err(AppError::db)?;
+        let template_name = |id: i64| -> Result<String, AppError> {
+            conn.query_row(
+                "SELECT name FROM exposuretemplate WHERE Id = ?",
+                [id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .map(|name| name.unwrap_or_default())
+            .map_err(AppError::db)
+        };
+        let source_default_exposure = if has_default {
+            conn.query_row(
+                "SELECT defaultexposure FROM exposuretemplate WHERE Id = ?",
+                [source_template_id],
+                |row| row.get::<_, Option<f64>>(0),
+            )
+            .map_err(AppError::db)?
+        } else {
+            None
+        };
+        let mut default_exposure_plan_ids = Vec::new();
+        for plan_id in &exposure_plan_ids {
+            let uses_default: bool = conn
+                .query_row(
+                    "SELECT exposure IS NULL OR exposure <= 0 FROM exposureplan WHERE Id = ?",
+                    [plan_id],
+                    |row| row.get(0),
+                )
+                .map_err(AppError::db)?;
+            if uses_default {
+                default_exposure_plan_ids.push(*plan_id);
+            }
+        }
         moves.push(TemplateMove {
             source_template_id,
+            source_name: template_name(source_template_id)?,
             destination_template_id,
+            destination_name: destination_template_id.map(template_name).transpose()?,
             exposure_plan_ids,
+            source_default_exposure,
+            default_exposure_plan_ids,
         });
     }
     Ok(moves)
@@ -889,9 +1107,12 @@ fn fingerprint(
             continue;
         }
         digest.update(table.as_bytes());
+        // Grades do not change what a target move does.
+        let moving_target = matches!(operation, OrganizationOperation::MoveTarget { .. });
         let selected_columns = if table == "acquiredimage" {
             columns(conn, table)?
                 .into_iter()
+                .filter(|column| !(moving_target && column.eq_ignore_ascii_case("gradingStatus")))
                 .filter(|column| {
                     [
                         "Id",
@@ -1036,12 +1257,23 @@ fn apply_organization(
     {
         return Err(AppError::Conflict("The affected catalog records changed since preview. Preview the organization again before applying.".into()));
     }
+    let result = apply_plan(&tx, &request.operation, &plan)?;
+    tx.commit().map_err(AppError::db)?;
+    Ok(result)
+}
+
+/// Write a checked plan. The caller holds the transaction and commits it.
+fn apply_plan(
+    tx: &Connection,
+    operation: &OrganizationOperation,
+    plan: &OrganizationPlan,
+) -> Result<OrganizationResult, AppError> {
     let project_id = match plan.preview.destination_project_id {
         Some(id) => id,
         None => {
             let now = chrono::Utc::now().timestamp();
             let id = clone_row(
-                &tx,
+                tx,
                 "project",
                 i64::from(plan.source.project_id),
                 &[
@@ -1055,7 +1287,14 @@ fn apply_organization(
                     ("inactivedate", Value::Integer(now)),
                 ],
             )?;
-            if has_column(&tx, "ruleweight", "projectid")? {
+            let new_project =
+                i32::try_from(id).map_err(|_| invalid("new project ID exceeds supported range"))?;
+            crate::server::exposure_groups::copy_project_settings(
+                tx,
+                plan.source.project_id,
+                new_project,
+            )?;
+            if has_column(tx, "ruleweight", "projectid")? {
                 let mut stmt = tx
                     .prepare("SELECT Id FROM ruleweight WHERE projectid = ? ORDER BY Id")
                     .map_err(AppError::db)?;
@@ -1065,12 +1304,7 @@ fn apply_organization(
                     .collect::<Result<Vec<_>, _>>()
                     .map_err(AppError::db)?;
                 for rule in rules {
-                    clone_row(
-                        &tx,
-                        "ruleweight",
-                        rule,
-                        &[("projectid", Value::Integer(id))],
-                    )?;
+                    clone_row(tx, "ruleweight", rule, &[("projectid", Value::Integer(id))])?;
                 }
             }
             i32::try_from(id).map_err(|_| invalid("new project ID exceeds supported range"))?
@@ -1080,7 +1314,7 @@ fn apply_organization(
         Some(id) => id,
         None => {
             let id = clone_row(
-                &tx,
+                tx,
                 "target",
                 i64::from(plan.source.id),
                 &[
@@ -1097,16 +1331,16 @@ fn apply_organization(
             i32::try_from(id).map_err(|_| invalid("new target ID exceeds supported range"))?
         }
     };
-    match &request.operation {
+    match operation {
         OrganizationOperation::MergeTargets { .. } => {
-            let destination_plans = exposure_plan_ids(&tx, target_id)?;
+            let destination_plans = exposure_plan_ids(tx, target_id)?;
             tx.execute(
                 "UPDATE acquiredimage SET targetId = ?, projectId = ? WHERE targetId = ?",
                 params![target_id, project_id, plan.source.id],
             )
             .map_err(AppError::db)?;
             for table in ["exposureplan", "flathistory"] {
-                if has_column(&tx, table, "targetid")? {
+                if has_column(tx, table, "targetid")? {
                     tx.execute(
                         &format!(
                             "UPDATE {} SET targetid = ? WHERE targetid = ?",
@@ -1118,7 +1352,7 @@ fn apply_organization(
                 }
             }
             for table in ["overrideexposureorderitem", "filtercadenceitem"] {
-                if has_column(&tx, table, "targetid")? {
+                if has_column(tx, table, "targetid")? {
                     tx.execute(
                         &format!("DELETE FROM {} WHERE targetid = ?", quote(table)),
                         [plan.source.id],
@@ -1126,7 +1360,7 @@ fn apply_organization(
                     .map_err(AppError::db)?;
                 }
             }
-            remap_exposure_order(&tx, target_id, &destination_plans)?;
+            remap_exposure_order(tx, target_id, &destination_plans)?;
             tx.execute("DELETE FROM target WHERE Id = ?", [plan.source.id])
                 .map_err(AppError::db)?;
         }
@@ -1134,7 +1368,7 @@ fn apply_organization(
             let mut plan_map = BTreeMap::new();
             for (&source_plan, &moved_count) in &plan.source_plan_counts {
                 let destination_plan = clone_row(
-                    &tx,
+                    tx,
                     "exposureplan",
                     source_plan,
                     &[
@@ -1148,7 +1382,7 @@ fn apply_organization(
                 tx.execute("UPDATE exposureplan SET acquired = MAX(0, COALESCE(acquired, 0) - ?) WHERE Id = ?", params![moved_count as i64, source_plan]).map_err(AppError::db)?;
                 plan_map.insert(source_plan, destination_plan);
             }
-            let has_exposure = has_column(&tx, "acquiredimage", "exposureId")?;
+            let has_exposure = has_column(tx, "acquiredimage", "exposureId")?;
             let sql = if has_exposure {
                 "UPDATE acquiredimage SET targetId = ?1, projectId = ?2, exposureId = ?3 WHERE Id = ?4 AND targetId = ?5"
             } else {
@@ -1179,8 +1413,7 @@ fn apply_organization(
             }
         }
         OrganizationOperation::MoveTarget { .. } => {
-            move_target(&tx, &plan, project_id)?;
-            tx.commit().map_err(AppError::db)?;
+            move_target(tx, plan, project_id)?;
             return Ok(OrganizationResult {
                 source_project_id: plan.source.project_id,
                 project_id,
@@ -1189,15 +1422,14 @@ fn apply_organization(
             });
         }
     }
-    if has_column(&tx, "filtercadenceitem", "targetid")? {
+    if has_column(tx, "filtercadenceitem", "targetid")? {
         tx.execute(
             "DELETE FROM filtercadenceitem WHERE targetid = ?",
             [target_id],
         )
         .map_err(AppError::db)?;
     }
-    if has_column(&tx, "acquiredimage", "exposureId")?
-        && has_column(&tx, "exposureplan", "accepted")?
+    if has_column(tx, "acquiredimage", "exposureId")? && has_column(tx, "exposureplan", "accepted")?
     {
         let mut stmt = tx.prepare("SELECT exposureId, COUNT(*) FROM acquiredimage WHERE targetId IN (?, ?) AND gradingStatus = 1 AND exposureId > 0 GROUP BY exposureId").map_err(AppError::db)?;
         let accepted = stmt
@@ -1207,9 +1439,9 @@ fn apply_organization(
             .map_err(AppError::db)?
             .collect::<Result<BTreeMap<_, _>, _>>()
             .map_err(AppError::db)?;
-        let affected_plans = exposure_plan_ids(&tx, plan.source.id)?
+        let affected_plans = exposure_plan_ids(tx, plan.source.id)?
             .into_iter()
-            .chain(exposure_plan_ids(&tx, target_id)?)
+            .chain(exposure_plan_ids(tx, target_id)?)
             .collect::<HashSet<_>>();
         let mut update = tx
             .prepare("UPDATE exposureplan SET accepted = ? WHERE Id = ?")
@@ -1223,7 +1455,6 @@ fn apply_organization(
                 .map_err(AppError::db)?;
         }
     }
-    tx.commit().map_err(AppError::db)?;
     Ok(OrganizationResult {
         source_project_id: plan.source.project_id,
         project_id,
@@ -1232,10 +1463,11 @@ fn apply_organization(
     })
 }
 
-/// Move a target and its frames to `project_id`. A target that changes
+/// Move a target and its exposures to `project_id`. A target that changes
 /// profile takes its exposure plans and flat history along, each plan on a
-/// template of the destination profile. A Planning plan stops managing the
-/// target: Planning's records of it as a panel go.
+/// template of the destination profile. Removed rejects record the new
+/// project. Planning's records of the target as a panel are deleted, and its
+/// open collaboration assignments end.
 fn move_target(
     conn: &Connection,
     plan: &OrganizationPlan,
@@ -1252,9 +1484,31 @@ fn move_target(
         params![project_id, target_id],
     )
     .map_err(AppError::db)?;
+    if has_column(conn, REMOVED_IMAGE_TABLE, "target_id")?
+        && has_column(conn, REMOVED_IMAGE_TABLE, "project_id")?
+    {
+        conn.execute(
+            "UPDATE psf_guard_removed_image SET project_id = ? WHERE target_id = ?",
+            params![project_id, target_id],
+        )
+        .map_err(AppError::db)?;
+    }
     let profile = &plan.destination_profile_id;
     if *profile != plan.source.profile_id {
         for template in &plan.template_moves {
+            // A plan without an exposure of its own uses its template's
+            // default; keep that exposure when the template is replaced.
+            if template.destination_template_id.is_some()
+                && let Some(exposure) = template.source_default_exposure
+            {
+                for exposure_plan in &template.default_exposure_plan_ids {
+                    conn.execute(
+                        "UPDATE exposureplan SET exposure = ? WHERE Id = ?",
+                        params![exposure, exposure_plan],
+                    )
+                    .map_err(AppError::db)?;
+                }
+            }
             let destination_template = match template.destination_template_id {
                 Some(id) => id,
                 None => clone_row(
@@ -1298,6 +1552,14 @@ fn move_target(
                 )
                 .map_err(AppError::db)?;
             }
+        }
+        if has_table(conn, COLLABORATION_PLAN_TABLE)? {
+            conn.execute(
+                "UPDATE psf_guard_collaboration_plan SET end_at_ms = ?
+                 WHERE target_guid = ? COLLATE NOCASE AND end_at_ms IS NULL",
+                params![chrono::Utc::now().timestamp_millis(), guid],
+            )
+            .map_err(AppError::db)?;
         }
     }
     Ok(())
@@ -1956,8 +2218,9 @@ mod tests {
     fn a_target_with_frames_cannot_change_profile() {
         let conn = catalog();
         let message = bad_request(plan_organization(&conn, &move_target(1, Some(3), None)));
-        assert!(message.contains("3 captured frames"), "{message}");
+        assert!(message.contains("has 3 exposures, captured"), "{message}");
         assert!(message.contains("its own profile"), "{message}");
+        assert!(message.contains("with Move exposures"), "{message}");
         assert_eq!(
             one::<i64>(&conn, "SELECT projectid FROM target WHERE Id = 1"),
             1
@@ -2223,7 +2486,7 @@ mod tests {
         assert!(preview
             .warnings
             .iter()
-            .any(|warning| warning.contains("panel r1c1")));
+            .any(|warning| warning.contains("no longer manages the target")));
 
         preview_and_apply(&mut conn, move_target(1, Some(2), None));
 
@@ -2252,5 +2515,419 @@ mod tests {
             .unwrap()
             .preview;
         assert_eq!(preview.planning_panel_id, None);
+    }
+
+    fn removed_reject(conn: &Connection, guid: &str, target_id: i32, project_id: i32) {
+        crate::commands::reject_removal::ensure_schema(conn).unwrap();
+        conn.execute(
+            "INSERT INTO psf_guard_removed_image (acquired_image_guid, acquired_image_id, project_id, target_id,
+                batch_id, removed_at, trash_until, rows_json, files_json)
+             VALUES (?, 900, ?, ?, 'batch', 1, 2, '{}', '[]')",
+            params![guid, project_id, target_id],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn removed_rejects_count_as_exposures_and_follow_the_target() {
+        let mut conn = catalog();
+        add_frameless_target(&conn);
+        removed_reject(&conn, "removed-5", 5, 1);
+        let message = bad_request(plan_organization(&conn, &move_target(5, Some(3), None)));
+        assert!(
+            message.contains("has 1 exposure, including 1 removed reject you can still restore"),
+            "{message}"
+        );
+        // Once its saved rows are purged, a removed reject cannot come back.
+        conn.execute("UPDATE psf_guard_removed_image SET purged_at = 3", [])
+            .unwrap();
+        plan_organization(&conn, &move_target(5, Some(3), None)).unwrap();
+
+        removed_reject(&conn, "removed-1", 1, 1);
+        let preview = plan_organization(&conn, &move_target(1, Some(2), None))
+            .unwrap()
+            .preview;
+        assert!(preview
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("Restoring it returns it to Destination project")));
+        preview_and_apply(&mut conn, move_target(1, Some(2), None));
+        assert_eq!(
+            one::<i64>(
+                &conn,
+                "SELECT project_id FROM psf_guard_removed_image WHERE acquired_image_guid = 'removed-1'"
+            ),
+            2
+        );
+        assert_eq!(
+            one::<i64>(
+                &conn,
+                "SELECT project_id FROM psf_guard_removed_image WHERE acquired_image_guid = 'removed-5'"
+            ),
+            1
+        );
+    }
+
+    #[test]
+    fn a_moved_target_ends_its_open_collaboration_assignments() {
+        let mut conn = catalog();
+        conn.execute_batch(
+            "CREATE TABLE psf_guard_collaboration_plan(
+                exposureplan_guid TEXT NOT NULL, target_guid TEXT NOT NULL, import_id TEXT NOT NULL,
+                source_digest TEXT NOT NULL, panel_index INTEGER NOT NULL, filter TEXT NOT NULL,
+                exposure_ms INTEGER NOT NULL, start_at_ms INTEGER NOT NULL, end_at_ms INTEGER,
+                desired_frames INTEGER NOT NULL, PRIMARY KEY(exposureplan_guid, import_id, source_digest));
+             INSERT INTO psf_guard_collaboration_plan VALUES
+                ('source-plan', 'SOURCE-TARGET', 'open', 'd', 0, 'L', 60000, 1, NULL, 10),
+                ('source-plan', 'source-target', 'ended', 'd', 0, 'L', 60000, 1, 5, 10),
+                ('destination-plan', 'destination-target', 'open', 'd', 0, 'L', 60000, 1, NULL, 10);",
+        )
+        .unwrap();
+        let preview = plan_organization(&conn, &move_target(1, Some(2), None))
+            .unwrap()
+            .preview;
+        assert!(preview
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("open collaboration assignment")));
+        let other = plan_organization(&conn, &move_target(3, Some(1), None))
+            .unwrap()
+            .preview;
+        assert!(other
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("open collaboration assignment")));
+
+        preview_and_apply(&mut conn, move_target(1, Some(2), None));
+
+        assert!(
+            one::<i64>(
+                &conn,
+                "SELECT end_at_ms FROM psf_guard_collaboration_plan WHERE import_id = 'open' AND exposureplan_guid = 'source-plan'"
+            ) > 1_000_000_000_000
+        );
+        assert_eq!(
+            one::<i64>(
+                &conn,
+                "SELECT end_at_ms FROM psf_guard_collaboration_plan WHERE import_id = 'ended'"
+            ),
+            5
+        );
+        assert_eq!(
+            one::<Option<i64>>(
+                &conn,
+                "SELECT end_at_ms FROM psf_guard_collaboration_plan WHERE exposureplan_guid = 'destination-plan'"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn a_reused_template_keeps_a_plans_default_exposure_and_the_preview_lists_templates() {
+        let mut conn = catalog();
+        add_frameless_target(&conn);
+        conn.execute_batch(
+            "UPDATE exposuretemplate SET defaultexposure = 120 WHERE Id = 1;
+             UPDATE exposuretemplate SET defaultexposure = 30 WHERE Id = 3;
+             UPDATE exposureplan SET exposure = -1 WHERE Id = 20;",
+        )
+        .unwrap();
+        let preview = plan_organization(&conn, &move_target(5, Some(3), None))
+            .unwrap()
+            .preview;
+        let changes: Vec<(&str, &str, bool)> = preview
+            .exposure_template_changes
+            .iter()
+            .map(|change| {
+                (
+                    change.source_template_name.as_str(),
+                    change.destination_template_name.as_str(),
+                    change.reused,
+                )
+            })
+            .collect();
+        assert_eq!(
+            changes,
+            [("Luminance", "Lum", true), ("Ha 300", "Ha 300", false)]
+        );
+        assert!(preview
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("1 exposure plan uses the default exposure")));
+        assert!(
+            preview
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("Other profile has no exposures")),
+            "{:?}",
+            preview.warnings
+        );
+
+        preview_and_apply(&mut conn, move_target(5, Some(3), None));
+
+        assert_eq!(
+            one::<f64>(&conn, "SELECT exposure FROM exposureplan WHERE Id = 20"),
+            120.0
+        );
+        assert_eq!(
+            one::<f64>(&conn, "SELECT exposure FROM exposureplan WHERE Id = 21"),
+            300.0
+        );
+    }
+
+    #[test]
+    fn a_target_with_exposures_does_not_warn_of_an_empty_destination() {
+        let conn = catalog();
+        let preview = plan_organization(&conn, &move_target(1, None, Some("Spring")))
+            .unwrap()
+            .preview;
+        assert!(!preview
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("has no exposures")));
+    }
+
+    #[test]
+    fn a_new_project_copies_the_stack_settings_of_the_targets_project() {
+        let mut conn = catalog();
+        conn.execute_batch(
+            "CREATE TABLE psf_guard_project_processing (project_key TEXT PRIMARY KEY,
+                split_exposure_groups INTEGER NOT NULL, process_folder TEXT, split_chosen INTEGER);
+             INSERT INTO psf_guard_project_processing VALUES ('guid:source-project', 0, 'iris', 1);",
+        )
+        .unwrap();
+        let result = preview_and_apply(&mut conn, move_target(1, None, Some("Spring campaign")));
+        let settings =
+            crate::server::exposure_groups::load_settings(&conn, result.project_id).unwrap();
+        assert!(!settings.split_exposure_groups);
+        assert_eq!(settings.process_folder.as_deref(), Some("iris"));
+        assert_eq!(
+            one::<i64>(&conn, "SELECT COUNT(*) FROM psf_guard_project_processing"),
+            2
+        );
+    }
+
+    #[test]
+    fn a_grade_change_after_a_target_move_preview_does_not_require_a_new_preview() {
+        let mut conn = catalog();
+        let operation = move_target(1, Some(2), None);
+        let expected_fingerprint = plan_organization(&conn, &operation)
+            .unwrap()
+            .preview
+            .fingerprint;
+        conn.execute(
+            "UPDATE acquiredimage SET gradingStatus = 2 WHERE Id = 1",
+            [],
+        )
+        .unwrap();
+        apply_organization(
+            &mut conn,
+            &OrganizationApplyRequest {
+                operation,
+                expected_fingerprint,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            one::<i64>(&conn, "SELECT projectid FROM target WHERE Id = 1"),
+            2
+        );
+    }
+}
+
+/// Target moves through the HTTP API, with stack indices on disk.
+#[cfg(test)]
+mod http_tests {
+    use crate::server::state::AppState;
+    use axum::{body::Body, http::Request, Router};
+    use serde_json::{json, Value};
+    use std::sync::Arc;
+    use tower::ServiceExt;
+
+    struct Rig {
+        _dir: tempfile::TempDir,
+        path: std::path::PathBuf,
+        stacks: std::path::PathBuf,
+        app: Router,
+    }
+
+    fn rig() -> Rig {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rig.sqlite");
+        let images = dir.path().join("images");
+        std::fs::create_dir_all(&images).unwrap();
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        crate::ts_schema::apply_schema(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO project (Id,profileId,name,state,guid) VALUES
+                (1,'p','Bubble',1,'pg1'), (2,'p','Cassiopeia',1,'pg2'), (3,'other','Other rig',1,'pg3');
+             INSERT INTO target (Id,name,active,ra,dec,epochcode,projectid,guid) VALUES
+                (1,'Bubble Nebula',1,23.3,61.2,0,1,'tg1'), (2,'Bubble Nebula',1,23.3,61.2,0,2,'tg2');
+             INSERT INTO exposuretemplate (Id,profileId,name,filtername,guid) VALUES (1,'p','SII','SII','eg');
+             INSERT INTO exposureplan (Id,profileId,exposure,desired,acquired,accepted,targetid,exposureTemplateId,guid)
+                VALUES (1,'p',300,50,1,0,1,1,'lg');
+             INSERT INTO acquiredimage (Id,projectId,targetId,acquireddate,filtername,gradingStatus,metadata,profileId,exposureId,guid)
+                VALUES (1,1,1,1000,'SII',0,'{}','p',1,'ig1');",
+        )
+        .unwrap();
+        drop(conn);
+        let catalog = crate::server::database_context::DatabaseContext::new(
+            "rig".into(),
+            "Rig".into(),
+            path.display().to_string(),
+            vec![images.display().to_string()],
+            None,
+            None,
+            None,
+            dir.path().join("cache"),
+        )
+        .unwrap();
+        let stacks = crate::server::storage::stacks(&catalog.stack_root);
+        std::fs::create_dir_all(&stacks).unwrap();
+        std::fs::write(
+            stacks.join("latest-project-1.json"),
+            json!({"project_id": 1, "database_id": "rig", "groups": [
+                {"job_id": "sii", "created_unix_seconds": 1,
+                 "group": {"index": 0, "target_id": 1, "filter_name": "SII"}}]})
+            .to_string(),
+        )
+        .unwrap();
+        let state = AppState::new_for_test(rusqlite::Connection::open_in_memory().unwrap());
+        {
+            let mut databases = state.databases.write().unwrap();
+            databases.clear();
+            databases.insert(catalog.id.clone(), Arc::new(catalog));
+        }
+        let app = Router::new().nest("/api", crate::server::api_router(Arc::new(state)));
+        Rig {
+            _dir: dir,
+            path,
+            stacks,
+            app,
+        }
+    }
+
+    async fn send(app: &Router, method: &str, uri: &str, body: Value) -> (u16, Value) {
+        let request = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("host", "localhost")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        let status = response.status().as_u16();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        )
+    }
+
+    fn target(rig: &Rig) -> (i32, String) {
+        rusqlite::Connection::open(&rig.path)
+            .unwrap()
+            .query_row(
+                "SELECT projectid, name FROM target WHERE Id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap()
+    }
+
+    fn index_jobs(rig: &Rig, project: i32) -> Vec<String> {
+        let path = rig.stacks.join(format!("latest-project-{project}.json"));
+        let Ok(bytes) = std::fs::read(path) else {
+            return Vec::new();
+        };
+        let index: Value = serde_json::from_slice(&bytes).unwrap();
+        index["groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["job_id"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn put_refuses_a_move_without_changing_anything_else() {
+        let rig = rig();
+        let (status, body) = send(
+            &rig.app,
+            "PUT",
+            "/api/db/rig/targets/1",
+            json!({ "name": "Renamed", "active": false, "project_id": 3 }),
+        )
+        .await;
+        assert_eq!(status, 400, "{body}");
+        assert!(
+            body["error"].as_str().unwrap().contains("has 1 exposure"),
+            "{body}"
+        );
+        assert_eq!(target(&rig), (1, "Bubble Nebula".to_string()));
+        let active: bool = rusqlite::Connection::open(&rig.path)
+            .unwrap()
+            .query_row("SELECT active FROM target WHERE Id = 1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert!(active, "a refused move leaves the other changes unmade");
+
+        let (status, body) = send(
+            &rig.app,
+            "PUT",
+            "/api/db/rig/targets/1",
+            json!({ "project_id": 2 }),
+        )
+        .await;
+        assert_eq!(status, 400, "{body}");
+        assert!(
+            body["error"].as_str().unwrap().contains("Merge target"),
+            "{body}"
+        );
+        assert_eq!(index_jobs(&rig, 1), ["sii"]);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stack_previews_follow_a_target_moved_by_put_and_by_apply() {
+        let rig = rig();
+        let (status, body) = send(
+            &rig.app,
+            "PUT",
+            "/api/db/rig/targets/1",
+            json!({ "name": "Bubble Nebula west", "project_id": 2 }),
+        )
+        .await;
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body["data"]["images_moved"], 1);
+        assert_eq!(target(&rig), (2, "Bubble Nebula west".to_string()));
+        assert_eq!(index_jobs(&rig, 2), ["sii"]);
+        assert!(index_jobs(&rig, 1).is_empty());
+
+        let operation = json!({ "kind": "move_target", "target_id": 1,
+            "destination": { "project_id": 1 } });
+        let (status, preview) = send(
+            &rig.app,
+            "POST",
+            "/api/db/rig/organization/preview",
+            operation.clone(),
+        )
+        .await;
+        assert_eq!(status, 200, "{preview}");
+        let fingerprint = preview["data"]["fingerprint"].as_str().unwrap();
+        let (status, result) = send(
+            &rig.app,
+            "POST",
+            "/api/db/rig/organization/apply",
+            json!({ "operation": operation, "expected_fingerprint": fingerprint }),
+        )
+        .await;
+        assert_eq!(status, 200, "{result}");
+        assert_eq!(result["data"]["source_project_id"], 2);
+        assert_eq!(target(&rig).0, 1);
+        assert_eq!(index_jobs(&rig, 1), ["sii"]);
+        assert!(index_jobs(&rig, 2).is_empty());
     }
 }

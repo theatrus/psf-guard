@@ -1382,12 +1382,30 @@ pub fn restore_with(
                 [tombstone.image_id],
                 |row| row.get::<_, bool>(0),
             )?;
-            let id = insert_row(
-                &tx,
-                "acquiredimage",
-                &rows.acquiredimage,
-                &[("Id", free.then_some(SqlValue::Integer(tombstone.image_id)))],
-            )?;
+            // The frame returns to its target's project as it is now, which
+            // differs from the saved one once the target moved or its
+            // project was merged into another.
+            let target_id = rows
+                .acquiredimage
+                .iter()
+                .find(|(column, _)| column.eq_ignore_ascii_case("targetId"))
+                .and_then(|(_, value)| value.as_i64())
+                .or(tombstone.target_id);
+            let current_project: Option<i64> = match target_id {
+                Some(target_id) => tx
+                    .query_row(
+                        "SELECT projectid FROM target WHERE Id = ?1",
+                        [target_id],
+                        |row| row.get(0),
+                    )
+                    .optional()?,
+                None => None,
+            };
+            let mut overrides = vec![("Id", free.then_some(SqlValue::Integer(tombstone.image_id)))];
+            if let Some(project) = current_project {
+                overrides.push(("projectId", Some(SqlValue::Integer(project))));
+            }
+            let id = insert_row(&tx, "acquiredimage", &rows.acquiredimage, &overrides)?;
             for thumbnail in &rows.imagedata {
                 insert_row(
                     &tx,
@@ -1909,6 +1927,36 @@ mod tests {
                 "SELECT rejected_at FROM psf_guard_rejected_at WHERE acquired_image_guid = 'g1'"
             ),
             NOW - 30 * DAY
+        );
+    }
+
+    #[test]
+    fn a_restored_reject_returns_to_its_targets_current_project() {
+        let c = catalog();
+        let none = BTreeSet::new();
+        let plan = plan(&c.conn, &c.images(), &options(&none, 7)).unwrap();
+        let report = apply(&c.conn, &c.images(), &options(&none, 7), &plan.digest, 14).unwrap();
+        assert_eq!(report.removed.len(), 2, "{report:?}");
+        // The target moves to another project while its rejects are removed.
+        c.conn
+            .execute_batch(
+                "INSERT INTO project (Id, profileId, name, guid) VALUES (2, 'p', 'Andromeda', 'pg2');
+                 UPDATE target SET projectId = 2 WHERE Id = 10;
+                 UPDATE acquiredimage SET projectId = 2 WHERE targetId = 10;",
+            )
+            .unwrap();
+        let restored = restore(
+            &c.conn,
+            &RestoreSelection {
+                batch_id: Some(report.batch_id),
+                guids: vec![],
+            },
+        )
+        .unwrap();
+        assert_eq!(restored.restored.len(), 2, "{restored:?}");
+        assert_eq!(
+            c.count("SELECT COUNT(*) FROM acquiredimage WHERE targetId = 10 AND projectId = 2"),
+            3
         );
     }
 

@@ -76,6 +76,17 @@ describe('Library target editing', () => {
     setDisplayPreferences({ showNightChip: true, showAllChip: true, showCalibrationChip: true, advanceOnGrade: true, projectPickerGrouping: 'activity', libraryDensity: 'compact' });
   });
 
+  it('saves a typed name before opening the move preview', async () => {
+    const { targetUpdates } = renderLibrary();
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit target IC 1805' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Target name' }), { target: { value: 'IC 1805 core' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Move to another project...' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Move target' });
+    expect(targetUpdates).toEqual([{ name: 'IC 1805 core' }]);
+    expect(within(dialog).getByText('IC 1805 core')).toBeInTheDocument();
+    setDisplayPreferences({ showNightChip: true, showAllChip: true, showCalibrationChip: true, advanceOnGrade: true, projectPickerGrouping: 'activity', libraryDensity: 'compact' });
+  });
+
   it('still renames a target from Edit target', async () => {
     const { targetUpdates } = renderLibrary();
     fireEvent.click(await screen.findByRole('button', { name: 'Edit target IC 1805' }));

@@ -292,8 +292,12 @@ describe('OrganizationDialog', () => {
       profile_change: { from_profile_id: 'c925', to_profile_id: 'ultracat' },
       exposure_templates_reused: 1,
       exposure_templates_copied: 2,
+      exposure_template_changes: [
+        { source_template_name: 'Ha 300', destination_template_name: 'Ha 300 s', reused: true },
+        { source_template_name: 'OIII 300', destination_template_name: 'OIII 300', reused: false },
+      ],
       planning_panel_id: 'r1c2',
-      warnings: ['A Planning plan activated this target as panel r1c2.'],
+      warnings: ['A Planning plan activated this target as one of its panels.'],
     };
 
     it('offers every other project, marks other profiles, and applies the previewed move', async () => {
@@ -326,8 +330,11 @@ describe('OrganizationDialog', () => {
       expect(summary).toHaveTextContent('c925 to ultracat');
       expect(summary).toHaveTextContent('Exposure templates reused1');
       expect(summary).toHaveTextContent('Exposure templates copied2');
-      expect(summary).toHaveTextContent('Planning panelr1c2');
-      expect(summary).toHaveTextContent('A Planning plan activated this target as panel r1c2.');
+      expect(summary).toHaveTextContent('PlanningThe plan no longer manages this target');
+      expect(summary).not.toHaveTextContent('r1c2');
+      expect(summary).toHaveTextContent('Ha 300 uses Ha 300 s');
+      expect(summary).toHaveTextContent('OIII 300 is copied to the new profile');
+      expect(summary).toHaveTextContent('A Planning plan activated this target as one of its panels.');
       expect(applies).toEqual([]);
 
       await userEvent.click(screen.getByRole('button', { name: 'Apply move' }));
@@ -336,6 +343,16 @@ describe('OrganizationDialog', () => {
       const operation = { kind: 'move_target', target_id: 11, destination: { project_id: 3 } };
       expect(previews).toEqual([operation]);
       expect(applies).toEqual([{ operation, expected_fingerprint: targetPreview.fingerprint }]);
+    });
+
+    it('marks a Closed destination project', async () => {
+      server.use(http.get('/api/db/:dbId/organization/destinations', () => ok({
+        projects: [...projects, { id: 4, profile_id: 'c925', name: 'Last winter', state: 3 }],
+        targets,
+      })));
+      openDialog(targetScope);
+      expect(await screen.findByRole('option', { name: 'Last winter · Closed' })).toBeInTheDocument();
+      expect(screen.getByRole('option', { name: 'M 44 collection' })).toBeInTheDocument();
     });
 
     it('moves a target to a new project by name', async () => {
@@ -349,6 +366,7 @@ describe('OrganizationDialog', () => {
           profile_change: null,
           exposure_templates_reused: 0,
           exposure_templates_copied: 0,
+          exposure_template_changes: [],
           planning_panel_id: null,
           warnings: [],
         });

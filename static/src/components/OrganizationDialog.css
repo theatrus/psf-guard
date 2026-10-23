@@ -57,6 +57,11 @@
   font-size: 1rem;
 }
 
+.organization-preview h4 {
+  margin: 0.8rem 0 0.4rem;
+  font-size: 0.9rem;
+}
+
 .organization-preview dl {
   display: grid;
   grid-template-columns: minmax(7rem, 1fr) minmax(0, 2fr);
