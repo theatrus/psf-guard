@@ -84,7 +84,7 @@ const FINAL_PASS: Choice<'final_pass'>[] = [
     value: 'reintegrate',
     label: 'Reintegrate',
     help:
-      'Reads every admitted frame three more times and rejects outliers against all ' +
+      'Reads every admitted frame again and rejects outliers against all ' +
       'the others, so a satellite trail in the reference or the first frames is removed too.',
   },
   {
