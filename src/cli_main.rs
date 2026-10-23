@@ -601,6 +601,7 @@ pub fn main() -> Result<()> {
                 light_filter: rules.light_filter(),
                 // A person ran this import; it creates what matches nothing.
                 new_targets: crate::commands::import::NewTargets::Create,
+                admit_removed_names: false,
             };
             let mut outcome = import_frames(&mut conn, frames, &options)?;
             outcome.scan_rules = collected.skipped;
@@ -1331,6 +1332,9 @@ pub fn main() -> Result<()> {
                     dry_run,
                     with_image_data: !no_image_data,
                     stop: crate::concurrency::Stop::new(),
+                    // A terminal run applies what it reads; it has no
+                    // preview to hold it to.
+                    deletions: Default::default(),
                 }))?;
                 print_remote_summary(&outcome.summary);
                 println!(
@@ -1439,6 +1443,7 @@ pub fn main() -> Result<()> {
                     dry_run,
                     with_image_data: !no_image_data,
                     project_filter: project,
+                    deletions: Default::default(),
                 };
 
                 let summary = sync_pull(&pair.source, &pair.destination, &options)?;
@@ -1456,9 +1461,14 @@ pub fn main() -> Result<()> {
                     } else {
                         String::new()
                     };
+                    let deleted = if c.deleted > 0 {
+                        format!(" deleted={}", c.deleted)
+                    } else {
+                        String::new()
+                    };
                     println!(
-                        "  {:<16} inserted={} updated={} unchanged={}{}",
-                        label, c.inserted, c.updated, c.unchanged, skipped
+                        "  {:<16} inserted={} updated={} unchanged={}{}{}",
+                        label, c.inserted, c.updated, c.unchanged, skipped, deleted
                     );
                 };
                 println!(
@@ -1541,6 +1551,10 @@ pub fn main() -> Result<()> {
                     &PlanningOptions {
                         dry_run,
                         project_filter: project,
+                        // `--to` names a Target Scheduler file: a project the
+                        // source deleted only loses its rows there.
+                        destination: crate::commands::sync::SyncDestination::Scheduler,
+                        deletions: Default::default(),
                     },
                 )?;
 
@@ -1550,9 +1564,19 @@ pub fn main() -> Result<()> {
                     }
                 }
                 let print_counts = |label: &str, counts: &TableCounts| {
+                    let deleted = if counts.deleted > 0 {
+                        format!(" deleted={}", counts.deleted)
+                    } else {
+                        String::new()
+                    };
                     println!(
-                        "  {:<16} inserted={} updated={} unchanged={} skipped={}",
-                        label, counts.inserted, counts.updated, counts.unchanged, counts.skipped
+                        "  {:<16} inserted={} updated={} unchanged={} skipped={}{}",
+                        label,
+                        counts.inserted,
+                        counts.updated,
+                        counts.unchanged,
+                        counts.skipped,
+                        deleted
                     );
                 };
                 println!(

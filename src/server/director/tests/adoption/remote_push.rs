@@ -45,6 +45,7 @@ async fn peer_server(dir: &std::path::Path) -> (String, Connection) {
     let router = Router::new()
         .route("/api/sync/v1/capabilities", get(remote_sync::capabilities))
         .route("/api/sync/v1/previews", post(remote_sync::create_preview))
+        .route("/api/sync/v1/exports", post(remote_sync::create_export))
         .route(
             "/api/sync/v1/previews/{preview_id}/apply",
             post(remote_sync::apply_preview),
@@ -514,4 +515,89 @@ async fn a_plan_with_no_remote_rig_records_and_sends_no_push() {
         .unwrap();
     assert!(sent.is_empty());
     assert_eq!(projects(&peer_db), 0);
+}
+
+/// A pull from a peer reads the peer again when it applies, so it deletes
+/// only the projects its preview listed: one the peer deleted after the
+/// preview stays until the next preview shows it.
+#[tokio::test]
+async fn a_peer_pull_deletes_only_what_its_preview_listed() {
+    const PREVIEWED: &str = "d0d0d0d0-0000-4000-8000-00000000000d";
+    const LATER: &str = "1a1a1a1a-0000-4000-8000-00000000001a";
+    let a = activated().await;
+    let (url, peer_db) = peer_server(a.f._dir.path()).await;
+    let registry_path = a.f._dir.path().join("registry.json");
+    let mut registry = DbRegistry::default();
+    registry.peers.push(PeerEntry {
+        id: "obs".into(),
+        name: "Observatory".into(),
+        base_url: url,
+        token: TOKEN.into(),
+        catalog_id: None,
+    });
+    registry.save(&registry_path).unwrap();
+    a.f.state.set_registry_path(Some(registry_path));
+    for (guid, name) in [(PREVIEWED, "Previewed"), (LATER, "Later")] {
+        a.db.execute(
+            "INSERT INTO project (profileId, name, guid) VALUES ('profile-a', ?2, ?1)",
+            [guid, name],
+        )
+        .unwrap();
+    }
+    crate::commands::project_removal::ensure_schema(&peer_db).unwrap();
+    let delete_on_peer = |guid: &str| {
+        peer_db
+            .execute(
+                "INSERT INTO psf_guard_removed_project (project_id, project_guid, name, removed_at, frames)
+                 VALUES (1, ?1, 'gone', 1, 0)",
+                [guid],
+            )
+            .unwrap();
+    };
+    let present = |guid: &str| -> i64 {
+        a.db.query_row(
+            "SELECT COUNT(*) FROM project WHERE guid = ?1",
+            [guid],
+            |row| row.get(0),
+        )
+        .unwrap()
+    };
+    let sync = |body: Value| {
+        let state = Arc::clone(&a.f.state);
+        async move {
+            crate::server::peers::sync_with_peer(
+                axum::extract::State(state),
+                axum::extract::Path("rig".to_string()),
+                axum::Json(serde_json::from_value(body).unwrap()),
+            )
+            .await
+            .map(|response| serde_json::to_value(&response.0).unwrap())
+        }
+    };
+
+    delete_on_peer(PREVIEWED);
+    let preview = sync(json!({"peer_id": "obs", "direction": "pull", "dry_run": true}))
+        .await
+        .unwrap();
+    assert_eq!(
+        preview["data"]["deleted_projects"],
+        json!([PREVIEWED]),
+        "{preview}"
+    );
+    assert_eq!(present(PREVIEWED), 1, "a preview deletes nothing");
+
+    delete_on_peer(LATER);
+    let applied = sync(json!({
+        "peer_id": "obs", "direction": "pull", "dry_run": false,
+        "previewed_deletions": preview["data"]["deleted_projects"],
+    }))
+    .await
+    .unwrap();
+    assert_eq!(
+        applied["data"]["deleted_projects"],
+        json!([PREVIEWED]),
+        "{applied}"
+    );
+    assert_eq!(present(PREVIEWED), 0);
+    assert_eq!(present(LATER), 1, "not in the preview");
 }

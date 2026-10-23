@@ -36,9 +36,10 @@
   **Delete** beside an archived project. The dialog
   shows how many targets, exposure plans and frames go, and asks you to type
   the project's name when it has frames. Frame records and grades leave the
-  catalog; the image files stay on disk. Later syncs and imports leave a
-  project with frames out until you click **Allow again** under **Deleted
-  projects** in the Library; a project without frames is not listed there. A plan that linked the project no longer plans work for that
+  catalog; the image files stay on disk. Later syncs and imports leave the
+  project out until you click **Allow again** under **Deleted projects** in
+  the Library. A project without frames appears there once a sync has left
+  it out. A plan that linked the project no longer plans work for that
   rig. Deleting needs a server started with `--allow-database-management`.
   Restoring removed rejects no longer puts back a frame whose project was
   deleted.
@@ -68,6 +69,35 @@
   **Plans with nothing captured yet**. Deleting it leaves the collaboration
   first, as **Leave collaboration** does. A plan with frames in reports to the
   collaboration stays until you leave the collaboration from the plan.
+- A sync now deletes a project that its source catalog deleted, when
+  nothing was captured for the project in the destination. This applies to
+  pulls, to a planning push into a rig's Target Scheduler database, and to
+  syncs with another PSF Guard server that runs this version. A project
+  with frames in the destination stays, and the preview says how many
+  exposures it has there. So does a project that belongs to a
+  collaboration. A pull from a peer deletes only the projects its preview
+  listed. The preview and the result show how many
+  projects the transfer deletes. A plan that linked a deleted project no
+  longer plans work for that rig. When a pull leaves out new frames of a
+  deleted project, imports and uploads of those files are skipped too.
+- **Allow again** now holds across syncs. When another catalog deleted a
+  project because yours did, a sync from that catalog no longer deletes
+  the project again after you click **Allow again**. When that catalog
+  syncs from yours, it allows the project back too.
+- To delete projects on a rig that the N.I.N.A. plugin serves, update the
+  plugin to a version with project deletion support. Older plugins keep
+  the project on the rig.
+- An upload of a frame from a project deleted in the receiving catalog is
+  refused with a message that explains how to allow the project back. An
+  upload of a frame removed as a reject is refused with a message that
+  explains how to restore it. The updated N.I.N.A. plugin holds such an
+  upload without retrying it. After you allow the project back or restore
+  the frame, select **Retry refused uploads** in the plugin settings to
+  upload it again, or select **Forget refused uploads** to remove the held
+  uploads from the queue; the image files stay on disk. Older plugins show
+  these uploads as blocked jobs. A different frame that only shares a
+  deleted frame's file name, such as `0001.fits` from another target,
+  uploads as usual.
 
 - A color preview can run BlurXTerminator and NoiseXTerminator on its color
   channels together. In **Processing stack**, turn the tools on under

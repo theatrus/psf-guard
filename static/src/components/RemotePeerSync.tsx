@@ -138,6 +138,9 @@ export default function RemotePeerSync({ databases, disabled }: RemotePeerSyncPr
         dry_run: dryRun,
         reviewed_only: !allGrades,
         with_image_data: true,
+        // The apply reads the peer again; it deletes only what this
+        // preview listed.
+        previewed_deletions: dryRun ? undefined : preview?.deleted_projects ?? [],
       };
       await pendingStop.current;
       previewing.current = dryRun ? dbId : null;

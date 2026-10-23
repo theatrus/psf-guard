@@ -756,7 +756,41 @@ fn synchronize(state: &Arc<AppState>, job: &str, catalog: &str, settings: &Setti
         Some(Err(error)) => (None, Some(error)),
         None => (None, None),
     };
-    let report = crate::ts_sync::synchronize(&mut local, &snapshot, destination.as_mut())?;
+    // A Target Scheduler snapshot rarely carries deletions. Planning is read
+    // only when it does, and a failure to read it holds the deletions for a
+    // later sync rather than failing the capture sync.
+    let carries_deletions =
+        !crate::commands::project_removal::source_deletions(&snapshot)?.is_empty();
+    let runtime = state.runtime();
+    let deletions = match (&runtime, carries_deletions) {
+        (Some(runtime), true) => runtime
+            .block_on(super::project_removal::sync_deletion_rules(state, Some(job)))
+            .unwrap_or_else(|error| {
+                tracing::warn!(db = %job, "TS sync could not read Planning; holding project deletions: {}", error.message());
+                crate::commands::sync::SourceDeletionRules {
+                    held: Some("Planning could not be read to check for collaborations; a later sync tries again".into()),
+                    ..Default::default()
+                }
+            }),
+        (None, true) => crate::commands::sync::SourceDeletionRules {
+            held: Some("Planning could not be read to check for collaborations; a later sync tries again".into()),
+            ..Default::default()
+        },
+        (_, false) => Default::default(),
+    };
+    let report =
+        crate::ts_sync::synchronize_with(&mut local, &snapshot, destination.as_mut(), &deletions)?;
+    // Planning forgets each project the sync deleted, as after Delete
+    // project in the Library. This runner thread waits for it.
+    if !report.deleted_project_guids.is_empty()
+        && let Some(runtime) = &runtime
+    {
+        runtime.block_on(super::project_removal::forget_synced_deletions(
+            state,
+            job,
+            &report.deleted_project_guids,
+        ));
+    }
     if let Some(context) = state.get_database(job) {
         context.register_remote_image_arrivals(&report.arrivals);
         let _ = context.ensure_cache_available();

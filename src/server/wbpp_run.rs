@@ -1191,6 +1191,7 @@ pub(crate) async fn start_queued(state: Arc<AppState>, next: QueuedRun, stop: St
                 AppError::BadRequest(message)
                 | AppError::Conflict(message)
                 | AppError::Forbidden(message)
+                | AppError::Gone(message)
                 | AppError::InternalError(message)
                 | AppError::NotFoundMessage(message)
                 | AppError::DatabaseError(message) => message.clone(),

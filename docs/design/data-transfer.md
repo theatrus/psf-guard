@@ -63,8 +63,10 @@ The remaining pieces are:
   server, or a N.I.N.A. plugin.
 
 **Merge**
-: A one-way, additive copy into a destination. It can insert and update rows
-  under the rules below. Version 1 never deletes destination rows.
+: A one-way copy into a destination. It inserts and updates rows under the
+  rules below. Version 1 deletes destination rows in one case only: a
+  project the source catalog deleted, when nothing was captured for it in
+  the destination (see [Deleted projects](#deleted-projects)).
 
 **Preview**
 : A frozen source snapshot, selected options, destination preconditions, and
@@ -135,7 +137,8 @@ filters remain available.
 | Existing reviewed grade during merge | Image GUID | Destination wins |
 | Existing Pending grade during merge | Image GUID | Fill from source |
 | Explicit grade push | Image GUID | Source grade and reason win |
-| Destination-only row | None | Keep |
+| Destination-only row | None | Keep, except a project the source catalog deleted (its GUID in the source's `psf_guard_removed_project`, not allowed back) with no frames and no restorable removed rejects in the destination: delete it, with its targets and exposure plans |
+| Destination project the source deleted, with frames in the destination | Project GUID | Keep and report how many exposures it has |
 | Duplicate or empty GUID | None | Skip and report |
 | Non-null parent that cannot map | Parent GUID | Skip and report |
 | Same-looking object with another GUID | Name and coordinates | Warn; never auto-merge |
@@ -379,6 +382,57 @@ for it on an export with `include_frame_derivatives`. An older peer rejects
 a bundle carrying a table it does not know, so neither side sends one
 unasked. A bundle without the table leaves the receiver's records alone.
 
+### Deleted projects
+
+`project_tombstones_v1` advertises that a peer reads the projects a catalog
+deleted. Merge and planning bundles may carry the
+`psf_guard_removed_project` table with these columns, one row for each
+deletion whose GUID is a valid UUID, standing or allowed back:
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `project_guid` | TEXT | The project's GUID, a UUID |
+| `name` | TEXT | The project's name, for change lines |
+| `removed_at` | INTEGER | When the catalog deleted it, Unix seconds |
+| `allowed_back_at` | INTEGER or NULL | When the catalog allowed it back; NULL while the deletion stands |
+
+A reader must tolerate more columns.
+
+- **Exports.** `POST /api/sync/v1/exports` takes
+  `include_project_tombstones` (bool, default false). The export includes
+  the table for `merge` and `push_planning` only when it is true; a
+  `push_grades` export never does. An older client never sets the field,
+  so the bundles it receives do not change.
+- **Pushes.** A PSF Guard client sends the table on a merge or planning
+  push only to a server that advertises the capability. An older server
+  refuses a bundle with a table it does not know, so it never receives one.
+- **Receiving.** A server accepts the table in merge and planning bundles
+  and refuses it in a grade push. Accepting it is safe for both: the
+  receiver deletes only projects with nothing captured in its catalog, and
+  a preview shows each deletion before Apply. A bundle without the table
+  deletes nothing, so older clients see no change.
+- **Allow again.** A standing deletion is not applied where the receiver
+  allowed the project back after `removed_at`. A deletion allowed back
+  allows back the receiver's standing deletions of the GUID that a sync
+  recorded and dated before `allowed_back_at`; a deletion a person made on
+  the receiver stands until Allow again there. A receiver dates a deletion
+  it records with the sender's `removed_at`, so all catalogs compare the
+  same date. See
+  [Allowing a project back](project-removal.md#allowing-a-project-back).
+
+A merge or planning push into a PSF Guard catalog records each deletion as
+a tombstone there, so a later sync from a rig does not bring the project
+back, and Planning forgets the project after the commit. A planning push
+into a Target Scheduler file (a `ts:` connection or Director file delivery)
+deletes only the rows.
+
+A pull from a peer previews one export and applies another, fetched when
+the apply runs. So that Apply changes no more than the preview showed, the
+dry run returns `deleted_projects`, the GUIDs it would delete, and the
+apply request sends them back as `previewed_deletions`. The apply deletes
+only those; a project the peer deleted after the preview stays, with a
+change line, until the next preview lists it.
+
 ### Scheduler flat coverage
 
 `flat_history_v1` advertises a separate typed exchange for the NINA plugin.
@@ -593,6 +647,15 @@ time and filter normally establish the association. If either header is
 missing, the unique basename must also resolve by `OBJECT` or coordinates to
 that row's target. A supplied time, filter, object, or coordinate that resolves
 elsewhere remains a conflict.
+
+A light that a project deletion in this catalog took out (same file name
+and a capture time within 2 s; without both times it imports) is refused
+with
+`410 Gone` and an error message, in the standard error envelope, that
+names the project and explains how to allow it back. A light removed from
+the catalog as a reject is refused with `410 Gone` and its own message,
+which explains how to restore it. A client must not retry a 410. A frame
+that only shares a removed frame's file name imports as usual.
 
 Identical retries are idempotent. The response returns the resolved database,
 frame kind, and either the project, target, and image IDs for a light or the

@@ -112,6 +112,38 @@ describe('RemotePeerSync', () => {
     expect(await screen.findByText(/^Applied:/)).toBeInTheDocument();
   });
 
+  it('sends the deletions its preview listed with the apply', async () => {
+    withPeers([peer]);
+    const bodies: Array<Record<string, unknown>> = [];
+    server.use(
+      http.post('/api/databases/local/sync/remote', async ({ request }) => {
+        const body = (await request.json()) as Record<string, unknown>;
+        bodies.push(body);
+        return HttpResponse.json({
+          success: true,
+          data: {
+            applied: !body.dry_run,
+            peer_product: 'PSF Guard 0.5.0',
+            peer_catalog: 'scope',
+            summary: { project_deleted: 1 },
+            deleted_projects: ['d0d0d0d0-0000-4000-8000-00000000000d'],
+          },
+          error: null,
+          status: 'ok',
+        });
+      })
+    );
+
+    const user = userEvent.setup();
+    render(<RemotePeerSync databases={[local]} />, { wrapper: wrapper() });
+    await user.click(await screen.findByRole('button', { name: 'Preview changes' }));
+    await screen.findByRole('button', { name: 'Apply this preview' });
+    expect(bodies[0].previewed_deletions).toBeUndefined();
+    await user.click(screen.getByRole('button', { name: 'Apply this preview' }));
+    await waitFor(() => expect(bodies).toHaveLength(2));
+    expect(bodies[1].previewed_deletions).toEqual(['d0d0d0d0-0000-4000-8000-00000000000d']);
+  });
+
   it('drops a preview when the direction changes under it', async () => {
     withPeers([peer]);
     server.use(

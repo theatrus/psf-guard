@@ -77,13 +77,59 @@ const MERGE_TABLES: &[&str] = &[
 ];
 /// PSF Guard tables a merge carries only when both ends know them. An
 /// older peer rejects a bundle naming a table it does not know, so a sender
-/// includes these only for a receiver that advertises
-/// [`FRAME_DERIVATIVES_CAPABILITY`], and a receiver that gets none leaves
-/// its own records alone.
-const OPTIONAL_MERGE_TABLES: &[&str] = &["psf_guard_frame_derivative"];
+/// includes each only for a receiver that advertises its capability
+/// ([`FRAME_DERIVATIVES_CAPABILITY`], [`PROJECT_TOMBSTONES_CAPABILITY`]),
+/// and an export includes each only when the client asks for it. A
+/// receiver that gets none leaves its own records alone.
+const OPTIONAL_MERGE_TABLES: &[&str] = &[FRAME_DERIVATIVES_TABLE, PROJECT_TOMBSTONES_TABLE];
+/// PSF Guard tables a planning push carries only when both ends know them,
+/// on the same terms as [`OPTIONAL_MERGE_TABLES`].
+const OPTIONAL_PLANNING_TABLES: &[&str] = &[PROJECT_TOMBSTONES_TABLE];
+
+const FRAME_DERIVATIVES_TABLE: &str = "psf_guard_frame_derivative";
+/// Projects the sending catalog deleted, standing or allowed back. A
+/// bundle carries only the `project_guid` (a UUID), `name`, `removed_at`
+/// and `allowed_back_at` columns.
+const PROJECT_TOMBSTONES_TABLE: &str = "psf_guard_removed_project";
+/// The columns of [`PROJECT_TOMBSTONES_TABLE`] a bundle carries.
+const PROJECT_TOMBSTONE_COLUMNS: &[&str] =
+    &["project_guid", "name", "removed_at", "allowed_back_at"];
 
 /// The capability that says a peer reads and writes pairing records.
 pub const FRAME_DERIVATIVES_CAPABILITY: &str = "frame_derivatives_v1";
+/// The capability that says a peer reads the projects a catalog deleted
+/// from merge and planning bundles, and deletes them in its own catalog
+/// when nothing was captured for them there.
+pub const PROJECT_TOMBSTONES_CAPABILITY: &str = "project_tombstones_v1";
+
+/// Which optional PSF Guard tables a bundle may carry: the ones the
+/// receiver can read.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct OptionalTables {
+    /// Pairing records of calibrated copies (merge only).
+    pub frame_derivatives: bool,
+    /// Projects the catalog deleted (merge and planning).
+    pub project_tombstones: bool,
+}
+
+impl OptionalTables {
+    /// Every optional table a peer with these capabilities reads.
+    pub fn from_capabilities(capabilities: &[String]) -> Self {
+        let has = |wanted: &str| capabilities.iter().any(|name| name == wanted);
+        Self {
+            frame_derivatives: has(FRAME_DERIVATIVES_CAPABILITY),
+            project_tombstones: has(PROJECT_TOMBSTONES_CAPABILITY),
+        }
+    }
+
+    fn includes(self, table: &str) -> bool {
+        match table {
+            FRAME_DERIVATIVES_TABLE => self.frame_derivatives,
+            PROJECT_TOMBSTONES_TABLE => self.project_tombstones,
+            _ => false,
+        }
+    }
+}
 
 /// A grade push reads its source rows through the scheduler's own
 /// project/target join, so the bundle has to carry those two tables even
@@ -179,6 +225,12 @@ pub struct CreateExportRequest {
     /// the client asks, since an older client cannot read them.
     #[serde(default)]
     pub include_frame_derivatives: bool,
+    /// Merge and planning exports: include the projects this catalog
+    /// deleted (`psf_guard_removed_project`, its `project_guid` and `name`
+    /// columns). Off unless the client asks, since an older client cannot
+    /// read the table.
+    #[serde(default)]
+    pub include_project_tombstones: bool,
 }
 
 fn default_true() -> bool {
@@ -449,6 +501,7 @@ pub async fn capabilities(
         "exports",
         "flat_history_v1",
         FRAME_DERIVATIVES_CAPABILITY,
+        PROJECT_TOMBSTONES_CAPABILITY,
     ];
     if catalog
         .remote_image_upload
@@ -943,7 +996,10 @@ pub async fn create_export(
     let operation = request.operation;
     let reviewed_only = request.reviewed_only;
     let include_thumbnails = request.include_thumbnails;
-    let include_frame_derivatives = request.include_frame_derivatives;
+    let optional = OptionalTables {
+        frame_derivatives: request.include_frame_derivatives,
+        project_tombstones: request.include_project_tombstones,
+    };
     let audit = |outcome, detail: Option<&str>, summary| {
         state.remote_audit.record(
             &catalog.id,
@@ -964,7 +1020,7 @@ pub async fn create_export(
             operation,
             reviewed_only,
             include_thumbnails,
-            include_frame_derivatives,
+            optional,
         )
     })
     .await
@@ -1409,7 +1465,7 @@ pub(crate) fn export_bundle(
     operation: SyncOperation,
     reviewed_only: bool,
     include_thumbnails: bool,
-    include_optional: bool,
+    optional: OptionalTables,
 ) -> anyhow::Result<CatalogBundle> {
     let connection =
         open_scheduler_connection_with_flags(database_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
@@ -1446,25 +1502,47 @@ pub(crate) fn export_bundle(
         );
         tables.insert((*name).to_string(), table);
     }
-    if include_optional {
-        for name in optional_tables(operation) {
-            let present: bool = connection.query_row(
-                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type = 'table' AND name = ?1",
-                [name],
-                |row| row.get(0),
-            )?;
-            if !present {
-                continue;
-            }
-            let table = read_bundle_table(&connection, name, None)?;
-            row_count = row_count.saturating_add(table.rows.len());
-            anyhow::ensure!(
-                row_count <= MAX_BUNDLE_ROWS,
-                "this database exceeds the {MAX_BUNDLE_ROWS} row export limit; \
-                 narrow the operation or sync in smaller pieces"
-            );
-            tables.insert((*name).to_string(), table);
+    for name in optional_tables(operation) {
+        if !optional.includes(name) {
+            continue;
         }
+        let present: bool = connection.query_row(
+            "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            [name],
+            |row| row.get(0),
+        )?;
+        if !present {
+            continue;
+        }
+        let table = if *name == PROJECT_TOMBSTONES_TABLE {
+            // Deletions and their Allow again, so a receiver follows both.
+            // A receiver matches projects by GUID, so a row without a
+            // valid UUID tells it nothing.
+            let mut table = read_bundle_columns(
+                &connection,
+                name,
+                Some(PROJECT_TOMBSTONE_COLUMNS),
+                Some("project_guid IS NOT NULL"),
+            )?;
+            let guid = table
+                .columns
+                .iter()
+                .position(|column| column.name.eq_ignore_ascii_case("project_guid"));
+            table.rows.retain(|row| {
+                guid.and_then(|guid| row.values[guid].value.as_deref())
+                    .is_some_and(|value| Uuid::parse_str(value.trim()).is_ok())
+            });
+            table
+        } else {
+            read_bundle_table(&connection, name, None)?
+        };
+        row_count = row_count.saturating_add(table.rows.len());
+        anyhow::ensure!(
+            row_count <= MAX_BUNDLE_ROWS,
+            "this database exceeds the {MAX_BUNDLE_ROWS} row export limit; \
+             narrow the operation or sync in smaller pieces"
+        );
+        tables.insert((*name).to_string(), table);
     }
     let mut bundle = CatalogBundle {
         protocol_version: PROTOCOL_VERSION,
@@ -1490,6 +1568,17 @@ fn read_bundle_table(
     name: &str,
     where_clause: Option<&str>,
 ) -> anyhow::Result<BundleTable> {
+    read_bundle_columns(connection, name, None, where_clause)
+}
+
+/// Read a table into a bundle, keeping only the named columns when `only`
+/// is set.
+fn read_bundle_columns(
+    connection: &Connection,
+    name: &str,
+    only: Option<&[&str]>,
+    where_clause: Option<&str>,
+) -> anyhow::Result<BundleTable> {
     let mut schema_statement =
         connection.prepare(&format!("PRAGMA table_info({})", quote_identifier(name)))?;
     let columns = schema_statement
@@ -1501,7 +1590,15 @@ fn read_bundle_table(
                 primary_key: row.get::<_, i64>(5)? != 0,
             })
         })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+        .collect::<rusqlite::Result<Vec<_>>>()?
+        .into_iter()
+        .filter(|column: &BundleColumn| {
+            only.is_none_or(|only| {
+                only.iter()
+                    .any(|wanted| column.name.eq_ignore_ascii_case(wanted))
+            })
+        })
+        .collect::<Vec<_>>();
     anyhow::ensure!(!columns.is_empty(), "table {name} is missing");
     let select = columns
         .iter()
@@ -1624,6 +1721,11 @@ fn add_table_summary(
     summary.insert(format!("{name}_updated"), counts.updated as i64);
     summary.insert(format!("{name}_unchanged"), counts.unchanged as i64);
     summary.insert(format!("{name}_skipped"), counts.skipped as i64);
+    // Only a sync that deletes reports it, so a summary from a sync that
+    // deletes nothing reads as it always did.
+    if counts.deleted > 0 {
+        summary.insert(format!("{name}_deleted"), counts.deleted as i64);
+    }
 }
 
 pub(crate) fn operation_label(operation: SyncOperation) -> &'static str {
@@ -1660,6 +1762,7 @@ fn outcome_of(error: &AppError) -> AuditOutcome {
         AppError::BadRequest(_)
         | AppError::Conflict(_)
         | AppError::Forbidden(_)
+        | AppError::Gone(_)
         | AppError::NotFound
         | AppError::NotFoundMessage(_) => AuditOutcome::Refused,
         _ => AuditOutcome::Failed,
@@ -1674,15 +1777,21 @@ fn detail_of(error: &AppError) -> String {
         | AppError::BadRequest(message)
         | AppError::Conflict(message)
         | AppError::Forbidden(message)
+        | AppError::Gone(message)
         | AppError::InternalError(message) => message.clone(),
         AppError::NotImplemented => "not implemented".into(),
     }
 }
 
+/// Tables a bundle may carry for this operation beyond `allowed_tables`.
+/// A bundle from a client is accepted with any of them: a receiver that
+/// reads project tombstones deletes only projects with nothing captured in
+/// its catalog, so they are safe for a merge and a planning push alike.
 fn optional_tables(operation: SyncOperation) -> &'static [&'static str] {
     match operation {
         SyncOperation::Merge => OPTIONAL_MERGE_TABLES,
-        SyncOperation::PushPlanning | SyncOperation::PushGrades => &[],
+        SyncOperation::PushPlanning => OPTIONAL_PLANNING_TABLES,
+        SyncOperation::PushGrades => &[],
     }
 }
 
@@ -2036,6 +2145,10 @@ mod tests {
 
     #[test]
     fn merge_exports_skip_thumbnails_unless_asked() {
+        const DERIVATIVES: OptionalTables = OptionalTables {
+            frame_derivatives: true,
+            project_tombstones: false,
+        };
         let path = temp_snapshot("export-src");
         let connection = Connection::open(&path).unwrap();
         connection
@@ -2058,15 +2171,39 @@ mod tests {
 
         // Thumbnails dominate bundle size; a merge export leaves them out
         // unless the client opts in.
-        let lean = export_bundle(&path, "cat", SyncOperation::Merge, false, false, false).unwrap();
+        let lean = export_bundle(
+            &path,
+            "cat",
+            SyncOperation::Merge,
+            false,
+            false,
+            OptionalTables::default(),
+        )
+        .unwrap();
         assert!(!lean.tables.contains_key("imagedata"));
         assert_eq!(lean.tables["acquiredimage"].rows.len(), 1);
 
-        let full = export_bundle(&path, "cat", SyncOperation::Merge, false, true, false).unwrap();
+        let full = export_bundle(
+            &path,
+            "cat",
+            SyncOperation::Merge,
+            false,
+            true,
+            OptionalTables::default(),
+        )
+        .unwrap();
         assert_eq!(full.tables["imagedata"].rows.len(), 1);
 
         // A catalog with no pairing records sends none, even when asked.
-        let asked = export_bundle(&path, "cat", SyncOperation::Merge, false, false, true).unwrap();
+        let asked = export_bundle(
+            &path,
+            "cat",
+            SyncOperation::Merge,
+            false,
+            false,
+            DERIVATIVES,
+        )
+        .unwrap();
         assert!(!asked.tables.contains_key("psf_guard_frame_derivative"));
 
         // With records, they go only to a receiver that asked for them, and
@@ -2084,9 +2221,25 @@ mod tests {
             )
             .unwrap();
         drop(connection);
-        let lean = export_bundle(&path, "cat", SyncOperation::Merge, false, false, false).unwrap();
+        let lean = export_bundle(
+            &path,
+            "cat",
+            SyncOperation::Merge,
+            false,
+            false,
+            OptionalTables::default(),
+        )
+        .unwrap();
         assert!(!lean.tables.contains_key("psf_guard_frame_derivative"));
-        let paired = export_bundle(&path, "cat", SyncOperation::Merge, false, false, true).unwrap();
+        let paired = export_bundle(
+            &path,
+            "cat",
+            SyncOperation::Merge,
+            false,
+            false,
+            DERIVATIVES,
+        )
+        .unwrap();
         assert_eq!(paired.tables["psf_guard_frame_derivative"].rows.len(), 1);
         validate_bundle(&paired).unwrap();
         let staged = path.with_extension("staged.sqlite");
@@ -2101,6 +2254,25 @@ mod tests {
         drop(staged_connection);
         let _ = std::fs::remove_file(&staged);
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_peer_gets_project_tombstones_only_when_it_reads_them() {
+        let capabilities = |names: &[&str]| {
+            OptionalTables::from_capabilities(
+                &names
+                    .iter()
+                    .map(|name| name.to_string())
+                    .collect::<Vec<_>>(),
+            )
+        };
+        assert_eq!(capabilities(&["merge"]), OptionalTables::default());
+        assert!(capabilities(&[PROJECT_TOMBSTONES_CAPABILITY]).project_tombstones);
+        assert!(!capabilities(&[FRAME_DERIVATIVES_CAPABILITY]).project_tombstones);
+        // A grade push never carries the table; merge and planning may.
+        assert!(optional_tables(SyncOperation::Merge).contains(&PROJECT_TOMBSTONES_TABLE));
+        assert!(optional_tables(SyncOperation::PushPlanning).contains(&PROJECT_TOMBSTONES_TABLE));
+        assert!(optional_tables(SyncOperation::PushGrades).is_empty());
     }
 
     #[test]

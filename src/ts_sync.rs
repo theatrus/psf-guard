@@ -145,6 +145,10 @@ pub fn initialize(conn: &Connection) -> Result<()> {
 pub struct Report {
     #[serde(skip)]
     pub(crate) arrivals: Vec<crate::commands::sync::ChangedAcquiredImage>,
+    /// GUIDs of the catalog's projects this sync deleted because the
+    /// source deleted them. Planning forgets them after the commit.
+    #[serde(skip)]
+    pub(crate) deleted_project_guids: Vec<String>,
     pub inserted: usize,
     pub updated: usize,
     pub grades_written: usize,
@@ -157,7 +161,18 @@ pub struct Report {
 pub fn synchronize(
     local: &mut Connection,
     snapshot: &Connection,
+    destination: Option<&mut Connection>,
+) -> Result<Report> {
+    synchronize_with(local, snapshot, destination, &Default::default())
+}
+
+/// [`synchronize`], with what may stop it from deleting a project the
+/// source deleted.
+pub fn synchronize_with(
+    local: &mut Connection,
+    snapshot: &Connection,
     mut destination: Option<&mut Connection>,
+    deletions: &crate::commands::sync::SourceDeletionRules,
 ) -> Result<Report> {
     crate::commands::sync::require_pull_capable(snapshot)?;
     local.execute_batch(SCHEMA)?;
@@ -220,10 +235,11 @@ pub fn synchronize(
             changes.push((guid.clone(), current.clone(), previous_source));
         }
     }
-    let summary = crate::commands::sync::sync_arrivals(snapshot, &tx, &dirty)?;
+    let summary = crate::commands::sync::sync_arrivals(snapshot, &tx, &dirty, deletions)?;
     report.inserted = summary.acquiredimage.inserted;
     report.updated = summary.acquiredimage.updated;
     report.arrivals = summary.changed_acquiredimages;
+    report.deleted_project_guids = summary.deleted_project_guids;
     let after = grades(&tx)?;
     for (guid, source) in &incoming {
         if !dirty.contains(guid)

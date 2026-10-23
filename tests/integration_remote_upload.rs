@@ -1647,3 +1647,231 @@ async fn upload_still_rejects_a_non_image_extension() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(image_count(&fixture.database_a), 0);
 }
+
+/// A light of a project deleted from this catalog is refused with 410, which
+/// a client does not retry, and the message explains how to allow the
+/// project back. The file already received stays on disk.
+#[tokio::test]
+async fn a_light_of_a_deleted_project_is_refused_as_gone() {
+    let fixture = Fixture::new();
+    let first = fits_bytes("M 31", "2026-07-24T05:00:00");
+    let (status, body) = upload(
+        fixture.state.clone(),
+        "catalog-a",
+        "catalog-a",
+        TOKEN_A,
+        "m31-001.fits",
+        &first,
+        &sha256(&first),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let project_id = body["data"]["resolution"]["project_id"].as_i64().unwrap();
+
+    let connection = rusqlite::Connection::open(&fixture.database_a).unwrap();
+    let plan =
+        psf_guard::commands::project_removal::plan(&connection, project_id, &Default::default())
+            .unwrap()
+            .unwrap();
+    let outcome = psf_guard::commands::project_removal::remove(
+        &connection,
+        project_id,
+        &plan.digest,
+        &Default::default(),
+        1_790_000_000,
+    )
+    .unwrap();
+    assert!(matches!(
+        outcome,
+        psf_guard::commands::project_removal::Outcome::Removed { .. }
+    ));
+    drop(connection);
+    assert_eq!(image_count(&fixture.database_a), 0);
+
+    let (status, body) = upload(
+        fixture.state.clone(),
+        "catalog-a",
+        "catalog-a",
+        TOKEN_A,
+        "M31-001.fits",
+        &first,
+        &sha256(&first),
+    )
+    .await;
+    assert_eq!(status, StatusCode::GONE, "{body}");
+    assert_eq!(body["success"], false, "{body}");
+    let message = body["error"].as_str().unwrap();
+    assert!(message.contains("deleted from this catalog"), "{message}");
+    assert!(message.contains("Allow again"), "{message}");
+    assert!(message.contains("\"M 31\""), "{message}");
+    assert_eq!(image_count(&fixture.database_a), 0);
+    assert!(fixture.images_a.join("m31-001.fits").is_file());
+}
+
+/// A light removed from this catalog as a reject is refused with 410 and a
+/// message of its own, not the generic import failure, even after a purge
+/// emptied its saved rows: the capture time is kept beside them. Another
+/// target's frame with the same name imports.
+#[tokio::test]
+async fn a_removed_rejects_light_is_refused_as_gone() {
+    let fixture = Fixture::with_placement(RemoteImageUploadPlacement::TargetTree);
+    let first = fits_bytes("M 31", "2026-07-24T05:00:00");
+    let (status, body) = upload(
+        fixture.state.clone(),
+        "catalog-a",
+        "catalog-a",
+        TOKEN_A,
+        "0001.fits",
+        &first,
+        &sha256(&first),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // What a reject removal leaves, from before the capture time had a
+    // column of its own: the row goes, a tombstone keeps its name and its
+    // saved rows. Its trash is emptied and its rows purged.
+    let connection = rusqlite::Connection::open(&fixture.database_a).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE psf_guard_removed_image (
+               acquired_image_guid TEXT PRIMARY KEY NOT NULL, acquired_image_id INTEGER NOT NULL,
+               project_id INTEGER, target_id INTEGER, exposure_id INTEGER, file_name TEXT,
+               batch_id TEXT NOT NULL, removed_at INTEGER NOT NULL, rejected_at INTEGER,
+               trash_until INTEGER NOT NULL, files_deleted_at INTEGER, purged_at INTEGER,
+               bytes INTEGER NOT NULL DEFAULT 0, rows_json TEXT NOT NULL, files_json TEXT NOT NULL);
+             INSERT INTO psf_guard_removed_image
+               (acquired_image_guid, acquired_image_id, project_id, target_id, file_name, batch_id,
+                removed_at, trash_until, files_deleted_at, rows_json, files_json)
+             SELECT guid, Id, projectId, targetId, '0001.fits', 'b', 1, 2, 3,
+                    json_object('acquiredimage', json_object('acquireddate', acquireddate)), '[]'
+             FROM acquiredimage;
+             DELETE FROM psf_guard_remote_image_file;
+             DELETE FROM acquiredimage;",
+        )
+        .unwrap();
+    let purged = psf_guard::commands::reject_removal::purge(&connection, None, 4).unwrap();
+    assert_eq!(purged.frames, 1);
+    let (rows, acquired_at): (String, Option<i64>) = connection
+        .query_row(
+            "SELECT rows_json, acquired_at FROM psf_guard_removed_image",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!((rows.as_str(), acquired_at), ("{}", Some(1_784_869_200)));
+    assert_eq!(
+        psf_guard::commands::reject_removal::removed_reject_capture_times(&connection, "0001.FITS")
+            .unwrap(),
+        [Some(1_784_869_200)]
+    );
+    drop(connection);
+
+    let (status, body) = upload(
+        fixture.state.clone(),
+        "catalog-a",
+        "catalog-a",
+        TOKEN_A,
+        "0001.fits",
+        &first,
+        &sha256(&first),
+    )
+    .await;
+    assert_eq!(status, StatusCode::GONE, "{body}");
+    let message = body["error"].as_str().unwrap();
+    assert!(
+        message.contains("removed from this catalog as a reject"),
+        "{message}"
+    );
+    assert!(message.contains("Purge rejects"), "{message}");
+    assert_eq!(image_count(&fixture.database_a), 0);
+
+    // Another frame named 0001.fits: the next night, through another filter,
+    // so it files beside the first without replacing it.
+    let other =
+        fits_bytes_with_identity("LIGHT", "M 42", Some("OIII"), Some("2026-07-25T05:00:00"));
+    let (status, body) = upload(
+        fixture.state.clone(),
+        "catalog-a",
+        "catalog-a",
+        TOKEN_A,
+        "0001.fits",
+        &other,
+        &sha256(&other),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(image_count(&fixture.database_a), 1);
+}
+
+/// N.I.N.A. file patterns reuse a name such as `0001.fits` across targets.
+/// A tombstone refuses only the frame it recorded: same name and a capture
+/// time within 2 s. Another frame with that name imports.
+#[tokio::test]
+async fn a_frame_that_only_shares_a_deleted_frames_name_imports() {
+    let fixture = Fixture::with_placement(RemoteImageUploadPlacement::TargetTree);
+    let deleted = fits_bytes("M 31", "2026-07-24T05:00:00");
+    let (status, body) = upload(
+        fixture.state.clone(),
+        "catalog-a",
+        "catalog-a",
+        TOKEN_A,
+        "0001.fits",
+        &deleted,
+        &sha256(&deleted),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let project_id = body["data"]["resolution"]["project_id"].as_i64().unwrap();
+    let connection = rusqlite::Connection::open(&fixture.database_a).unwrap();
+    let plan =
+        psf_guard::commands::project_removal::plan(&connection, project_id, &Default::default())
+            .unwrap()
+            .unwrap();
+    psf_guard::commands::project_removal::remove(
+        &connection,
+        project_id,
+        &plan.digest,
+        &Default::default(),
+        1_790_000_000,
+    )
+    .unwrap();
+    assert_eq!(
+        psf_guard::commands::project_removal::deleted_project_frames_named(
+            &connection,
+            "0001.fits"
+        )
+        .unwrap(),
+        [("M 31".to_string(), Some(1_784_869_200))]
+    );
+    drop(connection);
+
+    // The deleted frame itself, a second later in its header: refused.
+    let again = fits_bytes("M 31", "2026-07-24T05:00:01");
+    let (status, body) = upload(
+        fixture.state.clone(),
+        "catalog-a",
+        "catalog-a",
+        TOKEN_A,
+        "0001.fits",
+        &again,
+        &sha256(&again),
+    )
+    .await;
+    assert_eq!(status, StatusCode::GONE, "{body}");
+
+    // Another target's first frame, the next night: imported.
+    let other = fits_bytes("M 42", "2026-07-25T05:00:00");
+    let (status, body) = upload(
+        fixture.state.clone(),
+        "catalog-a",
+        "catalog-a",
+        TOKEN_A,
+        "0001.fits",
+        &other,
+        &sha256(&other),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(image_count(&fixture.database_a), 1);
+}

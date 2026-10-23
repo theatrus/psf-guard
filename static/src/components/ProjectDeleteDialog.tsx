@@ -122,7 +122,7 @@ export default function ProjectDeleteDialog({ request, onClose, onDeleted }: Pro
                 This catalog copies from <code>{preview.synced_from}</code>. The project stays in that
                 database, and N.I.N.A. still schedules it there while it is Active. {withFrames
                   ? 'Later syncs leave the project and its new frames out of this catalog.'
-                  : 'With no frames to keep out, the next sync adds the project back to this catalog.'}
+                  : 'Later syncs leave the project out of this catalog.'}
               </p>
             : preview.state === 1 && <p className="project-delete-note">
                 The project is Active. When N.I.N.A. uses this database, it stops scheduling the project.

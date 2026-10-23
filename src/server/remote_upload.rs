@@ -324,6 +324,18 @@ fn publish_and_import(
             "{filename} is already registered as a light in this database"
         )));
     }
+    // A light of a project deleted from this catalog, or removed as a
+    // reject, stays out: 410, not a failure worth retrying. A tombstone
+    // with the same file name but another capture time is another frame
+    // (N.I.N.A. file patterns reuse names across targets), which imports.
+    let mut admit_removed_name = false;
+    if calibration_kind.is_none() && existing_resolution.is_none() {
+        match removed_light(&connection, &filename, frame.timestamp)? {
+            RemovedLight::NotRemoved => {}
+            RemovedLight::SameNameOnly => admit_removed_name = true,
+            RemovedLight::Refused(refusal) => return Err(refusal),
+        }
+    }
 
     // Retries follow the path already registered in this catalog before they
     // derive a path from today's target name or placement setting. That keeps
@@ -428,6 +440,7 @@ fn publish_and_import(
             vec![frame.clone()],
             &ImportOptions {
                 pair_derivatives,
+                admit_removed_names: admit_removed_name,
                 ..ImportOptions::default()
             },
         ) {
@@ -555,6 +568,69 @@ fn publish_and_import(
         },
         light_mapping_changed,
     })
+}
+
+/// What this catalog's tombstones say about an uploaded light.
+enum RemovedLight {
+    NotRemoved,
+    /// A removed frame has the same file name, but another capture time.
+    SameNameOnly,
+    Refused(AppError),
+}
+
+/// Whether a project deletion or a reject removal took out this light: a
+/// tombstone with its file name and a capture time within
+/// [`CAPTURE_IDENTITY_TIME_TOLERANCE_SECS`] of the upload's. Without both
+/// times the upload cannot be shown to be the removed frame, so it
+/// imports.
+fn removed_light(
+    connection: &rusqlite::Connection,
+    filename: &str,
+    timestamp: Option<i64>,
+) -> Result<RemovedLight, AppError> {
+    let same_frame = |acquired_at: Option<i64>| match (acquired_at, timestamp) {
+        (Some(expected), Some(actual)) => {
+            expected.abs_diff(actual) <= CAPTURE_IDENTITY_TIME_TOLERANCE_SECS
+        }
+        _ => false,
+    };
+    let deleted =
+        crate::commands::project_removal::deleted_project_frames_named(connection, filename)
+            .map_err(AppError::db)?;
+    if let Some((project, _)) = deleted.iter().find(|(_, at)| same_frame(*at)) {
+        return Ok(RemovedLight::Refused(deleted_project_refusal(
+            filename, project,
+        )));
+    }
+    let rejects =
+        crate::commands::reject_removal::removed_reject_capture_times(connection, filename)
+            .map_err(AppError::db)?;
+    if rejects.iter().any(|at| same_frame(*at)) {
+        return Ok(RemovedLight::Refused(removed_reject_refusal(filename)));
+    }
+    Ok(if deleted.is_empty() && rejects.is_empty() {
+        RemovedLight::NotRemoved
+    } else {
+        RemovedLight::SameNameOnly
+    })
+}
+
+/// The refusal for a light whose project was deleted from this catalog.
+fn deleted_project_refusal(filename: &str, project: &str) -> AppError {
+    AppError::Gone(format!(
+        "{filename} was not imported: it belongs to the project \"{project}\", which was \
+         deleted from this catalog. To accept its frames again, open the Library, expand \
+         Deleted projects and click Allow again beside \"{project}\", then upload the file again."
+    ))
+}
+
+/// The refusal for a light removed from this catalog as a reject.
+fn removed_reject_refusal(filename: &str) -> AppError {
+    AppError::Gone(format!(
+        "{filename} was not imported: it was removed from this catalog as a reject. To bring \
+         the frame back, open Purge rejects for this database and click Restore beside its \
+         removal. A removal whose trash was emptied cannot be restored."
+    ))
 }
 
 fn persist_uploaded_file(

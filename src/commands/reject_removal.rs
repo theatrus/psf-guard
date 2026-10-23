@@ -117,7 +117,8 @@ const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS psf_guard_removed_image (
     purged_at INTEGER,
     bytes INTEGER NOT NULL DEFAULT 0,
     rows_json TEXT NOT NULL,
-    files_json TEXT NOT NULL
+    files_json TEXT NOT NULL,
+    acquired_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_psf_guard_removed_image_batch ON psf_guard_removed_image(batch_id);
 CREATE INDEX IF NOT EXISTS idx_psf_guard_removed_image_target ON psf_guard_removed_image(target_id)";
@@ -133,6 +134,57 @@ pub fn ensure_schema(conn: &Connection) -> Result<()> {
             [],
         )
         .context("adding psf_guard_removed_image.purged_at")?;
+    }
+    // Tables from before the frame's capture time was kept beside its rows
+    // take it from the saved rows, while they still have them.
+    if !has_column(conn, "psf_guard_removed_image", "acquired_at") {
+        conn.execute(
+            "ALTER TABLE psf_guard_removed_image ADD COLUMN acquired_at INTEGER",
+            [],
+        )
+        .context("adding psf_guard_removed_image.acquired_at")?;
+        backfill_capture_times(conn, "1 = 1", None)?;
+    }
+    Ok(())
+}
+
+/// The capture time a removed reject's saved rows record, Unix seconds.
+fn saved_capture_time(rows_json: &str) -> Option<i64> {
+    serde_json::from_str::<RowSnapshot>(rows_json)
+        .ok()
+        .and_then(|rows| {
+            rows.acquiredimage
+                .get("acquireddate")
+                .and_then(Json::as_i64)
+        })
+}
+
+/// Copy each matching removed reject's capture time from its saved rows to
+/// `acquired_at`, so an upload of the same frame is still recognized after
+/// a purge empties the rows. `filter` is a condition on the table, with
+/// `?1` bound to `batch_id`.
+fn backfill_capture_times(conn: &Connection, filter: &str, batch_id: Option<&str>) -> Result<()> {
+    let mut statement = conn.prepare(&format!(
+        "SELECT acquired_image_guid, rows_json FROM psf_guard_removed_image
+         WHERE acquired_at IS NULL AND rows_json <> '{{}}' AND ({filter})"
+    ))?;
+    let parameters: Vec<&dyn rusqlite::ToSql> = if filter.contains("?1") {
+        vec![&batch_id]
+    } else {
+        Vec::new()
+    };
+    let rows = statement
+        .query_map(parameters.as_slice(), |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut update = conn.prepare(
+        "UPDATE psf_guard_removed_image SET acquired_at = ?2 WHERE acquired_image_guid = ?1",
+    )?;
+    for (guid, rows_json) in rows {
+        if let Some(acquired_at) = saved_capture_time(&rows_json) {
+            update.execute(params![guid, acquired_at])?;
+        }
     }
     Ok(())
 }
@@ -189,6 +241,36 @@ pub fn removed_file_names(conn: &Connection) -> Result<HashSet<String>> {
         }
     }
     Ok(names)
+}
+
+/// The capture time (Unix seconds) of each removed reject whose file has
+/// this name, compared in lower case: `acquired_at`, or the saved rows for
+/// a reject from before it was kept; `None` when neither says. An upload
+/// of the same frame is refused rather than bringing it back.
+pub fn removed_reject_capture_times(
+    conn: &Connection,
+    file_name: &str,
+) -> Result<Vec<Option<i64>>> {
+    if !table_exists(conn, "psf_guard_removed_image") {
+        return Ok(Vec::new());
+    }
+    let acquired_at = if has_column(conn, "psf_guard_removed_image", "acquired_at") {
+        "acquired_at"
+    } else {
+        "NULL"
+    };
+    let mut statement = conn.prepare(&format!(
+        "SELECT {acquired_at}, rows_json FROM psf_guard_removed_image WHERE lower(file_name) = lower(?1)"
+    ))?;
+    let rows = statement
+        .query_map([file_name], |row| {
+            Ok((row.get::<_, Option<i64>>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows
+        .into_iter()
+        .map(|(acquired_at, rows_json)| acquired_at.or_else(|| saved_capture_time(&rows_json)))
+        .collect())
 }
 
 /// Which frames a run may take: one project, one target, or the database.
@@ -932,8 +1014,9 @@ fn remove_one(
         tx.execute(
             "INSERT INTO psf_guard_removed_image (
                 acquired_image_guid, acquired_image_id, project_id, target_id, exposure_id,
-                file_name, batch_id, removed_at, rejected_at, trash_until, bytes, rows_json, files_json)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                file_name, batch_id, removed_at, rejected_at, trash_until, bytes, rows_json, files_json,
+                acquired_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 frame.guid,
                 frame.image_id,
@@ -948,6 +1031,7 @@ fn remove_one(
                 trashed.iter().map(|file| file.bytes).sum::<u64>() as i64,
                 serde_json::to_string(&rows)?,
                 serde_json::to_string(&trashed)?,
+                rows.acquiredimage.get("acquireddate").and_then(Json::as_i64),
             ],
         )?;
         for (table, key, value) in [
@@ -1520,6 +1604,9 @@ pub fn purge(conn: &Connection, batch_id: Option<&str>, now: i64) -> Result<Purg
     ensure_schema(conn)?;
     let due =
         "files_deleted_at IS NOT NULL AND purged_at IS NULL AND (?1 IS NULL OR batch_id = ?1)";
+    // The capture time outlives the rows, so an upload of the same frame
+    // is still recognized.
+    backfill_capture_times(conn, due, batch_id)?;
     let (frames, bytes): (i64, Option<i64>) = conn.query_row(
         &format!("SELECT COUNT(*), SUM(LENGTH(rows_json) + LENGTH(files_json)) FROM psf_guard_removed_image WHERE {due}"),
         [batch_id],
@@ -2170,6 +2257,7 @@ mod tests {
                 dry_run: false,
                 with_image_data: true,
                 project_filter: None,
+                deletions: Default::default(),
             },
         )
         .unwrap();

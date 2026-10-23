@@ -715,9 +715,11 @@ files stay on disk. When the project has frames, type its name to confirm.
 A plan that linked the project keeps its framing and its other databases
 and no longer plans work for that rig; a plan left with no database moves to
 the plans with nothing captured yet. Later syncs and imports skip a
-deleted project that had frames, and its files, until you click **Allow
-again** beside it under **Deleted projects**, below the archive. A project
-without frames is not listed there. A project that comes back
+deleted project, and its files, until you click **Allow again** beside it
+under **Deleted projects**, below the archive. A project without frames
+appears there once a sync has left it out. A sync from this catalog also
+deletes the project in a catalog or rig it writes to, when nothing was
+captured for it there. A project that comes back
 arrives with a plan of its own; to rejoin its old plan, use **Attach a
 project from another database** in that plan's workspace. Deleting needs an editor's
 account and a server started with `--allow-database-management`. A plan with nothing

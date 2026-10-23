@@ -1069,3 +1069,222 @@ async fn an_upload_only_key_cannot_reach_the_sync_protocol() {
         assert_eq!(status, StatusCode::FORBIDDEN, "{uri}: {response:#}");
     }
 }
+
+const EMPTY_GUID: &str = "5e5e5e5e-0000-4000-8000-000000000005";
+
+/// The source catalog deleted Empty, which had no frames, and allowed
+/// another deletion back. Rows without a valid UUID never travel.
+const DELETED_IN_SOURCE: &str = "
+     CREATE TABLE psf_guard_removed_project (id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL,
+       project_guid TEXT, name TEXT NOT NULL, removed_at INTEGER NOT NULL, frames INTEGER NOT NULL,
+       allowed_back_at INTEGER, left_out_at INTEGER, origin TEXT NOT NULL DEFAULT 'local');
+     INSERT INTO psf_guard_removed_project (id, project_id, project_guid, name, removed_at, frames, allowed_back_at) VALUES
+       (1, 5, '5e5e5e5e-0000-4000-8000-000000000005', 'Empty', 100, 0, NULL),
+       (2, 6, '6e6e6e6e-0000-4000-8000-000000000006', 'Allowed back', 100, 4, 200),
+       (3, 7, NULL, 'From before', 100, 0, 100),
+       (4, 8, '', 'No GUID', 100, 0, NULL),
+       (5, 9, 'not-a-uuid', 'Not a UUID', 100, 0, NULL);";
+
+/// The destination still has Empty, with nothing captured for it.
+const EMPTY_IN_DESTINATION: &str =
+    "INSERT INTO project VALUES (5,'p','Empty','',1,1,'5e5e5e5e-0000-4000-8000-000000000005');
+     INSERT INTO target VALUES (50,'Empty',1,1.0,2.0,0,5,'empty-target');";
+
+impl Harness {
+    async fn export_with(
+        &self,
+        operation: &str,
+        include_project_tombstones: Option<bool>,
+    ) -> Value {
+        let mut request = json!({
+            "protocol_version": 1,
+            "catalog_id": "source",
+            "operation": operation,
+            "reviewed_only": false,
+        });
+        if let Some(include) = include_project_tombstones {
+            request["include_project_tombstones"] = json!(include);
+        }
+        let (status, exported) = call(
+            self.router.clone(),
+            "POST",
+            "/api/sync/v1/exports",
+            Some(SOURCE_TOKEN),
+            Some(request),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{exported:#}");
+        exported["data"]["bundle"].clone()
+    }
+}
+
+#[tokio::test]
+async fn capabilities_advertise_project_tombstones() {
+    let harness = Harness::new("", "");
+    let (status, response) = call(
+        harness.router,
+        "GET",
+        "/api/sync/v1/capabilities",
+        Some(DESTINATION_TOKEN),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{response:#}");
+    assert!(response["data"]["capabilities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|value| value == remote_sync::PROJECT_TOMBSTONES_CAPABILITY));
+    assert_eq!(
+        remote_sync::PROJECT_TOMBSTONES_CAPABILITY,
+        "project_tombstones_v1"
+    );
+}
+
+/// An export carries the deleted projects only when the client asks: an
+/// older client, which never asks, sees the bundle it always did.
+#[tokio::test]
+async fn exports_carry_deleted_projects_only_when_asked() {
+    let harness = Harness::new(&format!("{OBSERVED}{DELETED_IN_SOURCE}"), "");
+    for operation in ["merge", "push_planning", "push_grades"] {
+        for asked in [None, Some(false)] {
+            let bundle = harness.export_with(operation, asked).await;
+            assert!(
+                bundle["tables"].get("psf_guard_removed_project").is_none(),
+                "{operation} {asked:?}: {bundle:#}"
+            );
+        }
+    }
+    for operation in ["merge", "push_planning"] {
+        let bundle = harness.export_with(operation, Some(true)).await;
+        let table = &bundle["tables"]["psf_guard_removed_project"];
+        let columns: Vec<&str> = table["columns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|column| column["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            columns,
+            ["project_guid", "name", "removed_at", "allowed_back_at"],
+            "{operation}"
+        );
+        let rows = table["rows"].as_array().unwrap();
+        assert_eq!(
+            rows.len(),
+            2,
+            "rows with a UUID, standing or allowed back: {table:#}"
+        );
+        assert_eq!(rows[0]["values"][0]["value"], EMPTY_GUID);
+        assert_eq!(rows[0]["values"][1]["value"], "Empty");
+        assert_eq!(rows[0]["values"][2]["value"], "100");
+        assert_eq!(rows[0]["values"][3]["kind"], "null");
+        assert_eq!(rows[1]["values"][3]["value"], "200");
+    }
+    // A grade push never carries it.
+    let bundle = harness.export_with("push_grades", Some(true)).await;
+    assert!(bundle["tables"].get("psf_guard_removed_project").is_none());
+}
+
+/// A merge bundle with the deleted projects deletes the destination's
+/// frameless copy and records it; one without them changes nothing.
+#[tokio::test]
+async fn a_merge_with_deleted_projects_deletes_the_destinations_frameless_copy() {
+    let harness = Harness::new(
+        &format!("{OBSERVED}{DELETED_IN_SOURCE}"),
+        EMPTY_IN_DESTINATION,
+    );
+
+    // An older client's bundle: nothing is deleted.
+    let old = harness.export_with("merge", None).await;
+    let preview_id = harness.preview("merge", old).await;
+    let (status, applied) = harness.apply(&preview_id).await;
+    assert_eq!(status, StatusCode::OK, "{applied:#}");
+    let present = |harness: &Harness| {
+        harness
+            .destination()
+            .query_row(
+                "SELECT COUNT(*) FROM project WHERE guid = '5e5e5e5e-0000-4000-8000-000000000005'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap()
+    };
+    assert_eq!(present(&harness), 1);
+
+    let bundle = harness.export_with("merge", Some(true)).await;
+    let preview_id = harness.preview("merge", bundle).await;
+    assert_eq!(present(&harness), 1, "a preview deletes nothing");
+    let (status, applied) = harness.apply(&preview_id).await;
+    assert_eq!(status, StatusCode::OK, "{applied:#}");
+    assert_eq!(present(&harness), 0);
+    assert_eq!(
+        applied["data"]["summary"]["project_deleted"], 1,
+        "{applied:#}"
+    );
+    let recorded: i64 = harness
+        .destination()
+        .query_row(
+            "SELECT COUNT(*) FROM psf_guard_removed_project WHERE project_guid = '5e5e5e5e-0000-4000-8000-000000000005' AND origin = 'sync'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(recorded, 1, "a pulled-into catalog records the deletion");
+}
+
+/// A planning push from a peer with the deleted projects deletes the
+/// frameless copy. The destination is a registered PSF Guard catalog, so
+/// it records the deletion, hidden from Deleted projects, and a later sync
+/// from a rig does not bring the project back.
+#[tokio::test]
+async fn a_planning_push_from_a_peer_deletes_and_records_the_deletion() {
+    let harness = Harness::new(
+        &format!("{OBSERVED}{DELETED_IN_SOURCE}"),
+        EMPTY_IN_DESTINATION,
+    );
+    let bundle = harness.export_with("push_planning", Some(true)).await;
+    let preview_id = harness.preview("push_planning", bundle).await;
+    let (status, applied) = harness.apply(&preview_id).await;
+    assert_eq!(status, StatusCode::OK, "{applied:#}");
+    assert_eq!(
+        applied["data"]["summary"]["project_deleted"], 1,
+        "{applied:#}"
+    );
+    let destination = harness.destination();
+    assert_eq!(count(&destination, "project"), 1, "M42 arrives, Empty goes");
+    let (recorded, listed): (i64, i64) = destination
+        .query_row(
+            "SELECT COUNT(*), COUNT(left_out_at) FROM psf_guard_removed_project
+             WHERE project_guid = '5e5e5e5e-0000-4000-8000-000000000005' AND frames = 0 AND allowed_back_at IS NULL AND origin = 'sync'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!((recorded, listed), (1, 0));
+}
+
+/// A grade push carrying the table is refused: only merge and planning
+/// bundles may carry it.
+#[tokio::test]
+async fn a_grade_push_carrying_deleted_projects_is_refused() {
+    let harness = Harness::new(&format!("{OBSERVED}{DELETED_IN_SOURCE}"), "");
+    let merge = harness.export_with("merge", Some(true)).await;
+    let mut grades = harness.export_with("push_grades", None).await;
+    grades["tables"]["psf_guard_removed_project"] =
+        merge["tables"]["psf_guard_removed_project"].clone();
+    let (status, response) = call(
+        harness.router.clone(),
+        "POST",
+        "/api/sync/v1/previews",
+        Some(DESTINATION_TOKEN),
+        Some(json!({
+            "protocol_version": 1,
+            "catalog_id": "destination",
+            "operation": "push_grades",
+            "bundle": grades
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{response:#}");
+}

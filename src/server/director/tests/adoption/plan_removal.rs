@@ -100,6 +100,22 @@ async fn deleting_a_plan_deletes_its_rig_projects_and_the_plan() {
             .unwrap();
         assert_eq!(left, 0, "{table} kept rows");
     }
+    // The rig's project, without frames, stays deleted: a hidden local
+    // tombstone keeps later syncs from bringing it back.
+    let (tombstone, origin, allowed_back): (String, String, Option<i64>) =
+        a.db.query_row(
+            "SELECT lower(project_guid), origin, allowed_back_at FROM psf_guard_removed_project",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        (tombstone, origin.as_str(), allowed_back),
+        (guid.to_lowercase(), "local", None)
+    );
+    assert!(crate::commands::project_removal::deletions(&a.db)
+        .unwrap()
+        .is_empty());
     let (status, _) = call(
         &a.f.app,
         "GET",

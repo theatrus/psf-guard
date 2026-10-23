@@ -129,6 +129,55 @@ fn planning_guid(plan: &project_removal::RemovalPlan) -> Option<Uuid> {
         .and_then(|guid| Uuid::parse_str(guid).ok())
 }
 
+/// What keeps a sync into catalog `db_slug` (or into a Target Scheduler
+/// file, with no slug) from deleting a project its source deleted: frames
+/// reported to a collaboration, and the catalog's projects whose plan came
+/// from one. An error reading Planning stops the sync, as it stops Delete
+/// project.
+pub(crate) async fn sync_deletion_rules(
+    state: &AppState,
+    db_slug: Option<&str>,
+) -> Result<crate::commands::sync::SourceDeletionRules, AppError> {
+    let mut rules = crate::commands::sync::SourceDeletionRules {
+        protected_frames: protected(state).await?,
+        ..Default::default()
+    };
+    if let (Some(service), Some(slug)) = (state.director.clone(), db_slug) {
+        rules.protected_projects = service
+            .collaboration_source_projects(state.all_databases(), slug.to_string())
+            .await
+            .map_err(|error| {
+                AppError::InternalError(format!("reading collaboration plans: {error}"))
+            })?
+            .into_iter()
+            .collect();
+    }
+    Ok(rules)
+}
+
+/// Make Planning forget the projects a sync deleted from catalog `db_id`
+/// because their source catalog deleted them, as it forgets a project the
+/// Library deletes. Runs after the sync's transaction commits. A failure is
+/// logged; the plan then still links a project that is gone, as after a
+/// Delete project whose Planning step failed.
+pub(crate) async fn forget_synced_deletions(state: &Arc<AppState>, db_id: &str, guids: &[String]) {
+    let Some(service) = state.director.clone() else {
+        return;
+    };
+    for guid in guids {
+        let Ok(guid) = Uuid::parse_str(guid) else {
+            continue;
+        };
+        if let Err(error) = service
+            .clone()
+            .forget_source_project(state.all_databases(), db_id.to_string(), guid)
+            .await
+        {
+            tracing::warn!(db = %db_id, %guid, "A sync deleted a project but its plan still links it: {error}");
+        }
+    }
+}
+
 /// Plan the deletion on a read-only connection.
 async fn read_plan(
     ctx: &DbContext,

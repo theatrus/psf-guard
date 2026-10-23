@@ -115,6 +115,10 @@ pub struct ImportOptions {
     /// Create structure for lights that match no existing target, or leave
     /// them out. Only an automatic run asks for anything but `Create`.
     pub new_targets: NewTargets,
+    /// Import a light whose file name a removed frame had: a project
+    /// deletion's or a removed reject's. Off by default. An upload turns it
+    /// on once the capture time shows a different frame with that name.
+    pub admit_removed_names: bool,
 }
 
 pub const DEFAULT_MATCH_RADIUS_DEG: f64 = 0.5;
@@ -135,6 +139,7 @@ impl Default for ImportOptions {
             only_new: false,
             light_filter: LightFilter::default(),
             new_targets: NewTargets::default(),
+            admit_removed_names: false,
         }
     }
 }
@@ -150,7 +155,7 @@ pub fn known_files(conn: &Connection, files: &[PathBuf]) -> Result<HashSet<PathB
         .filter_map(|path| path.file_name())
         .map(|name| name.to_string_lossy().to_lowercase())
         .collect();
-    let mut existing = existing_basenames(conn, &candidate_basenames)?;
+    let mut existing = existing_basenames(conn, &candidate_basenames, true)?;
     existing.extend(crate::frame_derivatives::recorded_file_names(conn)?);
     let calibration = crate::calibration::known_calibration_fingerprints(conn)?;
     let mut known = HashSet::new();
@@ -564,7 +569,7 @@ pub fn import_frames(
         .map(|basename| basename.to_lowercase())
         .filter(|basename| !basename.is_empty())
         .collect();
-    let existing = existing_basenames(&tx, &candidate_basenames)?;
+    let existing = existing_basenames(&tx, &candidate_basenames, !options.admit_removed_names)?;
     // The rigs this catalog has seen. A light that names a rig none of them
     // admits is set aside, unless the run says otherwise.
     let known_rigs = if options.accept_other_rigs {
@@ -1291,6 +1296,7 @@ fn attach_frames_to_target(
 fn existing_basenames(
     conn: &Connection,
     candidate_basenames: &HashSet<String>,
+    with_removed: bool,
 ) -> Result<HashSet<String>> {
     let mut set = HashSet::new();
     if candidate_basenames.len() <= 16 {
@@ -1312,6 +1318,9 @@ fn existing_basenames(
     }
     // A removed reject's file is known too, so importing or uploading it
     // again does not bring the frame back as a new one.
+    if !with_removed {
+        return Ok(set);
+    }
     set.extend(
         crate::commands::reject_removal::removed_file_names(conn)?
             .into_iter()

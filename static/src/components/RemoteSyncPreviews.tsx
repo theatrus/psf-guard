@@ -110,6 +110,9 @@ export default function RemoteSyncPreviews({
                 <td>{entry.source}</td>
                 <td>
                   {entry.result.total_inserted} new · {entry.result.total_updated} updated
+                  {(entry.result.project?.deleted ?? 0) > 0
+                    ? ` · ${entry.result.project.deleted} deleted project${entry.result.project.deleted === 1 ? '' : 's'}`
+                    : ''}
                   {(entry.result.adopted ?? 0) > 0
                     ? ` · ${entry.result.adopted} existing local image records matched`
                     : ''}

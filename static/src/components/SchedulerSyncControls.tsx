@@ -29,6 +29,22 @@ const operationLabel = (kind: SchedulerSyncKind) => {
   }
 };
 
+const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? '' : 's'}`;
+
+/** Projects the source catalog deleted that the transfer deletes here
+ *  too, because nothing was captured for them here. */
+const deletedProjectsLine = (result: SchedulerSyncResponse) => {
+  const projects = result.project.deleted ?? 0;
+  if (projects === 0) return null;
+  const parts = [
+    (result.target.deleted ?? 0) > 0 ? plural(result.target.deleted ?? 0, 'target') : null,
+    (result.exposureplan.deleted ?? 0) > 0 ? plural(result.exposureplan.deleted ?? 0, 'exposure plan') : null,
+  ].filter((part): part is string => part !== null);
+  return `Deletes ${plural(projects, 'project')} that the source catalog deleted${
+    parts.length > 0 ? `, with ${parts.join(' and ')}` : ''
+  }. Nothing was captured for ${projects === 1 ? 'it' : 'them'} in the destination.`;
+};
+
 /** The Keep out and Use anyway choices a pull carries: each changes which
  * frames the destination's masters take, so the preview says so. */
 const calibrationChoiceLine = (result: SchedulerSyncResponse) => {
@@ -240,9 +256,11 @@ export default function SchedulerSyncControls({
       );
       sessionStorage.removeItem(STORED_PREVIEW_KEY);
       setPending(null);
+      const deleted = result.project?.deleted ?? 0;
       setMessage(
         `${operationLabel(result.kind)} complete: ${result.total_inserted} added, ` +
-          `${result.total_updated} updated.`
+          `${result.total_updated} updated` +
+          (deleted > 0 ? `, ${plural(deleted, 'project')} deleted.` : '.')
       );
       queryClient.invalidateQueries({ queryKey: ['databases'] });
       queryClient.invalidateQueries({ queryKey: ['db'] });
@@ -442,6 +460,9 @@ export default function SchedulerSyncControls({
                   ? `, captures +${pending.result.acquiredimage.inserted}/${pending.result.acquiredimage.updated}`
                   : ''}
               </small>
+              {deletedProjectsLine(pending.result) && (
+                <small>{deletedProjectsLine(pending.result)}</small>
+              )}
               {calibrationChoiceLine(pending.result) && (
                 <small>{calibrationChoiceLine(pending.result)}</small>
               )}

@@ -338,6 +338,7 @@ fn a_capture_received_by_manual_sync_tracks_reviews_before_the_first_automatic_r
                 dry_run: false,
                 with_image_data: false,
                 project_filter: None,
+                deletions: Default::default(),
             },
         )
         .unwrap();

@@ -17,7 +17,7 @@ use std::{
 };
 
 use crate::server::database_context::open_scheduler_connection_with_flags;
-use crate::server::remote_sync::SyncOperation;
+use crate::server::remote_sync::{OptionalTables, SyncOperation};
 use crate::sync_client::{local_bundle, materialize, SyncClient};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,11 +59,19 @@ pub struct RemoteSyncOptions {
     /// Interrupts the local merge of a pull. The caller drops the future to
     /// stop a request to the peer.
     pub stop: crate::concurrency::Stop,
+    /// For a pull: what may stop it from deleting a local project the
+    /// peer's catalog deleted, including the deletions its preview listed.
+    pub deletions: crate::commands::sync::SourceDeletionRules,
 }
 
 pub struct RemoteSyncOutcome {
     pub applied: bool,
     pub summary: BTreeMap<String, i64>,
+    /// GUIDs of the local projects a pull deleted, or for a dry run would
+    /// delete, because the peer's catalog deleted them. The server tells
+    /// Planning to forget the ones an apply deleted, and holds an apply to
+    /// the ones its preview listed.
+    pub deleted_project_guids: Vec<String>,
     pub peer_product: String,
     pub peer_catalog: String,
 }
@@ -88,17 +96,21 @@ pub async fn sync_remote(options: RemoteSyncOptions) -> Result<RemoteSyncOutcome
         client.base_url()
     );
 
+    let mut deleted_project_guids = Vec::new();
     let summary = match options.direction {
-        RemoteDirection::Pull => pull_from(&client, &catalog, &options).await?,
+        RemoteDirection::Pull => {
+            let (summary, deleted) = pull_from(&client, &catalog, &options).await?;
+            deleted_project_guids = deleted;
+            summary
+        }
         RemoteDirection::PushPlanning | RemoteDirection::PushGrades => {
+            // Only the optional tables the peer reads: an older peer refuses
+            // a bundle with a table it does not know.
             push_to(
                 &client,
                 &catalog,
                 &options,
-                capabilities
-                    .capabilities
-                    .iter()
-                    .any(|name| name == crate::server::remote_sync::FRAME_DERIVATIVES_CAPABILITY),
+                OptionalTables::from_capabilities(&capabilities.capabilities),
             )
             .await?
         }
@@ -106,6 +118,7 @@ pub async fn sync_remote(options: RemoteSyncOptions) -> Result<RemoteSyncOutcome
     Ok(RemoteSyncOutcome {
         applied: !options.dry_run,
         summary,
+        deleted_project_guids,
         peer_product,
         peer_catalog: catalog,
     })
@@ -118,7 +131,7 @@ async fn pull_from(
     client: &SyncClient,
     catalog: &str,
     options: &RemoteSyncOptions,
-) -> Result<BTreeMap<String, i64>> {
+) -> Result<(BTreeMap<String, i64>, Vec<String>)> {
     use crate::commands::sync::{require_pull_capable, sync_pull, PullOptions};
 
     let bundle = client.export(catalog, SyncOperation::Merge, false).await?;
@@ -135,11 +148,12 @@ async fn pull_from(
         .suffix(".sqlite")
         .tempfile()
         .context("creating a staging file for the peer's bundle")?;
-    let (local_path, dry_run, with_image_data, stop) = (
+    let (local_path, dry_run, with_image_data, stop, deletions) = (
         options.local_path.clone(),
         options.dry_run,
         options.with_image_data,
         options.stop.clone(),
+        options.deletions.clone(),
     );
     // Staging and merging are SQLite work: off the async runtime.
     tokio::task::spawn_blocking(move || {
@@ -163,9 +177,14 @@ async fn pull_from(
                 dry_run,
                 with_image_data,
                 project_filter: None,
+                deletions,
             },
         )?;
-        Ok(pull_summary(&summary))
+        // A preview's list is what it would delete; an apply's, what it did.
+        Ok((
+            pull_summary(&summary),
+            summary.deleted_project_guids.clone(),
+        ))
     })
     .await
     .context("the merge task")?
@@ -177,7 +196,7 @@ async fn push_to(
     client: &SyncClient,
     catalog: &str,
     options: &RemoteSyncOptions,
-    peer_reads_frame_derivatives: bool,
+    optional: OptionalTables,
 ) -> Result<BTreeMap<String, i64>> {
     let operation = options.direction.operation();
     let bundle = local_bundle(
@@ -186,7 +205,7 @@ async fn push_to(
         operation,
         options.reviewed_only,
         options.with_image_data,
-        peer_reads_frame_derivatives,
+        optional,
     )
     .context("building a bundle from the local database")?;
     let rows: usize = bundle.tables.values().map(|table| table.rows.len()).sum();
@@ -249,6 +268,9 @@ fn pull_summary(summary: &crate::commands::sync::PullSummary) -> BTreeMap<String
     ] {
         counts.insert(format!("{name}_inserted"), table.inserted as i64);
         counts.insert(format!("{name}_updated"), table.updated as i64);
+        if table.deleted > 0 {
+            counts.insert(format!("{name}_deleted"), table.deleted as i64);
+        }
     }
     if summary.imagedata_synced {
         counts.insert(

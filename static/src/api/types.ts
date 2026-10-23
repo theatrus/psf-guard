@@ -2549,6 +2549,10 @@ export interface SchedulerSyncTableCounts {
   updated: number;
   unchanged: number;
   skipped: number;
+  /** Rows deleted because the source catalog deleted their project and
+   *  nothing was captured for it in the destination. Absent on older
+   *  responses. */
+  deleted?: number;
 }
 
 export interface SchedulerSyncGradeCounts {
@@ -4418,6 +4422,9 @@ export interface RemoteSyncRequest {
   dry_run: boolean;
   reviewed_only?: boolean;
   with_image_data?: boolean;
+  /** For a pull that writes: the projects its preview listed for deletion.
+   *  The apply reads the peer again and deletes only these. */
+  previewed_deletions?: string[];
 }
 
 export interface RemoteSyncResult {
@@ -4425,6 +4432,10 @@ export interface RemoteSyncResult {
   peer_product: string;
   peer_catalog: string;
   summary: Record<string, number>;
+  /** For a pull: GUIDs of local projects it deleted, or for a preview would
+   *  delete, because the peer's catalog deleted them. Absent on older
+   *  servers. */
+  deleted_projects?: string[];
 }
 export type FlatHistoryState =
   | 'recorded' | 'pending' | 'removed' | 'absent' | 'conflict' | 'superseded';
