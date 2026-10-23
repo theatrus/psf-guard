@@ -106,15 +106,16 @@ describe('Deleting a plan', () => {
       host: 'collab.example', base_url: 'https://collab.example/', remote_project_id: '000000000002',
       remote_project_name: 'M31 halo', imports: 2, unsent_reports: 0, sent_reports: 0, reported_frames: 0,
       transfers: 0, nightly_intake: ['Community'], open_assignments: 6, coordinator_reachable: false,
+      signed_in: [], not_signed_in: ['RedCat'],
     };
     server.use(http.get(path, () => ok(preview({ collaboration }))));
     mount();
     const note = await screen.findByRole('note', { name: 'Collaboration' });
     expect(note).toHaveTextContent('This plan comes from the collaboration at collab.example (M31 halo, project 000000000002). Deleting it leaves the collaboration first:');
-    expect(note).toHaveTextContent('Ends 6 open assignments in the rig databases, so new frames no longer count toward the collaboration.');
+    expect(note).toHaveTextContent('Its 6 open assignments in the rig databases are deleted with the rig projects.');
     expect(note).toHaveTextContent('Removes 2 imported nightly assignments.');
     expect(note).toHaveTextContent('Stops nightly intake on Community from importing the project.');
-    expect(note).toHaveTextContent('PSF Guard cannot tell collab.example: no rig here is signed in to it. Leave or decline the project on collab.example too.');
+    expect(note).toHaveTextContent('PSF Guard cannot tell collab.example: RedCat is not signed in to collab.example. Leave or decline the project on collab.example too.');
     expect(screen.getByRole('button', { name: 'Delete plan' })).toBeEnabled();
   });
 });

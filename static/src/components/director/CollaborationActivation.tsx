@@ -1,9 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '../../api/client';
 import type { CollaborationVisit } from '../../api/collaborationTypes';
 import EarlyBeta, { COLLABORATION_BETA } from './EarlyBeta';
 import CollaborationLeaveDialog from './CollaborationLeaveDialog';
+import { leftSummary } from './collaborationLeaveText';
+import type { DirectorCollaborationLeft } from '../../api/directorTypes';
 
 /** The plan's imported nightly assignments, to choose for activation, and
  *  Leave collaboration for a server that can change rig databases. */
@@ -14,11 +16,19 @@ export default function CollaborationActivation({ projectId, value, onChange, di
 }) {
   const query = useQuery({ queryKey: ['collaborationActivation', projectId], queryFn: () => apiClient.getCollaborationActivation(projectId), retry: false });
   const [leaving, setLeaving] = useState(false);
-  const dialog = leaving && <CollaborationLeaveDialog planId={projectId} onClose={() => setLeaving(false)} onLeft={() => onChange([])} />;
+  const [left, setLeft] = useState<DirectorCollaborationLeft | null>(null);
+  const status = useRef<HTMLParagraphElement>(null);
+  // The Leave button goes with the assignments, so focus moves to the line
+  // that says what leaving did once the dialog closes.
+  useEffect(() => {
+    if (!leaving && left) status.current?.focus();
+  }, [leaving, left]);
+  const dialog = leaving && <CollaborationLeaveDialog planId={projectId} onClose={() => setLeaving(false)} onLeft={outcome => { setLeft(outcome); onChange([]); }} />;
+  const summary = left && <p ref={status} tabIndex={-1} role="status">{leftSummary(left)}</p>;
   if (query.isError) return <p role="alert">Collaboration assignments could not be loaded: {query.error.message}</p>;
   // The dialog keeps its place in the tree when the assignments go, so it
   // can still show what leaving did.
-  if (!query.data?.imports.length) return <>{null}{dialog}</>;
+  if (!query.data?.imports.length) return <>{summary}{dialog}</>;
   return <><fieldset disabled={disabled} className="collaboration-activation"><legend>Collaboration assignments <EarlyBeta note={COLLABORATION_BETA} /></legend>
     {query.data.imports.map(i => {
       const selected = value.find(v => v.import_id === i.import_id);

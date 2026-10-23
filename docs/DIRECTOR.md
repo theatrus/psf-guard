@@ -233,9 +233,14 @@ changes:
 
 - the plan's open assignments in the rig databases end, so new frames no
   longer count toward the collaboration;
-- its imported assignments are removed, with its report records: reports not
-  yet sent and the record of reports already sent. The coordinator keeps the
+- its imported assignments are removed;
+- reports not yet sent are deleted and never reach the coordinator. To have
+  them counted, deliver them first with **Check in** in the rig's
+  **Collaboration** section;
+- the record of reports already sent is removed. The coordinator keeps the
   reports it received;
+- frames in reports lose their protection: removing rejects and deleting the
+  project in the Library can then remove them;
 - file transfers for it that have not finished are cancelled;
 - nightly intake stops importing the project. When the project was the only
   one a rig's intake listed, **Pull tonight automatically** turns off.
@@ -246,11 +251,13 @@ show a warning for it: the plan's assignments there stay open, though PSF
 Guard no longer counts frames toward them. Register the database again in
 Settings, then activate the plan; activation ends them.
 
-Click **Leave collaboration**. PSF Guard then declines the plan's tasks at the
-coordinator with the rig's saved sign-in, so the coordinator stops assigning
-work for it to this server's rigs. When no rig here is signed in to that
-server, or the request fails, the result says so; leave or decline the
-project on the coordinator's site too.
+The dialog also names the rigs signed in to the coordinator and those that
+are not. Click **Leave collaboration**. PSF Guard then declines the plan's
+tasks at the coordinator with each signed-in rig's saved sign-in, so the
+coordinator stops assigning that work to those rigs. The result says
+whether all, some or none of the tasks were declined; for any that were
+not, leave or decline the project on the coordinator's site too. When the
+dialog closes, the Activation section shows what leaving did.
 
 The plan stays as a plan of your own. It keeps its framing, exposures,
 priorities and activation record, and its rig projects keep their targets,
@@ -260,7 +267,8 @@ plan's own framing, not the collaboration's panels. You can now rename,
 attach, detach or delete it like any other plan.
 
 To take part again, join the project from the rig's **Collaboration**
-section and review the import. The review says that the import rejoins your
+section, which creates a new task when the old one was declined, and review
+the import. The review says that the import rejoins your
 plan; **Import draft** links the plan to the project again and keeps its
 name, framing, exposures and recipes.
 

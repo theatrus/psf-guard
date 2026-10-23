@@ -266,6 +266,18 @@ async fn imported(a: &super::activation::Activated) -> PreparedImport {
 /// Import the fixtures' share for `rig` as `agent`, with one OIII recipe
 /// for the rig. Agents on one server share the plan.
 fn import_for(a: &super::activation::Activated, rig: Uuid, agent: &str) -> PreparedImport {
+    import_task(a, rig, agent, "000000000004", 1000)
+}
+
+/// Import task `task` of the fixtures' share at `now`, and give the rig an
+/// OIII recipe when it has none.
+fn import_task(
+    a: &super::activation::Activated,
+    rig: Uuid,
+    agent: &str,
+    task: &str,
+    now: u64,
+) -> PreparedImport {
     use psf_guard_director_interop::{astrocollab::Source, collaboration::prepare_import};
     use psf_guard_director_meta::plan::{Contribution, TemplateChoice};
     let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
@@ -274,20 +286,24 @@ fn import_for(a: &super::activation::Activated, rig: Uuid, agent: &str) -> Prepa
         "../../../../../crates/director-interop/tests/fixtures/starfront-tonight.json"
     ))
     .unwrap();
+    wire.as_object_mut().unwrap().remove("task");
     wire["tasks"][0]["agent"] = json!(agent);
-    wire["task"]["agent"] = json!(agent);
+    wire["tasks"][0]["id"] = json!(task);
     let p = prepare_import(
         &serde_json::to_vec(&wire).unwrap(),
         &source,
         "2026-10-05",
-        "000000000004",
+        task,
     )
     .unwrap();
     let preview = store.preview_collaboration_import(&p, rig).unwrap();
     store
-        .apply_collaboration_import(&p, rig, &preview.review_digest, 1000)
+        .apply_collaboration_import(&p, rig, &preview.review_digest, now)
         .unwrap();
     let mut plan = store.plan_draft(p.project_id()).unwrap().unwrap();
+    if plan.contributions.iter().any(|c| c.rig_id == rig) {
+        return p;
+    }
     plan.contributions.push(Contribution {
         id: Uuid::new_v4(),
         objective_id: plan.objectives[0].id,
@@ -387,7 +403,7 @@ async fn deleting_an_imported_plan_with_nothing_captured_leaves_its_collaboratio
     assert_eq!(deleted["coordinator"]["declined"], json!([]));
     assert_eq!(
         deleted["coordinator"]["problems"],
-        json!(["No rig on this server is signed in as agent 000000000001 at this collaboration."])
+        json!(["RedCat rig is not signed in to this collaboration."])
     );
     let left: i64 =
         a.db.query_row(
@@ -426,7 +442,7 @@ async fn a_plan_with_reported_frames_stays_until_it_leaves_the_collaboration() {
     let (_, preview) = call(&a.f.app, "GET", &path, Value::Null, None).await;
     assert_eq!(
         preview["data"]["refusal"],
-        "1 frame of this plan was reported to the collaboration at collab.example. Open the plan and choose Leave collaboration under Collaboration assignments, then delete the plan."
+        "1 frame of this plan is in reports to the collaboration at collab.example. Open the plan and choose Leave collaboration under Collaboration assignments, then delete its projects from the Library."
     );
     let digest = preview["data"]["databases"][0]["project"]["digest"].clone();
     let (status, _) = call(
@@ -601,4 +617,164 @@ async fn leaving_with_an_unregistered_database_warns_and_activation_ends_its_ass
     .await;
     assert_eq!(status, StatusCode::OK, "{applied}");
     assert_eq!(open_assignments(&a.db), 0);
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+}
+
+fn ended_assignments(db: &Connection) -> i64 {
+    db.query_row(
+        "SELECT COUNT(*) FROM psf_guard_collaboration_plan WHERE end_at_ms IS NOT NULL",
+        [],
+        |row| row.get(0),
+    )
+    .unwrap()
+}
+
+/// Leaving commits in the store before it touches the rig databases: when
+/// the store is busy, the plan stays in its collaboration with every
+/// assignment open, rather than half left.
+#[tokio::test]
+async fn a_busy_store_leaves_nothing_half_done() {
+    let a = activated().await;
+    let p = imported(&a).await;
+    let leave = format!("/projects/{}/collaboration/leave", p.project_id());
+    let service = a.f.state.director.clone().unwrap();
+    let writes = service.admission.clone().acquire_owned().await.unwrap();
+    let (status, busy) = call(&a.f.app, "POST", &leave, Value::Null, None).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{busy}");
+    drop(writes);
+    assert_eq!(open_assignments(&a.db), 6);
+    let plan = p.project_id();
+    assert!(service
+        .clone()
+        .query(move |s| s.plan_from_collaboration(plan))
+        .await
+        .unwrap());
+    let (status, left) = call(&a.f.app, "POST", &leave, Value::Null, None).await;
+    assert_eq!(status, StatusCode::OK, "{left}");
+    assert_eq!(open_assignments(&a.db), 0);
+}
+
+/// A plan that left and imported the same task again activates: its ended
+/// assignments reopen from the activation, and the frames goal stays.
+#[tokio::test]
+async fn a_rejoined_plan_activates_its_assignments_again() {
+    let a = activated().await;
+    let p = imported(&a).await;
+    let leave = format!("/projects/{}/collaboration/leave", p.project_id());
+    let (status, left) = call(&a.f.app, "POST", &leave, Value::Null, None).await;
+    assert_eq!(status, StatusCode::OK, "{left}");
+    assert_eq!(open_assignments(&a.db), 0);
+    let ended_at: i64 =
+        a.db.query_row(
+            "SELECT MAX(end_at_ms) FROM psf_guard_collaboration_plan",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let again = import_task(&a, a.rig, "000000000001", "000000000004", now_ms());
+    assert_eq!(again.import_id(), p.import_id());
+    activate_imports(&a, &[&again]).await;
+    assert_eq!(open_assignments(&a.db), 6);
+    let started: i64 =
+        a.db.query_row(
+            "SELECT MIN(start_at_ms) FROM psf_guard_collaboration_plan",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(started >= ended_at, "{started} < {ended_at}");
+}
+
+/// A revision a newer assignment replaced keeps its old import time, so its
+/// ended rows stay ended and it is not activated again.
+#[tokio::test]
+async fn a_superseded_assignment_stays_ended() {
+    let a = activated().await;
+    let first = imported(&a).await;
+    let second = import_task(&a, a.rig, "000000000001", "000000000005", now_ms());
+    assert_eq!(second.project_id(), first.project_id());
+    activate_imports(&a, &[&second]).await;
+    let first_open: i64 = a
+        .db
+        .query_row(
+            "SELECT COUNT(*) FROM psf_guard_collaboration_plan WHERE import_id=?1 AND end_at_ms IS NULL",
+            [first.import_id().to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(first_open, 0);
+    let ended = ended_assignments(&a.db);
+    assert!(ended > 0);
+    let visits = json!([{"import_id": first.import_id(), "source_digest": first.digest()}]);
+    let project = first.project_id();
+    let (_, preview) = call(
+        &a.f.app,
+        "POST",
+        &format!("/projects/{project}/activation/preview"),
+        json!({"collaboration": visits}),
+        None,
+    )
+    .await;
+    assert!(
+        preview
+            .to_string()
+            .contains("This assignment was superseded."),
+        "{preview}"
+    );
+    assert_eq!(ended_assignments(&a.db), ended);
+}
+
+/// Activating a plan of its own on the rig ends only its own leftover
+/// assignments: a plan still in its collaboration keeps its rows open.
+#[tokio::test]
+async fn an_ordinary_activation_leaves_an_imported_plans_assignments_open() {
+    let a = activated().await;
+    imported(&a).await;
+    activate(&a).await;
+    assert_eq!(open_assignments(&a.db), 6);
+}
+
+/// Deleting a plan of its own does not wait for the collaboration gate; a
+/// plan from a collaboration does.
+#[tokio::test]
+async fn only_an_imported_plan_waits_for_collaboration_work() {
+    let a = activated().await;
+    activate(&a).await;
+    let p = imported(&a).await;
+    let service = a.f.state.director.clone().unwrap();
+    let gate = crate::server::director::collaboration_auth::leave::hold(&service)
+        .await
+        .unwrap();
+    let path = format!("/projects/{}/deletion", p.project_id());
+    let (_, preview) = call(&a.f.app, "GET", &path, Value::Null, None).await;
+    let digest = preview["data"]["databases"][0]["project"]["digest"].clone();
+    let (status, _) = call(
+        &a.f.app,
+        "POST",
+        &path,
+        json!({"digests": {guid_of(&preview): digest}}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    let path = format!("/projects/{}/deletion", a.project);
+    let (_, preview) = call(&a.f.app, "GET", &path, Value::Null, None).await;
+    let digest = preview["data"]["databases"][0]["project"]["digest"].clone();
+    let (status, deleted) = call(
+        &a.f.app,
+        "POST",
+        &path,
+        json!({"digests": {guid_of(&preview): digest}}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{deleted}");
+    assert_eq!(deleted["data"]["state"], "deleted", "{deleted}");
+    drop(gate);
 }

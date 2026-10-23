@@ -50,9 +50,11 @@ preferences, framing and plan drafts, activation record and draft imports
 The plan stays when:
 
 - a linked database is not registered on this server, or cannot be read;
-- the plan came from a collaboration and frames were queued for or sent in
-  a report to it: leave the collaboration from the plan first (see
-  [Leaving a collaboration](collaboration.md#leaving-a-collaboration));
+- the plan came from a collaboration and frames are in reports to it,
+  queued or sent: leave the collaboration from the plan first (see
+  [Leaving a collaboration](collaboration.md#leaving-a-collaboration)),
+  then delete its projects from the Library, since a plan with reported
+  frames has captured frames;
 - a rig captured frames for it: delete that project from the Library
   first, where the frames are counted and the name is typed.
 
@@ -69,11 +71,14 @@ forgets the projects already deleted, as for any plan.
 
 The deletion holds, in this order, the collaboration gate that nightly
 intake, automatic reports and every interactive collaboration operation
-take, the turn at the rig databases that discovery, plan listings and
-activation take, and the sync lock activation holds. No intake, report or
-activation writes the plan's rigs, links or collaboration records
-meanwhile. Nightly intake activates work while it holds the gate, so the
-gate comes first. Every project needs the digest of the preview the person
+take (only for a plan from a collaboration), the turn at the rig databases
+that discovery, plan listings and activation take, and the sync lock
+activation holds. No intake, report or activation writes the plan's rigs,
+links or collaboration records meanwhile. Nightly intake activates work
+while it holds the gate, so the gate comes first. A plan of its own does
+not wait for the gate; when an import linked it meanwhile, the deletion
+answers `changed` with the new preview. The deletion runs in its own task,
+so a browser that goes away cannot stop it part way. Every project needs the digest of the preview the person
 saw before anything is deleted. `MetaStore::delete_plan` refuses a plan
 that links a project the deletion did not handle, or one with frames
 queued for or sent in a collaboration report.
@@ -198,10 +203,9 @@ the new plan to it with **Attach a project from another database**.
   after the frame was removed.
 - A plan imported from a collaboration keeps its projects. The refusal
   names the plan and says where to go next: choose **Leave collaboration**
-  under **Collaboration assignments** in the plan, then delete the project;
-  or, when the plan has nothing captured, delete the whole plan under
-  **Plans with nothing captured yet**. After the plan leaves, its reported
-  frames are no longer protected, as no correction will be sent.
+  under **Collaboration assignments** in the plan, then delete the project.
+  After the plan leaves, its reported frames are no longer protected, as
+  no correction will be sent.
 - A preview older than the project removes nothing and returns a new
   preview.
 

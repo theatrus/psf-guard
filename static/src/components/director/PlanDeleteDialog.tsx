@@ -107,7 +107,7 @@ export default function PlanDeleteDialog({ planId, name, onClose, onDeleted }: P
           {preview.collaboration && <div className="project-delete-note" role="note" aria-label="Collaboration">
             <p>This plan comes from {collaborationName(preview.collaboration)}. Deleting it leaves the collaboration first:</p>
             <ul className="project-delete-list">
-              {leaveChanges(preview.collaboration).map(change => <li key={change}>{change}</li>)}
+              {leaveChanges(preview.collaboration, true).map(change => <li key={change}>{change}</li>)}
             </ul>
             <p>{coordinatorPlan(preview.collaboration)}</p>
           </div>}

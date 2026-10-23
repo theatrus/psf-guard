@@ -2,10 +2,10 @@
 //! local plan. See docs/design/collaboration.md, "Leaving a collaboration".
 //!
 //! `GET /projects/{id}/collaboration/leave` previews what leaving removes
-//! and keeps. `POST` ends the imports' open assignments in the rig
-//! databases the plan links, removes the collaboration records in one
-//! meta-store transaction, then declines the plan's tasks at the
-//! coordinator. The plan, its rig projects, frames, grades and drafts stay.
+//! and keeps. `POST` removes the collaboration records in one meta-store
+//! transaction, ends the imports' open assignments in the rig databases the
+//! plan links, then declines the plan's tasks at the coordinator. The plan,
+//! its rig projects, frames, grades and drafts stay.
 //!
 //! Locks, in the order every holder takes them: the collaboration gate
 //! (nightly intake, automatic reports, report delivery and interactive
@@ -49,6 +49,10 @@ pub(super) struct CollaborationView {
     /// Every task's rig has a registered connection with a saved sign-in,
     /// so leaving can decline the tasks at the coordinator.
     pub(super) coordinator_reachable: bool,
+    /// Rigs signed in to the coordinator, whose tasks leaving declines.
+    pub(super) signed_in: Vec<String>,
+    /// Rigs that are not, whose tasks the person must decline there.
+    pub(super) not_signed_in: Vec<String>,
 }
 
 pub(super) async fn view(
@@ -57,7 +61,7 @@ pub(super) async fn view(
     collaboration: &PlanCollaboration,
     open_assignments: usize,
 ) -> CollaborationView {
-    let coordinator_reachable = remote::reachable(
+    let reach = remote::reach(
         state,
         service,
         collaboration.base_url.clone(),
@@ -80,7 +84,9 @@ pub(super) async fn view(
             .map(|intake| intake.name.clone())
             .collect(),
         open_assignments,
-        coordinator_reachable,
+        coordinator_reachable: reach.not_signed_in.is_empty(),
+        signed_in: reach.signed_in,
+        not_signed_in: reach.not_signed_in,
     }
 }
 
@@ -305,7 +311,24 @@ pub(super) async fn leave(
 ) -> Result<Json<ApiResponse<LeaveOutcome>>, Error> {
     let service = writable(&state)?;
     // Leaving signs in to the coordinator as joining does.
-    remote::interactive(&state, &access, &headers).map_err(Error::Denied)?;
+    remote::interactive(&state, &access, &headers, remote::Purpose::Leave)
+        .map_err(Error::Denied)?;
+    // A browser that goes away must not stop leaving between its steps or
+    // before the coordinator is told.
+    tokio::spawn(async move { leave_now(state, service, id).await })
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, plan = %id, "Leaving a collaboration did not finish");
+            Error::Internal
+        })?
+        .map(|outcome| Json(ApiResponse::success(outcome)))
+}
+
+async fn leave_now(
+    state: Arc<AppState>,
+    service: Arc<Service>,
+    id: Uuid,
+) -> Result<LeaveOutcome, Error> {
     let _gate = remote::hold(&service).await?;
     let catalogs = admit(&service.discovery_admission).await?;
     let sync = state.sync_apply_lock.lock().await;
@@ -313,14 +336,20 @@ pub(super) async fn leave(
     if let Some(refusal) = preview.refusal {
         return Err(Error::Refused(refusal));
     }
-    let collaboration = collaboration.ok_or(Error::Missing)?;
-    let imports = collaboration.import_ids.clone();
+    collaboration.ok_or(Error::Missing)?;
+    // The store first: once it commits, the plan has left, and nothing
+    // reads its rig rows as assignments (`current` skips a row whose
+    // import is gone). Ending them second can only leave rows open, which
+    // the result reports and the next activation ends.
+    let left = service
+        .clone()
+        .run(move |store| store.leave_collaboration(id))
+        .await?;
+    let imports = left.import_ids.clone();
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_millis() as u64)
         .unwrap_or(0);
-    // A person can always leave: a database that cannot be written keeps
-    // its open rows, and the result says so.
     let mut warnings = preview.warnings;
     let (ended, unwritten) = blocking(move || {
         let mut ended = 0;
@@ -337,32 +366,21 @@ pub(super) async fn leave(
         (ended, unwritten)
     })
     .await?;
-    for warning in &unwritten {
+    warnings.extend(unwritten);
+    for warning in &warnings {
         tracing::warn!(plan = %id, %warning, "Left a collaboration with assignments still open");
     }
-    warnings.extend(unwritten);
-    let left = match service
-        .clone()
-        .run(move |store| store.leave_collaboration(id))
-        .await
-    {
-        Ok(left) => left,
-        Err(error) => {
-            tracing::warn!(plan = %id, ?error, ended, "Ended a plan's assignments but did not leave its collaboration");
-            return Err(error);
-        }
-    };
     drop(sync);
     drop(catalogs);
     let view = view(&state, service.clone(), &left, ended).await;
     remote::forget_runs(service.clone(), left.base_url.clone()).await;
     let coordinator = remote::decline(&state, service.clone(), &left.base_url, &left.tasks).await;
     tracing::info!(plan = %id, host = %view.host, declined = coordinator.declined.len(), "Left a collaboration");
-    Ok(Json(ApiResponse::success(LeaveOutcome::Left {
+    Ok(LeaveOutcome::Left {
         name: preview.name,
         collaboration: view,
         assignments_ended: ended,
         warnings,
         coordinator,
-    })))
+    })
 }

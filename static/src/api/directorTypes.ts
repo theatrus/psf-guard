@@ -652,8 +652,6 @@ export interface DirectorFeasibility {
   warnings: string[];
 }
 
-/** What deleting a plan would delete: each linked database's project, and
- *  why the plan cannot be deleted, if it cannot. */
 /** The collaboration a plan came from, and what leaving it removes. */
 export interface DirectorPlanCollaboration {
   /** The collaboration server's host, such as collab.starfront.space. */
@@ -677,10 +675,16 @@ export interface DirectorPlanCollaboration {
   open_assignments: number;
   /** Every task's rig is signed in here, so leaving can decline the tasks at the coordinator. */
   coordinator_reachable: boolean;
+  /** Rigs signed in to the coordinator, whose tasks leaving declines. */
+  signed_in: string[];
+  /** Rigs that are not, whose tasks the person must decline there. */
+  not_signed_in: string[];
 }
 /** What telling the coordinator did when a plan left its collaboration. */
 export interface DirectorCoordinatorOutcome {
   host: string;
+  /** Tasks there were to decline. */
+  tasks: number;
   /** Tasks the coordinator declined. */
   declined: string[];
   /** Why a task could not be declined, one sentence each. */
@@ -704,6 +708,8 @@ export interface DirectorCollaborationLeft {
   warnings: string[];
   coordinator: DirectorCoordinatorOutcome;
 }
+/** What deleting a plan would delete: each linked database's project, and
+ *  why the plan cannot be deleted, if it cannot. */
 export interface DirectorPlanDeletion {
   name: string;
   /** The collaboration the plan came from, which deleting leaves. */

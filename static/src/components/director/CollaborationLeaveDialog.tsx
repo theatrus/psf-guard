@@ -3,7 +3,7 @@ import { isAxiosError } from 'axios';
 import { apiClient } from '../../api/client';
 import type { DirectorCollaborationLeft } from '../../api/directorTypes';
 import Dialog from '../Dialog';
-import { collaborationName, coordinatorPlan, coordinatorResult, leaveChanges } from './collaborationLeaveText';
+import { collaborationName, coordinatorPlan, leaveChanges, leftSummary } from './collaborationLeaveText';
 import '../ProjectDeleteDialog.css';
 
 interface Props {
@@ -64,12 +64,8 @@ export default function CollaborationLeaveDialog({ planId, onClose, onLeft }: Pr
     >
       {query.isLoading && <p role="status">Reading the plan's collaboration...</p>}
       {query.isError && <p className="project-delete-error" role="alert">{message(query.error)}</p>}
-      {left && <p role="status">
-        {left.name} left {collaborationName(left.collaboration)} and is now a plan of your own.
-        {left.assignments_ended > 0 && ` Ended ${left.assignments_ended.toLocaleString()} open assignment${left.assignments_ended === 1 ? '' : 's'}.`}
-        {' '}{coordinatorResult(left.coordinator)}
-      </p>}
-      {left && left.warnings.map(warning => <p key={warning} className="project-delete-error" role="alert">{warning}</p>)}
+      {left && <p role="status">{leftSummary(left)}</p>}
+      {left && left.warnings.map(warning => <p key={warning} className="project-delete-warning" role="note">{warning}</p>)}
       {!left && preview?.collaboration && (
         <>
           <p><strong>{preview.name}</strong> comes from {collaborationName(preview.collaboration)}. Leaving makes it a plan of your own. PSF Guard:</p>
@@ -77,7 +73,7 @@ export default function CollaborationLeaveDialog({ planId, onClose, onLeft }: Pr
             {leaveChanges(preview.collaboration).map(change => <li key={change}>{change}</li>)}
           </ul>
           <p>{coordinatorPlan(preview.collaboration)}</p>
-          {preview.warnings.map(warning => <p key={warning} className="project-delete-error" role="note">{warning}</p>)}
+          {preview.warnings.map(warning => <p key={warning} className="project-delete-warning" role="note">{warning}</p>)}
           <p className="project-delete-note">
             The plan keeps its framing, exposures, priorities and activation record. Its rig projects keep their
             targets, frames and grades, and the targets stay scheduled until you change them.

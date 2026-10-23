@@ -1030,11 +1030,21 @@ async fn browser_flow_validates_origin_and_keeps_person_token_on_host() {
     remote.abort();
 }
 
-/// Leaving declines the plan's task at the coordinator with the rig's saved
-/// sign-in, takes the project out of the nightly intake policy, and leaves
-/// the plan as an ordinary one.
-#[tokio::test]
-async fn leaving_declines_the_task_and_stops_nightly_intake() {
+/// A paired rig that imported the fixtures' share from a mock coordinator
+/// that records each task it is asked to decline.
+struct Imported {
+    _dir: tempfile::TempDir,
+    state: Arc<AppState>,
+    app: Router,
+    id: Uuid,
+    route: String,
+    endpoint: String,
+    plan: Uuid,
+    declined: Arc<Mutex<Vec<(String, Value)>>>,
+    remote: tokio::task::JoinHandle<()>,
+}
+
+async fn imported_from_coordinator() -> Imported {
     let (_dir, state, app, rig) = fixture().await;
     commissioned(&state, rig).await;
     let mut wire: Value = serde_json::from_slice(include_bytes!(concat!(
@@ -1123,6 +1133,35 @@ async fn leaving_declines_the_task_and_stops_nightly_intake() {
     .await;
     assert_eq!(status, StatusCode::OK, "{applied}");
     let plan: Uuid = serde_json::from_value(applied["data"]["plan"]["project_id"].clone()).unwrap();
+    Imported {
+        _dir,
+        state,
+        app,
+        id,
+        route,
+        endpoint,
+        plan,
+        declined,
+        remote,
+    }
+}
+
+/// Leaving declines the plan's task at the coordinator with the rig's saved
+/// sign-in, takes the project out of the nightly intake policy, and leaves
+/// the plan as an ordinary one.
+#[tokio::test]
+async fn leaving_declines_the_task_and_stops_nightly_intake() {
+    let Imported {
+        _dir,
+        state,
+        app,
+        id,
+        route,
+        endpoint,
+        plan,
+        declined,
+        remote,
+    } = imported_from_coordinator().await;
     // A saved policy that lists the project; off, as this rig has no database.
     let policy = json!({"enabled":false,"catalog_id":Uuid::new_v4(),"project_ids":["000000000002"],"interval_minutes":5,"activate":false});
     let (status, configured) = call(
@@ -1150,7 +1189,7 @@ async fn leaving_declines_the_task_and_stops_nightly_intake() {
     assert_eq!(left["data"]["state"], "left");
     assert_eq!(
         left["data"]["coordinator"],
-        json!({"host":endpoint.trim_start_matches("http://").trim_end_matches('/'),"declined":["000000000004"],"problems":[]})
+        json!({"host":endpoint.trim_start_matches("http://").trim_end_matches('/'),"tasks":1,"declined":["000000000004"],"problems":[]})
     );
     assert_eq!(
         *declined.lock().unwrap(),
@@ -1214,4 +1253,80 @@ async fn leaving_declines_the_task_and_stops_nightly_intake() {
         .unwrap();
     assert!(imported);
     remote.abort();
+}
+
+/// Deleting a plan from a collaboration with nothing captured declines its
+/// task at the coordinator with the rig's saved sign-in.
+#[tokio::test]
+async fn deleting_an_imported_plan_declines_its_task() {
+    let i = imported_from_coordinator().await;
+    let path = format!("/projects/{}/deletion", i.plan);
+    let (status, preview) = call(&i.app, "GET", &path, Value::Null, &[]).await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(
+        preview["data"]["collaboration"]["signed_in"],
+        json!(["Rig"])
+    );
+    assert_eq!(preview["data"]["collaboration"]["not_signed_in"], json!([]));
+    let (status, deleted) = call(&i.app, "POST", &path, json!({"digests": {}}), &[]).await;
+    assert_eq!(status, StatusCode::OK, "{deleted}");
+    assert_eq!(deleted["data"]["state"], "deleted", "{deleted}");
+    assert_eq!(
+        deleted["data"]["coordinator"]["declined"],
+        json!(["000000000004"])
+    );
+    assert_eq!(
+        *i.declined.lock().unwrap(),
+        vec![("000000000004".to_string(), json!({"state":"declined"}))]
+    );
+    let plan = i.plan;
+    let gone = i
+        .state
+        .director
+        .clone()
+        .unwrap()
+        .query(move |s| s.project(plan))
+        .await
+        .unwrap();
+    assert!(gone.is_none());
+    i.remote.abort();
+}
+
+/// A request from another site is refused with a message about leaving or
+/// deleting, not about collaboration setup.
+#[tokio::test]
+async fn leaving_or_deleting_from_another_site_is_refused_in_their_terms() {
+    let i = imported_from_coordinator().await;
+    let foreign = [
+        ("origin", "https://elsewhere.example"),
+        ("host", "localhost"),
+    ];
+    let (status, refused) = call(
+        &i.app,
+        "POST",
+        &format!("/projects/{}/collaboration/leave", i.plan),
+        Value::Null,
+        &foreign,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(
+        refused["error"],
+        "Leave the collaboration from PSF Guard's own page; requests from another site are refused."
+    );
+    let (status, refused) = call(
+        &i.app,
+        "POST",
+        &format!("/projects/{}/deletion", i.plan),
+        json!({"digests": {}}),
+        &foreign,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(
+        refused["error"],
+        "Delete the plan from PSF Guard's own page; requests from another site are refused."
+    );
+    assert!(i.declined.lock().unwrap().is_empty());
+    i.remote.abort();
 }

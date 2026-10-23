@@ -161,9 +161,9 @@ async fn read_preview(
         .filter(|collaboration| collaboration.reported_frames > 0)
     {
         Some(format!(
-            "{} of this plan {} reported to the collaboration at {}. Open the plan and choose Leave collaboration under Collaboration assignments, then delete the plan.",
+            "{} of this plan {} in reports to the collaboration at {}. Open the plan and choose Leave collaboration under Collaboration assignments, then delete its projects from the Library.",
             count(reported.reported_frames as usize, "frame"),
-            if reported.reported_frames == 1 { "was" } else { "were" },
+            if reported.reported_frames == 1 { "is" } else { "are" },
             reported.host
         ))
     } else {
@@ -334,21 +334,47 @@ pub(super) async fn delete(
     Json(request): Json<DeletionRequest>,
 ) -> Result<Json<ApiResponse<DeletionOutcome>>, Error> {
     let service = writable(&state)?;
-    // The collaboration gate first, as nightly intake takes it before it
-    // activates work: no intake, report or collaboration operation runs
-    // half way through. Then the turn at the rig databases that discovery,
-    // plan listings and activation take, and the sync lock activation
-    // holds: none of them writes this plan's rigs or links while it is
-    // deleted.
-    let _gate = remote::hold(&service).await?;
+    let interactive = remote::interactive(&state, &access, &headers, remote::Purpose::DeletePlan);
+    // A browser that goes away must not stop the deletion between its
+    // steps or before the coordinator is told.
+    tokio::spawn(async move { delete_now(state, service, id, request, interactive).await })
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, plan = %id, "Deleting a plan did not finish");
+            Error::Internal
+        })?
+}
+
+async fn delete_now(
+    state: Arc<AppState>,
+    service: Arc<Service>,
+    id: Uuid,
+    request: DeletionRequest,
+    interactive: Result<(), &'static str>,
+) -> Result<Json<ApiResponse<DeletionOutcome>>, Error> {
+    let imported = service
+        .clone()
+        .query(move |store| Ok(store.plan_collaboration(id)?.is_some()))
+        .await?;
+    if imported {
+        // Deleting leaves the collaboration and signs in to the coordinator
+        // as joining does.
+        interactive.map_err(Error::Denied)?;
+    }
+    // For a plan from a collaboration, the collaboration gate first, as
+    // nightly intake takes it before it activates work: no intake, report
+    // or collaboration operation runs half way through. A plan of its own
+    // does not wait for it. Then the turn at the rig databases that
+    // discovery, plan listings and activation take, and the sync lock
+    // activation holds: none of them writes this plan's rigs or links while
+    // it is deleted.
+    let gate = match imported {
+        true => Some(remote::hold(&service).await?),
+        false => None,
+    };
     let catalogs = admit(&service.discovery_admission).await?;
     let sync = state.sync_apply_lock.lock().await;
     let (preview, targets) = read_preview(&state, &service, id).await?;
-    if preview.collaboration.is_some() {
-        // Deleting leaves the collaboration and signs in to the coordinator
-        // as joining does.
-        remote::interactive(&state, &access, &headers).map_err(Error::Denied)?;
-    }
     if let Some(refusal) = preview.refusal.clone() {
         return Err(Error::Refused(refusal));
     }
@@ -358,6 +384,11 @@ pub(super) async fn delete(
             deleted,
         })))
     };
+    // A plan that was imported meanwhile needs the gate and the
+    // interactive check: the person sees the new preview and deletes again.
+    if preview.collaboration.is_some() && gate.is_none() {
+        return changed(preview, Vec::new());
+    }
     // Every project needs the digest of the preview the person saw before
     // anything is deleted.
     let missing = preview.databases.iter().any(|database| {
@@ -366,6 +397,7 @@ pub(super) async fn delete(
     if missing {
         return changed(preview, Vec::new());
     }
+    let leaving = preview.collaboration.is_some();
     let links: Vec<(Uuid, Uuid)> = targets
         .iter()
         .map(|target| (target.catalog, target.guid))
@@ -427,7 +459,7 @@ pub(super) async fn delete(
     }
     match service
         .clone()
-        .run(move |store| store.delete_plan(id, &links))
+        .run(move |store| store.delete_plan(id, &links, leaving))
         .await
     {
         Ok(left) => {

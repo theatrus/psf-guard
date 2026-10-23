@@ -230,9 +230,26 @@ impl MetaStore {
             return Err(Error::InvalidInput);
         }
         let id = Uuid::new_v5(&connection, &encoded);
+        // The same request after a plan left its collaboration and rejoined
+        // has the same ID: it replaces the transfer leaving cancelled.
+        let mut replacing = false;
         if let Some(existing) = self.transfer(id)? {
-            return Ok(existing);
+            if existing.state != State::Cancelled
+                || existing.error.as_deref() != Some(super::collaboration_leave::LEFT_COLLABORATION)
+            {
+                return Ok(existing);
+            }
+            replacing = true;
         }
+        let import = match request.pointer("/selection/import_id") {
+            None | Some(Value::Null) => None,
+            Some(value) => Some(
+                value
+                    .as_str()
+                    .and_then(|id| Uuid::parse_str(id).ok())
+                    .ok_or(Error::InvalidInput)?,
+            ),
+        };
         let active:i64=self.connection.query_row("SELECT COUNT(*) FROM collaboration_transfer WHERE json_extract(payload,'$.state') NOT IN ('complete','cancelled')",[],|r|r.get(0))?;
         if active >= 512 {
             return Err(Error::Conflict);
@@ -253,6 +270,31 @@ impl MetaStore {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        // A transfer names an import; one that was left meanwhile is gone.
+        if let Some(import) = import {
+            let exists: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM collaboration_import WHERE id=?1)",
+                [import.to_string()],
+                |r| r.get(0),
+            )?;
+            if !exists {
+                return Err(Error::NotFound);
+            }
+        }
+        if replacing {
+            for table in [
+                "collaboration_transfer_receipt",
+                "collaboration_transfer_artifact",
+                "collaboration_transfer_summary",
+                "collaboration_transfer_definition",
+                "collaboration_transfer",
+            ] {
+                tx.execute(
+                    &format!("DELETE FROM {table} WHERE id=?1"),
+                    [id.to_string()],
+                )?;
+            }
+        }
         tx.execute(
             "INSERT INTO collaboration_transfer VALUES(?1,?2,1,?3)",
             params![id.to_string(), connection.to_string(), checkpoint(&job)?],

@@ -124,7 +124,8 @@ fn leaving_removes_one_plans_collaboration_records_and_keeps_the_plan() {
         preview.tasks,
         vec![RemoteTask {
             agent_id: "000000000001".into(),
-            task_id: "000000000004".into()
+            task_id: "000000000004".into(),
+            rig: "Rig".into()
         }]
     );
 
@@ -216,7 +217,12 @@ fn deleting_an_imported_plan_leaves_its_collaboration_unless_frames_were_reporte
     let b = connection(&mut s, rig, &["000000000002", "000000000003"]);
 
     // Nothing reported: the plan and its collaboration records go together.
-    let left = s.delete_plan(q.project_id(), &[]).unwrap().unwrap();
+    // A caller that previewed a plan of its own is refused.
+    assert!(matches!(
+        s.delete_plan(q.project_id(), &[], false),
+        Err(Error::Conflict)
+    ));
+    let left = s.delete_plan(q.project_id(), &[], true).unwrap().unwrap();
     assert_eq!(left.remote_project_id, "000000000003");
     assert!(s.project(q.project_id()).unwrap().is_none());
     assert!(s.collaboration_import(q.import_id()).unwrap().is_none());
@@ -234,12 +240,12 @@ fn deleting_an_imported_plan_leaves_its_collaboration_unless_frames_were_reporte
     // Queued frames keep the plan until it leaves the collaboration.
     report(&mut s, &p, &[1], 2000);
     assert!(matches!(
-        s.delete_plan(p.project_id(), &[]),
+        s.delete_plan(p.project_id(), &[], true),
         Err(Error::Conflict)
     ));
     assert!(s.plan_collaboration(p.project_id()).unwrap().is_some());
     s.leave_collaboration(p.project_id()).unwrap();
-    assert_eq!(s.delete_plan(p.project_id(), &[]).unwrap(), None);
+    assert_eq!(s.delete_plan(p.project_id(), &[], false).unwrap(), None);
     assert!(s.project(p.project_id()).unwrap().is_none());
 }
 

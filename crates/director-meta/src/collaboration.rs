@@ -435,6 +435,9 @@ fn rejoins(conn: &Connection, plan: &PreparedImport) -> Result<Option<String>, E
         )
         .optional()?;
     if let Some(mapped) = mapped {
+        // Plan IDs derive from the server and remote project, so the link
+        // names this plan. Another plan here means a store written some
+        // other way, which no import may take over.
         return if mapped == project {
             Ok(None)
         } else {
@@ -449,6 +452,8 @@ fn rejoins(conn: &Connection, plan: &PreparedImport) -> Result<Option<String>, E
         [&project],
         |r| r.get(0),
     )?;
+    // Unreachable for the same reason: a plan with this ID linked to a
+    // different remote project would mean a store written some other way.
     if linked {
         return Err(Error::Conflict);
     }

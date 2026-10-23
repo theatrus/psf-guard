@@ -101,9 +101,7 @@ async fn protected(state: &AppState) -> Result<BTreeSet<String>, AppError> {
 fn collaboration_refusal(plan: &str) -> String {
     format!(
         "This project belongs to {plan}, a plan from a collaboration. Open the plan and choose \
-         Leave collaboration under Collaboration assignments, then delete the project here. If \
-         the plan has nothing captured, you can delete the whole plan under Plans with nothing \
-         captured yet instead."
+         Leave collaboration under Collaboration assignments, then delete the project here."
     )
 }
 

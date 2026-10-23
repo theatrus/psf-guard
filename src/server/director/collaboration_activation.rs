@@ -151,6 +151,9 @@ pub(super) fn end_left(tx: &Connection, project: &str, now: u64) -> rusqlite::Re
 pub(super) struct Admitted {
     pub visit: Visit,
     pub import: Imported,
+    /// When the visit's revision was imported, the latest time if it was
+    /// imported again after the plan left the collaboration.
+    pub revision_imported_at_ms: u64,
     pub panels: Vec<Panel>,
 }
 
@@ -168,12 +171,17 @@ pub(super) fn admit(
             return Err(Error::Conflict.into());
         }
         let panels = panels(&import.plan).map_err(|_| Error::Invalid)?;
+        let revision_imported_at_ms = store
+            .collaboration_import_revision(visit.import_id, &visit.source_digest)?
+            .ok_or(Error::Missing)?
+            .imported_at_ms;
         if result
             .insert(
                 import.rig_id,
                 Admitted {
                     visit: visit.clone(),
                     import,
+                    revision_imported_at_ms,
                     panels,
                 },
             )
@@ -264,6 +272,24 @@ impl Admitted {
         now: u64,
     ) -> Result<bool, activation::RigError> {
         tx.execute_batch(DDL)?;
+        // Rows ended before this revision was imported were ended by
+        // leaving the collaboration: the import that rejoined it brought the
+        // revision back with a new time. They reopen from now, so frames
+        // captured while the plan was its own do not count. A revision
+        // superseded by a newer one keeps its old time, and its rows stay
+        // ended.
+        let reopened = tx.execute(
+            "UPDATE psf_guard_collaboration_plan SET end_at_ms=NULL, start_at_ms=?4
+             WHERE import_id=?2 AND source_digest=?3 AND end_at_ms IS NOT NULL AND end_at_ms<=?5
+               AND target_guid IN (SELECT target_guid FROM psf_guard_director_target WHERE project_guid=?1)",
+            params![
+                project,
+                self.visit.import_id.to_string(),
+                self.visit.source_digest,
+                (now / 1000 * 1000) as i64,
+                i64::try_from(self.revision_imported_at_ms).unwrap_or(i64::MAX)
+            ],
+        )?;
         let previous: Option<Option<i64>> = tx.query_row(
             "SELECT end_at_ms FROM psf_guard_collaboration_plan c JOIN psf_guard_director_target t ON t.target_guid=c.target_guid
              WHERE t.project_guid=?1 AND c.import_id=?2 AND c.source_digest=?3 LIMIT 1",
@@ -275,7 +301,7 @@ impl Admitted {
             AND target_guid IN (SELECT target_guid FROM psf_guard_director_target WHERE project_guid=?1)
             AND NOT (import_id=?3 AND source_digest=?4)",
             params![project,(now/1000*1000) as i64,self.visit.import_id.to_string(),self.visit.source_digest])?;
-        Ok(previous.is_none())
+        Ok(previous.is_none() || reopened > 0)
     }
 
     pub fn frame_goal(

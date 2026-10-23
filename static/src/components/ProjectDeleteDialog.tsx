@@ -32,8 +32,7 @@ function refusal(preview: ProjectRemovalPreview): string | null {
   }
   if (preview.linked_plan?.from_collaboration) {
     return `This project belongs to ${preview.linked_plan.name}, a plan from a collaboration. Open the plan and choose `
-      + 'Leave collaboration under Collaboration assignments, then delete the project here. If the plan has nothing '
-      + 'captured, you can delete the whole plan under Plans with nothing captured yet instead.';
+      + 'Leave collaboration under Collaboration assignments, then delete the project here.';
   }
   if (preview.protected_frames > 0) {
     return `${count(preview.protected_frames, 'frame')} of this project ${preview.protected_frames === 1 ? 'was' : 'were'} reported to a collaboration, so it cannot be deleted.`;

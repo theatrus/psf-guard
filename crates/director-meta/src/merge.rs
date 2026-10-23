@@ -298,13 +298,16 @@ impl MetaStore {
     /// delete first; `expected` lists the links the caller handled. A plan
     /// from a collaboration leaves it in the same transaction, as
     /// [`MetaStore::leave_collaboration`] does, and the collaboration it
-    /// left is returned. A plan that links a project not in `expected`, or
-    /// one with frames queued for or sent in a collaboration report, is
-    /// refused with [`Error::Conflict`].
+    /// left is returned. `leaving` says the caller previewed a plan from a
+    /// collaboration. A plan that links a project not in `expected`, one
+    /// with frames queued for or sent in a collaboration report, or one
+    /// whose collaboration the caller did not expect, is refused with
+    /// [`Error::Conflict`].
     pub fn delete_plan(
         &mut self,
         plan: Uuid,
         expected: &[(Uuid, Uuid)],
+        leaving: bool,
     ) -> Result<Option<super::collaboration_leave::PlanCollaboration>, Error> {
         valid_id(plan)?;
         let tx = self
@@ -340,6 +343,11 @@ impl MetaStore {
             }
         }
         let left = super::collaboration_leave::leave(&tx, plan)?;
+        // A plan an import linked meanwhile was previewed as a plan of its
+        // own: the person sees its collaboration before it goes.
+        if left.is_some() && !leaving {
+            return Err(Error::Conflict);
+        }
         tx.execute(
             "DELETE FROM project_profile WHERE EXISTS(
                 SELECT 1 FROM project_catalog link

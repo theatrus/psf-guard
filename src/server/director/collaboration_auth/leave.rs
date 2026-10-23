@@ -10,23 +10,50 @@ use psf_guard_director_meta::collaboration_leave::RemoteTask;
 pub(in crate::server::director) struct Told {
     /// The collaboration server's host.
     pub host: String,
+    /// Tasks there were to decline.
+    pub tasks: usize,
     /// Tasks the coordinator declined.
     pub declined: Vec<String>,
     /// Why a task could not be declined, one sentence each.
     pub problems: Vec<String>,
 }
 
+/// What a person is doing when PSF Guard signs in to the coordinator for
+/// them, for the refusal message.
+#[derive(Clone, Copy, Debug)]
+pub(in crate::server::director) enum Purpose {
+    Leave,
+    DeletePlan,
+}
+
 /// The same check as joining a project: an interactive editor's same-origin
 /// request on a server with database management. The message explains a
-/// refusal.
+/// refusal in terms of what the person was doing.
 pub(in crate::server::director) fn interactive(
     state: &AppState,
     access: &RequestAccess,
     headers: &HeaderMap,
+    purpose: Purpose,
 ) -> Result<(), &'static str> {
-    operator(state, access, headers)
+    use Purpose::*;
+    check_operator(state, access, headers)
         .map(|_| ())
-        .map_err(|f| f.1)
+        .map_err(|refusal| match (refusal, purpose) {
+            (NotOperator::Editor, Leave) => {
+                "Leaving a collaboration needs an editor signed in to PSF Guard, not an API token, on a server with database management."
+            }
+            (NotOperator::Editor, DeletePlan) => {
+                "Deleting a plan from a collaboration needs an editor signed in to PSF Guard, not an API token, on a server with database management."
+            }
+            (NotOperator::BadOrigin | NotOperator::CrossOrigin, Leave) => {
+                "Leave the collaboration from PSF Guard's own page; requests from another site are refused."
+            }
+            (NotOperator::BadOrigin | NotOperator::CrossOrigin, DeletePlan) => {
+                "Delete the plan from PSF Guard's own page; requests from another site are refused."
+            }
+            (NotOperator::SignIn, Leave) => "Sign in again, then leave the collaboration.",
+            (NotOperator::SignIn, DeletePlan) => "Sign in again, then delete the plan.",
+        })
 }
 
 /// The host of a collaboration server's URL, as the dialogs show it.
@@ -64,49 +91,58 @@ async fn connections(
         .map_err(Into::into)
 }
 
-/// The registered connection for one agent at the server, with its saved
-/// token, or why there is none.
+/// The registered connection for one task's agent at the server, with its
+/// saved token, or why there is none.
 async fn signed_in(
     state: &AppState,
     connections: &[ConnectionBinding],
-    agent: &str,
+    task: &RemoteTask,
 ) -> Result<(ConnectionBinding, String), String> {
+    let rig = &task.rig;
     let b = connections
         .iter()
-        .find(|b| b.agent_id.as_deref() == Some(agent) && b.state == ConnectionState::Registered)
+        .find(|b| {
+            b.agent_id.as_deref() == Some(task.agent_id.as_str())
+                && b.state == ConnectionState::Registered
+        })
         .cloned()
-        .ok_or_else(|| {
-            format!("No rig on this server is signed in as agent {agent} at this collaboration.")
-        })?;
+        .ok_or_else(|| format!("{rig} is not signed in to this collaboration."))?;
     let path = registry(state).map_err(|f| f.1.to_owned())?;
     let copy = b.clone();
     match file(move || credentials::read(&path, &copy)).await {
         Ok(Some(token)) => Ok((b, token)),
-        Ok(None) => Err(format!("The saved sign-in for {} is missing.", b.name)),
+        Ok(None) => Err(format!("The saved sign-in for {rig} is missing.")),
         Err(f) => Err(f.1.to_owned()),
     }
 }
 
-/// Whether each task's rig has a registered connection with a saved
-/// sign-in, so leaving can decline the tasks at the coordinator.
-pub(in crate::server::director) async fn reachable(
+/// Which of the tasks' rigs can decline at the coordinator, and which
+/// cannot, each named once.
+#[derive(Clone, Debug, Default, Serialize)]
+pub(in crate::server::director) struct Reach {
+    pub signed_in: Vec<String>,
+    pub not_signed_in: Vec<String>,
+}
+
+pub(in crate::server::director) async fn reach(
     state: &AppState,
     service: Arc<Service>,
     base_url: String,
     tasks: &[RemoteTask],
-) -> bool {
-    let Ok(connections) = connections(service, base_url).await else {
-        return false;
-    };
+) -> Reach {
+    let mut reach = Reach::default();
+    let connections = connections(service, base_url).await.unwrap_or_default();
     for task in tasks {
-        if signed_in(state, &connections, &task.agent_id)
-            .await
-            .is_err()
-        {
-            return false;
+        let list = if signed_in(state, &connections, task).await.is_ok() {
+            &mut reach.signed_in
+        } else {
+            &mut reach.not_signed_in
+        };
+        if !list.contains(&task.rig) {
+            list.push(task.rig.clone());
         }
     }
-    true
+    reach
 }
 
 /// Decline each task at the coordinator. A rejected sign-in marks its
@@ -121,6 +157,7 @@ pub(in crate::server::director) async fn decline(
     let host = host(base_url);
     let mut told = Told {
         host: host.clone(),
+        tasks: tasks.len(),
         ..Told::default()
     };
     let connections = match connections(service.clone(), base_url.to_owned()).await {
@@ -131,7 +168,7 @@ pub(in crate::server::director) async fn decline(
         }
     };
     for task in tasks {
-        let (b, token) = match signed_in(state, &connections, &task.agent_id).await {
+        let (b, token) = match signed_in(state, &connections, task).await {
             Ok(found) => found,
             Err(problem) => {
                 told.problems.push(problem);
@@ -158,13 +195,22 @@ pub(in crate::server::director) async fn decline(
                 }
                 told.problems.push(format!(
                     "{host} rejected the saved sign-in for {}. Reconnect it in the rig's Collaboration settings.",
-                    b.name
+                    task.rig
                 ));
             }
             Err(failure) => told.problems.push(format!(
-                "Task {} was not declined at {host}: {}",
-                task.task_id, failure.1
+                "{host} did not decline the task for {}: {}",
+                task.rig, failure.1
             )),
+        }
+        if told.declined.last() != Some(&task.task_id) {
+            tracing::warn!(
+                %host,
+                task = %task.task_id,
+                rig = %task.rig,
+                problem = told.problems.last().map(String::as_str).unwrap_or(""),
+                "Task still to decline at the coordinator"
+            );
         }
     }
     told

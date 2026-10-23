@@ -12,13 +12,20 @@ use super::collaboration_connection::ConnectionBinding;
 use super::*;
 use std::collections::BTreeSet;
 
-/// A task this server holds at the coordinator for the plan: what leaving
-/// declines there.
+/// A task the coordinator assigned to one of this server's rigs for the
+/// plan: what leaving declines there.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RemoteTask {
     pub agent_id: String,
     pub task_id: String,
+    /// The rig the agent is bound to, as the dialogs name it.
+    pub rig: String,
 }
+
+/// The error a transfer cancelled by leaving carries. A later automatic
+/// request for the same files, after the plan rejoins, replaces such a
+/// transfer; a transfer a person cancelled stays cancelled.
+pub const LEFT_COLLABORATION: &str = "Cancelled: the plan left its collaboration";
 
 /// A nightly intake policy that lists the plan's remote project.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -87,8 +94,9 @@ fn read(conn: &Connection, plan: Uuid) -> Result<Option<PlanCollaboration>, Erro
         return Ok(None);
     };
     let mut statement = conn.prepare(
-        "SELECT id,agent_id,task_id FROM collaboration_import WHERE project_id=?1
-         ORDER BY imported_at_ms DESC,id",
+        "SELECT i.id,i.agent_id,i.task_id,r.name FROM collaboration_import i
+         JOIN rig r ON r.id=i.rig_id WHERE i.project_id=?1
+         ORDER BY i.imported_at_ms DESC,i.id",
     )?;
     let rows = statement
         .query_map([&id], |row| {
@@ -96,15 +104,20 @@ fn read(conn: &Connection, plan: Uuid) -> Result<Option<PlanCollaboration>, Erro
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     drop(statement);
     let mut import_ids = Vec::new();
     let mut tasks = BTreeSet::new();
-    for (import, agent_id, task_id) in rows {
+    for (import, agent_id, task_id, rig) in rows {
         import_ids.push(parse_id(&import)?);
-        tasks.insert(RemoteTask { agent_id, task_id });
+        tasks.insert(RemoteTask {
+            agent_id,
+            task_id,
+            rig,
+        });
     }
     let remote_project_name = match import_ids.first() {
         Some(newest) => super::collaboration::read_import(conn, *newest)?
@@ -273,7 +286,7 @@ fn cancel_transfers(tx: &Connection, plan: &str) -> Result<(), Error> {
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     drop(statement);
-    const ERROR: &str = "Cancelled: the plan left its collaboration";
+    const ERROR: &str = LEFT_COLLABORATION;
     for (id, revision, payload) in rows {
         let mut job: super::transfer::Job =
             serde_json::from_str(&payload).map_err(|_| Error::CorruptDatabase)?;
