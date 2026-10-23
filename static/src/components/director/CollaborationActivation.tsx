@@ -1,15 +1,37 @@
+import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '../../api/client';
 import type { CollaborationVisit } from '../../api/collaborationTypes';
 import EarlyBeta, { COLLABORATION_BETA } from './EarlyBeta';
+import CollaborationLeaveDialog from './CollaborationLeaveDialog';
+import { leftSummary } from './collaborationLeaveText';
+import type { DirectorCollaborationLeft } from '../../api/directorTypes';
 
-export default function CollaborationActivation({ projectId, value, onChange, disabled }: {
+/** The plan's imported nightly assignments, to choose for activation, and
+ *  Leave collaboration for a server that can change rig databases. */
+export default function CollaborationActivation({ projectId, value, onChange, disabled, canLeave }: {
   projectId: string; value: CollaborationVisit[]; onChange: (value: CollaborationVisit[]) => void; disabled: boolean;
+  /** An editor on a server with database management. */
+  canLeave: boolean;
 }) {
   const query = useQuery({ queryKey: ['collaborationActivation', projectId], queryFn: () => apiClient.getCollaborationActivation(projectId), retry: false });
+  const [leaving, setLeaving] = useState(false);
+  const [left, setLeft] = useState<DirectorCollaborationLeft | null>(null);
+  const status = useRef<HTMLParagraphElement>(null);
+  // The Leave button goes with the assignments, so focus moves to the line
+  // that says what leaving did once the dialog closes.
+  useEffect(() => {
+    if (!leaving && left) status.current?.focus();
+  }, [leaving, left]);
+  const dialog = leaving && <CollaborationLeaveDialog planId={projectId} onClose={() => setLeaving(false)} onLeft={outcome => { setLeft(outcome); onChange([]); }} />;
+  // Shown once the dialog closes, which shows the same result until then.
+  const summary = left && !leaving && <p ref={status} tabIndex={-1} role="status">{leftSummary(left)}</p>;
   if (query.isError) return <p role="alert">Collaboration assignments could not be loaded: {query.error.message}</p>;
-  if (!query.data?.imports.length) return null;
-  return <fieldset disabled={disabled} className="collaboration-activation"><legend>Collaboration assignments <EarlyBeta note={COLLABORATION_BETA} /></legend>
+  // The status line and the dialog keep their places in the tree whether or
+  // not the assignments are still listed, so the dialog can show what
+  // leaving did and focus can move even before the list refreshes.
+  if (!query.data?.imports.length) return <>{summary}{null}{dialog}</>;
+  return <>{summary}<fieldset disabled={disabled} className="collaboration-activation"><legend>Collaboration assignments <EarlyBeta note={COLLABORATION_BETA} /></legend>
     {query.data.imports.map(i => {
       const selected = value.find(v => v.import_id === i.import_id);
       return <div key={i.import_id}>
@@ -21,5 +43,6 @@ export default function CollaborationActivation({ projectId, value, onChange, di
         </>}
       </div>;
     })}
-  </fieldset>;
+    {canLeave && <button type="button" className="header-button" onClick={() => setLeaving(true)}>Leave collaboration</button>}
+  </fieldset>{dialog}</>;
 }

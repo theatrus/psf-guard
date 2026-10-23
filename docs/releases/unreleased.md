@@ -47,6 +47,27 @@
   the plan's project in each database; **Delete plan** deletes them and the
   plan with its framing. A plan whose rigs captured frames stays until you
   delete those projects from the Library.
+- You can leave a collaboration. Open a plan imported from a collaboration,
+  and under **Collaboration assignments** in Activation click **Leave
+  collaboration**. The dialog lists what goes: the plan's open assignments in
+  the rig databases end, its imported assignments are removed, unfinished
+  file transfers for it are cancelled, and nightly intake stops importing the
+  project. Reports not yet sent are deleted and never reach the coordinator;
+  deliver them first with **Check in** to have them counted. Frames in
+  reports lose their protection, so removing rejects and deleting the
+  project in the Library can then remove them. PSF Guard declines the plan's
+  tasks at the coordinator for each rig signed in to it; the dialog names
+  any rig that is not, and you should leave or decline the project on the
+  coordinator's site for that rig too. The plan stays as a plan of your own, with its framing, exposures,
+  rig projects, frames and grades, so you can rename, attach, detach or
+  delete it like any other plan. A database the plan links that is missing
+  or cannot be written does not stop you leaving; the dialog warns that its
+  assignments stay open until you register it again and activate the plan.
+  Joining and importing the project again later rejoins the same plan.
+- A plan from a collaboration with nothing captured can now be deleted under
+  **Plans with nothing captured yet**. Deleting it leaves the collaboration
+  first, as **Leave collaboration** does. A plan with frames in reports to the
+  collaboration stays until you leave the collaboration from the plan.
 
 - A color preview can run BlurXTerminator and NoiseXTerminator on its color
   channels together. In **Processing stack**, turn the tools on under

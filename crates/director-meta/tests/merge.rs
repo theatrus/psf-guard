@@ -267,16 +267,22 @@ fn deleting_a_plan_removes_it_and_its_links() {
 
     assert_eq!(store.plan_links(plan).unwrap(), [(catalog, guid)]);
     // A link the caller did not handle keeps the plan.
-    assert!(matches!(store.delete_plan(plan, &[]), Err(Error::Conflict)));
+    assert!(matches!(
+        store.delete_plan(plan, &[], false),
+        Err(Error::Conflict)
+    ));
     assert!(store.project(plan).unwrap().is_some());
-    store.delete_plan(plan, &[(catalog, guid)]).unwrap();
+    store.delete_plan(plan, &[(catalog, guid)], false).unwrap();
     assert!(store.project(plan).unwrap().is_none());
     assert!(store.framing_draft(plan).unwrap().is_none());
     assert!(store.plan_links(plan).unwrap().is_empty());
     assert_eq!(store.linked_project(catalog, guid).unwrap(), None);
     assert!(store.project(kept).unwrap().is_some());
-    assert!(matches!(store.delete_plan(plan, &[]), Err(Error::NotFound)));
+    assert!(matches!(
+        store.delete_plan(plan, &[], false),
+        Err(Error::NotFound)
+    ));
     // A plan without any database goes too.
-    store.delete_plan(kept, &[]).unwrap();
+    store.delete_plan(kept, &[], false).unwrap();
     assert!(store.project(kept).unwrap().is_none());
 }

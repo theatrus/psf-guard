@@ -49,3 +49,9 @@
   cursor: default;
   opacity: 0.5;
 }
+
+/* A warning that does not stop the action, such as a database leaving a
+   collaboration cannot reach. */
+.project-delete-warning {
+  color: var(--color-warning);
+}

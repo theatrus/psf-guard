@@ -67,6 +67,7 @@ export default function CollaborationWorkflows({ connection, canWrite, refresh, 
     </div>)}
     {preview?.result.preview && <section aria-label="Review collaboration import"><h4>Review import</h4>
       <p>{preview.result.plan?.share.name ?? preview.input.task}: {preview.result.plan?.share.demands.length} visits for {preview.input.night.night}</p>
+      {preview.result.preview.rejoins && <p role="note">This import rejoins your plan {preview.result.preview.rejoins}, which left this project. The plan keeps its framing, exposures and recipes.</p>}
       <table><thead><tr><th>Panel</th><th>Filter</th><th>Exposure (s)</th><th>Frames</th></tr></thead><tbody>{preview.result.plan?.share.demands.map(d => <tr key={`${d.panel_index}-${d.filter}`}><td>{d.panel_index}</td><td>{d.filter}</td><td>{d.exposure_ms / 1000}</td><td>{d.requested_frames}</td></tr>)}</tbody></table>
       <button type="button" disabled={busy} onClick={() => mutation.mutate({ ...preview.input, operation: 'apply', review_digest: preview.result.preview!.review_digest })}><Save size={16} />Import draft</button>
       {preview.result.plan && <Link to={`/plan?plan=${encodeURIComponent(preview.result.plan.project_id)}`}>Project plan</Link>}

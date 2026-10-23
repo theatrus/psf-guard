@@ -403,7 +403,7 @@ fn deleting_a_plan_takes_it_out_of_project_orders() {
     global.project_order = Some(vec![gone, kept]);
     store.save_observing_settings(&global).unwrap();
 
-    store.delete_plan(gone, &[]).unwrap();
+    store.delete_plan(gone, &[], false).unwrap();
     let global = store
         .observing_settings(Scope::Global, store.instance_id())
         .unwrap();

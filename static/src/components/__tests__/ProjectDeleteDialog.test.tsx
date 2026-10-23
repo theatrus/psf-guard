@@ -112,7 +112,7 @@ describe('Deleting a project', () => {
 
   it.each([
     [{ allowed: false }, /does not allow database changes/],
-    [{ linked_plan: { name: 'Shared', databases: 2, from_collaboration: true } }, /plan from a collaboration/],
+    [{ linked_plan: { name: 'Shared', databases: 2, from_collaboration: true } }, /belongs to Shared, a plan from a collaboration\. Open the plan and choose Leave collaboration/],
     [{ protected_frames: 2 }, /2 frames of this project were reported to a collaboration/],
   ])('explains why a project cannot be deleted: %o', async (extra, why) => {
     server.use(http.get('/api/db/rig/projects/7/removal', () => ok(preview(extra))));

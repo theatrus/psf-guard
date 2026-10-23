@@ -21,6 +21,7 @@ use std::{
 };
 pub(super) mod background;
 mod credentials;
+pub(super) mod leave;
 #[cfg(test)]
 mod tests;
 pub(super) mod transfers;
@@ -136,32 +137,42 @@ fn registry(state: &AppState) -> Result<PathBuf, Failure> {
             "Collaboration setup needs a persistent config registry",
         ))
 }
-fn operator(
+/// Why a request is not an interactive editor's, as [`operator`] checks it.
+#[derive(Clone, Copy, Debug)]
+enum NotOperator {
+    /// No database management, an API token, or a read-only account.
+    Editor,
+    /// An `Origin` header that cannot be read, or no `Host`.
+    BadOrigin,
+    /// A request from another site.
+    CrossOrigin,
+    /// No signed-in session that can change settings.
+    SignIn,
+}
+
+fn check_operator(
     state: &AppState,
     access: &RequestAccess,
     headers: &HeaderMap,
-) -> Result<String, Failure> {
+) -> Result<String, NotOperator> {
     if !state.database_management_allowed()
         || access.api_token
         || access.role != auth::AccessRole::ReadWrite
     {
-        return Err(Failure(
-            StatusCode::FORBIDDEN,
-            "Collaboration setup requires an interactive editor and database management",
-        ));
+        return Err(NotOperator::Editor);
     }
     if let Some(origin) = headers.get(ORIGIN) {
         let origin: reqwest::Url = origin
             .to_str()
             .ok()
             .and_then(|s| s.parse().ok())
-            .ok_or_else(invalid)?;
+            .ok_or(NotOperator::BadOrigin)?;
         let host = headers
             .get(HOST)
             .and_then(|h| h.to_str().ok())
-            .ok_or_else(invalid)?;
-        let expected =
-            reqwest::Url::parse(&format!("{}://{host}", origin.scheme())).map_err(|_| invalid())?;
+            .ok_or(NotOperator::BadOrigin)?;
+        let expected = reqwest::Url::parse(&format!("{}://{host}", origin.scheme()))
+            .map_err(|_| NotOperator::BadOrigin)?;
         let tauri = state.anonymous_access_trusted()
             && matches!(
                 origin.as_str(),
@@ -171,16 +182,32 @@ fn operator(
             && (origin.origin() != expected.origin()
                 || !matches!(origin.scheme(), "http" | "https"))
         {
-            return Err(Failure(
-                StatusCode::FORBIDDEN,
-                "Collaboration setup requires a same-origin request",
-            ));
+            return Err(NotOperator::CrossOrigin);
         }
     }
-    auth::setup_owner(state, headers).ok_or(Failure(
-        StatusCode::FORBIDDEN,
-        "Sign in again before collaboration setup",
-    ))
+    auth::setup_owner(state, headers).ok_or(NotOperator::SignIn)
+}
+
+fn operator(
+    state: &AppState,
+    access: &RequestAccess,
+    headers: &HeaderMap,
+) -> Result<String, Failure> {
+    check_operator(state, access, headers).map_err(|refusal| match refusal {
+        NotOperator::Editor => Failure(
+            StatusCode::FORBIDDEN,
+            "Collaboration setup requires an interactive editor and database management",
+        ),
+        NotOperator::BadOrigin => invalid(),
+        NotOperator::CrossOrigin => Failure(
+            StatusCode::FORBIDDEN,
+            "Collaboration setup requires a same-origin request",
+        ),
+        NotOperator::SignIn => Failure(
+            StatusCode::FORBIDDEN,
+            "Sign in again before collaboration setup",
+        ),
+    })
 }
 async fn file<T: Send + 'static>(
     work: impl FnOnce() -> std::io::Result<T> + Send + 'static,
@@ -672,8 +699,13 @@ impl Remote {
             .strip_prefix("projects/")
             .and_then(|s| s.strip_suffix("/files"))
             .is_some_and(psf_guard_director_interop::workflow::valid_remote_id);
+        // A task's state: leaving a collaboration declines its tasks.
+        let task = route
+            .strip_prefix("agent/task/")
+            .is_some_and(psf_guard_director_interop::workflow::valid_remote_id);
         if !join
             && !files
+            && !task
             && !matches!(
                 route,
                 "health"

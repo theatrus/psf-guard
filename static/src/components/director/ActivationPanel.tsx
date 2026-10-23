@@ -372,7 +372,7 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere, o
     : '';
   const changed = refused && (refused.found ?? (!reconciling ? preview.result : null));
   return <section className="activation" aria-label="Activation">
-    <CollaborationActivation projectId={projectId} value={visits} disabled={writing || !canWrite} onChange={setVisits} />
+    <CollaborationActivation projectId={projectId} value={visits} disabled={writing || !canWrite} onChange={setVisits} canLeave={canWrite && manageable} />
     {last.data && <p className="director-muted">Last activated {new Date(last.data.applied_at_ms).toLocaleString()} · {last.data.rigs.length} rig{last.data.rigs.length === 1 ? '' : 's'}</p>}
     {last.data && (behind.length > 0 || unsent.length > 0) && <p className="activation-behind" role="note">{notSynced}</p>}
     {unsent.length > 0 && <div className="activation-unsent" role="note" aria-label={unsent.some(site => site.peer_id.startsWith('ts:')) ? 'Not sent to Target Scheduler' : 'Not sent to remote sites'}>

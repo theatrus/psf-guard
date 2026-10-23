@@ -10,6 +10,7 @@ import { identityId } from './identityId';
 import { matchesSearch } from './planFilters';
 import PlanRow from './PlanRow';
 import PlanDeleteDialog from './PlanDeleteDialog';
+import { coordinatorResult } from './collaborationLeaveText';
 import { listNames } from './listNames';
 import { CLOSED_PROJECT_STATE, INACTIVE_PROJECT_STATE } from '../../utils/projectNavigation';
 import '../projectCard.css';
@@ -152,9 +153,12 @@ export default function LibraryPlans({ search, show, listed, dbFilter = null, in
       onDeleted={(outcome) => {
         setDeleting(null);
         focusNotice.current = true;
-        setNotice(outcome.databases.length
-          ? `Deleted the plan ${outcome.name} and its project${outcome.databases.length === 1 ? '' : 's'} on ${listNames(outcome.databases)}.`
-          : `Deleted the plan ${outcome.name}.`);
+        setNotice([
+          outcome.databases.length
+            ? `Deleted the plan ${outcome.name} and its project${outcome.databases.length === 1 ? '' : 's'} on ${listNames(outcome.databases)}.`
+            : `Deleted the plan ${outcome.name}.`,
+          outcome.coordinator ? `It left its collaboration. ${coordinatorResult(outcome.coordinator)}` : '',
+        ].filter(Boolean).join(' '));
       }}
     />}
   </section>;

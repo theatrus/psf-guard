@@ -461,26 +461,44 @@ async fn automatic(state: &Arc<AppState>, service: Arc<Service>) -> Result<(), F
                     attempt: None,
                     source_versions,
                 };
-                let value = serde_json::to_value(request).map_err(|_| invalid())?;
-                let key = Uuid::new_v5(&id, &serde_json::to_vec(&value).map_err(|_| invalid())?);
-                if service
-                    .clone()
-                    .query(move |s| s.transfer_revision(key))
-                    .await?
-                    .is_some()
-                {
-                    continue;
+                if queue_automatic(service.clone(), id, request).await? {
+                    remaining -= 1;
                 }
-                let now = workflows::now_ms()?;
-                service
-                    .clone()
-                    .run(move |s| s.create_transfer(id, value, now))
-                    .await?;
-                remaining -= 1;
             }
         }
     }
     Ok(())
+}
+
+/// Queue one automatic request unless a transfer for it is kept. A transfer
+/// that leaving the collaboration cancelled does not count, so the cohort
+/// queues again after the plan rejoins. An import left between the scan and
+/// this request is skipped. Returns whether a transfer was queued.
+async fn queue_automatic(
+    service: Arc<Service>,
+    connection: Uuid,
+    request: Request,
+) -> Result<bool, Failure> {
+    let value = serde_json::to_value(request).map_err(|_| invalid())?;
+    let key = Uuid::new_v5(
+        &connection,
+        &serde_json::to_vec(&value).map_err(|_| invalid())?,
+    );
+    if service.clone().query(move |s| s.transfer_kept(key)).await? {
+        return Ok(false);
+    }
+    let now = workflows::now_ms()?;
+    match service
+        .run(move |s| s.create_transfer(connection, value, now))
+        .await
+    {
+        Ok(_) => Ok(true),
+        Err(Error::Missing) => {
+            tracing::debug!(%connection, "Automatic transfer skipped: its import was left");
+            Ok(false)
+        }
+        Err(error) => Err(error.into()),
+    }
 }
 
 async fn validate(
@@ -753,6 +771,88 @@ mod tests {
         http::Request as HttpRequest,
         routing::put,
     };
+
+    /// After a plan leaves its collaboration and rejoins, the automatic pass
+    /// queues the same cohort again; while the import is gone it skips it.
+    #[tokio::test]
+    async fn an_automatic_cohort_queues_again_after_a_rejoin() {
+        use psf_guard_director_interop::{astrocollab::Source, collaboration::prepare_import};
+        let (_dir, state, app, rig) = fixture().await;
+        let connection = add(&app, rig, "http://127.0.0.1:9/", &[]).await;
+        let service = state.director.clone().unwrap();
+        let p = prepare_import(
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/crates/director-interop/tests/fixtures/starfront-tonight.json"
+            )),
+            &Source::new("https://collab.example", "000000000001", false).unwrap(),
+            "2026-10-05",
+            "000000000004",
+        )
+        .unwrap();
+        let import = |p: psf_guard_director_interop::collaboration::PreparedImport| {
+            let service = service.clone();
+            async move {
+                service
+                    .run(move |s| {
+                        let preview = s.preview_collaboration_import(&p, rig)?;
+                        s.apply_collaboration_import(&p, rig, &preview.review_digest, 1000)
+                            .map(|_| ())
+                    })
+                    .await
+                    .unwrap()
+            }
+        };
+        import(p.clone()).await;
+        let image = Uuid::new_v4();
+        let request = || -> Request {
+            serde_json::from_value(json!({
+                "selection": {"import_id": p.import_id(), "catalog": "rig", "panel": 0, "image_guids": [image]},
+                "automatic": true
+            }))
+            .unwrap()
+        };
+        let claimed = |service: Arc<Service>| {
+            let import = p.import_id();
+            async move {
+                service
+                    .query(move |s| s.raw_transfer_sources(connection, import, 0))
+                    .await
+                    .unwrap()
+            }
+        };
+        assert!(queue_automatic(service.clone(), connection, request())
+            .await
+            .unwrap());
+        assert!(!queue_automatic(service.clone(), connection, request())
+            .await
+            .unwrap());
+        assert!(claimed(service.clone()).await.contains_key(&image));
+
+        let plan = p.project_id();
+        service
+            .clone()
+            .run(move |s| s.leave_collaboration(plan).map(|_| ()))
+            .await
+            .unwrap();
+        // The import is gone: the pass skips the cohort without failing.
+        assert!(!queue_automatic(service.clone(), connection, request())
+            .await
+            .unwrap());
+        // The cancelled transfer no longer reserves its frames.
+        assert!(claimed(service.clone()).await.is_empty());
+
+        import(p.clone()).await;
+        assert!(queue_automatic(service.clone(), connection, request())
+            .await
+            .unwrap());
+        let jobs = service.clone().query(|s| s.transfers()).await.unwrap();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].state, TransferState::Preparing);
+        assert!(!queue_automatic(service.clone(), connection, request())
+            .await
+            .unwrap());
+    }
 
     async fn upload_fixture(
         reply: Router,

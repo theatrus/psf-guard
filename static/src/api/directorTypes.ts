@@ -652,10 +652,68 @@ export interface DirectorFeasibility {
   warnings: string[];
 }
 
+/** The collaboration a plan came from, and what leaving it removes. */
+export interface DirectorPlanCollaboration {
+  /** The collaboration server's host, such as collab.starfront.space. */
+  host: string;
+  base_url: string;
+  remote_project_id: string;
+  remote_project_name: string | null;
+  /** Nightly assignments imported for the plan. */
+  imports: number;
+  /** Reports the coordinator has not acknowledged. */
+  unsent_reports: number;
+  /** Reports the coordinator acknowledged. */
+  sent_reports: number;
+  /** Frames queued for or sent in a report. */
+  reported_frames: number;
+  /** File transfers for the imports that have not finished. */
+  transfers: number;
+  /** Connections whose nightly intake lists the remote project. */
+  nightly_intake: string[];
+  /** Assignments still open in the rig databases. */
+  open_assignments: number;
+  /** Every task's rig is signed in here, so leaving can decline the tasks at the coordinator. */
+  coordinator_reachable: boolean;
+  /** Rigs signed in to the coordinator, whose tasks leaving declines. */
+  signed_in: string[];
+  /** Rigs that are not, whose tasks the person must decline there. */
+  not_signed_in: string[];
+}
+/** What telling the coordinator did when a plan left its collaboration. */
+export interface DirectorCoordinatorOutcome {
+  host: string;
+  /** Tasks there were to decline. */
+  tasks: number;
+  /** Tasks the coordinator declined. */
+  declined: string[];
+  /** Why a task could not be declined, one sentence each. */
+  problems: string[];
+}
+export interface DirectorCollaborationLeave {
+  name: string;
+  /** Null for a plan of its own. */
+  collaboration: DirectorPlanCollaboration | null;
+  /** Linked databases leaving cannot reach: their assignments stay open. */
+  warnings: string[];
+  refusal: string | null;
+}
+export interface DirectorCollaborationLeft {
+  state: 'left';
+  name: string;
+  collaboration: DirectorPlanCollaboration;
+  /** Open assignments ended in the rig databases. */
+  assignments_ended: number;
+  /** Linked databases whose assignments could not be ended. */
+  warnings: string[];
+  coordinator: DirectorCoordinatorOutcome;
+}
 /** What deleting a plan would delete: each linked database's project, and
  *  why the plan cannot be deleted, if it cannot. */
 export interface DirectorPlanDeletion {
   name: string;
+  /** The collaboration the plan came from, which deleting leaves. */
+  collaboration: DirectorPlanCollaboration | null;
   databases: {
     /** The project's GUID, which the delete keys its digest by. */
     source_project_guid: string;
@@ -669,6 +727,6 @@ export interface DirectorPlanDeletion {
   refusal: string | null;
 }
 export type DirectorPlanDeletionOutcome =
-  | { state: 'deleted'; name: string; databases: string[] }
+  | { state: 'deleted'; name: string; databases: string[]; coordinator?: DirectorCoordinatorOutcome }
   | { state: 'changed'; preview: DirectorPlanDeletion; deleted: string[] }
   | { state: 'stopped'; error: string; deleted: string[] };

@@ -1029,3 +1029,304 @@ async fn browser_flow_validates_origin_and_keeps_person_token_on_host() {
         .is_err());
     remote.abort();
 }
+
+/// A paired rig that imported the fixtures' share from a mock coordinator
+/// that records each task it is asked to decline.
+struct Imported {
+    _dir: tempfile::TempDir,
+    state: Arc<AppState>,
+    app: Router,
+    id: Uuid,
+    route: String,
+    endpoint: String,
+    plan: Uuid,
+    declined: Arc<Mutex<Vec<(String, Value)>>>,
+    remote: tokio::task::JoinHandle<()>,
+}
+
+async fn imported_from_coordinator() -> Imported {
+    let (_dir, state, app, rig) = fixture().await;
+    commissioned(&state, rig).await;
+    let mut wire: Value = serde_json::from_slice(include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/crates/director-interop/tests/fixtures/starfront-tonight.json"
+    )))
+    .unwrap();
+    wire.as_object_mut().unwrap().remove("task");
+    let declined = Arc::new(Mutex::new(Vec::<(String, Value)>::new()));
+    let seen = declined.clone();
+    let (endpoint, remote) = mock(
+        Router::new()
+            .route(
+                "/api/v1/health",
+                get(|| async { Json(health(json!(["pairing"]))) }),
+            )
+            .route(
+                "/api/v1/pair",
+                axum::routing::post(|| async {
+                    Json(json!({"agent":{"id":"000000000001"},"token":"test-agent-token"}))
+                }),
+            )
+            .route(
+                "/api/v1/agent/hello",
+                axum::routing::post(|| async {
+                    Json(json!({"agent":"000000000001","protocol":1,"serverTime":1791171023.0}))
+                }),
+            )
+            .route(
+                "/api/v1/agent/task",
+                get(move || {
+                    let wire = wire.clone();
+                    async move { Json(wire) }
+                }),
+            )
+            .route(
+                "/api/v1/agent/task/{task}",
+                axum::routing::post(
+                    move |Path(task): Path<String>, headers: HeaderMap, Json(body): Json<Value>| {
+                        let seen = seen.clone();
+                        async move {
+                            assert_eq!(headers["authorization"], "Bearer test-agent-token");
+                            seen.lock().unwrap().push((task, body.clone()));
+                            Json(json!({"task":{"state":body["state"]}}))
+                        }
+                    },
+                ),
+            ),
+    )
+    .await;
+    let id = add(&app, rig, &endpoint, &[]).await;
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            &action(id, "pair"),
+            json!({"code":"PAIR"}),
+            &[]
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let route = format!("/collaboration/{id}/work");
+    assert_eq!(
+        call(&app, "POST", &route, setup_filters(), &[]).await.0,
+        StatusCode::OK
+    );
+    let (status, preview) = call(
+        &app,
+        "POST",
+        &route,
+        json!({"operation":"preview","task":"000000000004","night":observing_night()}),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    let digest = preview["data"]["preview"]["review_digest"].clone();
+    let (status, applied) = call(
+        &app,
+        "POST",
+        &route,
+        json!({"operation":"apply","task":"000000000004","night":observing_night(),"review_digest":digest}),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    let plan: Uuid = serde_json::from_value(applied["data"]["plan"]["project_id"].clone()).unwrap();
+    Imported {
+        _dir,
+        state,
+        app,
+        id,
+        route,
+        endpoint,
+        plan,
+        declined,
+        remote,
+    }
+}
+
+/// Leaving declines the plan's task at the coordinator with the rig's saved
+/// sign-in, takes the project out of the nightly intake policy, and leaves
+/// the plan as an ordinary one.
+#[tokio::test]
+async fn leaving_declines_the_task_and_stops_nightly_intake() {
+    let Imported {
+        _dir,
+        state,
+        app,
+        id,
+        route,
+        endpoint,
+        plan,
+        declined,
+        remote,
+    } = imported_from_coordinator().await;
+    // A saved policy that lists the project; off, as this rig has no database.
+    let policy = json!({"enabled":false,"catalog_id":Uuid::new_v4(),"project_ids":["000000000002"],"interval_minutes":5,"activate":false});
+    let (status, configured) = call(
+        &app,
+        "POST",
+        &route,
+        json!({"operation":"background_configure","expected":null,"policy":policy}),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{configured}");
+
+    let leave = format!("/projects/{plan}/collaboration/leave");
+    let (status, preview) = call(&app, "GET", &leave, Value::Null, &[]).await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    let collaboration = &preview["data"]["collaboration"];
+    assert_eq!(collaboration["remote_project_id"], "000000000002");
+    assert_eq!(collaboration["imports"], 1);
+    assert_eq!(collaboration["nightly_intake"], json!(["Rig"]));
+    assert_eq!(collaboration["coordinator_reachable"], true);
+    assert_eq!(preview["data"]["refusal"], Value::Null);
+
+    let (status, left) = call(&app, "POST", &leave, Value::Null, &[]).await;
+    assert_eq!(status, StatusCode::OK, "{left}");
+    assert_eq!(left["data"]["state"], "left");
+    assert_eq!(
+        left["data"]["coordinator"],
+        json!({"host":endpoint.trim_start_matches("http://").trim_end_matches('/'),"tasks":1,"declined":["000000000004"],"problems":[]})
+    );
+    assert_eq!(
+        *declined.lock().unwrap(),
+        vec![("000000000004".to_string(), json!({"state":"declined"}))]
+    );
+    let service = state.director.clone().unwrap();
+    let (binding, imported, kept) = service
+        .query(move |s| {
+            Ok((
+                s.collaboration_connection(id)?.unwrap(),
+                s.plan_from_collaboration(plan)?,
+                s.project(plan)?.is_some(),
+            ))
+        })
+        .await
+        .unwrap();
+    assert!(binding.background.unwrap().project_ids.is_empty());
+    assert!(!imported && kept);
+    let (status, status_body) = call(
+        &app,
+        "POST",
+        &route,
+        json!({"operation":"background_status"}),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{status_body}");
+    assert_eq!(status_body["data"]["projects"], json!([]));
+
+    // Importing the project again rejoins the plan rather than conflicting.
+    let (status, again) = call(
+        &app,
+        "POST",
+        &route,
+        json!({"operation":"preview","task":"000000000004","night":observing_night()}),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(
+        again["data"]["preview"]["rejoins"],
+        "M31 halo in narrowband"
+    );
+    let digest = again["data"]["preview"]["review_digest"].clone();
+    let (status, rejoined) = call(
+        &app,
+        "POST",
+        &route,
+        json!({"operation":"apply","task":"000000000004","night":observing_night(),"review_digest":digest}),
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{rejoined}");
+    assert_eq!(rejoined["data"]["plan"]["project_id"], plan.to_string());
+    let imported = state
+        .director
+        .clone()
+        .unwrap()
+        .query(move |s| s.plan_from_collaboration(plan))
+        .await
+        .unwrap();
+    assert!(imported);
+    remote.abort();
+}
+
+/// Deleting a plan from a collaboration with nothing captured declines its
+/// task at the coordinator with the rig's saved sign-in.
+#[tokio::test]
+async fn deleting_an_imported_plan_declines_its_task() {
+    let i = imported_from_coordinator().await;
+    let path = format!("/projects/{}/deletion", i.plan);
+    let (status, preview) = call(&i.app, "GET", &path, Value::Null, &[]).await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(
+        preview["data"]["collaboration"]["signed_in"],
+        json!(["Rig"])
+    );
+    assert_eq!(preview["data"]["collaboration"]["not_signed_in"], json!([]));
+    let (status, deleted) = call(&i.app, "POST", &path, json!({"digests": {}}), &[]).await;
+    assert_eq!(status, StatusCode::OK, "{deleted}");
+    assert_eq!(deleted["data"]["state"], "deleted", "{deleted}");
+    assert_eq!(
+        deleted["data"]["coordinator"]["declined"],
+        json!(["000000000004"])
+    );
+    assert_eq!(
+        *i.declined.lock().unwrap(),
+        vec![("000000000004".to_string(), json!({"state":"declined"}))]
+    );
+    let plan = i.plan;
+    let gone = i
+        .state
+        .director
+        .clone()
+        .unwrap()
+        .query(move |s| s.project(plan))
+        .await
+        .unwrap();
+    assert!(gone.is_none());
+    i.remote.abort();
+}
+
+/// A request from another site is refused with a message about leaving or
+/// deleting, not about collaboration setup.
+#[tokio::test]
+async fn leaving_or_deleting_from_another_site_is_refused_in_their_terms() {
+    let i = imported_from_coordinator().await;
+    let foreign = [
+        ("origin", "https://elsewhere.example"),
+        ("host", "localhost"),
+    ];
+    let (status, refused) = call(
+        &i.app,
+        "POST",
+        &format!("/projects/{}/collaboration/leave", i.plan),
+        Value::Null,
+        &foreign,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(
+        refused["error"],
+        "Leave the collaboration from PSF Guard's own page; requests from another site are refused."
+    );
+    let (status, refused) = call(
+        &i.app,
+        "POST",
+        &format!("/projects/{}/deletion", i.plan),
+        json!({"digests": {}}),
+        &foreign,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(
+        refused["error"],
+        "Delete the plan from PSF Guard's own page; requests from another site are refused."
+    );
+    assert!(i.declined.lock().unwrap().is_empty());
+    i.remote.abort();
+}

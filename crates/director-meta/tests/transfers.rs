@@ -4,6 +4,25 @@ use psf_guard_director_meta::{
     Error, MetaStore, Uuid,
 };
 use serde_json::json;
+#[path = "../../director-interop/tests/support/mod.rs"]
+mod support;
+
+/// Two stored imports for the rig, as transfers name only imports that exist.
+fn two_imports(store: &mut MetaStore) -> (Uuid, Uuid) {
+    let rig = store.create_rig(Uuid::new_v4(), "Imports").unwrap().id;
+    let first = support::import();
+    let mut wire = support::wire();
+    wire.as_object_mut().unwrap().remove("task");
+    wire["tasks"][0]["id"] = json!("000000000005");
+    let second = support::prepared(&wire);
+    for p in [&first, &second] {
+        let preview = store.preview_collaboration_import(p, rig).unwrap();
+        store
+            .apply_collaboration_import(p, rig, &preview.review_digest, 1000)
+            .unwrap();
+    }
+    (first.import_id(), second.import_id())
+}
 
 fn setup() -> (tempfile::TempDir, MetaStore, Uuid) {
     let dir = tempfile::tempdir().unwrap();
@@ -213,7 +232,7 @@ fn reprepare_does_not_reuse_a_previous_owners_receipts() {
 #[test]
 fn raw_admission_excludes_old_images_without_bypassing_held_work() {
     let (_dir, mut store, connection) = setup();
-    let import = Uuid::new_v4();
+    let (import, other) = two_imports(&mut store);
     let delivered = Uuid::new_v4();
     let held = Uuid::new_v4();
     let cancelled = Uuid::new_v4();
@@ -222,7 +241,7 @@ fn raw_admission_excludes_old_images_without_bypassing_held_work() {
         (held, State::NeedsReview, 0, import, None),
         (cancelled, State::Cancelled, 0, import, None),
         (Uuid::new_v4(), State::Queued, 1, import, None),
-        (Uuid::new_v4(), State::Queued, 0, Uuid::new_v4(), None),
+        (Uuid::new_v4(), State::Queued, 0, other, None),
         (
             Uuid::new_v4(),
             State::Complete,
@@ -476,4 +495,42 @@ fn activity_says_which_transfers_a_policy_queued() {
     };
     assert_eq!(flag(automatic.id), json!(true));
     assert_eq!(flag(by_hand.id), json!(false));
+}
+
+#[test]
+fn a_transfer_names_a_stored_import_and_replaces_one_leaving_cancelled() {
+    let (_dir, mut store, connection) = setup();
+    let request = |import: Uuid| json!({"selection":{"import_id":import,"panel":0,"image_guids":[]},"automatic":true});
+    assert!(matches!(
+        store.create_transfer(connection, request(Uuid::new_v4()), 100),
+        Err(Error::NotFound)
+    ));
+    let (import, _) = two_imports(&mut store);
+    let first = store
+        .create_transfer(connection, request(import), 100)
+        .unwrap();
+    // A person's Cancel stays.
+    let cancelled = store
+        .control_transfer(first.id, first.revision, "cancel")
+        .unwrap();
+    let again = store
+        .create_transfer(connection, request(import), 200)
+        .unwrap();
+    assert_eq!((again.id, again.state), (first.id, State::Cancelled));
+    assert_eq!(again.revision, cancelled.revision);
+    // Leaving cancels it with its own note; the same request after the plan
+    // rejoins starts a fresh transfer.
+    let mut left = again.clone();
+    left.error = Some(psf_guard_director_meta::collaboration_leave::LEFT_COLLABORATION.into());
+    store.save_transfer(left).unwrap();
+    let fresh = store
+        .create_transfer(connection, request(import), 300)
+        .unwrap();
+    assert_eq!(fresh.id, first.id);
+    assert_eq!(fresh.state, State::Preparing);
+    assert_eq!((fresh.revision, fresh.created_at_ms), (1, 300));
+    assert_eq!(
+        store.transfer(first.id).unwrap().unwrap().state,
+        State::Preparing
+    );
 }

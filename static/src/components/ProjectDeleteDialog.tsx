@@ -31,7 +31,8 @@ function refusal(preview: ProjectRemovalPreview): string | null {
     return 'This server does not allow database changes. Restart it with --allow-database-management to delete projects.';
   }
   if (preview.linked_plan?.from_collaboration) {
-    return 'This project belongs to a plan from a collaboration, so it cannot be deleted here.';
+    return `This project belongs to ${preview.linked_plan.name}, a plan from a collaboration. Open the plan and choose `
+      + 'Leave collaboration under Collaboration assignments, then delete the project here.';
   }
   if (preview.protected_frames > 0) {
     return `${count(preview.protected_frames, 'frame')} of this project ${preview.protected_frames === 1 ? 'was' : 'were'} reported to a collaboration, so it cannot be deleted.`;

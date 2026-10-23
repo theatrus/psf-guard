@@ -38,7 +38,8 @@ export interface CollaborationWork {
   night?: CollaborationNight;
   projects?: RemoteProject[];
   shares?: RemoteShare[];
-  preview?: { review_digest: string; action: string; acquisition_enabled: boolean };
+  /** `rejoins` names the plan that left this project, which the import links to it again. */
+  preview?: { review_digest: string; action: string; acquisition_enabled: boolean; rejoins?: string | null };
   plan?: { project_id: string; import_id: string; night: string; share: RemoteShare };
   delivered?: number;
   accepted?: number;
