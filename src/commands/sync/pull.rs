@@ -38,6 +38,22 @@ pub struct TableCounts {
     /// Rows skipped as ambiguous: a duplicate guid in either DB, or a non-null
     /// parent FK that didn't map to a destination row.
     pub skipped: usize,
+    /// Destination rows deleted because the source catalog deleted their
+    /// project and nothing was captured for it in the destination.
+    pub deleted: usize,
+}
+
+/// The kind of database a sync writes, which decides what it may record
+/// there about a project it deletes because the source deleted it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SyncDestination {
+    /// A PSF Guard catalog that a pull fills. A deletion is also recorded
+    /// as a tombstone, so a later sync from a rig does not bring the
+    /// project back.
+    Catalog,
+    /// A rig's Target Scheduler database that a planning push writes. The
+    /// rows are deleted and no PSF Guard table is written.
+    Scheduler,
 }
 
 /// Outcome of a pull.
@@ -1230,12 +1246,18 @@ pub(super) struct StructureSync {
 /// `accepted`: local grading decisions win in the merge, so the counter is
 /// recomputed from the merged grades afterwards — copying the telescope's
 /// value would fight that reconciliation on every re-pull.
+///
+/// Projects the source catalog deleted are deleted in the destination when
+/// nothing was captured for them there. `destination` says whether the
+/// sync may also record that deletion as a tombstone (a PSF Guard catalog)
+/// or must write no PSF Guard table (a rig's Target Scheduler database).
 pub(super) fn sync_structure(
     src: &Connection,
     tx: &Transaction,
     project_filter: Option<&str>,
     excluded_plan_counts: &[&str],
     preserve_existing: bool,
+    destination: SyncDestination,
     changes: &mut Vec<String>,
 ) -> Result<StructureSync> {
     let included_projects: Option<HashSet<i64>> = match project_filter {
@@ -1253,6 +1275,7 @@ pub(super) fn sync_structure(
     // without a skip line for each row. A pull a person runs says once
     // which projects it left out; the automatic one does not.
     let removed = crate::commands::project_removal::removed_project_guids(tx)?;
+    let mut left_out: Vec<(String, i64)> = Vec::new();
     let included_projects = if removed.is_empty() {
         included_projects
     } else {
@@ -1274,18 +1297,40 @@ pub(super) fn sync_structure(
             }
             let deleted = guid
                 .as_deref()
-                .is_some_and(|guid| removed.contains(&guid.trim().to_ascii_lowercase()));
-            if !deleted {
-                kept.insert(id);
-            } else if !preserve_existing {
-                changes.push(format!(
-                    "leave out project \"{}\": deleted in this catalog (Allow again in the Library lets it back)",
-                    name.unwrap_or_default()
-                ));
+                .map(|guid| guid.trim().to_ascii_lowercase())
+                .filter(|guid| removed.contains(guid));
+            match deleted {
+                None => {
+                    kept.insert(id);
+                }
+                Some(guid) => {
+                    left_out.push((guid, id));
+                    if !preserve_existing {
+                        changes.push(format!(
+                            "leave out project \"{}\": deleted in this catalog (Allow again in the Library lets it back)",
+                            name.unwrap_or_default()
+                        ));
+                    }
+                }
             }
         }
         Some(kept)
     };
+    let now = crate::commands::project_removal::unix_now();
+    for (guid, source_project) in &left_out {
+        // Deleted projects lists a deletion once a sync has left it out.
+        crate::commands::project_removal::mark_left_out(tx, guid, now)?;
+        // The frames of a deleted project that still arrive from a rig:
+        // an upload or import of their files is skipped as removed.
+        if destination == SyncDestination::Catalog {
+            let frames = left_out_frames(src, *source_project)?;
+            crate::commands::project_removal::add_left_out_frames(tx, guid, &frames, now)?;
+        }
+    }
+    // Projects the source deleted, deleted here too when nothing was
+    // captured for them here.
+    let deleted =
+        delete_projects_deleted_in_source(src, tx, project_filter, destination, now, changes)?;
     let included_targets: Option<HashSet<i64>> = match &included_projects {
         Some(projs) => Some(child_ids(src, "target", "projectid", projs)?),
         None => None,
@@ -1349,17 +1394,171 @@ pub(super) fn sync_structure(
         changes,
     )?;
 
+    let mut project = proj.counts;
+    project.deleted = deleted.projects;
+    let mut target = tgt.counts;
+    target.deleted = deleted.targets;
+    let mut exposureplan = plan.counts;
+    exposureplan.deleted = deleted.exposure_plans;
     Ok(StructureSync {
         exposuretemplate: tmpl.counts,
-        project: proj.counts,
+        project,
         ruleweight,
-        target: tgt.counts,
-        exposureplan: plan.counts,
+        target,
+        exposureplan,
         project_map: proj_map,
         target_map: tgt_map,
         plan_map: plan.id_map,
         selected_project_ids: included_projects,
     })
+}
+
+/// What a sync deleted because the source catalog deleted the projects.
+#[derive(Debug, Default)]
+struct SourceDeletions {
+    projects: usize,
+    targets: usize,
+    exposure_plans: usize,
+}
+
+fn exposures(count: usize) -> String {
+    if count == 1 {
+        "1 exposure".into()
+    } else {
+        format!("{count} exposures")
+    }
+}
+
+/// Delete each destination project that the source catalog deleted and has
+/// not allowed back, when nothing was captured for it in the destination:
+/// no frames on the project or its targets, and no removed rejects that
+/// Restore can bring back. A project with frames here stays, with a change
+/// line that says why. In a PSF Guard catalog the deletion is recorded as a
+/// tombstone; in a Target Scheduler database only the rows go.
+fn delete_projects_deleted_in_source(
+    src: &Connection,
+    tx: &Transaction,
+    project_filter: Option<&str>,
+    destination: SyncDestination,
+    now: i64,
+    changes: &mut Vec<String>,
+) -> Result<SourceDeletions> {
+    use crate::commands::project_removal;
+
+    let mut deleted = SourceDeletions::default();
+    let deletions = project_removal::source_deletions(src)?;
+    if deletions.is_empty() || !super::table_has_column(tx, "project", "guid") {
+        return Ok(deleted);
+    }
+    // A source that has the project again does not mean to delete it.
+    let mut live_statement = src.prepare(
+        "SELECT lower(trim(guid)) FROM project WHERE guid IS NOT NULL AND trim(guid) <> ''",
+    )?;
+    let live: HashSet<String> = live_statement
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    let filter = project_filter.map(str::to_lowercase);
+    let mut find = tx.prepare("SELECT Id FROM project WHERE lower(trim(guid)) = ?1")?;
+    for deletion in deletions {
+        if live.contains(&deletion.guid) {
+            continue;
+        }
+        let ids = find
+            .query_map([&deletion.guid], |row| row.get::<_, i64>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let id = match ids.as_slice() {
+            [] => continue,
+            [id] => *id,
+            _ => {
+                changes.push(format!(
+                    "skip project \"{}\": deleted in the source catalog, but {} projects here have its GUID",
+                    deletion.name,
+                    ids.len()
+                ));
+                continue;
+            }
+        };
+        let Some(plan) = project_removal::plan(tx, id, &std::collections::BTreeSet::new())? else {
+            continue;
+        };
+        if filter
+            .as_deref()
+            .is_some_and(|filter| !plan.name.to_lowercase().contains(filter))
+        {
+            continue;
+        }
+        if plan.frames.total > 0 {
+            changes.push(format!(
+                "keep project \"{}\": deleted in the source catalog, but it has {} here",
+                plan.name,
+                exposures(plan.frames.total)
+            ));
+            continue;
+        }
+        let rejects = project_removal::restorable_rejects(tx, id)?;
+        if rejects > 0 {
+            changes.push(format!(
+                "keep project \"{}\": deleted in the source catalog, but it has {} here that Restore can bring back",
+                plan.name,
+                exposures(rejects).replacen("exposure", "removed exposure", 1)
+            ));
+            continue;
+        }
+        if destination == SyncDestination::Catalog {
+            project_removal::record_sync_deletion(tx, &plan, now)?;
+        }
+        project_removal::delete_project_rows(tx, &plan)?;
+        deleted.projects += 1;
+        deleted.targets += plan.targets;
+        deleted.exposure_plans += plan.exposure_plans;
+        changes.push(format!(
+            "delete project \"{}\": deleted in the source catalog",
+            plan.name
+        ));
+    }
+    Ok(deleted)
+}
+
+/// The frames a source has for one of its projects, as frame tombstones
+/// record them: GUID and lower-case file name without its folder. Frames
+/// with no file name are left out; an upload or import matches by name.
+fn left_out_frames(
+    src: &Connection,
+    source_project: i64,
+) -> Result<Vec<crate::commands::project_removal::LeftOutFrame>> {
+    if !super::table_has_column(src, "acquiredimage", "metadata") {
+        return Ok(Vec::new());
+    }
+    let guid = if super::table_has_column(src, "acquiredimage", "guid") {
+        "guid"
+    } else {
+        "NULL"
+    };
+    let mut statement = src.prepare(&format!(
+        "SELECT {guid}, metadata FROM acquiredimage WHERE projectId = ?1 ORDER BY Id"
+    ))?;
+    let frames = statement
+        .query_map([source_project], |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, Option<String>>(1)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(frames
+        .into_iter()
+        .filter_map(|(guid, metadata)| {
+            let file_name = metadata
+                .as_deref()
+                .and_then(crate::commands::reject_archive::parse_filename_from_metadata)
+                .filter(|name| !name.is_empty())?
+                .to_lowercase();
+            Some(crate::commands::project_removal::LeftOutFrame {
+                guid: guid.filter(|guid| !guid.is_empty()),
+                file_name,
+            })
+        })
+        .collect())
 }
 
 /// Pull telescope structure + captures into the destination DB.
@@ -1390,7 +1589,15 @@ pub(crate) fn sync_arrivals(
     require_pull_capable(src)?;
     require_pull_capable(tx)?;
     let mut summary = PullSummary::default();
-    let structure = sync_structure(src, tx, None, &["accepted"], true, &mut summary.changes)?;
+    let structure = sync_structure(
+        src,
+        tx,
+        None,
+        &["accepted"],
+        true,
+        SyncDestination::Catalog,
+        &mut summary.changes,
+    )?;
     upsert_acquired_images(
         src,
         tx,
@@ -1436,6 +1643,7 @@ pub(crate) fn sync_pull_in_transaction(
         opts.project_filter.as_deref(),
         &["accepted"],
         false,
+        SyncDestination::Catalog,
         &mut summary.changes,
     )?;
     summary.exposuretemplate = structure.exposuretemplate;
@@ -1476,24 +1684,28 @@ pub(crate) fn sync_pull_in_transaction(
         updated: calibration.rigs.updated,
         unchanged: calibration.rigs.unchanged,
         skipped: 0,
+        deleted: 0,
     };
     summary.calibration_rig_bindings = TableCounts {
         inserted: calibration.rig_bindings.inserted,
         updated: calibration.rig_bindings.updated,
         unchanged: calibration.rig_bindings.unchanged,
         skipped: 0,
+        deleted: 0,
     };
     summary.calibration_frames = TableCounts {
         inserted: calibration.frames.inserted,
         updated: calibration.frames.updated,
         unchanged: calibration.frames.unchanged,
         skipped: calibration.frames.skipped,
+        deleted: 0,
     };
     summary.calibration_grades = TableCounts {
         inserted: calibration.quality.inserted,
         updated: calibration.quality.updated,
         unchanged: calibration.quality.unchanged,
         skipped: 0,
+        deleted: 0,
     };
     summary.calibration_choices = calibration.choices;
     if let Some(line) = calibration_choice_line(&calibration.choices) {
@@ -1511,6 +1723,7 @@ pub(crate) fn sync_pull_in_transaction(
         updated: derivatives.updated,
         unchanged: derivatives.unchanged,
         skipped: derivatives.skipped,
+        deleted: 0,
     };
 
     // Pulled rows carry grades; the destination's plans must count them.

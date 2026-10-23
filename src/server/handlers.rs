@@ -2305,6 +2305,9 @@ pub enum AppError {
     BadRequest(String),
     Conflict(String),
     Forbidden(String),
+    /// 410: the request asks for something this catalog removed on
+    /// purpose, so retrying it cannot succeed.
+    Gone(String),
     InternalError(String),
     NotImplemented,
 }
@@ -2328,6 +2331,7 @@ impl AppError {
             | AppError::BadRequest(message)
             | AppError::Conflict(message)
             | AppError::Forbidden(message)
+            | AppError::Gone(message)
             | AppError::InternalError(message) => message.clone(),
         }
     }
@@ -2376,6 +2380,14 @@ impl IntoResponse for AppError {
                 tracing::warn!("🚫 Forbidden: {}", msg);
                 return (
                     StatusCode::FORBIDDEN,
+                    Json(ApiResponse::<()>::error(msg.clone())),
+                )
+                    .into_response();
+            }
+            AppError::Gone(msg) => {
+                tracing::warn!("🪦 Gone: {}", msg);
+                return (
+                    StatusCode::GONE,
                     Json(ApiResponse::<()>::error(msg.clone())),
                 )
                     .into_response();

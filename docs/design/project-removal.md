@@ -23,7 +23,7 @@ explains why the project cannot be deleted.
 | --- | --- | --- |
 | GET | `/api/db/{db}/projects/{id}/removal` | The preview: name, GUID, state, `targets`, `exposure_plans`, `frames` by grade, `protected_frames`, `linked_plan`, `synced_from`, `allowed` and `digest` |
 | POST | `/api/db/{db}/projects/{id}/removal` | `{digest}`. Returns `{state: "removed", …}` with the counts and the plan that no longer links the database, or `{state: "changed", preview}` when the project changed since the preview. `403` without database management, `409` for frames reported to a collaboration or a plan from one, `404` for a project that is gone |
-| GET | `/api/db/{db}/deleted-projects` | Deleted projects that syncs and imports leave out, newest first: `id`, `project_id`, `name`, `removed_at`, `frames` |
+| GET | `/api/db/{db}/deleted-projects` | Deleted projects that syncs and imports leave out, newest first: `id`, `project_id`, `name`, `removed_at`, `frames`. A deletion without frames is listed once a sync has left the project out |
 | POST | `/api/db/{db}/deleted-projects/{id}/allow` | Lets the next sync or import add the project back. `403` without database management |
 | GET | `/api/director/v1/projects/{id}/deletion` | A plan's deletion preview: `name`, each linked database (`catalog_slug`, `catalog_name`, its `project` with `targets`, `exposure_plans`, `frames` and `digest`, or `problem` when it cannot be read), `collaboration` for a plan from a collaboration (as Leave previews it) and `refusal` |
 | POST | `/api/director/v1/projects/{id}/deletion` | `{digests: {project GUID: digest}}`. Returns `{state: "deleted", name, databases, coordinator?}`, `{state: "changed", preview, deleted}` when the plan or a project changed, or `{state: "stopped", error, deleted}`. `422` with the refusal, `403` without database management, or for a plan from a collaboration without an interactive editor |
@@ -113,9 +113,10 @@ GUID, target, exposure plan and frame row Ids). The frames are the
 project's and any recorded under another project on one of its targets.
 
 1. Tombstones: a `psf_guard_removed_project` row (Id, GUID, name, date,
-   frame count) and, under its Id, a `psf_guard_removed_project_frame` row
-   for each frame's Id, GUID and lower-case file name, and for each
-   calibrated copy paired with a frame.
+   frame count, and `left_out_at`, the first time a sync left the project
+   out) and, under its Id, a `psf_guard_removed_project_frame` row for each
+   frame's Id, GUID and lower-case file name, and for each calibrated copy
+   paired with a frame.
 2. Each frame's `imagedata`, `psf_guard_remote_image_file`,
    `psf_guard_flat_light_angle`, `psf_guard_frame_derivative`,
    `psf_guard_archive`, `psf_guard_rejected_at`, `psf_guard_ts_sync_grade`,
@@ -132,6 +133,8 @@ project's and any recorded under another project on one of its targets.
 5. `ruleweight`, `psf_guard_director_project`,
    `psf_guard_project_processing`, then the project.
 
+Steps 2 to 5 are `delete_project_rows`, which a sync also uses (see
+[Deleting in other catalogs and rigs](#deleting-in-other-catalogs-and-rigs)).
 Target Scheduler declares no cascades, so each table is deleted from by
 name; optional tables are probed first. Exposure templates belong to the
 profile and stay. A GUID that another project in the catalog also has, in
@@ -157,12 +160,15 @@ is still linked to the plan, the plan keeps the rig's work.
 
 ## How syncs and imports leave it out
 
-Only a project with frames is kept out. A project without frames has no
-files an import could bring back, so its deletion writes no GUID tombstone
-and is not listed under **Deleted projects**; its row in
-`psf_guard_removed_project` is marked allowed back at once and stays only
-for the Restore check. A catalog that syncs from Target Scheduler gets such
-a project back on its next sync, and the dialog says so.
+Every deletion keeps its project out, with frames or without. A project
+without frames is listed under **Deleted projects** only once a sync has
+left it out (`left_out_at` is set): until then, keeping it out changes
+nothing anyone would see. The list shows a deletion when
+`allowed_back_at IS NULL AND (frames > 0 OR left_out_at IS NOT NULL)`. A
+table created before `left_out_at` gains the column the next time PSF
+Guard writes to it, and lists the deletions with frames meanwhile.
+Deletions made before this change for projects without frames were marked
+allowed back at once; they stay that way.
 
 - **Sync.** A pull leaves out a source project whose GUID has a tombstone,
   with its targets, exposure plans and frames, as a project filter does:
@@ -170,7 +176,14 @@ a project back on its next sync, and the dialog says so.
   person runs lists each project it left out once ("leave out project …:
   deleted in this catalog"); the automatic sync does not. This covers
   automatic Target Scheduler sync, a full pull and PSF Guard to PSF Guard
-  sync.
+  sync. Leaving the project out sets the deletion's `left_out_at` the
+  first time. A dry run does this inside the transaction it rolls back, so
+  a preview changes nothing.
+- **Frames that still arrive.** A pull into a catalog adds the left-out
+  frames' GUIDs and lower-case file names (the basename of the metadata
+  `FileName`) to the deletion's frame tombstones, when they are not there
+  yet, inside the sync's transaction. An upload or import of those files is
+  then skipped as removed.
 - **Imports.** `reject_removal::removed_file_names` also returns the
   deleted project's file names, its lights' and their calibrated copies',
   so a folder import or autoimport of the files left on disk skips them;
@@ -181,6 +194,76 @@ a project back on its next sync, and the dialog says so.
 A synced catalog's source keeps the project: PSF Guard opens it read-only.
 The preview says so, and that N.I.N.A. still schedules the project there
 while it is Active.
+
+## Deleting in other catalogs and rigs
+
+A sync applies the source catalog's deletions to its destination, in every
+direction that writes project rows: a full pull, the automatic arrival
+sync, a pull from a peer and a planning push (`sync_structure` in
+`src/commands/sync/pull.rs`). For each GUID in the source's
+`psf_guard_removed_project` that is not allowed back and that the source
+has no project for:
+
+- When the destination has a project with that GUID and nothing was
+  captured for it there (no `acquiredimage` row with its project Id or on
+  one of its targets, and no removed reject that Restore can bring back),
+  the sync deletes it with `delete_project_rows` and reports `delete
+  project "M31": deleted in the source catalog`. The project, target and
+  exposure plan counts include it as `deleted`, and the sync preview shows
+  how many projects a transfer deletes.
+- When the destination has frames for it, the project stays and the sync
+  reports `keep project "M31": deleted in the source catalog, but it has 3
+  exposures here`. A removed reject keeps it too, with its own line.
+- When two projects in the destination have the GUID, neither is deleted
+  and the sync reports a skip line. A project filter limits deletions to
+  destination projects whose names match it.
+
+`sync_structure` takes the kind of destination explicitly
+(`SyncDestination`):
+
+- **Catalog**: a full pull, the arrival sync and a pull from a peer write a
+  PSF Guard catalog. The sync also records the deletion there as a
+  tombstone with no frames, so a later sync from a rig that still has the
+  project leaves it out. That tombstone is not listed until such a sync
+  leaves the project out.
+- **Scheduler**: a planning push writes a rig's Target Scheduler database.
+  Only the rows go; the sync writes no PSF Guard table there. A peer that
+  receives a planning push treats its own catalog the same way.
+
+Everything runs inside the caller's transaction, so a dry run deletes and
+records nothing. After a sync deletes a project, Planning still links it
+until the plan is changed: unlike **Delete project**, a sync does not run
+`MetaStore::forget_source_project`.
+
+### Peers
+
+A remote PSF Guard reads deletions from the `psf_guard_removed_project`
+table of a merge or planning bundle, carrying only `project_guid` and
+`name` and only deletions not allowed back. A peer that reads it
+advertises `project_tombstones_v1`; a client pushes the table only to a
+peer that advertises it, and an export includes it only when the request
+sets `include_project_tombstones`. A bundle without the table deletes
+nothing. See
+[Data transfer](data-transfer.md#deleted-projects).
+
+### Uploads
+
+An upload of a light whose file name a project deletion lists is refused
+with `410 Gone` and a message that names the project and explains how to
+allow it back (**Deleted projects**, **Allow again**). The receive
+directory is not written. A 410 is not a failure worth retrying: the
+N.I.N.A. plugin retries only on no response, 408, 409, 429 and 5xx.
+
+### The N.I.N.A. plugin
+
+The plugin applies a planning or merge bundle to its rig's Target
+Scheduler database itself, so PSF Guard's sync engine does not run there.
+To delete a project on its rig, the plugin must ask for
+`include_project_tombstones` on an export, read `project_guid` and `name`
+from `psf_guard_removed_project`, and delete a project it has with that
+GUID when nothing was captured for it, as described above. Until it does,
+a rig that the plugin serves keeps a project deleted in PSF Guard, and the
+next pull leaves it out of PSF Guard again.
 
 ## Allowing a project back
 
@@ -214,9 +297,11 @@ the new plan to it with **Attach a project from another database**.
 - A frame recorded under another project on one of the deleted project's
   targets is deleted with it, and its GUID is tombstoned. While the source
   still has the frame, each pull lists it as skipped.
-- Remote image intake does not read the tombstones, as it does not read
-  reject removal's. An upload of a deleted project's file arrives as a new
-  frame.
+- Remote image intake reads the project tombstones only; an upload of a
+  removed reject's file is still refused with a generic 400.
+- A sync that deletes a project does not update Planning or the server's
+  caches; nothing was captured for the project, so only Planning's link is
+  left.
 - There is no restore of the deleted rows. The tombstones keep the frame
   Ids and names, not the rows; Allow again lets a sync or import add the
   project anew.

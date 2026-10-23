@@ -1647,3 +1647,63 @@ async fn upload_still_rejects_a_non_image_extension() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(image_count(&fixture.database_a), 0);
 }
+
+/// A light of a project deleted from this catalog is refused with 410, which
+/// a client does not retry, and the message explains how to allow the
+/// project back. The file already received stays on disk.
+#[tokio::test]
+async fn a_light_of_a_deleted_project_is_refused_as_gone() {
+    let fixture = Fixture::new();
+    let first = fits_bytes("M 31", "2026-07-24T05:00:00");
+    let (status, body) = upload(
+        fixture.state.clone(),
+        "catalog-a",
+        "catalog-a",
+        TOKEN_A,
+        "m31-001.fits",
+        &first,
+        &sha256(&first),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let project_id = body["data"]["resolution"]["project_id"].as_i64().unwrap();
+
+    let connection = rusqlite::Connection::open(&fixture.database_a).unwrap();
+    let plan =
+        psf_guard::commands::project_removal::plan(&connection, project_id, &Default::default())
+            .unwrap()
+            .unwrap();
+    let outcome = psf_guard::commands::project_removal::remove(
+        &connection,
+        project_id,
+        &plan.digest,
+        &Default::default(),
+        1_790_000_000,
+    )
+    .unwrap();
+    assert!(matches!(
+        outcome,
+        psf_guard::commands::project_removal::Outcome::Removed { .. }
+    ));
+    drop(connection);
+    assert_eq!(image_count(&fixture.database_a), 0);
+
+    let (status, body) = upload(
+        fixture.state.clone(),
+        "catalog-a",
+        "catalog-a",
+        TOKEN_A,
+        "M31-001.fits",
+        &first,
+        &sha256(&first),
+    )
+    .await;
+    assert_eq!(status, StatusCode::GONE, "{body}");
+    assert_eq!(body["success"], false, "{body}");
+    let message = body["error"].as_str().unwrap();
+    assert!(message.contains("deleted from this catalog"), "{message}");
+    assert!(message.contains("Allow again"), "{message}");
+    assert!(message.contains("\"M 31\""), "{message}");
+    assert_eq!(image_count(&fixture.database_a), 0);
+    assert!(fixture.images_a.join("m31-001.fits").is_file());
+}

@@ -185,6 +185,53 @@ describe('SchedulerSyncControls', () => {
     expect(requests[1]).toEqual({ preview_id: 'planning-preview' });
   });
 
+  it('says which projects a transfer deletes because the source catalog deleted them', async () => {
+    const result = {
+      kind: 'push_planning',
+      dry_run: true,
+      source_db_id: 'local',
+      destination_db_id: 'scope',
+      exposuretemplate: counts,
+      project: { ...counts, deleted: 1 },
+      ruleweight: counts,
+      target: { ...counts, deleted: 2 },
+      exposureplan: { ...counts, deleted: 1 },
+      acquiredimage: null,
+      imagedata: null,
+      grades: null,
+      grade_filled: 0,
+      grade_preserved: 0,
+      imagedata_bytes: 0,
+      total_inserted: 0,
+      total_updated: 0,
+    };
+    server.use(
+      http.post('/api/databases/local/sync/preview', () => HttpResponse.json({
+        success: true,
+        data: { preview_id: 'deleting-preview', created_at: 1, expires_at: 4_102_444_800, result },
+        error: null,
+        status: 'ready',
+      })),
+      http.post('/api/databases/local/sync/previews/deleting-preview/apply', () => HttpResponse.json({
+        success: true,
+        data: { ...result, dry_run: false },
+        error: null,
+        status: 'ready',
+      })),
+    );
+
+    const user = userEvent.setup();
+    render(<SchedulerSyncControls databases={[local, telescope]} />, { wrapper: wrapper() });
+    await user.click(screen.getByRole('button', { name: 'Send planning' }));
+    await user.click(screen.getByRole('button', { name: 'Preview changes' }));
+    expect(await screen.findByText(
+      'Deletes 1 project that the source catalog deleted, with 2 targets and 1 exposure plan. Nothing was captured for it in the destination.',
+    )).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Apply this preview' }));
+    expect(await screen.findByText('Send planning complete: 0 added, 0 updated, 1 project deleted.')).toBeInTheDocument();
+  });
+
   it('stops a preview whose inputs changed and ignores its late reply', async () => {
     let answer: (() => void) | undefined;
     const stops: string[] = [];

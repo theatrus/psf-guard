@@ -2549,6 +2549,10 @@ export interface SchedulerSyncTableCounts {
   updated: number;
   unchanged: number;
   skipped: number;
+  /** Rows deleted because the source catalog deleted their project and
+   *  nothing was captured for it in the destination. Absent on older
+   *  responses. */
+  deleted?: number;
 }
 
 export interface SchedulerSyncGradeCounts {

@@ -36,9 +36,10 @@
   **Delete** beside an archived project. The dialog
   shows how many targets, exposure plans and frames go, and asks you to type
   the project's name when it has frames. Frame records and grades leave the
-  catalog; the image files stay on disk. Later syncs and imports leave a
-  project with frames out until you click **Allow again** under **Deleted
-  projects** in the Library; a project without frames is not listed there. A plan that linked the project no longer plans work for that
+  catalog; the image files stay on disk. Later syncs and imports leave the
+  project out until you click **Allow again** under **Deleted projects** in
+  the Library. A project without frames appears there once a sync has left
+  it out. A plan that linked the project no longer plans work for that
   rig. Deleting needs a server started with `--allow-database-management`.
   Restoring removed rejects no longer puts back a frame whose project was
   deleted.
@@ -68,6 +69,17 @@
   **Plans with nothing captured yet**. Deleting it leaves the collaboration
   first, as **Leave collaboration** does. A plan with frames in reports to the
   collaboration stays until you leave the collaboration from the plan.
+- A sync now deletes a project that its source catalog deleted, when
+  nothing was captured for the project in the destination. This applies to
+  pulls, to a planning push into a rig's Target Scheduler database, and to
+  syncs with another PSF Guard server that runs this version. A project
+  with frames in the destination stays, and the preview says how many
+  exposures it has there. The preview and the result show how many
+  projects the transfer deletes. When a pull leaves out new frames of a
+  deleted project, imports and uploads of those files are skipped too.
+- An upload of a frame from a project deleted in the receiving catalog is
+  refused with a message that explains how to allow the project back. The
+  N.I.N.A. plugin does not retry it.
 
 - A color preview can run BlurXTerminator and NoiseXTerminator on its color
   channels together. In **Processing stack**, turn the tools on under

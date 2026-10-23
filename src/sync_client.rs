@@ -141,6 +141,7 @@ impl SyncClient {
                     "operation": operation,
                     "reviewed_only": reviewed_only,
                     "include_frame_derivatives": true,
+                    "include_project_tombstones": true,
                 }),
             )
             .await
@@ -265,7 +266,7 @@ pub fn local_bundle(
     operation: SyncOperation,
     reviewed_only: bool,
     include_thumbnails: bool,
-    include_optional: bool,
+    optional: crate::server::remote_sync::OptionalTables,
 ) -> Result<CatalogBundle> {
     crate::server::remote_sync::export_bundle(
         database_path,
@@ -273,7 +274,7 @@ pub fn local_bundle(
         operation,
         reviewed_only,
         include_thumbnails,
-        include_optional,
+        optional,
     )
 }
 

@@ -5,7 +5,7 @@
 //! image data, or grades. Existing telescope plan progress (`acquired` and
 //! `accepted`) stays unchanged; a new plan starts with both counts at zero.
 
-use super::pull::sync_structure;
+use super::pull::{sync_structure, SyncDestination};
 use super::{require_planning_capable, TableCounts};
 use anyhow::{Context, Result};
 use rusqlite::{Connection, Transaction, TransactionBehavior};
@@ -89,6 +89,9 @@ pub(crate) fn sync_planning_in_transaction(
         opts.project_filter.as_deref(),
         &["acquired", "accepted"],
         false,
+        // A planning push writes a rig's Target Scheduler database: a
+        // project the source deleted goes, and no tombstone is written.
+        SyncDestination::Scheduler,
         &mut summary.changes,
     )?;
 

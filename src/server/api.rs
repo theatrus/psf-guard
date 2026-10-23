@@ -645,6 +645,11 @@ pub struct SchedulerSyncTableCounts {
     pub updated: usize,
     pub unchanged: usize,
     pub skipped: usize,
+    /// Rows deleted because the source catalog deleted their project and
+    /// nothing was captured for it in the destination. Absent on older
+    /// responses.
+    #[serde(default)]
+    pub deleted: usize,
 }
 
 impl From<&crate::commands::sync::TableCounts> for SchedulerSyncTableCounts {
@@ -654,6 +659,7 @@ impl From<&crate::commands::sync::TableCounts> for SchedulerSyncTableCounts {
             updated: value.updated,
             unchanged: value.unchanged,
             skipped: value.skipped,
+            deleted: value.deleted,
         }
     }
 }

@@ -17,7 +17,7 @@ use std::{
 };
 
 use crate::server::database_context::open_scheduler_connection_with_flags;
-use crate::server::remote_sync::SyncOperation;
+use crate::server::remote_sync::{OptionalTables, SyncOperation};
 use crate::sync_client::{local_bundle, materialize, SyncClient};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,14 +91,13 @@ pub async fn sync_remote(options: RemoteSyncOptions) -> Result<RemoteSyncOutcome
     let summary = match options.direction {
         RemoteDirection::Pull => pull_from(&client, &catalog, &options).await?,
         RemoteDirection::PushPlanning | RemoteDirection::PushGrades => {
+            // Only the optional tables the peer reads: an older peer refuses
+            // a bundle with a table it does not know.
             push_to(
                 &client,
                 &catalog,
                 &options,
-                capabilities
-                    .capabilities
-                    .iter()
-                    .any(|name| name == crate::server::remote_sync::FRAME_DERIVATIVES_CAPABILITY),
+                OptionalTables::from_capabilities(&capabilities.capabilities),
             )
             .await?
         }
@@ -177,7 +176,7 @@ async fn push_to(
     client: &SyncClient,
     catalog: &str,
     options: &RemoteSyncOptions,
-    peer_reads_frame_derivatives: bool,
+    optional: OptionalTables,
 ) -> Result<BTreeMap<String, i64>> {
     let operation = options.direction.operation();
     let bundle = local_bundle(
@@ -186,7 +185,7 @@ async fn push_to(
         operation,
         options.reviewed_only,
         options.with_image_data,
-        peer_reads_frame_derivatives,
+        optional,
     )
     .context("building a bundle from the local database")?;
     let rows: usize = bundle.tables.values().map(|table| table.rows.len()).sum();
@@ -249,6 +248,9 @@ fn pull_summary(summary: &crate::commands::sync::PullSummary) -> BTreeMap<String
     ] {
         counts.insert(format!("{name}_inserted"), table.inserted as i64);
         counts.insert(format!("{name}_updated"), table.updated as i64);
+        if table.deleted > 0 {
+            counts.insert(format!("{name}_deleted"), table.deleted as i64);
+        }
     }
     if summary.imagedata_synced {
         counts.insert(

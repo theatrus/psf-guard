@@ -546,31 +546,323 @@ fn a_deleted_project_can_be_allowed_back() {
     );
 }
 
-/// A project without frames leaves nothing to keep out: no sync or import
-/// skips it, and Deleted projects does not list it. Restore still sees its
-/// deletion.
+/// Add a project without frames: Empty (Id 3), with a target and an
+/// exposure plan.
+fn add_empty_project(conn: &Connection) {
+    conn.execute_batch(
+        "INSERT INTO project (Id, profileId, name, state, guid) VALUES (3, 'p', 'Empty', 1, 'pg-empty');
+         INSERT INTO target (Id, name, active, epochcode, projectid, guid) VALUES (30, 'Empty', 1, 0, 3, 'tg-empty');
+         INSERT INTO exposureplan (Id, profileId, exposure, desired, acquired, accepted, targetid, exposureTemplateId, guid)
+           VALUES (300, 'p', 300, 10, 0, 0, 30, 1, 'eg-empty');",
+    )
+    .unwrap();
+}
+
+fn pull_options(dry_run: bool) -> PullOptions {
+    PullOptions {
+        dry_run,
+        with_image_data: false,
+        project_filter: None,
+    }
+}
+
+fn has_table(conn: &Connection, table: &str) -> bool {
+    count(
+        conn,
+        &format!("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = '{table}'"),
+    ) > 0
+}
+
+/// A project without frames stays deleted: no sync brings it back. Deleted
+/// projects lists it only once a sync has left it out, and Allow again
+/// works for it as for any other. Restore still sees its deletion.
 #[test]
-fn deleting_a_project_without_frames_lists_nothing() {
+fn an_unshot_project_stays_deleted_and_is_listed_once_a_sync_leaves_it_out() {
+    let source = catalog();
+    add_empty_project(&source);
+    let local = catalog();
+    add_empty_project(&local);
+    assert!(matches!(delete(&local, 3), Outcome::Removed { .. }));
+    assert_eq!(
+        count(&local, "SELECT COUNT(*) FROM project WHERE Id = 3"),
+        0
+    );
+    assert_eq!(
+        count(&local, "SELECT COUNT(*) FROM target WHERE Id = 30"),
+        0
+    );
+    assert!(removed_project_guids(&local).unwrap().contains("pg-empty"));
+    assert!(deletions(&local).unwrap().is_empty(), "not listed yet");
+
+    // A dry run leaves it unlisted.
+    sync_pull(&source, &local, &pull_options(true)).unwrap();
+    assert!(deletions(&local).unwrap().is_empty());
+
+    let summary = sync_pull(&source, &local, &pull_options(false)).unwrap();
+    assert_eq!(
+        count(
+            &local,
+            "SELECT COUNT(*) FROM project WHERE guid = 'pg-empty'"
+        ),
+        0,
+        "{:?}",
+        summary.changes
+    );
+    let listed = deletions(&local).unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!((listed[0].name.as_str(), listed[0].frames), ("Empty", 0));
+
+    assert!(allow_back(&local, listed[0].id, NOW + 5).unwrap());
+    assert!(deletions(&local).unwrap().is_empty());
+    sync_pull(&source, &local, &pull_options(false)).unwrap();
+    assert_eq!(
+        count(
+            &local,
+            "SELECT COUNT(*) FROM project WHERE guid = 'pg-empty'"
+        ),
+        1
+    );
+    // The dated row stays for Restore in reject removal.
+    assert_eq!(
+        count(
+            &local,
+            "SELECT COUNT(*) FROM psf_guard_removed_project WHERE project_id = 3 AND removed_at = 1790000000"
+        ),
+        1
+    );
+}
+
+/// A table from before syncs recorded leaving a project out gains the
+/// column, and lists deletions with frames meanwhile.
+#[test]
+fn an_older_tombstone_table_gains_the_left_out_column() {
     let conn = catalog();
+    conn.execute_batch(&SCHEMA.replace(",\n    left_out_at INTEGER", ""))
+        .unwrap();
+    assert!(!has_column(
+        &conn,
+        "psf_guard_removed_project",
+        "left_out_at"
+    ));
     conn.execute(
-        "INSERT INTO project (Id, profileId, name, guid) VALUES (3, 'p', 'Empty', 'pg-empty')",
+        "INSERT INTO psf_guard_removed_project (project_id, project_guid, name, removed_at, frames)
+         VALUES (5, 'pg-old', 'Old', 1, 2)",
         [],
     )
     .unwrap();
-    conn.execute(
-        "INSERT INTO target (Id, name, active, epochcode, projectid, guid) VALUES (30, 'Empty', 1, 0, 3, 'tg-empty')",
-        [],
+    assert_eq!(deletions(&conn).unwrap().len(), 1);
+    ensure_schema(&conn).unwrap();
+    assert!(has_column(
+        &conn,
+        "psf_guard_removed_project",
+        "left_out_at"
+    ));
+    assert_eq!(deletions(&conn).unwrap().len(), 1);
+}
+
+/// A pull leaves out the frames a rig still captures for a deleted project,
+/// and records their files so an upload or import of them is skipped. A
+/// second pull adds nothing twice; a dry run adds nothing.
+#[test]
+fn a_pull_records_the_files_of_frames_it_leaves_out() {
+    let source = catalog();
+    source
+        .execute(
+            "INSERT INTO acquiredimage (Id, projectId, targetId, acquireddate, filtername, gradingStatus, metadata, guid, profileId)
+             VALUES (7, 1, 10, 1759302000, 'L', 0, '{\"FileName\":\"C:\\\\N\\\\M31_L_007.FITS\"}', 'g7', 'p')",
+            [],
+        )
+        .unwrap();
+    let local = catalog();
+    delete(&local, 1);
+    let frames = || {
+        count(
+            &local,
+            "SELECT COUNT(*) FROM psf_guard_removed_project_frame",
+        )
+    };
+    let before = frames();
+
+    sync_pull(&source, &local, &pull_options(true)).unwrap();
+    assert_eq!(frames(), before, "a dry run records nothing");
+
+    sync_pull(&source, &local, &pull_options(false)).unwrap();
+    assert_eq!(frames(), before + 1);
+    assert!(removed_file_names(&local)
+        .unwrap()
+        .contains(&"m31_l_007.fits".to_string()));
+    assert_eq!(
+        count(
+            &local,
+            "SELECT COUNT(*) FROM acquiredimage WHERE guid = 'g7'"
+        ),
+        0
+    );
+    assert_eq!(
+        deleted_project_of_file(&local, "M31_L_007.fits")
+            .unwrap()
+            .as_deref(),
+        Some("M31")
+    );
+
+    sync_pull(&source, &local, &pull_options(false)).unwrap();
+    assert_eq!(frames(), before + 1, "already recorded");
+
+    // Allow again clears them with the rest.
+    let listed = deletions(&local).unwrap();
+    assert!(allow_back(&local, listed[0].id, NOW + 5).unwrap());
+    assert!(deleted_project_of_file(&local, "m31_l_007.fits")
+        .unwrap()
+        .is_none());
+}
+
+/// A planning push into a rig's Target Scheduler database deletes a
+/// project the source catalog deleted when nothing was captured for it
+/// there, and writes no PSF Guard table. A project with frames there stays,
+/// and the preview says why.
+#[test]
+fn a_planning_push_deletes_a_project_the_source_deleted_when_the_rig_has_no_frames_for_it() {
+    use crate::commands::sync::{sync_planning, PlanningOptions};
+
+    let source = catalog();
+    add_empty_project(&source);
+    delete(&source, 3);
+    delete(&source, 1);
+
+    let rig = Connection::open_in_memory().unwrap();
+    crate::ts_schema::apply_schema(&rig).unwrap();
+    rig.execute_batch(
+        r#"INSERT INTO project (Id, profileId, name, state, guid) VALUES
+             (1, 'p', 'M31', 1, 'pg-m31'), (2, 'p', 'M42', 1, 'pg-m42');
+           INSERT INTO target (Id, name, active, epochcode, projectid, guid) VALUES
+             (10, 'M31', 1, 0, 1, 'tg-m31'), (20, 'M42', 1, 0, 2, 'tg-m42');
+           INSERT INTO exposuretemplate (Id, profileId, name, filtername, guid) VALUES (1, 'p', 'L', 'L', 'xg');
+           INSERT INTO acquiredimage (Id, projectId, targetId, acquireddate, filtername, gradingStatus, metadata, guid, profileId)
+             VALUES (1, 1, 10, 1759300000, 'L', 0, '{}', 'g1', 'p');"#,
     )
     .unwrap();
-    assert!(matches!(delete(&conn, 3), Outcome::Removed { .. }));
-    assert_eq!(count(&conn, "SELECT COUNT(*) FROM project WHERE Id = 3"), 0);
-    assert_eq!(count(&conn, "SELECT COUNT(*) FROM target WHERE Id = 30"), 0);
-    assert!(deletions(&conn).unwrap().is_empty());
-    assert!(removed_project_guids(&conn).unwrap().is_empty());
-    conn.execute(
-        "INSERT INTO project (Id, profileId, name, guid) VALUES (3, 'p', 'Reused', 'pg-new')",
-        [],
-    )
-    .unwrap();
-    assert!(project_removed_since(&conn, 3, NOW - 10).unwrap());
+    add_empty_project(&rig);
+
+    let options = |dry_run| PlanningOptions {
+        dry_run,
+        project_filter: None,
+    };
+    let preview = sync_planning(&source, &rig, &options(true)).unwrap();
+    assert_eq!(preview.project.deleted, 1);
+    assert_eq!(
+        count(&rig, "SELECT COUNT(*) FROM project WHERE guid = 'pg-empty'"),
+        1,
+        "a dry run deletes nothing"
+    );
+
+    let summary = sync_planning(&source, &rig, &options(false)).unwrap();
+    assert_eq!(
+        (
+            summary.project.deleted,
+            summary.target.deleted,
+            summary.exposureplan.deleted
+        ),
+        (1, 1, 1)
+    );
+    assert!(summary
+        .changes
+        .contains(&"delete project \"Empty\": deleted in the source catalog".to_string()));
+    assert!(
+        summary.changes.contains(
+            &"keep project \"M31\": deleted in the source catalog, but it has 1 exposure here"
+                .to_string()
+        ),
+        "{:?}",
+        summary.changes
+    );
+    assert_eq!(
+        count(&rig, "SELECT COUNT(*) FROM project WHERE guid = 'pg-empty'"),
+        0
+    );
+    assert_eq!(count(&rig, "SELECT COUNT(*) FROM target WHERE Id = 30"), 0);
+    assert_eq!(
+        count(&rig, "SELECT COUNT(*) FROM exposureplan WHERE Id = 300"),
+        0
+    );
+    assert_eq!(
+        count(&rig, "SELECT COUNT(*) FROM project WHERE guid = 'pg-m31'"),
+        1
+    );
+    assert!(
+        !has_table(&rig, "psf_guard_removed_project"),
+        "a Target Scheduler database gets no tombstone"
+    );
+}
+
+/// A pull from a catalog that deleted a project deletes the destination's
+/// copy when nothing was captured for it there, and records the deletion
+/// so a later sync from a rig does not bring it back. A removed reject that
+/// Restore can bring back keeps the project.
+#[test]
+fn a_pull_deletes_a_project_the_source_catalog_deleted() {
+    let source = catalog();
+    add_empty_project(&source);
+    delete(&source, 3);
+
+    let local = catalog();
+    add_empty_project(&local);
+    let summary = sync_pull(&source, &local, &pull_options(true)).unwrap();
+    assert_eq!(summary.project.deleted, 1);
+    assert_eq!(
+        count(
+            &local,
+            "SELECT COUNT(*) FROM project WHERE guid = 'pg-empty'"
+        ),
+        1,
+        "a dry run deletes nothing"
+    );
+    assert!(removed_project_guids(&local).unwrap().is_empty());
+
+    let summary = sync_pull(&source, &local, &pull_options(false)).unwrap();
+    assert_eq!(summary.project.deleted, 1, "{:?}", summary.changes);
+    assert_eq!(
+        count(
+            &local,
+            "SELECT COUNT(*) FROM project WHERE guid = 'pg-empty'"
+        ),
+        0
+    );
+    assert!(removed_project_guids(&local).unwrap().contains("pg-empty"));
+    assert!(deletions(&local).unwrap().is_empty(), "hidden");
+
+    // The rig still has the project: the next pull leaves it out, and from
+    // then on Deleted projects lists it.
+    let rig = catalog();
+    add_empty_project(&rig);
+    sync_pull(&rig, &local, &pull_options(false)).unwrap();
+    assert_eq!(
+        count(
+            &local,
+            "SELECT COUNT(*) FROM project WHERE guid = 'pg-empty'"
+        ),
+        0
+    );
+    assert_eq!(deletions(&local).unwrap().len(), 1);
+
+    // A removed reject Restore can bring back keeps the project.
+    let local = catalog();
+    add_empty_project(&local);
+    local
+        .execute(
+            "INSERT INTO psf_guard_removed_image
+               (acquired_image_guid, acquired_image_id, project_id, target_id, batch_id,
+                removed_at, trash_until, rows_json, files_json)
+             VALUES ('r-empty', 95, 3, 30, 'b', 1, 2, '{}', '[]')",
+            [],
+        )
+        .unwrap();
+    let summary = sync_pull(&source, &local, &pull_options(false)).unwrap();
+    assert_eq!(summary.project.deleted, 0);
+    assert!(summary.changes.contains(
+        &"keep project \"Empty\": deleted in the source catalog, but it has 1 removed exposure here that Restore can bring back".to_string()
+    ), "{:?}", summary.changes);
+    assert_eq!(
+        count(&local, "SELECT COUNT(*) FROM project WHERE Id = 3"),
+        1
+    );
 }

@@ -1456,9 +1456,14 @@ pub fn main() -> Result<()> {
                     } else {
                         String::new()
                     };
+                    let deleted = if c.deleted > 0 {
+                        format!(" deleted={}", c.deleted)
+                    } else {
+                        String::new()
+                    };
                     println!(
-                        "  {:<16} inserted={} updated={} unchanged={}{}",
-                        label, c.inserted, c.updated, c.unchanged, skipped
+                        "  {:<16} inserted={} updated={} unchanged={}{}{}",
+                        label, c.inserted, c.updated, c.unchanged, skipped, deleted
                     );
                 };
                 println!(
@@ -1550,9 +1555,19 @@ pub fn main() -> Result<()> {
                     }
                 }
                 let print_counts = |label: &str, counts: &TableCounts| {
+                    let deleted = if counts.deleted > 0 {
+                        format!(" deleted={}", counts.deleted)
+                    } else {
+                        String::new()
+                    };
                     println!(
-                        "  {:<16} inserted={} updated={} unchanged={} skipped={}",
-                        label, counts.inserted, counts.updated, counts.unchanged, counts.skipped
+                        "  {:<16} inserted={} updated={} unchanged={} skipped={}{}",
+                        label,
+                        counts.inserted,
+                        counts.updated,
+                        counts.unchanged,
+                        counts.skipped,
+                        deleted
                     );
                 };
                 println!(

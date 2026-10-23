@@ -324,6 +324,17 @@ fn publish_and_import(
             "{filename} is already registered as a light in this database"
         )));
     }
+    // A light of a project deleted from this catalog stays out. 410, not a
+    // failure worth retrying: sending it again cannot succeed until someone
+    // allows the project back.
+    if calibration_kind.is_none()
+        && existing_resolution.is_none()
+        && let Some(project) =
+            crate::commands::project_removal::deleted_project_of_file(&connection, &filename)
+                .map_err(AppError::db)?
+    {
+        return Err(deleted_project_refusal(&filename, &project));
+    }
 
     // Retries follow the path already registered in this catalog before they
     // derive a path from today's target name or placement setting. That keeps
@@ -555,6 +566,15 @@ fn publish_and_import(
         },
         light_mapping_changed,
     })
+}
+
+/// The refusal for a light whose project was deleted from this catalog.
+fn deleted_project_refusal(filename: &str, project: &str) -> AppError {
+    AppError::Gone(format!(
+        "{filename} was not imported: it belongs to the project \"{project}\", which was \
+         deleted from this catalog. To accept its frames again, open the Library, expand \
+         Deleted projects and click Allow again beside \"{project}\", then upload the file again."
+    ))
 }
 
 fn persist_uploaded_file(
