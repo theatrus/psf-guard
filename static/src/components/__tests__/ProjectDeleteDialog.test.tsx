@@ -132,4 +132,11 @@ describe('Deleting a project', () => {
     expect(screen.queryByText(/The project is Active. When N.I.N.A. uses this database/)).not.toBeInTheDocument();
     expect(screen.getByText('Its plan, M31, keeps its other 2 databases and no longer plans work for this rig.')).toBeInTheDocument();
   });
+
+  it('says a synced catalog gets a project without frames back on its next sync', async () => {
+    server.use(http.get('/api/db/rig/projects/7/removal', () => ok(preview({ synced_from: '/rig/schedulerdb.sqlite' }))));
+    mount();
+    expect(await screen.findByText(/This catalog copies from/)).toHaveTextContent(
+      'With no frames to keep out, the next sync adds the project back to this catalog.');
+  });
 });

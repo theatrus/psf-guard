@@ -456,15 +456,21 @@ pub fn remove(
     }
     ensure_schema(&tx)?;
     let tombstone_guid = plan.guid.as_deref().filter(|_| plan.unique_guid);
+    // A project without frames has no files an import could bring back: its
+    // deletion keeps nothing out and is not listed. Its row stays, dated, for
+    // the Restore check in reject removal.
+    let kept_out = plan.frames.total > 0;
     tx.execute(
-        "INSERT INTO psf_guard_removed_project (project_id, project_guid, name, removed_at, frames)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
+        "INSERT INTO psf_guard_removed_project
+            (project_id, project_guid, name, removed_at, frames, allowed_back_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         params![
             project_id,
-            tombstone_guid,
+            tombstone_guid.filter(|_| kept_out),
             plan.name,
             now,
-            plan.frames.total as i64
+            plan.frames.total as i64,
+            (!kept_out).then_some(now)
         ],
     )?;
     let removal = tx.last_insert_rowid();

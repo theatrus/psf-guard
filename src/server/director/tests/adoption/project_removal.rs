@@ -59,13 +59,20 @@ async fn deleting_an_activated_project_takes_it_out_of_its_plan() {
         a.db.query_row("SELECT Id FROM project", [], |row| row.get(0))
             .unwrap();
     let path = format!("/projects/{id}/removal");
+    // One frame, so the deletion is listed and keeps the project out.
+    a.db.execute(
+        "INSERT INTO acquiredimage (projectId, targetId, acquireddate, filtername, gradingStatus, metadata, guid)
+         SELECT projectid, Id, 0, 'Ha', 0, '{\"FileName\":\"heart_001.fits\"}', 'heart-frame' FROM target LIMIT 1",
+        [],
+    )
+    .unwrap();
 
     let (status, review) = catalog_call(&a.f.state, "GET", &path, Value::Null).await;
     assert_eq!(status, StatusCode::OK, "{review}");
     let review = &review["data"];
     assert_eq!(review["name"], "Heart Nebula");
     assert_eq!(review["targets"], 2);
-    assert_eq!(review["frames"]["total"], 0);
+    assert_eq!(review["frames"]["total"], 1);
     assert_eq!(
         review["linked_plan"],
         json!({"name": "Heart Nebula", "databases": 1, "from_collaboration": false})
@@ -88,7 +95,7 @@ async fn deleting_an_activated_project_takes_it_out_of_its_plan() {
     assert_eq!(status, StatusCode::OK, "{removed}");
     assert_eq!(
         removed["data"],
-        json!({"state": "removed", "name": "Heart Nebula", "targets": 2, "exposure_plans": 2, "frames": 0,
+        json!({"state": "removed", "name": "Heart Nebula", "targets": 2, "exposure_plans": 2, "frames": 1,
                "plan": "Heart Nebula", "plan_error": null})
     );
     for table in [

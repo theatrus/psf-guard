@@ -545,3 +545,32 @@ fn a_deleted_project_can_be_allowed_back() {
         3
     );
 }
+
+/// A project without frames leaves nothing to keep out: no sync or import
+/// skips it, and Deleted projects does not list it. Restore still sees its
+/// deletion.
+#[test]
+fn deleting_a_project_without_frames_lists_nothing() {
+    let conn = catalog();
+    conn.execute(
+        "INSERT INTO project (Id, profileId, name, guid) VALUES (3, 'p', 'Empty', 'pg-empty')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO target (Id, name, active, epochcode, projectid, guid) VALUES (30, 'Empty', 1, 0, 3, 'tg-empty')",
+        [],
+    )
+    .unwrap();
+    assert!(matches!(delete(&conn, 3), Outcome::Removed { .. }));
+    assert_eq!(count(&conn, "SELECT COUNT(*) FROM project WHERE Id = 3"), 0);
+    assert_eq!(count(&conn, "SELECT COUNT(*) FROM target WHERE Id = 30"), 0);
+    assert!(deletions(&conn).unwrap().is_empty());
+    assert!(removed_project_guids(&conn).unwrap().is_empty());
+    conn.execute(
+        "INSERT INTO project (Id, profileId, name, guid) VALUES (3, 'p', 'Reused', 'pg-new')",
+        [],
+    )
+    .unwrap();
+    assert!(project_removed_since(&conn, 3, NOW - 10).unwrap());
+}

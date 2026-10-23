@@ -17,9 +17,9 @@
   **Delete** beside an archived project. The dialog
   shows how many targets, exposure plans and frames go, and asks you to type
   the project's name when it has frames. Frame records and grades leave the
-  catalog; the image files stay on disk. Later syncs and imports leave the
-  project out until you click **Allow again** under **Deleted projects** in
-  the Library. A plan that linked the project no longer plans work for that
+  catalog; the image files stay on disk. Later syncs and imports leave a
+  project with frames out until you click **Allow again** under **Deleted
+  projects** in the Library; a project without frames is not listed there. A plan that linked the project no longer plans work for that
   rig. Deleting needs a server started with `--allow-database-management`.
   Restoring removed rejects no longer puts back a frame whose project was
   deleted.

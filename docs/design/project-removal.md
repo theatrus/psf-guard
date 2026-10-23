@@ -97,6 +97,13 @@ is still linked to the plan, the plan keeps the rig's work.
 
 ## How syncs and imports leave it out
 
+Only a project with frames is kept out. A project without frames has no
+files an import could bring back, so its deletion writes no GUID tombstone
+and is not listed under **Deleted projects**; its row in
+`psf_guard_removed_project` is marked allowed back at once and stays only
+for the Restore check. A catalog that syncs from Target Scheduler gets such
+a project back on its next sync, and the dialog says so.
+
 - **Sync.** A pull leaves out a source project whose GUID has a tombstone,
   with its targets, exposure plans and frames, as a project filter does:
   no skip line and no skipped count for its rows. A pull or transfer a
