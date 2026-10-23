@@ -3,8 +3,8 @@
 use super::{
     color, LatestStackPreviews, StackGroupState, StackGroupStatus, StackJobState, StackPreviewJob,
 };
+use crate::server::file_body::file_body;
 use axum::{
-    body::Body,
     extract::{Path, Query, State},
     http::{
         header::{CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE},
@@ -21,7 +21,6 @@ use std::{
     path::{Path as FsPath, PathBuf},
     sync::Arc,
 };
-use tokio_util::io::ReaderStream;
 
 use crate::{
     calibration::{AppliedCalibration, CalibrationKind},
@@ -856,7 +855,7 @@ pub(crate) async fn serve_file(
         );
     }
     response
-        .body(Body::from_stream(ReaderStream::new(file)))
+        .body(file_body(file))
         .map_err(|_| AppError::InternalError("Could not serve master file".into()))
 }
 

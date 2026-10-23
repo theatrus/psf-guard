@@ -13,8 +13,8 @@ use super::{
     StackPreviewManager, MAX_REMEMBERED_JOBS, SEIZA_STACKING_OUTPUT_VERSION,
 };
 use crate::concurrency::Stop;
+use crate::server::file_body::file_body;
 use axum::{
-    body::Body,
     extract::{Path, Query, State},
     http::{
         header::{CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE},
@@ -39,7 +39,6 @@ use std::collections::{BTreeMap, HashSet};
 use std::fmt::Write as _;
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
-use tokio_util::io::ReaderStream;
 
 use crate::server::api::ApiResponse;
 use crate::server::extract::DbContext;
@@ -1424,11 +1423,9 @@ pub(super) async fn stream_artifact(
             format!("attachment; filename=\"{filename}\""),
         );
     }
-    response
-        .body(Body::from_stream(ReaderStream::new(file)))
-        .map_err(|error| {
-            AppError::InternalError(format!("Failed to stream color artifact: {error}"))
-        })
+    response.body(file_body(file)).map_err(|error| {
+        AppError::InternalError(format!("Failed to stream color artifact: {error}"))
+    })
 }
 
 fn validate_request(request: &StackColorRequest) -> Result<(), AppError> {
