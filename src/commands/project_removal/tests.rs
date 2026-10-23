@@ -1332,7 +1332,6 @@ fn assert_target_kept(conn: &Connection, changes: &[String]) {
         ("filtercadenceitem", "targetid = 30"),
         ("flathistory", "targetId = 30"),
         ("exposureplan", "targetid = 30"),
-        ("psf_guard_director_target", "target_guid = 'tg-empty'"),
         ("psf_guard_director_plan", "target_guid = 'tg-empty'"),
         (
             "psf_guard_scheduler_flat_history",
@@ -1348,6 +1347,14 @@ fn assert_target_kept(conn: &Connection, changes: &[String]) {
             "{table} lost the moved target's row"
         );
     }
+    // Planning's target row named the deleted project; it goes.
+    assert_eq!(
+        count(
+            conn,
+            "SELECT COUNT(*) FROM psf_guard_director_target WHERE lower(project_guid) = 'pg-empty'"
+        ),
+        0
+    );
 }
 
 /// A source catalog that moved a target out of a project and then deleted
@@ -1458,4 +1465,81 @@ fn frames_follow_their_target_out_of_a_deleted_project() {
             .unwrap()
             .is_empty());
     }
+}
+
+/// The source still has T under P; this catalog moved T to Q and deleted
+/// P, and the source also deleted Q, which has no frames here. Q stays
+/// while T arrives from the source, so T's frames land on a target that
+/// exists.
+#[test]
+fn a_project_stays_while_a_target_it_holds_still_arrives() {
+    let source = catalog();
+    add_empty_project(&source);
+    source
+        .execute_batch(
+            "INSERT INTO project (Id, profileId, name, state, guid) VALUES (4, 'p', 'Q', 1, 'pg-q');
+             INSERT INTO acquiredimage (Id, projectId, targetId, acquireddate, filtername, gradingStatus, metadata, guid, exposureId, profileId)
+               VALUES (9, 3, 30, 1759309000, 'L', 0, '{\"FileName\":\"Empty_L_001.fits\"}', 'g-empty', 300, 'p');",
+        )
+        .unwrap();
+    delete(&source, 4);
+    let local = catalog();
+    add_empty_project(&local);
+    local
+        .execute_batch(
+            "INSERT INTO project (Id, profileId, name, state, guid) VALUES (4, 'p', 'Q', 1, 'pg-q');
+             UPDATE target SET projectid = 4 WHERE Id = 30;",
+        )
+        .unwrap();
+    delete(&local, 3);
+
+    let summary = sync_pull(&source, &local, &pull_options(false)).unwrap();
+    assert!(summary.changes.contains(
+        &"keep project \"Q\": deleted in the source catalog, but its target \"Empty\" still arrives from the source".to_string()
+    ), "{:?}", summary.changes);
+    assert_eq!(
+        count(&local, "SELECT COUNT(*) FROM project WHERE guid = 'pg-q'"),
+        1
+    );
+    assert_eq!(
+        count(
+            &local,
+            "SELECT COUNT(*) FROM acquiredimage a JOIN target t ON t.Id = a.targetId
+             WHERE a.guid = 'g-empty' AND t.projectid = 4 AND a.projectId = 4"
+        ),
+        1
+    );
+}
+
+/// A name filter that leaves a frame's project out still leaves its
+/// frames out, even when their target's project is in: only a project
+/// deleted here hands its frames to their target.
+#[test]
+fn a_name_filter_still_leaves_out_frames_of_projects_it_excludes() {
+    let source = catalog();
+    // M31's frames, on a target now under M42.
+    source
+        .execute("UPDATE target SET projectid = 2 WHERE Id = 10", [])
+        .unwrap();
+    let local = Connection::open_in_memory().unwrap();
+    crate::ts_schema::apply_schema(&local).unwrap();
+    let mut options = pull_options(false);
+    options.project_filter = Some("M42".into());
+    let summary = sync_pull(&source, &local, &options).unwrap();
+    assert_eq!(
+        count(
+            &local,
+            "SELECT COUNT(*) FROM acquiredimage WHERE guid IN ('g1','g2','g3')"
+        ),
+        0,
+        "{:?}",
+        summary.changes
+    );
+    assert_eq!(
+        count(
+            &local,
+            "SELECT COUNT(*) FROM acquiredimage WHERE guid = 'g4'"
+        ),
+        1
+    );
 }

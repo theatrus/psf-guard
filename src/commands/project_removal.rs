@@ -1038,12 +1038,14 @@ pub(crate) fn delete_project_rows(
         }
     }
     if let Some(guid) = guid {
-        // Planning's rows for targets deleted by hand before this. A target
-        // moved to another project keeps its row.
+        // Planning's rows that name the project: for its targets, for ones
+        // deleted by hand before this, and for ones a sync moved to another
+        // project. A moved target's row must not keep naming the deleted
+        // project, as Move to (organization.rs) leaves none: mosaic layouts
+        // and collaboration activations read the project from it.
         if table_exists(tx, "psf_guard_director_target") {
             tx.execute(
-                "DELETE FROM psf_guard_director_target WHERE lower(project_guid) = lower(?1)
-                   AND target_guid NOT IN (SELECT guid FROM target WHERE guid IS NOT NULL)",
+                "DELETE FROM psf_guard_director_target WHERE lower(project_guid) = lower(?1)",
                 [guid],
             )?;
         }

@@ -808,6 +808,7 @@ fn upsert_acquired_images(
     plan_map: &HashMap<i64, i64>,
     allowed_project_ids: Option<&HashSet<i64>>,
     moved_targets: &HashMap<i64, i64>,
+    left_out_projects: &HashSet<i64>,
     preserve_metadata: bool,
     preserve_grades: Option<&HashSet<String>>,
     summary: &mut PullSummary,
@@ -896,7 +897,8 @@ fn upsert_acquired_images(
         let src_target = tgt_pos.and_then(|position| as_i64(&all_vals[position]));
         let project_allowed = allowed_project_ids
             .is_none_or(|allowed| src_proj.is_some_and(|project| allowed.contains(&project)));
-        let follows_target = match (project_allowed, src_target) {
+        let deleted_here = src_proj.is_some_and(|project| left_out_projects.contains(&project));
+        let follows_target = match (project_allowed || !deleted_here, src_target) {
             (false, Some(source_target)) => match moved_targets.get(&source_target) {
                 Some(project) => Some(*project),
                 None => match tgt_map.get(&source_target) {
@@ -1296,6 +1298,10 @@ pub(super) struct StructureSync {
     /// to a project that stays: source target Id to destination project Id.
     /// They and their frames arrive under that project.
     pub moved_targets: HashMap<i64, i64>,
+    /// Source projects left out because they were deleted here. A frame of
+    /// one whose target arrives follows its target; a frame of a project a
+    /// name filter left out does not.
+    pub left_out_projects: HashSet<i64>,
 }
 
 /// is true, existing destination `acquired`/`accepted` counts stay unchanged
@@ -1519,7 +1525,9 @@ pub(super) fn sync_structure(
         tx,
         project_filter,
         deletions,
-        DeletionPhase::Delete,
+        DeletionPhase::Delete {
+            arriving: &tgt_map.values().copied().collect(),
+        },
         now,
         changes,
     )?;
@@ -1544,6 +1552,7 @@ pub(super) fn sync_structure(
             .into_iter()
             .map(|(target, (_, project))| (target, project))
             .collect(),
+        left_out_projects: left_out.iter().map(|(_, project)| *project).collect(),
     })
 }
 
@@ -1583,7 +1592,7 @@ fn apply_source_deletions(
     tx: &Transaction,
     project_filter: Option<&str>,
     context: SourceDeletionContext<'_>,
-    phase: DeletionPhase,
+    phase: DeletionPhase<'_>,
     now: i64,
     changes: &mut Vec<String>,
 ) -> Result<SourceDeletions> {
@@ -1606,7 +1615,9 @@ fn apply_source_deletions(
     let mut find = tx.prepare("SELECT Id FROM project WHERE lower(trim(guid)) = ?1")?;
     for deletion in deletions {
         let removed_at = match deletion.state {
-            SourceDeletionState::AllowedBack { .. } if phase == DeletionPhase::Delete => continue,
+            SourceDeletionState::AllowedBack { .. } if phase != DeletionPhase::AllowBack => {
+                continue;
+            }
             SourceDeletionState::Standing { .. } if phase == DeletionPhase::AllowBack => continue,
             SourceDeletionState::AllowedBack { allowed_back_at } => {
                 if project_removal::follow_allow_back(tx, &deletion.guid, allowed_back_at)? > 0 {
@@ -1665,10 +1676,16 @@ fn apply_source_deletions(
         }
         // A target the source has under another project was moved there;
         // the upsert re-parented it here. One still here could not move.
-        if let Some(target) = unmoved_target(src, tx, id)? {
-            changes.push(keep(format!(
-                "its target \"{target}\" could not move to its project in the source"
-            )));
+        if let Some((target, target_id)) = unmoved_target(src, tx, id)? {
+            let arrives = match phase {
+                DeletionPhase::Delete { arriving } => arriving.contains(&target_id),
+                DeletionPhase::AllowBack => false,
+            };
+            changes.push(keep(if arrives {
+                format!("its target \"{target}\" still arrives from the source")
+            } else {
+                format!("its target \"{target}\" could not move to its project in the source")
+            }));
             continue;
         }
         let rejects = project_removal::restorable_rejects(tx, id)?;
@@ -1739,38 +1756,48 @@ fn destination_project(
 
 /// Which tombstone rules a call of [`apply_source_deletions`] applies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DeletionPhase {
+enum DeletionPhase<'a> {
     /// Follow the source's Allow again. First, so a project allowed back
     /// here comes back in the same sync.
     AllowBack,
     /// Delete what the source deleted. Last, after the targets are synced,
     /// so a target the source moved out of a deleted project is re-parented
     /// with its Id and the rows that refer to it, not deleted with it.
-    Delete,
+    /// `arriving` lists the destination targets this sync wrote: a project
+    /// holding one stays, so no frame is written to a deleted target.
+    Delete { arriving: &'a HashSet<i64> },
 }
 
 /// The name of a target of destination project `project_id` that the
 /// source has under another project: the sync could not move it there.
-fn unmoved_target(src: &Connection, tx: &Transaction, project_id: i64) -> Result<Option<String>> {
+fn unmoved_target(
+    src: &Connection,
+    tx: &Transaction,
+    project_id: i64,
+) -> Result<Option<(String, i64)>> {
     if !super::table_has_column(src, "target", "guid")
         || !super::table_has_column(tx, "target", "guid")
     {
         return Ok(None);
     }
     let mut here = tx.prepare(
-        "SELECT name, lower(trim(guid)) FROM target
+        "SELECT name, lower(trim(guid)), Id FROM target
          WHERE projectid = ?1 AND guid IS NOT NULL AND trim(guid) <> ''",
     )?;
     let targets = here
         .query_map([project_id], |row| {
-            Ok((row.get::<_, Option<String>>(0)?, row.get::<_, String>(1)?))
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let mut there =
         src.prepare("SELECT EXISTS(SELECT 1 FROM target WHERE lower(trim(guid)) = ?1)")?;
-    for (name, guid) in targets {
+    for (name, guid, id) in targets {
         if there.query_row([&guid], |row| row.get::<_, bool>(0))? {
-            return Ok(Some(name.unwrap_or(guid)));
+            return Ok(Some((name.unwrap_or(guid), id)));
         }
     }
     Ok(None)
@@ -1989,6 +2016,7 @@ pub(crate) fn sync_arrivals(
         &structure.plan_map,
         structure.selected_project_ids.as_ref(),
         &structure.moved_targets,
+        &structure.left_out_projects,
         true,
         Some(dirty_grades),
         &mut summary,
@@ -2049,6 +2077,7 @@ pub(crate) fn sync_pull_in_transaction(
         &structure.plan_map,
         structure.selected_project_ids.as_ref(),
         &structure.moved_targets,
+        &structure.left_out_projects,
         false,
         None,
         &mut summary,

@@ -198,9 +198,10 @@ allowed back at once; they stay that way.
   plans and frames under it. Its frames are not added to the deletion's
   frame tombstones.
 - **Frames follow their target.** A frame whose own project is left out
-  but whose target arrives, because the target's project arrives or the
-  target was moved here, arrives with the target, under the target's
-  project here. This covers a rig whose target a planning sync moved while
+  because it was deleted here, but whose target arrives, because the
+  target's project arrives or the target was moved here, arrives with the
+  target, under the target's project here. A frame of a project that a
+  name filter left out stays out. This covers a rig whose target a planning sync moved while
   its earlier frames kept the old project's Id. No such frame, and no frame
   whose GUID this catalog already has, is added to the frame tombstones,
   so its upload is not refused.
@@ -227,8 +228,14 @@ the source moved out of the deleted project into another one is then
 already under its new project here, with its Id and every row that refers
 to it: order and cadence items, flat history, and Planning's
 `psf_guard_director_target`, `psf_guard_director_plan` and
-`psf_guard_scheduler_flat_history` rows. `delete_project_rows` leaves a
-moved target's `psf_guard_director_target` row alone. For each GUID in the
+`psf_guard_scheduler_flat_history` rows. Its `psf_guard_director_target`
+row named the deleted project, so `delete_project_rows` deletes it, as Move
+to does: mosaic layouts and collaboration activations read the project from
+that row. While a target the sync writes is still under a project the
+source deleted (the source has it under a project deleted here, and this
+catalog moved it), that project stays: `keep project "Q": deleted in the
+source catalog, but its target "T" still arrives from the source`. For
+each GUID in the
 source's `psf_guard_removed_project` that is not allowed back and that
 the source has no project for:
 
@@ -350,9 +357,10 @@ a target PSF Guard moved out of a deleted project is re-parented on the
 rig, and they keep the old project while a target the source has under a
 live project cannot move, as PSF Guard's own sync does. They hold an
 upload refused with 410 (a deleted project's or a removed reject's file)
-as refused: **Retry refused uploads** sends it again after you allow the
-project back or restore the frame, and **Forget refused uploads** drops
-the held uploads while the image files stay on disk. Older plugin
+without retrying it: **Retry refused uploads** uploads it again after you
+allow the project back or restore the frame, and **Forget refused
+uploads** removes the held uploads from the queue while the image files
+stay on disk. Older plugin
 versions do not delete projects: their rig keeps the project, and the
 next pull leaves it out of PSF Guard again. They show a refused upload as
 a blocked job.

@@ -91,13 +91,13 @@
   refused with a message that explains how to allow the project back. An
   upload of a frame removed as a reject is refused with a message that
   explains how to restore it. The updated N.I.N.A. plugin holds such an
-  upload as refused. After you allow the project back or restore the
-  frame, click **Retry refused uploads** in the plugin to send it again,
-  or click **Forget refused uploads** to drop the held uploads; the image
-  files stay on disk. Older plugins show these uploads as blocked jobs. A
-  different
-  frame that only shares a deleted frame's file name, such as
-  `0001.fits` from another target, uploads as usual.
+  upload without retrying it. After you allow the project back or restore
+  the frame, select **Retry refused uploads** in the plugin settings to
+  upload it again, or select **Forget refused uploads** to remove the held
+  uploads from the queue; the image files stay on disk. Older plugins show
+  these uploads as blocked jobs. A different frame that only shares a
+  deleted frame's file name, such as `0001.fits` from another target,
+  uploads as usual.
 
 - A color preview can run BlurXTerminator and NoiseXTerminator on its color
   channels together. In **Processing stack**, turn the tools on under
