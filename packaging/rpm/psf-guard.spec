@@ -57,9 +57,13 @@ tar -xf %{SOURCE1}
 # build.rs not to invoke npm. Crates resolve from ./vendor, so build offline.
 export PSF_GUARD_SKIP_FRONTEND_BUILD=1
 export CARGO_NET_OFFLINE=true
-# Build only the binary shipped by this package and cap concurrent rustc jobs
-# to keep linking within memory limits on standard RPM builders.
-cargo build --release --locked --bin psf-guard --jobs 1
+# Build only the binary shipped by this package: one rustc job per core, but
+# no more than one per 3 GB of memory, so a small builder runs few and a
+# 32-core, 64 GB one about 21. `--jobs 1` held every build to one core (26-35
+# min on any machine, 2026-10-23); the release profile's thin LTO keeps the
+# final link well inside that budget.
+%constrain_build -m 3072
+cargo build --release --locked --bin psf-guard --jobs %{_smp_build_ncpus}
 
 %install
 install -Dpm0755 target/release/%{name} %{buildroot}%{_bindir}/%{name}
