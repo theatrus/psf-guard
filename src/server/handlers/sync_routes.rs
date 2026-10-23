@@ -261,11 +261,14 @@ pub(crate) async fn execute_scheduler_sync_paths(
     let deletions = if matches!(req.kind, SchedulerSyncKind::PushGrades) {
         crate::commands::sync::SourceDeletionRules::default()
     } else {
-        crate::server::project_removal::sync_deletion_rules(
-            state,
-            destination_is_catalog.then_some(destination_id.as_str()),
-        )
-        .await?
+        // A `ts:<slug>` connection is the rig file of catalog `<slug>`,
+        // whose projects Planning links: its collaborations protect them.
+        let planning_slug = if destination_is_catalog {
+            Some(destination_id.as_str())
+        } else {
+            destination_id.strip_prefix("ts:")
+        };
+        crate::server::project_removal::sync_deletion_rules(state, planning_slug).await?
     };
     let kind = req.kind;
     let dry_run = req.dry_run;

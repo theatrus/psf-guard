@@ -224,9 +224,11 @@ fn allow_removal_back(conn: &Connection, id: i64, allowed_back_at: i64) -> Resul
 }
 
 /// Follow another catalog's Allow again: each standing deletion here of
-/// the project with this GUID (lower case) made before `allowed_back_at`
-/// is allowed back as of that date. A deletion made here later stands.
-/// Returns how many deletions were allowed back.
+/// the project with this GUID (lower case) that a sync recorded (`origin`
+/// `sync`), dated before `allowed_back_at`, is allowed back as of that
+/// date. A deletion a person made in this catalog stands until Allow again
+/// here, and so does a deletion dated later. Returns how many deletions
+/// were allowed back.
 pub(crate) fn follow_allow_back(
     conn: &Connection,
     project_guid: &str,
@@ -235,9 +237,14 @@ pub(crate) fn follow_allow_back(
     if !table_exists(conn, "psf_guard_removed_project") {
         return Ok(0);
     }
+    // A table from before `origin` holds only this catalog's deletions.
+    if !has_column(conn, "psf_guard_removed_project", "origin") {
+        return Ok(0);
+    }
     let mut statement = conn.prepare(
         "SELECT id FROM psf_guard_removed_project
-         WHERE lower(project_guid) = ?1 AND allowed_back_at IS NULL AND removed_at < ?2",
+         WHERE lower(project_guid) = ?1 AND allowed_back_at IS NULL AND removed_at < ?2
+           AND origin = 'sync'",
     )?;
     let ids = statement
         .query_map(params![project_guid, allowed_back_at], |row| {
@@ -522,8 +529,14 @@ pub(crate) fn reported_rejects(
 /// Record, in a PSF Guard catalog, a project a sync deleted because its
 /// source catalog deleted it, so a later sync from a rig does not bring it
 /// back. Nothing was captured for it here, so Deleted projects does not
-/// list it until a sync leaves it out.
-pub(crate) fn record_sync_deletion(conn: &Connection, plan: &RemovalPlan, now: i64) -> Result<()> {
+/// list it until a sync leaves it out. The row is dated `removed_at`, when
+/// the person deleted the project in the catalog it came from, so every
+/// catalog compares Allow again with the same date.
+pub(crate) fn record_sync_deletion(
+    conn: &Connection,
+    plan: &RemovalPlan,
+    removed_at: i64,
+) -> Result<()> {
     ensure_schema(conn)?;
     conn.execute(
         "INSERT INTO psf_guard_removed_project
@@ -533,7 +546,7 @@ pub(crate) fn record_sync_deletion(conn: &Connection, plan: &RemovalPlan, now: i
             plan.project_id,
             plan.guid.as_deref().filter(|_| plan.unique_guid),
             plan.name,
-            now,
+            removed_at,
             plan.frames.total as i64
         ],
     )?;

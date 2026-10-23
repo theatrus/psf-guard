@@ -580,9 +580,9 @@ enum RemovedLight {
 
 /// Whether a project deletion or a reject removal took out this light: a
 /// tombstone with its file name and a capture time within
-/// [`CAPTURE_IDENTITY_TIME_TOLERANCE_SECS`] of the upload's. A tombstone
-/// without a time, from before times were recorded, or an upload without
-/// one, matches by name alone.
+/// [`CAPTURE_IDENTITY_TIME_TOLERANCE_SECS`] of the upload's. Without both
+/// times the upload cannot be shown to be the removed frame, so it
+/// imports.
 fn removed_light(
     connection: &rusqlite::Connection,
     filename: &str,
@@ -592,7 +592,7 @@ fn removed_light(
         (Some(expected), Some(actual)) => {
             expected.abs_diff(actual) <= CAPTURE_IDENTITY_TIME_TOLERANCE_SECS
         }
-        _ => true,
+        _ => false,
     };
     let deleted =
         crate::commands::project_removal::deleted_project_frames_named(connection, filename)

@@ -413,8 +413,11 @@ A reader must tolerate more columns.
   deletes nothing, so older clients see no change.
 - **Allow again.** A standing deletion is not applied where the receiver
   allowed the project back after `removed_at`. A deletion allowed back
-  allows back the receiver's standing deletions of the GUID made before
-  `allowed_back_at`. See
+  allows back the receiver's standing deletions of the GUID that a sync
+  recorded and dated before `allowed_back_at`; a deletion a person made on
+  the receiver stands until Allow again there. A receiver dates a deletion
+  it records with the sender's `removed_at`, so all catalogs compare the
+  same date. See
   [Allowing a project back](project-removal.md#allowing-a-project-back).
 
 A merge or planning push into a PSF Guard catalog records each deletion as
@@ -645,8 +648,9 @@ missing, the unique basename must also resolve by `OBJECT` or coordinates to
 that row's target. A supplied time, filter, object, or coordinate that resolves
 elsewhere remains a conflict.
 
-A light that a project deletion in this catalog took out (same file name,
-and a capture time within 2 s when both are known) is refused with
+A light that a project deletion in this catalog took out (same file name
+and a capture time within 2 s; without both times it imports) is refused
+with
 `410 Gone` and an error message, in the standard error envelope, that
 names the project and explains how to allow it back. A light removed from
 the catalog as a reject is refused with `410 Gone` and its own message,

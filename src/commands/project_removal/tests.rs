@@ -928,7 +928,7 @@ fn allow_again_survives_a_round_trip_between_catalogs() {
     );
 
     let id = count(&a, "SELECT id FROM psf_guard_removed_project");
-    let allowed_at = unix_now() + 60;
+    let allowed_at = NOW + 100;
     assert!(allow_back(&a, id, allowed_at).unwrap());
     // Allow again keeps the GUID, so syncs can pass the choice on.
     assert_eq!(
@@ -1093,7 +1093,8 @@ fn left_out_frames_are_read_again_only_when_they_change() {
             .unwrap()
     };
     sync_pull(&source, &local, &pull_options(false)).unwrap();
-    assert_eq!(signature().as_deref(), Some("3:3"));
+    let first = signature().unwrap();
+    assert!(first.starts_with("3:"), "{first}");
     let before = frames();
     // Not read again: a frame tombstone deleted by hand stays deleted.
     local
@@ -1113,6 +1114,187 @@ fn left_out_frames_are_read_again_only_when_they_change() {
         )
         .unwrap();
     sync_pull(&source, &local, &pull_options(false)).unwrap();
-    assert_eq!(signature().as_deref(), Some("4:8"));
+    assert!(signature().unwrap().starts_with("4:"));
     assert_eq!(frames(), before + 1);
+
+    // Another source with as many frames, but other ones, is read too.
+    let other = catalog();
+    other
+        .execute_batch(
+            "DELETE FROM imagedata WHERE acquiredimageid IN (SELECT Id FROM acquiredimage WHERE projectId = 1);
+             DELETE FROM acquiredimage WHERE projectId = 1;
+             INSERT INTO acquiredimage (Id, projectId, targetId, acquireddate, filtername, gradingStatus, metadata, guid, profileId) VALUES
+               (1, 1, 10, 1759304000, 'L', 0, '{\"FileName\":\"M31_R_001.fits\"}', 'r1', 'p'),
+               (2, 1, 10, 1759304300, 'L', 0, '{\"FileName\":\"M31_R_002.fits\"}', 'r2', 'p'),
+               (3, 1, 10, 1759304600, 'L', 0, '{\"FileName\":\"M31_R_003.fits\"}', 'r3', 'p'),
+               (8, 1, 10, 1759304900, 'L', 0, '{\"FileName\":\"M31_R_008.fits\"}', 'r8', 'p');",
+        )
+        .unwrap();
+    sync_pull(&other, &local, &pull_options(false)).unwrap();
+    assert!(removed_file_names(&local)
+        .unwrap()
+        .contains(&"m31_r_008.fits".to_string()));
+}
+
+/// Three catalogs: every deletion a sync records carries the date the
+/// person deleted the project, so a third catalog compares Allow again
+/// with that date and not with when it synced. A deletes P at t1; C pulls
+/// from A; A allows P back at t3 and a rig brings P back to A. B pulls
+/// from C, then from A, and A pulls from B: P stays in A, and B's deletion
+/// ends allowed back.
+#[test]
+fn allow_again_holds_across_three_catalogs() {
+    let t1 = NOW;
+    let t3 = NOW + 300;
+    let empty_in =
+        |conn: &Connection| count(conn, "SELECT COUNT(*) FROM project WHERE guid = 'pg-empty'");
+    let rig = catalog();
+    add_empty_project(&rig);
+    let [a, b, c] = [catalog(), catalog(), catalog()];
+    for catalog in [&a, &b, &c] {
+        add_empty_project(catalog);
+    }
+
+    let digest = plan(&a, 3, &BTreeSet::new()).unwrap().unwrap().digest;
+    remove(&a, 3, &digest, &BTreeSet::new(), t1).unwrap();
+    sync_pull(&a, &c, &pull_options(false)).unwrap();
+    assert_eq!(empty_in(&c), 0);
+    let dated = |conn: &Connection| -> (i64, Option<i64>) {
+        conn.query_row(
+            "SELECT removed_at, allowed_back_at FROM psf_guard_removed_project
+             WHERE project_guid = 'pg-empty' ORDER BY id DESC LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap()
+    };
+    assert_eq!(dated(&c), (t1, None), "dated when A deleted it");
+
+    let id = count(&a, "SELECT id FROM psf_guard_removed_project");
+    assert!(allow_back(&a, id, t3).unwrap());
+    sync_pull(&rig, &a, &pull_options(false)).unwrap();
+    assert_eq!(empty_in(&a), 1);
+
+    sync_pull(&c, &b, &pull_options(false)).unwrap();
+    assert_eq!(empty_in(&b), 0);
+    assert_eq!(dated(&b), (t1, None));
+    sync_pull(&a, &b, &pull_options(false)).unwrap();
+    assert_eq!(dated(&b), (t1, Some(t3)), "B follows A's Allow again");
+    assert_eq!(empty_in(&b), 1);
+    let summary = sync_pull(&b, &a, &pull_options(false)).unwrap();
+    assert_eq!(empty_in(&a), 1, "{:?}", summary.changes);
+}
+
+/// Another catalog's Allow again does not undo a deletion a person made in
+/// this catalog, however it is dated; only Allow again here does.
+#[test]
+fn a_deletion_made_here_waits_for_allow_again_here() {
+    let source = catalog();
+    add_empty_project(&source);
+    delete(&source, 3);
+    let id = count(&source, "SELECT id FROM psf_guard_removed_project");
+    assert!(allow_back(&source, id, NOW + 500).unwrap());
+
+    let local = catalog();
+    add_empty_project(&local);
+    let digest = plan(&local, 3, &BTreeSet::new()).unwrap().unwrap().digest;
+    remove(&local, 3, &digest, &BTreeSet::new(), NOW + 10).unwrap();
+    sync_pull(&source, &local, &pull_options(false)).unwrap();
+    assert_eq!(
+        deletion_row(&local),
+        (Some("pg-empty".into()), None, "local".into())
+    );
+    assert_eq!(
+        count(
+            &local,
+            "SELECT COUNT(*) FROM project WHERE guid = 'pg-empty'"
+        ),
+        0
+    );
+}
+
+/// A target a person moved here from a project, before deleting that
+/// project without frames, keeps arriving: the Target Scheduler source
+/// still lists it under the old project. Its new frames arrive under its
+/// project here, and none of them is recorded as removed.
+#[test]
+fn a_target_moved_out_of_a_deleted_project_keeps_arriving() {
+    let source = catalog();
+    source
+        .execute(
+            "INSERT INTO acquiredimage (Id, projectId, targetId, acquireddate, filtername, gradingStatus, metadata, guid, exposureId, profileId)
+             VALUES (9, 1, 10, 1759309000, 'L', 0, '{\"FileName\":\"M31_L_009.fits\"}', 'g9', 100, 'p')",
+            [],
+        )
+        .unwrap();
+    let local = catalog();
+    // Move M31's target, with its frames, to M42; then delete M31, empty.
+    local
+        .execute_batch(
+            "UPDATE target SET projectid = 2 WHERE Id = 10;
+             UPDATE acquiredimage SET projectId = 2 WHERE targetId = 10;",
+        )
+        .unwrap();
+    let removal = plan(&local, 1, &BTreeSet::new()).unwrap().unwrap();
+    assert_eq!((removal.targets, removal.frames.total), (0, 0));
+    delete(&local, 1);
+
+    let summary = sync_pull(&source, &local, &pull_options(false)).unwrap();
+    assert_eq!(
+        count(&local, "SELECT COUNT(*) FROM project WHERE guid = 'pg-m31'"),
+        0,
+        "the deleted project stays deleted"
+    );
+    assert_eq!(
+        count(
+            &local,
+            "SELECT COUNT(*) FROM acquiredimage WHERE guid = 'g9' AND projectId = 2 AND targetId = 10"
+        ),
+        1,
+        "{:?}",
+        summary.changes
+    );
+    assert_eq!(
+        count(
+            &local,
+            "SELECT COUNT(*) FROM target WHERE Id = 10 AND projectid = 2"
+        ),
+        1
+    );
+    assert_eq!(
+        summary.target.skipped + summary.acquiredimage.skipped,
+        0,
+        "{:?}",
+        summary.changes
+    );
+    assert!(deleted_project_frames_named(&local, "m31_l_009.fits")
+        .unwrap()
+        .is_empty());
+    assert!(!removed_file_names(&local)
+        .unwrap()
+        .contains(&"m31_l_009.fits".to_string()));
+}
+
+/// When the server cannot check Planning, a sync holds its deletions for a
+/// later run and still brings everything else.
+#[test]
+fn held_deletions_wait_for_a_later_sync() {
+    let source = catalog();
+    add_empty_project(&source);
+    delete(&source, 3);
+    let local = catalog();
+    add_empty_project(&local);
+    let mut options = pull_options(false);
+    options.deletions.held = Some("Planning could not be read".into());
+    let summary = sync_pull(&source, &local, &options).unwrap();
+    assert!(summary.changes.contains(
+        &"keep project \"Empty\": deleted in the source catalog, but Planning could not be read"
+            .to_string()
+    ), "{:?}", summary.changes);
+    assert_eq!(
+        count(&local, "SELECT COUNT(*) FROM project WHERE Id = 3"),
+        1
+    );
+    let summary = sync_pull(&source, &local, &pull_options(false)).unwrap();
+    assert_eq!(summary.project.deleted, 1);
 }

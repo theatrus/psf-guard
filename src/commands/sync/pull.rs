@@ -72,6 +72,10 @@ pub struct SourceDeletionRules {
     /// the ones its preview listed. Set by an apply that reads its source
     /// again rather than the previewed copy.
     pub previewed: Option<HashSet<String>>,
+    /// When set, no project is deleted this run, and each that would be
+    /// stays with this reason: say, Planning could not be read to check
+    /// for collaborations. A later sync tries again.
+    pub held: Option<String>,
 }
 
 /// Where a sync writes and what may stop it from deleting a project.
@@ -803,6 +807,7 @@ fn upsert_acquired_images(
     tgt_map: &HashMap<i64, i64>,
     plan_map: &HashMap<i64, i64>,
     allowed_project_ids: Option<&HashSet<i64>>,
+    moved_targets: &HashMap<i64, i64>,
     preserve_metadata: bool,
     preserve_grades: Option<&HashSet<String>>,
     summary: &mut PullSummary,
@@ -813,6 +818,7 @@ fn upsert_acquired_images(
     let id_pos = ci("Id").ok_or_else(|| anyhow!("acquiredimage.Id missing"))?;
     let guid_pos = ci("guid").ok_or_else(|| anyhow!("acquiredimage.guid missing"))?;
     let proj_pos = ci("projectId").ok_or_else(|| anyhow!("acquiredimage.projectId missing"))?;
+    let tgt_pos = ci("targetId");
 
     let write_idx: Vec<usize> = (0..cols.len()).filter(|&i| i != id_pos).collect();
     let write_cols: Vec<&str> = write_idx.iter().map(|&i| cols[i].as_str()).collect();
@@ -882,7 +888,14 @@ fn upsert_acquired_images(
             None => continue,
         };
         let src_proj = as_i64(&all_vals[proj_pos]);
-        if let Some(allowed) = allowed_project_ids {
+        // A frame on a target moved here from a deleted project arrives
+        // under the target's project here.
+        let moved_to = tgt_pos
+            .and_then(|position| as_i64(&all_vals[position]))
+            .and_then(|target| moved_targets.get(&target).copied());
+        if let Some(allowed) = allowed_project_ids
+            && moved_to.is_none()
+        {
             match src_proj {
                 Some(p) if allowed.contains(&p) => {}
                 _ => continue,
@@ -911,9 +924,14 @@ fn upsert_acquired_images(
         // projectId/targetId are required FKs: skip the row if either parent
         // wasn't pulled, rather than retaining a source id that points at an
         // unrelated destination row.
-        if !remap_fk_checked(&mut write_values, Some(proj_w), proj_map)
-            || !remap_fk_checked(&mut write_values, Some(tgt_w), tgt_map)
-        {
+        let project_mapped = match moved_to {
+            Some(project) => {
+                write_values[proj_w] = Value::Integer(project);
+                true
+            }
+            None => remap_fk_checked(&mut write_values, Some(proj_w), proj_map),
+        };
+        if !project_mapped || !remap_fk_checked(&mut write_values, Some(tgt_w), tgt_map) {
             summary.acquiredimage.skipped += 1;
             summary
                 .changes
@@ -1266,6 +1284,10 @@ pub(super) struct StructureSync {
     /// GUIDs of the destination projects deleted because the source
     /// catalog deleted them.
     pub deleted_project_guids: Vec<String>,
+    /// Source targets of a project deleted here that a person moved here
+    /// to a project that stays: source target Id to destination project Id.
+    /// They and their frames arrive under that project.
+    pub moved_targets: HashMap<i64, i64>,
 }
 
 /// is true, existing destination `acquired`/`accepted` counts stay unchanged
@@ -1355,6 +1377,11 @@ pub(super) fn sync_structure(
         }
         Some(kept)
     };
+    // Targets a person moved here from a project deleted here to one that
+    // stays: the source still lists them under the deleted project. They
+    // arrive under their project here, with their plans and frames.
+    let moved = moved_targets(src, tx, &left_out, &removed)?;
+    let moved_ids: HashSet<i64> = moved.keys().copied().collect();
     for (guid, source_project) in &left_out {
         // Deleted projects lists a deletion once a sync has left it out.
         crate::commands::project_removal::mark_left_out(tx, guid, now)?;
@@ -1362,12 +1389,12 @@ pub(super) fn sync_structure(
         // an upload or import of their files is skipped as removed. They
         // are read again only when the source's frames for it changed.
         if destination == SyncDestination::Catalog {
-            let signature = left_out_signature(src, *source_project)?;
+            let signature = left_out_signature(src, *source_project, &moved_ids)?;
             crate::commands::project_removal::add_left_out_frames(
                 tx,
                 guid,
                 &signature,
-                || left_out_frames(src, *source_project),
+                || left_out_frames(src, *source_project, &moved_ids),
                 now,
             )?;
         }
@@ -1377,7 +1404,11 @@ pub(super) fn sync_structure(
         None => None,
     };
     let included_plans: Option<HashSet<i64>> = match &included_targets {
-        Some(tgts) => Some(child_ids(src, "exposureplan", "targetid", tgts)?),
+        Some(tgts) => {
+            let mut targets = tgts.clone();
+            targets.extend(moved_ids.iter().copied());
+            Some(child_ids(src, "exposureplan", "targetid", &targets)?)
+        }
         None => None,
     };
 
@@ -1422,7 +1453,33 @@ pub(super) fn sync_structure(
         preserve_existing,
         changes,
     )?;
-    let tgt_map = tgt.id_map;
+    let mut tgt_map = tgt.id_map;
+    let mut target_counts = tgt.counts;
+    // Moved targets keep their project here: one pass for each destination
+    // project, mapping their source project to it.
+    let mut by_project: HashMap<i64, (HashSet<i64>, HashMap<i64, i64>)> = HashMap::new();
+    for (target, (source_project, project)) in &moved {
+        let group = by_project.entry(*project).or_default();
+        group.0.insert(*target);
+        group.1.insert(*source_project, *project);
+    }
+    for (targets, project_map) in by_project.values() {
+        let moved_upsert = upsert_guid_table(
+            src,
+            tx,
+            "target",
+            &[("projectid", project_map)],
+            Some(targets),
+            &[],
+            preserve_existing,
+            changes,
+        )?;
+        tgt_map.extend(moved_upsert.id_map);
+        target_counts.inserted += moved_upsert.counts.inserted;
+        target_counts.updated += moved_upsert.counts.updated;
+        target_counts.unchanged += moved_upsert.counts.unchanged;
+        target_counts.skipped += moved_upsert.counts.skipped;
+    }
 
     let plan = upsert_guid_table(
         src,
@@ -1437,7 +1494,7 @@ pub(super) fn sync_structure(
 
     let mut project = proj.counts;
     project.deleted = deleted.projects;
-    let mut target = tgt.counts;
+    let mut target = target_counts;
     target.deleted = deleted.targets;
     let mut exposureplan = plan.counts;
     exposureplan.deleted = deleted.exposure_plans;
@@ -1452,6 +1509,10 @@ pub(super) fn sync_structure(
         plan_map: plan.id_map,
         selected_project_ids: included_projects,
         deleted_project_guids: deleted.guids,
+        moved_targets: moved
+            .into_iter()
+            .map(|(target, (_, project))| (target, project))
+            .collect(),
     })
 }
 
@@ -1591,8 +1652,13 @@ fn apply_source_deletions(
             changes.push(keep("it was not in the preview; preview again".into()));
             continue;
         }
+        if let Some(reason) = &rules.held {
+            changes.push(keep(reason.clone()));
+            continue;
+        }
         if context.destination == SyncDestination::Catalog {
-            project_removal::record_sync_deletion(tx, &plan, now)?;
+            // Dated when the person deleted it, on that catalog's clock.
+            project_removal::record_sync_deletion(tx, &plan, removed_at.unwrap_or(now))?;
         }
         project_removal::delete_project_rows(tx, &plan)?;
         deleted.guids.push(deletion.guid.clone());
@@ -1609,13 +1675,95 @@ fn apply_source_deletions(
 
 /// The count and highest Id of a source project's frames, so a sync reads
 /// the frames of a deleted project again only when they changed.
-fn left_out_signature(src: &Connection, source_project: i64) -> Result<String> {
-    let (count, highest): (i64, Option<i64>) = src.query_row(
-        "SELECT COUNT(*), MAX(Id) FROM acquiredimage WHERE projectId = ?1",
-        [source_project],
-        |row| Ok((row.get(0)?, row.get(1)?)),
+fn left_out_signature(
+    src: &Connection,
+    source_project: i64,
+    moved: &HashSet<i64>,
+) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    let guid = if super::table_has_column(src, "acquiredimage", "guid") {
+        "guid"
+    } else {
+        "NULL"
+    };
+    let mut statement = src.prepare(&format!(
+        "SELECT Id, {guid}, targetId FROM acquiredimage WHERE projectId = ?1 ORDER BY Id"
+    ))?;
+    let mut hasher = Sha256::new();
+    let mut count = 0usize;
+    let mut rows = statement.query([source_project])?;
+    while let Some(row) = rows.next()? {
+        if row
+            .get::<_, Option<i64>>(2)?
+            .is_some_and(|target| moved.contains(&target))
+        {
+            continue;
+        }
+        hasher.update(row.get::<_, i64>(0)?.to_le_bytes());
+        hasher.update(
+            row.get::<_, Option<String>>(1)?
+                .unwrap_or_default()
+                .as_bytes(),
+        );
+        hasher.update([0]);
+        count += 1;
+    }
+    let digest: String = hasher
+        .finalize()
+        .iter()
+        .take(16)
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    Ok(format!("{count}:{digest}"))
+}
+
+/// Source targets of the projects left out as deleted here whose GUID this
+/// catalog has under a project that stays: a person moved them there.
+/// Source target Id to its source project Id and the destination project
+/// Id.
+fn moved_targets(
+    src: &Connection,
+    tx: &Transaction,
+    left_out: &[(String, i64)],
+    removed: &std::collections::BTreeSet<String>,
+) -> Result<HashMap<i64, (i64, i64)>> {
+    let mut moved = HashMap::new();
+    if left_out.is_empty()
+        || !super::table_has_column(src, "target", "guid")
+        || !super::table_has_column(tx, "target", "guid")
+    {
+        return Ok(moved);
+    }
+    let mut targets = src.prepare("SELECT Id, guid FROM target WHERE projectid = ?1")?;
+    let mut here = tx.prepare(
+        "SELECT t.projectid, lower(trim(p.guid)) FROM target t JOIN project p ON p.Id = t.projectid
+         WHERE lower(trim(t.guid)) = lower(trim(?1))",
     )?;
-    Ok(format!("{count}:{}", highest.unwrap_or_default()))
+    for (_, source_project) in left_out {
+        let rows = targets
+            .query_map([source_project], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for (target, guid) in rows {
+            let Some(guid) = guid.filter(|guid| !guid.trim().is_empty()) else {
+                continue;
+            };
+            let found = here
+                .query_map([&guid], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            if let [(project, project_guid)] = found.as_slice()
+                && !project_guid
+                    .as_ref()
+                    .is_some_and(|project_guid| removed.contains(project_guid))
+            {
+                moved.insert(target, (*source_project, *project));
+            }
+        }
+    }
+    Ok(moved)
 }
 
 /// The frames a source has for one of its projects, as frame tombstones
@@ -1624,6 +1772,7 @@ fn left_out_signature(src: &Connection, source_project: i64) -> Result<String> {
 fn left_out_frames(
     src: &Connection,
     source_project: i64,
+    moved: &HashSet<i64>,
 ) -> Result<Vec<crate::commands::project_removal::LeftOutFrame>> {
     if !super::table_has_column(src, "acquiredimage", "metadata") {
         return Ok(Vec::new());
@@ -1639,7 +1788,8 @@ fn left_out_frames(
         "NULL"
     };
     let mut statement = src.prepare(&format!(
-        "SELECT {guid}, metadata, {acquired_date} FROM acquiredimage WHERE projectId = ?1 ORDER BY Id"
+        "SELECT {guid}, metadata, {acquired_date}, targetId FROM acquiredimage
+         WHERE projectId = ?1 ORDER BY Id"
     ))?;
     let frames = statement
         .query_map([source_project], |row| {
@@ -1647,9 +1797,15 @@ fn left_out_frames(
                 row.get::<_, Option<String>>(0)?,
                 row.get::<_, Option<String>>(1)?,
                 row.get::<_, Option<i64>>(2).ok().flatten(),
+                row.get::<_, Option<i64>>(3)?,
             ))
         })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+        .collect::<rusqlite::Result<Vec<_>>>()?
+        .into_iter()
+        // A moved target's frames arrive under its project here.
+        .filter(|(_, _, _, target)| !target.is_some_and(|target| moved.contains(&target)))
+        .map(|(guid, metadata, acquired_at, _)| (guid, metadata, acquired_at))
+        .collect::<Vec<_>>();
     Ok(frames
         .into_iter()
         .filter_map(|(guid, metadata, acquired_at)| {
@@ -1716,6 +1872,7 @@ pub(crate) fn sync_arrivals(
         &structure.target_map,
         &structure.plan_map,
         structure.selected_project_ids.as_ref(),
+        &structure.moved_targets,
         true,
         Some(dirty_grades),
         &mut summary,
@@ -1775,6 +1932,7 @@ pub(crate) fn sync_pull_in_transaction(
         &structure.target_map,
         &structure.plan_map,
         structure.selected_project_ids.as_ref(),
+        &structure.moved_targets,
         false,
         None,
         &mut summary,

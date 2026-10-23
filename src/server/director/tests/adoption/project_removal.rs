@@ -333,3 +333,90 @@ async fn a_planning_push_into_a_ts_file_deletes_without_a_tombstone() {
         .unwrap();
     assert_eq!((projects, tombstone_tables), (0, 0));
 }
+
+/// A planning push into a Target Scheduler file keeps a project whose plan
+/// came from a collaboration, as Delete project does: the `ts:<slug>`
+/// connection is the rig file of catalog `<slug>`, whose links Planning
+/// keeps.
+#[tokio::test]
+async fn a_planning_push_into_a_ts_file_keeps_a_collaborations_project() {
+    let a = activated().await;
+    let (_, preview) = call(
+        &a.f.app,
+        "POST",
+        &format!("/projects/{}/activation/preview", a.project),
+        json!({}),
+        None,
+    )
+    .await;
+    let (status, applied) = call(
+        &a.f.app,
+        "POST",
+        &format!("/projects/{}/activation/apply", a.project),
+        json!({"preview_digest": preview["data"]["preview_digest"]}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    let guid: String =
+        a.db.query_row("SELECT guid FROM project", [], |row| row.get(0))
+            .unwrap();
+    // The plan, as if imported from a collaboration.
+    rusqlite::Connection::open(a.f._dir.path().join("meta.sqlite"))
+        .unwrap()
+        .execute(
+            "INSERT INTO collaboration_project VALUES ('https://coordinator.example', 'remote-1', ?1)",
+            [a.project.to_string()],
+        )
+        .unwrap();
+
+    let source_path = a.f._dir.path().join("planning-source.sqlite");
+    let source = crate::ts_schema::create_fresh_db(&source_path).unwrap();
+    crate::commands::project_removal::ensure_schema(&source).unwrap();
+    source
+        .execute(
+            "INSERT INTO psf_guard_removed_project (project_id, project_guid, name, removed_at, frames)
+             VALUES (1, ?1, 'Heart Nebula', 1, 0)",
+            [&guid],
+        )
+        .unwrap();
+    drop(source);
+    let ts_path = a.f._dir.path().join("TargetScheduler-copy.sqlite");
+    let ts = crate::ts_schema::create_fresh_db(&ts_path).unwrap();
+    ts.execute(
+        "INSERT INTO project (profileId, name, guid) VALUES ('profile-a', 'Heart Nebula', ?1)",
+        [&guid],
+    )
+    .unwrap();
+    let (result, _) = crate::server::handlers::execute_scheduler_sync_paths(
+        &a.f.state,
+        source_path,
+        ts_path,
+        "rig".into(),
+        "ts:rig".into(),
+        crate::server::api::SchedulerSyncRequest {
+            peer_db_id: "ts:rig".into(),
+            kind: crate::server::api::SchedulerSyncKind::PushPlanning,
+            dry_run: false,
+            with_image_data: None,
+            project: None,
+            target: None,
+            status: None,
+            reviewed_only: true,
+        },
+        crate::server::handlers::SyncGuardMode::None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.project.deleted, 0, "{:?}", result.changes);
+    assert!(
+        result.changes.iter().any(|line| line
+            == "keep project \"Heart Nebula\": deleted in the source catalog, but it belongs to a collaboration here"),
+        "{:?}",
+        result.changes
+    );
+    let left: i64 = ts
+        .query_row("SELECT COUNT(*) FROM project", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(left, 1);
+}
