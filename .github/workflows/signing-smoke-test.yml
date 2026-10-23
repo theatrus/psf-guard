@@ -25,7 +25,8 @@ permissions:
 jobs:
   smoke:
     name: Azure Artifact Signing smoke test
-    runs-on: windows-latest
+    # Our Windows runner, where release.yml signs.
+    runs-on: [self-hosted, windows, ghr-windows-x64]
     # Must match the Entra federated credential subject
     # `repo:theatrus/psf-guard:environment:release`.
     environment: release
