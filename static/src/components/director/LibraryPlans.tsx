@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, Plus, RefreshCw, X } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import type { DirectorIdentity, DirectorPlanLink, DirectorPlanRow } from '../../api/directorTypes';
@@ -9,6 +9,8 @@ import { waitingPlanMatchesShow, type LibraryShow } from '../libraryShow';
 import { identityId } from './identityId';
 import { matchesSearch } from './planFilters';
 import PlanRow from './PlanRow';
+import PlanDeleteDialog from './PlanDeleteDialog';
+import { listNames } from './listNames';
 import { CLOSED_PROJECT_STATE, INACTIVE_PROJECT_STATE } from '../../utils/projectNavigation';
 import '../projectCard.css';
 import './DirectorPage.css';
@@ -57,6 +59,11 @@ export default function LibraryPlans({ search, show, listed, dbFilter = null, in
     focusNotice.current = false;
     noticeRef.current?.focus();
   }, [notice]);
+  // Deleting a plan deletes its projects in the rig databases: it needs
+  // database management as well as an editor's account.
+  const { data: serverInfo } = useQuery({ queryKey: ['serverInfo'], queryFn: apiClient.getServerInfo, staleTime: 5 * 60 * 1000 });
+  const deleteAllowed = canWrite && (serverInfo?.allow_database_management ?? false);
+  const [deleting, setDeleting] = useState<DirectorPlanRow | null>(null);
   const reopen = useMutation({
     retry: false,
     mutationFn: async (row: DirectorPlanRow) => {
@@ -117,7 +124,8 @@ export default function LibraryPlans({ search, show, listed, dbFilter = null, in
   const item = (row: DirectorPlanRow) => <li key={row.project.id} className="director-plan">
     <PlanRow row={row} href={plans.hrefFor(row)} canWrite={canWrite} editing={!!edit} onRename={() => begin({ creating: false, record: row.project })}
       reopenOn={closedLinks(row).map(link => link.catalog_name)} reopenDisabled={reopen.isPending}
-      onReopen={() => { setNotice(''); reopen.mutate(row); }} reopening={reopen.isPending && reopen.variables?.project.id === row.project.id} />
+      onReopen={() => { setNotice(''); reopen.mutate(row); }} reopening={reopen.isPending && reopen.variables?.project.id === row.project.id}
+      onDelete={deleteAllowed ? () => { setNotice(''); setDeleting(row); } : undefined} />
     {edit?.record.id === row.project.id && !edit.creating && form}
   </li>;
   return <section className="director-page director-embedded library-plans" aria-label="Plans with nothing captured yet">
@@ -137,5 +145,17 @@ export default function LibraryPlans({ search, show, listed, dbFilter = null, in
     {plans.error && <p className="director-error" role="alert">{message(plans.query.error)}</p>}
     {plans.query.isSuccess && shown.length === 0 && <p className="director-muted">{waiting.length === 0 ? 'Every plan has frames.' : 'No waiting plan matches.'}</p>}
     <ul className="director-plan-list is-compact">{shown.map(item)}</ul>
+    {deleting && <PlanDeleteDialog
+      planId={deleting.project.id}
+      name={deleting.project.name}
+      onClose={() => setDeleting(null)}
+      onDeleted={(outcome) => {
+        setDeleting(null);
+        focusNotice.current = true;
+        setNotice(outcome.databases.length
+          ? `Deleted the plan ${outcome.name} and its project${outcome.databases.length === 1 ? '' : 's'} on ${listNames(outcome.databases)}.`
+          : `Deleted the plan ${outcome.name}.`);
+      }}
+    />}
   </section>;
 }

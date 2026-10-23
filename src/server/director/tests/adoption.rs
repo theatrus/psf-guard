@@ -11,6 +11,7 @@ mod framing;
 mod mosaic;
 mod plan;
 mod plan_progress;
+mod plan_removal;
 mod plans;
 mod program;
 mod project_removal;

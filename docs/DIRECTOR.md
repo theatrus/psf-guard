@@ -671,8 +671,11 @@ again** beside it under **Deleted projects**, below the archive. A project
 without frames is not listed there. A project that comes back
 arrives with a plan of its own; to rejoin its old plan, use **Attach a
 project from another database** in that plan's workspace. Deleting needs an editor's
-account and a server started with `--allow-database-management`. See
-[Project removal](design/project-removal.md).
+account and a server started with `--allow-database-management`. A plan with nothing
+captured has a delete button beside its name under **Plans with nothing
+captured yet**: it deletes the plan's project in each database it links, then
+the plan. A plan whose rigs captured frames stays until those projects are
+deleted. See [Project removal](design/project-removal.md).
 
 The header's project picker follows the same rule. A project that lives in
 several databases under one GUID is one row there, badged with its rig count
@@ -828,13 +831,16 @@ delivery requirement.
 | GET | `/projects/{id}` | Exact project UUID. |
 | PATCH | `/projects/{id}` | `{"expected_revision":1,"name":"Andromeda"}` |
 | POST | `/projects/{id}/attach` | `from_project_id`: the plan to absorb. Moves every database link of that plan onto this one, takes its framing and plan drafts where this plan has none, and retires it. `409` when both plans link the same database, `404` when the other plan is gone, `400` for a plan attaching itself. Answers `into`, `absorbed`, `moved_links`, `framing_taken`, `plan_taken`. |
+| GET | `/projects/{id}/deletion` | What deleting the plan deletes: its project in each database it links, with targets, exposure plans, frames and a digest, and `refusal` when the plan cannot be deleted. See [Project removal](design/project-removal.md#deleting-a-plan). |
+| POST | `/projects/{id}/deletion` | `{"digests":{"<project GUID>":"<digest>"}}`. Deletes each project, then the plan. Returns `deleted`, `changed` with a new preview, or `stopped` with the error; the last two list the databases whose project went already. Needs database management. |
 | POST | `/projects/{id}/detach` | `catalog_slug`, `source_project_guid` and `name`: moves that one database link onto a new plan called `name` and answers the new plan's identity. `404` when the link is not this plan's. |
 
 The same identity operations and body/query shapes are available at `/sites`
 and `/rigs`. The latter remains a compatibility API for prototype references;
 normal clients should enable planning on a registered database instead. Identity
-names never establish a binding. Identity routes do not delete an identity or
-grant credentials; the separate pairing routes above do the latter.
+names never establish a binding. Identity routes do not grant credentials;
+the separate pairing routes above do. Only a plan is deleted, through
+`/projects/{id}/deletion`.
 
 A global project identity is not a Target Scheduler project or a catalog-local
 integer ID. Same-name projects stay distinct. Keep the caller-generated UUID
@@ -846,7 +852,6 @@ Listings return `items` and `next_after`, ordered by stable UUID rather than
 name. Each page is a fresh read, not a long-running snapshot; restart a full
 listing to discover concurrent inserts before its cursor. Request bodies are
 limited to 4 KiB for identity operations, and unknown fields are rejected.
-There is no deletion endpoint.
 
 ## Catalog adoption
 

@@ -387,3 +387,30 @@ fn scheduling_limits_inherit_and_say_where_each_came_from() {
         .contains("scheduling"));
     assert!(resolve_scheduling(&[]).sources.is_empty());
 }
+
+/// A deleted plan leaves no preferences behind, and leaves every project
+/// order, so the order can be saved again.
+#[test]
+fn deleting_a_plan_takes_it_out_of_project_orders() {
+    let dir = TempDir::new().unwrap();
+    let mut store = MetaStore::create(&dir.path().join("meta.sqlite")).unwrap();
+    let gone = store.create_project(Uuid::new_v4(), "Gone").unwrap().id;
+    let kept = store.create_project(Uuid::new_v4(), "Kept").unwrap().id;
+    let mut own = Settings::empty(Scope::Project, gone);
+    own.overrides.weights.insert(Factor::MoonOpportunity, 10);
+    store.save_observing_settings(&own).unwrap();
+    let mut global = Settings::empty(Scope::Global, store.instance_id());
+    global.project_order = Some(vec![gone, kept]);
+    store.save_observing_settings(&global).unwrap();
+
+    store.delete_plan(gone, &[]).unwrap();
+    let global = store
+        .observing_settings(Scope::Global, store.instance_id())
+        .unwrap();
+    assert_eq!(global.project_order, Some(vec![kept]));
+    store.save_observing_settings(&global).unwrap();
+    assert!(matches!(
+        store.observing_settings(Scope::Project, gone),
+        Err(Error::NotFound)
+    ));
+}

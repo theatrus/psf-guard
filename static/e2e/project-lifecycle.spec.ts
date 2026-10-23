@@ -133,3 +133,23 @@ test('Edit project opens the delete dialog, and Cancel deletes nothing', async (
   await expect(dialog).toHaveCount(0);
   expect(count(databasePath, "SELECT COUNT(*) AS n FROM project WHERE name = 'Project Alpha'")).toBe(1);
 });
+
+test('a plan with nothing captured is deleted from the Library', async ({ page, request }) => {
+  await register(request, catalogWithClosedBeta());
+  const id = randomUUID();
+  const created = await request.post('/api/director/v1/projects', { data: { id, name: 'Lifecycle plan' } });
+  expect(created.ok(), await created.text()).toBeTruthy();
+
+  await page.goto('/');
+  const plans = page.getByRole('region', { name: 'Plans with nothing captured yet' });
+  await expect(plans.getByRole('link', { name: 'Open Lifecycle plan' })).toBeVisible({ timeout: 15_000 });
+  await plans.getByRole('button', { name: 'Delete Lifecycle plan' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Delete Lifecycle plan' });
+  await expect(dialog.getByText('its Framing, Exposures and Priority settings, and its activation record')).toBeVisible();
+  await dialog.getByRole('button', { name: 'Delete plan' }).click();
+
+  await expect(plans.getByRole('status')).toHaveText('Deleted the plan Lifecycle plan.');
+  await expect(plans.getByRole('link', { name: 'Open Lifecycle plan' })).toHaveCount(0);
+  const gone = await request.get(`/api/director/v1/projects/${id}`);
+  expect(gone.status()).toBe(404);
+});

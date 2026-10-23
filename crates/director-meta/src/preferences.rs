@@ -383,6 +383,44 @@ pub(crate) fn attach_project(
     Ok(())
 }
 
+/// Forget a deleted plan: its own preferences, and its place in every
+/// project order, which a later save checks against the plans that exist.
+pub(crate) fn forget_project(conn: &Connection, plan: Uuid) -> Result<(), Error> {
+    conn.execute(
+        "DELETE FROM observing_preferences WHERE scope='project' AND scope_id=?1",
+        [plan.to_string()],
+    )?;
+    let mut statement = conn.prepare("SELECT payload FROM observing_preferences")?;
+    let rows = statement
+        .query_map([], |r| r.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    for payload in rows {
+        let mut settings: Settings =
+            serde_json::from_str(&payload).map_err(|_| Error::CorruptDatabase)?;
+        let Some(order) = &mut settings.project_order else {
+            continue;
+        };
+        if !order.contains(&plan) {
+            continue;
+        }
+        order.retain(|id| *id != plan);
+        settings.revision = settings
+            .revision
+            .checked_add(1)
+            .filter(|r| *r < i64::MAX as u64)
+            .ok_or(Error::InvalidInput)?;
+        conn.execute(
+            "UPDATE observing_preferences SET payload=?1 WHERE scope=?2 AND scope_id=?3",
+            params![
+                serde_json::to_string(&settings).map_err(|_| Error::InvalidInput)?,
+                scope_name(settings.scope),
+                settings.scope_id.to_string()
+            ],
+        )?;
+    }
+    Ok(())
+}
+
 impl MetaStore {
     pub fn observing_settings(&self, scope: Scope, id: Uuid) -> Result<Settings, Error> {
         read(&self.connection, self.instance_id, scope, id)

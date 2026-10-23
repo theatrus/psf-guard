@@ -734,6 +734,10 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
         .route("/sky/search", get(sky_search::search))
         .route("/sky/objects", get(sky_objects::marks))
         .route("/projects/{id}", get(project).patch(rename_project))
+        .route(
+            "/projects/{id}/deletion",
+            get(plan_removal::preview).post(plan_removal::delete),
+        )
         .route("/projects/{id}/attach", axum::routing::post(attach_project))
         .route("/projects/{id}/detach", axum::routing::post(detach_project))
         .merge(configuration_api::routes())
@@ -976,6 +980,7 @@ async fn detach_project(
 }
 
 mod configuration_api;
+mod plan_removal;
 mod preferences;
 #[cfg(test)]
 mod tests;

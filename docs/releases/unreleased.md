@@ -23,6 +23,11 @@
   rig. Deleting needs a server started with `--allow-database-management`.
   Restoring removed rejects no longer puts back a frame whose project was
   deleted.
+- You can delete a plan with nothing captured. Under **Plans with nothing
+  captured yet**, click the delete button beside the plan. The dialog lists
+  the plan's project in each database; **Delete plan** deletes them and the
+  plan with its framing. A plan whose rigs captured frames stays until you
+  delete those projects from the Library.
 
 - A color preview can run BlurXTerminator and NoiseXTerminator on its color
   channels together. In **Processing stack**, turn the tools on under
