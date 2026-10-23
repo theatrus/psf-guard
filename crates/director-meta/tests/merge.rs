@@ -190,3 +190,64 @@ fn attaching_moves_links_takes_missing_drafts_and_retires_the_absorbed_plan() {
     let reopened = MetaStore::open(&path).unwrap();
     assert!(reopened.project(fresh.id).unwrap().is_some());
 }
+
+#[test]
+fn forgetting_a_deleted_project_drops_its_link_and_keeps_the_plan() {
+    let (_dir, path) = scratch();
+    let mut store = MetaStore::create(&path).unwrap();
+    let instance = store.instance_id();
+    let plan = store.create_project(Uuid::new_v4(), "Heart").unwrap().id;
+    let (gone_guid, kept_guid) = (Uuid::new_v4(), Uuid::new_v4());
+    let gone = linked(&mut store, instance, plan, gone_guid, "C925");
+    let kept = linked(&mut store, instance, plan, kept_guid, "Redcat");
+    store
+        .save_framing_draft(&draft(plan, "IC 1805"), 0)
+        .unwrap();
+
+    let before = store.source_project_plan(gone, gone_guid).unwrap().unwrap();
+    assert_eq!(
+        (before.plan.id, before.links, before.imported),
+        (plan, 2, false)
+    );
+
+    assert_eq!(
+        store.forget_source_project(gone, gone_guid).unwrap(),
+        Some(plan)
+    );
+    assert_eq!(store.linked_project(gone, gone_guid).unwrap(), None);
+    assert_eq!(store.linked_project(kept, kept_guid).unwrap(), Some(plan));
+    assert_eq!(
+        store
+            .source_project_plan(kept, kept_guid)
+            .unwrap()
+            .unwrap()
+            .links,
+        1
+    );
+    assert_eq!(
+        store.framing_draft(plan).unwrap().unwrap().target_name,
+        "IC 1805",
+        "the plan keeps its framing"
+    );
+    // Nothing is left under the link: the same project can link again.
+    let rig = store.catalog_rig(gone).unwrap().unwrap().rig.id;
+    let other = store.create_project(Uuid::new_v4(), "Other").unwrap().id;
+    store
+        .link_catalog_project(&ProjectMapping {
+            catalog_id: gone,
+            source_project_guid: gone_guid,
+            source_profile_id: "profile".into(),
+            project_id: other,
+            rig_id: rig,
+        })
+        .unwrap();
+    // A project no plan links is nothing to forget.
+    assert_eq!(
+        store.forget_source_project(kept, Uuid::new_v4()).unwrap(),
+        None
+    );
+    assert!(store
+        .source_project_plan(kept, Uuid::new_v4())
+        .unwrap()
+        .is_none());
+}

@@ -1117,6 +1117,23 @@ mod tests {
             true,
         ));
         assert!(!requires_write(&Method::OPTIONS, "/backups", false));
+        // Deleting a project, or allowing a deleted one back, is an
+        // editor's, even for an account that may run calculations.
+        assert!(!requires_write(
+            &Method::GET,
+            "/db/test/projects/1/removal",
+            true
+        ));
+        assert!(requires_write(
+            &Method::POST,
+            "/db/test/projects/1/removal",
+            true
+        ));
+        assert!(requires_write(
+            &Method::POST,
+            "/db/test/deleted-projects/1/allow",
+            true
+        ));
         assert!(!requires_write(
             &Method::POST,
             "/db/test/images/generation-status",

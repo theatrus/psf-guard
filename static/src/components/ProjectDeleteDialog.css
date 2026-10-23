@@ -1,0 +1,51 @@
+.project-delete-dialog {
+  width: min(34rem, 100%);
+}
+
+.project-delete-dialog p {
+  margin: 0 0 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.project-delete-list {
+  margin: 0 0 0.8rem;
+  padding-left: 1.2rem;
+}
+
+.project-delete-note {
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+}
+
+.project-delete-error {
+  color: var(--color-error);
+  font-size: 0.85rem;
+}
+
+.project-delete-confirm-field {
+  display: grid;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+}
+
+.project-delete-confirm-field input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 0.5rem;
+  border: 1px solid var(--color-border-tertiary);
+  border-radius: 4px;
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  font: inherit;
+}
+
+.project-delete-confirm-field input:focus-visible {
+  outline: 2px solid var(--state-focus-border);
+  outline-offset: 1px;
+}
+
+.project-delete-confirm:disabled {
+  cursor: default;
+  opacity: 0.5;
+}

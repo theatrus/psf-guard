@@ -157,31 +157,37 @@ fn has_column(conn: &Connection, table: &str, column: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// GUIDs of every removed frame, so a catalog pull leaves them out. Empty
-/// when nothing was ever removed.
+/// GUIDs of every removed frame, including frames removed with their
+/// project, so a catalog pull leaves them out. Empty when nothing was ever
+/// removed.
 pub fn removed_guids(conn: &Connection) -> Result<HashSet<String>> {
-    if !table_exists(conn, "psf_guard_removed_image") {
-        return Ok(HashSet::new());
+    let mut guids: HashSet<String> = crate::commands::project_removal::removed_frame_guids(conn)?
+        .into_iter()
+        .collect();
+    if table_exists(conn, "psf_guard_removed_image") {
+        let mut statement =
+            conn.prepare("SELECT acquired_image_guid FROM psf_guard_removed_image")?;
+        for guid in statement.query_map([], |row| row.get::<_, String>(0))? {
+            guids.insert(guid?);
+        }
     }
-    let mut statement = conn.prepare("SELECT acquired_image_guid FROM psf_guard_removed_image")?;
-    let guids = statement
-        .query_map([], |row| row.get::<_, String>(0))?
-        .collect::<rusqlite::Result<_>>()?;
     Ok(guids)
 }
 
 /// Lower-case file names of removed lights, so an import or upload of the
 /// same file does not bring the frame back as a new one.
 pub fn removed_file_names(conn: &Connection) -> Result<HashSet<String>> {
-    if !table_exists(conn, "psf_guard_removed_image") {
-        return Ok(HashSet::new());
+    let mut names: HashSet<String> = crate::commands::project_removal::removed_file_names(conn)?
+        .into_iter()
+        .collect();
+    if table_exists(conn, "psf_guard_removed_image") {
+        let mut statement = conn.prepare(
+            "SELECT file_name FROM psf_guard_removed_image WHERE file_name IS NOT NULL AND file_name <> ''",
+        )?;
+        for name in statement.query_map([], |row| row.get::<_, String>(0))? {
+            names.insert(name?);
+        }
     }
-    let mut statement = conn.prepare(
-        "SELECT file_name FROM psf_guard_removed_image WHERE file_name IS NOT NULL AND file_name <> ''",
-    )?;
-    let names = statement
-        .query_map([], |row| row.get::<_, String>(0))?
-        .collect::<rusqlite::Result<_>>()?;
     Ok(names)
 }
 
@@ -1178,6 +1184,7 @@ struct Tombstone {
     rejected_at: Option<i64>,
     files_deleted_at: Option<i64>,
     purged: bool,
+    removed_at: i64,
     rows: RowSnapshot,
     files: Vec<TrashedFile>,
 }
@@ -1193,7 +1200,7 @@ fn tombstones(conn: &Connection, selection: &RestoreSelection) -> Result<Vec<Tom
     };
     let mut statement = conn.prepare(&format!(
         "SELECT acquired_image_guid, acquired_image_id, target_id, file_name, rejected_at,
-                files_deleted_at, rows_json, files_json, batch_id, project_id, {purged}
+                files_deleted_at, rows_json, files_json, batch_id, project_id, {purged}, removed_at
          FROM psf_guard_removed_image ORDER BY removed_at, acquired_image_id"
     ))?;
     let wanted: HashSet<&str> = selection.guids.iter().map(String::as_str).collect();
@@ -1216,6 +1223,7 @@ fn tombstones(conn: &Connection, selection: &RestoreSelection) -> Result<Vec<Tom
             rejected_at: row.get(4)?,
             files_deleted_at: row.get(5)?,
             purged: row.get(10)?,
+            removed_at: row.get(11)?,
             rows: serde_json::from_str(&row.get::<_, String>(6)?)?,
             files: serde_json::from_str(&row.get::<_, String>(7)?)?,
         });
@@ -1318,6 +1326,21 @@ pub fn restore_with(
             fail(
                 &mut report,
                 "the catalog has a frame with its GUID again".into(),
+            );
+            continue;
+        }
+        // A project deleted after this frame was removed may have given its
+        // Id to a new project, which the frame must not join.
+        if let Some(project) = tombstone.project_id
+            && crate::commands::project_removal::project_removed_since(
+                conn,
+                project,
+                tombstone.removed_at,
+            )?
+        {
+            fail(
+                &mut report,
+                "its project is no longer in the catalog".into(),
             );
             continue;
         }
@@ -1765,6 +1788,41 @@ mod tests {
         )
         .unwrap();
         assert_eq!(restored.restored.len(), 1, "{restored:?}");
+    }
+
+    #[test]
+    fn restore_refuses_frames_whose_project_was_deleted() {
+        let c = catalog();
+        let none = BTreeSet::new();
+        let plan = plan(&c.conn, &c.images(), &options(&none, 7)).unwrap();
+        let report = apply(&c.conn, &c.images(), &options(&none, 7), &plan.digest, 14).unwrap();
+        assert_eq!(report.removed.len(), 2);
+        let project = crate::commands::project_removal::plan(&c.conn, 1, &none)
+            .unwrap()
+            .unwrap();
+        crate::commands::project_removal::remove(&c.conn, 1, &project.digest, &none, NOW).unwrap();
+        // A new project takes the deleted one's Id.
+        c.conn
+            .execute(
+                "INSERT INTO project (Id, profileId, name, guid) VALUES (1, 'p', 'New', 'new')",
+                [],
+            )
+            .unwrap();
+        let restored = restore(
+            &c.conn,
+            &RestoreSelection {
+                batch_id: Some(report.batch_id.clone()),
+                guids: vec![],
+            },
+        )
+        .unwrap();
+        assert!(restored.restored.is_empty(), "{restored:?}");
+        assert_eq!(restored.failed.len(), 2);
+        assert!(restored
+            .failed
+            .iter()
+            .all(|frame| frame.reason == "its project is no longer in the catalog"));
+        assert_eq!(c.count("SELECT COUNT(*) FROM acquiredimage"), 0);
     }
 
     #[test]

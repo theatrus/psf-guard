@@ -13,6 +13,7 @@ mod plan;
 mod plan_progress;
 mod plans;
 mod program;
+mod project_removal;
 mod remote_push;
 mod rig_profile;
 mod rig_scheduling;

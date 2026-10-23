@@ -2865,6 +2865,12 @@ pub fn move_project_stacks(ctx: &DatabaseContext, from: i32, to: i32) {
     janitor::move_project_indices(&ctx.stack_root, from, to);
 }
 
+/// Drop a deleted project's stack indices at once: Target Scheduler gives
+/// its Id to the next project, which must not inherit them before the sweep.
+pub fn forget_project_stacks(ctx: &DatabaseContext, project_id: i32) {
+    janitor::drop_project_indices(&ctx.stack_root, project_id);
+}
+
 fn sweep_database(state: &AppState, ctx: &DatabaseContext) {
     // The shared request connection is only borrowed when it is free.
     let live_projects: Option<std::collections::HashSet<i32>> = {

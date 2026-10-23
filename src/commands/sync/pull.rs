@@ -1215,7 +1215,8 @@ pub(super) struct StructureSync {
     pub project_map: HashMap<i64, i64>,
     pub target_map: HashMap<i64, i64>,
     pub plan_map: HashMap<i64, i64>,
-    /// Source project ids selected by a project filter. `None` means all.
+    /// Source project ids selected by a project filter, less projects
+    /// deleted here. `None` means all.
     pub selected_project_ids: Option<HashSet<i64>>,
 }
 
@@ -1246,6 +1247,44 @@ pub(super) fn sync_structure(
             Some(ids)
         }
         None => None,
+    };
+    // Projects deleted here stay deleted. They are left out as a project
+    // filter leaves projects out, with their targets, plans and frames,
+    // without a skip line for each row. A pull a person runs says once
+    // which projects it left out; the automatic one does not.
+    let removed = crate::commands::project_removal::removed_project_guids(tx)?;
+    let included_projects = if removed.is_empty() {
+        included_projects
+    } else {
+        let mut statement = src.prepare("SELECT Id, guid, name FROM project")?;
+        let mut kept = HashSet::new();
+        for row in statement.query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        })? {
+            let (id, guid, name) = row?;
+            if !included_projects
+                .as_ref()
+                .is_none_or(|included| included.contains(&id))
+            {
+                continue;
+            }
+            let deleted = guid
+                .as_deref()
+                .is_some_and(|guid| removed.contains(&guid.trim().to_ascii_lowercase()));
+            if !deleted {
+                kept.insert(id);
+            } else if !preserve_existing {
+                changes.push(format!(
+                    "leave out project \"{}\": deleted in this catalog (Allow again in the Library lets it back)",
+                    name.unwrap_or_default()
+                ));
+            }
+        }
+        Some(kept)
     };
     let included_targets: Option<HashSet<i64>> = match &included_projects {
         Some(projs) => Some(child_ids(src, "target", "projectid", projs)?),
@@ -1358,7 +1397,7 @@ pub(crate) fn sync_arrivals(
         &structure.project_map,
         &structure.target_map,
         &structure.plan_map,
-        None,
+        structure.selected_project_ids.as_ref(),
         true,
         Some(dirty_grades),
         &mut summary,

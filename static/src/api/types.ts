@@ -3817,6 +3817,42 @@ export interface ProjectSchedulerDetails {
   targets: SchedulerTargetDetails[];
 }
 
+/** What deleting a project would take from its catalog, from
+ *  `GET /api/db/{db}/projects/{id}/removal`. */
+export interface ProjectRemovalPreview {
+  project_id: number;
+  name: string;
+  guid: string | null;
+  /** Target Scheduler's state: 0 draft, 1 active, 2 inactive, 3 closed. */
+  state: number | null;
+  targets: number;
+  exposure_plans: number;
+  frames: { total: number; accepted: number; rejected: number; pending: number };
+  /** Frames reported to a collaboration; any keeps the project. */
+  protected_frames: number;
+  /** Send back with the delete; it changes when a target, plan or frame does. */
+  digest: string;
+  linked_plan: { name: string; databases: number; from_collaboration: boolean } | null;
+  /** The Target Scheduler database this catalog copies from. */
+  synced_from: string | null;
+  /** Database management is on, so the server deletes projects. */
+  allowed: boolean;
+}
+
+/** A deleted project that syncs and imports leave out. */
+export interface DeletedProject {
+  id: number;
+  project_id: number;
+  name: string;
+  /** Unix seconds. */
+  removed_at: number;
+  frames: number;
+}
+
+export type ProjectRemovalOutcome =
+  | { state: 'removed'; name: string; targets: number; exposure_plans: number; frames: number; plan: string | null; plan_error: string | null }
+  | { state: 'changed'; preview: ProjectRemovalPreview };
+
 export interface ProjectSchedulerUpdate {
   name?: string;
   description?: string;

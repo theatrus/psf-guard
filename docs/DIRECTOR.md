@@ -658,6 +658,22 @@ Closed. A plan that is Closed on any rig has **Reopen**, which sets its
 project Inactive on each rig where it is Closed and reports the result for
 each.
 
+To delete a project from one database, open its **Edit project** panel and
+click **Delete project...**, or click **Delete** beside it under **Archived
+projects**. The dialog lists what goes: the project's targets,
+exposure plans and frames, with their grades and measurements. The image
+files stay on disk. When the project has frames, type its name to confirm.
+A plan that linked the project keeps its framing and its other databases
+and no longer plans work for that rig; a plan left with no database moves to
+the plans with nothing captured yet. Later syncs and imports skip a
+deleted project that had frames, and its files, until you click **Allow
+again** beside it under **Deleted projects**, below the archive. A project
+without frames is not listed there. A project that comes back
+arrives with a plan of its own; to rejoin its old plan, use **Attach a
+project from another database** in that plan's workspace. Deleting needs an editor's
+account and a server started with `--allow-database-management`. See
+[Project removal](design/project-removal.md).
+
 The header's project picker follows the same rule. A project that lives in
 several databases under one GUID is one row there, badged with its rig count
 and listing every database; it opens to one block per rig, each with that

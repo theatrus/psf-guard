@@ -69,6 +69,8 @@ import {
 import { DEFAULT_WBPP_OPTIONS } from '../api/types';
 import { commonDirectory } from '../utils/commonDirectory';
 import OrganizationDialog, { type OrganizationScope } from './OrganizationDialog';
+import ProjectDeleteDialog, { type ProjectDeleteRequest } from './ProjectDeleteDialog';
+import DeletedProjects from './DeletedProjects';
 import { useAccess } from '../auth/access';
 import PreviewImage from './PreviewImage';
 import { useColorPreview } from '../hooks/useColorPreview';
@@ -160,10 +162,18 @@ export default function Overview() {
   const { canWrite } = useAccess();
   // Moving targets and exposures edits catalog rows: an editor's work.
   const organizeAllowed = canWrite;
+  // Deleting a project changes a database the server was pointed at: it
+  // needs database management as well.
+  const deleteAllowed = canWrite && (serverInfo?.allow_database_management ?? false);
+  const [deleting, setDeleting] = useState<{ request: ProjectDeleteRequest; inArchive: boolean } | null>(null);
+  const openDelete = (project: WithDb<ProjectOverview>, inArchive: boolean) => setDeleting({
+    request: { dbId: project.db_id, dbName: project.db_name, projectId: project.id, name: project.display_name },
+    inArchive,
+  });
   // A project's Target Scheduler state, written straight into its database.
   // The notice shows where the change was made: a project reopened from the
   // archive leaves it, and the list's top may be out of view.
-  const [stateNotice, setStateNotice] = useState<{ text: string; inArchive: boolean } | null>(null);
+  const [stateNotice, setStateNotice] = useState<{ text: string; inArchive: boolean; focus?: boolean } | null>(null);
   const [pendingStates, setPendingStates] = useState<Record<string, number>>({});
   useEffect(() => {
     if (!stateNotice) return;
@@ -173,8 +183,12 @@ export default function Overview() {
   // Reopen takes the row, and its button, out of the archive: focus moves to
   // the notice, so a screen reader reads it and focus stays on the page.
   const archiveNotice = useRef<HTMLParagraphElement>(null);
+  // A deletion from the Edit project panel closes the panel with the button
+  // that started it: focus moves to the notice at the top of the list.
+  const listNotice = useRef<HTMLParagraphElement>(null);
   useEffect(() => {
     if (stateNotice?.inArchive) archiveNotice.current?.focus();
+    else if (stateNotice?.focus) listNotice.current?.focus();
   }, [stateNotice]);
   const changeState = async (project: WithDb<ProjectOverview>, state: number, inArchive = false) => {
     const key = projectKey(project.db_id, project.id);
@@ -942,7 +956,7 @@ export default function Overview() {
               <button type="button" className="library-link-button" onClick={() => updateParams({ show: null, q: null })}>Show all</button>
             </p>
           )}
-          {stateNotice && !stateNotice.inArchive && <p className="library-narrowed" role="status">{stateNotice.text}</p>}
+          {stateNotice && !stateNotice.inArchive && <p ref={listNotice} tabIndex={-1} className="library-narrowed" role="status">{stateNotice.text}</p>}
 
           {activeProjectGroups.length === 0 && archivedProjects.length === 0 && show !== 'unlinked' && (
             <div className="empty-state">
@@ -1190,6 +1204,16 @@ export default function Overview() {
                         >
                           Cancel
                         </button>
+                        {deleteAllowed && (
+                          <button
+                            type="button"
+                            className="organize-delete"
+                            disabled={organizeBusy}
+                            onClick={() => openDelete(project, false)}
+                          >
+                            Delete project...
+                          </button>
+                        )}
                         {organizeError && <span className="organize-error">{organizeError}</span>}
                       </div>
                     )}
@@ -1745,13 +1769,24 @@ export default function Overview() {
                         {organizeAllowed && (
                           <button
                             type="button"
-                            className="library-reopen"
+                            className="library-row-button"
                             disabled={reopening}
                             aria-label={`Reopen ${project.display_name} on ${project.db_name}`}
                             title={`Set ${project.display_name} to Inactive on ${project.db_name}. Target Scheduler does not select it until it is set to Active.`}
                             onClick={() => void changeState(project, INACTIVE_PROJECT_STATE, true)}
                           >
                             {reopening ? 'Reopening...' : 'Reopen'}
+                          </button>
+                        )}
+                        {deleteAllowed && (
+                          <button
+                            type="button"
+                            className="library-row-button library-row-delete"
+                            aria-label={`Delete ${project.display_name} from ${project.db_name}`}
+                            title={`Delete ${project.display_name} from ${project.db_name}. The dialog shows what goes before anything is deleted.`}
+                            onClick={() => openDelete(project, true)}
+                          >
+                            Delete
                           </button>
                         )}
                       </div>
@@ -1761,8 +1796,40 @@ export default function Overview() {
               )}
             </section>
           )}
+
+          {deleteAllowed && (
+            <DeletedProjects
+              catalogs={(databases ?? [])
+                .filter((database) => !dbFilter || database.id === dbFilter)
+                .map((database) => ({ id: database.id, name: database.name }))}
+            />
+          )}
         </div>
       </div>
+
+      {deleting && (
+        <ProjectDeleteDialog
+          request={deleting.request}
+          onClose={() => setDeleting(null)}
+          onDeleted={(outcome) => {
+            const { request, inArchive } = deleting;
+            setDeleting(null);
+            setOrganizing(null);
+            const frames = `${outcome.frames.toLocaleString()} frame${outcome.frames === 1 ? '' : 's'}`;
+            const targets = `${outcome.targets} target${outcome.targets === 1 ? '' : 's'}`;
+            setStateNotice({
+              text: [
+                `Deleted ${outcome.name} from ${request.dbName}, with ${targets} and ${frames}.`,
+                outcome.frames > 0 ? 'The image files are still on disk.' : '',
+                outcome.plan ? `Its plan, ${outcome.plan}, no longer plans work for this rig.` : '',
+                outcome.plan_error ? `Planning still lists the project: ${outcome.plan_error}` : '',
+              ].filter(Boolean).join(' '),
+              inArchive,
+              focus: true,
+            });
+          }}
+        />
+      )}
 
       {organizationScope && (
         <OrganizationDialog

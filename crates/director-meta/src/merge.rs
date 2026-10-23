@@ -158,39 +158,149 @@ impl MetaStore {
                 source_project_guid.to_string()
             ],
         )?;
-        if let Some(rig) = super::catalog_rig::read_binding(&tx, catalog)? {
-            if let Some(mut plan) = super::plan::read_plan(&tx, from)?
-                && plan.contributions.iter().any(|c| c.rig_id == rig)
-            {
-                if !drop_rig_work {
-                    return Err(Error::Conflict);
-                }
-                plan.contributions.retain(|c| c.rig_id != rig);
-                plan.revision = plan.revision.checked_add(1).ok_or(Error::Conflict)?;
-                tx.execute(
-                    "UPDATE plan_draft SET revision=?2, payload=?3 WHERE project_id=?1",
-                    params![
-                        from.to_string(),
-                        i64::try_from(plan.revision).map_err(|_| Error::Conflict)?,
-                        super::configuration::encode(&plan)?
-                    ],
-                )?;
-            }
-            if let Some(mut activation) = super::activation::read_activation(&tx, from)? {
-                let before = (activation.rigs.len(), activation.inactive_rigs.len());
-                activation.rigs.retain(|r| r.rig_id != rig);
-                activation.inactive_rigs.retain(|r| r.rig_id != rig);
-                if before != (activation.rigs.len(), activation.inactive_rigs.len()) {
-                    tx.execute(
-                        "UPDATE activation SET payload=?2 WHERE project_id=?1",
-                        params![from.to_string(), super::configuration::encode(&activation)?],
-                    )?;
-                }
-            }
-        }
+        drop_rig(&tx, from, catalog, drop_rig_work)?;
         tx.commit()?;
         Ok(fresh)
     }
+
+    /// The plan that links one database's project, with how many databases
+    /// it links in all and whether it came from a collaboration.
+    pub fn source_project_plan(
+        &self,
+        catalog: Uuid,
+        source_project_guid: Uuid,
+    ) -> Result<Option<SourcePlan>, Error> {
+        let Some(plan) = self.linked_project(catalog, source_project_guid)? else {
+            return Ok(None);
+        };
+        let Some(identity) = read_named(&self.connection, Kind::Project, plan)? else {
+            return Ok(None);
+        };
+        let (links, imported): (i64, bool) = self.connection.query_row(
+            "SELECT (SELECT count(*) FROM project_catalog WHERE project_id=?1),
+                    EXISTS(SELECT 1 FROM collaboration_project WHERE project_id=?1)",
+            [plan.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        Ok(Some(SourcePlan {
+            plan: identity,
+            links: u32::try_from(links).unwrap_or(u32::MAX),
+            imported,
+        }))
+    }
+
+    /// Forget one database's project after it was deleted there: its link,
+    /// the plan's work for that database's rig, and the rig in the plan's
+    /// activation record, so the next activation does not create the
+    /// project again. The plan keeps its framing and its other links.
+    /// Returns the plan, or `None` when no plan linked the project. A plan
+    /// from a collaboration is refused with [`Error::Conflict`].
+    pub fn forget_source_project(
+        &mut self,
+        catalog: Uuid,
+        source_project_guid: Uuid,
+    ) -> Result<Option<Uuid>, Error> {
+        valid_id(catalog)?;
+        valid_id(source_project_guid)?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let linked: Option<String> = tx
+            .query_row(
+                "SELECT project_id FROM project_catalog WHERE catalog_id=?1 AND source_project_guid=?2",
+                params![catalog.to_string(), source_project_guid.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(plan) = linked.as_deref().map(parse_id).transpose()? else {
+            return Ok(None);
+        };
+        let imported: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM collaboration_project WHERE project_id=?1)",
+            [plan.to_string()],
+            |row| row.get(0),
+        )?;
+        if imported {
+            return Err(Error::Conflict);
+        }
+        let link = params![catalog.to_string(), source_project_guid.to_string()];
+        tx.execute(
+            "DELETE FROM project_profile WHERE catalog_id=?1 AND source_project_guid=?2",
+            link,
+        )?;
+        tx.execute(
+            "DELETE FROM draft_import WHERE catalog_id=?1 AND source_project_guid=?2",
+            link,
+        )?;
+        tx.execute(
+            "DELETE FROM project_catalog WHERE catalog_id=?1 AND source_project_guid=?2",
+            link,
+        )?;
+        drop_rig(&tx, plan, catalog, true)?;
+        tx.commit()?;
+        Ok(Some(plan))
+    }
+}
+
+/// The plan that links a database's project, as [`MetaStore::source_project_plan`]
+/// reads it.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SourcePlan {
+    pub plan: NamedIdentity,
+    /// Databases the plan links, this one included.
+    pub links: u32,
+    /// The plan came from a collaboration.
+    pub imported: bool,
+}
+
+/// Take the rig of `catalog` out of `plan`: the work the plan has for it and
+/// the rig in its activation record, so the next activation neither creates
+/// a project there nor reads the rig as turned off. Nothing changes while
+/// another project of the catalog is linked to the plan. With work for the
+/// rig and without `drop_rig_work`, refused with [`Error::Conflict`].
+fn drop_rig(tx: &Connection, plan: Uuid, catalog: Uuid, drop_rig_work: bool) -> Result<(), Error> {
+    let Some(rig) = super::catalog_rig::read_binding(tx, catalog)? else {
+        return Ok(());
+    };
+    // Another project of this catalog still linked to the plan keeps the
+    // rig's work and its place in the activation record.
+    let still_linked: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM project_catalog WHERE project_id=?1 AND catalog_id=?2)",
+        params![plan.to_string(), catalog.to_string()],
+        |row| row.get(0),
+    )?;
+    if still_linked {
+        return Ok(());
+    }
+    if let Some(mut draft) = super::plan::read_plan(tx, plan)?
+        && draft.contributions.iter().any(|c| c.rig_id == rig)
+    {
+        if !drop_rig_work {
+            return Err(Error::Conflict);
+        }
+        draft.contributions.retain(|c| c.rig_id != rig);
+        draft.revision = draft.revision.checked_add(1).ok_or(Error::Conflict)?;
+        tx.execute(
+            "UPDATE plan_draft SET revision=?2, payload=?3 WHERE project_id=?1",
+            params![
+                plan.to_string(),
+                i64::try_from(draft.revision).map_err(|_| Error::Conflict)?,
+                super::configuration::encode(&draft)?
+            ],
+        )?;
+    }
+    if let Some(mut activation) = super::activation::read_activation(tx, plan)? {
+        let before = (activation.rigs.len(), activation.inactive_rigs.len());
+        activation.rigs.retain(|r| r.rig_id != rig);
+        activation.inactive_rigs.retain(|r| r.rig_id != rig);
+        if before != (activation.rigs.len(), activation.inactive_rigs.len()) {
+            tx.execute(
+                "UPDATE activation SET payload=?2 WHERE project_id=?1",
+                params![plan.to_string(), super::configuration::encode(&activation)?],
+            )?;
+        }
+    }
+    Ok(())
 }
 
 /// Move `from`'s draft in `table` to `into` when `into` has none; drop it
