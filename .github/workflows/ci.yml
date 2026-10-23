@@ -1,5 +1,11 @@
 name: CI
 
+# Linux and Windows jobs run on ephemeral 32-core spot runners (tfinfra
+# roots/github-runners, docs/github-runners-plan.md). macOS, arm64, releases,
+# and every pull request from a fork stay on GitHub's runners: a fork's code
+# never runs on ours. Job names are unchanged, so the required checks still
+# match.
+
 on:
   # Release branches (`release/v0.10`) ship point releases, so they get the
   # same checks as main without a hand-started run.
@@ -27,7 +33,7 @@ env:
 jobs:
   test:
     name: Test on ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ (github.event.pull_request.head.repo.fork || matrix.os == 'macos-latest') && matrix.os || fromJSON(matrix.os == 'windows-latest' && '["self-hosted","windows","ghr-windows-x64"]' || '["self-hosted","linux","ghr-linux-x64"]') }}
     strategy:
       fail-fast: false
       matrix:
@@ -81,6 +87,9 @@ jobs:
     # every branch from keeping its own copy of the same 2 GB.
     - name: Cache cargo build
       uses: Swatinem/rust-cache@v2
+      # Our runners compile through sccache in S3 instead; GitHub's cache would
+      # only duplicate it, and saving it to GitHub is slow from AWS.
+      if: ${{ !startsWith(runner.name, 'ghr-') }}
       with:
         key: test
         save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -115,8 +124,18 @@ jobs:
     - name: Run clippy
       run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+    - name: Install cargo-nextest
+      uses: taiki-e/install-action@v2.87.30
+      with:
+        tool: cargo-nextest
+
+    # nextest runs the tests of every binary in parallel, where cargo test runs
+    # one binary at a time. It does not run doctests, hence the second step.
     - name: Run tests
-      run: cargo test --workspace --verbose
+      run: cargo nextest run --workspace
+
+    - name: Run doctests
+      run: cargo test --doc --workspace
 
     # Only Linux needs a release binary, because only the e2e job consumes
     # one. Release builds its own assets from release.yml, and the Windows and
@@ -136,7 +155,7 @@ jobs:
 
   e2e:
     name: Playwright end-to-end (Linux)
-    runs-on: ubuntu-22.04
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-22.04' || fromJSON('["self-hosted","linux","ghr-linux-x64"]') }}
     needs: test
     steps:
     - uses: actions/checkout@v7
@@ -210,7 +229,7 @@ jobs:
 
   test-tauri:
     name: Test Tauri Build on ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ (github.event.pull_request.head.repo.fork || matrix.os == 'macos-latest') && matrix.os || fromJSON(matrix.os == 'windows-latest' && '["self-hosted","windows","ghr-windows-x64"]' || '["self-hosted","linux","ghr-linux-x64"]') }}
     strategy:
       fail-fast: false
       matrix:
@@ -281,6 +300,9 @@ jobs:
 
     - name: Cache cargo build
       uses: Swatinem/rust-cache@v2
+      # Our runners compile through sccache in S3 instead; GitHub's cache would
+      # only duplicate it, and saving it to GitHub is slow from AWS.
+      if: ${{ !startsWith(runner.name, 'ghr-') }}
       with:
         key: tauri
         save-if: ${{ github.ref == 'refs/heads/main' }}
