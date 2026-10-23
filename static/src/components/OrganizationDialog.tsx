@@ -11,7 +11,16 @@ export type OrganizationScope = {
   sourceTargetId: number;
   sourceTargetName: string;
   sourceProjectId: number;
-} & ({ kind: 'merge_targets' } | { kind: 'move_images'; imageIds: number[] });
+} & ({ kind: 'merge_targets' } | { kind: 'move_images'; imageIds: number[] } | { kind: 'move_target' });
+
+/** A profile ID as the Library shows it beside a project name. */
+const profileTag = (profileId: string) => profileId.slice(0, 8);
+
+const TITLES: Record<OrganizationScope['kind'], string> = {
+  merge_targets: 'Merge targets',
+  move_images: 'Move exposures',
+  move_target: 'Move target',
+};
 
 interface Props {
   scope: OrganizationScope;
@@ -22,7 +31,10 @@ interface Props {
 export default function OrganizationDialog({ scope, onClose, onApplied }: Props) {
   const queryClient = useQueryClient();
   const merging = scope.kind === 'merge_targets';
-  const [projectId, setProjectId] = useState(String(scope.sourceProjectId));
+  const movingTarget = scope.kind === 'move_target';
+  // A moving target needs a project other than its own, so none is chosen
+  // at first.
+  const [projectId, setProjectId] = useState(movingTarget ? '' : String(scope.sourceProjectId));
   const [targetId, setTargetId] = useState('');
   const [projectName, setProjectName] = useState('');
   const [targetName, setTargetName] = useState('');
@@ -37,19 +49,27 @@ export default function OrganizationDialog({ scope, onClose, onApplied }: Props)
     queryFn: () => apiClient.getOrganizationDestinations(scope.dbId),
   });
   const sourceProject = destinations.data?.projects.find(project => project.id === scope.sourceProjectId);
+  // A whole target can move to a project of any profile; the server refuses
+  // a profile change for a target with frames and explains why.
   const compatibleProjects = destinations.data?.projects.filter(
-    project => sourceProject && project.profile_id === sourceProject.profile_id,
+    project => sourceProject && (movingTarget
+      ? project.id !== sourceProject.id
+      : project.profile_id === sourceProject.profile_id),
   ) ?? [];
+  const projectLabel = (project: { name: string; profile_id: string }) =>
+    movingTarget && sourceProject && project.profile_id !== sourceProject.profile_id
+      ? `${project.name} · profile ${profileTag(project.profile_id)}`
+      : project.name;
   const destinationTargets = destinations.data?.targets.filter(
     target => target.project_id === Number(projectId) && target.id !== scope.sourceTargetId,
   ) ?? [];
   const loading = destinations.isPending;
   const loadError = destinations.error;
   const newProject = projectId === 'new';
-  const newTarget = newProject || targetId === 'new';
+  const newTarget = !movingTarget && (newProject || targetId === 'new');
   const ready = !loading && !loadError && !!sourceProject
     && (newProject ? !!projectName.trim() : compatibleProjects.some(project => project.id === Number(projectId)))
-    && (newTarget ? !!targetName.trim() : destinationTargets.some(target => target.id === Number(targetId)));
+    && (movingTarget || (newTarget ? !!targetName.trim() : destinationTargets.some(target => target.id === Number(targetId))));
 
   const change = (update: () => void) => {
     update();
@@ -62,6 +82,15 @@ export default function OrganizationDialog({ scope, onClose, onApplied }: Props)
         kind: 'merge_targets',
         source_target_id: scope.sourceTargetId,
         destination_target_id: Number(targetId),
+      };
+    }
+    if (scope.kind === 'move_target') {
+      return {
+        kind: 'move_target',
+        target_id: scope.sourceTargetId,
+        destination: newProject
+          ? { new_project_name: projectName.trim() }
+          : { project_id: Number(projectId) },
       };
     }
     return {
@@ -115,7 +144,7 @@ export default function OrganizationDialog({ scope, onClose, onApplied }: Props)
   return (
     <Dialog
       open
-      title={merging ? 'Merge targets' : 'Move exposures'}
+      title={TITLES[scope.kind]}
       className="organization-dialog"
       onClose={() => { if (!busy) onClose(); }}
       footer={
@@ -145,7 +174,7 @@ export default function OrganizationDialog({ scope, onClose, onApplied }: Props)
         <span>From</span>
         <strong>{summary?.source_target_name ?? scope.sourceTargetName}</strong>
         <span>{summary?.source_project_name ?? sourceProject?.name}</span>
-        {!merging && <span>{scope.imageIds.length} selected exposure{scope.imageIds.length === 1 ? '' : 's'}</span>}
+        {scope.kind === 'move_images' && <span>{scope.imageIds.length} selected exposure{scope.imageIds.length === 1 ? '' : 's'}</span>}
       </div>
       {loading && <p role="status">Loading destinations...</p>}
       {loadError && <div role="alert">
@@ -162,7 +191,8 @@ export default function OrganizationDialog({ scope, onClose, onApplied }: Props)
             setProjectId(event.target.value);
             setTargetId('');
           })}>
-            {compatibleProjects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}
+            {movingTarget && <option value="">Choose a project</option>}
+            {compatibleProjects.map(project => <option key={project.id} value={project.id}>{projectLabel(project)}</option>)}
             {!merging && <option value="new">New project...</option>}
           </select>
         </label>
@@ -170,7 +200,7 @@ export default function OrganizationDialog({ scope, onClose, onApplied }: Props)
           New project name
           <input value={projectName} maxLength={200} onChange={event => change(() => setProjectName(event.target.value))} />
         </label>}
-        {!newProject && <label>
+        {!newProject && !movingTarget && <label>
           Destination target
           <select value={targetId} onChange={event => change(() => setTargetId(event.target.value))}>
             <option value="">Choose a target</option>
@@ -187,10 +217,19 @@ export default function OrganizationDialog({ scope, onClose, onApplied }: Props)
         <h3>Change preview</h3>
         <dl>
           <dt>Destination</dt>
-          <dd>{summary.destination_project_name} / {summary.destination_target_name}</dd>
+          <dd>{movingTarget
+            ? `${summary.destination_project_name}${summary.destination_project_id == null ? ' (new project)' : ''}`
+            : `${summary.destination_project_name} / ${summary.destination_target_name}`}</dd>
           <dt>Exposures moved</dt><dd>{summary.images_moved}</dd>
           {summary.exposure_plans_moved > 0 && <><dt>Exposure plans moved</dt><dd>{summary.exposure_plans_moved}</dd></>}
           {summary.exposure_plans_created > 0 && <><dt>Inactive plans created</dt><dd>{summary.exposure_plans_created}</dd></>}
+          {summary.profile_change && <>
+            <dt>Profile</dt>
+            <dd>{profileTag(summary.profile_change.from_profile_id)} to {profileTag(summary.profile_change.to_profile_id)}</dd>
+            <dt>Exposure templates reused</dt><dd>{summary.exposure_templates_reused ?? 0}</dd>
+            <dt>Exposure templates copied</dt><dd>{summary.exposure_templates_copied ?? 0}</dd>
+          </>}
+          {summary.planning_panel_id && <><dt>Planning panel</dt><dd>{summary.planning_panel_id}</dd></>}
         </dl>
         {merging && <p>The source target will be removed. The destination keeps its name and framing.</p>}
         {summary.warnings.length > 0 && <ul>{summary.warnings.map(warning => <li key={warning}>{warning}</li>)}</ul>}

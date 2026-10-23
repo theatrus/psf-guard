@@ -1077,11 +1077,25 @@ async fn organize_rename_move_and_merge() {
             r.get(0)
         })
         .unwrap();
+    // A project cannot hold two targets of one name: the move is refused
+    // and points to Merge target.
     let (status, body) = json_request(
         build_app(state.clone()),
         "PUT",
         &format!("/api/db/{slug}/targets/{t2}"),
         Some(serde_json::json!({ "name": "Veil East", "project_id": p1 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(
+        body["error"].as_str().unwrap().contains("Merge target"),
+        "{body}"
+    );
+    let (status, body) = json_request(
+        build_app(state.clone()),
+        "PUT",
+        &format!("/api/db/{slug}/targets/{t2}"),
+        Some(serde_json::json!({ "name": "Veil West field", "project_id": p1 })),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "move failed: {body}");
@@ -1093,7 +1107,7 @@ async fn organize_rename_move_and_merge() {
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .unwrap();
-    assert_eq!((tgt_project, tgt_name.as_str()), (p1, "Veil East"));
+    assert_eq!((tgt_project, tgt_name.as_str()), (p1, "Veil West field"));
     let orphaned: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM acquiredimage WHERE projectId = ?",

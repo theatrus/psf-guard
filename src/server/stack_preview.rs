@@ -2871,6 +2871,12 @@ pub fn forget_project_stacks(ctx: &DatabaseContext, project_id: i32) {
     janitor::drop_project_indices(&ctx.stack_root, project_id);
 }
 
+/// Move a target's stacks to the project it moved to, so its stack previews
+/// stay with it. Returns how many index entries moved.
+pub fn move_target_stacks(ctx: &DatabaseContext, target_id: i32, from: i32, to: i32) -> usize {
+    janitor::move_target_indices(&ctx.stack_root, target_id, from, to)
+}
+
 fn sweep_database(state: &AppState, ctx: &DatabaseContext) {
     // The shared request connection is only borrowed when it is free.
     let live_projects: Option<std::collections::HashSet<i32>> = {

@@ -290,3 +290,29 @@ test('selected exposures split into a new project and target on a phone', async 
   expect(after[1]).toMatchObject({ projectId: 1, targetId: 1 });
   expectImageEvidenceUnchanged(before, after);
 });
+
+test('Edit target moves a whole target to a new project after preview', async ({ page }) => {
+  const before = images();
+  await page.goto('/');
+  await page.getByRole('button', { name: `Edit target ${SOURCE_TARGET}`, exact: true }).click();
+  await page.getByRole('button', { name: 'Move to another project...', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Move target', exact: true });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('combobox', { name: 'Destination project', exact: true }).selectOption('new');
+  await dialog.getByLabel('New project name', { exact: true }).fill('M 44 spring campaign');
+  await previewMove(dialog);
+  const summary = dialog.getByRole('region', { name: 'Change preview' });
+  await expect(summary).toContainText('M 44 spring campaign (new project)');
+  await expect(summary).toContainText('starts inactive');
+  await dialog.getByRole('button', { name: 'Apply move', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  const project = readCatalog((db) => db.prepare('SELECT Id, state, profileId FROM project WHERE name = ?').get('M 44 spring campaign')) as { Id: number; state: number; profileId: string };
+  expect(project).toMatchObject({ state: 2, profileId: 'default' });
+  expect(readCatalog((db) => db.prepare('SELECT projectid, guid FROM target WHERE Id = 1').get()))
+    .toEqual({ projectid: project.Id, guid: 'organization-source-target' });
+  expect(readCatalog((db) => db.prepare('SELECT targetid, guid FROM exposureplan WHERE Id = 1').get()))
+    .toEqual({ targetid: 1, guid: 'organization-source-plan' });
+  const after = images();
+  expect(after.map((row) => [row.projectId, row.targetId])).toEqual([[project.Id, 1], [project.Id, 1], [project.Id, 1], [2, 2]]);
+  expectImageEvidenceUnchanged(before, after);
+});

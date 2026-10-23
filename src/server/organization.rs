@@ -9,7 +9,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::api::ApiResponse;
-use super::database_context::{open_scheduler_connection, open_scheduler_connection_with_flags};
+use super::database_context::{
+    open_scheduler_connection, open_scheduler_connection_with_flags, DatabaseContext,
+};
 use super::extract::DbContext;
 use super::handlers::AppError;
 use super::state::AppState;
@@ -27,6 +29,23 @@ pub enum OrganizationOperation {
         image_ids: Vec<i32>,
         destination: OrganizationDestination,
     },
+    /// Move a whole target, with its frames, exposure plans and stack
+    /// previews, to another project.
+    MoveTarget {
+        target_id: i32,
+        destination: TargetMoveDestination,
+    },
+}
+
+/// Where a moved target goes: an existing project of any profile, or a new
+/// project in the target's own profile. Exactly one field is set.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TargetMoveDestination {
+    #[serde(default)]
+    pub project_id: Option<i32>,
+    #[serde(default)]
+    pub new_project_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -60,10 +79,31 @@ pub struct OrganizationPreview {
     pub exposure_plans_moved: usize,
     pub exposure_plans_created: usize,
     pub warnings: Vec<String>,
+    /// Set when a moved target changes Target Scheduler profile.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile_change: Option<OrganizationProfileChange>,
+    /// Exposure templates of the destination profile that a moved target's
+    /// exposure plans will use as they are.
+    pub exposure_templates_reused: usize,
+    /// Exposure templates copied into the destination profile for a moved
+    /// target's exposure plans.
+    pub exposure_templates_copied: usize,
+    /// The Planning panel a moved target was activated as, when a plan
+    /// manages it. The move ends that management.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub planning_panel_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OrganizationProfileChange {
+    pub from_profile_id: String,
+    pub to_profile_id: String,
 }
 
 #[derive(Debug, Serialize)]
 pub struct OrganizationResult {
+    /// The project the source target was in before the change.
+    pub source_project_id: i32,
     pub project_id: i32,
     pub target_id: i32,
     pub images_moved: usize,
@@ -170,11 +210,7 @@ pub async fn apply(
         let _organization_guard = context.organization_mutex.lock().map_err(AppError::db)?;
         let mut conn = open_scheduler_connection(&context.database_path).map_err(AppError::db)?;
         let result = apply_organization(&mut conn, &request)?;
-        if let Err(error) = context.refresh_organization_navigation(&conn) {
-            tracing::warn!(db = %context.id, "Organization succeeded but navigation refresh failed: {error}");
-        }
-        tracing::info!(db = %context.id, target_id = result.target_id, images_moved = result.images_moved,
-            "Applied catalog organization");
+        after_apply(&context, &conn, &request.operation, &result);
         Ok::<_, AppError>(result)
     })
     .await
@@ -186,6 +222,60 @@ pub async fn apply(
         crate::server::stack_preview::automatic::RefreshReason::Sync,
     );
     Ok(Json(ApiResponse::success(result)))
+}
+
+/// Move a target to another project without a separate preview, for
+/// `PUT /targets/{id}` with a `project_id`. The same checks as a previewed
+/// move apply. The caller refreshes the automatic stacks.
+pub(crate) fn move_target_to_project(
+    context: &DatabaseContext,
+    target_id: i32,
+    project_id: i32,
+) -> Result<OrganizationResult, AppError> {
+    let _organization_guard = context.organization_mutex.lock().map_err(AppError::db)?;
+    let mut conn = open_scheduler_connection(&context.database_path).map_err(AppError::db)?;
+    let operation = OrganizationOperation::MoveTarget {
+        target_id,
+        destination: TargetMoveDestination {
+            project_id: Some(project_id),
+            new_project_name: None,
+        },
+    };
+    let expected_fingerprint = plan_organization(&conn, &operation)?.preview.fingerprint;
+    let request = OrganizationApplyRequest {
+        operation,
+        expected_fingerprint,
+    };
+    let result = apply_organization(&mut conn, &request)?;
+    after_apply(context, &conn, &request.operation, &result);
+    Ok(result)
+}
+
+/// Bring what lives outside the catalog up to date after a change: the
+/// Library navigation, and a moved target's stack previews.
+fn after_apply(
+    context: &DatabaseContext,
+    conn: &Connection,
+    operation: &OrganizationOperation,
+    result: &OrganizationResult,
+) {
+    if let Err(error) = context.refresh_organization_navigation(conn) {
+        tracing::warn!(db = %context.id, "Organization succeeded but navigation refresh failed: {error}");
+    }
+    if matches!(operation, OrganizationOperation::MoveTarget { .. })
+        && result.source_project_id != result.project_id
+    {
+        let moved = crate::server::stack_preview::move_target_stacks(
+            context,
+            result.target_id,
+            result.source_project_id,
+            result.project_id,
+        );
+        tracing::info!(db = %context.id, target_id = result.target_id, stack_entries = moved,
+            "Moved a target's stack previews with it");
+    }
+    tracing::info!(db = %context.id, target_id = result.target_id, images_moved = result.images_moved,
+        "Applied catalog organization");
 }
 
 #[derive(Debug)]
@@ -208,7 +298,26 @@ struct OrganizationPlan {
     source: TargetIdentity,
     images: Vec<ImageMembership>,
     source_plan_counts: BTreeMap<i64, usize>,
+    /// For a target moving to another profile: which exposure template each
+    /// of its exposure plans uses there.
+    template_moves: Vec<TemplateMove>,
+    destination_profile_id: String,
+    /// A moved target's GUID, when it has one.
+    target_guid: Option<String>,
 }
+
+/// One source exposure template of a target that changes profile, and the
+/// destination profile's matching template, if there is one. Without a
+/// match, the move copies the source template into the destination profile.
+#[derive(Debug, Clone, PartialEq)]
+struct TemplateMove {
+    source_template_id: i64,
+    destination_template_id: Option<i64>,
+    exposure_plan_ids: Vec<i64>,
+}
+
+const DIRECTOR_TARGET_TABLE: &str = "psf_guard_director_target";
+const DIRECTOR_PLAN_TABLE: &str = "psf_guard_director_plan";
 
 fn invalid(message: impl Into<String>) -> AppError {
     AppError::BadRequest(message.into())
@@ -265,6 +374,21 @@ fn columns(conn: &Connection, table: &str) -> Result<Vec<String>, AppError> {
         .map_err(AppError::db)
 }
 
+/// A profile ID as the Library shows it beside a project name: its first
+/// eight characters.
+fn profile_tag(profile_id: &str) -> String {
+    profile_id.chars().take(8).collect()
+}
+
+fn has_table(conn: &Connection, table: &str) -> Result<bool, AppError> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?)",
+        [table],
+        |row| row.get(0),
+    )
+    .map_err(AppError::db)
+}
+
 fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool, AppError> {
     Ok(columns(conn, table)?
         .iter()
@@ -301,8 +425,10 @@ fn plan_organization(
             .map_err(AppError::db)?
             .ok_or_else(|| invalid("one or more selected images no longer exist"))?
         }
+        OrganizationOperation::MoveTarget { target_id, .. } => *target_id,
     };
     let source = target_identity(conn, source_id)?;
+    let mut destination_profile_id = source.profile_id.clone();
     let mut preview = OrganizationPreview {
         fingerprint: String::new(),
         source_project_id: source.project_id,
@@ -317,6 +443,10 @@ fn plan_organization(
         exposure_plans_moved: 0,
         exposure_plans_created: 0,
         warnings: vec!["A later Target Scheduler sync can restore the scheduler's target and project assignments.".into()],
+        profile_change: None,
+        exposure_templates_reused: 0,
+        exposure_templates_copied: 0,
+        planning_panel_id: None,
     };
     let destination_target = match operation {
         OrganizationOperation::MergeTargets {
@@ -370,6 +500,48 @@ fn plan_organization(
             }
             destination.target_id
         }
+        OrganizationOperation::MoveTarget { destination, .. } => {
+            match (&destination.project_id, &destination.new_project_name) {
+                (Some(project_id), None) => {
+                    if *project_id == source.project_id {
+                        return Err(invalid(format!(
+                            "{} is already in {}; choose another project",
+                            source.name, source.project_name
+                        )));
+                    }
+                    let (project_name, profile_id) = project_identity(conn, *project_id)?;
+                    preview.destination_project_id = Some(*project_id);
+                    preview.destination_project_name = project_name;
+                    destination_profile_id = profile_id;
+                }
+                (None, Some(project_name)) => {
+                    preview.destination_project_name = name(project_name)?;
+                    let exists: bool = conn.query_row(
+                        "SELECT EXISTS(SELECT 1 FROM project WHERE profileId = ? AND lower(trim(name)) = lower(?))",
+                        params![source.profile_id, preview.destination_project_name], |row| row.get(0),
+                    ).map_err(AppError::db)?;
+                    if exists {
+                        return Err(invalid("a project with this name already exists in this profile; choose that project instead"));
+                    }
+                }
+                _ => return Err(invalid("choose an existing project or a new project name")),
+            }
+            if let Some(project_id) = preview.destination_project_id {
+                let clash: bool = conn.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM target WHERE projectid = ? AND Id <> ? AND lower(trim(name)) = lower(trim(?)))",
+                    params![project_id, source.id, source.name], |row| row.get(0),
+                ).map_err(AppError::db)?;
+                if clash {
+                    return Err(invalid(format!(
+                        "{} already has a target named {}. To combine the two targets, use Merge target instead.",
+                        preview.destination_project_name, source.name.trim()
+                    )));
+                }
+            }
+            preview.destination_target_id = Some(source.id);
+            preview.destination_target_name = source.name.clone();
+            None
+        }
     };
     if let Some(destination_id) = destination_target {
         if source.id == destination_id {
@@ -402,6 +574,8 @@ fn plan_organization(
     };
     let mut images = Vec::new();
     let mut source_plan_counts = BTreeMap::new();
+    let mut template_moves = Vec::new();
+    let mut target_guid = None;
     let rows = stmt
         .query_map([source.id], |row| {
             Ok((
@@ -471,14 +645,191 @@ fn plan_organization(
                     .push("The new project copies the source settings and starts inactive.".into());
             }
         }
+        OrganizationOperation::MoveTarget { .. } => {
+            preview.exposure_plans_moved = count_rows(conn, "exposureplan", "targetid", source.id)?;
+            if destination_profile_id != source.profile_id {
+                if !images.is_empty() {
+                    return Err(invalid(format!(
+                        "{} has {} captured frame{} from Target Scheduler profile {}, and {} belongs to profile {}. \
+                         A target with frames can only move to a project of its own profile, because each frame's \
+                         profile selects its calibration frames and nights. Choose a project of profile {}, or move \
+                         the frames with Move exposures.",
+                        source.name,
+                        images.len(),
+                        if images.len() == 1 { "" } else { "s" },
+                        profile_tag(&source.profile_id),
+                        preview.destination_project_name,
+                        profile_tag(&destination_profile_id),
+                        profile_tag(&source.profile_id),
+                    )));
+                }
+                template_moves = plan_template_moves(conn, source.id, &destination_profile_id)?;
+                preview.exposure_templates_reused = template_moves
+                    .iter()
+                    .filter(|template| template.destination_template_id.is_some())
+                    .count();
+                preview.exposure_templates_copied =
+                    template_moves.len() - preview.exposure_templates_reused;
+                preview.profile_change = Some(OrganizationProfileChange {
+                    from_profile_id: source.profile_id.clone(),
+                    to_profile_id: destination_profile_id.clone(),
+                });
+                preview.warnings.push(format!(
+                    "The target moves from profile {} to profile {}. Its exposure plans use exposure templates of profile {}: \
+                     matching templates are reused, and the others are copied.",
+                    profile_tag(&source.profile_id),
+                    profile_tag(&destination_profile_id),
+                    profile_tag(&destination_profile_id)
+                ));
+            }
+            preview.warnings.push(
+                "The target keeps its name, framing, exposure plans, flat history and exposure order. \
+                 Its frames and stack previews move with it."
+                    .into(),
+            );
+            if preview.destination_project_id.is_none() {
+                preview.warnings.push(format!(
+                    "The new project copies the settings of {} and starts inactive.",
+                    source.project_name
+                ));
+            }
+            target_guid = if has_column(conn, "target", "guid")? {
+                conn.query_row("SELECT guid FROM target WHERE Id = ?", [source.id], |row| {
+                    row.get::<_, Option<String>>(0)
+                })
+                .map_err(AppError::db)?
+                .filter(|guid| !guid.is_empty())
+            } else {
+                None
+            };
+            if let Some(guid) = &target_guid
+                && has_table(conn, DIRECTOR_TARGET_TABLE)?
+            {
+                preview.planning_panel_id = conn
+                    .query_row(
+                        "SELECT panel_id FROM psf_guard_director_target WHERE target_guid = ?",
+                        [guid],
+                        |row| row.get(0),
+                    )
+                    .optional()
+                    .map_err(AppError::db)?;
+            }
+            if let Some(panel) = &preview.planning_panel_id {
+                preview.warnings.push(format!(
+                    "A Planning plan activated this target as panel {panel}. After the move, the plan no longer \
+                     manages it, and the plan's next activation can add a new target for that panel to {}.",
+                    source.project_name
+                ));
+            }
+        }
     }
-    preview.fingerprint = fingerprint(conn, operation, &source, &preview)?;
+    let extra = format!(
+        "{destination_profile_id}\u{0}{template_moves:?}\u{0}{:?}",
+        preview.planning_panel_id
+    );
+    preview.fingerprint = fingerprint(conn, operation, &source, &preview, extra.as_bytes())?;
     Ok(OrganizationPlan {
         preview,
         source,
         images,
         source_plan_counts,
+        template_moves,
+        destination_profile_id,
+        target_guid,
     })
+}
+
+/// For a target that moves to another profile: each exposure template its
+/// exposure plans use, and the destination profile's template with the same
+/// filter, gain, offset, binning and readout mode, if there is one. Blank
+/// values match blank values, and a blank binning matches binning 1, as when
+/// an exposure plan is added.
+fn plan_template_moves(
+    conn: &Connection,
+    target_id: i32,
+    destination_profile_id: &str,
+) -> Result<Vec<TemplateMove>, AppError> {
+    if !has_column(conn, "exposureplan", "exposureTemplateId")? {
+        return Ok(Vec::new());
+    }
+    let mut stmt = conn
+        .prepare(
+            "SELECT Id, exposureTemplateId FROM exposureplan
+             WHERE targetid = ? AND exposureTemplateId IS NOT NULL ORDER BY Id",
+        )
+        .map_err(AppError::db)?;
+    let mut plans_by_template: BTreeMap<i64, Vec<i64>> = BTreeMap::new();
+    for row in stmt
+        .query_map([target_id], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+        })
+        .map_err(AppError::db)?
+    {
+        let (plan_id, template_id) = row.map_err(AppError::db)?;
+        plans_by_template
+            .entry(template_id)
+            .or_default()
+            .push(plan_id);
+    }
+    // Compare only the settings this database's templates record.
+    let mut compared = vec![("filtername", "filtername IS ?")];
+    for (column, condition) in [
+        ("gain", "gain IS ?"),
+        ("offset", "offset IS ?"),
+        ("bin", "IFNULL(bin, 1) = IFNULL(?, 1)"),
+        ("readoutmode", "readoutmode IS ?"),
+    ] {
+        if has_column(conn, "exposuretemplate", column)? {
+            compared.push((column, condition));
+        }
+    }
+    let settings_sql = format!(
+        "SELECT {} FROM exposuretemplate WHERE Id = ?",
+        compared
+            .iter()
+            .map(|(column, _)| quote(column))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    let match_sql = format!(
+        "SELECT Id FROM exposuretemplate WHERE profileId = ? AND {} ORDER BY Id LIMIT 1",
+        compared
+            .iter()
+            .map(|(_, condition)| *condition)
+            .collect::<Vec<_>>()
+            .join(" AND ")
+    );
+    let mut moves = Vec::new();
+    for (source_template_id, exposure_plan_ids) in plans_by_template {
+        let settings: Vec<Value> = conn
+            .query_row(&settings_sql, [source_template_id], |row| {
+                (0..compared.len())
+                    .map(|index| row.get::<_, Value>(index))
+                    .collect()
+            })
+            .optional()
+            .map_err(AppError::db)?
+            .ok_or_else(|| {
+                invalid(format!(
+                    "an exposure plan of this target refers to exposure template {source_template_id}, \
+                     which no longer exists; repair the catalog before moving the target"
+                ))
+            })?;
+        let mut values = vec![Value::Text(destination_profile_id.to_string())];
+        values.extend(settings);
+        let destination_template_id = conn
+            .query_row(&match_sql, rusqlite::params_from_iter(values), |row| {
+                row.get::<_, i64>(0)
+            })
+            .optional()
+            .map_err(AppError::db)?;
+        moves.push(TemplateMove {
+            source_template_id,
+            destination_template_id,
+            exposure_plan_ids,
+        });
+    }
+    Ok(moves)
 }
 
 fn count_rows(conn: &Connection, table: &str, parent: &str, id: i32) -> Result<usize, AppError> {
@@ -502,12 +853,14 @@ fn fingerprint(
     operation: &OrganizationOperation,
     source: &TargetIdentity,
     preview: &OrganizationPreview,
+    extra: &[u8],
 ) -> Result<String, AppError> {
     let mut digest = Sha256::new();
     digest.update(
         serde_json::to_vec(operation)
             .map_err(|error| AppError::InternalError(error.to_string()))?,
     );
+    digest.update(extra);
     let destination_target = preview.destination_target_id.unwrap_or(source.id);
     let destination_project = preview.destination_project_id.unwrap_or(source.project_id);
     for (table, parent, ids) in [
@@ -825,6 +1178,16 @@ fn apply_organization(
                 }
             }
         }
+        OrganizationOperation::MoveTarget { .. } => {
+            move_target(&tx, &plan, project_id)?;
+            tx.commit().map_err(AppError::db)?;
+            return Ok(OrganizationResult {
+                source_project_id: plan.source.project_id,
+                project_id,
+                target_id,
+                images_moved: plan.images.len(),
+            });
+        }
     }
     if has_column(&tx, "filtercadenceitem", "targetid")? {
         tx.execute(
@@ -862,10 +1225,82 @@ fn apply_organization(
     }
     tx.commit().map_err(AppError::db)?;
     Ok(OrganizationResult {
+        source_project_id: plan.source.project_id,
         project_id,
         target_id,
         images_moved: plan.images.len(),
     })
+}
+
+/// Move a target and its frames to `project_id`. A target that changes
+/// profile takes its exposure plans and flat history along, each plan on a
+/// template of the destination profile. A Planning plan stops managing the
+/// target: Planning's records of it as a panel go.
+fn move_target(
+    conn: &Connection,
+    plan: &OrganizationPlan,
+    project_id: i32,
+) -> Result<(), AppError> {
+    let target_id = plan.source.id;
+    conn.execute(
+        "UPDATE target SET projectid = ? WHERE Id = ?",
+        params![project_id, target_id],
+    )
+    .map_err(AppError::db)?;
+    conn.execute(
+        "UPDATE acquiredimage SET projectId = ? WHERE targetId = ?",
+        params![project_id, target_id],
+    )
+    .map_err(AppError::db)?;
+    let profile = &plan.destination_profile_id;
+    if *profile != plan.source.profile_id {
+        for template in &plan.template_moves {
+            let destination_template = match template.destination_template_id {
+                Some(id) => id,
+                None => clone_row(
+                    conn,
+                    "exposuretemplate",
+                    template.source_template_id,
+                    &[("profileId", Value::Text(profile.clone()))],
+                )?,
+            };
+            for exposure_plan in &template.exposure_plan_ids {
+                conn.execute(
+                    "UPDATE exposureplan SET exposureTemplateId = ? WHERE Id = ?",
+                    params![destination_template, exposure_plan],
+                )
+                .map_err(AppError::db)?;
+            }
+        }
+        if has_column(conn, "exposureplan", "profileId")? {
+            conn.execute(
+                "UPDATE exposureplan SET profileId = ? WHERE targetid = ?",
+                params![profile, target_id],
+            )
+            .map_err(AppError::db)?;
+        }
+        if has_column(conn, "flathistory", "profileId")?
+            && has_column(conn, "flathistory", "targetId")?
+        {
+            conn.execute(
+                "UPDATE flathistory SET profileId = ? WHERE targetId = ?",
+                params![profile, target_id],
+            )
+            .map_err(AppError::db)?;
+        }
+    }
+    if let Some(guid) = &plan.target_guid {
+        for table in [DIRECTOR_TARGET_TABLE, DIRECTOR_PLAN_TABLE] {
+            if has_table(conn, table)? {
+                conn.execute(
+                    &format!("DELETE FROM {} WHERE target_guid = ?", quote(table)),
+                    [guid],
+                )
+                .map_err(AppError::db)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn exposure_plan_ids(conn: &Connection, target_id: i32) -> Result<Vec<i64>, AppError> {
@@ -1410,5 +1845,412 @@ mod tests {
         let choices = destination_choices(&conn).unwrap();
         assert!(choices.projects.iter().any(|project| project.id == 20));
         assert!(choices.targets.iter().any(|target| target.id == 4));
+    }
+
+    fn move_target(
+        target_id: i32,
+        project_id: Option<i32>,
+        new_project_name: Option<&str>,
+    ) -> OrganizationOperation {
+        OrganizationOperation::MoveTarget {
+            target_id,
+            destination: TargetMoveDestination {
+                project_id,
+                new_project_name: new_project_name.map(str::to_string),
+            },
+        }
+    }
+
+    fn bad_request(result: Result<OrganizationPlan, AppError>) -> String {
+        match result {
+            Err(AppError::BadRequest(message)) => message,
+            Err(other) => panic!("expected a bad request, got {other:?}"),
+            Ok(_) => panic!("expected a bad request, got a plan"),
+        }
+    }
+
+    /// A target with no frames in project 1 (profile `p`), with one plan on
+    /// the Luminance template and one on an Ha template of profile `p`.
+    /// Profile `other` has a Luminance template with the same settings and
+    /// an Ha template with another gain.
+    fn add_frameless_target(conn: &Connection) {
+        conn.execute_batch(
+            "INSERT INTO target (Id, name, active, ra, dec, epochcode, rotation, roi, projectid, guid) VALUES
+                (5, 'NGC 2403', 1, 7.6, 65.6, 2, 0, 100, 1, 'frameless-target');
+             INSERT INTO exposuretemplate (Id, profileId, name, filtername, gain, offset, bin, readoutmode, guid) VALUES
+                (2, 'p', 'Ha 300', 'Ha', 100, 10, 1, 0, 'ha-template'),
+                (3, 'other', 'Lum', 'L', NULL, NULL, 1, NULL, 'other-lum-template'),
+                (4, 'other', 'Ha high gain', 'Ha', 200, 10, 1, 0, 'other-ha-template');
+             INSERT INTO exposureplan (Id, profileId, exposure, desired, acquired, accepted, targetid, exposureTemplateId, enabled, guid) VALUES
+                (20, 'p', 120, 40, 0, 0, 5, 1, 1, 'frameless-lum-plan'),
+                (21, 'p', 300, 20, 0, 0, 5, 2, 1, 'frameless-ha-plan'),
+                (22, 'p', 600, 10, 0, 0, 5, 2, 1, 'frameless-ha-long-plan');
+             INSERT INTO flathistory (Id, targetId, profileId) VALUES (3, 5, 'p');",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn moved_target_takes_its_frames_and_keeps_its_plans_within_the_profile() {
+        let mut conn = catalog();
+        let operation = move_target(1, Some(2), None);
+        let plan = plan_organization(&conn, &operation).unwrap();
+        assert_eq!(plan.preview.images_moved, 3);
+        assert_eq!(plan.preview.exposure_plans_moved, 1);
+        assert_eq!(plan.preview.destination_target_id, Some(1));
+        assert!(plan.preview.profile_change.is_none());
+        assert_eq!(
+            one::<i64>(&conn, "SELECT projectid FROM target WHERE Id = 1"),
+            1,
+            "preview must not move the target"
+        );
+        let result = preview_and_apply(&mut conn, operation);
+        assert_eq!(
+            (
+                result.source_project_id,
+                result.project_id,
+                result.target_id,
+                result.images_moved
+            ),
+            (1, 2, 1, 3)
+        );
+        assert_eq!(
+            one::<i64>(&conn, "SELECT projectid FROM target WHERE Id = 1"),
+            2
+        );
+        assert_eq!(
+            one::<i64>(
+                &conn,
+                "SELECT COUNT(*) FROM acquiredimage WHERE targetId = 1 AND projectId = 2"
+            ),
+            3
+        );
+        assert_eq!(
+            one::<String>(&conn, "SELECT targetid || '/' || profileId || '/' || exposureTemplateId || '/' || accepted FROM exposureplan WHERE Id = 1"),
+            "1/p/1/9",
+            "exposure plans stay as they were"
+        );
+        assert_eq!(
+            one::<i64>(
+                &conn,
+                "SELECT COUNT(*) FROM overrideexposureorderitem WHERE targetid = 1"
+            ),
+            1
+        );
+        assert_eq!(
+            one::<i64>(
+                &conn,
+                "SELECT COUNT(*) FROM filtercadenceitem WHERE targetid = 1"
+            ),
+            1
+        );
+        assert_eq!(
+            one::<String>(&conn, "SELECT profileId FROM flathistory WHERE Id = 1"),
+            "p"
+        );
+        assert_eq!(one::<i64>(&conn, "SELECT COUNT(*) FROM project"), 3);
+        assert_links(&conn);
+    }
+
+    #[test]
+    fn a_target_with_frames_cannot_change_profile() {
+        let conn = catalog();
+        let message = bad_request(plan_organization(&conn, &move_target(1, Some(3), None)));
+        assert!(message.contains("3 captured frames"), "{message}");
+        assert!(message.contains("its own profile"), "{message}");
+        assert_eq!(
+            one::<i64>(&conn, "SELECT projectid FROM target WHERE Id = 1"),
+            1
+        );
+    }
+
+    #[test]
+    fn a_frameless_target_changes_profile_reusing_and_copying_templates() {
+        let mut conn = catalog();
+        add_frameless_target(&conn);
+        let operation = move_target(5, Some(3), None);
+        let preview = plan_organization(&conn, &operation).unwrap().preview;
+        assert_eq!(preview.images_moved, 0);
+        assert_eq!(preview.exposure_plans_moved, 3);
+        assert_eq!(
+            (
+                preview.exposure_templates_reused,
+                preview.exposure_templates_copied
+            ),
+            (1, 1)
+        );
+        let change = preview.profile_change.unwrap();
+        assert_eq!(
+            (
+                change.from_profile_id.as_str(),
+                change.to_profile_id.as_str()
+            ),
+            ("p", "other")
+        );
+        let templates_before = one::<i64>(&conn, "SELECT COUNT(*) FROM exposuretemplate");
+
+        let result = preview_and_apply(&mut conn, operation);
+
+        assert_eq!((result.source_project_id, result.project_id), (1, 3));
+        assert_eq!(
+            one::<i64>(&conn, "SELECT projectid FROM target WHERE Id = 5"),
+            3
+        );
+        assert_eq!(
+            one::<String>(
+                &conn,
+                "SELECT profileId || '/' || exposureTemplateId FROM exposureplan WHERE Id = 20"
+            ),
+            "other/3",
+            "the matching Luminance template is reused"
+        );
+        let copied: i64 = one(
+            &conn,
+            "SELECT exposureTemplateId FROM exposureplan WHERE Id = 21",
+        );
+        assert_eq!(
+            one::<i64>(
+                &conn,
+                "SELECT exposureTemplateId FROM exposureplan WHERE Id = 22"
+            ),
+            copied,
+            "plans that shared a template share its copy"
+        );
+        assert!(![2, 4].contains(&copied));
+        assert_eq!(
+            one::<i64>(&conn, "SELECT COUNT(*) FROM exposuretemplate"),
+            templates_before + 1
+        );
+        let template: (String, String, i64, String) = conn
+            .query_row(
+                "SELECT profileId, filtername, gain, guid FROM exposuretemplate WHERE Id = ?",
+                [copied],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (template.0.as_str(), template.1.as_str(), template.2),
+            ("other", "Ha", 100)
+        );
+        assert_ne!(template.3, "ha-template");
+        assert_eq!(
+            one::<String>(&conn, "SELECT profileId FROM exposuretemplate WHERE Id = 2"),
+            "p",
+            "the source template stays in its profile"
+        );
+        assert_eq!(
+            one::<String>(&conn, "SELECT profileId FROM exposureplan WHERE Id = 21"),
+            "other"
+        );
+        assert_eq!(
+            one::<String>(&conn, "SELECT profileId FROM flathistory WHERE Id = 3"),
+            "other"
+        );
+        assert_eq!(
+            one::<String>(&conn, "SELECT profileId FROM flathistory WHERE Id = 1"),
+            "p"
+        );
+        assert_links(&conn);
+    }
+
+    #[test]
+    fn a_target_moves_to_a_new_project_copied_from_its_own() {
+        let mut conn = catalog();
+        let message = bad_request(plan_organization(
+            &conn,
+            &move_target(1, None, Some(" destination project ")),
+        ));
+        assert!(message.contains("already exists"), "{message}");
+        let preview = plan_organization(&conn, &move_target(1, None, Some("Spring campaign")))
+            .unwrap()
+            .preview;
+        assert_eq!(preview.destination_project_id, None);
+        assert!(preview
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("starts inactive")));
+
+        let result = preview_and_apply(&mut conn, move_target(1, None, Some("Spring campaign")));
+
+        assert!(result.project_id > 3);
+        let project: (String, String, i64, String) = conn
+            .query_row(
+                "SELECT name, profileId, state, guid FROM project WHERE Id = ?",
+                [result.project_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (project.0.as_str(), project.1.as_str(), project.2),
+            ("Spring campaign", "p", 2)
+        );
+        assert_ne!(project.3, "source-project");
+        let rules: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ruleweight WHERE projectid = ?",
+                [result.project_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(rules, 1);
+        assert_eq!(
+            one::<i64>(&conn, "SELECT COUNT(*) FROM ruleweight WHERE projectid = 1"),
+            1,
+            "the source project keeps its rule weights"
+        );
+        assert_eq!(result.target_id, 1);
+        let moved: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM acquiredimage WHERE targetId = 1 AND projectId = ?",
+                [result.project_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(moved, 3);
+        assert_eq!(
+            one::<String>(&conn, "SELECT guid FROM target WHERE Id = 1"),
+            "source-target",
+            "the target keeps its identity"
+        );
+        assert_links(&conn);
+    }
+
+    #[test]
+    fn a_name_clash_or_unclear_destination_is_refused() {
+        let conn = catalog();
+        conn.execute("UPDATE target SET name = ' m81 ' WHERE Id = 1", [])
+            .unwrap();
+        let message = bad_request(plan_organization(&conn, &move_target(1, Some(2), None)));
+        assert!(message.contains("Merge target"), "{message}");
+        assert!(message.contains("Destination project"), "{message}");
+        bad_request(plan_organization(&conn, &move_target(1, Some(1), None)));
+        bad_request(plan_organization(&conn, &move_target(1, None, None)));
+        bad_request(plan_organization(
+            &conn,
+            &move_target(1, Some(2), Some("Both")),
+        ));
+        bad_request(plan_organization(&conn, &move_target(1, Some(99), None)));
+        bad_request(plan_organization(&conn, &move_target(99, Some(2), None)));
+        // A target with another name moves; only names collide.
+        conn.execute("UPDATE target SET name = 'M81 alias' WHERE Id = 1", [])
+            .unwrap();
+        plan_organization(&conn, &move_target(1, Some(2), None)).unwrap();
+    }
+
+    #[test]
+    fn a_stale_target_move_preview_is_refused() {
+        let mut conn = catalog();
+        let operation = move_target(1, Some(2), None);
+        let fingerprint = plan_organization(&conn, &operation)
+            .unwrap()
+            .preview
+            .fingerprint;
+        conn.execute("UPDATE exposureplan SET desired = 99 WHERE Id = 1", [])
+            .unwrap();
+        assert!(matches!(
+            apply_organization(
+                &mut conn,
+                &OrganizationApplyRequest {
+                    operation,
+                    expected_fingerprint: fingerprint
+                }
+            ),
+            Err(AppError::Conflict(_))
+        ));
+        assert_eq!(
+            one::<i64>(&conn, "SELECT projectid FROM target WHERE Id = 1"),
+            1
+        );
+
+        // A new matching template in the destination profile changes what
+        // the move would do, so it needs a new preview too.
+        add_frameless_target(&conn);
+        let operation = move_target(5, Some(3), None);
+        let fingerprint = plan_organization(&conn, &operation)
+            .unwrap()
+            .preview
+            .fingerprint;
+        conn.execute(
+            "INSERT INTO exposuretemplate (Id, profileId, name, filtername, gain, offset, bin, readoutmode, guid)
+             VALUES (9, 'other', 'Ha 300', 'Ha', 100, 10, NULL, 0, 'late-template')",
+            [],
+        )
+        .unwrap();
+        assert!(matches!(
+            apply_organization(
+                &mut conn,
+                &OrganizationApplyRequest {
+                    operation: operation.clone(),
+                    expected_fingerprint: fingerprint
+                }
+            ),
+            Err(AppError::Conflict(_))
+        ));
+        let preview = plan_organization(&conn, &operation).unwrap().preview;
+        assert_eq!(
+            (
+                preview.exposure_templates_reused,
+                preview.exposure_templates_copied
+            ),
+            (2, 0),
+            "a blank binning matches binning 1"
+        );
+    }
+
+    #[test]
+    fn a_moved_target_leaves_its_planning_panel() {
+        let mut conn = catalog();
+        conn.execute_batch(
+            "CREATE TABLE psf_guard_director_target(
+                target_guid TEXT PRIMARY KEY NOT NULL, project_guid TEXT NOT NULL,
+                panel_id TEXT NOT NULL, framing_revision INTEGER NOT NULL);
+             CREATE TABLE psf_guard_director_plan(
+                exposureplan_guid TEXT PRIMARY KEY NOT NULL, target_guid TEXT NOT NULL,
+                contribution_id TEXT NOT NULL, objective_id TEXT NOT NULL, bandpass_id TEXT NOT NULL,
+                purpose TEXT NOT NULL, required_frames INTEGER NOT NULL, plan_revision INTEGER NOT NULL);
+             INSERT INTO psf_guard_director_target VALUES
+                ('source-target', 'source-project', 'r1c1', 1),
+                ('destination-target', 'destination-project', 'r1c1', 1);
+             INSERT INTO psf_guard_director_plan VALUES
+                ('source-plan', 'source-target', 'c', 'o', 'L', 'light', 30, 1),
+                ('destination-plan', 'destination-target', 'c', 'o', 'L', 'light', 50, 1);",
+        )
+        .unwrap();
+        let preview = plan_organization(&conn, &move_target(1, Some(2), None))
+            .unwrap()
+            .preview;
+        assert_eq!(preview.planning_panel_id.as_deref(), Some("r1c1"));
+        assert!(preview
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("panel r1c1")));
+
+        preview_and_apply(&mut conn, move_target(1, Some(2), None));
+
+        assert_eq!(
+            one::<String>(
+                &conn,
+                "SELECT group_concat(target_guid) FROM psf_guard_director_target"
+            ),
+            "destination-target"
+        );
+        assert_eq!(
+            one::<String>(
+                &conn,
+                "SELECT group_concat(exposureplan_guid) FROM psf_guard_director_plan"
+            ),
+            "destination-plan"
+        );
+        // A move reports a panel only while Planning has a record of one.
+        let preview = plan_organization(&conn, &move_target(3, Some(1), None))
+            .unwrap()
+            .preview;
+        assert_eq!(preview.planning_panel_id.as_deref(), Some("r1c1"));
+        conn.execute("DELETE FROM psf_guard_director_target", [])
+            .unwrap();
+        let preview = plan_organization(&conn, &move_target(3, Some(1), None))
+            .unwrap()
+            .preview;
+        assert_eq!(preview.planning_panel_id, None);
     }
 }
