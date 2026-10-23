@@ -1,4 +1,7 @@
 export const CLOSED_PROJECT_STATE = 3;
+/** Reopen sets an archived project Inactive: it is back in the Library, and
+ *  Target Scheduler does not select it until someone sets it Active. */
+export const INACTIVE_PROJECT_STATE = 2;
 export const RECENT_PROJECT_SECONDS = 7 * 24 * 60 * 60;
 const MONTH_SECONDS = 30 * 24 * 60 * 60;
 

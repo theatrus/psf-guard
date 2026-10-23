@@ -2283,7 +2283,7 @@ export const apiClient = {
       dbPath(dbId, `/projects/${projectId}`),
       typeof request === 'string' ? { name: request } : request
     );
-    if (!data.data) throw new Error(data.error || 'Failed to rename project');
+    if (!data.data) throw new Error(data.error || 'Failed to update project');
   },
 
   /** Rename a target and/or move it to another project (same profile). */

@@ -87,7 +87,7 @@ export const THEME_ALLOWLIST: { colours: ThemeFindings; states: ThemeFindings; i
     ],
     "components/Overview.css": [
       ".overview .stat-row .active (.active)",
-      ".project-card.is-current, .project-archive-item[aria-current='true'] (.is-current)",
+      ".project-card.is-current, .project-archive-item.is-current (.is-current)",
       ".target-state.active (.active)"
     ],
     "components/director/DirectorPage.css": [

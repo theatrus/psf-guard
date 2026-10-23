@@ -1,13 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { setDisplayPreferences } from '../../hooks/useDisplayPreferences';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import type { ReactNode } from 'react';
 import { http, HttpResponse } from 'msw';
 import { server } from '../../test/msw-server';
 import Overview from '../Overview';
-import { CLOSED_PROJECT_STATE } from '../../utils/projectNavigation';
+import { CLOSED_PROJECT_STATE, INACTIVE_PROJECT_STATE } from '../../utils/projectNavigation';
 
 function ok(data: unknown) {
   return HttpResponse.json({ success: true, data, error: null, status: 'ready' });
@@ -126,7 +126,39 @@ describe('Overview return scope', () => {
       'data-current-project',
       'true'
     );
-    expect(archived.closest('.project-archive-item')).toHaveAttribute('aria-current', 'true');
+    expect(archived.closest('.project-archive-item')).toHaveClass('is-current');
+    // A screen reader hears it on the row's open button, which takes focus.
+    expect(archived.closest('button')).toHaveAttribute('aria-current', 'true');
     await waitFor(() => expect(scrollIntoView).toHaveBeenCalledTimes(1));
+  });
+
+  it('reopens an archived project as Inactive and says so beside the archive', async () => {
+    let state = CLOSED_PROJECT_STATE;
+    const writes: unknown[] = [];
+    useOverviewData([project(1, 'Sh2 86')]);
+    server.use(
+      http.get('/api/db/:dbId/projects/overview', () => ok([project(1, 'Sh2 86'), project(9, 'Old survey', state)])),
+      http.put('/api/db/:dbId/projects/:projectId', async ({ request, params }) => {
+        expect(params).toMatchObject({ dbId: 'test', projectId: '9' });
+        const body = await request.json() as { state: number };
+        writes.push(body);
+        state = body.state;
+        return ok({ updated: true });
+      }),
+    );
+    Element.prototype.scrollIntoView = vi.fn();
+
+    render(<Overview />, { wrapper: wrapper('/?db=test&project=9') });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Reopen Old survey on Demo catalog' }));
+    expect(await screen.findByRole('status')).toHaveTextContent('Old survey is now Inactive on Demo catalog.');
+    expect(screen.getByRole('status')).toHaveFocus();
+    expect(writes).toEqual([{ state: INACTIVE_PROJECT_STATE }]);
+    // Back in the list, the project leaves the archive.
+    await waitFor(() => expect(document.querySelector('.project-archive')).toBeNull());
+    expect(screen.getByText('Old survey').closest('.project-card')).not.toBeNull();
+    // The notice outlasts the archive it came from, and keeps focus.
+    expect(screen.getByRole('status')).toHaveTextContent('Old survey is now Inactive on Demo catalog.');
+    expect(screen.getByRole('status')).toHaveFocus();
   });
 });

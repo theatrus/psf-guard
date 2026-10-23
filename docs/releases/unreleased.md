@@ -6,6 +6,13 @@
 
 ## Changes
 
+- You can reopen an archived project from the Library. Open **Archived
+  projects** and click **Reopen** beside the project. PSF Guard sets it
+  Inactive in Target Scheduler, so it returns to the project list but is not
+  scheduled until you set it Active. A plan with nothing captured yet has
+  **Reopen** while it is Closed on any rig; it sets the project Inactive on
+  each of those rigs. Reopen appears for accounts that can edit.
+
 - A color preview can run BlurXTerminator and NoiseXTerminator on its color
   channels together. In **Processing stack**, turn the tools on under
   **RC-Astro on the color channels together**. They run on the aligned channels before color

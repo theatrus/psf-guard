@@ -170,4 +170,56 @@ describe("The Library's plans with nothing captured yet", () => {
     expect(view.container).toBeEmptyDOMElement();
     expect(plansCall).not.toHaveBeenCalled();
   });
+
+  const closedLink = (slug: string, id: number, state: number) => ({ catalog_slug: slug, catalog_name: slug.toUpperCase(), rig, source_project_guid: `g${id}`, source_row_id: id, source_name: 'M31', source_state: state, earliest_capture_s: null, latest_capture_s: null, targets: [] });
+
+  it('reopens a plan Closed on every rig as Inactive on each rig', async () => {
+    const closed = row(record, { links: [closedLink('c925', 3, 3), closedLink('redcat', 4, 3)] });
+    const writes: string[] = [];
+    server.use(
+      http.get('/api/director/v1/plans', () => HttpResponse.json(ok(list(writes.length === 2 ? [] : [closed])))),
+      http.put('/api/db/:dbId/projects/:projectId', async ({ request, params }) => {
+        writes.push(`${params.dbId}:${params.projectId}=${(await request.json() as { state: number }).state}`);
+        return HttpResponse.json(ok({ updated: true }));
+      }),
+    );
+    mount(true, { show: 'closed' });
+    fireEvent.click(await screen.findByRole('button', { name: 'Reopen M31' }));
+    const notice = await screen.findByText('M31 is now Inactive on C925 and REDCAT.');
+    // The row leaves the Closed list, so focus moves to the notice.
+    expect(notice).toHaveFocus();
+    expect(writes.sort()).toEqual(['c925:3=2', 'redcat:4=2']);
+    await waitFor(() => expect(screen.queryByRole('link', { name: 'Open M31' })).not.toBeInTheDocument());
+  });
+
+  it('reports a rig that could not reopen and offers Reopen again there', async () => {
+    let links = [closedLink('c925', 3, 3), closedLink('redcat', 4, 3)];
+    server.use(
+      http.get('/api/director/v1/plans', () => HttpResponse.json(ok(list([row(record, { links })])))),
+      http.put('/api/db/:dbId/projects/:projectId', ({ params }) => {
+        if (params.dbId === 'redcat') return HttpResponse.json({ success: false, data: null, error: 'database is locked' }, { status: 500 });
+        links = [closedLink('c925', 3, 2), closedLink('redcat', 4, 3)];
+        return HttpResponse.json(ok({ updated: true }));
+      }),
+    );
+    const view = mount(true, { show: 'closed' });
+    fireEvent.click(await screen.findByRole('button', { name: 'Reopen M31' }));
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'M31 is now Inactive on C925. Could not reopen it on REDCAT: database is locked');
+    // No longer Closed on every rig, the plan shows under All, where Reopen
+    // tries the rig that is still Closed.
+    view.rerender(<LibraryPlans search="" show="all" listed={new Set()} />);
+    expect(await screen.findByRole('button', { name: 'Reopen M31' })).toHaveAttribute(
+      'title', expect.stringContaining('Inactive on REDCAT, where it is Closed'));
+  });
+
+  it('offers Reopen to writers only', async () => {
+    server.use(http.get('/api/director/v1/plans', () => HttpResponse.json(ok(list([row(record, { links: [closedLink('c925', 3, 3)] })])))));
+    const view = mount(false, { show: 'closed' });
+    expect(await screen.findByRole('link', { name: 'Open M31' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Reopen M31' })).not.toBeInTheDocument();
+    view.unmount();
+    mount(true, { show: 'closed' });
+    expect(await screen.findByRole('button', { name: 'Reopen M31' })).toBeInTheDocument();
+  });
 });

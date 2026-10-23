@@ -321,34 +321,55 @@
 .project-archive-item {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 9px 11px;
+  gap: 8px;
   border: 1px solid var(--color-border-secondary);
   border-radius: 6px;
   background: var(--color-bg-surface);
   color: var(--color-text-secondary);
+}
+
+.project-archive-open {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 9px 11px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
   cursor: pointer;
+  font: inherit;
   text-align: left;
 }
 
-.project-archive-item:hover {
+.project-archive-open:disabled {
+  cursor: default;
+}
+
+.project-archive-item > .library-reopen {
+  margin-right: 8px;
+}
+
+.project-archive-item:has(> .project-archive-open:not(:disabled):hover) {
   border-color: var(--color-border-tertiary);
   background: var(--color-bg-elevated);
 }
 
-.project-archive-item > span:first-child {
+.project-archive-open > span:first-child {
   display: grid;
   gap: 2px;
 }
 
-.project-archive-item small,
-.project-archive-item > span:last-child {
+.project-archive-open small,
+.project-archive-open > span:last-child {
   color: var(--color-text-muted);
   font-size: 0.72rem;
 }
 
-.project-archive-item:focus-visible,
+.project-archive-open:focus-visible,
 .project-archive-toggle:focus-visible {
   outline: 2px solid var(--state-focus-border);
   outline-offset: 2px;
@@ -679,10 +700,10 @@
 
 /* The project the user was working in before they opened the Overview. The
    ring says "you were here" without competing with the new-images accent.
-   The card is a container, so it keeps a class; its open button and the
-   archive row say aria-current. */
+   The card and the archive row are containers, so they keep a class; their
+   open buttons carry aria-current. */
 .project-card.is-current,
-.project-archive-item[aria-current='true'] {
+.project-archive-item.is-current {
   border-color: var(--state-on-border);
   box-shadow: 0 0 0 2px var(--state-on-bg);
 }
@@ -1225,7 +1246,7 @@
     padding: 12px;
   }
 
-  .project-archive-item {
+  .project-archive-open {
     align-items: flex-start;
     flex-direction: column;
   }
@@ -1416,6 +1437,12 @@
   margin: 0 0 12px;
   color: var(--color-text-secondary);
   font-size: 0.9rem;
+}
+
+/* Reopen moves focus to its notice. */
+.library-narrowed:focus-visible {
+  outline: 2px solid var(--state-focus-border);
+  outline-offset: 2px;
 }
 
 .library-link-button {

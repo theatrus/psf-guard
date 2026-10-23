@@ -1,18 +1,23 @@
-import { useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Check, Plus, RefreshCw, X } from 'lucide-react';
 import { apiClient } from '../../api/client';
-import type { DirectorIdentity, DirectorPlanRow } from '../../api/directorTypes';
+import type { DirectorIdentity, DirectorPlanLink, DirectorPlanRow } from '../../api/directorTypes';
 import { useAccess } from '../../auth/access';
 import { usePlans } from '../header/useCurrentPlan';
 import { waitingPlanMatchesShow, type LibraryShow } from '../libraryShow';
 import { identityId } from './identityId';
 import { matchesSearch } from './planFilters';
 import PlanRow from './PlanRow';
+import { CLOSED_PROJECT_STATE, INACTIVE_PROJECT_STATE } from '../../utils/projectNavigation';
 import '../projectCard.css';
 import './DirectorPage.css';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Director request failed';
+
+/** The rigs where a plan's project is Closed, which Reopen sets Inactive. */
+const closedLinks = (row: DirectorPlanRow): DirectorPlanLink[] =>
+  row.links.filter(link => link.source_row_id !== null && link.source_state === CLOSED_PROJECT_STATE);
 
 interface Edit { record: DirectorIdentity; creating: boolean }
 
@@ -42,6 +47,37 @@ export default function LibraryPlans({ search, show, listed, dbFilter = null, in
       void client.invalidateQueries({ queryKey: ['directorPlans'] });
     },
     onSettled: () => { submitting.current = false; },
+  });
+  // Reopen sets each rig's Closed project Inactive. Every rig is tried, so
+  // one failure does not stop the rest, and the notice reports each outcome.
+  const noticeRef = useRef<HTMLParagraphElement>(null);
+  const focusNotice = useRef(false);
+  useEffect(() => {
+    if (!notice || !focusNotice.current) return;
+    focusNotice.current = false;
+    noticeRef.current?.focus();
+  }, [notice]);
+  const reopen = useMutation({
+    retry: false,
+    mutationFn: async (row: DirectorPlanRow) => {
+      const closed = closedLinks(row);
+      const results = await Promise.allSettled(closed.map(link =>
+        apiClient.updateProject(link.catalog_slug, link.source_row_id!, { state: INACTIVE_PROJECT_STATE })));
+      return closed.map((link, index) => ({ link, result: results[index] }));
+    },
+    onSuccess: (outcomes, row) => {
+      const reopened = outcomes.filter(outcome => outcome.result.status === 'fulfilled').map(outcome => outcome.link.catalog_name);
+      const failures = outcomes.flatMap(outcome => outcome.result.status === 'rejected'
+        ? [`Could not reopen it on ${outcome.link.catalog_name}: ${message(outcome.result.reason)}`] : []);
+      const done = reopened.length ? [`${row.project.name} is now Inactive on ${reopened.join(' and ')}.`] : [`Could not reopen ${row.project.name}.`];
+      focusNotice.current = true;
+      setNotice([...done, ...failures].join(' '));
+    },
+    // The plan list must show the new states before Reopen is offered again.
+    onSettled: (_, __, row) => Promise.all([
+      client.invalidateQueries({ queryKey: ['directorPlans'] }),
+      ...row.links.map(link => client.invalidateQueries({ queryKey: ['db', link.catalog_slug] })),
+    ]),
   });
   if (!plans.enabled) return null;
   const begin = (next: Edit) => { save.reset(); setValidation(''); setNotice(''); setName(next.record.name); setEdit(next); };
@@ -79,7 +115,9 @@ export default function LibraryPlans({ search, show, listed, dbFilter = null, in
   // Nothing to show and nothing to do: stay out of the Library.
   if (!canWrite && shown.length === 0 && !plans.error && !plans.query.data?.warnings.length) return null;
   const item = (row: DirectorPlanRow) => <li key={row.project.id} className="director-plan">
-    <PlanRow row={row} href={plans.hrefFor(row)} canWrite={canWrite} editing={!!edit} onRename={() => begin({ creating: false, record: row.project })} />
+    <PlanRow row={row} href={plans.hrefFor(row)} canWrite={canWrite} editing={!!edit} onRename={() => begin({ creating: false, record: row.project })}
+      reopenOn={closedLinks(row).map(link => link.catalog_name)} reopenDisabled={reopen.isPending}
+      onReopen={() => { setNotice(''); reopen.mutate(row); }} reopening={reopen.isPending && reopen.variables?.project.id === row.project.id} />
     {edit?.record.id === row.project.id && !edit.creating && form}
   </li>;
   return <section className="director-page director-embedded library-plans" aria-label="Plans with nothing captured yet">
@@ -93,7 +131,7 @@ export default function LibraryPlans({ search, show, listed, dbFilter = null, in
     <p className="director-muted">Plans appear here until a rig captures the first frame. After that, they appear in the project list.</p>
     {plans.query.data?.warnings.map(warning => <p key={warning} className="director-error" role="alert">{warning}</p>)}
     {incomplete && <p className="director-muted">Some databases could not be read, so their plans are left out here.</p>}
-    {notice && <p role="status">{notice}</p>}
+    {notice && <p ref={noticeRef} tabIndex={-1} className="library-plans-notice" role="status">{notice}</p>}
     {edit?.creating && form}
     {plans.loading && <p role="status">Loading plans...</p>}
     {plans.error && <p className="director-error" role="alert">{message(plans.query.error)}</p>}
