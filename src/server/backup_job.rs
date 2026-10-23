@@ -1238,7 +1238,7 @@ pub async fn download_backup(
         .await
         .map_err(|_| AppError::NotFoundMessage("That backup is no longer there.".into()))?;
     let length = file.metadata().await.map(|meta| meta.len()).ok();
-    let body = axum::body::Body::from_stream(tokio_util::io::ReaderStream::new(file));
+    let body = crate::server::file_body::file_body(file);
     let mut response = Response::builder()
         .header(header::CONTENT_TYPE, "application/zip")
         .header(

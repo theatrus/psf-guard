@@ -6,8 +6,8 @@ use super::{
     PREVIEW_MAX_DIMENSION,
 };
 use crate::concurrency::Stop;
+use crate::server::file_body::file_body;
 use axum::{
-    body::Body,
     extract::{Path, Query},
     http::{
         header::{CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE},
@@ -31,7 +31,6 @@ use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
-use tokio_util::io::ReaderStream;
 
 use crate::server::api::ApiResponse;
 use crate::server::extract::DbContext;
@@ -2717,7 +2716,7 @@ pub async fn get_stack_stretch_image(
         .header(CONTENT_TYPE, "image/png")
         .header(CONTENT_LENGTH, length)
         .header(CACHE_CONTROL, "private, max-age=31536000, immutable")
-        .body(Body::from_stream(ReaderStream::new(file)))
+        .body(file_body(file))
         .map_err(|error| {
             AppError::InternalError(format!("Failed to build stretched PNG response: {error}"))
         })
@@ -2768,7 +2767,7 @@ pub async fn download_stack_stretch_fits(
             format!("attachment; filename=\"{filename}\""),
         )
         .header(CACHE_CONTROL, "private, max-age=31536000, immutable")
-        .body(Body::from_stream(ReaderStream::new(file)))
+        .body(file_body(file))
         .map_err(|error| {
             AppError::InternalError(format!("Failed to build processed FITS response: {error}"))
         })
@@ -2800,7 +2799,7 @@ pub async fn get_stack_stretch_stars_image(
         .header(CONTENT_TYPE, "image/png")
         .header(CONTENT_LENGTH, length)
         .header(CACHE_CONTROL, "private, max-age=31536000, immutable")
-        .body(Body::from_stream(ReaderStream::new(file)))
+        .body(file_body(file))
         .map_err(|error| {
             AppError::InternalError(format!("Failed to build stars PNG response: {error}"))
         })
@@ -2837,7 +2836,7 @@ pub async fn download_stack_stretch_stars_fits(
             format!("attachment; filename=\"{filename}\""),
         )
         .header(CACHE_CONTROL, "private, max-age=31536000, immutable")
-        .body(Body::from_stream(ReaderStream::new(file)))
+        .body(file_body(file))
         .map_err(|error| {
             AppError::InternalError(format!("Failed to build stars FITS response: {error}"))
         })

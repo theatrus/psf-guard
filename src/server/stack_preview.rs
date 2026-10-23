@@ -59,6 +59,7 @@ use mono_build::{
 use render::preview_needs_render;
 use render::queue_preview_render;
 
+use crate::server::file_body::file_body;
 pub(super) use crate::server::job_line::Entry;
 use crate::server::job_line::{DispatchRules, Lease, Tier, Turn};
 pub(super) use crate::server::job_line::{Lane, LineWork, Needs, Submission, Task, Worker};
@@ -79,7 +80,6 @@ use std::fmt::Write as _;
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio_util::io::ReaderStream;
 
 use crate::acquisition_context::FramingResolver;
 use crate::db::Database;
@@ -2237,7 +2237,7 @@ pub async fn get_stack_preview_image(
         .header(CONTENT_TYPE, "image/png")
         .header(CONTENT_LENGTH, length)
         .header(CACHE_CONTROL, "private, max-age=31536000, immutable")
-        .body(Body::from_stream(ReaderStream::new(file)))
+        .body(file_body(file))
         .map_err(|error| {
             AppError::InternalError(format!("Failed to build stack PNG response: {error}"))
         })
@@ -2290,7 +2290,7 @@ pub async fn download_stack_preview_fits(
             format!("attachment; filename=\"{filename}\""),
         )
         .header(CACHE_CONTROL, "private, max-age=31536000, immutable")
-        .body(Body::from_stream(ReaderStream::new(file)))
+        .body(file_body(file))
         .map_err(|error| {
             AppError::InternalError(format!("Failed to build stack FITS response: {error}"))
         })
