@@ -5,6 +5,7 @@ import { apiClient } from '../../api/client';
 import type { DirectorPlanDeletion, DirectorPlanDeletionOutcome } from '../../api/directorTypes';
 import Dialog from '../Dialog';
 import { listNames } from './listNames';
+import { collaborationName, coordinatorPlan, leaveChanges } from './collaborationLeaveText';
 import '../ProjectDeleteDialog.css';
 
 interface Props {
@@ -23,9 +24,10 @@ const deletedOn = (names: string[]) =>
   `The project${names.length === 1 ? '' : 's'} on ${listNames(names)} ${names.length === 1 ? 'was' : 'were'} deleted`;
 
 /** Delete a plan with nothing captured: its project in each database it
- *  links, then the plan with its framing and drafts. The server refuses a
- *  plan whose rigs captured frames, and a delete whose preview is out of
- *  date, which answers with a new one. */
+ *  links, then the plan with its framing and drafts. A plan from a
+ *  collaboration leaves it first. The server refuses a plan whose rigs
+ *  captured or reported frames, and a delete whose preview is out of date,
+ *  which answers with a new one. */
 export default function PlanDeleteDialog({ planId, name, onClose, onDeleted }: Props) {
   const client = useQueryClient();
   // What the last attempt left: a newer preview, or an error, and the
@@ -102,6 +104,13 @@ export default function PlanDeleteDialog({ planId, name, onClose, onDeleted }: P
               </li>
             ))}
           </ul>
+          {preview.collaboration && <div className="project-delete-note" role="note" aria-label="Collaboration">
+            <p>This plan comes from {collaborationName(preview.collaboration)}. Deleting it leaves the collaboration first:</p>
+            <ul className="project-delete-list">
+              {leaveChanges(preview.collaboration).map(change => <li key={change}>{change}</li>)}
+            </ul>
+            <p>{coordinatorPlan(preview.collaboration)}</p>
+          </div>}
           {preview.databases.map(database => database.project && (database.synced_from
             ? <p key={`note-${database.source_project_guid}`} className="project-delete-note">
                 {database.catalog_name} copies from <code>{database.synced_from}</code>. The project stays in that

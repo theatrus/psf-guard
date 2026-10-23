@@ -29,7 +29,8 @@ pub struct LinkedPlan {
     pub name: String,
     /// Databases the plan links, this one included.
     pub databases: u32,
-    /// The plan came from a collaboration. Its projects cannot be deleted.
+    /// The plan came from a collaboration. Its projects cannot be deleted
+    /// until the plan leaves it.
     pub from_collaboration: bool,
 }
 
@@ -93,6 +94,17 @@ async fn protected(state: &AppState) -> Result<BTreeSet<String>, AppError> {
         }),
         None => Ok(BTreeSet::new()),
     }
+}
+
+/// Why a project whose plan came from a collaboration cannot be deleted,
+/// and where to go next. The Library's dialog shows the same text.
+fn collaboration_refusal(plan: &str) -> String {
+    format!(
+        "This project belongs to {plan}, a plan from a collaboration. Open the plan and choose \
+         Leave collaboration under Collaboration assignments, then delete the project here. If \
+         the plan has nothing captured, you can delete the whole plan under Plans with nothing \
+         captured yet instead."
+    )
 }
 
 /// The plan that links the project, read only when the project's GUID is
@@ -180,14 +192,12 @@ pub async fn remove(
     require_database_management_allowed(&state)?;
     let protected = protected(&state).await?;
     // A plan from a collaboration keeps its projects: the coordinator
-    // assigned them. Checked before anything is deleted.
+    // assigned them. Leaving the collaboration makes the plan an ordinary
+    // one. Checked before anything is deleted.
     let before = read_plan(&ctx, project_id, BTreeSet::new()).await?;
     let linked = linked_plan(&state, &ctx, &before).await?;
-    if linked.as_ref().is_some_and(|plan| plan.from_collaboration) {
-        return Err(AppError::Conflict(
-            "This project belongs to a plan from a collaboration, so it cannot be deleted here."
-                .into(),
-        ));
+    if let Some(plan) = linked.as_ref().filter(|plan| plan.from_collaboration) {
+        return Err(AppError::Conflict(collaboration_refusal(&plan.name)));
     }
 
     let context = ctx.0.clone();

@@ -6,12 +6,21 @@
 //! digest deletes the projects, one database at a time, then the plan. A
 //! rig that captured frames keeps the plan: those projects are deleted from
 //! the Library, one database at a time, where the frames are counted.
+//!
+//! A plan from a collaboration leaves it in the same meta-store transaction
+//! that deletes the plan, then the coordinator is told, as Leave
+//! collaboration does (see `collaboration_leave`). Frames queued for or
+//! sent in a report keep the plan until the person leaves on purpose.
 
+use super::collaboration_auth::leave as remote;
+use super::collaboration_leave::CollaborationView;
 use super::*;
 use crate::commands::project_removal;
+use crate::server::auth::RequestAccess;
 use crate::server::database_context::{
     open_scheduler_connection, open_scheduler_connection_with_flags, DatabaseContext,
 };
+use axum::{http::HeaderMap, Extension};
 use rusqlite::OptionalExtension;
 use std::collections::BTreeSet;
 
@@ -47,6 +56,8 @@ pub(super) struct LinkedProject {
 pub(super) struct PlanDeletionPreview {
     name: String,
     databases: Vec<LinkedDatabase>,
+    /// The collaboration the plan came from, which deleting leaves.
+    collaboration: Option<CollaborationView>,
     /// Why the plan cannot be deleted, or `None` when it can.
     refusal: Option<String>,
 }
@@ -65,6 +76,10 @@ pub(super) enum DeletionOutcome {
         name: String,
         /// Databases whose project was deleted.
         databases: Vec<String>,
+        /// What telling the coordinator did, for a plan from a
+        /// collaboration.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        coordinator: Option<remote::Told>,
     },
     /// The plan or a project changed since the preview, so the plan stays.
     /// The databases in `deleted` lost their project already.
@@ -91,7 +106,7 @@ async fn read_preview(
     service: &Arc<Service>,
     id: Uuid,
 ) -> Result<(PlanDeletionPreview, Vec<Target>), Error> {
-    let (plan, links, imported) = service
+    let (plan, links, collaboration, linked) = service
         .clone()
         .query(move |store| {
             let plan = store.project(id)?;
@@ -100,29 +115,55 @@ async fn read_preview(
                 let rig = store.catalog_rig(catalog)?.map(|binding| binding.rig.name);
                 links.push((catalog, guid, rig));
             }
-            let imported = store.plan_from_collaboration(id)?;
-            Ok((plan, links, imported))
+            let collaboration = store.plan_collaboration(id)?;
+            let linked = super::collaboration_leave::linked_databases(store, id)?;
+            Ok((plan, links, collaboration, linked))
         })
         .await?;
     let plan = plan.ok_or(Error::Missing)?;
     let catalogs = state.all_databases();
     let instance = service.instance_id;
-    let read = blocking(move || {
+    let imports = collaboration
+        .as_ref()
+        .map(|collaboration| collaboration.import_ids.clone())
+        .unwrap_or_default();
+    let (read, open) = blocking(move || {
         let identified = identified_catalogs(&catalogs, instance);
-        links
+        // Deleting the projects deletes their assignments; the count is
+        // for the dialog. A database that cannot be read is a problem the
+        // links below report.
+        let open = super::collaboration_leave::read_assignments(&identified, linked, &imports)
+            .map(|found| found.iter().map(|(_, open)| open).sum())
+            .unwrap_or(0);
+        let read = links
             .into_iter()
             .map(|(catalog, guid, rig)| read_link(&identified, catalog, guid, rig))
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>();
+        (read, open)
     })
     .await?;
     let (databases, targets): (Vec<_>, Vec<_>) = read.into_iter().unzip();
-    let refusal = if imported {
-        Some("This plan came from a collaboration, so it cannot be deleted here.".into())
-    } else if let Some(problem) = databases
+    let collaboration = match &collaboration {
+        Some(collaboration) => Some(
+            super::collaboration_leave::view(state, service.clone(), collaboration, open).await,
+        ),
+        None => None,
+    };
+    let refusal = if let Some(problem) = databases
         .iter()
         .find_map(|database| database.problem.clone())
     {
         Some(problem)
+    } else if let Some(reported) = collaboration
+        .as_ref()
+        .filter(|collaboration| collaboration.reported_frames > 0)
+    {
+        Some(format!(
+            "{} of this plan {} reported to the collaboration at {}. Open the plan and choose Leave collaboration under Collaboration assignments, then delete the plan.",
+            count(reported.reported_frames as usize, "frame"),
+            if reported.reported_frames == 1 { "was" } else { "were" },
+            reported.host
+        ))
     } else {
         databases.iter().find_map(|database| {
             let project = database
@@ -141,10 +182,15 @@ async fn read_preview(
         PlanDeletionPreview {
             name: plan.name,
             databases,
+            collaboration,
             refusal,
         },
         targets,
     ))
+}
+
+fn count(n: usize, word: &str) -> String {
+    format!("{n} {word}{}", if n == 1 { "" } else { "s" })
 }
 
 /// Read one link's project from its database file.
@@ -281,15 +327,26 @@ fn stopped(
 pub(super) async fn delete(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
+    Extension(access): Extension<RequestAccess>,
+    headers: HeaderMap,
     Json(request): Json<DeletionRequest>,
 ) -> Result<Json<ApiResponse<DeletionOutcome>>, Error> {
     let service = writable(&state)?;
-    // The turn at the rig databases that discovery, plan listings and
-    // activation take, and the sync lock activation holds: none of them
-    // writes this plan's rigs or links while it is deleted.
-    let _catalogs = admit(&service.discovery_admission).await?;
-    let _sync = state.sync_apply_lock.lock().await;
+    // The collaboration gate first, as nightly intake takes it before it
+    // activates work: no intake, report or collaboration operation runs
+    // half way through. Then the turn at the rig databases that discovery,
+    // plan listings and activation take, and the sync lock activation
+    // holds: none of them writes this plan's rigs or links while it is
+    // deleted.
+    let _gate = remote::hold(&service).await?;
+    let catalogs = admit(&service.discovery_admission).await?;
+    let sync = state.sync_apply_lock.lock().await;
     let (preview, targets) = read_preview(&state, &service, id).await?;
+    if preview.collaboration.is_some() {
+        // Deleting leaves the collaboration and signs in to the coordinator
+        // as joining does.
+        remote::interactive(&state, &access, &headers).map_err(Error::Denied)?;
+    }
     if let Some(refusal) = preview.refusal.clone() {
         return Err(Error::Refused(refusal));
     }
@@ -371,14 +428,26 @@ pub(super) async fn delete(
         .run(move |store| store.delete_plan(id, &links))
         .await
     {
-        Ok(()) => {
+        Ok(left) => {
             tracing::info!(plan = %id, name = %preview.name, databases = deleted.len(), "Deleted a plan");
+            drop(sync);
+            drop(catalogs);
+            let coordinator = match left {
+                Some(left) => {
+                    remote::forget_runs(service.clone(), left.base_url.clone()).await;
+                    Some(
+                        remote::decline(&state, service.clone(), &left.base_url, &left.tasks).await,
+                    )
+                }
+                None => None,
+            };
             Ok(Json(ApiResponse::success(DeletionOutcome::Deleted {
                 name: preview.name,
                 databases: deleted,
+                coordinator,
             })))
         }
-        // The plan took a link, or came from a collaboration, meanwhile.
+        // The plan took a link, or reported frames, meanwhile.
         Err(Error::Conflict) => {
             if !forget(&service, gone).await {
                 return stopped(STILL_LISTED.into(), deleted);

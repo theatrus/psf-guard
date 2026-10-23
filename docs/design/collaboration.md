@@ -6,8 +6,9 @@ and fresh activity forwarding implemented. Reviewed assignments can use existing
 Activation to write ordinary Target Scheduler rows, with GUID-based capture
 association and actual-observing-night credit. Neither remote registration nor
 import grants acquisition. Direct Starfront intake is not a requirement of
-Director or PSF Guard Sync. Reporting-owner handoff remains planned.
-Last reviewed: 2026-10-15.
+Director or PSF Guard Sync. An imported plan can leave its collaboration.
+Reporting-owner handoff remains planned.
+Last reviewed: 2026-10-22.
 
 ## Sources and scope
 
@@ -446,7 +447,7 @@ Schema 23 retains immutable source revisions, so grading after a compatible
 source update can still use the original assignment. One server/agent binds
 to one rig. Older remote versions and changed content at the same version are
 refused. Attaching or detaching an imported project is blocked until provenance
-handoff is supported. Activation requires a current reviewed assignment for
+handoff is supported, or until the plan leaves the collaboration. Activation requires a current reviewed assignment for
 each participating rig and one enabled recipe per assigned filter at its assigned
 exposure. Import alone never grants acquisition.
 
@@ -541,6 +542,71 @@ activity is not replayed as current presence; scientific reports are replayed.
 Still missing: reporting-owner handoff and
 lossless mixed-revision aggregates. Managed-host hello/join, import, catalog
 evidence, common footprint, report transport and durable replay are implemented.
+
+### Leaving a collaboration
+
+**Leave collaboration**, under **Collaboration assignments** in a plan's
+Activation, makes an imported plan an ordinary local plan.
+`GET /projects/{id}/collaboration/leave` previews it; `POST` applies it and
+needs database management and an interactive editor, as joining does. The
+plan, its framing, objectives, recipes, links, activation record, rig
+projects, frames and grades stay. In order, the server:
+
+1. ends the imports' open `psf_guard_collaboration_plan` rows in each
+   database the plan links (`end_at_ms` at the current second, as a
+   cutover is). The rows stay as the record of what was assigned; no frame
+   after the cutover matches them. A linked database that is not registered
+   or cannot be read refuses the leave, as plan deletion does;
+2. in one meta-store transaction (`MetaStore::leave_collaboration`):
+   cancels unfinished `collaboration_transfer` jobs whose selection names
+   one of the plan's imports; deletes the imports' `collaboration_capture`,
+   `collaboration_outbox` (queued and acknowledged), `collaboration_revision`
+   and `collaboration_import` rows, then the `collaboration_project` row;
+   and removes the remote project from the `project_ids` of every
+   connection's background policy on the same server. A policy left with no
+   project turns nightly intake off. Each changed policy is a
+   compare-and-set update of the connection's payload and clears the
+   connection's nightly checkpoint and saved response, as saving a policy
+   does, so the next run fetches again;
+3. forgets the background loop's process-local runs for every connection to
+   that server, so no report scan resumes inside an import that is gone;
+4. declines each task the imports came from with
+   `POST /api/v1/agent/task/{task}` and `{"state":"declined"}`, using the
+   saved sign-in of the registered connection for the import's agent. A
+   declined task leaves the agent's list and gets no more panels. A
+   rejected sign-in marks the connection for repair. The local leave stands
+   whatever the coordinator answers; the result lists the declined tasks
+   and why any task was not declined, and the dialog asks the person to
+   leave or decline the project on the coordinator's site then.
+
+Nothing is kept that would make the plan collaboration work again. Import
+rows drive activation's assignment list, report candidates, automatic
+reports, report delivery and file transfers, so they go, and with them
+every report record. The coordinator keeps the reports it received.
+`collaboration_file_delivery` rows stay: they record files the remote
+project already holds, keyed by server and remote project, and only let a
+later upload skip them. Without capture rows, frames the plan reported are
+no longer protected from reject removal or project deletion, as no
+correction will be sent.
+
+Nightly intake imports only shares whose project is in the policy's
+`project_ids`, so the pruned policy cannot import the plan again. Manual
+**Tonight** and **Apply** still can, as an explicit choice; a plan's ID comes
+from the server and remote project, so importing a project again while the
+plan that left it exists is refused. Delete that plan first.
+
+Deleting an imported plan with nothing captured leaves its collaboration
+inside the transaction that deletes the plan, then declines its tasks. Frames
+queued for or sent in a report refuse the deletion until the person leaves
+on purpose. See [Project removal](project-removal.md#deleting-a-plan).
+
+Leaving and deleting take the collaboration gate before the rig-database turn
+(`discovery_admission`) and the sync lock. Nightly intake, automatic reports,
+report delivery and every interactive collaboration operation hold the gate,
+and intake activates work under it, which takes the other two; taking the
+gate first excludes them without a lock-order inversion. The transfer worker
+does not take the gate: a cancelled job changes revision, so the worker's
+next compare-and-set save fails and an in-flight upload is not acknowledged.
 
 ### Host and admission work
 

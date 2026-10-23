@@ -12,6 +12,7 @@ pub mod catalog_rig;
 pub mod client;
 pub mod collaboration;
 pub mod collaboration_connection;
+pub mod collaboration_leave;
 pub mod configuration;
 pub mod draft_import;
 pub mod equipment_report;

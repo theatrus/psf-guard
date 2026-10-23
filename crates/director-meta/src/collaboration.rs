@@ -412,7 +412,7 @@ fn preview(conn: &Connection, plan: &PreparedImport, rig: Uuid) -> Result<Import
     })
 }
 
-fn read_import(conn: &Connection, id: Uuid) -> Result<Option<Imported>, Error> {
+pub(crate) fn read_import(conn: &Connection, id: Uuid) -> Result<Option<Imported>, Error> {
     valid_id(id)?;
     type Row = (
         String,

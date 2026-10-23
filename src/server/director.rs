@@ -362,6 +362,8 @@ enum Error {
     Internal,
     /// A well-formed request the stored record will not take, and why.
     Refused(String),
+    /// The request needs more than this caller has, and what that is.
+    Denied(&'static str),
 }
 
 impl From<StoreError> for Error {
@@ -405,6 +407,7 @@ impl IntoResponse for Error {
     fn into_response(self) -> Response {
         let (status, message) = match self {
             Self::Refused(reason) => (StatusCode::UNPROCESSABLE_ENTITY, reason),
+            Self::Denied(reason) => (StatusCode::FORBIDDEN, reason.to_owned()),
             other => {
                 let (status, message) = match other {
                     Self::Disabled => (StatusCode::NOT_FOUND, "Director metadata is disabled"),
@@ -426,7 +429,7 @@ impl IntoResponse for Error {
                         StatusCode::SERVICE_UNAVAILABLE,
                         "Director metadata is busy; retry shortly",
                     ),
-                    Self::Internal | Self::Refused(_) => (
+                    Self::Internal | Self::Refused(_) | Self::Denied(_) => (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         "Director metadata operation failed; see server logs",
                     ),
@@ -738,6 +741,10 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
             "/projects/{id}/deletion",
             get(plan_removal::preview).post(plan_removal::delete),
         )
+        .route(
+            "/projects/{id}/collaboration/leave",
+            get(collaboration_leave::preview).post(collaboration_leave::leave),
+        )
         .route("/projects/{id}/attach", axum::routing::post(attach_project))
         .route("/projects/{id}/detach", axum::routing::post(detach_project))
         .merge(configuration_api::routes())
@@ -979,6 +986,7 @@ async fn detach_project(
     })
 }
 
+mod collaboration_leave;
 mod configuration_api;
 mod plan_removal;
 mod preferences;

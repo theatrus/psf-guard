@@ -223,6 +223,37 @@ to the old agent are never reassigned to the new one. **Disconnect** removes the
 saved token for this connection. The agent stays registered on the remote server;
 assigned work and queued reports stay saved. HTTPS is required except for explicitly enabled loopback HTTP tests.
 
+### Leave a collaboration
+
+Open the plan's workspace. Under **Activation**, **Collaboration assignments**
+lists the plan's imported nightly assignments; click **Leave collaboration**.
+The button needs an editor's account on a server with database management.
+The dialog shows the collaboration's host and project and what leaving
+changes:
+
+- the plan's open assignments in the rig databases end, so new frames no
+  longer count toward the collaboration;
+- its imported assignments are removed, with its report records: reports not
+  yet sent and the record of reports already sent. The coordinator keeps the
+  reports it received;
+- file transfers for it that have not finished are cancelled;
+- nightly intake stops importing the project. When the project was the only
+  one a rig's intake listed, **Pull tonight automatically** turns off.
+
+Click **Leave collaboration**. PSF Guard then declines the plan's tasks at the
+coordinator with the rig's saved sign-in, so the coordinator stops assigning
+work for it to this server's rigs. When no rig here is signed in to that
+server, or the request fails, the result says so; leave or decline the
+project on the coordinator's site too.
+
+The plan stays as a plan of your own. It keeps its framing, exposures,
+priorities and activation record, and its rig projects keep their targets,
+frames and grades. Its targets stay scheduled in Target Scheduler until you
+change them. You can now rename, attach, detach or delete it like any other
+plan. Importing the same project again is refused while that plan exists:
+to take part again, delete the plan, then join and import the project from
+the rig's **Collaboration** section.
+
 ## Project Priority
 
 Open a plan workspace and unfold **Project priority**, which says where the
@@ -831,8 +862,10 @@ delivery requirement.
 | GET | `/projects/{id}` | Exact project UUID. |
 | PATCH | `/projects/{id}` | `{"expected_revision":1,"name":"Andromeda"}` |
 | POST | `/projects/{id}/attach` | `from_project_id`: the plan to absorb. Moves every database link of that plan onto this one, takes its framing and plan drafts where this plan has none, and retires it. `409` when both plans link the same database, `404` when the other plan is gone, `400` for a plan attaching itself. Answers `into`, `absorbed`, `moved_links`, `framing_taken`, `plan_taken`. |
-| GET | `/projects/{id}/deletion` | What deleting the plan deletes: its project in each database it links, with targets, exposure plans, frames and a digest, and `refusal` when the plan cannot be deleted. See [Project removal](design/project-removal.md#deleting-a-plan). |
-| POST | `/projects/{id}/deletion` | `{"digests":{"<project GUID>":"<digest>"}}`. Deletes each project, then the plan. Returns `deleted`, `changed` with a new preview, or `stopped` with the error; the last two list the databases whose project went already. Needs database management. |
+| GET | `/projects/{id}/collaboration/leave` | What leaving the plan's collaboration removes: `collaboration` with the server's `host`, the remote project's ID and name, counts of imports, unsent and sent reports, reported frames, unfinished transfers and open assignments, the connections whose nightly intake lists the project, and `coordinator_reachable`. `refusal` explains why the plan cannot leave. See [Leaving a collaboration](design/collaboration.md#leaving-a-collaboration). |
+| POST | `/projects/{id}/collaboration/leave` | Ends the open assignments in the rig databases, removes the collaboration records and declines the plan's tasks at the coordinator. Returns `left` with `assignments_ended` and `coordinator` (`declined` tasks and `problems`). Needs database management and an interactive editor, as joining a project does. |
+| GET | `/projects/{id}/deletion` | What deleting the plan deletes: its project in each database it links, with targets, exposure plans, frames and a digest, `collaboration` as Leave previews it for a plan from a collaboration, and `refusal` when the plan cannot be deleted. See [Project removal](design/project-removal.md#deleting-a-plan). |
+| POST | `/projects/{id}/deletion` | `{"digests":{"<project GUID>":"<digest>"}}`. Deletes each project, then the plan; a plan from a collaboration leaves it in the same transaction. Returns `deleted` (with `coordinator` for a plan from a collaboration), `changed` with a new preview, or `stopped` with the error; the last two list the databases whose project went already. Needs database management, and an interactive editor for a plan from a collaboration. |
 | POST | `/projects/{id}/detach` | `catalog_slug`, `source_project_guid` and `name`: moves that one database link onto a new plan called `name` and answers the new plan's identity. `404` when the link is not this plan's. |
 
 The same identity operations and body/query shapes are available at `/sites`

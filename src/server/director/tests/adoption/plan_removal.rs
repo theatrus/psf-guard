@@ -249,3 +249,239 @@ async fn an_unregistered_database_keeps_the_plan() {
         "The database for RedCat rig is not registered on this server. Register it again in Settings, then delete the plan."
     );
 }
+
+#[path = "../../../../../crates/director-interop/tests/support/mod.rs"]
+mod support;
+use psf_guard_director_interop::collaboration::PreparedImport;
+
+/// Import the fixtures' nightly share and activate it on the rig: the rig's
+/// database then has a project with six collaboration assignments.
+async fn imported(a: &super::activation::Activated) -> PreparedImport {
+    use psf_guard_director_interop::{astrocollab::Source, collaboration::prepare_import};
+    use psf_guard_director_meta::plan::{Contribution, TemplateChoice};
+    let p = {
+        let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        let source = Source::new("https://collab.example", "000000000001", false).unwrap();
+        let p = prepare_import(
+            include_bytes!(
+                "../../../../../crates/director-interop/tests/fixtures/starfront-tonight.json"
+            ),
+            &source,
+            "2026-10-05",
+            "000000000004",
+        )
+        .unwrap();
+        let preview = store.preview_collaboration_import(&p, a.rig).unwrap();
+        store
+            .apply_collaboration_import(&p, a.rig, &preview.review_digest, 1000)
+            .unwrap();
+        let mut plan = store.plan_draft(p.project_id()).unwrap().unwrap();
+        plan.contributions.push(Contribution {
+            id: Uuid::new_v4(),
+            objective_id: plan.objectives[0].id,
+            rig_id: a.rig,
+            template: TemplateChoice {
+                template_guid: None,
+                template_id: None,
+                name: "O 300".into(),
+                filter_name: "OIII".into(),
+                gain: Some(100),
+                offset: Some(30),
+                bin: Some(1),
+                readout_mode: None,
+                moon: None,
+            },
+            exposure_seconds: 300.0,
+            panel_ids: vec![],
+            enabled: true,
+            goal: None,
+        });
+        store.save_plan_draft(&plan, plan.revision).unwrap();
+        p
+    };
+    let visit = json!([{"import_id": p.import_id(), "source_digest": p.digest()}]);
+    let project = p.project_id();
+    let (status, preview) = call(
+        &a.f.app,
+        "POST",
+        &format!("/projects/{project}/activation/preview"),
+        json!({"collaboration": visit}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    let (status, applied) = call(
+        &a.f.app,
+        "POST",
+        &format!("/projects/{project}/activation/apply"),
+        json!({"preview_digest": preview["data"]["preview_digest"], "collaboration": visit}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    assert_eq!(open_assignments(&a.db), 6);
+    p
+}
+
+fn open_assignments(db: &Connection) -> i64 {
+    db.query_row(
+        "SELECT COUNT(*) FROM psf_guard_collaboration_plan WHERE end_at_ms IS NULL",
+        [],
+        |row| row.get(0),
+    )
+    .unwrap()
+}
+
+/// A plan from a collaboration with nothing captured: the preview names the
+/// collaboration, and deleting removes the rig's project, the plan and its
+/// collaboration records. No connection can sign in, so the coordinator is
+/// not told, and the outcome says so.
+#[tokio::test]
+async fn deleting_an_imported_plan_with_nothing_captured_leaves_its_collaboration() {
+    let a = activated().await;
+    let p = imported(&a).await;
+    let path = format!("/projects/{}/deletion", p.project_id());
+    let (status, preview) = call(&a.f.app, "GET", &path, Value::Null, None).await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    let preview = &preview["data"];
+    assert_eq!(preview["refusal"], Value::Null, "{preview}");
+    let collaboration = &preview["collaboration"];
+    assert_eq!(collaboration["host"], "collab.example");
+    assert_eq!(collaboration["remote_project_id"], "000000000002");
+    assert_eq!(
+        collaboration["remote_project_name"],
+        "M31 halo in narrowband"
+    );
+    assert_eq!(collaboration["imports"], 1);
+    assert_eq!(collaboration["unsent_reports"], 0);
+    assert_eq!(collaboration["open_assignments"], 6);
+    assert_eq!(collaboration["coordinator_reachable"], false);
+    let digest = preview["databases"][0]["project"]["digest"].clone();
+    let (status, deleted) = call(
+        &a.f.app,
+        "POST",
+        &path,
+        json!({"digests": {guid_of(preview): digest}}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{deleted}");
+    let deleted = &deleted["data"];
+    assert_eq!(deleted["state"], "deleted", "{deleted}");
+    assert_eq!(deleted["coordinator"]["declined"], json!([]));
+    assert_eq!(
+        deleted["coordinator"]["problems"],
+        json!(["No rig on this server is signed in as agent 000000000001 at this collaboration."])
+    );
+    let left: i64 =
+        a.db.query_row(
+            "SELECT COUNT(*) FROM psf_guard_collaboration_plan",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(left, 0);
+    let service = a.f.state.director.clone().unwrap();
+    let (import, plan) = (p.import_id(), p.project_id());
+    let (import, plan) = service
+        .query(move |s| Ok((s.collaboration_import(import)?, s.project(plan)?)))
+        .await
+        .unwrap();
+    assert!(import.is_none());
+    assert!(plan.is_none());
+}
+
+/// Frames reported to the collaboration keep the plan, and the refusal
+/// points to Leave collaboration. Leaving ends the rig's assignments and
+/// keeps the plan and its project; the plan can then be deleted.
+#[tokio::test]
+async fn a_plan_with_reported_frames_stays_until_it_leaves_the_collaboration() {
+    use psf_guard_director_interop::collaboration::finalize_contribution;
+    let a = activated().await;
+    let p = imported(&a).await;
+    let service = a.f.state.director.clone().unwrap();
+    let finalized = finalize_contribution(&p, &[support::frame(&p, 1)]).unwrap();
+    service
+        .clone()
+        .run(move |s| s.queue_collaboration_report(&finalized, 2000).map(|_| ()))
+        .await
+        .unwrap();
+    let path = format!("/projects/{}/deletion", p.project_id());
+    let (_, preview) = call(&a.f.app, "GET", &path, Value::Null, None).await;
+    assert_eq!(
+        preview["data"]["refusal"],
+        "1 frame of this plan was reported to the collaboration at collab.example. Open the plan and choose Leave collaboration under Collaboration assignments, then delete the plan."
+    );
+    let digest = preview["data"]["databases"][0]["project"]["digest"].clone();
+    let (status, _) = call(
+        &a.f.app,
+        "POST",
+        &path,
+        json!({"digests": {guid_of(&preview): digest}}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+
+    let leave = format!("/projects/{}/collaboration/leave", p.project_id());
+    let (status, view) = call(&a.f.app, "GET", &leave, Value::Null, None).await;
+    assert_eq!(status, StatusCode::OK, "{view}");
+    assert_eq!(view["data"]["refusal"], Value::Null);
+    assert_eq!(view["data"]["collaboration"]["unsent_reports"], 1);
+    assert_eq!(view["data"]["collaboration"]["reported_frames"], 1);
+    let (status, left) = call(&a.f.app, "POST", &leave, Value::Null, None).await;
+    assert_eq!(status, StatusCode::OK, "{left}");
+    assert_eq!(left["data"]["state"], "left", "{left}");
+    assert_eq!(left["data"]["assignments_ended"], 6);
+    assert_eq!(open_assignments(&a.db), 0);
+    // The rows stay, ended, as the record of what was assigned.
+    let rows: i64 =
+        a.db.query_row(
+            "SELECT COUNT(*) FROM psf_guard_collaboration_plan",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(rows, 6);
+    let projects: i64 =
+        a.db.query_row("SELECT COUNT(*) FROM project", [], |row| row.get(0))
+            .unwrap();
+    assert_eq!(projects, 1);
+    let plan = p.project_id();
+    let (kept, imported, reported) = service
+        .clone()
+        .query(move |s| {
+            Ok((
+                s.project(plan)?.is_some(),
+                s.plan_from_collaboration(plan)?,
+                s.reported_image_guids()?,
+            ))
+        })
+        .await
+        .unwrap();
+    assert!(kept && !imported && reported.is_empty());
+    // A plan of its own has nothing to leave.
+    let (_, again) = call(&a.f.app, "GET", &leave, Value::Null, None).await;
+    assert_eq!(
+        again["data"]["refusal"],
+        "This plan did not come from a collaboration."
+    );
+    let (status, _) = call(&a.f.app, "POST", &leave, Value::Null, None).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+
+    let (_, preview) = call(&a.f.app, "GET", &path, Value::Null, None).await;
+    assert_eq!(preview["data"]["refusal"], Value::Null, "{preview}");
+    assert_eq!(preview["data"]["collaboration"], Value::Null);
+    let digest = preview["data"]["databases"][0]["project"]["digest"].clone();
+    let (status, deleted) = call(
+        &a.f.app,
+        "POST",
+        &path,
+        json!({"digests": {guid_of(&preview): digest}}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{deleted}");
+    assert_eq!(deleted["data"]["state"], "deleted");
+    assert_eq!(deleted["data"].get("coordinator"), None);
+}

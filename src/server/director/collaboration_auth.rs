@@ -21,6 +21,7 @@ use std::{
 };
 pub(super) mod background;
 mod credentials;
+pub(super) mod leave;
 #[cfg(test)]
 mod tests;
 pub(super) mod transfers;
@@ -672,8 +673,13 @@ impl Remote {
             .strip_prefix("projects/")
             .and_then(|s| s.strip_suffix("/files"))
             .is_some_and(psf_guard_director_interop::workflow::valid_remote_id);
+        // A task's state: leaving a collaboration declines its tasks.
+        let task = route
+            .strip_prefix("agent/task/")
+            .is_some_and(psf_guard_director_interop::workflow::valid_remote_id);
         if !join
             && !files
+            && !task
             && !matches!(
                 route,
                 "health"

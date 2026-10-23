@@ -25,8 +25,8 @@ explains why the project cannot be deleted.
 | POST | `/api/db/{db}/projects/{id}/removal` | `{digest}`. Returns `{state: "removed", …}` with the counts and the plan that no longer links the database, or `{state: "changed", preview}` when the project changed since the preview. `403` without database management, `409` for frames reported to a collaboration or a plan from one, `404` for a project that is gone |
 | GET | `/api/db/{db}/deleted-projects` | Deleted projects that syncs and imports leave out, newest first: `id`, `project_id`, `name`, `removed_at`, `frames` |
 | POST | `/api/db/{db}/deleted-projects/{id}/allow` | Lets the next sync or import add the project back. `403` without database management |
-| GET | `/api/director/v1/projects/{id}/deletion` | A plan's deletion preview: `name`, each linked database (`catalog_slug`, `catalog_name`, its `project` with `targets`, `exposure_plans`, `frames` and `digest`, or `problem` when it cannot be read) and `refusal` |
-| POST | `/api/director/v1/projects/{id}/deletion` | `{digests: {project GUID: digest}}`. Returns `{state: "deleted", name, databases}`, `{state: "changed", preview, deleted}` when the plan or a project changed, or `{state: "stopped", error, deleted}`. `422` with the refusal, `403` without database management |
+| GET | `/api/director/v1/projects/{id}/deletion` | A plan's deletion preview: `name`, each linked database (`catalog_slug`, `catalog_name`, its `project` with `targets`, `exposure_plans`, `frames` and `digest`, or `problem` when it cannot be read), `collaboration` for a plan from a collaboration (as Leave previews it) and `refusal` |
+| POST | `/api/director/v1/projects/{id}/deletion` | `{digests: {project GUID: digest}}`. Returns `{state: "deleted", name, databases, coordinator?}`, `{state: "changed", preview, deleted}` when the plan or a project changed, or `{state: "stopped", error, deleted}`. `422` with the refusal, `403` without database management, or for a plan from a collaboration without an interactive editor |
 
 The preview reads on a read-only connection. Neither route runs as a job:
 the deletion is one transaction of set-based statements, like a project
@@ -49,17 +49,32 @@ preferences, framing and plan drafts, activation record and draft imports
 
 The plan stays when:
 
-- a rig captured frames for it: delete that project from the Library
-  first, where the frames are counted and the name is typed;
 - a linked database is not registered on this server, or cannot be read;
-- the plan came from a collaboration.
+- the plan came from a collaboration and frames were queued for or sent in
+  a report to it: leave the collaboration from the plan first (see
+  [Leaving a collaboration](collaboration.md#leaving-a-collaboration));
+- a rig captured frames for it: delete that project from the Library
+  first, where the frames are counted and the name is typed.
 
-The deletion holds the turn at the rig databases that discovery, plan
-listings and activation take, and the sync lock activation holds, so no
-activation writes the plan's rigs or links meanwhile. Every project needs
-the digest of the preview the person saw before anything is deleted.
-`MetaStore::delete_plan` refuses a plan that links a project the deletion
-did not handle, or one that came from a collaboration.
+A plan from a collaboration with nothing reported leaves the collaboration
+as it is deleted. The dialog names the collaboration's host and project and
+lists what leaving removes. `MetaStore::delete_plan` removes the plan's
+collaboration records in the same transaction that deletes the plan, as
+`MetaStore::leave_collaboration` does, and the server then declines the
+plan's tasks at the coordinator. The deleted projects take their
+`psf_guard_collaboration_plan` rows with them, so no assignment needs ending.
+Deleting such a plan needs an interactive editor, as joining a project does.
+
+The deletion holds, in this order, the collaboration gate that nightly
+intake, automatic reports and every interactive collaboration operation
+take, the turn at the rig databases that discovery, plan listings and
+activation take, and the sync lock activation holds. No intake, report or
+activation writes the plan's rigs, links or collaboration records
+meanwhile. Nightly intake activates work while it holds the gate, so the
+gate comes first. Every project needs the digest of the preview the person
+saw before anything is deleted. `MetaStore::delete_plan` refuses a plan
+that links a project the deletion did not handle, or one with frames
+queued for or sent in a collaboration report.
 
 When a project changed after the preview, the deletion stops there and
 answers `changed` with a new preview. When deleting fails, it answers
@@ -179,7 +194,12 @@ the new plan to it with **Attach a project from another database**.
   be deleted, as such a reject cannot be removed.
 - Restore in reject removal refuses a frame whose project was deleted
   after the frame was removed.
-- A plan imported from a collaboration keeps its projects.
+- A plan imported from a collaboration keeps its projects. The refusal
+  names the plan and says where to go next: choose **Leave collaboration**
+  under **Collaboration assignments** in the plan, then delete the project;
+  or, when the plan has nothing captured, delete the whole plan under
+  **Plans with nothing captured yet**. After the plan leaves, its reported
+  frames are no longer protected, as no correction will be sent.
 - A preview older than the project removes nothing and returns a new
   preview.
 

@@ -5,7 +5,7 @@ import type { ReactNode } from 'react';
 import { http, HttpResponse } from 'msw';
 import { server } from '../../test/msw-server';
 import PlanDeleteDialog from '../director/PlanDeleteDialog';
-import type { DirectorPlanDeletion } from '../../api/directorTypes';
+import type { DirectorPlanCollaboration, DirectorPlanDeletion } from '../../api/directorTypes';
 
 const ok = (data: unknown) => HttpResponse.json({ success: true, data, error: null });
 const PLAN = '11111111-1111-4111-8111-111111111111';
@@ -18,6 +18,7 @@ function preview(extra: Partial<DirectorPlanDeletion> = {}): DirectorPlanDeletio
       { source_project_guid: 'g-c925', catalog_slug: 'c925', catalog_name: 'C925', synced_from: null, project: { id: 3, name: 'M31', state: 2, targets: 2, exposure_plans: 4, frames: 0, digest: 'a' }, problem: null },
       { source_project_guid: 'g-redcat', catalog_slug: 'redcat', catalog_name: 'RedCat', synced_from: null, project: null, problem: null },
     ],
+    collaboration: null,
     refusal: null,
     ...extra,
   };
@@ -98,5 +99,22 @@ describe('Deleting a plan', () => {
     mount();
     expect(await screen.findByText(/C925 copies from/)).toHaveTextContent('The project stays in that database, N.I.N.A. still schedules it there while it is Active, and the next sync adds it back here.');
     expect(screen.getByText('On Askar the project is Active. When N.I.N.A. uses that database, it stops scheduling the project.')).toBeInTheDocument();
+  });
+
+  it('says a plan from a collaboration leaves it, and whether the coordinator is told', async () => {
+    const collaboration: DirectorPlanCollaboration = {
+      host: 'collab.example', base_url: 'https://collab.example/', remote_project_id: '000000000002',
+      remote_project_name: 'M31 halo', imports: 2, unsent_reports: 0, sent_reports: 0, reported_frames: 0,
+      transfers: 0, nightly_intake: ['Community'], open_assignments: 6, coordinator_reachable: false,
+    };
+    server.use(http.get(path, () => ok(preview({ collaboration }))));
+    mount();
+    const note = await screen.findByRole('note', { name: 'Collaboration' });
+    expect(note).toHaveTextContent('This plan comes from the collaboration at collab.example (M31 halo, project 000000000002). Deleting it leaves the collaboration first:');
+    expect(note).toHaveTextContent('Ends 6 open assignments in the rig databases, so new frames no longer count toward the collaboration.');
+    expect(note).toHaveTextContent('Removes 2 imported nightly assignments.');
+    expect(note).toHaveTextContent('Stops nightly intake on Community from importing the project.');
+    expect(note).toHaveTextContent('PSF Guard cannot tell collab.example: no rig here is signed in to it. Leave or decline the project on collab.example too.');
+    expect(screen.getByRole('button', { name: 'Delete plan' })).toBeEnabled();
   });
 });

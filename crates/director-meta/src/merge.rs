@@ -275,9 +275,16 @@ impl MetaStore {
     /// orders, framing and plan drafts, activation record and draft
     /// imports. The projects in the rig databases are the caller's to
     /// delete first; `expected` lists the links the caller handled. A plan
-    /// from a collaboration, or one that links a project not in
-    /// `expected`, is refused with [`Error::Conflict`].
-    pub fn delete_plan(&mut self, plan: Uuid, expected: &[(Uuid, Uuid)]) -> Result<(), Error> {
+    /// from a collaboration leaves it in the same transaction, as
+    /// [`MetaStore::leave_collaboration`] does, and the collaboration it
+    /// left is returned. A plan that links a project not in `expected`, or
+    /// one with frames queued for or sent in a collaboration report, is
+    /// refused with [`Error::Conflict`].
+    pub fn delete_plan(
+        &mut self,
+        plan: Uuid,
+        expected: &[(Uuid, Uuid)],
+    ) -> Result<Option<super::collaboration_leave::PlanCollaboration>, Error> {
         valid_id(plan)?;
         let tx = self
             .connection
@@ -286,12 +293,15 @@ impl MetaStore {
             return Err(Error::NotFound);
         }
         let id = plan.to_string();
-        let imported: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM collaboration_project WHERE project_id=?1)",
+        // Reported frames keep the plan until the person leaves the
+        // collaboration on purpose.
+        let reported: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM collaboration_capture WHERE import_id IN
+                (SELECT id FROM collaboration_import WHERE project_id=?1))",
             [&id],
             |row| row.get(0),
         )?;
-        if imported {
+        if reported {
             return Err(Error::Conflict);
         }
         let mut statement = tx.prepare(
@@ -308,6 +318,7 @@ impl MetaStore {
                 return Err(Error::Conflict);
             }
         }
+        let left = super::collaboration_leave::leave(&tx, plan)?;
         tx.execute(
             "DELETE FROM project_profile WHERE EXISTS(
                 SELECT 1 FROM project_catalog link
@@ -319,7 +330,7 @@ impl MetaStore {
         super::preferences::forget_project(&tx, plan)?;
         retire(&tx, plan)?;
         tx.commit()?;
-        Ok(())
+        Ok(left)
     }
 }
 

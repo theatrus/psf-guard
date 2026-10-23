@@ -1,15 +1,25 @@
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '../../api/client';
 import type { CollaborationVisit } from '../../api/collaborationTypes';
 import EarlyBeta, { COLLABORATION_BETA } from './EarlyBeta';
+import CollaborationLeaveDialog from './CollaborationLeaveDialog';
 
-export default function CollaborationActivation({ projectId, value, onChange, disabled }: {
+/** The plan's imported nightly assignments, to choose for activation, and
+ *  Leave collaboration for a server that can change rig databases. */
+export default function CollaborationActivation({ projectId, value, onChange, disabled, canLeave }: {
   projectId: string; value: CollaborationVisit[]; onChange: (value: CollaborationVisit[]) => void; disabled: boolean;
+  /** An editor on a server with database management. */
+  canLeave: boolean;
 }) {
   const query = useQuery({ queryKey: ['collaborationActivation', projectId], queryFn: () => apiClient.getCollaborationActivation(projectId), retry: false });
+  const [leaving, setLeaving] = useState(false);
+  const dialog = leaving && <CollaborationLeaveDialog planId={projectId} onClose={() => setLeaving(false)} onLeft={() => onChange([])} />;
   if (query.isError) return <p role="alert">Collaboration assignments could not be loaded: {query.error.message}</p>;
-  if (!query.data?.imports.length) return null;
-  return <fieldset disabled={disabled} className="collaboration-activation"><legend>Collaboration assignments <EarlyBeta note={COLLABORATION_BETA} /></legend>
+  // The dialog keeps its place in the tree when the assignments go, so it
+  // can still show what leaving did.
+  if (!query.data?.imports.length) return <>{null}{dialog}</>;
+  return <><fieldset disabled={disabled} className="collaboration-activation"><legend>Collaboration assignments <EarlyBeta note={COLLABORATION_BETA} /></legend>
     {query.data.imports.map(i => {
       const selected = value.find(v => v.import_id === i.import_id);
       return <div key={i.import_id}>
@@ -21,5 +31,6 @@ export default function CollaborationActivation({ projectId, value, onChange, di
         </>}
       </div>;
     })}
-  </fieldset>;
+    {canLeave && <button type="button" className="header-button" onClick={() => setLeaving(true)}>Leave collaboration</button>}
+  </fieldset>{dialog}</>;
 }

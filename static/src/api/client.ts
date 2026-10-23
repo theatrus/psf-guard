@@ -13,7 +13,7 @@ import { getServerUrl } from '../utils/tauri';
 import { BUILD_HEADER, noteServerBuild } from '../updates/pageBuild';
 import type { DirectorAdoptionPlan, DirectorAdoptionReport, DirectorCollection, DirectorCutoutRequest, DirectorCutoutResult, DirectorDiscovery, DirectorFramingDraft, DirectorFramingDraftView, DirectorFramingPreview, DirectorFramingRequest, DirectorIdentity, DirectorIdentityPage, DirectorMappingPage, DirectorFeasibility, DirectorMosaicPreview, DirectorResolvedName,
   DirectorSkyMarks,
-  DirectorSkyMarksQuery, DirectorActivation, DirectorActivationPushReport, DirectorActivationReport, DirectorPlanDraft, DirectorPlanList, DirectorPlanView, DirectorRigStatusView, DirectorRigProfileSummary, DirectorTemplateList, DirectorStatus, DirectorRigPlan, DirectorRigProfileEdit, DirectorRigProfileView, DirectorRigReport, DirectorSurvey, DirectorNameSearch, DirectorLibraryTemplate, DirectorAttached, DirectorTakenValues, DirectorRigScheduling, DirectorPlanProgress, DirectorPlanDeletion, DirectorPlanDeletionOutcome } from './directorTypes';
+  DirectorSkyMarksQuery, DirectorActivation, DirectorActivationPushReport, DirectorActivationReport, DirectorPlanDraft, DirectorPlanList, DirectorPlanView, DirectorRigStatusView, DirectorRigProfileSummary, DirectorTemplateList, DirectorStatus, DirectorRigPlan, DirectorRigProfileEdit, DirectorRigProfileView, DirectorRigReport, DirectorSurvey, DirectorNameSearch, DirectorLibraryTemplate, DirectorAttached, DirectorTakenValues, DirectorRigScheduling, DirectorPlanProgress, DirectorPlanDeletion, DirectorPlanDeletionOutcome, DirectorCollaborationLeave, DirectorCollaborationLeft } from './directorTypes';
 import type { GuidFillReport, GuidReport,
   ProjectMosaic,
   ProjectProcessingSettings,
@@ -572,6 +572,23 @@ export const apiClient = {
     const { data } = await api.post<ApiResponse<DirectorPlanDeletionOutcome>>(
       `/director/v1/projects/${encodeURIComponent(projectId)}/deletion`, { digests });
     if (!data.data) throw new Error(data.error || 'Failed to delete the plan');
+    return data.data;
+  },
+
+  /** What leaving the plan's collaboration removes and keeps. */
+  getDirectorCollaborationLeave: async (projectId: string): Promise<DirectorCollaborationLeave> => {
+    const api = await getApi();
+    const { data } = await api.get<ApiResponse<DirectorCollaborationLeave>>(`/director/v1/projects/${encodeURIComponent(projectId)}/collaboration/leave`);
+    if (!data.data) throw new Error(data.error || 'Failed to read what leaving the collaboration removes');
+    return data.data;
+  },
+
+  /** Leave the plan's collaboration: the plan becomes a plan of its own. */
+  leaveDirectorCollaboration: async (projectId: string): Promise<DirectorCollaborationLeft> => {
+    const api = await getApi();
+    const { data } = await api.post<ApiResponse<DirectorCollaborationLeft>>(
+      `/director/v1/projects/${encodeURIComponent(projectId)}/collaboration/leave`, {});
+    if (!data.data) throw new Error(data.error || 'Failed to leave the collaboration');
     return data.data;
   },
 
