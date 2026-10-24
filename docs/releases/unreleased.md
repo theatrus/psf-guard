@@ -8,6 +8,11 @@
 
 - **Allow time for rebuilds.** The stacking engine changed, so each stack
   rebuilds once when next opened or refreshed.
+- **Scoring defaults are now one copy on the server.** The first editor to
+  open PSF Guard after the update saves their own scoring defaults there,
+  built-in values included. Everyone on the server then sees the same
+  defaults, and only an editor can change them. A viewer's own defaults are
+  not copied.
 
 ## Changes
 
@@ -50,3 +55,8 @@
   their values in place of your planning site and Target Scheduler limit
   edits. **Reload rig profile** keeps those edits when nothing changed on the
   server.
+- Automatic stack refreshes now score with the server's scoring defaults,
+  the same values every view starts from. Stacks that showed **Out of date —
+  scoring settings changed** after an automatic refresh are rebuilt with the
+  defaults on the next automatic refresh, and stop showing it. Saving new defaults in **Settings › Review**
+  rebuilds stacks scored another way when automatic previews are on.

@@ -200,14 +200,19 @@ and set point per exposure; PSF Guard imports carry the sensor temperature
 from the FITS header. API callers can change the margin with
 `sensor_temp_tolerance_c`.
 
-**Defaults and the current view.** Every view starts from your scoring
-defaults, set in **Settings › Review › Sequence scoring**. Each field shows
+### Scoring defaults
+
+**Defaults and the current view.** Every view starts from the server's
+scoring defaults, set in **Settings › Review › Sequence scoring**. The server
+keeps one copy for everyone who uses it, and automatic stack builds score
+with it too. Only an editor can change it. Each field shows
 its built-in value, and **Reset to built-in defaults** brings back the
 calibrated scoring: every penalty at 100% and no limits. A change in the
 toolbar applies to the current view only. The control then reads
 **Scoring (changed)**, and its popover offers **Save as default**, which
-makes the view's values your defaults, and **Reset to default**, which
-returns the view to them.
+makes the view's values the server's defaults, and **Reset to default**,
+which returns the view to them. A viewer cannot save defaults: **Save as
+default** stays disabled for them.
 
 The same rules hold in the toolbar, the address and Settings, and the server
 checks them too: a penalty from 0% to 200% in steps of 10%, a Max HFR above
@@ -215,22 +220,34 @@ checks them too: a penalty from 0% to 200% in steps of 10%, a Max HFR above
 1,000,000. Either limit may be empty, which turns it off. A value outside
 them is refused and shown, never quietly changed.
 
-Once any value differs from your defaults, the URL stores all of them:
+Once any value differs from the defaults, the URL stores all of them:
 `penaltySatellite`, `penaltyPointing`, `penaltyTemporal`, `penaltyHfrRise`,
 `penaltyStarLoss` (1 is 100%), `maxHfr` and `minStars`, with `off` for a limit turned off. A link therefore
 scores the same for whoever opens it, whatever their defaults. A reload, the
 project's other targets, Images, the detail view and Stacks keep the view's
 scoring, so a frame scores the same everywhere in the project. Those views
 show **Scoring (changed)** with a **Reset**, and Stacks says beside **Build**
-which values a build will use: a stack records the scoring it picked its
-frames with, and the automatic refresh reuses it. Moving to another project
-or database drops the view's scoring, and the defaults apply there.
+which values a build will use. A stack records the scoring it picked its
+frames with, and shows **Out of date — scoring settings changed** when the
+view scores another way. Automatic refreshes score with the server's
+defaults, so a card they build matches every view that keeps the defaults.
+Moving to another project or database drops the view's scoring, and the
+defaults apply there.
 
-Signed in to a server with user accounts, your defaults are saved with your
-account (see [view preferences](AUTHENTICATION.md#view-preferences));
-otherwise the browser keeps them. The values an earlier version's Scoring
-control remembered become the browser's defaults the first time this version
-loads.
+**Saving new defaults.** The new values apply to each view when it next
+loads them, and to automatic builds at once. When automatic stack previews
+are on, saving values that differ refreshes every database's projects after
+the arrival delay, so their stacks are built with the new scoring; with
+**Also stack channels that have no stack yet** on, that refresh also stacks
+recent channels without a stack. `GET` and `PUT /api/settings/scoring` read
+and set the defaults.
+
+**From an earlier version.** Each user or browser used to keep their own
+defaults. The first page an editor opens after the update, while the
+server has no copy, saves that editor's values to the server, built-in
+values included. That first editor decides: a later editor's own older
+values are not copied over them, and a viewer's never are. Signed in, the
+values come from the user's account; otherwise from the browser.
 
 The zero-star cap does not scale: a frame measured to have no stars is
 ruined whatever the setting. API callers pass `penalty_satellite`,

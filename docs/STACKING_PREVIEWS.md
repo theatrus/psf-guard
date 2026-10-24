@@ -775,11 +775,15 @@ its own. Turn on **Automatically refresh stack previews** under Settings →
 Stacking → Stack previews. It applies to every database on the server and is
 off by default.
 
-A refresh rebuilds exactly what the project's cards remember: the same
-targets and channels, the same Accepted-only policy, order, scoring, and
-per-channel calibration choices, over the frames the project holds now. It uses
-the server's current stacking method, so a method change reaches the next
-refresh. Its color previews are composed again afterwards, as after any
+A refresh rebuilds what the project's cards remember: the same targets and
+channels, the same Accepted-only policy, order, and per-channel calibration
+choices, over the frames the project holds now. It uses the server's current
+stacking method and scoring defaults (see
+[scoring defaults](SCREENING.md#scoring-defaults)), so a change to either
+reaches the next refresh. A card built with other scoring, which shows
+**Out of date — scoring settings changed**, is stacked again with the
+defaults by that refresh, and the job list shows it as one to restack.
+Its color previews are composed again afterwards, as after any
 build (see [Color previews from channel stacks](#color-previews-from-channel-stacks)). Like **Build stacks**, it
 queues one build per channel, the same builds a person's Build stacks makes,
 so after either one only the channels whose frames or grades changed stack
@@ -789,8 +793,7 @@ again; the rest are cache hits.
 two or more usable frames, one of them captured recently enough, is stacked
 on the next refresh too, with the settings of the
 project's other cards (for a project with none: every frame that is not
-rejected, capture order, and the default scoring, since your scoring
-preferences live in the browser),
+rejected, and capture order), scored with the server's defaults,
 so frames that arrive are stacked before anyone opens the project. **A new
 channel needs a frame from the last (days)** sets how recent (a week by
 default); older channels are left alone, so turning it on does not stack a
@@ -847,6 +850,12 @@ What queues a refresh, and how long it waits first:
   minutes by default) because grading is interactive. Each further change
   pushes the refresh out again, up to four delays. New frames outrank waiting
   grades and pull the refresh in to the arrival delay.
+- **New scoring defaults**, saved in Settings › Review or with the Scoring
+  control's **Save as default**, refresh every database's projects after the
+  arrival delay, when the values differ from the old ones. The first
+  editor's copy at the update counts as a save. When that editor's values
+  are the built-in ones, nothing changes, so cards stacked with other
+  scoring wait for the next refresh, whatever queues it.
 
 A refresh runs on the same single stacking worker as any other build, as
 background work that yields to previews and quality scans, waits while a

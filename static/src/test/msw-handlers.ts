@@ -1,4 +1,5 @@
 import { http, HttpResponse } from 'msw';
+import { scoringDefaultsHandlers } from './scoringDefaults';
 
 const emptyCollaborationActivation = http.get('/api/director/v1/projects/:id/activation/collaboration', () => HttpResponse.json({ success: true, data: { imports: [] }, error: null }));
 const emptyTransfers = http.get('/api/director/v1/transfers', () => HttpResponse.json({ success: true, data: { jobs: [], policies: [] }, error: null }));
@@ -71,6 +72,7 @@ const idleWbppRun = {
 };
 
 export const handlers = [
+  ...scoringDefaultsHandlers,
   http.get('/api/ts-sync', () => HttpResponse.json({ success: true, data: [], error: null })),
   emptyCollaborationActivation,
   emptyTransfers,

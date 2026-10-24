@@ -45,8 +45,8 @@ import {
   sameScoring,
   SCORING_DEFAULTS,
   useScoringPreferences,
-  type ScoringPreferences,
 } from '../hooks/useScoringPreferences';
+import { scoringPreferencesOf, stackScoringSettings } from '../utils/scoring';
 
 type StackCandidateImage = Pick<
   Image,
@@ -99,32 +99,6 @@ interface StackArtifact {
 function previewRevision(artifact: StackArtifact): string {
   const rendered = artifact.group.preview_revision;
   return rendered ? `${artifact.artifactRevision}.${rendered}` : artifact.artifactRevision;
-}
-
-function stackScoringSettings(preferences: ScoringPreferences): StackScoringSettings {
-  return {
-    penalty_satellite: preferences.satellite,
-    penalty_pointing: preferences.pointing,
-    penalty_temporal: preferences.temporal,
-    penalty_hfr_rise: preferences.hfrRise,
-    penalty_star_loss: preferences.starLoss,
-    hfr_reject_above: preferences.hfrRejectAbove,
-    star_count_reject_below: preferences.starCountRejectBelow,
-  };
-}
-
-/** The inverse of `stackScoringSettings`, so an artifact's recorded policy
- * can be compared with the shared `sameScoring`. */
-function scoringPreferencesOf(settings: StackScoringSettings): ScoringPreferences {
-  return {
-    satellite: settings.penalty_satellite,
-    pointing: settings.penalty_pointing,
-    temporal: settings.penalty_temporal,
-    hfrRise: settings.penalty_hfr_rise ?? 1,
-    starLoss: settings.penalty_star_loss ?? 1,
-    hfrRejectAbove: settings.hfr_reject_above,
-    starCountRejectBelow: settings.star_count_reject_below,
-  };
 }
 
 const CALIBRATED_SCORING = stackScoringSettings(SCORING_DEFAULTS);

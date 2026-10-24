@@ -125,10 +125,12 @@ import type { GuidFillReport, GuidReport,
   CalibrationMode,
   StackFrameOrder,
   StackMethod,
+  StackScoringSettings,
   WbppActivity,
   JobsResponse,
   WbppStackImport,
   StackMethodSettings,
+  ScoringDefaultsSettings,
   StackGpu,
   StackGpuSettings,
   WorkerSettings,
@@ -1037,6 +1039,29 @@ export const apiClient = {
       folders,
     );
     if (!data.data) throw new Error(data.error || 'Failed to save the folders');
+    return data.data;
+  },
+
+  getScoringDefaults: async (): Promise<ScoringDefaultsSettings> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<ScoringDefaultsSettings>>('/settings/scoring');
+    if (!data.data) throw new Error(data.error || 'Failed to load the scoring defaults');
+    return data.data;
+  },
+
+  /** With `onlyIfUnstored`, the server saves only when it holds no copy yet,
+   *  and otherwise answers with the copy it holds. */
+  updateScoringDefaults: async (
+    scoring: StackScoringSettings,
+    { onlyIfUnstored = false }: { onlyIfUnstored?: boolean } = {},
+  ): Promise<ScoringDefaultsSettings> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.put<ApiResponse<ScoringDefaultsSettings>>(
+      '/settings/scoring',
+      scoring,
+      onlyIfUnstored ? { params: { only_if_unstored: true } } : undefined,
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to save the scoring defaults');
     return data.data;
   },
 

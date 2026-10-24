@@ -1,30 +1,46 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { act, renderHook } from '@testing-library/react';
+import { describe, expect, it } from 'vitest';
+import { act, renderHook, waitFor } from '@testing-library/react';
+import { QueryClientProvider, type QueryClient } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import {
   penaltyParamsOf,
-  scoringDefaults,
   SCORING_DEFAULTS as DEFAULTS,
-  setScoringDefaults,
+  useScoringDefaults,
   useScoringPreferences,
   useViewScoring,
 } from '../useScoringPreferences';
 import { getDisplayPreferences } from '../useDisplayPreferences';
+import { AccessContext } from '../../auth/access';
+import {
+  deliverScoringDefaults,
+  scoringServer,
+  testQueryClient,
+  VIEWER_ACCESS,
+  waitForScoringDefaults,
+} from '../../test/scoringDefaults';
 import { keepScoringInScope, useDbProjectTarget, useUrlParams } from '../useUrlState';
 import { imageDetailPath } from '../../utils/imageDetailRoutes';
 
-function inRouter(entry: string) {
+function inRouter(entry: string, client: QueryClient = testQueryClient()) {
   return function Wrapper({ children }: { children: ReactNode }) {
-    return <MemoryRouter initialEntries={[entry]}>{children}</MemoryRouter>;
+    return (
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={[entry]}>{children}</MemoryRouter>
+      </QueryClientProvider>
+    );
   };
 }
 
-/** The Scoring control's hook, with the link it writes to. */
-function renderViewScoring(entry = '/sequence?db=main&project=1&target=1') {
-  return renderHook(() => ({ view: useViewScoring(), search: useLocation().search }), {
-    wrapper: inRouter(entry),
+/** The Scoring control's hook, with the link it writes to, once the
+ *  server's defaults have arrived. */
+async function renderViewScoring(entry = '/sequence?db=main&project=1&target=1') {
+  const client = testQueryClient();
+  const view = renderHook(() => ({ view: useViewScoring(), search: useLocation().search }), {
+    wrapper: inRouter(entry, client),
   });
+  await waitForScoringDefaults(client);
+  return { client, ...view };
 }
 
 describe('scoring request params', () => {
@@ -48,28 +64,46 @@ describe('scoring request params', () => {
   });
 });
 
-describe('a view\'s scoring', () => {
-  beforeEach(() => setScoringDefaults({ ...DEFAULTS }));
-  afterEach(() => setScoringDefaults({ ...DEFAULTS }));
-
-  it('starts from the saved defaults', () => {
-    setScoringDefaults({ ...DEFAULTS, satellite: 0, hfrRejectAbove: 2.55 });
-    const { result } = renderViewScoring();
-    expect(result.current.view.scoring).toEqual({ ...DEFAULTS, satellite: 0, hfrRejectAbove: 2.55 });
-    expect(result.current.view.changed).toBe(false);
+describe('the server\'s scoring defaults', () => {
+  it('are the built-in values until the server\'s arrive', async () => {
+    scoringServer.set({ ...DEFAULTS, satellite: 0 });
+    const { result } = renderHook(() => useScoringDefaults(), { wrapper: inRouter('/') });
+    expect(result.current).toEqual(DEFAULTS);
+    await waitFor(() => expect(result.current).toEqual({ ...DEFAULTS, satellite: 0 }));
   });
 
-  it('lets the link win over the defaults', () => {
-    setScoringDefaults({ ...DEFAULTS, hfrRejectAbove: 2.55 });
+  it('follow defaults saved elsewhere', async () => {
+    const client = testQueryClient();
+    const { result } = renderHook(() => useScoringDefaults(), { wrapper: inRouter('/', client) });
+    await waitForScoringDefaults(client);
+    act(() => deliverScoringDefaults(client, { ...DEFAULTS, hfrRejectAbove: 2.2 }));
+    await waitFor(() => expect(result.current.hfrRejectAbove).toBe(2.2));
+  });
+});
+
+describe('a view\'s scoring', () => {
+  it('starts from the server\'s defaults', async () => {
+    scoringServer.set({ ...DEFAULTS, satellite: 0, hfrRejectAbove: 2.55 });
+    const { result } = await renderViewScoring();
+    await waitFor(() =>
+      expect(result.current.view.scoring).toEqual({ ...DEFAULTS, satellite: 0, hfrRejectAbove: 2.55 }));
+    expect(result.current.view.changed).toBe(false);
+    expect(result.current.view.canSaveDefault).toBe(true);
+  });
+
+  it('lets the link win over the defaults', async () => {
+    scoringServer.set({ ...DEFAULTS, hfrRejectAbove: 2.55 });
+    const client = testQueryClient();
     const { result } = renderHook(() => useScoringPreferences(), {
-      wrapper: inRouter('/grid?db=main&maxHfr=4&penaltyPointing=0'),
+      wrapper: inRouter('/grid?db=main&maxHfr=4&penaltyPointing=0', client),
     });
+    await waitForScoringDefaults(client);
     expect(result.current).toEqual({ ...DEFAULTS, pointing: 0, hfrRejectAbove: 4 });
   });
 
-  it('applies a change to the view alone, as the link', () => {
-    setScoringDefaults({ ...DEFAULTS, hfrRejectAbove: 2.55 });
-    const { result } = renderViewScoring();
+  it('applies a change to the view alone, as the link', async () => {
+    scoringServer.set({ ...DEFAULTS, hfrRejectAbove: 2.55 });
+    const { result } = await renderViewScoring();
     act(() => result.current.view.setScoring({
       ...result.current.view.scoring,
       starCountRejectBelow: 505,
@@ -82,35 +116,58 @@ describe('a view\'s scoring', () => {
     expect(result.current.view.scoring.starCountRejectBelow).toBe(505);
     expect(result.current.view.changed).toBe(true);
     // The defaults have not moved.
-    expect(scoringDefaults()).toEqual({ ...DEFAULTS, hfrRejectAbove: 2.55 });
+    expect(scoringServer.saves).toEqual([]);
   });
 
-  it('saves the view as the default and leaves a clean link', () => {
-    const { result } = renderViewScoring('/sequence?db=main&penaltySatellite=0&maxHfr=3');
+  it('saves the view as the server\'s default and leaves a clean link', async () => {
+    const before = getDisplayPreferences();
+    const { result } = await renderViewScoring('/sequence?db=main&penaltySatellite=0&maxHfr=3');
     expect(result.current.view.changed).toBe(true);
     act(() => result.current.view.saveAsDefault(result.current.view.scoring));
-    expect(scoringDefaults()).toEqual({ ...DEFAULTS, satellite: 0, hfrRejectAbove: 3 });
-    expect(getDisplayPreferences()).toMatchObject({
-      scoringPenaltySatellite: 0,
-      scoringHfrRejectAbove: 3,
-    });
-    expect(result.current.search).toBe('?db=main');
+    await waitFor(() => expect(result.current.search).toBe('?db=main'));
+    expect(scoringServer.saves).toEqual([{ ...DEFAULTS, satellite: 0, hfrRejectAbove: 3 }]);
+    // The server keeps them, not this person's display preferences.
+    expect(getDisplayPreferences()).toEqual(before);
     expect(result.current.view.scoring).toEqual({ ...DEFAULTS, satellite: 0, hfrRejectAbove: 3 });
     expect(result.current.view.changed).toBe(false);
   });
 
-  it('resets the view to the defaults', () => {
-    setScoringDefaults({ ...DEFAULTS, temporal: 0.5 });
-    const { result } = renderViewScoring('/sequence?db=main&penaltyTemporal=2&minStars=40');
+  it('keeps the view\'s link when the save fails', async () => {
+    scoringServer.failure = { error: 'The settings file is read-only' };
+    const { result } = await renderViewScoring('/sequence?db=main&penaltySatellite=0&maxHfr=3');
+    act(() => result.current.view.saveAsDefault(result.current.view.scoring));
+    await waitFor(() =>
+      expect(result.current.view.saveDefaultError?.message).toBe('The settings file is read-only'));
+    expect(result.current.view.savingDefault).toBe(false);
+    expect(result.current.search).toBe('?db=main&penaltySatellite=0&maxHfr=3');
+    expect(result.current.view.changed).toBe(true);
+    expect(scoringServer.get()).toEqual(DEFAULTS);
+  });
+
+  it('tells a viewer they cannot save the defaults', async () => {
+    const client = testQueryClient();
+    const Router = inRouter('/sequence?db=main', client);
+    const { result } = renderHook(() => useViewScoring(), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <AccessContext.Provider value={VIEWER_ACCESS}><Router>{children}</Router></AccessContext.Provider>
+      ),
+    });
+    await waitForScoringDefaults(client);
+    expect(result.current.canSaveDefault).toBe(false);
+  });
+
+  it('resets the view to the defaults', async () => {
+    scoringServer.set({ ...DEFAULTS, temporal: 0.5 });
+    const { result } = await renderViewScoring('/sequence?db=main&penaltyTemporal=2&minStars=40');
     expect(result.current.view.scoring).toMatchObject({ temporal: 2, starCountRejectBelow: 40 });
     act(() => result.current.view.resetToDefault());
     expect(result.current.search).toBe('?db=main');
     expect(result.current.view.scoring).toEqual({ ...DEFAULTS, temporal: 0.5 });
-    expect(scoringDefaults()).toEqual({ ...DEFAULTS, temporal: 0.5 });
+    expect(scoringServer.saves).toEqual([]);
   });
 
-  it('keeps one snapshot while the values stay the same', () => {
-    const { result, rerender } = renderViewScoring();
+  it('keeps one snapshot while the values stay the same', async () => {
+    const { result, rerender } = await renderViewScoring();
     const first = result.current.view.scoring;
     rerender();
     expect(result.current.view.scoring).toBe(first);

@@ -6,6 +6,9 @@ import { describe, expect, it } from 'vitest';
 import { server } from '../../test/msw-server';
 import AuthGate from '../AccessContext';
 import { useAccess } from '../access';
+import { SCORING_DEFAULTS, stackScoringSettings } from '../../utils/scoring';
+
+const CALIBRATED = stackScoringSettings(SCORING_DEFAULTS);
 
 function wrapper() {
   const queryClient = new QueryClient({
@@ -38,6 +41,69 @@ describe('AuthGate', () => {
     );
 
     expect(await screen.findByText(/Catalog ready · editor/)).toBeInTheDocument();
+  });
+
+  it('waits for the server\'s scoring defaults before showing the app', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    server.use(
+      http.get('/api/settings/scoring', async () => {
+        await gate;
+        return HttpResponse.json({
+          success: true,
+          data: { scoring: CALIBRATED, builtin: CALIBRATED, stored: true },
+          error: null,
+        });
+      }),
+    );
+    render(
+      <AuthGate><ProtectedContent /></AuthGate>,
+      { wrapper: wrapper() },
+    );
+
+    await waitFor(() => expect(screen.getByText('Loading scoring defaults…')).toBeInTheDocument());
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screen.getByText('Loading scoring defaults…')).toBeInTheDocument();
+    expect(screen.queryByText(/Catalog ready/)).toBeNull();
+    release();
+    expect(await screen.findByText(/Catalog ready · editor/)).toBeInTheDocument();
+  });
+
+  it('shows the app when the scoring defaults cannot be read', async () => {
+    server.use(
+      http.get('/api/settings/scoring', () =>
+        HttpResponse.json({ success: false, data: null, error: 'Internal error' }, { status: 500 })),
+    );
+    render(
+      <AuthGate><ProtectedContent /></AuthGate>,
+      { wrapper: wrapper() },
+    );
+
+    expect(await screen.findByText(/Catalog ready · editor/)).toBeInTheDocument();
+  });
+
+  it('shows the app at once when the scoring defaults cannot be read, without retrying', async () => {
+    let reads = 0;
+    server.use(
+      http.get('/api/settings/scoring', () => {
+        reads += 1;
+        return HttpResponse.json({ success: false, data: null, error: 'Internal error' }, { status: 500 });
+      }),
+    );
+    // The app's own query defaults (router/index.tsx), which retry a failed
+    // query three times, seconds apart.
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { staleTime: 30000, refetchInterval: 30000 } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <AuthGate><ProtectedContent /></AuthGate>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText(/Catalog ready · editor/)).toBeInTheDocument();
+    expect(reads).toBe(1);
+    queryClient.clear();
   });
 
   it('shows a normal login form and exposes the signed-in role', async () => {

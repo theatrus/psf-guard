@@ -1,11 +1,13 @@
 import { useId, useState, type FormEvent } from 'react';
-import { setScoringDefaults, useScoringDefaults } from '../hooks/useScoringPreferences';
+import { useAccess } from '../auth/access';
+import { useSaveScoringDefaults, useScoringDefaults } from '../hooks/useScoringPreferences';
 import {
   formatScoringValue,
   parseScoringText,
   SCORING_DEFAULTS,
   SCORING_RULES,
   sameScoring,
+  scoringPreferencesOf,
   scoringText,
   type ScoringField,
   type ScoringPreferences,
@@ -49,18 +51,20 @@ function sameTexts(left: Texts, right: Texts): boolean {
 }
 
 /**
- * Settings › Review › Sequence scoring: the person's own defaults for the
- * Scoring control. Every view starts from them; a change in a view's
- * toolbar stays in that view until it is saved as the default. They are
- * kept with the other review preferences: in this browser, or with a
- * signed-in user's account. Each field follows the same rules as the
- * toolbar and the link (SCORING_RULES), so a default saved anywhere opens
- * here as a value the form accepts.
+ * Settings › Review › Sequence scoring: the server's defaults for the
+ * Scoring control. Every view starts from them, for everyone on the server,
+ * and automatic stack builds score with them; a change in a view's toolbar
+ * stays in that view until it is saved as the default. Only an editor may
+ * change them. Each field follows the same rules as the toolbar and the
+ * link (SCORING_RULES), so a default saved anywhere opens here as a value
+ * the form accepts.
  */
 export default function ScoringDefaultsSettings() {
   const headingId = useId();
   const fieldId = useId();
   const defaults = useScoringDefaults();
+  const saveDefaults = useSaveScoringDefaults();
+  const { canWrite } = useAccess();
   // The defaults the fields started from. Newer ones (the toolbar's Save as
   // default, another tab, a sign-in) replace untouched fields, but never
   // what the person is typing: they are offered instead.
@@ -106,9 +110,12 @@ export default function ScoringDefaultsSettings() {
       setUnreadable(unread);
       return;
     }
-    if (!dirty) return;
-    adopt(values);
-    setScoringDefaults(values);
+    if (!dirty || !canWrite || saveDefaults.isPending) return;
+    // The fields keep what was typed until the server has it: a failed
+    // save leaves the edits to try again.
+    saveDefaults.mutate(values, {
+      onSuccess: (saved) => adopt(scoringPreferencesOf(saved.scoring)),
+    });
   };
 
   const field = (key: ScoringField) => {
@@ -160,9 +167,16 @@ export default function ScoringDefaultsSettings() {
       <UnsavedMark label="scoring defaults" dirty={edited} />
       <h3 id={headingId}>Sequence scoring</h3>
       <p className="scoring-defaults-intro">
-        Every view's <strong>Scoring</strong> control starts from these. A
-        change there applies to that view until you save it as the default.
+        Every view's <strong>Scoring</strong> control starts from these, for
+        everyone on this server, and automatic stack builds score with them. A
+        change in a view's control applies to that view until you save it as
+        the default. When automatic stack previews are on, saving new defaults
+        rebuilds stacks scored another way, after the arrival delay set under
+        Settings › Stacking.
       </p>
+      {!canWrite && (
+        <p className="scoring-defaults-intro">Only an editor can change the defaults.</p>
+      )}
       {newerArrived && (
         <p className="scoring-defaults-newer" role="status">
           Newer defaults were saved elsewhere while you were editing. Saving will replace them with your edits.{' '}
@@ -172,33 +186,40 @@ export default function ScoringDefaultsSettings() {
         </p>
       )}
       <form className="scoring-defaults-form" onSubmit={save} noValidate>
-        <fieldset className="scoring-defaults-group">
+        <fieldset className="scoring-defaults-group" disabled={!canWrite}>
           <legend>Penalties</legend>
           {PENALTIES.map(field)}
         </fieldset>
-        <fieldset className="scoring-defaults-group">
+        <fieldset className="scoring-defaults-group" disabled={!canWrite}>
           <legend>Reject limits</legend>
           {LIMITS.map(field)}
         </fieldset>
         {/* aria-disabled, not disabled: a button that disables itself as it
             is pressed would drop keyboard focus out of the form. */}
         <div className="scoring-defaults-actions">
-          <button type="submit" className="save-button" aria-disabled={!dirty}>
-            Save defaults
+          <button type="submit" className="save-button" aria-disabled={!dirty || !canWrite || saveDefaults.isPending}>
+            {saveDefaults.isPending ? 'Saving…' : 'Save defaults'}
           </button>
           <button
             type="button"
             className="cancel-button"
-            aria-disabled={atBuiltIn}
+            aria-disabled={atBuiltIn || !canWrite}
             onClick={() => {
-              if (atBuiltIn) return;
-              adopt({ ...SCORING_DEFAULTS });
-              setScoringDefaults({ ...SCORING_DEFAULTS });
+              if (atBuiltIn || !canWrite || saveDefaults.isPending) return;
+              saveDefaults.mutate(
+                { ...SCORING_DEFAULTS },
+                { onSuccess: (saved) => adopt(scoringPreferencesOf(saved.scoring)) },
+              );
             }}
           >
             Reset to built-in defaults
           </button>
         </div>
+        {saveDefaults.isError && (
+          <p className="scoring-default-error" role="alert">
+            Could not save the defaults: {(saveDefaults.error as Error).message}
+          </p>
+        )}
       </form>
     </section>
   );

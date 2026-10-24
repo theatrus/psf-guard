@@ -242,8 +242,6 @@ A signed-in user's view choices follow them to any browser or device:
 
 - Images and Sequence: the sort order, the grouping (one for a project, one
   for All projects), the thumbnail sizes, and the chips.
-- Sequence scoring: the penalty and reject-limit defaults each view's
-  Scoring control starts from.
 - Library: compact or detailed rows.
 - The project picker's grouping, and moving on after a grade.
 
@@ -258,17 +256,14 @@ and saved then. A change made in one tab is saved by that tab; the user's
 other tabs in the same browser follow it without saving it again. A link
 that names an order, a grouping or a scoring value still wins; the saved
 choice fills in what a link leaves out. A viewer saves their own preferences too: they
-change no catalog, so the role does not gate them. A viewer cannot open
-Settings, so they save scoring defaults with the Scoring control's **Save
-as default**.
+change no catalog, so the role does not gate them.
 
-**Scoring defaults** are personal, not a catalog setting. They change the
-scores and reject recommendations this person sees, and what their own
-actions use. Saving them changes nothing anyone else sees: others see only
-what those actions produce, as with a grade. The one lasting product is a
-stack: it records the scoring its build used, and the automatic refresh of
-that project reuses the newest build's scoring for everyone, as it did
-before. A project's first automatic build uses the built-in scoring.
+**Scoring defaults** are not a view preference. The server keeps one copy
+for everyone, which every view's Scoring control starts from and automatic
+stack builds use, and only an editor can change it; see
+[scoring defaults](SCREENING.md#scoring-defaults). Before this version each
+user kept their own: the first page an editor opens after the update, while
+the server has no copy, saves that editor's values to the server.
 
 **First sign-in.** If the user has no document yet, they start from the
 defaults, with one exception: the first account to sign in on a browser

@@ -36,6 +36,7 @@ import { apiClient } from './api/client';
 import AuthGate from './auth/AccessContext';
 import { useAccess } from './auth/access';
 import { useAccountPreferences } from './hooks/useAccountPreferences';
+import { useScoringDefaultsMigration } from './hooks/useScoringDefaultsMigration';
 import './App.css';
 
 function AppContent({ zoom }: { zoom?: DesktopZoom }) {
@@ -82,6 +83,9 @@ function AppContent({ zoom }: { zoom?: DesktopZoom }) {
   const access = useAccess();
   // A signed-in user's View choices follow them from browser to browser.
   useAccountPreferences(access.status.username);
+  // The scoring defaults moved to the server: the first page there saves
+  // the person's own, once.
+  useScoringDefaultsMigration(access.status.username, access.canWrite);
   // Settings opens by itself at most once: the check repeats for late Tauri
   // globals, and a user who closed it should not see it come back.
   const autoOpened = useRef(false);

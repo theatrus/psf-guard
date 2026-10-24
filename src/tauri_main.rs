@@ -785,6 +785,7 @@ mod tests {
             astrobin: None,
             pixinsight: None,
             backups: None,
+            scoring: None,
             peers: Vec::new(),
         }
     }

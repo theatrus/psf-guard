@@ -11,10 +11,12 @@
 //! interactive build cancels a running automatic one, whose checkpoint picks
 //! up where it stopped.
 //!
-//! A refresh asks for exactly what the cards remember: the same targets and
-//! channels, the same Accepted-only policy, order, scoring, and calibration
-//! choices, over the project's current frames, one build per channel as a
-//! person's Build stacks makes them. The job identity covers the frames and
+//! A refresh asks for what the cards remember: the same targets and
+//! channels, the same Accepted-only policy, order, and calibration choices,
+//! over the project's current frames, one build per channel as a person's
+//! Build stacks makes them. It scores with the server's scoring defaults
+//! (`scoring_defaults`), the values every view starts from, so a card it
+//! builds matches what the page compares it with. The job identity covers the frames and
 //! their grades, so a channel that would rebuild nothing new is a cache hit
 //! and starts no work. With new channels on, channels with no stack yet and
 //! a recent frame are stacked too. Color follows each target's last channel.
@@ -190,12 +192,15 @@ pub enum RefreshReason {
     Sync,
     /// Grades changed, by hand or by a scan.
     Grade,
+    /// The server's scoring defaults changed, so stacks scored otherwise
+    /// are built again.
+    Scoring,
 }
 
 impl RefreshReason {
     fn delay(self) -> Duration {
         let minutes = match self {
-            RefreshReason::Arrival | RefreshReason::Sync => {
+            RefreshReason::Arrival | RefreshReason::Sync | RefreshReason::Scoring => {
                 ARRIVAL_DELAY_MINUTES.load(Ordering::Relaxed)
             }
             RefreshReason::Grade => GRADE_DELAY_MINUTES.load(Ordering::Relaxed),
@@ -213,6 +218,7 @@ impl RefreshReason {
             RefreshReason::Arrival => "new frames",
             RefreshReason::Sync => "a sync",
             RefreshReason::Grade => "grade changes",
+            RefreshReason::Scoring => "a scoring change",
         }
     }
 }
@@ -1115,28 +1121,34 @@ pub(super) fn plan_refresh(
                         .as_ref()
                         .map(|group| group.key.clone()),
                 },
-                entry
-                    .group
-                    .input_images
-                    .iter()
-                    .map(|image| (image.image_id, image.grading_status))
-                    .collect::<HashSet<_>>(),
+                (
+                    entry
+                        .group
+                        .input_images
+                        .iter()
+                        .map(|image| (image.image_id, image.grading_status))
+                        .collect::<HashSet<_>>(),
+                    entry.scoring,
+                ),
             )
         })
         .collect::<HashMap<_, _>>();
-    let mut request = refresh_request(&latest, &[]).unwrap_or_else(|| StackPreviewRequest {
-        image_ids: Vec::new(),
-        accepted_only: false,
-        force: false,
-        north_up: false,
-        calibration: crate::calibration::CalibrationMode::Auto,
-        calibration_overrides: Vec::new(),
-        order: Default::default(),
-        scoring: Default::default(),
-        method: None,
-        color_defaults: None,
-        channel: None,
-    });
+    // Read once, so every channel of the refresh scores the same way.
+    let scoring = crate::server::scoring_defaults::current();
+    let mut request =
+        refresh_request(&latest, &[], &scoring).unwrap_or_else(|| StackPreviewRequest {
+            image_ids: Vec::new(),
+            accepted_only: false,
+            force: false,
+            north_up: false,
+            calibration: crate::calibration::CalibrationMode::Auto,
+            calibration_overrides: Vec::new(),
+            order: Default::default(),
+            scoring: scoring_overrides(&scoring),
+            method: None,
+            color_defaults: None,
+            channel: None,
+        });
     let recent_since = new_channel_since();
     let mut channels = Vec::new();
     let mut restack = Vec::new();
@@ -1144,13 +1156,15 @@ pub(super) fn plan_refresh(
     for (key, frames) in &current {
         let name = names.get(key).cloned().unwrap_or_default();
         match remembered.get(key) {
-            Some(built) => {
+            Some((built, built_scoring)) => {
                 channels.push(key.clone());
                 let now = frames
                     .iter()
                     .map(|image| (image.id, image.grading_status))
                     .collect::<HashSet<_>>();
-                if &now != built {
+                // A card scored otherwise than the server's defaults is
+                // stacked again too, and listed as such.
+                if &now != built || *built_scoring != scoring {
                     restack.push((claim_key(project_id, key), name));
                 }
             }
@@ -1203,11 +1217,13 @@ pub(super) fn plan_refresh(
 }
 
 /// The request that rebuilds what a project's cards remember, over the
-/// frames the project holds now. `None` when fewer than two frames remain
-/// in the remembered channels.
+/// frames the project holds now, scored with `scoring`, the server's
+/// defaults. `None` when fewer than two frames remain in the remembered
+/// channels.
 pub(super) fn refresh_request(
     latest: &LatestStackPreviews,
     images: &[AcquiredImage],
+    scoring: &StackScoringSettings,
 ) -> Option<StackPreviewRequest> {
     let newest = latest
         .groups
@@ -1269,7 +1285,10 @@ pub(super) fn refresh_request(
         calibration: crate::calibration::CalibrationMode::Auto,
         calibration_overrides: calibration_overrides.into_values().collect(),
         order: newest.order,
-        scoring: scoring_overrides(&newest.scoring),
+        // The server's scoring defaults, not the card's: a card built with
+        // other scoring shows out of date against the views, and this
+        // rebuild brings it in line.
+        scoring: scoring_overrides(scoring),
         // The server's current method, so a settings change reaches the next refresh.
         method: None,
         // An automatic refresh adds the default Color setup's pipeline.
@@ -1278,7 +1297,7 @@ pub(super) fn refresh_request(
     })
 }
 
-/// The overrides that reproduce a recorded scoring snapshot.
+/// The overrides that reproduce a scoring snapshot.
 fn scoring_overrides(scoring: &StackScoringSettings) -> ScoringOverrideQuery {
     ScoringOverrideQuery {
         penalty_satellite: Some(scoring.penalty_satellite),
@@ -1638,6 +1657,8 @@ mod tests {
             {"image_id": 1, "grading_status": 1},
             {"image_id": 2, "grading_status": 1}
         ]);
+        // Scored as the server's defaults, the built-in values here.
+        stacked["scoring"] = serde_json::to_value(StackScoringSettings::default()).unwrap();
         let latest = serde_json::json!({
             "schema_version": 1, "database_id": ctx.id, "project_id": 1, "updated_unix_seconds": 5,
             "groups": [stacked]
@@ -1661,6 +1682,15 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert_eq!(plan.channels.len(), 1);
+
+        // A card scored otherwise than the server's defaults restacks, and
+        // the queue lists it, though no frame or grade moved.
+        let mut scored_otherwise = latest.clone();
+        scored_otherwise["groups"][0]["scoring"]["penalty_satellite"] = serde_json::json!(0.5);
+        std::fs::write(&path, serde_json::to_vec(&scored_otherwise).unwrap()).unwrap();
+        let plan = plan_refresh(&ctx, 1).unwrap().unwrap();
+        assert_eq!(names(&plan), vec!["T · R".to_string()]);
+        std::fs::write(&path, serde_json::to_vec(&latest).unwrap()).unwrap();
 
         // A new R frame, and R is due to restack.
         {
@@ -2004,6 +2034,29 @@ mod tests {
     }
 
     #[test]
+    fn a_build_records_exactly_the_scoring_defaults_it_was_asked_for() {
+        // The cards a refresh builds must record the server's defaults to
+        // the bit, or the page would still show them out of date.
+        for defaults in [
+            StackScoringSettings::default(),
+            StackScoringSettings {
+                penalty_satellite: 0.3,
+                penalty_pointing: 0.0,
+                penalty_temporal: 2.0,
+                penalty_hfr_rise: 1.5,
+                penalty_star_loss: 0.7,
+                hfr_reject_above: Some(2.55),
+                star_count_reject_below: Some(505.0),
+            },
+        ] {
+            assert_eq!(
+                StackScoringSettings::from_overrides(&scoring_overrides(&defaults)),
+                defaults
+            );
+        }
+    }
+
+    #[test]
     fn a_refresh_asks_for_what_the_cards_remember_over_the_frames_the_project_holds_now() {
         let latest: LatestStackPreviews = serde_json::from_value(serde_json::json!({
             "schema_version": 1, "database_id": "db-one", "project_id": 1, "updated_unix_seconds": 5,
@@ -2024,7 +2077,15 @@ mod tests {
             // Nor is another target.
             image(7, 2, "R"),
         ];
-        let request = refresh_request(&latest, &images).expect("a request");
+        // The server's scoring defaults, not the cards' 50% satellite and
+        // 3 px Max HFR.
+        let server = StackScoringSettings {
+            penalty_satellite: 0.3,
+            hfr_reject_above: None,
+            star_count_reject_below: Some(40.0),
+            ..StackScoringSettings::default()
+        };
+        let request = refresh_request(&latest, &images, &server).expect("a request");
         assert_eq!(request.image_ids, vec![1, 2, 3, 4, 5]);
         // The newest card's policies carry the request.
         assert!(request.accepted_only, "the G card at 12 was accepted-only");
@@ -2033,9 +2094,9 @@ mod tests {
             request.method, None,
             "a refresh takes the server's current method"
         );
-        assert_eq!(request.scoring.penalty_satellite, Some(0.5));
-        assert_eq!(request.scoring.hfr_reject_above, Some(3.0));
-        assert_eq!(request.scoring.star_count_reject_below, None);
+        assert_eq!(request.scoring.penalty_satellite, Some(0.3));
+        assert_eq!(request.scoring.hfr_reject_above, None);
+        assert_eq!(request.scoring.star_count_reject_below, Some(40.0));
         assert!(!request.force);
         // Only the card that chose something other than auto is an override.
         assert_eq!(request.calibration_overrides.len(), 1);
@@ -2045,7 +2106,7 @@ mod tests {
             crate::calibration::CalibrationMode::Off
         );
         assert!(
-            refresh_request(&latest, &images[..1]).is_none(),
+            refresh_request(&latest, &images[..1], &server).is_none(),
             "one frame cannot be stacked"
         );
     }

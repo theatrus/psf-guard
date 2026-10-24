@@ -58,6 +58,7 @@ pub mod remote_upload;
 pub mod remote_upload_layout;
 pub mod schedule;
 pub mod scheduler;
+pub mod scoring_defaults;
 pub mod shutdown;
 pub mod sky_coverage;
 pub mod slug;
@@ -170,6 +171,7 @@ static SERVER_STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::Atomic
 fn apply_registry_settings(registry: &crate::db_registry::DbRegistry) {
     crate::calibration::configure(registry.calibration.as_ref());
     stack_preview::automatic::configure_from_registry(registry.stacking.as_ref());
+    scoring_defaults::configure(registry.scoring.as_ref());
     cache_budget::configure(registry.storage.as_ref());
 }
 
@@ -737,6 +739,11 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route(
             "/settings/storage/folders",
             axum::routing::put(storage_settings::update_storage_folders),
+        )
+        .route(
+            "/settings/scoring",
+            get(scoring_defaults::get_scoring_defaults)
+                .put(scoring_defaults::update_scoring_defaults),
         )
         .route(
             "/settings/stacking/method",

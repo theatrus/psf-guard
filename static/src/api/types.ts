@@ -1017,6 +1017,17 @@ export interface StackScoringSettings {
   star_count_reject_below: number | null;
 }
 
+/** The server's scoring defaults: what every view's Scoring control starts
+ *  from and automatic stack builds use. */
+export interface ScoringDefaultsSettings {
+  scoring: StackScoringSettings;
+  /** PSF Guard's own values. */
+  builtin: StackScoringSettings;
+  /** False until the server holds a copy; the page then saves the person's
+   *  earlier defaults once (useScoringDefaultsMigration). */
+  stored: boolean;
+}
+
 /** Where a stack WBPP made came from. */
 export interface WbppStackSource {
   master_file: string;
@@ -1112,7 +1123,7 @@ export interface ScheduledRefresh {
   /** null refreshes every followed project of the database. */
   project_id: number | null;
   project_name: string | null;
-  reason: 'arrival' | 'sync' | 'grade';
+  reason: 'arrival' | 'sync' | 'grade' | 'scoring';
   due_in_seconds: number;
   /**
    * The channels it expects to restack, then the ones it will stack for the

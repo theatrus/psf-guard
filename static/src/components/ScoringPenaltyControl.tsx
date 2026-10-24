@@ -24,11 +24,12 @@ const LIMIT_KEYS: LimitKey[] = ['hfrRejectAbove', 'starCountRejectBelow'];
  * frames, hits the quality score, plus the absolute reject limits (HFR
  * ceiling, star-count floor).
  *
- * It starts from the person's defaults (Settings › Review). A change here
+ * It starts from the server's defaults (Settings › Review). A change here
  * applies to this view: it goes in the link, so it stays through a reload
  * and travels to Images, the detail view, Stacks and the project's other
  * targets, which say so, and the button says the view differs. Save as
- * default makes it the default; Reset to default drops it.
+ * default makes it the server's default, for every view and automatic
+ * stack builds, and only an editor may; Reset to default drops it.
  *
  * Inputs track locally while editing and commit on release/blur: every
  * commit changes the scoring query keys and refetches whole-scope analyses,
@@ -42,8 +43,17 @@ const LIMIT_KEYS: LimitKey[] = ['hfrRejectAbove', 'starCountRejectBelow'];
  */
 export default function ScoringPenaltyControl() {
   const errorId = useId();
-  const { scoring, defaults, setScoring, saveAsDefault, resetToDefault } = useViewScoring();
-  // Settings opens for editors only; a viewer saves defaults from here.
+  const {
+    scoring,
+    defaults,
+    setScoring,
+    canSaveDefault,
+    saveAsDefault,
+    savingDefault,
+    saveDefaultError,
+    resetToDefault,
+  } = useViewScoring();
+  // Settings, like saving the defaults, is for editors only.
   const { canWrite } = useAccess();
   const [draft, setDraft] = useState<ScoringPreferences | null>(null);
   const [limitTexts, setLimitTexts] = useState<Partial<Record<LimitKey, string>>>({});
@@ -78,7 +88,7 @@ export default function ScoringPenaltyControl() {
     starCountRejectBelow: settled('starCountRejectBelow'),
   };
   const differs = !sameScoring(effective, defaults);
-  const canSave = differs && refused.length === 0;
+  const canSave = differs && refused.length === 0 && canSaveDefault && !savingDefault;
 
   const clearDrafts = () => {
     setDraft(null);
@@ -105,7 +115,7 @@ export default function ScoringPenaltyControl() {
     return (
       <label
         className={`penalty-slider${off ? ' is-set' : ''}`}
-        title={`${title} Your default: ${formatPenalty(defaults[key])}.`}
+        title={`${title} Default: ${formatPenalty(defaults[key])}.`}
       >
         <span className="penalty-label">{SCORING_RULES[key].label}</span>
         <input
@@ -135,7 +145,7 @@ export default function ScoringPenaltyControl() {
       <>
         <label
           className={`penalty-limit${off ? ' is-set' : ''}`}
-          title={`${title} Your default: ${formatLimit(defaults[key])}.`}
+          title={`${title} Default: ${formatLimit(defaults[key])}.`}
         >
           <span className="penalty-label">{rule.label}</span>
           <input
@@ -173,7 +183,7 @@ export default function ScoringPenaltyControl() {
 
   return (
     <details className={`scoring-penalty-control${differs ? ' is-set' : ''}`}>
-      <summary title="How evidence and limits affect the quality score and reject recommendations. Penalties: 100% is the calibrated default, 0% ignores that evidence, 200% doubles the penalty. Reject limits are fixed cut-offs like N.I.N.A. subframe selection. Changes here apply to this view until you save them as your default.">
+      <summary title="How evidence and limits affect the quality score and reject recommendations. Penalties: 100% is the calibrated default, 0% ignores that evidence, 200% doubles the penalty. Reject limits are fixed cut-offs like N.I.N.A. subframe selection. Changes here apply to this view until you save them as the default.">
         Scoring{differs ? ' (changed)' : ''}
       </summary>
       <div className="scoring-penalty-panel">
@@ -208,7 +218,7 @@ export default function ScoringPenaltyControl() {
           'Recommend rejecting any frame with fewer detected stars than this, however the rest of the sequence looks. Leave blank to disable this limit.'
         )}
         <p className="penalty-defaults-note">
-          {differs ? 'Changed for this view.' : 'Your defaults.'}
+          {differs ? 'Changed for this view.' : 'The defaults.'}
           {canWrite && (
             <>
               {' '}
@@ -229,7 +239,7 @@ export default function ScoringPenaltyControl() {
             type="button"
             className="tool-button"
             aria-disabled={!differs}
-            title="Score this view with your defaults again"
+            title="Score this view with the defaults again"
             onClick={() => {
               if (!differs) return;
               clearDrafts();
@@ -242,7 +252,11 @@ export default function ScoringPenaltyControl() {
             type="button"
             className="tool-button"
             aria-disabled={!canSave}
-            title="Make these values your defaults: every view starts from them"
+            title={
+              canSaveDefault
+                ? 'Make these values the defaults: every view and automatic stack build uses them'
+                : 'Only an editor can change the defaults'
+            }
             onClick={() => {
               if (!canSave) {
                 if (refused.length > 0) {
@@ -251,13 +265,18 @@ export default function ScoringPenaltyControl() {
                 return;
               }
               const next = normalizeScoring(effective, scoring);
-              clearDrafts();
-              saveAsDefault(next);
+              // A typed value stays until the save succeeds.
+              saveAsDefault(next, clearDrafts);
             }}
           >
-            Save as default
+            {savingDefault ? 'Saving…' : 'Save as default'}
           </button>
         </div>
+        {saveDefaultError && (
+          <p className="penalty-error" role="alert">
+            Could not save the defaults: {saveDefaultError.message}
+          </p>
+        )}
       </div>
     </details>
   );
