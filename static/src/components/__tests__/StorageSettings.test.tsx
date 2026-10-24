@@ -37,7 +37,7 @@ const settings = (
     stack_max_volume_percent: stackLimit,
     calibration_max_volume_percent: stackLimit === null ? null : limit,
     default_max_volume_percent: 90,
-    min_max_volume_percent: 50,
+    min_max_volume_percent: 0,
     volumes: [{
       path: '/var/cache/psf-guard/askar', databases: ['Askar'],
       total_bytes: 1000 * GiB, used_bytes: 930 * GiB, used_percent: 93, max_percent: limit,
@@ -77,6 +77,20 @@ describe('StorageSettings', () => {
     fireEvent.change(slider, { target: { value: '80' } });
     fireEvent.pointerUp(slider);
     await waitFor(() => expect(saved).toEqual({ max_volume_percent: 80 }));
+  });
+
+  it('allows volume limits all the way down to zero', async () => {
+    let saved: unknown;
+    server.use(
+      http.get('/api/settings/storage', () => HttpResponse.json(settings(90))),
+      http.put('/api/settings/storage', async ({ request }) => { saved = await request.json(); return HttpResponse.json(settings(0)); })
+    );
+    render(<StorageSettings canManage />, { wrapper: wrapper() });
+    const slider = await screen.findByRole('slider', { name: /Volume usage limit/ });
+    expect(slider).toHaveAttribute('min', '0');
+    fireEvent.change(slider, { target: { value: '0' } });
+    fireEvent.pointerUp(slider);
+    await waitFor(() => expect(saved).toEqual({ max_volume_percent: 0 }));
   });
 
   it('saves a stack folder for the next start and leaves a fixed cache alone', async () => {

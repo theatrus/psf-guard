@@ -184,10 +184,15 @@ pub async fn update_storage_settings(
     .await?;
     cache_budget::configure(storage.as_ref());
     let state_for_pass = Arc::clone(&state);
-    let reports =
-        tokio::task::spawn_blocking(move || cache_budget::pass_after_limit_change(&state_for_pass))
-            .await
-            .map_err(|error| AppError::InternalError(format!("storage check failed: {error}")))?;
+    let reports = tokio::task::spawn_blocking(move || {
+        let reports = cache_budget::pass_after_limit_change(&state_for_pass);
+        // WBPP uses the resolved cap on shared volumes. Invalidate older
+        // cleanup plans after resolving the new limits and before responding.
+        super::wbpp_storage::policy_changed(&state_for_pass);
+        reports
+    })
+    .await
+    .map_err(|error| AppError::InternalError(format!("storage check failed: {error}")))?;
     cache_budget::record(&state.cache_budget, reports);
     Ok(Json(ApiResponse::success(response(&state))))
 }

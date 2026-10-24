@@ -391,7 +391,8 @@ what nothing references any more:
   Merging a project moves its indices onto the project it merged into, so its
   stacks stay.
 
-WBPP run folders are never removed: a run's output may exist nowhere else.
+WBPP run folders use their own intermediate/master retention and volume limit;
+see [Manage WBPP storage](WBPP.md#manage-wbpp-storage).
 
 Both indices replace entries per identity — mono per target/channel, color
 per target/kind/palette — so a job's output is durable until its input set
@@ -1012,8 +1013,9 @@ on: how full it is, which folders and databases it holds, and how much of it
 is previews, stacks and masters.
 
 **Volume usage limit** (90% by default) is the highest share of the
-whole volume, other files included, that may be used, as `df` counts it. It
-applies to all three folders unless **Separate limits for stacks and
+whole volume, other files included, that may be used, as `df` counts it. Limits
+accept every whole percentage from 0% through 100%. The limit applies to all
+three folders unless **Separate limits for stacks and
 calibration masters** gives those two their own. A volume holding more than
 one folder uses the lowest of their limits.
 
@@ -1045,11 +1047,16 @@ limit once nothing more may go is reported in red. The sizes in Settings are
 measured at most hourly, and after a cull. On a file system that keeps snapshots,
 deleted previews free no space until the snapshot goes, so each pass culls
 further until none are left. 100%
-turns culling off. Changing the limit needs database management. Windows
-servers do not read their volumes, so the limit does not apply there.
+turns culling off. Changing the limit needs database management. On Windows,
+background preview generation and WBPP cleanup can check volume usage, but
+the general preview/master cleanup pass is not available.
 
 To give stacks more room, put the stack folder on a larger volume, such as a
 network share, and keep the cache on a fast local disk.
+
+WBPP work folders have their own path, percentage limit, and intermediate/master
+retention policy under **Settings → Storage → WBPP storage**. See
+[Manage WBPP storage](WBPP.md#manage-wbpp-storage).
 
 ## Inspect calibration masters
 

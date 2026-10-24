@@ -138,7 +138,7 @@ describe('TauriSettings import state', () => {
             stack_max_volume_percent: null,
             calibration_max_volume_percent: null,
             default_max_volume_percent: 90,
-            min_max_volume_percent: 50,
+            min_max_volume_percent: 0,
             volumes: [],
             folders: [],
             folder_notes: [],

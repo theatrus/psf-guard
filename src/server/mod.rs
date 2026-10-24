@@ -76,6 +76,7 @@ pub mod user_admin;
 pub mod user_preferences;
 pub mod wbpp_queue;
 pub mod wbpp_run;
+pub mod wbpp_storage;
 
 use axum::{
     extract::DefaultBodyLimit,
@@ -1109,6 +1110,7 @@ async fn run_server_internal(
     // Release feeds are process-global. Refresh once now and then every 24
     // hours; browser reloads only read this cache through the API.
     state.update_notices.start_refresh_loop(&state);
+    crate::server::wbpp_storage::spawn(&state);
 
     // For the job journal's last write at shutdown; the router takes `state`.
     let journal_state = Arc::clone(&state);

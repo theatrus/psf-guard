@@ -115,6 +115,7 @@ pub struct AppState {
     pub ts_sync: crate::server::ts_sync::Manager,
     /// WBPP runs waiting for PixInsight, across every database.
     pub wbpp_queue: crate::server::wbpp_queue::WbppQueue,
+    pub wbpp_storage: crate::server::wbpp_storage::Manager,
     /// What the storage passes keep between passes.
     pub cache_budget: crate::server::cache_budget::CacheBudget,
     /// What the jobs route keeps between polls.
@@ -568,6 +569,7 @@ impl AppState {
             backups: crate::server::backup_job::BackupManager::default(),
             ts_sync: crate::server::ts_sync::Manager::default(),
             wbpp_queue: crate::server::wbpp_queue::WbppQueue::default(),
+            wbpp_storage: crate::server::wbpp_storage::Manager::default(),
             cache_budget: crate::server::cache_budget::CacheBudget::default(),
             jobs_cache: crate::server::jobs::JobsCache::default(),
             catalog_jobs: crate::server::catalog_jobs::CatalogJobRegistry::default(),
@@ -903,6 +905,7 @@ impl AppState {
             backups: crate::server::backup_job::BackupManager::default(),
             ts_sync: crate::server::ts_sync::Manager::default(),
             wbpp_queue: crate::server::wbpp_queue::WbppQueue::default(),
+            wbpp_storage: crate::server::wbpp_storage::Manager::default(),
             cache_budget: crate::server::cache_budget::CacheBudget::default(),
             jobs_cache: crate::server::jobs::JobsCache::default(),
             catalog_jobs: crate::server::catalog_jobs::CatalogJobRegistry::default(),

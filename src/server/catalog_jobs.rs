@@ -16,6 +16,7 @@ use crate::server::state::AppState;
 
 #[derive(Default)]
 pub struct CatalogJobRegistry {
+    pub(crate) wbpp_storage: CatalogJobs<crate::server::wbpp_storage::Cleanup>,
     pub(crate) flat_measure: CatalogJobs<crate::server::flat_measure::FlatMeasure>,
     pub(crate) frame_sites: CatalogJobs<crate::server::frame_sites::FrameSites>,
     pub(crate) duplicates: CatalogJobs<crate::server::calibration_duplicates::Duplicates>,

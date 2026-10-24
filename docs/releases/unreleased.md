@@ -23,6 +23,16 @@
   **Settings → Setups** and click **Make default** on a Color setup, or save
   your changes over **Default**. Color previews you already have are not
   changed.
+
+- Manage WBPP work files under **Settings → Storage → WBPP storage**: choose a
+  dedicated folder and volume usage limit, remove intermediates before masters,
+  and set separate retention periods. Intermediates default to seven days and
+  masters to 90 days; **Keep WBPP masters forever** protects masters from cleanup.
+  Active runs, downloads, and master copies are protected, and saved process
+  masters and imported stacks remain separate.
+- Volume usage limits now accept every whole percentage from 0% through 100%,
+  including values below 50%, for the cache, stacks, calibration masters, and WBPP.
+
 - Stack previews now run on the GPU when your computer has one: Metal on a
   Mac, Vulkan on Linux and Direct3D 12 on Windows. Debayering, star
   detection, resampling, the live stack and the final pass run there. On an

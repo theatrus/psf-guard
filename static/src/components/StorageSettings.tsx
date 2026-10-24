@@ -12,6 +12,7 @@ import type {
 import { isTauriApp, tauriConfig } from '../utils/tauri';
 import PathField from './PathField';
 import UnsavedMark from './UnsavedMark';
+import WbppStorageSettings from './WbppStorageSettings';
 
 const QUERY_KEY = ['storage-settings'] as const;
 
@@ -397,6 +398,7 @@ export default function StorageSettings({ canManage }: { canManage: boolean }) {
         <p className="error-text" role="alert">{(save.error as Error).message}</p>
       )}
       <StorageFolders current={current} canManage={canManage} />
+      <WbppStorageSettings canManage={canManage} />
     </div>
   );
 }

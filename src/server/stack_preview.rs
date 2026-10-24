@@ -2110,6 +2110,7 @@ pub struct ImportWbppStacksRequest {
 /// Guard is taken in on its own; this covers one that finished before this
 /// feature or whose import failed. Only the run's own folder is read.
 pub async fn import_wbpp_stacks(
+    State(state): State<Arc<AppState>>,
     ctx: DbContext,
     Path((_db_id, project_id)): Path<(String, i32)>,
     Json(request): Json<ImportWbppStacksRequest>,
@@ -2131,9 +2132,13 @@ pub async fn import_wbpp_stacks(
             crate::server::wbpp_run::last_target(&store),
         )
     };
+    let protected = state
+        .wbpp_storage
+        .protect(output_dir.parent().unwrap_or(&output_dir));
     let ctx = Arc::clone(&ctx.0);
     let target_id = request.target_id.or(last_target);
     tokio::task::spawn_blocking(move || {
+        let _protected = protected;
         let target = {
             let conn = ctx.db();
             let conn = conn.lock().map_err(|error| error.to_string())?;

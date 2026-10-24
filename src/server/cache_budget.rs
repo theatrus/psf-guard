@@ -30,8 +30,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 /// The limit when nobody has chosen one.
 pub const DEFAULT_MAX_VOLUME_PERCENT: u8 = 90;
-/// The lowest limit a person may choose: below it the cache would thrash.
-pub const MIN_MAX_VOLUME_PERCENT: u8 = 50;
+/// Any whole-volume percentage may be chosen, including zero.
+pub const MIN_MAX_VOLUME_PERCENT: u8 = 0;
 /// How far below the limit a cull brings the volume, so the next preview
 /// does not start another.
 const HEADROOM_PERCENT: f64 = 2.0;
@@ -669,6 +669,21 @@ impl Usage {
     }
 }
 
+/// The limit already resolved for a volume shared with other managed storage.
+pub(crate) fn limit_on_path(budget: &CacheBudget, path: &Path) -> Option<u8> {
+    device_of(path).and_then(|device| budget.volume_limits.lock().unwrap().get(&device).copied())
+}
+
+/// Current volume use and bytes needed to reach two points below a limit.
+pub(crate) fn usage_for_path(path: &Path, limit: u8) -> Option<(f64, u64)> {
+    volume_usage(path).map(|usage| {
+        (
+            usage.percent(),
+            usage.bytes_over((f64::from(limit).min(100.0) - HEADROOM_PERCENT).max(0.0)),
+        )
+    })
+}
+
 /// Bytes free to this process on the volume holding `path`, when the
 /// platform says.
 pub(crate) fn available_bytes(path: &Path) -> Option<u64> {
@@ -694,19 +709,43 @@ fn volume_usage(path: &Path) -> Option<Usage> {
     })
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn volume_usage(path: &Path) -> Option<Usage> {
+    use std::os::windows::ffi::OsStrExt;
+    let path: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let (mut available, mut total, mut free) = (0u64, 0u64, 0u64);
+    // SAFETY: a NUL-terminated path and three writable counters.
+    if unsafe {
+        windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW(
+            path.as_ptr(),
+            &mut available,
+            &mut total,
+            &mut free,
+        )
+    } == 0
+    {
+        return None;
+    }
+    Some(Usage {
+        total,
+        available,
+        used: total.saturating_sub(free),
+    })
+}
+
+#[cfg(not(any(unix, windows)))]
 fn volume_usage(_path: &Path) -> Option<Usage> {
     None
 }
 
 #[cfg(unix)]
-fn device_of(path: &Path) -> Option<u64> {
+pub(crate) fn device_of(path: &Path) -> Option<u64> {
     use std::os::unix::fs::MetadataExt;
     std::fs::metadata(path).ok().map(|metadata| metadata.dev())
 }
 
 #[cfg(not(unix))]
-fn device_of(_path: &Path) -> Option<u64> {
+pub(crate) fn device_of(_path: &Path) -> Option<u64> {
     None
 }
 

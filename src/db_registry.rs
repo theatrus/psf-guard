@@ -800,6 +800,42 @@ pub struct ExportSettings {
     pub wbpp: Option<crate::commands::export::wbpp::WbppOptions>,
 }
 
+/// Cleanup of PSF Guard's WBPP work folders. Zero master days keeps masters forever.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WbppStoragePolicy {
+    pub max_volume_percent: u8,
+    pub intermediate_days: u32,
+    pub master_days: u32,
+}
+
+impl Default for WbppStoragePolicy {
+    fn default() -> Self {
+        Self {
+            max_volume_percent: 90,
+            intermediate_days: 7,
+            master_days: 90,
+        }
+    }
+}
+
+impl WbppStoragePolicy {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.max_volume_percent > 100 {
+            return Err("WBPP volume usage limit must be between 0 and 100 percent".into());
+        }
+        if self.intermediate_days > 36500 || self.master_days > 36500 {
+            return Err("WBPP retention must be between 0 and 36500 days".into());
+        }
+        if self.master_days != 0
+            && (self.intermediate_days > 0 && self.master_days < self.intermediate_days)
+        {
+            return Err("WBPP masters must be kept at least as long as intermediate files".into());
+        }
+        Ok(())
+    }
+}
+
 /// Where PixInsight is, for running WBPP from inside PSF Guard.
 ///
 /// Lives in the registry beside the other process-global preferences: it is
@@ -813,9 +849,11 @@ pub struct PixInsightSettings {
     pub binary: Option<String>,
     /// Where WBPP runs put their script and output, since a run writes
     /// gigabytes and the cache may sit on a small disk. Absent means the
-    /// database's export directory when it has one, else the cache.
+    /// database's export directory when it has one, else the stack folder.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runs_dir: Option<String>,
+    #[serde(default)]
+    pub storage: WbppStoragePolicy,
 }
 
 impl Default for DbRegistry {
