@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import { describePixInsight, formatFree } from '../utils/pixinsight';
@@ -17,22 +17,18 @@ export default function PixInsightSettings() {
     queryKey: ['pixinsight-settings'],
     queryFn: apiClient.getPixInsightSettings,
   });
+  // A field without an edit (null) shows the server's value, so a refetch
+  // updates it; an edited field keeps what was typed until Save.
   const [draft, setDraft] = useState<string | null>(null);
   const [runsDraft, setRunsDraft] = useState<string | null>(null);
-  useEffect(() => {
-    if (settings.data && draft === null) {
-      setDraft(settings.data.binary ?? '');
-      setRunsDraft(settings.data.runs_dir ?? '');
-    }
-  }, [settings.data, draft]);
 
   const save = useMutation({
     mutationFn: (update: { binary: string | null; runs_dir: string | null }) =>
       apiClient.updatePixInsightSettings(update),
     onSuccess: (updated) => {
       queryClient.setQueryData(['pixinsight-settings'], updated);
-      setDraft(updated.binary ?? '');
-      setRunsDraft(updated.runs_dir ?? '');
+      setDraft(null);
+      setRunsDraft(null);
     },
   });
 
@@ -46,10 +42,10 @@ export default function PixInsightSettings() {
     );
   }
   const current = settings.data!;
-  const changed =
-    (draft ?? '') !== (current.binary ?? '') || (runsDraft ?? '') !== (current.runs_dir ?? '');
-  const submit = () =>
-    save.mutate({ binary: draft?.trim() || null, runs_dir: runsDraft?.trim() || null });
+  const binary = draft ?? current.binary ?? '';
+  const runsDir = runsDraft ?? current.runs_dir ?? '';
+  const changed = binary !== (current.binary ?? '') || runsDir !== (current.runs_dir ?? '');
+  const submit = () => save.mutate({ binary: binary.trim() || null, runs_dir: runsDir.trim() || null });
 
   return (
     <div className="pixinsight-settings">
@@ -79,7 +75,7 @@ export default function PixInsightSettings() {
             dialogTitle="Select the PixInsight executable"
             aria-label="PixInsight executable"
             placeholder="/opt/PixInsight/bin/PixInsight.sh"
-            value={draft ?? ''}
+            value={binary}
             onChange={setDraft}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && changed) submit();
@@ -101,7 +97,7 @@ export default function PixInsightSettings() {
             dialogTitle="Select the WBPP runs folder"
             aria-label="WBPP runs folder"
             placeholder="/data/wbpp-runs"
-            value={runsDraft ?? ''}
+            value={runsDir}
             onChange={setRunsDraft}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && changed) submit();

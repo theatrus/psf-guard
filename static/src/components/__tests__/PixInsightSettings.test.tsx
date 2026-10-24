@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { Profiler, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
@@ -8,10 +8,13 @@ import PixInsightSettings from '../PixInsightSettings';
 import { describePixInsight } from '../../utils/pixinsight';
 import type { PixInsightSettings as Settings } from '../../api/types';
 
-function wrapper() {
-  const queryClient = new QueryClient({
+function testClient() {
+  return new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
+}
+
+function wrapper(queryClient = testClient()) {
   return function Wrapper({ children }: { children: ReactNode }) {
     return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
   };
@@ -99,5 +102,45 @@ describe('PixInsightSettings', () => {
       expect(saved).toEqual({ binary: '/home/me/PixInsight/bin/PixInsight.sh', runs_dir: null })
     );
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('WBPP 3.1.0 as configured'));
+  });
+
+  it('shows the saved executable in the same render as the status', () => {
+    server.use(http.get('/api/settings/pixinsight', () => HttpResponse.json(ok(missing))));
+    const queryClient = testClient();
+    queryClient.setQueryData(['pixinsight-settings'], missing);
+    // Read the DOM at every commit: a render that shows the status with an
+    // empty field is what a test or a person can catch between two commits.
+    const shown: string[] = [];
+    const record = () => {
+      const input = document.querySelector<HTMLInputElement>('input[aria-label="PixInsight executable"]');
+      if (document.querySelector('[role="status"]') && input) shown.push(input.value);
+    };
+    render(
+      <Profiler id="pixinsight-settings" onRender={record}>
+        <PixInsightSettings />
+      </Profiler>,
+      { wrapper: wrapper(queryClient) }
+    );
+    expect(shown.length).toBeGreaterThan(0);
+    expect(shown.filter((value) => value !== '/nope/PixInsight.sh')).toEqual([]);
+  });
+
+  it('Check again updates an unedited field and keeps an edited one', async () => {
+    const configured: Settings = {
+      ...found,
+      binary: '/home/me/PixInsight/bin/PixInsight.sh',
+      detection: { ...found.detection, source: 'configured' },
+    };
+    let answer = missing;
+    server.use(http.get('/api/settings/pixinsight', () => HttpResponse.json(ok(answer))));
+    render(<PixInsightSettings />, { wrapper: wrapper() });
+    expect(await screen.findByRole('status')).toHaveTextContent('PixInsight not found');
+    const runs = screen.getByLabelText('WBPP runs folder');
+    fireEvent.change(runs, { target: { value: '/data/wbpp-runs' } });
+    answer = configured;
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('WBPP 3.1.0 as configured'));
+    expect(screen.getByLabelText('PixInsight executable')).toHaveValue('/home/me/PixInsight/bin/PixInsight.sh');
+    expect(runs).toHaveValue('/data/wbpp-runs');
   });
 });

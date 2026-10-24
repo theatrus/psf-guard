@@ -18,3 +18,6 @@
   12. Computers without a supported GPU, and frames under about a million
   pixels, stack on the CPU as before. To choose which passes run on the GPU,
   open **Settings → Stacking → GPU**.
+- In **Settings → PixInsight**, **Check again** now shows the executable and
+  WBPP runs folder the server reports. A path you have edited but not saved
+  stays as you typed it.
