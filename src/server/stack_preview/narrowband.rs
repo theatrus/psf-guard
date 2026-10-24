@@ -121,10 +121,17 @@ pub(super) fn resolve(
         let selected: Vec<_> = [StackColorRole::Ha, StackColorRole::Oiii]
             .iter()
             .filter_map(|role| {
-                let chosen = request.input_sources.get(role)?;
-                target.by_role.get(role)?.iter().find(|source| {
-                    source.job_id == chosen.job_id && source.group_index == chosen.group_index
-                })
+                let candidates = target.by_role.get(role)?;
+                if let Some(chosen) = request.input_sources.get(role) {
+                    candidates.iter().find(|source| {
+                        source.job_id == chosen.job_id && source.group_index == chosen.group_index
+                    })
+                } else {
+                    match candidates.as_slice() {
+                        [only] => Some(only),
+                        _ => None,
+                    }
+                }
             })
             .collect();
         let sii: Vec<_> = target
@@ -713,6 +720,34 @@ mod tests {
         })
         .collect();
         assert_eq!(ids.len(), 5);
+    }
+
+    #[test]
+    fn implicit_narrowband_sources_still_constrain_the_automatic_sii_choice() {
+        let mut target = target(false, true);
+        let mut request = request(None);
+        for (role, sources) in &mut target.by_role {
+            let seconds = if *role == StackColorRole::Sii {
+                30.0
+            } else {
+                300.0
+            };
+            sources[0].exposure_group = Some(crate::server::exposure_groups::ExposureGroup {
+                key: seconds.to_string(),
+                label: format!("{seconds} s"),
+                min_seconds: Some(seconds),
+                max_seconds: Some(seconds),
+            });
+        }
+        resolve(&target, &mut request).unwrap();
+        assert_eq!(request.palette, Some(StackNarrowbandPalette::Hoo));
+        target.by_role.get_mut(&StackColorRole::Sii).unwrap()[0].exposure_group = target.by_role
+            [&StackColorRole::Ha][0]
+            .exposure_group
+            .clone();
+        target.by_role.get_mut(&StackColorRole::Sii).unwrap()[0].wbpp = true;
+        resolve(&target, &mut request).unwrap();
+        assert_eq!(request.palette, Some(StackNarrowbandPalette::Hoo));
     }
 
     #[test]
