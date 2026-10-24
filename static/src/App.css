@@ -981,6 +981,12 @@
 
 /* Main Content */
 .app-main {
+  /* The containing block for absolutely positioned content with no other
+     positioned ancestor, such as a visually hidden caption. Without it, that
+     content is placed against the document and can make the document taller
+     than the window. The window then shows a second scrollbar, and the wheel
+     scrolls the whole app, even behind Settings. */
+  position: relative;
   flex: 1;
   overflow-y: auto;
   padding: 0 2rem 2rem 2rem; /* Remove top padding, keep sides and bottom */
