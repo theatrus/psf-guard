@@ -1307,6 +1307,10 @@ test('re-applies processing to a rebuilt stack, showing the previous result mean
   await controls.locator('summary').click();
   await controls.getByRole('checkbox', { name: 'Deconvolution' }).check();
   await controls.getByRole('spinbutton', { name: 'Alpha M44 B Target median' }).fill('0.3');
+  // The re-apply after the rebuild must outlast the panel's 1 s job poll.
+  // At 4 iterations it took 0.9 s, so the card's first look could already
+  // find the new result and never show the carried one. 30 take about 4.5 s.
+  await controls.getByRole('spinbutton', { name: 'Deconvolution Iterations' }).fill('30');
   await controls.getByRole('button', { name: 'Apply processing' }).click();
   await expect(controls.locator('summary')).toContainText('3.1px deconv · Auto MTF applied', {
     timeout: 60_000,
