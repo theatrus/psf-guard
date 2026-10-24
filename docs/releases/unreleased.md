@@ -20,9 +20,6 @@
   about every five seconds. The finished preview replaces it when processing
   completes; completed FITS downloads remain separate during a rebuild.
 
-- Save storage limits, folders, and WBPP retention together with **Save storage settings**.
-  WBPP shares the **Limits** and **Folders** sections with the other storage options.
-
 - Automatic stack refreshes now compose a target's first color preview once
   its channels are stacked, as a build you start does. New color previews
   start from the Color setup marked as the default. PSF Guard adds one named
@@ -30,6 +27,9 @@
   **Settings → Setups** and click **Make default** on a Color setup, or save
   your changes over **Default**. Color previews you already have are not
   changed.
+
+- Save storage limits, folders, and WBPP retention together with **Save storage settings**.
+  WBPP shares the **Limits** and **Folders** sections with the other storage options.
 
 - Manage WBPP work files under **Settings → Storage**: choose a
   dedicated folder and volume usage limit, remove intermediates before masters,
