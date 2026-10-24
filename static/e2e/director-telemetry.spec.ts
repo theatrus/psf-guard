@@ -23,7 +23,7 @@ for (const width of [1440, 390]) {
     await expect(live).toContainText('completed, Autofocus for 2 min, safety Safe (stale');
     // An empty disposable server opens first-run settings over the page.
     if (await page.getByRole('heading', { name: 'PSF Guard Settings' }).isVisible())
-      await page.getByRole('button', { name: '×', exact: true }).click();
+      await page.getByRole('button', { name: 'Close settings' }).click();
     await live.getByText('Completed operations (1)', { exact: true }).click();
     await expect(live).toContainText('before target: succeeded, 75 s');
     await expect(live).toContainText('completed 1 h ago');
