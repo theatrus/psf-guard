@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import type { StackAutomationSettings as Settings } from '../api/types';
@@ -18,23 +18,14 @@ export default function StackAutomationSettings() {
   });
 
   // The delays edit as text so a half-typed value is not fought by the
-  // parser; each commits when its field is left.
-  const [arrivalDraft, setArrivalDraft] = useState('');
-  const [gradeDraft, setGradeDraft] = useState('');
-  // The new-channel window, in days; shown as the last finite one while any
-  // age is chosen, so unticking it brings that back.
-  const [windowDraft, setWindowDraft] = useState('');
-  useEffect(() => {
-    if (settings.data) {
-      setArrivalDraft(String(settings.data.arrival_delay_minutes));
-      setGradeDraft(String(settings.data.grade_delay_minutes));
-      setWindowDraft((previous) =>
-        settings.data.new_channel_window_days > 0
-          ? String(settings.data.new_channel_window_days)
-          : previous || String(settings.data.default_new_channel_window_days)
-      );
-    }
-  }, [settings.data]);
+  // parser; each commits when its field is left. A field without an edit
+  // (null) shows the server's value, so a refetch updates it.
+  const [arrivalDraft, setArrivalDraft] = useState<string | null>(null);
+  const [gradeDraft, setGradeDraft] = useState<string | null>(null);
+  // The new-channel window, in days. While any age is chosen the field shows
+  // the days set aside when it was ticked, so unticking brings them back.
+  const [windowDraft, setWindowDraft] = useState<string | null>(null);
+  const [asideDays, setAsideDays] = useState<string | null>(null);
 
   const save = useMutation({
     mutationFn: (update: {
@@ -61,20 +52,27 @@ export default function StackAutomationSettings() {
   }
 
   const current = settings.data!;
+  const arrivalText = arrivalDraft ?? String(current.arrival_delay_minutes);
+  const gradeText = gradeDraft ?? String(current.grade_delay_minutes);
+  const windowText =
+    windowDraft ??
+    (current.new_channel_window_days > 0
+      ? String(current.new_channel_window_days)
+      : asideDays ?? String(current.default_new_channel_window_days));
   const validMinutes = (draft: string) => {
     const minutes = draft.trim() === '' ? NaN : Number(draft);
     return Number.isInteger(minutes) && minutes >= 1 && minutes <= current.max_delay_minutes
       ? minutes
       : null;
   };
-  const arrival = validMinutes(arrivalDraft);
-  const grade = validMinutes(gradeDraft);
+  const arrival = validMinutes(arrivalText);
+  const grade = validMinutes(gradeText);
   const anyAge = current.new_channel_window_days === 0;
   // On unless the server says otherwise; an older server has no such
   // setting.
   const reapply = current.reapply_processing ?? true;
   const windowDays = (() => {
-    const days = windowDraft.trim() === '' ? NaN : Number(windowDraft);
+    const days = windowText.trim() === '' ? NaN : Number(windowText);
     return Number.isInteger(days) && days >= 1 && days <= 3650 ? days : null;
   })();
 
@@ -89,32 +87,35 @@ export default function StackAutomationSettings() {
         | 'new_channel_window_days'
         | 'reapply_processing'
       >
-    >
+    >,
+    onSaved?: () => void
   ) =>
-    save.mutate({
-      automatic_previews: current.automatic_previews,
-      arrival_delay_minutes: current.arrival_delay_minutes,
-      grade_delay_minutes: current.grade_delay_minutes,
-      build_new_channels: current.build_new_channels,
-      new_channel_window_days: current.new_channel_window_days,
-      reapply_processing: reapply,
-      ...next,
-    });
+    save.mutate(
+      {
+        automatic_previews: current.automatic_previews,
+        arrival_delay_minutes: current.arrival_delay_minutes,
+        grade_delay_minutes: current.grade_delay_minutes,
+        build_new_channels: current.build_new_channels,
+        new_channel_window_days: current.new_channel_window_days,
+        reapply_processing: reapply,
+        ...next,
+      },
+      { onSuccess: onSaved }
+    );
+  // A field commits when it is left with a valid value that differs from the
+  // saved one. An invalid value reverts to the saved one, and a failed save
+  // keeps what was typed.
   const commitWindow = () => {
-    if (windowDays === null) setWindowDraft(String(current.new_channel_window_days || current.default_new_channel_window_days));
-    else if (!anyAge && windowDays !== current.new_channel_window_days) {
-      persist({ new_channel_window_days: windowDays });
-    }
+    if (anyAge || windowDays === null || windowDays === current.new_channel_window_days) setWindowDraft(null);
+    else persist({ new_channel_window_days: windowDays }, () => setWindowDraft(null));
   };
-  // A delay commits when its field is left with a valid value that differs
-  // from what the server holds; an invalid one snaps back.
   const commitArrival = () => {
-    if (arrival === null) setArrivalDraft(String(current.arrival_delay_minutes));
-    else if (arrival !== current.arrival_delay_minutes) persist({ arrival_delay_minutes: arrival });
+    if (arrival === null || arrival === current.arrival_delay_minutes) setArrivalDraft(null);
+    else persist({ arrival_delay_minutes: arrival }, () => setArrivalDraft(null));
   };
   const commitGrade = () => {
-    if (grade === null) setGradeDraft(String(current.grade_delay_minutes));
-    else if (grade !== current.grade_delay_minutes) persist({ grade_delay_minutes: grade });
+    if (grade === null || grade === current.grade_delay_minutes) setGradeDraft(null);
+    else persist({ grade_delay_minutes: grade }, () => setGradeDraft(null));
   };
   const commitOnEnter = (commit: () => void) => (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'Enter') {
@@ -161,7 +162,7 @@ export default function StackAutomationSettings() {
             min={1}
             max={current.max_delay_minutes}
             step={1}
-            value={arrivalDraft}
+            value={arrivalText}
             aria-label="Minutes to wait after new frames"
             aria-invalid={arrival === null}
             disabled={!current.automatic_previews}
@@ -184,7 +185,7 @@ export default function StackAutomationSettings() {
             min={1}
             max={current.max_delay_minutes}
             step={1}
-            value={gradeDraft}
+            value={gradeText}
             aria-label="Minutes to wait after grade changes"
             aria-invalid={grade === null}
             disabled={!current.automatic_previews}
@@ -223,7 +224,7 @@ export default function StackAutomationSettings() {
             min={1}
             max={3650}
             step={1}
-            value={windowDraft}
+            value={windowText}
             aria-label="Recent-frame requirement (days)"
             aria-invalid={!anyAge && windowDays === null}
             disabled={!current.automatic_previews || !current.build_new_channels || anyAge}
@@ -237,11 +238,14 @@ export default function StackAutomationSettings() {
             type="checkbox"
             checked={anyAge}
             disabled={!current.automatic_previews || !current.build_new_channels}
-            onChange={(event) =>
-              persist({
-                new_channel_window_days: event.target.checked ? 0 : windowDays ?? current.default_new_channel_window_days,
-              })
-            }
+            onChange={(event) => {
+              if (event.target.checked) {
+                setAsideDays(windowText);
+                persist({ new_channel_window_days: 0 });
+              } else {
+                persist({ new_channel_window_days: windowDays ?? current.default_new_channel_window_days });
+              }
+            }}
           />
           <span>
             Also stack old channels, of any age

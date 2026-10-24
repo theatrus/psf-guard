@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
@@ -36,8 +36,9 @@ function mockServer() {
   return saved;
 }
 
-function renderSettings() {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+function renderSettings(
+  queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
+) {
   const Wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
   );
@@ -59,5 +60,29 @@ describe('WorkerShareSettings', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Use the default' }));
     await waitFor(() => expect(saved).toHaveLength(2));
     expect(saved[1]).toEqual({ interactive_ratio: null, background_ratio: null });
+  });
+
+  it('a refetch updates an unmoved slider and keeps a moved one', async () => {
+    mockServer();
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    renderSettings(queryClient);
+    const background = await screen.findByRole('slider', { name: 'Background work share of cores' });
+    fireEvent.change(background, { target: { value: '10' } });
+    server.use(
+      http.get('/api/settings/workers', () =>
+        ok({
+          interactive_ratio: 0.75,
+          background_ratio: 0.5,
+          default_interactive_ratio: 0.5,
+          default_background_ratio: 0.25,
+          logical_cores: 16,
+        })
+      )
+    );
+    await act(() => queryClient.refetchQueries({ queryKey: ['worker-settings'] }));
+    await waitFor(() =>
+      expect(screen.getByRole('slider', { name: 'Interactive work share of cores' })).toHaveValue('75')
+    );
+    expect(background).toHaveValue('10');
   });
 });

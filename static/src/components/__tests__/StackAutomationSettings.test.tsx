@@ -1,15 +1,18 @@
-import type { ReactNode } from 'react';
+import { Profiler, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
 import { server } from '../../test/msw-server';
 import StackAutomationSettings from '../StackAutomationSettings';
 
-function wrapper() {
-  const queryClient = new QueryClient({
+function testClient() {
+  return new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
+}
+
+function wrapper(queryClient = testClient()) {
   return function Wrapper({ children }: { children: ReactNode }) {
     return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
   };
@@ -226,5 +229,62 @@ describe('StackAutomationSettings', () => {
     expect(
       await screen.findByRole('checkbox', { name: /Re-apply processing when a stack refreshes/ })
     ).toBeChecked();
+  });
+
+  it('shows the saved delays in the first render with settings', () => {
+    server.use(http.get('/api/settings/stacking', () => HttpResponse.json(current(true, 5, 15, true, 7))));
+    const queryClient = testClient();
+    queryClient.setQueryData(['stack-automation-settings'], current(true, 5, 15, true, 7).data);
+    // Read the DOM at every commit: a render that shows the settings with an
+    // empty field is what a test or a person can catch between two commits.
+    const shown: string[] = [];
+    const record = () => {
+      const fields = ['Minutes to wait after new frames', 'Minutes to wait after grade changes', 'Recent-frame requirement (days)']
+        .map((label) => document.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)?.value);
+      if (fields.every((value) => value !== undefined)) shown.push(fields.join(' '));
+    };
+    render(
+      <Profiler id="stack-automation-settings" onRender={record}>
+        <StackAutomationSettings />
+      </Profiler>,
+      { wrapper: wrapper(queryClient) }
+    );
+    expect(shown.length).toBeGreaterThan(0);
+    expect(shown.filter((values) => values !== '5 15 7')).toEqual([]);
+  });
+
+  it('a refetch updates an unedited delay and keeps one being edited', async () => {
+    let answer = current(true, 5, 15);
+    server.use(http.get('/api/settings/stacking', () => HttpResponse.json(answer)));
+    const queryClient = testClient();
+    render(<StackAutomationSettings />, { wrapper: wrapper(queryClient) });
+    const grade = await screen.findByLabelText('Minutes to wait after grade changes');
+    fireEvent.change(grade, { target: { value: '45' } });
+    answer = current(true, 10, 20);
+    await act(() => queryClient.refetchQueries({ queryKey: ['stack-automation-settings'] }));
+    await waitFor(() => expect(screen.getByLabelText('Minutes to wait after new frames')).toHaveValue(10));
+    expect(grade).toHaveValue(45);
+  });
+
+  it('shows the saved days when another client clears any age', async () => {
+    let answer = current(true, 5, 15, true, 30);
+    server.use(
+      http.get('/api/settings/stacking', () => HttpResponse.json(answer)),
+      http.put('/api/settings/stacking', () => {
+        answer = current(true, 5, 15, true, 0);
+        return HttpResponse.json(answer);
+      })
+    );
+    const queryClient = testClient();
+    render(<StackAutomationSettings />, { wrapper: wrapper(queryClient) });
+    const anyAge = await screen.findByRole('checkbox', { name: /Also stack old channels, of any age/ });
+    fireEvent.click(anyAge);
+    await waitFor(() => expect(anyAge).toBeChecked());
+    const days = screen.getByLabelText('Recent-frame requirement (days)');
+    expect(days).toHaveValue(30);
+    answer = current(true, 5, 15, true, 14);
+    await act(() => queryClient.refetchQueries({ queryKey: ['stack-automation-settings'] }));
+    await waitFor(() => expect(anyAge).not.toBeChecked());
+    expect(days).toHaveValue(14);
   });
 });
