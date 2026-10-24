@@ -1,20 +1,19 @@
 import { useCallback, useMemo } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
-import type { PenaltyScaleParams } from '../api/types';
+import { apiClient } from '../api/client';
+import type { PenaltyScaleParams, ScoringDefaultsSettings } from '../api/types';
+import { useAccess } from '../auth/access';
 import {
   clearedScoringParams,
-  fieldsFromScoring,
   sameScoring,
-  scoringFromFields,
+  SCORING_DEFAULTS,
   scoringFromParams,
   scoringParamUpdates,
+  scoringPreferencesOf,
+  stackScoringSettings,
   type ScoringPreferences,
 } from '../utils/scoring';
-import {
-  getDisplayPreferences,
-  setDisplayPreferences,
-  useDisplayPreferences,
-} from './useDisplayPreferences';
 import { useUrlParams } from './useUrlState';
 
 export {
@@ -30,10 +29,10 @@ export {
  * view, the grid badges, the detail panel and stack builds.
  *
  * Two layers:
- * - The person's defaults, set in Settings › Review or with the Scoring
- *   control's Save as default. They live with the View panel's choices
- *   (useDisplayPreferences), so a signed-in user's follow them to another
- *   browser.
+ * - The server's scoring defaults, one copy for everyone, set in
+ *   Settings › Review or with the Scoring control's Save as default.
+ *   Automatic stack builds score with them too, so a card they build
+ *   matches what the page compares it with.
  * - The current view's own changes, from the Scoring control. They live in
  *   the link (SCORING_PARAMS), all five once any differs, so they apply to
  *   this view, travel with it to the project's other targets, Images, the
@@ -42,15 +41,7 @@ export {
  *   a value the link names wins over the defaults.
  */
 
-/** The saved defaults now, outside React. */
-export function scoringDefaults(): ScoringPreferences {
-  return scoringFromFields(getDisplayPreferences());
-}
-
-/** Save new defaults. */
-export function setScoringDefaults(next: ScoringPreferences): void {
-  setDisplayPreferences({ ...getDisplayPreferences(), ...fieldsFromScoring(next) });
-}
+export const SCORING_DEFAULTS_QUERY_KEY = ['scoring-defaults'] as const;
 
 /** One snapshot per distinct set of values, so a caller can key effects
  *  and memos on it. */
@@ -62,10 +53,25 @@ function useStableScoring(scoring: ScoringPreferences): ScoringPreferences {
   );
 }
 
-/** The saved defaults. */
+/** The server's scoring defaults as it sends them. */
+export function useScoringDefaultsQuery() {
+  return useQuery({ queryKey: SCORING_DEFAULTS_QUERY_KEY, queryFn: apiClient.getScoringDefaults });
+}
+
+/** The server's scoring defaults. Until they arrive, the built-in values. */
 export function useScoringDefaults(): ScoringPreferences {
-  const preferences = useDisplayPreferences();
-  return useStableScoring(scoringFromFields(preferences));
+  const { data } = useScoringDefaultsQuery();
+  return useStableScoring(data ? scoringPreferencesOf(data.scoring) : SCORING_DEFAULTS);
+}
+
+/** Save new scoring defaults on the server. Only an editor may. */
+export function useSaveScoringDefaults() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (next: ScoringPreferences) => apiClient.updateScoringDefaults(stackScoringSettings(next)),
+    onSuccess: (saved: ScoringDefaultsSettings) =>
+      queryClient.setQueryData(SCORING_DEFAULTS_QUERY_KEY, saved),
+  });
 }
 
 /** The scoring the current view uses: what the link names, over the
@@ -79,19 +85,22 @@ export function useScoringPreferences(): ScoringPreferences {
 /** The view's scoring with the ways to change it, for the Scoring control. */
 export function useViewScoring() {
   const { updateParams } = useUrlParams();
+  const { canWrite } = useAccess();
   const scoring = useScoringPreferences();
   const defaults = useScoringDefaults();
+  const saveDefaults = useSaveScoringDefaults();
 
   /** Score this view with `next`; the defaults stay as they are. */
   const setScoring = useCallback((next: ScoringPreferences) => {
-    updateParams(scoringParamUpdates(next, scoringDefaults()));
-  }, [updateParams]);
+    updateParams(scoringParamUpdates(next, defaults));
+  }, [updateParams, defaults]);
 
-  /** Make `next` the defaults, which this view then uses. */
+  /** Make `next` the server's defaults, which this view then uses once
+   *  they are saved. */
+  const { mutate } = saveDefaults;
   const saveAsDefault = useCallback((next: ScoringPreferences) => {
-    setScoringDefaults(next);
-    updateParams(clearedScoringParams());
-  }, [updateParams]);
+    mutate(next, { onSuccess: () => updateParams(clearedScoringParams()) });
+  }, [mutate, updateParams]);
 
   /** Go back to the defaults in this view. */
   const resetToDefault = useCallback(() => {
@@ -103,7 +112,11 @@ export function useViewScoring() {
     defaults,
     changed: !sameScoring(scoring, defaults),
     setScoring,
+    /** Whether this person may change the server's defaults. */
+    canSaveDefault: canWrite,
     saveAsDefault,
+    savingDefault: saveDefaults.isPending,
+    saveDefaultError: saveDefaults.error as Error | null,
     resetToDefault,
   };
 }

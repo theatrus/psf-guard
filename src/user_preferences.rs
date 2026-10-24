@@ -124,8 +124,10 @@ pub const KNOWN_KEYS: &[(&str, PreferenceKind)] = &[
             max: 1200,
         },
     ),
-    // The Scoring control's defaults: what each view's scoring starts from
-    // until the person changes it there. See `SCORING_PREFERENCE_KEYS` in
+    // The scoring defaults each user kept before the server held one copy
+    // (`server::scoring_defaults`). Still accepted, so an older browser's
+    // save is not refused, and read once when a page copies an editor's
+    // values to the server. See `SCORING_PREFERENCE_KEYS` in
     // `static/src/utils/scoring.ts`.
     (
         "scoringPenaltySatellite",

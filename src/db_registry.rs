@@ -521,6 +521,16 @@ pub struct DbRegistry {
         skip_serializing_if = "Option::is_none"
     )]
     pub backups: Option<crate::backup::schedule::BackupSettings>,
+    /// The server's scoring defaults, edited in Settings › Review: what every
+    /// view's scoring starts from and automatic stack builds use. Absent
+    /// until first saved, which means the built-in values. A block this
+    /// version cannot read reads as absent.
+    #[serde(
+        default,
+        deserialize_with = "lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub scoring: Option<crate::server::stack_preview::StackScoringSettings>,
 }
 
 /// What the AstroBin CSV export needs from the person: which equipment
@@ -824,6 +834,7 @@ impl Default for DbRegistry {
             astrobin: None,
             pixinsight: None,
             backups: None,
+            scoring: None,
         }
     }
 }

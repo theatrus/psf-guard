@@ -7,8 +7,9 @@ import {
   waitForCacheReady,
 } from './helpers';
 
-// Sequence's scoring defaults: set in Settings, applied by every view, and
-// changed per view in the toolbar until saved. The fixture's Alpha sequence
+// Sequence's scoring defaults: one copy on the server, set in Settings,
+// applied by every view, and changed per view in the toolbar until saved.
+// The fixture's Alpha sequence
 // has HFRs 2.4 / 2.5 / 2.6 and star counts 520 / 510 / 500, so a Max HFR
 // of 2.55 or a Min stars of 505 flags the third frame, and Min stars 515
 // the last two.
@@ -38,8 +39,23 @@ async function closeSettings(page: Page) {
   await expect(page.getByRole('heading', { name: 'PSF Guard Settings' })).toHaveCount(0);
 }
 
+const BUILT_IN = {
+  penalty_satellite: 1,
+  penalty_pointing: 1,
+  penalty_temporal: 1,
+  penalty_hfr_rise: 1,
+  penalty_star_loss: 1,
+  hfr_reject_above: null,
+  star_count_reject_below: null,
+};
+
 test.describe('without accounts', () => {
   let dbId: string;
+
+  // The server keeps the defaults; other specs score with the built-in ones.
+  test.afterEach(async ({ request }) => {
+    await request.put('/api/settings/scoring', { data: BUILT_IN });
+  });
 
   test.beforeEach(async ({ request }) => {
     await resetDatabases(request);
@@ -177,65 +193,86 @@ test.describe('with accounts', () => {
   const sequence = () =>
     `${accounts.base}/#/sequence?db=${encodeURIComponent(accounts.dbId())}&project=1&target=1`;
 
-  test('a user\'s scoring defaults follow them to a fresh browser, and stay theirs', async ({ browser }) => {
-    // Bob, an editor, sets his own in Settings.
+  test('an editor\'s earlier defaults reach the server once, and every user scores with them', async ({ browser }) => {
+    // Before the server kept a copy, bob, an editor, saved his own with his
+    // account. The server has none yet.
     const bob = await accounts.signIn(browser, 'bob');
-    await openSequence(bob, sequence());
-    const bobSaved = bob.waitForResponse((response) =>
-      response.url().endsWith('/api/me/preferences')
-      && response.request().method() === 'PATCH'
+    const seeded = await bob.context().request.patch(`${accounts.base}/api/me/preferences`, {
+      data: { schema_version: 1, preferences: { scoringHfrRejectAbove: 2.45 } },
+    });
+    expect(seeded.ok()).toBeTruthy();
+    expect((await (await bob.context().request.get(`${accounts.base}/api/settings/scoring`)).json()).data.stored)
+      .toBe(false);
+
+    // His next page load copies them to the server. (Signing in loaded the
+    // app before they were seeded, so it found nothing to copy then.)
+    const copied = bob.waitForResponse((response) =>
+      response.url().endsWith('/api/settings/scoring')
+      && response.request().method() === 'PUT'
       && response.ok()
-      && (response.request().postData() ?? '').includes('"scoringHfrRejectAbove":2.45'));
-    const defaults = await openScoringDefaults(bob);
-    await defaults.getByRole('spinbutton', { name: 'Max HFR (pixels)' }).fill('2.45');
-    await defaults.getByRole('button', { name: 'Save defaults' }).click();
-    await bobSaved;
-    await closeSettings(bob);
+      && (response.request().postData() ?? '').includes('"hfr_reject_above":2.45'),
+    { timeout: 15_000 });
+    await bob.reload();
+    await copied;
+    await openSequence(bob, sequence());
     await expect(flagged(bob)).toHaveCount(2, { timeout: 15_000 });
+    await expect(summary(bob)).toHaveText('Scoring');
     await bob.context().close();
 
-    // Alice, a viewer, saves hers from the toolbar.
+    // Alice, a viewer, scores with the same defaults in her own browser,
+    // and cannot save others.
     const alice = await accounts.signIn(browser, 'alice');
     await openSequence(alice, sequence());
-    await expect(flagged(alice)).toHaveCount(0, { timeout: 15_000 });
+    await expect(flagged(alice)).toHaveCount(2, { timeout: 15_000 });
     await openScoring(alice);
+    await expect(alice.getByLabel('Max HFR')).toHaveValue('2.45');
     // Settings is for editors, so the popover offers no way there.
     await expect(alice.getByRole('button', { name: 'Edit defaults' })).toHaveCount(0);
     const minStars = alice.getByLabel('Min stars');
-    await minStars.fill('505');
+    await minStars.fill('515');
     await minStars.press('Enter');
-    await expect(flagged(alice)).toHaveCount(1, { timeout: 15_000 });
     await expect(summary(alice)).toHaveText('Scoring (changed)');
-    const aliceSaved = alice.waitForResponse((response) =>
-      response.url().endsWith('/api/me/preferences')
-      && response.request().method() === 'PATCH'
+    await expect(alice.getByRole('button', { name: 'Save as default' })).toBeDisabled();
+    await alice.context().close();
+  });
+
+  test('a change an editor saves reaches every user, and is copied no more', async ({ browser }) => {
+    // Bob saves new defaults in Settings; the server's copy changes.
+    const bob = await accounts.signIn(browser, 'bob');
+    await openSequence(bob, sequence());
+    const saved = bob.waitForResponse((response) =>
+      response.url().endsWith('/api/settings/scoring')
+      && response.request().method() === 'PUT'
       && response.ok()
-      && (response.request().postData() ?? '').includes('"scoringStarCountRejectBelow":505'));
-    await alice.getByRole('button', { name: 'Save as default' }).click();
-    await aliceSaved;
-    await expect(summary(alice)).toHaveText('Scoring');
-    await alice.reload();
-    await expect(alice.locator('.sequence-image-card')).toHaveCount(3, { timeout: 30_000 });
+      && (response.request().postData() ?? '').includes('"star_count_reject_below":505'));
+    const defaults = await openScoringDefaults(bob);
+    await defaults.getByRole('spinbutton', { name: 'Max HFR (pixels)' }).fill('');
+    await defaults.getByRole('spinbutton', { name: 'Min stars' }).fill('505');
+    await defaults.getByRole('button', { name: 'Save defaults' }).click();
+    await saved;
+    await closeSettings(bob);
+    await expect(flagged(bob)).toHaveCount(1, { timeout: 15_000 });
+    await bob.context().close();
+
+    // Alice, in a fresh browser, sees bob's new defaults.
+    const alice = await accounts.signIn(browser, 'alice');
+    await openSequence(alice, sequence());
     await expect(flagged(alice)).toHaveCount(1, { timeout: 15_000 });
+    await openScoring(alice);
+    await expect(alice.getByLabel('Min stars')).toHaveValue('505');
+    await expect(alice.getByLabel('Max HFR')).toHaveValue('');
     await alice.context().close();
 
-    // Another browser: alice finds her defaults.
-    const aliceAgain = await accounts.signIn(browser, 'alice');
-    await openSequence(aliceAgain, sequence());
-    await expect(flagged(aliceAgain)).toHaveCount(1, { timeout: 15_000 });
-    await expect(summary(aliceAgain)).toHaveText('Scoring');
-    await openScoring(aliceAgain);
-    await expect(aliceAgain.getByLabel('Min stars')).toHaveValue('505');
-    await expect(aliceAgain.getByLabel('Max HFR')).toHaveValue('');
-    await aliceAgain.context().close();
-
-    // Bob keeps his.
+    // Bob's account still holds his older values, but the server has a
+    // copy now, so a new page does not copy them over it.
     const bobAgain = await accounts.signIn(browser, 'bob');
+    let copiedAgain = false;
+    bobAgain.on('request', (request) => {
+      if (request.url().endsWith('/api/settings/scoring') && request.method() === 'PUT') copiedAgain = true;
+    });
     await openSequence(bobAgain, sequence());
-    await expect(flagged(bobAgain)).toHaveCount(2, { timeout: 15_000 });
-    await openScoring(bobAgain);
-    await expect(bobAgain.getByLabel('Max HFR')).toHaveValue('2.45');
-    await expect(bobAgain.getByLabel('Min stars')).toHaveValue('');
+    await expect(flagged(bobAgain)).toHaveCount(1, { timeout: 15_000 });
+    expect(copiedAgain).toBe(false);
     await bobAgain.context().close();
   });
 });

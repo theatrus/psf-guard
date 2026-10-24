@@ -305,6 +305,10 @@ pub(super) const READABLE_ROUTES: &[(&str, &str)] = &[
         "/settings/calibration",
         "Calibration matching settings, global and per rig, with night_zone (where a rig's nights split)",
     ),
+    (
+        "/settings/scoring",
+        "Scoring defaults every view starts from and automatic stack builds use",
+    ),
     ("/settings/stacking", "Stack automation settings"),
     ("/settings/stacking/method", "Default stacking method"),
     (

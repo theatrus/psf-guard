@@ -1,3 +1,5 @@
+import type { StackScoringSettings } from '../api/types';
+
 /**
  * How hard each kind of event evidence hits the quality score, and the
  * absolute reject limits. Each penalty multiplies that evidence's built-in
@@ -169,6 +171,34 @@ export function penaltyKeyOf(preferences: ScoringPreferences): (number | null)[]
     preferences.hfrRejectAbove,
     preferences.starCountRejectBelow,
   ];
+}
+
+/** Preferences as the server's scoring settings: a stack's recorded
+ *  scoring, and the server's scoring defaults. */
+export function stackScoringSettings(preferences: ScoringPreferences): StackScoringSettings {
+  return {
+    penalty_satellite: preferences.satellite,
+    penalty_pointing: preferences.pointing,
+    penalty_temporal: preferences.temporal,
+    penalty_hfr_rise: preferences.hfrRise,
+    penalty_star_loss: preferences.starLoss,
+    hfr_reject_above: preferences.hfrRejectAbove,
+    star_count_reject_below: preferences.starCountRejectBelow,
+  };
+}
+
+/** The inverse of `stackScoringSettings`. A setting recorded before HFR
+ *  rise and star loss existed reads as their calibrated 100%. */
+export function scoringPreferencesOf(settings: StackScoringSettings): ScoringPreferences {
+  return {
+    satellite: settings.penalty_satellite,
+    pointing: settings.penalty_pointing,
+    temporal: settings.penalty_temporal,
+    hfrRise: settings.penalty_hfr_rise ?? 1,
+    starLoss: settings.penalty_star_loss ?? 1,
+    hfrRejectAbove: settings.hfr_reject_above,
+    starCountRejectBelow: settings.star_count_reject_below,
+  };
 }
 
 /** Whether two snapshots score identically: the one comparison every "is

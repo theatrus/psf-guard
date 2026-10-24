@@ -1,15 +1,18 @@
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClientProvider, type QueryClient } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import { MemoryRouter } from 'react-router-dom';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { http, HttpResponse } from 'msw';
 import { server } from '../../test/msw-server';
+import { SCORING_DEFAULTS } from '../../hooks/useScoringPreferences';
 import {
-  SCORING_DEFAULTS,
-  setScoringDefaults,
-} from '../../hooks/useScoringPreferences';
+  deliverScoringDefaults,
+  scoringServer,
+  testQueryClient,
+  waitForScoringDefaults,
+} from '../../test/scoringDefaults';
 import type { StackScoringSettings } from '../../api/types';
 import StackPreviewPanel from '../StackPreviewPanel';
 
@@ -18,12 +21,9 @@ const images = [
   { id: 2, target_id: 42, target_name: 'Sh2 86', filter_name: 'Ha', grading_status: 1 },
 ];
 
-function wrapper(entry = '/stacks?db=test&project=1') {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false, gcTime: 0 } },
-  });
+function wrapper(queryClient: QueryClient, entry = '/stacks?db=test&project=1') {
   return function Wrapper({ children }: { children: ReactNode }) {
-    // The panel scores with the link's values over the person's defaults.
+    // The panel scores with the link's values over the server's defaults.
     return (
       <MemoryRouter initialEntries={[entry]}>
         <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
@@ -99,7 +99,8 @@ function mockLatest(scoring?: StackScoringSettings) {
 }
 
 function renderPanel(entry?: string) {
-  return render(
+  const client = testQueryClient();
+  const view = render(
     <StackPreviewPanel
       dbId="test"
       projectId={1}
@@ -107,12 +108,10 @@ function renderPanel(entry?: string) {
       selectionSource="visible"
       onOpenImage={() => undefined}
     />,
-    { wrapper: wrapper(entry) }
+    { wrapper: wrapper(client, entry) }
   );
+  return { client, ...view };
 }
-
-beforeEach(() => setScoringDefaults({ ...SCORING_DEFAULTS }));
-afterEach(() => setScoringDefaults({ ...SCORING_DEFAULTS }));
 
 describe('StackPreviewPanel scoring provenance', () => {
   it('treats an old artifact without scoring metadata as calibrated', async () => {
@@ -140,7 +139,7 @@ describe('StackPreviewPanel scoring provenance', () => {
     );
 
     act(() => {
-      setScoringDefaults({ ...SCORING_DEFAULTS, satellite: 0 });
+      deliverScoringDefaults(view.client, { ...SCORING_DEFAULTS, satellite: 0 });
     });
 
     await waitFor(() =>
@@ -169,11 +168,13 @@ describe('StackPreviewPanel and a view\'s own scoring', () => {
   }
 
   it('builds with the link\'s scoring, and says so beside Build', async () => {
-    setScoringDefaults({ ...SCORING_DEFAULTS, hfrRejectAbove: 3 });
+    scoringServer.set({ ...SCORING_DEFAULTS, hfrRejectAbove: 3 });
     const submitted = mockBuild();
     renderPanel(VIEW);
     const note = await screen.findByRole('note');
-    expect(note).toHaveTextContent('Builds here use this view\'s scoring, not your defaults');
+    // The server's defaults arrive after the first render.
+    await waitFor(() => expect(note).toHaveTextContent('Max HFR off (default 3)'));
+    expect(note).toHaveTextContent('Builds here use this view\'s scoring, not the defaults');
     expect(note).toHaveTextContent('Satellite trails off (default 100%)');
     expect(note).toHaveTextContent('Max HFR off (default 3)');
     expect(note).toHaveTextContent('Min stars 40 (default off)');
@@ -183,9 +184,10 @@ describe('StackPreviewPanel and a view\'s own scoring', () => {
   });
 
   it('builds with the defaults once the view is reset', async () => {
-    setScoringDefaults({ ...SCORING_DEFAULTS, hfrRejectAbove: 3 });
+    scoringServer.set({ ...SCORING_DEFAULTS, hfrRejectAbove: 3 });
     const submitted = mockBuild();
-    renderPanel(VIEW);
+    const { client } = renderPanel(VIEW);
+    await waitForScoringDefaults(client);
     await userEvent.click(await screen.findByRole('button', { name: 'Reset to default' }));
     await waitFor(() => expect(screen.queryByRole('note')).toBeNull());
     await userEvent.click(screen.getByRole('button', { name: 'Build stacks' }));

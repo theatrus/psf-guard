@@ -8,8 +8,9 @@ interface ScoringChangedNoteProps {
 
 /**
  * Says that the view scores with its own values, set in Sequence's Scoring
- * control, rather than the person's defaults, on the views that use the
+ * control, rather than the defaults, on the views that use the
  * scoring but have no control for it: Images, the detail view and Stacks.
+ * The defaults are the server's (Settings › Review).
  * Reset returns the view to the defaults. Nothing shows while the view
  * scores as the defaults do.
  */
@@ -23,7 +24,7 @@ export default function ScoringChangedNote({ build = false }: ScoringChangedNote
       <div className="scoring-changed-note scoring-changed-build is-set" role="note">
         <span>
           <strong>Scoring (changed).</strong> Builds here use this view's scoring, not
-          your defaults: {changes}.
+          the defaults: {changes}.
         </span>
         <button type="button" onClick={resetToDefault}>
           Reset to default
@@ -35,7 +36,7 @@ export default function ScoringChangedNote({ build = false }: ScoringChangedNote
   return (
     <span
       className="scoring-changed-note is-set"
-      title={`This view scores with its own values, not your defaults: ${changes}.`}
+      title={`This view scores with its own values, not the defaults: ${changes}.`}
     >
       Scoring (changed)
       <span className="visually-hidden">: {changes}.</span>
