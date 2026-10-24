@@ -28,11 +28,37 @@ export function runDirectories(tmpBase: string): string[] {
   return [tmpBase, `${tmpBase}-sync`];
 }
 
+/** Remove one directory and everything in it. One still being written to,
+ *  as when the server under test finishes background work while teardown
+ *  runs, fails with ENOTEMPTY: the removal tries again a few times first. */
+function removeDirectory(directory: string): void {
+  fs.rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+}
+
 /** Remove this run's directories. Safe to call when they do not exist. */
 export function removeRunDirectories(tmpBase: string): void {
+  for (const directory of runDirectories(tmpBase)) removeDirectory(directory);
+}
+
+/**
+ * Teardown's removal: what could not be removed is reported, not thrown.
+ * Every test has passed or failed by then, and a directory left behind is
+ * collected by a later run's sweep, so a failed removal must not fail the
+ * run. Returns the directories left behind, with why.
+ */
+export function removeRunDirectoriesQuietly(
+  tmpBase: string,
+  remove: (directory: string) => void = removeDirectory,
+): string[] {
+  const left: string[] = [];
   for (const directory of runDirectories(tmpBase)) {
-    fs.rmSync(directory, { recursive: true, force: true });
+    try {
+      remove(directory);
+    } catch (error) {
+      left.push(`${directory}: ${(error as Error).message}`);
+    }
   }
+  return left;
 }
 
 function processIsAlive(pid: number): boolean {

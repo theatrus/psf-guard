@@ -4,6 +4,7 @@ import * as path from 'path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   removeRunDirectories,
+  removeRunDirectoriesQuietly,
   runDirectories,
   sweepAbandonedRunDirectories,
 } from '../../e2e/tmp-dirs';
@@ -109,5 +110,31 @@ describe('e2e tmp directories', () => {
 
     expect(fs.existsSync(base)).toBe(false);
     expect(fs.existsSync(sync)).toBe(false);
+  });
+
+  it('teardown reports a directory it cannot remove instead of failing the run', () => {
+    const base = makeRunDir(999_000_009);
+    makeRunDir(999_000_009, '-sync');
+    const busy = `ENOTEMPTY, Directory not empty: '${base}'`;
+    const removed: string[] = [];
+
+    const left = removeRunDirectoriesQuietly(base, (directory) => {
+      if (directory === base) throw new Error(busy);
+      fs.rmSync(directory, { recursive: true, force: true });
+      removed.push(directory);
+    });
+
+    // The busy directory is reported, and its sibling is still removed.
+    expect(left).toEqual([`${base}: ${busy}`]);
+    expect(removed).toEqual([`${base}-sync`]);
+    expect(fs.existsSync(`${base}-sync`)).toBe(false);
+  });
+
+  it('teardown removes both directories when nothing is busy', () => {
+    const base = makeRunDir(999_000_010);
+    makeRunDir(999_000_010, '-sync');
+    expect(removeRunDirectoriesQuietly(base)).toEqual([]);
+    expect(fs.existsSync(base)).toBe(false);
+    expect(fs.existsSync(`${base}-sync`)).toBe(false);
   });
 });
