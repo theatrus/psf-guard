@@ -25,3 +25,7 @@
   the server reports new values, fields you have not edited update to match,
   and a field you are editing keeps what you typed. In PixInsight, **Check
   again** now updates the executable and WBPP runs folder.
+- Settings no longer shows a second scrollbar when you open it from the
+  Stacks page. Before, with a stack's **Exact measurements** table open,
+  scrolling in Settings could also scroll the Stacks page behind it, and the
+  page could be out of view when Settings closed.
