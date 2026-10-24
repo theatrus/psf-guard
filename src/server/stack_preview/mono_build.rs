@@ -661,9 +661,10 @@ pub(super) fn run_group(
     let (mut stacker, mut ledger, mut points, mut orientation_vote) = pool.install(|| {
         // A checkpoint that fails to reopen — a Seiza version change, a
         // truncated file — is discarded and the group builds from scratch.
-        // A reopened stack keeps the GPU options it was saved with: Seiza
-        // offers no way to change them, and they change only where the
-        // arithmetic runs, not what is stacked.
+        // A reopened stack keeps the GPU options it was saved with, since
+        // Seiza offers no way to change them. `under_gpu` above restacks
+        // when the live passes would run elsewhere; a changed frame count or
+        // timing log waits for the next full restack.
         let restored = checkpoint.and_then(|checkpoint| {
             match LiveStacker::open_context(&checkpoint.context_path) {
                 Ok(stacker)

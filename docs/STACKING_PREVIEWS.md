@@ -226,10 +226,12 @@ date.
 
 **Settings → Stacking → GPU** controls it for every build on the server:
 
-- **Use the GPU** is on by default. Off runs the live stack and the final
-  pass's rejection on the CPU.
+- **Use the GPU** is on by default. Off keeps the live pass (debayering, star
+  detection, resampling and the running stack) and the final pass's outlier
+  rejection on the CPU.
 - **Passes on the GPU** turns single passes off: **Debayering**, **Star
   detection**, **Resampling**, **Live stack** and **Final pass**.
+  **Debayering** and **Resampling** cover the live pass only.
 - **Frames at once** limits how many frames the GPU works on at the same
   time, 1 to 16; default 3. The others wait without using GPU memory.
 - **Log GPU timings** writes each GPU call's stages and times to the server's
@@ -242,7 +244,10 @@ already running keeps the choice it started with. A refresh that would add
 frames to a channel's last build restacks every frame once when **Use the
 GPU**, **Debayering**, **Star detection**, **Resampling** or **Live stack**
 changed since that build: Seiza restores a stack with the GPU choice it was
-saved with. The card shows `Full restack: the GPU setting changed`.
+saved with. The card shows `Full restack: the GPU setting changed`. A
+change to **Frames at once** or **Log GPU timings** alone does not restack:
+a refresh that adds frames keeps the values of the channel's last full
+build until the channel restacks for another reason.
 
 These calls still use Seiza's defaults, every pass allowed on the GPU,
 whatever the settings say:

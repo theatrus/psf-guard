@@ -8,9 +8,17 @@ const STACK_GPU_QUERY_KEY = ['stack-gpu'] as const;
 type Pass = 'debayer' | 'detection' | 'resampling' | 'accumulator' | 'integration';
 
 const PASSES: Array<{ key: Pass; label: string; help: string }> = [
-  { key: 'debayer', label: 'Debayering', help: "Demosaics a color camera's frames by VNG." },
+  {
+    key: 'debayer',
+    label: 'Debayering',
+    help: "Demosaics a color camera's frames by VNG in the live pass.",
+  },
   { key: 'detection', label: 'Star detection', help: "Finds each frame's stars for registration." },
-  { key: 'resampling', label: 'Resampling', help: "Aligns each frame onto the reference frame's grid." },
+  {
+    key: 'resampling',
+    label: 'Resampling',
+    help: "Aligns each frame onto the reference frame's grid in the live pass.",
+  },
   {
     key: 'accumulator',
     label: 'Live stack',
@@ -113,8 +121,9 @@ export default function StackGpuSettings() {
         supported GPU, stack on the CPU. The GPU calculates in single precision, so its stacks
         differ slightly from the CPU&apos;s: about 0.005 of the noise on average, and more at a
         pixel where an outlier is rejected on one and kept on the other. A change applies to the
-        next build. Built stacks stay current, but a refresh that would add frames to a stack
-        restacks every frame once after a change to Use the GPU or a pass.
+        next build. Built stacks stay current. After a change to Use the GPU, Debayering, Star
+        detection, Resampling or Live stack, a refresh that would add frames to a stack restacks
+        every frame once.
       </p>
       <fieldset className="calibration-settings-group stack-method-group" disabled={save.isPending}>
         <legend>GPU stacking</legend>
@@ -130,10 +139,11 @@ export default function StackGpuSettings() {
               <em className="stack-method-default"> recommended</em>
             </span>
             <small>
-              Off runs the live stack and the final pass&apos;s outlier rejection on the CPU. The
-              final pass still debayers color camera frames and resamples every frame on the GPU.
-              Artifact searches and color preview alignment do too. If a GPU pass fails, the build continues on the CPU, and PSF Guard keeps
-              every pass on the CPU until it restarts.
+              Off keeps the live pass (debayering, star detection, resampling and the running
+              stack) and the final pass&apos;s outlier rejection on the CPU. The final pass still
+              debayers color camera frames and resamples every frame on the GPU. Artifact
+              searches and color preview alignment do too. If a GPU pass fails, the build
+              continues on the CPU, and PSF Guard keeps every pass on the CPU until it restarts.
             </small>
           </span>
         </label>

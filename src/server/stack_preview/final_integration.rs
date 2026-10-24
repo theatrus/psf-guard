@@ -123,10 +123,6 @@ fn is_scratch_failure(error: &seiza_stacking::Error, scratch: &std::path::Path) 
         || (message.contains(" back from ") && message.contains(&*scratch.to_string_lossy()))
 }
 
-/// The weights the live pass gave each admitted frame, in replay order, or
-/// `None` for an equal-weight stack. Seiza measured them once; replaying with
-/// anything else would publish a different stack from the one the live pass
-/// admitted. A weighted ledger that lacks one is refused rather than mixed.
 /// The final pass's options: the build's stop flag, the live pass's frame
 /// weights, and the passes `gpu` allows on the GPU.
 fn batch_options(
@@ -142,6 +138,10 @@ fn batch_options(
     }
 }
 
+/// The weights the live pass gave each admitted frame, in replay order, or
+/// `None` for an equal-weight stack. Seiza measured them once; replaying with
+/// anything else would publish a different stack from the one the live pass
+/// admitted. A weighted ledger that lacks one is refused rather than mixed.
 fn replay_weights(
     weighting: super::StackWeighting,
     admitted: &[(usize, &resume::ResumeFrame)],
