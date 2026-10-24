@@ -1,7 +1,10 @@
 > Implementation status: the paired narrowband worktrees implement shared
 > H-alpha stretching, display balance, automatic SHO/HOO selection, and RGB
-> star replacement on regular narrowband cards. Continuum subtraction remains
-> a design for a later linear stage. The standalone HTML preview includes
+> star replacement on regular narrowband cards. The paired Seiza worktree now
+> implements continuum fitting and signed subtraction in Rust, C, Python and
+> the CLI. PSF Guard integration remains planned for a later linear stage.
+> Seiza stays unreleased until the complete feature set is ready.
+> The standalone HTML preview includes
 > exploratory controls and is not the application.
 
 # Color previews and channel processing
@@ -11,8 +14,9 @@ and RC-Astro steps by default, run them on each channel's own stack in the
 card's cache, and can run BlurXTerminator and NoiseXTerminator on the color
 channels together.
 **Built in the paired feature worktrees**: narrowband balance, automatic
-palettes, and RGB stars. **Proposed**: continuum subtraction for broadband plus
-narrowband combinations, green reduction, and additional lightness choices.
+palettes, and RGB stars; Seiza continuum APIs and CLI. **Proposed in PSF Guard**:
+continuum subtraction and blending for broadband plus narrowband combinations,
+green reduction, and additional lightness choices.
 Last updated: 2026-10-24
 
 A channel card can run deconvolution and the RC-Astro tools
@@ -298,7 +302,7 @@ Research checked on 2026-10-24:
   dependencies or code to copy into PSF Guard.
 
 The mathematical operations belong in Seiza. Its
-`docs/design/color-composition.md` records the numeric contracts and continuum proposal,
+`docs/design/color-composition.md` records the numeric contracts and continuum APIs,
 failure cases, bindings and validation. PSF Guard owns source selection,
 setups, jobs, caches, diagnostics and this UI.
 
@@ -675,7 +679,7 @@ cargo build --config target/narrowband-local.toml
 
 That file is a local development artifact under the ignored target directory.
 The development lockfile resolves Seiza to local paths. Before merging the
-PSF Guard dependency update, publish Seiza 0.47.0 and regenerate Cargo.lock
+PSF Guard dependency update, publish Seiza 0.43.0 (including seiza-stacking 0.47.0) and regenerate Cargo.lock
 against the registry. Do not publish the development lockfile as a release
 resolution. The implementation has no claim of numerical parity with the
 Cosmic Photons PixInsight script.
@@ -703,3 +707,26 @@ origins and sizes, so a direct pixel-by-pixel comparison needs their recorded
 crop regions. RGB star calibration reported no plate solve: the cutout fixture
 has no fresh pixel solve. This run verifies separation, recombination, caching,
 and coverage, rather than Gaia calibration or full-frame processing speed.
+
+
+### Seiza continuum core in the paired draft
+
+The Seiza draft now supplies `fit_continuum`, `measure_and_fit_continuum` and
+`subtract_continuum`, with C ABI, Python and CLI twins. Inputs are aligned,
+linear mono planes with stars. The core measures isolated aperture fluxes,
+fits nonnegative through-origin coefficients, and checks held-out residuals,
+saturation, PSF widths, alignment and conditioning. It returns a plan tied to
+exact prepared source revisions or an explicit skipped outcome. Subtraction
+retains signed samples and missing coverage without stretching or a pedestal.
+
+The current contract applies only to those exact revisions. It deliberately
+refuses a plan applied to a different starless revision; associating pre-removal
+and starless branches with validated flux equivalence remains host work.
+PSF Guard must also add the tracked continuum job stage, cache identities,
+per-line outcomes, combined-image recipe and UI before enabling automatic
+LRGB+SHO subtraction. Its existing narrowband cards do not call these new APIs.
+
+The prepared workspace version is Seiza 0.43.0 with stacking/output version
+0.47.0. Keep the Seiza PR in draft; do not merge, tag or publish until all work
+for the combined release is ready. PSF Guard's dependency and registry lockfile
+can be finalized only after that later publication.
