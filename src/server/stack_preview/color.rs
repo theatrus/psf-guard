@@ -4835,26 +4835,38 @@ pub(super) fn retained_calibration_source(
 /// stack of each of its channels: the same role, filter, exposure group and
 /// origin (PSF Guard or WBPP), so a choice the person made between families
 /// holds. One whose channels did not change is left alone. A target with no
-/// preview yet gets its first one when `defaults` carries the person's
-/// display pipeline: LRGB when it has L, R, G and B, else RGB, else the
-/// first narrowband palette its channels allow, from PSF Guard's own stacks.
+/// preview yet gets its first one when `defaults` carries a color pipeline,
+/// as a person's build and an automatic refresh both do: LRGB when it has
+/// L, R, G and B, else RGB, else the first narrowband palette its channels
+/// allow, from PSF Guard's own stacks.
 pub(super) fn requests_after_build(
     ctx: &crate::server::database_context::DatabaseContext,
     project_id: i32,
     target_id: i32,
     defaults: Option<&StackColorProcessing>,
-) -> Result<Vec<StackColorRequest>, AppError> {
+) -> Result<ColorAfterBuild, AppError> {
     let latest = load_latest_stacks(ctx, project_id)?;
     let sources = collect_sources(&ctx.stack_root, &latest);
     let Some(target) = sources.get(&target_id) else {
-        return Ok(Vec::new());
+        return Ok(ColorAfterBuild::default());
     };
     let remembered = load_latest_colors(ctx, project_id)?
         .jobs
         .into_iter()
         .filter(|job| job.target_id == target_id)
         .collect::<Vec<_>>();
-    Ok(plan_after_build(target_id, target, &remembered, defaults))
+    Ok(ColorAfterBuild {
+        requests: plan_after_build(target_id, target, &remembered, defaults),
+        first: remembered.is_empty(),
+    })
+}
+
+/// The color previews [`requests_after_build`] plans for one target.
+#[derive(Debug, Default)]
+pub(super) struct ColorAfterBuild {
+    pub(super) requests: Vec<StackColorRequest>,
+    /// The target has no color preview yet, so the request is its first.
+    pub(super) first: bool,
 }
 
 /// What makes two channel stacks the same channel of a composition: the
@@ -5038,7 +5050,7 @@ fn plan_after_build(
 }
 
 /// A target's first color preview: the richest kind its channels make, each
-/// role from its one PSF Guard stack, with the person's display pipeline
+/// role from its one PSF Guard stack, with the build's color pipeline
 /// narrowed to those roles. `None` when no kind has exactly one stack for
 /// every role it needs.
 fn first_composite(
@@ -5463,7 +5475,7 @@ fn persist_color_manifest(stack_root: &FsPath, job: &StackColorJob) -> Result<()
     write_json_atomic(&color_manifest_path(stack_root, &job.job_id), job)
 }
 
-fn persist_latest_color(stack_root: &FsPath, job: &StackColorJob) -> Result<(), String> {
+pub(super) fn persist_latest_color(stack_root: &FsPath, job: &StackColorJob) -> Result<(), String> {
     super::with_index_lock(stack_root, || persist_latest_color_locked(stack_root, job))
 }
 
@@ -7528,9 +7540,8 @@ mod tests {
         assert_eq!(requests[0].kind, StackColorKind::Narrowband);
         assert!(requests[0].palette.is_some());
 
-        // Without the person's defaults, as for an automatic refresh, no
-        // first composite; and a role with two of PSF Guard's own stacks is
-        // a choice left to the person.
+        // Without a color pipeline, no first composite; and a role with two
+        // of PSF Guard's own stacks is a choice left to the person.
         assert!(plan_after_build(7, &sources(rgb()), &[], None).is_empty());
         let mut two_reds = rgb();
         two_reds.push(channel(Red, "R", "r-300s", false));

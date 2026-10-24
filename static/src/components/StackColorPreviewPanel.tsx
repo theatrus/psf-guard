@@ -32,6 +32,7 @@ import { STACK_ACTIVITY_QUERY_KEY, useStackActivity } from '../hooks/useStackAct
 import { JOBS_QUERY_KEY } from '../api/jobs';
 import { buildColorExposureSets, colorSourceKey, colorSourcesLabel, completedColorArtifact, resolveColorSources, sameColorSourceFamily, wbppColorSet, type ColorExposureSet } from './stackColorSources';
 import { withRetainedColorExposureSets } from './colorExposureCards';
+import { fetchDefaultColorFor } from './defaultColorSetup';
 import './StackColorSources.css';
 
 /** A channel's frame count, or that WBPP made it and recorded none. */
@@ -61,7 +62,10 @@ interface ColorOperation {
   operationKey: string;
   cardKey: string;
   crop: StackColorCrop;
-  processing: StackColorProcessing;
+  /** The processing to run, or, for a Build, how to choose it once the
+   *  default Color setup has been read from the server. */
+  processing: StackColorProcessing
+    | ((defaults: (roles: StackColorRole[]) => StackColorProcessing) => StackColorProcessing);
   inputSources?: StackColorInputSources;
 }
 
@@ -506,13 +510,17 @@ export default function StackColorPreviewPanel({
     mutate: startColor,
     reset: resetStart,
   } = useMutation({
-    mutationFn: (operation: ColorOperation) => apiClient.startStackColor(operation.dbId, operation.projectId, {
+    // The card shows the build as pending from the click, while the
+    // default Color setup is read and while the server queues the build.
+    mutationFn: async (operation: ColorOperation) => apiClient.startStackColor(operation.dbId, operation.projectId, {
       target_id: operation.targetId,
       kind: operation.kind,
       palette: operation.palette,
       force: operation.force,
       crop: operation.crop,
-      processing: operation.processing,
+      processing: typeof operation.processing === 'function'
+        ? operation.processing(await fetchDefaultColorFor(queryClient))
+        : operation.processing,
       ...(operation.inputSources ? { input_sources: operation.inputSources } : {}),
     }),
     onMutate: (operation) => {
@@ -874,7 +882,9 @@ export default function StackColorPreviewPanel({
           targetId: target.target_id, kind, palette,
           force: Boolean(artifact && !artifact.outdated),
           operationKey: key, cardKey: key, crop,
-          processing: processingForColorBuild(artifact, requiredRoles(kind, palette)),
+          // A new preview starts from the default Color setup.
+          processing: (defaults) =>
+            processingForColorBuild(artifact, requiredRoles(kind, palette), defaults),
           inputSources: sources.inputSources,
         })}
         onInspect={setInspector}

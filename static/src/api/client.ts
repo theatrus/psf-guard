@@ -2523,6 +2523,16 @@ export const apiClient = {
     return data.data;
   },
 
+  /** Make a Color setup the one new color previews start from. */
+  markDefaultColorSetup: async (name: string): Promise<ProcessingSetupsDocument> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.put<ApiResponse<ProcessingSetupsDocument>>(
+      `/processing-setups/${encodeURIComponent(name)}/default`
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to mark the default color setup');
+    return data.data;
+  },
+
   importProcessingSetups: async (
     document: ProcessingSetupsDocument
   ): Promise<ProcessingSetupsImportResult> => {

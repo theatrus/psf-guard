@@ -758,6 +758,10 @@ pub fn api_router(state: Arc<AppState>) -> Router {
             "/processing-setups/{name}",
             axum::routing::delete(processing_setups::delete_setup),
         )
+        .route(
+            "/processing-setups/{name}/default",
+            axum::routing::put(processing_setups::mark_default_setup),
+        )
         .route("/update-notice", get(handlers::get_update_notice))
         .nest("/director/v1", director::routes())
         .route(

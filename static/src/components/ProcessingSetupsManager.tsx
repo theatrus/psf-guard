@@ -3,18 +3,23 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import type { ProcessingSetup, ProcessingSetupsDocument } from '../api/types';
 import { setupExportFilename } from './processingSetups';
+import { PROCESSING_SETUPS_QUERY_KEY, processingSetupsQuery } from './defaultColorSetup';
 import { useAccess } from '../auth/access';
 import { formatRelativeTime } from '../utils/relativeTime';
 
-const SETUPS_QUERY_KEY = ['processing-setups'] as const;
-
 const kindLabels = { view: 'View processing', color: 'Color pipeline' } as const;
+
+/** The seeded default Color setup as PSF Guard added it: it has no times
+ *  until someone saves over it. */
+function untouchedSeed(setup: ProcessingSetup): boolean {
+  return setup.created_unix_seconds === 0 && setup.updated_unix_seconds === 0;
+}
 
 /**
  * The management side of named processing setups, in Settings: the full list
- * across both editors, deletion, and moving the collection between installs.
- * Saving and applying stay in the processing editors, next to the parameters
- * they capture.
+ * across both editors, the default Color setup, deletion, and moving the
+ * collection between installs. Saving and applying stay in the processing
+ * editors, next to the parameters they capture.
  */
 export default function ProcessingSetupsManager() {
   const access = useAccess();
@@ -23,12 +28,14 @@ export default function ProcessingSetupsManager() {
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const setups = useQuery({
-    queryKey: SETUPS_QUERY_KEY,
-    queryFn: apiClient.getProcessingSetups,
-    staleTime: 30_000,
-  });
+  const setups = useQuery(processingSetupsQuery());
   const list = setups.data?.setups ?? [];
+  // The seeded default nobody edited is the built-in pipeline every install
+  // has, so Export all leaves it out.
+  const exportable = list.filter((setup) => !untouchedSeed(setup));
+  const defaultColor = setups.data?.default_color ?? null;
+  const isDefault = (setup: ProcessingSetup) =>
+    setup.kind === 'color' && defaultColor?.toLowerCase() === setup.name.toLowerCase();
 
   const report = (message: string) => {
     setError(null);
@@ -38,7 +45,7 @@ export default function ProcessingSetupsManager() {
     setNotice(null);
     setError(cause instanceof Error ? cause.message : fallback);
   };
-  const refresh = () => queryClient.invalidateQueries({ queryKey: SETUPS_QUERY_KEY });
+  const refresh = () => queryClient.invalidateQueries({ queryKey: PROCESSING_SETUPS_QUERY_KEY });
 
   const remove = useMutation({
     mutationFn: (name: string) => apiClient.deleteProcessingSetup(name),
@@ -48,12 +55,22 @@ export default function ProcessingSetupsManager() {
     },
     onError: (cause) => fail(cause, 'Deleting the setup failed'),
   });
+  const markDefault = useMutation({
+    mutationFn: (name: string) => apiClient.markDefaultColorSetup(name),
+    onSuccess: (_, name) => {
+      refresh();
+      report(`New color previews now start from “${name}”`);
+    },
+    onError: (cause) => fail(cause, 'Marking the default setup failed'),
+  });
   const importSetups = useMutation({
     mutationFn: (document: ProcessingSetupsDocument) =>
       apiClient.importProcessingSetups(document),
     onSuccess: (result) => {
       refresh();
-      report(`Imported ${result.imported} new, replaced ${result.replaced}`);
+      report(`Imported ${result.imported} new, replaced ${result.replaced}` + (result.skipped
+        ? `, skipped ${result.skipped} unedited default ${result.skipped === 1 ? 'setup' : 'setups'} already here`
+        : ''));
     },
     onError: (cause) => fail(cause, 'Importing setups failed'),
   });
@@ -72,7 +89,7 @@ export default function ProcessingSetupsManager() {
 
   const exportAll = () => {
     download(
-      setups.data ?? { schema_version: 1, setups: [] },
+      { schema_version: setups.data?.schema_version ?? 1, setups: exportable },
       'psf-guard-processing-setups.json'
     );
   };
@@ -100,7 +117,7 @@ export default function ProcessingSetupsManager() {
     }
   };
 
-  const busy = remove.isPending || importSetups.isPending;
+  const busy = remove.isPending || importSetups.isPending || markDefault.isPending;
 
   return (
     <div className="settings-section processing-setups-manager">
@@ -113,6 +130,14 @@ export default function ProcessingSetupsManager() {
             processing</strong> and the color <strong>Processing stack</strong>;
             manage the collection here. One exported file moves all of them to
             another install.
+          </p>
+          <p>
+            New color previews start from the default Color setup, including
+            the first color preview an automatic refresh composes for a
+            target. To change that pipeline, apply the setup on a color card,
+            edit it, and save it under the same name, or make another Color
+            setup the default. The default setup cannot be deleted until
+            another one is the default.
           </p>
         </div>
         <div className="processing-setups-manager-actions">
@@ -142,7 +167,7 @@ export default function ProcessingSetupsManager() {
           <button
             type="button"
             className="browse-button"
-            disabled={busy || list.length === 0}
+            disabled={busy || exportable.length === 0}
             onClick={exportAll}
           >
             Export all
@@ -171,10 +196,32 @@ export default function ProcessingSetupsManager() {
           <tbody>
             {list.map((setup) => (
               <tr key={`${setup.kind}:${setup.name}`}>
-                <td>{setup.name}</td>
+                <td>
+                  {setup.name}
+                  {isDefault(setup) && (
+                    <span className="processing-setups-default">
+                      Default for new color previews
+                    </span>
+                  )}
+                </td>
                 <td>{kindLabels[setup.kind]}</td>
-                <td>{formatRelativeTime(setup.updated_unix_seconds)}</td>
+                <td>
+                  {untouchedSeed(setup)
+                    ? 'Not edited'
+                    : formatRelativeTime(setup.updated_unix_seconds)}
+                </td>
                 <td className="processing-setups-row-actions">
+                  {access.canWrite && setup.kind === 'color' && !isDefault(setup) && (
+                    <button
+                      type="button"
+                      className="browse-button"
+                      disabled={busy}
+                      aria-label={`Make “${setup.name}” the default for new color previews`}
+                      onClick={() => markDefault.mutate(setup.name)}
+                    >
+                      Make default
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="browse-button"
@@ -187,7 +234,10 @@ export default function ProcessingSetupsManager() {
                     <button
                       type="button"
                       className="remove-button"
-                      disabled={busy}
+                      disabled={busy || isDefault(setup)}
+                      title={isDefault(setup)
+                        ? 'Make another Color setup the default before deleting this one'
+                        : undefined}
                       onClick={() => remove.mutate(setup.name)}
                     >
                       Delete

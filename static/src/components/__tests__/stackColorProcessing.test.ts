@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { StackColorRole } from '../../api/types';
 import {
   BACKGROUND_COLOR_CACHE_VERSION,
   defaultColorProcessing,
@@ -87,6 +88,24 @@ describe('stack color processing defaults', () => {
       cache_version: BACKGROUND_COLOR_CACHE_VERSION,
       processing,
     }, ['red', 'green', 'blue']).background_extraction?.strength).toBe(1);
+  });
+
+  it('starts a new or outdated color preview from the given defaults', () => {
+    const roles: StackColorRole[] = ['red', 'green', 'blue'];
+    const marked = (channels: StackColorRole[]) => ({
+      ...defaultColorProcessing(channels),
+      background_extraction: null,
+    });
+    expect(processingForColorBuild(undefined, roles, marked).background_extraction).toBeNull();
+    expect(processingForColorBuild({
+      cache_version: BACKGROUND_COLOR_CACHE_VERSION - 1,
+      processing: defaultColorProcessing(roles),
+    }, roles, marked).background_extraction).toBeNull();
+    // A current preview keeps its own processing.
+    expect(processingForColorBuild({
+      cache_version: BACKGROUND_COLOR_CACHE_VERSION,
+      processing: defaultColorProcessing(roles),
+    }, roles, marked).background_extraction).not.toBeNull();
   });
 
   it('enables catalog protection for older background requests', () => {

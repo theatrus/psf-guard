@@ -141,8 +141,8 @@ The editor can also, with or without the database-management gate below:
 - update projects, targets, coordinates, and exposure plans, and move targets
   and exposures between projects;
 - start quality scans, and imports from the database's own image folders;
-- save, delete, and import named processing setups (viewers can list, apply,
-  and export them);
+- save, delete, and import named processing setups, and choose the default
+  Color setup (viewers can list, apply, and export them);
 - keep calibration frames out or use them anyway, mark their validity, forget
   them, clear generated masters, and invalidate Target Scheduler flat
   coverage;

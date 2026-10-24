@@ -11,6 +11,13 @@
 
 ## Changes
 
+- Automatic stack refreshes now compose a target's first color preview once
+  its channels are stacked, as a build you start does. New color previews
+  start from the Color setup marked as the default. PSF Guard adds one named
+  **Default** with the current pipeline. To use another pipeline, open
+  **Settings → Setups** and click **Make default** on a Color setup, or save
+  your changes over **Default**. Color previews you already have are not
+  changed.
 - Stack previews now run on the GPU when your computer has one: Metal on a
   Mac, Vulkan on Linux and Direct3D 12 on Windows. Debayering, star
   detection, resampling, the live stack and the final pass run there. On an

@@ -798,9 +798,18 @@ whole catalog. **Also stack old channels, of any age** drops the cutoff: each
 database's next refresh (every database's, after a restart) then stacks every
 channel there without a stack,
 which on a large catalog keeps the stacker busy for a long while, as
-background work that yields to anything you start. A
-first stack this way gets no first color preview; once one is composed, it
-follows its channels.
+background work that yields to anything you start.
+
+A refresh also composes a target's first color preview once its channels are
+stacked, with the pipeline of the default Color setup (see
+[Default color setup](#default-color-setup)). This includes a target whose
+channels were already stacked and only came back from the cache. PSF Guard
+reads the default setup at each refresh, so a setup you mark as the default
+applies from the next refresh on. A target that already has a color preview
+keeps it: the preview follows its channels, as after any build. If a target's
+first color preview fails, later refreshes do not try the same composition
+again while the server keeps the failed job, at most until it restarts. To try
+it again, click **Build** on its color card.
 
 A refresh waiting for its delay does not appear in the header's jobs list
 or count. Once it is due, the scheduler checks within 15 seconds. It plans
@@ -1495,6 +1504,49 @@ validate. The server checks
 every saved or imported setup against the same types the build endpoints
 parse, so a setup that saves is a setup a build can use.
 
+### Default color setup
+
+New color previews start from the Color setup marked as the default. This
+applies to the first color preview a build or an automatic refresh composes
+for a target, to **Build** on a color card that has no preview yet, and to
+**Reset defaults** in the color **Processing stack**. **Settings → Setups**
+labels it **Default for new color previews**.
+
+PSF Guard adds a Color setup named **Default** the first time it reads a
+setups list that has no default. Its pipeline is the built-in one: background
+extraction, an automatic MTF stretch on each channel, solar color calibration,
+and inputs that take their deconvolution and RC-Astro steps from each channel
+card. If you already saved a Color setup named Default, PSF Guard marks that
+one instead. If a view setup is named Default, the new Color setup is named
+**Default color**. PSF Guard writes the new setup to the setups file with your
+next change to the list: `processing-setups.json` beside `config.json`, or
+`<stem>.processing-setups.json` beside a custom database registry such as
+`catalogs.json`. Until you save over it, its row shows **Not edited**.
+
+- To change the default pipeline, apply the default setup on a color card,
+  edit it, and choose **Save as…** with the same name.
+- To use another pipeline, click **Make default** on that Color setup's row in
+  **Settings → Setups**.
+
+You cannot delete the default setup until another Color setup is the default.
+You cannot save a view setup under its name either, with one exception: a view
+setup named Default, saved or imported while the added Default is not edited,
+takes the name, and the Color setup moves to **Default color** and stays the
+default.
+
+A default setup saved from some channels, such as an SHO card, gives the other
+channels the stretch it applies to all of its own; when its channels have
+different stretches, the other channels get the built-in stretch. A server
+without a database registry uses the built-in pipeline. Changing the default
+does not change color previews that already exist.
+
+**Export all** leaves out the added Default until you edit it, since every
+install has the same one. An import replaces the default setup when the file
+has an edited setup of the same name, skips an unedited Default when this
+install already has a setup of that name, and never changes which setup is
+the default. The setups file records the default only when it is not
+**Default**, so PSF Guard 0.12 and earlier can still read the file.
+
 The whole **Stacks** panel collapses from its title, like the detail sections
 inside it, and stays collapsed across reloads. **Card size**, at the top of
 the view, sets how wide the stack and color cards are, from 300 to
@@ -1524,11 +1576,12 @@ siblings were waiting on; a stopped one does not, so **Stop all** starts no
 color work, and the next build composes what is due. Each channel keeps its family: its
 filter, exposure group, and whether WBPP or PSF Guard made it. A target with
 no color preview yet gets its first one after a build started from Stacks,
-for the whole set or one channel: LRGB when it has L, R, G
-and B, else RGB, else the first narrowband palette its channels allow, with
-the display pipeline the color cards start from. A role with two of PSF
-Guard's own stacks, such as two exposure groups of R, is a choice left to
-you. Automatic refreshes compose only what was composed before.
+for the whole set or one channel, or after an automatic refresh: LRGB when it
+has L, R, G and B, else RGB, else the first narrowband palette its channels
+allow, with the pipeline of the default Color setup (see
+[Default color setup](#default-color-setup)). A narrowband palette is never
+color calibrated, whatever the setup says. A role with two of PSF Guard's own
+stacks, such as two exposure groups of R, is a choice left to you.
 
 When you click **Build** or **Apply processing stack** on a color card, the
 composition joins the queue at once, as **Preparing color preview**, and the
@@ -2143,12 +2196,23 @@ GET    /api/processing-setups
 POST   /api/processing-setups
 POST   /api/processing-setups/import
 DELETE /api/processing-setups/{name}
+PUT    /api/processing-setups/{name}/default
 ```
 
 The save body is `{ "name": "Deep SHO", "kind": "view" | "color",
 "settings": { ... } }` with settings shaped exactly like the matching build
 request fragment above. The GET response is also the export document: the
-import endpoint accepts it verbatim and replaces setups of the same name.
+import endpoint accepts it verbatim and replaces setups of the same name. It
+also carries `default_color`, the name of the default Color setup (`null`
+when none is marked), and `default_color_processing`, the pipeline new color
+previews start from, with a stretch for every channel. The import ignores
+both; its response counts the setups `imported`, `replaced`, and `skipped`
+(an unedited Default, whose timestamps are 0, when this install already has
+that name). `PUT …/default` marks a Color setup as the default and returns the
+list; it needs an editor, like the other changes. `DELETE` answers `409` for
+the default setup. A stack build's `color_defaults` is the pipeline a target's
+first color preview gets; the page sends `default_color_processing`, and an
+automatic refresh reads the same value from the setups file.
 
 The POST body is `{ "image_ids": [...], "accepted_only": false, "force":
 false, "order": "capture" | "quality" }`; `order` defaults to `capture`.

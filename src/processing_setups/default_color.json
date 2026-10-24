@@ -1,0 +1,106 @@
+{
+  "input_processing": "channels",
+  "background_extraction": {
+    "config": {
+      "model": {
+        "kind": "automatic",
+        "max_degree": 2,
+        "ridge": 1e-08,
+        "rbf_smoothing": 0.01,
+        "max_control_points": 192,
+        "allow_radial_basis": false,
+        "minimum_improvement": 0.08
+      },
+      "samples_per_axis": 12,
+      "sample_radius": null,
+      "search_steps": 4,
+      "sample_rejection_sigma": 3.5,
+      "fit_rejection_sigma": 3,
+      "fit_rejection_iterations": 3,
+      "border_fraction": 0.03
+    },
+    "correction_mode": "subtract",
+    "strength": 1,
+    "protect_catalog_emission": true
+  },
+  "input_deconvolutions": {},
+  "input_rc_astro": {},
+  "input_stretches": {
+    "luminance": [
+      {
+        "model": {
+          "type": "auto-mtf",
+          "target_median": 0.2,
+          "shadows_clip": -2.8
+        },
+        "color_strategy": "linked"
+      }
+    ],
+    "red": [
+      {
+        "model": {
+          "type": "auto-mtf",
+          "target_median": 0.2,
+          "shadows_clip": -2.8
+        },
+        "color_strategy": "linked"
+      }
+    ],
+    "green": [
+      {
+        "model": {
+          "type": "auto-mtf",
+          "target_median": 0.2,
+          "shadows_clip": -2.8
+        },
+        "color_strategy": "linked"
+      }
+    ],
+    "blue": [
+      {
+        "model": {
+          "type": "auto-mtf",
+          "target_median": 0.2,
+          "shadows_clip": -2.8
+        },
+        "color_strategy": "linked"
+      }
+    ],
+    "ha": [
+      {
+        "model": {
+          "type": "auto-mtf",
+          "target_median": 0.2,
+          "shadows_clip": -2.8
+        },
+        "color_strategy": "linked"
+      }
+    ],
+    "oiii": [
+      {
+        "model": {
+          "type": "auto-mtf",
+          "target_median": 0.2,
+          "shadows_clip": -2.8
+        },
+        "color_strategy": "linked"
+      }
+    ],
+    "sii": [
+      {
+        "model": {
+          "type": "auto-mtf",
+          "target_median": 0.2,
+          "shadows_clip": -2.8
+        },
+        "color_strategy": "linked"
+      }
+    ]
+  },
+  "output_stretches": [],
+  "color_calibration": {
+    "enabled": true,
+    "neutralize_background": true,
+    "white_reference": "solar"
+  }
+}
