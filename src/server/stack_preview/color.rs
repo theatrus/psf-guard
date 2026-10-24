@@ -27,10 +27,10 @@ use seiza_background::{
     BackgroundConfig, BackgroundFit, CorrectionMode, FittedModel, ModelConfig, ProtectedRegion,
 };
 use seiza_stacking::{
-    combine_lrgb, combine_narrowband, combine_rgb, resample_to_reference, write_color_fits_f32,
-    write_processed_image_fits_f32, ColorComposition, ColorCrop, ColorNormalization, ColorOptions,
-    ColorTransfer, CropReport, FitsFrame, ForaxxOptions, LinearImage, NarrowbandPalette,
-    ReferenceRegion, Registrar, RegistrationOptions,
+    combine_lrgb, combine_narrowband, combine_rgb, resample_to_reference_with_gpu,
+    write_color_fits_f32, write_processed_image_fits_f32, ColorComposition, ColorCrop,
+    ColorNormalization, ColorOptions, ColorTransfer, CropReport, FitsFrame, ForaxxOptions,
+    LinearImage, NarrowbandPalette, ReferenceRegion, Registrar, RegistrationOptions,
 };
 use seiza_stretch::{ImageShape, StretchStack, StretchStackOutput, StretchStageProgress};
 use serde::{Deserialize, Serialize};
@@ -3191,6 +3191,9 @@ fn compose_color(
         state,
         job_id: &job.job_id,
     };
+    // The GPU setting when the composition starts, for every channel it
+    // aligns.
+    let gpu = super::gpu::current().options();
     let reference_role = reference_role(job.kind);
     let reference_source = job
         .sources
@@ -3377,7 +3380,9 @@ fn compose_color(
             None,
         );
         let registrar = pool
-            .install(|| Registrar::new(&reference.image, RegistrationOptions::default()))
+            .install(|| {
+                Registrar::new_with_gpu(&reference.image, RegistrationOptions::default(), &gpu)
+            })
             .map_err(|error| error.to_string())?;
         progress.advance(StackColorProgressPhase::RegisteringSources, 1);
         state.stack_previews.update_color(&job.job_id, |current| {
@@ -3647,11 +3652,12 @@ fn compose_color(
                     .get(&source.role)
                     .copied()
                     .ok_or_else(|| format!("{} was not registered", source.role.label()))?;
-                let aligned = resample_to_reference(
+                let aligned = resample_to_reference_with_gpu(
                     &frame.image,
                     images[&reference_role].width,
                     images[&reference_role].height,
                     transform,
+                    &gpu,
                 )
                 .map_err(|error| {
                     format!(
@@ -3677,6 +3683,7 @@ fn compose_color(
                         images[&reference_role].width,
                         images[&reference_role].height,
                     ),
+                    &gpu,
                 )
             })
             .flatten();
@@ -4559,6 +4566,7 @@ fn clipped_on_reference(
     sources: &[StackColorSource],
     registered: &BTreeMap<StackColorRole, seiza_stacking::SimilarityTransform>,
     (width, height): (usize, usize),
+    gpu: &seiza_stacking::GpuOptions,
 ) -> Option<LinearImage> {
     let mut combined: Option<LinearImage> = None;
     for source in sources
@@ -4580,7 +4588,7 @@ fn clipped_on_reference(
         {
             map
         } else {
-            match resample_to_reference(&map, width, height, transform) {
+            match resample_to_reference_with_gpu(&map, width, height, transform, gpu) {
                 Ok(map) => map,
                 Err(error) => {
                     tracing::warn!(
@@ -8618,7 +8626,8 @@ mod tests {
             (StackColorRole::Blue, shifted),
             (StackColorRole::Ha, identity),
         ]);
-        let map = clipped_on_reference(root.path(), &sources, &registered, (width, height))
+        let cpu = seiza_stacking::GpuOptions::cpu();
+        let map = clipped_on_reference(root.path(), &sources, &registered, (width, height), &cpu)
             .expect("three colour channels kept maps");
         let at = |x: usize, y: usize| map.data[y * width + x];
         assert_eq!(at(5, 5), 0.9);
@@ -8631,6 +8640,7 @@ mod tests {
             &[channel(StackColorRole::Red, "R", "unclipped", false)],
             &registered,
             (width, height),
+            &cpu,
         )
         .is_none());
     }

@@ -1,38 +1,45 @@
-import { useEffect, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { apiClient } from '../api/client';
-import type { StackGpu } from '../api/types';
+import { useEffect, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { apiClient } from "../api/client";
+import type { StackGpu } from "../api/types";
 
-const STACK_GPU_QUERY_KEY = ['stack-gpu'] as const;
+const STACK_GPU_QUERY_KEY = ["stack-gpu"] as const;
 
-type Pass = 'debayer' | 'detection' | 'resampling' | 'accumulator' | 'integration';
+type Pass =
+  "debayer" | "detection" | "resampling" | "accumulator" | "integration";
 
 const PASSES: Array<{ key: Pass; label: string; help: string }> = [
   {
-    key: 'debayer',
-    label: 'Debayering',
-    help: "Demosaics a color camera's frames by VNG in the live pass.",
-  },
-  { key: 'detection', label: 'Star detection', help: "Finds each frame's stars for registration." },
-  {
-    key: 'resampling',
-    label: 'Resampling',
-    help: "Aligns each frame onto the reference frame's grid in the live pass.",
+    key: "debayer",
+    label: "Debayering",
+    help: "Demosaics a color camera's frames by VNG.",
   },
   {
-    key: 'accumulator',
-    label: 'Live stack',
-    help: 'Keeps the running stack on the GPU, and normalizes and adds each frame there.',
+    key: "detection",
+    label: "Star detection",
+    help: "Finds each frame's stars for registration, and the stars that align color previews' channels.",
   },
   {
-    key: 'integration',
-    label: 'Final pass',
-    help: 'Rejects outliers and integrates the frames when the final pass reintegrates them.',
+    key: "resampling",
+    label: "Resampling",
+    help: "Aligns each frame onto the reference frame's grid, rotates a stack north up, and aligns color previews' channels.",
+  },
+  {
+    key: "accumulator",
+    label: "Live stack",
+    help: "Keeps the running stack on the GPU, and normalizes and adds each frame there.",
+  },
+  {
+    key: "integration",
+    label: "Final pass",
+    help: "Rejects outliers and integrates the frames when the final pass reintegrates them.",
   },
 ];
 
 const sameGpu = (left: StackGpu, right: StackGpu) =>
-  (Object.keys(left) as Array<keyof StackGpu>).every((key) => left[key] === right[key]);
+  (Object.keys(left) as Array<keyof StackGpu>).every(
+    (key) => left[key] === right[key],
+  );
 
 /**
  * How many frames the GPU works on at once. Saved when the field loses focus
@@ -70,15 +77,15 @@ function ConcurrencyField({
           onChange={(event) => setDraft(event.target.value)}
           onBlur={commit}
           onKeyDown={(event) => {
-            if (event.key === 'Enter') commit();
+            if (event.key === "Enter") commit();
           }}
         />
         <span>
           Frames, 1 to {maximum}
           <small>
-            How many frames the GPU works on at the same time. The others wait without using GPU
-            memory. The default is 3. Lower it if a stack runs out of memory; raising it seldom
-            makes a stack faster.
+            How many frames the GPU works on at the same time. The others wait
+            without using GPU memory. The default is 3. Lower it if a stack runs
+            out of memory; raising it seldom makes a stack faster.
           </small>
         </span>
       </label>
@@ -93,10 +100,14 @@ function ConcurrencyField({
  */
 export default function StackGpuSettings() {
   const queryClient = useQueryClient();
-  const settings = useQuery({ queryKey: STACK_GPU_QUERY_KEY, queryFn: apiClient.getStackGpu });
+  const settings = useQuery({
+    queryKey: STACK_GPU_QUERY_KEY,
+    queryFn: apiClient.getStackGpu,
+  });
   const save = useMutation({
     mutationFn: apiClient.updateStackGpu,
-    onSuccess: (updated) => queryClient.setQueryData(STACK_GPU_QUERY_KEY, updated),
+    onSuccess: (updated) =>
+      queryClient.setQueryData(STACK_GPU_QUERY_KEY, updated),
   });
 
   if (settings.isLoading) return null;
@@ -104,7 +115,9 @@ export default function StackGpuSettings() {
     return (
       <div className="stack-method-settings">
         <h3>GPU</h3>
-        <p className="muted" role="alert">Could not load the GPU settings.</p>
+        <p className="muted" role="alert">
+          Could not load the GPU settings.
+        </p>
       </div>
     );
   }
@@ -116,22 +129,28 @@ export default function StackGpuSettings() {
     <div className="stack-method-settings">
       <h3>GPU</h3>
       <p className="muted">
-        Stack previews run their heaviest passes on the GPU: Metal on a Mac, Vulkan on Linux and
-        Direct3D 12 on Windows. Frames under about a million pixels, and computers without a
-        supported GPU, stack on the CPU. The GPU calculates in single precision, so its stacks
-        differ slightly from the CPU&apos;s: about 0.005 of the noise on average, and more at a
-        pixel where an outlier is rejected on one and kept on the other. A change applies to the
-        next build. Built stacks stay current. After a change to Use the GPU, Debayering, Star
-        detection, Resampling or Live stack, a refresh that would add frames to a stack restacks
-        every frame once.
+        Stack previews run their heaviest passes on the GPU: Metal on a Mac,
+        Vulkan on Linux and Direct3D 12 on Windows. Frames under about a million
+        pixels, and computers without a supported GPU, stack on the CPU. The GPU
+        calculates in single precision, so its stacks differ slightly from the
+        CPU&apos;s: about 0.005 of the noise on average, and more at a pixel
+        where an outlier is rejected on one and kept on the other. A change
+        applies to the next build, color preview or artifact search. Built
+        stacks stay current, and a refresh that adds frames to a stack continues
+        it under the new choice.
       </p>
-      <fieldset className="calibration-settings-group stack-method-group" disabled={save.isPending}>
+      <fieldset
+        className="calibration-settings-group stack-method-group"
+        disabled={save.isPending}
+      >
         <legend>GPU stacking</legend>
         <label className="review-preference">
           <input
             type="checkbox"
             checked={gpu.enabled}
-            onChange={(event) => choose({ ...gpu, enabled: event.target.checked })}
+            onChange={(event) =>
+              choose({ ...gpu, enabled: event.target.checked })
+            }
           />
           <span>
             <span className="stack-method-label">
@@ -139,11 +158,10 @@ export default function StackGpuSettings() {
               <em className="stack-method-default"> recommended</em>
             </span>
             <small>
-              Off keeps the live pass (debayering, star detection, resampling and the running
-              stack) and the final pass&apos;s outlier rejection on the CPU. The final pass still
-              debayers color camera frames and resamples every frame on the GPU. Artifact
-              searches and color preview alignment do too. If a GPU pass fails, the build
-              continues on the CPU, and PSF Guard keeps every pass on the CPU until it restarts.
+              Off keeps all stacking work on the CPU: the live pass, the final
+              pass, artifact searches and color preview alignment. If a GPU pass
+              fails, the build continues on the CPU, and PSF Guard keeps every
+              pass on the CPU until it restarts.
             </small>
           </span>
         </label>
@@ -157,7 +175,10 @@ export default function StackGpuSettings() {
           </button>
         </div>
       </fieldset>
-      <fieldset className="stack-method-choices" disabled={save.isPending || !gpu.enabled}>
+      <fieldset
+        className="stack-method-choices"
+        disabled={save.isPending || !gpu.enabled}
+      >
         <fieldset className="calibration-settings-group stack-method-group">
           <legend>Passes on the GPU</legend>
           {PASSES.map((pass) => (
@@ -165,7 +186,9 @@ export default function StackGpuSettings() {
               <input
                 type="checkbox"
                 checked={gpu[pass.key]}
-                onChange={(event) => choose({ ...gpu, [pass.key]: event.target.checked })}
+                onChange={(event) =>
+                  choose({ ...gpu, [pass.key]: event.target.checked })
+                }
               />
               <span>
                 {pass.label}
@@ -175,20 +198,27 @@ export default function StackGpuSettings() {
           ))}
         </fieldset>
         <div>
-          <ConcurrencyField gpu={gpu} maximum={maxConcurrency} onChange={choose} />
+          <ConcurrencyField
+            gpu={gpu}
+            maximum={maxConcurrency}
+            onChange={choose}
+          />
           <fieldset className="calibration-settings-group stack-method-group">
             <legend>Diagnostics</legend>
             <label className="review-preference">
               <input
                 type="checkbox"
                 checked={gpu.trace}
-                onChange={(event) => choose({ ...gpu, trace: event.target.checked })}
+                onChange={(event) =>
+                  choose({ ...gpu, trace: event.target.checked })
+                }
               />
               <span>
                 Log GPU timings
                 <small>
-                  Writes each GPU call&apos;s stages and times to the server&apos;s standard error,
-                  to show where a stack spends its time. The desktop app does not show this output.
+                  Writes each GPU call&apos;s stages and times to the
+                  server&apos;s standard error, to show where a stack spends its
+                  time. The desktop app does not show this output.
                 </small>
               </span>
             </label>
@@ -196,7 +226,9 @@ export default function StackGpuSettings() {
         </div>
       </fieldset>
       {save.isError && (
-        <p className="error-text" role="alert">{(save.error as Error).message}</p>
+        <p className="error-text" role="alert">
+          {(save.error as Error).message}
+        </p>
       )}
     </div>
   );

@@ -607,8 +607,7 @@ pub(super) fn run_group(
         &calibration_fingerprint,
         order,
         &requested,
-    )
-    .under_gpu(gpu);
+    );
     if let Some(reason) = decision.fresh_reason() {
         tracing::info!(
             target_id = group_target_id,
@@ -663,12 +662,10 @@ pub(super) fn run_group(
     let (mut stacker, mut ledger, mut points, mut orientation_vote) = pool.install(|| {
         // A checkpoint that fails to reopen — a Seiza version change, a
         // truncated file — is discarded and the group builds from scratch.
-        // A reopened stack keeps the GPU options it was saved with, since
-        // Seiza offers no way to change them. `under_gpu` above restacks
-        // when the live passes would run elsewhere; a changed frame count or
-        // timing log waits for the next full restack.
+        // A reopened stack runs its live passes under this build's GPU
+        // setting, not the one it was saved under.
         let restored = checkpoint.and_then(|checkpoint| {
-            match LiveStacker::open_context(&checkpoint.context_path) {
+            match LiveStacker::open_context_with_gpu(&checkpoint.context_path, gpu.options()) {
                 Ok(stacker)
                     if resume::context_matches_manifest(
                         stacker.view().accepted_frames,
@@ -899,7 +896,6 @@ pub(super) fn run_group(
                     scoring,
                     method,
                     calibration_fingerprint: calibration_fingerprint.clone(),
-                    gpu,
                     order,
                     snr_points: points.to_vec(),
                     frames: ledger.to_vec(),
@@ -1407,10 +1403,10 @@ pub(super) fn run_group(
             )
             .map_err(|error| error.to_string())?;
             let oriented = orientation
-                .apply(&integrated)
+                .apply_with_gpu(&integrated, &gpu.options())
                 .map_err(|error| error.to_string())?;
             let clipped = clipped
-                .map(|clipped| orientation.apply(&clipped))
+                .map(|clipped| orientation.apply_with_gpu(&clipped, &gpu.options()))
                 .transpose()
                 .map_err(|error| error.to_string())?;
             let record = StackSkyOrientation {

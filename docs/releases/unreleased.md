@@ -46,7 +46,9 @@
   Apple M4 Max, 35 frames of 26 megapixels stacked in 5–6 seconds instead of
   12. Computers without a supported GPU, and frames under about a million
   pixels, stack on the CPU as before. To choose which passes run on the GPU,
-  open **Settings → Stacking → GPU**.
+  open **Settings → Stacking → GPU**. With **Use the GPU** off, all stacking
+  work stays on the CPU, including artifact searches and the channel
+  alignment of color previews.
 - In the Settings sections **Setups → PixInsight**, **Stacking → Stack
   previews**, **Performance → Processor use** and, in the desktop app,
   **Server**, fields no longer appear blank, or show an Automatic port, for a

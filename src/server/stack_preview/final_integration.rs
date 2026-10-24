@@ -41,6 +41,7 @@ pub(super) fn integrate(
         .filter(|(_, frame)| frame.admitted())
         .collect::<Vec<_>>();
     let options = batch_options(cancel, replay_weights(method.weighting, &admitted)?, gpu);
+    let gpu = options.gpu;
     let load = |index: usize| {
         let (source_index, record) = admitted[index];
         let source = &group.frames[source_index];
@@ -65,6 +66,7 @@ pub(super) fn integrate(
             cosmetic,
             mapping,
             method.seiza_interpolation(),
+            &gpu,
         )?;
         if super::source_fingerprint(&source.path) != source.source_fingerprint {
             return Err(seiza_stacking::Error::Stack(format!(
@@ -170,6 +172,7 @@ fn prepare_registered_frame(
     cosmetic: Option<ImpulseFilterOptions>,
     mapping: &RegisteredFrameMapping,
     interpolation: seiza_stacking::Interpolation,
+    gpu: &seiza_stacking::GpuOptions,
 ) -> seiza_stacking::Result<LinearImage> {
     if let Some(masters) = masters {
         // Under the gate its session's lights were admitted under: their
@@ -180,10 +183,10 @@ fn prepare_registered_frame(
     if let Some(cosmetic) = cosmetic {
         seiza_stacking::suppress_impulses(&mut frame.image, frame.bayer, &cosmetic)?;
     }
-    let frame = frame.into_prepared()?;
+    let frame = frame.into_prepared_with_gpu(gpu)?;
     // Through the recorded warp, when registration fitted one, and with the
     // live pass's resampling.
-    mapping.extract_region_with(
+    mapping.extract_region_with_gpu(
         &frame.image,
         ReferenceRegion {
             x: 0,
@@ -192,6 +195,7 @@ fn prepare_registered_frame(
             height: mapping.reference_height(),
         },
         interpolation,
+        gpu,
     )
 }
 
@@ -263,6 +267,7 @@ mod tests {
             Some(ImpulseFilterOptions::default()),
             &mapping,
             Interpolation::Bilinear,
+            &seiza_stacking::GpuOptions::cpu(),
         )
         .unwrap();
         assert!(corrected.data.iter().all(|&value| value == 90.0));
@@ -273,6 +278,7 @@ mod tests {
             None,
             &mapping,
             Interpolation::Bilinear,
+            &seiza_stacking::GpuOptions::cpu(),
         )
         .unwrap();
         assert_eq!(calibrated.data[40], 7990.0);
@@ -283,6 +289,7 @@ mod tests {
             None,
             &mapping,
             Interpolation::Bilinear,
+            &seiza_stacking::GpuOptions::cpu(),
         )
         .unwrap();
         assert_eq!(bypassed.data, raw.data);
@@ -308,6 +315,7 @@ mod tests {
             None,
             &mapping,
             Interpolation::Bilinear,
+            &seiza_stacking::GpuOptions::cpu(),
         )
         .unwrap();
         assert!(registered
@@ -400,6 +408,7 @@ mod tests {
             cosmetic,
             &live.reference_mapping(),
             Interpolation::Bilinear,
+            &seiza_stacking::GpuOptions::cpu(),
         )
         .unwrap();
         assert_eq!(prepared.channels, 3);
@@ -411,6 +420,7 @@ mod tests {
             None,
             &live.reference_mapping(),
             Interpolation::Bilinear,
+            &seiza_stacking::GpuOptions::cpu(),
         )
         .unwrap();
         assert!(
@@ -435,6 +445,7 @@ mod tests {
             cosmetic,
             &diagnostics.mapping,
             Interpolation::Bilinear,
+            &seiza_stacking::GpuOptions::cpu(),
         )
         .unwrap();
         assert!(registered.data.iter().any(|value| value.is_nan()));
@@ -849,6 +860,7 @@ mod tests {
                 None,
                 &RegisteredFrameMapping::identity(&raw),
                 Interpolation::Bilinear,
+                &seiza_stacking::GpuOptions::cpu(),
             )
         };
         replay(&gate).expect("the final pass calibrates the light with the flat its rig matched");
@@ -999,6 +1011,7 @@ mod tests {
                 None,
                 &RegisteredFrameMapping::identity(&raw),
                 Interpolation::Bilinear,
+                &seiza_stacking::GpuOptions::cpu(),
             )
         };
         // The final pass calibrates the light under its session's gate, and

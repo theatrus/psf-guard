@@ -62,11 +62,6 @@ pub(super) struct ResumeManifest {
     #[serde(default = "StackMethod::classic")]
     pub method: StackMethod,
     pub calibration_fingerprint: String,
-    /// Which passes ran on the GPU. Seiza restores the accumulator with the
-    /// options it was saved under. Checkpoints from before this field
-    /// existed used Seiza's defaults.
-    #[serde(default)]
-    pub gpu: super::StackGpu,
     /// The order the frames were pushed in. Only a capture-order stack is
     /// ever resumed, but the checkpoint records what it was so an older one
     /// cannot be extended under a different reading.
@@ -117,18 +112,6 @@ impl ResumeDecision {
         match self {
             Self::Resume(state) => Some(*state),
             Self::Fresh(_) => None,
-        }
-    }
-
-    /// Start over when the checkpoint ran other passes on the GPU than `gpu`
-    /// would: Seiza offers no way to move a restored accumulator, so the
-    /// choice would otherwise never reach this group's live pass again.
-    pub fn under_gpu(self, gpu: super::StackGpu) -> Self {
-        match self {
-            Self::Resume(state) if !state.manifest.gpu.same_live_passes(&gpu) => {
-                Self::Fresh(Some("the GPU setting changed"))
-            }
-            other => other,
         }
     }
 
@@ -425,7 +408,6 @@ mod tests {
             scoring: StackScoringSettings::default(),
             method: StackMethod::classic(),
             calibration_fingerprint: "cal-1".into(),
-            gpu: crate::server::stack_preview::StackGpu::default(),
             frames,
         }
     }
@@ -856,63 +838,18 @@ mod tests {
     }
 
     #[test]
-    fn a_changed_gpu_setting_rebuilds_from_scratch() {
-        use crate::server::stack_preview::StackGpu;
+    fn a_checkpoint_resumes_whatever_the_gpu_setting_it_was_built_under() {
         let cache = tempfile::tempdir().unwrap();
-        store(cache.path(), &manifest(vec![frame(1, "f1")]));
-        let requested = [(1, "f1"), (2, "f2")];
-        // Saved with every pass on the GPU, extended the same way.
-        assert!(try_load(cache.path(), &requested).is_some());
-        let resumed = load_with_gpu(cache.path(), &requested, StackGpu::default());
-        assert_eq!(resumed.fresh_reason(), None);
-        assert!(resumed.state().is_some());
-        // Turned off since: Seiza would keep the saved passes on the GPU.
-        let off = StackGpu {
-            enabled: false,
-            ..StackGpu::default()
-        };
-        let decision = load_with_gpu(cache.path(), &requested, off);
-        assert_eq!(decision.fresh_reason(), Some("the GPU setting changed"));
-        // Only the frame count changed: still extended.
-        let fewer = StackGpu {
-            concurrency: 1,
-            ..StackGpu::default()
-        };
-        assert!(load_with_gpu(cache.path(), &requested, fewer)
-            .state()
-            .is_some());
-        // A manifest from before the field existed reads as Seiza's defaults.
-        let mut bytes: serde_json::Value =
-            serde_json::to_value(manifest(vec![frame(1, "f1")])).unwrap();
-        bytes.as_object_mut().unwrap().remove("gpu");
-        let old: ResumeManifest = serde_json::from_value(bytes).unwrap();
-        assert_eq!(old.gpu, StackGpu::default());
-    }
-
-    fn load_with_gpu(
-        stack_root: &Path,
-        requested: &[(i32, &str)],
-        gpu: crate::server::stack_preview::StackGpu,
-    ) -> ResumeDecision {
-        let requested = requested
-            .iter()
-            .map(|&(image_id, fingerprint)| (image_id, fingerprint, 300.0))
-            .collect::<Vec<_>>();
-        load(
-            stack_root,
-            "db",
-            7,
-            "Ha",
-            None,
-            false,
-            StackScoringSettings::default(),
-            StackMethod::classic(),
-            "test",
-            "cal-1",
-            snr::StackFrameOrder::Capture,
-            &requested,
-        )
-        .under_gpu(gpu)
+        // A manifest from a release that recorded the GPU setting, here
+        // with the GPU off: the field is ignored and the stack extends.
+        let mut bytes = serde_json::to_value(manifest(vec![frame(1, "f1")])).unwrap();
+        bytes
+            .as_object_mut()
+            .unwrap()
+            .insert("gpu".into(), serde_json::json!({ "enabled": false }));
+        let manifest: ResumeManifest = serde_json::from_value(bytes).unwrap();
+        store(cache.path(), &manifest);
+        assert!(try_load(cache.path(), &[(1, "f1"), (2, "f2")]).is_some());
     }
 
     fn noise_method() -> StackMethod {
