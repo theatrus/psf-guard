@@ -2009,6 +2009,24 @@ export interface PixInsightDetection {
 /** How PixInsight gets the display it needs on the server. */
 export type DisplayPlan = { kind: 'own' } | { kind: 'xvfb'; path: string } | { kind: 'missing' };
 
+export interface WbppStoragePolicy {
+  max_volume_percent: number;
+  intermediate_days: number;
+  /** Zero keeps masters forever. */
+  master_days: number;
+}
+
+export interface WbppStorageReport {
+  checked_at: number | null;
+  runs: number;
+  intermediate_bytes: number;
+  master_bytes: number;
+  deleted_files: number;
+  freed_bytes: number;
+  volumes: { path: string; used_percent: number; max_percent: number; over_limit: boolean }[];
+  errors: string[];
+}
+
 export interface PixInsightSettings {
   /** The executable the settings name, if any. */
   binary: string | null;
@@ -2020,6 +2038,8 @@ export interface PixInsightSettings {
   runs_dir: string | null;
   /** Bytes free where that folder is, when known. */
   runs_dir_free_bytes: number | null;
+  storage?: WbppStoragePolicy;
+  storage_report?: WbppStorageReport;
 }
 
 export interface WbppOutputFile {
@@ -2175,7 +2195,7 @@ export interface JobLink {
 /** One job in the header's list, as `GET /api/jobs` returns it. */
 export interface JobRow {
   key: string;
-  kind: 'refresh' | 'quality' | 'flats' | 'sites' | 'duplicates' | 'rejects' | 'stack' | 'processing' | 'wbpp' | 'transfer' | 'backup' | 'catalog' | 'grading' | 'health' | 'headers' | 'flat_use' | 'upkeep' | 'preview' | 'import' | 'export' | 'artifact_search' | 'planning_push' | 'pregeneration';
+  kind: 'refresh' | 'quality' | 'flats' | 'sites' | 'duplicates' | 'rejects' | 'stack' | 'processing' | 'wbpp' | 'transfer' | 'backup' | 'catalog' | 'grading' | 'health' | 'headers' | 'flat_use' | 'upkeep' | 'preview' | 'import' | 'export' | 'artifact_search' | 'planning_push' | 'pregeneration' | 'wbpp_cleanup';
   title: string;
   scope: string;
   detail: string;

@@ -1198,6 +1198,7 @@ export const apiClient = {
   updatePixInsightSettings: async (update: {
     binary: string | null;
     runs_dir: string | null;
+    storage?: import('./types').WbppStoragePolicy;
   }): Promise<PixInsightSettings> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.put<ApiResponse<PixInsightSettings>>(

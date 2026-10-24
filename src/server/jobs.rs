@@ -100,6 +100,7 @@ pub enum RowKind {
     ArtifactSearch,
     PlanningPush,
     Pregeneration,
+    WbppCleanup,
 }
 
 /// The two lines a person can reorder. Each runs one job at a time.
@@ -410,6 +411,7 @@ pub struct Snapshot {
     pub transfers: Vec<Value>,
     pub ts_sync: Vec<TsSyncJob>,
     pub backup: Option<BackupJob>,
+    pub wbpp_cleanup: crate::server::wbpp_storage::Status,
     pub catalog_install: Option<CatalogInstallProgress>,
     pub previews: Vec<PreviewRun>,
     /// Artifact searches in the stack line, with their places while they
@@ -438,6 +440,7 @@ impl Default for Snapshot {
             transfers: Vec::new(),
             ts_sync: Vec::new(),
             backup: None,
+            wbpp_cleanup: Default::default(),
             catalog_install: None,
             previews: Vec::new(),
             artifact_searches: Vec::new(),
@@ -1722,6 +1725,27 @@ pub fn rows(snapshot: &Snapshot, project_of: ProjectOf) -> Vec<JobRow> {
             .iter()
             .map(waiting_reapply_row),
     );
+    if snapshot.wbpp_cleanup.running {
+        let cleanup = &snapshot.wbpp_cleanup;
+        rows.push(
+            JobRow {
+                detail: cleanup.current.clone().unwrap_or_default(),
+                waiting_for: cleanup.waiting_for.clone(),
+                status: if cleanup.waiting_for.is_some() {
+                    RowStatus::Waiting
+                } else {
+                    RowStatus::Running
+                },
+                ..JobRow::new(
+                    "wbpp-cleanup",
+                    RowKind::WbppCleanup,
+                    "Cleaning WBPP storage",
+                    "WBPP runs",
+                )
+            }
+            .automatic(true),
+        );
+    }
     if let Some(backup) = &snapshot.backup {
         rows.push(backup_row(backup));
     }
@@ -1853,6 +1877,7 @@ fn snapshot(state: &Arc<AppState>, transfers: Vec<Value>, manages: bool) -> Snap
             Vec::new()
         },
         backup: backups_allowed.then(|| state.backups.job()).flatten(),
+        wbpp_cleanup: crate::server::wbpp_storage::status(state),
         catalog_install: Some(state.catalog_install.status().progress),
         previews: state.previews.running(),
         artifact_searches: state.stack_previews.artifact_searches_under_way(),

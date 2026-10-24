@@ -281,6 +281,8 @@ pub struct PixInsightSettingsResponse {
     pub runs_dir: Option<String>,
     /// Bytes free where that folder is (or would be), when known.
     pub runs_dir_free_bytes: Option<u64>,
+    pub storage: crate::db_registry::WbppStoragePolicy,
+    pub storage_report: super::wbpp_storage::Report,
 }
 
 #[derive(Debug, Deserialize)]
@@ -291,6 +293,8 @@ pub struct UpdatePixInsightSettingsRequest {
     /// Empty or absent means the export directory or the stack root.
     #[serde(default)]
     pub runs_dir: Option<String>,
+    #[serde(default)]
+    pub storage: Option<crate::db_registry::WbppStoragePolicy>,
 }
 
 fn clean(value: Option<String>) -> Option<String> {
@@ -299,7 +303,7 @@ fn clean(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn configured(state: &AppState) -> Result<PixInsightSettings, AppError> {
+pub(crate) fn configured(state: &AppState) -> Result<PixInsightSettings, AppError> {
     let Ok(path) = require_registry_path(state) else {
         return Ok(PixInsightSettings::default());
     };
@@ -309,10 +313,14 @@ fn configured(state: &AppState) -> Result<PixInsightSettings, AppError> {
     Ok(PixInsightSettings {
         binary: clean(settings.binary),
         runs_dir: clean(settings.runs_dir),
+        storage: settings.storage,
     })
 }
 
-fn settings_response(settings: PixInsightSettings) -> PixInsightSettingsResponse {
+fn settings_response(
+    settings: PixInsightSettings,
+    storage_report: super::wbpp_storage::Report,
+) -> PixInsightSettingsResponse {
     let detection = detect(settings.binary.as_deref());
     let display = display_plan();
     let ready = detection.install.is_some() && display != DisplayPlan::Missing;
@@ -327,6 +335,8 @@ fn settings_response(settings: PixInsightSettings) -> PixInsightSettingsResponse
         ready,
         runs_dir: settings.runs_dir,
         runs_dir_free_bytes,
+        storage: settings.storage,
+        storage_report,
     }
 }
 
@@ -402,7 +412,8 @@ pub async fn get_pixinsight_settings(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ApiResponse<PixInsightSettingsResponse>>, AppError> {
     let settings = configured(&state)?;
-    let response = tokio::task::spawn_blocking(move || settings_response(settings))
+    let storage_report = state.wbpp_storage.report();
+    let response = tokio::task::spawn_blocking(move || settings_response(settings, storage_report))
         .await
         .map_err(|error| AppError::InternalError(format!("settings task: {error}")))?;
     Ok(Json(ApiResponse::success(response)))
@@ -417,16 +428,37 @@ pub async fn update_pixinsight_settings(
     let settings = PixInsightSettings {
         binary: clean(request.binary),
         runs_dir: clean(request.runs_dir),
+        storage: request.storage.unwrap_or(configured(&state)?.storage),
     };
+    settings.storage.validate().map_err(AppError::BadRequest)?;
+    if settings
+        .runs_dir
+        .as_deref()
+        .is_some_and(|path| !Path::new(path).is_absolute())
+    {
+        return Err(AppError::BadRequest(
+            "Use an absolute WBPP runs folder path".into(),
+        ));
+    }
     // Absent is what the defaults already mean; storing nothing keeps the
     // registry clean for older builds reading the same file.
     let stored = (settings != PixInsightSettings::default()).then(|| settings.clone());
+    let old_state = state.clone();
+    tokio::task::spawn_blocking(move || super::wbpp_storage::remember_roots(&old_state))
+        .await
+        .map_err(|error| AppError::InternalError(error.to_string()))?
+        .map_err(|error| AppError::InternalError(error.to_string()))?;
     update_registry(&state, |registry| {
         registry.pixinsight = stored;
         Ok(())
     })
     .await?;
-    let response = tokio::task::spawn_blocking(move || settings_response(settings))
+    let changed_state = state.clone();
+    tokio::task::spawn_blocking(move || super::wbpp_storage::policy_changed(&changed_state))
+        .await
+        .map_err(|error| AppError::InternalError(error.to_string()))?;
+    let storage_report = state.wbpp_storage.report();
+    let response = tokio::task::spawn_blocking(move || settings_response(settings, storage_report))
         .await
         .map_err(|error| AppError::InternalError(format!("settings task: {error}")))?;
     Ok(Json(ApiResponse::success(response)))
@@ -717,7 +749,11 @@ fn resolve_install(
 /// A folder name for a run: the scope, then the time, so runs sort.
 fn run_dir_name(scope: &str) -> String {
     let stamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
-    format!("{}-{stamp}", sanitize_component(scope).replace(' ', "_"))
+    format!(
+        "{}-{stamp}-{}",
+        sanitize_component(scope).replace(' ', "_"),
+        uuid::Uuid::new_v4().simple()
+    )
 }
 
 /// Kill PixInsight and whatever xvfb-run started with it.
@@ -1031,7 +1067,26 @@ async fn prepare(
     let wbpp_options = req.options.clone();
     let extra = req.extra_params.clone();
 
+    let protected = state.wbpp_storage.protect(&work_dir);
     Ok(Some(Box::pin(async move {
+        let _protected = protected;
+        let storage_path = work_dir.clone();
+        let start_state = state.clone();
+        let start_path = work_dir.clone();
+        let start_result = tokio::task::spawn_blocking(move || {
+            super::wbpp_storage::started(&start_state, &start_path)
+        })
+        .await;
+        if !matches!(start_result, Ok(Ok(()))) {
+            finish(
+                &job_store,
+                "error",
+                Some(format!(
+                    "Could not record WBPP storage ownership: {start_result:?}"
+                )),
+            );
+            return;
+        }
         let import_output = output_dir.clone();
         let outcome = run(
             job_ctx.clone(),
@@ -1146,6 +1201,14 @@ async fn prepare(
             };
             update(&job_store, |progress| progress.stacks = Some(stacks));
         }
+        let _ = tokio::task::spawn_blocking(move || {
+            if let Err(error) = super::wbpp_storage::finished(&storage_path) {
+                tracing::warn!("Could not record finished WBPP run: {error}");
+            }
+        })
+        .await;
+        drop(_protected);
+        super::wbpp_storage::request(&state);
     })))
 }
 
@@ -1325,6 +1388,17 @@ async fn run(
         .spawn()
         .map_err(|e| anyhow::anyhow!("starting {}: {e}", command.program.display()))?;
     let pid = child.id();
+    if let Some(pid) = pid {
+        let folder = work_dir.clone();
+        let recorded =
+            tokio::task::spawn_blocking(move || super::wbpp_storage::record_pid(&folder, pid))
+                .await;
+        if !matches!(recorded, Ok(Ok(()))) {
+            kill_hard(pid);
+            let _ = child.wait().await;
+            anyhow::bail!("Could not record the WBPP process for storage protection: {recorded:?}");
+        }
+    }
     tracing::info!(
         "🔭 WBPP run db={} started pid={:?}: {}",
         ctx.id,
@@ -1642,6 +1716,9 @@ pub async fn publish_wbpp_run(
     // replace the copy's progress.
     let copying = state.wbpp_queue.hold_database(&ctx.id);
     let (output_dir, project_id) = begin_publish(&ctx.wbpp_run, &process_dir, &folder)?;
+    let protected = state
+        .wbpp_storage
+        .protect(output_dir.parent().unwrap_or(&output_dir));
     let publish_ctx = ctx.0.clone();
     let publish_store = ctx.0.wbpp_run.clone();
     let failed_store = publish_store.clone();
@@ -1649,6 +1726,7 @@ pub async fn publish_wbpp_run(
     tokio::spawn(async move {
         let result = tokio::task::spawn_blocking(move || {
             let _priority = priority;
+            let _protected = protected;
             publish_and_record(
                 &publish_ctx,
                 &publish_store,
@@ -1710,6 +1788,7 @@ fn file_below(work_dir: &Path, requested: &str) -> Result<PathBuf, AppError> {
 /// `GET /api/db/{db_id}/wbpp/runs/current/files/{*path}` — a file the run
 /// wrote: a master, a calibrated frame, a log, or the script itself.
 pub async fn get_wbpp_run_file(
+    State(state): State<Arc<AppState>>,
     ctx: DbContext,
     AxumPath((_db_id, requested)): AxumPath<(String, String)>,
 ) -> Result<axum::response::Response, AppError> {
@@ -1720,6 +1799,7 @@ pub async fn get_wbpp_run_file(
     if work_dir.is_empty() {
         return Err(AppError::NotFoundMessage("no WBPP run yet".into()));
     }
+    let protected = state.wbpp_storage.protect(Path::new(&work_dir));
     let path = file_below(Path::new(&work_dir), &requested)?;
     let name = path
         .file_name()
@@ -1736,7 +1816,7 @@ pub async fn get_wbpp_run_file(
     let file = tokio::fs::File::open(&path)
         .await
         .map_err(|e| AppError::InternalError(format!("opening {}: {e}", path.display())))?;
-    let body = crate::server::file_body::file_body(file);
+    let body = crate::server::file_body::file_body_with_guard(file, protected);
     axum::response::Response::builder()
         .header(header::CONTENT_TYPE, content_type)
         .header(
@@ -1817,6 +1897,7 @@ mod tests {
             pixinsight: Some(PixInsightSettings {
                 binary: Some(binary.display().to_string()),
                 runs_dir: None,
+                ..Default::default()
             }),
             ..Default::default()
         };

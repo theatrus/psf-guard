@@ -115,7 +115,7 @@ then the masters. So the run folder is yours to place. The **WBPP runs
 folder** under **Settings → Setups → PixInsight** puts every database's
 runs below it (`<folder>/<database>/<project>-<time>/`) and shows the
 space free there. Without one, a database's runs go under its export
-directory when it has one, and only otherwise under the cache. The run
+directory when it has one, and otherwise under its stack folder. The run
 dialog can also pick a folder for one run. The dialog shows free space at start.
 
 The dialog then follows WBPP's own log: which step it is on, how long the
@@ -149,8 +149,8 @@ project that is running shows that run; from another project's dialog,
 
 When PixInsight exits, the dialog lists the masters WBPP wrote, each a
 download, with links to the script, WBPP's log and PixInsight's console
-output. Everything stays in the run folder, so it is also there on the
-server's disk for PixInsight to open directly. A run that wrote no master
+output. Files remain in the run folder until the WBPP storage policy removes
+them; PixInsight can open retained files directly. A run that wrote no master
 is reported as failed, with the last error WBPP logged.
 
 The Library shows every database's run under way, just finished, or in
@@ -159,8 +159,47 @@ the metrics, coloured by state, and the project's own **Stack in WBPP**
 action reads *Stacking in WBPP…*, *Queued for WBPP*, *WBPP masters ready*
 or *WBPP failed* until the next run. Either reopens the dialog. **×** on a
 finished run's row clears it from view everywhere; the run folder and its
-files stay on disk. The run's state lives in the server process, so a
+files remain subject to the storage policy. The run's state lives in the server process, so a
 server restart forgets a finished run's progress and results too.
+
+### Manage WBPP storage
+
+Open **Settings → Storage → WBPP storage** to choose a dedicated **WBPP runs
+folder**, a **WBPP volume usage limit**, and separate retention periods for
+intermediate files and masters. The folder is independent of the cache and
+stack folders. Changing it affects new runs; earlier managed folders remain
+eligible for cleanup, including after a restart.
+
+The defaults are 90% volume usage, seven days for intermediates, and 90 days
+for masters. Limits accept every whole percentage from 0% through 100% and
+include other files on the volume. When WBPP shares a monitored volume, the
+lower storage limit applies. At 100%, WBPP pressure cleanup is disabled;
+age-based cleanup still runs. Targets below 2% are clamped to zero.
+
+Cleanup checks a minute after startup, every five minutes, after a run finishes,
+and after a policy change. It removes expired intermediates first. If volume
+usage exceeds the limit, it removes more intermediate files, oldest runs first,
+aiming for two percentage points below the limit. It then removes expired
+masters. Calibrated and registered frames, scripts, logs, and other work files
+are intermediates; files in WBPP's `master/` output are masters.
+
+Masters keep their full retention period even under disk pressure. Choose
+**Keep WBPP masters forever** to prevent automatic master deletion entirely.
+A volume can therefore remain above its limit when active work, retained
+masters, or unrelated files use the space. Settings shows the measured use,
+cleanup results, and any files it could not read or remove.
+
+Retention begins when a run finishes, or at a file's later modification time.
+Active runs, downloads, master copies, and imports are protected. Empty run
+folders are removed, and deleted outputs disappear from the current run's
+file list. Cleanup manages only PSF Guard runs, without following symlinks;
+it does not delete source frames, process-directory master copies, or imported
+WBPP stacks. Recognizable older server runs are included; arbitrary export
+folders are left alone.
+
+The cleanup pass runs as automatic work in the header's job list. Folder sizes
+and the WBPP volume readings refresh with each pass; opening Settings does not
+rescan the run folders.
 
 ### Keep the masters with your finished work
 
