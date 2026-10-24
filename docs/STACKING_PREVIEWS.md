@@ -1659,6 +1659,61 @@ keeps its saved result but does not replace the latest color preview.
   remain available, and selecting another palette builds or restores its own
   artifact.
 
+### Automatic narrowband and RGB stars
+
+Use the regular narrowband card beside RGB and LRGB. Its header has three
+choices: **Palette**, **Stars**, and **Edges**. You do not need to open a
+custom combination to use automatic processing.
+
+New narrowband previews start with **Palette → Automatic**. PSF Guard chooses
+SHO when one usable SII stack matches the selected narrowband exposure band;
+otherwise it chooses HOO. You can still choose a specific palette. An existing
+preview keeps its saved palette and processing when you rebuild it.
+
+**Stars** chooses what appears over the nebula:
+
+| Choice | Result |
+| --- | --- |
+| Automatic | Uses RGB stars when R, G, B and licensed StarXTerminator are usable; otherwise keeps narrowband stars and explains the fallback. |
+| RGB | Separates narrowband and RGB stars, then screens the RGB stars onto the starless narrowband nebula. A missing source or failed tool stops the build. |
+| Narrowband | Keeps stars in the narrowband inputs. |
+| None | Runs StarXTerminator and produces the starless narrowband nebula. |
+| From channel cards | Preserves the behavior of an older saved preview, including its channel-card star removal. |
+
+For the new star choices, the color build reuses channel-card sharpening and
+denoising before alignment, but defers StarXTerminator to the **Stars** choice.
+Star removal set on the color channels is also deferred. A failed explicit
+RGB or None build leaves the previous completed preview available.
+
+Open **Custom combination** within the card to choose exact source stacks.
+**RGB star inputs** can use shorter exposures than the nebula. Automatic RGB
+selection uses the same source origin as the nebula (PSF Guard stacks or WBPP
+masters); an explicit selection can use another origin. Multiple RGB candidates
+require a choice; Automatic keeps narrowband stars until the ambiguity is
+resolved. All selected channels register onto the H-alpha grid. **Edges** also
+respects RGB coverage when RGB stars are used.
+
+Open **Processing stack → Stretch and narrowband balance** to adjust the
+nebula. The initial narrowband recipe resolves one stretch from H-alpha and
+applies it to the physical H-alpha, OIII and SII planes, then balances OIII and
+SII toward H-alpha before the palette maps them to RGB. **OIII boost** and
+**SII boost** start at 1; **Shadow protection** starts at 1 to protect each
+channel's median background. Flat or noise-dominated channels stay unchanged;
+the completed preview reports the reason. This is a display balance inspired
+by Narrowband Normalization, with no claim of matching the PixInsight script.
+A default Color setup with different per-filter stretches keeps those stretches.
+
+RGB color calibration runs on star-containing linear RGB before star removal.
+The original and starless RGB then receive the same linked display stretch;
+their difference supplies the RGB stars without adding a second nebula. The
+nebula's output stretch stages run after recombination. Foraxx keeps its
+existing dynamic mapping and disables the new shared H-alpha stretch and
+narrowband balance controls.
+
+Continuum subtraction is a planned linear processing stage for combined
+LRGB+narrowband data. This version does not subtract broadband continuum;
+see the [continuum subtraction design](design/color-channel-processing.md).
+
 With exposure grouping enabled, the default cards match channels by their
 recorded duration ranges, not their filter-specific group identifiers. Starting
 with the shortest range, a band accepts another channel only while its longest

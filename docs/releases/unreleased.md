@@ -20,6 +20,13 @@
   about every five seconds. The finished preview replaces it when processing
   completes; completed FITS downloads remain separate during a rebuild.
 
+- New narrowband color cards offer automatic SHO/HOO selection, a shared
+  H-alpha stretch, and background-protected OIII/SII balance. Choose
+  **Stars → Automatic** to use RGB stars when the sources and StarXTerminator
+  are available, with an explained fallback to narrowband stars. Exact RGB
+  sources can use different exposures under the card's **Custom combination**.
+  Existing previews keep their saved palette and processing.
+
 - Automatic stack refreshes now compose a target's first color preview once
   its channels are stacked, as a build you start does. New color previews
   start from the Color setup marked as the default. PSF Guard adds one named

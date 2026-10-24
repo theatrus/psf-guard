@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { http, HttpResponse } from 'msw';
 import { server } from '../../test/msw-server';
 import StackColorProcessingControls from '../StackColorProcessingControls';
-import { defaultColorProcessing } from '../stackColorProcessing';
+import { defaultColorProcessing, automaticNarrowbandProcessing } from '../stackColorProcessing';
 import { defaultDeconvolutionConfig } from '../stackDeconvolution';
 
 // The setups bar inside the editor reads the global setups list.
@@ -20,6 +20,38 @@ function renderWithQueries(element: ReactElement) {
 }
 
 describe('StackColorProcessingControls', () => {
+  it('uses one H-alpha stretch for a new automatic recipe and saves balance changes', async () => {
+    const onApply = vi.fn();
+    renderWithQueries(<StackColorProcessingControls label="SHO" roles={['ha', 'oiii', 'sii']}
+      automaticNarrowband palette="sho" applied={null} backgrounds={{}} protections={{}} fallbacks={{}}
+      deconvolutions={{}} disabled={false} onApply={onApply} />);
+    await userEvent.click(screen.getByText('Processing stack'));
+    await userEvent.click(screen.getByText('Stretch and narrowband balance'));
+    expect(screen.getByRole('combobox', { name: 'Narrowband channel stretch' })).toHaveValue('shared');
+    expect(screen.getByRole('checkbox', { name: 'Narrowband balance' })).toBeChecked();
+    expect(screen.getAllByText('Uses the stretch resolved from Hα.')).toHaveLength(2);
+    const boost = screen.getByRole('spinbutton', { name: 'OIII boost' });
+    await userEvent.clear(boost);
+    await userEvent.type(boost, '1.5');
+    await userEvent.click(screen.getByRole('button', { name: 'Apply processing stack' }));
+    expect(onApply).toHaveBeenCalledWith(expect.objectContaining({
+      narrowband: expect.objectContaining({ shared_stretch: true, balance: expect.objectContaining({ oiii_boost: 1.5 }) }),
+    }));
+  });
+
+  it('disables shared H-alpha stretching and balance for Foraxx', async () => {
+    renderWithQueries(<StackColorProcessingControls label="Foraxx SHO" roles={['ha', 'oiii', 'sii']}
+      palette="foraxx-sho" applied={automaticNarrowbandProcessing(defaultColorProcessing(['ha', 'oiii', 'sii']))}
+      backgrounds={{}} protections={{}} fallbacks={{}} deconvolutions={{}} disabled={false} onApply={vi.fn()} />);
+    await userEvent.click(screen.getByText('Processing stack'));
+    await userEvent.click(screen.getByText('Stretch and narrowband balance'));
+    expect(screen.getByRole('combobox', { name: 'Narrowband channel stretch' })).toBeDisabled();
+    expect(screen.getByRole('checkbox', { name: 'Narrowband balance' })).toBeDisabled();
+    expect(screen.getByRole('spinbutton', { name: 'OIII boost' })).toBeDisabled();
+    expect(screen.queryByText('Uses the stretch resolved from Hα.')).not.toBeInTheDocument();
+    expect(screen.getByText(/Foraxx uses its existing dynamic mapping/)).toBeInTheDocument();
+  });
+
   it("follows each channel card's deconvolution and RC-Astro steps by default", async () => {
     const user = userEvent.setup();
     const onApply = vi.fn();

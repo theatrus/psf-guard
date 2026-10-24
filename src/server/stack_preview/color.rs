@@ -4,6 +4,9 @@
 //! exact artifact revisions, register them to a common pixel grid, and then
 //! delegate RGB/LRGB/narrowband composition to `seiza-stacking`.
 
+#[path = "narrowband.rs"]
+mod narrowband;
+
 use super::color_calibration::{
     self, ColorCalibrationPlan, StackColorCalibration, StackColorCalibrationBasis,
     StackColorCalibrationOutcome,
@@ -252,6 +255,10 @@ impl StackNarrowbandPalette {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StackColorRequest {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub automatic_palette: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stars: Option<narrowband::ColorStars>,
     pub target_id: i32,
     pub kind: StackColorKind,
     #[serde(default)]
@@ -313,6 +320,8 @@ pub struct FollowedChannelProcessing {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct StackColorProcessing {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub narrowband: Option<narrowband::NarrowbandProcessing>,
     /// Whether the inputs' deconvolution and RC-Astro steps are the build's
     /// own or follow each channel's card.
     #[serde(default, skip_serializing_if = "ColorInputProcessing::is_own")]
@@ -398,8 +407,10 @@ pub enum StackColorProgressPhase {
     NormalizingInputs,
     /// RC-Astro on the aligned color channels together.
     RcAstroColor,
+    SeparatingStars,
     CalibratingColor,
     StretchingInputs,
+    BalancingNarrowband,
     ComposingColor,
     StretchingOutput,
     WritingFits,
@@ -480,6 +491,14 @@ struct ResolvedBackgroundProtection {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StackColorJob {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub automatic_palette: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stars: Option<narrowband::ColorStars>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub narrowband_resolution: Option<narrowband::NarrowbandResolution>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub narrowband_balance: Option<seiza_stacking::NarrowbandBalanceReport>,
     pub schema_version: u32,
     /// Built by the automatic refresh rather than asked for.
     #[serde(default)]
@@ -561,7 +580,8 @@ pub struct StackColorJob {
     #[serde(default)]
     pub background_protection_fallbacks: BTreeMap<StackColorRole, String>,
     /// The solve and Gaia catalog color calibration rests on. Part of the
-    /// cache identity; absent when calibration is off.
+    /// cache identity, including RGB star calibration in a narrowband build;
+    /// absent when neither branch calibrates.
     #[serde(default)]
     pub color_calibration_basis: Option<StackColorCalibrationBasis>,
     /// What color calibration did, once the composition has run.
@@ -651,6 +671,8 @@ struct TargetSources {
 
 #[derive(Serialize, Deserialize)]
 pub(super) struct PreparedColorJob {
+    #[serde(default)]
+    stars_plan: Option<narrowband::StarsPlan>,
     pub(super) public: StackColorJob,
     pub(super) stack_root: PathBuf,
     background_regions: BTreeMap<StackColorRole, Vec<ProtectedRegion>>,
@@ -696,7 +718,20 @@ impl PreparedColorJob {
     /// the cache its channel card uses (or none is set), and its RC-Astro
     /// result on the color channels is cached (or none is set).
     pub(super) fn runs_quickly(&self) -> bool {
-        (self.inputs_cached() || self.channel_tools_cached()) && self.color_tools_cached()
+        (self.inputs_cached() || self.channel_tools_cached())
+            && self.color_tools_cached()
+            && self.stars_plan.as_ref().is_none_or(|plan| {
+                super::rc_astro::rc_astro_chain_cached(
+                    &self.stack_root,
+                    &plan.nebula_chain,
+                    &plan.config,
+                ) && (plan.rgb_chain.is_empty()
+                    || super::rc_astro::rc_astro_chain_cached(
+                        &self.stack_root,
+                        &plan.rgb_chain,
+                        &plan.config,
+                    ))
+            })
     }
 
     fn color_tools_cached(&self) -> bool {
@@ -862,9 +897,22 @@ fn color_progress(
             1,
         ),
         (
+            StackColorProgressPhase::SeparatingStars,
+            "Separating stars for narrowband color",
+            0,
+        ),
+        (
             StackColorProgressPhase::StretchingInputs,
             "Applying input stretch stages",
             input_stages,
+        ),
+        (
+            StackColorProgressPhase::BalancingNarrowband,
+            "Balancing narrowband channels",
+            processing
+                .and_then(|p| p.narrowband.as_ref())
+                .and_then(|p| p.balance.as_ref())
+                .map_or(0, |_| 1),
         ),
         (
             StackColorProgressPhase::ComposingColor,
@@ -1195,6 +1243,10 @@ pub(super) fn preparing_color_job(
     let label = composition_label(request.kind, request.palette).to_string();
     let channels = required_roles(request.kind, request.palette).len();
     StackColorJob {
+        automatic_palette: request.automatic_palette,
+        stars: request.stars,
+        narrowband_resolution: None,
+        narrowband_balance: None,
         automatic: false,
         schema_version: 1,
         job_id,
@@ -1429,6 +1481,14 @@ pub(super) async fn stream_artifact(
 }
 
 fn validate_request(request: &StackColorRequest) -> Result<(), AppError> {
+    if request.kind != StackColorKind::Narrowband
+        && (request.automatic_palette || request.stars.is_some())
+    {
+        return Err(AppError::BadRequest(
+            "Automatic narrowband palettes and star sources apply only to narrowband previews"
+                .into(),
+        ));
+    }
     match (request.kind, request.palette) {
         (StackColorKind::Rgb | StackColorKind::Lrgb, Some(_)) => Err(AppError::BadRequest(
             "RGB and LRGB color previews do not take a narrowband palette".into(),
@@ -1437,7 +1497,20 @@ fn validate_request(request: &StackColorRequest) -> Result<(), AppError> {
             "Narrowband color previews require a palette".into(),
         )),
         _ => {
-            let required = required_roles(request.kind, request.palette);
+            let mut required = required_roles(request.kind, request.palette);
+            if request.automatic_palette {
+                required.push(StackColorRole::Sii);
+            }
+            if matches!(
+                request.stars,
+                Some(narrowband::ColorStars::Automatic | narrowband::ColorStars::Rgb)
+            ) {
+                required.extend([
+                    StackColorRole::Red,
+                    StackColorRole::Green,
+                    StackColorRole::Blue,
+                ]);
+            }
             if let Some(role) = request
                 .input_sources
                 .keys()
@@ -1452,6 +1525,9 @@ fn validate_request(request: &StackColorRequest) -> Result<(), AppError> {
             let Some(processing) = &request.processing else {
                 return Ok(());
             };
+            if let Some(config) = &processing.narrowband {
+                config.validate().map_err(AppError::BadRequest)?;
+            }
             if let Some(role) = processing
                 .input_stretches
                 .keys()
@@ -1567,7 +1643,7 @@ pub(super) fn prepare_color_job(
     let target = targets.get(&request.target_id).ok_or_else(|| {
         AppError::BadRequest("No completed channel stacks are available for that target".into())
     })?;
-    let sources = select_sources(target, &request)?;
+    let (sources, narrowband_resolution, separation) = narrowband::resolve(target, &mut request)?;
     // Following the cards needs the stacks chosen first: each input takes
     // what its card applied to that exact stack revision.
     let mut followed_channel_processing = BTreeMap::new();
@@ -1576,6 +1652,11 @@ pub(super) fn prepare_color_job(
     {
         followed_channel_processing = channel_card_processing(&ctx.stack_root, &sources)?;
         follow_channel_cards(processing, &followed_channel_processing);
+    }
+    if request.stars.is_some()
+        && let Some(processing) = &mut request.processing
+    {
+        narrowband::defer_channel_star_removal(processing);
     }
     let mut rc_astro_schemas = BTreeMap::new();
     if let Some(processing) = &mut request.processing {
@@ -1676,7 +1757,73 @@ pub(super) fn prepare_color_job(
         },
         _ => ColorRcAstroPlan::default(),
     };
-    let job_id = color_job_id(&ColorJobIdentity {
+    let stars_plan = separation
+        .map(|(config, schemas)| {
+            let input_id = linear_input_id.as_deref().ok_or_else(|| {
+                AppError::BadRequest("RGB stars require a processing stack".into())
+            })?;
+            let calibration = narrowband_resolution
+                .as_ref()
+                .filter(|resolved| resolved.stars == narrowband::ColorStars::Rgb)
+                .map(|_| {
+                    plan_color_calibration(
+                        ctx,
+                        astrometry,
+                        StackColorKind::Narrowband,
+                        &sources,
+                        StackColorCalibration::default(),
+                    )
+                });
+            let calibration_key =
+                serde_json::to_string(&calibration.as_ref().map(|plan| &plan.basis))
+                    .map_err(|error| AppError::InternalError(error.to_string()))?;
+            let nebula_input = serde_json::to_string(&(input_id, &color_rc_astro.chain))
+                .map_err(|error| AppError::InternalError(error.to_string()))?;
+            let nebula_chain = super::rc_astro::rc_astro_chain_ids(
+                &ctx.id,
+                &format!("narrowband-stars:{nebula_input}"),
+                &nebula_input,
+                &config,
+                &schemas,
+                None,
+            )?;
+            let rgb_chain = if calibration.is_some() {
+                super::rc_astro::rc_astro_chain_ids(
+                    &ctx.id,
+                    &format!("rgb-stars:{input_id}:{calibration_key}"),
+                    input_id,
+                    &config,
+                    &schemas,
+                    None,
+                )?
+            } else {
+                Vec::new()
+            };
+            Ok::<_, AppError>(narrowband::StarsPlan {
+                config,
+                schemas,
+                nebula_chain,
+                rgb_chain,
+                calibration,
+            })
+        })
+        .transpose()?;
+    let color_calibration_basis = color_calibration_basis.or_else(|| {
+        stars_plan
+            .as_ref()
+            .and_then(|plan| plan.calibration.as_ref())
+            .map(|plan| plan.basis.clone())
+    });
+    let mut narrowband_resolution = narrowband_resolution;
+    if let (Some(plan), Some(resolution)) = (&stars_plan, &mut narrowband_resolution) {
+        resolution.rc_astro_ids = plan
+            .nebula_chain
+            .iter()
+            .chain(&plan.rgb_chain)
+            .cloned()
+            .collect();
+    }
+    let base_job_id = color_job_id(&ColorJobIdentity {
         database_id: &ctx.id,
         project_id,
         request: &request,
@@ -1691,10 +1838,45 @@ pub(super) fn prepare_color_job(
         color_calibration_basis: color_calibration_basis.as_ref(),
         sources: &sources,
     })?;
+    let job_id = if request.automatic_palette || request.stars.is_some() {
+        let mut hash = Sha256::new();
+        hash.update(base_job_id.as_bytes());
+        hash.update(
+            serde_json::to_vec(
+                &stars_plan
+                    .as_ref()
+                    .map(|plan| (&plan.nebula_chain, &plan.rgb_chain)),
+            )
+            .map_err(|error| AppError::InternalError(error.to_string()))?,
+        );
+        if request.automatic_palette || request.stars == Some(narrowband::ColorStars::Automatic) {
+            hash.update(narrowband::available_sources(target).as_bytes());
+        }
+        hash.finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    } else {
+        base_job_id
+    };
     let artifact_revision = super::new_artifact_revision();
     let total_channels = sources.len();
+    let mut progress = color_progress(total_channels, request.processing.as_ref());
+    if stars_plan.is_some()
+        && let Some(phase) = progress
+            .phases
+            .iter_mut()
+            .find(|phase| phase.phase == StackColorProgressPhase::SeparatingStars)
+    {
+        phase.total_units = 2;
+    }
     Ok(PreparedColorJob {
+        stars_plan,
         public: StackColorJob {
+            automatic_palette: request.automatic_palette,
+            stars: request.stars,
+            narrowband_resolution,
+            narrowband_balance: None,
             automatic: false,
             schema_version: 1,
             job_id: job_id.clone(),
@@ -1710,7 +1892,7 @@ pub(super) fn prepare_color_job(
             phase: "Waiting for color processor".into(),
             processed_channels: 0,
             total_channels,
-            progress: color_progress(total_channels, request.processing.as_ref()),
+            progress,
             created_unix_seconds: chrono::Utc::now().timestamp(),
             artifact_revision: artifact_revision.clone(),
             cache_version: STACK_COLOR_CACHE_VERSION,
@@ -1827,6 +2009,13 @@ fn color_job_id(identity: &ColorJobIdentity<'_>) -> Result<String, AppError> {
     hasher.update(STACK_COLOR_CACHE_VERSION.to_le_bytes());
     hasher.update(SEIZA_STACKING_OUTPUT_VERSION.as_bytes());
     hasher.update(SEIZA_BACKGROUND_VERSION.as_bytes());
+    if request.automatic_palette || request.stars.is_some() {
+        hasher.update(b"narrowband-stars-v1");
+        hasher.update(
+            serde_json::to_vec(&(request.automatic_palette, request.stars))
+                .map_err(|error| AppError::InternalError(error.to_string()))?,
+        );
+    }
     // Only a build with tools adds these, so a build without them keeps its
     // id across the change to where tools run.
     if let Some(input_id) = identity.channel_tools_input_id {
@@ -2671,6 +2860,7 @@ fn run_color_job(state: &Arc<AppState>, prepared: PreparedColorJob, cancel: Stop
             &prepared.rc_astro_chains,
             &prepared.color_rc_astro,
             prepared.color_calibration.as_ref(),
+            prepared.stars_plan.as_ref(),
             &stop,
         )
     }));
@@ -3185,6 +3375,7 @@ fn compose_color(
     rc_astro_chains: &BTreeMap<StackColorRole, Vec<String>>,
     color_rc_astro: &ColorRcAstroPlan,
     color_calibration: Option<&ColorCalibrationPlan>,
+    stars_plan: Option<&narrowband::StarsPlan>,
     stop: &ColorStop,
 ) -> Result<(), String> {
     let progress = ColorProgressTracker {
@@ -3276,6 +3467,7 @@ fn compose_color(
     });
     let pixels = reference.image.pixel_count();
     let bytes_per_pixel = COLOR_BYTES_PER_PIXEL
+        + if stars_plan.is_some() { 192 } else { 0 }
         + if job.processing.as_ref().is_some_and(|processing| {
             !processing.input_deconvolutions.is_empty() || !processing.input_rc_astro.is_empty()
         }) {
@@ -3614,6 +3806,7 @@ fn compose_color(
         // shares when calibration waits for the composition.
         let mut calibration: Option<StackColorCalibrationOutcome> = None;
         let mut deferred_stages: Option<Vec<super::stretch::StackStretchRequest>> = None;
+        let mut rgb_stars = None;
         let open_catalog = || {
             state
                 .astrometry
@@ -3762,6 +3955,24 @@ fn compose_color(
             }
 
             stop.check()?;
+            if let Some(plan) = stars_plan {
+                rgb_stars = narrowband::separate_stars(
+                    state,
+                    job,
+                    plan,
+                    stack_root,
+                    &mut images,
+                    &reference_headers,
+                    &progress,
+                    stop,
+                    &open_catalog,
+                )?;
+            } else {
+                progress.skip(
+                    StackColorProgressPhase::SeparatingStars,
+                    "Star replacement skipped",
+                );
+            }
             // A starless channel has nebula where the clipped cores were,
             // which rendering them neutral would grey out.
             if resolved_rc_astro
@@ -3834,7 +4045,18 @@ fn compose_color(
                 .values()
                 .map(Vec::len)
                 .sum::<usize>();
-            if deferred_stages.is_some() {
+            let shared_narrowband = job.kind == StackColorKind::Narrowband
+                && !matches!(
+                    job.palette,
+                    Some(StackNarrowbandPalette::ForaxxSho | StackNarrowbandPalette::ForaxxHoo)
+                )
+                && processing
+                    .narrowband
+                    .as_ref()
+                    .is_some_and(|config| config.shared_stretch);
+            if shared_narrowband {
+                narrowband::shared_stretch(state, job, processing, &mut images, &progress, stop)?;
+            } else if deferred_stages.is_some() {
                 progress.skip(
                     StackColorProgressPhase::StretchingInputs,
                     "Channel stretches run on the calibrated composition",
@@ -3930,6 +4152,10 @@ fn compose_color(
                 "RC-Astro on the color channels skipped (legacy quick look)",
             );
             progress.skip(
+                StackColorProgressPhase::SeparatingStars,
+                "Star replacement skipped (legacy quick look)",
+            );
+            progress.skip(
                 StackColorProgressPhase::CalibratingColor,
                 "Color calibration skipped (legacy quick look)",
             );
@@ -3943,6 +4169,27 @@ fn compose_color(
             }
         };
 
+        if let Some(config) = job.processing.as_ref().and_then(|p| p.narrowband.as_ref())
+            && job.kind == StackColorKind::Narrowband
+            && config.balance.is_some()
+            && !matches!(
+                job.palette,
+                Some(StackNarrowbandPalette::ForaxxSho | StackNarrowbandPalette::ForaxxHoo)
+            )
+        {
+            narrowband::balance(
+                state,
+                job,
+                config.balance.as_ref().unwrap(),
+                &mut images,
+                &progress,
+            )?;
+        } else {
+            progress.skip(
+                StackColorProgressPhase::BalancingNarrowband,
+                "Narrowband balance skipped",
+            );
+        }
         stop.check()?;
         progress.begin(
             StackColorProgressPhase::ComposingColor,
@@ -3979,6 +4226,19 @@ fn compose_color(
             }
         }
         .map_err(|error| error.to_string())?;
+        if let Some(stars) = rgb_stars {
+            let original = stars
+                .original
+                .crop(composition.region)
+                .map_err(|error| error.to_string())?;
+            let starless = stars
+                .starless
+                .crop(composition.region)
+                .map_err(|error| error.to_string())?;
+            seiza_stacking::screen_rgb_stars(&mut composition.image, &original, &starless)
+                .map_err(|error| error.to_string())?;
+            composition.transfer = ColorTransfer::DisplayReferred;
+        }
         if job.processing.is_none() {
             progress.finish(StackColorProgressPhase::NormalizingInputs);
         }
@@ -5016,7 +5276,14 @@ fn plan_after_build(
     let mut requests = Vec::new();
     for previous in remembered {
         let mut input_sources = BTreeMap::new();
-        let mut changed = false;
+        let mut changed = (previous.automatic_palette
+            || previous.stars == Some(narrowband::ColorStars::Automatic))
+            && previous
+                .narrowband_resolution
+                .as_ref()
+                .is_some_and(|resolved| {
+                    resolved.available_sources != narrowband::available_sources(target)
+                });
         for source in &previous.sources {
             let newest = target.by_role.get(&source.role).and_then(|candidates| {
                 candidates.iter().find(|candidate| {
@@ -5039,6 +5306,8 @@ fn plan_after_build(
         }
         if changed {
             requests.push(StackColorRequest {
+                automatic_palette: previous.automatic_palette,
+                stars: previous.stars,
                 target_id,
                 kind: previous.kind,
                 palette: previous.palette,
@@ -5105,6 +5374,12 @@ fn first_composite(
             })
             .collect::<Option<BTreeMap<_, _>>>()?;
         let mut processing = defaults.clone();
+        if kind == StackColorKind::Narrowband && processing.narrowband.is_none() {
+            processing.narrowband = Some(narrowband::NarrowbandProcessing {
+                shared_stretch: shared_input_stages(defaults, &roles).is_some(),
+                balance: Some(Default::default()),
+            });
+        }
         processing
             .input_stretches
             .retain(|role, _| roles.contains(role));
@@ -5115,6 +5390,9 @@ fn first_composite(
             .input_rc_astro
             .retain(|role, _| roles.contains(role));
         Some(StackColorRequest {
+            automatic_palette: kind == StackColorKind::Narrowband,
+            stars: (kind == StackColorKind::Narrowband)
+                .then_some(narrowband::ColorStars::Automatic),
             target_id,
             kind,
             palette,
@@ -5415,6 +5693,16 @@ fn color_job_outdated_reason(
     job: &StackColorJob,
     latest: &LatestStackPreviews,
 ) -> Result<Option<String>, AppError> {
+    if (job.automatic_palette || job.stars == Some(narrowband::ColorStars::Automatic))
+        && let Some(target) = collect_sources(&ctx.stack_root, latest).get(&job.target_id)
+        && job.narrowband_resolution.as_ref().is_some_and(|resolved| {
+            resolved.available_sources != narrowband::available_sources(target)
+        })
+    {
+        return Ok(Some(
+            "the channels available for the automatic palette or RGB stars changed".into(),
+        ));
+    }
     if job.cache_version != STACK_COLOR_CACHE_VERSION
         || job.stacking_version != SEIZA_STACKING_OUTPUT_VERSION
         || job.background_version != SEIZA_BACKGROUND_VERSION
@@ -5464,7 +5752,8 @@ fn color_job_outdated_reason(
         job.color_calibration_basis.as_ref(),
         job.processing
             .as_ref()
-            .and_then(|processing| processing.color_calibration),
+            .and_then(|processing| processing.color_calibration)
+            .or_else(|| narrowband::rgb_calibration_settings(job)),
     ) {
         let current = plan_color_calibration(ctx, astrometry, job.kind, &job.sources, settings);
         if &current.basis != basis {
@@ -5594,6 +5883,11 @@ pub(super) fn latest_color_rc_astro_ids(stack_root: &FsPath) -> Vec<String> {
         job.input_rc_astro_ids
             .into_values()
             .chain(job.color_rc_astro_id)
+            .chain(
+                job.narrowband_resolution
+                    .into_iter()
+                    .flat_map(|resolved| resolved.rc_astro_ids),
+            )
     })
     .collect()
 }
@@ -5952,6 +6246,7 @@ mod tests {
             rc_astro_chains.insert(StackColorRole::Red, vec!["blurxterminator".to_string()]);
         }
         PreparedColorJob {
+            stars_plan: None,
             public,
             stack_root: stack_root.to_path_buf(),
             background_regions: BTreeMap::new(),
@@ -6154,6 +6449,7 @@ mod tests {
             rc_astro_schemas,
             &tools.rc_astro_chains,
             &color_rc_astro,
+            None,
             None,
             &stop,
         )
@@ -6959,6 +7255,7 @@ mod tests {
             public.linear_input_id = Some("unprepared".into());
             public.input_deconvolution_ids = tools.deconvolution_ids.clone();
             PreparedColorJob {
+                stars_plan: None,
                 public,
                 stack_root: root.to_path_buf(),
                 background_regions: BTreeMap::new(),
@@ -7200,10 +7497,14 @@ mod tests {
         drop(busy);
     }
 
-    fn running_color_job(job_id: &str, state: StackJobState) -> StackColorJob {
+    pub(super) fn running_color_job(job_id: &str, state: StackJobState) -> StackColorJob {
         let mut progress = color_progress(3, None);
         progress.completed_units = 4;
         StackColorJob {
+            automatic_palette: false,
+            stars: None,
+            narrowband_resolution: None,
+            narrowband_balance: None,
             automatic: false,
             schema_version: 1,
             job_id: job_id.into(),
@@ -7430,6 +7731,8 @@ mod tests {
         let protection = BTreeMap::new();
         let id = |processing: StackColorProcessing| {
             let request = StackColorRequest {
+                automatic_palette: false,
+                stars: None,
                 target_id: 7,
                 kind: StackColorKind::Rgb,
                 palette: None,
@@ -8179,6 +8482,8 @@ mod tests {
     #[test]
     fn rejects_palette_shape_mismatches_before_preparing_a_job() {
         assert!(validate_request(&StackColorRequest {
+            automatic_palette: false,
+            stars: None,
             target_id: 1,
             kind: StackColorKind::Rgb,
             palette: Some(StackNarrowbandPalette::Sho),
@@ -8189,6 +8494,8 @@ mod tests {
         })
         .is_err());
         assert!(validate_request(&StackColorRequest {
+            automatic_palette: false,
+            stars: None,
             target_id: 1,
             kind: StackColorKind::Lrgb,
             palette: Some(StackNarrowbandPalette::Sho),
@@ -8199,6 +8506,8 @@ mod tests {
         })
         .is_err());
         assert!(validate_request(&StackColorRequest {
+            automatic_palette: false,
+            stars: None,
             target_id: 1,
             kind: StackColorKind::Narrowband,
             palette: None,
@@ -8213,6 +8522,8 @@ mod tests {
     #[test]
     fn rejects_client_background_regions_and_invalid_strength() {
         let request = |extraction| StackColorRequest {
+            automatic_palette: false,
+            stars: None,
             target_id: 1,
             kind: StackColorKind::Rgb,
             palette: None,
@@ -8389,6 +8700,7 @@ mod tests {
     #[test]
     fn progress_ledger_accounts_for_every_pipeline_phase() {
         let processing = StackColorProcessing {
+            narrowband: None,
             input_processing: ColorInputProcessing::Own,
             background_extraction: Some(StackBackgroundExtraction {
                 config: BackgroundConfig::default(),
@@ -8433,7 +8745,7 @@ mod tests {
 
         let progress = color_progress(3, Some(&processing));
 
-        assert_eq!(progress.phases.len(), 16);
+        assert_eq!(progress.phases.len(), 18);
         // Aligning resamples the two channels that are not the reference.
         assert_eq!(progress.total_units, 28);
         // The tools run on each channel's own stack, before background
@@ -8532,6 +8844,8 @@ mod tests {
         let mut processing = defaults();
         resolve_color_calibration(StackColorKind::Rgb, &mut processing);
         let request = |processing: StackColorProcessing| StackColorRequest {
+            automatic_palette: false,
+            stars: None,
             target_id: 7,
             kind: StackColorKind::Rgb,
             palette: None,

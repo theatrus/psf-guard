@@ -180,7 +180,7 @@ describe('automatic color exposure cards', () => {
     })));
     mount({ sources: [...candidates, ...narrowband], narrowbandPalettes: ['hoo'] });
     await screen.findByRole('button', { name: 'Build RGB 30 s color preview' });
-    await waitFor(() => expect(screen.getAllByText('Custom combination')).toHaveLength(2));
+    await waitFor(() => expect(document.querySelectorAll('.stack-color-grid > details.stack-color-custom')).toHaveLength(2));
     const items = [...document.querySelector('.stack-color-grid')!.children].map((child) => child.tagName);
     expect(items.filter((tag) => tag === 'ARTICLE').length).toBeGreaterThanOrEqual(3);
     // Interleaved, each whole-row fold would leave its card alone on a row.

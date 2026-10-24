@@ -313,6 +313,46 @@ function seedSyntheticOscStack(databaseId: string, projectId: number): void {
   }, null, 2));
 }
 
+test('builds automatic narrowband on its regular card and shows the resolved processing', async ({ page, request }, testInfo) => {
+  test.setTimeout(120_000);
+  seedSyntheticColorStacks(dbId, 2);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto(`/#/stacks?db=${encodeURIComponent(dbId)}&project=2`);
+  const card = page.locator('article.stack-color-card[data-color-kind="narrowband"]');
+  await expect(card).toHaveCount(1);
+  await expect(card.getByRole('combobox', { name: /narrowband palette/ })).toHaveValue('automatic');
+  await expect(card.getByRole('combobox', { name: /SHO stars/ })).toHaveValue('automatic');
+  const processing = card.locator('.stack-color-processing');
+  await expect(processing).not.toHaveAttribute('open');
+  await processing.locator(':scope > summary').click();
+  await processing.getByText('Stretch and narrowband balance', { exact: true }).click();
+  await expect(processing.getByRole('combobox', { name: 'Narrowband channel stretch' })).toHaveValue('shared');
+  await expect(processing.getByRole('checkbox', { name: 'Narrowband balance', exact: true })).toBeChecked();
+  await expect(processing.getByRole('spinbutton', { name: 'OIII boost' })).toHaveValue('1');
+  await processing.locator(':scope > summary').click();
+  const started = page.waitForResponse((response) => response.request().method() === 'POST'
+    && /stack-previews\/color$/.test(new URL(response.url()).pathname));
+  await card.getByRole('button', { name: 'Build SHO color preview', exact: true }).click();
+  const response = await started;
+  expect(response.request().postDataJSON()).toMatchObject({ automatic_palette: true, stars: 'automatic' });
+  await expect(card.locator('.stack-preview-progress')).toHaveAttribute('data-stack-color-state', 'completed', { timeout: 90_000 });
+  const catalog = (await (await request.get(`/api/db/${dbId}/projects/2/stack-previews/color`)).json()).data;
+  const built = catalog.jobs.find((job: { automatic_palette?: boolean }) => job.automatic_palette);
+  expect(built.palette).toBe('sho');
+  expect(['rgb', 'narrowband']).toContain(built.narrowband_resolution.stars);
+  expect(built.narrowband_resolution.detail).toBeTruthy();
+  expect(built.narrowband_balance.channels).toHaveLength(3);
+  const download = await request.get(built.fits_url, FITS_DOWNLOAD);
+  expect(download.ok()).toBe(true);
+  expect((await download.body()).subarray(0, 2880).toString('ascii')).toContain("DISPLAY");
+  await processing.locator(':scope > summary').click();
+  await processing.getByText('Stretch and narrowband balance', { exact: true }).click();
+  await expect(processing).toContainText(/applied|identity|skipped/);
+  await processing.locator(':scope > summary').click();
+  await card.locator(':scope > header').scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath('automatic-narrowband.png') });
+});
+
 test('refuses RC-Astro values past the tool range beside Apply, where the server refusals show too', async ({ page }, testInfo) => {
   test.setTimeout(120_000);
   seedSyntheticColorStacks(dbId, 2);
@@ -1645,8 +1685,8 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
   const lrgbButton = section.getByRole('button', { name: 'Build LRGB color preview' });
   const lrgbCard = section.locator('.stack-color-card[data-color-kind="lrgb"]');
   const palette = section.getByRole('combobox', { name: 'Beta Field narrowband palette' });
-  await expect(palette.locator('option')).toHaveCount(9);
-  await expect(palette).toHaveValue('sho');
+  await expect(palette.locator('option')).toHaveCount(10);
+  await expect(palette).toHaveValue('automatic');
 
   await rgbButton.click();
   await expect(rgbCard.locator('.stack-preview-progress')).toHaveAttribute(
@@ -1714,7 +1754,7 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
   await expect(rgbCard.locator('.stack-preview-progress')).toContainText('28/28 steps');
   const phaseDetails = rgbCard.locator('.stack-color-phase-details');
   await phaseDetails.locator('summary').click();
-  await expect(phaseDetails.locator('li')).toHaveCount(16);
+  await expect(phaseDetails.locator('li')).toHaveCount(18);
   await expect(phaseDetails.locator('li[data-phase="calibrating_color"]'))
     .toHaveAttribute('data-phase-state', 'skipped');
   await expect(phaseDetails.locator('li[data-phase="rc_astro_inputs"]'))
@@ -1795,7 +1835,7 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
   await expect(narrowbandCard.locator('.stack-preview-progress')).toHaveAttribute(
     'data-stack-color-state', 'completed', { timeout: 90_000 }
   );
-  await expect(narrowbandCard.locator('.stack-preview-progress')).toContainText('19/19 steps');
+  await expect(narrowbandCard.locator('.stack-preview-progress')).toContainText('20/20 steps');
   await expect(narrowbandCard.locator('.stack-color-calibration')).toHaveCount(0);
   await expect(
     narrowbandCard.getByRole('img', { name: /Foraxx HOO color stack preview/i })

@@ -1373,6 +1373,7 @@ export interface StackReprocessing {
 
 export type StackColorRole = 'luminance' | 'red' | 'green' | 'blue' | 'ha' | 'oiii' | 'sii';
 export type StackColorKind = 'rgb' | 'lrgb' | 'narrowband';
+export type StackColorStars = 'automatic' | 'rgb' | 'narrowband' | 'none';
 export type StackNarrowbandPalette =
   | 'sho'
   | 'soh'
@@ -1416,6 +1417,10 @@ export type StackColorInputSources = Partial<Record<StackColorRole, StackColorSo
 export type StackColorInputProcessing = 'own' | 'channels';
 
 export interface StackColorProcessing {
+  narrowband?: {
+    shared_stretch: boolean;
+    balance?: { has_sii: boolean; shadow_protection: number; oiii_boost: number; sii_boost: number; max_samples: number } | null;
+  } | null;
   input_processing?: StackColorInputProcessing;
   background_extraction: StackBackgroundExtraction | null;
   input_deconvolutions: Partial<Record<StackColorRole, StackDeconvolutionConfig>>;
@@ -1601,8 +1606,10 @@ export type StackColorProgressPhase =
   | 'aligning_sources'
   | 'normalizing_inputs'
   | 'rc_astro_color'
+  | 'separating_stars'
   | 'calibrating_color'
   | 'stretching_inputs'
+  | 'balancing_narrowband'
   | 'rc_astro_inputs'
   | 'composing_color'
   | 'stretching_output'
@@ -1651,6 +1658,19 @@ export interface StackColorCropReport {
 }
 
 export interface StackColorJob {
+  automatic_palette?: boolean;
+  stars?: StackColorStars | null;
+  narrowband_resolution?: {
+    stars: StackColorStars;
+    detail: string;
+    available_sources: string;
+    rc_astro_ids: string[];
+    color_calibration?: StackColorCalibrationOutcome | null;
+  } | null;
+  narrowband_balance?: { channels: {
+    channel: string; status: string; reason: string | null; samples: number;
+    median: number | null; background: number | null; positiveDeviation: number | null; midtone: number | null;
+  }[] } | null;
   source_family_key?: string;
   schema_version: number;
   job_id: string;

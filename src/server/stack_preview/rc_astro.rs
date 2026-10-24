@@ -1560,6 +1560,10 @@ pub(super) mod test_tool {
     }
 
     impl FakeTool {
+        pub fn fail_star_removal(&self) {
+            std::fs::write(self.dir.path().join("fail-sxt"), b"").unwrap();
+        }
+
         /// Let the held run in hand finish; the next run holds again.
         pub fn release(&self) {
             std::fs::write(self.dir.path().join("release"), b"").unwrap();
@@ -1632,10 +1636,13 @@ if [ "$2" = "--json" ]; then
     sxt) name="StarXTerminator" ;;
     *) name="$1" ;;
   esac
-  echo '{{"schemaVersion":6,"cliVersion":"9.9.9-test","key":"'"$1"'","name":"RC-Astro '"$name"'","mlVersion":4,"parameters":[]}}'
+  parameters='[]'
+  if [ "$1" = "sxt" ]; then parameters='[{{"label":"Generate Star Image","name":"stars","flag":"--stars","type":"bool","default":false}}]'; fi
+  echo '{{"schemaVersion":6,"cliVersion":"9.9.9-test","key":"'"$1"'","name":"RC-Astro '"$name"'","mlVersion":4,"parameters":'"$parameters"'}}'
   exit 0
 fi
 echo "$1" >> "{state}/invocations"
+if [ "$1" = "sxt" ] && [ -f "{state}/fail-sxt" ]; then echo 'Synthetic star separation failure' >&2; exit 1; fi
 out=""
 input=""
 stars=0

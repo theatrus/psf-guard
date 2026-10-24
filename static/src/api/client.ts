@@ -2936,6 +2936,8 @@ export const apiClient = {
       target_id: number;
       kind: StackColorKind;
       palette?: StackNarrowbandPalette;
+      automatic_palette?: boolean;
+      stars?: 'automatic' | 'rgb' | 'narrowband' | 'none';
       force?: boolean;
       crop?: StackColorCrop;
       processing?: StackColorProcessing;

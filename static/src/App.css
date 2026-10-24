@@ -4679,13 +4679,15 @@
 }
 
 .stack-color-phase-details,
-.stack-color-processing {
+.stack-color-processing,
+.stack-color-combination {
   border-bottom: 1px solid var(--color-bg-tertiary);
   background: color-mix(in srgb, var(--color-bg-secondary) 72%, transparent);
 }
 
 .stack-color-phase-details > summary,
-.stack-color-processing > summary {
+.stack-color-processing > summary,
+.stack-color-combination > summary {
   display: flex;
   align-items: center;
   justify-content: space-between;
