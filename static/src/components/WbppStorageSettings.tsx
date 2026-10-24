@@ -124,8 +124,13 @@ export default function WbppStorageSettings({ canManage }: { canManage: boolean 
             min={policy.intermediate_days}
             max={36500}
             disabled={policy.master_days === 0}
-            value={policy.master_days || 90}
-            onChange={(e) => edit('master_days', Number(e.target.value))}
+            value={policy.master_days === 0 ? 90 : Number.isNaN(policy.master_days) ? '' : policy.master_days}
+            onChange={(e) =>
+              edit(
+                'master_days',
+                e.target.value !== '' && Number(e.target.value) > 0 ? Number(e.target.value) : Number.NaN
+              )
+            }
           />
         </label>
         <label className="review-preference">

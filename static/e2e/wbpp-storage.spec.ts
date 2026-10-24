@@ -21,6 +21,10 @@ test('WBPP has a dedicated folder, percentage cap and optional forever masters',
     await expect(limit).toHaveAttribute('min', '0');
     await limit.fill('25');
     await page.getByLabel('WBPP intermediate retention, in days').fill('14');
+    const masterDays = page.getByLabel('WBPP master retention, in days');
+    await masterDays.fill('');
+    await expect(page.getByRole('checkbox', { name: /^Keep WBPP masters forever/ })).not.toBeChecked();
+    await masterDays.fill('120');
     await page.getByRole('checkbox', { name: /^Keep WBPP masters forever/ }).check();
     await expect(page.getByLabel('WBPP master retention, in days')).toBeDisabled();
     await page.getByRole('button', { name: 'Save WBPP storage', exact: true }).click();

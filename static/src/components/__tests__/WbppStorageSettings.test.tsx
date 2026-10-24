@@ -74,6 +74,19 @@ describe('WBPP storage settings', () => {
     expect(screen.getByRole('button', { name: 'Save WBPP storage' })).toBeDisabled();
     expect(screen.getByRole('alert')).toHaveTextContent('Keep masters at least as long');
   });
+  it('allows clearing and retyping a master lifetime without selecting forever', async () => {
+    server.use(http.get('/api/settings/pixinsight', () => HttpResponse.json(ok(initial))));
+    render(<WbppStorageSettings canManage />, { wrapper: wrapper() });
+    const days = await screen.findByLabelText('WBPP master retention, in days');
+    fireEvent.change(days, { target: { value: '' } });
+    expect(days).toHaveValue(null);
+    expect(days).toBeEnabled();
+    expect(screen.getByRole('checkbox', { name: /Keep WBPP masters forever/ })).not.toBeChecked();
+    expect(screen.getByRole('button', { name: 'Save WBPP storage' })).toBeDisabled();
+    fireEvent.change(days, { target: { value: '120' } });
+    expect(days).toHaveValue(120);
+    expect(screen.getByRole('button', { name: 'Save WBPP storage' })).toBeEnabled();
+  });
   it('shows usage and protects settings from read-only changes', async () => {
     server.use(http.get('/api/settings/pixinsight', () => HttpResponse.json(ok(initial))));
     render(<WbppStorageSettings canManage={false} />, { wrapper: wrapper() });
