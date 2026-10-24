@@ -604,7 +604,10 @@ interface ListedSetup { name: string; kind: string; updated_unix_seconds: number
 
 /** Setups are global and survive a database reset. Leave only the seeded
  *  "Default" Color setup, marked as the default and holding the built-in
- *  pipeline, so a test that edits or re-marks it cannot reach the next. */
+ *  pipeline, so a test that edits or re-marks it cannot reach the next.
+ *  A Default saved again here has timestamps, so it is no longer the
+ *  unedited seed ("Not edited" in Settings): once an earlier test has
+ *  edited it, later tests cannot rely on the unedited state. */
 async function resetProcessingSetups(request: APIRequestContext) {
   const listed = async () => (await (await request.get('/api/processing-setups')).json()).data as {
     setups: ListedSetup[]; default_color: string | null;

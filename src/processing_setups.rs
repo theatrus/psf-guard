@@ -67,6 +67,9 @@ pub struct ProcessingSetupRecord {
     pub settings: serde_json::Value,
     pub created_unix_seconds: i64,
     pub updated_unix_seconds: i64,
+    /// Fields a newer version wrote, kept so saving here does not drop them.
+    #[serde(flatten)]
+    pub other_fields: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -264,6 +267,7 @@ impl ProcessingSetupsRegistry {
             settings,
             created_unix_seconds: 0,
             updated_unix_seconds: 0,
+            other_fields: Default::default(),
         });
         self.setups.sort_by_key(|setup| setup.name.to_lowercase());
         self.default_color = Some(name);
@@ -365,6 +369,7 @@ mod tests {
             settings: serde_json::json!({ "model": { "type": "auto-mtf" } }),
             created_unix_seconds: 100,
             updated_unix_seconds: 100,
+            other_fields: Default::default(),
         }
     }
 
@@ -647,6 +652,7 @@ mod tests {
         let written: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(written["someday"]["kept"], true);
+        assert_eq!(written["setups"][0]["someday_per_setup"], 3);
     }
 
     #[test]

@@ -4146,6 +4146,7 @@ async fn a_refresh_that_finds_a_targets_channels_built_composes_its_first_color_
     assert!(
         color::requests_after_build(&ctx, 7, 42, refresh.color_defaults.as_ref())
             .unwrap()
+            .requests
             .is_empty()
     );
     state.stack_previews.request_cancel(&first.job_id);
@@ -4175,8 +4176,46 @@ async fn a_refresh_that_renders_a_finished_build_again_gives_it_the_color_pipeli
     drop(busy);
 }
 
+/// Mark a color job the server keeps in memory as failed.
+fn fail_color_job(state: &AppState, job_id: &str) {
+    let mut jobs = state.stack_previews.color_jobs.lock().unwrap();
+    let job = jobs.get_mut(job_id).unwrap();
+    job.state = StackJobState::Failed;
+    job.error = Some("could not register the channels".into());
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_first_color_preview_that_failed_is_not_tried_again_by_each_refresh() {
+    let cache = tempfile::tempdir().unwrap();
+    let state = state_with_project(cache.path());
+    let ctx = state.get_database("test").unwrap();
+    // The compositions stay queued while the test looks at them.
+    let busy = state.stack_previews.line.reserve_main().await;
+    let channels = rgb_channels_on_disk(cache.path());
+    let refresh = automatic_refresh(&state);
+    automatic::reuse_finished_build(&state, &ctx, automatic_blue(&channels), &refresh).await;
+    let first = color_jobs(&state).remove(0);
+    fail_color_job(&state, &first.job_id);
+
+    // The next refresh leaves it failed.
+    automatic::reuse_finished_build(&state, &ctx, automatic_blue(&channels), &refresh).await;
+    let after = color_jobs(&state);
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0].state, StackJobState::Failed);
+
+    // A person's build tries it again.
+    let mut persons = channels[2].clone();
+    persons.color_defaults = refresh.color_defaults.clone();
+    automatic::compose_colors_after(&state, &ctx, &persons);
+    let retried = state.stack_previews.get_color(&first.job_id).unwrap();
+    assert_eq!(retried.state, StackJobState::Queued);
+    assert!(!retried.automatic);
+    state.stack_previews.request_cancel(&first.job_id);
+    drop(busy);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_refresh_tries_again_a_failed_recomposition_of_an_existing_color_preview() {
     let cache = tempfile::tempdir().unwrap();
     let state = state_with_project(cache.path());
     let ctx = state.get_database("test").unwrap();
@@ -4184,45 +4223,26 @@ async fn a_first_color_preview_that_failed_is_not_tried_again_by_each_refresh() 
     let channels = rgb_channels_on_disk(cache.path());
     let refresh = automatic_refresh(&state);
     automatic::reuse_finished_build(&state, &ctx, automatic_blue(&channels), &refresh).await;
-    // It failed: in memory, and in the manifest a restart reads.
-    let mut failed = color_jobs(&state).remove(0);
-    failed.state = StackJobState::Failed;
-    failed.error = Some("could not register the channels".into());
-    state
-        .stack_previews
-        .color_jobs
-        .lock()
-        .unwrap()
-        .insert(failed.job_id.clone(), failed.clone());
-    stretch::write_json_atomic(
-        &color::color_manifest_path(cache.path(), &failed.job_id),
-        &failed,
-    )
-    .unwrap();
+    // The target shows this preview, composed from an older stack of each
+    // channel: a refresh composes it again from the current ones.
+    let composed = color_jobs(&state).remove(0);
+    let mut shown = composed.clone();
+    shown.state = StackJobState::Completed;
+    for source in &mut shown.sources {
+        source.artifact_revision = "older".into();
+    }
+    color::persist_latest_color(cache.path(), &shown).unwrap();
+    let planned = color::requests_after_build(&ctx, 7, 42, None).unwrap();
+    assert!(!planned.first);
+    assert_eq!(planned.requests.len(), 1);
+    // That composition failed, perhaps for a moment.
+    fail_color_job(&state, &composed.job_id);
 
-    // The next refresh leaves it failed.
     automatic::reuse_finished_build(&state, &ctx, automatic_blue(&channels), &refresh).await;
-    let after = color_jobs(&state);
-    assert_eq!(after.len(), 1);
-    assert_eq!(after[0].state, StackJobState::Failed);
-    drop(busy);
-
-    // So does one after a restart, which finds only its manifest.
-    let restarted = state_with_project(cache.path());
-    let ctx = restarted.get_database("test").unwrap();
-    let busy = restarted.stack_previews.line.reserve_main().await;
-    automatic::reuse_finished_build(&restarted, &ctx, automatic_blue(&channels), &refresh).await;
-    assert!(color_jobs(&restarted).is_empty());
-
-    // A person's build tries it again.
-    let mut persons = channels[2].clone();
-    persons.color_defaults = refresh.color_defaults.clone();
-    automatic::compose_colors_after(&restarted, &ctx, &persons);
-    let retried = color_jobs(&restarted);
-    assert_eq!(retried.len(), 1);
-    assert_eq!(retried[0].job_id, failed.job_id);
-    assert!(!retried[0].automatic);
-    restarted.stack_previews.request_cancel(&failed.job_id);
+    let retried = state.stack_previews.get_color(&composed.job_id).unwrap();
+    assert_eq!(retried.state, StackJobState::Queued);
+    assert!(retried.automatic);
+    state.stack_previews.request_cancel(&composed.job_id);
     drop(busy);
 }
 

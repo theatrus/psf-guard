@@ -1318,13 +1318,13 @@ pub(super) fn compose_colors_after(
         ) {
             continue;
         }
-        let requests = match color::requests_after_build(
+        let planned = match color::requests_after_build(
             ctx,
             job.project_id,
             target_id,
             job.color_defaults.as_ref(),
         ) {
-            Ok(requests) => requests,
+            Ok(planned) => planned,
             Err(error) => {
                 tracing::warn!(
                     db = %ctx.id,
@@ -1335,22 +1335,34 @@ pub(super) fn compose_colors_after(
                 continue;
             }
         };
-        for request in requests {
-            enqueue_color_after(state, ctx, job.project_id, &request, job.automatic);
+        for request in planned.requests {
+            enqueue_color_after(
+                state,
+                ctx,
+                job.project_id,
+                &request,
+                job.automatic,
+                planned.first,
+            );
         }
     }
 }
 
 /// Queue one color preview after a build, unless the same one is already
-/// queued, running, or built. Automatic work does not try again a
-/// composition of the same stacks with the same settings that failed: it
-/// would fail again on every refresh. A person's build does.
+/// queued, running, or built. Automatic work does not try a target's
+/// `first` color preview again when the same composition failed, which
+/// would otherwise fail again on every refresh. The failure is remembered
+/// in memory only, so the next try comes after a restart or once the
+/// failed job is no longer kept. A person's build tries it again, and so
+/// does the recomposition of a preview the target already has, since its
+/// failure can be temporary.
 fn enqueue_color_after(
     state: &Arc<AppState>,
     ctx: &Arc<DatabaseContext>,
     project_id: i32,
     request: &StackColorRequest,
     automatic: bool,
+    first: bool,
 ) {
     let mut prepared = match color::prepare_color_job(ctx, &state.astrometry, project_id, request) {
         Ok(prepared) => prepared,
@@ -1368,16 +1380,15 @@ fn enqueue_color_after(
         && (matches!(
             existing.state,
             StackJobState::Queued | StackJobState::Running | StackJobState::Completed
-        ) || (automatic && existing.state == StackJobState::Failed))
+        ) || (automatic && first && existing.state == StackJobState::Failed))
     {
         return;
     }
     let manifest = color::color_manifest_path(&prepared.stack_root, &color_id);
     if let Ok(bytes) = std::fs::read(&manifest)
         && let Ok(existing) = serde_json::from_slice::<StackColorJob>(&bytes)
-        && ((existing.state == StackJobState::Completed
-            && color::color_job_artifacts_exist(&prepared.stack_root, &existing))
-            || (automatic && existing.state == StackJobState::Failed))
+        && existing.state == StackJobState::Completed
+        && color::color_job_artifacts_exist(&prepared.stack_root, &existing)
     {
         return;
     }
@@ -1846,6 +1857,7 @@ mod tests {
                 }),
                 created_unix_seconds: 1,
                 updated_unix_seconds: 1,
+                other_fields: Default::default(),
             })
             .unwrap();
         setups.seed_default_color(serde_json::json!({}));

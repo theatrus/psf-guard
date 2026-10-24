@@ -4844,18 +4844,29 @@ pub(super) fn requests_after_build(
     project_id: i32,
     target_id: i32,
     defaults: Option<&StackColorProcessing>,
-) -> Result<Vec<StackColorRequest>, AppError> {
+) -> Result<ColorAfterBuild, AppError> {
     let latest = load_latest_stacks(ctx, project_id)?;
     let sources = collect_sources(&ctx.stack_root, &latest);
     let Some(target) = sources.get(&target_id) else {
-        return Ok(Vec::new());
+        return Ok(ColorAfterBuild::default());
     };
     let remembered = load_latest_colors(ctx, project_id)?
         .jobs
         .into_iter()
         .filter(|job| job.target_id == target_id)
         .collect::<Vec<_>>();
-    Ok(plan_after_build(target_id, target, &remembered, defaults))
+    Ok(ColorAfterBuild {
+        requests: plan_after_build(target_id, target, &remembered, defaults),
+        first: remembered.is_empty(),
+    })
+}
+
+/// The color previews [`requests_after_build`] plans for one target.
+#[derive(Debug, Default)]
+pub(super) struct ColorAfterBuild {
+    pub(super) requests: Vec<StackColorRequest>,
+    /// The target has no color preview yet, so the request is its first.
+    pub(super) first: bool,
 }
 
 /// What makes two channel stacks the same channel of a composition: the

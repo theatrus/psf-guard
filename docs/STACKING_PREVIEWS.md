@@ -806,7 +806,10 @@ stacked, with the pipeline of the default Color setup (see
 channels were already stacked and only came back from the cache. PSF Guard
 reads the default setup at each refresh, so a setup you mark as the default
 applies from the next refresh on. A target that already has a color preview
-keeps it: the preview follows its channels, as after any build.
+keeps it: the preview follows its channels, as after any build. If a target's
+first color preview fails, later refreshes do not try the same composition
+again while the server keeps the failed job, at most until it restarts. To try
+it again, click **Build** on its color card.
 
 A refresh waiting for its delay does not appear in the header's jobs list
 or count. Once it is due, the scheduler checks within 15 seconds. It plans

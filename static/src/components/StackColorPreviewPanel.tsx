@@ -62,7 +62,10 @@ interface ColorOperation {
   operationKey: string;
   cardKey: string;
   crop: StackColorCrop;
-  processing: StackColorProcessing;
+  /** The processing to run, or, for a Build, how to choose it once the
+   *  default Color setup has been read from the server. */
+  processing: StackColorProcessing
+    | ((defaults: (roles: StackColorRole[]) => StackColorProcessing) => StackColorProcessing);
   inputSources?: StackColorInputSources;
 }
 
@@ -507,13 +510,17 @@ export default function StackColorPreviewPanel({
     mutate: startColor,
     reset: resetStart,
   } = useMutation({
-    mutationFn: (operation: ColorOperation) => apiClient.startStackColor(operation.dbId, operation.projectId, {
+    // The card shows the build as pending from the click, while the
+    // default Color setup is read and while the server queues the build.
+    mutationFn: async (operation: ColorOperation) => apiClient.startStackColor(operation.dbId, operation.projectId, {
       target_id: operation.targetId,
       kind: operation.kind,
       palette: operation.palette,
       force: operation.force,
       crop: operation.crop,
-      processing: operation.processing,
+      processing: typeof operation.processing === 'function'
+        ? operation.processing(await fetchDefaultColorFor(queryClient))
+        : operation.processing,
       ...(operation.inputSources ? { input_sources: operation.inputSources } : {}),
     }),
     onMutate: (operation) => {
@@ -870,19 +877,16 @@ export default function StackColorPreviewPanel({
           ...current, [paletteStateKey]: next,
         })) : undefined}
         onCropChange={(next) => setCropByCard((current) => ({ ...current, [key]: next }))}
-        onBuild={async () => {
-          // A new preview starts from the default Color setup, read from
-          // the server first as the panel's Build stacks does.
-          const defaults = await fetchDefaultColorFor(queryClient);
-          startColor({
-            dbId, projectId,
-            targetId: target.target_id, kind, palette,
-            force: Boolean(artifact && !artifact.outdated),
-            operationKey: key, cardKey: key, crop,
-            processing: processingForColorBuild(artifact, requiredRoles(kind, palette), defaults),
-            inputSources: sources.inputSources,
-          });
-        }}
+        onBuild={() => startColor({
+          dbId, projectId,
+          targetId: target.target_id, kind, palette,
+          force: Boolean(artifact && !artifact.outdated),
+          operationKey: key, cardKey: key, crop,
+          // A new preview starts from the default Color setup.
+          processing: (defaults) =>
+            processingForColorBuild(artifact, requiredRoles(kind, palette), defaults),
+          inputSources: sources.inputSources,
+        })}
         onInspect={setInspector}
         startError={startErrorByCard[key] ?? (artifact ? preparationFailure(watched) : undefined)}
         onProcessingApply={(processing) => startColor({

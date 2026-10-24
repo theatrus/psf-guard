@@ -280,6 +280,7 @@ pub async fn save_setup(
         settings,
         created_unix_seconds: now,
         updated_unix_seconds: now,
+        other_fields: Default::default(),
     };
     let saved_name = record.name.clone();
 
@@ -375,6 +376,7 @@ pub async fn import_setups(
             settings,
             created_unix_seconds: now,
             updated_unix_seconds: now,
+            other_fields: Default::default(),
         };
         records.push((record, untouched_seed));
     }
@@ -566,6 +568,7 @@ mod tests {
                 settings: canonical_settings(ProcessingSetupKind::Color, settings).unwrap(),
                 created_unix_seconds: 1,
                 updated_unix_seconds: 1,
+                other_fields: Default::default(),
             })
             .unwrap();
         registry.seed_default_color(builtin_color_settings());
