@@ -1,20 +1,24 @@
-import { useEffect, useRef, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import type {
   CacheVolumeReport,
-  StorageFolder,
   StorageFolderKind,
-  StorageFoldersUpdate,
-  StorageLimitsUpdate,
   StorageSettings as StorageSettingsData,
+  PixInsightSettings,
 } from '../api/types';
 import { isTauriApp, tauriConfig } from '../utils/tauri';
 import PathField from './PathField';
 import UnsavedMark from './UnsavedMark';
-import WbppStorageSettings from './WbppStorageSettings';
+import WbppStorageSettings, { WbppStorageReport } from './WbppStorageSettings';
+import {
+  useStorageSettingsForm,
+  STORAGE_QUERY_KEY,
+  PIXINSIGHT_QUERY_KEY,
+  type StorageSettingsForm,
+} from './useStorageSettingsForm';
 
-const QUERY_KEY = ['storage-settings'] as const;
+const QUERY_KEY = STORAGE_QUERY_KEY;
 
 // Powers, not shifts: a shift in JavaScript is 32-bit, so 1 << 40 is 256.
 const KiB = 2 ** 10;
@@ -64,8 +68,8 @@ function VolumeUse({ volume }: { volume: CacheVolumeReport }) {
         )}
       </div>
       <p className="muted storage-volume-breakdown">
-        Stacks {bytes(volume.stack_bytes)} · calibration masters {bytes(volume.calibration_bytes)} ·
-        image previews {bytes(volume.preview_bytes)}
+        Stacks {bytes(volume.stack_bytes)} · calibration masters {bytes(volume.calibration_bytes)} · image
+        previews {bytes(volume.preview_bytes)}
         {volume.other_bytes > 0 && <> · other {bytes(volume.other_bytes)}</>}
         {volume.databases.length > 0 && <> · for {volume.databases.join(', ')}</>}
         {volume.kinds.length > 0 && <> · used for {kindList(volume.kinds)}</>}
@@ -88,76 +92,33 @@ function VolumeUse({ volume }: { volume: CacheVolumeReport }) {
 
 const FOLDER_LABELS: Record<StorageFolderKind, { name: string; hint: string }> = {
   cache: { name: 'Cache', hint: 'Image previews, star lists and plate solves.' },
-  stacks: { name: 'Stacks', hint: 'Stacks, their processing, and WBPP runs. Leave blank to use the cache folder.' },
+  stacks: { name: 'Stacks', hint: 'Stacks and their processing. Leave blank to use the cache folder.' },
   calibration: {
     name: 'Calibration masters',
     hint: 'Masters built from your calibration frames. Leave blank to use the cache folder.',
   },
 };
 
-const FOLDER_FIELDS: Record<StorageFolderKind, keyof StorageFoldersUpdate> = {
-  cache: 'cache_dir',
-  stacks: 'stack_dir',
-  calibration: 'calibration_dir',
-};
-
-function chosenFolders(folders: StorageFolder[]): Record<StorageFolderKind, string> {
-  const chosen = { cache: '', stacks: '', calibration: '' };
-  for (const folder of folders) chosen[folder.kind] = folder.chosen ?? '';
-  return chosen;
-}
-
-/**
- * Where the cache, stacks and masters go. A change takes effect when the
- * server next starts, which moves the files across first.
- */
-function StorageFolders({ current, canManage }: { current: StorageSettingsData; canManage: boolean }) {
-  const queryClient = useQueryClient();
-  const [draft, setDraft] = useState(() => chosenFolders(current.folders));
+/** Folder changes for cache, stacks and calibration take effect after a restart.
+ * WBPP changes apply to new runs as soon as the shared form is saved. */
+function StorageFolders({
+  current,
+  canManage,
+  form,
+}: {
+  current: StorageSettingsData;
+  canManage: boolean;
+  form: StorageSettingsForm;
+}) {
   const [restarting, setRestarting] = useState(false);
-  // Follow a save made elsewhere unless this form has its own edits.
-  const savedKey = JSON.stringify(chosenFolders(current.folders));
-  const lastSaved = useRef(savedKey);
-  useEffect(() => {
-    if (lastSaved.current === savedKey) return;
-    const previous = lastSaved.current;
-    lastSaved.current = savedKey;
-    setDraft((draftNow) =>
-      JSON.stringify(draftNow) === previous ? (JSON.parse(savedKey) as typeof draftNow) : draftNow,
-    );
-  }, [savedKey]);
-  const save = useMutation({
-    mutationFn: apiClient.updateStorageFolders,
-    onSuccess: (updated) => {
-      queryClient.setQueryData(QUERY_KEY, updated);
-      const saved = chosenFolders(updated.folders);
-      lastSaved.current = JSON.stringify(saved);
-      setDraft(saved);
-    },
-  });
-  const saved = chosenFolders(current.folders);
-  const dirty = current.folders.some((folder) => draft[folder.kind].trim() !== saved[folder.kind]);
   const pending = current.folders.some((folder) => folder.path !== folder.next_path);
-  const editable = canManage && current.can_choose_folders;
-
-  // The whole app, not just its server: files move only at a fresh start,
-  // when nothing from the old server is still writing.
+  const editable = canManage && current.can_choose_folders && !form.save.isPending;
   const restart = async () => {
     setRestarting(true);
     if (!(await tauriConfig.restartApplication())) setRestarting(false);
   };
-
-  const submit = () => {
-    const update: StorageFoldersUpdate = {};
-    for (const folder of current.folders) {
-      if (folder.source !== 'server_config') update[FOLDER_FIELDS[folder.kind]] = draft[folder.kind].trim();
-    }
-    save.mutate(update);
-  };
-
   return (
     <div className="storage-folders">
-      <UnsavedMark label="storage folders" dirty={dirty} />
       <h3>Folders</h3>
       {current.folders.map((folder) => {
         const label = FOLDER_LABELS[folder.kind];
@@ -171,11 +132,11 @@ function StorageFolders({ current, canManage }: { current: StorageSettingsData; 
             <PathField
               id={inputId}
               dialogTitle={`Select the ${label.name.toLowerCase()} folder`}
-              value={fixed ? folder.next_path : draft[folder.kind]}
+              value={fixed ? folder.next_path : form.folders[folder.kind]}
               placeholder={folder.kind === 'cache' ? folder.next_path : 'Same as the cache'}
-              disabled={!editable || fixed || save.isPending}
+              disabled={!editable || fixed}
               aria-describedby={`${inputId}-hint`}
-              onChange={(path) => setDraft((previous) => ({ ...previous, [folder.kind]: path }))}
+              onChange={(path) => form.editFolder(folder.kind, path)}
             />
             <small className="muted" id={`${inputId}-hint`}>
               {fixed ? 'Set by the server config file.' : label.hint}
@@ -189,40 +150,51 @@ function StorageFolders({ current, canManage }: { current: StorageSettingsData; 
           </div>
         );
       })}
+      <div className="storage-folder">
+        <label htmlFor="storage-folder-wbpp" className="stack-method-label">
+          WBPP runs
+        </label>
+        <PathField
+          id="storage-folder-wbpp"
+          aria-label="WBPP storage folder"
+          dialogTitle="Select the WBPP runs folder"
+          value={form.wbppFolder}
+          placeholder="Export directory or stack folder"
+          disabled={!editable}
+          aria-describedby="storage-folder-wbpp-hint"
+          onChange={form.editWbppFolder}
+        />
+        <small className="muted" id="storage-folder-wbpp-hint">
+          WBPP scripts and output. New runs use this folder after you save; old folders remain managed. Leave
+          blank to use each database’s export directory, or its stack folder.
+        </small>
+      </div>
       {current.folder_notes.map((note) => (
         <p key={note} className="muted storage-volume-note">
           {note}
         </p>
       ))}
       {!current.can_choose_folders && (
-        <p className="muted">This server has no writable settings file. Change these folders in its configuration file.</p>
+        <p className="muted">
+          This server has no writable settings file. Change these folders in its configuration file.
+        </p>
       )}
-      {editable && (
-        <div className="storage-folder-actions">
-          <button type="button" className="save-button" disabled={!dirty || save.isPending} onClick={submit}>
-            {save.isPending ? 'Saving…' : 'Save folders'}
-          </button>
-          {pending && (
-            <span className="muted">
-              Restart PSF Guard to use the new folders. PSF Guard moves existing files before startup
-        finishes. Moving many files may delay startup.
-            </span>
-          )}
-          {pending && isTauriApp() && (
-            <button type="button" className="btn btn-secondary" onClick={restart} disabled={restarting}>
-              {restarting ? 'Restarting…' : 'Restart now'}
-            </button>
-          )}
-        </div>
+      {pending && (
+        <p className="muted">
+          Restart PSF Guard to use the new folders. PSF Guard moves existing files before startup finishes.
+          Moving many files may delay startup.
+        </p>
       )}
-      {save.isError && (
-        <p className="error-text" role="alert">{(save.error as Error).message}</p>
+      {pending && editable && isTauriApp() && (
+        <button type="button" className="btn btn-secondary" onClick={restart} disabled={restarting}>
+          {restarting ? 'Restarting…' : 'Restart now'}
+        </button>
       )}
     </div>
   );
 }
 
-/** One limit: a slider saved when let go, on Enter, or on leaving it. */
+/** A staged limit; the shared Save button applies it. */
 function LimitSlider({
   label,
   ariaLabel,
@@ -230,8 +202,7 @@ function LimitSlider({
   value,
   min,
   disabled,
-  resetToken,
-  onCommit,
+  onChange,
 }: {
   label: string;
   ariaLabel: string;
@@ -239,40 +210,26 @@ function LimitSlider({
   value: number;
   min: number;
   disabled: boolean;
-  /** Changes after a failed save, so the slider shows the saved value again. */
-  resetToken: number;
-  onCommit: (percent: number) => void;
+  onChange: (percent: number) => void;
 }) {
-  const [draft, setDraft] = useState(value);
-  useEffect(() => setDraft(value), [value, resetToken]);
-  const commit = () => {
-    if (draft !== value) onCommit(draft);
-  };
   return (
     <div className="review-preference worker-share">
       <span>
         <span className="stack-method-label">
           {label}
-          <em className="worker-share-value">{draft >= 100 ? 'no limit' : `${draft}%`}</em>
+          <em className="worker-share-value">{value >= 100 ? 'no limit' : `${value}%`}</em>
         </span>
         <small>{hint}</small>
       </span>
-      {/* Not disabled while saving: that would take the slider out of a keyboard user's hands. */}
       <input
         type="range"
         min={min}
         max={100}
         step={1}
-        value={draft}
+        value={value}
         disabled={disabled}
         aria-label={ariaLabel}
-        onChange={(event) => setDraft(Number(event.target.value))}
-        // Each save also checks the volumes, so not on every arrow press.
-        onPointerUp={commit}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter') commit();
-        }}
-        onBlur={commit}
+        onChange={(event) => onChange(Number(event.target.value))}
       />
     </div>
   );
@@ -284,65 +241,75 @@ function LimitSlider({
  * masters may have limits of their own for the volumes they sit on.
  */
 export default function StorageSettings({ canManage }: { canManage: boolean }) {
-  const queryClient = useQueryClient();
   const settings = useQuery({
     queryKey: QUERY_KEY,
     queryFn: apiClient.getStorageSettings,
     refetchInterval: 60_000,
   });
-  const [failures, setFailures] = useState(0);
-  const save = useMutation({
-    mutationFn: apiClient.updateStorageSettings,
-    onSuccess: (updated) => queryClient.setQueryData(QUERY_KEY, updated),
-    onError: () => setFailures((count) => count + 1),
+  const pixinsight = useQuery({
+    queryKey: PIXINSIGHT_QUERY_KEY,
+    queryFn: apiClient.getPixInsightSettings,
+    refetchInterval: 60_000,
   });
-
-  if (settings.isLoading) return null;
-  if (settings.isError || !settings.data) {
+  if (settings.isLoading || pixinsight.isLoading) return null;
+  if (settings.isError || !settings.data || pixinsight.isError || !pixinsight.data) {
     return (
       <div className="stack-method-settings">
         <h3>Disk use</h3>
-        <p className="muted" role="alert">Could not load the disk limit.</p>
+        <p className="muted" role="alert">
+          Could not load storage settings.
+        </p>
       </div>
     );
   }
-  const current = settings.data;
-  const separate =
-    current.stack_max_volume_percent !== null || current.calibration_max_volume_percent !== null;
-  // Not held back while another save runs: each names only its own limit,
-  // and the server applies them one at a time.
-  const commit = (limits: StorageLimitsUpdate) => save.mutate(limits);
+  return <StorageForm current={settings.data} pixinsight={pixinsight.data} canManage={canManage} />;
+}
+
+function StorageForm({
+  current,
+  pixinsight,
+  canManage,
+}: {
+  current: StorageSettingsData;
+  pixinsight: PixInsightSettings;
+  canManage: boolean;
+}) {
+  const form = useStorageSettingsForm(current, pixinsight);
+  const { save, limits } = form;
+  const separate = limits.stack_max_volume_percent !== null || limits.calibration_max_volume_percent !== null;
+  const commit = form.editLimits;
   const needsManagement = canManage ? '' : ' Changing it needs database management on this server.';
 
   return (
     <div className="stack-method-settings storage-settings">
       <h3>Disk use</h3>
+      <UnsavedMark label="storage settings" dirty={form.dirty} />
       <p className="muted">
-        When disk usage exceeds the limit, PSF Guard first deletes the least recently viewed image
-        previews, aiming for two percentage points below the limit. It then checks stack checkpoints
-        at least a day old and calibration masters unused for a week. Stacks and color previews
-        are never deleted automatically. PSF Guard regenerates previews when you open an image
-        and rebuilds masters from their source frames when needed.
+        When disk usage exceeds the limit, PSF Guard first deletes the least recently viewed image previews,
+        aiming for two percentage points below the limit. It then checks stack checkpoints at least a day old
+        and calibration masters unused for a week. Stacks and color previews are never deleted automatically.
+        PSF Guard regenerates previews when you open an image and rebuilds masters from their source frames
+        when needed.
       </p>
       {current.volumes.length === 0 ? (
         <p className="muted">The first check runs a minute after the server starts.</p>
       ) : (
         current.volumes.map((volume) => <VolumeUse key={volume.path} volume={volume} />)
       )}
-      <fieldset className="calibration-settings-group" disabled={!canManage}>
+      <p className="muted">
+        Click <strong>Save storage settings</strong> to apply limits and WBPP options. Cache, stack, and
+        calibration folder changes need a restart.
+      </p>
+      <fieldset className="calibration-settings-group" disabled={!canManage || save.isPending}>
+        <legend>Limits</legend>
         <LimitSlider
           label={separate ? 'Cache volume usage limit' : 'Volume usage limit'}
-          ariaLabel={
-            separate
-              ? 'Cache volume usage limit, in percent'
-              : 'Volume usage limit, in percent'
-          }
+          ariaLabel={separate ? 'Cache volume usage limit, in percent' : 'Volume usage limit, in percent'}
           hint={`Percentage of total disk space used, including other files. Default ${current.default_max_volume_percent}%; 100% disables automatic cleanup.${separate ? ' A volume shared with stacks or masters uses the lowest of their limits.' : ''}${needsManagement}`}
-          value={current.max_volume_percent}
+          value={limits.max_volume_percent}
           min={current.min_max_volume_percent}
           disabled={!canManage}
-          resetToken={failures}
-          onCommit={(percent) => commit({ max_volume_percent: percent })}
+          onChange={(percent) => commit({ max_volume_percent: percent })}
         />
         <label className="review-preference storage-separate-limits">
           <input
@@ -353,10 +320,10 @@ export default function StorageSettings({ canManage }: { canManage: boolean }) {
               commit(
                 event.target.checked
                   ? {
-                      stack_max_volume_percent: current.max_volume_percent,
-                      calibration_max_volume_percent: current.max_volume_percent,
+                      stack_max_volume_percent: limits.max_volume_percent,
+                      calibration_max_volume_percent: limits.max_volume_percent,
                     }
-                  : { stack_max_volume_percent: null, calibration_max_volume_percent: null },
+                  : { stack_max_volume_percent: null, calibration_max_volume_percent: null }
               )
             }
           />
@@ -364,8 +331,8 @@ export default function StorageSettings({ canManage }: { canManage: boolean }) {
             Separate limits for stacks and calibration masters
             <small className="muted">
               {' '}
-              For folders on their own volumes. A volume holding more than one folder uses the lowest
-              of their limits.
+              For folders on their own volumes. A volume holding more than one folder uses the lowest of their
+              limits.
             </small>
           </span>
         </label>
@@ -375,30 +342,52 @@ export default function StorageSettings({ canManage }: { canManage: boolean }) {
               label="Stack volume usage limit"
               ariaLabel="Stack volume usage limit, in percent"
               hint="PSF Guard never deletes stacks automatically. On a separate stack volume, cleanup deletes only checkpoints at least a day old. If stacks share the cache volume, the lower limit also applies to preview cleanup."
-              value={current.stack_max_volume_percent ?? current.max_volume_percent}
+              value={limits.stack_max_volume_percent ?? limits.max_volume_percent}
               min={current.min_max_volume_percent}
               disabled={!canManage}
-              resetToken={failures}
-              onCommit={(percent) => commit({ stack_max_volume_percent: percent })}
+              onChange={(percent) => commit({ stack_max_volume_percent: percent })}
             />
             <LimitSlider
               label="Calibration master volume usage limit"
               ariaLabel="Calibration master volume usage limit, in percent"
               hint="Above this limit, PSF Guard deletes masters unused for a week, least recently used first, but only if cleanup can bring usage below the limit. It preserves masters whose source frames are missing. If masters share the cache volume, the lower limit also applies to preview cleanup."
-              value={current.calibration_max_volume_percent ?? current.max_volume_percent}
+              value={limits.calibration_max_volume_percent ?? limits.max_volume_percent}
               min={current.min_max_volume_percent}
               disabled={!canManage}
-              resetToken={failures}
-              onCommit={(percent) => commit({ calibration_max_volume_percent: percent })}
+              onChange={(percent) => commit({ calibration_max_volume_percent: percent })}
             />
           </>
         )}
+        <LimitSlider
+          label="WBPP volume usage limit"
+          ariaLabel="WBPP volume usage limit, in percent"
+          hint="Total volume usage, including other files. A shared volume uses the lower storage limit. Cleanup removes intermediate files first; masters keep their retention period. 100% disables pressure cleanup."
+          value={form.wbpp.max_volume_percent}
+          min={0}
+          disabled={!canManage || save.isPending}
+          onChange={(percent) => form.editWbpp('max_volume_percent', percent)}
+        />
       </fieldset>
+      <StorageFolders current={current} canManage={canManage} form={form} />
+      <WbppStorageSettings
+        policy={form.wbpp}
+        onChange={form.editWbpp}
+        disabled={!canManage || save.isPending}
+      />
+      <WbppStorageReport report={pixinsight.storage_report} />
+      <button
+        type="button"
+        className="save-button"
+        disabled={!canManage || !form.dirty || !form.valid || save.isPending}
+        onClick={() => save.mutate()}
+      >
+        {save.isPending ? 'Saving…' : 'Save storage settings'}
+      </button>
       {save.isError && (
-        <p className="error-text" role="alert">{(save.error as Error).message}</p>
+        <p className="error-text" role="alert">
+          {(save.error as Error).message}
+        </p>
       )}
-      <StorageFolders current={current} canManage={canManage} />
-      <WbppStorageSettings canManage={canManage} />
     </div>
   );
 }

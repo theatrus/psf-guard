@@ -7667,7 +7667,8 @@
   min-width: 0;
 }
 
-.storage-folder code {
+.storage-folders code,
+.storage-folders .error-text {
   overflow-wrap: anywhere;
 }
 

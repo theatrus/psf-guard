@@ -1031,7 +1031,9 @@ whole volume, other files included, that may be used, as `df` counts it. Limits
 accept every whole percentage from 0% through 100%. The limit applies to all
 three folders unless **Separate limits for stacks and
 calibration masters** gives those two their own. A volume holding more than
-one folder uses the lowest of their limits.
+one folder uses the lowest of their limits. Edit the limits and folders, then
+click **Save storage settings** to apply them. Cache, stack, and calibration
+folder changes take effect after a restart; WBPP folder changes apply to new runs.
 
 Every five minutes, and right after a limit is changed, PSF Guard reads each
 volume. When one is over its limit it deletes only what lives on that volume.
@@ -1069,7 +1071,8 @@ To give stacks more room, put the stack folder on a larger volume, such as a
 network share, and keep the cache on a fast local disk.
 
 WBPP work folders have their own path, percentage limit, and intermediate/master
-retention policy under **Settings → Storage → WBPP storage**. See
+retention policy under **Settings → Storage**. WBPP uses the same **Limits**,
+**Folders**, and **Save storage settings** action as the other storage options. See
 [Manage WBPP storage](WBPP.md#manage-wbpp-storage).
 
 ## Inspect calibration masters

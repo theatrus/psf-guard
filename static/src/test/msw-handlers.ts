@@ -72,6 +72,16 @@ const idleWbppRun = {
 };
 
 export const handlers = [
+  http.get('/api/settings/pixinsight', () => HttpResponse.json({ success: true, error: null, data: {
+    binary: null, runs_dir: null, runs_dir_free_bytes: null, ready: false,
+    detection: { install: null, source: null, checked: [], problem: null }, display: { kind: 'missing' },
+    storage: { max_volume_percent: 90, intermediate_days: 7, master_days: 90 },
+  } })),
+  http.get('/api/settings/storage', () => HttpResponse.json({ success: true, error: null, data: {
+    max_volume_percent: 90, stack_max_volume_percent: null, calibration_max_volume_percent: null,
+    default_max_volume_percent: 90, min_max_volume_percent: 0, volumes: [], folder_notes: [], can_choose_folders: true,
+    folders: ['cache', 'stacks', 'calibration'].map((kind) => ({ kind, path: '/cache', next_path: '/cache', source: 'default', chosen: null })),
+  } })),
   ...scoringDefaultsHandlers,
   http.get('/api/ts-sync', () => HttpResponse.json({ success: true, data: [], error: null })),
   emptyCollaborationActivation,

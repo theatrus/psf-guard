@@ -11,6 +11,10 @@ test('WBPP storage fields fit a phone', async ({ page, request }) => {
   await openSettings(page);
   await page.getByRole('tab', { name: 'Storage', exact: true }).click();
   const panel = page.getByRole('tabpanel');
+  const folders = panel.getByRole('heading', { name: 'Folders' }).locator('..');
+  await expect(folders.getByLabel('WBPP storage folder')).toBeVisible();
+  await expect(panel.getByRole('button', { name: /^Save/ })).toHaveCount(1);
+  await expect(panel.getByText('Stacks, their processing, and WBPP runs.', { exact: false })).toHaveCount(0);
   for (const label of [
     'WBPP storage folder',
     'WBPP volume usage limit, in percent',
@@ -53,15 +57,17 @@ test('WBPP has a dedicated folder, percentage cap and optional forever masters',
     await masterDays.fill('120');
     await page.getByRole('checkbox', { name: /^Keep WBPP masters forever/ }).check();
     await expect(page.getByLabel('WBPP master retention, in days')).toBeDisabled();
-    await page.getByRole('button', { name: 'Save WBPP storage', exact: true }).click();
-    await expect(page.getByRole('button', { name: 'Save WBPP storage', exact: true })).toBeDisabled();
-    const saved = (await (await request.get('/api/settings/pixinsight')).json()).data;
-    expect(saved.runs_dir).toBe(path.join(tmpBase(), 'wbpp-runs'));
-    expect(saved.storage).toEqual({ max_volume_percent: 25, intermediate_days: 14, master_days: 0 });
     const general = page.getByRole('slider', { name: /^Volume usage limit, in percent$/ });
     await expect(general).toHaveAttribute('min', '0');
     await general.fill('20');
     await general.press('Enter');
+    expect((await (await request.get('/api/settings/storage')).json()).data.max_volume_percent).toBe(storage.max_volume_percent);
+    await expect(page.getByRole('button', { name: /^Save/ })).toHaveCount(1);
+    await page.getByRole('button', { name: 'Save storage settings', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Save storage settings', exact: true })).toBeDisabled();
+    const saved = (await (await request.get('/api/settings/pixinsight')).json()).data;
+    expect(saved.runs_dir).toBe(path.join(tmpBase(), 'wbpp-runs'));
+    expect(saved.storage).toEqual({ max_volume_percent: 25, intermediate_days: 14, master_days: 0 });
     await expect
       .poll(async () => (await (await request.get('/api/settings/storage')).json()).data.max_volume_percent)
       .toBe(20);
