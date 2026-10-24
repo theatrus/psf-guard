@@ -1121,12 +1121,15 @@ pub(super) fn plan_refresh(
                         .as_ref()
                         .map(|group| group.key.clone()),
                 },
-                entry
-                    .group
-                    .input_images
-                    .iter()
-                    .map(|image| (image.image_id, image.grading_status))
-                    .collect::<HashSet<_>>(),
+                (
+                    entry
+                        .group
+                        .input_images
+                        .iter()
+                        .map(|image| (image.image_id, image.grading_status))
+                        .collect::<HashSet<_>>(),
+                    entry.scoring,
+                ),
             )
         })
         .collect::<HashMap<_, _>>();
@@ -1153,13 +1156,15 @@ pub(super) fn plan_refresh(
     for (key, frames) in &current {
         let name = names.get(key).cloned().unwrap_or_default();
         match remembered.get(key) {
-            Some(built) => {
+            Some((built, built_scoring)) => {
                 channels.push(key.clone());
                 let now = frames
                     .iter()
                     .map(|image| (image.id, image.grading_status))
                     .collect::<HashSet<_>>();
-                if &now != built {
+                // A card scored otherwise than the server's defaults is
+                // stacked again too, and listed as such.
+                if &now != built || *built_scoring != scoring {
                     restack.push((claim_key(project_id, key), name));
                 }
             }
@@ -1652,6 +1657,8 @@ mod tests {
             {"image_id": 1, "grading_status": 1},
             {"image_id": 2, "grading_status": 1}
         ]);
+        // Scored as the server's defaults, the built-in values here.
+        stacked["scoring"] = serde_json::to_value(StackScoringSettings::default()).unwrap();
         let latest = serde_json::json!({
             "schema_version": 1, "database_id": ctx.id, "project_id": 1, "updated_unix_seconds": 5,
             "groups": [stacked]
@@ -1675,6 +1682,15 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert_eq!(plan.channels.len(), 1);
+
+        // A card scored otherwise than the server's defaults restacks, and
+        // the queue lists it, though no frame or grade moved.
+        let mut scored_otherwise = latest.clone();
+        scored_otherwise["groups"][0]["scoring"]["penalty_satellite"] = serde_json::json!(0.5);
+        std::fs::write(&path, serde_json::to_vec(&scored_otherwise).unwrap()).unwrap();
+        let plan = plan_refresh(&ctx, 1).unwrap().unwrap();
+        assert_eq!(names(&plan), vec!["T · R".to_string()]);
+        std::fs::write(&path, serde_json::to_vec(&latest).unwrap()).unwrap();
 
         // A new R frame, and R is due to restack.
         {
@@ -2015,6 +2031,29 @@ mod tests {
         assert!(!scheduled[0].waiting, "still settling");
         assert!(scheduled[0].due_in_seconds > 0);
         configure(AutomationPolicy::default());
+    }
+
+    #[test]
+    fn a_build_records_exactly_the_scoring_defaults_it_was_asked_for() {
+        // The cards a refresh builds must record the server's defaults to
+        // the bit, or the page would still show them out of date.
+        for defaults in [
+            StackScoringSettings::default(),
+            StackScoringSettings {
+                penalty_satellite: 0.3,
+                penalty_pointing: 0.0,
+                penalty_temporal: 2.0,
+                penalty_hfr_rise: 1.5,
+                penalty_star_loss: 0.7,
+                hfr_reject_above: Some(2.55),
+                star_count_reject_below: Some(505.0),
+            },
+        ] {
+            assert_eq!(
+                StackScoringSettings::from_overrides(&scoring_overrides(&defaults)),
+                defaults
+            );
+        }
     }
 
     #[test]

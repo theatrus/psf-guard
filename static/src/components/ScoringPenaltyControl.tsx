@@ -53,7 +53,7 @@ export default function ScoringPenaltyControl() {
     saveDefaultError,
     resetToDefault,
   } = useViewScoring();
-  // Settings opens for editors only; a viewer saves defaults from here.
+  // Settings, like saving the defaults, is for editors only.
   const { canWrite } = useAccess();
   const [draft, setDraft] = useState<ScoringPreferences | null>(null);
   const [limitTexts, setLimitTexts] = useState<Partial<Record<LimitKey, string>>>({});
@@ -265,8 +265,8 @@ export default function ScoringPenaltyControl() {
                 return;
               }
               const next = normalizeScoring(effective, scoring);
-              clearDrafts();
-              saveAsDefault(next);
+              // A typed value stays until the save succeeds.
+              saveAsDefault(next, clearDrafts);
             }}
           >
             {savingDefault ? 'Saving…' : 'Save as default'}

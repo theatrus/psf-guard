@@ -6,6 +6,9 @@ import { describe, expect, it } from 'vitest';
 import { server } from '../../test/msw-server';
 import AuthGate from '../AccessContext';
 import { useAccess } from '../access';
+import { SCORING_DEFAULTS, stackScoringSettings } from '../../utils/scoring';
+
+const CALIBRATED = stackScoringSettings(SCORING_DEFAULTS);
 
 function wrapper() {
   const queryClient = new QueryClient({
@@ -32,6 +35,46 @@ function ProtectedContent() {
 
 describe('AuthGate', () => {
   it('passes through when server authentication is disabled', async () => {
+    render(
+      <AuthGate><ProtectedContent /></AuthGate>,
+      { wrapper: wrapper() },
+    );
+
+    expect(await screen.findByText(/Catalog ready · editor/)).toBeInTheDocument();
+  });
+
+  it('waits for the server\'s scoring defaults before showing the app', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    server.use(
+      http.get('/api/settings/scoring', async () => {
+        await gate;
+        return HttpResponse.json({
+          success: true,
+          data: { scoring: CALIBRATED, builtin: CALIBRATED, stored: true },
+          error: null,
+        });
+      }),
+    );
+    render(
+      <AuthGate><ProtectedContent /></AuthGate>,
+      { wrapper: wrapper() },
+    );
+
+    await waitFor(() => expect(screen.getByText('Checking access…')).toBeInTheDocument());
+    // Access is known by now; only the scoring defaults are outstanding.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screen.getByText('Checking access…')).toBeInTheDocument();
+    expect(screen.queryByText(/Catalog ready/)).toBeNull();
+    release();
+    expect(await screen.findByText(/Catalog ready · editor/)).toBeInTheDocument();
+  });
+
+  it('shows the app when the scoring defaults cannot be read', async () => {
+    server.use(
+      http.get('/api/settings/scoring', () =>
+        HttpResponse.json({ success: false, data: null, error: 'Internal error' }, { status: 500 })),
+    );
     render(
       <AuthGate><ProtectedContent /></AuthGate>,
       { wrapper: wrapper() },

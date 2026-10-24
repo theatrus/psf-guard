@@ -7,7 +7,12 @@ import { server } from '../../test/msw-server';
 import { scoringServer, testQueryClient, waitForScoringDefaults } from '../../test/scoringDefaults';
 import { useScoringDefaultsMigration } from '../useScoringDefaultsMigration';
 import { getDisplayPreferences, setDisplayPreferences } from '../useDisplayPreferences';
-import { fieldsFromScoring, SCORING_DEFAULTS as DEFAULTS, type ScoringPreferences } from '../../utils/scoring';
+import {
+  fieldsFromScoring,
+  SCORING_DEFAULTS as DEFAULTS,
+  stackScoringSettings,
+  type ScoringPreferences,
+} from '../../utils/scoring';
 
 const BROWSER: ScoringPreferences = { ...DEFAULTS, satellite: 0, hfrRejectAbove: 3 };
 const ACCOUNT: ScoringPreferences = { ...DEFAULTS, temporal: 0.5, starCountRejectBelow: 40 };
@@ -77,6 +82,8 @@ describe('copying a person\'s own scoring defaults to the server', () => {
     setBrowserScoring(BROWSER);
     const { client } = renderMigration();
     await waitFor(() => expect(scoringServer.saves).toEqual([BROWSER]));
+    // Only while the server has no copy: a copy saved first wins.
+    expect(scoringServer.puts).toEqual([{ value: BROWSER, onlyIfUnstored: true }]);
     // The page then has the copy, stored.
     await waitFor(() => expect(client.getQueryData(['scoring-defaults'])).toMatchObject({ stored: true }));
   });
@@ -87,17 +94,45 @@ describe('copying a person\'s own scoring defaults to the server', () => {
     const reads = mockAccount(ACCOUNT);
     renderMigration({ username: 'ann' });
     await waitFor(() => expect(scoringServer.saves).toEqual([ACCOUNT]));
+    expect(scoringServer.puts).toEqual([{ value: ACCOUNT, onlyIfUnstored: true }]);
     expect(reads.count).toBe(1);
   });
 
-  it('saves nothing when the person\'s defaults are the built-in values', async () => {
+  it('saves the built-in values too, so the first editor decides', async () => {
     scoringServer.set(DEFAULTS, false);
     setBrowserScoring(BROWSER);
     const reads = mockAccount(DEFAULTS);
-    renderMigration({ username: 'ann' });
-    await waitFor(() => expect(reads.count).toBe(1));
-    await settle();
+    const { client } = renderMigration({ username: 'ann' });
+    await waitFor(() => expect(scoringServer.saves).toEqual([DEFAULTS]));
+    expect(scoringServer.puts).toEqual([{ value: DEFAULTS, onlyIfUnstored: true }]);
+    expect(reads.count).toBe(1);
+    await waitFor(() => expect(client.getQueryData(['scoring-defaults'])).toMatchObject({ stored: true }));
+  });
+
+  it('takes the server\'s copy when another page saved first', async () => {
+    // The page read the server before another editor's page saved a copy.
+    const OTHER: ScoringPreferences = { ...DEFAULTS, pointing: 0 };
+    scoringServer.set(OTHER, true);
+    server.use(
+      http.get('/api/settings/scoring', () => HttpResponse.json({
+        success: true,
+        data: {
+          scoring: stackScoringSettings(DEFAULTS),
+          builtin: stackScoringSettings(DEFAULTS),
+          stored: false,
+        },
+        error: null,
+      }), { once: true }),
+    );
+    setBrowserScoring(BROWSER);
+    const { client } = renderMigration();
+    await waitFor(() => expect(scoringServer.puts).toEqual([{ value: BROWSER, onlyIfUnstored: true }]));
+    await waitFor(() => expect(client.getQueryData(['scoring-defaults'])).toMatchObject({
+      scoring: stackScoringSettings(OTHER),
+      stored: true,
+    }));
     expect(scoringServer.saves).toEqual([]);
+    expect(scoringServer.get()).toEqual(OTHER);
   });
 
   it('saves nothing, and reads nothing, when the server already has defaults', async () => {
@@ -108,7 +143,7 @@ describe('copying a person\'s own scoring defaults to the server', () => {
     await waitForScoringDefaults(client);
     await settle();
     expect(reads.count).toBe(0);
-    expect(scoringServer.saves).toEqual([]);
+    expect(scoringServer.puts).toEqual([]);
   });
 
   it('saves nothing for a person who cannot change settings', async () => {
@@ -119,7 +154,7 @@ describe('copying a person\'s own scoring defaults to the server', () => {
     await waitForScoringDefaults(client);
     await settle();
     expect(reads.count).toBe(0);
-    expect(scoringServer.saves).toEqual([]);
+    expect(scoringServer.puts).toEqual([]);
   });
 
   it('copies once, even when re-rendered', async () => {
@@ -129,7 +164,7 @@ describe('copying a person\'s own scoring defaults to the server', () => {
     await waitFor(() => expect(scoringServer.saves).toHaveLength(1));
     rerender({ username: undefined, canWrite: true });
     await settle();
-    expect(scoringServer.saves).toHaveLength(1);
+    expect(scoringServer.puts).toHaveLength(1);
   });
 
   it('tries once, even after a failed save leaves the server without defaults', async () => {
@@ -137,7 +172,7 @@ describe('copying a person\'s own scoring defaults to the server', () => {
     scoringServer.failure = { status: 500 };
     const reads = mockAccount(ACCOUNT);
     const { rerender } = renderMigration({ username: 'ann' });
-    await waitFor(() => expect(reads.count).toBe(1));
+    await waitFor(() => expect(scoringServer.puts).toHaveLength(1));
     await settle();
     // The page still finds the server without defaults, and the hook runs
     // again for another reason, such as a change of access.
@@ -146,6 +181,7 @@ describe('copying a person\'s own scoring defaults to the server', () => {
     rerender({ username: 'ann', canWrite: true });
     await settle();
     expect(reads.count).toBe(1);
+    expect(scoringServer.puts).toHaveLength(1);
     expect(scoringServer.saves).toEqual([]);
   });
 
@@ -161,6 +197,6 @@ describe('copying a person\'s own scoring defaults to the server', () => {
     release();
     await waitFor(() => expect(scoringServer.saves).toEqual([ACCOUNT]));
     await settle();
-    expect(scoringServer.saves).toHaveLength(1);
+    expect(scoringServer.puts).toHaveLength(1);
   });
 });

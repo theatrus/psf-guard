@@ -221,4 +221,20 @@ describe('the Sequence toolbar\'s Scoring control', () => {
     expect(search).toBe(`?${query}`);
     expect(summary()).toHaveTextContent('Scoring (changed)');
   });
+
+  it('keeps a typed limit when Save as default fails', async () => {
+    const user = userEvent.setup();
+    scoringServer.failure = { error: 'The settings file is read-only' };
+    await renderControl();
+    await user.type(minStars(), '505');
+    // A press without leaving the field, so the typed text is not yet in
+    // the link.
+    fireEvent.click(saveButton());
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Could not save the defaults: The settings file is read-only',
+    );
+    expect(minStars()).toHaveValue(505);
+    expect(link().has('minStars')).toBe(false);
+    expect(saveButton()).toHaveAttribute('aria-disabled', 'false');
+  });
 });

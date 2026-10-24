@@ -782,7 +782,7 @@ stacking method and scoring defaults (see
 [scoring defaults](SCREENING.md#scoring-defaults)), so a change to either
 reaches the next refresh. A card built with other scoring, which shows
 **Out of date — scoring settings changed**, is stacked again with the
-defaults. Its color previews are composed again afterwards, as after any
+defaults by that refresh, and the job list shows it as one to restack. Its color previews are composed again afterwards, as after any
 build (see [Color previews from channel stacks](#color-previews-from-channel-stacks)). Like **Build stacks**, it
 queues one build per channel, the same builds a person's Build stacks makes,
 so after either one only the channels whose frames or grades changed stack
@@ -850,8 +850,10 @@ What queues a refresh, and how long it waits first:
   pushes the refresh out again, up to four delays. New frames outrank waiting
   grades and pull the refresh in to the arrival delay.
 - **New scoring defaults**, saved in Settings › Review or with the Scoring
-  control's **Save as default**, refresh every database's stacked projects
-  after the arrival delay, when the values differ from the old ones.
+  control's **Save as default**, refresh every database's projects after the
+  arrival delay, when the values differ from the old ones. Cards stacked
+  with other scoring are not refreshed at the update itself: they wait for
+  the next refresh, whatever queues it.
 
 A refresh runs on the same single stacking worker as any other build, as
 background work that yields to previews and quality scans, waits while a

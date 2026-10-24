@@ -96,10 +96,15 @@ export function useViewScoring() {
   }, [updateParams, defaults]);
 
   /** Make `next` the server's defaults, which this view then uses once
-   *  they are saved. */
+   *  they are saved; `onSaved` runs then too. */
   const { mutate } = saveDefaults;
-  const saveAsDefault = useCallback((next: ScoringPreferences) => {
-    mutate(next, { onSuccess: () => updateParams(clearedScoringParams()) });
+  const saveAsDefault = useCallback((next: ScoringPreferences, onSaved?: () => void) => {
+    mutate(next, {
+      onSuccess: () => {
+        updateParams(clearedScoringParams());
+        onSaved?.();
+      },
+    });
   }, [mutate, updateParams]);
 
   /** Go back to the defaults in this view. */

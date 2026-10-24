@@ -262,9 +262,8 @@ change no catalog, so the role does not gate them.
 for everyone, which every view's Scoring control starts from and automatic
 stack builds use, and only an editor can change it; see
 [scoring defaults](SCREENING.md#scoring-defaults). Before this version each
-user kept their own: the first page an editor opens after the update saves
-that editor's values to the server, if the server has none yet and they
-differ from the built-in values.
+user kept their own: the first page an editor opens after the update, while
+the server has no copy, saves that editor's values to the server.
 
 **First sign-in.** If the user has no document yet, they start from the
 defaults, with one exception: the first account to sign in on a browser

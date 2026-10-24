@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { startAccountsServer, type AccountsServer } from './accounts-server';
+import { ACCOUNT_PASSWORD, startAccountsServer, type AccountsServer } from './accounts-server';
 import {
   openSettings,
   registerFixtureDb,
@@ -193,27 +193,23 @@ test.describe('with accounts', () => {
   const sequence = () =>
     `${accounts.base}/#/sequence?db=${encodeURIComponent(accounts.dbId())}&project=1&target=1`;
 
-  test('an editor\'s earlier defaults reach the server once, and every user scores with them', async ({ browser }) => {
+  test('an editor\'s earlier defaults reach the server once, and every user scores with them', async ({ browser, playwright }) => {
     // Before the server kept a copy, bob, an editor, saved his own with his
-    // account. The server has none yet.
-    const bob = await accounts.signIn(browser, 'bob');
-    const seeded = await bob.context().request.patch(`${accounts.base}/api/me/preferences`, {
+    // account. Seed them before any page of his loads; the server has none.
+    const api = await playwright.request.newContext({ baseURL: accounts.base });
+    expect((await api.post('/api/auth/login', { data: { username: 'bob', password: ACCOUNT_PASSWORD } })).ok())
+      .toBeTruthy();
+    expect((await api.patch('/api/me/preferences', {
       data: { schema_version: 1, preferences: { scoringHfrRejectAbove: 2.45 } },
-    });
-    expect(seeded.ok()).toBeTruthy();
-    expect((await (await bob.context().request.get(`${accounts.base}/api/settings/scoring`)).json()).data.stored)
-      .toBe(false);
+    })).ok()).toBeTruthy();
+    expect((await (await api.get('/api/settings/scoring')).json()).data.stored).toBe(false);
+    await api.dispose();
 
-    // His next page load copies them to the server. (Signing in loaded the
-    // app before they were seeded, so it found nothing to copy then.)
-    const copied = bob.waitForResponse((response) =>
-      response.url().endsWith('/api/settings/scoring')
-      && response.request().method() === 'PUT'
-      && response.ok()
-      && (response.request().postData() ?? '').includes('"hfr_reject_above":2.45'),
-    { timeout: 15_000 });
-    await bob.reload();
-    await copied;
+    // His first page after the update copies them to the server.
+    const bob = await accounts.signIn(browser, 'bob');
+    await expect.poll(async () =>
+      (await (await bob.context().request.get(`${accounts.base}/api/settings/scoring`)).json()).data.scoring
+        .hfr_reject_above, { timeout: 15_000 }).toBe(2.45);
     await openSequence(bob, sequence());
     await expect(flagged(bob)).toHaveCount(2, { timeout: 15_000 });
     await expect(summary(bob)).toHaveText('Scoring');

@@ -7,6 +7,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import type { AuthStatus } from '../api/types';
+import { useScoringDefaultsQuery } from '../hooks/useScoringPreferences';
 import { AccessContext } from './access';
 import { AUTH_REQUIRED_EVENT } from './events';
 
@@ -112,9 +113,20 @@ export default function AuthGate({ children }: { children: ReactNode }) {
         },
       }}
     >
-      {children}
+      <ScoringDefaultsGate>{children}</ScoringDefaultsGate>
     </AccessContext.Provider>
   );
+}
+
+/**
+ * Views and builds score with the server's scoring defaults, so the app
+ * waits for them rather than scoring with the built-in values and then
+ * again. A failed read leaves the built-in values in use.
+ */
+function ScoringDefaultsGate({ children }: { children: ReactNode }) {
+  const { isPending } = useScoringDefaultsQuery();
+  if (isPending) return <div className="auth-page auth-loading">Checking access…</div>;
+  return <>{children}</>;
 }
 
 function LoginScreen({

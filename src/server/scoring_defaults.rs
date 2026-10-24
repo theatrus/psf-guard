@@ -18,16 +18,35 @@ use crate::server::state::AppState;
 use crate::user_preferences::{
     MAX_HFR_REJECT_LIMIT, MAX_SCORING_PENALTY, MAX_STAR_COUNT_REJECT_LIMIT, SCORING_PENALTY_STEP,
 };
-use axum::{extract::State, Json};
-use serde::Serialize;
+use axum::{
+    extract::{Query, State},
+    Json,
+};
+use serde::{Deserialize, Serialize};
 use std::sync::{Arc, PoisonError, RwLock};
 
 static CURRENT: RwLock<Option<StackScoringSettings>> = RwLock::new(None);
 
+/// One save at a time, from its registry write to the value in force, so
+/// two saves at once cannot leave the server using one and the registry
+/// holding the other.
+static SAVING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// Use the registry's scoring defaults, or the built-in ones when it stores
-/// none.
+/// none or values the Scoring control could not have saved.
 pub fn configure(stored: Option<&StackScoringSettings>) {
-    *CURRENT.write().unwrap_or_else(PoisonError::into_inner) = stored.copied();
+    *CURRENT.write().unwrap_or_else(PoisonError::into_inner) =
+        stored.and_then(|scoring| usable(*scoring));
+}
+
+/// Stored values as they are used: checked, or none with a warning when a
+/// hand-edited registry holds values the Scoring control cannot set.
+fn usable(scoring: StackScoringSettings) -> Option<StackScoringSettings> {
+    checked(scoring)
+        .inspect_err(|error| {
+            tracing::warn!("Registry scoring defaults ignored ({error}); using the built-in values")
+        })
+        .ok()
 }
 
 /// The scoring automatic builds use now.
@@ -55,8 +74,9 @@ fn checked(scoring: StackScoringSettings) -> Result<StackScoringSettings, String
                 SCORING_PENALTY_STEP * 100.0
             ));
         }
-        // Dividing by the steps per whole keeps a tenth exact.
-        Ok(steps.round() / (1.0 / SCORING_PENALTY_STEP).round())
+        // Dividing by the steps per whole keeps a tenth exact; adding 0
+        // turns -0 into 0, whose bytes every cache key built from it shares.
+        Ok(steps.round() / (1.0 / SCORING_PENALTY_STEP).round() + 0.0)
     };
     let hfr_reject_above = match scoring.hfr_reject_above {
         Some(limit) if !(limit.is_finite() && limit > 0.0 && limit <= MAX_HFR_REJECT_LIMIT) => {
@@ -119,30 +139,49 @@ pub async fn get_scoring_defaults(
             let stored = DbRegistry::load_or_init(&path)
                 .map_err(|error| AppError::InternalError(error.to_string()))?
                 .scoring;
-            response(stored, stored.is_some())
+            response(stored.and_then(usable), stored.is_some())
         }
         Err(_) => response(Some(current()), true),
     };
     Ok(Json(ApiResponse::success(body)))
 }
 
+#[derive(Debug, Default, Deserialize)]
+pub struct UpdateScoringQuery {
+    /// Save only when the server holds no copy yet, as the page's one-time
+    /// copy of a person's earlier defaults does; otherwise the stored copy
+    /// stays and comes back. The first editor's page decides.
+    #[serde(default)]
+    pub only_if_unstored: bool,
+}
+
 /// PUT /api/settings/scoring
 ///
 /// Applies to every view from its next load and to automatic builds from
 /// now on. When the values change and automatic previews are on, every
-/// database's stacked projects refresh, so their cards are built with the
-/// new scoring.
+/// database's projects refresh, so their cards are built with the new
+/// scoring.
 pub async fn update_scoring_defaults(
     State(state): State<Arc<AppState>>,
+    Query(query): Query<UpdateScoringQuery>,
     Json(request): Json<StackScoringSettings>,
 ) -> Result<Json<ApiResponse<ScoringDefaultsResponse>>, AppError> {
     let scoring = checked(request).map_err(AppError::BadRequest)?;
-    let previous = update_registry(&state, |registry| {
-        let previous = registry.scoring.unwrap_or_default();
+    let _saving = SAVING.lock().await;
+    let outcome = update_registry(&state, |registry| {
+        let previous = registry.scoring;
+        if query.only_if_unstored && previous.is_some() {
+            return Ok(Err(previous.and_then(usable)));
+        }
         registry.scoring = Some(scoring);
-        Ok(previous)
+        Ok(Ok(previous.and_then(usable).unwrap_or_default()))
     })
     .await?;
+    let previous = match outcome {
+        Ok(previous) => previous,
+        // A copy was stored first: it stays, and the page adopts it.
+        Err(stored) => return Ok(Json(ApiResponse::success(response(stored, true)))),
+    };
     configure(Some(&scoring));
     if previous != scoring {
         for ctx in state.all_databases() {
@@ -170,6 +209,12 @@ mod tests {
         };
         let stored = checked(noisy).unwrap();
         assert_eq!(stored.penalty_satellite, 0.3);
+        let off = checked(StackScoringSettings {
+            penalty_pointing: -0.0,
+            ..builtin
+        })
+        .unwrap();
+        assert_eq!(off.penalty_pointing.to_bits(), 0.0f64.to_bits());
         assert_eq!(stored.hfr_reject_above, Some(4.5));
         assert_eq!(stored.star_count_reject_below, Some(50.0));
     }
@@ -209,6 +254,20 @@ mod tests {
         ] {
             assert!(checked(refused).is_err(), "{refused:?}");
         }
+    }
+
+    #[test]
+    fn a_hand_edited_registry_value_is_not_used() {
+        let edited = StackScoringSettings {
+            penalty_satellite: 5.0,
+            ..StackScoringSettings::default()
+        };
+        assert_eq!(usable(edited), None);
+        let saved = StackScoringSettings {
+            penalty_satellite: 0.5,
+            ..StackScoringSettings::default()
+        };
+        assert_eq!(usable(saved), Some(saved));
     }
 
     #[test]

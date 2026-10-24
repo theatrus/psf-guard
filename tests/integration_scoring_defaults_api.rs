@@ -117,9 +117,19 @@ async fn send(
     cookie: &str,
     body: Option<Value>,
 ) -> (StatusCode, Value) {
+    send_to(app, method, "/api/settings/scoring", cookie, body).await
+}
+
+async fn send_to(
+    app: &Router,
+    method: Method,
+    uri: &str,
+    cookie: &str,
+    body: Option<Value>,
+) -> (StatusCode, Value) {
     let request = Request::builder()
         .method(method)
-        .uri("/api/settings/scoring")
+        .uri(uri)
         .header(COOKIE, cookie);
     let request = match body {
         Some(body) => request
@@ -287,5 +297,57 @@ async fn a_change_refreshes_every_database_when_automatic_previews_are_on() {
     automatic::configure(AutomationPolicy::default());
     send(&server.app, Method::PUT, &editor, Some(scoring(0.0, None))).await;
     assert_eq!(server.state.auto_stacks.pending_count(), 0);
+    reset();
+}
+
+#[tokio::test]
+async fn the_first_editor_s_copy_wins_and_a_later_copy_takes_it() {
+    let _turn = TURN.lock().await;
+    reset();
+    let server = server();
+    let editor = login(&server.app, "editor", "editor-secret").await;
+    const COPY: &str = "/api/settings/scoring?only_if_unstored=true";
+
+    // The first page's copy is saved.
+    let (status, body) = send_to(
+        &server.app,
+        Method::PUT,
+        COPY,
+        &editor,
+        Some(scoring(0.5, None)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["data"]["scoring"], scoring(0.5, None));
+
+    // A second page's copy finds one stored: the server keeps it and
+    // answers with it, and nothing is refreshed.
+    automatic::configure(AutomationPolicy {
+        enabled: true,
+        ..AutomationPolicy::default()
+    });
+    let (status, body) = send_to(
+        &server.app,
+        Method::PUT,
+        COPY,
+        &editor,
+        Some(scoring(1.0, Some(3.0))),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["data"]["scoring"], scoring(0.5, None));
+    assert_eq!(body["data"]["stored"], true);
+    assert_eq!(server.state.auto_stacks.pending_count(), 0);
+    assert_eq!(scoring_defaults::current().penalty_satellite, 0.5);
+
+    // An ordinary save still replaces it.
+    let (_, body) = send(
+        &server.app,
+        Method::PUT,
+        &editor,
+        Some(scoring(1.0, Some(3.0))),
+    )
+    .await;
+    assert_eq!(body["data"]["scoring"], scoring(1.0, Some(3.0)));
     reset();
 }

@@ -17,14 +17,17 @@ import {
 /**
  * A stand-in for the server's scoring defaults (`/api/settings/scoring`),
  * served by the default MSW handlers. A test sets what the server holds
- * with `set`, reads what a save left with `get`, and finds every save in
- * `saves`. Setting `failure` makes saves fail. `afterEach` in setup.ts
- * resets it to the built-in values, stored.
+ * with `set`, reads what a save left with `get`, finds every save request
+ * in `puts` and every save the server kept in `saves`. A save sent with
+ * `only_if_unstored` is kept only while the server holds no copy; otherwise
+ * the server answers with its copy. Setting `failure` makes saves fail.
+ * `afterEach` in setup.ts resets it to the built-in values, stored.
  */
 export const scoringServer = {
   value: { ...SCORING_DEFAULTS } as ScoringPreferences,
   stored: true,
   saves: [] as ScoringPreferences[],
+  puts: [] as { value: ScoringPreferences; onlyIfUnstored: boolean }[],
   /** When set, a save fails this way and the server keeps what it had. */
   failure: null as null | { status: 500 } | { error: string },
   set(next: ScoringPreferences, stored = true) {
@@ -38,6 +41,7 @@ export const scoringServer = {
     this.value = { ...SCORING_DEFAULTS };
     this.stored = true;
     this.saves = [];
+    this.puts = [];
     this.failure = null;
   },
 };
@@ -53,12 +57,17 @@ export const scoringDefaultsHandlers = [
     HttpResponse.json({ success: true, data: response(), error: null }),
   ),
   http.put('/api/settings/scoring', async ({ request }) => {
+    const next = scoringPreferencesOf((await request.json()) as StackScoringSettings);
+    const onlyIfUnstored = new URL(request.url).searchParams.get('only_if_unstored') === 'true';
+    scoringServer.puts.push({ value: next, onlyIfUnstored });
     const failure = scoringServer.failure;
     if (failure && 'status' in failure) {
       return HttpResponse.json({ success: false, data: null, error: 'Internal error' }, { status: failure.status });
     }
     if (failure) return HttpResponse.json({ success: false, data: null, error: failure.error });
-    const next = scoringPreferencesOf((await request.json()) as StackScoringSettings);
+    if (onlyIfUnstored && scoringServer.stored) {
+      return HttpResponse.json({ success: true, data: response(), error: null });
+    }
     scoringServer.set(next);
     scoringServer.saves.push(next);
     return HttpResponse.json({ success: true, data: response(), error: null });

@@ -236,15 +236,18 @@ defaults apply there.
 
 **Saving new defaults.** The new values apply to each view when it next
 loads them, and to automatic builds at once. When automatic stack previews
-are on, saving values that differ refreshes every database's stacked
-projects after the arrival delay, so their stacks are built with the new
-scoring. `GET` and `PUT /api/settings/scoring` read and set the defaults.
+are on, saving values that differ refreshes every database's projects after
+the arrival delay, so their stacks are built with the new scoring; with
+**Also stack channels that have no stack yet** on, that refresh also stacks
+recent channels without a stack. `GET` and `PUT /api/settings/scoring` read
+and set the defaults.
 
 **From an earlier version.** Each user or browser used to keep their own
-defaults. The first page an editor opens after the update saves that
-editor's values to the server, once: only when the server has none yet and
-those values differ from the built-in ones. Signed in, the values come from
-the user's account; otherwise from the browser.
+defaults. The first page an editor opens after the update, while the
+server has no copy, saves that editor's values to the server, built-in
+values included. That first editor decides: a later editor's own older
+values are not copied over them, and a viewer's never are. Signed in, the
+values come from the user's account; otherwise from the browser.
 
 The zero-star cap does not scale: a frame measured to have no stars is
 ruined whatever the setting. API callers pass `penalty_satellite`,
