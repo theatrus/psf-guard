@@ -688,6 +688,8 @@ export default function StackColorPreviewPanel({
   useEffect(() => {
     setWatchedJobIds([]);
     setPaletteByCard({});
+    setStarsByCard({});
+    setRgbSourcesByCard({});
     setCropByCard({});
     setSourcesByCard({});
     setSavedByCard({});
@@ -906,24 +908,26 @@ export default function StackColorPreviewPanel({
     const starKey = paletteStateKey ?? key;
     const stars: StarsSelection = kind === 'narrowband'
       ? starsByCard[starKey] ?? artifact?.stars ?? (artifact ? 'channels' : 'automatic') : 'channels';
+    const usesRgbStars = kind === 'narrowband' && (stars === 'rgb' || stars === 'automatic');
+    const rgbKey = `${dbId}:${projectId}:${starKey}`;
     const rgbRoles: StackColorRole[] = ['red', 'green', 'blue'];
     const rgbCandidates = (target.source_candidates ?? []).filter((source) => rgbRoles.includes(source.role));
     const rgbChoices = { ...Object.fromEntries((artifact?.sources ?? []).filter((source) => rgbRoles.includes(source.role)).map((previous) => {
       const current = rgbCandidates.filter((candidate) => sameColorSourceFamily(candidate, previous));
       return [previous.role, current.length === 1 ? colorSourceKey(current[0]) : ''];
-    })), ...rgbSourcesByCard[key] };
+    })), ...rgbSourcesByCard[rgbKey] };
     const chosenRgb = resolveColorSources(rgbCandidates, rgbRoles, rgbChoices);
     const staleRgbChoice = Object.entries(rgbChoices).some(([role, value]) => value && !rgbCandidates.some((source) => source.role === role && colorSourceKey(source) === value));
     const rgbInputs = Object.fromEntries(Object.entries(rgbChoices).flatMap(([role, value]) => {
       const source = rgbCandidates.find((candidate) => candidate.role === role && colorSourceKey(candidate) === value);
       return source ? [[role, { job_id: source.job_id, group_index: source.group_index, artifact_revision: source.artifact_revision }]] : [];
     }));
-    const inputSources = kind === 'narrowband' && (stars === 'rgb' || stars === 'automatic')
+    const inputSources = usesRgbStars
       ? { ...sources.inputSources, ...rgbInputs } : sources.inputSources;
     const processingRoles = [...requiredRoles(kind, palette),
       ...(automaticPalette ? ['sii' as const] : []),
-      ...(kind === 'narrowband' && (stars === 'rgb' || stars === 'automatic') ? rgbRoles : [])];
-    const starSourceControls = kind === 'narrowband' && (stars === 'rgb' || stars === 'automatic') ? <section className="stack-color-source-selectors" aria-label="RGB star inputs">
+      ...(usesRgbStars ? rgbRoles : [])];
+    const starSourceControls = usesRgbStars ? <section className="stack-color-source-selectors" aria-label="RGB star inputs">
       <h4>RGB star inputs</h4>
       {rgbRoles.map((role) => {
         const choices = rgbCandidates.filter((source) => source.role === role);
@@ -931,7 +935,7 @@ export default function StackColorPreviewPanel({
         return choices.length <= 1 ? <span key={role}>{roleLabels[role]}: {chosen ? colorSourcesLabel([chosen]) : 'Unavailable'}</span> : <label key={role}>
           <span>{roleLabels[role]}</span>
           <select aria-label={`${target.target_name} ${roleLabels[role]} RGB stars source stack`} value={chosen ? colorSourceKey(chosen) : ''}
-            onChange={(event) => setRgbSourcesByCard((current) => ({ ...current, [key]: { ...current[key], [role]: event.target.value } }))}>
+            onChange={(event) => setRgbSourcesByCard((current) => ({ ...current, [rgbKey]: { ...current[rgbKey], [role]: event.target.value } }))}>
             <option value="">Automatic source choice</option>
             {choices.map((source) => <option key={colorSourceKey(source)} value={colorSourceKey(source)}>{colorSourcesLabel([source])}</option>)}
           </select>
@@ -946,7 +950,7 @@ export default function StackColorPreviewPanel({
         key={key}
         dbId={dbId}
         projectId={projectId}
-        channelSources={kind === 'narrowband' ? [...sources.sources, ...chosenRgb.sources] : sources.sources}
+        channelSources={usesRgbStars ? [...sources.sources, ...chosenRgb.sources] : sources.sources}
         target={target}
         kind={kind}
         palette={palette}
@@ -958,8 +962,8 @@ export default function StackColorPreviewPanel({
         activeJob={watched?.state === 'completed' ? undefined : watched}
         busy={cardBusy}
         operationPending={operationPending}
-        unavailable={(!exposureSet && !available) || !sources.complete || (stars !== 'channels' && staleRgbChoice)}
-        unavailableReason={stars !== 'channels' && staleRgbChoice ? 'A selected RGB star source is no longer current; choose it again in Custom combination' : sources.unavailableReason}
+        unavailable={(!exposureSet && !available) || !sources.complete || (usesRgbStars && staleRgbChoice)}
+        unavailableReason={usesRgbStars && staleRgbChoice ? 'A selected RGB star source is no longer current; choose it again in Custom combination' : sources.unavailableReason}
         sourceControls={sources.controls}
         starSourceControls={starSourceControls}
         exposureSetKey={exposureSet?.key}

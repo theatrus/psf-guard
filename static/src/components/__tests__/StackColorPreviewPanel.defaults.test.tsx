@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { render, screen, waitFor, within, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { http, HttpResponse } from 'msw';
@@ -98,7 +98,7 @@ describe('automatic narrowband on a regular card', () => {
     server.use(
       http.get('/api/stack-activity', () => ok({ active: [] })),
       http.get('/api/processing-setups', () => ok({ schema_version: 1, setups: [] })),
-      http.get('/api/db/test/projects/1/stack-previews/color', () => ok({
+      http.get('/api/db/test/projects/:projectId/stack-previews/color', () => ok({
         targets: [{ target_id: 42, target_name: 'M31',
           available_roles: [...roles, ...nbRoles].map((role) => ({ role, filter_name: role })),
           source_candidates: candidates, ambiguous_roles: ['red'], unmapped_filters: [],
@@ -121,7 +121,16 @@ describe('automatic narrowband on a regular card', () => {
     const card = view.container.querySelector<HTMLElement>('article[data-color-kind="narrowband"]')!;
     expect(card.closest('.stack-color-grid')).not.toBeNull();
     expect(card.closest('details[data-color-kind]')).toBeNull();
-    return { card, started };
+    return { card, started,
+      changeProject: () => view.rerender(<QueryClientProvider client={client}>
+        <StackColorPreviewPanel dbId="test" projectId={2} sourceRevision="initial" channelBuildRunning={false}
+          outdatedSourceKeys={new Set()} canCompute onOpenImage={() => undefined} />
+      </QueryClientProvider>),
+      removeRgbSource: async () => {
+        candidates.splice(candidates.findIndex((source) => source.job_id === 'red-short'), 1);
+        await act(() => client.refetchQueries());
+      },
+    };
   }
 
   it('defaults to automatic palette and RGB stars, with exact RGB choices inside Custom combination', async () => {
@@ -145,6 +154,41 @@ describe('automatic narrowband on a regular card', () => {
       stars: 'rgb', crop: 'inscribed', input_sources: { red: { job_id: 'red-short', group_index: 9, artifact_revision: 'rev' } },
       processing: { narrowband: { shared_stretch: true, balance: { oiii_boost: 1, sii_boost: 1, shadow_protection: 1 } } },
     });
+  });
+
+  it('resets Stars when another project has the same target identifier', async () => {
+    const { card, changeProject } = await setup();
+    await userEvent.selectOptions(within(card).getByRole('combobox', { name: /SHO stars/ }), 'none');
+    changeProject();
+    await waitFor(() => expect(screen.getByRole('combobox', { name: /SHO stars/ })).toHaveValue('automatic'));
+  });
+
+  it('keeps the selected RGB source when changing palettes', async () => {
+    const { card, started } = await setup();
+    const ui = within(card);
+    await userEvent.click(ui.getByText('Custom combination'));
+    const picker = ui.getByRole<HTMLSelectElement>('combobox', { name: /R RGB stars source stack/ });
+    const chosen = Array.from(picker.options).find((option) => option.value.includes('red-short'))!.value;
+    await userEvent.selectOptions(picker, chosen);
+    await userEvent.selectOptions(ui.getByRole('combobox', { name: /narrowband palette/ }), 'hoo');
+    const nextCard = screen.getByRole('combobox', { name: /narrowband palette/ }).closest('article')!;
+    await userEvent.click(within(nextCard).getByText('Custom combination'));
+    expect(within(nextCard).getByRole('combobox', { name: /R RGB stars source stack/ })).toHaveValue(chosen);
+    await userEvent.click(within(nextCard).getByRole('button', { name: 'Build HOO color preview' }));
+    await waitFor(() => expect(started).toHaveLength(1));
+    expect(started[0]).toMatchObject({ input_sources: { red: { job_id: 'red-short' } } });
+  });
+
+  it('allows narrowband stars after a selected RGB source disappears', async () => {
+    const { card, removeRgbSource } = await setup();
+    const ui = within(card);
+    await userEvent.click(ui.getByText('Custom combination'));
+    const picker = ui.getByRole<HTMLSelectElement>('combobox', { name: /R RGB stars source stack/ });
+    await userEvent.selectOptions(picker, Array.from(picker.options).find((option) => option.value.includes('red-short'))!.value);
+    await removeRgbSource();
+    expect(ui.getByRole('button', { name: 'Build SHO color preview' })).toBeDisabled();
+    await userEvent.selectOptions(ui.getByRole('combobox', { name: /SHO stars/ }), 'narrowband');
+    expect(ui.getByRole('button', { name: 'Build SHO color preview' })).toBeEnabled();
   });
 
   it('drops unused RGB tool settings when changing a saved RGB-stars preview to narrowband stars', async () => {
