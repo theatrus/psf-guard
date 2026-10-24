@@ -1,4 +1,5 @@
 import { readFile, stat, writeFile } from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -175,4 +176,7 @@ async function main() {
   ]);
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) await main();
+// Node gives import.meta.url with links resolved and argv[1] as typed, so
+// compare real paths: through a symlink or junction (our Windows runners'
+// _work) the two differ, and the script would exit 0 having done nothing.
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) await main();

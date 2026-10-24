@@ -1,4 +1,5 @@
 import { readFile, writeFile } from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -29,7 +30,10 @@ export async function writeUpdaterConfig(outputPath, overlayPath) {
   await writeFile(outputPath, `${JSON.stringify(config, null, 2)}\n`);
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Node gives import.meta.url with links resolved and argv[1] as typed, so
+// compare real paths: through a symlink or junction (our Windows runners'
+// _work) the two differ, and the script would exit 0 having done nothing.
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   const [outputPath, overlayPath] = process.argv.slice(2);
   if (!outputPath) {
     throw new Error('Usage: node scripts/write-updater-config.mjs OUTPUT [OVERLAY]');

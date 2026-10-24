@@ -1,8 +1,8 @@
 name: CI
 
 # Linux (x64 and arm64) and Windows jobs run on ephemeral 32-core runners
-# (tfinfra roots/github-runners, docs/github-runners-plan.md). macOS, releases,
-# and every pull request from a fork stay on GitHub's runners: a fork's code
+# (tfinfra roots/github-runners, docs/github-runners-plan.md). macOS and
+# every pull request from a fork stay on GitHub's runners: a fork's code
 # never runs on ours. Job names are unchanged, so the required checks still
 # match.
 
