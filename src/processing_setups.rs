@@ -58,8 +58,8 @@ impl ProcessingSetupKind {
     }
 }
 
+/// Unknown fields are ignored, so a file a newer version wrote still loads.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ProcessingSetupRecord {
     pub name: String,
     pub kind: ProcessingSetupKind,
@@ -70,16 +70,34 @@ pub struct ProcessingSetupRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ProcessingSetupsRegistry {
     pub schema_version: u32,
     pub setups: Vec<ProcessingSetupRecord>,
-    /// The Color setup new color previews start from. `None` only in a file
+    /// The Color setup new color previews start from. `None` in a file
     /// written before defaults existed, which gets the seeded setup when it
     /// loads. A name that no longer matches a Color setup means the
     /// built-in pipeline.
-    #[serde(default)]
+    ///
+    /// The file leaves out a mark on the setup named "Default": loading
+    /// marks that setup again, and versions before 0.13, which refuse
+    /// unknown fields, can still read the file.
+    #[serde(default, skip_serializing_if = "marks_the_seed_name")]
     pub default_color: Option<String>,
+    /// Fields a newer version wrote, kept so saving here does not drop them.
+    #[serde(flatten)]
+    pub other_fields: serde_json::Map<String, serde_json::Value>,
+}
+
+fn marks_the_seed_name(default_color: &Option<String>) -> bool {
+    default_color
+        .as_deref()
+        .is_none_or(|name| same_name(name, DEFAULT_COLOR_SETUP_NAME))
+}
+
+/// Names for the seeded default Color setup after "Default".
+fn other_default_color_names() -> impl Iterator<Item = String> {
+    std::iter::once("Default color".to_string())
+        .chain((2..).map(|number| format!("Default color {number}")))
 }
 
 impl Default for ProcessingSetupsRegistry {
@@ -88,6 +106,7 @@ impl Default for ProcessingSetupsRegistry {
             schema_version: CURRENT_SCHEMA_VERSION,
             setups: Vec::new(),
             default_color: None,
+            other_fields: serde_json::Map::new(),
         }
     }
 }
@@ -112,6 +131,12 @@ pub fn validate_setup_name(name: &str) -> Result<()> {
 
 fn same_name(left: &str, right: &str) -> bool {
     left.to_lowercase() == right.to_lowercase()
+}
+
+/// The seeded default Color setup as PSF Guard added it: nobody has saved
+/// over it, so it has no timestamps.
+pub fn is_untouched_seed(setup: &ProcessingSetupRecord) -> bool {
+    setup.created_unix_seconds == 0 && setup.updated_unix_seconds == 0
 }
 
 impl ProcessingSetupsRegistry {
@@ -217,9 +242,8 @@ impl ProcessingSetupsRegistry {
         if self.default_color.is_some() {
             return false;
         }
-        let mut candidates = [DEFAULT_COLOR_SETUP_NAME.to_string(), "Default color".into()]
-            .into_iter()
-            .chain((2..).map(|number| format!("Default color {number}")));
+        let mut candidates = std::iter::once(DEFAULT_COLOR_SETUP_NAME.to_string())
+            .chain(other_default_color_names());
         let name = loop {
             let candidate = candidates.next().expect("the candidates never end");
             match self.find(&candidate) {
@@ -265,19 +289,34 @@ impl ProcessingSetupsRegistry {
     /// existing setup was replaced. A replacement keeps the original creation
     /// time and the original spelling wins on case-only differences, so a
     /// re-import cannot silently fork "SHO" and "sho". The default Color
-    /// setup can be replaced only by another Color setup.
+    /// setup can be replaced only by another Color setup, except that the
+    /// seeded one nobody has edited moves to "Default color" to make room
+    /// for a view setup named "Default", and stays the default.
     pub fn upsert(&mut self, mut record: ProcessingSetupRecord) -> Result<bool> {
         validate_setup_name(&record.name)?;
         if record.kind != ProcessingSetupKind::Color
-            && self
+            && let Some(marked) = self
                 .default_color_setup()
-                .is_some_and(|marked| same_name(&marked.name, &record.name))
+                .filter(|marked| same_name(&marked.name, &record.name))
         {
-            bail!(
-                "\"{}\" is the default Color setup, so it cannot be replaced by a view setup. \
-                 Save the view setup under another name.",
-                record.name
-            );
+            if !is_untouched_seed(marked) {
+                bail!(
+                    "\"{}\" is the default Color setup, so it cannot be replaced by a view setup. \
+                     Save the view setup under another name.",
+                    record.name
+                );
+            }
+            let moved = other_default_color_names()
+                .find(|name| self.find(name).is_none())
+                .expect("the names never end");
+            let seed = self
+                .setups
+                .iter_mut()
+                .find(|setup| same_name(&setup.name, &record.name))
+                .expect("the marked setup is in the list");
+            seed.name = moved.clone();
+            self.default_color = Some(moved);
+            self.setups.sort_by_key(|setup| setup.name.to_lowercase());
         }
         if let Some(existing) = self
             .setups
@@ -493,8 +532,9 @@ mod tests {
         assert_eq!(registry.default_color, None);
         registry.seed_default_color(serde_json::json!({}));
         registry.save(&path).unwrap();
-        let restored = ProcessingSetupsRegistry::load(&path).unwrap();
-        assert_eq!(restored.default_color.as_deref(), Some("Default"));
+        let mut restored = ProcessingSetupsRegistry::load(&path).unwrap();
+        assert!(restored.find("Default").is_some());
+        restored.seed_default_color(serde_json::json!({}));
         assert!(restored.default_color_setup().is_some());
     }
 
@@ -522,9 +562,6 @@ mod tests {
     fn the_default_cannot_be_deleted_or_replaced_by_a_view_setup() {
         let mut registry = seeded();
         assert!(registry.remove("default").is_err());
-        assert!(registry
-            .upsert(record("DEFAULT", ProcessingSetupKind::View))
-            .is_err());
         // Saving a Color setup over it edits it and keeps the mark.
         assert!(registry
             .upsert(record("default", ProcessingSetupKind::Color))
@@ -533,6 +570,83 @@ mod tests {
         assert_eq!(setup.name, "Default");
         assert_eq!(setup.updated_unix_seconds, 100);
         assert_eq!(setup.settings["model"]["type"], "auto-mtf");
+        // Once edited, a view setup cannot take its name.
+        assert!(registry
+            .upsert(record("DEFAULT", ProcessingSetupKind::View))
+            .is_err());
+        assert!(registry.remove("default").is_err());
+    }
+
+    #[test]
+    fn a_view_setup_named_default_moves_the_untouched_seed_aside() {
+        let mut registry = seeded();
+        registry
+            .upsert(record("Default color", ProcessingSetupKind::View))
+            .unwrap();
+        assert!(!registry
+            .upsert(record("default", ProcessingSetupKind::View))
+            .unwrap());
+        assert_eq!(
+            registry.find("Default").unwrap().kind,
+            ProcessingSetupKind::View
+        );
+        let seed = registry.default_color_setup().unwrap();
+        assert_eq!(seed.name, "Default color 2");
+        assert!(is_untouched_seed(seed));
+        assert_eq!(registry.setups.len(), 3);
+    }
+
+    #[test]
+    fn a_file_keeps_the_mark_on_default_only_by_loading_it_again() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("processing-setups.json");
+        let mut registry = seeded();
+        registry.save(&path).unwrap();
+        // Versions before 0.13 refuse unknown fields: an unchanged mark is
+        // not written, and loading marks "Default" again.
+        let written: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(written.get("default_color").is_none(), "{written}");
+        let mut restored = ProcessingSetupsRegistry::load(&path).unwrap();
+        assert_eq!(restored.default_color, None);
+        restored.seed_default_color(serde_json::json!({}));
+        assert_eq!(restored.default_color.as_deref(), Some("Default"));
+        assert_eq!(restored.setups.len(), 1);
+
+        // Another setup marked is written.
+        registry
+            .upsert(record("Faint", ProcessingSetupKind::Color))
+            .unwrap();
+        registry.mark_default_color("faint").unwrap();
+        registry.save(&path).unwrap();
+        let restored = ProcessingSetupsRegistry::load(&path).unwrap();
+        assert_eq!(restored.default_color.as_deref(), Some("Faint"));
+    }
+
+    #[test]
+    fn a_file_from_a_newer_version_loads_and_keeps_its_fields() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("processing-setups.json");
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version": 1,
+                "someday": { "kept": true },
+                "setups": [
+                    { "name": "Bright", "kind": "view", "settings": {},
+                      "created_unix_seconds": 1, "updated_unix_seconds": 1,
+                      "someday_per_setup": 3 },
+                ],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let registry = ProcessingSetupsRegistry::load(&path).unwrap();
+        assert_eq!(registry.setups[0].name, "Bright");
+        registry.save(&path).unwrap();
+        let written: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(written["someday"]["kept"], true);
     }
 
     #[test]

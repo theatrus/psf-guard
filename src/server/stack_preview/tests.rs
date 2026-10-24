@@ -4075,6 +4075,36 @@ fn rgb_channels_on_disk(cache: &FsPath) -> Vec<StackPreviewJob> {
         .collect()
 }
 
+/// The request of an automatic refresh, carrying the default color pipeline.
+fn automatic_refresh(state: &AppState) -> StackPreviewRequest {
+    let mut refresh = build_request(Vec::new());
+    refresh.color_defaults = Some(crate::server::processing_setups::default_color_processing(
+        state,
+    ));
+    refresh
+}
+
+/// An automatic build of target 42's B from before color defaults existed,
+/// its preview rendered by this version.
+fn automatic_blue(channels: &[StackPreviewJob]) -> StackPreviewJob {
+    let mut found = channels[2].clone();
+    found.automatic = true;
+    found.color_defaults = None;
+    found.groups[0].preview_stretch_version = Some(stretch::SEIZA_STRETCH_OUTPUT_VERSION.into());
+    found
+}
+
+fn color_jobs(state: &AppState) -> Vec<color::StackColorJob> {
+    state
+        .stack_previews
+        .color_jobs
+        .lock()
+        .unwrap()
+        .values()
+        .cloned()
+        .collect()
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_refresh_that_finds_a_targets_channels_built_composes_its_first_color_preview() {
     use color::StackColorRole::{Blue, Green, Red};
@@ -4084,26 +4114,12 @@ async fn a_refresh_that_finds_a_targets_channels_built_composes_its_first_color_
     // The composition stays queued while the test looks at it.
     let busy = state.stack_previews.line.reserve_main().await;
     let channels = rgb_channels_on_disk(cache.path());
-    let mut refresh = build_request(Vec::new());
-    refresh.color_defaults = Some(crate::server::processing_setups::default_color_processing(
-        &state,
-    ));
-    // An automatic build of B from before carries no color pipeline; the
-    // refresh that finds it finished gives it the default one.
-    let mut found = channels[2].clone();
-    found.automatic = true;
-    assert!(found.color_defaults.is_none());
-    let found = automatic::with_refresh_color_defaults(found, &refresh);
-    automatic::compose_colors_after(&state, &ctx, &found);
+    let refresh = automatic_refresh(&state);
+    let render_queued =
+        automatic::reuse_finished_build(&state, &ctx, automatic_blue(&channels), &refresh).await;
+    assert!(!render_queued, "its preview is current");
 
-    let composed = state
-        .stack_previews
-        .color_jobs
-        .lock()
-        .unwrap()
-        .values()
-        .cloned()
-        .collect::<Vec<_>>();
+    let composed = color_jobs(&state);
     assert_eq!(composed.len(), 1, "one first color preview");
     let first = &composed[0];
     assert_eq!(
@@ -4133,6 +4149,80 @@ async fn a_refresh_that_finds_a_targets_channels_built_composes_its_first_color_
             .is_empty()
     );
     state.stack_previews.request_cancel(&first.job_id);
+    drop(busy);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_refresh_that_renders_a_finished_build_again_gives_it_the_color_pipeline() {
+    let cache = tempfile::tempdir().unwrap();
+    let state = state_with_project(cache.path());
+    let ctx = state.get_database("test").unwrap();
+    let busy = state.stack_previews.line.reserve_main().await;
+    let channels = rgb_channels_on_disk(cache.path());
+    let refresh = automatic_refresh(&state);
+    let mut found = automatic_blue(&channels);
+    found.groups[0].preview_stretch_version = Some("0.2.2".into());
+    let job_id = found.job_id.clone();
+    assert!(automatic::reuse_finished_build(&state, &ctx, found, &refresh).await);
+    // The render composes the target's color when it ends, with this.
+    let rendering = state.stack_previews.get(&job_id).unwrap();
+    assert_eq!(rendering.state, StackJobState::Queued);
+    assert_eq!(
+        serde_json::to_value(&rendering.color_defaults).unwrap(),
+        serde_json::to_value(&refresh.color_defaults).unwrap()
+    );
+    state.stack_previews.request_cancel(&job_id);
+    drop(busy);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_first_color_preview_that_failed_is_not_tried_again_by_each_refresh() {
+    let cache = tempfile::tempdir().unwrap();
+    let state = state_with_project(cache.path());
+    let ctx = state.get_database("test").unwrap();
+    let busy = state.stack_previews.line.reserve_main().await;
+    let channels = rgb_channels_on_disk(cache.path());
+    let refresh = automatic_refresh(&state);
+    automatic::reuse_finished_build(&state, &ctx, automatic_blue(&channels), &refresh).await;
+    // It failed: in memory, and in the manifest a restart reads.
+    let mut failed = color_jobs(&state).remove(0);
+    failed.state = StackJobState::Failed;
+    failed.error = Some("could not register the channels".into());
+    state
+        .stack_previews
+        .color_jobs
+        .lock()
+        .unwrap()
+        .insert(failed.job_id.clone(), failed.clone());
+    stretch::write_json_atomic(
+        &color::color_manifest_path(cache.path(), &failed.job_id),
+        &failed,
+    )
+    .unwrap();
+
+    // The next refresh leaves it failed.
+    automatic::reuse_finished_build(&state, &ctx, automatic_blue(&channels), &refresh).await;
+    let after = color_jobs(&state);
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0].state, StackJobState::Failed);
+    drop(busy);
+
+    // So does one after a restart, which finds only its manifest.
+    let restarted = state_with_project(cache.path());
+    let ctx = restarted.get_database("test").unwrap();
+    let busy = restarted.stack_previews.line.reserve_main().await;
+    automatic::reuse_finished_build(&restarted, &ctx, automatic_blue(&channels), &refresh).await;
+    assert!(color_jobs(&restarted).is_empty());
+
+    // A person's build tries it again.
+    let mut persons = channels[2].clone();
+    persons.color_defaults = refresh.color_defaults.clone();
+    automatic::compose_colors_after(&restarted, &ctx, &persons);
+    let retried = color_jobs(&restarted);
+    assert_eq!(retried.len(), 1);
+    assert_eq!(retried[0].job_id, failed.job_id);
+    assert!(!retried[0].automatic);
+    restarted.stack_previews.request_cancel(&failed.job_id);
     drop(busy);
 }
 

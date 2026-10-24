@@ -39,6 +39,16 @@ export function useDefaultColorProcessing(): (roles: StackColorRole[]) => StackC
   return useCallback((roles: StackColorRole[]) => defaultColorFor(data, roles), [data]);
 }
 
+/** The setups list, waiting for the server when it is not loaded yet;
+ *  undefined when it cannot be read. */
+async function fetchSetups(queryClient: QueryClient): Promise<ProcessingSetupsDocument | undefined> {
+  try {
+    return await queryClient.fetchQuery(processingSetupsQuery());
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * The pipeline a build sends for a target's first color preview, whichever
  * channels it turns out to have. It waits for the server's list, so a build
@@ -46,10 +56,15 @@ export function useDefaultColorProcessing(): (roles: StackColorRole[]) => StackC
  * it uses the built-in pipeline.
  */
 export async function fetchColorDefaults(queryClient: QueryClient): Promise<StackColorProcessing> {
-  try {
-    const document = await queryClient.fetchQuery(processingSetupsQuery());
-    return document.default_color_processing ?? defaultColorProcessing(ALL_COLOR_ROLES);
-  } catch {
-    return defaultColorProcessing(ALL_COLOR_ROLES);
-  }
+  return (await fetchSetups(queryClient))?.default_color_processing
+    ?? defaultColorProcessing(ALL_COLOR_ROLES);
+}
+
+/** {@link defaultColorFor}, waiting for the server's list as
+ *  {@link fetchColorDefaults} does. */
+export async function fetchDefaultColorFor(
+  queryClient: QueryClient
+): Promise<(roles: StackColorRole[]) => StackColorProcessing> {
+  const document = await fetchSetups(queryClient);
+  return (roles) => defaultColorFor(document, roles);
 }

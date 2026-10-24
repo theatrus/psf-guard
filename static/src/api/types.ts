@@ -1491,6 +1491,9 @@ export interface ProcessingSetupsDocument {
 export interface ProcessingSetupsImportResult {
   imported: number;
   replaced: number;
+  /** Seeded default setups nobody edited, left out because this install
+   *  already has a setup of that name. */
+  skipped?: number;
   setups: ProcessingSetup[];
 }
 

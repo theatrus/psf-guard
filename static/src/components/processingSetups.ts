@@ -55,7 +55,7 @@ export interface BuiltinColorSetup {
 
 export const builtinColorSetups: BuiltinColorSetup[] = [
   {
-    name: 'Default color pipeline',
+    name: 'Built-in color pipeline',
     settings: (roles) => defaultColorProcessing(roles),
   },
   {

@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { http, HttpResponse } from 'msw';
 import { server } from '../../test/msw-server';
 import type { ProcessingSetupsDocument } from '../../api/types';
@@ -77,5 +77,39 @@ describe('ProcessingSetupsManager', () => {
     );
     expect(within(row('Default')).getByRole('button', { name: 'Delete' })).toBeEnabled();
     expect(within(row('Faint')).getByRole('button', { name: 'Delete' })).toBeDisabled();
+  });
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it('leaves the unedited Default out of Export all and says when an import skips one', async () => {
+    server.use(
+      http.get('/api/processing-setups', () => HttpResponse.json({
+        success: true, data: listing('Default'), error: null,
+      })),
+      http.post('/api/processing-setups/import', () => HttpResponse.json({
+        success: true, error: null,
+        data: { imported: 1, replaced: 0, skipped: 1, setups: listing('Default').setups },
+      })),
+    );
+    const exported: Blob[] = [];
+    vi.spyOn(URL, 'createObjectURL').mockImplementation((blob) => {
+      exported.push(blob as Blob);
+      return 'blob:setups';
+    });
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+    const view = renderManager();
+    await screen.findByText('Faint');
+    await userEvent.click(screen.getByRole('button', { name: 'Export all' }));
+    const document_ = JSON.parse(await exported[0].text()) as ProcessingSetupsDocument;
+    expect(document_.setups.map((setup) => setup.name)).toEqual(['Bright', 'Faint']);
+
+    const input = view.container.querySelector('input[type="file"]') as HTMLInputElement;
+    await userEvent.upload(input, new File([JSON.stringify(document_)], 'setups.json', {
+      type: 'application/json',
+    }));
+    expect(await screen.findByText(
+      'Imported 1 new, replaced 0, skipped 1 unedited default setup already here'
+    )).toBeInTheDocument();
   });
 });

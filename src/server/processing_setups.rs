@@ -74,12 +74,11 @@ pub struct ImportedSetup {
     pub name: String,
     pub kind: ProcessingSetupKind,
     pub settings: serde_json::Value,
-    // Timestamps in an export are informational; imports are stamped fresh.
+    // Imports are stamped fresh. The timestamps only tell the seeded
+    // default setup, which has none until someone saves over it.
     #[serde(default)]
-    #[allow(dead_code)]
     pub created_unix_seconds: Option<i64>,
     #[serde(default)]
-    #[allow(dead_code)]
     pub updated_unix_seconds: Option<i64>,
 }
 
@@ -87,6 +86,9 @@ pub struct ImportedSetup {
 pub struct ImportSetupsResponse {
     pub imported: usize,
     pub replaced: usize,
+    /// Seeded default setups nobody edited, left out because this install
+    /// already has a setup of that name.
+    pub skipped: usize,
     pub setups: Vec<ProcessingSetupRecord>,
 }
 
@@ -358,6 +360,8 @@ pub async fn import_setups(
 
     let mut records = Vec::with_capacity(request.setups.len());
     for setup in request.setups {
+        let untouched_seed =
+            setup.created_unix_seconds == Some(0) && setup.updated_unix_seconds == Some(0);
         let settings =
             canonical_settings(setup.kind, setup.settings).map_err(|error| match error {
                 AppError::BadRequest(message) => {
@@ -365,21 +369,29 @@ pub async fn import_setups(
                 }
                 other => other,
             })?;
-        records.push(ProcessingSetupRecord {
+        let record = ProcessingSetupRecord {
             name: setup.name,
             kind: setup.kind,
             settings,
             created_unix_seconds: now,
             updated_unix_seconds: now,
-        });
+        };
+        records.push((record, untouched_seed));
     }
 
     let _guard = state.processing_setups_write.lock().unwrap();
     let mut registry = load_registry(&path)?;
     let mut imported = 0usize;
     let mut replaced = 0usize;
+    let mut skipped = 0usize;
     let mut staged = registry.clone();
-    for record in records {
+    for (record, untouched_seed) in records {
+        // Another install's built-in pipeline must not replace this one's
+        // own setup of the same name, such as an edited "Default".
+        if untouched_seed && staged.find(&record.name).is_some() {
+            skipped += 1;
+            continue;
+        }
         if staged
             .upsert(record)
             .map_err(|error| AppError::BadRequest(error.to_string()))?
@@ -394,6 +406,7 @@ pub async fn import_setups(
     Ok(Json(ApiResponse::success(ImportSetupsResponse {
         imported,
         replaced,
+        skipped,
         setups: registry.setups,
     })))
 }
@@ -672,7 +685,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let stored = ProcessingSetupsRegistry::load(&path).unwrap();
+        let stored = load_registry(&path).unwrap();
         assert_eq!(stored.default_color.as_deref(), Some("Default"));
         assert!(stored.find("Default").is_some());
     }
@@ -740,22 +753,16 @@ mod tests {
         );
     }
 
+    fn view_settings() -> serde_json::Value {
+        serde_json::json!({"model": {"type": "identity"}})
+    }
+
     #[tokio::test]
     async fn the_default_cannot_be_deleted_or_turned_into_a_view_setup() {
         let directory = tempfile::tempdir().unwrap();
         let (state, _) = state_with_setups(directory.path());
         let deleted = delete_setup(State(Arc::clone(&state)), Path("Default".into())).await;
         assert!(matches!(deleted, Err(AppError::Conflict(_))));
-        let replaced = save_setup(
-            State(Arc::clone(&state)),
-            save_request(
-                "default",
-                ProcessingSetupKind::View,
-                serde_json::json!({"model": {"type": "identity"}}),
-            ),
-        )
-        .await;
-        assert!(matches!(replaced, Err(AppError::BadRequest(_))));
 
         // Saving a Color pipeline under its name edits it.
         let _ = save_setup(
@@ -774,40 +781,85 @@ mod tests {
             .default_color_processing
             .background_extraction
             .is_none());
+        let replaced = save_setup(
+            State(Arc::clone(&state)),
+            save_request("default", ProcessingSetupKind::View, view_settings()),
+        )
+        .await;
+        assert!(matches!(replaced, Err(AppError::BadRequest(_))));
+    }
+
+    #[tokio::test]
+    async fn a_view_setup_named_default_moves_the_seed_and_it_stays_the_default() {
+        let directory = tempfile::tempdir().unwrap();
+        let (state, path) = state_with_setups(directory.path());
+        // An install with no setups file yet, as before 0.13.
+        let _ = save_setup(
+            State(Arc::clone(&state)),
+            save_request("Default", ProcessingSetupKind::View, view_settings()),
+        )
+        .await
+        .unwrap();
+        let listing = listed(&state).await;
+        assert_eq!(listing.default_color.as_deref(), Some("Default color"));
+        assert_eq!(
+            serde_json::to_value(&listing.default_color_processing).unwrap(),
+            serde_json::to_value(builtin_color_processing()).unwrap()
+        );
+        let stored = ProcessingSetupsRegistry::load(&path).unwrap();
+        assert_eq!(stored.default_color.as_deref(), Some("Default color"));
+
+        // An older export with a view "Default" imports the same way.
+        let directory = tempfile::tempdir().unwrap();
+        let (state, _) = state_with_setups(directory.path());
+        let _ = import_setups(
+            State(Arc::clone(&state)),
+            Json(
+                serde_json::from_value(serde_json::json!({
+                    "schema_version": 1,
+                    "setups": [{ "name": "Default", "kind": "view", "settings": view_settings(),
+                                 "created_unix_seconds": 5, "updated_unix_seconds": 5 }],
+                }))
+                .unwrap(),
+            ),
+        )
+        .await
+        .unwrap();
+        let listing = listed(&state).await;
+        assert_eq!(listing.default_color.as_deref(), Some("Default color"));
+        assert_eq!(listing.setups.len(), 2);
+    }
+
+    async fn import(
+        state: &Arc<AppState>,
+        setups: serde_json::Value,
+    ) -> Result<Json<ApiResponse<ImportSetupsResponse>>, AppError> {
+        import_setups(
+            State(Arc::clone(state)),
+            Json(
+                serde_json::from_value(serde_json::json!({
+                    "schema_version": 1,
+                    "setups": setups,
+                    // A list response saved as a file carries these.
+                    "default_color": "Other",
+                }))
+                .unwrap(),
+            ),
+        )
+        .await
     }
 
     #[tokio::test]
     async fn an_import_edits_the_default_by_name_and_keeps_the_mark() {
         let directory = tempfile::tempdir().unwrap();
         let (state, _) = state_with_setups(directory.path());
-        let import = |setups: serde_json::Value| {
-            let state = Arc::clone(&state);
-            async move {
-                import_setups(
-                    State(state),
-                    Json(
-                        serde_json::from_value(serde_json::json!({
-                            "schema_version": 1,
-                            "setups": setups,
-                            // A list response saved as a file carries these.
-                            "default_color": "Other",
-                        }))
-                        .unwrap(),
-                    ),
-                )
-                .await
-            }
-        };
-        let view_over_default = import(serde_json::json!([
-            { "name": "Default", "kind": "view", "settings": { "model": { "type": "identity" } } },
-        ]))
-        .await;
-        assert!(matches!(view_over_default, Err(AppError::BadRequest(_))));
-
-        let _ = import(serde_json::json!([
-            { "name": "Other", "kind": "color", "settings": { "output_stretches": [] } },
-            { "name": "DEFAULT", "kind": "color", "settings": { "background_extraction": null } },
-        ]))
+        let _ = import(
+            &state,
+            serde_json::json!([
+                { "name": "Other", "kind": "color", "settings": { "output_stretches": [] } },
+                { "name": "DEFAULT", "kind": "color", "settings": { "background_extraction": null } },
+            ]),
+        )
         .await
         .unwrap();
         let listing = listed(&state).await;
@@ -820,6 +872,66 @@ mod tests {
             .default_color_processing
             .background_extraction
             .is_none());
+
+        // Once edited, an import cannot put a view setup in its place.
+        let view_over_default = import(
+            &state,
+            serde_json::json!([{ "name": "Default", "kind": "view", "settings": view_settings() }]),
+        )
+        .await;
+        assert!(matches!(view_over_default, Err(AppError::BadRequest(_))));
+    }
+
+    #[tokio::test]
+    async fn another_installs_unedited_default_does_not_replace_this_ones() {
+        let directory = tempfile::tempdir().unwrap();
+        let (state, _) = state_with_setups(directory.path());
+        let _ = save_setup(
+            State(Arc::clone(&state)),
+            save_request(
+                "Default",
+                ProcessingSetupKind::Color,
+                serde_json::json!({ "background_extraction": null }),
+            ),
+        )
+        .await
+        .unwrap();
+        // An export from an install whose seed nobody edited.
+        let seed = serde_json::json!({
+            "name": "Default", "kind": "color", "settings": builtin_color_settings(),
+            "created_unix_seconds": 0, "updated_unix_seconds": 0,
+        });
+        let result = import(
+            &state,
+            serde_json::json!([seed, { "name": "Other", "kind": "color", "settings": {} }]),
+        )
+        .await
+        .unwrap()
+        .0
+        .data
+        .unwrap();
+        assert_eq!(
+            (result.imported, result.replaced, result.skipped),
+            (1, 0, 1)
+        );
+        assert!(listed(&state)
+            .await
+            .default_color_processing
+            .background_extraction
+            .is_none());
+
+        // An install without that name takes it, with fresh timestamps.
+        let directory = tempfile::tempdir().unwrap();
+        let (state, _) = state_with_setups(directory.path());
+        let mut renamed = seed.clone();
+        renamed["name"] = "Built in elsewhere".into();
+        let result = import(&state, serde_json::json!([renamed]))
+            .await
+            .unwrap()
+            .0
+            .data
+            .unwrap();
+        assert_eq!((result.imported, result.skipped), (1, 0));
     }
 
     #[test]

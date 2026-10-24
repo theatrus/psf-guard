@@ -9,6 +9,12 @@ import { formatRelativeTime } from '../utils/relativeTime';
 
 const kindLabels = { view: 'View processing', color: 'Color pipeline' } as const;
 
+/** The seeded default Color setup as PSF Guard added it: it has no times
+ *  until someone saves over it. */
+function untouchedSeed(setup: ProcessingSetup): boolean {
+  return setup.created_unix_seconds === 0 && setup.updated_unix_seconds === 0;
+}
+
 /**
  * The management side of named processing setups, in Settings: the full list
  * across both editors, the default Color setup, deletion, and moving the
@@ -24,6 +30,9 @@ export default function ProcessingSetupsManager() {
 
   const setups = useQuery(processingSetupsQuery());
   const list = setups.data?.setups ?? [];
+  // The seeded default nobody edited is the built-in pipeline every install
+  // has, so Export all leaves it out.
+  const exportable = list.filter((setup) => !untouchedSeed(setup));
   const defaultColor = setups.data?.default_color ?? null;
   const isDefault = (setup: ProcessingSetup) =>
     setup.kind === 'color' && defaultColor?.toLowerCase() === setup.name.toLowerCase();
@@ -59,7 +68,9 @@ export default function ProcessingSetupsManager() {
       apiClient.importProcessingSetups(document),
     onSuccess: (result) => {
       refresh();
-      report(`Imported ${result.imported} new, replaced ${result.replaced}`);
+      report(`Imported ${result.imported} new, replaced ${result.replaced}` + (result.skipped
+        ? `, skipped ${result.skipped} unedited default ${result.skipped === 1 ? 'setup' : 'setups'} already here`
+        : ''));
     },
     onError: (cause) => fail(cause, 'Importing setups failed'),
   });
@@ -78,7 +89,7 @@ export default function ProcessingSetupsManager() {
 
   const exportAll = () => {
     download(
-      { schema_version: setups.data?.schema_version ?? 1, setups: list },
+      { schema_version: setups.data?.schema_version ?? 1, setups: exportable },
       'psf-guard-processing-setups.json'
     );
   };
@@ -156,7 +167,7 @@ export default function ProcessingSetupsManager() {
           <button
             type="button"
             className="browse-button"
-            disabled={busy || list.length === 0}
+            disabled={busy || exportable.length === 0}
             onClick={exportAll}
           >
             Export all
@@ -195,10 +206,9 @@ export default function ProcessingSetupsManager() {
                 </td>
                 <td>{kindLabels[setup.kind]}</td>
                 <td>
-                  {/* The seeded setup has no time until someone saves over it. */}
-                  {setup.updated_unix_seconds > 0
-                    ? formatRelativeTime(setup.updated_unix_seconds)
-                    : 'Not edited'}
+                  {untouchedSeed(setup)
+                    ? 'Not edited'
+                    : formatRelativeTime(setup.updated_unix_seconds)}
                 </td>
                 <td className="processing-setups-row-actions">
                   {access.canWrite && setup.kind === 'color' && !isDefault(setup) && (

@@ -796,9 +796,8 @@ async fn refresh_project(
         {
             continue;
         }
-        // A build of these exact frames already finished, perhaps before
-        // the card moved on to another: the card points at it again and its
-        // color follows, as when a person's build matches one.
+        // A build of these exact frames already finished; see
+        // `reuse_finished_build`.
         let finished = state
             .stack_previews
             .get(&job_id)
@@ -810,35 +809,9 @@ async fn refresh_project(
                     .filter(|existing| existing.state == StackJobState::Completed)
             });
         if let Some(existing) = finished {
-            let existing = with_refresh_color_defaults(existing, &request);
-            // Its previews may be out of date: they render again from its
-            // FITS. Checking reads files, so it runs off the async runtime.
-            let render_queued = {
-                let state = Arc::clone(state);
-                let ctx = Arc::clone(ctx);
-                let existing = existing.clone();
-                tokio::task::spawn_blocking(move || {
-                    let defaults = existing.color_defaults.clone();
-                    super::queue_preview_render(&state, &ctx, &existing, true, defaults).is_some()
-                })
-                .await
-                .unwrap_or(false)
-            };
-            if render_queued {
+            if reuse_finished_build(state, ctx, existing, &request).await {
                 started += 1;
-                continue;
             }
-            let state = Arc::clone(state);
-            let ctx = Arc::clone(ctx);
-            let _ = tokio::task::spawn_blocking(move || {
-                if let Err(error) =
-                    super::persist_latest_and_reapply(&state, &ctx, &existing, false)
-                {
-                    tracing::warn!("could not point the card back at a finished build: {error}");
-                }
-                compose_colors_after(&state, &ctx, &existing);
-            })
-            .await;
             continue;
         }
         prepared.public.automatic = true;
@@ -882,6 +855,46 @@ async fn refresh_project(
     })
 }
 
+/// A build of a refresh's channel that already finished, perhaps before the
+/// card moved on to another: the card points at it again and its color
+/// follows, with the refresh's color pipeline for a target's first color
+/// preview, as when a person's build matches one. Its previews may be out of
+/// date: they render again from its FITS, and the color follows that render.
+/// True when a render was queued.
+pub(super) async fn reuse_finished_build(
+    state: &Arc<AppState>,
+    ctx: &Arc<DatabaseContext>,
+    finished: StackPreviewJob,
+    request: &StackPreviewRequest,
+) -> bool {
+    let finished = with_refresh_color_defaults(finished, request);
+    // Checking reads files, so it runs off the async runtime.
+    let render_queued = {
+        let state = Arc::clone(state);
+        let ctx = Arc::clone(ctx);
+        let finished = finished.clone();
+        tokio::task::spawn_blocking(move || {
+            let defaults = finished.color_defaults.clone();
+            super::queue_preview_render(&state, &ctx, &finished, true, defaults).is_some()
+        })
+        .await
+        .unwrap_or(false)
+    };
+    if render_queued {
+        return true;
+    }
+    let state = Arc::clone(state);
+    let ctx = Arc::clone(ctx);
+    let _ = tokio::task::spawn_blocking(move || {
+        if let Err(error) = super::persist_latest_and_reapply(&state, &ctx, &finished, false) {
+            tracing::warn!("could not point the card back at a finished build: {error}");
+        }
+        compose_colors_after(&state, &ctx, &finished);
+    })
+    .await;
+    false
+}
+
 /// [`plan_refresh`] for an automatic refresh, whose builds carry the
 /// pipeline of the default Color setup, read now: a target with no color
 /// preview gets its first one when its channels are stacked.
@@ -902,7 +915,7 @@ pub(super) fn plan_automatic_refresh(
 /// A finished build a refresh found for one of its channels, carrying the
 /// refresh's color pipeline for a target's first color preview. A person's
 /// build keeps the pipeline it was asked with.
-pub(super) fn with_refresh_color_defaults(
+fn with_refresh_color_defaults(
     mut finished: StackPreviewJob,
     request: &StackPreviewRequest,
 ) -> StackPreviewJob {
@@ -1329,7 +1342,9 @@ pub(super) fn compose_colors_after(
 }
 
 /// Queue one color preview after a build, unless the same one is already
-/// queued, running, or built.
+/// queued, running, or built. Automatic work does not try again a
+/// composition of the same stacks with the same settings that failed: it
+/// would fail again on every refresh. A person's build does.
 fn enqueue_color_after(
     state: &Arc<AppState>,
     ctx: &Arc<DatabaseContext>,
@@ -1350,18 +1365,19 @@ fn enqueue_color_after(
     };
     let color_id = prepared.public.job_id.clone();
     if let Some(existing) = state.stack_previews.get_color(&color_id)
-        && matches!(
+        && (matches!(
             existing.state,
             StackJobState::Queued | StackJobState::Running | StackJobState::Completed
-        )
+        ) || (automatic && existing.state == StackJobState::Failed))
     {
         return;
     }
     let manifest = color::color_manifest_path(&prepared.stack_root, &color_id);
     if let Ok(bytes) = std::fs::read(&manifest)
         && let Ok(existing) = serde_json::from_slice::<StackColorJob>(&bytes)
-        && existing.state == StackJobState::Completed
-        && color::color_job_artifacts_exist(&prepared.stack_root, &existing)
+        && ((existing.state == StackJobState::Completed
+            && color::color_job_artifacts_exist(&prepared.stack_root, &existing))
+            || (automatic && existing.state == StackJobState::Failed))
     {
         return;
     }

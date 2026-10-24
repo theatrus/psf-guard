@@ -31,7 +31,7 @@ import {
   colorCatalogQueryPrefix,
 } from './channelProcessing';
 import { colorSourceKey } from './stackColorSources';
-import { fetchColorDefaults } from './defaultColorSetup';
+import { fetchColorDefaults, processingSetupsQuery } from './defaultColorSetup';
 import StackStretchControls from './StackStretchControls';
 import StackColorCalibrationLine from './StackColorCalibrationLine';
 import { calibrationOutdated } from './stackCalibrationStale';
@@ -70,9 +70,6 @@ interface StackPreviewPanelProps {
    *  from the project's other targets (a mosaic's other panels) stay out. */
   targetId?: number | null;
 }
-
-/** Every color role, so the server can narrow the person's default color
- *  pipeline to whichever composite a target's channels make. */
 
 /** A result card's width when the page does not choose one. */
 export const DEFAULT_STACK_CARD_SIZE = 550;
@@ -469,6 +466,9 @@ export default function StackPreviewPanel({
     () => [...images].map((image) => image.id).sort((left, right) => left - right),
     [images]
   );
+
+  // Loaded ahead, so a build has the default Color setup at once.
+  useQuery(processingSetupsQuery());
 
   const latest = useQuery({
     queryKey: latestStackQueryKey(dbId, projectId),

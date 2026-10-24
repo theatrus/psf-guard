@@ -32,7 +32,7 @@ import { STACK_ACTIVITY_QUERY_KEY, useStackActivity } from '../hooks/useStackAct
 import { JOBS_QUERY_KEY } from '../api/jobs';
 import { buildColorExposureSets, colorSourceKey, colorSourcesLabel, completedColorArtifact, resolveColorSources, sameColorSourceFamily, wbppColorSet, type ColorExposureSet } from './stackColorSources';
 import { withRetainedColorExposureSets } from './colorExposureCards';
-import { useDefaultColorProcessing } from './defaultColorSetup';
+import { fetchDefaultColorFor } from './defaultColorSetup';
 import './StackColorSources.css';
 
 /** A channel's frame count, or that WBPP made it and recorded none. */
@@ -485,7 +485,6 @@ export default function StackColorPreviewPanel({
   targetId = null,
 }: StackColorPreviewPanelProps) {
   const queryClient = useQueryClient();
-  const colorDefaults = useDefaultColorProcessing();
   const [watchedJobIds, setWatchedJobIds] = useState<string[]>([]);
   // The card that asked for each composition still being prepared, which
   // names no channel stacks yet to match a card by, and whether it came
@@ -871,14 +870,19 @@ export default function StackColorPreviewPanel({
           ...current, [paletteStateKey]: next,
         })) : undefined}
         onCropChange={(next) => setCropByCard((current) => ({ ...current, [key]: next }))}
-        onBuild={() => startColor({
-          dbId, projectId,
-          targetId: target.target_id, kind, palette,
-          force: Boolean(artifact && !artifact.outdated),
-          operationKey: key, cardKey: key, crop,
-          processing: processingForColorBuild(artifact, requiredRoles(kind, palette), colorDefaults),
-          inputSources: sources.inputSources,
-        })}
+        onBuild={async () => {
+          // A new preview starts from the default Color setup, read from
+          // the server first as the panel's Build stacks does.
+          const defaults = await fetchDefaultColorFor(queryClient);
+          startColor({
+            dbId, projectId,
+            targetId: target.target_id, kind, palette,
+            force: Boolean(artifact && !artifact.outdated),
+            operationKey: key, cardKey: key, crop,
+            processing: processingForColorBuild(artifact, requiredRoles(kind, palette), defaults),
+            inputSources: sources.inputSources,
+          });
+        }}
         onInspect={setInspector}
         startError={startErrorByCard[key] ?? (artifact ? preparationFailure(watched) : undefined)}
         onProcessingApply={(processing) => startColor({
