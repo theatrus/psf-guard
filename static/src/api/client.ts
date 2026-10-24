@@ -129,6 +129,8 @@ import type { GuidFillReport, GuidReport,
   JobsResponse,
   WbppStackImport,
   StackMethodSettings,
+  StackGpu,
+  StackGpuSettings,
   WorkerSettings,
   StorageSettings,
   StorageFoldersUpdate,
@@ -1054,6 +1056,20 @@ export const apiClient = {
       method
     );
     if (!data.data) throw new Error(data.error || 'Failed to save the stacking method');
+    return data.data;
+  },
+
+  getStackGpu: async (): Promise<StackGpuSettings> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<StackGpuSettings>>('/settings/stacking/gpu');
+    if (!data.data) throw new Error(data.error || 'Failed to load the GPU settings');
+    return data.data;
+  },
+
+  updateStackGpu: async (gpu: StackGpu): Promise<StackGpuSettings> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.put<ApiResponse<StackGpuSettings>>('/settings/stacking/gpu', gpu);
+    if (!data.data) throw new Error(data.error || 'Failed to save the GPU settings');
     return data.data;
   },
 

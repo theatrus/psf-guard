@@ -209,6 +209,10 @@ pub(super) fn execute_build(prepared: PreparedJob, worker: &Worker<'_>) -> Build
     let scoring = prepared.public.scoring;
     // Every job this process prepares records its method.
     let method = prepared.public.method.unwrap_or_default();
+    // Read as the build starts: a change made while the build is queued
+    // applies to it, and a change made while it runs applies to the next
+    // build.
+    let gpu = super::gpu::current();
     let PreparedJob {
         public: _,
         mut groups,
@@ -231,6 +235,7 @@ pub(super) fn execute_build(prepared: PreparedJob, worker: &Worker<'_>) -> Build
         accepted_only,
         scoring,
         method,
+        gpu,
         order,
         worker_policy: &worker_policy,
         cancel,
@@ -378,6 +383,8 @@ pub(super) struct GroupJob<'a> {
     accepted_only: bool,
     scoring: StackScoringSettings,
     method: StackMethod,
+    /// Which passes run on the GPU, for every channel of the build.
+    gpu: super::StackGpu,
     order: snr::StackFrameOrder,
     worker_policy: &'a crate::concurrency::WorkerPolicy,
     cancel: &'a Stop,
@@ -400,6 +407,7 @@ pub(super) fn run_group(
         accepted_only,
         scoring,
         method,
+        gpu,
         order,
         worker_policy,
         cancel,
@@ -597,7 +605,8 @@ pub(super) fn run_group(
         &calibration_fingerprint,
         order,
         &requested,
-    );
+    )
+    .under_gpu(gpu);
     if let Some(reason) = decision.fresh_reason() {
         tracing::info!(
             target_id = group_target_id,
@@ -652,6 +661,10 @@ pub(super) fn run_group(
     let (mut stacker, mut ledger, mut points, mut orientation_vote) = pool.install(|| {
         // A checkpoint that fails to reopen — a Seiza version change, a
         // truncated file — is discarded and the group builds from scratch.
+        // A reopened stack keeps the GPU options it was saved with, since
+        // Seiza offers no way to change them. `under_gpu` above restacks
+        // when the live passes would run elsewhere; a changed frame count or
+        // timing log waits for the next full restack.
         let restored = checkpoint.and_then(|checkpoint| {
             match LiveStacker::open_context(&checkpoint.context_path) {
                 Ok(stacker)
@@ -748,7 +761,7 @@ pub(super) fn run_group(
                 // cannot reject them statistically. The spatial impulse
                 // filter is the remaining defense; when any session has a
                 // dark, the dark does the job with real measurements.
-                let mut options = method.stack_options(cosmetic);
+                let mut options = method.stack_options(cosmetic, gpu);
                 // The reference is judged against its session's masters
                 // under that session's gate, its rig's tolerances.
                 options.match_tolerances = plan.sessions[plan.assignments[0]].match_tolerances;
@@ -884,6 +897,7 @@ pub(super) fn run_group(
                     scoring,
                     method,
                     calibration_fingerprint: calibration_fingerprint.clone(),
+                    gpu,
                     order,
                     snr_points: points.to_vec(),
                     frames: ledger.to_vec(),
@@ -1309,6 +1323,7 @@ pub(super) fn run_group(
                 &group,
                 &ledger,
                 method,
+                gpu,
                 &plan,
                 &session_cosmetics,
                 scratch.as_deref(),

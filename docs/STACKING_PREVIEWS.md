@@ -199,6 +199,66 @@ Jobs and the latest index record `method`, and each admitted frame of a
 weighted build records `integration_weight` and `noise_sigma`, one value per
 channel.
 
+### GPU stacking
+
+Stack builds run their heaviest passes on the GPU: Metal on a Mac, Vulkan on
+Linux and Direct3D 12 on Windows. Seiza runs these passes there:
+
+- debayering a color camera's frames;
+- star detection for registration;
+- resampling each frame onto the reference grid;
+- the live stack's running mean, with each frame's normalization;
+- the final pass's rejection and integration.
+
+Frames under about a million pixels stack on the CPU, as do computers
+without a supported GPU. If a GPU pass fails, the build continues on the CPU
+and Seiza logs the failure once. Every pass then stays on the CPU until PSF
+Guard restarts. On an Apple M4 Max, 35 frames of 26 megapixels (mono, raw,
+with the final pass) took 5–6 seconds instead of 12. Of that, the live pass
+took 3.2 seconds instead of 8.2.
+
+The GPU calculates in single precision and the CPU in double, so their stacks
+differ by rounding: on those 35 frames, by 0.005 of the noise RMS. A pixel
+where an outlier is rejected on one and kept on the other can differ by
+several times the noise. The choice is therefore not part of the stacking
+method or the job id, and changing it does not make built stacks out of
+date.
+
+**Settings → Stacking → GPU** controls it for every build on the server:
+
+- **Use the GPU** is on by default. Off keeps the live pass (debayering, star
+  detection, resampling and the running stack) and the final pass's outlier
+  rejection on the CPU.
+- **Passes on the GPU** turns single passes off: **Debayering**, **Star
+  detection**, **Resampling**, **Live stack** and **Final pass**.
+  **Debayering** and **Resampling** cover the live pass only.
+- **Frames at once** limits how many frames the GPU works on at the same
+  time, 1 to 16; default 3. The others wait without using GPU memory.
+- **Log GPU timings** writes each GPU call's stages and times to the server's
+  standard error. The desktop app does not show this output.
+- **Restore defaults** turns **Use the GPU** and every pass on, sets
+  **Frames at once** to 3 and turns **Log GPU timings** off.
+
+A change applies to the next build, including automatic refreshes. A build
+already running keeps the choice it started with. A refresh that would add
+frames to a channel's last build restacks every frame once when **Use the
+GPU**, **Debayering**, **Star detection**, **Resampling** or **Live stack**
+changed since that build: Seiza restores a stack with the GPU choice it was
+saved with. The card shows `Full restack: the GPU setting changed`. A
+change to **Frames at once** or **Log GPU timings** alone does not restack:
+a refresh that adds frames keeps the values of the channel's last full
+build until the channel restacks for another reason.
+
+These calls still use Seiza's defaults, every pass allowed on the GPU,
+whatever the settings say:
+
+- the final pass's frame preparation: debayering color camera frames and
+  resampling each frame onto the reference grid;
+- artifact searches, which prepare and resample the frames they search;
+- color previews, which align their channels.
+
+`GET` and `PUT /api/settings/stacking/gpu` read and set the choice.
+
 ### Queue builds by hand
 
 Build buttons stay available while a build runs. **Build channel** and **Build

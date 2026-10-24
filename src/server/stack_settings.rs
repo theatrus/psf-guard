@@ -1,6 +1,6 @@
 //! Process-wide stack preview settings, persisted in the registry and applied
-//! without a restart: the automatic refresh policy, and the method every
-//! stack integrates its frames with.
+//! without a restart: the automatic refresh policy, the method every stack
+//! integrates its frames with, and which of its passes run on the GPU.
 
 use crate::db_registry::{DbRegistry, StackAutomationSettings};
 use crate::server::api::ApiResponse;
@@ -8,7 +8,7 @@ use crate::server::handlers::{require_registry_path, update_registry, AppError};
 use crate::server::stack_preview::automatic::{
     self, AutomationPolicy, MAX_DELAY_MINUTES, MAX_NEW_CHANNEL_WINDOW_DAYS,
 };
-use crate::server::stack_preview::{method, StackMethod};
+use crate::server::stack_preview::{gpu, method, StackGpu, StackMethod};
 use crate::server::state::AppState;
 use axum::{extract::State, Json};
 use serde::{Deserialize, Serialize};
@@ -132,28 +132,42 @@ fn requested_policy(
     Ok(policy)
 }
 
-/// The registry entry for a policy and a method: nothing at all when both
-/// are the defaults, so a registry that only ever held defaults stays clean.
-fn stored(policy: AutomationPolicy, method: StackMethod) -> Option<StackAutomationSettings> {
+/// The registry entry for a policy, a method and a GPU choice: nothing at
+/// all when all three are the defaults, so a registry that only ever held
+/// defaults stays clean.
+fn stored(
+    policy: AutomationPolicy,
+    method: StackMethod,
+    gpu: StackGpu,
+) -> Option<StackAutomationSettings> {
     let defaults = AutomationPolicy::default();
-    (policy != defaults || method != StackMethod::default()).then_some(StackAutomationSettings {
-        automatic_previews: policy.enabled.then_some(true),
-        arrival_delay_minutes: (policy.arrival_delay_minutes != defaults.arrival_delay_minutes)
-            .then_some(policy.arrival_delay_minutes),
-        grade_delay_minutes: (policy.grade_delay_minutes != defaults.grade_delay_minutes)
-            .then_some(policy.grade_delay_minutes),
-        method: (method != StackMethod::default()).then_some(method),
-        build_new_channels: policy.build_new_channels.then_some(true),
-        new_channel_window_days: (policy.new_channel_window_days
-            != defaults.new_channel_window_days)
-            .then_some(policy.new_channel_window_days),
-        reapply_processing: (!policy.reapply_processing).then_some(false),
-    })
+    (policy != defaults || method != StackMethod::default() || gpu != StackGpu::default())
+        .then_some(StackAutomationSettings {
+            automatic_previews: policy.enabled.then_some(true),
+            arrival_delay_minutes: (policy.arrival_delay_minutes != defaults.arrival_delay_minutes)
+                .then_some(policy.arrival_delay_minutes),
+            grade_delay_minutes: (policy.grade_delay_minutes != defaults.grade_delay_minutes)
+                .then_some(policy.grade_delay_minutes),
+            method: (method != StackMethod::default()).then_some(method),
+            gpu: (gpu != StackGpu::default()).then_some(gpu),
+            build_new_channels: policy.build_new_channels.then_some(true),
+            new_channel_window_days: (policy.new_channel_window_days
+                != defaults.new_channel_window_days)
+                .then_some(policy.new_channel_window_days),
+            reapply_processing: (!policy.reapply_processing).then_some(false),
+        })
 }
 
 fn stored_method(settings: Option<&StackAutomationSettings>) -> StackMethod {
     settings
         .and_then(|settings| settings.method)
+        .unwrap_or_default()
+}
+
+fn stored_gpu(settings: Option<&StackAutomationSettings>) -> StackGpu {
+    settings
+        .and_then(|settings| settings.gpu)
+        .map(StackGpu::clamped)
         .unwrap_or_default()
 }
 
@@ -164,7 +178,8 @@ pub async fn update_stack_settings(
 ) -> Result<Json<ApiResponse<StackSettingsResponse>>, AppError> {
     let policy = update_registry(&state, |registry| {
         let policy = requested_policy(&request, registry.stacking.as_ref())?;
-        registry.stacking = stored(policy, stored_method(registry.stacking.as_ref()));
+        let current = registry.stacking.as_ref();
+        registry.stacking = stored(policy, stored_method(current), stored_gpu(current));
         Ok(policy)
     })
     .await?;
@@ -230,12 +245,69 @@ pub async fn update_stack_method(
             .as_ref()
             .map(|settings| settings.policy())
             .unwrap_or_default();
-        registry.stacking = stored(policy, method);
+        registry.stacking = stored(policy, method, stored_gpu(registry.stacking.as_ref()));
         Ok(())
     })
     .await?;
     method::configure(method);
     Ok(Json(ApiResponse::success(method_response(method))))
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct StackGpuResponse {
+    /// What builds starting now use.
+    pub gpu: StackGpu,
+    /// Seiza's default: every pass on the GPU.
+    pub recommended: StackGpu,
+    /// The most frame calls the settings allow on the GPU at once.
+    pub max_concurrency: u32,
+}
+
+fn gpu_response(gpu: StackGpu) -> StackGpuResponse {
+    StackGpuResponse {
+        gpu,
+        recommended: StackGpu::default(),
+        max_concurrency: gpu::MAX_GPU_CONCURRENCY,
+    }
+}
+
+/// GET /api/settings/stacking/gpu
+pub async fn get_stack_gpu(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ApiResponse<StackGpuResponse>>, AppError> {
+    let gpu = match require_registry_path(&state) {
+        Ok(path) => stored_gpu(
+            DbRegistry::load_or_init(&path)
+                .map_err(|error| AppError::InternalError(error.to_string()))?
+                .stacking
+                .as_ref(),
+        ),
+        Err(_) => gpu::current(),
+    };
+    Ok(Json(ApiResponse::success(gpu_response(gpu))))
+}
+
+/// PUT /api/settings/stacking/gpu
+///
+/// Applies to builds that start from now on, including automatic refreshes.
+/// Builds already running keep the choice they started with, and built
+/// stacks are not out of date.
+pub async fn update_stack_gpu(
+    State(state): State<Arc<AppState>>,
+    Json(gpu): Json<StackGpu>,
+) -> Result<Json<ApiResponse<StackGpuResponse>>, AppError> {
+    gpu.validate().map_err(AppError::BadRequest)?;
+    update_registry(&state, |registry| {
+        let current = registry.stacking.as_ref();
+        let policy = current
+            .map(|settings| settings.policy())
+            .unwrap_or_default();
+        registry.stacking = stored(policy, stored_method(current), gpu);
+        Ok(())
+    })
+    .await?;
+    gpu::configure(gpu);
+    Ok(Json(ApiResponse::success(gpu_response(gpu))))
 }
 
 /// How much of the processor background work may take.
@@ -327,7 +399,11 @@ mod tests {
     #[test]
     fn a_default_policy_is_not_written_and_a_chosen_one_round_trips() {
         assert_eq!(
-            stored(AutomationPolicy::default(), StackMethod::default()),
+            stored(
+                AutomationPolicy::default(),
+                StackMethod::default(),
+                StackGpu::default()
+            ),
             None
         );
         let chosen = AutomationPolicy {
@@ -338,7 +414,8 @@ mod tests {
             new_channel_window_days: 7,
             reapply_processing: false,
         };
-        let entry = stored(chosen, StackMethod::default()).expect("a chosen policy is stored");
+        let entry = stored(chosen, StackMethod::default(), StackGpu::default())
+            .expect("a chosen policy is stored");
         assert_eq!(entry.method, None, "the recommended method is not written");
         assert_eq!(entry.automatic_previews, Some(true));
         assert_eq!(
@@ -366,6 +443,7 @@ mod tests {
             arrival_delay_minutes: Some(10),
             grade_delay_minutes: None,
             method: None,
+            gpu: None,
             build_new_channels: None,
             new_channel_window_days: None,
             reapply_processing: None,
@@ -417,7 +495,8 @@ mod tests {
             final_pass: crate::server::stack_preview::StackFinalPass::Draft,
             ..StackMethod::default()
         };
-        let entry = stored(AutomationPolicy::default(), draft).expect("a chosen method is stored");
+        let entry = stored(AutomationPolicy::default(), draft, StackGpu::default())
+            .expect("a chosen method is stored");
         assert_eq!(entry.automatic_previews, None);
         assert_eq!(entry.method, Some(draft));
         // The automation route rebuilds the entry; the method rides along.
@@ -425,9 +504,44 @@ mod tests {
             enabled: true,
             ..AutomationPolicy::default()
         };
-        let rebuilt = stored(policy, stored_method(Some(&entry))).unwrap();
+        let rebuilt = stored(
+            policy,
+            stored_method(Some(&entry)),
+            stored_gpu(Some(&entry)),
+        )
+        .unwrap();
         assert_eq!(rebuilt.method, Some(draft));
         assert_eq!(stored_method(None), StackMethod::default());
+    }
+
+    #[test]
+    fn a_gpu_choice_is_stored_alone_and_survives_method_and_policy_changes() {
+        let off = StackGpu {
+            enabled: false,
+            ..StackGpu::default()
+        };
+        let entry = stored(AutomationPolicy::default(), StackMethod::default(), off)
+            .expect("a chosen GPU setting is stored");
+        assert_eq!(entry.gpu, Some(off));
+        assert_eq!(entry.method, None, "the recommended method is not written");
+        // The method and automation routes rebuild the entry; the GPU choice
+        // rides along.
+        let draft = StackMethod {
+            final_pass: crate::server::stack_preview::StackFinalPass::Draft,
+            ..StackMethod::default()
+        };
+        let rebuilt = stored(AutomationPolicy::default(), draft, stored_gpu(Some(&entry))).unwrap();
+        assert_eq!(rebuilt.gpu, Some(off));
+        assert_eq!(rebuilt.method, Some(draft));
+        // Back to the default, nothing is written for it.
+        let reset = stored(
+            AutomationPolicy::default(),
+            stored_method(Some(&rebuilt)),
+            StackGpu::default(),
+        )
+        .unwrap();
+        assert_eq!(reset.gpu, None);
+        assert_eq!(stored_gpu(None), StackGpu::default());
     }
 
     #[test]

@@ -676,6 +676,14 @@ pub struct StackAutomationSettings {
         skip_serializing_if = "Option::is_none"
     )]
     pub method: Option<crate::server::stack_preview::StackMethod>,
+    /// Which of a stack's passes run on the GPU; absent runs every pass
+    /// there, Seiza's default.
+    #[serde(
+        default,
+        deserialize_with = "lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub gpu: Option<crate::server::stack_preview::StackGpu>,
     /// Automatic refreshes also stack channels with no stack yet; absent
     /// means only the channels already stacked.
     #[serde(default, skip_serializing_if = "Option::is_none")]

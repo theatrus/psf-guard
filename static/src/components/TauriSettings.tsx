@@ -27,6 +27,7 @@ import CalibrationMatchingSettings from './CalibrationMatchingSettings';
 import CalibrationRigSettings from './CalibrationRigSettings';
 import StackAutomationSettings from './StackAutomationSettings';
 import StackMethodSettings from './StackMethodSettings';
+import StackGpuSettings from './StackGpuSettings';
 import WorkerShareSettings from './WorkerShareSettings';
 import StorageSettings from './StorageSettings';
 import BackupSettings from './BackupSettings';
@@ -2111,6 +2112,7 @@ export default function TauriSettings({
           {currentTab === 'stacking' && (
             <div className="settings-setups">
               <StackMethodSettings />
+              <StackGpuSettings />
               <StackAutomationSettings />
             </div>
           )}

@@ -14,6 +14,7 @@ pub mod color;
 pub mod color_calibration;
 mod execution;
 mod final_integration;
+pub mod gpu;
 mod janitor;
 pub mod journal;
 mod line_work;
@@ -93,6 +94,7 @@ use crate::server::exposure_groups::{ExposureGroup, ProjectExposureGroups};
 use crate::server::extract::DbContext;
 use crate::server::handlers::AppError;
 use crate::server::state::AppState;
+pub use gpu::StackGpu;
 pub use method::{StackFinalPass, StackMethod, StackReference, StackWeighting};
 
 /// The Seiza release whose stacking output this build reproduces. Stack
