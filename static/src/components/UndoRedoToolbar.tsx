@@ -48,20 +48,14 @@ export default function UndoRedoToolbar({
     if (!canUndo || isProcessing) return;
     
     const success = await onUndo();
-    if (success) {
-      setShowFeedback('undo');
-      setTimeout(() => setShowFeedback(null), 2000);
-    }
+    if (success) setShowFeedback('undo');
   };
 
   const handleRedo = async () => {
     if (!canRedo || isProcessing) return;
     
     const success = await onRedo();
-    if (success) {
-      setShowFeedback('redo');
-      setTimeout(() => setShowFeedback(null), 2000);
-    }
+    if (success) setShowFeedback('redo');
   };
 
   const lastAction = getLastAction();
@@ -90,6 +84,15 @@ export default function UndoRedoToolbar({
   useEffect(() => {
     setShowFeedback(null);
   }, [undoStackSize, redoStackSize]);
+
+  // The feedback hides after two seconds. The timer belongs to the shown
+  // feedback, so it stops when the toolbar unmounts rather than updating a
+  // toolbar that is gone.
+  useEffect(() => {
+    if (!showFeedback) return;
+    const timer = setTimeout(() => setShowFeedback(null), 2000);
+    return () => clearTimeout(timer);
+  }, [showFeedback]);
 
   return (
     <div className={`undo-redo-toolbar ${className}`}>
