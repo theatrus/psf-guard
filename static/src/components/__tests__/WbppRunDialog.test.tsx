@@ -1,6 +1,6 @@
-import type { ReactNode } from 'react';
+import { Profiler, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
 import { server } from '../../test/msw-server';
@@ -251,6 +251,67 @@ describe('saving WBPP masters', () => {
     expect(await screen.findByRole('button', { name: 'Save masters' })).toBeEnabled();
     expect(screen.getByRole('textbox', { name: 'Process folder' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Stack again' })).toBeEnabled();
+  });
+
+  it("shows the project's last folder in the first render with the finished run", () => {
+    mockCommon();
+    const finished: WbppRunProgress = { ...running, running: false, stage: 'complete', finished_at: 10 };
+    const databases = [{ id: 'alpha', name: 'Alpha', process_directory: '/process' }];
+    const status = { started: false, queued: [], progress: finished };
+    const settings = { split_exposure_groups: false, process_folder: 'Sh2 86 masters' };
+    server.use(
+      http.get('/api/databases', () => ok(databases)),
+      http.get('/api/db/alpha/wbpp/runs/current', () => ok(status)),
+      http.get('/api/db/alpha/projects/:id/processing-settings', () => ok(settings))
+    );
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    client.setQueryData(['databases'], databases);
+    client.setQueryData(['db', 'alpha', 'wbpp-run'], status);
+    client.setQueryData(['pixinsight-settings'], pixinsight);
+    client.setQueryData(['db', 'alpha', 'project', 1, 'processing-settings'], settings);
+    // Read the DOM at every commit: a render that shows the finished run with
+    // an empty folder is what a test or a person can catch between two commits.
+    const shown: string[] = [];
+    const record = () => {
+      const input = document.querySelector<HTMLInputElement>('input[aria-label="Process folder"]');
+      if (input) shown.push(input.value);
+    };
+    render(
+      <QueryClientProvider client={client}>
+        <Profiler id="wbpp-run-dialog" onRender={record}>
+          <WbppRunDialog request={{ dbId: 'alpha', scope: { project_id: 1 }, label: 'Sh2 86' }}
+            defaultOptions={DEFAULT_WBPP_OPTIONS} onClose={() => {}} />
+        </Profiler>
+      </QueryClientProvider>
+    );
+    expect(shown.length).toBeGreaterThan(0);
+    expect(shown.filter((value) => value !== 'Sh2 86 masters')).toEqual([]);
+  });
+
+  it("follows the project's folder until the person edits it", async () => {
+    mockCommon();
+    let folder = 'Sh2 86 masters';
+    server.use(
+      http.get('/api/databases', () => ok([{ id: 'alpha', process_directory: '/process' }])),
+      http.get('/api/db/alpha/wbpp/runs/current', () => ok({ started: false, queued: [],
+        progress: { ...running, running: false, stage: 'complete', finished_at: 10 } })),
+      http.get('/api/db/alpha/projects/:id/processing-settings', () => ok({ split_exposure_groups: false, process_folder: folder }))
+    );
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    const settingsKey = ['db', 'alpha', 'project', 1, 'processing-settings'];
+    render(<QueryClientProvider client={client}>
+      <WbppRunDialog request={{ dbId: 'alpha', scope: { project_id: 1 }, label: 'Sh2 86' }}
+        defaultOptions={DEFAULT_WBPP_OPTIONS} onClose={() => {}} />
+    </QueryClientProvider>);
+    const field = await screen.findByRole('textbox', { name: 'Process folder' });
+    await waitFor(() => expect(field).toHaveValue('Sh2 86 masters'));
+    folder = 'Sh2 86/2026';
+    await act(() => client.refetchQueries({ queryKey: settingsKey }));
+    await waitFor(() => expect(field).toHaveValue('Sh2 86/2026'));
+    fireEvent.change(field, { target: { value: 'Sh2 86 retry' } });
+    folder = 'Sh2 86/2027';
+    await act(() => client.refetchQueries({ queryKey: settingsKey }));
+    expect(field).toHaveValue('Sh2 86 retry');
   });
 
   it('explains the missing Gaia catalog without hiding the original error', async () => {

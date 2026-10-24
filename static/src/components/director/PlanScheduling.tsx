@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { apiClient } from '../../api/client';
@@ -6,13 +6,12 @@ import { useAccess } from '../../auth/access';
 import type { ObservingSettings, SchedulingOverrides } from '../../api/directorPreferences';
 import { useDraftSection } from './pageDraftsState';
 import SchedulingFields from './SchedulingFields';
-import { compactOverrides, describeLimit, describeSource, LIMITS, TS_DEFAULTS } from './schedulingModel';
+import { compactOverrides, describeLimit, describeSource, LIMITS, sameOverrides as same, TS_DEFAULTS } from './schedulingModel';
 import { retryWhenBusy } from './retry';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Could not save the scheduling limits';
 const httpStatus = (error: unknown) => isAxiosError(error) ? error.response?.status
   : error instanceof Error && isAxiosError(error.cause) ? error.cause.response?.status : undefined;
-const same = (left: SchedulingOverrides, right: SchedulingOverrides) => JSON.stringify(compactOverrides(left)) === JSON.stringify(compactOverrides(right));
 
 /** This plan's Target Scheduler scheduling limits: an override for each, or
  *  the default every plan, the rig's site or the rig sets. Activation writes
@@ -25,34 +24,30 @@ export default function PlanScheduling({ projectId, rigs }: { projectId: string;
   // What each rig would use without this plan's overrides, and with them.
   const inherited = useQueries({ queries: rigs.map(rig => ({ queryKey: ['observingEffective', rig.id], queryFn: () => apiClient.getEffectiveObserving(rig.id), retry: retryWhenBusy, retryDelay: 700, refetchOnWindowFocus: false })) });
   const resolved = useQueries({ queries: rigs.map(rig => ({ queryKey: ['observingEffective', rig.id, projectId], queryFn: () => apiClient.getEffectiveObserving(rig.id, projectId), retry: retryWhenBusy, retryDelay: 700, refetchOnWindowFocus: false })) });
-  const [draft, setDraft] = useState<SchedulingOverrides>({});
-  // The saved limits the draft last took, and whether a copy with other
-  // limits arrived over unsaved edits since.
-  const taken = useRef<SchedulingOverrides | null>(null);
-  const [changedElsewhere, setChangedElsewhere] = useState(false);
-  const current = useRef(draft);
-  current.current = draft;
-  useEffect(() => {
-    if (!stored.data) return;
-    const next = stored.data.scheduling ?? {};
-    const was = taken.current;
-    taken.current = next;
-    // A new copy replaces the draft only while nothing is unsaved; over
-    // edits, the edits stay and other limits saved elsewhere are flagged.
-    // A save of the plan's priority, the same record, changes no limit.
-    if (was === null || same(current.current, was)) setDraft(next);
-    else if (!same(next, was)) setChangedElsewhere(true);
-  }, [stored.data]);
-  const baseline = compactOverrides(stored.data?.scheduling ?? {});
-  const unsaved = canWrite && !!stored.data && JSON.stringify(compactOverrides(draft)) !== JSON.stringify(baseline);
+  // The person's edits and the saved limits they started from. Without
+  // edits (null), the fields show the saved limits, so a newer copy reaches
+  // them. Over edits, the edits stay and other limits saved elsewhere are
+  // flagged. A save of the plan's priority, the same record, changes no
+  // limit.
+  const [edit, setEdit] = useState<{ overrides: SchedulingOverrides; base: SchedulingOverrides } | null>(null);
+  const savedLimits = stored.data?.scheduling ?? {};
+  const draft = edit ? edit.overrides : savedLimits;
+  const changedElsewhere = edit !== null && !same(savedLimits, edit.base);
+  // Edits put back to the saved limits are no edits, unless other limits
+  // arrived under them: the fields keep what was typed until Reload.
+  const change = (next: SchedulingOverrides) => setEdit(current => {
+    const base = current?.base ?? savedLimits;
+    return same(next, base) && same(base, savedLimits) ? null : { overrides: next, base };
+  });
+  const unsaved = canWrite && !!stored.data && !same(draft, savedLimits);
   const save = useMutation({
     retry: false,
     mutationFn: (settings: ObservingSettings) => apiClient.saveObservingSettings(settings),
     onSuccess: saved => {
-      setChangedElsewhere(false);
       // Our own save is the copy the draft stands on now, not news from
       // elsewhere; edits typed while it ran stay on top of it.
-      taken.current = saved.scheduling ?? {};
+      const base = saved.scheduling ?? {};
+      setEdit(current => current === null || same(current.overrides, base) ? null : { overrides: current.overrides, base });
       client.setQueryData(key, saved);
       void client.invalidateQueries({ queryKey: ['observingEffective'] });
     },
@@ -62,10 +57,7 @@ export default function PlanScheduling({ projectId, rigs }: { projectId: string;
   });
   const stale = httpStatus(save.error) === 409;
   // Drop the draft for the saved limits, as they are now.
-  const reload = () => {
-    save.reset(); setChangedElsewhere(false);
-    void stored.refetch().then(result => { if (result.data) { taken.current = result.data.scheduling ?? {}; setDraft(taken.current); } });
-  };
+  const reload = () => { save.reset(); setEdit(null); void stored.refetch(); };
   useDraftSection('scheduling', {
     label: 'Scheduling limits',
     order: 3,
@@ -77,13 +69,13 @@ export default function PlanScheduling({ projectId, rigs }: { projectId: string;
       try { await save.mutateAsync({ ...stored.data, scheduling: compactOverrides(draft) }); } catch (error) { return message(error); }
       return true;
     },
-    discard: () => { setDraft(stored.data?.scheduling ?? {}); setChangedElsewhere(false); save.reset(); },
+    discard: () => { setEdit(null); save.reset(); },
   });
   const first = inherited[0]?.data?.scheduling;
   return <section className="plan-scheduling" aria-label="Scheduling limits">
     <p className="director-muted">Empty fields inherit</p>
     {stored.isError && <p className="director-error" role="alert">{message(stored.error)}</p>}
-    {stored.data && <SchedulingFields label="This plan's limits" overrides={draft} onChange={setDraft} disabled={!canWrite}
+    {stored.data && <SchedulingFields label="This plan's limits" overrides={draft} onChange={change} disabled={!canWrite}
       inherited={first?.values ?? TS_DEFAULTS} inheritedFrom={limit => rigs.length > 1 ? 'per rig, below' : describeSource(first?.sources[limit])} />}
     {(stale || changedElsewhere)
       ? <p className="director-error" role="alert">These limits changed elsewhere. <button type="button" onClick={reload}>Reload</button></p>

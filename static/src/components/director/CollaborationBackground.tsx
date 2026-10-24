@@ -1,17 +1,22 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { RefreshCw, Save, Undo2 } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import type { CollaborationBackgroundInput, CollaborationBackgroundPolicy, CollaborationConnection, RemoteProject } from '../../api/collaborationTypes';
 
+/** The automation form, and the saved policy it started from for the
+ *  server's compare-and-set check. */
+type PolicyForm = { enabled: boolean; projects: string[]; reports: boolean; activate: boolean; expected: CollaborationBackgroundPolicy | null };
+const formFromPolicy = (policy: CollaborationBackgroundPolicy | null): PolicyForm => ({
+  enabled: policy?.enabled ?? false, projects: policy?.project_ids ?? [], reports: policy?.automatic_reports ?? false, activate: policy?.activate ?? false, expected: policy,
+});
+
 export default function CollaborationBackground({ connection, canWrite, refresh, joinedProjects = [], embedded = false, active = true }: { connection: CollaborationConnection; canWrite: boolean; refresh: () => void; joinedProjects?: RemoteProject[]; embedded?: boolean; active?: boolean }) {
   const [open, setOpen] = useState(false);
-  const [dirty, setDirty] = useState(false);
-  const [enabled, setEnabled] = useState(false);
-  const [projects, setProjects] = useState<string[]>([]);
-  const [reports, setReports] = useState(false);
-  const [activate, setActivate] = useState(false);
-  const [expected, setExpected] = useState<CollaborationBackgroundPolicy | null>(null);
+  // Unedited (null), the form shows the saved policy and follows each poll;
+  // an edit keeps the policy it started from until Save or Discard.
+  const [edit, setEdit] = useState<PolicyForm | null>(null);
+  const dirty = edit !== null;
   const client = useQueryClient();
   const key = ['collaboration-background', connection.binding.id];
   const query = useQuery({
@@ -20,23 +25,18 @@ export default function CollaborationBackground({ connection, canWrite, refresh,
     enabled: active && (embedded || open),
     refetchInterval: active && (embedded || open) ? 15_000 : false,
   });
-  useEffect(() => {
-    if (!query.data || dirty) return;
-    const policy = query.data.policy;
-    setExpected(policy);
-    setEnabled(policy?.enabled ?? false);
-    setProjects(policy?.project_ids ?? []);
-    setReports(policy?.automatic_reports ?? false);
-    setActivate(policy?.activate ?? false);
-  }, [query.data, dirty]);
   const mutation = useMutation({
     retry: false,
     mutationFn: (input: CollaborationBackgroundInput) => apiClient.collaborationBackground(connection.binding.id, input),
-    onSuccess: data => { client.setQueryData(key, data); setDirty(false); refresh(); },
+    onSuccess: data => { client.setQueryData(key, data); setEdit(null); refresh(); },
     onError: () => { void client.invalidateQueries({ queryKey: key }); refresh(); },
   });
-  const change = (update: () => void) => { setDirty(true); update(); };
   const saved = query.data?.policy ?? null;
+  const { enabled, projects, reports, activate, expected } = edit ?? formFromPolicy(saved);
+  const change = (patch: (form: PolicyForm) => Partial<PolicyForm>) => setEdit(current => {
+    const form = current ?? formFromPolicy(saved);
+    return { ...form, ...patch(form) };
+  });
   const catalog = query.data?.catalogs.length === 1 ? query.data.catalogs[0] : null;
   const policy: CollaborationBackgroundPolicy = { enabled, catalog_id: catalog?.id ?? expected?.catalog_id ?? '', project_ids: projects, interval_minutes: expected?.interval_minutes ?? 15, activate, automatic_reports: reports };
   const valid = !!catalog && (!enabled || projects.length > 0) && projects.length <= 32;
@@ -55,16 +55,16 @@ export default function CollaborationBackground({ connection, canWrite, refresh,
     }}>
       <fieldset disabled={busy}><legend>Nightly automation</legend>
         <p>Rig database: {catalog?.name ?? 'Unavailable or ambiguous'}</p>
-        <label className="collaboration-automation-option"><input type="checkbox" checked={enabled} onChange={e => change(() => setEnabled(e.target.checked))} />Pull tonight automatically</label>
+        <label className="collaboration-automation-option"><input type="checkbox" checked={enabled} onChange={e => { const checked = e.target.checked; change(() => ({ enabled: checked })); }} />Pull tonight automatically</label>
         <fieldset><legend>Allowed projects</legend>
-          {[...choices].map(([id, name]) => <label className="collaboration-project-choice" key={id}><input type="checkbox" checked={projects.includes(id)} onChange={e => change(() => setProjects(all => e.target.checked ? [...all, id] : all.filter(p => p !== id)))} />{name}</label>)}
+          {[...choices].map(([id, name]) => <label className="collaboration-project-choice" key={id}><input type="checkbox" checked={projects.includes(id)} onChange={e => { const checked = e.target.checked; change(form => ({ projects: checked ? [...form.projects, id] : form.projects.filter(p => p !== id) })); }} />{name}</label>)}
           {choices.size === 0 && <p>No joined or imported projects</p>}
         </fieldset>
-        <label className="collaboration-automation-option"><input type="checkbox" checked={activate} onChange={e => change(() => setActivate(e.target.checked))} />Activate on the rig</label>
-        <label className="collaboration-automation-option"><input type="checkbox" checked={reports} onChange={e => change(() => setReports(e.target.checked))} />Submit contribution reports automatically</label>
+        <label className="collaboration-automation-option"><input type="checkbox" checked={activate} onChange={e => { const checked = e.target.checked; change(() => ({ activate: checked })); }} />Activate on the rig</label>
+        <label className="collaboration-automation-option"><input type="checkbox" checked={reports} onChange={e => { const checked = e.target.checked; change(() => ({ reports: checked })); }} />Submit contribution reports automatically</label>
         <div className="director-actions">
           <button type="submit" disabled={!dirty || ((enabled || reports) && !valid)}><Save size={16} />Save automation</button>
-          <button type="button" title="Discard edits" aria-label="Discard automation edits" disabled={!dirty} onClick={() => setDirty(false)}><Undo2 size={16} /></button>
+          <button type="button" title="Discard edits" aria-label="Discard automation edits" disabled={!dirty} onClick={() => setEdit(null)}><Undo2 size={16} /></button>
           <button type="button" disabled={!(saved?.enabled || saved?.automatic_reports) || !connected || dirty || !!status?.running} onClick={() => mutation.mutate({ operation: 'background_run' })}><RefreshCw size={16} />Refresh now</button>
         </div>
       </fieldset>
