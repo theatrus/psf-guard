@@ -849,7 +849,7 @@ pub struct PixInsightSettings {
     pub binary: Option<String>,
     /// Where WBPP runs put their script and output, since a run writes
     /// gigabytes and the cache may sit on a small disk. Absent means the
-    /// database's export directory when it has one, else the cache.
+    /// database's export directory when it has one, else the stack folder.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runs_dir: Option<String>,
     #[serde(default)]

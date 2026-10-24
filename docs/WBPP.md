@@ -159,8 +159,8 @@ the metrics, coloured by state, and the project's own **Stack in WBPP**
 action reads *Stacking in WBPP…*, *Queued for WBPP*, *WBPP masters ready*
 or *WBPP failed* until the next run. Either reopens the dialog. **×** on a
 finished run's row clears it from view everywhere; the run folder and its
-files remain subject to the storage policy. The run's state lives in the server process, so a
-server restart forgets a finished run's progress and results too.
+files remain subject to the storage policy. The run's state lives in the server
+process, so a server restart forgets a finished run's progress and results too.
 
 ### Manage WBPP storage
 

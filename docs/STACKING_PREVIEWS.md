@@ -1014,8 +1014,8 @@ is previews, stacks and masters.
 
 **Volume usage limit** (90% by default) is the highest share of the
 whole volume, other files included, that may be used, as `df` counts it. Limits
-accept every whole percentage from 0% through 100%. It
-applies to all three folders unless **Separate limits for stacks and
+accept every whole percentage from 0% through 100%. The limit applies to all
+three folders unless **Separate limits for stacks and
 calibration masters** gives those two their own. A volume holding more than
 one folder uses the lowest of their limits.
 
@@ -1047,8 +1047,9 @@ limit once nothing more may go is reported in red. The sizes in Settings are
 measured at most hourly, and after a cull. On a file system that keeps snapshots,
 deleted previews free no space until the snapshot goes, so each pass culls
 further until none are left. 100%
-turns culling off. Changing the limit needs database management. On Windows, background preview generation and WBPP cleanup can check volume
-usage, but the general preview/master cleanup pass is not available.
+turns culling off. Changing the limit needs database management. On Windows,
+background preview generation and WBPP cleanup can check volume usage, but
+the general preview/master cleanup pass is not available.
 
 To give stacks more room, put the stack folder on a larger volume, such as a
 network share, and keep the cache on a fast local disk.
