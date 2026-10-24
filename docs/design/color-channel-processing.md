@@ -730,3 +730,43 @@ The prepared workspace version is Seiza 0.43.0 with stacking/output version
 0.47.0. Keep the Seiza PR in draft; do not merge, tag or publish until all work
 for the combined release is ready. PSF Guard's dependency and registry lockfile
 can be finalized only after that later publication.
+
+### SNR G132 full-field examples and remaining work
+
+The paired application also processed the newest ready SNR G132 R/G/B and
+Ha/OIII/SII masters, representing 100 h 4 min of integration. No separate L
+master was available. Seiza binned the 9576×6388 masters by two with matching
+WCS changes. An isolated Supergateway registry/cache supplied the resulting
+4788×3194 planes to the ordinary tracked color-job API. RGB, shared-stretch
+SHO without balance, balanced SHO, balanced SHO with RGB stars, and HOO with
+RGB stars all completed. The RGB-star examples used licensed SXT ML11 on CPU.
+They retained 98.2–98.9% of the binned field and were visually inspected. No
+BXT, NXT or extra green reduction was applied. Gaia calibration was disabled
+because the isolated fixture contained no fresh pixel solve. The original
+masters and live catalog were unchanged.
+
+A separate Seiza continuum check on star-containing, aligned linear planes
+exposed work still needed before automatic defaults are ready. With 400
+candidate positions, 341 Ha/R candidates were rejected for saturation, and
+Ha had too few valid stars. SII/R passed with only 12 training and three
+held-out stars; OIII/G+B failed the brightness-trend check. With the candidate
+budget raised to 1600 and all error/PSF/registration limits unchanged, Ha and
+SII failed brightness trends, while OIII/G+B passed with 530 training and 178
+held-out stars, at 6.3% validation fractional RMS. The experimental 65535
+working-unit saturation ceiling also needs a validated physical mapping after
+master calibration and normalization.
+
+These results prioritize candidate eligibility before the budget limit,
+brightness-range coverage and fit stability across sample budgets. SII's
+small-sample success is not evidence for a stable automatic result. Visual
+inspection of OIII's signed residual also shows local stellar residuals and
+negative cores: acceptable aperture flux errors do not prove pixel-level PSF
+cancellation. The color examples do not include continuum subtraction, and
+the grayscale residual examples have separate display stretches.
+
+After those Seiza checks, PSF Guard still needs the aligned linear cache and
+tracked continuum stage, explicit per-line outcomes, combined-image units and
+blending, validated starless-branch relationships, and the combined recipe/fit
+inspection UI. Keep the Seiza release on hold while that work is gathered and
+reviewed; the registry lockfile and hosted builds follow a later authorized
+publication.
