@@ -1622,6 +1622,7 @@ mod tests {
             color_calibration_outdated: None,
             preview_stretch_version: None,
             preview_revision: None,
+            live_preview: None,
             preview_render_failed: None,
             total_exposure_seconds: 3.0,
             preview_url: None,

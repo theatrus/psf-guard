@@ -25,6 +25,7 @@ pub(super) fn cancel_unfinished_groups(job: &mut StackPreviewJob) {
         ) {
             group.state = StackGroupState::Cancelled;
             group.phase = "cancelled".into();
+            group.live_preview = None;
         }
     }
 }
@@ -277,6 +278,7 @@ pub(super) fn execute_build(prepared: PreparedJob, worker: &Worker<'_>) -> Build
             state.stack_previews.update(&job_id, |job| {
                 // However the channel ended, it is no longer building masters.
                 job.groups[group.index].calibration_progress = None;
+                job.groups[group.index].live_preview = None;
             });
             state.stack_previews.update(&job_id, |job| match result {
                 Ok(GroupOutcome::Built) => {
@@ -940,6 +942,11 @@ pub(super) fn run_group(
             })
         };
 
+    let mut live_preview = live::Publisher::new(state, stack_root, job_id, group.index, &pool);
+    if !cancel.requested() {
+        live_preview.publish(&stacker, stacker.view().accepted_frames, false);
+    }
+
     // Pending frames keep their index into `group.frames`, which is what
     // the calibration plan's session assignments are aligned with.
     let pending: Vec<(usize, &PreparedFrame)> =
@@ -995,6 +1002,7 @@ pub(super) fn run_group(
                 batch_end = batch_end.min(limit);
             }
         }
+        batch_end = batch_end.min(batch_start.saturating_add(live_preview.batch_frames()));
         let batch = &pending[batch_start..batch_end];
         let paths: Vec<PathBuf> = batch.iter().map(|(_, frame)| frame.path.clone()).collect();
         // Auto mode's contract: a calibration problem is something to
@@ -1157,6 +1165,7 @@ pub(super) fn run_group(
             execution = ?report.execution,
             "Stack preparation batch finished"
         );
+        live_preview.observe_batch(batch_started.elapsed(), consumed);
         batch_start = batch_end;
 
         // Read the accumulator whenever this batch carried it past a
@@ -1170,9 +1179,10 @@ pub(super) fn run_group(
         // Frames the stack turned away move the depth without moving the
         // accepted count, and a step that integrated nothing is not a
         // depth on the curve.
+        let accepted_frames = stacker.view().accepted_frames;
         let advanced = points
             .last()
-            .is_none_or(|last| last.frames < stacker.view().accepted_frames);
+            .is_none_or(|last| last.frames < accepted_frames);
         if (crossed || cancelled)
             && advanced
             && let Some(sample) = pool.install(|| seiza_stacking::measure_depth(stacker.view()))
@@ -1184,6 +1194,9 @@ pub(super) fn run_group(
                 job.groups[group.index].snr = Some(progressive);
             });
         }
+        if !cancelled && !cancel.requested() {
+            live_preview.publish(&stacker, accepted_frames, false);
+        }
     }
 
     if cancelled {
@@ -1191,6 +1204,10 @@ pub(super) fn run_group(
         // continues from them.
         save_checkpoint(&stacker, &ledger, &points);
         return Ok(GroupOutcome::Cancelled);
+    }
+    if !cancel.requested() {
+        // Keep the deepest live estimate visible throughout final rejection.
+        live_preview.publish(&stacker, stacker.view().accepted_frames, true);
     }
     // The accumulator is complete: checkpoint it before the snapshot
     // consumes the stacker, so an additive rebuild can pick it up here.

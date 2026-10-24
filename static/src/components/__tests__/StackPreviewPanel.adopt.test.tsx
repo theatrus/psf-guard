@@ -55,6 +55,72 @@ const runningGroup = {
 };
 
 describe('StackPreviewPanel job adoption', () => {
+  it('refreshes a live image during the first build and replaces it with the finished artifact', async () => {
+    let state = 'running';
+    let group = {
+      ...runningGroup,
+      live_preview: { url: '/live.png?v=1', accepted_frames: 1 } as { url: string; accepted_frames: number } | null,
+    };
+    server.use(
+      http.get('/api/stack-activity', () => ok({ schema_version: 1, active: [{
+        kind: 'mono', job_id: 'live', database_id: 'test', project_id: 1, state,
+        label: 'Sh2 86 Ha', detail: 'Registering frames', processed_units: 1, total_units: 2,
+      }] })),
+      http.get('/api/db/test/projects/1/stack-previews/latest', () => ok({ groups: [] })),
+      http.get('/api/db/test/projects/1/stack-previews/color', () => ok({ targets: [], jobs: [] })),
+      http.get('/api/db/test/projects/1/stack-previews/live', () => ok({
+        job_id: 'live', database_id: 'test', project_id: 1, state, accepted_only: false,
+        artifact_revision: 'finished', groups: [group], error: null,
+      })),
+      http.get('/api/db/test/stack-previews/live/0/stretch', () => ok(null)),
+    );
+    render(<StackPreviewPanel dbId="test" projectId={1} images={images} selectionSource="visible" onOpenImage={() => undefined} />, { wrapper: wrapper() });
+    const image = await screen.findByAltText('Sh2 86 Ha live stack preview');
+    expect(image).toHaveAttribute('src', '/live.png?v=1');
+    expect(screen.queryByRole('link', { name: /FITS/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Inspect full size/ })).not.toBeInTheDocument();
+    group = { ...group, phase: 'Rejecting transients: integrating', processed_frames: 2,
+      live_preview: { url: '/live.png?v=2', accepted_frames: 2 } };
+    await waitFor(() => expect(image).toHaveAttribute('src', '/live.png?v=2'), { timeout: 3000 });
+    expect(screen.getByText(/Live stack · 2 accepted frames/)).toBeInTheDocument();
+    state = 'completed';
+    group = { ...group, state: 'ready', phase: 'ready', live_preview: null };
+    await waitFor(() => expect(screen.getByAltText('Sh2 86 Ha stack preview')).toHaveAttribute('src', expect.stringContaining('/live/0/preview?v=finished')), { timeout: 3000 });
+    expect(screen.queryByText(/final processing pending/)).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Download linear FITS' })).toBeInTheDocument();
+  });
+
+  it('keeps completed downloads separate and restores their image after a stopped live rebuild', async () => {
+    let stopped = false;
+    server.use(
+      http.get('/api/stack-activity', () => ok({ schema_version: 1, active: [{
+        kind: 'mono', job_id: 'rebuild', database_id: 'test', project_id: 1, state: 'running',
+        label: 'Sh2 86 Ha', detail: 'Registering frames', processed_units: 1, total_units: 2,
+      }] })),
+      http.get('/api/db/test/projects/1/stack-previews/latest', () => ok({ groups: [{
+        job_id: 'previous', artifact_revision: 'old', accepted_only: false,
+        group: { ...runningGroup, state: 'ready', phase: 'ready' },
+      }] })),
+      http.get('/api/db/test/projects/1/stack-previews/color', () => ok({ targets: [], jobs: [] })),
+      http.get('/api/db/test/projects/1/stack-previews/rebuild', () => ok({
+        job_id: 'rebuild', database_id: 'test', project_id: 1,
+        state: stopped ? 'cancelled' : 'running', accepted_only: false,
+        artifact_revision: 'new', groups: [{ ...runningGroup,
+          state: stopped ? 'cancelled' : 'running',
+          live_preview: { url: '/live-rebuild.png', accepted_frames: 1 },
+        }], error: null,
+      })),
+      http.get('/api/db/test/stack-previews/previous/0/stretch', () => ok(null)),
+    );
+    render(<StackPreviewPanel dbId="test" projectId={1} images={images} selectionSource="visible" onOpenImage={() => undefined} />, { wrapper: wrapper() });
+    expect(await screen.findByAltText('Sh2 86 Ha live stack preview')).toHaveAttribute('src', '/live-rebuild.png');
+    expect(screen.getByRole('link', { name: 'Download completed linear FITS' })).toHaveAttribute('href', expect.stringContaining('/previous/0/fits'));
+    expect(screen.getByRole('button', { name: 'Inspect completed stack' })).toBeInTheDocument();
+    stopped = true;
+    await waitFor(() => expect(screen.getByAltText('Sh2 86 Ha stack preview')).toHaveAttribute('src', expect.stringContaining('/previous/0/preview')), { timeout: 3000 });
+    expect(screen.queryByText(/final processing pending/)).not.toBeInTheDocument();
+  });
+
   it('keeps calibration inspection and summary bound to the displayed artifact during a rebuild', async () => {
     let inspectedRevision: string | null = null;
     server.use(

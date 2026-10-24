@@ -170,6 +170,7 @@ fn ready_group(target_id: i32, filter_name: &str, image_id: i32) -> StackGroupSt
         color_calibration_outdated: None,
         preview_stretch_version: None,
         preview_revision: None,
+        live_preview: None,
         preview_render_failed: None,
         total_exposure_seconds: 120.0,
         preview_url: None,
@@ -2018,6 +2019,48 @@ fn state_on_disk(cache: &FsPath, registry: Option<&FsPath>) -> Arc<AppState> {
         .insert(ctx.id.clone(), Arc::new(ctx));
     *state.registry_path.write().unwrap() = registry.map(FsPath::to_path_buf);
     state
+}
+
+#[tokio::test]
+async fn live_preview_requests_are_not_cached_or_served_from_the_finished_preview() {
+    let cache = tempfile::tempdir().unwrap();
+    let state = state_on_disk(cache.path(), None);
+    let job = "a".repeat(64);
+    let live_path = live::path(cache.path(), &job, 0);
+    std::fs::create_dir_all(live_path.parent().unwrap()).unwrap();
+    std::fs::write(&live_path, b"running image").unwrap();
+    std::fs::write(preview_path(cache.path(), &job, 0), b"finished image").unwrap();
+    for is_live in [true, false] {
+        let response = get_stack_preview_image(
+            DbContext(state.get_database("test").unwrap()),
+            Path(("test".into(), job.clone(), 0)),
+            Query(StackPreviewImageQuery {
+                live: is_live,
+                ..Default::default()
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            response.headers()[CACHE_CONTROL],
+            if is_live {
+                "private, no-store"
+            } else {
+                "private, max-age=31536000, immutable"
+            }
+        );
+        let bytes = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap();
+        assert_eq!(
+            bytes.as_ref(),
+            if is_live {
+                b"running image".as_slice()
+            } else {
+                b"finished image".as_slice()
+            }
+        );
+    }
 }
 
 /// A test's turn with the process-wide setting, which re-apply tests

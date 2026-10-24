@@ -18,6 +18,8 @@ pub mod gpu;
 mod janitor;
 pub mod journal;
 mod line_work;
+mod live;
+pub use live::LiveStackPreview;
 pub mod method;
 mod mono_build;
 mod processing_queue;
@@ -320,6 +322,8 @@ pub enum StackPreviewImageSize {
 pub struct StackPreviewImageQuery {
     #[serde(default)]
     pub size: StackPreviewImageSize,
+    #[serde(default)]
+    pub live: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -494,6 +498,9 @@ pub struct StackGroupStatus {
     /// the new image while the stack keeps its artifact revision.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview_revision: Option<String>,
+    /// A temporary display of the running accumulator, separate from the finished stack.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live_preview: Option<LiveStackPreview>,
     /// The stretch release at which rendering the card preview again from
     /// the FITS failed. No Build tries again until the release changes or
     /// the stack is rebuilt; the card's note says why it failed.
@@ -2225,10 +2232,14 @@ pub async fn get_stack_preview_image(
     Query(query): Query<StackPreviewImageQuery>,
 ) -> Result<Response, AppError> {
     validate_job_id(&job_id)?;
-    let path = match query.size {
-        StackPreviewImageSize::Screen => preview_path(&ctx.stack_root, &job_id, group_index),
-        StackPreviewImageSize::Original => {
-            original_preview_path(&ctx.stack_root, &job_id, group_index)
+    let path = if query.live {
+        live::path(&ctx.stack_root, &job_id, group_index)
+    } else {
+        match query.size {
+            StackPreviewImageSize::Screen => preview_path(&ctx.stack_root, &job_id, group_index),
+            StackPreviewImageSize::Original => {
+                original_preview_path(&ctx.stack_root, &job_id, group_index)
+            }
         }
     };
     let file = tokio::fs::File::open(&path)
@@ -2243,7 +2254,14 @@ pub async fn get_stack_preview_image(
         .status(StatusCode::OK)
         .header(CONTENT_TYPE, "image/png")
         .header(CONTENT_LENGTH, length)
-        .header(CACHE_CONTROL, "private, max-age=31536000, immutable")
+        .header(
+            CACHE_CONTROL,
+            if query.live {
+                "private, no-store"
+            } else {
+                "private, max-age=31536000, immutable"
+            },
+        )
         .body(file_body(file))
         .map_err(|error| {
             AppError::InternalError(format!("Failed to build stack PNG response: {error}"))

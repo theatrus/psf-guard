@@ -816,6 +816,55 @@ mod tests {
     }
 
     #[test]
+    fn display_snapshots_between_batches_preserve_the_integrated_pixels() {
+        let threads = ThreadBudget::from_total(4);
+        let pool = compute_pool(&threads);
+        let (_whole_dir, mut whole, whole_paths) = pool.install(pipeline_fixture);
+        let (_live_dir, mut live, live_paths) = pool.install(pipeline_fixture);
+        let options = PipelineOptions::default();
+        run_pipeline(
+            &mut whole,
+            &whole_paths,
+            &options,
+            &pool,
+            &threads,
+            |_, outcome| {
+                outcome.unwrap();
+                Continue::Yes
+            },
+        )
+        .unwrap();
+        for path in live_paths {
+            run_pipeline(
+                &mut live,
+                &[path],
+                &options,
+                &pool,
+                &threads,
+                |_, outcome| {
+                    outcome.unwrap();
+                    Continue::Yes
+                },
+            )
+            .unwrap();
+            let snapshot = pool.install(|| live.export_snapshot()).unwrap();
+            pool.install(|| snapshot.image.binned(2)).unwrap();
+        }
+        let (whole, live) = pool.install(|| (whole.snapshot().unwrap(), live.snapshot().unwrap()));
+        let bits = |values: &[f32]| {
+            values
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(bits(&whole.image.data), bits(&live.image.data));
+        assert_eq!(bits(&whole.variance.data), bits(&live.variance.data));
+        assert_eq!(whole.coverage, live.coverage);
+        assert_eq!(whole.rejected_samples, live.rejected_samples);
+        assert_eq!(whole.accepted_frames, live.accepted_frames);
+    }
+
+    #[test]
     fn memory_limited_wrapper_integrates_on_the_full_phase_pool() {
         let initial = allowance(4);
         let pixels = 192 * 160;
