@@ -48,20 +48,20 @@ regex = "1.12"
 globset = "0.4"
 semver = "1"
 byteorder = "1.5"
-seiza = { git = "https://github.com/theatrus/seiza.git", rev = "5dd356d50a30c8419d7bef994a8d02cabf2c2435", version = "0.42.1" }
-seiza-download = { git = "https://github.com/theatrus/seiza.git", rev = "5dd356d50a30c8419d7bef994a8d02cabf2c2435", version = "0.9.0" }
-seiza-imgproc = { git = "https://github.com/theatrus/seiza.git", rev = "5dd356d50a30c8419d7bef994a8d02cabf2c2435", version = "0.3.2", features = ["parallel"] }
-seiza-fits = { git = "https://github.com/theatrus/seiza.git", rev = "5dd356d50a30c8419d7bef994a8d02cabf2c2435", version = "=0.6.0" }
-seiza-satellites = { git = "https://github.com/theatrus/seiza.git", rev = "5dd356d50a30c8419d7bef994a8d02cabf2c2435", version = "0.22.0", features = ["serde"] }
-seiza-stacking = { git = "https://github.com/theatrus/seiza.git", rev = "5dd356d50a30c8419d7bef994a8d02cabf2c2435", version = "0.46.0" }
-seiza-stretch = { git = "https://github.com/theatrus/seiza.git", rev = "5dd356d50a30c8419d7bef994a8d02cabf2c2435", version = "0.3.2" }
+seiza = "0.42.2"
+seiza-download = "0.9.0"
+seiza-imgproc = { version = "0.3.2", features = ["parallel"] }
+seiza-fits = "=0.6.0"
+seiza-satellites = { version = "0.22.0", features = ["serde"] }
+seiza-stacking = "0.46.1"
+seiza-stretch = "0.3.2"
 # XISF reading. Already in the tree through seiza-stacking, which decodes both
 # containers into the same `seiza_fits::FitsImage`.
-seiza-xisf = { git = "https://github.com/theatrus/seiza.git", rev = "5dd356d50a30c8419d7bef994a8d02cabf2c2435", version = "0.7.0" }
-seiza-background = { git = "https://github.com/theatrus/seiza.git", rev = "5dd356d50a30c8419d7bef994a8d02cabf2c2435", version = "0.3.1" }
-seiza-calibration = { git = "https://github.com/theatrus/seiza.git", rev = "5dd356d50a30c8419d7bef994a8d02cabf2c2435", version = "0.8.1" }
-seiza-deconvolution = { git = "https://github.com/theatrus/seiza.git", rev = "5dd356d50a30c8419d7bef994a8d02cabf2c2435", version = "0.1.2" }
-seiza-stars = { git = "https://github.com/theatrus/seiza.git", rev = "5dd356d50a30c8419d7bef994a8d02cabf2c2435", version = "0.4.0" }
+seiza-xisf = "0.7.0"
+seiza-background = "0.3.1"
+seiza-calibration = "0.8.1"
+seiza-deconvolution = "0.1.2"
+seiza-stars = "0.4.0"
 sha2 = "0.11"
 base64 = "0.23"
 rayon = "1"
