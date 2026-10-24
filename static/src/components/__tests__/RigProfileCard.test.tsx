@@ -386,18 +386,23 @@ describe('Rig profile card', () => {
     }
     const meridian = () => within(screen.getByRole('group', { name: 'Rig Target Scheduler limits' })).getByRole('spinbutton', { name: 'Meridian window' });
 
-    it('refuses a save over settings changed elsewhere and overwrites nothing', async () => {
-      fixture();
+    it('refuses a save over settings changed elsewhere, overwrites nothing, and says the profile was saved', async () => {
+      const { saves } = fixture();
       const settings = settingsServer();
       const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
       mount(true, client);
       const site = await openSite();
       fireEvent.change(site, { target: { value: backyard.id } });
+      fireEvent.change(screen.getByLabelText('Bortle class'), { target: { value: '6' } });
       settings.current = { ...settings.current, revision: 1, scheduling: { meridian_window_minutes: 30 } };
       await act(() => client.refetchQueries({ queryKey: ['observingSettings', 'rig', rig.id] }));
       expect(site).toHaveValue(backyard.id);
       fireEvent.click(screen.getByRole('button', { name: 'Save rig profile' }));
-      const alert = await screen.findByText(/This rig changed since you loaded it/);
+      const alert = await screen.findByText(/Its planning site and Target Scheduler limits changed since you loaded them/);
+      expect(alert).toHaveTextContent(/^The rig profile was saved\./);
+      expect(screen.queryByText(/This rig changed since you loaded it/)).not.toBeInTheDocument();
+      expect(saves).toHaveLength(1);
+      expect(saves[0].sky_quality?.value).toEqual({ bortle_class: 6, sqm_mag_per_arcsec2: null });
       expect(settings.saves).toEqual([expect.objectContaining({ revision: 0, site_id: backyard.id, scheduling: { meridian_window_minutes: 20 } })]);
       expect(settings.current).toMatchObject({ revision: 1, site_id: null, scheduling: { meridian_window_minutes: 30 } });
       // Reload drops the edits made over the old settings and shows the new ones.

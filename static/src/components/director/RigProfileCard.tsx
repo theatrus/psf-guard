@@ -20,6 +20,8 @@ import { useUnsavedChanges } from '../../hooks/useUnsavedChanges';
 const message = (error: unknown) => isAxiosError(error)
   ? error.response?.data?.error || error.message
   : error instanceof Error ? error.message : 'Rig profile request failed';
+/** The profile was saved, but its planning site and limits were not. */
+class SettingsNotSaved extends Error {}
 // The HTTP error behind a failure, through the errors that wrap it.
 const httpErrorOf = (error: unknown): AxiosError | null => isAxiosError(error) ? error
   : error instanceof Error ? httpErrorOf(error.cause) : null;
@@ -111,7 +113,7 @@ export default function RigProfileCard({ slug }: { slug: string }) {
           client.setQueryData(['observingSettings', 'rig', settings.scope_id], settings);
           void client.invalidateQueries({ queryKey: ['observingEffective'] });
         } catch (error) {
-          throw new Error(`Rig profile saved, but site and limits could not be saved: ${message(error)}`, { cause: error });
+          throw new SettingsNotSaved(`Rig profile saved, but site and limits could not be saved: ${message(error)}`, { cause: error });
         }
       }
       return saved;
@@ -165,7 +167,9 @@ export default function RigProfileCard({ slug }: { slug: string }) {
     {loaded.isPending && <p role="status">Loading rig profile...</p>}
     {loaded.isError && <p className="director-error" role="alert">{message(loaded.error)}</p>}
     {notice && <p role="status">{notice}</p>}
-    {stale && <p className="director-error" role="alert">This rig changed since you loaded it. <button type="button" onClick={reload}>Reload</button></p>}
+    {stale && <p className="director-error" role="alert">{save.error instanceof SettingsNotSaved
+      ? 'The rig profile was saved. Its planning site and Target Scheduler limits changed since you loaded them. '
+      : 'This rig changed since you loaded it. '}<button type="button" onClick={reload}>Reload</button></p>}
     {data && form && <div className="rig-setup-layout">
     <WorkspaceTabs id={id} className="rig-setup-nav" orientation={vertical ? 'vertical' : 'horizontal'} label="Rig setup sections" tabs={TABS} value={tab} onChange={next => { setTab(next); if (next === 'collaboration') setCollaborationVisited(true); }} />
     <div className="rig-setup-content">

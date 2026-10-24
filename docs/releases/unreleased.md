@@ -38,6 +38,8 @@
   edits stay until you save or discard them.
 - When someone else changes a rig's planning site or Target Scheduler limits
   while you edit them, **Save rig profile** no longer overwrites their
-  change. PSF Guard explains that the rig changed; click **Reload** to load
-  their values in place of your site and limit edits. **Reload rig profile**
-  keeps those edits when nothing changed on the server.
+  change. PSF Guard saves the rest of the rig profile and explains that the
+  planning site and Target Scheduler limits changed. Click **Reload** to load
+  their values in place of your planning site and Target Scheduler limit
+  edits. **Reload rig profile** keeps those edits when nothing changed on the
+  server.
