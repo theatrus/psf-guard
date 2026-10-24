@@ -679,3 +679,27 @@ PSF Guard dependency update, publish Seiza 0.47.0 and regenerate Cargo.lock
 against the registry. Do not publish the development lockfile as a release
 resolution. The implementation has no claim of numerical parity with the
 Cosmic Photons PixInsight script.
+
+
+### Real StarXTerminator validation
+
+The RGB-star path was exercised on Supergateway with licensed RC-Astro 2.6.6,
+StarXTerminator ML11, using its CPU backend. The isolated server used central
+1024×1024 cutouts of existing Bubble Nebula R/G/B and Ha/OIII/SII masters;
+Seiza read the sources and PSF Guard registered all six planes onto Ha.
+The original masters and live catalog were not changed.
+
+Explicit RGB, Automatic and None each completed through the normal tracked
+color-job API. The first RGB build ran SXT on RGB and the physical narrowband
+planes. Automatic resolved to RGB and reused both result IDs, with no further
+SXT invocation; its cached composition took about two seconds. None ran one
+narrowband separation and produced the starless preview. All three downloads
+were display FITS and reported applied OIII/SII balance.
+
+Full-coverage cropping retained 752×936 pixels (67.1%) with RGB stars, compared
+with 969×954 (88.2%) for the starless narrowband-only branch. This checks that
+RGB registration gaps affect the final crop. These images have different crop
+origins and sizes, so a direct pixel-by-pixel comparison needs their recorded
+crop regions. RGB star calibration reported no plate solve: the cutout fixture
+has no fresh pixel solve. This run verifies separation, recombination, caching,
+and coverage, rather than Gaia calibration or full-frame processing speed.
