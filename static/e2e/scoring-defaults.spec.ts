@@ -67,7 +67,7 @@ test.describe('without accounts', () => {
     await waitForCacheReady(request, dbId);
   });
 
-  test('defaults set in Settings apply in Sequence, and the toolbar saves its own', async ({ page }) => {
+  test('defaults set in Settings apply in Sequence, and the toolbar saves its own', async ({ page }, testInfo) => {
     const sequenceUrl = `/#/sequence?db=${encodeURIComponent(dbId)}&project=1&target=1`;
     await openSequence(page, sequenceUrl);
     await expect(flagged(page)).toHaveCount(0);
@@ -78,6 +78,9 @@ test.describe('without accounts', () => {
       .toHaveValue('100');
     await defaults.getByRole('spinbutton', { name: 'Max HFR (pixels)' }).fill('2.55');
     await defaults.getByRole('button', { name: 'Save defaults' }).click();
+    await expect(defaults.getByRole('button', { name: 'Save defaults' })).toBeDisabled();
+    await defaults.getByRole('heading', { name: 'Sequence scoring' }).scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath('scoring-defaults-settings.png') });
     await closeSettings(page);
 
     // The view takes them, and does not count as changed.
@@ -229,6 +232,7 @@ test.describe('with accounts', () => {
     await minStars.press('Enter');
     await expect(summary(alice)).toHaveText('Scoring (changed)');
     await expect(alice.getByRole('button', { name: 'Save as default' })).toBeDisabled();
+    await alice.screenshot({ path: test.info().outputPath('scoring-control-viewer.png') });
     await alice.context().close();
   });
 

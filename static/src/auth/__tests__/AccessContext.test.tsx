@@ -61,10 +61,9 @@ describe('AuthGate', () => {
       { wrapper: wrapper() },
     );
 
-    await waitFor(() => expect(screen.getByText('Checking access…')).toBeInTheDocument());
-    // Access is known by now; only the scoring defaults are outstanding.
+    await waitFor(() => expect(screen.getByText('Loading scoring defaults…')).toBeInTheDocument());
     await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(screen.getByText('Checking access…')).toBeInTheDocument();
+    expect(screen.getByText('Loading scoring defaults…')).toBeInTheDocument();
     expect(screen.queryByText(/Catalog ready/)).toBeNull();
     release();
     expect(await screen.findByText(/Catalog ready · editor/)).toBeInTheDocument();
@@ -81,6 +80,30 @@ describe('AuthGate', () => {
     );
 
     expect(await screen.findByText(/Catalog ready · editor/)).toBeInTheDocument();
+  });
+
+  it('shows the app at once when the scoring defaults cannot be read, without retrying', async () => {
+    let reads = 0;
+    server.use(
+      http.get('/api/settings/scoring', () => {
+        reads += 1;
+        return HttpResponse.json({ success: false, data: null, error: 'Internal error' }, { status: 500 });
+      }),
+    );
+    // The app's own query defaults (router/index.tsx), which retry a failed
+    // query three times, seconds apart.
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { staleTime: 30000, refetchInterval: 30000 } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <AuthGate><ProtectedContent /></AuthGate>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText(/Catalog ready · editor/)).toBeInTheDocument();
+    expect(reads).toBe(1);
+    queryClient.clear();
   });
 
   it('shows a normal login form and exposes the signed-in role', async () => {

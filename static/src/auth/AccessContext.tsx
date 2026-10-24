@@ -125,7 +125,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
  */
 function ScoringDefaultsGate({ children }: { children: ReactNode }) {
   const { isPending } = useScoringDefaultsQuery();
-  if (isPending) return <div className="auth-page auth-loading">Checking access…</div>;
+  if (isPending) return <div className="auth-page auth-loading">Loading scoring defaults…</div>;
   return <>{children}</>;
 }
 

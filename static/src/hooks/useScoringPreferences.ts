@@ -53,9 +53,15 @@ function useStableScoring(scoring: ScoringPreferences): ScoringPreferences {
   );
 }
 
-/** The server's scoring defaults as it sends them. */
+/** The server's scoring defaults as it sends them. A failed read is not
+ *  retried at once: the app waits for this read before it shows anything,
+ *  and falls back to the built-in values; the next refetch tries again. */
 export function useScoringDefaultsQuery() {
-  return useQuery({ queryKey: SCORING_DEFAULTS_QUERY_KEY, queryFn: apiClient.getScoringDefaults });
+  return useQuery({
+    queryKey: SCORING_DEFAULTS_QUERY_KEY,
+    queryFn: apiClient.getScoringDefaults,
+    retry: false,
+  });
 }
 
 /** The server's scoring defaults. Until they arrive, the built-in values. */
