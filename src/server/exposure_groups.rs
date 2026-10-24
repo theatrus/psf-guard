@@ -133,7 +133,7 @@ impl CatalogRevision {
 
 #[derive(Default)]
 pub(crate) struct ProjectExposureGroupsCache {
-    entries: HashMap<i32, (CatalogRevision, Arc<ProjectExposureGroups>)>,
+    entries: HashMap<(i32, bool), (CatalogRevision, Arc<ProjectExposureGroups>)>,
     /// Where the catalog's nights split
     /// ([`super::sky_coverage::cached_night_boundary`]), as of a revision.
     pub(crate) night_boundary: Option<(CatalogRevision, i64)>,
@@ -167,25 +167,33 @@ pub fn cached_project_groups(
     conn: &Connection,
     project_id: i32,
 ) -> Result<Arc<ProjectExposureGroups>, AppError> {
+    cached_groups(ctx, conn, project_id, false)
+}
+
+pub(crate) fn cached_groups(
+    ctx: &super::database_context::DatabaseContext,
+    conn: &Connection,
+    project_id: i32,
+    mosaic: bool,
+) -> Result<Arc<ProjectExposureGroups>, AppError> {
+    let key = (project_id, mosaic);
     let revision = CatalogRevision::read(conn)?;
     let mut cache = ctx
         .exposure_groups_cache
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if let Some((cached_revision, groups)) = cache.entries.get(&project_id)
+    if let Some((cached_revision, groups)) = cache.entries.get(&key)
         && *cached_revision == revision
     {
         return Ok(Arc::clone(groups));
     }
-    let groups = Arc::new(load_project_groups(conn, project_id)?);
+    let groups = Arc::new(load_groups(conn, project_id, mosaic)?);
     // A second connection may commit while the two read queries run. Do not
     // retain that raced result under a revision which never described it.
     if CatalogRevision::read(conn)? == revision {
-        cache
-            .entries
-            .insert(project_id, (revision, Arc::clone(&groups)));
+        cache.entries.insert(key, (revision, Arc::clone(&groups)));
     } else {
-        cache.entries.remove(&project_id);
+        cache.entries.remove(&key);
     }
     Ok(groups)
 }
@@ -430,6 +438,14 @@ pub fn load_project_groups(
     conn: &Connection,
     project_id: i32,
 ) -> Result<ProjectExposureGroups, AppError> {
+    load_groups(conn, project_id, false)
+}
+
+fn load_groups(
+    conn: &Connection,
+    project_id: i32,
+    mosaic: bool,
+) -> Result<ProjectExposureGroups, AppError> {
     let settings = load_settings(conn, project_id)?;
     let mut by_image = HashMap::new();
     // A catalog with no image table yet has nothing to group.
@@ -457,10 +473,13 @@ pub fn load_project_groups(
         let mut streams: BTreeMap<(i32, String), ExposureStream> = BTreeMap::new();
         for row in rows {
             let (id, target, filter, metadata) = row.map_err(AppError::db)?;
-            streams.entry((target, filter)).or_default().push((
-                id,
-                metadata.as_deref().and_then(exposure_seconds_from_metadata),
-            ));
+            streams
+                .entry((if mosaic { -project_id } else { target }, filter))
+                .or_default()
+                .push((
+                    id,
+                    metadata.as_deref().and_then(exposure_seconds_from_metadata),
+                ));
         }
         for stream in streams.values_mut() {
             assign_stream(stream, &mut by_image);
@@ -551,6 +570,22 @@ mod tests {
             (9,1,10,'G','{\"ExposureDuration\":12}'),
             (10,2,20,'R','{\"ExposureDuration\":10}');").unwrap();
         conn
+    }
+
+    #[test]
+    fn mosaic_exposure_families_span_panels_without_changing_panel_groups() {
+        let conn = fixture();
+        let panels = load_groups(&conn, 1, false).unwrap();
+        let mosaic = load_groups(&conn, 1, true).unwrap();
+        assert_ne!(panels.by_image[&1].key, panels.by_image[&8].key);
+        assert_eq!(mosaic.by_image[&1].key, mosaic.by_image[&8].key);
+        assert_ne!(mosaic.by_image[&1].key, mosaic.by_image[&5].key);
+        assert_ne!(mosaic.by_image[&1].key, mosaic.by_image[&9].key);
+        assert_eq!(mosaic.by_image[&1].min_seconds, Some(10.0));
+        assert_eq!(
+            load_groups(&conn, 1, false).unwrap().by_image,
+            panels.by_image
+        );
     }
 
     #[test]

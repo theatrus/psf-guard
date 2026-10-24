@@ -746,20 +746,34 @@ async fn refresh_project(
     let ctx_for_plan = Arc::clone(ctx);
     let state_for_plan = Arc::clone(state);
     let planned = tokio::task::spawn_blocking(move || {
-        let Some(plan) = plan_automatic_refresh(&state_for_plan, &ctx_for_plan, project_id)? else {
-            return Ok::<_, AppError>(None);
-        };
-        validate_request(&plan.request)?;
-        // One build per channel, the same builds a person's Build stacks
-        // makes, so a refresh after it is a cache hit for what did not
-        // change and restacks only what did.
-        let channels = prepare_channels(
-            &ctx_for_plan,
-            project_id,
-            &plan.request,
-            Some(&plan.channels),
-        )?;
-        Ok(Some((channels, plan.channels)))
+        let mut all_channels = Vec::new();
+        let mut planned_channels = Vec::new();
+        for mosaic in [false, true] {
+            let plan = if mosaic {
+                plan_refresh_mode(&ctx_for_plan, project_id, true)?
+            } else {
+                plan_automatic_refresh(&state_for_plan, &ctx_for_plan, project_id)?
+            };
+            let Some(mut plan) = plan else {
+                continue;
+            };
+            plan.request.color_defaults = Some(
+                crate::server::processing_setups::default_color_processing(&state_for_plan),
+            );
+            validate_request(&plan.request)?;
+            // One build per channel, the same builds a person's Build stacks
+            // makes, so a refresh after it is a cache hit for what did not
+            // change and restacks only what did.
+            let channels = prepare_channels(
+                &ctx_for_plan,
+                project_id,
+                &plan.request,
+                Some(&plan.channels),
+            )?;
+            all_channels.extend(channels);
+            planned_channels.extend(plan.channels);
+        }
+        Ok::<_, AppError>((!all_channels.is_empty()).then_some((all_channels, planned_channels)))
     })
     .await
     .map_err(|error| {
@@ -1030,13 +1044,15 @@ pub(super) fn expected_channels(
     };
     let channels = projects
         .into_iter()
-        .filter_map(|project_id| match plan_refresh(ctx, project_id) {
-            Ok(plan) => plan,
-            Err(error) => {
-                tracing::debug!(db = %ctx.id, project_id, "could not plan a refresh: {error:?}");
-                None
+        .flat_map(|project_id| [false, true].into_iter().filter_map(move |mosaic| {
+            match plan_refresh_mode(ctx, project_id, mosaic) {
+                Ok(plan) => plan,
+                Err(error) => {
+                    tracing::debug!(db = %ctx.id, project_id, "could not plan a refresh: {error:?}");
+                    None
+                }
             }
-        })
+        }))
         .flat_map(|plan| plan.expected)
         .collect::<Vec<_>>();
     let mut cache = refreshes.expected.lock().unwrap();
@@ -1065,14 +1081,28 @@ pub(super) fn plan_refresh(
     ctx: &DatabaseContext,
     project_id: i32,
 ) -> Result<Option<RefreshPlan>, AppError> {
-    let latest = read_latest(ctx, project_id)?.unwrap_or_else(|| LatestStackPreviews {
+    plan_refresh_mode(ctx, project_id, false)
+}
+
+fn plan_refresh_mode(
+    ctx: &DatabaseContext,
+    project_id: i32,
+    mosaic: bool,
+) -> Result<Option<RefreshPlan>, AppError> {
+    let mut latest = read_latest(ctx, project_id)?.unwrap_or_else(|| LatestStackPreviews {
         schema_version: 1,
         database_id: ctx.id.clone(),
         project_id,
         updated_unix_seconds: 0,
         groups: Vec::new(),
     });
-    let build_new = BUILD_NEW_CHANNELS.load(Ordering::Relaxed);
+    latest
+        .groups
+        .retain(|entry| (entry.group.target_id == -project_id) == mosaic);
+    // Do not start large mosaic integrations merely because panel automation
+    // is enabled. Once a person builds a mosaic, keep its channels current.
+    let build_new =
+        BUILD_NEW_CHANNELS.load(Ordering::Relaxed) && (!mosaic || !latest.groups.is_empty());
     if latest.groups.is_empty() && !build_new {
         return Ok(None);
     }
@@ -1082,11 +1112,11 @@ pub(super) fn plan_refresh(
         let images = Database::new(&conn)
             .get_images_by_project_id(project_id)
             .map_err(AppError::db)?;
-        let groups = crate::server::exposure_groups::cached_project_groups(ctx, &conn, project_id)?;
+        let groups = crate::server::exposure_groups::cached_groups(ctx, &conn, project_id, mosaic)?;
         (images, groups)
     };
     let key_of = |image: &AcquiredImage| StackChannelKey {
-        target_id: image.target_id,
+        target_id: if mosaic { -project_id } else { image.target_id },
         filter_name: image.filter_name.clone(),
         exposure_group_key: exposure_groups
             .by_image
@@ -1095,10 +1125,21 @@ pub(super) fn plan_refresh(
     };
     let mut current: BTreeMap<StackChannelKey, Vec<&AcquiredImage>> = BTreeMap::new();
     let mut names: HashMap<StackChannelKey, String> = HashMap::new();
+    let mosaic_name = mosaic
+        .then(|| {
+            latest
+                .groups
+                .first()
+                .map(|entry| entry.group.target_name.clone())
+        })
+        .flatten();
     for (image, _, target_name) in &images {
         let key = key_of(image);
         names.entry(key.clone()).or_insert_with(|| {
-            let mut name = super::channel_label(target_name, &image.filter_name);
+            let mut name = super::channel_label(
+                mosaic_name.as_deref().unwrap_or(target_name),
+                &image.filter_name,
+            );
             if let Some(group) = exposure_groups.by_image.get(&image.id) {
                 name.push_str(" · ");
                 name.push_str(&group.label);
@@ -1137,6 +1178,7 @@ pub(super) fn plan_refresh(
     let scoring = crate::server::scoring_defaults::current();
     let mut request =
         refresh_request(&latest, &[], &scoring).unwrap_or_else(|| StackPreviewRequest {
+            mosaic: false,
             image_ids: Vec::new(),
             accepted_only: false,
             force: false,
@@ -1204,9 +1246,10 @@ pub(super) fn plan_refresh(
     // the pier-side mapping as they do in a person's build.
     let image_ids = images
         .iter()
-        .filter(|(image, _, _)| targets.contains(&image.target_id))
+        .filter(|(image, _, _)| mosaic || targets.contains(&image.target_id))
         .map(|(image, _, _)| image.id)
         .collect::<Vec<_>>();
+    request.mosaic = mosaic;
     request.image_ids = image_ids;
     restack.extend(fresh);
     Ok(Some(RefreshPlan {
@@ -1236,7 +1279,16 @@ pub(super) fn refresh_request(
         .collect();
     let mut image_ids: Vec<i32> = images
         .iter()
-        .filter(|image| channels.contains(&(image.target_id, image.filter_name.clone())))
+        .filter(|image| {
+            channels.contains(&(
+                if newest.group.target_id < 0 {
+                    newest.group.target_id
+                } else {
+                    image.target_id
+                },
+                image.filter_name.clone(),
+            ))
+        })
         .map(|image| image.id)
         .collect();
     image_ids.sort_unstable();
@@ -1278,6 +1330,7 @@ pub(super) fn refresh_request(
         .as_ref()
         .is_some_and(|orientation| orientation.convention == seiza_stacking::SKY_ORIENTATION_NAME);
     Some(StackPreviewRequest {
+        mosaic: newest.group.target_id < 0,
         image_ids,
         accepted_only: newest.accepted_only,
         force: false,
@@ -1621,6 +1674,46 @@ mod tests {
                 }))
             }
         })
+    }
+
+    #[test]
+    fn mosaic_refresh_uses_every_panel_and_keeps_panel_builds_independent() {
+        let _guard = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let old = BUILD_NEW_CHANNELS.swap(false, Ordering::Relaxed);
+        let directory = tempfile::tempdir().unwrap();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::ts_schema::apply_schema(&conn).unwrap();
+        conn.execute_batch("INSERT INTO project(Id,name,profileId,guid) VALUES(1,'Heart','profile','heart');
+            INSERT INTO target(Id,name,projectId,active,ra,dec,epochcode,rotation,roi,guid) VALUES(1,'Panel 1',1,1,10,20,0,0,100,'panel-1'),(2,'Panel 2',1,1,11,20,0,0,100,'panel-2');
+            CREATE TABLE psf_guard_project_processing(project_key TEXT PRIMARY KEY,split_exposure_groups INTEGER NOT NULL,split_chosen INTEGER);
+            INSERT INTO psf_guard_project_processing VALUES('guid:heart',0,1);
+            INSERT INTO acquiredimage(Id,projectId,targetId,gradingStatus,metadata,filtername) VALUES(1,1,1,1,'{}','Ha'),(2,1,2,1,'{}','Ha'),(3,1,2,1,'{}','Ha');").unwrap();
+        let mut ctx = DatabaseContext::new_for_test(conn);
+        ctx.use_storage_for_test(directory.path());
+        let mut mosaic = remembered(
+            -1,
+            "Ha",
+            10,
+            crate::calibration::CalibrationMode::Auto,
+            true,
+        );
+        mosaic["group"]["target_name"] = serde_json::json!("Heart mosaic");
+        mosaic["group"]["input_images"] = serde_json::json!([{"image_id":1,"grading_status":1},{"image_id":2,"grading_status":1}]);
+        let latest = serde_json::json!({"schema_version":1,"database_id":ctx.id,"project_id":1,"updated_unix_seconds":1,"groups":[mosaic]});
+        let path = latest_path(&ctx.stack_root, 1);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, serde_json::to_vec(&latest).unwrap()).unwrap();
+        let plan = plan_refresh_mode(&ctx, 1, true).unwrap().unwrap();
+        assert!(plan.request.mosaic);
+        let mut ids = plan.request.image_ids.clone();
+        ids.sort_unstable();
+        assert_eq!(ids, vec![1, 2, 3]);
+        assert_eq!(plan.channels.len(), 1);
+        assert_eq!(plan.channels[0].target_id, -1);
+        assert_eq!(plan.expected.len(), 1);
+        assert!(plan.expected[0].1.contains("Heart mosaic"));
+        assert!(plan_refresh(&ctx, 1).unwrap().is_none());
+        BUILD_NEW_CHANNELS.store(old, Ordering::Relaxed);
     }
 
     #[test]

@@ -74,9 +74,9 @@ export default function MosaicStacks({ mosaic }: { mosaic: ProjectMosaic }) {
 
   return (
     <section className="mosaic-stacks" aria-label={`${mosaicLabel(mosaic)}: stacks`}>
-      <h2>{mosaicLabel(mosaic)}</h2>
+      <h2>Panel coverage</h2>
       <p className="muted">
-        Each panel's latest stack. They are not stitched: each panel stacks on its own.
+        Panel coverage from each panel's latest stack. Build stacks above to integrate the panels into one mosaic per channel.
       </p>
       <div className="mosaic-stacks-body">
         <div

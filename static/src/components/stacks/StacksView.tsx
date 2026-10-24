@@ -96,10 +96,11 @@ export default function StacksView() {
   // Nights as the view splits them, the server's setting or the link's.
   const nightSplit = useNightSplit();
   const { data: images = [], isLoading } = useQuery({
-    queryKey: ['db', dbId, 'all-images', projectId, targetId, nightSplit.queryKey],
+    queryKey: ['db', dbId, 'all-images', projectId, targetId, ...(mosaicScope ? ['mosaic'] : []), nightSplit.queryKey],
     queryFn: () =>
       apiClient.getImages(dbId!, {
         project_id: projectId || undefined,
+        mosaic: mosaicScope || undefined,
         target_id: targetId || undefined,
         limit: 10000,
         nights: nightSplit.override ?? undefined,
@@ -107,7 +108,7 @@ export default function StacksView() {
     enabled: !!dbId && projectId != null,
     // A new night split keeps the old frames on screen until its own
     // arrive, so the grid neither empties nor loses its place.
-    placeholderData: keepAcrossNightSplit(['db', dbId, 'all-images', projectId, targetId]),
+    placeholderData: keepAcrossNightSplit(['db', dbId, 'all-images', projectId, targetId, ...(mosaicScope ? ['mosaic'] : [])]),
     refetchInterval: 30000,
   });
   const selection = useMemo(() => {
@@ -116,6 +117,16 @@ export default function StacksView() {
     const chosen = images.filter((image) => wanted.has(image.id));
     return chosen.length >= 2 ? chosen : null;
   }, [handed, images]);
+  const stackImages = useMemo(() => {
+    if (!mosaicScope) return selection ?? images;
+    if (!mosaic || projectId === null) return [];
+    const panels = new Set(mosaic.panels.map(panel => panel.target_id));
+    return (selection ?? images).filter(image => panels.has(image.target_id)).map(image => ({
+      ...image,
+      target_id: -projectId,
+      target_name: `${mosaic.name} mosaic`,
+    }));
+  }, [mosaicScope, mosaic, selection, images, projectId]);
   const openImage = useCallback(
     (imageId: number) => navigate(imageDetailPath(imageId, latestParams(), 'grid')),
     [latestParams, navigate]
@@ -208,15 +219,15 @@ export default function StacksView() {
           </button>
         </p>
       )}
-      {mosaic && <MosaicStacks mosaic={mosaic} />}
       <StackPreviewPanel
         dbId={dbId}
         projectId={projectId}
-        images={selection ?? images}
+        images={stackImages}
+        mosaic={mosaicScope}
         selectionSource={selection ? 'selected' : 'scope'}
         cardSize={cardSize}
         onOpenImage={openImage}
-        targetId={targetId}
+        targetId={mosaicScope ? -projectId : targetId}
         actions={
           canManage && (
             <button
@@ -237,6 +248,7 @@ export default function StacksView() {
           )
         }
       />
+      {mosaic && <MosaicStacks mosaic={mosaic} />}
       <WbppStacks
         dbId={dbId}
         projectId={projectId}

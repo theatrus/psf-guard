@@ -54,6 +54,7 @@ type StackCandidateImage = Pick<
 >;
 
 interface StackPreviewPanelProps {
+  mosaic?: boolean;
   dbId: string;
   projectId: number;
   images: StackCandidateImage[];
@@ -327,6 +328,7 @@ export default function StackPreviewPanel({
   actions,
   onOpenImage,
   targetId = null,
+  mosaic = false,
 }: StackPreviewPanelProps) {
   const queryClient = useQueryClient();
   const { canCompute } = useAccess();
@@ -468,6 +470,7 @@ export default function StackPreviewPanel({
     }) => {
       const request = {
         image_ids: variables.imageIds,
+        mosaic,
         accepted_only: acceptedOnly,
         force: variables.force,
         order: frameOrder,

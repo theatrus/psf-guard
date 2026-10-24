@@ -1031,6 +1031,7 @@ fn stack_quality_prefers_comparable_target_filter_scores() {
 #[test]
 fn request_requires_unique_pair_or_more() {
     assert!(validate_request(&StackPreviewRequest {
+        mosaic: false,
         image_ids: vec![1],
         accepted_only: false,
         force: false,
@@ -1045,6 +1046,7 @@ fn request_requires_unique_pair_or_more() {
     })
     .is_err());
     assert!(validate_request(&StackPreviewRequest {
+        mosaic: false,
         image_ids: vec![1, 1],
         accepted_only: false,
         force: false,
@@ -1059,6 +1061,7 @@ fn request_requires_unique_pair_or_more() {
     })
     .is_err());
     assert!(validate_request(&StackPreviewRequest {
+        mosaic: false,
         image_ids: vec![1, 2],
         accepted_only: false,
         force: false,
@@ -1078,6 +1081,7 @@ fn request_requires_unique_pair_or_more() {
 fn a_channel_override_wins_over_the_request_mode() {
     use crate::calibration::CalibrationMode;
     let mut request = StackPreviewRequest {
+        mosaic: false,
         image_ids: vec![1, 2],
         accepted_only: false,
         force: false,
@@ -4872,5 +4876,72 @@ fn the_sweep_reads_targets_and_skips_one_without_a_project() {
     assert_eq!(
         targets,
         HashMap::from([(1, (4, "M31".to_string())), (3, (5, String::new()))])
+    );
+}
+
+#[test]
+fn mosaic_preparation_groups_the_panels_but_keeps_panel_builds_separate() {
+    let directory = tempfile::tempdir().unwrap();
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    crate::ts_schema::apply_schema(&conn).unwrap();
+    conn.execute_batch(
+        "INSERT INTO project(Id,name,profileId,guid) VALUES(1,'Heart','profile','heart');",
+    )
+    .unwrap();
+    for (id, ra, dec) in [
+        (1, 2.44551940192046, 60.8716260846094),
+        (2, 2.64549968148958, 61.8322312232724),
+        (3, 2.6424302894418, 60.8716260846094),
+        (4, 2.44245000987269, 61.8322312232724),
+    ] {
+        conn.execute("INSERT INTO target(Id,name,projectId,active,ra,dec,epochcode,rotation,roi,guid) VALUES(?1,?2,1,1,?3,?4,0,0,100,?2)", rusqlite::params![id,format!("Panel {id}"),ra,dec]).unwrap();
+        for repeat in 0..2 {
+            let image_id = id * 2 + repeat;
+            conn.execute("INSERT INTO acquiredimage(Id,projectId,targetId,gradingStatus,metadata,filtername) VALUES(?1,1,?2,1,'{\"ExposureDuration\":300}','Ha')", rusqlite::params![image_id,id]).unwrap();
+        }
+    }
+    let mut ctx = DatabaseContext::new_for_test(conn);
+    ctx.use_storage_for_test(directory.path());
+    let ctx = Arc::new(ctx);
+    let mut request = build_request((2..10).collect());
+    let mut panels = prepare_job(&ctx, 1, &request).unwrap();
+    assert_eq!(panels.public.groups.len(), 4);
+    request.mosaic = true;
+    let mut mosaic = prepare_job(&ctx, 1, &request).unwrap();
+    assert_eq!(mosaic.public.groups.len(), 1);
+    assert_eq!(mosaic.public.groups[0].target_id, -1);
+    assert_eq!(mosaic.public.groups[0].total_candidates, 8);
+    assert!(mosaic.groups[0].mosaic);
+    let mut panel_ids = mosaic.groups[0].mosaic_panels.clone();
+    panel_ids.sort_unstable();
+    assert_eq!(panel_ids, vec![1, 2, 3, 4]);
+    assert_ne!(mosaic.public.job_id, panels.public.job_id);
+    assert_eq!(mosaic.public.groups[0].input_images.len(), 8);
+    for job in [&mut panels.public, &mut mosaic.public] {
+        job.state = StackJobState::Completed;
+        for group in &mut job.groups {
+            group.state = StackGroupState::Ready;
+            group.sky_orientation = Some(sky_orientation());
+        }
+    }
+    let manager = StackPreviewManager::new();
+    manager.persist_latest(&ctx, &panels.public).unwrap();
+    manager.persist_latest(&ctx, &mosaic.public).unwrap();
+    let read = || {
+        serde_json::from_slice::<LatestStackPreviews>(
+            &std::fs::read(latest_path(&ctx.stack_root, 1)).unwrap(),
+        )
+        .unwrap()
+    };
+    assert_eq!(
+        read().groups.len(),
+        5,
+        "publishing a mosaic must retain panel stacks"
+    );
+    manager.persist_latest(&ctx, &panels.public).unwrap();
+    assert_eq!(
+        read().groups.len(),
+        5,
+        "publishing panels must retain the mosaic"
     );
 }

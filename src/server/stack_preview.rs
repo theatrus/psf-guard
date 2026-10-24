@@ -22,6 +22,7 @@ mod live;
 pub use live::LiveStackPreview;
 pub mod method;
 mod mono_build;
+mod mosaic;
 mod processing_queue;
 pub mod rc_astro;
 pub(crate) mod reapply;
@@ -210,6 +211,9 @@ const STACK_BYTES_PER_OUTPUT_SAMPLE: u64 = 96;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StackPreviewRequest {
     pub image_ids: Vec<i32>,
+    /// Integrate the project’s panels on one expanded Seiza canvas per channel.
+    #[serde(default)]
+    pub mosaic: bool,
     #[serde(default)]
     pub accepted_only: bool,
     #[serde(default)]
@@ -217,7 +221,8 @@ pub struct StackPreviewRequest {
     /// Reproject the integration onto the canonical north-up, east-left grid.
     /// Off by default: a stack keeps the rotation of its reference frame, and
     /// registration already absorbs a meridian flip. Turn this on when several
-    /// stacks must share one sky frame, such as a mosaic.
+    /// single-field stacks need the same north-up convention. Mosaic builds
+    /// use their expanded canvas and cannot combine this option with mosaic.
     #[serde(default)]
     pub north_up: bool,
     /// How this build calibrates its lights: `auto` (default) applies the
@@ -443,6 +448,7 @@ impl StackSkyOrientation {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StackGroupStatus {
     pub index: usize,
+    /// Catalog target ID, or the negative project ID for an integrated mosaic.
     pub target_id: i32,
     pub target_name: String,
     pub filter_name: String,
@@ -1673,8 +1679,15 @@ impl StackPreviewManager {
         let current = {
             let db = ctx.db();
             let conn = db.lock().map_err(|error| error.to_string())?;
-            crate::server::exposure_groups::cached_project_groups(ctx, &conn, job.project_id)
-                .map_err(|error| format!("Failed to load project exposure groups: {error:?}"))?
+            crate::server::exposure_groups::cached_groups(
+                ctx,
+                &conn,
+                job.project_id,
+                job.groups
+                    .iter()
+                    .any(|group| group.target_id == -job.project_id),
+            )
+            .map_err(|error| format!("Failed to load project exposure groups: {error:?}"))?
         };
         let _guard = self.latest_write.lock().unwrap();
         persist_latest_groups_with_exposures(&ctx.stack_root, job, Some(&current))
@@ -1718,6 +1731,8 @@ impl Default for StackPreviewManager {
 #[derive(Clone, Serialize, Deserialize)]
 struct PreparedFrame {
     image_id: i32,
+    #[serde(default)]
+    target_id: i32,
     acquired_date: Option<i64>,
     quality_score: Option<f64>,
     path: PathBuf,
@@ -1776,6 +1791,10 @@ fn rejected_decision(frame: &PreparedFrame, reason: String) -> StackFrameDecisio
 #[derive(Clone, Serialize, Deserialize)]
 struct PreparedGroup {
     index: usize,
+    #[serde(default)]
+    mosaic: bool,
+    #[serde(default)]
+    mosaic_panels: Vec<i32>,
     /// The mode this channel calibrates under: its request override, or the
     /// request-wide mode.
     calibration: crate::calibration::CalibrationMode,
@@ -2729,8 +2748,13 @@ fn persist_latest_groups_locked(
             .iter()
             .any(|group| group_matches_project_exposures(group, current))
     {
+        let mosaic = job
+            .groups
+            .iter()
+            .any(|group| group.target_id == -job.project_id);
         latest.groups.retain(|entry| {
-            entry.group.exposure_group.is_none()
+            (entry.group.target_id == -job.project_id) != mosaic
+                || entry.group.exposure_group.is_none()
                 || group_matches_project_exposures(&entry.group, current)
         });
     }
@@ -2847,9 +2871,18 @@ pub(super) fn current_project_latest_stacks(
     let conn = ctx.db();
     let conn = conn.lock().map_err(AppError::db)?;
     let current = crate::server::exposure_groups::cached_project_groups(ctx, &conn, project_id)?;
-    latest
-        .groups
-        .retain(|entry| group_matches_project_exposures(&entry.group, &current));
+    let mosaic_groups =
+        crate::server::exposure_groups::cached_groups(ctx, &conn, project_id, true)?;
+    latest.groups.retain(|entry| {
+        group_matches_project_exposures(
+            &entry.group,
+            if entry.group.target_id == -project_id {
+                &mosaic_groups
+            } else {
+                &current
+            },
+        )
+    });
     Ok(latest)
 }
 

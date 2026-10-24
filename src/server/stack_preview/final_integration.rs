@@ -484,6 +484,7 @@ mod tests {
             let path = directory.join(format!("{index}.fits"));
             seiza_stacking::write_processed_image_fits_f32(&path, &pixels, &[], &[]).unwrap();
             let source = super::super::PreparedFrame {
+                target_id: 0,
                 image_id: index,
                 acquired_date: None,
                 quality_score: None,
@@ -509,6 +510,8 @@ mod tests {
         }
         (
             PreparedGroup {
+                mosaic: false,
+                mosaic_panels: Vec::new(),
                 flat_star_masking: false,
                 index: 0,
                 calibration: crate::calibration::CalibrationMode::Off,

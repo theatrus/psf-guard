@@ -18,7 +18,7 @@ describe('MosaicStacks', () => {
       { target_id: 3, target_name: 'M31 3', panel_id: 'r2c1', row: 2, column: 1, preview: null },
     ];
     const { container } = render(<MosaicStacks mosaic={{ project_id: 1, name: 'M31', source: 'director', rows: 2, columns: 2, panels }} />);
-    expect(screen.getByRole('heading', { name: 'M31 mosaic (3 panels)' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Panel coverage' })).toBeInTheDocument();
     const cells = container.querySelectorAll<HTMLElement>('.mosaic-stacks-cell');
     expect([...cells].map(cell => [cell.style.gridRow, cell.style.gridColumn])).toEqual([['1', '1'], ['1', '2'], ['2', '1']]);
     expect(screen.getByText('No stack yet')).toBeInTheDocument();

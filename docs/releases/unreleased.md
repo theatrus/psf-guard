@@ -34,6 +34,11 @@
   and the server share.
   See [Workers](../REMOTE_WORKERS.md).
 
+- Build one integrated mosaic per channel in **Stacks**, then compose RGB,
+  LRGB and narrowband color from those mosaics. Frames keep their calibration
+  sessions and align against overlapping panels. Incomplete mosaics identify
+  panels with no aligned frames.
+
 - Watch a channel's in-progress stack in **Stacks**, with a live preview updated
   about every five seconds. The finished preview replaces it when processing
   completes; completed FITS downloads remain separate during a rebuild.

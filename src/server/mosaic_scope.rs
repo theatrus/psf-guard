@@ -1,6 +1,6 @@
 //! A project's mosaic panels as one scope, so the Library can show a
-//! Target Scheduler mosaic's targets together. Grouping is display only:
-//! grading, calibration and stacking stay per panel.
+//! Target Scheduler mosaic's targets together. Grading and calibration stay
+//! per panel; Stacks can integrate their lights on an expanded mosaic canvas.
 //!
 //! The panels come from Director's records when it activated the project,
 //! else from the grid the targets' coordinates form. Target names such as

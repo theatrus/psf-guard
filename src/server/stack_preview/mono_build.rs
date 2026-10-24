@@ -109,7 +109,10 @@ pub(super) fn choose_references(
     cancel: &Stop,
 ) {
     let ctx = state.get_database(database_id);
-    for group in groups.iter_mut().filter(|group| group.frames.len() >= 2) {
+    for group in groups
+        .iter_mut()
+        .filter(|group| group.frames.len() >= 2 && !group.mosaic)
+    {
         if cancel.requested() {
             return;
         }
@@ -630,7 +633,7 @@ pub(super) fn run_group(
             );
         });
     }
-    let checkpoint = decision.state();
+    let checkpoint = (!group.mosaic).then(|| decision.state()).flatten();
     let reference_frame = crate::image_io::open_linear_frame(&group.frames[0].path)
         .map_err(|error| error.to_string())?;
     let reference_is_bayer = reference_frame.bayer.is_some();
@@ -640,7 +643,7 @@ pub(super) fn run_group(
         reference_frame.image.channels as u64
     };
     let pixels = reference_frame.image.pixel_count();
-    let pipeline_budget = execution::plan_pipeline(
+    let mut pipeline_budget = execution::plan_pipeline(
         available_memory,
         worker_policy,
         pixels,
@@ -648,7 +651,7 @@ pub(super) fn run_group(
         &plan,
         &threads,
     )?;
-    let threads = pipeline_budget.threads;
+    let mut threads = pipeline_budget.threads;
     tracing::info!(
         job_id,
         group_index = group.index,
@@ -659,7 +662,7 @@ pub(super) fn run_group(
         "Stack pipeline memory planned"
     );
 
-    let (mut stacker, mut ledger, mut points, mut orientation_vote) = pool.install(|| {
+    let initialized = pool.install(|| {
         // A checkpoint that fails to reopen — a Seiza version change, a
         // truncated file — is discarded and the group builds from scratch.
         // A reopened stack runs its live passes under this build's GPU
@@ -700,7 +703,30 @@ pub(super) fn run_group(
             }
         });
         let mut orientation_vote = OrientationVote::default();
-        let (stacker, ledger, points) = match restored {
+        let (stacker, ledger, points) = if group.mosaic {
+            state.stack_previews.update(job_id, |job| {
+                let status = &mut job.groups[group.index];
+                status.phase = "planning mosaic".into();
+                status.reference_image_id = None;
+                status.resume_note = Some("Mosaic canvases are replanned when their inputs change".into());
+            });
+            let limit = mosaic::maximum_samples(available_memory, worker_policy, &plan)?;
+            let stacker = mosaic::plan(&group, &plan,
+                method.stack_options(cosmetic, gpu), &stack_dir(stack_root, job_id), limit, cancel,
+                |count, width, height| {
+                    state.stack_previews.update(job_id, |job| {
+                        job.groups[group.index].phase = format!("planning mosaic: {count} references, {width} × {height}");
+                    });
+                })?;
+            state.stack_previews.update(job_id, |job| {
+                let status = &mut job.groups[group.index];
+                status.output_channels = output_channels as usize;
+                for note in stacker.expansion_planning_notes() {
+                    add_note(&mut status.resume_note, note);
+                }
+            });
+            (stacker, Vec::new(), Vec::new())
+        } else { match restored {
             Some((stacker, manifest)) => {
                 // Replay the checkpointed ledger: the per-frame record, the
                 // counters, and each accepted frame's orientation vote. The
@@ -850,9 +876,25 @@ pub(super) fn run_group(
                 }];
                 (stacker, ledger, Vec::new())
             }
-        };
+        }};
         Ok::<_, String>((stacker, ledger, points, orientation_vote))
-    })?;
+    });
+    if cancel.requested() {
+        return Ok(GroupOutcome::Cancelled);
+    }
+    let (mut stacker, mut ledger, mut points, mut orientation_vote) = initialized?;
+    if group.mosaic {
+        let view = stacker.view();
+        pipeline_budget = execution::plan_pipeline(
+            available_memory,
+            worker_policy,
+            view.width * view.height,
+            view.mean.len(),
+            &plan,
+            &threads,
+        )?;
+        threads = pipeline_budget.threads;
+    }
     // The reference frame alone is the first depth on the curve and the
     // baseline every later depth is read against: one frame's noise.
     if points.is_empty()
@@ -866,7 +908,7 @@ pub(super) fn run_group(
                 // A quality-ordered build is a full restack by nature. Writing its
                 // accumulator here would leave a checkpoint no later build can
                 // extend, in place of the capture-order one that can be.
-                if !order.resumable() {
+                if group.mosaic || !order.resumable() {
                     return;
                 }
                 if ledger.iter().any(|frame| frame.retryable_failure) {
@@ -939,7 +981,7 @@ pub(super) fn run_group(
         };
 
     let mut live_preview = live::Publisher::new(state, stack_root, job_id, group.index, &pool);
-    if !cancel.requested() {
+    if !cancel.requested() && stacker.view().accepted_frames > 0 {
         live_preview.publish(&stacker, stacker.view().accepted_frames, false);
     }
 
@@ -1243,6 +1285,15 @@ pub(super) fn run_group(
         return Ok(GroupOutcome::Cancelled);
     }
     pool.install(|| {
+        if group.mosaic {
+            let expected = group.frames.iter().map(|f| f.target_id).collect::<HashSet<_>>();
+            let joined = group.frames.iter().zip(&ledger).filter(|(_, record)| record.admitted())
+                .map(|(frame, _)| frame.target_id).collect::<HashSet<_>>();
+            let missing = expected.difference(&joined).copied().collect::<Vec<_>>();
+            if !missing.is_empty() {
+                return Err(format!("Mosaic is incomplete: no frames aligned from panel target(s) {missing:?}. Inspect the rejected frames."));
+            }
+        }
         let reference_headers = stacker.reference_headers().to_vec();
         let accepted_frames = stacker.view().accepted_frames;
         let rejected_frames = stacker.view().rejected_frames;
@@ -1393,7 +1444,10 @@ pub(super) fn run_group(
         // shared north-up grid that a mosaic needs. The one correction it still
         // makes is a half turn when the reference sits on the thinner side of a
         // flip, so the result faces the way most of the night was shot.
-        let (image, clipped, sky_orientation, mut output_cards) = if north_up {
+        let (image, clipped, sky_orientation, mut output_cards) = if group.mosaic {
+            let orientation = StackSkyOrientation::source_frame(integrated.width, integrated.height, "mosaic canvas");
+            (integrated, clipped, orientation, Vec::new())
+        } else if north_up {
             let (source_wcs, orientation_source) =
                 resolve_stack_wcs(state, &ctx, &group.frames[0], &reference_headers)?;
             let orientation = seiza_stacking::SkyOrientationPlan::new(

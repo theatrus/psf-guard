@@ -386,6 +386,7 @@ export interface ApiResponse<T> {
 }
 
 export interface ImageQuery {
+  mosaic?: boolean;
   project_id?: number;
   target_id?: number;
   status?: 'pending' | 'accepted' | 'rejected';

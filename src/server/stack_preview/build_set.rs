@@ -898,6 +898,11 @@ pub(super) fn start_prepared(
 }
 
 pub(super) fn validate_request(request: &StackPreviewRequest) -> Result<(), AppError> {
+    if request.mosaic && request.north_up {
+        return Err(AppError::BadRequest(
+            "Mosaics use Seiza's expanded canvas; north_up cannot be combined with mosaic".into(),
+        ));
+    }
     if request.image_ids.len() < 2 {
         return Err(AppError::BadRequest(
             "Stack previews require at least two image IDs".into(),
@@ -1067,12 +1072,21 @@ pub(super) fn prepare_whole(
     let flat_star_masking = crate::calibration::flat_star_masking_enabled();
     let scoring = StackScoringSettings::from_overrides(&request.scoring);
     let requested = request.image_ids.iter().copied().collect::<HashSet<_>>();
-    let (project_images, framing_by_image, mapped_sources, exposure_groups) = {
+    let (project_images, framing_by_image, mapped_sources, exposure_groups, mosaic) = {
         let conn = ctx.db();
         let conn = conn.lock().map_err(AppError::db)?;
         let db = Database::new(&conn);
         let exposure_groups =
-            crate::server::exposure_groups::cached_project_groups(ctx, &conn, project_id)?;
+            crate::server::exposure_groups::cached_groups(ctx, &conn, project_id, request.mosaic)?;
+        let mosaic = if request.mosaic {
+            Some(
+                crate::server::mosaic_scope::project_mosaic(&conn, project_id)?.ok_or_else(
+                    || AppError::BadRequest("This project has no mosaic panels".into()),
+                )?,
+            )
+        } else {
+            None
+        };
         let images = db
             .get_images_by_project_id(project_id)
             .map_err(AppError::db)?;
@@ -1088,6 +1102,19 @@ pub(super) fn prepare_whole(
         if found != requested.len() {
             return Err(AppError::BadRequest(
                 "Every requested image must belong to the selected project".into(),
+            ));
+        }
+        if let Some(mosaic) = &mosaic
+            && images.iter().any(|(image, _, _)| {
+                requested.contains(&image.id)
+                    && !mosaic
+                        .panels
+                        .iter()
+                        .any(|panel| panel.target_id == image.target_id)
+            })
+        {
+            return Err(AppError::BadRequest(
+                "Every mosaic image must belong to a panel".into(),
             ));
         }
         let selected_groups = images
@@ -1124,7 +1151,7 @@ pub(super) fn prepare_whole(
             &ctx.image_dir_paths,
             relevant.iter().map(|(image, _, _)| image),
         )?;
-        (relevant, framing, mapped_sources, exposure_groups)
+        (relevant, framing, mapped_sources, exposure_groups, mosaic)
     };
 
     let quality = quality_results(
@@ -1140,7 +1167,7 @@ pub(super) fn prepare_whole(
         .collect::<HashMap<_, _>>();
 
     type StackGroupKey = (i32, String, String, Option<String>);
-    type ScoredImages = Vec<(AcquiredImage, ImageQualityResult)>;
+    type ScoredImages = Vec<(AcquiredImage, ImageQualityResult, String)>;
     let mut grouped: BTreeMap<StackGroupKey, ScoredImages> = BTreeMap::new();
     for (image, _project_name, target_name) in project_images {
         if !requested.contains(&image.id) {
@@ -1152,8 +1179,15 @@ pub(super) fn prepare_whole(
             .unwrap_or_else(|| fallback_quality(image.id));
         grouped
             .entry((
-                image.target_id,
-                target_name,
+                if request.mosaic {
+                    -project_id
+                } else {
+                    image.target_id
+                },
+                mosaic
+                    .as_ref()
+                    .map(|m| format!("{} mosaic", m.name))
+                    .unwrap_or_else(|| target_name.clone()),
                 image.filter_name.clone(),
                 exposure_groups
                     .by_image
@@ -1161,7 +1195,7 @@ pub(super) fn prepare_whole(
                     .map(|group| group.key.clone()),
             ))
             .or_default()
-            .push((image, scored));
+            .push((image, scored, target_name));
     }
 
     let mut public_groups = Vec::new();
@@ -1212,6 +1246,18 @@ pub(super) fn prepare_whole(
     hasher.update(method.fingerprint().as_bytes());
 
     // Each group's own identity starts from the same settings.
+    if let Some(mosaic) = &mosaic {
+        hasher.update(b"\0expanded-mosaic-v1\0");
+        let mut panels = mosaic
+            .panels
+            .iter()
+            .map(|panel| panel.target_id)
+            .collect::<Vec<_>>();
+        panels.sort_unstable();
+        for id in panels {
+            hasher.update(id.to_le_bytes());
+        }
+    }
     let prefix = hasher.clone();
     let mut identities = Vec::new();
     // Read from the library once, for every group, when the first needs it.
@@ -1228,7 +1274,7 @@ pub(super) fn prepare_whole(
             request.calibration_for(target_id, &filter_name, exposure_group_key.as_deref());
         let exposure_group = entries
             .first()
-            .and_then(|(image, _)| exposure_groups.by_image.get(&image.id))
+            .and_then(|(image, _, _)| exposure_groups.by_image.get(&image.id))
             .cloned();
         hasher.update(target_id.to_le_bytes());
         group_hasher.update(target_id.to_le_bytes());
@@ -1244,11 +1290,11 @@ pub(super) fn prepare_whole(
             hasher.update(key.as_bytes());
             group_hasher.update(key.as_bytes());
         }
-        entries.sort_by_key(|(image, _)| (image.acquired_date.unwrap_or(0), image.id));
+        entries.sort_by_key(|(image, _, _)| (image.acquired_date.unwrap_or(0), image.id));
         let total_candidates = entries.len();
         let input_images = entries
             .iter()
-            .map(|(image, _)| StackInputImage {
+            .map(|(image, _, _)| StackInputImage {
                 image_id: image.id,
                 grading_status: image.grading_status,
             })
@@ -1258,7 +1304,11 @@ pub(super) fn prepare_whole(
         let mut decisions = Vec::new();
         let mut frames = Vec::new();
 
-        for (image, scored) in entries {
+        for (image, scored, source_target_name) in entries {
+            if request.mosaic {
+                hasher.update(image.target_id.to_le_bytes());
+                group_hasher.update(image.target_id.to_le_bytes());
+            }
             hasher.update(image.id.to_le_bytes());
             group_hasher.update(image.id.to_le_bytes());
             hasher.update(image.grading_status.to_le_bytes());
@@ -1289,22 +1339,25 @@ pub(super) fn prepare_whole(
                 ));
                 continue;
             };
-            let path =
-                match crate::server::handlers::find_fits_file(ctx, &image, &target_name, &filename)
-                {
-                    Ok(path) => path,
-                    Err(AppError::Conflict(message)) => return Err(AppError::Conflict(message)),
-                    Err(AppError::NotFound) => {
-                        missing_files += 1;
-                        decisions.push(excluded_decision(
-                            &image,
-                            &scored,
-                            "FITS file was not found".into(),
-                        ));
-                        continue;
-                    }
-                    Err(error) => return Err(error),
-                };
+            let path = match crate::server::handlers::find_fits_file(
+                ctx,
+                &image,
+                &source_target_name,
+                &filename,
+            ) {
+                Ok(path) => path,
+                Err(AppError::Conflict(message)) => return Err(AppError::Conflict(message)),
+                Err(AppError::NotFound) => {
+                    missing_files += 1;
+                    decisions.push(excluded_decision(
+                        &image,
+                        &scored,
+                        "FITS file was not found".into(),
+                    ));
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
             let source_fingerprint = source_fingerprint(&path);
             hasher.update(source_fingerprint.as_bytes());
             group_hasher.update(source_fingerprint.as_bytes());
@@ -1313,6 +1366,7 @@ pub(super) fn prepare_whole(
             group_hasher.update(exposure_seconds.to_le_bytes());
             frames.push(PreparedFrame {
                 image_id: image.id,
+                target_id: image.target_id,
                 acquired_date: image.acquired_date,
                 quality_score: Some(scored.quality_score),
                 path,
@@ -1476,6 +1530,11 @@ pub(super) fn prepare_whole(
         });
         prepared_groups.push(PreparedGroup {
             flat_star_masking,
+            mosaic: request.mosaic,
+            mosaic_panels: mosaic
+                .as_ref()
+                .map(|m| m.panels.iter().map(|p| p.target_id).collect())
+                .unwrap_or_default(),
             index,
             calibration: group_calibration,
             frames,

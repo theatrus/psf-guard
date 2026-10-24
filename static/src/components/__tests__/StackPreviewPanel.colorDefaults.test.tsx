@@ -19,7 +19,7 @@ function ok(data: unknown) {
   return HttpResponse.json({ success: true, data, error: null, status: 'ready' });
 }
 
-function renderPanel() {
+function renderPanel(mosaic = false) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   function Wrapper({ children }: { children: ReactNode }) {
     return (
@@ -29,7 +29,7 @@ function renderPanel() {
     );
   }
   return render(
-    <StackPreviewPanel dbId="test" projectId={1} images={images} selectionSource="visible"
+    <StackPreviewPanel dbId="test" projectId={1} images={images.map(image => mosaic ? { ...image, target_id: -1, target_name: 'Heart mosaic' } : image)} mosaic={mosaic} targetId={mosaic ? -1 : null} selectionSource="visible"
       onOpenImage={() => undefined} />,
     { wrapper: Wrapper }
   );
@@ -66,6 +66,15 @@ describe('StackPreviewPanel color defaults', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Build stacks' }));
     await waitFor(() => expect(submitted).toHaveLength(1));
     expect(submitted[0].color_defaults).toEqual(faint);
+  });
+
+  it('builds one mosaic channel with every selected panel image', async () => {
+    const submitted = mockBuild();
+    renderPanel(true);
+    await userEvent.click(await screen.findByRole('button', { name: 'Build stacks' }));
+    await waitFor(() => expect(submitted).toHaveLength(1));
+    expect(submitted[0]).toMatchObject({ mosaic: true, image_ids: [1, 2] });
+    expect(screen.getAllByText('Heart mosaic')).toHaveLength(1);
   });
 
   it('uses the built-in pipeline from a server that marks no setup', async () => {
