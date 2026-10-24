@@ -1,4 +1,4 @@
-import { type ReactNode } from 'react';
+import { Profiler, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
@@ -60,13 +60,13 @@ function fixture(conflictOnce = false) {
   );
   return { saves };
 }
-function mount(canWrite = true) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+function mount(canWrite = true, client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } }), onRender?: () => void) {
   function Wrapper({ children }: { children: ReactNode }) {
     const access = useAccess();
     return <QueryClientProvider client={client}><AccessContext.Provider value={{ ...access, canWrite }}>{children}</AccessContext.Provider></QueryClientProvider>;
   }
-  return render(<RigProfileCard slug="catalog" />, { wrapper: Wrapper });
+  const card = <RigProfileCard slug="catalog" />;
+  return render(onRender ? <Profiler id="rig-profile" onRender={onRender}>{card}</Profiler> : card, { wrapper: Wrapper });
 }
 
 describe('Rig profile card', () => {
@@ -330,6 +330,55 @@ describe('Rig profile card', () => {
     expect(await within(projects).findByText('Wrote the limits into 2 projects.')).toBeInTheDocument();
     expect(applies).toEqual([{ digest: 'a'.repeat(64) }]);
     await waitFor(() => expect(within(projects).getByTestId('rig-scheduling-summary')).toHaveTextContent('The one project in RedCat 61 has these limits.'));
+  });
+
+  it('shows the saved site and limits in the first render with them, with nothing unsaved', async () => {
+    fixture();
+    const backyard = { id: '33333333-3333-4333-8333-333333333333', name: 'Backyard', revision: 1 };
+    const defaults = { global_id: 'g', presets: {}, sites: [backyard] };
+    server.use(
+      http.get('/api/director/v1/preferences', () => HttpResponse.json(ok(defaults))),
+      http.get(`/api/director/v1/preferences/rig/${rig.id}`, () => HttpResponse.json(ok({ scope: 'rig', scope_id: rig.id, revision: 0, overrides: { weights: {} }, enabled: null, site_id: backyard.id, scheduling: { meridian_window_minutes: 20 } }))),
+    );
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    client.setQueryData(['observingDefaults'], defaults);
+    // Read the DOM at every commit once the rig's settings are in: a render
+    // that shows no site, empty limits or Unsaved changes beside them is what
+    // a test or a person can catch between two commits.
+    const shown: string[] = [];
+    const record = () => {
+      const site = document.querySelector<HTMLSelectElement>('select[aria-label="Planning site"]');
+      const meridian = document.querySelector<HTMLInputElement>('[aria-label="Rig Target Scheduler limits"] input[aria-label="Meridian window"]');
+      if (site && !site.disabled && meridian) shown.push(`${site.value} ${meridian.value} ${!!screen.queryByText('Unsaved changes')}`);
+    };
+    mount(true, client, record);
+    await waitFor(() => expect(screen.getByLabelText('Planning site')).toHaveValue(backyard.id));
+    expect(shown.length).toBeGreaterThan(0);
+    expect(shown.filter(values => values !== `${backyard.id} 20 false`)).toEqual([]);
+  });
+
+  it('a refetch updates unedited limits and keeps an edited site', async () => {
+    fixture();
+    const backyard = { id: '33333333-3333-4333-8333-333333333333', name: 'Backyard', revision: 1 };
+    const ridge = { id: '44444444-4444-4444-8444-444444444444', name: 'Ridge', revision: 1 };
+    let rigSettings = { scope: 'rig', scope_id: rig.id, revision: 0, overrides: { weights: {} }, enabled: null, site_id: null as string | null, scheduling: { meridian_window_minutes: 20 } };
+    server.use(
+      http.get('/api/director/v1/preferences', () => HttpResponse.json(ok({ global_id: 'g', presets: {}, sites: [backyard, ridge] }))),
+      http.get(`/api/director/v1/preferences/rig/${rig.id}`, () => HttpResponse.json(ok(rigSettings))),
+    );
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    mount(true, client);
+    fireEvent.click(await screen.findByRole('tab', { name: 'Site' }));
+    const site = await screen.findByLabelText('Planning site');
+    await waitFor(() => expect(site).toBeEnabled());
+    fireEvent.change(site, { target: { value: backyard.id } });
+    rigSettings = { ...rigSettings, revision: 1, site_id: ridge.id, scheduling: { meridian_window_minutes: 30 } };
+    await act(() => client.refetchQueries({ queryKey: ['observingSettings', 'rig', rig.id] }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Limits and delivery' }));
+    const fields = screen.getByRole('group', { name: 'Rig Target Scheduler limits' });
+    await waitFor(() => expect(within(fields).getByRole('spinbutton', { name: 'Meridian window' })).toHaveValue(30));
+    expect(site).toHaveValue(backyard.id);
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
   });
 
   it('offers a Reload after a lost race', async () => {

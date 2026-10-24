@@ -1,3 +1,4 @@
+import { Profiler } from 'react';
 import { describe, expect, it } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -85,6 +86,43 @@ describe('Automatic collaboration work', () => {
     expect(requests.find(r => r.operation === 'background_configure')?.expected).toBeNull();
     await userEvent.click(screen.getByRole('button', { name: 'Discard automation edits' }));
     await waitFor(() => expect(screen.getByLabelText('Submit contribution reports automatically')).toBeChecked());
+  });
+  it('shows a saved policy in the first render with it', () => {
+    const data = { ...initial, policy: { enabled: true, catalog_id: 'catalog', project_ids: ['000000000002'], interval_minutes: 15, activate: true, automatic_reports: true } };
+    server.use(http.post('/api/director/v1/collaboration/connection/work', () => HttpResponse.json({ success: true, data })));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    client.setQueryData(['collaboration-background', 'connection'], data);
+    // Read the DOM at every commit: a render that shows the saved policy with
+    // unticked boxes is what a test or a person can catch between two commits.
+    const labels = ['Pull tonight automatically', 'M31', 'Activate on the rig', 'Submit contribution reports automatically'];
+    const shown: string[] = [];
+    const record = () => {
+      const boxes = labels.map(label => screen.queryByLabelText<HTMLInputElement>(label)?.checked);
+      if (boxes.every(checked => checked !== undefined)) shown.push(boxes.join(' '));
+    };
+    render(<QueryClientProvider client={client}>
+      <Profiler id="collaboration-background" onRender={record}>
+        <CollaborationBackground connection={connection} canWrite refresh={() => undefined} embedded />
+      </Profiler>
+    </QueryClientProvider>);
+    expect(shown.length).toBeGreaterThan(0);
+    expect(shown.filter(boxes => boxes !== 'true true true true')).toEqual([]);
+    expect(screen.getByRole('button', { name: 'Save automation' })).toBeDisabled();
+  });
+  it('follows each poll until the person edits the policy', async () => {
+    let data: CollaborationBackgroundReply = structuredClone(initial);
+    server.use(http.post('/api/director/v1/collaboration/connection/work', () => HttpResponse.json({ success: true, data })));
+    const client = setup();
+    await userEvent.click(screen.getByText('Automatic work requests'));
+    await screen.findByText('Rig database: RedCat 61');
+    data = { ...data, policy: { enabled: false, catalog_id: 'catalog', project_ids: [], interval_minutes: 15, activate: false, automatic_reports: true } };
+    await act(() => client.invalidateQueries({ queryKey: ['collaboration-background', 'connection'] }));
+    await waitFor(() => expect(screen.getByLabelText('Submit contribution reports automatically')).toBeChecked());
+    await userEvent.click(screen.getByLabelText('Activate on the rig'));
+    data = { ...data, policy: { ...data.policy!, automatic_reports: false } };
+    await act(() => client.invalidateQueries({ queryKey: ['collaboration-background', 'connection'] }));
+    expect(screen.getByLabelText('Submit contribution reports automatically')).toBeChecked();
+    expect(screen.getByLabelText('Activate on the rig')).toBeChecked();
   });
   it('shows held work and errors without disabling a recovery edit', async () => {
     const data = { ...initial, policy: { enabled: true, catalog_id: 'catalog', project_ids: ['000000000002'], interval_minutes: 15, activate: true }, status: { ...initial.status, last_error: 'Server offline', result: { night: '2026-10-05', imported: 0, unchanged: 1, activated: 0, held: ['Choose recipes in Planning'] } } };

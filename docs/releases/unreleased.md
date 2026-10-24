@@ -29,3 +29,11 @@
   Stacks page. Before, with a stack's **Exact measurements** table open,
   scrolling in Settings could also scroll the Stacks page behind it, and the
   page could be out of view when Settings closed.
+- A plan's scheduling limits on its **Rigs** tab, and a rig's planning site
+  and Target Scheduler limits under **Rigs**, no longer appear empty or
+  marked unsaved for a moment when they load. A collaboration connection's
+  **Automation** tab shows the saved choices at once instead of unticked
+  boxes. **Stack with WBPP** shows the project's process folder at once.
+  Fields you have not edited now follow newer values from the server; your
+  edits stay until you save or discard them. **Reload** on a rig now also
+  drops unsaved changes to its planning site and limits.

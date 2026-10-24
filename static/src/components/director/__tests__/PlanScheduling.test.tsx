@@ -1,4 +1,4 @@
-import type { ReactNode, MutableRefObject } from 'react';
+import { Profiler, type ReactNode, type MutableRefObject } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
@@ -18,8 +18,8 @@ const ts: SchedulingValues = { minimum_time_minutes: 30, minimum_altitude_degree
 const global = { scope: 'global' as const, id: 'g', revision: 2 };
 const rigSource = { scope: 'rig' as const, id: c925.id, revision: 1 };
 
-function fixture() {
-  let stored: ObservingSettings = { scope: 'project', scope_id: project, revision: 0, overrides: { weights: {}, importance: null, minimum_dwell_ms: null, switch_margin: null }, enabled: null, site_id: null, project_order: null };
+function fixture(scheduling?: ObservingSettings['scheduling']) {
+  let stored: ObservingSettings = { scope: 'project', scope_id: project, revision: 0, overrides: { weights: {}, importance: null, minimum_dwell_ms: null, switch_margin: null }, enabled: null, site_id: null, project_order: null, scheduling };
   const saves: ObservingSettings[] = [];
   const effective = (rig: string, withProject: boolean) => {
     const values = { ...ts, minimum_altitude_degrees: 25, meridian_window_minutes: rig === c925.id ? 30 : 20 };
@@ -38,7 +38,7 @@ function fixture() {
     }),
     http.get('/api/director/v1/rigs/:rig/preferences', ({ params, request }) => ok(effective(String(params.rig), new URL(request.url).searchParams.has('project_id')))),
   );
-  return { saves };
+  return { saves, stored: () => stored, store: (next: ObservingSettings) => { stored = next; } };
 }
 
 type Drafts = ReturnType<typeof usePageDrafts>;
@@ -47,14 +47,13 @@ function OnPage({ out }: { out: MutableRefObject<Drafts | null> }) {
   out.current = drafts;
   return <DraftProvider drafts={drafts}><PlanScheduling projectId={project} rigs={[redcat, c925]} /></DraftProvider>;
 }
-function mount(canWrite = true) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+function mount(canWrite = true, client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } }), onRender?: (drafts: Drafts | null) => void) {
   function Wrapper({ children }: { children: ReactNode }) {
     const access = useAccess();
     return <QueryClientProvider client={client}><AccessContext.Provider value={{ ...access, canWrite }}>{children}</AccessContext.Provider></QueryClientProvider>;
   }
   const drafts: MutableRefObject<Drafts | null> = { current: null };
-  render(<OnPage out={drafts} />, { wrapper: Wrapper });
+  render(onRender ? <Profiler id="plan-scheduling" onRender={() => onRender(drafts.current)}><OnPage out={drafts} /></Profiler> : <OnPage out={drafts} />, { wrapper: Wrapper });
   return drafts;
 }
 
@@ -126,6 +125,48 @@ describe('plan scheduling limits', () => {
     await waitFor(() => expect(screen.getByRole('spinbutton', { name: 'Minimum time' })).toHaveValue(45));
     expect(screen.getByRole('spinbutton', { name: 'Minimum altitude' })).toHaveValue(null);
     await waitFor(() => expect(screen.queryByText(/These limits changed elsewhere/)).not.toBeInTheDocument());
+  });
+
+  it('shows the saved limits in the first render with them, with nothing unsaved', () => {
+    const { stored } = fixture({ minimum_altitude_degrees: 35, meridian_window_minutes: 10 });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    client.setQueryData(['observingSettings', 'project', project], stored());
+    // Read the DOM and the save bar's list at every commit: a render that
+    // shows empty limits, or marks them unsaved, is what a test or a person
+    // can catch between two commits.
+    const shown: string[] = [];
+    const record = (drafts: Drafts | null) => {
+      const fields = ['Minimum altitude', 'Meridian window'].map(label => screen.queryByRole('spinbutton', { name: label }) as HTMLInputElement | null);
+      if (fields.every(field => field)) shown.push(`${fields.map(field => field!.value).join(' ')} ${drafts?.unsaved.length ?? 0}`);
+    };
+    mount(true, client, record);
+    expect(shown.length).toBeGreaterThan(0);
+    expect(shown.filter(values => values !== '35 10 0')).toEqual([]);
+  });
+
+  it('a newer copy replaces unedited limits, and flags edited ones', async () => {
+    const { stored, store } = fixture({ minimum_altitude_degrees: 35 });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    const drafts = mount(true, client);
+    const altitude = await screen.findByRole('spinbutton', { name: 'Minimum altitude' });
+    await waitFor(() => expect(altitude).toHaveValue(35));
+    store({ ...stored(), revision: 1, scheduling: { minimum_altitude_degrees: 40 } });
+    await act(() => client.refetchQueries({ queryKey: ['observingSettings', 'project', project] }));
+    await waitFor(() => expect(altitude).toHaveValue(40));
+    expect(drafts.current!.unsaved).toEqual([]);
+    expect(screen.queryByText(/changed elsewhere/)).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Minimum time' }), { target: { value: '60' } });
+    store({ ...stored(), revision: 2, scheduling: { minimum_altitude_degrees: 45 } });
+    await act(() => client.refetchQueries({ queryKey: ['observingSettings', 'project', project] }));
+    expect(await screen.findByText(/These limits changed elsewhere/)).toBeInTheDocument();
+    expect(screen.getByRole('spinbutton', { name: 'Minimum time' })).toHaveValue(60);
+    expect(altitude).toHaveValue(40);
+    // Discard drops the edits and shows the newer limits.
+    act(() => drafts.current!.discardAll());
+    await waitFor(() => expect(altitude).toHaveValue(45));
+    expect(screen.getByRole('spinbutton', { name: 'Minimum time' })).toHaveValue(null);
+    expect(screen.queryByText(/changed elsewhere/)).not.toBeInTheDocument();
   });
 
   it('is read only without write access', async () => {

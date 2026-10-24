@@ -61,13 +61,16 @@ export default function RigProfileCard({ slug }: { slug: string }) {
   const summaries = useQuery({ queryKey: ['directorRigProfiles'], queryFn: apiClient.getDirectorRigProfiles, refetchOnWindowFocus: false });
   const placed = summaries.data?.find(entry => entry.catalog_slug === slug)?.site;
   const [form, setForm] = useState<RigProfileForm | null>(null);
-  const [siteId, setSiteId] = useState<string | null>(null);
-  // The rig's Target Scheduler limits, saved with its observing settings.
-  const [scheduling, setScheduling] = useState<SchedulingOverrides>({});
+  // The planning site and the rig's Target Scheduler limits, saved with its
+  // observing settings. Until the person edits one (undefined or null), it
+  // shows the saved value, so a newer copy reaches it.
+  const [siteDraft, setSiteDraft] = useState<string | null | undefined>(undefined);
+  const [schedulingDraft, setSchedulingDraft] = useState<SchedulingOverrides | null>(null);
+  const siteId = siteDraft !== undefined ? siteDraft : rigSettings.data?.site_id ?? null;
+  const scheduling = schedulingDraft ?? rigSettings.data?.scheduling ?? {};
   const [problem, setProblem] = useState('');
   const [notice, setNotice] = useState('');
   useEffect(() => { if (loaded.data) setForm(formFromProfile(loaded.data.profile)); }, [loaded.data]);
-  useEffect(() => { if (rigSettings.data) { setSiteId(rigSettings.data.site_id); setScheduling(rigSettings.data.scheduling ?? {}); } }, [rigSettings.data]);
   const schedulingChanged = !!rigSettings.data && JSON.stringify(compactOverrides(scheduling)) !== JSON.stringify(compactOverrides(rigSettings.data.scheduling ?? {}));
   // What the rig inherits: every plan's limits, then its site's.
   const globalSettings = useQuery({ queryKey: ['observingSettings', 'global', sites.data?.global_id], queryFn: () => apiClient.getObservingSettings('global', sites.data!.global_id), enabled: !!sites.data, refetchOnWindowFocus: false });
@@ -100,7 +103,11 @@ export default function RigProfileCard({ slug }: { slug: string }) {
       }
       return saved;
     },
-    onSuccess: saved => setNotice(`Saved rig profile revision ${saved.profile.revision}.`),
+    onSuccess: saved => {
+      setNotice(`Saved rig profile revision ${saved.profile.revision}.`);
+      // The site and limits are saved too, or matched what was saved.
+      setSiteDraft(undefined); setSchedulingDraft(null);
+    },
     // Either step may have changed what planning reads for the rig.
     onSettled: () => { void client.invalidateQueries({ queryKey: ['directorRigProfiles'] }); void client.invalidateQueries({ queryKey: ['rigScheduling'] }); },
   });
@@ -109,7 +116,7 @@ export default function RigProfileCard({ slug }: { slug: string }) {
   const httpError = isAxiosError(save.error) ? save.error
     : save.error instanceof Error && isAxiosError(save.error.cause) ? save.error.cause : null;
   const stale = httpError?.response?.status === 409;
-  const reload = () => { setNotice(''); setProblem(''); save.reset(); void loaded.refetch(); if (rigId) void rigSettings.refetch(); };
+  const reload = () => { setNotice(''); setProblem(''); save.reset(); setSiteDraft(undefined); setSchedulingDraft(null); void loaded.refetch(); if (rigId) void rigSettings.refetch(); };
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (!loaded.data || !form || !canWrite || save.isPending) return;
@@ -174,7 +181,7 @@ export default function RigProfileCard({ slug }: { slug: string }) {
         <legend>Site</legend>
         <label className="rig-profile-field" htmlFor={`${slug}-planning-site`}><span>Planning site</span>
           <span className="rig-profile-input">
-            <select id={`${slug}-planning-site`} aria-label="Planning site" value={siteId ?? ''} disabled={!rigSettings.data} onChange={event => setSiteId(event.target.value || null)}>
+            <select id={`${slug}-planning-site`} aria-label="Planning site" value={siteId ?? ''} disabled={!rigSettings.data} onChange={event => setSiteDraft(event.target.value || null)}>
               <option value="">None</option>
               {sites.data?.sites.map(site => <option key={site.id} value={site.id}>{site.name}</option>)}
             </select>
@@ -214,7 +221,7 @@ export default function RigProfileCard({ slug }: { slug: string }) {
       <fieldset disabled={disabled} className="scheduling-defaults">
         <legend>Target Scheduler limits</legend>
         <p className="director-muted">Click Apply to update projects in this rig's database. Plan-specific limits override these values. Blank fields use the site's defaults, then the global defaults.</p>
-        <SchedulingFields label="Rig Target Scheduler limits" overrides={scheduling} onChange={next => setScheduling(compactOverrides(next))}
+        <SchedulingFields label="Rig Target Scheduler limits" overrides={scheduling} onChange={next => setSchedulingDraft(compactOverrides(next))}
           inherited={parentLimits.values} inheritedFrom={limit => parentLimits.from[limit]} disabled={disabled || !rigSettings.data} />
       </fieldset>
       {rigId && <RigSchedulingApply rigId={rigId} unsaved={schedulingChanged} />}

@@ -111,16 +111,18 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
     enabled: projectId !== undefined,
   });
   // The folder the masters go to: what this project used last, else its name.
-  const [publishFolder, setPublishFolder] = useState<string | null>(null);
+  // Until the person edits it (null), the field shows that folder as soon as
+  // the project's settings load.
+  const [folderDraft, setFolderDraft] = useState<string | null>(null);
+  const publishFolder =
+    folderDraft ??
+    (projectId !== undefined && projectSettings.isLoading
+      ? ''
+      : (projectSettings.data?.process_folder ?? request.label));
   const [publishOnFinish, setPublishOnFinish] = useState(false);
-  useEffect(() => {
-    if (publishFolder !== null) return;
-    if (projectId !== undefined && projectSettings.isLoading) return;
-    setPublishFolder(projectSettings.data?.process_folder ?? request.label);
-  }, [publishFolder, projectId, projectSettings.isLoading, projectSettings.data, request.label]);
   const publish = useMutation({
     onMutate: () => queryClient.cancelQueries({ queryKey: ['db', request.dbId, 'wbpp-run'] }),
-    mutationFn: () => apiClient.publishWbppRun(request.dbId, (publishFolder ?? '').trim()),
+    mutationFn: () => apiClient.publishWbppRun(request.dbId, publishFolder.trim()),
     onError: () => queryClient.invalidateQueries({ queryKey: ['db', request.dbId, 'wbpp-run'] }),
     onSuccess: async (status) => {
       await queryClient.cancelQueries({ queryKey: ['db', request.dbId, 'wbpp-run'] });
@@ -153,8 +155,8 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
           .filter(Boolean),
         scope_label: request.label,
         ...(workRoot.trim() ? { work_root: workRoot.trim() } : {}),
-        ...(publishOnFinish && processDir && (publishFolder ?? '').trim()
-          ? { publish_folder: (publishFolder ?? '').trim() }
+        ...(publishOnFinish && processDir && publishFolder.trim()
+          ? { publish_folder: publishFolder.trim() }
           : {}),
       }),
     onSuccess: (status) => {
@@ -376,8 +378,8 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
               <input
                 type="text"
                 aria-label="Process folder"
-                value={publishFolder ?? ''}
-                onChange={(event) => setPublishFolder(event.target.value)}
+                value={publishFolder}
+                onChange={(event) => setFolderDraft(event.target.value)}
               />
             </label>
           )}
@@ -506,17 +508,14 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
                         type="text"
                         aria-label="Process folder"
                         disabled={copying}
-                        value={publishFolder ?? ''}
-                        onChange={(event) => setPublishFolder(event.target.value)}
+                        value={publishFolder}
+                        onChange={(event) => setFolderDraft(event.target.value)}
                       />
                     </label>
                     <button
                       type="button"
                       className="header-button"
-                      disabled={
-                        copying ||
-                        !(publishFolder ?? '').trim()
-                      }
+                      disabled={copying || !publishFolder.trim()}
                       onClick={() => publish.mutate()}
                     >
                       {copying ? 'Copying…' : 'Save masters'}
