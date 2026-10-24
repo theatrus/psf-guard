@@ -20,7 +20,6 @@ import type {
   StackMethod,
   StackScoringSettings,
   StackStretchPreview,
-  StackColorRole,
 } from '../api/types';
 import StackPreviewInspector from './StackPreviewInspector';
 import CalibrationMasterButton from './CalibrationMasterInspector';
@@ -32,7 +31,7 @@ import {
   colorCatalogQueryPrefix,
 } from './channelProcessing';
 import { colorSourceKey } from './stackColorSources';
-import { defaultColorProcessing } from './stackColorProcessing';
+import { fetchColorDefaults } from './defaultColorSetup';
 import StackStretchControls from './StackStretchControls';
 import StackColorCalibrationLine from './StackColorCalibrationLine';
 import { calibrationOutdated } from './stackCalibrationStale';
@@ -74,7 +73,6 @@ interface StackPreviewPanelProps {
 
 /** Every color role, so the server can narrow the person's default color
  *  pipeline to whichever composite a target's channels make. */
-const ALL_COLOR_ROLES: StackColorRole[] = ['luminance', 'red', 'green', 'blue', 'ha', 'oiii', 'sii'];
 
 /** A result card's width when the page does not choose one. */
 export const DEFAULT_STACK_CARD_SIZE = 550;
@@ -512,7 +510,9 @@ export default function StackPreviewPanel({
             exposure_group_key: channel.exposureGroup?.key,
             calibration: channelOverride(channel.key)!,
           })),
-        color_defaults: defaultColorProcessing(ALL_COLOR_ROLES),
+        // A target with no color preview gets its first one from the
+        // default Color setup, chosen in Settings → Setups.
+        color_defaults: await fetchColorDefaults(queryClient),
         channel: variables.channel && {
           target_id: variables.channel.targetId,
           filter_name: variables.channel.filterName,

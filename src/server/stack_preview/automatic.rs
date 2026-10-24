@@ -738,8 +738,9 @@ async fn refresh_project(
     reason: RefreshReason,
 ) -> Result<RefreshOutcome, AppError> {
     let ctx_for_plan = Arc::clone(ctx);
+    let state_for_plan = Arc::clone(state);
     let planned = tokio::task::spawn_blocking(move || {
-        let Some(plan) = plan_refresh(&ctx_for_plan, project_id)? else {
+        let Some(plan) = plan_automatic_refresh(&state_for_plan, &ctx_for_plan, project_id)? else {
             return Ok::<_, AppError>(None);
         };
         validate_request(&plan.request)?;
@@ -809,6 +810,7 @@ async fn refresh_project(
                     .filter(|existing| existing.state == StackJobState::Completed)
             });
         if let Some(existing) = finished {
+            let existing = with_refresh_color_defaults(existing, &request);
             // Its previews may be out of date: they render again from its
             // FITS. Checking reads files, so it runs off the async runtime.
             let render_queued = {
@@ -816,7 +818,8 @@ async fn refresh_project(
                 let ctx = Arc::clone(ctx);
                 let existing = existing.clone();
                 tokio::task::spawn_blocking(move || {
-                    super::queue_preview_render(&state, &ctx, &existing, true, None).is_some()
+                    let defaults = existing.color_defaults.clone();
+                    super::queue_preview_render(&state, &ctx, &existing, true, defaults).is_some()
                 })
                 .await
                 .unwrap_or(false)
@@ -877,6 +880,36 @@ async fn refresh_project(
     } else {
         RefreshOutcome::Unchanged
     })
+}
+
+/// [`plan_refresh`] for an automatic refresh, whose builds carry the
+/// pipeline of the default Color setup, read now: a target with no color
+/// preview gets its first one when its channels are stacked.
+pub(super) fn plan_automatic_refresh(
+    state: &AppState,
+    ctx: &DatabaseContext,
+    project_id: i32,
+) -> Result<Option<RefreshPlan>, AppError> {
+    let Some(mut plan) = plan_refresh(ctx, project_id)? else {
+        return Ok(None);
+    };
+    plan.request.color_defaults = Some(crate::server::processing_setups::default_color_processing(
+        state,
+    ));
+    Ok(Some(plan))
+}
+
+/// A finished build a refresh found for one of its channels, carrying the
+/// refresh's color pipeline for a target's first color preview. A person's
+/// build keeps the pipeline it was asked with.
+pub(super) fn with_refresh_color_defaults(
+    mut finished: StackPreviewJob,
+    request: &StackPreviewRequest,
+) -> StackPreviewJob {
+    if finished.automatic || finished.color_defaults.is_none() {
+        finished.color_defaults = request.color_defaults.clone();
+    }
+    finished
 }
 
 /// A channel's identity within its database, for telling refreshes that
@@ -1226,8 +1259,7 @@ pub(super) fn refresh_request(
         scoring: scoring_overrides(&newest.scoring),
         // The server's current method, so a settings change reaches the next refresh.
         method: None,
-        // A refresh brings back the color previews composed before, never a
-        // first one nobody asked for.
+        // An automatic refresh adds the default Color setup's pipeline.
         color_defaults: None,
         channel: None,
     })
@@ -1249,8 +1281,8 @@ fn scoring_overrides(scoring: &StackScoringSettings) -> ScoringOverrideQuery {
 /// Compose a target's color previews again once a build leaves none of its
 /// channels waiting, so color follows the channels in the queue: the ones
 /// composed before, from the newest stack of each of their channels, and,
-/// when the build carried the person's display pipeline and the target has
-/// none, its first composite. A target another build is still stacking
+/// when the build carried a color pipeline and the target has none, its
+/// first composite. A target another build is still stacking
 /// waits for that build, which composes it when it ends.
 pub(super) fn compose_colors_after(
     state: &Arc<AppState>,
@@ -1751,7 +1783,154 @@ mod tests {
         ));
         assert!(state.auto_stacks.scheduled().is_empty());
         assert!(state.auto_stacks.starting.lock().unwrap().is_empty());
+        // It carries the default color pipeline, so the target gets its
+        // first color preview once its channels are stacked.
+        assert_eq!(
+            serde_json::to_value(&build.color_defaults).unwrap(),
+            serde_json::to_value(Some(
+                crate::server::processing_setups::default_color_processing(&state)
+            ))
+            .unwrap()
+        );
         state.stack_previews.request_cancel(&build.job_id);
+    }
+
+    /// A server whose setups file marks a Color setup whose red stretch
+    /// aims at `target_median` as the default.
+    fn state_with_default_color_setup(
+        directory: &std::path::Path,
+        target_median: f64,
+    ) -> Arc<AppState> {
+        let state = Arc::new(AppState::new_for_test(
+            rusqlite::Connection::open_in_memory().unwrap(),
+        ));
+        let registry = directory.join("config.json");
+        *state.registry_path.write().unwrap() = Some(registry.clone());
+        mark_default_color_setup(&registry, target_median);
+        state
+    }
+
+    fn mark_default_color_setup(registry: &std::path::Path, target_median: f64) {
+        use crate::processing_setups::{
+            ProcessingSetupKind, ProcessingSetupRecord, ProcessingSetupsRegistry,
+        };
+        let path = ProcessingSetupsRegistry::path_for_database_registry(registry);
+        let mut setups = ProcessingSetupsRegistry::load(&path).unwrap();
+        let name = format!("Median {target_median}");
+        setups
+            .upsert(ProcessingSetupRecord {
+                name: name.clone(),
+                kind: ProcessingSetupKind::Color,
+                settings: serde_json::json!({
+                    "input_stretches": { "red": [{
+                        "model": { "type": "auto-mtf", "target_median": target_median,
+                                   "shadows_clip": -2.8 },
+                        "color_strategy": "linked",
+                    }] },
+                }),
+                created_unix_seconds: 1,
+                updated_unix_seconds: 1,
+            })
+            .unwrap();
+        setups.seed_default_color(serde_json::json!({}));
+        setups.mark_default_color(&name).unwrap();
+        setups.save(&path).unwrap();
+    }
+
+    fn red_median(request: &StackPreviewRequest) -> f64 {
+        let defaults = request
+            .color_defaults
+            .as_ref()
+            .expect("the refresh carries no color pipeline");
+        serde_json::to_value(&defaults.input_stretches[&color::StackColorRole::Red]).unwrap()[0]
+            ["model"]["target_median"]
+            .as_f64()
+            .unwrap()
+    }
+
+    #[test]
+    fn a_refresh_carries_the_default_color_setup_as_it_is_now() {
+        let (_directory, ctx) = project_with_a_stale_channel();
+        let setups = tempfile::tempdir().unwrap();
+        let state = state_with_default_color_setup(setups.path(), 0.1);
+        let plan = plan_automatic_refresh(&state, &ctx, 1).unwrap().unwrap();
+        assert_eq!(red_median(&plan.request), 0.1);
+        // Every channel has a stretch, whichever channels the setup named.
+        assert_eq!(
+            plan.request.color_defaults.unwrap().input_stretches.len(),
+            7
+        );
+
+        // Another setup marked since: the next refresh reads it.
+        mark_default_color_setup(&setups.path().join("config.json"), 0.3);
+        let plan = plan_automatic_refresh(&state, &ctx, 1).unwrap().unwrap();
+        assert_eq!(red_median(&plan.request), 0.3);
+    }
+
+    #[test]
+    fn a_refresh_that_builds_a_new_channel_carries_the_default_color_setup() {
+        let guard = POLICY_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        configure(AutomationPolicy {
+            enabled: true,
+            build_new_channels: true,
+            ..AutomationPolicy::default()
+        });
+        let (_directory, ctx) = project_with_a_stale_channel();
+        // No card yet: R is a new channel.
+        std::fs::remove_file(latest_path(&ctx.stack_root, 1)).unwrap();
+        let setups = tempfile::tempdir().unwrap();
+        let state = state_with_default_color_setup(setups.path(), 0.15);
+        let plan = plan_automatic_refresh(&state, &ctx, 1).unwrap().unwrap();
+        configure(AutomationPolicy::default());
+        drop(guard);
+        assert_eq!(plan.expected.len(), 1, "{:?}", plan.expected);
+        assert_eq!(red_median(&plan.request), 0.15);
+    }
+
+    #[test]
+    fn a_finished_build_a_refresh_finds_takes_the_refreshs_color_pipeline_unless_a_person_chose_one(
+    ) {
+        let (_directory, ctx) = project_with_a_stale_channel();
+        let setups = tempfile::tempdir().unwrap();
+        let state = state_with_default_color_setup(setups.path(), 0.1);
+        let request = plan_automatic_refresh(&state, &ctx, 1)
+            .unwrap()
+            .unwrap()
+            .request;
+        let mut chosen = request.color_defaults.clone().unwrap();
+        chosen.input_stretches.insert(
+            color::StackColorRole::Red,
+            serde_json::from_value(serde_json::json!([{
+                "model": { "type": "auto-mtf", "target_median": 0.4, "shadows_clip": -2.8 },
+            }]))
+            .unwrap(),
+        );
+        let finished = |automatic: bool, defaults: Option<&color::StackColorProcessing>| {
+            let mut job: StackPreviewJob = serde_json::from_value(serde_json::json!({
+                "schema_version": 2, "job_id": "f".repeat(64), "database_id": ctx.id,
+                "project_id": 1, "state": "completed", "accepted_only": false,
+                "created_unix_seconds": 1, "stacking_version": "", "groups": [], "error": null,
+            }))
+            .unwrap();
+            job.automatic = automatic;
+            job.color_defaults = defaults.cloned();
+            with_refresh_color_defaults(job, &request)
+        };
+        let median = |job: StackPreviewJob| {
+            red_median(&StackPreviewRequest {
+                color_defaults: job.color_defaults,
+                ..request.clone()
+            })
+        };
+        // An automatic build carries the pipeline it was built with, or
+        // none from before defaults: either way the refresh's applies.
+        assert_eq!(median(finished(true, None)), 0.1);
+        assert_eq!(median(finished(true, Some(&chosen))), 0.1);
+        // A person's build keeps the pipeline they asked with.
+        assert_eq!(median(finished(false, Some(&chosen))), 0.4);
+        assert_eq!(median(finished(false, None)), 0.1);
     }
 
     #[test]

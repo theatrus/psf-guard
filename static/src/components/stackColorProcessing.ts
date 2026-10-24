@@ -10,6 +10,11 @@ import { defaultStretchRequest } from './stackStretchModels';
 
 export const BACKGROUND_COLOR_CACHE_VERSION = 4;
 
+/** Every channel a color preview can use, in display order. */
+export const ALL_COLOR_ROLES: StackColorRole[] = [
+  'luminance', 'red', 'green', 'blue', 'ha', 'oiii', 'sii',
+];
+
 export function defaultBackgroundModel(
   kind: StackBackgroundConfig['model']['kind'] = 'automatic'
 ): StackBackgroundConfig['model'] {
@@ -54,8 +59,12 @@ export function colorCalibrationApplies(roles: StackColorRole[]): boolean {
   return (['red', 'green', 'blue'] as const).every((role) => roles.includes(role));
 }
 
-/** A new color build's processing. Its inputs run the deconvolution and
- *  RC-Astro steps their channel cards applied. */
+/** The built-in color pipeline, for these channels. Its inputs run the
+ *  deconvolution and RC-Astro steps their channel cards applied. The server
+ *  seeds the "Default" Color setup with this pipeline for every channel
+ *  (src/processing_setups/default_color.json, checked by a test), and new
+ *  color builds start from whichever setup is marked default; this is the
+ *  fallback when the server's choice is not available. */
 export function defaultColorProcessing(roles: StackColorRole[]): StackColorProcessing {
   return {
     input_processing: 'channels',
@@ -70,14 +79,17 @@ export function defaultColorProcessing(roles: StackColorRole[]): StackColorProce
   };
 }
 
+/** What a color build of these channels runs: the preview's own processing,
+ *  or, for a new or outdated preview, `defaults` for its channels. */
 export function processingForColorBuild(
   artifact: Pick<StackColorJob, 'cache_version' | 'processing'> | undefined,
-  roles: StackColorRole[]
+  roles: StackColorRole[],
+  defaults: (roles: StackColorRole[]) => StackColorProcessing = defaultColorProcessing
 ): StackColorProcessing {
   if (!artifact || artifact.cache_version < BACKGROUND_COLOR_CACHE_VERSION) {
-    return defaultColorProcessing(roles);
+    return defaults(roles);
   }
-  const processing = artifact.processing ?? defaultColorProcessing(roles);
+  const processing = artifact.processing ?? defaults(roles);
   return {
     ...processing,
     background_extraction: processing.background_extraction

@@ -4625,6 +4625,17 @@
   text-transform: uppercase;
 }
 
+.processing-setups-default {
+  margin-left: 0.5rem;
+  padding: 1px 7px;
+  border: 1px solid var(--color-primary);
+  border-radius: 999px;
+  color: var(--color-primary);
+  font-size: 0.68rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 .processing-setups-row-actions {
   display: flex;
   justify-content: flex-end;

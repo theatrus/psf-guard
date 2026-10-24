@@ -11,6 +11,12 @@
 //! the same Rust types the build endpoints deserialize, so a setup that loads
 //! is a setup the pipeline can parse. Parameter *ranges* are still enforced at
 //! build time by the endpoints themselves; this module only guarantees shape.
+//!
+//! One Color setup is the default: new color previews, a person's and the
+//! ones automatic refreshes compose, start from its pipeline. A registry that
+//! has never had a default gets a setup named "Default" with the built-in
+//! pipeline in [`DEFAULT_COLOR_SETTINGS`]; the server adds it when it loads
+//! the file and writes it with the next change, so a read never writes.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -21,6 +27,16 @@ use serde::{Deserialize, Serialize};
 pub const CURRENT_SCHEMA_VERSION: u32 = 1;
 pub const MAX_SETUP_NAME_CHARS: usize = 64;
 pub const MAX_SETUPS: usize = 200;
+
+/// The built-in color pipeline, which the seeded "Default" setup starts with:
+/// background extraction, an automatic MTF stretch on every channel, solar
+/// color calibration, and inputs that follow their channel cards. The
+/// frontend's `defaultColorProcessing` must produce exactly this JSON; a test
+/// on each side checks it.
+pub const DEFAULT_COLOR_SETTINGS: &str = include_str!("processing_setups/default_color.json");
+
+/// The name the seeded default Color setup gets when no setup uses it.
+pub const DEFAULT_COLOR_SETUP_NAME: &str = "Default";
 
 /// Which processing editor a setup belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,6 +74,12 @@ pub struct ProcessingSetupRecord {
 pub struct ProcessingSetupsRegistry {
     pub schema_version: u32,
     pub setups: Vec<ProcessingSetupRecord>,
+    /// The Color setup new color previews start from. `None` only in a file
+    /// written before defaults existed, which gets the seeded setup when it
+    /// loads. A name that no longer matches a Color setup means the
+    /// built-in pipeline.
+    #[serde(default)]
+    pub default_color: Option<String>,
 }
 
 impl Default for ProcessingSetupsRegistry {
@@ -65,6 +87,7 @@ impl Default for ProcessingSetupsRegistry {
         Self {
             schema_version: CURRENT_SCHEMA_VERSION,
             setups: Vec::new(),
+            default_color: None,
         }
     }
 }
@@ -177,12 +200,85 @@ impl ProcessingSetupsRegistry {
             .find(|setup| same_name(&setup.name, name))
     }
 
+    /// The Color setup marked as the default, when the mark matches one.
+    pub fn default_color_setup(&self) -> Option<&ProcessingSetupRecord> {
+        self.default_color
+            .as_deref()
+            .and_then(|name| self.find(name))
+            .filter(|setup| setup.kind == ProcessingSetupKind::Color)
+    }
+
+    /// Give a registry that has never had a default Color setup the seeded
+    /// one, with `settings` as its pipeline. A Color setup the person already
+    /// named "Default" becomes the default as it is. Its timestamps are zero
+    /// until someone saves over it. Returns true when the registry changed;
+    /// a registry with a default, even one since deleted, is left alone.
+    pub fn seed_default_color(&mut self, settings: serde_json::Value) -> bool {
+        if self.default_color.is_some() {
+            return false;
+        }
+        let mut candidates = [DEFAULT_COLOR_SETUP_NAME.to_string(), "Default color".into()]
+            .into_iter()
+            .chain((2..).map(|number| format!("Default color {number}")));
+        let name = loop {
+            let candidate = candidates.next().expect("the candidates never end");
+            match self.find(&candidate) {
+                Some(setup) if setup.kind == ProcessingSetupKind::Color => {
+                    self.default_color = Some(setup.name.clone());
+                    return true;
+                }
+                Some(_) => continue,
+                None => break candidate,
+            }
+        };
+        if self.setups.len() >= MAX_SETUPS {
+            return false;
+        }
+        self.setups.push(ProcessingSetupRecord {
+            name: name.clone(),
+            kind: ProcessingSetupKind::Color,
+            settings,
+            created_unix_seconds: 0,
+            updated_unix_seconds: 0,
+        });
+        self.setups.sort_by_key(|setup| setup.name.to_lowercase());
+        self.default_color = Some(name);
+        true
+    }
+
+    /// Mark a Color setup as the one new color previews start from.
+    pub fn mark_default_color(&mut self, name: &str) -> Result<()> {
+        let Some(setup) = self.find(name) else {
+            bail!("No processing setup is named {name}");
+        };
+        if setup.kind != ProcessingSetupKind::Color {
+            bail!(
+                "Only a Color setup can be the default for new color previews; \"{}\" is a view setup",
+                setup.name
+            );
+        }
+        self.default_color = Some(setup.name.clone());
+        Ok(())
+    }
+
     /// Insert or replace by name (case-insensitive). Returns true when an
     /// existing setup was replaced. A replacement keeps the original creation
     /// time and the original spelling wins on case-only differences, so a
-    /// re-import cannot silently fork "SHO" and "sho".
+    /// re-import cannot silently fork "SHO" and "sho". The default Color
+    /// setup can be replaced only by another Color setup.
     pub fn upsert(&mut self, mut record: ProcessingSetupRecord) -> Result<bool> {
         validate_setup_name(&record.name)?;
+        if record.kind != ProcessingSetupKind::Color
+            && self
+                .default_color_setup()
+                .is_some_and(|marked| same_name(&marked.name, &record.name))
+        {
+            bail!(
+                "\"{}\" is the default Color setup, so it cannot be replaced by a view setup. \
+                 Save the view setup under another name.",
+                record.name
+            );
+        }
         if let Some(existing) = self
             .setups
             .iter_mut()
@@ -202,10 +298,20 @@ impl ProcessingSetupsRegistry {
     }
 
     /// Remove by name (case-insensitive). Returns false when nothing matched.
-    pub fn remove(&mut self, name: &str) -> bool {
+    /// The default Color setup cannot be removed while it is marked.
+    pub fn remove(&mut self, name: &str) -> Result<bool> {
+        if self
+            .default_color_setup()
+            .is_some_and(|marked| same_name(&marked.name, name))
+        {
+            bail!(
+                "\"{name}\" is the default for new color previews. Mark another Color setup \
+                 as the default before deleting it."
+            );
+        }
         let before = self.setups.len();
         self.setups.retain(|setup| !same_name(&setup.name, name));
-        self.setups.len() != before
+        Ok(self.setups.len() != before)
     }
 }
 
@@ -313,8 +419,134 @@ mod tests {
         registry
             .upsert(record("Bright", ProcessingSetupKind::View))
             .unwrap();
-        assert!(!registry.remove("absent"));
-        assert!(registry.remove("BRIGHT"));
+        assert!(!registry.remove("absent").unwrap());
+        assert!(registry.remove("BRIGHT").unwrap());
         assert!(registry.setups.is_empty());
+    }
+
+    fn seeded() -> ProcessingSetupsRegistry {
+        let mut registry = ProcessingSetupsRegistry::default();
+        assert!(registry.seed_default_color(serde_json::json!({ "output_stretches": [] })));
+        registry
+    }
+
+    #[test]
+    fn the_built_in_pipeline_is_a_color_pipeline_for_every_channel() {
+        let settings: serde_json::Value = serde_json::from_str(DEFAULT_COLOR_SETTINGS).unwrap();
+        assert_eq!(settings["input_processing"], "channels");
+        assert_eq!(settings["color_calibration"]["white_reference"], "solar");
+        let roles = settings["input_stretches"].as_object().unwrap();
+        assert_eq!(
+            roles.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["blue", "green", "ha", "luminance", "oiii", "red", "sii"]
+        );
+    }
+
+    #[test]
+    fn a_registry_without_a_default_gets_one_seeded_once() {
+        let mut registry = seeded();
+        assert_eq!(registry.default_color.as_deref(), Some("Default"));
+        let setup = registry.default_color_setup().unwrap();
+        assert_eq!(setup.kind, ProcessingSetupKind::Color);
+        assert_eq!(setup.updated_unix_seconds, 0);
+        // Seeding again changes nothing, even after the seed is gone.
+        assert!(!registry.seed_default_color(serde_json::json!({})));
+        assert_eq!(registry.setups.len(), 1);
+        registry
+            .upsert(record("Deep SHO", ProcessingSetupKind::Color))
+            .unwrap();
+        registry.mark_default_color("deep sho").unwrap();
+        assert!(registry.remove("Default").unwrap());
+        assert!(!registry.seed_default_color(serde_json::json!({})));
+        assert!(registry.find("Default").is_none());
+    }
+
+    #[test]
+    fn seeding_uses_a_color_setup_already_named_default_and_steps_around_a_view_one() {
+        let mut registry = ProcessingSetupsRegistry::default();
+        registry
+            .upsert(record("default", ProcessingSetupKind::Color))
+            .unwrap();
+        assert!(registry.seed_default_color(serde_json::json!({})));
+        assert_eq!(registry.setups.len(), 1);
+        assert_eq!(registry.default_color.as_deref(), Some("default"));
+        assert_eq!(
+            registry.setups[0].created_unix_seconds, 100,
+            "kept as it was"
+        );
+
+        let mut registry = ProcessingSetupsRegistry::default();
+        registry
+            .upsert(record("Default", ProcessingSetupKind::View))
+            .unwrap();
+        assert!(registry.seed_default_color(serde_json::json!({})));
+        assert_eq!(registry.default_color.as_deref(), Some("Default color"));
+        assert_eq!(registry.setups.len(), 2);
+    }
+
+    #[test]
+    fn an_old_file_loads_without_a_default_and_a_new_one_keeps_its_mark() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("processing-setups.json");
+        std::fs::write(&path, r#"{ "schema_version": 1, "setups": [] }"#).unwrap();
+        let mut registry = ProcessingSetupsRegistry::load(&path).unwrap();
+        assert_eq!(registry.default_color, None);
+        registry.seed_default_color(serde_json::json!({}));
+        registry.save(&path).unwrap();
+        let restored = ProcessingSetupsRegistry::load(&path).unwrap();
+        assert_eq!(restored.default_color.as_deref(), Some("Default"));
+        assert!(restored.default_color_setup().is_some());
+    }
+
+    #[test]
+    fn only_a_color_setup_can_be_marked_default() {
+        let mut registry = seeded();
+        registry
+            .upsert(record("Bright", ProcessingSetupKind::View))
+            .unwrap();
+        assert!(registry.mark_default_color("Bright").is_err());
+        assert!(registry.mark_default_color("absent").is_err());
+        assert_eq!(registry.default_color.as_deref(), Some("Default"));
+        registry
+            .upsert(record("Deep SHO", ProcessingSetupKind::Color))
+            .unwrap();
+        registry.mark_default_color("DEEP sho").unwrap();
+        assert_eq!(
+            registry.default_color.as_deref(),
+            Some("Deep SHO"),
+            "stored spelling"
+        );
+    }
+
+    #[test]
+    fn the_default_cannot_be_deleted_or_replaced_by_a_view_setup() {
+        let mut registry = seeded();
+        assert!(registry.remove("default").is_err());
+        assert!(registry
+            .upsert(record("DEFAULT", ProcessingSetupKind::View))
+            .is_err());
+        // Saving a Color setup over it edits it and keeps the mark.
+        assert!(registry
+            .upsert(record("default", ProcessingSetupKind::Color))
+            .unwrap());
+        let setup = registry.default_color_setup().unwrap();
+        assert_eq!(setup.name, "Default");
+        assert_eq!(setup.updated_unix_seconds, 100);
+        assert_eq!(setup.settings["model"]["type"], "auto-mtf");
+    }
+
+    #[test]
+    fn a_mark_that_matches_no_color_setup_does_not_block_deletes() {
+        // A hand-edited file can mark a setup that is not there, or not a
+        // Color setup: the built-in pipeline applies and nothing is locked.
+        let mut registry = ProcessingSetupsRegistry {
+            default_color: Some("Mono".into()),
+            ..Default::default()
+        };
+        registry
+            .upsert(record("Mono", ProcessingSetupKind::View))
+            .unwrap();
+        assert!(registry.default_color_setup().is_none());
+        assert!(registry.remove("Mono").unwrap());
     }
 }

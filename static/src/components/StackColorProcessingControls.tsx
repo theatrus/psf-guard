@@ -28,8 +28,8 @@ import {
   colorCalibrationApplies,
   defaultBackgroundModel,
   defaultBackgroundExtraction,
-  defaultColorProcessing,
 } from './stackColorProcessing';
+import { useDefaultColorProcessing } from './defaultColorSetup';
 import ColorCalibrationSwitch from './ColorCalibrationSwitch';
 import ProcessingSetupsBar from './ProcessingSetupsBar';
 import { builtinColorSetups, colorSetupForRoles } from './processingSetups';
@@ -600,14 +600,23 @@ export default function StackColorProcessingControls({
   const rcAstroCapabilities = useRcAstroCapabilities().data;
   const rcAstroTools = rcAstroCapabilities?.tools;
   const calibrates = colorCalibrationApplies(roles);
-  const defaults = useMemo(() => defaultColorProcessing(roles), [roles]);
+  const colorDefaults = useDefaultColorProcessing();
+  const defaults = useMemo(() => colorDefaults(roles), [colorDefaults, roles]);
   const baseline = applied
     ? { ...applied, input_deconvolutions: applied.input_deconvolutions ?? {},
         input_rc_astro: applied.input_rc_astro ?? {} }
     : defaults;
   const [draft, setDraft] = useState<StackColorProcessing>(() => cloneProcessing(baseline));
   const [error, setError] = useState<string | null>(null);
-  const changed = canonicalJson(draft) !== canonicalJson(baseline);
+  const baselineJson = canonicalJson(baseline);
+  // A new preview's baseline is the default Color setup, which can arrive
+  // from the server after the editor opens: a draft nobody edited follows it.
+  const [draftBaselineJson, setDraftBaselineJson] = useState(baselineJson);
+  if (draftBaselineJson !== baselineJson) {
+    setDraftBaselineJson(baselineJson);
+    if (canonicalJson(draft) === draftBaselineJson) setDraft(cloneProcessing(baseline));
+  }
+  const changed = canonicalJson(draft) !== baselineJson;
   const toolName = (tool: string) => rcAstroTools?.find((schema) => schema.key === tool)?.name ?? tool;
   const channelSummary = channelProcessingSummary(channelProcessing, roles, toolName);
   const followsCards = draft.input_processing === 'channels';

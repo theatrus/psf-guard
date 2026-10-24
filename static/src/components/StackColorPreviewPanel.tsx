@@ -32,6 +32,7 @@ import { STACK_ACTIVITY_QUERY_KEY, useStackActivity } from '../hooks/useStackAct
 import { JOBS_QUERY_KEY } from '../api/jobs';
 import { buildColorExposureSets, colorSourceKey, colorSourcesLabel, completedColorArtifact, resolveColorSources, sameColorSourceFamily, wbppColorSet, type ColorExposureSet } from './stackColorSources';
 import { withRetainedColorExposureSets } from './colorExposureCards';
+import { useDefaultColorProcessing } from './defaultColorSetup';
 import './StackColorSources.css';
 
 /** A channel's frame count, or that WBPP made it and recorded none. */
@@ -484,6 +485,7 @@ export default function StackColorPreviewPanel({
   targetId = null,
 }: StackColorPreviewPanelProps) {
   const queryClient = useQueryClient();
+  const colorDefaults = useDefaultColorProcessing();
   const [watchedJobIds, setWatchedJobIds] = useState<string[]>([]);
   // The card that asked for each composition still being prepared, which
   // names no channel stacks yet to match a card by, and whether it came
@@ -874,7 +876,7 @@ export default function StackColorPreviewPanel({
           targetId: target.target_id, kind, palette,
           force: Boolean(artifact && !artifact.outdated),
           operationKey: key, cardKey: key, crop,
-          processing: processingForColorBuild(artifact, requiredRoles(kind, palette)),
+          processing: processingForColorBuild(artifact, requiredRoles(kind, palette), colorDefaults),
           inputSources: sources.inputSources,
         })}
         onInspect={setInspector}

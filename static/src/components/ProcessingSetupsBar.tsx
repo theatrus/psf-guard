@@ -3,8 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import type { ProcessingSetupKind } from '../api/types';
 import { useAccess } from '../auth/access';
-
-const SETUPS_QUERY_KEY = ['processing-setups'] as const;
+import { PROCESSING_SETUPS_QUERY_KEY, processingSetupsQuery } from './defaultColorSetup';
 const BUILTIN_PREFIX = 'builtin:';
 const SAVED_PREFIX = 'saved:';
 
@@ -39,11 +38,7 @@ export default function ProcessingSetupsBar({
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const setups = useQuery({
-    queryKey: SETUPS_QUERY_KEY,
-    queryFn: apiClient.getProcessingSetups,
-    staleTime: 30_000,
-  });
+  const setups = useQuery(processingSetupsQuery());
   const saved = (setups.data?.setups ?? []).filter((setup) => setup.kind === kind);
 
   const report = (message: string) => {
@@ -54,7 +49,7 @@ export default function ProcessingSetupsBar({
     setNotice(null);
     setError(cause instanceof Error ? cause.message : fallback);
   };
-  const refresh = () => queryClient.invalidateQueries({ queryKey: SETUPS_QUERY_KEY });
+  const refresh = () => queryClient.invalidateQueries({ queryKey: PROCESSING_SETUPS_QUERY_KEY });
 
   const save = useMutation({
     mutationFn: (name: string) => apiClient.saveProcessingSetup(name, kind, current()),

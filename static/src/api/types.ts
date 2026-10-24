@@ -1479,6 +1479,13 @@ export interface ProcessingSetup {
 export interface ProcessingSetupsDocument {
   schema_version: number;
   setups: ProcessingSetup[];
+  /** The Color setup new color previews start from; null when none is
+   *  marked and the built-in pipeline applies. The list response sets it;
+   *  an export file does not need it. */
+  default_color?: string | null;
+  /** The pipeline new color previews start from, with a stretch for every
+   *  channel: the marked setup's, or the built-in one. */
+  default_color_processing?: StackColorProcessing;
 }
 
 export interface ProcessingSetupsImportResult {

@@ -4063,6 +4063,79 @@ async fn a_failed_render_says_why_and_the_next_build_reuses_the_stack() {
     assert!(next.cached.is_some(), "the next Build reuses the stack");
 }
 
+/// Target 42's R, G and B, stacked and shown on their cards.
+fn rgb_channels_on_disk(cache: &FsPath) -> Vec<StackPreviewJob> {
+    [('1', "R"), ('2', "G"), ('3', "B")]
+        .into_iter()
+        .map(|(digit, filter)| {
+            let job = channel_stack_on_disk(cache, &digit.to_string().repeat(64), filter, "rev");
+            persist_latest_groups(cache, &job).unwrap();
+            job
+        })
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_refresh_that_finds_a_targets_channels_built_composes_its_first_color_preview() {
+    use color::StackColorRole::{Blue, Green, Red};
+    let cache = tempfile::tempdir().unwrap();
+    let state = state_with_project(cache.path());
+    let ctx = state.get_database("test").unwrap();
+    // The composition stays queued while the test looks at it.
+    let busy = state.stack_previews.line.reserve_main().await;
+    let channels = rgb_channels_on_disk(cache.path());
+    let mut refresh = build_request(Vec::new());
+    refresh.color_defaults = Some(crate::server::processing_setups::default_color_processing(
+        &state,
+    ));
+    // An automatic build of B from before carries no color pipeline; the
+    // refresh that finds it finished gives it the default one.
+    let mut found = channels[2].clone();
+    found.automatic = true;
+    assert!(found.color_defaults.is_none());
+    let found = automatic::with_refresh_color_defaults(found, &refresh);
+    automatic::compose_colors_after(&state, &ctx, &found);
+
+    let composed = state
+        .stack_previews
+        .color_jobs
+        .lock()
+        .unwrap()
+        .values()
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(composed.len(), 1, "one first color preview");
+    let first = &composed[0];
+    assert_eq!(
+        (first.target_id, first.kind),
+        (42, color::StackColorKind::Rgb)
+    );
+    assert!(first.automatic);
+    let processing = first.processing.as_ref().unwrap();
+    assert_eq!(
+        processing
+            .input_stretches
+            .keys()
+            .copied()
+            .collect::<Vec<_>>(),
+        [Red, Green, Blue]
+    );
+    assert!(processing.color_calibration.is_some(), "RGB is calibrated");
+
+    // Once the target has a color preview, the default pipeline plans
+    // nothing new for it: its preview follows its channels.
+    let mut shown = first.clone();
+    shown.state = StackJobState::Completed;
+    color::persist_latest_color(cache.path(), &shown).unwrap();
+    assert!(
+        color::requests_after_build(&ctx, 7, 42, refresh.color_defaults.as_ref())
+            .unwrap()
+            .is_empty()
+    );
+    state.stack_previews.request_cancel(&first.job_id);
+    drop(busy);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_automatic_render_leaves_a_persons_build_and_its_color_defaults_as_they_were() {
     let cache = tempfile::tempdir().unwrap();
