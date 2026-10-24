@@ -37,14 +37,14 @@ test('a running stack refreshes its image, survives a reload, and becomes the fi
   // Keep the job running deterministically while the page polls it. The
   // real preview renderer and HTTP cache behavior have Rust coverage.
   await page.route(`**/stack-previews/${jobId}/0/preview?*`, (route) => route.fulfill({
-    contentType: 'image/png',
-    body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64'),
+    contentType: 'image/svg+xml',
+    body: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="12"><rect width="16" height="12" fill="white"/></svg>',
   }));
   await page.goto(`/#/stacks?db=${encodeURIComponent(db.id)}&project=1`);
   const panel = page.locator('.stack-preview-panel');
   const image = panel.getByRole('img', { name: 'Alpha M44 B live stack preview' });
   await expect(image).toBeVisible();
-  await expect(image).toHaveJSProperty('naturalWidth', 1);
+  await expect(image).toHaveJSProperty('naturalWidth', 16);
   await expect(image).toHaveAttribute('src', /live=true&v=1$/);
   await expect(panel.getByRole('link', { name: 'Download linear FITS' })).toHaveCount(0);
   frames = 3;
