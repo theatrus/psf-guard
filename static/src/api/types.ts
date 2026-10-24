@@ -928,6 +928,8 @@ export interface StackGroupStatus {
   preview_stretch_version?: string | null;
   /** Set each time the card preview is rendered again from the FITS. */
   preview_revision?: string | null;
+  /** Temporary preview while stacking; never a source for processing or FITS downloads. */
+  live_preview?: { url: string; accepted_frames: number } | null;
   sky_orientation: StackSkyOrientation | null;
   reference_image_id: number | null;
   total_exposure_seconds: number;

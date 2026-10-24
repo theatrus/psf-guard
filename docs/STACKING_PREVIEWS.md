@@ -41,6 +41,19 @@ uses the same input set and cache as a full-set build. Once a result exists,
 **Rebuild current set** and the card’s **Rebuild** button force a new build. Rebuilding
 one channel replaces only that channel's saved result.
 
+While a channel stacks, its card shows a **Live stack** preview and the number
+of accepted frames in that image. PSF Guard refreshes it about every five seconds
+between batches, then keeps the latest image visible during final rejection.
+Slow frames can delay an update. The live image uses an automatic stretch and
+the reference frame's orientation; final processing and orientation follow when
+the build finishes.
+
+On a rebuild, **Inspect completed stack** and **Download completed linear FITS**
+still open the previous completed result. Live images are temporary displays;
+they cannot be used for color composition, processing, or FITS downloads. When
+the build completes, its finished preview replaces the live image. Stopping a
+rebuild restores the previous preview.
+
 - Every frame of the project, or of the target chosen in the header, is the
   input.
 - To stack a hand-picked set, select two or more images in **Images** and
@@ -534,8 +547,9 @@ editor, like starting a run.
 The stop takes effect between frames, between channels, and between the
 frames a calibration master reads, so it lands within one frame's work rather
 than instantly. A master stopped part way writes nothing.
-Nothing partial is published: a channel that stops before its FITS and preview
+No partial stack artifact is published: a channel that stops before its FITS and preview
 are written leaves no artifact, and the card says the channel was stopped.
+Its temporary live image disappears from the card.
 Channels that already finished keep their previews and are remembered as usual.
 Build again when you are ready; a stopped job is never reused as a cached
 result.

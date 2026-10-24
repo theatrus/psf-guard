@@ -771,6 +771,14 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
   await expect(progress).toContainText(/\d+\/3 frames/);
   await expect(panel.locator('.stack-preview-metrics')).toBeVisible();
 
+  const liveImage = panel.getByRole('img', { name: /live stack preview/i });
+  await expect(liveImage).toBeVisible({ timeout: 90_000 });
+  const liveUrl = await liveImage.getAttribute('src');
+  expect(liveUrl).toContain('live=true');
+  const liveResponse = await page.request.get(liveUrl!);
+  expect(liveResponse.status()).toBe(200);
+  expect(liveResponse.headers()['cache-control']).toBe('private, no-store');
+
   const results = panel.locator('.stack-preview-results');
   await expect(results).toHaveAttribute('data-job-state', 'completed', {
     timeout: 210_000,

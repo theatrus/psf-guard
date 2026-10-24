@@ -16,6 +16,10 @@
 
 ## Changes
 
+- Watch a channel's in-progress stack in **Stacks**, with a live preview updated
+  about every five seconds. The finished preview replaces it when processing
+  completes; completed FITS downloads remain separate during a rebuild.
+
 - Automatic stack refreshes now compose a target's first color preview once
   its channels are stacked, as a build you start does. New color previews
   start from the Color setup marked as the default. PSF Guard adds one named

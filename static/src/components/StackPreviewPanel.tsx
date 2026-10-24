@@ -1146,6 +1146,14 @@ export default function StackPreviewPanel({
                   : null;
                 const groupBusy =
                   activeGroup?.state === 'queued' || activeGroup?.state === 'running';
+                const livePreview = activeEntry?.job.state === 'running' && activeGroup?.state === 'running'
+                  ? activeGroup.live_preview : null;
+                const previewUrl = livePreview?.url
+                  || (stretchKey && starsView[stretchKey] && appliedStretch?.stars_preview_url)
+                  || appliedStretch?.preview_url
+                  || (artifact ? apiClient.getStackPreviewUrl(
+                    dbId, artifact.jobId, artifact.group.index, previewRevision(artifact)
+                  ) : undefined);
                 const canBuildChannel = (current?.images.length ?? 0) >= 2;
                 const progressGroup = activeGroup ?? artifact?.group;
                 const liveCurve = groupBusy ? activeGroup?.snr : null;
@@ -1257,8 +1265,8 @@ export default function StackPreviewPanel({
                           <button
                             className="stack-preview-card-action"
                             type="button"
-                            aria-label="Inspect full size"
-                            title="Inspect full size"
+                            aria-label={livePreview ? 'Inspect completed stack' : 'Inspect full size'}
+                            title={livePreview ? 'Inspect completed stack' : 'Inspect full size'}
                             onClick={() => setInspector(artifact)}
                           >
                             Inspect
@@ -1274,8 +1282,8 @@ export default function StackPreviewPanel({
                               artifact.artifactRevision
                             )}
                             download
-                            aria-label="Download linear FITS"
-                            title="Download linear FITS"
+                            aria-label={livePreview ? 'Download completed linear FITS' : 'Download linear FITS'}
+                            title={livePreview ? 'Download completed linear FITS' : 'Download linear FITS'}
                           >
                             FITS
                           </a>
@@ -1308,20 +1316,16 @@ export default function StackPreviewPanel({
                       <div className="stack-preview-resume-note">{progressGroup.resume_note}</div>
                     )}
 
-                    {artifact && (
+                    {(artifact || livePreview) && (
                       <div className="stack-preview-image">
                         <img
-                          src={(stretchKey && starsView[stretchKey] && appliedStretch?.stars_preview_url)
-                            || appliedStretch?.preview_url
-                            || apiClient.getStackPreviewUrl(
-                              dbId, artifact.jobId, artifact.group.index, previewRevision(artifact)
-                            )}
-                          alt={`${targetName} ${channelLabel(filterName, exposureGroup)} stack preview`}
+                          src={previewUrl}
+                          alt={`${targetName} ${channelLabel(filterName, exposureGroup)} ${livePreview ? 'live ' : ''}stack preview`}
                         />
-                        {isSkyOriented(artifact.group.sky_orientation) && (
+                        {!livePreview && artifact && isSkyOriented(artifact.group.sky_orientation) && (
                           <span className="stack-preview-orientation">N ↑ · E ←</span>
                         )}
-                        {stretchKey && appliedStretch?.stars_preview_url && (
+                        {!livePreview && stretchKey && appliedStretch?.stars_preview_url && (
                           <div className="stack-preview-stars-toggle" role="group" aria-label="Star removal view">
                             <button
                               type="button"
@@ -1345,6 +1349,11 @@ export default function StackPreviewPanel({
                           </div>
                         )}
                       </div>
+                    )}
+                    {livePreview && (
+                      <p className="stack-preview-resume-note" role="status">
+                        Live stack · {livePreview.accepted_frames} accepted frames · final processing pending
+                      </p>
                     )}
                     {artifact && artifact.group.output_channels === 3 && (() => {
                       // Applied processing says what it did; without any, the
