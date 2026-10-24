@@ -1,6 +1,7 @@
-import { expect, test, type Locator, type Page } from '@playwright/test';
+import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test';
 import * as fs from 'fs';
 import * as path from 'path';
+import { fileURLToPath } from 'url';
 import type { StackCalibrationMasters } from '../src/api/types';
 import { registerFixtureDb, resetDatabases, waitForCacheReady, openSettings } from './helpers';
 import { jobRow, stubJobs } from './jobRows';
@@ -594,14 +595,43 @@ test('runs RC-Astro on the color channels together', async ({ page }, testInfo) 
   await together.screenshot({ path: testInfo.outputPath('color-channels-together-mobile.png') });
 });
 
-test.beforeEach(async ({ request }, testInfo) => {
-  await resetDatabases(request);
-  // Setups are global and survive a database reset.
-  const setups = (await (await request.get('/api/processing-setups')).json()).data.setups;
-  for (const setup of setups) {
+// The built-in color pipeline the server seeds the "Default" setup with.
+const BUILT_IN_COLOR_PIPELINE = JSON.parse(fs.readFileSync(
+  fileURLToPath(new URL('../../src/processing_setups/default_color.json', import.meta.url)), 'utf8'
+));
+
+interface ListedSetup { name: string; kind: string; updated_unix_seconds: number }
+
+/** Setups are global and survive a database reset. Leave only the seeded
+ *  "Default" Color setup, marked as the default and holding the built-in
+ *  pipeline, so a test that edits or re-marks it cannot reach the next. */
+async function resetProcessingSetups(request: APIRequestContext) {
+  const listed = async () => (await (await request.get('/api/processing-setups')).json()).data as {
+    setups: ListedSetup[]; default_color: string | null;
+  };
+  const seed = (await listed()).setups.find((setup) => setup.name === 'Default');
+  // An untouched seed has no time; anything else is saved over.
+  if (seed?.kind !== 'color' || seed.updated_unix_seconds !== 0) {
+    const saved = await request.post('/api/processing-setups', {
+      data: { name: 'Default', kind: 'color', settings: BUILT_IN_COLOR_PIPELINE },
+    });
+    expect(saved.ok()).toBe(true);
+  }
+  const marked = await request.put('/api/processing-setups/Default/default');
+  expect(marked.ok()).toBe(true);
+  for (const setup of (await listed()).setups) {
+    if (setup.name === 'Default') continue;
     const response = await request.delete(`/api/processing-setups/${encodeURIComponent(setup.name)}`);
     expect(response.ok()).toBe(true);
   }
+  const reset = await listed();
+  expect(reset.default_color).toBe('Default');
+  expect(reset.setups.map((setup) => setup.name)).toEqual(['Default']);
+}
+
+test.beforeEach(async ({ request }, testInfo) => {
+  await resetDatabases(request);
+  await resetProcessingSetups(request);
   const entry = await registerFixtureDb(request, {
     name: 'Stack Preview e2e',
     // Removing a registry entry preserves its cache; each test needs its own slug.
@@ -1514,6 +1544,76 @@ test('shows a processing run asked for before the page opened, then its result',
   await expect.poll(() => savedReads, { timeout: 15_000 }).toBeGreaterThan(readsWhileRunning);
 });
 
+test('starts a first color preview from the default Color setup, chosen in Settings', async ({
+  page, request,
+}, testInfo) => {
+  test.setTimeout(180_000);
+  seedSyntheticColorStacks(dbId, 2);
+  // A Color setup with no background extraction and a brighter stretch.
+  const faint = {
+    ...BUILT_IN_COLOR_PIPELINE,
+    background_extraction: null,
+    output_stretches: [{
+      model: { type: 'auto-mtf', target_median: 0.3, shadows_clip: -2.8 },
+      color_strategy: 'linked',
+    }],
+  };
+  const saved = await request.post('/api/processing-setups', {
+    data: { name: 'Faint nebula', kind: 'color', settings: faint },
+  });
+  expect(saved.ok()).toBe(true);
+
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto(`/#/stacks?db=${encodeURIComponent(dbId)}&project=2`);
+  await openSettings(page);
+  const settingsModal = page.locator('.tauri-settings .modal-content');
+  await settingsModal.getByRole('tab', { name: 'Setups' }).click();
+  const manager = settingsModal.locator('.processing-setups-manager');
+  const seededRow = manager.locator('tbody tr', { hasText: /^Default/ });
+  const faintRow = manager.locator('tbody tr', { hasText: 'Faint nebula' });
+  await expect(seededRow).toContainText('Default for new color previews');
+  await expect(seededRow.getByRole('button', { name: 'Delete' })).toBeDisabled();
+  await expect(seededRow.getByRole('button', { name: /the default for new color previews/ }))
+    .toHaveCount(0);
+  await expect(faintRow.getByRole('button', { name: 'Delete' })).toBeEnabled();
+  await manager.screenshot({ path: testInfo.outputPath('default-color-setup-before.png') });
+
+  await faintRow.getByRole('button', {
+    name: 'Make “Faint nebula” the default for new color previews',
+  }).click();
+  await expect(manager).toContainText('New color previews now start from “Faint nebula”');
+  await expect(faintRow).toContainText('Default for new color previews');
+  await expect(faintRow.getByRole('button', { name: 'Delete' })).toBeDisabled();
+  await expect(seededRow.getByRole('button', { name: 'Delete' })).toBeEnabled();
+  await manager.screenshot({ path: testInfo.outputPath('default-color-setup-marked.png') });
+  await settingsModal.locator('.close-button').click();
+
+  // The first RGB build of this target asks for the marked setup's pipeline.
+  const section = page.locator('.stack-color-section');
+  await expect(section).toBeVisible();
+  const colorRequest = page.waitForRequest((sent) =>
+    sent.method() === 'POST' && /\/projects\/2\/stack-previews\/color$/.test(new URL(sent.url()).pathname)
+  );
+  await section.getByRole('button', { name: 'Build RGB color preview' }).click();
+  const processing = (await colorRequest).postDataJSON().processing;
+  expect(processing.background_extraction).toBeNull();
+  expect(processing.output_stretches[0].model.target_median).toBe(0.3);
+  expect(Object.keys(processing.input_stretches).sort()).toEqual(['blue', 'green', 'red']);
+  expect(processing.color_calibration).toEqual(BUILT_IN_COLOR_PIPELINE.color_calibration);
+
+  // The card's processing editor shows the same pipeline.
+  const rgbCard = section.locator('.stack-color-card[data-color-kind="rgb"]');
+  await expect(rgbCard.locator('.stack-preview-progress')).toHaveAttribute(
+    'data-stack-color-state', 'completed', { timeout: 90_000 }
+  );
+  const rgbProcessing = rgbCard.locator('.stack-color-processing');
+  await rgbProcessing.locator('summary').click();
+  await expect(rgbProcessing.getByRole('region', { name: 'Background extraction' })
+    .getByRole('checkbox', { name: 'Background extraction' })).not.toBeChecked();
+  await expect(rgbProcessing.getByRole('spinbutton', { name: 'RGB output stage 1 Target median' }))
+    .toHaveValue('0.3');
+});
+
 test('composes cached channel stacks into RGB, LRGB, and selectable narrowband previews', async ({
   page,
 }) => {
@@ -1785,7 +1885,8 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
   const settingsModal = page.locator('.tauri-settings .modal-content');
   await settingsModal.getByRole('tab', { name: 'Setups' }).click();
   const manager = settingsModal.locator('.processing-setups-manager');
-  await expect(manager.locator('tbody tr')).toHaveCount(1);
+  // The seeded Default and the saved pipeline.
+  await expect(manager.locator('tbody tr')).toHaveCount(2);
   await expect(manager).toContainText('E2E color pipeline');
   await expect(manager).toContainText('Color pipeline');
 
@@ -1822,12 +1923,12 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
   fs.writeFileSync(importPath, JSON.stringify(renamed));
   await manager.locator('input[type="file"]').setInputFiles(importPath);
   await expect(manager).toContainText('Imported 1 new, replaced 0');
-  await expect(manager.locator('tbody tr')).toHaveCount(2);
+  await expect(manager.locator('tbody tr')).toHaveCount(3);
 
   const importedRow = manager.locator('tbody tr', { hasText: 'Imported pipeline' });
   await importedRow.getByRole('button', { name: 'Delete' }).click();
   await expect(manager).toContainText('Deleted “Imported pipeline”');
-  await expect(manager.locator('tbody tr')).toHaveCount(1);
+  await expect(manager.locator('tbody tr')).toHaveCount(2);
   await settingsModal.locator('.close-button').click();
 
   // The whole stack panel collapses like the detail sections do, and the
