@@ -53,6 +53,11 @@ export function compactOverrides(overrides: SchedulingOverrides): SchedulingOver
   return Object.fromEntries(Object.entries(overrides).filter(([, value]) => value !== null && value !== undefined)) as SchedulingOverrides;
 }
 
+/** Whether two sets of overrides set the same limits. */
+export function sameOverrides(left: SchedulingOverrides, right: SchedulingOverrides): boolean {
+  return JSON.stringify(compactOverrides(left)) === JSON.stringify(compactOverrides(right));
+}
+
 /** What a scope inherits from the scopes above it, most general first: each
  *  value and where it comes from. Unset everywhere is Target Scheduler's. */
 export function inheritedLimits(layers: Array<{ overrides?: SchedulingOverrides; from: string } | null>): { values: SchedulingValues; from: Record<LimitKey, string> } {

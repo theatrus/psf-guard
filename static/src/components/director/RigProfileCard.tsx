@@ -1,16 +1,16 @@
 import { useEffect, useId, useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { isAxiosError } from 'axios';
+import { isAxiosError, type AxiosError } from 'axios';
 import { Camera, Check, Download, Link2, MapPin, RefreshCw, SlidersHorizontal } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import type { DirectorRigProfileView, DirectorRigSite } from '../../api/directorTypes';
-import type { SchedulingOverrides } from '../../api/directorPreferences';
+import type { ObservingSettings, SchedulingOverrides } from '../../api/directorPreferences';
 import HorizonEditor from './HorizonEditor';
 import CollaborationConnections from './CollaborationConnections';
 import RigSchedulingApply from './RigSchedulingApply';
 import SchedulingFields from './SchedulingFields';
-import { compactOverrides, inheritedLimits } from './schedulingModel';
+import { compactOverrides, inheritedLimits, sameOverrides } from './schedulingModel';
 import EarlyBeta from './EarlyBeta';
 import WorkspaceTabs from './WorkspaceTabs';
 import { workspacePanel } from './workspacePanel';
@@ -20,6 +20,9 @@ import { useUnsavedChanges } from '../../hooks/useUnsavedChanges';
 const message = (error: unknown) => isAxiosError(error)
   ? error.response?.data?.error || error.message
   : error instanceof Error ? error.message : 'Rig profile request failed';
+// The HTTP error behind a failure, through the errors that wrap it.
+const httpErrorOf = (error: unknown): AxiosError | null => isAxiosError(error) ? error
+  : error instanceof Error ? httpErrorOf(error.cause) : null;
 
 const TABS = [{ id: 'optics', label: 'Optics', icon: <Camera size={16} /> }, { id: 'site', label: 'Site', icon: <MapPin size={16} /> }, { id: 'limits', label: 'Limits and delivery', icon: <SlidersHorizontal size={16} /> }, { id: 'collaboration', label: 'Collaboration', icon: <Link2 size={16} /> }] as const;
 type Tab = (typeof TABS)[number]['id'];
@@ -61,17 +64,27 @@ export default function RigProfileCard({ slug }: { slug: string }) {
   const summaries = useQuery({ queryKey: ['directorRigProfiles'], queryFn: apiClient.getDirectorRigProfiles, refetchOnWindowFocus: false });
   const placed = summaries.data?.find(entry => entry.catalog_slug === slug)?.site;
   const [form, setForm] = useState<RigProfileForm | null>(null);
-  // The planning site and the rig's Target Scheduler limits, saved with its
-  // observing settings. Until the person edits one (undefined or null), it
-  // shows the saved value, so a newer copy reaches it.
-  const [siteDraft, setSiteDraft] = useState<string | null | undefined>(undefined);
-  const [schedulingDraft, setSchedulingDraft] = useState<SchedulingOverrides | null>(null);
-  const siteId = siteDraft !== undefined ? siteDraft : rigSettings.data?.site_id ?? null;
-  const scheduling = schedulingDraft ?? rigSettings.data?.scheduling ?? {};
+  // Edits to the planning site and the rig's Target Scheduler limits, saved
+  // with its observing settings, and the copy of those settings they started
+  // from. Without edits (null), the fields show the saved values, so a newer
+  // copy reaches them. Save sends the edits with the revision they started
+  // from, so the server refuses them if the settings changed since.
+  const [settingsEdit, setSettingsEdit] = useState<{ siteId: string | null; scheduling: SchedulingOverrides; base: ObservingSettings } | null>(null);
+  const siteId = settingsEdit ? settingsEdit.siteId : rigSettings.data?.site_id ?? null;
+  const scheduling = settingsEdit ? settingsEdit.scheduling : rigSettings.data?.scheduling ?? {};
+  // Edits put back to the values they started from are no edits, while
+  // those values are still the saved ones.
+  const editSettings = (patch: { siteId?: string | null; scheduling?: SchedulingOverrides }) => setSettingsEdit(current => {
+    const base = current?.base ?? rigSettings.data;
+    if (!base) return current;
+    const next = { siteId: current ? current.siteId : base.site_id, scheduling: current ? current.scheduling : base.scheduling ?? {}, ...patch, base };
+    const unchanged = next.siteId === base.site_id && sameOverrides(next.scheduling, base.scheduling ?? {});
+    return unchanged && base.revision === rigSettings.data?.revision ? null : next;
+  });
   const [problem, setProblem] = useState('');
   const [notice, setNotice] = useState('');
   useEffect(() => { if (loaded.data) setForm(formFromProfile(loaded.data.profile)); }, [loaded.data]);
-  const schedulingChanged = !!rigSettings.data && JSON.stringify(compactOverrides(scheduling)) !== JSON.stringify(compactOverrides(rigSettings.data.scheduling ?? {}));
+  const schedulingChanged = !!rigSettings.data && !sameOverrides(scheduling, rigSettings.data.scheduling ?? {});
   // What the rig inherits: every plan's limits, then its site's.
   const globalSettings = useQuery({ queryKey: ['observingSettings', 'global', sites.data?.global_id], queryFn: () => apiClient.getObservingSettings('global', sites.data!.global_id), enabled: !!sites.data, refetchOnWindowFocus: false });
   const siteSettings = useQuery({ queryKey: ['observingSettings', 'site', siteId], queryFn: () => apiClient.getObservingSettings('site', siteId!), enabled: !!siteId, refetchOnWindowFocus: false });
@@ -94,7 +107,7 @@ export default function RigProfileCard({ slug }: { slug: string }) {
       // rig's observing settings.
       if (rigSettings.data && (siteId !== rigSettings.data.site_id || schedulingChanged)) {
         try {
-          const settings = await apiClient.saveObservingSettings({ ...rigSettings.data, site_id: siteId, scheduling: compactOverrides(scheduling) });
+          const settings = await apiClient.saveObservingSettings({ ...(settingsEdit?.base ?? rigSettings.data), site_id: siteId, scheduling: compactOverrides(scheduling) });
           client.setQueryData(['observingSettings', 'rig', settings.scope_id], settings);
           void client.invalidateQueries({ queryKey: ['observingEffective'] });
         } catch (error) {
@@ -106,17 +119,25 @@ export default function RigProfileCard({ slug }: { slug: string }) {
     onSuccess: saved => {
       setNotice(`Saved rig profile revision ${saved.profile.revision}.`);
       // The site and limits are saved too, or matched what was saved.
-      setSiteDraft(undefined); setSchedulingDraft(null);
+      setSettingsEdit(null);
     },
     // Either step may have changed what planning reads for the rig.
     onSettled: () => { void client.invalidateQueries({ queryKey: ['directorRigProfiles'] }); void client.invalidateQueries({ queryKey: ['rigScheduling'] }); },
   });
   // Derived from the error itself, so the conflict notice and the generic one
-  // can never both render for the same failed save.
-  const httpError = isAxiosError(save.error) ? save.error
-    : save.error instanceof Error && isAxiosError(save.error.cause) ? save.error.cause : null;
+  // can never both render for the same failed save. A refused site and
+  // limits step comes wrapped in the message that the profile was saved.
+  const httpError = httpErrorOf(save.error);
   const stale = httpError?.response?.status === 409;
-  const reload = () => { setNotice(''); setProblem(''); save.reset(); setSiteDraft(undefined); setSchedulingDraft(null); void loaded.refetch(); if (rigId) void rigSettings.refetch(); };
+  // Reload drops site and limit edits only when the settings under them
+  // changed, as it drops the profile's fields only when the profile did.
+  const reload = () => {
+    setNotice(''); setProblem(''); save.reset(); void loaded.refetch();
+    if (rigId) void rigSettings.refetch().then(result => {
+      const latest = result.data;
+      if (latest) setSettingsEdit(current => current && current.base.revision !== latest.revision ? null : current);
+    });
+  };
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (!loaded.data || !form || !canWrite || save.isPending) return;
@@ -181,7 +202,7 @@ export default function RigProfileCard({ slug }: { slug: string }) {
         <legend>Site</legend>
         <label className="rig-profile-field" htmlFor={`${slug}-planning-site`}><span>Planning site</span>
           <span className="rig-profile-input">
-            <select id={`${slug}-planning-site`} aria-label="Planning site" value={siteId ?? ''} disabled={!rigSettings.data} onChange={event => setSiteDraft(event.target.value || null)}>
+            <select id={`${slug}-planning-site`} aria-label="Planning site" value={siteId ?? ''} disabled={!rigSettings.data} onChange={event => editSettings({ siteId: event.target.value || null })}>
               <option value="">None</option>
               {sites.data?.sites.map(site => <option key={site.id} value={site.id}>{site.name}</option>)}
             </select>
@@ -221,7 +242,7 @@ export default function RigProfileCard({ slug }: { slug: string }) {
       <fieldset disabled={disabled} className="scheduling-defaults">
         <legend>Target Scheduler limits</legend>
         <p className="director-muted">Click Apply to update projects in this rig's database. Plan-specific limits override these values. Blank fields use the site's defaults, then the global defaults.</p>
-        <SchedulingFields label="Rig Target Scheduler limits" overrides={scheduling} onChange={next => setSchedulingDraft(compactOverrides(next))}
+        <SchedulingFields label="Rig Target Scheduler limits" overrides={scheduling} onChange={next => editSettings({ scheduling: compactOverrides(next) })}
           inherited={parentLimits.values} inheritedFrom={limit => parentLimits.from[limit]} disabled={disabled || !rigSettings.data} />
       </fieldset>
       {rigId && <RigSchedulingApply rigId={rigId} unsaved={schedulingChanged} />}

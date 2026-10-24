@@ -6,13 +6,12 @@ import { useAccess } from '../../auth/access';
 import type { ObservingSettings, SchedulingOverrides } from '../../api/directorPreferences';
 import { useDraftSection } from './pageDraftsState';
 import SchedulingFields from './SchedulingFields';
-import { compactOverrides, describeLimit, describeSource, LIMITS, TS_DEFAULTS } from './schedulingModel';
+import { compactOverrides, describeLimit, describeSource, LIMITS, sameOverrides as same, TS_DEFAULTS } from './schedulingModel';
 import { retryWhenBusy } from './retry';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Could not save the scheduling limits';
 const httpStatus = (error: unknown) => isAxiosError(error) ? error.response?.status
   : error instanceof Error && isAxiosError(error.cause) ? error.cause.response?.status : undefined;
-const same = (left: SchedulingOverrides, right: SchedulingOverrides) => JSON.stringify(compactOverrides(left)) === JSON.stringify(compactOverrides(right));
 
 /** This plan's Target Scheduler scheduling limits: an override for each, or
  *  the default every plan, the rig's site or the rig sets. Activation writes
@@ -26,19 +25,20 @@ export default function PlanScheduling({ projectId, rigs }: { projectId: string;
   const inherited = useQueries({ queries: rigs.map(rig => ({ queryKey: ['observingEffective', rig.id], queryFn: () => apiClient.getEffectiveObserving(rig.id), retry: retryWhenBusy, retryDelay: 700, refetchOnWindowFocus: false })) });
   const resolved = useQueries({ queries: rigs.map(rig => ({ queryKey: ['observingEffective', rig.id, projectId], queryFn: () => apiClient.getEffectiveObserving(rig.id, projectId), retry: retryWhenBusy, retryDelay: 700, refetchOnWindowFocus: false })) });
   // The person's edits and the saved limits they started from. Without
-  // edits (null, or edits that match their base), the fields show the saved
-  // limits, so a newer copy reaches them. Over edits, the edits stay and
-  // other limits saved elsewhere are flagged. A save of the plan's priority,
-  // the same record, changes no limit.
+  // edits (null), the fields show the saved limits, so a newer copy reaches
+  // them. Over edits, the edits stay and other limits saved elsewhere are
+  // flagged. A save of the plan's priority, the same record, changes no
+  // limit.
   const [edit, setEdit] = useState<{ overrides: SchedulingOverrides; base: SchedulingOverrides } | null>(null);
   const savedLimits = stored.data?.scheduling ?? {};
-  const edited = edit !== null && !same(edit.overrides, edit.base);
-  const draft = edited ? edit.overrides : savedLimits;
-  const changedElsewhere = edited && !same(savedLimits, edit.base);
-  const change = (next: SchedulingOverrides) => setEdit(current => ({
-    overrides: next,
-    base: current !== null && !same(current.overrides, current.base) ? current.base : savedLimits,
-  }));
+  const draft = edit ? edit.overrides : savedLimits;
+  const changedElsewhere = edit !== null && !same(savedLimits, edit.base);
+  // Edits put back to the saved limits are no edits, unless other limits
+  // arrived under them: the fields keep what was typed until Reload.
+  const change = (next: SchedulingOverrides) => setEdit(current => {
+    const base = current?.base ?? savedLimits;
+    return same(next, base) && same(base, savedLimits) ? null : { overrides: next, base };
+  });
   const unsaved = canWrite && !!stored.data && !same(draft, savedLimits);
   const save = useMutation({
     retry: false,

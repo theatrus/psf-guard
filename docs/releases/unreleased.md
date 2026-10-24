@@ -35,5 +35,9 @@
   **Automation** tab shows the saved choices at once instead of unticked
   boxes. **Stack with WBPP** shows the project's process folder at once.
   Fields you have not edited now follow newer values from the server; your
-  edits stay until you save or discard them. **Reload** on a rig now also
-  drops unsaved changes to its planning site and limits.
+  edits stay until you save or discard them.
+- When someone else changes a rig's planning site or Target Scheduler limits
+  while you edit them, **Save rig profile** no longer overwrites their
+  change. PSF Guard explains that the rig changed; click **Reload** to load
+  their values in place of your site and limit edits. **Reload rig profile**
+  keeps those edits when nothing changed on the server.

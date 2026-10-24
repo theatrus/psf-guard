@@ -169,6 +169,38 @@ describe('plan scheduling limits', () => {
     expect(screen.queryByText(/changed elsewhere/)).not.toBeInTheDocument();
   });
 
+  it('keeps a value typed back to the saved one while the limits changed elsewhere', async () => {
+    const { stored, store } = fixture({ minimum_altitude_degrees: 35 });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    mount(true, client);
+    const altitude = await screen.findByRole('spinbutton', { name: 'Minimum altitude' });
+    await waitFor(() => expect(altitude).toHaveValue(35));
+    fireEvent.change(altitude, { target: { value: '50' } });
+    store({ ...stored(), revision: 1, scheduling: { minimum_altitude_degrees: 40, minimum_time_minutes: 45 } });
+    await act(() => client.refetchQueries({ queryKey: ['observingSettings', 'project', project] }));
+    expect(await screen.findByText(/These limits changed elsewhere/)).toBeInTheDocument();
+    fireEvent.change(altitude, { target: { value: '35' } });
+    expect(altitude).toHaveValue(35);
+    expect(screen.getByRole('spinbutton', { name: 'Minimum time' })).toHaveValue(null);
+    expect(screen.getByText(/These limits changed elsewhere/)).toBeInTheDocument();
+  });
+
+  it('treats limits typed back to the saved ones as unedited', async () => {
+    const { stored, store } = fixture({ minimum_altitude_degrees: 35 });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    const drafts = mount(true, client);
+    const altitude = await screen.findByRole('spinbutton', { name: 'Minimum altitude' });
+    await waitFor(() => expect(altitude).toHaveValue(35));
+    fireEvent.change(altitude, { target: { value: '50' } });
+    await waitFor(() => expect(drafts.current!.unsaved).toHaveLength(1));
+    fireEvent.change(altitude, { target: { value: '35' } });
+    await waitFor(() => expect(drafts.current!.unsaved).toEqual([]));
+    store({ ...stored(), revision: 1, scheduling: { minimum_altitude_degrees: 40 } });
+    await act(() => client.refetchQueries({ queryKey: ['observingSettings', 'project', project] }));
+    await waitFor(() => expect(altitude).toHaveValue(40));
+    expect(screen.queryByText(/changed elsewhere/)).not.toBeInTheDocument();
+  });
+
   it('is read only without write access', async () => {
     fixture();
     mount(false);

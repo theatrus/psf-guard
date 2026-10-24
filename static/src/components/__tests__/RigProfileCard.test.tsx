@@ -357,28 +357,119 @@ describe('Rig profile card', () => {
     expect(shown.filter(values => values !== `${backyard.id} 20 false`)).toEqual([]);
   });
 
-  it('a refetch updates unedited limits and keeps an edited site', async () => {
-    fixture();
+  describe('site and limits saved with the rig settings', () => {
     const backyard = { id: '33333333-3333-4333-8333-333333333333', name: 'Backyard', revision: 1 };
     const ridge = { id: '44444444-4444-4444-8444-444444444444', name: 'Ridge', revision: 1 };
-    let rigSettings = { scope: 'rig', scope_id: rig.id, revision: 0, overrides: { weights: {} }, enabled: null, site_id: null as string | null, scheduling: { meridian_window_minutes: 20 } };
-    server.use(
-      http.get('/api/director/v1/preferences', () => HttpResponse.json(ok({ global_id: 'g', presets: {}, sites: [backyard, ridge] }))),
-      http.get(`/api/director/v1/preferences/rig/${rig.id}`, () => HttpResponse.json(ok(rigSettings))),
-    );
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
-    mount(true, client);
-    fireEvent.click(await screen.findByRole('tab', { name: 'Site' }));
-    const site = await screen.findByLabelText('Planning site');
-    await waitFor(() => expect(site).toBeEnabled());
-    fireEvent.change(site, { target: { value: backyard.id } });
-    rigSettings = { ...rigSettings, revision: 1, site_id: ridge.id, scheduling: { meridian_window_minutes: 30 } };
-    await act(() => client.refetchQueries({ queryKey: ['observingSettings', 'rig', rig.id] }));
-    fireEvent.click(screen.getByRole('tab', { name: 'Limits and delivery' }));
-    const fields = screen.getByRole('group', { name: 'Rig Target Scheduler limits' });
-    await waitFor(() => expect(within(fields).getByRole('spinbutton', { name: 'Meridian window' })).toHaveValue(30));
-    expect(site).toHaveValue(backyard.id);
-    expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
+    type Settings = { scope: string; scope_id: string; revision: number; overrides: { weights: object }; enabled: null; site_id: string | null; scheduling: Record<string, unknown> };
+    // The rig settings server, refusing a save that names an old revision.
+    function settingsServer() {
+      const state = { current: { scope: 'rig', scope_id: rig.id, revision: 0, overrides: { weights: {} }, enabled: null, site_id: null, scheduling: { meridian_window_minutes: 20 } } as Settings, saves: [] as Settings[], reads: 0 };
+      server.use(
+        http.get('/api/director/v1/preferences', () => HttpResponse.json(ok({ global_id: 'g', presets: {}, sites: [backyard, ridge] }))),
+        http.get('/api/director/v1/preferences/site/:id', ({ params }) => HttpResponse.json(ok({ scope: 'site', scope_id: params.id, revision: 0, overrides: { weights: {} }, enabled: null, site_id: null, scheduling: {} }))),
+        http.get(`/api/director/v1/preferences/rig/${rig.id}`, () => { state.reads += 1; return HttpResponse.json(ok(state.current)); }),
+        http.put(`/api/director/v1/preferences/rig/${rig.id}`, async ({ request }) => {
+          const body = await request.json() as Settings;
+          state.saves.push(body);
+          if (body.revision !== state.current.revision) return HttpResponse.json({ success: false, data: null, error: 'stale' }, { status: 409 });
+          state.current = { ...body, revision: body.revision + 1 };
+          return HttpResponse.json(ok(state.current));
+        }),
+      );
+      return state;
+    }
+    async function openSite() {
+      fireEvent.click(await screen.findByRole('tab', { name: 'Site' }));
+      const site = await screen.findByLabelText('Planning site');
+      await waitFor(() => expect(site).toBeEnabled());
+      return site;
+    }
+    const meridian = () => within(screen.getByRole('group', { name: 'Rig Target Scheduler limits' })).getByRole('spinbutton', { name: 'Meridian window' });
+
+    it('refuses a save over settings changed elsewhere and overwrites nothing', async () => {
+      fixture();
+      const settings = settingsServer();
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+      mount(true, client);
+      const site = await openSite();
+      fireEvent.change(site, { target: { value: backyard.id } });
+      settings.current = { ...settings.current, revision: 1, scheduling: { meridian_window_minutes: 30 } };
+      await act(() => client.refetchQueries({ queryKey: ['observingSettings', 'rig', rig.id] }));
+      expect(site).toHaveValue(backyard.id);
+      fireEvent.click(screen.getByRole('button', { name: 'Save rig profile' }));
+      const alert = await screen.findByText(/This rig changed since you loaded it/);
+      expect(settings.saves).toEqual([expect.objectContaining({ revision: 0, site_id: backyard.id, scheduling: { meridian_window_minutes: 20 } })]);
+      expect(settings.current).toMatchObject({ revision: 1, site_id: null, scheduling: { meridian_window_minutes: 30 } });
+      // Reload drops the edits made over the old settings and shows the new ones.
+      fireEvent.click(within(alert).getByRole('button', { name: 'Reload' }));
+      await waitFor(() => expect(site).toHaveValue(''));
+      fireEvent.click(screen.getByRole('tab', { name: 'Limits and delivery' }));
+      expect(meridian()).toHaveValue(30);
+    });
+
+    it('keeps site, limit and profile edits through a Reload that finds nothing new', async () => {
+      fixture();
+      const settings = settingsServer();
+      mount();
+      const site = await openSite();
+      fireEvent.change(site, { target: { value: backyard.id } });
+      fireEvent.change(screen.getByLabelText('Bortle class'), { target: { value: '6' } });
+      fireEvent.click(screen.getByRole('tab', { name: 'Limits and delivery' }));
+      fireEvent.change(meridian(), { target: { value: '45' } });
+      const reads = settings.reads;
+      fireEvent.click(screen.getByRole('button', { name: 'Reload rig profile' }));
+      await waitFor(() => expect(settings.reads).toBe(reads + 1));
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Reload rig profile' })).toBeEnabled());
+      expect(meridian()).toHaveValue(45);
+      fireEvent.click(screen.getByRole('tab', { name: 'Site' }));
+      expect(site).toHaveValue(backyard.id);
+      expect(screen.getByLabelText('Bortle class')).toHaveValue(6);
+      expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
+    });
+
+    it('keeps a site cleared to None while a limit is edited after it', async () => {
+      fixture();
+      const settings = settingsServer();
+      settings.current = { ...settings.current, site_id: backyard.id };
+      mount();
+      const site = await openSite();
+      await waitFor(() => expect(site).toHaveValue(backyard.id));
+      fireEvent.change(site, { target: { value: '' } });
+      fireEvent.click(screen.getByRole('tab', { name: 'Limits and delivery' }));
+      fireEvent.change(meridian(), { target: { value: '45' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Save rig profile' }));
+      await waitFor(() => expect(settings.saves).toHaveLength(1));
+      expect(settings.saves[0]).toMatchObject({ revision: 0, site_id: null, scheduling: { meridian_window_minutes: 45 } });
+    });
+
+    it('treats a site put back to the saved one as unedited, and Save clears the edits', async () => {
+      fixture();
+      const settings = settingsServer();
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+      const refetch = () => act(() => client.refetchQueries({ queryKey: ['observingSettings', 'rig', rig.id] }));
+      mount(true, client);
+      const site = await openSite();
+      fireEvent.change(site, { target: { value: backyard.id } });
+      expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
+      fireEvent.change(site, { target: { value: '' } });
+      expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument();
+      // Unedited again, the site follows a newer copy.
+      settings.current = { ...settings.current, revision: 1, site_id: ridge.id };
+      await refetch();
+      await waitFor(() => expect(site).toHaveValue(ridge.id));
+
+      fireEvent.click(screen.getByRole('tab', { name: 'Limits and delivery' }));
+      fireEvent.change(meridian(), { target: { value: '45' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Save rig profile' }));
+      expect(await screen.findByText('Saved rig profile revision 1.')).toBeInTheDocument();
+      expect(settings.saves).toEqual([expect.objectContaining({ revision: 1, site_id: ridge.id, scheduling: { meridian_window_minutes: 45 } })]);
+      // Saved, the fields follow the next copy too.
+      settings.current = { ...settings.current, revision: 3, site_id: backyard.id, scheduling: { meridian_window_minutes: 50 } };
+      await refetch();
+      await waitFor(() => expect(meridian()).toHaveValue(50));
+      fireEvent.click(screen.getByRole('tab', { name: 'Site' }));
+      expect(site).toHaveValue(backyard.id);
+    });
   });
 
   it('offers a Reload after a lost race', async () => {
