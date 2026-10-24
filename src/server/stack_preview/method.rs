@@ -188,10 +188,11 @@ impl StackMethod {
     }
 
     /// The Seiza options for this method's live pass, around the caller's
-    /// impulse filter.
+    /// impulse filter, with the passes `gpu` allows on the GPU.
     pub fn stack_options(
         &self,
         cosmetic: Option<seiza_stacking::ImpulseFilterOptions>,
+        gpu: super::StackGpu,
     ) -> seiza_stacking::StackOptions {
         let mut options = seiza_stacking::StackOptions {
             normalization: match self.normalization {
@@ -213,6 +214,7 @@ impl StackMethod {
             } else {
                 seiza_stacking::CfaIntegration::Demosaic
             },
+            gpu: gpu.options(),
             ..seiza_stacking::StackOptions::default()
         };
         options.registration.model = match self.registration {
@@ -299,8 +301,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_live_pass_runs_on_the_gpu_as_the_setting_allows() {
+        use super::super::StackGpu;
+        assert_eq!(
+            StackMethod::default()
+                .stack_options(None, StackGpu::default())
+                .gpu,
+            seiza_stacking::GpuOptions::default()
+        );
+        let off = StackGpu {
+            enabled: false,
+            ..StackGpu::default()
+        };
+        assert_eq!(
+            StackMethod::default().stack_options(None, off).gpu,
+            seiza_stacking::GpuOptions::cpu()
+        );
+    }
+
+    #[test]
     fn the_default_follows_the_seiza_command_line() {
-        let options = StackMethod::default().stack_options(None);
+        let options = StackMethod::default().stack_options(None, super::super::StackGpu::default());
         assert_eq!(
             options.normalization,
             seiza_stacking::NormalizationMode::LocalBackground { tile_size: 256 }
@@ -375,7 +396,7 @@ mod tests {
 
     #[test]
     fn classic_is_the_library_default_psf_guard_used_before() {
-        let options = StackMethod::classic().stack_options(None);
+        let options = StackMethod::classic().stack_options(None, super::super::StackGpu::default());
         let library = seiza_stacking::StackOptions {
             normalization: seiza_stacking::NormalizationMode::Global,
             ..seiza_stacking::StackOptions::default()

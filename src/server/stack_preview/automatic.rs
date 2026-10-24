@@ -156,6 +156,12 @@ pub fn configure_from_registry(settings: Option<&crate::db_registry::StackAutoma
             .and_then(|settings| settings.method)
             .unwrap_or_default(),
     );
+    super::gpu::configure(
+        settings
+            .and_then(|settings| settings.gpu)
+            .map(super::StackGpu::clamped)
+            .unwrap_or_default(),
+    );
     configure(
         settings
             .map(|settings| settings.policy())

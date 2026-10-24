@@ -308,6 +308,10 @@ pub(super) const READABLE_ROUTES: &[(&str, &str)] = &[
     ("/settings/stacking", "Stack automation settings"),
     ("/settings/stacking/method", "Default stacking method"),
     (
+        "/settings/stacking/gpu",
+        "Which stacking passes run on the GPU",
+    ),
+    (
         "/settings/storage",
         "Where generated files live, and volume limits",
     ),

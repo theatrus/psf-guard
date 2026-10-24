@@ -781,6 +781,34 @@ export interface StackMethodSettings {
   max_reference_rotation_margin_degrees: number;
 }
 
+/**
+ * Which of a stack's passes run on the GPU. One server-wide choice, read
+ * when each build starts; it changes where the arithmetic runs, not what is
+ * stacked, so built stacks stay current.
+ */
+export interface StackGpu {
+  /** `false` keeps every pass on the CPU. */
+  enabled: boolean;
+  debayer: boolean;
+  detection: boolean;
+  resampling: boolean;
+  /** The live stack's running mean. */
+  accumulator: boolean;
+  /** The final pass's rejection and integration. */
+  integration: boolean;
+  /** How many frame calls may run on the GPU at once. */
+  concurrency: number;
+  /** Log each GPU call's stages and times to the server's standard error. */
+  trace: boolean;
+}
+
+export interface StackGpuSettings {
+  gpu: StackGpu;
+  /** Seiza's default: every pass on the GPU. */
+  recommended: StackGpu;
+  max_concurrency: number;
+}
+
 /** One depth on a progressive signal-to-noise curve. */
 export interface SnrPoint {
   frames: number;

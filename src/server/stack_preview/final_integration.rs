@@ -28,6 +28,7 @@ pub(super) fn integrate(
     group: &PreparedGroup,
     ledger: &[resume::ResumeFrame],
     method: super::StackMethod,
+    gpu: super::StackGpu,
     plan: &crate::calibration::CalibrationPlan,
     cosmetics: &SessionCosmetics,
     scratch: Option<&std::path::Path>,
@@ -39,11 +40,7 @@ pub(super) fn integrate(
         .enumerate()
         .filter(|(_, frame)| frame.admitted())
         .collect::<Vec<_>>();
-    let options = BatchStackOptions {
-        cancel: Some(cancel.clone().into()),
-        frame_weights: replay_weights(method.weighting, &admitted)?,
-        ..BatchStackOptions::default()
-    };
+    let options = batch_options(cancel, replay_weights(method.weighting, &admitted)?, gpu);
     let load = |index: usize| {
         let (source_index, record) = admitted[index];
         let source = &group.frames[source_index];
@@ -130,6 +127,21 @@ fn is_scratch_failure(error: &seiza_stacking::Error, scratch: &std::path::Path) 
 /// `None` for an equal-weight stack. Seiza measured them once; replaying with
 /// anything else would publish a different stack from the one the live pass
 /// admitted. A weighted ledger that lacks one is refused rather than mixed.
+/// The final pass's options: the build's stop flag, the live pass's frame
+/// weights, and the passes `gpu` allows on the GPU.
+fn batch_options(
+    cancel: &Stop,
+    frame_weights: Option<Vec<Vec<f32>>>,
+    gpu: super::StackGpu,
+) -> BatchStackOptions {
+    BatchStackOptions {
+        cancel: Some(cancel.clone().into()),
+        frame_weights,
+        gpu: gpu.options(),
+        ..BatchStackOptions::default()
+    }
+}
+
 fn replay_weights(
     weighting: super::StackWeighting,
     admitted: &[(usize, &resume::ResumeFrame)],
@@ -206,6 +218,36 @@ mod tests {
             source: None,
             bounds: None,
         }
+    }
+
+    #[test]
+    fn the_final_pass_runs_on_the_gpu_as_the_setting_allows() {
+        use crate::server::stack_preview::StackGpu;
+        let cancel = crate::concurrency::Stop::new();
+        assert_eq!(
+            batch_options(&cancel, None, StackGpu::default()).gpu,
+            seiza_stacking::GpuOptions::default()
+        );
+        let chosen = StackGpu {
+            integration: false,
+            concurrency: 2,
+            ..StackGpu::default()
+        };
+        let options = batch_options(&cancel, None, chosen);
+        assert!(!options.gpu.integration);
+        assert_eq!(options.gpu.concurrency, 2);
+        assert_eq!(
+            batch_options(
+                &cancel,
+                None,
+                StackGpu {
+                    enabled: false,
+                    ..StackGpu::default()
+                }
+            )
+            .gpu,
+            seiza_stacking::GpuOptions::cpu()
+        );
     }
 
     #[test]
@@ -475,6 +517,7 @@ mod tests {
             &group,
             &ledger,
             StackMethod::classic(),
+            crate::server::stack_preview::StackGpu::default(),
             &plan,
             &SessionCosmetics::none(plan.sessions.len()),
             Some(&directory.path().join("scratch")),
@@ -511,6 +554,7 @@ mod tests {
                 &group,
                 &ledger,
                 StackMethod::classic(),
+                crate::server::stack_preview::StackGpu::default(),
                 &plan,
                 &cosmetics,
                 scratch,
@@ -588,6 +632,7 @@ mod tests {
             &group,
             &ledger,
             StackMethod::classic(),
+            crate::server::stack_preview::StackGpu::default(),
             &plan,
             &none,
             Some(&directory.path().join("scratch")),
@@ -602,6 +647,7 @@ mod tests {
                 &group,
                 &ledger,
                 StackMethod::classic(),
+                crate::server::stack_preview::StackGpu::default(),
                 &plan,
                 &none,
                 Some(&directory.path().join("scratch")),
@@ -637,6 +683,7 @@ mod tests {
                 weighting: StackWeighting::Noise,
                 ..StackMethod::classic()
             },
+            crate::server::stack_preview::StackGpu::default(),
             &plan,
             &none,
             Some(&directory.path().join("scratch")),
@@ -657,6 +704,7 @@ mod tests {
             &group,
             &ledger,
             StackMethod::classic(),
+            crate::server::stack_preview::StackGpu::default(),
             &plan,
             &none,
             Some(&directory.path().join("scratch")),
@@ -688,6 +736,7 @@ mod tests {
                 weighting: StackWeighting::Noise,
                 ..StackMethod::classic()
             },
+            crate::server::stack_preview::StackGpu::default(),
             &plan,
             &SessionCosmetics::none(plan.sessions.len()),
             Some(&directory.path().join("scratch")),

@@ -743,6 +743,10 @@ pub fn api_router(state: Arc<AppState>) -> Router {
             get(stack_settings::get_stack_method).put(stack_settings::update_stack_method),
         )
         .route(
+            "/settings/stacking/gpu",
+            get(stack_settings::get_stack_gpu).put(stack_settings::update_stack_gpu),
+        )
+        .route(
             "/processing-setups",
             get(processing_setups::list_setups).post(processing_setups::save_setup),
         )
