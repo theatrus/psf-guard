@@ -164,10 +164,10 @@ process, so a server restart forgets a finished run's progress and results too.
 
 ### Manage WBPP storage
 
-Open **Settings → Storage → WBPP storage** to choose a dedicated **WBPP runs
-folder**, a **WBPP volume usage limit**, and separate retention periods for
-intermediate files and masters. The folder is independent of the cache and
-stack folders. Changing it affects new runs; earlier managed folders remain
+Open **Settings → Storage**. Set **WBPP volume usage limit** under **Limits**,
+choose **WBPP runs** under **Folders**, and set **WBPP retention** for intermediate
+files and masters. Click **Save storage settings** to apply all your storage
+edits together. The folder is independent of the cache and stack folders. Changing it affects new runs; earlier managed folders remain
 eligible for cleanup, including after a restart.
 
 The defaults are 90% volume usage, seven days for intermediates, and 90 days

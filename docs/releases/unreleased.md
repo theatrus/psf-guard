@@ -28,7 +28,10 @@
   your changes over **Default**. Color previews you already have are not
   changed.
 
-- Manage WBPP work files under **Settings → Storage → WBPP storage**: choose a
+- Save storage limits, folders, and WBPP retention together with **Save storage settings**.
+  WBPP shares the **Limits** and **Folders** sections with the other storage options.
+
+- Manage WBPP work files under **Settings → Storage**: choose a
   dedicated folder and volume usage limit, remove intermediates before masters,
   and set separate retention periods. Intermediates default to seven days and
   masters to 90 days; **Keep WBPP masters forever** protects masters from cleanup.
