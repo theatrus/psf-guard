@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import type { WorkerSettings } from '../api/types';
@@ -34,21 +34,18 @@ function cores(ratio: number, logical: number): number {
 export default function WorkerShareSettings() {
   const queryClient = useQueryClient();
   const settings = useQuery({ queryKey: QUERY_KEY, queryFn: apiClient.getWorkerSettings });
-  const [draft, setDraft] = useState<Record<Share, number> | null>(null);
-  useEffect(() => {
-    if (settings.data) {
-      setDraft({
-        interactive_ratio: settings.data.interactive_ratio,
-        background_ratio: settings.data.background_ratio,
-      });
-    }
-  }, [settings.data]);
+  // The shares as moved. A slider not moved shows the saved share, so a
+  // refetch updates it.
+  const [draft, setDraft] = useState<Partial<Record<Share, number>>>({});
   const save = useMutation({
     mutationFn: apiClient.updateWorkerSettings,
-    onSuccess: (updated) => queryClient.setQueryData(QUERY_KEY, updated),
+    onSuccess: (updated) => {
+      queryClient.setQueryData(QUERY_KEY, updated);
+      setDraft({});
+    },
   });
 
-  if (settings.isLoading || !draft) return null;
+  if (settings.isLoading) return null;
   if (settings.isError || !settings.data) {
     return (
       <div className="stack-method-settings">
@@ -58,6 +55,10 @@ export default function WorkerShareSettings() {
     );
   }
   const current: WorkerSettings = settings.data;
+  const shares: Record<Share, number> = {
+    interactive_ratio: draft.interactive_ratio ?? current.interactive_ratio,
+    background_ratio: draft.background_ratio ?? current.background_ratio,
+  };
   const defaultOf = (key: Share) =>
     key === 'interactive_ratio' ? current.default_interactive_ratio : current.default_background_ratio;
   const commit = (next: Record<Share, number>) =>
@@ -76,7 +77,7 @@ export default function WorkerShareSettings() {
       </p>
       <fieldset className="calibration-settings-group" disabled={save.isPending}>
         {SHARES.map((share) => {
-          const ratio = draft[share.key];
+          const ratio = shares[share.key];
           const isDefault = Math.abs(ratio - defaultOf(share.key)) < 1e-9;
           return (
             <div key={share.key} className="review-preference worker-share">
@@ -97,9 +98,8 @@ export default function WorkerShareSettings() {
                         type="button"
                         className="link-button"
                         onClick={() => {
-                          const next = { ...draft, [share.key]: defaultOf(share.key) };
-                          setDraft(next);
-                          commit(next);
+                          setDraft({ ...draft, [share.key]: defaultOf(share.key) });
+                          commit({ ...shares, [share.key]: defaultOf(share.key) });
                         }}
                       >
                         Use the default
@@ -117,10 +117,10 @@ export default function WorkerShareSettings() {
                 aria-label={`${share.label} share of cores`}
                 aria-valuetext={`${Math.round(ratio * 100)}%, ${cores(ratio, current.logical_cores)} cores`}
                 onChange={(event) => setDraft({ ...draft, [share.key]: Number(event.target.value) / 100 })}
-                onPointerUp={() => commit(draft)}
-                onKeyUp={() => commit(draft)}
+                onPointerUp={() => commit(shares)}
+                onKeyUp={() => commit(shares)}
                 onBlur={() => {
-                  if (draft[share.key] !== current[share.key]) commit(draft);
+                  if (shares[share.key] !== current[share.key]) commit(shares);
                 }}
               />
             </div>

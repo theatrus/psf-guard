@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { desktopServer, isTauriApp, tauriConfig } from '../utils/tauri';
 import OpenLogsButton from './OpenLogsButton';
@@ -41,19 +41,18 @@ export default function DesktopServerSettings({
 }: { onRestarted?: () => void }) {
   const client = useQueryClient();
   const settings = useServerSettings();
-  const [fixed, setFixed] = useState(false);
-  const [value, setValue] = useState('');
+  // A choice without an edit (null) shows the saved port, so a refetch
+  // updates it; an edited one keeps what was chosen until Save.
+  const [fixedDraft, setFixed] = useState<boolean | null>(null);
+  const [valueDraft, setValue] = useState<string | null>(null);
   const [validation, setValidation] = useState('');
-  const savedPort = settings.data?.server_port;
-  useEffect(() => {
-    if (savedPort !== undefined) {
-      setFixed(savedPort !== null);
-      setValue(savedPort === null ? '' : String(savedPort));
-    }
-  }, [savedPort]);
   const save = useMutation({
     mutationFn: desktopServer.savePort,
-    onSuccess: saved => client.setQueryData(KEY, saved),
+    onSuccess: saved => {
+      client.setQueryData(KEY, saved);
+      setFixed(null);
+      setValue(null);
+    },
   });
   const restart = useMutation({
     mutationFn: tauriConfig.restartServer,
@@ -66,6 +65,8 @@ export default function DesktopServerSettings({
     <button type="button" onClick={() => settings.refetch()}>Try again</button>
   </div>;
   const current = settings.data;
+  const fixed = fixedDraft ?? current.server_port !== null;
+  const value = valueDraft ?? (current.server_port === null ? '' : String(current.server_port));
   const port = fixed ? Number(value) : null;
   const dirty = port !== current.server_port;
   const busy = save.isPending || restart.isPending || current.starting;
