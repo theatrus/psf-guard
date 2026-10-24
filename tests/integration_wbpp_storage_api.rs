@@ -56,15 +56,17 @@ async fn put(router: &Router, path: &str, body: Value) -> (StatusCode, Value) {
 }
 #[tokio::test]
 async fn wbpp_policy_is_validated_persisted_and_preserved_by_older_clients() {
-    let (_dir, state, router) = server(true);
+    let (dir, state, router) = server(true);
+    let runs_dir = dir.path().join("wbpp-runs");
     let policy = json!({"max_volume_percent":20,"intermediate_days":14,"master_days":0});
     let (status, response) = put(
         &router,
         "/pixinsight",
-        json!({"runs_dir":"/tmp/wbpp-api-test","storage":policy}),
+        json!({"runs_dir":runs_dir,"storage":policy}),
     )
     .await;
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(status, StatusCode::OK, "{response}");
+    assert_eq!(response["data"]["runs_dir"], json!(runs_dir));
     assert_eq!(response["data"]["storage"], policy);
     let (status, response) = put(
         &router,

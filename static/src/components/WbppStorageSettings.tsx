@@ -53,7 +53,7 @@ export default function WbppStorageSettings({ canManage }: { canManage: boolean 
         Keep WBPP work files in their own folder. Cleanup checks every five minutes and removes intermediate
         files first. Active runs, downloads and master copies are protected.
       </p>
-      <fieldset disabled={!canManage || save.isPending}>
+      <fieldset className="settings-group" disabled={!canManage || save.isPending}>
         <label className="review-preference">
           <span>
             WBPP runs folder

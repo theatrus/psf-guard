@@ -2,6 +2,32 @@ import { expect, test } from '@playwright/test';
 import * as path from 'path';
 import { openSettings, registerFixtureDb, resetDatabases, tmpBase, waitForCacheReady } from './helpers';
 
+test('WBPP storage fields fit a phone', async ({ page, request }) => {
+  await resetDatabases(request);
+  const db = await registerFixtureDb(request);
+  await waitForCacheReady(request, db.id);
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.goto('/');
+  await openSettings(page);
+  await page.getByRole('tab', { name: 'Storage', exact: true }).click();
+  const panel = page.getByRole('tabpanel');
+  for (const label of [
+    'WBPP storage folder',
+    'WBPP volume usage limit, in percent',
+    'WBPP intermediate retention, in days',
+    'WBPP master retention, in days',
+    /^Keep WBPP masters forever/,
+  ]) {
+    const field = panel.getByLabel(label, { exact: typeof label === 'string' });
+    await field.scrollIntoViewIfNeeded();
+    const bounds = await field.boundingBox();
+    expect(bounds, String(label)).not.toBeNull();
+    expect(bounds!.x, String(label)).toBeGreaterThanOrEqual(0);
+    expect(bounds!.x + bounds!.width, String(label)).toBeLessThanOrEqual(390);
+  }
+  expect(await panel.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+});
+
 test('WBPP has a dedicated folder, percentage cap and optional forever masters', async ({
   page,
   request,
