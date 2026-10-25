@@ -25,6 +25,12 @@ use crate::remote_work::protocol::{
 };
 use crate::remote_work::{file_digest, map_path, LocalTools, WorkChoice};
 
+pub mod control;
+pub mod settings;
+
+pub use control::{WorkerControl, WorkerStatus};
+pub use settings::WorkerSettings;
+
 /// The worker command's arguments, as the command line gives them.
 pub struct WorkerArgs {
     pub server: String,
@@ -51,6 +57,8 @@ pub struct WorkerOptions {
     pub work: WorkChoice,
     /// How many tasks it runs at once.
     pub slots: usize,
+    /// What it is doing, and its pause and quit controls.
+    pub control: WorkerControl,
 }
 
 /// The longest wait between attempts to reach the server.
@@ -67,18 +75,96 @@ const EVENTS_PER_REPORT: usize = 200;
 /// How long a finished task keeps trying to send its last events.
 const FLUSH_LIMIT: Duration = Duration::from_secs(120);
 
-pub fn run(args: WorkerArgs) -> Result<()> {
+/// Where the worker's settings come from, and how it is controlled.
+pub enum WorkerLaunch {
+    /// The command line's arguments.
+    Arguments(WorkerArgs),
+    /// A settings file, with the controls served on a localhost port when
+    /// `serve_controls` is set.
+    Settings { path: PathBuf, serve_controls: bool },
+}
+
+pub fn run(launch: WorkerLaunch) -> Result<()> {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::filter::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::filter::EnvFilter::new("info")),
         )
         .try_init();
-    let options = options(args)?;
     let runtime = tokio::runtime::Runtime::new()?;
-    runtime.block_on(serve(options, async {
-        let _ = tokio::signal::ctrl_c().await;
-    }))
+    let control = WorkerControl::default();
+    {
+        let control = control.clone();
+        runtime.spawn(async move {
+            let _ = tokio::signal::ctrl_c().await;
+            control.quit();
+        });
+    }
+    runtime.block_on(run_with(launch, control))
+}
+
+/// Run the worker in the menu bar or the system tray, with the settings at
+/// `settings`. Desktop app builds only.
+#[cfg(feature = "tauri")]
+pub fn run_tray(settings: PathBuf) -> Result<()> {
+    crate::worker_tray::run(settings)
+}
+
+#[cfg(not(feature = "tauri"))]
+pub fn run_tray(_settings: PathBuf) -> Result<()> {
+    anyhow::bail!(
+        "This build has no menu bar or tray; run `psf-guard worker --config FILE` instead, \
+         or install the desktop app"
+    )
+}
+
+/// Run a worker until `control` quits it or the server refuses its token.
+pub async fn run_with(launch: WorkerLaunch, control: WorkerControl) -> Result<()> {
+    let (args, controls) = match launch {
+        WorkerLaunch::Arguments(args) => (args, None),
+        WorkerLaunch::Settings {
+            path,
+            serve_controls,
+        } => {
+            let settings = WorkerSettings::load(&path)?.with_context(|| {
+                format!(
+                    "There are no worker settings at {}; set up the worker in PSF Guard's \
+                     Settings, or start it with --server",
+                    path.display()
+                )
+            })?;
+            settings.validate()?;
+            (
+                settings.into_args(),
+                serve_controls.then(|| control::ControlFile::path_for(&path)),
+            )
+        }
+    };
+    let mut options = options(args)?;
+    options.control = control.clone();
+    if let Some(file) = controls {
+        let control = control.clone();
+        tokio::spawn(async move {
+            if let Err(error) = control::serve_control(control, file).await {
+                tracing::warn!("The worker's controls are not available: {error:#}");
+            }
+        });
+    }
+    let quitting = control.clone();
+    let served = serve(options, async move { quitting.quitting().await }).await;
+    control.update(|status| {
+        status.tasks.clear();
+        status.connection = match &served {
+            Err(_) => control::Connection::Refused,
+            Ok(()) => control::Connection::Stopped,
+        };
+        if let Err(error) = &served {
+            status.problem = Some(format!("{error:#}"));
+        }
+    });
+    // The controls stop with the worker.
+    control.quit();
+    served
 }
 
 fn options(args: WorkerArgs) -> Result<WorkerOptions> {
@@ -127,6 +213,7 @@ fn options(args: WorkerArgs) -> Result<WorkerOptions> {
             slots: args.slots,
         },
         work: WorkChoice::parse(&args.work).map_err(anyhow::Error::msg)?,
+        control: WorkerControl::default(),
         slots: {
             anyhow::ensure!(
                 (1..=MAX_SLOTS).contains(&args.slots),
@@ -498,6 +585,12 @@ pub async fn serve(options: WorkerOptions, shutdown: impl Future<Output = ()>) -
         offers,
         files: options.files.clone(),
     };
+    let control = options.control.clone();
+    control.update(|status| {
+        status.server = options.server.clone();
+        status.name = options.name.clone();
+        status.connection = control::Connection::Connecting;
+    });
     let mut options = Some(options);
     let mut client = Some(client);
     let mut backoff = Duration::from_secs(1);
@@ -512,6 +605,10 @@ pub async fn serve(options: WorkerOptions, shutdown: impl Future<Output = ()>) -
             Err(ClientError::Denied(message)) => anyhow::bail!(message),
             Err(error) => {
                 tracing::warn!("{error}; trying again in {}s", backoff.as_secs());
+                control.update(|status| {
+                    status.connection = control::Connection::Connecting;
+                    status.problem = Some(error.to_string());
+                });
                 tokio::select! {
                     () = &mut shutdown => return Ok(()),
                     () = tokio::time::sleep(backoff) => {}
@@ -521,6 +618,10 @@ pub async fn serve(options: WorkerOptions, shutdown: impl Future<Output = ()>) -
             }
         };
         backoff = Duration::from_secs(1);
+        control.update(|status| {
+            status.connection = control::Connection::Connected;
+            status.problem = None;
+        });
         let settings = options.as_ref().expect("the options are idle");
         tracing::info!(
             "Joined {} as {}, running up to {} task(s) at once",
@@ -584,6 +685,7 @@ pub async fn serve(options: WorkerOptions, shutdown: impl Future<Output = ()>) -
             Some(SlotEnd::Denied(message)) => anyhow::bail!(message),
             _ => tracing::warn!("The server forgot this worker; joining again"),
         }
+        control.update(|status| status.connection = control::Connection::Connecting);
         client = Some(joined.client);
         options = Some(joined.options);
     }
@@ -596,9 +698,18 @@ async fn run_slot(
     mut stopping: tokio::sync::watch::Receiver<bool>,
 ) -> SlotEnd {
     let mut backoff = Duration::from_secs(1);
+    let mut paused = joined.options.control.paused();
     loop {
         if *stopping.borrow() {
             return SlotEnd::Stopped;
+        }
+        // While paused, take no new task.
+        if *paused.borrow_and_update() {
+            tokio::select! {
+                _ = stopping.changed() => return SlotEnd::Stopped,
+                _ = paused.wait_for(|paused| !*paused) => {}
+            }
+            continue;
         }
         let claimed = tokio::select! {
             _ = stopping.changed() => return SlotEnd::Stopped,
@@ -710,6 +821,10 @@ async fn run_task(
         return Ok(());
     }
     tracing::info!(task = assignment.task, "Running {}", assignment.label);
+    let _listed = joined
+        .options
+        .control
+        .task(&assignment.task, &assignment.label);
     let scratch = joined.options.work_dir.join(&assignment.task);
     let outcome = run_task_in(joined, assignment, stopping, &scratch).await;
     let _ = tokio::fs::remove_dir_all(&scratch).await;
@@ -877,8 +992,18 @@ impl Heartbeat<'_> {
     /// Send how far the task got and the events not yet acknowledged.
     async fn report(&mut self) -> Result<(), ClientError> {
         let (first_event, events) = self.outbox.pending();
+        let fraction = *self.fraction.borrow();
+        self.joined.options.control.update(|status| {
+            if let Some(task) = status
+                .tasks
+                .iter_mut()
+                .find(|task| task.id == self.assignment.task)
+            {
+                task.fraction = fraction.clamp(0.0, 1.0);
+            }
+        });
         let progress = Progress {
-            fraction: *self.fraction.borrow(),
+            fraction,
             events,
             first_event,
         };

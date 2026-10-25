@@ -1601,6 +1601,8 @@ pub fn main() -> Result<()> {
         },
         Commands::Worker {
             server,
+            config,
+            tray,
             token,
             name,
             files,
@@ -1610,17 +1612,35 @@ pub fn main() -> Result<()> {
             work,
             slots,
         } => {
-            crate::commands::worker::run(crate::commands::worker::WorkerArgs {
-                server,
-                token,
-                name,
-                files,
-                maps,
-                work_dir,
-                rc_astro,
-                work,
-                slots,
-            })?;
+            use crate::commands::worker::{WorkerLaunch, WorkerSettings};
+            let settings_path = || -> Result<std::path::PathBuf> {
+                config
+                    .clone()
+                    .map(Into::into)
+                    .map_or_else(WorkerSettings::default_path, Ok)
+            };
+            if tray {
+                crate::commands::worker::run_tray(settings_path()?)?;
+            } else if config.is_some() {
+                crate::commands::worker::run(WorkerLaunch::Settings {
+                    path: settings_path()?,
+                    serve_controls: false,
+                })?;
+            } else {
+                crate::commands::worker::run(WorkerLaunch::Arguments(
+                    crate::commands::worker::WorkerArgs {
+                        server: server.expect("clap requires --server"),
+                        token,
+                        name,
+                        files,
+                        maps,
+                        work_dir,
+                        rc_astro,
+                        work,
+                        slots,
+                    },
+                ))?;
+            }
         }
         Commands::Users { action } => {
             crate::commands::users::manage_users(action)?;

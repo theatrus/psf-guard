@@ -1312,10 +1312,26 @@ pub enum Commands {
     /// PSF_GUARD_WORKER_TOKEN or `--token`. The worker offers the RC-Astro
     /// tools installed here, runs the tasks the server sends it, and keeps
     /// running until you stop it with Ctrl-C.
+    ///
+    /// With `--config`, the worker reads its settings from a file instead,
+    /// such as the one the desktop app writes. With `--tray`, the desktop
+    /// app runs the worker in the menu bar or the system tray.
     Worker {
         /// The server's address, such as `http://192.168.1.10:3000`.
-        #[arg(long)]
-        server: String,
+        /// Required unless the settings come from `--config` or `--tray`.
+        #[arg(long, required_unless_present_any = ["config", "tray"])]
+        server: Option<String>,
+
+        /// Read the worker's settings from this file, such as the one the
+        /// desktop app writes, instead of the other options.
+        #[arg(long, value_name = "FILE", conflicts_with = "server")]
+        config: Option<String>,
+
+        /// Run in the menu bar (macOS) or the system tray (Windows), with
+        /// the settings the desktop app saved, or those in `--config`.
+        /// Desktop app builds only.
+        #[arg(long, conflicts_with = "server")]
+        tray: bool,
 
         /// The worker token from Settings › Workers. When omitted, the
         /// token is read from PSF_GUARD_WORKER_TOKEN, which keeps it out of

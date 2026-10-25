@@ -333,8 +333,15 @@ pub fn main() {
             get_log_folder,
             open_log_folder
         ])
-        .run(tauri::generate_context!())
+        .run(context())
         .expect("error while running tauri application");
+}
+
+/// The app's Tauri context: its configuration and embedded frontend. The
+/// macro embeds the frontend, so it appears once, for the app window and
+/// for the worker's tray.
+pub(crate) fn context() -> tauri::Context<tauri::Wry> {
+    tauri::generate_context!()
 }
 
 /// Log to the console, as the server does, and to the daily file in the
