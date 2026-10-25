@@ -140,11 +140,20 @@ fn build_tray(
             }
         })
         .build(app)?;
+    let app = app.clone();
     std::thread::spawn(move || {
         let mut shown = lines;
         loop {
             std::thread::sleep(REFRESH);
-            let lines = MenuLines::of(&control.status());
+            let status = control.status();
+            // Stopped on purpose, such as from the desktop app: the tray
+            // goes too. A worker the server refused stays, so its menu can
+            // explain why.
+            if status.connection == Connection::Stopped {
+                app.exit(0);
+                return;
+            }
+            let lines = MenuLines::of(&status);
             if lines == shown {
                 continue;
             }

@@ -26,6 +26,7 @@ use crate::remote_work::protocol::{
 use crate::remote_work::{file_digest, map_path, LocalTools, WorkChoice};
 
 pub mod control;
+pub mod login;
 pub mod settings;
 
 pub use control::{WorkerControl, WorkerStatus};
@@ -553,16 +554,18 @@ pub async fn serve(options: WorkerOptions, shutdown: impl Future<Output = ()>) -
     .await?;
     offers.slots = options.slots;
     if offers.rc_astro.is_empty() {
+        // Without RC-Astro tools, a worker may still take stack builds.
+        let then = if offers.work.is_empty() {
+            "this worker has no work to accept yet"
+        } else {
+            "this worker accepts stack builds only"
+        };
         match (&options.tools.rc_astro, problem) {
-            (None, _) => tracing::warn!(
-                "rc-astro is not installed here; this worker has no work to accept yet"
-            ),
-            (Some(_), Some(problem)) => tracing::warn!(
-                "rc-astro could not be read ({problem}); this worker has no work to accept yet"
-            ),
-            (Some(_), None) => tracing::warn!(
-                "--work leaves out every RC-Astro tool; this worker has no work to accept yet"
-            ),
+            (None, _) => tracing::warn!("rc-astro is not installed here; {then}"),
+            (Some(_), Some(problem)) => {
+                tracing::warn!("rc-astro could not be read ({problem}); {then}")
+            }
+            (Some(_), None) => tracing::info!("--work leaves out every RC-Astro tool; {then}"),
         }
     } else {
         for schema in &offers.rc_astro {

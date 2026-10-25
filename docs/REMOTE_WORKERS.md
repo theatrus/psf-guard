@@ -47,6 +47,48 @@ name by default. `--rc-astro PATH` gives the rc-astro executable when it is
 not on `PATH`. `--slots N` lets the worker run up to N tasks at once, from 1
 to 16; the default is 1, since each RC-Astro step uses the GPU.
 
+## Run a worker from the desktop app
+
+On a Mac or a Windows PC, the PSF Guard app runs the worker for you: in the
+menu bar on macOS, and in the system tray on Windows. It keeps running when
+the app's window is closed.
+
+1. Install the PSF Guard app on the worker computer, the same release as the
+   server.
+2. On the server, open **Settings › Workers**, click **+ Add a worker**,
+   and create a token. Copy the token from the row under the commands.
+3. On the worker computer, open PSF Guard, then **Settings › Run a worker**.
+4. Enter the server's address, such as `http://192.168.1.10:3000`, and the
+   token. Choose the work the computer accepts, how many tasks it runs at
+   once, and how task files reach it; see [Choose how files reach the
+   worker](#choose-how-files-reach-the-worker).
+5. To start the worker each time you log in, select **Start the worker when
+   I log in**.
+6. Click **Save**, then **Start the worker**.
+
+The page then shows whether the worker is connected and the task it is
+running. **Pause taking tasks** lets running tasks finish and takes no new
+ones until you click **Resume taking tasks**. **Stop** stops the worker, and
+the server queues its running task again. After you change the settings,
+click **Restart** to use them.
+
+The worker's menu in the menu bar or the tray shows the same status, with
+**Pause Taking Tasks**, **Open PSF Guard** and **Quit Worker**.
+
+- PSF Guard saves the settings, with the token, in `worker.json` in its
+  settings folder, readable only by your user. `psf-guard worker --config
+  FILE` runs a worker from such a file without the menu bar or the tray.
+- **Start the worker when I log in** adds a login item: a LaunchAgent,
+  `~/Library/LaunchAgents/com.theatrus.psf-guard.worker.plist`, on macOS,
+  and a **PSF Guard Worker** entry under the `Run` key in the registry on
+  Windows. Clear the box and click **Save** to remove it.
+- The worker writes its log to files starting `psf-guard-worker` in the
+  app's log folder. Click **Open logs** on the page to see them.
+
+On Linux, the app does not run the worker in a tray; run it as a service
+instead, as [Run a worker as a Linux service](#run-a-worker-as-a-linux-service)
+explains.
+
 ## Run a worker as a Linux service
 
 The Fedora RPM and the Debian package install a `psf-guard-worker` systemd

@@ -331,7 +331,12 @@ pub fn main() {
             restart_server,
             is_configuration_valid,
             get_log_folder,
-            open_log_folder
+            open_log_folder,
+            crate::desktop_worker::get_desktop_worker,
+            crate::desktop_worker::save_desktop_worker,
+            crate::desktop_worker::start_desktop_worker,
+            crate::desktop_worker::stop_desktop_worker,
+            crate::desktop_worker::pause_desktop_worker
         ])
         .run(context())
         .expect("error while running tauri application");

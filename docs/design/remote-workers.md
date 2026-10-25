@@ -177,6 +177,39 @@ step whichever worker ran the earlier steps.
 - **Progress.** The stage reads `NoiseXTerminator on studio-pc` while a
   remote worker runs it.
 
+## Desktop worker
+
+`psf-guard worker --tray` runs the desktop app's worker: a second process of
+the app's binary, a Tauri app with a tray icon and no window
+(`src/worker_tray.rs`), so the worker keeps running when the app's window
+closes. On macOS it is an accessory app, with no Dock icon. It reuses the
+app's Tauri context (`tauri_main::context`), which embeds the frontend once.
+
+- **Settings.** `WorkerSettings` (`commands/worker/settings.rs`) is the
+  worker's arguments as a file, `worker.json` in the user's settings
+  folder, written with mode 0600 on Unix. `--config FILE` runs a worker
+  from it. The desktop app never returns the token to the page; a blank
+  token on save keeps the saved one.
+- **Status and controls.** `WorkerControl` (`commands/worker/control.rs`)
+  holds the worker's status (connection, running tasks and their progress,
+  the latest problem) and its pause and quit. A paused slot takes no new
+  task; running tasks finish. The tray worker serves `GET /status` and
+  `POST /pause`, `/resume` and `/quit` on a localhost port, behind a random
+  secret in the `x-psf-worker-control` header. The port, the secret and the
+  process id go in `worker-control.json` beside the settings, mode 0600,
+  removed when the worker stops. A second `--tray` start that finds a worker
+  answering there exits.
+- **Ending.** A deliberate stop (Quit, or `/quit` from the app) ends the
+  tray process. A worker the server refused, or one without settings, keeps
+  its tray so the menu can show why.
+- **Desktop app.** `src/desktop_worker.rs` holds the commands behind
+  **Settings › Run a worker**: read and save the settings, start the tray
+  process, and pause, resume and stop it through the control port.
+- **Start at login** (`commands/worker/login.rs`): a LaunchAgent with
+  `RunAtLoad` on macOS, and a value under
+  `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` on Windows. Both
+  run `psf-guard worker --tray --config <settings>`.
+
 ## Stack channels
 
 Each channel of a stack build can be a task (`stack_channel`). The build's

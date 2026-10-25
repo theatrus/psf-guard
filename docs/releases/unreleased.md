@@ -27,6 +27,13 @@
   spacing. Emission amounts and star reduction appear where they run in the
   pipeline; closing a step preserves its edits.
 
+- Run a worker from the PSF Guard app on a Mac or a Windows PC. Open
+  **Settings › Run a worker**, enter the server's address and a worker token,
+  and click **Start the worker**. The worker runs in the menu bar or the
+  system tray, keeps running when the window is closed, and can start when
+  you log in. Its menu and the Settings page show what it is doing, and let
+  you pause it or stop it.
+
 - Run a worker as a Linux service. The Fedora RPM and the Debian package
   install a `psf-guard-worker` systemd service, not enabled. Enter the
   server's address and a worker token in `/etc/psf-guard/worker.conf`, then

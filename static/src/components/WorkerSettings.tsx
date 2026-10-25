@@ -118,7 +118,7 @@ export default function WorkerSettings() {
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState('');
   const [created, setCreated] = useState<CreatedWorkerToken | null>(null);
-  const [copied, setCopied] = useState<'posix' | 'powershell' | null>(null);
+  const [copied, setCopied] = useState<'posix' | 'powershell' | 'token' | null>(null);
   const savedFolder = workers.data?.exchange_folder_setting ?? '';
   const [folder, setFolder] = useState(savedFolder);
   useEffect(() => setFolder(savedFolder), [savedFolder]);
@@ -181,10 +181,11 @@ export default function WorkerSettings() {
     ? {
       posix: `PSF_GUARD_WORKER_TOKEN=${created.token} psf-guard worker --server ${address}`,
       powershell: `$env:PSF_GUARD_WORKER_TOKEN="${created.token}"; psf-guard worker --server ${address}`,
+      token: created.token,
     }
     : null;
 
-  const copy = async (which: 'posix' | 'powershell') => {
+  const copy = async (which: 'posix' | 'powershell' | 'token') => {
     if (!commands) return;
     try {
       await navigator.clipboard.writeText(commands[which]);
@@ -285,6 +286,21 @@ export default function WorkerSettings() {
               onClick={() => void copy('powershell')}
             >
               {copied === 'powershell' ? 'Copied' : 'Copy'}
+            </button>
+          </div>
+          <p className="muted">
+            Or, in the PSF Guard app on a Mac or a Windows PC, open Settings ›
+            Run a worker and enter this server&apos;s address and the token:
+          </p>
+          <div className="token-secret-row">
+            <code className="token-secret-value" data-shell="token">{commands.token}</code>
+            <button
+              type="button"
+              className="browse-button"
+              aria-label="Copy the token"
+              onClick={() => void copy('token')}
+            >
+              {copied === 'token' ? 'Copied' : 'Copy'}
             </button>
           </div>
           {address.includes('THIS-SERVER') && (

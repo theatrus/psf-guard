@@ -185,3 +185,60 @@ export const tauriConfig = {
 
   isConfigurationValid: (): Promise<boolean> => invokeOr('is_configuration_valid', false),
 };
+
+/** One server folder and where this computer sees it, for shared files. */
+export interface WorkerPathMap {
+  server: string;
+  local: string;
+}
+
+/** The worker this computer runs: its settings, without the token. */
+export interface DesktopWorkerSettings {
+  server: string;
+  name: string | null;
+  files: 'remote' | 'shared';
+  maps: WorkerPathMap[];
+  work_dir: string | null;
+  rc_astro: string | null;
+  /** `--work` choices; empty takes everything the worker can run. */
+  work: string[];
+  slots: number;
+}
+
+/** What the running worker is doing (mirrors `WorkerStatus`). */
+export interface DesktopWorkerStatus {
+  server: string;
+  name: string;
+  version: string;
+  connection: 'connecting' | 'connected' | 'refused' | 'stopped';
+  paused: boolean;
+  tasks: Array<{ id: string; label: string; fraction: number }>;
+  problem: string | null;
+}
+
+export interface DesktopWorker {
+  /** Whether this system runs the worker in the menu bar or the tray. */
+  supported: boolean;
+  settings: DesktopWorkerSettings | null;
+  has_token: boolean;
+  start_at_login: boolean;
+  /** `null` while the worker is not running. */
+  status: DesktopWorkerStatus | null;
+  settings_path: string;
+}
+
+export interface SaveDesktopWorker extends DesktopWorkerSettings {
+  /** Blank keeps the saved token. */
+  token: string | null;
+  start_at_login: boolean;
+}
+
+// The worker this computer runs in the menu bar or the system tray.
+export const desktopWorker = {
+  get: (): Promise<DesktopWorker> => desktopInvoke('get_desktop_worker'),
+  save: (worker: SaveDesktopWorker): Promise<DesktopWorker> =>
+    desktopInvoke('save_desktop_worker', { worker }),
+  start: (): Promise<DesktopWorker> => desktopInvoke('start_desktop_worker'),
+  stop: (): Promise<DesktopWorker> => desktopInvoke('stop_desktop_worker'),
+  pause: (paused: boolean): Promise<DesktopWorker> => desktopInvoke('pause_desktop_worker', { paused }),
+};
