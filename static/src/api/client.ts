@@ -1012,6 +1012,7 @@ export const apiClient = {
   updateWorkerSettings: async (update: {
     interactive_ratio: number | null;
     background_ratio: number | null;
+    memory_budget_fraction?: number | null;
   }): Promise<WorkerSettings> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.put<ApiResponse<WorkerSettings>>('/settings/workers', update);

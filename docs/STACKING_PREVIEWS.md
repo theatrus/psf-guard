@@ -962,6 +962,26 @@ that starts after it. Memory can lower the count further: a pool never holds
 more frames than half the free memory allows. `GET` and `PUT
 /api/settings/workers` read and set the shares; `null` means the default.
 
+### Adjust the processing memory budget
+
+Open **Settings → Performance → Processing memory** and change **Memory budget**.
+Release the slider or press Enter to save; moving focus also saves.
+The limit starts at 50% and can be set from 5% to 100%. The panel shows the
+current budget in GiB. macOS uses installed physical memory; Linux and Windows
+use currently available memory. A higher budget allows larger jobs and leaves
+less room for other work. Changes apply to new jobs.
+
+When a color composition or stretch exceeds the budget, the error shows its
+estimated memory, the budget and the measured memory, with this Settings path.
+Change the budget if the server can use more memory, or use smaller input images.
+The estimate is a planning limit, rather than a reservation of memory.
+
+The choice is saved on the server for every database. **Use the default memory
+budget** restores `[server].memory_budget_fraction` from the TOML config, or 0.5
+when omitted. `GET /api/settings/workers` returns the effective/default fractions,
+`available_memory_bytes` and `memory_basis`. For `PUT`, a missing memory field
+preserves the current budget, and `null` restores the configured default.
+
 ## Cached results
 
 PSF Guard remembers the last successful preview for every target/channel in the

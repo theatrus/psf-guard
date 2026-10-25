@@ -3731,14 +3731,13 @@ fn compose_color(
         };
     let estimate = (pixels as u64).saturating_mul(bytes_per_pixel);
     let policy = state.worker_policy();
-    if let Some(available) = crate::concurrency::available_memory_bytes()
-        && estimate > (available as f64 * policy.memory_budget_fraction) as u64
-    {
-        return Err(format!(
-            "Estimated color-composition memory {} MiB exceeds the configured available-memory budget",
-            estimate / (1024 * 1024)
-        ));
-    }
+    crate::concurrency::check_processing_memory(
+        "color-composition",
+        estimate,
+        &policy,
+        crate::concurrency::available_memory_bytes(),
+    )?;
+
     let priority = super::job_priority(state.stack_previews.is_automatic(&job.job_id));
     let budget = crate::concurrency::plan_workers(None, &policy, priority, Some(pixels));
     let lease = state.lease_workers(priority, budget.workers);

@@ -136,3 +136,6 @@
 - Narrowband cards show a visible ✨ Stars label beside the star-policy selector.
 
 - Configure StarXTerminator separately for the linear nebula and RGB-star branches in **Process linear color**. Finished compositions retain the cached linear starless/stars outputs, and display blend amounts reuse the SXT runs.
+- Set the processing memory budget in **Settings → Performance → Processing
+  memory**. Color and stretch errors show the estimate and current budget, with
+  the setting to adjust it.
