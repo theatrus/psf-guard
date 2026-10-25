@@ -1622,10 +1622,7 @@ pub fn main() -> Result<()> {
             if tray {
                 crate::commands::worker::run_tray(settings_path()?)?;
             } else if config.is_some() {
-                crate::commands::worker::run(WorkerLaunch::Settings {
-                    path: settings_path()?,
-                    serve_controls: false,
-                })?;
+                crate::commands::worker::run(WorkerLaunch::Settings(settings_path()?))?;
             } else {
                 crate::commands::worker::run(WorkerLaunch::Arguments(
                     crate::commands::worker::WorkerArgs {

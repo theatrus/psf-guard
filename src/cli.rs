@@ -1324,13 +1324,20 @@ pub enum Commands {
 
         /// Read the worker's settings from this file, such as the one the
         /// desktop app writes, instead of the other options.
-        #[arg(long, value_name = "FILE", conflicts_with = "server")]
+        #[arg(
+            long,
+            value_name = "FILE",
+            conflicts_with_all = ["server", "token", "name", "files", "maps", "work_dir", "rc_astro", "work", "slots"]
+        )]
         config: Option<String>,
 
         /// Run in the menu bar (macOS) or the system tray (Windows), with
         /// the settings the desktop app saved, or those in `--config`.
         /// Desktop app builds only.
-        #[arg(long, conflicts_with = "server")]
+        #[arg(
+            long,
+            conflicts_with_all = ["server", "token", "name", "files", "maps", "work_dir", "rc_astro", "work", "slots"]
+        )]
         tray: bool,
 
         /// The worker token from Settings › Workers. When omitted, the

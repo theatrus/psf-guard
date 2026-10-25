@@ -32,7 +32,8 @@
   and click **Start the worker**. The worker runs in the menu bar or the
   system tray, keeps running when the window is closed, and can start when
   you log in. Its menu and the Settings page show what it is doing, and let
-  you pause it or stop it.
+  you pause it or stop it. Opening PSF Guard again while its window is open
+  now brings that window forward instead of starting a second copy.
 
 - Run a worker as a Linux service. The Fedora RPM and the Debian package
   install a `psf-guard-worker` systemd service, not enabled. Enter the

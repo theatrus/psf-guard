@@ -210,7 +210,7 @@ export interface DesktopWorkerStatus {
   server: string;
   name: string;
   version: string;
-  connection: 'connecting' | 'connected' | 'refused' | 'stopped';
+  connection: 'connecting' | 'connected' | 'failed' | 'stopped';
   paused: boolean;
   tasks: Array<{ id: string; label: string; fraction: number }>;
   problem: string | null;

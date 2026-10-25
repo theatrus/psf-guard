@@ -70,7 +70,7 @@ fn launch_agent(exe: &Path, settings: &Path) -> String {
     )
 }
 
-/// The command line the `Run` value holds.
+/// The command line stored in the `Run` value.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn run_command(exe: &Path, settings: &Path) -> String {
     format!(

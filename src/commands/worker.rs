@@ -76,13 +76,12 @@ const EVENTS_PER_REPORT: usize = 200;
 /// How long a finished task keeps trying to send its last events.
 const FLUSH_LIMIT: Duration = Duration::from_secs(120);
 
-/// Where the worker's settings come from, and how it is controlled.
+/// Where the worker's settings come from.
 pub enum WorkerLaunch {
     /// The command line's arguments.
     Arguments(WorkerArgs),
-    /// A settings file, with the controls served on a localhost port when
-    /// `serve_controls` is set.
-    Settings { path: PathBuf, serve_controls: bool },
+    /// A settings file.
+    Settings(PathBuf),
 }
 
 pub fn run(launch: WorkerLaunch) -> Result<()> {
@@ -120,51 +119,40 @@ pub fn run_tray(_settings: PathBuf) -> Result<()> {
 }
 
 /// Run a worker until `control` quits it or the server refuses its token.
+/// The status explains why the worker stopped.
 pub async fn run_with(launch: WorkerLaunch, control: WorkerControl) -> Result<()> {
-    let (args, controls) = match launch {
-        WorkerLaunch::Arguments(args) => (args, None),
-        WorkerLaunch::Settings {
-            path,
-            serve_controls,
-        } => {
-            let settings = WorkerSettings::load(&path)?.with_context(|| {
+    let prepared = match launch {
+        WorkerLaunch::Arguments(args) => options(args),
+        WorkerLaunch::Settings(path) => WorkerSettings::load(&path).and_then(|settings| {
+            let settings = settings.with_context(|| {
                 format!(
                     "There are no worker settings at {}; set up the worker in PSF Guard's \
-                     Settings, or start it with --server",
+                     Settings › Run a worker, or start it with --server",
                     path.display()
                 )
             })?;
             settings.validate()?;
-            (
-                settings.into_args(),
-                serve_controls.then(|| control::ControlFile::path_for(&path)),
-            )
-        }
+            options(settings.into_args())
+        }),
     };
-    let mut options = options(args)?;
-    options.control = control.clone();
-    if let Some(file) = controls {
-        let control = control.clone();
-        tokio::spawn(async move {
-            if let Err(error) = control::serve_control(control, file).await {
-                tracing::warn!("The worker's controls are not available: {error:#}");
-            }
-        });
-    }
-    let quitting = control.clone();
-    let served = serve(options, async move { quitting.quitting().await }).await;
+    let served = match prepared {
+        Ok(mut options) => {
+            options.control = control.clone();
+            let quitting = control.clone();
+            serve(options, async move { quitting.quitting().await }).await
+        }
+        Err(error) => Err(error),
+    };
     control.update(|status| {
         status.tasks.clear();
-        status.connection = match &served {
-            Err(_) => control::Connection::Refused,
-            Ok(()) => control::Connection::Stopped,
-        };
-        if let Err(error) = &served {
-            status.problem = Some(format!("{error:#}"));
+        match &served {
+            Ok(()) => status.connection = control::Connection::Stopped,
+            Err(error) => {
+                status.connection = control::Connection::Failed;
+                status.problem = Some(format!("{error:#}"));
+            }
         }
     });
-    // The controls stop with the worker.
-    control.quit();
     served
 }
 
@@ -226,13 +214,28 @@ fn options(args: WorkerArgs) -> Result<WorkerOptions> {
     })
 }
 
-/// This machine's host name, or "worker" when it cannot be read.
+/// This machine's host name, or "worker" when it cannot be read. It is read
+/// without starting a process, which on Windows would open a console window
+/// for the tray worker.
 fn host_name() -> String {
-    std::process::Command::new("hostname")
-        .output()
-        .ok()
-        .and_then(|output| String::from_utf8(output.stdout).ok())
-        .map(|name| name.trim().to_string())
+    #[cfg(windows)]
+    let name = std::env::var("COMPUTERNAME").ok();
+    #[cfg(unix)]
+    let name = {
+        let mut buffer = [0u8; 256];
+        // SAFETY: gethostname writes at most `buffer.len()` bytes into it.
+        let read = unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len()) };
+        (read == 0).then(|| {
+            let end = buffer
+                .iter()
+                .position(|byte| *byte == 0)
+                .unwrap_or(buffer.len());
+            String::from_utf8_lossy(&buffer[..end]).into_owned()
+        })
+    };
+    #[cfg(not(any(unix, windows)))]
+    let name: Option<String> = None;
+    name.map(|name| name.trim().to_string())
         .filter(|name| !name.is_empty())
         .unwrap_or_else(|| "worker".into())
 }
@@ -718,6 +721,13 @@ async fn run_slot(
             _ = stopping.changed() => return SlotEnd::Stopped,
             claimed = joined.client.claim(&joined.session, joined.poll) => claimed,
         };
+        // A claim the server answered means the worker is connected again.
+        if claimed.is_ok() {
+            joined.options.control.update(|status| {
+                status.connection = control::Connection::Connected;
+                status.problem = None;
+            });
+        }
         match claimed {
             Ok(None) => {}
             Ok(Some(assignment)) => match run_task(&joined, &assignment, stopping.clone()).await {
@@ -731,6 +741,10 @@ async fn run_slot(
             Err(ClientError::UnknownSession) => return SlotEnd::Rejoin,
             Err(error) => {
                 tracing::warn!("{error}; trying again in {}s", backoff.as_secs());
+                joined.options.control.update(|status| {
+                    status.connection = control::Connection::Connecting;
+                    status.problem = Some(error.to_string());
+                });
                 tokio::select! {
                     _ = stopping.changed() => return SlotEnd::Stopped,
                     () = tokio::time::sleep(backoff) => {}

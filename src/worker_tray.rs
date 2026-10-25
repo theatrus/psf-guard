@@ -12,7 +12,7 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
-use crate::commands::worker::control::{Connection, ControlClient, ControlFile};
+use crate::commands::worker::control::{self, Connection, ControlClient, ControlFile};
 use crate::commands::worker::{WorkerControl, WorkerLaunch, WorkerStatus};
 
 /// How often the menu reads the worker's status.
@@ -33,10 +33,7 @@ pub fn run(settings: PathBuf) -> Result<()> {
             .name("worker".into())
             .spawn(move || {
                 let runtime = tokio::runtime::Runtime::new()?;
-                let launch = WorkerLaunch::Settings {
-                    path: settings,
-                    serve_controls: true,
-                };
+                let launch = WorkerLaunch::Settings(settings);
                 let ran = runtime.block_on(crate::commands::worker::run_with(launch, control));
                 if let Err(error) = &ran {
                     tracing::error!("The worker stopped: {error:#}");
@@ -44,6 +41,7 @@ pub fn run(settings: PathBuf) -> Result<()> {
                 ran
             })?
     };
+    let controls = Controls::serve(control.clone(), ControlFile::path_for(&settings))?;
 
     let mut context = crate::tauri_main::context();
     // The tray has no window: the app's main window belongs to the app.
@@ -54,22 +52,62 @@ pub fn run(settings: PathBuf) -> Result<()> {
             move |app| {
                 #[cfg(target_os = "macos")]
                 app.set_activation_policy(tauri::ActivationPolicy::Accessory);
-                build_tray(app.handle(), control, worker)?;
+                build_tray(app.handle(), control, worker, controls)?;
                 Ok(())
             }
         })
         .build(context)?
-        .run(|_, event| {
+        .run(|_, event| match event {
             // With no window, nothing closing asks the tray to exit; only
             // Quit does.
-            if let tauri::RunEvent::ExitRequested {
+            tauri::RunEvent::ExitRequested {
                 code: None, api, ..
-            } = event
-            {
-                api.prevent_exit();
-            }
+            } => api.prevent_exit(),
+            // macOS counts this process as the running PSF Guard, since it
+            // runs the app's executable, so opening the app from the Dock or
+            // the Finder asks it to reopen. Open the app's window instead.
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen { .. } => open_app(),
+            _ => {}
         });
     Ok(())
+}
+
+/// The tray's control port, served on a thread of its own so it outlives
+/// the worker: the desktop app can still read why a worker stopped.
+struct Controls {
+    close: tokio::sync::oneshot::Sender<()>,
+    thread: std::thread::JoinHandle<()>,
+}
+
+impl Controls {
+    fn serve(control: WorkerControl, file: PathBuf) -> Result<Self> {
+        let (close, closed) = tokio::sync::oneshot::channel::<()>();
+        let thread = std::thread::Builder::new()
+            .name("worker-controls".into())
+            .spawn(move || {
+                let served = tokio::runtime::Runtime::new()
+                    .map_err(anyhow::Error::from)
+                    .and_then(|runtime| {
+                        runtime.block_on(control::serve_control(control, file, async {
+                            let _ = closed.await;
+                        }))
+                    });
+                if let Err(error) = served {
+                    tracing::warn!("The worker's controls are not available: {error:#}");
+                }
+            })?;
+        Ok(Self { close, thread })
+    }
+
+    /// Stop serving and remove the control file.
+    fn close(self) {
+        let _ = self.close.send(());
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while !self.thread.is_finished() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
 }
 
 /// Whether a worker answers on the controls this settings file's worker
@@ -87,6 +125,7 @@ fn build_tray(
     app: &tauri::AppHandle,
     control: WorkerControl,
     worker: std::thread::JoinHandle<Result<()>>,
+    controls: Controls,
 ) -> tauri::Result<()> {
     let lines = MenuLines::of(&control.status());
     let connection = MenuItem::with_id(app, "connection", &lines.connection, false, None::<&str>)?;
@@ -113,29 +152,15 @@ fn build_tray(
     if let Some(icon) = app.default_window_icon() {
         tray = tray.icon(icon.clone());
     }
-    let worker = std::sync::Mutex::new(Some(worker));
     let tray = tray
         .on_menu_event({
             let control = control.clone();
-            move |app, event| match event.id.as_ref() {
+            move |_, event| match event.id.as_ref() {
                 "pause" => control.set_paused(!control.status().paused),
                 "open" => open_app(),
-                "quit" => {
-                    control.quit();
-                    let worker = worker.lock().ok().and_then(|mut worker| worker.take());
-                    let app = app.clone();
-                    std::thread::spawn(move || {
-                        // Running tasks stop and the worker leaves the server,
-                        // which queues them again, before the tray goes.
-                        if let Some(worker) = worker {
-                            let deadline = std::time::Instant::now() + QUIT_LIMIT;
-                            while !worker.is_finished() && std::time::Instant::now() < deadline {
-                                std::thread::sleep(Duration::from_millis(100));
-                            }
-                        }
-                        app.exit(0);
-                    });
-                }
+                // The refresh below ends the tray once the worker has left
+                // the server, which queues its running tasks again.
+                "quit" => control.quit(),
                 _ => {}
             }
         })
@@ -143,17 +168,22 @@ fn build_tray(
     let app = app.clone();
     std::thread::spawn(move || {
         let mut shown = lines;
+        let mut quit_since: Option<std::time::Instant> = None;
         loop {
             std::thread::sleep(REFRESH);
-            let status = control.status();
-            // Stopped on purpose, such as from the desktop app: the tray
-            // goes too. A worker the server refused stays, so its menu can
-            // explain why.
-            if status.connection == Connection::Stopped {
-                app.exit(0);
-                return;
+            // Quit, from the menu or the desktop app, ends the tray once the
+            // worker has stopped, or after QUIT_LIMIT. A worker that stopped
+            // on its own, such as one the server refused, keeps its tray, so
+            // the menu and the desktop app can explain why.
+            if control.quit_requested() {
+                let since = *quit_since.get_or_insert_with(std::time::Instant::now);
+                if worker.is_finished() || since.elapsed() >= QUIT_LIMIT {
+                    controls.close();
+                    app.exit(0);
+                    return;
+                }
             }
-            let lines = MenuLines::of(&status);
+            let lines = MenuLines::of(&control.status());
             if lines == shown {
                 continue;
             }
@@ -167,20 +197,10 @@ fn build_tray(
     Ok(())
 }
 
-/// Open the desktop app, or bring it forward when it is open.
+/// Open the desktop app's window. The app's executable starts with no
+/// arguments; when the app is open already, it brings that window forward
+/// instead and exits.
 fn open_app() {
-    #[cfg(target_os = "macos")]
-    {
-        let opened = std::process::Command::new("open")
-            .args(["-b", crate::desktop_log::IDENTIFIER])
-            .status()
-            .is_ok_and(|status| status.success());
-        if opened {
-            return;
-        }
-    }
-    // An unbundled build, or Windows: start the app's binary with no
-    // arguments, which opens its window.
     match std::env::current_exe() {
         Ok(exe) => {
             if let Err(error) = std::process::Command::new(exe).spawn() {
@@ -208,12 +228,12 @@ impl MenuLines {
                 None => format!("Connecting to {}", status.server),
             },
             Connection::Connected => format!("Connected to {} as {}", status.server, status.name),
-            Connection::Refused => format!(
+            Connection::Failed => format!(
                 "Stopped: {}",
                 status
                     .problem
                     .as_deref()
-                    .unwrap_or("the server refused the worker")
+                    .unwrap_or("the worker could not go on")
             ),
             Connection::Stopped => "Stopped".to_string(),
         };
@@ -304,7 +324,7 @@ mod tests {
         assert_eq!(lines.work, "Paused: taking no new tasks");
         assert_eq!(lines.pause, "Resume Taking Tasks");
 
-        status.connection = Connection::Refused;
+        status.connection = Connection::Failed;
         status.problem = Some("The worker token was revoked".into());
         assert_eq!(
             MenuLines::of(&status).connection,

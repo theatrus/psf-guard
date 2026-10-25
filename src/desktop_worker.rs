@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::commands::worker::control::{ControlClient, ControlFile};
+use crate::commands::worker::control::{Connection, ControlClient, ControlFile};
 use crate::commands::worker::{login, WorkerSettings, WorkerStatus};
 use crate::remote_work::protocol::{FileMode, PathMap};
 
@@ -134,9 +134,26 @@ pub async fn save_desktop_worker(worker: SaveDesktopWorker) -> Result<DesktopWor
     describe().await
 }
 
+/// Quit a tray whose worker stopped, such as one the server refused, so a
+/// new start replaces it.
+async fn close_stopped_tray() -> Result<(), String> {
+    let stopped = running_status().await?.is_some_and(|status| {
+        matches!(status.connection, Connection::Failed | Connection::Stopped)
+    });
+    if stopped && let Some(client) = control_client()? {
+        let _ = client.quit().await;
+        let deadline = tokio::time::Instant::now() + STOP_LIMIT;
+        while running_status().await?.is_some() && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    }
+    Ok(())
+}
+
 /// Start the worker in the menu bar or the tray, unless it is running.
 #[tauri::command]
 pub async fn start_desktop_worker() -> Result<DesktopWorker, String> {
+    close_stopped_tray().await?;
     if running_status().await?.is_none() {
         let path = settings_path()?;
         let settings = WorkerSettings::load(&path)
@@ -157,7 +174,7 @@ pub async fn start_desktop_worker() -> Result<DesktopWorker, String> {
         let deadline = tokio::time::Instant::now() + START_LIMIT;
         while running_status().await?.is_none() {
             if tokio::time::Instant::now() >= deadline {
-                return Err("The worker did not start; open the log folder to see why".to_string());
+                return Err("The worker did not start; click Open logs to see why".to_string());
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
@@ -169,12 +186,12 @@ pub async fn start_desktop_worker() -> Result<DesktopWorker, String> {
 /// again.
 #[tauri::command]
 pub async fn stop_desktop_worker() -> Result<DesktopWorker, String> {
-    if let Some(client) = control_client()? {
-        if client.quit().await.is_ok() {
-            let deadline = tokio::time::Instant::now() + STOP_LIMIT;
-            while running_status().await?.is_some() && tokio::time::Instant::now() < deadline {
-                tokio::time::sleep(Duration::from_millis(250)).await;
-            }
+    if let Some(client) = control_client()?
+        && client.quit().await.is_ok()
+    {
+        let deadline = tokio::time::Instant::now() + STOP_LIMIT;
+        while running_status().await?.is_some() && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(250)).await;
         }
     }
     describe().await

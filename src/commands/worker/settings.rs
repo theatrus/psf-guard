@@ -1,6 +1,6 @@
 //! A worker's settings file: what `psf-guard worker --config` reads, and
 //! what the desktop app writes for the worker it runs on this computer.
-//! The file holds the worker's token, so only its user can read it.
+//! The file contains the worker's token, so only its user can read it.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -63,9 +63,11 @@ impl Default for WorkerSettings {
 }
 
 impl WorkerSettings {
-    /// This user's worker settings file, in PSF Guard's settings folder.
+    /// This user's worker settings file, in PSF Guard's settings folder on
+    /// this computer: on Windows, the local profile rather than the roaming
+    /// one, since a worker belongs to one computer.
     pub fn default_path() -> Result<PathBuf> {
-        Ok(dirs::config_dir()
+        Ok(dirs::config_local_dir()
             .context("This system has no settings folder")?
             .join("psf-guard")
             .join("worker.json"))

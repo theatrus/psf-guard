@@ -82,8 +82,8 @@ The worker's menu in the menu bar or the tray shows the same status, with
   `~/Library/LaunchAgents/com.theatrus.psf-guard.worker.plist`, on macOS,
   and a **PSF Guard Worker** entry under the `Run` key in the registry on
   Windows. Clear the box and click **Save** to remove it.
-- The worker writes its log to files starting `psf-guard-worker` in the
-  app's log folder. Click **Open logs** on the page to see them.
+- The worker writes its log to files starting `worker` in the app's log
+  folder. Click **Open logs** on the page to see them.
 
 On Linux, the app does not run the worker in a tray; run it as a service
 instead, as [Run a worker as a Linux service](#run-a-worker-as-a-linux-service)

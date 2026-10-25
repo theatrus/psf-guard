@@ -1,10 +1,10 @@
 //! What a running worker is doing, and the controls a desktop app or a
 //! tray menu uses on it: pause, resume and quit.
 //!
-//! A worker started with `--control` serves them on a localhost port. It
-//! writes the port and a secret it chose to a file only its user can read
-//! ([`ControlFile`]); every request must send that secret. The desktop app
-//! reads the file to find the worker.
+//! The tray worker (`psf-guard worker --tray`) serves them on a localhost
+//! port until it exits. It writes the port and a secret it chose to a file
+//! only its user can read ([`ControlFile`]); every request must send that
+//! secret. The desktop app reads the file to find the worker.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -28,8 +28,9 @@ pub enum Connection {
     Connecting,
     /// The server accepted the worker.
     Connected,
-    /// The server refused the worker's token. The worker has stopped.
-    Refused,
+    /// The worker stopped with a problem: the server refused its token, or
+    /// its settings cannot run.
+    Failed,
     /// The worker has stopped.
     Stopped,
 }
@@ -115,6 +116,11 @@ impl WorkerControl {
         self.0.quit.send_replace(true);
     }
 
+    /// Whether [`WorkerControl::quit`] was called.
+    pub fn quit_requested(&self) -> bool {
+        *self.0.quit.borrow()
+    }
+
     /// Completes once [`WorkerControl::quit`] is called.
     pub async fn quitting(&self) {
         let mut quit = self.0.quit.subscribe();
@@ -151,8 +157,7 @@ impl Drop for TaskEntry {
     }
 }
 
-/// Where a worker with `--control` serves its controls: a file in the
-/// worker's settings folder.
+/// Where the tray worker serves its controls, in a file beside its settings.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ControlFile {
     pub port: u16,
@@ -161,9 +166,14 @@ pub struct ControlFile {
 }
 
 impl ControlFile {
-    /// The file beside a worker's settings file.
+    /// The file beside a worker's settings file: `worker-control.json`
+    /// for `worker.json`.
     pub fn path_for(settings: &Path) -> PathBuf {
-        settings.with_file_name("worker-control.json")
+        let stem = settings
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "worker".into());
+        settings.with_file_name(format!("{stem}-control.json"))
     }
 
     pub fn read(path: &Path) -> Result<Self> {
@@ -176,10 +186,13 @@ impl ControlFile {
     }
 }
 
-/// Serve `control` on a localhost port until the worker quits, after
-/// writing where to reach it to `file`. The file is removed when the
-/// worker quits.
-pub async fn serve_control(control: WorkerControl, file: PathBuf) -> Result<()> {
+/// Serve `control` on a localhost port until `until` completes, after
+/// writing where to reach it to `file`. The file is removed then.
+pub async fn serve_control(
+    control: WorkerControl,
+    file: PathBuf,
+    until: impl std::future::Future<Output = ()> + Send + 'static,
+) -> Result<()> {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
         .await
         .context("opening the worker's control port")?;
@@ -199,9 +212,8 @@ pub async fn serve_control(control: WorkerControl, file: PathBuf) -> Result<()> 
             control: control.clone(),
             secret: Arc::new(secret),
         });
-    let quitting = control.clone();
     let served = axum::serve(listener, routes)
-        .with_graceful_shutdown(async move { quitting.quitting().await })
+        .with_graceful_shutdown(until)
         .await;
     // Only this worker's file: a newer worker may have written its own.
     if ControlFile::read(&file).is_ok_and(|written| written.pid == std::process::id()) {
@@ -285,6 +297,8 @@ impl ControlClient {
         Some(Self {
             http: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(5))
+                // A system proxy must not see the worker's secret.
+                .no_proxy()
                 .build()
                 .ok()?,
             base: format!("http://127.0.0.1:{}", file.port),

@@ -11,7 +11,9 @@ pub const IDENTIFIER: &str = "com.theatrus.psf-guard";
 /// Daily files kept; older ones are deleted as new days start.
 pub const KEPT_LOG_FILES: usize = 7;
 const FILE_PREFIX: &str = "psf-guard";
-const WORKER_FILE_PREFIX: &str = "psf-guard-worker";
+// Not `psf-guard-…`: each appender keeps its last week of files by prefix,
+// and the app's would count the worker's as its own.
+const WORKER_FILE_PREFIX: &str = "worker";
 const FILE_SUFFIX: &str = "log";
 
 /// Where the log files go, the folder Tauri's `app_log_dir` names:
@@ -35,7 +37,7 @@ pub fn file_appender(dir: &Path) -> std::io::Result<RollingFileAppender> {
 }
 
 /// The same for the worker the desktop app runs in the menu bar or the
-/// system tray, whose files start `psf-guard-worker`.
+/// system tray, whose files start `worker`.
 pub fn worker_file_appender(dir: &Path) -> std::io::Result<RollingFileAppender> {
     appender_with_prefix(dir, WORKER_FILE_PREFIX)
 }

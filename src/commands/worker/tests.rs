@@ -964,7 +964,12 @@ async fn the_controls_answer_only_with_the_secret_and_go_away_when_the_worker_qu
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("worker-control.json");
     let control = WorkerControl::default();
-    let served = tokio::spawn(control::serve_control(control.clone(), file.clone()));
+    let quitting = control.clone();
+    let served = tokio::spawn(control::serve_control(
+        control.clone(),
+        file.clone(),
+        async move { quitting.quitting().await },
+    ));
     eventually("the control file is written", || file.exists()).await;
     let client = control::ControlClient::find(&file).unwrap();
     assert!(!client.status().await.unwrap().paused);

@@ -59,8 +59,8 @@ function connectionText(status: DesktopWorkerStatus): string {
   switch (status.connection) {
     case 'connected':
       return `Connected to ${status.server} as ${status.name}`;
-    case 'refused':
-      return `Stopped: ${status.problem ?? 'the server refused the worker'}`;
+    case 'failed':
+      return `Stopped: ${status.problem ?? 'the worker could not go on'}`;
     case 'stopped':
       return 'Stopped';
     default:
