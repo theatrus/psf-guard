@@ -77,3 +77,38 @@ test('turning the GPU off saves, disables its passes, and the defaults come back
   const restored = await (await request.get(GPU_URL)).json();
   expect(restored.data.gpu).toEqual(restored.data.recommended);
 });
+
+
+test('processing memory budget persists, keeps CPU shares, and can restore defaults', async ({ page, request }, testInfo) => {
+  const endpoint='/api/settings/workers';
+  await request.put(endpoint,{data:{interactive_ratio:0.65,background_ratio:0.2,memory_budget_fraction:null}});
+  try {
+    await page.goto('/');await openSettings(page);await page.getByRole('tab',{name:'Performance'}).click();
+    const memory=page.getByRole('slider',{name:'Processing memory budget'});
+    await expect(memory).toHaveValue('50');
+    await memory.focus();await memory.press('Home');
+    for(let i=0;i<14;i++) await memory.press('ArrowRight');
+    await expect(memory).toHaveValue('75');
+    await memory.press('Enter');
+    await expect(memory).toHaveValue('75');
+    await expect.poll(async()=> (await (await request.get(endpoint)).json()).data.memory_budget_fraction).toBe(0.75);
+    const saved=(await (await request.get(endpoint)).json()).data;
+    expect(saved.interactive_ratio).toBe(0.65);expect(saved.background_ratio).toBe(0.2);
+    // Older API clients may update CPU shares without knowing the memory field.
+    await request.put(endpoint,{data:{interactive_ratio:0.7,background_ratio:0.2}});
+    expect((await (await request.get(endpoint)).json()).data.memory_budget_fraction).toBe(0.75);
+    await page.reload();await openSettings(page);await page.getByRole('tab',{name:'Performance'}).click();
+    await expect(memory).toHaveValue('75');
+    await page.getByRole('group',{name:'Processing memory'}).screenshot({path:testInfo.outputPath('processing-memory-desktop.png')});
+    await page.setViewportSize({width:390,height:900});
+    const group=page.getByRole('group',{name:'Processing memory'});
+    expect(await group.evaluate(e=>e.scrollWidth<=e.clientWidth+1)).toBe(true);
+    await group.screenshot({path:testInfo.outputPath('processing-memory-phone.png')});
+    await page.getByRole('button',{name:'Use the default memory budget'}).click();
+    await expect(memory).toHaveValue('50');
+    const invalid=await request.put(endpoint,{data:{memory_budget_fraction:1.1}});expect(invalid.status()).toBe(400);
+    expect((await (await request.get(endpoint)).json()).data.memory_budget_fraction).toBe(0.5);
+  } finally {
+    await request.put(endpoint,{data:{interactive_ratio:null,background_ratio:null,memory_budget_fraction:null}});
+  }
+});

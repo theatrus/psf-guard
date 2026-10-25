@@ -19,16 +19,21 @@ function mockServer() {
     default_interactive_ratio: 0.5,
     default_background_ratio: 0.25,
     logical_cores: 16,
+    memory_budget_fraction: 0.5,
+    default_memory_budget_fraction: 0.5,
+    available_memory_bytes: 48*1024**3,
+    memory_basis: 'installed',
   };
   server.use(
     http.get('/api/settings/workers', () => ok(current)),
     http.put('/api/settings/workers', async ({ request }) => {
-      const body = (await request.json()) as { interactive_ratio: number | null; background_ratio: number | null };
+      const body = (await request.json()) as { interactive_ratio: number | null; background_ratio: number | null; memory_budget_fraction?: number | null };
       saved.push(body);
       current = {
         ...current,
         interactive_ratio: body.interactive_ratio ?? current.default_interactive_ratio,
         background_ratio: body.background_ratio ?? current.default_background_ratio,
+        memory_budget_fraction: body.memory_budget_fraction === undefined ? current.memory_budget_fraction : body.memory_budget_fraction ?? current.default_memory_budget_fraction,
       };
       return ok(current);
     })
@@ -85,4 +90,28 @@ describe('WorkerShareSettings', () => {
     );
     expect(background).toHaveValue('10');
   });
+});
+
+
+it('saves a memory budget independently, shows GiB, and restores the server default', async () => {
+  const saved=mockServer(); renderSettings();
+  const memory=await screen.findByRole('slider',{name:'Processing memory budget'});
+  expect(screen.getByText('50% · 24.0 of 48.0 GiB installed memory')).toBeInTheDocument();
+  fireEvent.change(memory,{target:{value:'75'}});fireEvent.pointerUp(memory);
+  await waitFor(()=>expect(saved).toEqual([{interactive_ratio:null,background_ratio:null,memory_budget_fraction:0.75}]));
+  expect(await screen.findByText('75% · 36.0 of 48.0 GiB installed memory')).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button',{name:'Use the default memory budget'}));
+  await waitFor(()=>expect(saved).toHaveLength(2));
+  expect(saved[1]).toEqual({interactive_ratio:null,background_ratio:null,memory_budget_fraction:null});
+  await waitFor(()=>expect(memory).toHaveValue('50'));
+});
+
+
+it('lets keyboard users adjust the draft before Enter saves it', async () => {
+  const saved=mockServer();renderSettings();
+  const memory=await screen.findByRole('slider',{name:'Processing memory budget'});
+  fireEvent.change(memory,{target:{value:'65'}});fireEvent.keyUp(memory,{key:'ArrowRight'});
+  expect(saved).toHaveLength(0);
+  fireEvent.keyUp(memory,{key:'Enter'});
+  await waitFor(()=>expect(saved).toEqual([{interactive_ratio:null,background_ratio:null,memory_budget_fraction:0.65}]));
 });

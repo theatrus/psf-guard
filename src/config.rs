@@ -255,6 +255,9 @@ pub struct ServerConfig {
     /// an interactive scan is running. See `concurrency::WorkerPolicy`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background_worker_ratio: Option<f64>,
+    /// Fraction of system memory used as the processing budget (0.05–1, default 0.5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_budget_fraction: Option<f64>,
     /// Optional notice shown below the application header on every page.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub banner: Option<SiteBannerConfig>,
@@ -465,6 +468,7 @@ impl Default for ServerConfig {
             auth: None,
             scan_worker_ratio: None,
             background_worker_ratio: None,
+            memory_budget_fraction: None,
             banner: None,
             preview_format: None,
             preview_jpeg_quality: None,
@@ -601,7 +605,7 @@ impl Config {
     }
 
     /// Effective worker tuning policy for the parallel scans and background
-    /// pre-generation. The on-disk TOML surfaces the two core ratios; the other
+    /// pre-generation. The on-disk TOML surfaces the two core ratios and memory budget. Other
     /// knobs keep their compiled-in defaults. Ratios are clamped to
     /// `[0.05, 1.0]` so a typo can't disable the work or over-subscribe.
     pub fn get_worker_policy(&self) -> crate::concurrency::WorkerPolicy {
@@ -615,9 +619,17 @@ impl Config {
             .background_worker_ratio
             .unwrap_or(crate::concurrency::DEFAULT_BACKGROUND_RATIO)
             .clamp(0.05, 1.0);
-        crate::concurrency::WorkerPolicy::default()
-            .with_interactive_ratio(interactive)
-            .with_background_ratio(background)
+        crate::concurrency::WorkerPolicy {
+            memory_budget_fraction: self
+                .server
+                .memory_budget_fraction
+                .filter(|v| v.is_finite())
+                .unwrap_or(crate::concurrency::DEFAULT_MEMORY_BUDGET_FRACTION)
+                .clamp(0.05, 1.0),
+            ..crate::concurrency::WorkerPolicy::default()
+                .with_interactive_ratio(interactive)
+                .with_background_ratio(background)
+        }
     }
 
     pub fn get_cache_directory(&self) -> String {
@@ -949,9 +961,11 @@ directory = "./cache"
         let mut config = Config::default();
         config.server.scan_worker_ratio = Some(0.75);
         config.server.background_worker_ratio = Some(0.1);
+        config.server.memory_budget_fraction = Some(0.7);
         let policy = config.get_worker_policy();
         assert_eq!(policy.interactive_ratio, 0.75);
         assert_eq!(policy.background_ratio, 0.1);
+        assert_eq!(policy.memory_budget_fraction, 0.7);
 
         // Out-of-range values are clamped so a typo can't disable the work or
         // over-subscribe.
@@ -960,6 +974,10 @@ directory = "./cache"
         let policy = config.get_worker_policy();
         assert_eq!(policy.interactive_ratio, 0.05);
         assert_eq!(policy.background_ratio, 1.0);
+        config.server.memory_budget_fraction = Some(1.5);
+        assert_eq!(config.get_worker_policy().memory_budget_fraction, 1.0);
+        config.server.memory_budget_fraction = Some(f64::NAN);
+        assert_eq!(config.get_worker_policy().memory_budget_fraction, 0.5);
     }
 
     #[test]

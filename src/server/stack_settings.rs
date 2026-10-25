@@ -320,6 +320,10 @@ pub struct WorkerSettingsResponse {
     pub default_interactive_ratio: f64,
     pub default_background_ratio: f64,
     pub logical_cores: usize,
+    pub memory_budget_fraction: f64,
+    pub default_memory_budget_fraction: f64,
+    pub available_memory_bytes: Option<u64>,
+    pub memory_basis: &'static str,
 }
 
 fn worker_response(state: &AppState) -> WorkerSettingsResponse {
@@ -331,6 +335,10 @@ fn worker_response(state: &AppState) -> WorkerSettingsResponse {
         default_interactive_ratio: base.interactive_ratio,
         default_background_ratio: base.background_ratio,
         logical_cores: crate::concurrency::logical_cores(),
+        memory_budget_fraction: policy.memory_budget_fraction,
+        default_memory_budget_fraction: base.memory_budget_fraction,
+        available_memory_bytes: crate::concurrency::available_memory_bytes(),
+        memory_basis: crate::concurrency::memory_budget_basis(),
     }
 }
 
@@ -346,6 +354,15 @@ pub struct UpdateWorkerSettingsRequest {
     /// `null` goes back to the config file's share.
     pub interactive_ratio: Option<f64>,
     pub background_ratio: Option<f64>,
+    /// Omitted preserves the current memory budget; null restores the config default.
+    #[serde(default, deserialize_with = "present_memory_budget")]
+    pub memory_budget_fraction: Option<Option<f64>>,
+}
+
+fn present_memory_budget<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Option<f64>>, D::Error> {
+    Ok(Some(Option::<f64>::deserialize(deserializer)?))
 }
 
 /// The registry entry for a request: a share equal to the config file's is
@@ -353,6 +370,7 @@ pub struct UpdateWorkerSettingsRequest {
 fn stored_workers(
     request: &UpdateWorkerSettingsRequest,
     base: crate::concurrency::WorkerPolicy,
+    current_memory_budget: Option<f64>,
 ) -> Result<Option<crate::db_registry::WorkerSettings>, AppError> {
     let check = |label: &str, ratio: Option<f64>, default: f64| match ratio {
         Some(ratio) if !(0.05..=1.0).contains(&ratio) || !ratio.is_finite() => Err(
@@ -372,6 +390,13 @@ fn stored_workers(
             request.background_ratio,
             base.background_ratio,
         )?,
+        memory_budget_fraction: check(
+            "processing memory",
+            request
+                .memory_budget_fraction
+                .unwrap_or(current_memory_budget),
+            base.memory_budget_fraction,
+        )?,
     };
     Ok((settings != crate::db_registry::WorkerSettings::default()).then_some(settings))
 }
@@ -382,10 +407,15 @@ pub async fn update_worker_settings(
     State(state): State<Arc<AppState>>,
     Json(request): Json<UpdateWorkerSettingsRequest>,
 ) -> Result<Json<ApiResponse<WorkerSettingsResponse>>, AppError> {
-    let workers = stored_workers(&request, state.configured_worker_policy())?;
-    update_registry(&state, |registry| {
+    let base = state.configured_worker_policy();
+    let workers = update_registry(&state, |registry| {
+        let current_memory = registry
+            .workers
+            .as_ref()
+            .and_then(|w| w.memory_budget_fraction);
+        let workers = stored_workers(&request, base, current_memory)?;
         registry.workers = workers;
-        Ok(())
+        Ok(workers)
     })
     .await?;
     state.apply_worker_settings(workers.as_ref());
@@ -545,18 +575,53 @@ mod tests {
     }
 
     #[test]
+    fn memory_budget_is_persisted_applied_and_preserved_by_older_clients() {
+        let base = crate::concurrency::WorkerPolicy::default();
+        let request: UpdateWorkerSettingsRequest =
+            serde_json::from_value(serde_json::json!({"memory_budget_fraction":0.75})).unwrap();
+        let settings = stored_workers(&request, base, None).unwrap().unwrap();
+        let json = serde_json::to_vec(&settings).unwrap();
+        let loaded: crate::db_registry::WorkerSettings = serde_json::from_slice(&json).unwrap();
+        assert_eq!(loaded.apply(base).memory_budget_fraction, 0.75);
+        let older: UpdateWorkerSettingsRequest =
+            serde_json::from_value(serde_json::json!({"interactive_ratio":0.6})).unwrap();
+        assert_eq!(
+            stored_workers(&older, base, Some(0.75))
+                .unwrap()
+                .unwrap()
+                .memory_budget_fraction,
+            Some(0.75)
+        );
+        let reset: UpdateWorkerSettingsRequest =
+            serde_json::from_value(serde_json::json!({"memory_budget_fraction":null})).unwrap();
+        assert_eq!(stored_workers(&reset, base, Some(0.75)).unwrap(), None);
+        for ratio in [0.0, -0.1, 1.01, f64::NAN, f64::INFINITY] {
+            let request = UpdateWorkerSettingsRequest {
+                interactive_ratio: None,
+                background_ratio: None,
+                memory_budget_fraction: Some(Some(ratio)),
+            };
+            assert!(stored_workers(&request, base, None).is_err());
+        }
+    }
+
+    #[test]
     fn a_share_equal_to_the_config_file_is_not_stored_and_nonsense_is_refused() {
         let base = crate::concurrency::WorkerPolicy::default();
         let request = |interactive, background| UpdateWorkerSettingsRequest {
             interactive_ratio: interactive,
             background_ratio: background,
+            memory_budget_fraction: None,
         };
-        assert_eq!(stored_workers(&request(None, None), base).unwrap(), None);
         assert_eq!(
-            stored_workers(&request(Some(base.interactive_ratio), None), base).unwrap(),
+            stored_workers(&request(None, None), base, None).unwrap(),
             None
         );
-        let chosen = stored_workers(&request(Some(0.75), Some(0.1)), base)
+        assert_eq!(
+            stored_workers(&request(Some(base.interactive_ratio), None), base, None).unwrap(),
+            None
+        );
+        let chosen = stored_workers(&request(Some(0.75), Some(0.1)), base, None)
             .unwrap()
             .unwrap();
         assert_eq!(chosen.interactive_ratio, Some(0.75));
@@ -564,7 +629,7 @@ mod tests {
         let applied = chosen.apply(base);
         assert_eq!(applied.interactive_ratio, 0.75);
         assert_eq!(applied.background_ratio, 0.1);
-        assert!(stored_workers(&request(Some(0.0), None), base).is_err());
-        assert!(stored_workers(&request(None, Some(1.5)), base).is_err());
+        assert!(stored_workers(&request(Some(0.0), None), base, None).is_err());
+        assert!(stored_workers(&request(None, Some(1.5)), base, None).is_err());
     }
 }

@@ -705,6 +705,9 @@ pub struct WorkerSettings {
     /// preview pre-generation, quality backfill. Absent keeps the config's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background_ratio: Option<f64>,
+    /// Processing memory budget; absent uses the server config file's limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_budget_fraction: Option<f64>,
 }
 
 impl WorkerSettings {
@@ -719,6 +722,9 @@ impl WorkerSettings {
         }
         if let Some(ratio) = self.background_ratio {
             policy = policy.with_background_ratio(ratio.clamp(0.05, 1.0));
+        }
+        if let Some(fraction) = self.memory_budget_fraction.filter(|v| v.is_finite()) {
+            policy.memory_budget_fraction = fraction.clamp(0.05, 1.0);
         }
         policy
     }

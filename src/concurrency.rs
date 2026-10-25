@@ -320,7 +320,7 @@ impl Drop for WorkerLease {
 
 /// Tunables for the CPU-bound parallel operations, grouped so the whole policy
 /// threads through the server (`ServerConfig` → `AppState`) and CLI as one
-/// value instead of a fan-out of loose parameters. Only the two ratios are
+/// value instead of a fan-out of loose parameters. The core ratios and memory budget are
 /// surfaced in the on-disk TOML; the rest carry their compiled-in defaults but
 /// live here so a future knob is a one-line addition rather than another
 /// signature change.
@@ -778,8 +778,58 @@ pub fn probe_frame_pixels(path: &Path) -> Option<usize> {
     (w > 0 && h > 0).then_some(w * h)
 }
 
+/// Memory basis used by the platform probe and shown in budget errors/settings.
+pub(crate) fn memory_budget_basis() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "installed"
+    } else {
+        "available"
+    }
+}
+
+/// Refuse an operation above its planning budget, with the actual limit and
+/// the setting that controls it. An unknown memory size keeps existing behavior.
+pub(crate) fn check_processing_memory(
+    operation: &str,
+    estimate: u64,
+    policy: &WorkerPolicy,
+    available: Option<u64>,
+) -> Result<(), String> {
+    if let Some(available) = available {
+        let budget = (available as f64 * policy.memory_budget_fraction) as u64;
+        if estimate > budget {
+            return Err(format!("Estimated {operation} memory {} MiB exceeds the {} MiB processing budget ({}% of {} MiB {} memory). Adjust Settings → Performance → Processing memory, or use smaller input images.", estimate / (1024*1024), budget / (1024*1024), (policy.memory_budget_fraction*100.0).round(), available / (1024*1024), memory_budget_basis()));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn color_memory_error_shows_the_limit_and_setting_and_honors_a_larger_budget() {
+        let policy = WorkerPolicy::default();
+        let memory = 48_u64 * 1024 * 1024 * 1024;
+        let estimate = 24735_u64 * 1024 * 1024;
+        let error = check_processing_memory("color-composition", estimate, &policy, Some(memory))
+            .unwrap_err();
+        assert!(error.contains("24735 MiB"));
+        assert!(error.contains("24576 MiB processing budget"));
+        assert!(error.contains("50% of 49152 MiB"));
+        assert!(error.contains("Settings → Performance → Processing memory"));
+        let larger = WorkerPolicy {
+            memory_budget_fraction: 0.75,
+            ..policy
+        };
+        assert!(
+            check_processing_memory("color-composition", estimate, &larger, Some(memory)).is_ok()
+        );
+        assert!(
+            check_processing_memory("color-composition", memory / 2, &policy, Some(memory)).is_ok()
+        );
+        assert!(check_processing_memory("color-composition", estimate, &policy, None).is_ok());
+    }
+
     #[test]
     fn a_live_setting_reads_the_last_change_in_every_clone() {
         let setting = super::LiveSetting::new(true);

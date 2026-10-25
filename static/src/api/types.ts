@@ -2008,6 +2008,10 @@ export interface WorkerSettings {
   default_interactive_ratio: number;
   default_background_ratio: number;
   logical_cores: number;
+  memory_budget_fraction: number;
+  default_memory_budget_fraction: number;
+  available_memory_bytes: number | null;
+  memory_basis: 'installed' | 'available';
 }
 
 /** Whether, and how soon, remembered stack previews rebuild on their own. */
