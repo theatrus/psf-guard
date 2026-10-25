@@ -6259,7 +6259,10 @@ mod tests {
     use crate::server::stack_preview::{
         LatestStackPreviewGroup, StackGroupState, StackGroupStatus, StackSkyOrientation,
     };
-    use crate::server::workers::{rc_astro::RcAstroRunner, Workers};
+    use crate::server::workers::Workers;
+    // Only the tests that run the stand-in rc-astro use it.
+    #[cfg(unix)]
+    use crate::server::workers::rc_astro::RcAstroRunner;
 
     #[test]
     fn color_rc_astro_validation_rejects_foreign_roles() {
