@@ -162,6 +162,40 @@ again every 30 seconds; `journalctl -u psf-guard-worker` shows why.
 `PSF_GUARD_WORKER_EXTRA_ARGS` is split on spaces, so it cannot hold a path
 that contains one.
 
+## Run a worker as a Windows service
+
+A Windows PC that runs work while nobody is logged in can run the worker as
+a service instead of in the tray. The service starts with Windows and runs as
+Local System.
+
+1. Save the worker's settings in **Settings › Run a worker**, as for the
+   tray. Leave **Start the worker when I log in** cleared, and stop the tray
+   worker, so that only one worker runs on the computer.
+2. Open PowerShell as administrator, and run:
+
+   ```powershell
+   psf-guard-cli worker-service install
+   ```
+
+   The service uses the settings you saved. To use another settings file,
+   add `--config FILE`.
+
+The service appears as **PSF Guard Worker** in the Services console. It
+writes its log to files starting `worker` in
+`%ProgramData%\PSF Guard\logs`. When it fails, such as when the server
+refuses the token, Windows starts it again after 30 seconds. After you
+change the settings, restart the service from the Services console.
+
+To remove the service, run `psf-guard-cli worker-service uninstall` from
+PowerShell opened as administrator. The worker stops, and the server queues
+its running task again.
+
+Local System reads files on the computer, but not network shares mapped by
+a user. For task files on shared storage, change the service's account in
+the Services console to a user that can read and write the shares. Enter
+each share in the shared folders as a UNC path, such as `\\nas\astro`,
+since a drive letter mapped by a user does not exist for the service.
+
 ## Choose the work a worker accepts
 
 A worker accepts everything it can run unless you list its work with

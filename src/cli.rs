@@ -14,7 +14,26 @@ pub struct Cli {
     pub command: Commands,
 }
 
-/// CLI spelling of [`crate::server::stack_preview::snr::StackFrameOrder`].
+/// What `psf-guard worker-service` does.
+#[derive(Subcommand, Debug)]
+pub enum WorkerServiceAction {
+    /// Install the service, and start it.
+    Install {
+        /// The worker's settings file (defaults to the one the desktop app
+        /// saves for this user).
+        #[arg(long, value_name = "FILE")]
+        config: Option<String>,
+    },
+    /// Stop the service and remove it.
+    Uninstall,
+    /// Run as the service. Windows starts this; it is not for a terminal.
+    #[command(hide = true)]
+    Run {
+        #[arg(long, value_name = "FILE")]
+        config: String,
+    },
+}
+
 /// How a worker reaches task files.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
 pub enum WorkerFilesArg {
@@ -25,6 +44,7 @@ pub enum WorkerFilesArg {
     Shared,
 }
 
+/// CLI spelling of [`crate::server::stack_preview::snr::StackFrameOrder`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
 pub enum StackOrderArg {
     /// Chronological.
@@ -1386,6 +1406,18 @@ pub enum Commands {
         /// RC-Astro step uses the GPU, so more than one seldom helps.
         #[arg(long, default_value_t = 1)]
         slots: usize,
+    },
+
+    /// Run the worker as a Windows service, for a computer that runs work
+    /// while nobody is logged in.
+    ///
+    /// Save the worker's settings in the desktop app's Settings › Run a
+    /// worker first, or write a settings file. Then, from a terminal opened
+    /// as administrator, run `psf-guard-cli worker-service install`. The
+    /// service runs as Local System and starts with Windows.
+    WorkerService {
+        #[command(subcommand)]
+        action: WorkerServiceAction,
     },
 
     /// Start the web server for API access and static file serving

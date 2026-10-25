@@ -38,6 +38,12 @@
   you log in. Opening PSF Guard while its window is open brings that window
   forward instead of starting a second copy.
 
+- Run a worker as a Windows service, for a PC that runs work while nobody is
+  logged in. Save the worker's settings under **Settings › Workers › This
+  computer**, then run `psf-guard-cli worker-service install` in PowerShell
+  as administrator. Run it again after you change the settings or update PSF
+  Guard.
+
 - Run a worker as a Linux service. The Fedora RPM and the Debian package
   install a `psf-guard-worker` systemd service, not enabled. Enter the
   server's address and a worker token in `/etc/psf-guard/worker.conf`, then

@@ -219,6 +219,13 @@ and registers no plugins.
 - **Desktop app.** `src/desktop_worker.rs` has the commands behind
   **Settings › Workers › Worker on this computer**. They read and save settings,
   start the tray process, and pause, resume and stop it through the control port.
+- **Windows service** (`commands/worker/service.rs`): `psf-guard
+  worker-service install` creates `PSFGuardWorker`, started automatically,
+  as Local System, running `worker-service run --config <settings>` from
+  the installing binary. Stop and shutdown quit the worker, which leaves the
+  server, while the service reports a stop pending for up to 40 seconds. A
+  failed run exits nonzero, and the failure actions start it again after 30
+  seconds. It serves no controls and has no tray.
 - **Start worker at login** (`commands/worker/login.rs`): a LaunchAgent with
   `RunAtLoad` on macOS, and a value under
   `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` on Windows. Both
