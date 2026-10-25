@@ -8533,6 +8533,16 @@ mod tests {
             enabled: false,
             ..Default::default()
         });
+        let export = std::env::var("PSF_GUARD_MOSAIC_EXAMPLES")
+            .ok()
+            .map(PathBuf::from);
+        if let Some(export) = &export {
+            std::fs::create_dir_all(export).unwrap();
+        }
+        let bin: u32 = std::env::var("PSF_GUARD_MOSAIC_COLOR_BIN")
+            .ok()
+            .map(|v| v.parse().unwrap())
+            .unwrap_or(4);
         let mut groups = Vec::new();
         for (index, filter) in ["R", "G", "B", "HA", "OIII", "SII", "L"]
             .into_iter()
@@ -8546,7 +8556,7 @@ mod tests {
             )
             .unwrap()
             .image
-            .binned(4)
+            .binned(bin)
             .unwrap();
             let mut source = source_group(filter, index);
             source.group.target_id = -21;
@@ -8580,14 +8590,51 @@ mod tests {
                     .into_iter()
                     .map(|palette| (StackColorKind::Narrowband, Some(palette))),
             );
-        for (index, (kind, palette)) in variants.enumerate() {
+        let variants = variants
+            .map(|(kind, palette)| (kind, palette, false, false))
+            .chain([
+                (
+                    StackColorKind::Narrowband,
+                    Some(StackNarrowbandPalette::Sho),
+                    true,
+                    false,
+                ),
+                (
+                    StackColorKind::Narrowband,
+                    Some(StackNarrowbandPalette::Sho),
+                    true,
+                    true,
+                ),
+                (
+                    StackColorKind::Narrowband,
+                    Some(StackNarrowbandPalette::Hoo),
+                    true,
+                    true,
+                ),
+            ]);
+        for (index, (kind, palette, shared, balanced)) in variants.enumerate() {
+            let processing = shared.then(|| {
+                let mut processing =
+                    crate::server::processing_setups::default_color_processing(&state);
+                processing.color_calibration = None;
+                processing.narrowband = Some(narrowband::NarrowbandProcessing {
+                    shared_stretch: true,
+                    balance: balanced.then(|| seiza_stacking::NarrowbandBalanceOptions {
+                        has_sii: palette.is_some_and(StackNarrowbandPalette::requires_sii),
+                        ..Default::default()
+                    }),
+                });
+                processing
+            });
             let request = StackColorRequest {
+                automatic_palette: false,
+                stars: None,
                 target_id: -21,
                 kind,
                 palette,
                 force: false,
                 crop: StackColorCrop::None,
-                processing: None,
+                processing,
                 input_sources: BTreeMap::new(),
             };
             let sources = select_sources(&targets[&-21], &request).unwrap();
@@ -8606,7 +8653,8 @@ mod tests {
             job.project_id = 21;
             job.target_name = "Heart and Soul mosaic".into();
             job.label = composition_label(kind, palette).into();
-            job.progress = color_progress(sources.len(), None);
+            job.processing = request.processing.clone();
+            job.progress = color_progress(sources.len(), job.processing.as_ref());
             job.sources = sources;
             assert!(state.stack_previews.insert_color(job.clone()));
             compose_color(
@@ -8617,6 +8665,7 @@ mod tests {
                 &BTreeMap::new(),
                 &BTreeMap::new(),
                 &ColorRcAstroPlan::default(),
+                None,
                 None,
                 &ColorStop {
                     cancel: Stop::new(),
@@ -8640,6 +8689,34 @@ mod tests {
                 image.width,
                 image.height
             );
+            if let Some(export) = &export {
+                let suffix = if balanced {
+                    "-balanced"
+                } else if shared {
+                    "-shared"
+                } else {
+                    ""
+                };
+                let name = format!("{}{suffix}", job.label.to_ascii_lowercase());
+                std::fs::copy(
+                    color_preview_path(root, &job.job_id),
+                    export.join(format!("{name}.png")),
+                )
+                .unwrap();
+                std::fs::write(
+                    export.join(format!("{name}-request.json")),
+                    serde_json::to_vec_pretty(&request).unwrap(),
+                )
+                .unwrap();
+                std::fs::write(
+                    export.join(format!("{name}-report.json")),
+                    serde_json::to_vec_pretty(
+                        &state.stack_previews.get_color(&job.job_id).unwrap(),
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            }
             eprintln!("{}: {} × {}", job.label, image.width, image.height);
         }
     }

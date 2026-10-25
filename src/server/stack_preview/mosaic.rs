@@ -407,6 +407,30 @@ mod tests {
             serde_json::from_str(&std::env::var("PSF_GUARD_MOSAIC_INPUTS").unwrap()).unwrap();
         assert_eq!(paths.len(), 4);
         let scratch = tempfile::tempdir().unwrap();
+        let paths = if let Ok(factor) = std::env::var("PSF_GUARD_MOSAIC_INPUT_BIN") {
+            let factor: u32 = factor.parse().unwrap();
+            paths
+                .into_iter()
+                .enumerate()
+                .map(|(index, path)| {
+                    let frame = crate::image_io::open_linear_frame(path)
+                        .unwrap()
+                        .binned(factor)
+                        .unwrap();
+                    let output = scratch.path().join(format!("panel-{index}.fits"));
+                    seiza_stacking::write_processed_image_fits_f32(
+                        &output,
+                        &frame.image,
+                        &frame.headers,
+                        &[],
+                    )
+                    .unwrap();
+                    output
+                })
+                .collect()
+        } else {
+            paths
+        };
         let group = group(
             paths
                 .into_iter()
