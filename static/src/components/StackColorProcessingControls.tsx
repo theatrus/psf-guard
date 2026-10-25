@@ -1,3 +1,4 @@
+import StackStarSeparationControls from './StackStarSeparationControls';
 import { useMemo, useState, type ReactNode } from 'react';
 import type {
   StackBackgroundConfig,
@@ -76,7 +77,7 @@ function hasInvalidNumbers(processing: StackColorProcessing): boolean {
     (value) => typeof value === 'number' && !Number.isFinite(value)
   )) || Object.values(processing.input_deconvolutions).some((config) =>
     config && Object.values(config).some((value) => !Number.isFinite(value))
-  ) || [...Object.values(processing.input_rc_astro ?? {}), processing.color_rc_astro, processing.narrowband?.rgb_star_processing]
+  ) || [...Object.values(processing.input_rc_astro ?? {}), processing.color_rc_astro, processing.narrowband?.rgb_star_processing, processing.narrowband?.nebula_star_separation, processing.narrowband?.rgb_star_separation]
     .some((config) =>
       config?.steps.some((step) => Object.values(step.parameters).some((value) =>
         typeof value === 'number' && !Number.isFinite(value)
@@ -611,7 +612,7 @@ function channelProcessingSummary(
 export default function StackColorProcessingControls({
   label, roles, applied, backgrounds, protections, fallbacks, deconvolutions, rcAstro = {},
   colorRcAstro, channelProcessing = {}, followed, disabled, applyError, onApply,
-  automaticNarrowband = false, combination, palette, balanceReport, managesStars = false, stars, resolvedStars,
+  automaticNarrowband = false, combination, palette, balanceReport, managesStars = false, stars, resolvedStars, starSeparation,
 }: {
   label: string;
   roles: StackColorRole[];
@@ -623,6 +624,7 @@ export default function StackColorProcessingControls({
   managesStars?: boolean;
   stars?: StackColorStars;
   resolvedStars?: StackColorStars;
+  starSeparation?: StackColorJob['narrowband_resolution'];
   backgrounds: Partial<Record<StackColorRole, StackBackgroundFit>>;
   protections: Partial<Record<StackColorRole, StackBackgroundProtection>>;
   fallbacks: Partial<Record<StackColorRole, string>>;
@@ -709,6 +711,8 @@ export default function StackColorProcessingControls({
         !config.balance &&
         !config.shared_stretch &&
         !config.rgb_star_processing &&
+        !config.nebula_star_separation &&
+        !config.rgb_star_separation &&
         config.rgb_star_stretch == null &&
         (config.green_reduction ?? 0) === 0 &&
         (config.star_reduction ?? 0) === 0
@@ -891,6 +895,10 @@ export default function StackColorProcessingControls({
       setError(`Color channels: ${colorProblem}`);
       return;
     }
+    for (const [branch, config] of [['Narrowband nebula', draft.narrowband?.nebula_star_separation], ['RGB stars', draft.narrowband?.rgb_star_separation]] as const) {
+      const problem = rcAstroProblem(config, rcAstroTools);
+      if (problem) { setError(`${branch} star separation: ${problem}`); return; }
+    }
     const starProblem = rcAstroProblem(draft.narrowband?.rgb_star_processing, rcAstroTools);
     if (starProblem) {
       setError(`RGB stars: ${starProblem}`);
@@ -927,7 +935,7 @@ export default function StackColorProcessingControls({
             setDraft(
               cloneProcessing(
                 combinedColorProcessing(
-                  colorSetupForRoles(settings as StackColorProcessing, roles),
+                  colorSetupForRoles(settings as StackColorProcessing, roles, preparesRgbBranch),
                   combination,
                   roles,
                 ),
@@ -1088,6 +1096,12 @@ export default function StackColorProcessingControls({
                       No additional color-channel tools selected.
                     </p>
                   )}
+                {narrowband && managesStars && <StackStarSeparationControls
+                  label="Narrowband nebula" config={draft.narrowband?.nebula_star_separation}
+                  result={starSeparation?.nebula_star_separation}
+                  disabled={disabled || stars === 'narrowband'}
+                  onChange={(nebula_star_separation) => changeNarrowband({ ...draft.narrowband,
+                    shared_stretch: draft.narrowband?.shared_stretch ?? false, nebula_star_separation })} />}
                 {calibrates && !narrowband && (
                   <ColorCalibrationSwitch
                     calibration={draft.color_calibration}
@@ -1149,7 +1163,7 @@ export default function StackColorProcessingControls({
                         </p>
                       </section>
                     )}
-                  {calibrates && (
+                  {preparesRgbBranch && (
                     <ColorCalibrationSwitch
                       calibration={draft.color_calibration}
                       disabled={disabled}
@@ -1161,6 +1175,10 @@ export default function StackColorProcessingControls({
                       }
                     />
                   )}
+                  <StackStarSeparationControls label="RGB" config={draft.narrowband?.rgb_star_separation}
+                    result={starSeparation?.rgb_star_separation} disabled={disabled || !preparesRgbBranch}
+                    onChange={(rgb_star_separation) => changeNarrowband({ ...draft.narrowband,
+                      shared_stretch: draft.narrowband?.shared_stretch ?? false, rgb_star_separation })} />
                 </section>
               )}
             </div>

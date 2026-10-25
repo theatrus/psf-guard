@@ -134,3 +134,5 @@
   stars** to keep stars fainter. Saved setups keep their existing Auto MTF
   rendering until you switch.
 - Narrowband cards show a visible ✨ Stars label beside the star-policy selector.
+
+- Configure StarXTerminator separately for the linear nebula and RGB-star branches in **Process linear color**. Finished compositions retain the cached linear starless/stars outputs, and display blend amounts reuse the SXT runs.

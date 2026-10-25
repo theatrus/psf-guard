@@ -2191,6 +2191,13 @@ test('keeps narrowband and RGB star processing consistent on desktop and phone',
         { name: 'ash', flag: '--ash', label: 'Adjust Star Halos', description: 'Stellar halo adjustment',
           kind: { type: 'float', default: 0, min: -1, max: 1 } },
       ],
+    }, {
+      schema_version: 6, cli_version: '2.6.10', key: 'sxt', name: 'RC-Astro StarXTerminator',
+      ml_version: 11, licensed: true, license_message: null, parameters: [
+        { name: 'overlap', flag: '--overlap', label: 'Tile Overlap', description: 'Tile overlap', kind: { type: 'float', default: 0.2, min: 0, max: 0.5 } },
+        { name: 'stars', flag: '--stars', label: 'Generate Star Image', description: '', kind: { type: 'bool', default: false } },
+        { name: 'unscreen', flag: '--unscreen', label: 'Unscreen Stars', description: '', kind: { type: 'bool', default: false } },
+      ],
     }] },
   } }));
   await page.goto(`/#/stacks?db=${encodeURIComponent(dbId)}&project=2`);
@@ -2203,7 +2210,7 @@ test('keeps narrowband and RGB star processing consistent on desktop and phone',
   await setups.getByRole('combobox').selectOption('builtin:Automatic narrowband');
   await setups.getByRole('button', { name: 'Apply setup', exact: true }).click();
   await expect(processing.locator('.stack-processing-step[open]')).toHaveCount(0);
-  const captureStyle = '.app-header { visibility: hidden; }';
+  const captureStyle = '.app-header, .view-toolbar, .toolbar-dock, header:not(.stack-color-card header), nav:not(.stack-color-card nav) { visibility: hidden; }';
   for (const [size, width] of [['desktop', 1440], ['phone', 390]] as const) {
     await page.setViewportSize({ width, height: 1000 });
     expect(await processing.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
@@ -2224,17 +2231,30 @@ test('keeps narrowband and RGB star processing consistent on desktop and phone',
   const tone = combine.getByRole('spinbutton', { name: 'RGB star stretch amount' });
   await expect(tone).toHaveValue('5');
   await tone.fill('3');
+  const starCalibration = linear.getByRole('switch', { name: 'Color calibration' });
+  await starCalibration.click();
+  await expect(starCalibration).not.toBeChecked();
+  const rgbSeparation = linear.getByRole('region', { name: 'RGB separation RC-Astro tools' });
+  const nebulaSeparation = linear.getByRole('region', { name: 'Narrowband nebula separation RC-Astro tools' });
+  const overlap = rgbSeparation.getByRole('spinbutton', { name: 'Tile Overlap' });
+  await overlap.fill('0.3');
+  await expect(nebulaSeparation.getByRole('spinbutton', { name: 'Tile Overlap' })).toHaveValue('0.2');
+  await expect(rgbSeparation.getByRole('checkbox', { name: 'RC-Astro StarXTerminator' })).toBeDisabled();
   const reduction = combine.getByRole('spinbutton', { name: 'RGB star reduction' });
   await reduction.fill('0.4');
   await setups.getByRole('button', { name: 'Save as…' }).click();
   await setups.getByRole('textbox', { name: 'New setup name' }).fill('RGB stars flow');
   await setups.getByRole('button', { name: 'Save current settings', exact: true }).click();
   await expect(setups).toContainText('Saved “RGB stars flow”');
+  await starCalibration.click();
+  await overlap.fill('0.4');
   await reduction.fill('0.1');
   await tone.fill('6');
   await setups.getByRole('combobox').selectOption('saved:RGB stars flow');
   await setups.getByRole('button', { name: 'Apply setup', exact: true }).click();
   await expect(setups).toContainText('click Apply processing stack to render it');
+  await expect(starCalibration).not.toBeChecked();
+  await expect(overlap).toHaveValue('0.3');
   await expect(reduction).toHaveValue('0.4');
   await expect(tone).toHaveValue('3');
   await expect(stars.getByRole('spinbutton', { name: 'Sharpen Stars' })).toHaveValue('0.6');

@@ -1771,6 +1771,25 @@ narrowband balance controls.
 
 ![Independent RGB star stretch controls](images/stack-rgb-star-stretch-desktop.png)
 
+### Configure linear star separation
+
+Open **Processing stack → Process linear color**. Each managed narrowband or
+RGB branch has **Star separation** controls for StarXTerminator. **Tile Overlap**
+starts at the installed tool's default and is saved with the processing setup.
+The RGB branch also exposes its Gaia color-calibration choice, before SXT; saved
+setups keep that choice separately from the false-color nebula.
+The Stars selector controls which branches run; use Narrowband to keep native
+stars, or None for a starless result. Star separation always runs on linear data.
+The managed run keeps both the starless and stars images, with Unscreen Stars off.
+
+Completed compositions retain each branch's exact cache ID, tool/model version,
+resolved settings and links to its **Linear … starless FITS** and **Linear … stars
+FITS**. Stretch, palette, green-reduction and star-reduction edits reuse those
+linear outputs when their inputs are unchanged. Broadband structure blend
+amounts also reuse them. Changing one branch's SXT settings reruns that branch;
+new linear inputs, continuum coefficients, calibration or tool/model versions
+invalidate the affected run. Default-valued SXT settings reuse the default run.
+
 ### Sharpen RGB stars with BlurXTerminator
 
 Open the narrowband card's **Processing stack → Process linear color → RGB star processing**. Enable

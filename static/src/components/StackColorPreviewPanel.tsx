@@ -488,6 +488,7 @@ function ColorCard({
         managesStars={stars !== 'channels'}
         stars={stars === 'channels' ? undefined : stars}
         resolvedStars={current?.narrowband_resolution?.stars}
+        starSeparation={artifact?.narrowband_resolution}
         backgrounds={artifact?.resolved_backgrounds ?? {}}
         protections={artifact?.resolved_background_protection ?? {}}
         fallbacks={artifact?.background_protection_fallbacks ?? {}}

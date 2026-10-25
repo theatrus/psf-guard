@@ -110,7 +110,8 @@ function mapRoleEntries<T>(
 /** A stored color setup, reconciled onto the channels of the target card. */
 export function colorSetupForRoles(
   settings: StackColorProcessing,
-  roles: StackColorRole[]
+  roles: StackColorRole[],
+  hasRgbBranch = false,
 ): StackColorProcessing {
   return {
     ...(settings.emission ? { emission: structuredClone(settings.emission) } : {}),
@@ -142,9 +143,9 @@ export function colorSetupForRoles(
     ...(settings.color_rc_astro?.steps.length
       ? { color_rc_astro: structuredClone(settings.color_rc_astro) }
       : {}),
-    // A setup saved from a narrowband card says nothing of calibration, so
-    // an RGB card keeps the default; a narrowband card never calibrates.
-    ...(colorCalibrationApplies(roles)
+    // False-color nebulae do not calibrate, but their separate RGB star
+    // branch does. Keep its saved calibration without calibrating the nebula.
+    ...(colorCalibrationApplies(roles) || hasRgbBranch
       ? { color_calibration: settings.color_calibration ?? defaultColorCalibration() }
       : {}),
   };

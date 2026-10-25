@@ -35,6 +35,8 @@ export default function StackRcAstroControls({
   toolKeys,
   defaultsFor = defaultParameters,
   heading = 'RC-Astro tools',
+  required = false,
+  excludedParameters = [],
   onChange,
 }: {
   label: string;
@@ -46,6 +48,9 @@ export default function StackRcAstroControls({
   /** The parameters a tool starts with when it is turned on. */
   defaultsFor?: (schema: ExternalToolSchema) => Record<string, RcAstroParameterValue>;
   heading?: string;
+  /** Required managed steps are configured here; the star policy controls running them. */
+  required?: boolean;
+  excludedParameters?: readonly string[];
   onChange: (config: RcAstroProcessing | null) => void;
 }) {
   const capabilities = useRcAstroCapabilities();
@@ -70,9 +75,9 @@ export default function StackRcAstroControls({
                   ))}
                 </li>
               ))}</ol>
-              <button type="button" disabled={disabled} onClick={() => onChange(null)}>
+              {!required && <button type="button" disabled={disabled} onClick={() => onChange(null)}>
                 Remove RC-Astro steps
-              </button>
+              </button>}
             </>
           )}
           {result && <ResultDiagnostics result={result} />}
@@ -126,6 +131,8 @@ export default function StackRcAstroControls({
         <ToolSection
           key={schema.key}
           schema={schema}
+          required={required}
+          excludedParameters={excludedParameters}
           parameters={stepFor(schema.key)?.parameters}
           disabled={disabled}
           onToggle={(enabled) =>
@@ -140,7 +147,7 @@ export default function StackRcAstroControls({
       ))}
       {config?.steps.filter((step) => !tools.some((tool) => tool.key === step.tool)).map((step) => (
         <label key={step.tool}>
-          <input type="checkbox" checked disabled={disabled}
+          <input type="checkbox" checked disabled={disabled || required}
             aria-label={`${step.tool} unavailable`}
             onChange={() => setStep(step.tool, null)} />
           {step.tool} (unavailable)
@@ -172,11 +179,15 @@ function ToolSection({
   schema,
   parameters,
   disabled,
+  required,
+  excludedParameters,
   onToggle,
   onParameter,
   onParameters,
 }: {
   schema: ExternalToolSchema;
+  required: boolean;
+  excludedParameters: readonly string[];
   parameters: Record<string, RcAstroParameterValue> | undefined;
   disabled: boolean;
   onToggle: (enabled: boolean) => void;
@@ -187,11 +198,11 @@ function ToolSection({
   const correctOnly = enabled && offersCorrectOnly(schema) && isCorrectOnly(parameters);
   return (
     <div className="stack-rc-astro-tool">
-      <label>
+      <label title={required ? 'The Stars choice controls whether star separation runs' : undefined}>
         <input
           type="checkbox"
           checked={enabled}
-          disabled={disabled || (!schema.licensed && !enabled)}
+          disabled={disabled || required || (!schema.licensed && !enabled)}
           onChange={(event) => onToggle(event.target.checked)}
           aria-label={schema.name}
         />
@@ -217,7 +228,7 @@ function ToolSection({
             </label>
           )}
           {schema.parameters
-            .filter((parameter) => parameter.flag !== null)
+            .filter((parameter) => parameter.flag !== null && !excludedParameters.includes(parameter.name))
             .map((parameter) => (
               <ParameterField
                 key={parameter.name}

@@ -552,6 +552,35 @@ were clipped only in the derived display layer.
 
 ![Independent Star Stretch amount 3](../images/snrg132-stars-stretch3.png)
 
+### Cache and configure managed linear SXT
+
+`nebula_star_separation` and `rgb_star_separation` are optional SXT-only
+`RcAstroProcessing` settings on `NarrowbandProcessing`. Each branch resolves its
+own schema-validated parameters and chain identity. Missing/default settings
+retain the original managed identity. Defaults canonicalize before hashing;
+`stars`/`difference` must be true and `unscreen` must be false. Display changes
+never enter these tool settings.
+
+Mapped nebula identities include only the continuum inputs that change linear
+pixels. Broadband structure amount, line display amounts, positive display
+contribution and flux-export calibration no longer invalidate mapped BXT/SXT.
+Input/clipping revisions, subtraction mode, manual coefficients, photometry and
+fit options still do. RGB calibration settings/basis and earlier BXT/NXT identities
+remain part of the RGB separation key. Palette changes reuse only when the same
+physical linear planes and grid are supplied.
+
+`NarrowbandResolution` records typed per-branch linear SXT reports alongside the
+retained chain IDs: cache ID, resolved processing, CLI/model result, starless FITS
+URL and stars FITS URL. They persist in the final composition manifest and latest
+index. Existing cache retention protects those identities; a cache hit reloads
+both linear FITS outputs and refreshes use time. Regression tests count actual
+stand-in invocations across stretch/reduction edits and independent branch retunes,
+round-trip the final manifest, and verify 30-day-old referenced runs survive pruning.
+Missing stars files invalidate the final artifact references; rebuilding repairs only
+the affected branch. The real SNR G132 check reused all three RC-Astro IDs for
+explicit default overlap and broadband blend changes, completing in 10 and 8 seconds.
+[Cache validation](../images/snrg132-sxt-cache.json) records the exact outputs.
+
 ## Follow-up work
 
 - [ ] For automatic RGB-star source selection, prefer the shortest available

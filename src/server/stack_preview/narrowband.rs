@@ -20,6 +20,12 @@ pub struct NarrowbandProcessing {
     /// Optional sharpening/denoising on linear RGB before calibration and SXT.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rgb_star_processing: Option<super::super::rc_astro::RcAstroProcessing>,
+    /// SXT-only settings for each linear branch. Absent keeps the original
+    /// managed separation defaults; the star policy controls whether it runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nebula_star_separation: Option<super::super::rc_astro::RcAstroProcessing>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rgb_star_separation: Option<super::super::rc_astro::RcAstroProcessing>,
     /// Independent SetiAstro-style linear star residual stretch [0,8].
     /// None preserves the legacy paired RGB Auto MTF transfer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -63,6 +69,12 @@ impl NarrowbandProcessing {
         {
             return Err("Shadow protection must be 0 to 1, boosts positive and finite, and balance samples 4 to 1000000".into());
         }
+        for config in [&self.nebula_star_separation, &self.rgb_star_separation]
+            .into_iter()
+            .flatten()
+        {
+            validate_separation(config)?;
+        }
         if let Some(config) = &self.rgb_star_processing {
             config.validate()?;
             if config
@@ -77,6 +89,15 @@ impl NarrowbandProcessing {
     }
 }
 
+/// Exact cached linear SXT outputs used by this final composition.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LinearStarSeparationResult {
+    pub cache_id: String,
+    pub processing: super::super::rc_astro::RcAstroProcessing,
+    #[serde(flatten)]
+    pub output: StackColorRcAstroResult,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NarrowbandResolution {
     pub stars: ColorStars,
@@ -88,6 +109,10 @@ pub struct NarrowbandResolution {
     pub color_calibration: Option<StackColorCalibrationOutcome>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rgb_star_processing: Option<StackColorRcAstroResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nebula_star_separation: Option<LinearStarSeparationResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rgb_star_separation: Option<LinearStarSeparationResult>,
 }
 
 pub(super) fn rgb_calibration_settings(job: &StackColorJob) -> Option<StackColorCalibration> {
@@ -108,6 +133,8 @@ pub(super) fn rgb_calibration_settings(job: &StackColorJob) -> Option<StackColor
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct StarsPlan {
     pub config: super::super::rc_astro::RcAstroProcessing,
+    #[serde(default)]
+    pub rgb_config: Option<super::super::rc_astro::RcAstroProcessing>,
     pub schemas: Vec<(String, seiza_stacking::ExternalToolSchema)>,
     pub nebula_chain: Vec<String>,
     pub rgb_chain: Vec<String>,
@@ -148,6 +175,7 @@ pub(super) fn available_sources(target: &TargetSources) -> String {
 /// Resolve policy before selecting sources. Tool probing here is short-lived;
 /// all image work still runs later in the tracked color job.
 type SeparationTool = (
+    super::super::rc_astro::RcAstroProcessing,
     super::super::rc_astro::RcAstroProcessing,
     Vec<(String, seiza_stacking::ExternalToolSchema)>,
 );
@@ -240,6 +268,8 @@ pub(super) fn resolve(
                 rc_astro_ids: Vec::new(),
                 color_calibration: None,
                 rgb_star_processing: None,
+                nebula_star_separation: None,
+                rgb_star_separation: None,
             }),
             None,
         ));
@@ -251,6 +281,8 @@ pub(super) fn resolve(
         rc_astro_ids: Vec::new(),
         color_calibration: None,
         rgb_star_processing: None,
+        nebula_star_separation: None,
+        rgb_star_separation: None,
     };
     if choice == ColorStars::Narrowband {
         return Ok((sources, Some(resolution), None));
@@ -279,9 +311,14 @@ pub(super) fn resolve(
             )))
         }
     };
-    let config = match super::super::rc_astro::normalize_against_schemas(&config, &schemas) {
+    let settings = request
+        .processing
+        .as_ref()
+        .and_then(|p| p.narrowband.as_ref());
+    let requested_nebula = settings.and_then(|p| p.nebula_star_separation.as_ref());
+    let config = match separation_config(requested_nebula, &schemas) {
         Ok(config) => config,
-        Err(error) if may_fallback => {
+        Err(error) if may_fallback && requested_nebula.is_none() => {
             resolution.stars = ColorStars::Narrowband;
             resolution.detail = format!(
                 "Automatic uses narrowband stars: star separation is unavailable ({error})"
@@ -289,6 +326,15 @@ pub(super) fn resolve(
             return Ok((sources, Some(resolution), None));
         }
         Err(error) => return Err(AppError::BadRequest(error)),
+    };
+    let rgb_config = if choice != ColorStars::None || combined {
+        separation_config(
+            settings.and_then(|p| p.rgb_star_separation.as_ref()),
+            &schemas,
+        )
+        .map_err(AppError::BadRequest)?
+    } else {
+        separation_config(None, &schemas).map_err(AppError::BadRequest)?
     };
     if choice != ColorStars::None || combined {
         let rgb_request = StackColorRequest {
@@ -352,7 +398,141 @@ pub(super) fn resolve(
     } else {
         resolution.detail = "Starless narrowband nebula".into();
     }
-    Ok((sources, Some(resolution), Some((config, schemas))))
+    Ok((
+        sources,
+        Some(resolution),
+        Some((config, rgb_config, schemas)),
+    ))
+}
+
+fn validate_separation(config: &super::super::rc_astro::RcAstroProcessing) -> Result<(), String> {
+    config.validate()?;
+    if config.steps.len() != 1 || config.steps[0].tool != "sxt" {
+        return Err("Managed star separation supports only StarXTerminator".into());
+    }
+    for (name, value) in &config.steps[0].parameters {
+        if ((name == "stars" || name == "difference")
+            && *value != seiza_stacking::ExternalParameterValue::Bool(true))
+            || (name == "unscreen" && *value != seiza_stacking::ExternalParameterValue::Bool(false))
+        {
+            return Err(
+                "Linear star separation must keep the stars and leave Unscreen Stars off".into(),
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Keep tool output semantics fixed while allowing the live SXT parameters.
+/// Canonical defaults retain the existing managed-run cache identities.
+fn separation_config(
+    requested: Option<&super::super::rc_astro::RcAstroProcessing>,
+    schemas: &[(String, seiza_stacking::ExternalToolSchema)],
+) -> Result<super::super::rc_astro::RcAstroProcessing, String> {
+    use super::super::rc_astro::{RcAstroProcessing, RcAstroStep};
+    let schema = &schemas
+        .first()
+        .ok_or("StarXTerminator schema is unavailable")?
+        .1;
+    let mut config = requested.cloned().unwrap_or(RcAstroProcessing {
+        steps: vec![RcAstroStep {
+            tool: "sxt".into(),
+            parameters: BTreeMap::new(),
+        }],
+    });
+    validate_separation(&config)?;
+    let star_parameter = schema
+        .parameters
+        .iter()
+        .find(|p| matches!(p.name.as_str(), "stars" | "difference") && p.flag.is_some())
+        .ok_or("StarXTerminator cannot save its linear stars output")?;
+    let parameters = &mut config.steps[0].parameters;
+    parameters.retain(|name, _| name != "stars" && name != "difference");
+    parameters.insert(
+        star_parameter.name.clone(),
+        seiza_stacking::ExternalParameterValue::Bool(true),
+    );
+    if let Some(unscreen) = schema
+        .parameters
+        .iter()
+        .find(|p| p.name == "unscreen" && p.flag.is_some())
+    {
+        match unscreen.kind {
+            seiza_stacking::ExternalParameterKind::Bool { default: false } => {
+                parameters.remove("unscreen");
+            }
+            _ => {
+                parameters.insert(
+                    "unscreen".into(),
+                    seiza_stacking::ExternalParameterValue::Bool(false),
+                );
+            }
+        }
+    }
+    let mut config = super::super::rc_astro::normalize_against_schemas(&config, schemas)?;
+    config.steps[0].parameters.retain(|name, value| {
+        if name == &star_parameter.name {
+            return true;
+        }
+        !schema.parameters.iter().any(|p| {
+            p.name == *name
+                && match (&p.kind, &*value) {
+                    (
+                        seiza_stacking::ExternalParameterKind::Bool { default },
+                        seiza_stacking::ExternalParameterValue::Bool(v),
+                    ) => default == v,
+                    (
+                        seiza_stacking::ExternalParameterKind::Float { default, .. },
+                        seiza_stacking::ExternalParameterValue::Float(v),
+                    ) => default == v,
+                    (
+                        seiza_stacking::ExternalParameterKind::Int { default, .. },
+                        seiza_stacking::ExternalParameterValue::Int(v),
+                    ) => default == v,
+                    _ => false,
+                }
+        })
+    });
+    Ok(config)
+}
+
+/// A final composition keeps links to the exact linear results. If either
+/// half disappears, rebuilding repairs that run instead of retaining dead links.
+pub(super) fn separation_artifacts_exist(
+    root: &FsPath,
+    resolution: Option<&NarrowbandResolution>,
+) -> bool {
+    resolution
+        .into_iter()
+        .flat_map(|r| [&r.nebula_star_separation, &r.rgb_star_separation])
+        .flatten()
+        .all(|report| {
+            super::super::validate_job_id(&report.cache_id).is_ok()
+                && super::super::rc_astro::rc_astro_chain_cached(
+                    root,
+                    std::slice::from_ref(&report.cache_id),
+                    &report.processing,
+                )
+        })
+}
+
+fn separation_result(
+    database_id: &str,
+    chain: &[String],
+    config: &super::super::rc_astro::RcAstroProcessing,
+    result: super::super::rc_astro::StackRcAstroResult,
+) -> Result<LinearStarSeparationResult, String> {
+    let id = chain.last().ok_or("Star separation chain is empty")?;
+    let fits_url = format!("/api/db/{database_id}/stack-previews/rc-astro/{id}/fits");
+    Ok(LinearStarSeparationResult {
+        cache_id: id.clone(),
+        processing: config.clone(),
+        output: StackColorRcAstroResult {
+            stars_fits_url: result.has_stars.then(|| format!("{fits_url}?stars=true")),
+            fits_url,
+            result,
+        },
+    })
 }
 
 fn same_exposure_band(selected: &[&StackColorSource], candidate: &StackColorSource) -> bool {
@@ -480,12 +660,15 @@ pub(super) fn separate_stars(
         workers: &state.workers,
         person: !job.automatic,
     };
-    let run = |chain: &[String], image: &LinearImage, label: &str| {
+    let run = |chain: &[String],
+               config: &super::super::rc_astro::RcAstroProcessing,
+               image: &LinearImage,
+               label: &str| {
         super::super::rc_astro::apply_rc_astro(
             runner,
             root,
             chain,
-            &plan.config,
+            config,
             &plan.schemas,
             image,
             headers,
@@ -503,6 +686,7 @@ pub(super) fn separate_stars(
         )
     };
     let result = (|| {
+        let mut rgb_result = None;
         let rgb = if let Some(calibration) = &plan.calibration {
             if let Some(preparation) = &plan.rgb_preparation {
                 let combined = combine(images, RGB_ROLES)?;
@@ -566,7 +750,14 @@ pub(super) fn separate_stars(
                 }
             });
             let original = combine(images, RGB_ROLES)?;
-            let output = run(&plan.rgb_chain, &original, "RGB stars")?;
+            let config = plan.rgb_config.as_ref().unwrap_or(&plan.config);
+            let output = run(&plan.rgb_chain, config, &original, "RGB stars")?;
+            rgb_result = Some(separation_result(
+                &job.database_id,
+                &plan.rgb_chain,
+                config,
+                output.result.clone(),
+            )?);
             stop.check()?;
             // SXT has run on calibrated LINEAR RGB. Extract and stretch the
             // linear residual before any display transfer. The separate
@@ -613,7 +804,19 @@ pub(super) fn separate_stars(
         };
         let roles = color_channel_roles(job.kind, job.palette);
         let physical = combine(images, roles)?;
-        let mut output = run(&plan.nebula_chain, &physical, "Narrowband nebula")?.image;
+        let separated = run(
+            &plan.nebula_chain,
+            &plan.config,
+            &physical,
+            "Narrowband nebula",
+        )?;
+        let nebula_result = separation_result(
+            &job.database_id,
+            &plan.nebula_chain,
+            &plan.config,
+            separated.result,
+        )?;
+        let mut output = separated.image;
         stop.check()?;
         if let Some(rgb) = &rgb {
             // The output crop must also respect the RGB footprint. Do this
@@ -630,6 +833,12 @@ pub(super) fn separate_stars(
             }
         }
         put_planes(images, output, roles)?;
+        state.stack_previews.update_color(&job.job_id, |current| {
+            if let Some(resolution) = &mut current.narrowband_resolution {
+                resolution.nebula_star_separation = Some(nebula_result);
+                resolution.rgb_star_separation = rgb_result;
+            }
+        });
         Ok::<_, String>(rgb)
     })();
     match result {
@@ -653,6 +862,8 @@ pub(super) fn separate_stars(
                 if let Some(resolution) = &mut current.narrowband_resolution {
                     resolution.stars = ColorStars::Narrowband;
                     resolution.detail = detail.clone();
+                    resolution.nebula_star_separation = None;
+                    resolution.rgb_star_separation = None;
                 }
             });
             progress.skip(phase, detail);
@@ -797,6 +1008,8 @@ mod tests {
             rc_astro_ids: vec![],
             color_calibration: None,
             rgb_star_processing: None,
+            nebula_star_separation: None,
+            rgb_star_separation: None,
         };
         for stars in [ColorStars::Rgb, ColorStars::Narrowband, ColorStars::None] {
             resolution.stars = stars;
@@ -1137,6 +1350,58 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn separation_options_are_independent_and_defaults_reuse_existing_keys() {
+        use super::super::super::rc_astro::{rc_astro_chain_ids, RcAstroProcessing};
+        let _tool = super::super::super::rc_astro::test_tool::install(false);
+        let (_, _, resolved) =
+            resolve(&target(true, true), &mut request(Some(ColorStars::Rgb))).unwrap();
+        let (nebula, rgb, schemas) = resolved.unwrap();
+        assert_eq!(nebula, rgb);
+        let default_key =
+            rc_astro_chain_ids("db", "linear", "first", &nebula, &schemas, None).unwrap();
+        let explicit: RcAstroProcessing = serde_json::from_value(serde_json::json!({"steps":[{"tool":"sxt","parameters":{"overlap":0.2,"stars":true,"unscreen":false}}]})).unwrap();
+        assert_eq!(
+            separation_config(Some(&explicit), &schemas).unwrap(),
+            nebula
+        );
+        for parameters in [
+            serde_json::json!({"unscreen":true}),
+            serde_json::json!({"stars":false}),
+            serde_json::json!({"overlap":0.8}),
+        ] {
+            let config = serde_json::from_value(
+                serde_json::json!({"steps":[{"tool":"sxt","parameters":parameters}]}),
+            )
+            .unwrap();
+            assert!(separation_config(Some(&config), &schemas).is_err());
+        }
+        let mut changed = explicit.clone();
+        changed.steps[0].parameters.insert(
+            "overlap".into(),
+            seiza_stacking::ExternalParameterValue::Float(0.3),
+        );
+        let mut request = request(Some(ColorStars::Rgb));
+        request.processing = Some(StackColorProcessing {
+            narrowband: Some(NarrowbandProcessing {
+                nebula_star_separation: Some(changed),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        let (_, _, resolved) = resolve(&target(true, true), &mut request).unwrap();
+        let (nebula, rgb, _) = resolved.unwrap();
+        assert_ne!(
+            rc_astro_chain_ids("db", "linear", "first", &nebula, &schemas, None).unwrap(),
+            default_key
+        );
+        assert_eq!(
+            rc_astro_chain_ids("db", "linear", "first", &rgb, &schemas, None).unwrap(),
+            default_key
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn star_separation_reuses_both_caches_and_carries_rgb_coverage_into_the_crop() {
         let tool = super::super::super::rc_astro::test_tool::install(false);
         let (sources, resolution, config) = resolve(
@@ -1145,7 +1410,7 @@ mod tests {
             &mut request(Some(ColorStars::Rgb)),
         )
         .unwrap();
-        let (config, schemas) = config.unwrap();
+        let (config, rgb_config, schemas) = config.unwrap();
         let root = tempfile::tempdir().unwrap();
         let state = Arc::new(AppState::new_for_test(
             rusqlite::Connection::open_in_memory().unwrap(),
@@ -1176,6 +1441,7 @@ mod tests {
         )
         .unwrap();
         let plan = StarsPlan {
+            rgb_config: Some(rgb_config),
             rgb_preparation: Some(RgbStarPreparation {
                 config: preparation_config,
                 schemas: preparation_schemas,
@@ -1199,6 +1465,13 @@ mod tests {
                 None,
             )),
         };
+        job.narrowband_resolution.as_mut().unwrap().rc_astro_ids = plan
+            .nebula_chain
+            .iter()
+            .chain(plan.rgb_preparation.iter().flat_map(|p| &p.chain))
+            .chain(&plan.rgb_chain)
+            .cloned()
+            .collect();
         assert!(state.stack_previews.insert_color(job.clone()));
         let progress = ColorProgressTracker {
             state: &state,
@@ -1215,7 +1488,15 @@ mod tests {
                 (source.role, LinearImage::new(32, 32, 1, data).unwrap())
             })
             .collect();
-        for _ in 0..2 {
+        for amount in [None, Some(3.0), Some(5.0)] {
+            job.processing = Some(StackColorProcessing {
+                narrowband: Some(NarrowbandProcessing {
+                    rgb_star_stretch: amount,
+                    star_reduction: if amount == Some(3.0) { 0.4 } else { 0.0 },
+                    ..Default::default()
+                }),
+                ..Default::default()
+            });
             let mut images = original.clone();
             let stars = separate_stars(
                 &state,
@@ -1250,6 +1531,173 @@ mod tests {
             .rgb_star_processing
             .unwrap();
         assert_eq!(prepared.result.steps[0].tool, "bxt");
+        let saved = state.stack_previews.get_color(&job.job_id).unwrap();
+        let resolution = saved.narrowband_resolution.as_ref().unwrap();
+        for (report, chain) in [
+            (
+                resolution.nebula_star_separation.as_ref().unwrap(),
+                &plan.nebula_chain,
+            ),
+            (
+                resolution.rgb_star_separation.as_ref().unwrap(),
+                &plan.rgb_chain,
+            ),
+        ] {
+            assert_eq!(&report.cache_id, chain.last().unwrap());
+            assert!(report
+                .output
+                .stars_fits_url
+                .as_ref()
+                .unwrap()
+                .ends_with("?stars=true"));
+            assert!(super::super::super::rc_astro::rc_astro_chain_cached(
+                root.path(),
+                chain,
+                &report.processing
+            ));
+        }
+        // These exact references survive saving/reloading the final composition,
+        // and protect the linear SXT outputs from the cache janitor.
+        persist_color_manifest(root.path(), &saved).unwrap();
+        persist_latest_color(root.path(), &saved).unwrap();
+        let reloaded: StackColorJob = serde_json::from_slice(
+            &std::fs::read(color_manifest_path(root.path(), &saved.job_id)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            reloaded
+                .narrowband_resolution
+                .as_ref()
+                .unwrap()
+                .rgb_star_separation
+                .as_ref()
+                .unwrap()
+                .cache_id,
+            *plan.rgb_chain.last().unwrap()
+        );
+        assert!(latest_color_rc_astro_ids(root.path()).contains(plan.rgb_chain.last().unwrap()));
+        for id in &saved.narrowband_resolution.as_ref().unwrap().rc_astro_ids {
+            let path =
+                super::super::super::rc_astro::rc_astro_dir(root.path(), id).join("manifest.json");
+            let file = std::fs::File::options().write(true).open(path).unwrap();
+            file.set_modified(
+                std::time::SystemTime::now() - std::time::Duration::from_secs(30 * 86400),
+            )
+            .unwrap();
+        }
+        super::super::super::rc_astro::prune_rc_astro_cache(root.path(), &Default::default());
+        assert!(super::super::super::rc_astro::rc_astro_chain_cached(
+            root.path(),
+            &plan.rgb_chain,
+            plan.rgb_config.as_ref().unwrap()
+        ));
+        assert!(super::super::super::rc_astro::rc_astro_chain_cached(
+            root.path(),
+            &plan.nebula_chain,
+            &plan.config
+        ));
+        assert!(separation_artifacts_exist(
+            root.path(),
+            saved.narrowband_resolution.as_ref()
+        ));
+        std::fs::remove_file(
+            super::super::super::rc_astro::rc_astro_dir(
+                root.path(),
+                plan.rgb_chain.last().unwrap(),
+            )
+            .join("stars.fits"),
+        )
+        .unwrap();
+        assert!(!separation_artifacts_exist(
+            root.path(),
+            saved.narrowband_resolution.as_ref()
+        ));
+        separate_stars(
+            &state,
+            &job,
+            &plan,
+            root.path(),
+            &mut original.clone(),
+            &[],
+            &progress,
+            &ColorStop {
+                cancel: Stop::new(),
+            },
+            &|| Err("No test catalog".into()),
+        )
+        .unwrap();
+        assert_eq!(
+            tool.invocations(),
+            4,
+            "Only the missing RGB stars sidecar must be repaired"
+        );
+        assert!(separation_artifacts_exist(
+            root.path(),
+            saved.narrowband_resolution.as_ref()
+        ));
+        // Retuning one branch must rerun that SXT only, keeping BXT and the
+        // other branch's cached separation. Reapplying either reuses it too.
+        let mut tuned = plan.clone();
+        let mut rgb_config = tuned.rgb_config.clone().unwrap();
+        rgb_config.steps[0].parameters.insert(
+            "overlap".into(),
+            seiza_stacking::ExternalParameterValue::Float(0.3),
+        );
+        tuned.rgb_chain = super::super::super::rc_astro::rc_astro_chain_ids(
+            "db",
+            "rgb",
+            "first",
+            &rgb_config,
+            &tuned.schemas,
+            None,
+        )
+        .unwrap();
+        tuned.rgb_config = Some(rgb_config);
+        for expected in [5, 5] {
+            separate_stars(
+                &state,
+                &job,
+                &tuned,
+                root.path(),
+                &mut original.clone(),
+                &[],
+                &progress,
+                &ColorStop {
+                    cancel: Stop::new(),
+                },
+                &|| Err("No test catalog".into()),
+            )
+            .unwrap();
+            assert_eq!(tool.invocations(), expected);
+        }
+        tuned.config.steps[0].parameters.insert(
+            "overlap".into(),
+            seiza_stacking::ExternalParameterValue::Float(0.25),
+        );
+        tuned.nebula_chain = super::super::super::rc_astro::rc_astro_chain_ids(
+            "db",
+            "nebula",
+            "first",
+            &tuned.config,
+            &tuned.schemas,
+            None,
+        )
+        .unwrap();
+        separate_stars(
+            &state,
+            &job,
+            &tuned,
+            root.path(),
+            &mut original.clone(),
+            &[],
+            &progress,
+            &ColorStop {
+                cancel: Stop::new(),
+            },
+            &|| Err("No test catalog".into()),
+        )
+        .unwrap();
+        assert_eq!(tool.invocations(), 6);
         tool.fail_star_removal();
         let mut failing_plan = plan;
         failing_plan.nebula_chain = vec!["b".repeat(64)];

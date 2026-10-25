@@ -1,0 +1,128 @@
+[
+  {
+    "case": "cache-preserved-linear-sxt",
+    "seconds": 10.03,
+    "job_id": "06bb56b0709179d2200fb51bb1485b21206c9ccdb1a0447ad6226df9f5f3d525",
+    "linear_input_id": "efc68e0694cda28fd9b5cbf117adb760e2e8ae20cb3e6c3879ffc6b0227561e1",
+    "rc_astro_ids": [
+      "e35fb9a3ff338a8dd60ea14a45608cc2d257486b55860aa9b592889e8d85c1e1",
+      "7be4806688a3ce2b7e84d67ca965ce6870404e1874f8ae346eeb1504ee5baa1a",
+      "076d26251a8b3596c8d3434d92ba8140d3e1d0c5ba209d34d2101bdf78ada298"
+    ],
+    "nebula_star_separation": {
+      "cache_id": "e35fb9a3ff338a8dd60ea14a45608cc2d257486b55860aa9b592889e8d85c1e1",
+      "processing": {
+        "steps": [
+          {
+            "tool": "sxt",
+            "parameters": {
+              "stars": true
+            }
+          }
+        ]
+      },
+      "cli_version": "2.6.10",
+      "steps": [
+        {
+          "tool": "sxt",
+          "name": "RC-Astro StarXTerminator",
+          "ml_version": 11,
+          "device": "cpu",
+          "warnings": []
+        }
+      ],
+      "has_stars": true,
+      "fits_url": "/api/db/narrowband-finalization/stack-previews/rc-astro/e35fb9a3ff338a8dd60ea14a45608cc2d257486b55860aa9b592889e8d85c1e1/fits",
+      "stars_fits_url": "/api/db/narrowband-finalization/stack-previews/rc-astro/e35fb9a3ff338a8dd60ea14a45608cc2d257486b55860aa9b592889e8d85c1e1/fits?stars=true"
+    },
+    "rgb_star_separation": {
+      "cache_id": "076d26251a8b3596c8d3434d92ba8140d3e1d0c5ba209d34d2101bdf78ada298",
+      "processing": {
+        "steps": [
+          {
+            "tool": "sxt",
+            "parameters": {
+              "stars": true
+            }
+          }
+        ]
+      },
+      "cli_version": "2.6.10",
+      "steps": [
+        {
+          "tool": "sxt",
+          "name": "RC-Astro StarXTerminator",
+          "ml_version": 11,
+          "device": "cpu",
+          "warnings": []
+        }
+      ],
+      "has_stars": true,
+      "fits_url": "/api/db/narrowband-finalization/stack-previews/rc-astro/076d26251a8b3596c8d3434d92ba8140d3e1d0c5ba209d34d2101bdf78ada298/fits",
+      "stars_fits_url": "/api/db/narrowband-finalization/stack-previews/rc-astro/076d26251a8b3596c8d3434d92ba8140d3e1d0c5ba209d34d2101bdf78ada298/fits?stars=true"
+    }
+  },
+  {
+    "case": "cache-preserved-blend-change",
+    "seconds": 8.03,
+    "job_id": "31e0ef886b119126ebeeaf495213cb0f7e66ece693add424669a1f4f1399ab48",
+    "linear_input_id": "efc68e0694cda28fd9b5cbf117adb760e2e8ae20cb3e6c3879ffc6b0227561e1",
+    "rc_astro_ids": [
+      "e35fb9a3ff338a8dd60ea14a45608cc2d257486b55860aa9b592889e8d85c1e1",
+      "7be4806688a3ce2b7e84d67ca965ce6870404e1874f8ae346eeb1504ee5baa1a",
+      "076d26251a8b3596c8d3434d92ba8140d3e1d0c5ba209d34d2101bdf78ada298"
+    ],
+    "nebula_star_separation": {
+      "cache_id": "e35fb9a3ff338a8dd60ea14a45608cc2d257486b55860aa9b592889e8d85c1e1",
+      "processing": {
+        "steps": [
+          {
+            "tool": "sxt",
+            "parameters": {
+              "stars": true
+            }
+          }
+        ]
+      },
+      "cli_version": "2.6.10",
+      "steps": [
+        {
+          "tool": "sxt",
+          "name": "RC-Astro StarXTerminator",
+          "ml_version": 11,
+          "device": "cpu",
+          "warnings": []
+        }
+      ],
+      "has_stars": true,
+      "fits_url": "/api/db/narrowband-finalization/stack-previews/rc-astro/e35fb9a3ff338a8dd60ea14a45608cc2d257486b55860aa9b592889e8d85c1e1/fits",
+      "stars_fits_url": "/api/db/narrowband-finalization/stack-previews/rc-astro/e35fb9a3ff338a8dd60ea14a45608cc2d257486b55860aa9b592889e8d85c1e1/fits?stars=true"
+    },
+    "rgb_star_separation": {
+      "cache_id": "076d26251a8b3596c8d3434d92ba8140d3e1d0c5ba209d34d2101bdf78ada298",
+      "processing": {
+        "steps": [
+          {
+            "tool": "sxt",
+            "parameters": {
+              "stars": true
+            }
+          }
+        ]
+      },
+      "cli_version": "2.6.10",
+      "steps": [
+        {
+          "tool": "sxt",
+          "name": "RC-Astro StarXTerminator",
+          "ml_version": 11,
+          "device": "cpu",
+          "warnings": []
+        }
+      ],
+      "has_stars": true,
+      "fits_url": "/api/db/narrowband-finalization/stack-previews/rc-astro/076d26251a8b3596c8d3434d92ba8140d3e1d0c5ba209d34d2101bdf78ada298/fits",
+      "stars_fits_url": "/api/db/narrowband-finalization/stack-previews/rc-astro/076d26251a8b3596c8d3434d92ba8140d3e1d0c5ba209d34d2101bdf78ada298/fits?stars=true"
+    }
+  }
+]

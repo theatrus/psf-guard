@@ -1602,7 +1602,7 @@ if [ "$2" = "--json" ]; then
     *) name="$1" ;;
   esac
   parameters='[]'
-  if [ "$1" = "sxt" ]; then parameters='[{{"label":"Generate Star Image","name":"stars","flag":"--stars","type":"bool","default":false}}]'; fi
+  if [ "$1" = "sxt" ]; then parameters='[{{"label":"Generate Star Image","name":"stars","flag":"--stars","type":"bool","default":false}},{{"label":"Unscreen Stars","name":"unscreen","flag":"--unscreen","type":"bool","default":false}},{{"label":"Tile Overlap","name":"overlap","flag":"--overlap","type":"float","default":0.2,"min":0,"max":0.5}}]'; fi
   echo '{{"schemaVersion":6,"cliVersion":"9.9.9-test","key":"'"$1"'","name":"RC-Astro '"$name"'","mlVersion":4,"parameters":'"$parameters"'}}'
   exit 0
 fi

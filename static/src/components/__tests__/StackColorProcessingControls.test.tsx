@@ -552,3 +552,30 @@ describe('independent RGB star stretch', () => {
     expect(screen.getByRole('spinbutton', { name: 'RGB star stretch amount' })).toHaveValue(5);
   });
 });
+
+
+it('configures separate linear SXT runs and retains their parameters in the processing stack', async () => {
+  server.use(http.get('/api/tools/rc-astro', () => HttpResponse.json({ success: true, data: {
+    available: true, tools: [{ key: 'sxt', name: 'RC-Astro StarXTerminator', licensed: true, cli_version: '2.6.10', schema_version: 6, ml_version: 11,
+      parameters: [
+        { name: 'overlap', label: 'Tile Overlap', flag: '--overlap', description: 'Tile overlap', kind: { type: 'float', default: 0.2, min: 0, max: 0.5 } },
+        { name: 'stars', label: 'Generate Star Image', flag: '--stars', description: '', kind: { type: 'bool', default: false } },
+        { name: 'unscreen', label: 'Unscreen Stars', flag: '--unscreen', description: '', kind: { type: 'bool', default: false } },
+      ] }],
+  } })));
+  const onApply = vi.fn();
+  renderWithQueries(<StackColorProcessingControls label="SHO" roles={['ha','oiii','sii']} managesStars stars="rgb"
+    applied={defaultColorProcessing(['ha','oiii','sii'])} backgrounds={{}} protections={{}} fallbacks={{}} deconvolutions={{}} disabled={false} onApply={onApply} />);
+  await openProcessingFlow();
+  const nebula = await screen.findByRole('region', { name: 'Narrowband nebula separation RC-Astro tools' });
+  const rgb = screen.getByRole('region', { name: 'RGB separation RC-Astro tools' });
+  expect(within(screen.getByRole('region', { name: 'RGB branch' })).getByRole('switch', { name: 'Color calibration' })).toBeChecked();
+  const enabled = within(rgb).getByRole('checkbox', { name: 'RC-Astro StarXTerminator' });
+  expect(enabled).toBeChecked(); expect(enabled).toBeDisabled();
+  expect(within(rgb).queryByRole('checkbox', { name: 'Unscreen Stars' })).not.toBeInTheDocument();
+  const overlap = within(rgb).getByRole('spinbutton', { name: 'Tile Overlap' });
+  await userEvent.clear(overlap); await userEvent.type(overlap, '0.3');
+  expect(within(nebula).getByRole('spinbutton', { name: 'Tile Overlap' })).toHaveValue(0.2);
+  await userEvent.click(screen.getByRole('button', { name: 'Apply processing stack' }));
+  expect(onApply).toHaveBeenCalledWith(expect.objectContaining({ narrowband: expect.objectContaining({ rgb_star_separation: { steps: [{ tool: 'sxt', parameters: { overlap: 0.3 } }] } }) }));
+});
