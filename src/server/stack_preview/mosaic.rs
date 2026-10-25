@@ -30,24 +30,21 @@ pub(super) fn maximum_samples(
     Ok(usize::try_from(samples).unwrap_or(usize::MAX))
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(super) fn plan(
+/// The start of the error for a mosaic whose frames joined the canvas from
+/// too few panels. The frames decide it, so another machine fails the same
+/// way.
+pub(super) const INCOMPLETE: &str = "Mosaic is incomplete";
+
+/// Each panel's registration reference, by panel target ID, or why the
+/// mosaic cannot be planned from these frames. It reads no pixels, so a
+/// build checks it before it sends a mosaic to a worker.
+pub(super) fn panel_references(
     group: &PreparedGroup,
-    masters: &crate::calibration::CalibrationPlan,
-    mut options: seiza_stacking::StackOptions,
-    scratch: &FsPath,
-    maximum_samples: usize,
-    cancel: &Stop,
-    mut progress: impl FnMut(usize, usize, usize),
-) -> Result<LiveStacker, String> {
-    if options.cfa_integration == seiza_stacking::CfaIntegration::BayerDrizzle {
+    bayer_drizzle: bool,
+) -> Result<BTreeMap<i32, usize>, String> {
+    if bayer_drizzle {
         return Err("Mosaic integration does not support Bayer drizzle. Turn off Bayer drizzle in Settings → Stacking, then build again.".into());
     }
-    std::fs::create_dir_all(scratch).map_err(|e| e.to_string())?;
-    let temporary = tempfile::Builder::new()
-        .prefix("mosaic-reference-")
-        .tempdir_in(scratch)
-        .map_err(|e| e.to_string())?;
     // Keep the highest-scored reference from each panel. Capture order does
     // not decide which night supplies the panel's registration reference.
     let mut references = BTreeMap::<i32, usize>::new();
@@ -70,6 +67,28 @@ pub(super) fn plan(
     if references.len() < 2 {
         return Err("A mosaic channel needs eligible frames from at least two panels".into());
     }
+    Ok(references)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn plan(
+    group: &PreparedGroup,
+    masters: &crate::calibration::CalibrationPlan,
+    mut options: seiza_stacking::StackOptions,
+    scratch: &FsPath,
+    maximum_samples: usize,
+    cancel: &Stop,
+    mut progress: impl FnMut(usize, usize, usize),
+) -> Result<LiveStacker, String> {
+    let references = panel_references(
+        group,
+        options.cfa_integration == seiza_stacking::CfaIntegration::BayerDrizzle,
+    )?;
+    std::fs::create_dir_all(scratch).map_err(|e| e.to_string())?;
+    let temporary = tempfile::Builder::new()
+        .prefix("mosaic-reference-")
+        .tempdir_in(scratch)
+        .map_err(|e| e.to_string())?;
     let mut indices = references.into_values().collect::<Vec<_>>();
     // Anchor on the same first panel in every channel, rather than on the
     // globally best frame (which can be a different panel for each filter).

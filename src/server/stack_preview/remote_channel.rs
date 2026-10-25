@@ -661,6 +661,19 @@ pub(super) fn run_on_worker(
             finished.worker
         ))
     })?;
+    // The worker read its own copies. A frame that changed here while it
+    // stacked would leave decisions that describe another file.
+    if let Some(changed) = channel
+        .group
+        .frames
+        .iter()
+        .find(|frame| source_fingerprint(&frame.path) != frame.source_fingerprint)
+    {
+        return Err(failed(format!(
+            "Image {} changed while {} stacked it; rebuild the stack",
+            changed.image_id, finished.worker
+        )));
+    }
     let outputs = channel.outputs;
     // The stack first: when it cannot be placed, this server's checkpoint is
     // left as it was, for a build on this server to continue.

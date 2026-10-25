@@ -122,10 +122,15 @@ While a worker stacks a channel:
   answering for two minutes loses what it had.
 - Under **Workers first**, the server stacks the channel itself when no
   worker can take it or a worker fails it.
-- A mosaic stacks on a worker like any other channel: the worker plans
-  the canvas from the panels and keeps its temporary reference frames in
-  its `--work-dir`. A mosaic saves no checkpoint, so the server keeps any
-  checkpoint it had.
+- A mosaic stacks on a worker too. The worker writes one calibrated
+  reference frame per panel to its `--work-dir` while it plans the canvas,
+  and deletes them when planning ends. Allow room for them: each is about
+  the size of a 32-bit frame. A mosaic saves no checkpoint: **Stop**
+  discards its progress, and the next build starts the mosaic over.
+- Before a mosaic goes to a worker, the server checks that its frames
+  cover every panel. Under **Workers first**, a mosaic that a worker
+  reports as incomplete is not stacked again on the server, because the
+  same frames would fail there too.
 
 ## Choose how files reach the worker
 

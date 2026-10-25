@@ -838,6 +838,11 @@ async fn a_worker_stacks_a_mosaic_to_the_same_pixels_as_this_server() {
         })
         .await;
         let there = tempfile::tempdir().unwrap();
+        // A capture-order checkpoint of this target and filter, which a
+        // mosaic does not replace.
+        for name in ["resume.ctx", "resume.json"] {
+            std::fs::write(there.path().join(name), name).unwrap();
+        }
         let remote = {
             let (state, mosaic, directory) = (
                 Arc::clone(&server.state),
@@ -852,7 +857,13 @@ async fn a_worker_stacks_a_mosaic_to_the_same_pixels_as_this_server() {
         };
         assert_eq!(remote.dispositions, local.dispositions);
         assert_eq!(remote.pixels, local.pixels, "the same mosaic, bit for bit");
-        assert!(!remote.checkpoint, "a mosaic keeps no checkpoint");
+        for name in ["resume.ctx", "resume.json"] {
+            assert_eq!(
+                std::fs::read_to_string(there.path().join(name)).unwrap(),
+                name,
+                "a mosaic leaves this server's checkpoint alone"
+            );
+        }
         drop(stop);
         worker.await.unwrap().unwrap();
     }

@@ -736,6 +736,11 @@ pub(super) fn run_group(
     // A worker on another machine stacks the channel when Settings ›
     // Workers sends stack builds there. This server's cores are free for
     // other work while it does, and are leased again for the previews.
+    // A mosaic that cannot be planned from its frames fails here, before
+    // any frame is sent.
+    if group.mosaic {
+        mosaic::panel_references(&group, method.bayer_drizzle)?;
+    }
     let (integrated, lease, pool) = if remote_channel::wanted(state) {
         drop(pool);
         drop(lease);
@@ -777,7 +782,8 @@ pub(super) fn run_group(
             Ok(outcome) => outcome,
             // Under workers first, this server stacks a channel no worker
             // could take, or one a worker failed, such as when it ran out
-            // of memory.
+            // of memory. A mosaic whose frames joined from too few panels
+            // would fail the same way here.
             Err(
                 remote_channel::NotStacked::NoWorker(message)
                 | remote_channel::NotStacked::Failed(message),
@@ -785,7 +791,8 @@ pub(super) fn run_group(
                 .workers
                 .board
                 .placement(crate::remote_work::protocol::TaskKind::StackChannel)
-                .allows(true) =>
+                .allows(true)
+                && !message.starts_with(mosaic::INCOMPLETE) =>
             {
                 tracing::warn!(job_id, "{message}; this server stacks the channel");
                 add_note_to(

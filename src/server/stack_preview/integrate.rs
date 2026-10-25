@@ -767,7 +767,7 @@ pub(super) fn integrate_channel(
                 .collect::<HashSet<_>>();
             let missing = expected.difference(&joined).copied().collect::<Vec<_>>();
             if !missing.is_empty() {
-                return Err(format!("Mosaic is incomplete: no frames aligned from panel target(s) {missing:?}. Inspect the rejected frames."));
+                return Err(format!("{}: no frames aligned from panel target(s) {missing:?}. Inspect the rejected frames.", mosaic::INCOMPLETE));
             }
         }
         let reference_headers = stacker.reference_headers().to_vec();

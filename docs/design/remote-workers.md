@@ -222,7 +222,10 @@ own work splits where the catalog stops:
   are PSF Guard's, and the version is part of a stack's identity.
 - **Resources.** The worker gives a channel its share of its cores and
   free memory, one per slot, and keeps the final pass's copies of the frames
-  in its work folder. This server's GPU setting applies on the worker.
+  in its work folder. This server's GPU setting applies on the worker. The
+  worker plans memory with the default processing memory budget, not this
+  server's **Settings › Performance › Processing memory**, so a mosaic
+  canvas that fits here can be too large for a worker.
 - **Placement.** `remote_workers.stack` in the registry, this server only by
   default. This server stacks its own channels in process rather than
   through its worker; under workers first, it stacks the channel when no
@@ -238,12 +241,25 @@ own work splits where the catalog stops:
 - **Failure.** Under workers first, a channel a worker fails is stacked on
   this server.
 - **Mosaics** go to workers too. The spec carries each frame's panel
-  target and the group's panels; the worker plans the canvas in its work
-  folder and publishes on it (`Orientation::MosaicCanvas`). Planning, like
-  the final pass, checks the copy it reads (`read_fingerprint`). A mosaic
-  writes no checkpoint, and this server keeps its own. A test stacks a
-  synthetic four-panel mosaic here and on a worker, in both file modes,
-  and checks the pixels match bit for bit.
+  target and the group's panels. The worker writes the panel references
+  to its work folder, plans the canvas, and writes the stack on that
+  canvas (`Orientation::MosaicCanvas`). Planning checks each reference
+  against the fingerprint of the worker's own copy (`read_fingerprint`),
+  as the final pass does, because `source_fingerprint` includes this
+  server's path and never matches a worker's copy. A mosaic writes no
+  checkpoint, and this server leaves its checkpoint for that target and
+  filter unchanged.
+- **Mosaic failures.** This server checks the panels
+  (`mosaic::panel_references`) before it sends a mosaic, and does not
+  fall back on a mosaic that joined from too few panels
+  (`mosaic::INCOMPLETE`), which its frames decide. Other failures fall back
+  as for any channel.
+- **Changed frames.** When a task completes, this server checks each
+  frame's fingerprint again, so a frame replaced here while the worker
+  stacked its copy fails the channel.
+- A test stacks a synthetic four-panel mosaic here and on a worker, in both
+  file modes, and checks that the pixels match bit for bit and that this
+  server's checkpoint is left in place.
 
 A test stacks one synthetic channel on this server and on a real worker,
 over HTTP in both file modes, and checks the pixels match bit for bit on
