@@ -750,7 +750,7 @@ impl PreparedColorJob {
                     || super::rc_astro::rc_astro_chain_cached(
                         &self.stack_root,
                         &plan.rgb_chain,
-                        &plan.config,
+                        plan.rgb_config.as_ref().unwrap_or(&plan.config),
                     ))
             })
     }
@@ -1847,23 +1847,19 @@ pub(super) fn prepare_color_job(
         .map(|_| emission::clipping_cache_revision(&ctx.stack_root, &sources));
     // A mapped residual changes the pixels supplied to color tools and SXT.
     // RGB star preparation remains independent of this nebula branch.
-    let mapped_input_id =
-        if request.combination == Some(emission::CombinedColorRecipe::BroadbandStructure) {
-            Some(format!(
-                "{}:continuum:{}:{}",
-                linear_input_id.as_deref().unwrap_or_default(),
-                clipping_id.as_deref().unwrap_or_default(),
-                serde_json::to_string(
-                    &request
-                        .processing
-                        .as_ref()
-                        .and_then(|p| p.emission.as_ref())
-                )
-                .map_err(|e| AppError::InternalError(e.to_string()))?
-            ))
-        } else {
-            None
-        };
+    let mapped_input_id = (request.combination
+        == Some(emission::CombinedColorRecipe::BroadbandStructure))
+    .then(|| {
+        emission::mapped_input_identity(
+            linear_input_id.as_deref().unwrap_or_default(),
+            clipping_id.as_deref().unwrap_or_default(),
+            request
+                .processing
+                .as_ref()
+                .and_then(|p| p.emission.as_ref()),
+        )
+    })
+    .transpose()?;
     let nebula_cache_input = mapped_input_id.as_deref().or(linear_input_id.as_deref());
     let color_rc_astro = match (
         request
@@ -1885,7 +1881,7 @@ pub(super) fn prepare_color_job(
         _ => ColorRcAstroPlan::default(),
     };
     let stars_plan = separation
-        .map(|(config, schemas)| {
+        .map(|(config, rgb_config, schemas)| {
             let input_id = linear_input_id.as_deref().ok_or_else(|| {
                 AppError::BadRequest("RGB stars require a processing stack".into())
             })?;
@@ -1965,7 +1961,7 @@ pub(super) fn prepare_color_job(
                     &ctx.id,
                     &format!("rgb-stars:{rgb_input}:{calibration_key}"),
                     &rgb_input,
-                    &config,
+                    &rgb_config,
                     &schemas,
                     None,
                 )?
@@ -1973,6 +1969,7 @@ pub(super) fn prepare_color_job(
                 Vec::new()
             };
             Ok::<_, AppError>(narrowband::StarsPlan {
+                rgb_config: Some(rgb_config),
                 config,
                 schemas,
                 nebula_chain,
@@ -4565,13 +4562,23 @@ fn compose_color(
                     .as_ref()
                     .and_then(|p| p.narrowband.as_ref())
                     .map_or(0.0, |p| p.star_reduction);
-                seiza_stacking::screen_rgb_stars_reduced(
-                    &mut composition.image,
-                    &original,
-                    &starless,
-                    reduction,
-                )
-                .map_err(|error| error.to_string())?;
+                if let Some(layer) = stars.layer {
+                    let layer = layer.crop(composition.region).map_err(|e| e.to_string())?;
+                    seiza_stacking::screen_rgb_star_layer(
+                        &mut composition.image,
+                        &layer,
+                        reduction,
+                    )
+                    .map_err(|e| e.to_string())?;
+                } else {
+                    seiza_stacking::screen_rgb_stars_reduced(
+                        &mut composition.image,
+                        &original,
+                        &starless,
+                        reduction,
+                    )
+                    .map_err(|error| error.to_string())?;
+                }
             }
             composition.transfer = ColorTransfer::DisplayReferred;
         }
@@ -5301,6 +5308,7 @@ fn rc_astro_artifacts_exist(
 
 pub(super) fn color_job_artifacts_exist(stack_root: &FsPath, job: &StackColorJob) -> bool {
     color_artifacts_exist(stack_root, &job.job_id)
+        && narrowband::separation_artifacts_exist(stack_root, job.narrowband_resolution.as_ref())
         && emission::artifacts_exist(stack_root, job)
         && rc_astro_artifacts_exist(
             stack_root,
@@ -9719,6 +9727,7 @@ mod tests {
         let mut reduced = first.clone();
         reduced.narrowband = Some(narrowband::NarrowbandProcessing {
             star_reduction: 0.5,
+            rgb_star_stretch: Some(3.0),
             ..Default::default()
         });
         assert_eq!(

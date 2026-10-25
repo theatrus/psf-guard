@@ -1458,8 +1458,12 @@ export interface StackColorProcessing {
     shared_stretch: boolean;
     /** Optional BXT/NXT on the RGB star branch before calibration and SXT. */
     rgb_star_processing?: RcAstroProcessing | null;
+    nebula_star_separation?: RcAstroProcessing | null;
+    rgb_star_separation?: RcAstroProcessing | null;
     green_reduction?: number;
     star_reduction?: number;
+    /** Independent linear RGB star stretch [0,8]; absent keeps legacy Auto MTF. */
+    rgb_star_stretch?: number | null;
     balance?: { has_sii: boolean; shadow_protection: number; oiii_boost: number; sii_boost: number; max_samples: number; star_mask_radius?: number | null } | null;
   } | null;
   input_processing?: StackColorInputProcessing;
@@ -1698,6 +1702,14 @@ export interface StackColorCropReport {
   channels: StackColorChannelCoverage[];
 }
 
+/** Cached linear SXT outputs referenced by the final composition. */
+export type StackLinearStarSeparation = StackRcAstroResult & {
+  cache_id: string;
+  processing: RcAstroProcessing;
+  fits_url: string;
+  stars_fits_url?: string | null;
+};
+
 export interface StackColorJob {
   automatic_palette?: boolean;
   stars?: StackColorStars | null;
@@ -1708,6 +1720,8 @@ export interface StackColorJob {
     rc_astro_ids: string[];
     color_calibration?: StackColorCalibrationOutcome | null;
     rgb_star_processing?: (StackRcAstroResult & { fits_url: string; stars_fits_url?: string | null }) | null;
+    nebula_star_separation?: StackLinearStarSeparation | null;
+    rgb_star_separation?: StackLinearStarSeparation | null;
   } | null;
   narrowband_balance?: { channels: {
     channel: string; status: string; reason: string | null; samples: number;

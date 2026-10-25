@@ -289,8 +289,21 @@ neutral pixels are unchanged. This is an aesthetic operation with no SCNR
 parity claim. It runs after mapping, before broadband structure and RGB stars.
 
 An RGB-star branch optionally runs BXT/NXT on linear RGB, then the selected
-Gaia calibration and SXT. The RGB original and starless copy share the same
-color-preserving stretch before screen recombination. Gaia settings, its
+Gaia calibration and SXT, always before a display stretch. With
+`rgb_star_stretch` set, Seiza extracts the linear residual and applies the
+SetiAstro-style rational tone only to those stars. The optional amount is [0,8],
+with 5 seeded into new automatic recipes. A lower amount subdues stars; zero
+keeps the normalized linear residual. One linked source range matches the
+external-tool normalization; the background offset cancels in the residual.
+The stars-only layer is never independently normalized to its own peak.
+
+An absent/null field preserves the legacy common Auto MTF transfer of the RGB
+original/starless pair. The starless RGB still receives that display transfer
+for optional broadband structure. The independent star layer is screened once,
+after optional linked star reduction. Only the final composition identity
+includes the tone amount: linear input, BXT, Gaia and SXT artifacts remain
+reusable. C/Python/CLI surfaces live in Seiza. This implements the published
+tone, without claiming parity with PixInsight ColorSaturation/SCNR. Gaia settings, its
 pixel-solve/catalog basis and RC-Astro/model versions participate in the RGB
 SXT cache identity. Disabling Gaia preserves the RGB processing branch.
 
@@ -449,8 +462,8 @@ changes the final composition identity, with linear inputs, BXT and SXT still
 reusable. It applies only during RGB restoration, after mapping/green reduction
 and broadband-structure blending. Native stars and natural RGB/LRGB are unchanged.
 
-Seiza derives the display screen-star layer from the consistently stretched RGB
-original/starless pair. Its maximum RGB component supplies an intensity plane.
+Seiza uses the independently stretched linear residual when selected; legacy
+mode derives its screen-star layer from the consistently stretched RGB pair. Its maximum RGB component supplies an intensity plane.
 Blend that plane toward a one-pixel cross erosion, then apply the resulting
 common gain to all three star components before screen recombination. This
 preserves layer RGB ratios and cannot brighten stars. Invalid neighbours and
@@ -515,13 +528,61 @@ stored amount. Stored processing fields, algorithms and cache identity are
 unchanged by the layout. The narrowband-only built-in setup is hidden on natural
 RGB/LRGB emission cards; saved setups still use the existing role reconciler.
 
+### Independent star-stretch validation
+
+A fresh RC-Astro 2.6.10 run on SNR G132 compared legacy Auto MTF with Star
+Stretch amounts 5, 4 and 3, plus amount 3 with reduction 0.4. Each result uses
+BXT ML5, solar Gaia calibration and linear SXT ML11. Continuum is off,
+broadband structure is 0, and green reduction is 0.2. Every result shares the
+same 4757 × 3156 grid, linear-input identity and three RC-Astro identities.
+Changes after the first tool run completed in about 16–18 seconds using the
+cached branches. Amounts 3 → 4 → 5 brighten monotonically on every finite pixel;
+the nebula processing is identical.
+
+The native 800 × 800 crops cover (1978,1178)–(2778,1978), without resizing.
+[Validation data](../images/snrg132-star-stretch.json) records settings,
+identities, checksums and timings. The separate local smoke test used registered
+512 × 512 RGB and RC-Astro 2.6.10 BXT ML5 → NXT ML3 → linear SXT ML11 before
+Seiza's tone. SXT's positive residual agreed within 6e-8; negative residuals
+were clipped only in the derived display layer.
+
+![Legacy Auto MTF RGB stars](../images/snrg132-stars-legacy.png)
+
+![Independent Star Stretch amount 5](../images/snrg132-stars-stretch5.png)
+
+![Independent Star Stretch amount 3](../images/snrg132-stars-stretch3.png)
+
+### Cache and configure managed linear SXT
+
+`nebula_star_separation` and `rgb_star_separation` are optional SXT-only
+`RcAstroProcessing` settings on `NarrowbandProcessing`. Each branch resolves its
+own schema-validated parameters and chain identity. Missing/default settings
+retain the original managed identity. Defaults canonicalize before hashing;
+`stars`/`difference` must be true and `unscreen` must be false. Display changes
+never enter these tool settings.
+
+Mapped nebula identities include only the continuum inputs that change linear
+pixels. Broadband structure amount, line display amounts, positive display
+contribution and flux-export calibration no longer invalidate mapped BXT/SXT.
+Input/clipping revisions, subtraction mode, manual coefficients, photometry and
+fit options still do. RGB calibration settings/basis and earlier BXT/NXT identities
+remain part of the RGB separation key. Palette changes reuse only when the same
+physical linear planes and grid are supplied.
+
+`NarrowbandResolution` records typed per-branch linear SXT reports alongside the
+retained chain IDs: cache ID, resolved processing, CLI/model result, starless FITS
+URL and stars FITS URL. They persist in the final composition manifest and latest
+index. Existing cache retention protects those identities; a cache hit reloads
+both linear FITS outputs and refreshes use time. Regression tests count actual
+stand-in invocations across stretch/reduction edits and independent branch retunes,
+round-trip the final manifest, and verify 30-day-old referenced runs survive pruning.
+Missing stars files invalidate the final artifact references; rebuilding repairs only
+the affected branch. The real SNR G132 check reused all three RC-Astro IDs for
+explicit default overlap and broadband blend changes, completing in 10 and 8 seconds.
+[Cache validation](../images/snrg132-sxt-cache.json) records the exact outputs.
+
 ## Follow-up work
 
 - [ ] For automatic RGB-star source selection, prefer the shortest available
   RGB exposure group (for example, 60s rather than 300s) when several exposure
   groups qualify. Preserve explicit source choices in Custom combination.
-- [ ] Match the RGB-star stretch to SetiAstro's Star Stretch script rather than
-  the current general-purpose Auto-MTF/shared display stretch. Research the
-  script's behavior and parity requirements. Add a dedicated operation in
-  Seiza if needed, carry it through the C/Python/CLI surfaces, and expose the
-  matching RGB-star control in PSF Guard.

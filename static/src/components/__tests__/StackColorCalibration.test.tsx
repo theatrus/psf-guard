@@ -38,6 +38,7 @@ describe('color calibration defaults', () => {
     };
     expect(colorSetupForRoles(off, [...rgb]).color_calibration?.enabled).toBe(false);
     expect(colorSetupForRoles(off, ['ha', 'oiii'])).not.toHaveProperty('color_calibration');
+    expect(colorSetupForRoles(off, ['ha', 'oiii'], true).color_calibration?.enabled).toBe(false);
     const narrowband = defaultColorProcessing(['ha', 'oiii']);
     expect(colorSetupForRoles(narrowband, [...rgb]).color_calibration?.enabled).toBe(true);
   });

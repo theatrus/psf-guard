@@ -1,3 +1,4 @@
+import StackStarSeparationControls from './StackStarSeparationControls';
 import { useMemo, useState, type ReactNode } from 'react';
 import type {
   StackBackgroundConfig,
@@ -70,13 +71,13 @@ function hasInvalidNumbers(processing: StackColorProcessing): boolean {
     ...Object.values(processing.input_stretches).flatMap((value) => value ?? []),
     ...processing.output_stretches,
   ];
-  return !Number.isFinite(processing.narrowband?.star_reduction ?? 0) || !Number.isFinite(processing.narrowband?.green_reduction ?? 0)
+  return !Number.isFinite(processing.narrowband?.rgb_star_stretch ?? 0) || !Number.isFinite(processing.narrowband?.star_reduction ?? 0) || !Number.isFinite(processing.narrowband?.green_reduction ?? 0)
     || Object.values(processing.narrowband?.balance ?? {}).some((value) => typeof value === 'number' && !Number.isFinite(value))
     || stages.some((stage) => Object.values(stage.model).some(
     (value) => typeof value === 'number' && !Number.isFinite(value)
   )) || Object.values(processing.input_deconvolutions).some((config) =>
     config && Object.values(config).some((value) => !Number.isFinite(value))
-  ) || [...Object.values(processing.input_rc_astro ?? {}), processing.color_rc_astro, processing.narrowband?.rgb_star_processing]
+  ) || [...Object.values(processing.input_rc_astro ?? {}), processing.color_rc_astro, processing.narrowband?.rgb_star_processing, processing.narrowband?.nebula_star_separation, processing.narrowband?.rgb_star_separation]
     .some((config) =>
       config?.steps.some((step) => Object.values(step.parameters).some((value) =>
         typeof value === 'number' && !Number.isFinite(value)
@@ -611,7 +612,7 @@ function channelProcessingSummary(
 export default function StackColorProcessingControls({
   label, roles, applied, backgrounds, protections, fallbacks, deconvolutions, rcAstro = {},
   colorRcAstro, channelProcessing = {}, followed, disabled, applyError, onApply,
-  automaticNarrowband = false, combination, palette, balanceReport, managesStars = false, stars, resolvedStars,
+  automaticNarrowband = false, combination, palette, balanceReport, managesStars = false, stars, resolvedStars, starSeparation,
 }: {
   label: string;
   roles: StackColorRole[];
@@ -623,6 +624,7 @@ export default function StackColorProcessingControls({
   managesStars?: boolean;
   stars?: StackColorStars;
   resolvedStars?: StackColorStars;
+  starSeparation?: StackColorJob['narrowband_resolution'];
   backgrounds: Partial<Record<StackColorRole, StackBackgroundFit>>;
   protections: Partial<Record<StackColorRole, StackBackgroundProtection>>;
   fallbacks: Partial<Record<StackColorRole, string>>;
@@ -709,6 +711,9 @@ export default function StackColorProcessingControls({
         !config.balance &&
         !config.shared_stretch &&
         !config.rgb_star_processing &&
+        !config.nebula_star_separation &&
+        !config.rgb_star_separation &&
+        config.rgb_star_stretch == null &&
         (config.green_reduction ?? 0) === 0 &&
         (config.star_reduction ?? 0) === 0
       ) {
@@ -826,6 +831,10 @@ export default function StackColorProcessingControls({
         return;
       }
     }
+    if ((draft.narrowband?.rgb_star_stretch ?? 0) < 0 || (draft.narrowband?.rgb_star_stretch ?? 0) > 8) {
+      setError('RGB star stretch amount must be between zero and eight');
+      return;
+    }
     if (
       (draft.narrowband?.star_reduction ?? 0) < 0 ||
       (draft.narrowband?.star_reduction ?? 0) > 1
@@ -886,6 +895,10 @@ export default function StackColorProcessingControls({
       setError(`Color channels: ${colorProblem}`);
       return;
     }
+    for (const [branch, config] of [['Narrowband nebula', draft.narrowband?.nebula_star_separation], ['RGB stars', draft.narrowband?.rgb_star_separation]] as const) {
+      const problem = rcAstroProblem(config, rcAstroTools);
+      if (problem) { setError(`${branch} star separation: ${problem}`); return; }
+    }
     const starProblem = rcAstroProblem(draft.narrowband?.rgb_star_processing, rcAstroTools);
     if (starProblem) {
       setError(`RGB stars: ${starProblem}`);
@@ -922,7 +935,7 @@ export default function StackColorProcessingControls({
             setDraft(
               cloneProcessing(
                 combinedColorProcessing(
-                  colorSetupForRoles(settings as StackColorProcessing, roles),
+                  colorSetupForRoles(settings as StackColorProcessing, roles, preparesRgbBranch),
                   combination,
                   roles,
                 ),
@@ -1083,6 +1096,12 @@ export default function StackColorProcessingControls({
                       No additional color-channel tools selected.
                     </p>
                   )}
+                {narrowband && managesStars && <StackStarSeparationControls
+                  label="Narrowband nebula" config={draft.narrowband?.nebula_star_separation}
+                  result={starSeparation?.nebula_star_separation}
+                  disabled={disabled || stars === 'narrowband'}
+                  onChange={(nebula_star_separation) => changeNarrowband({ ...draft.narrowband,
+                    shared_stretch: draft.narrowband?.shared_stretch ?? false, nebula_star_separation })} />}
                 {calibrates && !narrowband && (
                   <ColorCalibrationSwitch
                     calibration={draft.color_calibration}
@@ -1144,7 +1163,7 @@ export default function StackColorProcessingControls({
                         </p>
                       </section>
                     )}
-                  {calibrates && (
+                  {preparesRgbBranch && (
                     <ColorCalibrationSwitch
                       calibration={draft.color_calibration}
                       disabled={disabled}
@@ -1156,6 +1175,10 @@ export default function StackColorProcessingControls({
                       }
                     />
                   )}
+                  <StackStarSeparationControls label="RGB" config={draft.narrowband?.rgb_star_separation}
+                    result={starSeparation?.rgb_star_separation} disabled={disabled || !preparesRgbBranch}
+                    onChange={(rgb_star_separation) => changeNarrowband({ ...draft.narrowband,
+                      shared_stretch: draft.narrowband?.shared_stretch ?? false, rgb_star_separation })} />
                 </section>
               )}
             </div>
@@ -1347,7 +1370,7 @@ export default function StackColorProcessingControls({
           {managesStars && narrowband && (
             <ProcessingStep
               title="Combine and restore stars"
-              summary={`${stars === 'automatic' || !stars ? `Automatic${resolvedStars ? ` → ${resolvedStars === 'rgb' ? 'RGB stars' : resolvedStars === 'narrowband' ? 'Narrowband stars' : 'No stars'}` : ' · RGB when available'}` : stars === 'rgb' ? 'RGB stars' : stars === 'none' ? 'No stars' : 'Narrowband stars'} · ${stars === 'none' || stars === 'narrowband' ? 'RGB reduction inactive' : `RGB reduction ${draft.narrowband?.star_reduction ?? 0}`}`}
+              summary={`${stars === 'automatic' || !stars ? `Automatic${resolvedStars ? ` → ${resolvedStars === 'rgb' ? 'RGB stars' : resolvedStars === 'narrowband' ? 'Narrowband stars' : 'No stars'}` : ' · RGB when available'}` : stars === 'rgb' ? 'RGB stars' : stars === 'none' ? 'No stars' : 'Narrowband stars'} · ${stars === 'none' || stars === 'narrowband' ? 'RGB stars inactive' : `${draft.narrowband?.rgb_star_stretch == null ? 'Auto MTF stars' : `Star Stretch ${draft.narrowband.rgb_star_stretch}`} · RGB reduction ${draft.narrowband?.star_reduction ?? 0}`}`}
             >
               {combination === 'broadband_structure' && draft.emission && (
                 <StackEmissionControls
@@ -1358,6 +1381,36 @@ export default function StackColorProcessingControls({
                   onChange={(emission) => setDraft((current) => ({ ...current, emission }))}
                 />
               )}
+              <section className="stack-background-controls" aria-label="RGB star stretch">
+                <header><strong>RGB star stretch</strong><span>After linear star separation</span></header>
+                <label className="stack-stretch-field">
+                  <span>Stretch</span>
+                  <select aria-label="RGB star stretch" value={draft.narrowband?.rgb_star_stretch == null ? 'legacy' : 'star'}
+                    disabled={disabled || stars === 'none' || stars === 'narrowband'}
+                    onChange={(event) => changeNarrowband({ ...draft.narrowband,
+                      shared_stretch: draft.narrowband?.shared_stretch ?? false,
+                      rgb_star_stretch: event.target.value === 'star' ? 5 : null,
+                    })}>
+                    <option value="star">Star Stretch</option><option value="legacy">Auto MTF (legacy)</option>
+                  </select>
+                  <small>StarXTerminator runs on linear RGB after optional BXT and color calibration.
+                    Star Stretch then stretches only the extracted stars, using a SetiAstro-style tone curve.</small>
+                </label>
+                {draft.narrowband?.rgb_star_stretch != null && (
+                  <label className="stack-stretch-field">
+                    <span>Amount</span>
+                    <input type="number" aria-label="RGB star stretch amount" min="0" max="8" step="0.1"
+                      value={draft.narrowband.rgb_star_stretch}
+                      disabled={disabled || stars === 'none' || stars === 'narrowband'}
+                      onChange={(event) => changeNarrowband({ ...draft.narrowband,
+                        shared_stretch: draft.narrowband?.shared_stretch ?? false,
+                        rgb_star_stretch: event.target.valueAsNumber,
+                      })} />
+                    <small>Lower amounts keep stars fainter. 5 is the starting value; 0 keeps the linear
+                      residual without a nonlinear lift. The nebula stretch is unchanged.</small>
+                  </label>
+                )}
+              </section>
               {managesStars && narrowband && (
                 <section className="stack-background-controls" aria-label="RGB star reduction">
                   <header>

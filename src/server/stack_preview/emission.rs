@@ -106,6 +106,29 @@ impl EmissionProcessing {
         Ok(())
     }
 }
+/// Mapped linear residuals ignore display blend strengths and flux exports.
+/// Keep those choices in the final composition key, outside BXT/SXT inputs.
+pub(super) fn mapped_input_identity(
+    input_id: &str,
+    clipping_id: &str,
+    config: Option<&EmissionProcessing>,
+) -> Result<String, AppError> {
+    let linear = config.map(|config| {
+        let mut linear = config.clone();
+        linear.broadband_amount = 0.0;
+        linear.positive_contribution = true;
+        linear.flux_calibration = None;
+        for line in linear.lines.values_mut() {
+            line.amount = EmissionLineSettings::default().amount;
+        }
+        linear
+    });
+    Ok(format!(
+        "{input_id}:continuum:{clipping_id}:{}",
+        serde_json::to_string(&linear).map_err(|e| AppError::InternalError(e.to_string()))?
+    ))
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ContinuumLineResult {
     pub role: StackColorRole,
@@ -935,6 +958,51 @@ pub(super) fn validate_natural_star_removal(
 mod tests {
     use super::super::tests::{channel, running_color_job};
     use super::*;
+
+    #[test]
+    fn mapped_linear_cache_ignores_display_amounts_but_tracks_continuum_inputs() {
+        let base = EmissionProcessing::default();
+        let id = mapped_input_identity("linear", "clip-v1", Some(&base)).unwrap();
+        let mut display = base.clone();
+        display.broadband_amount = 0.7;
+        display.positive_contribution = false;
+        for line in display.lines.values_mut() {
+            line.amount = 2.0;
+        }
+        assert_eq!(
+            mapped_input_identity("linear", "clip-v1", Some(&display)).unwrap(),
+            id
+        );
+        assert_ne!(
+            mapped_input_identity("new-linear", "clip-v1", Some(&base)).unwrap(),
+            id
+        );
+        assert_ne!(
+            mapped_input_identity("linear", "clip-v2", Some(&base)).unwrap(),
+            id
+        );
+        let mut manual = base.clone();
+        manual.mode = ContinuumMode::Manual;
+        assert_ne!(
+            mapped_input_identity("linear", "clip-v1", Some(&manual)).unwrap(),
+            id
+        );
+        manual
+            .lines
+            .get_mut(&StackColorRole::Ha)
+            .unwrap()
+            .coefficients = vec![0.5];
+        let first = mapped_input_identity("linear", "clip-v1", Some(&manual)).unwrap();
+        manual
+            .lines
+            .get_mut(&StackColorRole::Ha)
+            .unwrap()
+            .coefficients = vec![0.6];
+        assert_ne!(
+            mapped_input_identity("linear", "clip-v1", Some(&manual)).unwrap(),
+            first
+        );
+    }
 
     #[test]
     fn continuum_clipping_maps_align_with_cpu_processing() {

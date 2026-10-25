@@ -99,7 +99,12 @@ async function signIn(browser: Browser, name: string, before?: (page: Page) => P
   await page.goto(`${BASE}/`);
   await page.getByLabel('Username').fill(name);
   await page.getByLabel('Password').fill(PASSWORD);
-  await page.getByRole('button', { name: 'Sign in' }).click();
+  // Signing in reloads the document. The heading can disappear before that
+  // reload starts, so wait for its load before navigating to the grid.
+  await Promise.all([
+    page.waitForEvent('load'),
+    page.getByRole('button', { name: 'Sign in' }).click(),
+  ]);
   await expect(page.getByRole('heading', { name: 'Sign in to PSF Guard' })).toHaveCount(0);
   if (!dbId) {
     dbId = await page.evaluate(async () => {

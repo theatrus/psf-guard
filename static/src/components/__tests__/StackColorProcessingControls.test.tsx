@@ -464,7 +464,7 @@ describe('processing flow', () => {
       'Prepare inputs', 'Process linear color', 'Stretch and narrowband balance', 'Combine and restore stars', 'Finish RGB',
     ]);
     expect(steps.every((step) => !(step as HTMLDetailsElement).open)).toBe(true);
-    expect(within(flow).getByText('Automatic → RGB stars · RGB reduction 0')).toBeVisible();
+    expect(within(flow).getByText('Automatic → RGB stars · Star Stretch 5 · RGB reduction 0')).toBeVisible();
     await userEvent.click(screen.getByText('Stretch and narrowband balance'));
     const boost = screen.getByRole('spinbutton', { name: 'OIII boost' });
     await userEvent.clear(boost); await userEvent.type(boost, '1.5');
@@ -501,7 +501,7 @@ describe('processing flow', () => {
     await openProcessingFlow();
     expect(screen.getByRole('spinbutton', { name: 'RGB star reduction' })).toBeDisabled();
     expect(screen.getByRole('spinbutton', { name: 'RGB star reduction' })).toHaveValue(0.4);
-    expect(screen.getByText('Narrowband stars · RGB reduction inactive')).toBeVisible();
+    expect(screen.getByText('Narrowband stars · RGB stars inactive')).toBeVisible();
   });
 });
 
@@ -516,4 +516,66 @@ it('separates continuum references from mapped stretches and places structure bl
   const combine = screen.getByRole('group', { name: 'Combine and restore stars' });
   expect(within(combine).getByRole('spinbutton', { name: 'Broadband structure amount' })).toBeVisible();
   expect(within(screen.getByRole('group', { name: 'Subtract continuum' })).queryByRole('spinbutton', { name: 'Broadband structure amount' })).toBeNull();
+});
+
+
+describe('independent RGB star stretch', () => {
+  it('defaults new automatic RGB stars to Star Stretch and keeps reduction separate', async () => {
+    const onApply = vi.fn();
+    renderWithQueries(<StackColorProcessingControls label="SHO" roles={['ha','oiii','sii','red','green','blue']} automaticNarrowband managesStars stars="automatic"
+      applied={null} backgrounds={{}} protections={{}} fallbacks={{}} deconvolutions={{}} disabled={false} onApply={onApply} />);
+    await openProcessingFlow();
+    expect(screen.getByRole('combobox', { name: 'RGB star stretch' })).toHaveValue('star');
+    const amount = screen.getByRole('spinbutton', { name: 'RGB star stretch amount' });
+    expect(amount).toHaveValue(5);
+    await userEvent.clear(amount); await userEvent.type(amount, '3');
+    await userEvent.click(screen.getByRole('button', { name: 'Apply processing stack' }));
+    expect(onApply).toHaveBeenCalledWith(expect.objectContaining({ narrowband: expect.objectContaining({ rgb_star_stretch: 3 }) }));
+    expect(onApply.mock.calls[0][0].narrowband.star_reduction ?? 0).toBe(0);
+  });
+  it('preserves legacy setups and allows opting into the new curve', async () => {
+    const onApply = vi.fn();
+    renderWithQueries(<StackColorProcessingControls label="SHO" roles={['ha','oiii','sii','red','green','blue']} managesStars stars="rgb"
+      applied={defaultColorProcessing(['ha','oiii','sii'])} backgrounds={{}} protections={{}} fallbacks={{}} deconvolutions={{}} disabled={false} onApply={onApply} />);
+    await openProcessingFlow();
+    expect(screen.getByRole('combobox', { name: 'RGB star stretch' })).toHaveValue('legacy');
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'RGB star stretch' }), 'star');
+    await userEvent.click(screen.getByRole('button', { name: 'Apply processing stack' }));
+    expect(onApply).toHaveBeenCalledWith(expect.objectContaining({ narrowband: expect.objectContaining({ rgb_star_stretch: 5 }) }));
+  });
+  it.each(['none','narrowband'] as const)('disables star stretching for %s stars while retaining its amount', async (stars) => {
+    renderWithQueries(<StackColorProcessingControls label="SHO" roles={['ha','oiii','sii']} automaticNarrowband managesStars stars={stars}
+      applied={null} backgrounds={{}} protections={{}} fallbacks={{}} deconvolutions={{}} disabled={false} onApply={vi.fn()} />);
+    await openProcessingFlow();
+    expect(screen.getByRole('combobox', { name: 'RGB star stretch' })).toBeDisabled();
+    expect(screen.getByRole('spinbutton', { name: 'RGB star stretch amount' })).toBeDisabled();
+    expect(screen.getByRole('spinbutton', { name: 'RGB star stretch amount' })).toHaveValue(5);
+  });
+});
+
+
+it('configures separate linear SXT runs and retains their parameters in the processing stack', async () => {
+  server.use(http.get('/api/tools/rc-astro', () => HttpResponse.json({ success: true, data: {
+    available: true, tools: [{ key: 'sxt', name: 'RC-Astro StarXTerminator', licensed: true, cli_version: '2.6.10', schema_version: 6, ml_version: 11,
+      parameters: [
+        { name: 'overlap', label: 'Tile Overlap', flag: '--overlap', description: 'Tile overlap', kind: { type: 'float', default: 0.2, min: 0, max: 0.5 } },
+        { name: 'stars', label: 'Generate Star Image', flag: '--stars', description: '', kind: { type: 'bool', default: false } },
+        { name: 'unscreen', label: 'Unscreen Stars', flag: '--unscreen', description: '', kind: { type: 'bool', default: false } },
+      ] }],
+  } })));
+  const onApply = vi.fn();
+  renderWithQueries(<StackColorProcessingControls label="SHO" roles={['ha','oiii','sii']} managesStars stars="rgb"
+    applied={defaultColorProcessing(['ha','oiii','sii'])} backgrounds={{}} protections={{}} fallbacks={{}} deconvolutions={{}} disabled={false} onApply={onApply} />);
+  await openProcessingFlow();
+  const nebula = await screen.findByRole('region', { name: 'Narrowband nebula separation RC-Astro tools' });
+  const rgb = screen.getByRole('region', { name: 'RGB separation RC-Astro tools' });
+  expect(within(screen.getByRole('region', { name: 'RGB branch' })).getByRole('switch', { name: 'Color calibration' })).toBeChecked();
+  const enabled = within(rgb).getByRole('checkbox', { name: 'RC-Astro StarXTerminator' });
+  expect(enabled).toBeChecked(); expect(enabled).toBeDisabled();
+  expect(within(rgb).queryByRole('checkbox', { name: 'Unscreen Stars' })).not.toBeInTheDocument();
+  const overlap = within(rgb).getByRole('spinbutton', { name: 'Tile Overlap' });
+  await userEvent.clear(overlap); await userEvent.type(overlap, '0.3');
+  expect(within(nebula).getByRole('spinbutton', { name: 'Tile Overlap' })).toHaveValue(0.2);
+  await userEvent.click(screen.getByRole('button', { name: 'Apply processing stack' }));
+  expect(onApply).toHaveBeenCalledWith(expect.objectContaining({ narrowband: expect.objectContaining({ rgb_star_separation: { steps: [{ tool: 'sxt', parameters: { overlap: 0.3 } }] } }) }));
 });

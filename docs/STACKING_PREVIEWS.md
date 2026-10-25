@@ -1707,6 +1707,8 @@ keeps its saved result but does not replace the latest color preview.
 
 ### Automatic narrowband and RGB stars
 
+Use the **✨ Stars** selector beside the palette to choose which stars the preview restores.
+
 Use the regular narrowband card beside RGB and LRGB. Its header has three
 choices: **Palette**, **Stars**, and **Edges**. You do not need to open a
 custom combination to use automatic processing.
@@ -1750,11 +1752,43 @@ by Narrowband Normalization, with no claim of matching the PixInsight script.
 A default Color setup with different per-filter stretches keeps those stretches.
 
 RGB color calibration runs on star-containing linear RGB before star removal.
-The original and starless RGB then receive the same linked display stretch;
-their difference supplies the RGB stars without adding a second nebula. The
-nebula's output stretch stages run after recombination. Foraxx keeps its
+StarXTerminator always separates the RGB stars while the RGB image is linear.
+New automatic recipes then apply **Star Stretch** only to the extracted linear
+stars before screening them over the stretched nebula. Open **Processing stack
+→ Combine and restore stars → RGB star stretch**. Lower **Amount** to make stars
+fainter; 5 is the starting value, and 0 keeps the linear residual without a
+nonlinear lift. The nebula stretch and BXT settings stay independent. **RGB star
+reduction** can further reduce the stretched stars before restoration.
+
+Saved setups keep **Auto MTF (legacy)** until you choose **Star Stretch** and
+apply the processing stack. The legacy mode applies one linked display transfer
+to the original and starless RGB pair before extracting the screen layer.
+Star Stretch uses the tone formula published by [SetiAstro](https://www.setiastro.com/pjsr-scripts);
+it does not reproduce PixInsight's optional saturation or SCNR processes.
+The nebula's output stretch stages run after recombination. Foraxx keeps its
 existing dynamic mapping and disables the new shared H-alpha stretch and
 narrowband balance controls.
+
+![Independent RGB star stretch controls](images/stack-rgb-star-stretch-desktop.png)
+
+### Configure linear star separation
+
+Open **Processing stack → Process linear color**. Each managed narrowband or
+RGB branch has **Star separation** controls for StarXTerminator. **Tile Overlap**
+starts at the installed tool's default and is saved with the processing setup.
+The RGB branch also exposes its Gaia color-calibration choice, before SXT; saved
+setups keep that choice separately from the false-color nebula.
+The Stars selector controls which branches run; use Narrowband to keep native
+stars, or None for a starless result. Star separation always runs on linear data.
+The managed run keeps both the starless and stars images, with Unscreen Stars off.
+
+Completed compositions retain each branch's exact cache ID, tool/model version,
+resolved settings and links to its **Linear … starless FITS** and **Linear … stars
+FITS**. Stretch, palette, green-reduction and star-reduction edits reuse those
+linear outputs when their inputs are unchanged. Broadband structure blend
+amounts also reuse them. Changing one branch's SXT settings reruns that branch;
+new linear inputs, continuum coefficients, calibration or tool/model versions
+invalidate the affected run. Default-valued SXT settings reuse the default run.
 
 ### Sharpen RGB stars with BlurXTerminator
 

@@ -4278,6 +4278,17 @@
   clip: rect(0 0 0 0);
 }
 
+.stack-color-star-policy > span {
+  position: static;
+  width: auto;
+  height: auto;
+  overflow: visible;
+  clip: auto;
+  white-space: nowrap;
+  font-size: 0.68rem;
+  color: var(--color-text-secondary);
+}
+
 .stack-color-palette select {
   min-width: 0;
   max-width: 210px;
