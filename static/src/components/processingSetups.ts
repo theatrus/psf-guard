@@ -50,6 +50,7 @@ export function builtinViewSetups(displayReferred: boolean): BuiltinViewSetup[] 
 }
 
 export interface BuiltinColorSetup {
+  narrowbandOnly?: boolean;
   name: string;
   settings: (roles: StackColorRole[]) => StackColorProcessing;
   supports?: (roles: StackColorRole[]) => boolean;
@@ -66,6 +67,7 @@ export const builtinColorSetups: BuiltinColorSetup[] = [
   },
   {
     name: 'Automatic narrowband',
+    narrowbandOnly: true,
     supports: (roles) => roles.includes('ha') && roles.includes('oiii'),
     settings: (roles) => automaticNarrowbandProcessing(defaultColorProcessing(roles)),
   },

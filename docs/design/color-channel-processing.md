@@ -499,3 +499,29 @@ plan's reference order. The server rejects a changed fit/manual coefficient
 before exporting flux: retained source revisions do not establish that the
 previous residual zero levels still apply. Update the explicit zero-level
 calibration and coefficient snapshots when the subtraction model changes.
+
+## Processing editor flow
+
+The editor presents ordered, collapsible steps with saved setups above the
+flow and one Apply action below it. Linear channel tools and display stretches
+have separate lanes. The linear-color step shows the nebula/color branch and
+RGB-star branch separately; continuum-reference-only channels do not appear as
+stretch inputs. Natural emission amounts follow broadband calibration, while
+mapped broadband blending and RGB reduction precede final output stages.
+
+Disclosures retain drafts while closed. Star-policy summaries distinguish the
+saved policy from its resolved result. Inactive RGB reduction retains its
+stored amount. Stored processing fields, algorithms and cache identity are
+unchanged by the layout. The narrowband-only built-in setup is hidden on natural
+RGB/LRGB emission cards; saved setups still use the existing role reconciler.
+
+## Follow-up work
+
+- [ ] For automatic RGB-star source selection, prefer the shortest available
+  RGB exposure group (for example, 60s rather than 300s) when several exposure
+  groups qualify. Preserve explicit source choices in Custom combination.
+- [ ] Match the RGB-star stretch to SetiAstro's Star Stretch script rather than
+  the current general-purpose Auto-MTF/shared display stretch. Research the
+  script's behavior and parity requirements. Add a dedicated operation in
+  Seiza if needed, carry it through the C/Python/CLI surfaces, and expose the
+  matching RGB-star control in PSF Guard.

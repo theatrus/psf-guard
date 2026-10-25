@@ -1,3 +1,4 @@
+import { openProcessingFlow } from './processingFlowTestUtils';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -50,7 +51,7 @@ describe('Color calibration switch', () => {
       applied={defaultColorProcessing([...rgb])}
       backgrounds={{}} protections={{}} fallbacks={{}} deconvolutions={{}}
       disabled={false} onApply={onApply} />);
-    await user.click(screen.getByText('Processing stack'));
+    await openProcessingFlow();
     const toggle = screen.getByRole('switch', { name: 'Color calibration' });
     expect(toggle).toBeChecked();
     expect(screen.getByText('Gaia star colors')).toBeInTheDocument();
@@ -64,24 +65,22 @@ describe('Color calibration switch', () => {
   });
 
   it('reads an older RGB preview without settings as calibrated', async () => {
-    const user = userEvent.setup();
     const applied = defaultColorProcessing([...rgb]);
     delete applied.color_calibration;
     renderWithQueries(<StackColorProcessingControls label="RGB" roles={[...rgb]}
       applied={applied}
       backgrounds={{}} protections={{}} fallbacks={{}} deconvolutions={{}}
       disabled={false} onApply={vi.fn()} />);
-    await user.click(screen.getByText('Processing stack'));
+    await openProcessingFlow();
     expect(screen.getByRole('switch', { name: 'Color calibration' })).toBeChecked();
   });
 
   it('is absent for narrowband palettes', async () => {
-    const user = userEvent.setup();
     renderWithQueries(<StackColorProcessingControls label="SHO" roles={['ha', 'oiii', 'sii']}
       applied={defaultColorProcessing(['ha', 'oiii', 'sii'])}
       backgrounds={{}} protections={{}} fallbacks={{}} deconvolutions={{}}
       disabled={false} onApply={vi.fn()} />);
-    await user.click(screen.getByText('Processing stack'));
+    await openProcessingFlow();
     expect(screen.queryByRole('switch', { name: 'Color calibration' })).not.toBeInTheDocument();
   });
 });

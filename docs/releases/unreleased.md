@@ -16,12 +16,18 @@
 
 ## Changes
 
+- Color processing now follows numbered, expandable steps from input preparation
+  to RGB finishing. See color and RGB-star branches separately, inspect the
+  resolved star policy, and edit saved setups with consistent field fonts and
+  spacing. Emission amounts and star reduction appear where they run in the
+  pipeline; closing a step preserves its edits.
+
 - Watch a channel's in-progress stack in **Stacks**, with a live preview updated
   about every five seconds. The finished preview replaces it when processing
   completes; completed FITS downloads remain separate during a rebuild.
 
 - Narrowband previews can reduce the restored RGB stars independently of BXT.
-  Adjust **Processing stack → RGB star reduction** to make stars smaller and
+  Adjust **Processing stack → Combine and restore stars → RGB star reduction** to make stars smaller and
   fainter while preserving their color and the starless nebula. Zero preserves
   the current result. BXT sharpening and halo controls remain configurable.
 
@@ -37,7 +43,7 @@
   returns to measured photometry.
 
 - Narrowband previews can sharpen their RGB star branch with BlurXTerminator
-  before star extraction. Open **Processing stack → RGB star processing**.
+  before star extraction. Open **Processing stack → Process linear color → RGB star processing**.
 - Custom **RGB + emission**, **LRGB + emission**, and **Narrowband + broadband
   structure** cards fit and subtract continuum on aligned linear inputs.
   Automatic, Manual and Off controls retain signed residual downloads and

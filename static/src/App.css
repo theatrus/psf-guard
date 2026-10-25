@@ -4760,6 +4760,187 @@
   padding: 0 0.65rem 0.65rem;
 }
 
+/* Color processing follows the image pipeline. Fields keep the same
+   typography and spacing as the channel and stretch editors. */
+.stack-processing-flow {
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: processing-step;
+}
+
+.stack-processing-flow > li {
+  position: relative;
+  min-width: 0;
+  padding-left: 1.8rem;
+  counter-increment: processing-step;
+}
+
+.stack-processing-flow > li::before {
+  content: counter(processing-step);
+  position: absolute;
+  top: 0.5rem;
+  left: 0;
+  display: grid;
+  place-items: center;
+  width: 1.2rem;
+  height: 1.2rem;
+  border: 1px solid var(--color-bg-quaternary);
+  border-radius: 50%;
+  color: var(--color-text-secondary);
+  background: var(--color-bg-tertiary);
+  font-size: 0.62rem;
+  font-weight: 650;
+}
+
+.stack-processing-step {
+  min-width: 0;
+  border: 1px solid var(--color-bg-tertiary);
+  border-radius: 6px;
+  background: var(--color-bg-primary);
+}
+
+.stack-processing-step > summary {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.55rem 1.8rem 0.55rem 0.6rem;
+  position: relative;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  list-style: none;
+}
+
+.stack-processing-step > summary::-webkit-details-marker { display: none; }
+
+.stack-processing-step > summary::after {
+  content: '+';
+  position: absolute;
+  top: 0.55rem;
+  right: 0.6rem;
+  font-size: 0.8rem;
+}
+
+.stack-processing-step > summary[aria-expanded='true'] {
+  border-bottom: 1px solid var(--state-on-border);
+  color: var(--state-on-fg);
+  background: var(--state-on-bg);
+}
+
+.stack-processing-step > summary[aria-expanded='true']::after { content: '−'; }
+
+.stack-processing-step > summary:focus-visible {
+  outline: 2px solid var(--state-focus-border);
+  outline-offset: 2px;
+}
+
+.stack-processing-step > summary strong { font-size: 0.68rem; font-weight: 700; }
+
+.stack-processing-step > summary span {
+  color: var(--color-text-muted);
+  font-size: 0.6rem;
+  line-height: 1.45;
+}
+
+.stack-processing-step-body {
+  display: grid;
+  gap: 0.55rem;
+  min-width: 0;
+  padding: 0.55rem;
+}
+
+.stack-processing-flow .processing-setups-hint,
+.stack-processing-flow .stack-stretch-field > small {
+  display: block;
+  margin: 0;
+  font-size: 0.62rem;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.stack-processing-advanced > summary {
+  padding: 0.35rem 0;
+  color: var(--color-text-secondary);
+  font-size: 0.64rem;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.stack-processing-advanced > .stack-color-stage-grid { margin-top: 0.4rem; }
+.stack-narrowband-controls { display: grid; gap: 0.5rem; min-width: 0; }
+.stack-narrowband-controls > label:has(input[type='checkbox']) {
+  display: flex;
+  align-items: center;
+  gap: 0.42rem;
+  color: var(--color-text-secondary);
+  font-size: 0.64rem;
+}
+
+.processing-setups-row select,
+.processing-setups-row input[type='text'] { font-family: inherit; }
+
+
+.stack-processing-flow input[type='file']::file-selector-button {
+  padding: 0.25rem 0.4rem;
+  color: var(--color-text-primary);
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-bg-quaternary);
+  border-radius: 4px;
+  font: inherit;
+}
+
+.stack-narrowband-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 7rem), 1fr));
+  gap: 0.42rem;
+}
+
+.stack-narrowband-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+  align-items: start;
+  gap: 0.5rem;
+}
+
+.stack-narrowband-controls > ul {
+  margin: 0;
+  padding-left: 1rem;
+  color: var(--color-text-muted);
+  font-size: 0.62rem;
+  line-height: 1.5;
+}
+
+.stack-emission-controls > .stack-processing-advanced > small {
+  display: block;
+  margin-top: 0.4rem;
+  color: var(--color-text-muted);
+  font-size: 0.62rem;
+  line-height: 1.5;
+}
+
+.stack-color-processing .stack-stretch-actions { flex-wrap: wrap; }
+
+.stack-linear-branches {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
+  align-items: start;
+  gap: 0.6rem;
+}
+
+.stack-linear-branch { display: grid; gap: 0.5rem; min-width: 0; }
+.stack-linear-branch > header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  color: var(--color-text-secondary);
+  font-size: 0.68rem;
+}
+.stack-linear-branch > header span { color: var(--color-text-muted); font-size: 0.59rem; }
+
 .stack-background-controls,
 .stack-emission-controls {
   min-width: 0;

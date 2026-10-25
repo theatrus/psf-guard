@@ -1,3 +1,4 @@
+import { openProcessingFlow } from './processingFlowTestUtils';
 import { render, screen, within, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -25,8 +26,7 @@ describe('StackColorProcessingControls', () => {
     renderWithQueries(<StackColorProcessingControls label="SHO" roles={['ha', 'oiii', 'sii']}
       automaticNarrowband palette="sho" applied={null} backgrounds={{}} protections={{}} fallbacks={{}}
       deconvolutions={{}} disabled={false} onApply={onApply} />);
-    await userEvent.click(screen.getByText('Processing stack'));
-    await userEvent.click(screen.getByText('Stretch and narrowband balance'));
+    await openProcessingFlow();
     expect(screen.getByRole('combobox', { name: 'Narrowband channel stretch' })).toHaveValue('shared');
     expect(screen.getByRole('checkbox', { name: 'Narrowband balance' })).toBeChecked();
     expect(screen.getAllByText('Uses the stretch resolved from Hα.')).toHaveLength(2);
@@ -43,8 +43,7 @@ describe('StackColorProcessingControls', () => {
     renderWithQueries(<StackColorProcessingControls label="Foraxx SHO" roles={['ha', 'oiii', 'sii']}
       palette="foraxx-sho" applied={automaticNarrowbandProcessing(defaultColorProcessing(['ha', 'oiii', 'sii']))}
       backgrounds={{}} protections={{}} fallbacks={{}} deconvolutions={{}} disabled={false} onApply={vi.fn()} />);
-    await userEvent.click(screen.getByText('Processing stack'));
-    await userEvent.click(screen.getByText('Stretch and narrowband balance'));
+    await openProcessingFlow();
     expect(screen.getByRole('combobox', { name: 'Narrowband channel stretch' })).toBeDisabled();
     expect(screen.getByRole('checkbox', { name: 'Narrowband balance' })).toBeDisabled();
     expect(screen.getByRole('spinbutton', { name: 'OIII boost' })).toBeDisabled();
@@ -53,7 +52,6 @@ describe('StackColorProcessingControls', () => {
   });
 
   it("follows each channel card's deconvolution and RC-Astro steps by default", async () => {
-    const user = userEvent.setup();
     const onApply = vi.fn();
     server.use(
       http.get('/api/tools/rc-astro', () => HttpResponse.json({ success: true, data: {
@@ -67,7 +65,7 @@ describe('StackColorProcessingControls', () => {
       backgrounds={{}} protections={{}} fallbacks={{}} deconvolutions={{}}
       channelProcessing={{ ha: { rc_astro: { steps: [{ tool: 'bxt', parameters: {} }] } } }}
       disabled={false} onApply={onApply} />);
-    await user.click(screen.getByText('Processing stack'));
+    await openProcessingFlow();
     const mode = screen.getByRole('radiogroup', { name: 'Deconvolution and RC-Astro steps' });
     expect(within(mode).getByRole('radio', { name: 'From each channel card' })).toBeChecked();
     expect(await screen.findByText(
@@ -75,10 +73,10 @@ describe('StackColorProcessingControls', () => {
       'Changing a card makes this preview out of date.'
     )).toBeInTheDocument();
     // Each lane says what its card applied, in place of the tool editors.
-    const ha = screen.getByRole('region', { name: 'Hα input stretch stack' });
+    const ha = screen.getByRole('region', { name: 'Hα input linear processing' });
     expect(within(ha).getByText('From its channel card: BlurXTerminator.')).toBeInTheDocument();
     expect(within(ha).queryByRole('region', { name: 'Hα input deconvolution' })).not.toBeInTheDocument();
-    const oiii = screen.getByRole('region', { name: 'OIII input stretch stack' });
+    const oiii = screen.getByRole('region', { name: 'OIII input linear processing' });
     expect(within(oiii).getByText('Its channel card applied no deconvolution or RC-Astro steps.'))
       .toBeInTheDocument();
   });
@@ -102,7 +100,7 @@ describe('StackColorProcessingControls', () => {
       backgrounds={{}} protections={{}} fallbacks={{}} deconvolutions={{}}
       channelProcessing={{ ha: { rc_astro: { steps: [{ tool: 'bxt', parameters: {} }] } } }}
       disabled={false} onApply={onApply} />);
-    await user.click(screen.getByText('Processing stack'));
+    await openProcessingFlow();
     await user.click(screen.getByRole('radio', { name: 'Set in this build' }));
     expect(screen.getByRole('radio', { name: 'Set in this build' })).toBeChecked();
     expect(screen.getByText('Each input runs the deconvolution and RC-Astro steps set in its lane below.'))
@@ -117,7 +115,6 @@ describe('StackColorProcessingControls', () => {
   });
 
   it('shows what a build that followed the cards ran, and what a card applies now', async () => {
-    const user = userEvent.setup();
     server.use(
       http.get('/api/tools/rc-astro', () => HttpResponse.json({ success: true, data: {
         available: true, tools: [
@@ -144,20 +141,20 @@ describe('StackColorProcessingControls', () => {
         sii: { rc_astro: bxt },
       }}
       disabled={false} onApply={vi.fn()} />);
-    await user.click(screen.getByText('Processing stack'));
-    const ha = screen.getByRole('region', { name: 'Hα input stretch stack' });
+    await openProcessingFlow();
+    const ha = screen.getByRole('region', { name: 'Hα input linear processing' });
     expect(await within(ha).findByText(
       'From its channel card: BlurXTerminator. ' +
       'The card now applies: BlurXTerminator, NoiseXTerminator.'
     )).toBeInTheDocument();
     // OIII's card is unchanged: the lane shows what ran, with the measured
     // PSF its deconvolution used, read-only.
-    const oiii = screen.getByRole('region', { name: 'OIII input stretch stack' });
+    const oiii = screen.getByRole('region', { name: 'OIII input linear processing' });
     expect(within(oiii).getByText('From its channel card: deconvolution.')).toBeInTheDocument();
     const summary = within(oiii).getByRole('region', { name: 'OIII input deconvolution' });
     expect(summary).toHaveTextContent('PSF FWHM 3.25 px');
     expect(within(summary).queryByRole('checkbox')).not.toBeInTheDocument();
-    const sii = screen.getByRole('region', { name: 'SII input stretch stack' });
+    const sii = screen.getByRole('region', { name: 'SII input linear processing' });
     expect(within(sii).getByText(
       'Its channel card applied no deconvolution or RC-Astro steps. ' +
       'The card now applies: BlurXTerminator.'
@@ -165,20 +162,18 @@ describe('StackColorProcessingControls', () => {
   });
 
   it('says the inputs run no tools when no channel card applied any', async () => {
-    const user = userEvent.setup();
     renderWithQueries(<StackColorProcessingControls label="RGB" roles={['red', 'green', 'blue']}
       applied={defaultColorProcessing(['red', 'green', 'blue'])}
       backgrounds={{}} protections={{}} fallbacks={{}} deconvolutions={{}}
       disabled={false} onApply={vi.fn()} />);
-    await user.click(screen.getByText('Processing stack'));
+    await openProcessingFlow();
     expect(screen.getByText(
       'No channel card has deconvolution or RC-Astro steps applied, so the inputs run none.'
     )).toBeInTheDocument();
-    expect(screen.getByText(/Tools from channel cards/)).toBeInTheDocument();
+    expect(screen.getAllByText(/Tools from channel cards/).length).toBeGreaterThan(0);
   });
 
   it('keeps the own settings of processing saved before following the cards existed', async () => {
-    const user = userEvent.setup();
     const saved = defaultColorProcessing(['red', 'green', 'blue']);
     delete saved.input_processing;
     saved.input_deconvolutions = { red: defaultDeconvolutionConfig() };
@@ -187,7 +182,7 @@ describe('StackColorProcessingControls', () => {
       backgrounds={{}} protections={{}} fallbacks={{}} deconvolutions={{}}
       channelProcessing={{ green: { deconvolution: defaultDeconvolutionConfig() } }}
       disabled={false} onApply={vi.fn()} />);
-    await user.click(screen.getByText('Processing stack'));
+    await openProcessingFlow();
     expect(screen.getByRole('radio', { name: 'Set in this build' })).toBeChecked();
     const red = screen.getByRole('region', { name: 'R input deconvolution' });
     expect(within(red).getByRole('checkbox', { name: 'Deconvolution' })).toBeChecked();
@@ -211,9 +206,9 @@ describe('StackColorProcessingControls', () => {
       applied={defaultColorProcessing(['red', 'green', 'blue'])}
       backgrounds={{}} protections={{}} fallbacks={{}} deconvolutions={{}}
       disabled={false} onApply={onApply} />);
-    await user.click(screen.getByText('Processing stack'));
+    await openProcessingFlow();
     await user.click(screen.getByRole('radio', { name: 'Set in this build' }));
-    const red = screen.getByRole('region', { name: 'R input stretch stack' });
+    const red = screen.getByRole('region', { name: 'R input linear processing' });
     await user.click(await within(red).findByRole('checkbox', { name: 'NoiseXTerminator' }));
     await user.click(screen.getByRole('button', { name: 'Apply processing stack' }));
     expect(onApply).toHaveBeenCalledWith(expect.objectContaining({
@@ -251,9 +246,9 @@ describe('StackColorProcessingControls', () => {
     const { unmount } = renderWithQueries(
       <StackColorProcessingControls {...props} roles={[...props.roles]} />
     );
-    await user.click(screen.getByText('Processing stack'));
+    await openProcessingFlow();
     await user.click(screen.getByRole('radio', { name: 'Set in this build' }));
-    const red = screen.getByRole('region', { name: 'R input stretch stack' });
+    const red = screen.getByRole('region', { name: 'R input linear processing' });
     await user.click(await within(red).findByRole('checkbox', { name: 'RC-Astro BlurXTerminator' }));
     const stars = within(red).getByRole('spinbutton', { name: 'Sharpen Stars' });
     await user.clear(stars);
@@ -293,7 +288,7 @@ describe('StackColorProcessingControls', () => {
       />
     );
 
-    await user.click(screen.getByText('Processing stack'));
+    await openProcessingFlow();
     const protection = screen.getByRole('checkbox', {
       name: 'Protect catalog emission from background fitting',
     });
@@ -340,7 +335,7 @@ describe('StackColorProcessingControls', () => {
       applied={applied}
       backgrounds={{}} protections={{}} fallbacks={{}} deconvolutions={{}}
       disabled={false} onApply={onApply} />);
-    await user.click(screen.getByText('Processing stack'));
+    await openProcessingFlow();
     const together = await screen.findByRole('region', { name: 'RC-Astro on the color channels together' });
     expect(within(together).queryByRole('checkbox', { name: 'StarXTerminator' })).toBeNull();
 
@@ -379,7 +374,7 @@ describe('StackColorProcessingControls', () => {
       applied={defaultColorProcessing([...roles])}
       backgrounds={{}} protections={{}} fallbacks={{}} deconvolutions={{}}
       disabled={false} onApply={onApply} />);
-    await user.click(screen.getByText('Processing stack'));
+    await openProcessingFlow();
     const together = await screen.findByRole('region', { name: 'RC-Astro on the color channels together' });
     await user.click(within(together).getByRole('checkbox', { name: 'BlurXTerminator' }));
     expect(within(together).queryByRole('checkbox', { name: 'Correct only' })).toBeNull();
@@ -419,7 +414,7 @@ describe('StackColorProcessingControls', () => {
       applied={applied}
       backgrounds={{}} protections={{}} fallbacks={{}} deconvolutions={{}}
       disabled={false} onApply={vi.fn()} />);
-    await user.click(screen.getByText('Processing stack'));
+    await openProcessingFlow();
     const together = await screen.findByRole('region', { name: 'RC-Astro on the color channels together' });
     const correctOnly = within(together).getByRole('checkbox', { name: 'Correct only' });
     expect(correctOnly).toBeChecked();
@@ -435,8 +430,7 @@ describe('green reduction without other narrowband options', () => {
     const onApply = vi.fn();
     renderWithQueries(<StackColorProcessingControls label="Foraxx SHO" roles={['ha', 'oiii', 'sii']} palette="foraxx-sho"
       applied={defaultColorProcessing(['ha', 'oiii', 'sii'])} backgrounds={{}} protections={{}} fallbacks={{}} deconvolutions={{}} disabled={false} onApply={onApply} />);
-    await userEvent.click(screen.getByText('Processing stack'));
-    await userEvent.click(screen.getByText('Stretch and narrowband balance'));
+    await openProcessingFlow();
     await userEvent.clear(screen.getByLabelText('Reduce green excess'));
     await userEvent.type(screen.getByLabelText('Reduce green excess'), '0.5');
     await userEvent.click(screen.getByRole('button', { name: 'Apply processing stack' }));
@@ -449,10 +443,77 @@ describe('RGB star reduction', () => {
     const onApply = vi.fn();
     renderWithQueries(<StackColorProcessingControls label="SHO" roles={['ha', 'oiii', 'sii', 'red', 'green', 'blue']} palette="sho" managesStars
       applied={defaultColorProcessing(['ha', 'oiii', 'sii', 'red', 'green', 'blue'])} backgrounds={{}} protections={{}} fallbacks={{}} deconvolutions={{}} disabled={false} onApply={onApply} />);
-    await userEvent.click(screen.getByText('Processing stack'));
+    await openProcessingFlow();
     await userEvent.clear(screen.getByRole('spinbutton', { name: 'RGB star reduction' }));
     await userEvent.type(screen.getByRole('spinbutton', { name: 'RGB star reduction' }), '0.4');
     await userEvent.click(screen.getByRole('button', { name: 'Apply processing stack' }));
     expect(onApply).toHaveBeenCalledWith(expect.objectContaining({ narrowband: expect.objectContaining({ star_reduction: 0.4 }) }));
   });
+});
+
+
+describe('processing flow', () => {
+  it('opens with an ordered compact overview and retains edits in closed steps', async () => {
+    const onApply = vi.fn();
+    renderWithQueries(<StackColorProcessingControls label="SHO" roles={['ha', 'oiii', 'sii']} automaticNarrowband managesStars stars="automatic" resolvedStars="rgb"
+      applied={null} backgrounds={{}} protections={{}} fallbacks={{}} deconvolutions={{}} disabled={false} onApply={onApply} />);
+    await userEvent.click(screen.getByText('Processing stack'));
+    const flow = screen.getByRole('list', { name: 'Color processing flow' });
+    const steps = Array.from(flow.querySelectorAll(':scope > li > details'));
+    expect(steps.map((step) => step.getAttribute('aria-label'))).toEqual([
+      'Prepare inputs', 'Process linear color', 'Stretch and narrowband balance', 'Combine and restore stars', 'Finish RGB',
+    ]);
+    expect(steps.every((step) => !(step as HTMLDetailsElement).open)).toBe(true);
+    expect(within(flow).getByText('Automatic → RGB stars · RGB reduction 0')).toBeVisible();
+    await userEvent.click(screen.getByText('Stretch and narrowband balance'));
+    const boost = screen.getByRole('spinbutton', { name: 'OIII boost' });
+    await userEvent.clear(boost); await userEvent.type(boost, '1.5');
+    await userEvent.click(screen.getByText('Stretch and narrowband balance'));
+    expect(boost).not.toBeVisible();
+    await userEvent.click(screen.getByText('Combine and restore stars'));
+    const reduction = screen.getByRole('spinbutton', { name: 'RGB star reduction' });
+    await userEvent.clear(reduction); await userEvent.type(reduction, '0.4');
+    await userEvent.click(screen.getByText('Combine and restore stars'));
+    await userEvent.click(screen.getByRole('button', { name: 'Apply processing stack' }));
+    expect(onApply).toHaveBeenCalledWith(expect.objectContaining({ narrowband: expect.objectContaining({
+      star_reduction: 0.4, balance: expect.objectContaining({ oiii_boost: 1.5 }),
+    }) }));
+  });
+
+  it('puts natural emission blending after calibration and omits the narrowband-only setup', async () => {
+    renderWithQueries(<StackColorProcessingControls label="RGB + emission" roles={['red', 'green', 'blue', 'ha', 'oiii']} combination="emission"
+      applied={null} backgrounds={{}} protections={{}} fallbacks={{}} deconvolutions={{}} disabled={false} onApply={vi.fn()} />);
+    await openProcessingFlow();
+    expect(screen.queryByRole('option', { name: 'Automatic narrowband' })).not.toBeInTheDocument();
+    const subtraction = screen.getByRole('group', { name: 'Subtract continuum' });
+    const linear = screen.getByRole('group', { name: 'Process linear color' });
+    expect(within(subtraction).getByRole('combobox', { name: 'Continuum mode' })).toBeVisible();
+    expect(within(subtraction).queryByRole('spinbutton', { name: 'Hα emission amount' })).toBeNull();
+    expect(within(linear).getByRole('spinbutton', { name: 'Hα emission amount' })).toBeVisible();
+    expect(within(linear).getByRole('region', { name: 'Color calibration' })).toBeVisible();
+  });
+
+  it('keeps RGB reduction inactive for native narrowband stars without discarding the saved value', async () => {
+    const processing = automaticNarrowbandProcessing(defaultColorProcessing(['ha', 'oiii']));
+    processing.narrowband!.star_reduction = 0.4;
+    renderWithQueries(<StackColorProcessingControls label="HOO" roles={['ha', 'oiii']} managesStars stars="narrowband"
+      applied={processing} backgrounds={{}} protections={{}} fallbacks={{}} deconvolutions={{}} disabled={false} onApply={vi.fn()} />);
+    await openProcessingFlow();
+    expect(screen.getByRole('spinbutton', { name: 'RGB star reduction' })).toBeDisabled();
+    expect(screen.getByRole('spinbutton', { name: 'RGB star reduction' })).toHaveValue(0.4);
+    expect(screen.getByText('Narrowband stars · RGB reduction inactive')).toBeVisible();
+  });
+});
+
+
+it('separates continuum references from mapped stretches and places structure blending with restored stars', async () => {
+  renderWithQueries(<StackColorProcessingControls label="SHO + broadband" roles={['ha', 'oiii', 'sii', 'red', 'green', 'blue']} combination="broadband_structure" managesStars stars="rgb"
+    applied={null} backgrounds={{}} protections={{}} fallbacks={{}} deconvolutions={{}} disabled={false} onApply={vi.fn()} />);
+  await openProcessingFlow();
+  const stretch = screen.getByRole('group', { name: 'Stretch and narrowband balance' });
+  expect(within(stretch).getAllByRole('region')).toHaveLength(3);
+  expect(within(stretch).queryByRole('region', { name: 'R input stretch stack' })).toBeNull();
+  const combine = screen.getByRole('group', { name: 'Combine and restore stars' });
+  expect(within(combine).getByRole('spinbutton', { name: 'Broadband structure amount' })).toBeVisible();
+  expect(within(screen.getByRole('group', { name: 'Subtract continuum' })).queryByRole('spinbutton', { name: 'Broadband structure amount' })).toBeNull();
 });

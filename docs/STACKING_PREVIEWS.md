@@ -1489,6 +1489,47 @@ job journal and schedules waiting jobs from the saved processing settings.
 A run interrupted by two consecutive restarts, or one that cannot be
 restored, stays stopped. The card shows the reason.
 
+## Follow color processing steps
+
+Open a color card's **Processing stack**. **Setups** stays at the top; the
+numbered steps below show the current choices. Expand a step to edit it.
+Closing a step keeps your edits, and applying a saved setup fills the steps
+without starting a build.
+
+![Numbered color processing steps with saved setups above the flow](stack-color-flow-desktop.png)
+
+- **Prepare inputs** chooses the channel-card tools and background correction.
+  Expand **Per-channel tools** to inspect or override individual channels.
+- **Subtract continuum** appears for combined recipes. It contains the linear
+  fit, manual weights and advanced validation/export settings.
+- **Process linear color** separates the color/nebula branch from the RGB-star
+  branch. RGB BXT/NXT runs before Gaia and StarXTerminator. Natural RGB/LRGB
+  emission amounts are here, after color calibration and before stretching.
+- **Stretch and narrowband balance** contains physical narrowband stretches,
+  balance, star masks and green reduction. RGB/LRGB cards show **Stretch
+  channels** instead. Continuum-reference channels have no stretch lane here.
+- **Combine and restore stars** contains broadband structure blending and RGB
+  star reduction. Its summary shows the selected star policy and the resolved
+  result when available. RGB reduction is disabled for explicit narrowband or
+  no-star choices; its saved amount is retained.
+- **Finish RGB** contains additional output stretch stages after composition.
+
+Only the steps for the current recipe appear. The narrowband-only built-in
+setup is offered on narrowband cards. Click **Apply processing stack** to
+render the draft, or **Revert edits** to restore the applied settings.
+
+The linear-color step shows the nebula and RGB-star branches separately. This
+example uses edited BXT sharpening and halo values from a saved setup.
+
+![Separate narrowband-nebula and RGB-star processing branches](stack-color-linear-branches.png)
+
+On a phone, steps and controls wrap to the card's width:
+
+<p>
+  <img src="stack-color-flow-phone.png" alt="Color processing overview on a phone" width="350">
+  <img src="stack-color-balance-phone.png" alt="Expanded narrowband balance and stretch controls on a phone" width="301">
+</p>
+
 ## Named processing setups
 
 Both processing editors can save their parameters under a name and load them
@@ -1712,7 +1753,7 @@ narrowband balance controls.
 
 ### Sharpen RGB stars with BlurXTerminator
 
-Open the narrowband card's **Processing stack → RGB star processing**. Enable
+Open the narrowband card's **Processing stack → Process linear color → RGB star processing**. Enable
 **RC-Astro BlurXTerminator** and adjust **Sharpen Stars**, or add NoiseXTerminator. These
 steps run on the linear RGB branch before Gaia calibration and
 StarXTerminator. They apply when **Stars** uses RGB. The nebula keeps its own
@@ -1728,7 +1769,7 @@ appears when an L stack exists. Choose exact stacks under that card's
 **Custom combination**; broadband and narrowband exposures may differ.
 Ordinary RGB/LRGB and narrowband cards retain their current recipe.
 
-Open **Processing stack → Continuum subtraction**:
+Open **Processing stack → Subtract continuum**:
 
 - **Automatic** fits isolated stars on aligned linear inputs. R supplies the
   Ha/SII reference; G and B supply independently fitted OIII references.
@@ -2441,7 +2482,8 @@ not reconstruct clipped flux.
 
 ### Reduce RGB stars
 
-Open a narrowband card's **Processing stack** and adjust **RGB star reduction**.
+Open a narrowband card's **Processing stack → Combine and restore stars** and
+adjust **RGB star reduction**.
 It applies when **Stars** resolves to RGB, after BXT/NXT, Gaia calibration and
 SXT extraction. Keep 0 for the original extracted stars; start around 0.3–0.4
 for a gentler star field. Higher amounts make stars smaller and fainter and

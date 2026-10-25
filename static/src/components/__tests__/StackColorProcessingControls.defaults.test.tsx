@@ -1,3 +1,4 @@
+import { openProcessingFlow } from './processingFlowTestUtils';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -31,7 +32,7 @@ async function renderNewPreview() {
         channelProcessing={{}} disabled={false} onApply={vi.fn()} />
     </QueryClientProvider>
   );
-  await userEvent.click(screen.getByText('Processing stack'));
+  await openProcessingFlow();
   return {
     background: within(screen.getByRole('region', { name: 'Background extraction' }))
       .getByRole('checkbox', { name: 'Background extraction' }),
@@ -92,7 +93,7 @@ it('applies RGB-star BlurXTerminator independently of narrowband color tools', a
       applied={null} automaticNarrowband managesStars backgrounds={{}} protections={{}} fallbacks={{}}
       deconvolutions={{}} disabled={false} onApply={applied} />
   </QueryClientProvider>);
-  await userEvent.click(screen.getByText('Processing stack'));
+  await openProcessingFlow();
   const stars = await screen.findByRole('region', { name: 'RGB stars RC-Astro tools' });
   await userEvent.click(within(stars).getByRole('checkbox', { name: 'RC-Astro BlurXTerminator' }));
   await userEvent.click(screen.getByRole('button', { name: 'Apply processing stack' }));
@@ -109,7 +110,7 @@ it('offers Automatic, Manual and Off only on an explicit combined recipe', async
   render(<QueryClientProvider client={client}><StackColorProcessingControls label="SNR G132 RGB + emission"
     roles={['red','green','blue','ha','oiii']} combination="emission" applied={null}
     backgrounds={{}} protections={{}} fallbacks={{}} deconvolutions={{}} disabled={false} onApply={applied} /></QueryClientProvider>);
-  await userEvent.click(screen.getByText('Processing stack'));
+  await openProcessingFlow();
   expect(screen.getByRole('combobox', { name: 'Continuum mode' })).toHaveValue('automatic');
   await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Continuum mode' }), 'manual');
   await userEvent.click(screen.getByRole('button', { name: 'Apply processing stack' }));
