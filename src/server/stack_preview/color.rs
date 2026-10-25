@@ -4177,6 +4177,7 @@ fn compose_color(
                     &resolved_backgrounds,
                     &reference_headers,
                     &progress,
+                    &gpu,
                     stop,
                 )
             })?;

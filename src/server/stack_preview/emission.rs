@@ -291,6 +291,7 @@ fn clipping_map(
     source: &StackColorSource,
     transform: seiza_stacking::SimilarityTransform,
     grid: (usize, usize),
+    gpu: &seiza_stacking::GpuOptions,
 ) -> Option<Vec<u8>> {
     let image = super::super::read_clipped(&super::super::clipped_path(
         root,
@@ -302,7 +303,7 @@ fn clipping_map(
     {
         image
     } else {
-        resample_to_reference(&image, grid.0, grid.1, transform).ok()?
+        resample_to_reference_with_gpu(&image, grid.0, grid.1, transform, gpu).ok()?
     };
     Some(
         aligned
@@ -325,6 +326,7 @@ pub(super) fn apply(
     backgrounds: &BTreeMap<StackColorRole, BackgroundFit>,
     headers: &[(String, seiza_fits::HeaderValue)],
     progress: &ColorProgressTracker<'_>,
+    gpu: &seiza_stacking::GpuOptions,
     stop: &ColorStop,
 ) -> Result<Option<LinearImage>, String> {
     let Some(config) = job.processing.as_ref().and_then(|p| p.emission.as_ref()) else {
@@ -376,6 +378,7 @@ pub(super) fn apply(
                 .copied()
                 .unwrap_or(seiza_stacking::SimilarityTransform::IDENTITY),
             grid,
+            gpu,
         ) {
             masks.insert(source.role, mask);
         }
@@ -932,6 +935,34 @@ pub(super) fn validate_natural_star_removal(
 mod tests {
     use super::super::tests::{channel, running_color_job};
     use super::*;
+
+    #[test]
+    fn continuum_clipping_maps_align_with_cpu_processing() {
+        let root = tempfile::tempdir().unwrap();
+        let source = channel(StackColorRole::Ha, "Ha", "ha", false);
+        let path = super::super::super::clipped_path(root.path(), &source.job_id, 0);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut pixels = vec![0.0; 16 * 12];
+        pixels[5 * 16 + 4] = 1.0;
+        let image = LinearImage::new(16, 12, 1, pixels).unwrap();
+        super::super::super::write_clipped(&path, Some(&image)).unwrap();
+        let transform = seiza_stacking::SimilarityTransform {
+            translation_x: 2.0,
+            ..seiza_stacking::SimilarityTransform::IDENTITY
+        };
+        let mask = clipping_map(
+            root.path(),
+            &source,
+            transform,
+            (16, 12),
+            &seiza_stacking::GpuOptions::cpu(),
+        )
+        .unwrap();
+        assert_eq!(mask[5 * 16 + 6], 1);
+        assert_eq!(mask[5 * 16 + 4], 0);
+        assert!(mask.contains(&0));
+    }
+
     fn setup(
         root: &FsPath,
         mode: ContinuumMode,
@@ -1008,6 +1039,7 @@ mod tests {
                 state,
                 job_id: &job.job_id,
             },
+            &seiza_stacking::GpuOptions::cpu(),
             &ColorStop {
                 cancel: Stop::new(),
             },
