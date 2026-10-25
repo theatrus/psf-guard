@@ -1419,10 +1419,11 @@ export type StackColorInputProcessing = 'own' | 'channels';
 
 export interface StackEmissionProcessing {
   mode: 'automatic' | 'manual' | 'off';
+  flux_calibration?: Record<string, unknown> | null;
   lines: Partial<Record<StackColorRole, { amount: number; coefficients: number[]; reference_flux_ratios: number[] }>>;
   saturation?: Partial<Record<StackColorRole, number>>;
   fit?: { maxStars?: number; minimumStars?: number; maxFractionalError?: number };
-  photometry?: { apertureRadius?: number; annulusInner?: number; annulusOuter?: number };
+  photometry?: { apertureRadius?: number; annulusInner?: number; annulusOuter?: number; maxPixelResidual?: number; psfMatching?: { targetFwhm?: number | null } | null };
   positive_contribution: boolean;
   broadband_amount: number;
 }
@@ -1431,8 +1432,12 @@ export interface StackContinuumResult {
   references: StackColorRole[];
   status: 'applied' | 'manual' | 'skipped' | 'disabled';
   detail: string;
-  plan?: { coefficients: number[]; referenceFluxRatios: number[]; origin: string } | null;
-  diagnostics?: { candidateStars: number; eligibleStars: number; sampledStars: number; usedStars: number; validationStars: number; validationFractionalRms: number | null; samplingStabilityRms: number | null; rejected: Record<string, number> } | null;
+  plan?: { coefficients: number[]; referenceFluxRatios: number[]; origin: string; psfMatching?: { targetFwhm: number; measuredFwhm: number[]; kernelSigma: number[] } | null } | null;
+  diagnostics?: { candidateStars: number; eligibleStars: number; sampledStars: number; usedStars: number; validationStars: number; validationFractionalRms: number | null; samplingStabilityRms: number | null; rejected: Record<string, number>; psfMatching?: { targetFwhm: number; measuredFwhm: number[]; kernelSigma: number[] } | null; pixelValidation?: { clippedStars?: number; clippedProfiles?: number; clippedMaxAbsoluteFraction?: number | null; stars: number; p90AbsoluteFraction: number; medianCoreFraction: number; medianHaloFraction: number; limit: number; accepted: boolean } | null } | null;
+  flux_cache_id?: string | null;
+  flux_unit?: string | null;
+  flux_fits_url?: string | null;
+  flux_report_url?: string | null;
   residual_fits_url?: string | null;
   residual_preview_url?: string | null;
   report_url?: string | null;
@@ -1446,7 +1451,9 @@ export interface StackColorProcessing {
     shared_stretch: boolean;
     /** Optional BXT/NXT on the RGB star branch before calibration and SXT. */
     rgb_star_processing?: RcAstroProcessing | null;
-    balance?: { has_sii: boolean; shadow_protection: number; oiii_boost: number; sii_boost: number; max_samples: number } | null;
+    green_reduction?: number;
+    star_reduction?: number;
+    balance?: { has_sii: boolean; shadow_protection: number; oiii_boost: number; sii_boost: number; max_samples: number; star_mask_radius?: number | null } | null;
   } | null;
   input_processing?: StackColorInputProcessing;
   background_extraction: StackBackgroundExtraction | null;

@@ -1,22 +1,8 @@
-> Implementation status: the paired narrowband worktrees implement shared
-> H-alpha stretching, display balance, automatic SHO/HOO selection, and RGB
-> star replacement on regular narrowband cards. The paired Seiza worktree now
-> implements continuum fitting and signed subtraction in Rust, C, Python and
-> the CLI. PSF Guard integration remains planned for a later linear stage.
-> Seiza stays unreleased until the complete feature set is ready.
-> The standalone HTML preview includes
-> exploratory controls and is not the application.
-
 # Color previews and channel processing
 
-Status: **Built**: color previews follow each channel card's deconvolution
-and RC-Astro steps by default, run them on each channel's own stack in the
-card's cache, and can run BlurXTerminator and NoiseXTerminator on the color
-channels together.
-**Built in the paired feature worktrees**: narrowband balance, automatic
-palettes, and RGB stars; Seiza continuum APIs and CLI. **Proposed in PSF Guard**:
-continuum subtraction and blending for broadband plus narrowband combinations,
-green reduction, and additional lightness choices.
+The paired draft implements channel-card processing reuse, color BXT/NXT,
+narrowband display balance, RGB stars, explicit combined recipes, continuum
+validation and optional calibrated flux exports. Seiza remains unreleased.
 Last updated: 2026-10-24
 
 A channel card can run deconvolution and the RC-Astro tools
@@ -274,514 +260,242 @@ optical system.
 
 ## Narrowband balance and RGB stars
 
-Give a new narrowband preview a useful initial color balance without asking
-the user to stretch H-alpha, OIII and SII independently. Keep **Narrowband
-balance** separate from photometric color calibration and from continuum
-subtraction. It changes the displayed contribution of emission channels;
-it does not measure their physical abundance or remove continuum.
+Seiza owns image mathematics. PSF Guard owns source selection, saved setups,
+tracked jobs, caches and the interface. See Seiza's
+`docs/design/color-composition.md` for the binding and numeric contracts.
 
-### Research and limits
+Ordinary narrowband cards support automatic SHO/HOO selection and independently
+selected Automatic, RGB, narrowband or no stars. Source availability resolves
+the automatic policy during preparation; the saved policy and resolved result
+are separate. Source changes mark results out of date. Missing policy fields
+preserve existing concrete palettes and narrowband stars.
 
-Research checked on 2026-10-24:
+The balanced setup stretches physical H-alpha/OIII/SII with H-alpha's resolved
+Auto-MTF (target median 0.2, shadows −2.8), then balances OIII/SII against
+H-alpha. Boosts start at 1 and shadow protection at 1. Foraxx retains its own
+dynamic mapping and bypasses shared H-alpha stretching and balance. Display
+balance never feeds linear photometry or continuum subtraction.
 
-- [Cosmic Photons' process descriptions](https://cosmicphotons.com/scripts/)
-  distinguish NarrowbandNormalization's channel balance from NBColourMapper's
-  layer mixing, which can also support continuum subtraction.
-- The [NarrowbandNormalization documentation package](https://www.cosmicphotons.com/pi-modules/narrowbandnormalization/nbnDocumentation20240816v010001.tar.gz),
-  listed in the author's [update manifest](https://www.cosmicphotons.com/pi-modules/narrowbandnormalization/updates.xri),
-  describes H-alpha as the reference and background-protected midtone curves.
-  It permits linear and nonlinear data, with Lightness restricted to nonlinear
-  data. The document is version 1.0, dated 2024-08-16; the manifest also lists
-  module 1.1. Do not claim parity with the installed process from these notes.
-- [NightPhotons' PhotometricContinuumSubtraction documentation](https://www.nightphotons.com/software/photometric-continuum-subtraction/)
-  describes fitting stellar fluxes on linear images, using one or more
-  broadband references, and applying the fitted weights to starless images
-  separately. Its starting limits are 400 stars and peak 0.8. The
-  [script source](https://github.com/charleshagen/pixinsight/blob/main/src/scripts/NightPhotons/PhotometricContinuumSubtraction.js)
-  inspected reports version 1.4.2. These are reference workflows, not new
-  dependencies or code to copy into PSF Guard.
+Balance can exclude circles around detected stars from its statistics. The
+optional radius is 1–64 common-grid pixels; blank includes stars. Detection is
+bounded to 4096 stars per physical plane. The union mask excludes samples and
+pixel-difference noise pairs, without changing output coverage. Reports record
+the detected-star count and excluded pixel count.
 
-The mathematical operations belong in Seiza. Its
-`docs/design/color-composition.md` records the numeric contracts and continuum APIs,
-failure cases, bindings and validation. PSF Guard owns source selection,
-setups, jobs, caches, diagnostics and this UI.
+**Reduce green excess** starts at 0. On bounded display RGB it applies
+`G' = G − amount × max(0, G − max(R, B))`, with amount in [0,1]. Red, blue and
+neutral pixels are unchanged. This is an aesthetic operation with no SCNR
+parity claim. It runs after mapping, before broadband structure and RGB stars.
 
-### Where the new steps run
-
-The existing processing order remains the compatibility path for existing
-previews. A new **Balanced narrowband** setup uses this order:
-
-1. Load the chosen linear stacks and measure registration on their original
-   pixels, as today.
-2. Follow each channel card's deconvolution and RC-Astro steps. Reuse the
-   card's native-grid results, then correct backgrounds and align channels.
-3. Select the common valid area for statistics. Prepare the physical channels
-   for display, recording every affine scale and offset. This is display
-   preparation, not the new narrowband balance.
-4. Run optional BXT/NXT on the aligned linear color channels, as today.
-5. Apply one shared stretch to the physical H-alpha/OIII/SII planes, resolving
-   its curve once from H-alpha. Independent auto stretches are an advanced
-   alternative, visibly marked **Separate channel stretches**.
-6. Resolve and apply **Narrowband balance** to OIII and SII with H-alpha as
-   reference. Keep the physical role names even when a palette changes.
-7. Map the balanced channels through a static palette, then run optional
-   green reduction and output stretch stages. Preserve HOO's identical OIII
-   copies when no synthetic-green mix is requested.
-8. Crop and publish the preview with its resolved settings and warnings.
-
-The first version supports static palettes, including HOO and all six
-three-channel assignments. Foraxx already has its own dynamic display
-mapping. Keep the new balance off for Foraxx until a real-data comparison
-establishes a useful combination; explain this when the palette changes.
-Never interpret Foraxx's mixed RGB channels as three physical filters.
-
-This setup deliberately places balance in the display branch. The core can
-support linear data, but a nonlinear balance must never feed continuum fitting,
-photometry, stack accumulation or a download described as linear.
-
-### Starting settings
-
-The balanced narrowband column describes the initial recipe. Combined-image
-settings remain proposed; broader real-frame tuning is still needed:
-
-| Setting | Balanced narrowband | RGB/LRGB | LRGB + emission |
-| --- | --- | --- | --- |
-| Channel tools | From each channel card | Existing behavior | From each channel card, subject to linear-input checks |
-| Background correction | Existing automatic protected model | Existing behavior | Same correction on the fit and subtraction inputs |
-| Color calibration | Off | Existing Gaia calibration | Gaia on the broadband RGB branch only |
-| Stretch | Shared H-alpha Auto-MTF, median 0.2, shadows −2.8 | Existing behavior | Shared stretch after linear emission blending |
-| Narrowband balance | On, reference H-alpha | Off | Off for natural color; optional on the mapped SHO branch |
-| OIII / SII boost | 1.0 / 1.0 | Not applicable | 1.0 / 1.0 on a mapped branch |
-| Shadow protection | 1.0, the median background point | Not applicable | Same on a mapped branch |
-| Green reduction | 0, optional after mapping | Off | Off for natural color |
-| Lightness replacement | Off; defer additional choices | Not applicable | Existing LRGB luminance step |
-| Continuum subtraction | Off without broadband references | Off | Automatic, with a visible outcome for each line |
-
-Do not automatically remove stars or require an RC-Astro licence. Report when
-stars are included in balance statistics. A later option can measure diffuse
-signal through a star mask or use existing starless results; those modes need
-their own validation and cache identity.
-
-### Setups and compatibility
-
-Add an explicit, optional `narrowband_balance` configuration and a separate
-shared-input-stretch configuration to `StackColorProcessing`. Missing fields
-mean the exact current behavior. Disabled configurations serialize as absent,
-so an old request keeps its job id. Do not reinterpret `input_stretches` as a
-shared resolved curve: identical Auto-MTF settings currently resolve separately
-on narrowband inputs, which is a different operation.
-
-Offer **Balanced narrowband** as a built-in setup. On a fresh installation,
-the default Color setup may select it for static narrowband cards through an
-explicit composition profile. An existing default Color setup, edited or
-unedited, keeps its behavior. Users can opt in on a card and save that setup.
-Do not rewrite the all-role `default_color.json` or decide a setup's meaning
-from its display name. The current single default setup needs an explicit
-per-composition profile before different automatic RGB and narrowband defaults
-can ship. **Reset defaults** uses the user's selected default profile.
-Use a recorded configuration migration marker to distinguish a fresh install.
-If that distinction is unavailable, keep the current default and offer the
-preset explicitly; an absent or unedited saved setup does not prove freshness.
-
-Teach `colorSetupForRoles` and server setup validation about the new fields
-together: the current mapper enumerates fields and would otherwise drop them.
-Preserve an inapplicable profile in a saved setup, but do not execute it on an
-RGB card. Explain **Narrowband balance applies to narrowband palettes**.
-
-### Processing stack UI
-
-The following placement supersedes the first editor-only mockup. Keep the
-existing RGB, LRGB and narrowband cards under **Combine channel stacks**.
-There is no additional **Combination** or **Result** selector. Put these
-three controls in the narrowband card's header:
-
-| Header control | Choices | New automatic setup |
-| --- | --- | --- |
-| Palette | Automatic, existing static palettes, existing Foraxx palettes | Automatic: SHO with usable SII, otherwise HOO |
-| Stars | Automatic, RGB, Narrowband, None | Automatic: RGB when usable, otherwise Narrowband with the reason shown |
-| Edges | Existing crop choices | Existing default |
-
-Show the resolved result below them, for example **Automatic → SHO nebula +
-RGB stars**. Explicit choices take precedence: SHO without SII needs attention;
-it does not silently become HOO. RGB without usable RGB inputs or star
-separation needs attention; it does not silently use narrowband stars.
-
-**Processing stack** remains collapsed until opened. Its existing setup picker
-and **Save as…** stay at the start of the editor. Tool choices, background
-correction, stretches, balance and RGB output stages stay inside this editor.
-Put continuum mode, fitted scales, shared/separate stretch selection, boosts,
-shadow protection, green reduction and star-separation settings under focused
-details sections. They are not extra header dropdowns. Selecting a setup changes
-processing settings; Palette, Stars, Edges and selected sources remain choices
-of this color card. Show an existing result's actual settings, not new defaults.
-
-**Custom combination** stays collapsed below the editor. It lists **Nebula
-inputs** (H-alpha/OIII/SII) and **RGB star inputs** (R/G/B). Unique sources are
-shown as text. Show a source picker only when the role needs a choice. Use
-the same stack families and exposure groups as current selectors; a short RGB
-exposure need not match a long narrowband exposure. L does not supply RGB stars.
-Source selection, concrete palette, star policy and processing stay associated
-with the card across reloads and refreshes. The new **LRGB + emission** result
-gets its own card when supported; it is not an SHO palette choice.
-
-Keep **Processing stack**, **Deconvolution and RC-Astro**, the channel lanes,
-named setups, **Save as…**, and **Apply processing stack**. Add controls in
-their processing order rather than opening another editor:
-
-- **Channel stretch**: **Shared, reference Hα** or **Separate channel
-  stretches**. Shared mode edits one stretch stack. Keep the separate draft
-  when switching back, and never silently replace custom channel settings.
-- **Narrowband balance**: an on/off switch, OIII and SII boosts, and
-  **Shadow protection**. Put the reference and statistics in a collapsed
-  **Measured balance** section. Hide SII controls when the chosen palette
-  uses only H-alpha and OIII. A boost of 1 means no extra boost after balance.
-- **Green reduction**: an advanced output control, initially 0. Keep it
-  separate from OIII so the user knows it acts on displayed green.
-- The preview's status shows **Balanced to Hα**, **Off**, or **Skipped** with
-  the affected channel and reason. For a weak OIII measurement, write
-  **OIII balance skipped: too little signal above the background**. A
-  missing measurement does not establish that OIII emission is absent.
-
-Editing settings changes a draft. Applying it starts a tracked job and keeps
-the current image until the new one is ready. A later downsampled preview can
-give faster feedback using the same resolved full-frame plan; slider changes
-must not run full-frame work in a request handler or queue one job per event.
-Maintain image zoom and page scroll when details open or results arrive.
-
-The accompanying [processing UI study](narrowband-processing-ui.html) is an interactive design
-preview of the card header, collapsed editor and source choices in context.
-Its scenario selector sits outside the product card and is only a testing aid.
-Its outcomes and Build action are simulated; it does not process images.
-
-### Automatic narrowband with RGB stars
-
-This is a required supported result of the new automatic setup, not a later
-manual-only option. Palette and star source resolve independently. Automatic
-selects SHO when H-alpha, OIII and SII have usable sources, otherwise HOO when
-H-alpha and OIII do. It never invents SII or interprets broadband R as H-alpha.
-
-Automatic stars selects a complete, unambiguous R/G/B set when a configured
-star-separation tool can produce both a starless narrowband branch and RGB
-stars on the same grid. Respect explicitly selected sources. Reuse compatible
-tool artifacts, including a saved star-containing chain prefix, but do not
-assume that an existing starless output also supplies an RGB stars layer.
-When only narrowband exists, keep its stars and explain **RGB stars unavailable:
-no complete RGB source set**. With ambiguous RGB sources, offer the relevant
-picker in **Custom combination** and report the fallback. Missing tools or a
-failed separation also produce a visible fallback to narrowband stars in
-Automatic. Explicit RGB or None instead fails the new build and keeps the
-previous preview if separation cannot run.
-
-Build the automatic result in this order:
-
-1. Resolve the physical narrowband sources and any usable RGB star sources.
-   Register all required sources onto the same reference grid and retain
-   star-containing linear samples after channel tools/background correction.
-2. Measure optional continuum weights while the inputs still contain stars.
-   A failed optional fit in this automatic narrowband recipe leaves the
-   original narrowband signal in use and reports that continuum remains.
-   This differs from an explicitly requested emission-residual composite,
-   whose required line failures still need attention.
-3. Calibrate broadband RGB before extracting its stars. Produce a starless
-   narrowband branch and an RGB stars branch with the configured tool. Keep
-   their source revisions, masks, transfer and extraction settings. If the
-   continuum fit applies to starless inputs, validate and record their
-   association with the measured star-containing revisions.
-4. Stretch the starless narrowband channels with the shared H-alpha curve,
-   balance them, and map the resolved static palette. Foraxx uses its existing
-   mapping on this branch with the new balance off.
-5. Prepare the RGB stars with a consistent color-preserving display transform,
-   recombine them onto the mapped starless nebula, and run RGB output stages
-   on the complete image. This replaces narrowband stars; it does not add a
-   second set over a star-containing nebula. Validate mask edges and halos.
-
-Star source and continuum subtraction remain independent: choosing RGB stars
-does not blend broadband nebular structure or require a successful continuum
-fit. The automatic recipe attempts continuum fitting when usable references
-and valid linear measurements exist and the requested recipe can produce a
-starless nebula branch. If Automatic falls back to retaining narrowband stars,
-keep the original narrowband signal and report that continuum was retained
-too. Subtracting continuum from a star-containing image would otherwise change
-the very stars this fallback promises to keep. A later recipe that subtracts
-continuum while preserving narrowband stars must extract, preserve and restore
-that stars layer explicitly.
-
-Persist `palette_selection` and `star_selection` policies separately from the
-resolved palette and source roles. Proposed names are subject to API review.
-Resolve Automatic during job preparation, record why it chose each branch,
-and include the resolved plan and star-tool/model versions in cache identity.
-Record the relevant source-availability fingerprint as well: an added SII or
-RGB source can change an automatic result even when its previous source
-revisions did not change. Availability checks only mark the result out of date;
-they do not run star separation or image processing in a catalog request.
-Source updates can change an automatic HOO result to SHO or enable RGB stars;
-explicit choices do not change. Rebuild once the source changes settle, as
-current refresh does, and show what changed. Missing policy fields preserve
-the old concrete palette and narrowband stars. Do not add Automatic to Seiza's
-physical `NarrowbandPalette` enum: source selection is PSF Guard's job.
+An RGB-star branch optionally runs BXT/NXT on linear RGB, then the selected
+Gaia calibration and SXT. The RGB original and starless copy share the same
+color-preserving stretch before screen recombination. Gaia settings, its
+pixel-solve/catalog basis and RC-Astro/model versions participate in the RGB
+SXT cache identity. Disabling Gaia preserves the RGB processing branch.
 
 ## Subtract continuum for combined images
 
-Support two explicit results rather than treating LRGB and SHO as interchangeable:
+Combined cards are explicit recipes. Ordinary RGB, LRGB and narrowband cards
+keep their saved behavior. The **Custom combination** selector chooses exact
+source revisions independently across broadband and narrowband exposure groups.
 
-- **LRGB + emission** retains broadband colors and adds continuum-subtracted
-  H-alpha, OIII and SII residuals. This is the initial natural-color combined recipe. Start with an emission amount of 0.25 as an artistic preset, with
-  each line independently adjustable; validate that starting amount on real
-  data before shipping it.
-- **SHO + broadband** uses mapped line emission for the nebula, a separate
-  broadband-structure contribution, and optional RGB stars. Start that preset
-  with SHO structure alone and make the broadband amount explicit. Use the
-  same automatic/explicit RGB-stars path as the narrowband card. Never label
-  a star-containing RGB blend “RGB stars.”
+| Recipe | Linear base and references | Result |
+| --- | --- | --- |
+| RGB + emission | R grid; R for Ha/SII, fitted G+B for OIII | Broadband colors plus validated signed residual contributions |
+| LRGB + emission | L grid; same RGB references | RGB/emission blending followed by the existing L step |
+| Narrowband + broadband structure | Ha grid; same RGB references | Mapped starless residuals, explicit starless broadband amount and optional RGB stars |
 
-The request uses an explicit `combination` subtype (`emission` or
-`broadband_structure`) alongside its RGB/LRGB/narrowband kind and typed blend settings.
-Do not infer the result from the presence of seven input roles. Initially the
-user chooses a combined mode; the existing automatic first-color selection
-continues to choose LRGB, RGB or narrowband as documented. A combined result
-the user builds can then follow its sources through the existing refresh flow.
-
-Luminance L contributes structure. It is not the default continuum reference:
-its broad response mixes several lines. Start with R for H-alpha and SII,
-and a measured G/B composite for OIII. These are candidate sets, not fixed
-spectral coefficients. Fit G/B weights from the stars; do not hard-code a
-50/50 OIII continuum. Ambiguous sources or unknown filter roles require a
-choice in **Custom combination**. Broadband and narrowband exposures can
-differ substantially, so resolve exposure groups within each family rather
-than requiring all seven roles to share the existing factor-of-two band.
+Natural-color amounts start at 0.25 per line. Positive contribution starts on
+and changes only the display addition. Mapped broadband structure starts at
+0. L supplies luminance, not a continuum reference. No G/B coefficient is fixed
+at 50/50. These amounts are artistic choices, not line abundance measurements.
 
 ### Linear preparation and subtraction
 
-1. Resolve exact source revisions for the broadband and narrowband branches.
-   RGB + emission uses R's grid, LRGB + emission uses L's grid, and mapped
-   narrowband uses H-alpha's grid. Preserve contributing coverage masks.
-2. Keep the background-corrected, aligned linear samples before independent
-   percentile scaling and before any stretch. The current normalized-input
-   cache is too late to be the only input to this operation.
-3. Detect and match isolated, unsaturated stars. Measure local-background
-   aperture fluxes on the exact pixel revisions used for subtraction. Fit a
-   positive continuum scale, or a constrained nonnegative multi-reference
-   model. Reject outliers and check spatial and brightness-dependent residuals.
-4. Check PSF compatibility as well as registration. For an initial release,
-   skip automatic subtraction when stellar residuals fail validation rather
-   than sharpening or blurring the user's stacks without a recorded choice.
-   PSF-matched subtraction is a later explicit preparation step.
-5. Subtract the fitted continuum in linear light. Keep signed floating-point
-   residuals and coverage masks. Do not clip negative noise values, recenter
-   the residual by its median, or normalize each line to equal brightness.
-6. Convert residuals into the continuum reference's working units before
-   applying artistic amounts. For a single reference with fitted scale `a`,
-   that is `E/a`; the multi-reference plan records its composite reference
-   scale explicitly. Calibrate broadband RGB, transform residual units
-   consistently with the calibrated channel gains, and blend the line
-   contributions. Add L through
-   the existing luminance step. A nonnegative display contribution is an
-   explicit rendering choice; keep the signed residual separately.
-7. Stretch the combined natural-color result together. For mapped SHO, stretch
-   and balance the emission branch before its palette mapping, and then blend
-   the separately prepared broadband structure and optional stars.
+1. Resolve exact sources and register them on the reference grid. Retain
+   aligned, background-prepared linear samples before independent percentile
+   scaling or any stretch.
+2. Check original saturation evidence for every plane: a producer clipping map
+   or a physical ceiling in the exact working units. Image maxima and display
+   white points are not saturation evidence.
+3. If explicitly enabled, measure common unsaturated stellar widths and broaden
+   copies with normalized Gaussian kernels. Automatic target FWHM is 1.05 times
+   the largest median width. A manual target must be at least every measured
+   width, fit inside the aperture, and remain below two thirds of the sky
+   annulus inner radius (8 pixels with default photometry; hard limit 32).
+   No sharpening occurs. Propagate missing coverage
+   across the complete kernel support, invalidate unsupported edges, and dilate
+   clipping masks across that support.
+4. Measure isolated local-background-subtracted aperture fluxes, using radii
+   8/12/20 pixels. Search at most 4096 candidates independently of the 400 usable
+   star budget. Reject ineligible stars before sampling across brightness.
+   Fit a robust nonnegative through-origin model and audit its predictions
+   against the full eligible pool.
+5. Check held-out aperture residuals, spatial/brightness trends, registration,
+   conditioning and profile widths. Independently compare held-out pixel
+   profiles: sum absolute residuals above a three-sigma local noise allowance,
+   divided by NB stellar flux. The 90th percentile must be at most 0.15. Core
+   and halo signed fractions are reported separately so they cannot cancel
+   inside the absolute metric. Require at least three validation profiles.
+6. Subtract on those exact prepared samples. The plan records kernels and
+   derived source revisions, and replays the same preparation when reused.
+   Keep signed floating-point residuals and NaN coverage. Keep the separately
+   propagated background offset out of the stored scientific residual.
+7. For natural color, project residuals into reference units with the measured
+   stellar reference ratios. Run color BXT/NXT on the broadband base, calibrate
+   broadband RGB, apply its multiplicative gains to the added contribution,
+   add L when present, then stretch the composition together. BXT/NXT on this
+   lane precedes emission addition; it does not process the added residual.
+8. For a mapped recipe, subtract before SXT, prepare starless branches, stretch
+   and balance physical residuals, map the palette, reduce green if enabled,
+   blend the selected broadband structure amount, and restore RGB stars once.
 
-First-pass photometry requires star-containing linear channels. Combined
-recipes defer followed channel-card and color-channel StarXTerminator steps.
-Fit and subtract on exact aligned linear inputs before SXT, then prepare the
-nebula and RGB star branches. Never fit from starless pixels or silently reuse
-a plan across a tool that changes the source revision.
+Matching is an explicit Gaussian approximation. Equal equivalent FWHMs do not
+prove matched Moffat wings or cancellation of saturated stars. The independent
+pixel check still applies. Original broadband star pixels keep their own BXT
+option. Manual weights are explicitly unvalidated and require matching off in
+the host; automatic results never silently become manual results.
 
-Broadband filters also transmit emission lines. A stellar continuum fit alone
-does not correct that contamination. Without known transmission responses,
-describe the output as an **emission residual**, not a pure line-flux image.
-Do not infer throughput from filter names, exposure times, gain or bandwidth
-alone. A later throughput-aware solve can correct line attenuation explicitly.
+Natural RGB/LRGB combinations retain broadband stars. A channel-card SXT step
+therefore produces an actionable preparation error. Choose **Set in this
+build** and remove SXT, or use a mapped recipe with RGB-star restoration. Mapped
+recipes defer input SXT until after continuum subtraction.
 
-### Automatic outcomes and recovery
+### Outcomes and recovery
 
-**Continuum subtraction** offers **Automatic**, **Manual**, and **Off**.
-Automatic records an outcome for each requested line. Start with a 400 usable-star budget, after eligibility checks, and validate
-against the complete eligible pool (at most 4096 measured candidates); minimum usable stars, fit-error limits and PSF thresholds are
-provisional until synthetic and real-frame tests set them. Interpret any peak
-limit against a known saturation scale; the existing arbitrary percentile
-white point is not a sensor saturation level.
+**Automatic** records each accepted or skipped line. A skipped natural-color
+line is omitted and the broadband preview completes with warnings. A failed
+required mapped line stops the new build and retains the previous preview.
+**Manual** requires every coefficient; a blank optional OIII B/G ratio restores
+measured photometry. **Off** adds no natural-color emission and preserves the
+original narrowband signal in mapped recipes.
 
-Show **Continuum fit** with its reference channels, fitted scales, stars used,
-rejected stars, residual plot and any warnings. Provide a signed residual
-preview and download, plus the original narrowband preview for comparison.
-Manual requires every reference weight. A blank OIII stellar B/G ratio uses
-the measured ratio; if no ratio is measurable, enter one explicitly. Never
-report a manually overridden coefficient as fitted.
+Per-line results show weights, eligibility, training/held-out counts, aperture
+RMS, pixel validation and kernel resolution. Full JSON reports, signed residual
+FITS, previews and a lazy stellar residual plot remain available for failed
+builds as well as completed results.
 
-If one line fails in **LRGB + emission**, omit that line and show **Ready with
-warnings**, listing what was added and skipped. The unmodified broadband
-branch remains usable. Do not silently add the unsubtracted narrowband image.
-If a required SHO line fails in **SHO + broadband**, keep the previous result
-and mark the new build as needing attention; offer an explicit choice of a
-different palette or **Off**. Changing **Automatic** to **Off** explains that
-the original narrowband channels will be used, including their continuum.
+### Calibrated line-flux export
+
+A stellar fit alone produces an emission residual. Broadband filters can
+transmit the same lines. Optional **Calibrated line-flux export** requires a
+producer-supplied response calibration with exact sources, reference order,
+revision, line labels and common flux unit. Responses include exposure, gain,
+throughput, extinction and any doublet assumptions in the actual input units.
+Filter names and widths cannot supply these values.
+
+Seiza constructs `M[i,k] = NBresponse[i,k] − Σ a[i,j] BBresponse[i,j,k]`
+and solves `M F = residuals − residualZeroLevels` for one to three coupled lines. It rejects
+nonpositive or nearly cancelled diagonal response, rank/conditioning failures,
+stale sources, inconsistent matching targets and numeric overflow. Row-scaled
+conditioning and inversion preserve independent input gain units. Signed flux
+and common coverage remain intact.
+
+Optional residual covariance propagates as `M⁻¹ C M⁻ᵀ`. Missing covariance means
+unknown uncertainty. Coefficient/response uncertainty, unmodelled lines and
+spatial PSF errors are not included. Zero levels are explicit calibration inputs in residual sample units; the
+server never guesses them from a sky median or display baseline. Their
+uncertainty is also excluded unless supplied in the residual covariance.
+The sidecar report retains the complete
+calibration and plans. FITS declare the supplied BUNIT and calibrated-emission
+product. This scientific export does not replace the artistic preview inputs.
+Invalid requested calibration stops the build rather than exporting a partial
+or falsely calibrated result.
 
 ### Jobs and cache identity
 
-Retain the shared job line, stop controls, priority, worker leasing and
-`ComputePool`. Fit and image operations belong in the job runner. Add phases
-for **Measuring continuum**, **Subtracting continuum**, and **Balancing
-narrowband channels**; write all results atomically below the database slug.
+All image work runs in the existing tracked job with priority, worker leasing,
+ComputePool and stop controls. Generated artifacts are written atomically below
+the database slug. Registration and native channel tools remain reusable.
 
-Cache boundaries follow data dependence:
+The aligned raw-linear cache includes sources, background treatment, transforms
+and tools. Continuum cache identity includes exact source/mask revisions,
+fit/photometry/matching controls, manual coefficients and the Seiza output
+version. Amount changes reuse the fit and signed residual. Matching changes
+invalidate prepared measurements and subtraction. Flux artifacts have a
+separate identity containing every plan and calibration input. Completed-job
+reuse requires all referenced reports, previews, residuals and flux files.
 
-- Registration and native channel tools stay reusable across these choices.
-- Add an aligned linear cache before display normalization. Its key includes
-  sources, revisions, background correction, transforms, tools and the mask.
-- A continuum plan keys on those inputs, candidate references, fit options,
-  masks, any PSF preparation and the algorithm version. Persist the resolved
-  coefficients and diagnostics. A display crop may reuse it; a change to the
-  measurement region must resolve it again.
-- A display-balance plan keys on the prepared physical planes, shared or
-  separate stretch plans, statistics region, balance options and version.
-  A static palette permutation can reuse physical-channel balance.
-- The final result keys on all plans, blend settings, source family, crop,
-  output stages and the published Seiza output version. Keep dependencies in
-  the manifest so the janitor retains every referenced artifact.
+### Research and release boundary
 
+The workflow is informed by [Cosmic Photons' process descriptions](https://cosmicphotons.com/scripts/)
+and [NarrowbandNormalization documentation](https://www.cosmicphotons.com/pi-modules/narrowbandnormalization/nbnDocumentation20240816v010001.tar.gz),
+and by [NightPhotons' stellar continuum workflow](https://www.nightphotons.com/software/photometric-continuum-subtraction/).
+There is no third-party numerical-parity claim.
+[Photutils PSF matching](https://photutils.readthedocs.io/en/latest/user_guide/psf_matching.html)
+and [multi-wavelength matching research](https://arxiv.org/abs/1609.02006)
+explain why Gaussian width matching alone does not establish profile equality.
+[Continuum-removal calibration research](https://arxiv.org/abs/1110.5636)
+explains the need for response calibration and stellar-color assumptions.
 
-### Build the paired feature worktrees
+The paired draft prepares Seiza 0.43.0 with stacking/output 0.50.0. It remains
+unreleased. Use local Cargo path patches for paired development. Keep both PRs
+draft; publishing Seiza and resolving PSF Guard's registry lockfile require
+later release authorization. Do not commit a path-resolved development lockfile
+as a registry release resolution.
 
-The prototype currently depends on the new Seiza stacking API in version
-0.47.0. Build PSF Guard against the paired Seiza checkout with the local Cargo
-patch file generated for this worktree:
+Automatic continuum validation separately inspects isolated stellar candidates
+excluded for clipping/saturation. They never train the fit. Every inspected
+clipped profile must be measurable and below the same absolute residual limit;
+reports show their count and worst residual. A clean unsaturated held-out sample
+cannot conceal a clipped core or ring. This checks observed residuals and does
+not reconstruct clipped flux.
 
-```sh
-cargo build --config target/narrowband-local.toml
-```
+### Reduce the restored RGB star layer
 
-That file is a local development artifact under the ignored target directory.
-The development lockfile resolves Seiza to local paths. Before merging the
-PSF Guard dependency update, publish Seiza 0.43.0 (including seiza-stacking 0.47.0) and regenerate Cargo.lock
-against the registry. Do not publish the development lockfile as a release
-resolution. The implementation has no claim of numerical parity with the
-Cosmic Photons PixInsight script.
+`NarrowbandProcessing.star_reduction` defaults to 0 and is omitted from stored
+JSON at zero, preserving existing processing identities. A nonzero amount
+changes the final composition identity, with linear inputs, BXT and SXT still
+reusable. It applies only during RGB restoration, after mapping/green reduction
+and broadband-structure blending. Native stars and natural RGB/LRGB are unchanged.
 
+Seiza derives the display screen-star layer from the consistently stretched RGB
+original/starless pair. Its maximum RGB component supplies an intensity plane.
+Blend that plane toward a one-pixel cross erosion, then apply the resulting
+common gain to all three star components before screen recombination. This
+preserves layer RGB ratios and cannot brighten stars. Invalid neighbours and
+outer edges keep the unreduced layer; centre coverage remains unchanged.
+Zero follows the existing arithmetic bit for bit. This is display star-size/
+prominence reduction, not a change to a calibrated PSF or scientific artifact.
 
-### Real StarXTerminator validation
+### Real validation on Supergateway
 
-The RGB-star path was exercised on Supergateway with licensed RC-Astro 2.6.6,
-StarXTerminator ML11, using its CPU backend. The isolated server used central
-1024×1024 cutouts of existing Bubble Nebula R/G/B and Ha/OIII/SII masters;
-Seiza read the sources and PSF Guard registered all six planes onto Ha.
-The original masters and live catalog were not changed.
+The isolated validation registry used copied/binned completed Gecko Nebula
+LRGB+SHO, Cocoon LRGB+SHO, Triangulum LRGB+Ha, NGC7023 LRGB and SNR G132
+RGB/SHO masters. Fresh pixel solves succeeded, and Gaia calibrated the natural
+RGB/LRGB outputs and the restored RGB-star branches. No original masters or
+live catalog were modified. LRGB used real L masters.
 
-Explicit RGB, Automatic and None each completed through the normal tracked
-color-job API. The first RGB build ran SXT on RGB and the physical narrowband
-planes. Automatic resolved to RGB and reused both result IDs, with no further
-SXT invocation; its cached composition took about two seconds. None ran one
-narrowband separation and produced the starless preview. All three downloads
-were display FITS and reported applied OIII/SII balance.
+The additional pixel gates intentionally change these automatic outcomes:
 
-Full-coverage cropping retained 752×936 pixels (67.1%) with RGB stars, compared
-with 969×954 (88.2%) for the starless narrowband-only branch. This checks that
-RGB registration gaps affect the final crop. These images have different crop
-origins and sizes, so a direct pixel-by-pixel comparison needs their recorded
-crop regions. RGB star calibration reported no plate solve: the cutout fixture
-has no fresh pixel solve. This run verifies separation, recombination, caching,
-and coverage, rather than Gaia calibration or full-frame processing speed.
+| Field / line | Pixel p90, automatic target | Pixel p90, explicit 8 px | Clipped-core maximum at 8 px |
+| --- | --- | --- | --- |
+| Gecko Ha | 27.0% | 3.9% | 50.7% |
+| Gecko OIII | 29.6% | 1.0% | 48.4% |
+| Gecko SII | 23.8% | 0.8% | 48.3% |
+| Triangulum Ha | — | 4.3% | 41.7% |
+| Cocoon Ha / OIII / SII | — | 4.5% / 2.4% / 2.2% | 30.0% / 58.8% / 69.6% |
+| SNR G132 Ha | 22.0% | 6.1% | 84.0% |
+| SNR G132 OIII | 30.1% | 2.0% | 78.4% |
+| SNR G132 SII | 27.4% | 1.6% | 79.9% |
 
+All these tested emission lines were omitted from natural-color previews;
+required mapped builds stopped. Broader matching improved unsaturated profiles
+without recovering clipped cores. The gallery labels these as safety outcomes,
+not successful line enhancements. No calibrated response/zero-level data were
+available, so no physical line-flux calibration was invented.
 
-### Seiza continuum core in the paired draft
+A separate clean SNR G132 star comparison keeps continuum Off and broadband
+structure at 0. Licensed RC-Astro 2.6.6 ran BXT ML5 and SXT ML11 on CPU. BXT
+used Sharpen Stars 0.5 and Adjust Star Halos 0 before Gaia/SXT. BXT off/on and
+reduction 0/0.4 all completed on the same 4757×3156 crop. Reduction 0.4 reused
+the exact BXT and SXT artifact IDs and completed in 8.11 seconds. Native
+800×800 crops were rendered from display FITS with an identity transfer and
+visually inspected. The offline Dropbox gallery includes the actual requests,
+calibration/processing reports, checksums and display FITS.
 
-The Seiza draft now supplies `fit_continuum`, `measure_and_fit_continuum` and
-`subtract_continuum`, with C ABI, Python and CLI twins. Inputs are aligned,
-linear mono planes with stars. The core measures isolated aperture fluxes,
-fits nonnegative through-origin coefficients, and checks held-out residuals,
-saturation, PSF widths, alignment and conditioning. It returns a plan tied to
-exact prepared source revisions or an explicit skipped outcome. Subtraction
-retains signed samples and missing coverage without stretching or a pedestal.
-
-The current contract applies only to those exact revisions. It deliberately
-refuses a plan applied to a different starless revision; associating pre-removal
-and starless branches with validated flux equivalence remains host work.
-PSF Guard now retains exact aligned linear inputs, fits and subtracts them in
-tracked job phases, and exposes per-line outcomes and combined recipe cards.
-Subtraction precedes SXT; no association between a fitted star-containing
-revision and changed starless pixels is needed. Original narrowband cards
-continue to use their saved recipe.
-
-The prepared workspace version is Seiza 0.43.0 with stacking/output version
-0.49.0. Keep the Seiza PR in draft; do not merge, tag or publish until all work
-for the combined release is ready. PSF Guard's dependency and registry lockfile
-can be finalized only after that later publication.
-
-### SNR G132 full-field examples and remaining work
-
-The paired application also processed the newest ready SNR G132 R/G/B and
-Ha/OIII/SII masters, representing 100 h 4 min of integration. No separate L
-master was available. Seiza binned the 9576×6388 masters by two with matching
-WCS changes. An isolated Supergateway registry/cache supplied the resulting
-4788×3194 planes to the ordinary tracked color-job API. RGB, shared-stretch
-SHO without balance, balanced SHO, balanced SHO with RGB stars, and HOO with
-RGB stars all completed. The RGB-star examples used licensed SXT ML11 on CPU.
-They retained 98.2–98.9% of the binned field and were visually inspected. No
-BXT, NXT or extra green reduction was applied. Gaia calibration was disabled
-because the isolated fixture contained no fresh pixel solve. The original
-masters and live catalog were unchanged.
-
-A separate Seiza continuum check on star-containing, aligned linear planes
-exposed work still needed before automatic defaults are ready. With 400
-candidate positions, 341 Ha/R candidates were rejected for saturation, and
-Ha had too few valid stars. SII/R passed with only 12 training and three
-held-out stars; OIII/G+B failed the brightness-trend check. With the candidate
-budget raised to 1600 and all error/PSF/registration limits unchanged, Ha and
-SII failed brightness trends, while OIII/G+B passed with 530 training and 178
-held-out stars, at 6.3% validation fractional RMS. The experimental 65535
-working-unit saturation ceiling also needs a validated physical mapping after
-master calibration and normalization.
-
-These results prioritize candidate eligibility before the budget limit,
-brightness-range coverage and fit stability across sample budgets. SII's
-small-sample success is not evidence for a stable automatic result. Visual
-inspection of OIII's signed residual also shows local stellar residuals and
-negative cores: acceptable aperture flux errors do not prove pixel-level PSF
-cancellation. The color examples do not include continuum subtraction, and
-the grayscale residual examples have separate display stretches.
-
-The follow-up adds eligibility-before-budget sampling, broader-pool stability
-validation, producer clipping maps, exact linear caches and subtraction before
-SXT. Combined cards now expose explicit units, per-line outcomes, manual/off
-recovery, signed downloads and fit inspection. RGB star processing can apply
-licensed BXT before calibration and SXT. Keep the Seiza release on hold while
-the complete feature set is reviewed; the registry lockfile and hosted builds
-follow a later authorized publication.
-
-
-### Final SNR G132 combined-image validation
-
-The paired drafts were rerun with producer-derived clipping maps on the binned
-4788×3194 planes. Automatic fitting uses a fixed maximum of 4096 candidate
-positions independently of the usable-star budget, checks eligibility before
-sampling, and audits the brightness-spanning sample against the full eligible
-pool. No working-unit saturation ceiling was guessed.
-
-| Line | 400-star coefficients | Training / held out | Held-out RMS | Sample/full prediction RMS difference |
-| --- | --- | --- | --- | --- |
-| Ha / R | 0.04777995 | 293 / 96 | 10.22% | 0.077% |
-| OIII / G+B | 0.04377472, 0.04798876 | 278 / 92 | 1.98% | 0.176% |
-| SII / R | 0.05519169 | 298 / 100 | 5.46% | 0.066% |
-
-All three default fits and the 1600-star check passed without relaxing the
-PSF, registration, error or inlier limits. The final RGB + emission recipe
-completed with BXT on linear RGB, amounts 0.25 and a linked composition stretch
-while Gaia was off. The broader fit reused BXT and completed in 14 seconds.
-Automatic HOO + 20% starless broadband structure also completed, subtracting
-Ha/OIII before SXT and restoring one BXT-processed RGB star layer. The original
-masters and live catalogs were unchanged; no separate L master was available.
-LRGB + emission was exercised on the synthetic application/browser path.
-
-Licensed RC-Astro 2.6.6 used BXT ML5 and SXT ML11 on CPU. The BXT star option
-uses the vendor defaults, including Sharpen Stars 0.5, before RGB calibration
-and SXT. Native-pixel crops and full-field comparisons were visually inspected.
-The final signed Ha/OIII/SII FITS retain negative samples and coverage gaps and
-record LINEAR / EMISSION-RESIDUAL metadata. The offline gallery, exact requests,
-plans, stellar diagnostics and signed artifacts are in the user's Dropbox.
-
-The mapped automatic result still shows colored residual rings around some
-bright stars. An accepted aperture fit does not establish pixel-perfect local
-PSF or saturated-core cancellation. The gallery documents that limitation and
-retains an explicit continuum-Off comparison. These are emission residuals,
-with no pure-line-flux or third-party numerical-parity claim. Keep both PRs
-draft and Seiza unreleased while the complete release is reviewed.
+Flux calibration also requires exact `continuumCoefficients` snapshots in each
+plan's reference order. The server rejects a changed fit/manual coefficient
+before exporting flux: retained source revisions do not establish that the
+previous residual zero levels still apply. Update the explicit zero-level
+calibration and coefficient snapshots when the subtraction model changes.

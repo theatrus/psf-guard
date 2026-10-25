@@ -35,3 +35,11 @@ it('shows Off without suggesting unavailable fit evidence', async () => {
   expect(screen.queryByText('Review saturation evidence in the report')).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: 'Inspect stellar residuals' })).not.toBeInTheDocument();
 });
+
+it('explains a clipped-core rejection even when held-out profiles are clean', async () => {
+  mount({ role: 'ha', references: ['red'], status: 'skipped', detail: 'Clipped core residuals', clipping_maps: true,
+    diagnostics: { candidateStars: 30, eligibleStars: 20, sampledStars: 20, usedStars: 15, validationStars: 5, validationFractionalRms: 0.01, samplingStabilityRms: null, rejected: {},
+      pixelValidation: { stars: 5, accepted: false, p90AbsoluteFraction: 0.02, medianCoreFraction: 0, medianHaloFraction: 0, limit: 0.15, clippedStars: 2, clippedProfiles: 2, clippedMaxAbsoluteFraction: 0.8 } } });
+  await userEvent.click(screen.getByText(/Hα · Skipped/));
+  expect(screen.getByText(/Clipped stellar cores: 2 \/ 2 profiles checked · maximum absolute residual 80.0%/)).toBeInTheDocument();
+});

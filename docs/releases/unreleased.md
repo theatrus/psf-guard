@@ -20,6 +20,22 @@
   about every five seconds. The finished preview replaces it when processing
   completes; completed FITS downloads remain separate during a rebuild.
 
+- Narrowband previews can reduce the restored RGB stars independently of BXT.
+  Adjust **Processing stack → RGB star reduction** to make stars smaller and
+  fainter while preserving their color and the starless nebula. Zero preserves
+  the current result. BXT sharpening and halo controls remain configurable.
+
+- Combined color previews validate held-out stellar pixel profiles and can
+  explicitly match continuum PSFs with Gaussian broadening. Reports show
+  core/halo errors and the changed resolution. Narrowband controls also offer
+  star exclusions for balance statistics and green-excess reduction before
+  RGB stars are restored. Optional calibrated-response exports retain signed
+  line flux, exact source provenance and uncertainty assumptions.
+- RGB-star previews now honor the selected Gaia settings and separate their
+  SXT caches by those settings. Natural RGB/LRGB emission builds explain when
+  an inherited SXT step cannot run. Clearing the optional OIII B/G ratio
+  returns to measured photometry.
+
 - Narrowband previews can sharpen their RGB star branch with BlurXTerminator
   before star extraction. Open **Processing stack → RGB star processing**.
 - Custom **RGB + emission**, **LRGB + emission**, and **Narrowband + broadband

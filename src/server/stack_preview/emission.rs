@@ -47,6 +47,8 @@ pub struct EmissionProcessing {
     pub photometry: ContinuumPhotometryOptions,
     pub positive_contribution: bool,
     pub broadband_amount: f64,
+    /// Optional scientific export in calibrated physical units, independent of display amounts.
+    pub flux_calibration: Option<seiza_stacking::EmissionFluxCalibration>,
 }
 impl Default for EmissionProcessing {
     fn default() -> Self {
@@ -65,11 +67,18 @@ impl Default for EmissionProcessing {
             photometry: Default::default(),
             positive_contribution: true,
             broadband_amount: 0.0,
+            flux_calibration: None,
         }
     }
 }
 impl EmissionProcessing {
     pub(crate) fn validate(&self) -> Result<(), String> {
+        if self.mode == ContinuumMode::Automatic && self.photometry.max_pixel_residual.is_none() {
+            return Err("Automatic continuum subtraction requires pixel profile validation".into());
+        }
+        if self.mode == ContinuumMode::Manual && self.photometry.psf_matching.is_some() {
+            return Err("Use Automatic continuum mode for measured PSF matching, or disable matching before entering manual weights".into());
+        }
         if !self.broadband_amount.is_finite()
             || !(0.0..=1.0).contains(&self.broadband_amount)
             || self.lines.is_empty()
@@ -100,6 +109,14 @@ impl EmissionProcessing {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ContinuumLineResult {
     pub role: StackColorRole,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flux_cache_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flux_unit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flux_fits_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flux_report_url: Option<String>,
     pub references: Vec<StackColorRole>,
     pub status: String,
     pub detail: String,
@@ -214,6 +231,13 @@ fn write_linear(
                 seiza_fits::HeaderValue::String(
                     if path.file_name().is_some_and(|name| name == "residual.fits") {
                         "EMISSION-RESIDUAL"
+                    } else if path
+                        .parent()
+                        .and_then(|p| p.parent())
+                        .and_then(|p| p.file_name())
+                        .is_some_and(|name| name == "emission-flux")
+                    {
+                        "CALIBRATED-EMISSION"
                     } else {
                         "ALIGNED-INPUT"
                     }
@@ -377,6 +401,10 @@ pub(super) fn apply(
         };
         let mut result = ContinuumLineResult {
             role,
+            flux_cache_id: None,
+            flux_unit: None,
+            flux_fits_url: None,
+            flux_report_url: None,
             references: references.clone(),
             status: "disabled".into(),
             detail: "Continuum subtraction off".into(),
@@ -390,7 +418,9 @@ pub(super) fn apply(
             report_url: None,
         };
         if config.mode == ContinuumMode::Off
-            || (recipe == CombinedColorRecipe::Emission && settings.amount == 0.0)
+            || (recipe == CombinedColorRecipe::Emission
+                && settings.amount == 0.0
+                && config.flux_calibration.is_none())
         {
             results.push(result);
             continue;
@@ -499,6 +529,7 @@ pub(super) fn apply(
                 ContinuumFitOutcome::Fitted {
                     plan: ContinuumPlan {
                         schema_version: 1,
+                        psf_matching: None,
                         sources: sources.clone(),
                         coefficients: settings.coefficients.clone(),
                         reference_flux_ratios: ratios,
@@ -606,6 +637,76 @@ pub(super) fn apply(
             .stack_previews
             .update_color(&job.job_id, |current| current.continuum = results.clone());
     }
+    if let Some(calibration) = &config.flux_calibration {
+        let mut selected = Vec::new();
+        for name in &calibration.lines {
+            let index = results
+                .iter()
+                .position(|r| role_cache_name(r.role) == name)
+                .ok_or_else(|| {
+                    format!("Calibrated flux line {name} is not part of this combination")
+                })?;
+            if results[index].plan.is_none() {
+                return Err(format!("Calibrated flux export needs a validated residual for {name}; inspect the continuum report"));
+            }
+            selected.push(index);
+        }
+        let plans: Vec<_> = selected
+            .iter()
+            .map(|i| results[*i].plan.clone().unwrap())
+            .collect();
+        let flux_id = fingerprint(
+            &serde_json::to_vec(&(SEIZA_STACKING_OUTPUT_VERSION, &plans, calibration))
+                .map_err(|e| e.to_string())?,
+        );
+        let flux_directory = color_input_dir(root, input)
+            .join("emission-flux")
+            .join(&flux_id);
+        let residuals = selected
+            .iter()
+            .map(|i| {
+                let id = results[*i]
+                    .cache_id
+                    .as_deref()
+                    .ok_or("Continuum cache identity is missing")?;
+                crate::image_io::open_linear_frame(cache_dir(root, input, id).join("residual.fits"))
+                    .map(|f| f.image)
+                    .map_err(|e| e.to_string())
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let (fluxes, report) = seiza_stacking::solve_emission_flux(
+            &residuals.iter().collect::<Vec<_>>(),
+            &plans,
+            calibration,
+        )
+        .map_err(|e| format!("Calibrated flux export: {e}"))?;
+        let mut flux_headers = headers.to_vec();
+        flux_headers.retain(|(key, _)| !key.eq_ignore_ascii_case("BUNIT"));
+        flux_headers.push((
+            "BUNIT".into(),
+            seiza_fits::HeaderValue::String(report.unit.clone()),
+        ));
+        for (index, flux) in selected.iter().zip(fluxes) {
+            let result = &mut results[*index];
+            write_linear(
+                &flux_directory.join(format!("{}.fits", role_cache_name(result.role))),
+                &flux,
+                &flux_headers,
+                result.role,
+            )?;
+            let base = format!(
+                "/api/db/{}/stack-previews/color/{}/continuum/{}",
+                job.database_id,
+                job.job_id,
+                role_cache_name(result.role)
+            );
+            result.flux_cache_id = Some(flux_id.clone());
+            result.flux_unit = Some(report.unit.clone());
+            result.flux_fits_url = Some(format!("{base}/flux"));
+            result.flux_report_url = Some(format!("{base}/flux-report"));
+        }
+        write_json_atomic(&flux_directory.join("report.json"), &report)?;
+    }
     if recipe == CombinedColorRecipe::BroadbandStructure
         && results.iter().any(|r| r.status == "skipped")
     {
@@ -705,7 +806,18 @@ pub(super) fn artifacts_exist(root: &FsPath, job: &StackColorJob) -> bool {
             return false;
         }
         let directory = cache_dir(root, input, id);
-        directory.join("report.json").is_file()
+        let flux_exists = result.flux_cache_id.as_ref().is_none_or(|flux| {
+            super::super::validate_job_id(flux).is_ok() && {
+                let path = color_input_dir(root, input)
+                    .join("emission-flux")
+                    .join(flux);
+                path.join(format!("{}.fits", role_cache_name(result.role)))
+                    .is_file()
+                    && path.join("report.json").is_file()
+            }
+        });
+        flux_exists
+            && directory.join("report.json").is_file()
             && (result.residual_fits_url.is_none() || directory.join("residual.fits").is_file())
             && (result.residual_preview_url.is_none() || directory.join("preview.png").is_file())
     })
@@ -757,6 +869,26 @@ pub(super) async fn artifact(
     super::super::validate_job_id(input)?;
     super::super::validate_job_id(id)?;
     let directory = cache_dir(&ctx.stack_root, input, id);
+    if matches!(kind.as_str(), "flux" | "flux-report") {
+        let id = result.flux_cache_id.as_deref().ok_or(AppError::NotFound)?;
+        super::super::validate_job_id(id)?;
+        let directory = color_input_dir(&ctx.stack_root, input)
+            .join("emission-flux")
+            .join(id);
+        return if kind == "flux" {
+            stream_artifact(
+                directory.join(format!("{}.fits", role_cache_name(role))),
+                "application/fits",
+                Some(format!(
+                    "psf-guard-{}-calibrated-flux.fits",
+                    role_cache_name(role)
+                )),
+            )
+            .await
+        } else {
+            stream_artifact(directory.join("report.json"), "application/json", None).await
+        };
+    }
     match kind.as_str() {
         "fits" => {
             stream_artifact(
@@ -780,6 +912,20 @@ fn fingerprint(data: &[u8]) -> String {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+/// Natural combined recipes retain broadband stars; SXT has no restoration stage.
+pub(super) fn validate_natural_star_removal(
+    processing: &StackColorProcessing,
+) -> Result<(), AppError> {
+    if processing
+        .input_rc_astro
+        .values()
+        .any(|config| config.steps.iter().any(|step| step.tool == "sxt"))
+    {
+        return Err(AppError::BadRequest("RGB/LRGB with emission retains broadband stars and cannot use channel StarXTerminator. Choose Set in this build and remove SXT, or choose narrowband with RGB stars.".into()));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -947,6 +1093,70 @@ mod tests {
             .unwrap_err()
             .contains("previous result is retained"));
     }
+    #[test]
+    fn calibrated_flux_is_a_signed_scoped_export_and_keeps_display_amounts() {
+        let root = tempfile::tempdir().unwrap();
+        let (state, mut job, mut images) = setup(root.path(), ContinuumMode::Manual);
+        let baseline = run(&state, &job, root.path(), &mut images)
+            .unwrap()
+            .unwrap();
+        let initial = state.stack_previews.get_color(&job.job_id).unwrap();
+        let plan = initial.continuum[0].plan.as_ref().unwrap();
+        job.processing
+            .as_mut()
+            .unwrap()
+            .emission
+            .as_mut()
+            .unwrap()
+            .flux_calibration = Some(seiza_stacking::EmissionFluxCalibration {
+            revision: "response-v1".into(),
+            unit: "flux/pixel".into(),
+            lines: vec!["ha".into()],
+            sources: vec![plan.sources.clone()],
+            narrowband_response: vec![vec![1.0]],
+            continuum_coefficients: vec![vec![0.2]],
+            residual_zero_levels: vec![0.0],
+            reference_response: vec![vec![vec![0.5]]],
+            residual_covariance: None,
+        });
+        let combined = run(&state, &job, root.path(), &mut images)
+            .unwrap()
+            .unwrap();
+        assert_eq!(baseline.data, combined.data);
+        let saved = state.stack_previews.get_color(&job.job_id).unwrap();
+        assert!(artifacts_exist(root.path(), &saved));
+        let line = &saved.continuum[0];
+        assert_eq!(line.flux_unit.as_deref(), Some("flux/pixel"));
+        let directory = color_input_dir(root.path(), job.linear_input_id.as_deref().unwrap())
+            .join("emission-flux")
+            .join(line.flux_cache_id.as_deref().unwrap());
+        let flux = crate::image_io::open_linear_frame(directory.join("ha.fits")).unwrap();
+        assert!((flux.image.data[0] + 1.0 / 0.9).abs() < 1e-6);
+        assert!(flux.headers.iter().any(|(key, value)| key == "BUNIT"
+            && matches!(value,seiza_fits::HeaderValue::String(unit) if unit=="flux/pixel")));
+        let report: seiza_stacking::EmissionFluxReport =
+            serde_json::from_slice(&std::fs::read(directory.join("report.json")).unwrap()).unwrap();
+        assert!(report.flux_covariance.is_none());
+        assert_eq!(report.plans[0].coefficients, vec![0.2]);
+        std::fs::remove_file(directory.join("ha.fits")).unwrap();
+        assert!(!artifacts_exist(root.path(), &saved));
+    }
+
+    #[test]
+    fn natural_combined_sxt_intent_is_rejected_for_own_or_inherited_processing() {
+        let mut processing = StackColorProcessing::default();
+        let sxt =
+            serde_json::from_value(serde_json::json!({"steps":[{"tool":"sxt","parameters":{}}]}))
+                .unwrap();
+        processing.input_rc_astro.insert(StackColorRole::Red, sxt);
+        for mode in [ColorInputProcessing::Own, ColorInputProcessing::Channels] {
+            processing.input_processing = mode;
+            assert!(validate_natural_star_removal(&processing).is_err());
+        }
+        processing.input_rc_astro.clear();
+        assert!(validate_natural_star_removal(&processing).is_ok());
+    }
+
     #[test]
     fn failed_fit_reports_are_available_before_any_completed_manifest() {
         let root = tempfile::tempdir().unwrap();

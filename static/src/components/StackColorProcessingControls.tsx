@@ -69,7 +69,8 @@ function hasInvalidNumbers(processing: StackColorProcessing): boolean {
     ...Object.values(processing.input_stretches).flatMap((value) => value ?? []),
     ...processing.output_stretches,
   ];
-  return Object.values(processing.narrowband?.balance ?? {}).some((value) => typeof value === 'number' && !Number.isFinite(value))
+  return !Number.isFinite(processing.narrowband?.star_reduction ?? 0) || !Number.isFinite(processing.narrowband?.green_reduction ?? 0)
+    || Object.values(processing.narrowband?.balance ?? {}).some((value) => typeof value === 'number' && !Number.isFinite(value))
     || stages.some((stage) => Object.values(stage.model).some(
     (value) => typeof value === 'number' && !Number.isFinite(value)
   )) || Object.values(processing.input_deconvolutions).some((config) =>
@@ -642,7 +643,7 @@ export default function StackColorProcessingControls({
   const foraxx = palette === 'foraxx-sho' || palette === 'foraxx-hoo';
   const sharedNarrowband = narrowband && !foraxx && draft.narrowband?.shared_stretch;
   const changeNarrowband = (config: NonNullable<StackColorProcessing['narrowband']>) => setDraft((current) => {
-    if (!config.balance && !config.shared_stretch && !config.rgb_star_processing) {
+    if (!config.balance && !config.shared_stretch && !config.rgb_star_processing && (config.green_reduction ?? 0) === 0 && (config.star_reduction ?? 0) === 0) {
       const next = { ...current }; delete next.narrowband; return next;
     }
     return { ...current, narrowband: config };
@@ -704,12 +705,19 @@ export default function StackColorProcessingControls({
         Object.values(e.saturation ?? {}).some((v) => v === undefined || !Number.isFinite(v) || v <= 0)) {
         setError('Enter emission amounts from 0 to 5, structure from 0 to 1, and finite positive scales'); return;
       }
+      const target = e.photometry?.psfMatching?.targetFwhm;
+      if (target != null && (!Number.isFinite(target) || target <= 0 || target > Math.min(32, e.photometry?.apertureRadius ?? 8, (e.photometry?.annulusInner ?? 12) / 1.5))) { setError('Continuum target FWHM must fit inside the photometry aperture and below the sky annulus'); return; }
+      if (e.mode === 'manual' && e.photometry?.psfMatching) { setError('Disable PSF matching before using Manual continuum weights'); return; }
       if (e.mode === 'manual' && Object.entries(e.lines).some(([role, line]) => line?.coefficients.length !== (role === 'oiii' ? 2 : 1))) {
         setError('Enter every reference weight for Manual continuum subtraction'); return;
       }
     }
+    if ((draft.narrowband?.star_reduction ?? 0)<0 || (draft.narrowband?.star_reduction ?? 0)>1) {setError('RGB star reduction must be between zero and one');return;}
+    if ((draft.narrowband?.green_reduction ?? 0) < 0 || (draft.narrowband?.green_reduction ?? 0) > 1) {
+      setError('Green reduction must be between zero and one'); return;
+    }
     const balance = draft.narrowband?.balance;
-    if (balance && (balance.shadow_protection < 0 || balance.shadow_protection > 1 || balance.oiii_boost <= 0 || balance.sii_boost <= 0
+    if (balance && (balance.shadow_protection < 0 || balance.shadow_protection > 1 || balance.oiii_boost <= 0 || balance.sii_boost <= 0 || (balance.star_mask_radius != null && (balance.star_mask_radius < 1 || balance.star_mask_radius > 64))
       || !Number.isInteger(balance.max_samples) || balance.max_samples < 4 || balance.max_samples > 1_000_000)) {
       setError('Shadow protection must be 0 to 1, boosts positive, and balance samples 4 to 1000000'); return;
     }
@@ -824,8 +832,7 @@ export default function StackColorProcessingControls({
           </span>
         </div>
         {managesStars && <p className="processing-setups-hint">
-          The Stars choice on this color card controls star removal. Channel-card sharpening and denoising are reused;
-          StarXTerminator steps from channel cards or the color channels are deferred to this choice.
+          {combination === 'emission' ? 'RGB/LRGB + emission retains broadband stars. Channel StarXTerminator cannot run in this recipe; choose Set in this build and remove SXT, or choose narrowband with RGB stars.' : 'The Stars choice on this color card controls star removal. Channel-card sharpening and denoising are reused; StarXTerminator steps are deferred until the stars branch is prepared.'}
         </p>}
         {combination && draft.emission && <StackEmissionControls value={draft.emission} combination={combination} disabled={disabled}
           onChange={(emission) => setDraft((current) => ({ ...current, emission }))} />}
@@ -874,6 +881,13 @@ export default function StackColorProcessingControls({
             })} />
           <p className="processing-setups-hint">{combination ? "Runs BlurXTerminator or NoiseXTerminator on linear RGB before calibration and separation. This branch supplies broadband structure and optional RGB stars." : "Runs BlurXTerminator or NoiseXTerminator on linear RGB before star calibration and separation. Applies when Stars uses RGB. The narrowband nebula keeps its own processing."}</p>
         </section>}
+        {managesStars && narrowband && <section aria-label="RGB star reduction">
+          <label className="stack-stretch-field">RGB star reduction
+            <input type="number" aria-label="RGB star reduction" min="0" max="1" step="0.05" value={draft.narrowband?.star_reduction ?? 0} disabled={disabled}
+              onChange={(event) => changeNarrowband({ ...draft.narrowband, shared_stretch: draft.narrowband?.shared_stretch ?? false, star_reduction: event.target.valueAsNumber })} />
+            <small>0 keeps the extracted RGB stars. Increase to make them smaller and fainter while preserving their color. Applies when Stars uses RGB; the starless nebula is unchanged.</small>
+          </label>
+        </section>}
         {calibrates && (
           <ColorCalibrationSwitch
             calibration={draft.color_calibration}
@@ -913,6 +927,14 @@ export default function StackColorProcessingControls({
               </label>;
             })}
           </div>}
+          {draft.narrowband?.balance && <label className="stack-stretch-field">Exclude stars from balance statistics (radius in pixels)
+            <input type="number" aria-label="Balance star mask radius" min="1" max="64" step="1" disabled={disabled || foraxx} value={draft.narrowband.balance.star_mask_radius ?? ''}
+              onChange={(event) => changeNarrowband({ ...draft.narrowband!, balance: { ...draft.narrowband!.balance!, star_mask_radius: event.target.value === '' ? null : event.target.valueAsNumber } })} />
+            <small>Blank includes stars. This changes curve statistics and keeps output coverage.</small></label>}
+          <label className="stack-stretch-field">Reduce green excess
+            <input type="number" aria-label="Reduce green excess" min="0" max="1" step="0.05" disabled={disabled} value={draft.narrowband?.green_reduction ?? 0}
+              onChange={(event) => changeNarrowband({ ...draft.narrowband, shared_stretch: draft.narrowband?.shared_stretch ?? false, green_reduction: event.target.valueAsNumber })} />
+            <small>0 keeps mapped color; 1 removes green above both red and blue. Runs before broadband structure and RGB stars.</small></label>
           {balanceReport && <ul>{balanceReport.channels.map((channel) => <li key={channel.channel}>
             {roleLabels[channel.channel as StackColorRole] ?? channel.channel}: {channel.status}
             {channel.reason && ` · ${channel.reason === 'too_little_signal' ? 'too little signal above the background' : channel.reason.replaceAll('_', ' ')}`}

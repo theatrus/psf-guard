@@ -1765,8 +1765,42 @@ or download **Signed residual FITS**. The residual is not calibrated pure line
 flux: broadband filters can also transmit nebular lines, and aperture-level
 PSF compatibility does not guarantee perfect cancellation of every star.
 Fits examine eligibility before the 400 usable-star budget and validate the
-sample against the broader eligible pool. Adjusting an emission amount reuses
-the exact fit and signed residual; changing sources or fit controls rebuilds it.
+sample against the broader eligible pool. Automatic fits also require held-out
+pixel-profile validation: the 90th percentile noise-adjusted absolute residual
+must be at most 15% of stellar flux. The report shows separate core/halo
+fractions. This catches rings that an aperture-sum check can miss.
+
+Under **Advanced fit and saturation limits**, enable **Match continuum PSFs
+with Gaussian broadening** to prepare copies for fitting and subtraction.
+Leave **Target FWHM (pixels)** blank to choose 1.05 times the broadest measured
+profile, or enter a target at least as broad as every input.
+Default 8/12/20 photometry permits targets up to **8 pixels**. Larger targets
+require larger aperture/sky-annulus radii in the options JSON, with a hard
+target limit of 32 pixels. The result shows the target and kernel widths. Original RGB stars keep their
+own processing. Gaussian matching may leave different halo shapes; pixel
+validation still decides acceptance. Disable matching before choosing Manual.
+
+Under **Stretch and narrowband balance**, optionally enter an exclusion radius
+for stars in the balance statistics. Blank includes stars. **Reduce green
+excess** starts at 0; it changes mapped display nebula before broadband
+structure and RGB stars are restored. A value of 1 removes green above both
+red and blue, preserving neutral pixels.
+
+**Calibrated line-flux export** accepts a response calibration JSON for exact
+source objects from the full fit reports. Supply calibrated NB/reference
+responses, explicit calibrated residual zero levels, line labels, a revision
+and common flux unit. PSF Guard corrects
+broadband line leakage and exports signed **Calibrated line flux FITS** plus a
+**Response and uncertainty report**. Without calibration, downloads remain
+emission residuals. Unknown covariance is reported as unknown uncertainty;
+response and coefficient uncertainty are not included. Display amounts continue
+to use the signed residuals. Invalid calibration stops the build.
+
+Adjusting an emission amount reuses the exact fit and residual; changing sources,
+fit controls or matching rebuilds them. Color BXT/NXT on RGB/LRGB + emission
+processes the broadband base before Gaia calibration and emission addition.
+Channel SXT is unsupported for this natural-color recipe: choose **Set in this
+build** and remove SXT, or select a mapped recipe with RGB stars.
 
 See the [combined-image processing contract](design/color-channel-processing.md#subtract-continuum-for-combined-images)
 for cache boundaries, units and recovery behavior.
@@ -2397,3 +2431,32 @@ in stack-image pixels:
 The response points to an asynchronous search. Poll its GET endpoint until the
 state is `completed` or `failed`; completed results include immutable crop
 URLs and per-frame outlier evidence.
+
+Automatic continuum validation separately inspects isolated stellar candidates
+excluded for clipping/saturation. They never train the fit. Every inspected
+clipped profile must be measurable and below the same absolute residual limit;
+reports show their count and worst residual. A clean unsaturated held-out sample
+cannot conceal a clipped core or ring. This checks observed residuals and does
+not reconstruct clipped flux.
+
+### Reduce RGB stars
+
+Open a narrowband card's **Processing stack** and adjust **RGB star reduction**.
+It applies when **Stars** resolves to RGB, after BXT/NXT, Gaia calibration and
+SXT extraction. Keep 0 for the original extracted stars; start around 0.3–0.4
+for a gentler star field. Higher amounts make stars smaller and fainter and
+can remove faint stars. One linked RGB adjustment preserves the star layer's
+color ratios. The starless nebula and linear downloads are unchanged.
+
+BXT's **Sharpen Stars** and **Adjust Star Halos** remain independently
+configurable under **RGB star processing** (or **RGB branch processing** on a
+combined card). Star reduction changes the restored display layer after
+extraction. Changing its amount reuses RGB preparation/SXT caches and rebuilds
+the final composition. It does not affect native narrowband stars or the
+retained broadband stars in natural RGB/LRGB recipes.
+
+Flux calibration also requires exact `continuumCoefficients` snapshots in each
+plan's reference order. The server rejects a changed fit/manual coefficient
+before exporting flux: retained source revisions do not establish that the
+previous residual zero levels still apply. Update the explicit zero-level
+calibration and coefficient snapshots when the subtraction model changes.

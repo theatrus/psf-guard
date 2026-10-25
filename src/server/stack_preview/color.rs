@@ -50,7 +50,7 @@ use crate::server::extract::DbContext;
 use crate::server::handlers::AppError;
 use crate::server::state::AppState;
 
-const STACK_COLOR_CACHE_VERSION: u32 = 16;
+const STACK_COLOR_CACHE_VERSION: u32 = 17;
 const COLOR_INPUT_CACHE_VERSION: u32 = 4;
 /// Where a build's deconvolution and RC-Astro tools run, and how. 1: on each
 /// channel's own stack, before background extraction and registration, in
@@ -1745,14 +1745,24 @@ pub(super) fn prepare_color_job(
         followed_channel_processing = channel_card_processing(&ctx.stack_root, &sources)?;
         follow_channel_cards(processing, &followed_channel_processing);
     }
-    if (request.stars.is_some() || request.combination.is_some())
+    if request.kind == StackColorKind::Narrowband
+        && (request.stars.is_some() || request.combination.is_some())
         && let Some(processing) = &mut request.processing
     {
         narrowband::defer_channel_star_removal(processing);
     }
+    if request.combination == Some(emission::CombinedColorRecipe::Emission)
+        && let Some(processing) = &request.processing
+    {
+        emission::validate_natural_star_removal(processing)?;
+    }
+    let rgb_branch = narrowband_resolution.as_ref().is_some_and(|resolved| {
+        resolved.stars == narrowband::ColorStars::Rgb
+            || request.combination == Some(emission::CombinedColorRecipe::BroadbandStructure)
+    });
     let mut rc_astro_schemas = BTreeMap::new();
     if let Some(processing) = &mut request.processing {
-        resolve_color_calibration(request.kind, processing);
+        resolve_color_calibration(request.kind, rgb_branch, processing);
         let follows_cards = processing.input_processing == ColorInputProcessing::Channels;
         for (role, config) in &mut processing.input_rc_astro {
             let refused = |error| refused_rc_astro_steps(*role, follows_cards, error);
@@ -1782,7 +1792,7 @@ pub(super) fn prepare_color_job(
         .processing
         .as_ref()
         .and_then(|processing| processing.color_calibration)
-        .filter(|settings| settings.enabled)
+        .filter(|settings| settings.enabled && request.kind != StackColorKind::Narrowband)
         .map(|settings| plan_color_calibration(ctx, astrometry, request.kind, &sources, settings));
     let color_calibration_basis = color_calibration.as_ref().map(|plan| plan.basis.clone());
 
@@ -1897,9 +1907,7 @@ pub(super) fn prepare_color_job(
                             .unwrap_or_default(),
                     )
                 });
-            let calibration_key =
-                serde_json::to_string(&calibration.as_ref().map(|plan| &plan.basis))
-                    .map_err(|error| AppError::InternalError(error.to_string()))?;
+            let calibration_key = rgb_star_calibration_key(calibration.as_ref())?;
             let nebula_input = serde_json::to_string(&(
                 nebula_cache_input.unwrap_or(input_id),
                 &color_rc_astro.chain,
@@ -2299,12 +2307,24 @@ pub(super) fn follow_channel_cards(
         .collect();
 }
 
+fn rgb_star_calibration_key(plan: Option<&ColorCalibrationPlan>) -> Result<String, AppError> {
+    serde_json::to_string(&plan.map(|plan| (&plan.settings, &plan.basis)))
+        .map_err(|error| AppError::InternalError(error.to_string()))
+}
+
 /// Spell a request's color calibration out, so the job and its cache key
 /// say what runs: on by default for RGB and LRGB, never for a false-color
 /// palette.
-fn resolve_color_calibration(kind: StackColorKind, processing: &mut StackColorProcessing) {
+fn resolve_color_calibration(
+    kind: StackColorKind,
+    rgb_branch: bool,
+    processing: &mut StackColorProcessing,
+) {
     processing.color_calibration = match kind {
         StackColorKind::Rgb | StackColorKind::Lrgb => {
+            Some(processing.color_calibration.unwrap_or_default())
+        }
+        StackColorKind::Narrowband if rgb_branch => {
             Some(processing.color_calibration.unwrap_or_default())
         }
         StackColorKind::Narrowband => None,
@@ -4481,6 +4501,20 @@ fn compose_color(
             }
         }
         .map_err(|error| error.to_string())?;
+        if job.kind == StackColorKind::Narrowband {
+            let amount = job
+                .processing
+                .as_ref()
+                .and_then(|p| p.narrowband.as_ref())
+                .map_or(0.0, |p| p.green_reduction);
+            if amount > 0.0 {
+                if composition.transfer != ColorTransfer::DisplayReferred {
+                    return Err("Green reduction requires a display stretch before mapping".into());
+                }
+                seiza_stacking::reduce_green_excess(&mut composition.image, amount)
+                    .map_err(|e| e.to_string())?;
+            }
+        }
         if let Some(stars) = rgb_stars {
             if job.combination == Some(emission::CombinedColorRecipe::BroadbandStructure) {
                 let amount = job
@@ -4505,8 +4539,18 @@ fn compose_color(
                 .crop(composition.region)
                 .map_err(|error| error.to_string())?;
             if job.stars != Some(narrowband::ColorStars::None) {
-                seiza_stacking::screen_rgb_stars(&mut composition.image, &original, &starless)
-                    .map_err(|error| error.to_string())?;
+                let reduction = job
+                    .processing
+                    .as_ref()
+                    .and_then(|p| p.narrowband.as_ref())
+                    .map_or(0.0, |p| p.star_reduction);
+                seiza_stacking::screen_rgb_stars_reduced(
+                    &mut composition.image,
+                    &original,
+                    &starless,
+                    reduction,
+                )
+                .map_err(|error| error.to_string())?;
             }
             composition.transfer = ColorTransfer::DisplayReferred;
         }
@@ -9168,7 +9212,7 @@ mod tests {
     #[test]
     fn rgb_and_lrgb_calibrate_by_default_and_narrowband_never() {
         let mut processing = defaults();
-        resolve_color_calibration(StackColorKind::Rgb, &mut processing);
+        resolve_color_calibration(StackColorKind::Rgb, false, &mut processing);
         assert_eq!(
             processing.color_calibration,
             Some(StackColorCalibration::default())
@@ -9179,16 +9223,66 @@ mod tests {
             ..StackColorCalibration::default()
         };
         processing.color_calibration = Some(off);
-        resolve_color_calibration(StackColorKind::Lrgb, &mut processing);
+        resolve_color_calibration(StackColorKind::Lrgb, false, &mut processing);
         assert_eq!(processing.color_calibration, Some(off));
 
         processing.color_calibration = Some(StackColorCalibration::default());
-        resolve_color_calibration(StackColorKind::Narrowband, &mut processing);
+        resolve_color_calibration(StackColorKind::Narrowband, false, &mut processing);
         assert_eq!(processing.color_calibration, None);
         assert!(serde_json::to_value(&processing)
             .unwrap()
             .get("color_calibration")
             .is_none());
+    }
+
+    #[test]
+    fn rgb_branch_preserves_disabled_and_nondefault_calibration() {
+        let mut processing = defaults();
+        let settings = StackColorCalibration {
+            enabled: false,
+            neutralize_background: false,
+            ..Default::default()
+        };
+        processing.color_calibration = Some(settings);
+        resolve_color_calibration(StackColorKind::Narrowband, true, &mut processing);
+        assert_eq!(processing.color_calibration, Some(settings));
+        let before = serde_json::to_string(&processing).unwrap();
+        processing.color_calibration.as_mut().unwrap().enabled = true;
+        assert_ne!(before, serde_json::to_string(&processing).unwrap());
+    }
+
+    #[test]
+    fn rgb_star_separation_identity_follows_each_calibration_setting() {
+        let settings = StackColorCalibration::default();
+        let key = |settings| {
+            rgb_star_calibration_key(Some(&color_calibration::plan(
+                settings, None, None, None, None,
+            )))
+            .unwrap()
+        };
+        let baseline = key(settings);
+        assert_ne!(
+            baseline,
+            key(StackColorCalibration {
+                enabled: false,
+                ..settings
+            })
+        );
+        assert_ne!(
+            baseline,
+            key(StackColorCalibration {
+                neutralize_background: false,
+                ..settings
+            })
+        );
+        assert_ne!(
+            baseline,
+            key(StackColorCalibration {
+                white_reference: color_calibration::StackColorWhiteReference::BpRp(0.65),
+                ..settings
+            })
+        );
+        assert_eq!(baseline, key(settings));
     }
 
     fn calibration_basis(size_bytes: u64) -> StackColorCalibrationBasis {
@@ -9215,7 +9309,7 @@ mod tests {
             channel(StackColorRole::Blue, "B", "blue", false),
         ];
         let mut processing = defaults();
-        resolve_color_calibration(StackColorKind::Rgb, &mut processing);
+        resolve_color_calibration(StackColorKind::Rgb, false, &mut processing);
         let request = |processing: StackColorProcessing| StackColorRequest {
             combination: None,
             automatic_palette: false,
@@ -9569,6 +9663,24 @@ mod tests {
             &BTreeMap::new(),
         )
         .unwrap();
+        let mut reduced = first.clone();
+        reduced.narrowband = Some(narrowband::NarrowbandProcessing {
+            star_reduction: 0.5,
+            ..Default::default()
+        });
+        assert_eq!(
+            first_id,
+            color_input_cache_id(
+                "db",
+                2,
+                3,
+                &reduced,
+                &sources,
+                &protection,
+                &BTreeMap::new()
+            )
+            .unwrap()
+        );
         let mut changed_linear = first;
         changed_linear
             .input_deconvolutions

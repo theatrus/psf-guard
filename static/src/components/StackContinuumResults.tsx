@@ -5,6 +5,7 @@ import type { StackColorJob, StackContinuumResult } from '../api/types';
 const statuses = { applied: 'Applied', manual: 'Manual', skipped: 'Skipped', disabled: 'Off' };
 const labels: Record<string, string> = { ha: 'Hα', oiii: 'OIII', sii: 'SII', red: 'R', green: 'G', blue: 'B' };
 function Line({ dbId, jobId, line }: { dbId: string; jobId: string; line: StackContinuumResult }) {
+  const matching = line.plan?.psfMatching ?? line.diagnostics?.psfMatching;
   const [inspect, setInspect] = useState(false);
   const report = useQuery({ queryKey: ['db', dbId, 'continuum-report', jobId, line.role],
     queryFn: () => apiClient.getStackContinuumReport(dbId, jobId, line.role), enabled: inspect, retry: false });
@@ -18,7 +19,12 @@ function Line({ dbId, jobId, line }: { dbId: string; jobId: string; line: StackC
     {line.plan && <p>Weights ({line.references.map((r) => labels[r]).join(', ')}): {line.plan.coefficients.map((v) => v.toPrecision(5)).join(', ')}</p>}
     {line.diagnostics && <p>{line.diagnostics.usedStars} training · {line.diagnostics.validationStars} held out · {line.diagnostics.eligibleStars} eligible / {line.diagnostics.candidateStars} candidates
       {line.diagnostics.validationFractionalRms != null && ` · Held-out RMS ${(line.diagnostics.validationFractionalRms * 100).toFixed(1)}%`}</p>}
+    {line.diagnostics?.pixelValidation && <p>Held-out pixel profiles: {line.diagnostics.pixelValidation.accepted ? 'passed' : 'failed'} · 90th percentile absolute residual {(line.diagnostics.pixelValidation.p90AbsoluteFraction * 100).toFixed(1)}% / {(line.diagnostics.pixelValidation.limit * 100).toFixed(1)}% limit · {line.diagnostics.pixelValidation.stars} stars</p>}
+    {!!line.diagnostics?.pixelValidation?.clippedStars && <p>Clipped stellar cores: {line.diagnostics.pixelValidation.clippedProfiles} / {line.diagnostics.pixelValidation.clippedStars} profiles checked · maximum absolute residual {line.diagnostics.pixelValidation.clippedMaxAbsoluteFraction == null ? 'unavailable' : `${(line.diagnostics.pixelValidation.clippedMaxAbsoluteFraction * 100).toFixed(1)}%`}</p>}
+    {matching && <p>Gaussian PSF target {matching.targetFwhm.toFixed(2)} px · kernel σ (NB, references): {matching.kernelSigma.map((v) => v.toFixed(2)).join(', ')} px</p>}
     {line.status !== 'disabled' && <p>{line.clipping_maps ? 'Producer clipping maps used' : line.status === 'manual' ? 'Manual weights; signed residual retained' : 'Review saturation evidence in the report'}</p>}
+    {line.flux_fits_url && <p><a href={line.flux_fits_url} download>Calibrated line flux FITS ({line.flux_unit})</a>{' '}
+      {line.flux_report_url && <a href={line.flux_report_url} target="_blank" rel="noreferrer">Response and uncertainty report</a>}</p>}
     {line.residual_fits_url && <a href={line.residual_fits_url} download>Signed residual FITS</a>}{' '}
     {line.residual_preview_url && <a href={line.residual_preview_url} target="_blank" rel="noreferrer">Residual preview</a>}{' '}
     {line.report_url && <><a href={line.report_url} target="_blank" rel="noreferrer">Full stellar fit report</a>{' '}

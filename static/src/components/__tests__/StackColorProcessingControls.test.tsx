@@ -429,3 +429,30 @@ describe('StackColorProcessingControls', () => {
     expect(screen.getByRole('button', { name: 'Apply processing stack' })).toBeDisabled();
   });
 });
+
+describe('green reduction without other narrowband options', () => {
+  it('retains a standalone green amount for a Foraxx palette', async () => {
+    const onApply = vi.fn();
+    renderWithQueries(<StackColorProcessingControls label="Foraxx SHO" roles={['ha', 'oiii', 'sii']} palette="foraxx-sho"
+      applied={defaultColorProcessing(['ha', 'oiii', 'sii'])} backgrounds={{}} protections={{}} fallbacks={{}} deconvolutions={{}} disabled={false} onApply={onApply} />);
+    await userEvent.click(screen.getByText('Processing stack'));
+    await userEvent.click(screen.getByText('Stretch and narrowband balance'));
+    await userEvent.clear(screen.getByLabelText('Reduce green excess'));
+    await userEvent.type(screen.getByLabelText('Reduce green excess'), '0.5');
+    await userEvent.click(screen.getByRole('button', { name: 'Apply processing stack' }));
+    expect(onApply).toHaveBeenCalledWith(expect.objectContaining({ narrowband: expect.objectContaining({ green_reduction: 0.5 }) }));
+  });
+});
+
+describe('RGB star reduction', () => {
+  it('saves reduction independently of BXT, balance and shared stretching', async () => {
+    const onApply = vi.fn();
+    renderWithQueries(<StackColorProcessingControls label="SHO" roles={['ha', 'oiii', 'sii', 'red', 'green', 'blue']} palette="sho" managesStars
+      applied={defaultColorProcessing(['ha', 'oiii', 'sii', 'red', 'green', 'blue'])} backgrounds={{}} protections={{}} fallbacks={{}} deconvolutions={{}} disabled={false} onApply={onApply} />);
+    await userEvent.click(screen.getByText('Processing stack'));
+    await userEvent.clear(screen.getByRole('spinbutton', { name: 'RGB star reduction' }));
+    await userEvent.type(screen.getByRole('spinbutton', { name: 'RGB star reduction' }), '0.4');
+    await userEvent.click(screen.getByRole('button', { name: 'Apply processing stack' }));
+    expect(onApply).toHaveBeenCalledWith(expect.objectContaining({ narrowband: expect.objectContaining({ star_reduction: 0.4 }) }));
+  });
+});

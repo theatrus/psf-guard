@@ -20,12 +20,31 @@ pub struct NarrowbandProcessing {
     /// Optional sharpening/denoising on linear RGB before calibration and SXT.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rgb_star_processing: Option<super::super::rc_astro::RcAstroProcessing>,
+    /// Aesthetic green excess reduction on mapped display nebula, before RGB stars.
+    #[serde(default)]
+    pub green_reduction: f64,
+    /// Linked display-star erosion after RGB extraction; zero preserves stars.
+    #[serde(default, skip_serializing_if = "stars_unreduced")]
+    pub star_reduction: f64,
+}
+
+fn stars_unreduced(amount: &f64) -> bool {
+    *amount == 0.0
 }
 
 impl NarrowbandProcessing {
     pub(crate) fn validate(&self) -> Result<(), String> {
+        if !self.star_reduction.is_finite() || !(0.0..=1.0).contains(&self.star_reduction) {
+            return Err("RGB star reduction must be between zero and one".into());
+        }
+        if !self.green_reduction.is_finite() || !(0.0..=1.0).contains(&self.green_reduction) {
+            return Err("Green reduction must be between zero and one".into());
+        }
         if let Some(options) = self.balance
-            && (!options.shadow_protection.is_finite()
+            && (options
+                .star_mask_radius
+                .is_some_and(|r| !r.is_finite() || !(1.0..=64.0).contains(&r))
+                || !options.shadow_protection.is_finite()
                 || !(0.0..=1.0).contains(&options.shadow_protection)
                 || [options.oiii_boost, options.sii_boost]
                     .iter()
