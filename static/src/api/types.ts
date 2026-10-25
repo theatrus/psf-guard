@@ -1251,6 +1251,13 @@ export interface RcAstroCapabilities {
   available: boolean;
   executable?: string;
   tools: ExternalToolSchema[];
+  /** Whether this server has rc-astro. */
+  this_server?: boolean;
+  /** The connected workers that have rc-astro, by name. */
+  workers?: string[];
+  /** For each tool, the connected workers that take it. A tool no worker
+   *  takes runs on this server. */
+  tool_workers?: Record<string, string[]>;
   error?: string;
 }
 
@@ -5192,4 +5199,55 @@ export interface FlatMeasureStatus {
 
 export interface CalibrationQualityStatus {
   progress: CalibrationQualityProgress;
+}
+
+/** A worker token, without its secret. */
+export interface WorkerTokenSummary {
+  id: string;
+  name: string;
+  created_at: number;
+}
+
+/** A worker connected to this server, as Settings › Workers lists it. */
+export interface WorkerSessionSummary {
+  session: string;
+  token_id: string;
+  name: string;
+  version: string;
+  /** This server's own worker. */
+  local: boolean;
+  connected: boolean;
+  connected_at: number;
+  seconds_since_seen: number;
+  threads: number;
+  /** How many tasks it runs at once. */
+  slots: number;
+  /** The RC-Astro tools it takes, as "RC-Astro StarXTerminator 2.6.10". */
+  rc_astro: string[];
+  file_mode: 'remote' | 'shared';
+  /** Whether task files reach it by path. */
+  exchange_shared: boolean;
+  exchange_problem?: string;
+  running: Array<{ label: string; fraction: number }>;
+}
+
+/** Where one kind of work runs. */
+export type WorkPlacement = 'workers_first' | 'workers_only' | 'this_server';
+
+export interface WorkersSettings {
+  tokens: WorkerTokenSummary[];
+  workers: WorkerSessionSummary[];
+  queued: Array<{ label: string; needs: string }>;
+  exchange_folder: string;
+  exchange_folder_setting?: string;
+  default_exchange_folder: string;
+  /** The folder inside the exchange folder that holds task files. */
+  exchange_subfolder: string;
+  placement: { rc_astro: WorkPlacement };
+}
+
+export interface CreatedWorkerToken {
+  token: string;
+  summary: WorkerTokenSummary;
+  workers: WorkersSettings;
 }

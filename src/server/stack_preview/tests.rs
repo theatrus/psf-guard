@@ -2310,7 +2310,7 @@ async fn a_color_build_following_the_cards_records_them_and_goes_out_of_date_whe
     }))
     .unwrap();
     let prepare = || {
-        color::prepare_color_job(&ctx, &state.astrometry, 7, &request)
+        color::prepare_color_job(&ctx, &state.astrometry, &state.workers, 7, &request)
             .unwrap()
             .public
     };

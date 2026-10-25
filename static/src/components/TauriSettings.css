@@ -2881,3 +2881,22 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* Settings › Workers */
+.tauri-settings .worker-settings h4 {
+  margin: 20px 0 8px;
+}
+
+.tauri-settings .worker-state {
+  font-size: 0.85em;
+  color: var(--color-text-secondary);
+}
+
+.tauri-settings .worker-state[data-connected="true"] {
+  color: var(--color-success);
+}
+
+.tauri-settings .worker-queue {
+  margin: 0 0 12px;
+  padding-left: 20px;
+}

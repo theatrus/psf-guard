@@ -678,11 +678,12 @@ test('runs RC-Astro on the color channels together', async ({ page }, testInfo) 
   await together.evaluate((element) => element.scrollIntoView({ block: 'center' }));
   await together.screenshot({ path: testInfo.outputPath('color-channels-together-desktop.png') });
 
-  // This server has no rc-astro: preparing the build fails before anything
-  // runs, and the refusal shows beside Apply, saying which step.
+  // This server has no rc-astro and no worker is connected: preparing the
+  // build fails before anything runs, and the refusal shows beside Apply,
+  // saying which step.
   await processing.getByRole('button', { name: 'Apply processing stack' }).click();
   await expect(processing.getByRole('alert')).toHaveText(
-    'RC-Astro on the color channels cannot run: rc-astro is not installed on this server',
+    'RC-Astro on the color channels cannot run: rc-astro is not installed on this server or on a connected worker',
     { timeout: 30_000 }
   );
   await expect(card.locator('.stack-color-image img')).toBeVisible();

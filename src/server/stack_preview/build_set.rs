@@ -573,8 +573,14 @@ fn prepare_and_queue(
                 }
                 _ => (**request).clone(),
             };
-            let prepared = color::prepare_color_job(ctx, &state.astrometry, project_id, &request)
-                .map_err(|error| error.message())?;
+            let prepared = color::prepare_color_job(
+                ctx,
+                &state.astrometry,
+                &state.workers,
+                project_id,
+                &request,
+            )
+            .map_err(|error| error.message())?;
             if preparation_stopped(state, preparation) {
                 return Ok(None);
             }

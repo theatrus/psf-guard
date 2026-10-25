@@ -16,7 +16,7 @@ use std::sync::Arc;
 use axum::Json;
 use seiza_stacking::{
     write_processed_image_fits_f32, ExternalParameterValue, ExternalToolRequest,
-    ExternalToolSchema, LinearImage, RcAstroCli,
+    ExternalToolSchema, LinearImage,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -119,9 +119,9 @@ struct CachedRcAstro {
     rows_as_stored: bool,
 }
 
-/// What `GET /api/tools/rc-astro` reports: whether the CLI is installed and
-/// each tool's live schema, so the UI can build its controls from the same
-/// contract the run will use.
+/// What `GET /api/tools/rc-astro` reports: whether this server or a
+/// connected worker has rc-astro, and each tool's live schema, so the UI can
+/// build its controls from the same contract the run will use.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RcAstroCapabilities {
     pub available: bool,
@@ -129,44 +129,33 @@ pub struct RcAstroCapabilities {
     pub executable: Option<String>,
     #[serde(default)]
     pub tools: Vec<ExternalToolSchema>,
+    /// Whether this server has rc-astro.
+    #[serde(default)]
+    pub this_server: bool,
+    /// The connected workers that have rc-astro, by name.
+    #[serde(default)]
+    pub workers: Vec<String>,
+    /// For each tool, the connected workers that take it, by name. A tool
+    /// no worker takes runs on this server.
+    #[serde(default)]
+    pub tool_workers: BTreeMap<String, Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 
-fn cli() -> Option<RcAstroCli> {
-    // A service unit often runs with a minimal PATH; PSF_GUARD_RC_ASTRO
-    // names the executable directly.
-    let located = match std::env::var_os("PSF_GUARD_RC_ASTRO") {
-        Some(path) if !path.is_empty() => Some(RcAstroCli::with_executable(PathBuf::from(path))),
-        _ => RcAstroCli::locate(),
-    };
-    located.map(|cli| cli.with_host(format!("psf-guard-{}", env!("CARGO_PKG_VERSION"))))
-}
-
-/// Probe the installed CLI and every tool's schema. Spawns short-lived
-/// processes; callers wrap it in `spawn_blocking`.
-pub fn probe_capabilities() -> RcAstroCapabilities {
-    let Some(cli) = cli() else {
-        return RcAstroCapabilities {
-            available: false,
-            executable: None,
-            tools: Vec::new(),
-            error: None,
-        };
-    };
-    let mut tools = Vec::new();
-    let mut error = None;
-    for tool in RC_ASTRO_STEP_ORDER {
-        match cli.tool_schema(tool) {
-            Ok(schema) => tools.push(schema),
-            Err(problem) => error = Some(problem.to_string()),
-        }
-    }
+/// What `GET /api/tools/rc-astro` lists: the tools the next run would
+/// use, from this server or a connected worker.
+fn capabilities(workers: &crate::server::workers::Workers) -> RcAstroCapabilities {
+    let offered = workers.rc_astro_tools();
     RcAstroCapabilities {
-        available: !tools.is_empty(),
-        executable: Some(cli.executable().display().to_string()),
-        tools,
-        error,
+        available: !offered.tools.is_empty(),
+        executable: crate::remote_work::rc_astro::locate(None)
+            .map(|cli| cli.executable().display().to_string()),
+        tools: offered.tools,
+        this_server: offered.this_server,
+        workers: offered.workers,
+        tool_workers: offered.tool_workers,
+        error: workers.local_rc_astro_problem(),
     }
 }
 
@@ -174,11 +163,12 @@ pub fn probe_capabilities() -> RcAstroCapabilities {
 pub async fn get_rc_astro_capabilities(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
 ) -> Result<Json<ApiResponse<RcAstroCapabilities>>, AppError> {
-    let mut capabilities = tokio::task::spawn_blocking(probe_capabilities)
+    let probed = Arc::clone(&state);
+    let mut capabilities = tokio::task::spawn_blocking(move || capabilities(&probed.workers))
         .await
         .map_err(|error| AppError::InternalError(format!("RC-Astro probe failed: {error}")))?;
     // Every viewer may see which tools exist; the license line names the
-    // licensee and the executable names a server path, so those stay with
+    // licensee and the executable gives a server path, so those stay with
     // the operator role.
     for tool in &mut capabilities.tools {
         tool.license_message = None;
@@ -189,54 +179,22 @@ pub async fn get_rc_astro_capabilities(
     Ok(Json(ApiResponse::success(capabilities)))
 }
 
-/// A short-lived schema cache: every stretch apply needs the schemas to
-/// compute its cache identity, and spawning three probe processes per
-/// request adds latency for an answer that only changes on a CLI upgrade.
-static SCHEMA_CACHE: std::sync::LazyLock<
-    std::sync::Mutex<std::collections::HashMap<String, (std::time::Instant, ExternalToolSchema)>>,
-> = std::sync::LazyLock::new(Default::default);
-const SCHEMA_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(60);
-
-fn cached_tool_schema(cli: &RcAstroCli, tool: &str) -> Result<ExternalToolSchema, String> {
-    if let Ok(cache) = SCHEMA_CACHE.lock()
-        && let Some((read_at, schema)) = cache.get(tool)
-        && read_at.elapsed() < SCHEMA_CACHE_TTL
-    {
-        return Ok(schema.clone());
-    }
-    let schema = cli.tool_schema(tool).map_err(|error| error.to_string())?;
-    if let Ok(mut cache) = SCHEMA_CACHE.lock() {
-        cache.insert(
-            tool.to_string(),
-            (std::time::Instant::now(), schema.clone()),
-        );
-    }
-    Ok(schema)
-}
-
-/// Read the schemas the requested steps need, or say which tool refused.
-/// Spawns short-lived processes; callers wrap it in `spawn_blocking`.
+/// Read the schemas the requested steps need, from this server or a
+/// connected worker, or explain which tool cannot run. May spawn
+/// short-lived processes; callers wrap it in `spawn_blocking`.
 pub(super) fn schemas_for(
+    workers: &crate::server::workers::Workers,
     config: &RcAstroProcessing,
 ) -> Result<Vec<(String, ExternalToolSchema)>, String> {
-    let cli = cli().ok_or_else(|| "rc-astro is not installed on this server".to_string())?;
-    let mut schemas = Vec::new();
-    for step in config.ordered() {
-        let schema = cached_tool_schema(&cli, &step.tool)?;
-        if !schema.licensed {
-            return Err(format!(
-                "{} is not licensed on this server{}",
-                schema.name,
-                schema
-                    .license_message
-                    .as_deref()
-                    .map(|message| format!(" ({message})"))
-                    .unwrap_or_default()
-            ));
-        }
-        schemas.push((step.tool.clone(), schema));
-    }
-    Ok(schemas)
+    config
+        .ordered()
+        .into_iter()
+        .map(|step| {
+            workers
+                .rc_astro_schema(&step.tool)
+                .map(|schema| (step.tool.clone(), schema))
+        })
+        .collect()
 }
 
 /// Canonicalize a request against the live schemas: refuse unknown,
@@ -597,12 +555,15 @@ fn persist_prefix(
 /// download handlers serve; the returned images feed the stretch renders
 /// directly.
 ///
-/// `cancel` kills the tool in hand when it fires: the child is killed and
-/// reaped and its exchange folder removed. `before_step` is read before each
+/// Each tool runs as a task on a worker: this server's own, or a connected
+/// one that offers the tool at the schema's version. `cancel` stops the tool
+/// in hand when it fires; on this server the child is killed and reaped and
+/// its exchange folder removed before this returns. `before_step` is read before each
 /// tool starts; an error ends the chain there, keeping the steps already
 /// cached.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn apply_rc_astro(
+    runner: crate::server::workers::rc_astro::RcAstroRunner<'_>,
     stack_root: &FsPath,
     chain_ids: &[String],
     config: &RcAstroProcessing,
@@ -623,10 +584,7 @@ pub(super) fn apply_rc_astro(
         on_progress,
         before_step,
         &mut |schema, request, input, headers, progress| {
-            cli()
-                .ok_or_else(|| "rc-astro is not installed on this server".to_string())?
-                .process_image(schema, request, input, headers, cancel, progress)
-                .map_err(|error| error.to_string())
+            runner.run(schema, request, input, headers, cancel, progress)
         },
     )
 }
@@ -646,7 +604,7 @@ fn apply_rc_astro_with_runner(
         &ExternalToolRequest,
         &LinearImage,
         &[(String, seiza_fits::HeaderValue)],
-        &mut dyn FnMut(f32),
+        &mut dyn FnMut(f32, Option<&str>),
     ) -> Result<seiza_stacking::ProcessedStackImage, String>,
 ) -> Result<RcAstroOutcome, String> {
     let ordered = config.ordered();
@@ -726,9 +684,14 @@ fn apply_rc_astro_with_runner(
         );
         on_progress(&schema.name, index as f32 / total_steps as f32);
         // The chain's overall fraction: completed steps plus this step's
-        // own fraction, over the step count.
-        let mut step_progress = |fraction: f32| {
-            on_progress(&schema.name, (index as f32 + fraction) / total_steps as f32)
+        // own fraction, over the step count. A step on another machine
+        // says which.
+        let mut step_progress = |fraction: f32, worker: Option<&str>| {
+            let stage = match worker {
+                Some(worker) => format!("{} on {worker}", schema.name),
+                None => schema.name.clone(),
+            };
+            on_progress(&stage, (index as f32 + fraction) / total_steps as f32)
         };
         // Neural tools require finite inputs. Padding must never become sky
         // coverage when a registered border comes back from the external tool.
@@ -925,11 +888,11 @@ mod tests {
                           _request: &ExternalToolRequest,
                           input: &LinearImage,
                           _headers: &[(String, seiza_fits::HeaderValue)],
-                          progress: &mut dyn FnMut(f32)| {
+                          progress: &mut dyn FnMut(f32, Option<&str>)| {
             runs += 1;
             assert!(input.data.iter().all(|sample| sample.is_finite()));
             assert!((10.0..=20.0).contains(&input.data[0]));
-            progress(1.0);
+            progress(1.0, None);
             let mut starless = input.clone();
             for sample in &mut starless.data {
                 *sample *= 0.75;
@@ -1028,7 +991,7 @@ mod tests {
                       _request: &ExternalToolRequest,
                       input: &LinearImage,
                       headers: &[(String, seiza_fits::HeaderValue)],
-                      _progress: &mut dyn FnMut(f32)| {
+                      _progress: &mut dyn FnMut(f32, Option<&str>)| {
                     sent = headers
                         .iter()
                         .filter(|(key, _)| key == "ROWORDER")
@@ -1350,20 +1313,19 @@ mod tests {
                 )]),
             }],
         };
-        let mut sxt_schema = schema("sxt", "2.6.6", 11);
-        sxt_schema.parameters = vec![serde_json::from_value(serde_json::json!({
-            "name": "stars",
-            "flag": "--stars",
-            "label": "Generate Star Image",
-            "description": "",
-            "kind": {"type": "bool", "default": false},
-        }))
-        .unwrap()];
-        let schemas = vec![("sxt".to_string(), sxt_schema)];
+        // The tools run on this server's own worker, through the board, at
+        // the versions it offers.
+        let workers = crate::server::workers::Workers::default();
+        let runner = crate::server::workers::rc_astro::RcAstroRunner {
+            workers: &workers,
+            person: true,
+        };
+        let schemas = schemas_for(&workers, &config).unwrap();
         let image = LinearImage::new(3, 2, 1, vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0]).unwrap();
 
         let mut reported: Vec<(String, f32)> = Vec::new();
         let first = apply_rc_astro(
+            runner,
             cache.path(),
             &["a".repeat(64)],
             &config,
@@ -1384,12 +1346,13 @@ mod tests {
         // fractions unscaled.
         assert_eq!(
             reported.first().map(|(stage, _)| stage.as_str()),
-            Some("RC-Astro sxt")
+            Some("RC-Astro StarXTerminator")
         );
         assert_eq!(reported.first().map(|(_, fraction)| *fraction), Some(0.0));
         assert!(reported.iter().any(|(_, fraction)| *fraction >= 1.0));
 
         let second = apply_rc_astro(
+            runner,
             cache.path(),
             &["a".repeat(64)],
             &config,
@@ -1420,13 +1383,11 @@ mod tests {
         let bxt_nxt = RcAstroProcessing {
             steps: vec![step("bxt"), step("nxt")],
         };
-        let chain_schemas = vec![
-            ("bxt".to_string(), schema("bxt", "2.6.6", 4)),
-            ("nxt".to_string(), schema("nxt", "2.6.6", 3)),
-        ];
+        let chain_schemas = schemas_for(&workers, &bxt_nxt).unwrap();
         let bxt_ids = vec!["b".repeat(64)];
         let both_ids = vec!["b".repeat(64), "c".repeat(64)];
         apply_rc_astro(
+            runner,
             cache.path(),
             &bxt_ids,
             &bxt,
@@ -1440,6 +1401,7 @@ mod tests {
         .unwrap();
         let mut reported: Vec<(String, f32)> = Vec::new();
         let extended = apply_rc_astro(
+            runner,
             cache.path(),
             &both_ids,
             &bxt_nxt,
@@ -1456,7 +1418,7 @@ mod tests {
         // place in the whole chain: NoiseX starts at fraction 1/2.
         assert_eq!(
             reported.first().map(|(stage, _)| stage.as_str()),
-            Some("RC-Astro nxt")
+            Some("RC-Astro NoiseXTerminator")
         );
         assert_eq!(reported.first().map(|(_, fraction)| *fraction), Some(0.5));
         let invocations = tool.invocations_log();
@@ -1473,6 +1435,7 @@ mod tests {
         // cache hit with no tool spawned.
         let fresh_ids = vec!["e".repeat(64), "f".repeat(64)];
         apply_rc_astro(
+            runner,
             cache.path(),
             &fresh_ids,
             &bxt_nxt,
@@ -1485,6 +1448,7 @@ mod tests {
         )
         .unwrap();
         let bxt_alone = apply_rc_astro(
+            runner,
             cache.path(),
             &fresh_ids[..1],
             &bxt,
@@ -1511,6 +1475,7 @@ mod tests {
             .set_modified(a_month_ago)
             .unwrap();
         apply_rc_astro(
+            runner,
             cache.path(),
             &fresh_ids,
             &bxt_nxt,
@@ -1547,7 +1512,7 @@ mod tests {
 /// A stand-in `rc-astro` for tests. The executable is named by a
 /// process-wide environment variable, so one test at a time holds it.
 #[cfg(all(test, unix))]
-pub(super) mod test_tool {
+pub(crate) mod test_tool {
     use std::path::PathBuf;
     use std::sync::{Mutex, MutexGuard};
 

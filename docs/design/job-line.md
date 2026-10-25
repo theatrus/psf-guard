@@ -2,9 +2,9 @@
 
 Status: **Steps 1 to 10 built**: the stack line, the per-catalog jobs, the
 WBPP line, the header's jobs route, requests carried in the line, priority
-in the line, and the quality scans on `CatalogJobs`. Remote work is
-proposed.
-Last updated: 2026-10-19
+in the line, and the quality scans on `CatalogJobs`. Step 11, remote
+workers, is built for RC-Astro steps; see [Remote workers](remote-workers.md).
+Last updated: 2026-10-24
 
 This record proposes one shared shape for the server's queued work. It
 covers two things that grew separately: the line that runs stack builds,
@@ -366,7 +366,10 @@ the line.
 
 ## Remote work
 
-Not built by this proposal. It shapes the steps that are.
+[Remote workers](remote-workers.md) records what is built: a task board
+below the line, worker tokens, leases, shared and remote file modes, and
+RC-Astro steps as the first tasks. This section is the shape that record
+follows.
 
 A remote worker is a process on another machine that registers with the
 coordinator, says what it offers, and asks for work. The boundary is the
@@ -541,8 +544,9 @@ otherwise.
 10. **The remaining background work.** *Built:* quality scans and the
     database-wide analysis run on `CatalogJobs`, and calibration grading
     and health have header rows.
-11. **Remote workers** (later, its own design record): registration,
-    scoped input access, upload by digest, and assignment by `needs`.
+11. **Remote workers.** *Built* for RC-Astro steps: registration, scoped
+    input access, upload by digest, and assignment by what a worker offers.
+    See [Remote workers](remote-workers.md); stack builds are next.
 
 Steps 1 and 2 give most of the cleanup. Step 3 is what remote work needs,
 and keeps the server's own work honest about its inputs even if remote
@@ -570,7 +574,7 @@ work never comes. Step 4 depends on step 2.
   entry" rule would behave the same. The two lanes are built and keep the
   rule that short work never waits behind long work plain to see. Revisit
   this if remote workers need another model.
-- **The in-process worker will use the remote path.** When remote workers
-  are built, the server's own worker takes its entries through the same
-  lease and message path, so every local run tests it. Until then it calls
-  the work directly.
+- **The in-process worker uses the remote path.** The server's own worker
+  claims RC-Astro steps from the task board through the same lease and
+  message path as a remote one, so every local run tests it. Line entries
+  still run on this server's dispatchers directly.

@@ -869,7 +869,9 @@ fn cookie_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
 }
 
 fn uses_remote_bearer_token(path: &str) -> bool {
-    path.starts_with("/sync/v1/") || (path.starts_with("/db/") && path.ends_with("/images/upload"))
+    path.starts_with("/sync/v1/")
+        || path.starts_with("/workers/v1/")
+        || (path.starts_with("/db/") && path.ends_with("/images/upload"))
 }
 
 fn is_public_auth_path(path: &str) -> bool {
@@ -1279,6 +1281,19 @@ mod tests {
         assert!(uses_remote_bearer_token("/sync/v1/capabilities"));
         assert!(uses_remote_bearer_token("/db/test/images/upload"));
         assert!(!uses_remote_bearer_token("/db/test/images/12/grade"));
+        // Workers check their own tokens; Settings › Workers needs a person.
+        assert!(uses_remote_bearer_token("/workers/v1/register"));
+        assert!(uses_remote_bearer_token("/workers/v1/sessions/s/claim"));
+        assert!(!uses_remote_bearer_token("/workers"));
+        assert!(!uses_remote_bearer_token("/workers/tokens"));
+        assert!(!uses_remote_bearer_token("/workers/v1"));
+        // A worker token is not an API token, so it reaches no other route.
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer psfw_0123"),
+        );
+        assert_eq!(bearer_token(&headers), None);
     }
 
     #[test]

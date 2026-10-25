@@ -1726,6 +1726,7 @@ fn refused_rc_astro_steps(role: StackColorRole, follows_cards: bool, error: Stri
 pub(super) fn prepare_color_job(
     ctx: &crate::server::database_context::DatabaseContext,
     astrometry: &crate::astrometry::AstrometryContext,
+    workers: &crate::server::workers::Workers,
     project_id: i32,
     request: &StackColorRequest,
 ) -> Result<PreparedColorJob, AppError> {
@@ -1735,7 +1736,8 @@ pub(super) fn prepare_color_job(
     let target = targets.get(&request.target_id).ok_or_else(|| {
         AppError::BadRequest("No completed channel stacks are available for that target".into())
     })?;
-    let (sources, narrowband_resolution, separation) = narrowband::resolve(target, &mut request)?;
+    let (sources, narrowband_resolution, separation) =
+        narrowband::resolve(workers, target, &mut request)?;
     // Following the cards needs the stacks chosen first: each input takes
     // what its card applied to that exact stack revision.
     let mut followed_channel_processing = BTreeMap::new();
@@ -1766,7 +1768,7 @@ pub(super) fn prepare_color_job(
         let follows_cards = processing.input_processing == ColorInputProcessing::Channels;
         for (role, config) in &mut processing.input_rc_astro {
             let refused = |error| refused_rc_astro_steps(*role, follows_cards, error);
-            let schemas = super::rc_astro::schemas_for(config).map_err(refused)?;
+            let schemas = super::rc_astro::schemas_for(workers, config).map_err(refused)?;
             *config =
                 super::rc_astro::normalize_against_schemas(config, &schemas).map_err(refused)?;
             rc_astro_schemas.insert(*role, schemas);
@@ -1783,7 +1785,7 @@ pub(super) fn prepare_color_job(
                 "RC-Astro on the color channels cannot run: {error}"
             ))
         };
-        color_rc_astro_schemas = super::rc_astro::schemas_for(config).map_err(refused)?;
+        color_rc_astro_schemas = super::rc_astro::schemas_for(workers, config).map_err(refused)?;
         *config = super::rc_astro::normalize_against_schemas(config, &color_rc_astro_schemas)
             .map_err(refused)?;
     }
@@ -1928,9 +1930,12 @@ pub(super) fn prepare_color_job(
                     .and_then(|p| p.narrowband.as_ref())
                     .and_then(|p| p.rgb_star_processing.as_ref())
                     .map(|config| {
-                        let schemas = super::rc_astro::schemas_for(config).map_err(|error| {
-                            AppError::BadRequest(format!("RGB star processing cannot run: {error}"))
-                        })?;
+                        let schemas =
+                            super::rc_astro::schemas_for(workers, config).map_err(|error| {
+                                AppError::BadRequest(format!(
+                                    "RGB star processing cannot run: {error}"
+                                ))
+                            })?;
                         let config = super::rc_astro::normalize_against_schemas(config, &schemas)
                             .map_err(AppError::BadRequest)?;
                         let chain = super::rc_astro::rc_astro_chain_ids(
@@ -2954,8 +2959,13 @@ fn prepare_color_at_turn(
         fail("The database was removed while the composition waited".into());
         return None;
     };
-    let prepared = match prepare_color_job(&ctx, &state.astrometry, spec.project_id, &spec.request)
-    {
+    let prepared = match prepare_color_job(
+        &ctx,
+        &state.astrometry,
+        &state.workers,
+        spec.project_id,
+        &spec.request,
+    ) {
         Ok(prepared) => prepared,
         Err(error) => {
             fail(error.message());
@@ -3426,6 +3436,10 @@ fn run_channel_tools(
         let steps = config.steps.len();
         let outcome = pool.install(|| {
             super::rc_astro::apply_rc_astro(
+                crate::server::workers::rc_astro::RcAstroRunner {
+                    workers: &state.workers,
+                    person: !job.automatic,
+                },
                 stack_root,
                 chain,
                 config,
@@ -3480,6 +3494,7 @@ fn run_channel_tools(
 /// step is cached under `plan.chain`, so a stop keeps the finished ones.
 #[allow(clippy::too_many_arguments)]
 fn run_color_rc_astro(
+    workers: &crate::server::workers::Workers,
     job: &StackColorJob,
     stack_root: &FsPath,
     plan: &ColorRcAstroPlan,
@@ -3525,6 +3540,10 @@ fn run_color_rc_astro(
         None,
     );
     let outcome = super::rc_astro::apply_rc_astro(
+        crate::server::workers::rc_astro::RcAstroRunner {
+            workers,
+            person: !job.automatic,
+        },
         stack_root,
         &plan.chain,
         config,
@@ -4184,6 +4203,7 @@ fn compose_color(
             match processing.color_rc_astro.as_ref() {
                 Some(config) if !color_rc_astro.chain.is_empty() => {
                     let result = run_color_rc_astro(
+                        &state.workers,
                         job,
                         stack_root,
                         color_rc_astro,
@@ -6239,6 +6259,10 @@ mod tests {
     use crate::server::stack_preview::{
         LatestStackPreviewGroup, StackGroupState, StackGroupStatus, StackSkyOrientation,
     };
+    use crate::server::workers::Workers;
+    // Only the tests that run the stand-in rc-astro use it.
+    #[cfg(unix)]
+    use crate::server::workers::rc_astro::RcAstroRunner;
 
     #[test]
     fn color_rc_astro_validation_rejects_foreign_roles() {
@@ -6647,7 +6671,7 @@ mod tests {
         let root = cache.path();
         let nxt: super::super::rc_astro::RcAstroProcessing =
             serde_json::from_value(serde_json::json!({"steps": [{"tool": "nxt"}]})).unwrap();
-        let schemas = super::super::rc_astro::schemas_for(&nxt).unwrap();
+        let schemas = super::super::rc_astro::schemas_for(&Workers::default(), &nxt).unwrap();
         let chain = color_rc_astro_chain_ids("db", "inputs", RGB_ROLES, &nxt, &schemas).unwrap();
         write_cached_inputs(root, "inputs");
         let mut prepared = prepared_color(root, "color", false, false, Some("inputs"));
@@ -6661,6 +6685,10 @@ mod tests {
         };
         assert!(!prepared.runs_quickly());
         super::super::rc_astro::apply_rc_astro(
+            RcAstroRunner {
+                workers: &Workers::default(),
+                person: true,
+            },
             root,
             &chain,
             &nxt,
@@ -6769,7 +6797,8 @@ mod tests {
             .as_ref()
             .and_then(|processing| processing.color_rc_astro.as_ref())
             .map(|config| {
-                let schemas = super::super::rc_astro::schemas_for(config).unwrap();
+                let schemas =
+                    super::super::rc_astro::schemas_for(&Workers::default(), config).unwrap();
                 ColorRcAstroPlan {
                     chain: color_rc_astro_chain_ids("db", input_id, RGB_ROLES, config, &schemas)
                         .unwrap(),
@@ -7042,7 +7071,10 @@ mod tests {
         ];
         let bxt: super::super::rc_astro::RcAstroProcessing =
             serde_json::from_value(serde_json::json!({"steps": [{"tool": "bxt"}]})).unwrap();
-        let schemas = BTreeMap::from([(Red, super::super::rc_astro::schemas_for(&bxt).unwrap())]);
+        let schemas = BTreeMap::from([(
+            Red,
+            super::super::rc_astro::schemas_for(&Workers::default(), &bxt).unwrap(),
+        )]);
         let with_bxt = |strength| {
             let mut processing = extracted(strength);
             processing.input_rc_astro.insert(Red, bxt.clone());
@@ -7076,6 +7108,10 @@ mod tests {
         .unwrap();
         assert_eq!(first.input_rc_astro_ids[&Red], *card_chain.last().unwrap());
         super::super::rc_astro::apply_rc_astro(
+            RcAstroRunner {
+                workers: &Workers::default(),
+                person: true,
+            },
             root,
             &card_chain,
             &bxt,
@@ -7282,7 +7318,7 @@ mod tests {
             }),
         );
         assert!(state.stack_previews.insert_color(job.clone()));
-        let schemas = super::super::rc_astro::schemas_for(&nxt).unwrap();
+        let schemas = super::super::rc_astro::schemas_for(&Workers::default(), &nxt).unwrap();
         let plan = ColorRcAstroPlan {
             chain: color_rc_astro_chain_ids(
                 "db",
@@ -7306,6 +7342,7 @@ mod tests {
         let mut images = BTreeMap::from([(Ha, plane(0.1)), (Oiii, plane(0.5))]);
         let before = images.clone();
         run_color_rc_astro(
+            &Workers::default(),
             &job,
             root,
             &plan,
@@ -7335,7 +7372,7 @@ mod tests {
         rgb_job.palette = None;
         rgb_job.progress = job.progress.clone();
         assert!(state.stack_previews.insert_color(rgb_job.clone()));
-        let schemas = super::super::rc_astro::schemas_for(&nxt).unwrap();
+        let schemas = super::super::rc_astro::schemas_for(&Workers::default(), &nxt).unwrap();
         let plan = ColorRcAstroPlan {
             chain: color_rc_astro_chain_ids("db", &"0".repeat(64), RGB_ROLES, &nxt, &schemas)
                 .unwrap(),
@@ -7345,6 +7382,7 @@ mod tests {
             BTreeMap::from([(Red, plane(0.1)), (Green, plane(0.4)), (Blue, plane(0.7))]);
         let before = images.clone();
         run_color_rc_astro(
+            &Workers::default(),
             &rgb_job,
             root,
             &plan,
@@ -7434,7 +7472,10 @@ mod tests {
         ];
         let bxt: super::super::rc_astro::RcAstroProcessing =
             serde_json::from_value(serde_json::json!({"steps": [{"tool": "bxt"}]})).unwrap();
-        let schemas = BTreeMap::from([(Green, super::super::rc_astro::schemas_for(&bxt).unwrap())]);
+        let schemas = BTreeMap::from([(
+            Green,
+            super::super::rc_astro::schemas_for(&Workers::default(), &bxt).unwrap(),
+        )]);
 
         // Green's card runs BlurXTerminator on its stack first.
         let green_stack =
@@ -7449,6 +7490,10 @@ mod tests {
         )
         .unwrap();
         super::super::rc_astro::apply_rc_astro(
+            RcAstroRunner {
+                workers: &Workers::default(),
+                person: true,
+            },
             root,
             &card_chain,
             &bxt,
@@ -7646,7 +7691,10 @@ mod tests {
         let deconvolution = seiza_deconvolution::DeconvolutionConfig::conservative(2.0);
         let bxt: super::super::rc_astro::RcAstroProcessing =
             serde_json::from_value(serde_json::json!({"steps": [{"tool": "bxt"}]})).unwrap();
-        let schemas = BTreeMap::from([(Red, super::super::rc_astro::schemas_for(&bxt).unwrap())]);
+        let schemas = BTreeMap::from([(
+            Red,
+            super::super::rc_astro::schemas_for(&Workers::default(), &bxt).unwrap(),
+        )]);
         let mut processing = extracted(1.0);
         processing.input_deconvolutions.insert(Red, deconvolution);
         processing.input_rc_astro.insert(Red, bxt.clone());
@@ -7695,6 +7743,10 @@ mod tests {
         )
         .unwrap();
         super::super::rc_astro::apply_rc_astro(
+            RcAstroRunner {
+                workers: &Workers::default(),
+                person: true,
+            },
             root,
             &chain,
             &bxt,

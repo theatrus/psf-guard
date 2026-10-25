@@ -12,6 +12,7 @@ Use this index for detailed behavior and engineering records.
 - [Sky coverage map and timeline](SKY_COVERAGE.md)
 - [AstroBin acquisition export](ASTROBIN_EXPORT.md)
 - [Stacking with PixInsight's WBPP](WBPP.md)
+- [Workers: RC-Astro on another computer](REMOTE_WORKERS.md)
 - [Statistical grading](STATISTICAL_GRADING.md)
 - [Backups](BACKUPS.md)
 
@@ -27,7 +28,8 @@ These files explain contracts that span several modules or still have planned
 work. Historical checklists record delivery; they do not track current work.
 
 - [Background jobs and priority](design/background-jobs.md)
-- [Job queues and proposed remote workers](design/job-line.md)
+- [Job queues](design/job-line.md)
+- [Remote workers](design/remote-workers.md)
 - [Data transfer and remote sync](design/data-transfer.md)
 - [Multi-database architecture](design/multi-database.md)
 - [Director: goal-driven acquisition and phased plan](design/director.md)

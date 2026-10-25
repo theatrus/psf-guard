@@ -133,6 +133,8 @@ import type { GuidFillReport, GuidReport,
   ScoringDefaultsSettings,
   StackGpu,
   StackGpuSettings,
+  WorkersSettings,
+  CreatedWorkerToken,
   WorkerSettings,
   StorageSettings,
   StorageFoldersUpdate,
@@ -1083,6 +1085,43 @@ export const apiClient = {
       method
     );
     if (!data.data) throw new Error(data.error || 'Failed to save the stacking method');
+    return data.data;
+  },
+
+  getWorkers: async (): Promise<WorkersSettings> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<WorkersSettings>>('/workers');
+    if (!data.data) throw new Error(data.error || 'Failed to load the workers');
+    return data.data;
+  },
+
+  createWorkerToken: async (name: string): Promise<CreatedWorkerToken> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<CreatedWorkerToken>>('/workers/tokens', { name });
+    if (!data.data) throw new Error(data.error || 'Failed to create the worker token');
+    return data.data;
+  },
+
+  revokeWorkerToken: async (id: string): Promise<WorkersSettings> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.delete<ApiResponse<WorkersSettings>>(
+      `/workers/tokens/${encodeURIComponent(id)}`,
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to revoke the worker token');
+    return data.data;
+  },
+
+  setWorkerPlacement: async (placement: WorkersSettings['placement']): Promise<WorkersSettings> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.put<ApiResponse<WorkersSettings>>('/workers/placement', placement);
+    if (!data.data) throw new Error(data.error || 'Failed to save where work runs');
+    return data.data;
+  },
+
+  setWorkerExchangeFolder: async (folder: string | null): Promise<WorkersSettings> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.put<ApiResponse<WorkersSettings>>('/workers/exchange', { folder });
+    if (!data.data) throw new Error(data.error || 'Failed to save the exchange folder');
     return data.data;
   },
 

@@ -60,7 +60,7 @@ export default function StackRcAstroControls({
           </header>
           <p>{capabilities.data?.error ?? capabilities.error?.message ??
             (capabilities.isPending ? 'Checking server availability.' :
-              'RC-Astro is not installed on this server. Your saved processing steps are unchanged.')}</p>
+              'RC-Astro is not installed on this server or on a connected worker. Your saved processing steps are unchanged.')}</p>
           {!!config?.steps.length && (
             <>
               <ol>{orderedSteps(config.steps).map((step) => (
@@ -107,6 +107,16 @@ export default function StackRcAstroControls({
             : 'Off'}
         </span>
       </header>
+      {!!capabilities.data.workers?.length && (
+        <p className="stack-rc-astro-where">
+          {tools.map((schema) => {
+            const workers = capabilities.data.tool_workers?.[schema.key] ?? [];
+            return `${schema.name.replace(/^RC-Astro /, '')} on ${workers.length ? workers.join(', ') : 'this server'}`;
+          }).join(' · ')}
+          {capabilities.data.this_server && tools.some((schema) => capabilities.data.tool_workers?.[schema.key]?.length)
+            && '. This server runs a tool while no worker that takes it is connected.'}
+        </p>
+      )}
       {!!config?.steps.length && (
         <p>{orderedSteps(config.steps).map((step) =>
           tools.find((schema) => schema.key === step.tool)?.name ?? step.tool

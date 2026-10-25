@@ -148,6 +148,7 @@ type ResolvedSources = (
 );
 
 pub(super) fn resolve(
+    workers: &crate::server::workers::Workers,
     target: &TargetSources,
     request: &mut StackColorRequest,
 ) -> Result<ResolvedSources, AppError> {
@@ -253,7 +254,7 @@ pub(super) fn resolve(
             )]),
         }],
     };
-    let schemas = match super::super::rc_astro::schemas_for(&config) {
+    let schemas = match super::super::rc_astro::schemas_for(workers, &config) {
         Ok(schemas) => schemas,
         Err(error) if may_fallback => {
             resolution.stars = ColorStars::Narrowband;
@@ -464,8 +465,13 @@ pub(super) fn separate_stars(
         None,
         None,
     );
+    let runner = crate::server::workers::rc_astro::RcAstroRunner {
+        workers: &state.workers,
+        person: !job.automatic,
+    };
     let run = |chain: &[String], image: &LinearImage, label: &str| {
         super::super::rc_astro::apply_rc_astro(
+            runner,
             root,
             chain,
             &plan.config,
@@ -490,6 +496,7 @@ pub(super) fn separate_stars(
             if let Some(preparation) = &plan.rgb_preparation {
                 let combined = combine(images, RGB_ROLES)?;
                 let prepared = super::super::rc_astro::apply_rc_astro(
+                    runner,
                     root,
                     &preparation.chain,
                     &preparation.config,
@@ -722,6 +729,7 @@ pub(super) fn balance(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::server::workers::Workers;
 
     fn source(role: StackColorRole) -> StackColorSource {
         serde_json::from_value(serde_json::json!({
@@ -853,14 +861,14 @@ mod tests {
                 max_seconds: Some(seconds),
             });
         }
-        resolve(&target, &mut request).unwrap();
+        resolve(&Workers::default(), &target, &mut request).unwrap();
         assert_eq!(request.palette, Some(StackNarrowbandPalette::Hoo));
         target.by_role.get_mut(&StackColorRole::Sii).unwrap()[0].exposure_group = target.by_role
             [&StackColorRole::Ha][0]
             .exposure_group
             .clone();
         target.by_role.get_mut(&StackColorRole::Sii).unwrap()[0].wbpp = true;
-        resolve(&target, &mut request).unwrap();
+        resolve(&Workers::default(), &target, &mut request).unwrap();
         assert_eq!(request.palette, Some(StackNarrowbandPalette::Hoo));
     }
 
@@ -891,7 +899,7 @@ mod tests {
                 );
             }
         }
-        let (sources, _, _) = resolve(&target, &mut request).unwrap();
+        let (sources, _, _) = resolve(&Workers::default(), &target, &mut request).unwrap();
         assert_eq!(request.palette, Some(StackNarrowbandPalette::Hoo));
         assert_eq!(sources.len(), 2);
         let mut matching = target.by_role[&StackColorRole::Sii][0].clone();
@@ -904,7 +912,7 @@ mod tests {
             .get_mut(&StackColorRole::Sii)
             .unwrap()
             .push(matching);
-        let (sources, _, _) = resolve(&target, &mut request).unwrap();
+        let (sources, _, _) = resolve(&Workers::default(), &target, &mut request).unwrap();
         assert_eq!(request.palette, Some(StackNarrowbandPalette::Sho));
         assert!(sources.iter().any(|source| source.job_id == "sii-long"));
     }
@@ -913,7 +921,7 @@ mod tests {
     fn automatic_palette_uses_only_unambiguous_physical_filters() {
         let mut request = request(None);
         let target = target(false, true);
-        resolve(&target, &mut request).unwrap();
+        resolve(&Workers::default(), &target, &mut request).unwrap();
         assert_eq!(request.palette, Some(StackNarrowbandPalette::Sho));
         request.input_sources.clear();
         let mut ambiguous = target;
@@ -924,7 +932,7 @@ mod tests {
             .get_mut(&StackColorRole::Sii)
             .unwrap()
             .push(second);
-        resolve(&ambiguous, &mut request).unwrap();
+        resolve(&Workers::default(), &ambiguous, &mut request).unwrap();
         assert_eq!(request.palette, Some(StackNarrowbandPalette::Hoo));
         request.input_sources.insert(
             StackColorRole::Sii,
@@ -934,14 +942,14 @@ mod tests {
                 artifact_revision: "first".into(),
             },
         );
-        resolve(&ambiguous, &mut request).unwrap();
+        resolve(&Workers::default(), &ambiguous, &mut request).unwrap();
         assert_eq!(request.palette, Some(StackNarrowbandPalette::Sho));
         request
             .input_sources
             .get_mut(&StackColorRole::Sii)
             .unwrap()
             .artifact_revision = "stale".into();
-        assert!(resolve(&ambiguous, &mut request).is_err());
+        assert!(resolve(&Workers::default(), &ambiguous, &mut request).is_err());
     }
 
     #[test]
@@ -983,6 +991,7 @@ mod tests {
     fn automatic_stars_uses_rgb_and_reports_incomplete_sources() {
         let _tool = super::super::super::rc_astro::test_tool::install(false);
         let (sources, result, plan) = resolve(
+            &Workers::default(),
             &target(true, true),
             &mut request(Some(ColorStars::Automatic)),
         )
@@ -991,6 +1000,7 @@ mod tests {
         assert_eq!(result.unwrap().stars, ColorStars::Rgb);
         assert!(plan.is_some());
         let (sources, result, plan) = resolve(
+            &Workers::default(),
             &target(false, true),
             &mut request(Some(ColorStars::Automatic)),
         )
@@ -998,9 +1008,18 @@ mod tests {
         assert_eq!(sources.len(), 3);
         assert_eq!(result.unwrap().stars, ColorStars::Narrowband);
         assert!(plan.is_none());
-        assert!(resolve(&target(false, true), &mut request(Some(ColorStars::Rgb))).is_err());
-        let (_, result, plan) =
-            resolve(&target(false, true), &mut request(Some(ColorStars::None))).unwrap();
+        assert!(resolve(
+            &Workers::default(),
+            &target(false, true),
+            &mut request(Some(ColorStars::Rgb))
+        )
+        .is_err());
+        let (_, result, plan) = resolve(
+            &Workers::default(),
+            &target(false, true),
+            &mut request(Some(ColorStars::None)),
+        )
+        .unwrap();
         assert_eq!(result.unwrap().stars, ColorStars::None);
         assert!(plan.is_some());
     }
@@ -1020,7 +1039,12 @@ mod tests {
                 sources[0].wbpp = true;
             }
         }
-        let (selected, _, _) = resolve(&target, &mut request(Some(ColorStars::Automatic))).unwrap();
+        let (selected, _, _) = resolve(
+            &Workers::default(),
+            &target,
+            &mut request(Some(ColorStars::Automatic)),
+        )
+        .unwrap();
         assert!(selected.iter().all(|source| source.wbpp));
         let mut request = request(Some(ColorStars::Rgb));
         request.input_sources.insert(
@@ -1031,7 +1055,7 @@ mod tests {
                 artifact_revision: "first".into(),
             },
         );
-        let (selected, _, _) = resolve(&target, &mut request).unwrap();
+        let (selected, _, _) = resolve(&Workers::default(), &target, &mut request).unwrap();
         assert!(
             !selected
                 .iter()
@@ -1045,8 +1069,12 @@ mod tests {
     #[test]
     fn star_separation_reuses_both_caches_and_carries_rgb_coverage_into_the_crop() {
         let tool = super::super::super::rc_astro::test_tool::install(false);
-        let (sources, resolution, config) =
-            resolve(&target(true, true), &mut request(Some(ColorStars::Rgb))).unwrap();
+        let (sources, resolution, config) = resolve(
+            &Workers::default(),
+            &target(true, true),
+            &mut request(Some(ColorStars::Rgb)),
+        )
+        .unwrap();
         let (config, schemas) = config.unwrap();
         let root = tempfile::tempdir().unwrap();
         let state = Arc::new(AppState::new_for_test(
@@ -1066,7 +1094,8 @@ mod tests {
             }],
         };
         let preparation_schemas =
-            super::super::super::rc_astro::schemas_for(&preparation_config).unwrap();
+            super::super::super::rc_astro::schemas_for(&Workers::default(), &preparation_config)
+                .unwrap();
         let preparation_chain = super::super::super::rc_astro::rc_astro_chain_ids(
             "db",
             "rgb-prepare",

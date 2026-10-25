@@ -531,6 +531,67 @@ pub struct DbRegistry {
         skip_serializing_if = "Option::is_none"
     )]
     pub scoring: Option<crate::server::stack_preview::StackScoringSettings>,
+    /// The workers that may join this server, and the folder their task
+    /// files go through, edited in Settings › Workers. Additive within
+    /// registry v2; absent means no worker may join. A block this version
+    /// cannot read reads as absent.
+    #[serde(
+        default,
+        deserialize_with = "lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub remote_workers: Option<RemoteWorkerSettings>,
+}
+
+/// Who may join this server as a worker, and where task files go.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RemoteWorkerSettings {
+    /// One token per worker; the secret is stored only as its hash.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tokens: Vec<WorkerTokenRecord>,
+    /// The folder task files go through, as an absolute path. Absent puts
+    /// it in the cache folder. A worker in shared mode must see this folder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exchange_folder: Option<String>,
+    /// Where RC-Astro steps run.
+    #[serde(default)]
+    pub rc_astro: WorkPlacement,
+}
+
+/// Where one kind of work runs: on workers, on this server, or on workers
+/// with this server as the fallback.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkPlacement {
+    /// A connected worker that takes the work runs it; this server runs it
+    /// while none is connected.
+    #[default]
+    WorkersFirst,
+    /// Only workers run it; this server never does.
+    WorkersOnly,
+    /// Only this server runs it.
+    ThisServer,
+}
+
+impl WorkPlacement {
+    /// Whether a worker may run the work: this server's own, or another
+    /// machine's.
+    pub fn allows(self, this_server: bool) -> bool {
+        match self {
+            WorkPlacement::WorkersFirst => true,
+            WorkPlacement::WorkersOnly => !this_server,
+            WorkPlacement::ThisServer => this_server,
+        }
+    }
+}
+
+/// A worker token: its name and the SHA-256 of its secret.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkerTokenRecord {
+    pub id: String,
+    pub name: String,
+    pub token_hash: String,
+    pub created_at: i64,
 }
 
 /// What the AstroBin CSV export needs from the person: which equipment
@@ -873,6 +934,7 @@ impl Default for DbRegistry {
             pixinsight: None,
             backups: None,
             scoring: None,
+            remote_workers: None,
         }
     }
 }
