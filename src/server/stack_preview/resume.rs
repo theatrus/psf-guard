@@ -78,6 +78,7 @@ pub(super) struct ResumeManifest {
 
 /// A validated checkpoint: the reopened-context path plus the ledger to
 /// replay. Frames the new request adds are whatever the manifest lacks.
+#[derive(Clone)]
 pub(super) struct ResumeState {
     pub context_path: PathBuf,
     pub manifest: ResumeManifest,

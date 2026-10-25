@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use super::board::{Board, Refusal, POLL};
 use crate::remote_work::protocol::{
-    Assignment, Completion, FileAccess, FileMode, Offers, Registration, WrittenOutput,
+    Assignment, Completion, FileAccess, FileMode, Offers, Progress, Registration, WrittenOutput,
     PROTOCOL_VERSION,
 };
 
@@ -95,27 +95,32 @@ fn run(board: &Arc<Board>, session: &str, assignment: Assignment) {
         );
         return;
     };
-    let cancel = {
-        let (board, session, task, lease) = (
-            Arc::clone(board),
-            session.to_string(),
-            task.clone(),
-            lease.clone(),
-        );
-        seiza_stacking::CancelSignal::new(move || !board.still_wanted(&session, &task, &lease))
-    };
+    let stop = crate::concurrency::Stop::new();
+    if board
+        .attach_stop(session, &task, &lease, stop.clone())
+        .is_err()
+    {
+        // Stopped before it started.
+        return;
+    }
     let tools = super::local_tools();
+    let mut report = Report {
+        board,
+        session,
+        task: &task,
+        lease: &lease,
+        sent: 0,
+    };
     let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         crate::remote_work::execute(
             kind,
             spec,
             &input_paths,
             &output_dir,
+            &output_dir,
             &tools,
-            &cancel,
-            &mut |fraction| {
-                let _ = board.progress(session, &task, &lease, fraction);
-            },
+            &stop,
+            &mut report,
         )
     }))
     .unwrap_or_else(|_| Err("The task panicked on this server".into()));
@@ -160,5 +165,44 @@ fn run(board: &Arc<Board>, session: &str, assignment: Assignment) {
         // The work that waited for it stopped.
         Ok(()) | Err(Refusal::NotCurrent) => {}
         Err(refusal) => tracing::warn!(task, "This server's worker: {refusal}"),
+    }
+}
+
+/// A task's progress and events, reported straight to the board.
+struct Report<'a> {
+    board: &'a Board,
+    session: &'a str,
+    task: &'a str,
+    lease: &'a str,
+    /// Events reported so far.
+    sent: u64,
+}
+
+impl crate::remote_work::TaskReport for Report<'_> {
+    fn fraction(&mut self, done: f32) {
+        let _ = self.board.progress(
+            self.session,
+            self.task,
+            self.lease,
+            Progress {
+                fraction: done,
+                events: Vec::new(),
+                first_event: self.sent,
+            },
+        );
+    }
+
+    fn event(&mut self, event: serde_json::Value) {
+        let _ = self.board.progress(
+            self.session,
+            self.task,
+            self.lease,
+            Progress {
+                fraction: f32::NAN,
+                events: vec![event],
+                first_event: self.sent,
+            },
+        );
+        self.sent += 1;
     }
 }

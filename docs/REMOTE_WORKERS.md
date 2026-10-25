@@ -4,9 +4,15 @@ A worker is another computer that runs work for a PSF Guard server. Use one
 when the server lacks something the work needs: an RC-Astro licence, a GPU,
 or more processor cores. The server keeps the catalog and every result.
 
-Workers run RC-Astro tools today: BlurXTerminator, NoiseXTerminator and
-StarXTerminator, for stack previews, color previews and narrowband stars.
-Stack builds and WBPP runs stay on the server; stack builds are planned next.
+Workers run two kinds of work:
+
+- **RC-Astro tools**: BlurXTerminator, NoiseXTerminator and StarXTerminator,
+  for stack previews, color previews and narrowband stars.
+- **Stack builds**: each channel of a build, stacked from its frames. Stack
+  builds stay on the server unless you send them to workers; see [Stack
+  builds on a worker](#stack-builds-on-a-worker).
+
+WBPP runs stay on the server.
 
 ## Add a worker
 
@@ -46,27 +52,85 @@ to 16; the default is 1, since each RC-Astro step uses the GPU.
 A worker accepts everything it can run unless you list its work with
 `--work`. Repeat it for more:
 
+- `--work stack` accepts stack builds.
 - `--work rc-astro` accepts every RC-Astro tool installed on the worker.
 - `--work bxt`, `--work nxt` or `--work sxt` accepts only that tool.
 
 For example, `--work bxt --work sxt` sends BlurXTerminator and
-StarXTerminator to a GPU computer, and leaves NoiseXTerminator to the
-server. **Settings › Workers** lists the tools each worker accepts.
+StarXTerminator to a GPU computer, and leaves NoiseXTerminator and stack
+builds to the server. **Settings › Workers** lists the tools each worker
+accepts, and whether it accepts stack builds.
 
 ## Choose where work runs
 
 Under **Where work runs** in **Settings › Workers**, choose where RC-Astro
-tools run:
+tools run, and where stack builds run:
 
-- **Workers first** (the default). A connected worker that accepts a tool
-  runs it. The server runs the tool itself only while no such worker is
-  connected, so it is the fallback when a worker is stopped or unreachable.
-- **Workers only.** Only workers run the tools. With no worker connected, a
-  step fails rather than run on the server.
-- **This server only.** The server runs the tools, and workers are not sent
-  them.
+- **Workers first.** A connected worker that accepts the work runs it. The
+  server runs the work itself only while no such worker is connected, so it
+  is the fallback when a worker is stopped or unreachable. This is the
+  default for RC-Astro tools.
+- **Workers only.** Only workers run the work. With no worker connected, it
+  fails rather than run on the server.
+- **This server only.** The server runs the work, and workers are not sent
+  it. This is the default for stack builds.
 
-Stack builds and WBPP runs always run on the server for now.
+WBPP runs always run on the server.
+
+## Stack builds on a worker
+
+To stack builds on another computer, such as one with more cores or a GPU:
+
+1. Start the worker with `--work stack`, or with no `--work` at all. Use
+   shared files when you can: a worker in remote mode downloads every frame
+   of a channel before it stacks it, about 50 to 120 MB a frame.
+2. In **Settings › Workers**, under **Where work runs** › **Stack builds**,
+   choose **Workers first** or **Workers only**.
+
+The server sends a channel only to a worker on its own PSF Guard release
+and Seiza stacking version, with the frames, masters, checkpoint and
+settings it would use itself. **Settings › Stacking › GPU** applies on the
+worker too: with **Use the GPU** off, the worker stacks on its CPU even if
+it has a GPU. A GPU's passes can differ slightly from a CPU's, so a channel
+stacked on a worker with a GPU can differ slightly from one this server
+stacked on its CPU.
+
+The server still does the work that reads its catalog: it chooses each
+channel's reference frame, builds the calibration masters, decides whether
+the build continues a checkpoint, and plate-solves the reference for a
+north-up stack. The worker stacks the frames with those masters, runs the
+final pass and writes the stack. The server then stores the stack and its
+checkpoint and renders the previews.
+
+While a worker stacks a channel:
+
+- The card fills in frame by frame, a few seconds behind the worker, and
+  shows **Stacked on** with the worker's name.
+- The card's **Live stack** preview shows the worker's running image. The
+  worker renders it about every five seconds and sends the newest one after
+  the frames it includes. The server writes each image over the last as a
+  temporary file, and the finished preview replaces it. An image lost while
+  the server is unreachable is not sent again; the next one replaces it.
+- The server's cores are free for its other work.
+- A worker running several tasks (`--slots`) gives each channel its share
+  of its cores and memory. The final pass keeps its copies of the frames in
+  the worker's `--work-dir`.
+- **Stop**, or a person's build that stops an automatic one, asks the worker
+  to finish with the frames it has. It saves a checkpoint and sends it, and
+  the next build continues from it on any worker or on the server. The
+  server waits as long as the worker keeps reporting; a worker that stops
+  answering for two minutes loses what it had.
+- Under **Workers first**, the server stacks the channel itself when no
+  worker can take it or a worker fails it.
+- A mosaic stacks on a worker too. The worker writes one calibrated
+  reference frame per panel to its `--work-dir` while it plans the canvas,
+  and deletes them when planning ends. Allow room for them: each is about
+  the size of a 32-bit frame. A mosaic saves no checkpoint: **Stop**
+  discards its progress, and the next build starts the mosaic over.
+- Before a mosaic goes to a worker, the server checks that its frames
+  cover every panel. Under **Workers first**, a mosaic that a worker
+  reports as incomplete is not stacked again on the server, because the
+  same frames would fail there too.
 
 ## Choose how files reach the worker
 

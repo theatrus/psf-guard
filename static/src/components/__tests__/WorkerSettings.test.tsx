@@ -151,20 +151,41 @@ describe('WorkerSettings', () => {
     ]));
   });
 
-  it('saves where RC-Astro tools run', async () => {
-    let saved: unknown = null;
+  it('saves where RC-Astro tools and stack builds run, each on its own', async () => {
+    const saved: unknown[] = [];
+    let current = settings({ placement: { rc_astro: 'workers_first', stack: 'this_server' } });
     server.use(
-      http.get('/api/workers', () => HttpResponse.json(ok(settings()))),
+      http.get('/api/workers', () => HttpResponse.json(ok(current))),
       http.put('/api/workers/placement', async ({ request }) => {
-        saved = await request.json();
-        return HttpResponse.json(ok(settings({ placement: { rc_astro: 'workers_only' } })));
+        const placement = await request.json() as WorkersSettings['placement'];
+        saved.push(placement);
+        current = settings({ placement });
+        return HttpResponse.json(ok(current));
       }),
     );
     render(<WorkerSettings />, { wrapper: wrapper() });
-    fireEvent.click(await screen.findByRole('radio', { name: /^Workers only/ }));
-    await waitFor(() => expect(saved).toEqual({ rc_astro: 'workers_only' }));
-    expect(await screen.findByRole('radio', { name: /^Workers only/ })).toBeChecked();
-    expect(screen.getByText('Stack builds and WBPP runs stay on this server.')).toBeInTheDocument();
+    const tools = await screen.findByRole('group', { name: 'RC-Astro tools' });
+    const stacks = screen.getByRole('group', { name: 'Stack builds' });
+    // Stack builds stay on this server until someone chooses otherwise.
+    expect(within(stacks).getByRole('radio', { name: /^This server only/ })).toBeChecked();
+    fireEvent.click(within(tools).getByRole('radio', { name: /^Workers only/ }));
+    await waitFor(() => expect(within(tools).getByRole('radio', { name: /^Workers only/ })).toBeChecked());
+    fireEvent.click(within(stacks).getByRole('radio', { name: /^Workers first/ }));
+    await waitFor(() => expect(saved).toEqual([
+      { rc_astro: 'workers_only', stack: 'this_server' },
+      { rc_astro: 'workers_only', stack: 'workers_first' },
+    ]));
+    expect(screen.getByText(/WBPP runs stay on this server/)).toBeInTheDocument();
+  });
+
+  it('says which workers stack builds, with their Seiza stacking version', async () => {
+    const base = settings();
+    server.use(http.get('/api/workers', () => HttpResponse.json(ok({
+      ...base,
+      workers: [{ ...base.workers[1], stacking_version: '0.50.0' }],
+    }))));
+    render(<WorkerSettings />, { wrapper: wrapper() });
+    expect(await screen.findByText('Stack builds (Seiza stacking 0.50.0)')).toBeInTheDocument();
   });
 
   it('puts a placeholder in the command when this address only works here', () => {

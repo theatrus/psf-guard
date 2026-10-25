@@ -14,6 +14,13 @@ import { serverAddress } from '../utils/workerCommand';
 
 const WORKERS_QUERY_KEY = ['workers'] as const;
 
+type PlacementKind = 'rc_astro' | 'stack';
+
+const PLACEMENT_KINDS: Array<{ kind: PlacementKind; legend: string; fallback: WorkPlacement }> = [
+  { kind: 'rc_astro', legend: 'RC-Astro tools', fallback: 'workers_first' },
+  { kind: 'stack', legend: 'Stack builds', fallback: 'this_server' },
+];
+
 const PLACEMENTS: Array<{ value: WorkPlacement; label: string; help: string }> = [
   {
     value: 'workers_first',
@@ -71,6 +78,9 @@ function WorkerRow({ worker }: { worker: WorkerSessionSummary }) {
               ? worker.rc_astro.join(', ')
               : 'No RC-Astro tools'}
           </span>
+          {worker.stacking_version && (
+            <span className="muted">Stack builds (Seiza stacking {worker.stacking_version})</span>
+          )}
           <span className="muted">{fileAccess(worker)}</span>
           {!worker.local && (
             <span className="muted">
@@ -158,9 +168,11 @@ export default function WorkerSettings() {
     });
   };
 
-  const choosePlacement = (rcAstro: WorkPlacement) => {
+  const choosePlacement = (kind: PlacementKind, placement: WorkPlacement) => {
+    if (!workers.data) return;
+    const current = workers.data.placement;
     void run(async () => {
-      publish(await apiClient.setWorkerPlacement({ rc_astro: rcAstro }));
+      publish(await apiClient.setWorkerPlacement({ ...current, [kind]: placement }));
     });
   };
 
@@ -202,10 +214,10 @@ export default function WorkerSettings() {
         <div>
           <h3>Workers</h3>
           <p>
-            A worker is another computer that runs RC-Astro tools for this
-            server, such as one with a GPU or an RC-Astro licence. Install PSF
-            Guard there, create a token here, and run{' '}
-            <code>psf-guard worker</code> with it.
+            A worker is another computer that runs RC-Astro tools or stacks
+            builds for this server, such as one with a GPU, more cores or an
+            RC-Astro licence. Install PSF Guard there, create a token here, and
+            run <code>psf-guard worker</code> with it.
           </p>
         </div>
         {!formOpen && (
@@ -310,25 +322,31 @@ export default function WorkerSettings() {
       )}
 
       <h4>Where work runs</h4>
-      <fieldset className="calibration-settings-group" disabled={saving}>
-        <legend>RC-Astro tools</legend>
-        {PLACEMENTS.map((placement) => (
-          <label key={placement.value} className="review-preference">
-            <input
-              type="radio"
-              name="worker-placement-rc-astro"
-              value={placement.value}
-              checked={data.placement.rc_astro === placement.value}
-              onChange={() => choosePlacement(placement.value)}
-            />
-            <span>
-              {placement.label}
-              <small>{placement.help}</small>
-            </span>
-          </label>
-        ))}
-      </fieldset>
-      <p className="muted">Stack builds and WBPP runs stay on this server.</p>
+      {PLACEMENT_KINDS.map(({ kind, legend, fallback }) => (
+        <fieldset key={kind} className="calibration-settings-group" disabled={saving}>
+          <legend>{legend}</legend>
+          {PLACEMENTS.map((placement) => (
+            <label key={placement.value} className="review-preference">
+              <input
+                type="radio"
+                name={`worker-placement-${kind}`}
+                value={placement.value}
+                checked={(data.placement[kind] ?? fallback) === placement.value}
+                onChange={() => choosePlacement(kind, placement.value)}
+              />
+              <span>
+                {placement.label}
+                <small>{placement.help}</small>
+              </span>
+            </label>
+          ))}
+        </fieldset>
+      ))}
+      <p className="muted">
+        A build stacked on a worker shows no running image, and the channel&apos;s
+        card shows which worker stacked it. This server&apos;s GPU settings apply
+        on the worker. WBPP runs stay on this server.
+      </p>
 
       <h4>Tokens</h4>
       {data.tokens.length === 0 && <p className="muted">No worker tokens yet.</p>}

@@ -27,6 +27,14 @@
   spacing. Emission amounts and star reduction appear where they run in the
   pipeline; closing a step preserves its edits.
 
+- Stack builds on another computer. Start a worker with `--work stack`, then
+  choose **Workers first** or **Workers only** for stack builds in
+  **Settings › Workers**. Each channel stacks there from the frames, masters,
+  checkpoint and settings the server would use. Mosaics stack there too.
+  Each channel's card shows which worker stacked it, and its **Live stack**
+  preview shows the worker's running image. Stack builds stay on the server
+  unless you choose otherwise.
+
 - Run RC-Astro tools on another computer. Add a worker in **Settings ›
   Workers**, then run `psf-guard worker --server …` there with its token.
   The worker runs BlurXTerminator, NoiseXTerminator and StarXTerminator for

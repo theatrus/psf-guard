@@ -1,12 +1,12 @@
-//! The worker command against a real server's workers routes, with a
-//! stand-in rc-astro on both sides.
-
-#![cfg(unix)]
+//! The worker command against a real server's workers routes. The
+//! RC-Astro tests run a stand-in rc-astro, a shell script, so they run on
+//! Unix; the rest run everywhere.
 
 use super::*;
 use crate::server::state::AppState;
 use crate::server::workers::board::{Board, Timings};
 use crate::server::workers::{tokens, Workers};
+#[cfg(unix)]
 use seiza_stacking::LinearImage;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -17,6 +17,9 @@ struct Server {
     secret: String,
     /// Inputs downloaded and outputs uploaded over HTTP.
     transfers: Arc<AtomicUsize>,
+    /// The server's exchange folder, removed with the server. Only the
+    /// shared-folder RC-Astro tests, which run on Unix, read its path.
+    #[cfg_attr(not(unix), allow(dead_code))]
     exchange: tempfile::TempDir,
 }
 
@@ -113,6 +116,7 @@ fn start_worker_taking(
         work_dir: work_dir.to_path_buf(),
         tools: LocalTools {
             rc_astro: crate::remote_work::rc_astro::locate(None),
+            slots: 1,
         },
         work,
         slots: 1,
@@ -144,6 +148,7 @@ fn connected(server: &Server) -> Option<crate::server::workers::board::SessionSu
         .find(|worker| worker.name == "test-worker" && worker.connected)
 }
 
+#[cfg(unix)]
 fn noise_x() -> seiza_stacking::ExternalToolSchema {
     let cli = crate::remote_work::rc_astro::locate(None).unwrap();
     crate::remote_work::rc_astro::probe(&cli)
@@ -153,6 +158,7 @@ fn noise_x() -> seiza_stacking::ExternalToolSchema {
         .unwrap()
 }
 
+#[cfg(unix)]
 fn request() -> seiza_stacking::ExternalToolRequest {
     seiza_stacking::ExternalToolRequest {
         tool: "nxt".into(),
@@ -161,6 +167,7 @@ fn request() -> seiza_stacking::ExternalToolRequest {
     }
 }
 
+#[cfg(unix)]
 fn image() -> LinearImage {
     LinearImage::new(
         4,
@@ -172,6 +179,7 @@ fn image() -> LinearImage {
 }
 
 /// Run NoiseXTerminator on the board, as the server's processing would.
+#[cfg(unix)]
 async fn run_step(
     server: &Server,
     cancel: Option<seiza_stacking::CancelSignal>,
@@ -198,12 +206,14 @@ async fn run_step(
     .unwrap()
 }
 
+#[cfg(unix)]
 fn assert_same_pixels(processed: &LinearImage) {
     for (got, sent) in processed.data.iter().zip(&image().data) {
         assert!((got - sent).abs() < 1e-2, "{got} != {sent}");
     }
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_remote_worker_downloads_the_input_and_uploads_the_result() {
     let tool = crate::server::stack_preview::rc_astro::test_tool::install(false);
@@ -232,6 +242,7 @@ async fn a_remote_worker_downloads_the_input_and_uploads_the_result() {
     eventually("the worker leaves", || connected(&server).is_none()).await;
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_worker_advertises_only_the_tools_its_work_choices_list() {
     let _tool = crate::server::stack_preview::rc_astro::test_tool::install(false);
@@ -257,6 +268,7 @@ async fn a_worker_advertises_only_the_tools_its_work_choices_list() {
     worker.await.unwrap().unwrap();
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_shared_worker_reads_and_writes_through_its_map() {
     let tool = crate::server::stack_preview::rc_astro::test_tool::install(false);
@@ -291,6 +303,7 @@ async fn a_shared_worker_reads_and_writes_through_its_map() {
     worker.await.unwrap().unwrap();
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_shared_worker_that_cannot_see_the_folder_falls_back_to_the_server() {
     let tool = crate::server::stack_preview::rc_astro::test_tool::install(false);
@@ -318,6 +331,7 @@ async fn a_shared_worker_that_cannot_see_the_folder_falls_back_to_the_server() {
     worker.await.unwrap().unwrap();
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_stop_on_the_server_kills_the_tool_on_the_worker() {
     let tool = crate::server::stack_preview::rc_astro::test_tool::install(true);
@@ -415,6 +429,7 @@ fn maps_imply_shared_files_and_must_name_both_sides() {
 /// The real rc-astro on a remote worker, over HTTP, in both file modes.
 /// Needs a licensed rc-astro on this machine:
 /// `cargo test --lib real_rc_astro -- --ignored`.
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "needs a licensed rc-astro"]
 async fn real_rc_astro_runs_on_a_remote_worker() {
@@ -515,6 +530,7 @@ async fn real_rc_astro_runs_on_a_remote_worker() {
     }
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_slow_download_keeps_its_lease() {
     let tool = crate::server::stack_preview::rc_astro::test_tool::install(false);
@@ -530,6 +546,7 @@ async fn a_slow_download_keeps_its_lease() {
     worker.await.unwrap().unwrap();
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn revoking_the_token_stops_the_running_tool() {
     let tool = crate::server::stack_preview::rc_astro::test_tool::install(true);
@@ -602,5 +619,268 @@ fn a_task_id_or_file_name_that_leaves_the_work_folder_is_refused() {
             check_assignment(&assignment(task, input, output)).is_err(),
             "{task} {input} {output}"
         );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_worker_stacks_a_channel_to_the_same_pixels_as_this_server() {
+    use crate::server::stack_preview::remote_channel::testing;
+    let frames = tempfile::tempdir().unwrap();
+    let group = testing::synthetic_group(frames.path());
+    let here = tempfile::tempdir().unwrap();
+    let local = {
+        let (group, directory) = (group.clone(), here.path().to_path_buf());
+        tokio::task::spawn_blocking(move || testing::stack_here(&group, &directory))
+            .await
+            .unwrap()
+    };
+    assert_eq!(
+        local.dispositions,
+        ["reference", "accepted", "accepted", "accepted", "accepted"],
+        "{:?}",
+        local.notes
+    );
+
+    for files in [
+        FileAccess::default(),
+        FileAccess {
+            mode: FileMode::Shared,
+            maps: Vec::new(),
+        },
+    ] {
+        let shared = files.mode == FileMode::Shared;
+        let server = server().await;
+        // Stack builds stay on the server unless Settings › Workers sends
+        // them out.
+        server.state.workers.board.set_placement(
+            crate::remote_work::protocol::TaskKind::StackChannel,
+            crate::server::workers::board::WorkPlacement::WorkersOnly,
+        );
+        let work = tempfile::tempdir().unwrap();
+        let (stop, worker) = start_worker_taking(
+            &server,
+            files,
+            work.path(),
+            WorkChoice::parse(&["stack".into()]).unwrap(),
+        );
+        eventually("the worker connects", || {
+            connected(&server).is_some_and(|worker| !shared || worker.exchange_shared)
+        })
+        .await;
+        let there = tempfile::tempdir().unwrap();
+        let remote = {
+            let (state, group, directory) = (
+                Arc::clone(&server.state),
+                group.clone(),
+                there.path().to_path_buf(),
+            );
+            tokio::task::spawn_blocking(move || {
+                testing::stack_on_worker(&state, &group, &directory)
+            })
+            .await
+            .unwrap()
+        };
+        assert_eq!(remote.dispositions, local.dispositions);
+        assert_eq!(remote.matched_stars, local.matched_stars);
+        assert_eq!(remote.pixels, local.pixels, "the same stack, bit for bit");
+        assert!(remote.checkpoint, "the checkpoint came back");
+        assert!(
+            remote.notes.contains(&"Stacked on test-worker".to_string()),
+            "{:?}",
+            remote.notes
+        );
+        // The card showed the worker's running image; the last one went
+        // with the final events, before the outputs.
+        assert!(
+            remote.images.last() == Some(&5) && remote.images.iter().all(|frames| *frames <= 5),
+            "{:?}",
+            remote.images
+        );
+        // Every frame went over HTTP in remote mode: five frames, then the
+        // stack, the clipped map and the checkpoint's two halves.
+        let transfers = server.transfers.load(Ordering::SeqCst);
+        if shared {
+            assert_eq!(transfers, 0);
+        } else {
+            assert!(transfers >= 8, "{transfers}");
+        }
+        drop(stop);
+        worker.await.unwrap().unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_server_keeps_a_running_image_only_from_the_current_lease_and_only_a_png() {
+    let server = server().await;
+    server.state.workers.board.set_placement(
+        crate::remote_work::protocol::TaskKind::StackChannel,
+        crate::server::workers::board::WorkPlacement::WorkersOnly,
+    );
+    let ticket = server.state.workers.board.ticket().unwrap();
+    ticket
+        .submit(crate::server::workers::NewTask {
+            kind: crate::remote_work::protocol::TaskKind::StackChannel,
+            label: "Stack".into(),
+            person: true,
+            needs: crate::server::workers::TaskNeeds::Stack {
+                stacking_version: crate::server::stack_preview::SEIZA_STACKING_OUTPUT_VERSION
+                    .into(),
+                release: env!("CARGO_PKG_VERSION").into(),
+            },
+            spec: serde_json::json!({}),
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+        })
+        .unwrap();
+    let client = Client::new(&server.address, &server.secret).unwrap();
+    let (offers, _) = LocalTools {
+        rc_astro: None,
+        slots: 1,
+    }
+    .offers(1, &WorkChoice::parse(&["stack".into()]).unwrap());
+    let session = client
+        .register(&Registration {
+            protocol: PROTOCOL_VERSION,
+            name: "test-worker".into(),
+            version: env!("CARGO_PKG_VERSION").into(),
+            offers,
+            files: FileAccess::default(),
+        })
+        .await
+        .unwrap()
+        .session;
+    let assignment = client
+        .claim(&session, Duration::from_secs(1))
+        .await
+        .unwrap()
+        .expect("the task");
+
+    let mut png = Vec::new();
+    image::RgbImage::new(4, 3)
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    let mut huge = png.clone();
+    huge[16..20].copy_from_slice(&5000u32.to_be_bytes());
+    let mut lost = assignment.clone();
+    lost.lease = "an earlier lease".into();
+    for (assignment, image, refused) in [
+        (&assignment, b"not a PNG".to_vec(), Some("not a PNG")),
+        (&assignment, huge, Some("larger than 4096")),
+        (&lost, png.clone(), Some("")),
+        (&assignment, png.clone(), None),
+    ] {
+        let sent = client.preview(&session, assignment, image, 2).await;
+        match refused {
+            Some(why) => assert!(
+                sent.as_ref()
+                    .is_err_and(|error| error.to_string().contains(why)),
+                "{:?}",
+                sent.map_err(|error| error.to_string())
+            ),
+            None => sent.unwrap(),
+        }
+    }
+    client
+        .complete(
+            &session,
+            &assignment,
+            &Completion {
+                result: serde_json::json!({}),
+                outputs: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+    let mut received = Vec::new();
+    tokio::task::block_in_place(|| {
+        ticket.wait_with(crate::server::workers::Waiting {
+            stopped: &|| false,
+            progress: &mut |_, _| {},
+            events: &mut |_| {},
+            preview: &mut |image| received.push((image.png.to_vec(), image.frames)),
+            finish_on_stop: None,
+        })
+    })
+    .unwrap();
+    assert_eq!(received, [(png, 2)]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_worker_stacks_a_mosaic_to_the_same_pixels_as_this_server() {
+    use crate::server::stack_preview::remote_channel::testing;
+    let frames = tempfile::tempdir().unwrap();
+    let mosaic = testing::synthetic_mosaic(frames.path());
+    let here = tempfile::tempdir().unwrap();
+    let local = {
+        let (mosaic, directory) = (mosaic.clone(), here.path().to_path_buf());
+        tokio::task::spawn_blocking(move || testing::stack_here(&mosaic, &directory))
+            .await
+            .unwrap()
+    };
+    assert_eq!(
+        local
+            .dispositions
+            .iter()
+            .filter(|d| *d == "accepted")
+            .count(),
+        8,
+        "{:?} {:?}",
+        local.dispositions,
+        local.notes
+    );
+
+    for files in [
+        FileAccess::default(),
+        FileAccess {
+            mode: FileMode::Shared,
+            maps: Vec::new(),
+        },
+    ] {
+        let shared = files.mode == FileMode::Shared;
+        let server = server().await;
+        server.state.workers.board.set_placement(
+            crate::remote_work::protocol::TaskKind::StackChannel,
+            crate::server::workers::board::WorkPlacement::WorkersOnly,
+        );
+        let work = tempfile::tempdir().unwrap();
+        let (stop, worker) = start_worker_taking(
+            &server,
+            files,
+            work.path(),
+            WorkChoice::parse(&["stack".into()]).unwrap(),
+        );
+        eventually("the worker connects", || {
+            connected(&server).is_some_and(|worker| !shared || worker.exchange_shared)
+        })
+        .await;
+        let there = tempfile::tempdir().unwrap();
+        // A capture-order checkpoint of this target and filter, which a
+        // mosaic does not replace.
+        for name in ["resume.ctx", "resume.json"] {
+            std::fs::write(there.path().join(name), name).unwrap();
+        }
+        let remote = {
+            let (state, mosaic, directory) = (
+                Arc::clone(&server.state),
+                mosaic.clone(),
+                there.path().to_path_buf(),
+            );
+            tokio::task::spawn_blocking(move || {
+                testing::stack_on_worker(&state, &mosaic, &directory)
+            })
+            .await
+            .unwrap()
+        };
+        assert_eq!(remote.dispositions, local.dispositions);
+        assert_eq!(remote.pixels, local.pixels, "the same mosaic, bit for bit");
+        for name in ["resume.ctx", "resume.json"] {
+            assert_eq!(
+                std::fs::read_to_string(there.path().join(name)).unwrap(),
+                name,
+                "a mosaic leaves this server's checkpoint alone"
+            );
+        }
+        drop(stop);
+        worker.await.unwrap().unwrap();
     }
 }

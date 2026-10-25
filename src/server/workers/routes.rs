@@ -22,8 +22,8 @@ use tokio::io::AsyncWriteExt;
 
 use super::board::{QueuedSummary, Refusal, SessionSummary, WorkPlacement, POLL};
 use crate::remote_work::protocol::{
-    valid_file_name, Completion, Failure, ProbeAnswer, Progress, ProgressReply, Registered,
-    Registration, TaskKind, DIGEST_HEADER, LEASE_HEADER, PROTOCOL_VERSION,
+    valid_file_name, Completion, Failure, ProbeAnswer, Progress, Registered, Registration,
+    TaskKind, DIGEST_HEADER, FRAMES_HEADER, LEASE_HEADER, PROTOCOL_VERSION,
 };
 use crate::server::api::ApiResponse;
 use crate::server::auth::{AccessRole, RequestAccess};
@@ -32,6 +32,13 @@ use crate::server::state::AppState;
 
 /// The largest output a worker may upload.
 const MAX_OUTPUT_BYTES: u64 = 16 * 1024 * 1024 * 1024;
+/// The largest progress report a worker may send.
+const MAX_PROGRESS_BYTES: usize = 64 * 1024 * 1024;
+/// The largest running image a worker may send. Workers send images of
+/// about one megapixel.
+const MAX_PREVIEW_BYTES: usize = 16 * 1024 * 1024;
+/// The widest or tallest running image a worker may send.
+const MAX_PREVIEW_DIMENSION: u32 = 4096;
 
 /// The routes workers call, nested under `/api/workers/v1`.
 pub fn worker_routes() -> Router<Arc<AppState>> {
@@ -40,7 +47,15 @@ pub fn worker_routes() -> Router<Arc<AppState>> {
         .route("/sessions/{session}/probe", post(answer_probe))
         .route("/sessions/{session}/claim", post(claim))
         .route("/sessions/{session}/leave", post(leave))
-        .route("/sessions/{session}/tasks/{task}/progress", post(progress))
+        .route(
+            "/sessions/{session}/tasks/{task}/progress",
+            // A report can carry a stack's whole checkpoint ledger.
+            post(progress).layer(axum::extract::DefaultBodyLimit::max(MAX_PROGRESS_BYTES)),
+        )
+        .route(
+            "/sessions/{session}/tasks/{task}/preview",
+            put(preview).layer(axum::extract::DefaultBodyLimit::max(MAX_PREVIEW_BYTES)),
+        )
         .route(
             "/sessions/{session}/tasks/{task}/inputs/{name}",
             get(download_input),
@@ -231,11 +246,67 @@ async fn progress(
     match state
         .workers
         .board
-        .progress(&session, &task, &lease, progress.fraction)
+        .progress(&session, &task, &lease, progress)
     {
-        Ok(stop) => Json(ProgressReply { stop }).into_response(),
+        Ok(reply) => Json(reply).into_response(),
         Err(refused) => refused.into_response(),
     }
+}
+
+/// PUT …/tasks/{task}/preview: a running image of the task's work, as a
+/// PNG, with the number of frames it integrates in [`FRAMES_HEADER`].
+async fn preview(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path((session, task)): Path<(String, String)>,
+    png: axum::body::Bytes,
+) -> Response {
+    if let Err(response) = session_of_token(&state, &headers, &session) {
+        return response;
+    }
+    let lease = match lease(&headers) {
+        Ok(lease) => lease,
+        Err(response) => return response,
+    };
+    let Some(frames) = headers
+        .get(FRAMES_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u32>().ok())
+    else {
+        return refusal(
+            StatusCode::BAD_REQUEST,
+            format!("The image has no {FRAMES_HEADER} header"),
+        );
+    };
+    match png_dimensions(&png) {
+        Some((width, height))
+            if width <= MAX_PREVIEW_DIMENSION && height <= MAX_PREVIEW_DIMENSION => {}
+        Some(_) => {
+            return refusal(
+                StatusCode::BAD_REQUEST,
+                format!("The image is larger than {MAX_PREVIEW_DIMENSION} pixels a side"),
+            )
+        }
+        None => return refusal(StatusCode::BAD_REQUEST, "The image is not a PNG"),
+    }
+    let preview = super::TaskPreview { png, frames };
+    match state
+        .workers
+        .board
+        .preview(&session, &task, &lease, preview)
+    {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(refused) => refused.into_response(),
+    }
+}
+
+/// A PNG's width and height, from its header.
+fn png_dimensions(png: &[u8]) -> Option<(u32, u32)> {
+    if !png.starts_with(b"\x89PNG\r\n\x1a\n") || png.get(12..16)? != b"IHDR" {
+        return None;
+    }
+    let number = |at: usize| Some(u32::from_be_bytes(png.get(at..at + 4)?.try_into().ok()?));
+    Some((number(16)?, number(20)?))
 }
 
 /// GET …/tasks/{task}/inputs/{name}
@@ -447,11 +518,13 @@ pub struct WorkersResponse {
     pub placement: Placement,
 }
 
-/// Where each kind of work runs. Stack builds and WBPP runs stay on this
-/// server until they can run on workers.
+/// Where each kind of work runs. WBPP runs stay on this server.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct Placement {
     pub rc_astro: WorkPlacement,
+    /// Omitted keeps the current choice.
+    #[serde(default)]
+    pub stack: Option<WorkPlacement>,
 }
 
 /// `POST /api/workers/tokens`
@@ -522,6 +595,7 @@ fn summary(state: &AppState) -> WorkersResponse {
         exchange_subfolder: super::board::EXCHANGE_SUBFOLDER,
         placement: Placement {
             rc_astro: state.workers.board.placement(TaskKind::RcAstroStep),
+            stack: Some(state.workers.board.placement(TaskKind::StackChannel)),
         },
     }
 }
@@ -656,17 +730,19 @@ async fn set_placement(
 ) -> Result<Json<ApiResponse<WorkersResponse>>, AppError> {
     require_operator(&state, &access)?;
     update_registry(&state, |registry| {
-        registry
-            .remote_workers
-            .get_or_insert_with(Default::default)
-            .rc_astro = placement.rc_astro;
+        let settings = registry.remote_workers.get_or_insert_with(Default::default);
+        settings.rc_astro = placement.rc_astro;
+        if let Some(stack) = placement.stack {
+            settings.stack = stack;
+        }
         Ok(())
     })
     .await?;
-    state
-        .workers
-        .board
-        .set_placement(TaskKind::RcAstroStep, placement.rc_astro);
+    let board = &state.workers.board;
+    board.set_placement(TaskKind::RcAstroStep, placement.rc_astro);
+    if let Some(stack) = placement.stack {
+        board.set_placement(TaskKind::StackChannel, stack);
+    }
     Ok(Json(ApiResponse::success(summary(&state))))
 }
 

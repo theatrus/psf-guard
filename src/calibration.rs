@@ -4934,8 +4934,36 @@ fn resolve_or_build_masters_pinned(
     mode: CalibrationMode,
     settings: CalibrationBuildSettings,
 ) -> Result<(seiza_stacking::CalibrationMasters, AppliedCalibration)> {
+    resolve_masters_with_recipe(
+        conn,
+        calibration_root,
+        light_paths,
+        directory_tree,
+        cancel,
+        mode,
+        settings,
+    )
+    .map(|(masters, applied, _)| (masters, applied))
+}
+
+/// [`resolve_or_build_masters_pinned`], with the recipe the masters load
+/// from.
+fn resolve_masters_with_recipe(
+    conn: &Connection,
+    calibration_root: &Path,
+    light_paths: &[PathBuf],
+    directory_tree: Option<&crate::directory_tree::DirectoryTree>,
+    cancel: Option<&AtomicBool>,
+    mode: CalibrationMode,
+    settings: CalibrationBuildSettings,
+) -> Result<(
+    seiza_stacking::CalibrationMasters,
+    AppliedCalibration,
+    MasterRecipe,
+)> {
     if mode == CalibrationMode::Off {
-        return Ok(calibration_off());
+        let (masters, applied) = calibration_off();
+        return Ok((masters, applied, MasterRecipe::None));
     }
     let Some(light_path) = light_paths.first() else {
         anyhow::bail!("calibration needs at least one light frame");
@@ -4988,7 +5016,11 @@ fn resolve_or_build_masters_pinned(
         } else {
             applied.state = "none".into();
         }
-        return Ok((seiza_stacking::CalibrationMasters::default(), applied));
+        return Ok((
+            seiza_stacking::CalibrationMasters::default(),
+            applied,
+            MasterRecipe::None,
+        ));
     }
 
     // A read-only catalog, or one written by a newer build, can still reuse
@@ -5343,33 +5375,20 @@ fn resolve_or_build_masters_pinned(
     };
     applied.flat_master = flat.as_ref().map(|master| master.label());
 
-    let masters = if let (Some(pedestal), Some(flat_master)) = (estimated_pedestal, flat.as_ref()) {
-        // Hand seiza a synthesized constant bias so the existing
-        // light-minus-bias-then-divide path removes the fitted pedestal.
-        // The cached flat master is already normalized, so seiza leaves
-        // its values alone.
-        let flat_frame = crate::image_io::open_linear_frame(&flat_master.path)
-            .context("loading the cached master flat")?;
-        let bias_image = seiza_stacking::LinearImage::new(
-            flat_frame.image.width,
-            flat_frame.image.height,
-            flat_frame.image.channels,
-            vec![pedestal; flat_frame.image.data.len()],
-        )
-        .context("synthesizing the estimated-pedestal bias")?;
-        let flat_frame = seiza_stacking::MasterFlat::from_fits_frame(flat_frame)
-            .context("preparing the master flat")?;
-        seiza_stacking::CalibrationMasters::new(Some(bias_image), None, Some(flat_frame))
-            .context("preparing estimated-pedestal calibration")?
+    let recipe = if let (Some(pedestal), Some(flat_master)) = (estimated_pedestal, flat.as_ref()) {
+        MasterRecipe::PedestalFlat {
+            flat: flat_master.path.clone(),
+            pedestal,
+        }
     } else {
-        seiza_stacking::CalibrationMasters::from_fits_paths(
-            bias.as_ref().map(|value| value.path.as_path()),
-            dark.as_ref().map(|value| value.path.as_path()),
-            flat.as_ref().map(|value| value.path.as_path()),
-            light.exposure_s,
-        )
-        .context("loading matched calibration masters")?
+        MasterRecipe::Files {
+            bias: bias.as_ref().map(|value| value.path.clone()),
+            dark: dark.as_ref().map(|value| value.path.clone()),
+            flat: flat.as_ref().map(|value| value.path.clone()),
+            light_exposure_s: light.exposure_s,
+        }
     };
+    let masters = recipe.load(|path| path.to_path_buf())?;
     applied.estimated_pedestal_adu = estimated_pedestal;
     if let Some(pedestal) = estimated_pedestal {
         let hint_note = match header_pedestal_hint(&light) {
@@ -5507,7 +5526,109 @@ fn resolve_or_build_masters_pinned(
         estimated_pedestal_adu: applied.estimated_pedestal_adu,
         lights: light_paths.len(),
     }];
-    Ok((masters, applied))
+    Ok((masters, applied, recipe))
+}
+
+/// How a calibration session's masters load from their files: the files
+/// the masters were built into, and how they combine. A stack worker on
+/// another machine loads the same masters from it.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MasterRecipe {
+    /// No masters: the session stacks raw.
+    #[default]
+    None,
+    /// Matched masters, the dark scaled to the light's exposure.
+    Files {
+        bias: Option<PathBuf>,
+        dark: Option<PathBuf>,
+        flat: Option<PathBuf>,
+        light_exposure_s: Option<f64>,
+    },
+    /// A flat with no bias or dark, applied after subtracting a pedestal
+    /// fitted from the lights.
+    PedestalFlat { flat: PathBuf, pedestal: f32 },
+}
+
+impl MasterRecipe {
+    /// Every file the recipe reads.
+    pub fn files(&self) -> Vec<&Path> {
+        match self {
+            MasterRecipe::None => Vec::new(),
+            MasterRecipe::Files {
+                bias, dark, flat, ..
+            } => [bias, dark, flat]
+                .into_iter()
+                .flatten()
+                .map(PathBuf::as_path)
+                .collect(),
+            MasterRecipe::PedestalFlat { flat, .. } => vec![flat.as_path()],
+        }
+    }
+
+    /// The same recipe with each file where `place` puts it, such as where
+    /// a worker downloaded it.
+    pub fn with_files(&self, mut place: impl FnMut(&Path) -> PathBuf) -> Self {
+        match self {
+            MasterRecipe::None => MasterRecipe::None,
+            MasterRecipe::Files {
+                bias,
+                dark,
+                flat,
+                light_exposure_s,
+            } => MasterRecipe::Files {
+                bias: bias.as_deref().map(&mut place),
+                dark: dark.as_deref().map(&mut place),
+                flat: flat.as_deref().map(&mut place),
+                light_exposure_s: *light_exposure_s,
+            },
+            MasterRecipe::PedestalFlat { flat, pedestal } => MasterRecipe::PedestalFlat {
+                flat: place(flat),
+                pedestal: *pedestal,
+            },
+        }
+    }
+
+    /// Load the masters, reading each file where `place` puts it.
+    pub fn load(
+        &self,
+        place: impl Fn(&Path) -> PathBuf,
+    ) -> Result<seiza_stacking::CalibrationMasters> {
+        match self.with_files(place) {
+            MasterRecipe::None => Ok(seiza_stacking::CalibrationMasters::default()),
+            MasterRecipe::PedestalFlat { flat, pedestal } => {
+                // Hand seiza a synthesized constant bias so the existing
+                // light-minus-bias-then-divide path removes the fitted
+                // pedestal. The cached flat master is already normalized, so
+                // seiza leaves its values alone.
+                let flat_frame = crate::image_io::open_linear_frame(&flat)
+                    .context("loading the cached master flat")?;
+                let bias_image = seiza_stacking::LinearImage::new(
+                    flat_frame.image.width,
+                    flat_frame.image.height,
+                    flat_frame.image.channels,
+                    vec![pedestal; flat_frame.image.data.len()],
+                )
+                .context("synthesizing the estimated-pedestal bias")?;
+                let flat_frame = seiza_stacking::MasterFlat::from_fits_frame(flat_frame)
+                    .context("preparing the master flat")?;
+                seiza_stacking::CalibrationMasters::new(Some(bias_image), None, Some(flat_frame))
+                    .context("preparing estimated-pedestal calibration")
+            }
+            MasterRecipe::Files {
+                bias,
+                dark,
+                flat,
+                light_exposure_s,
+            } => seiza_stacking::CalibrationMasters::from_fits_paths(
+                bias.as_deref(),
+                dark.as_deref(),
+                flat.as_deref(),
+                light_exposure_s,
+            )
+            .context("loading matched calibration masters"),
+        }
+    }
 }
 
 /// The masters a resolution actually applied, as one comparable string.
@@ -5536,6 +5657,8 @@ fn masters_signature(applied: &AppliedCalibration) -> String {
 /// calibrate with and how they resolved.
 pub struct CalibrationSession {
     pub masters: seiza_stacking::CalibrationMasters,
+    /// The files `masters` loaded from.
+    pub recipe: MasterRecipe,
     pub applied: AppliedCalibration,
     /// The gate a stack judges this session's lights against its masters
     /// under: their rig's tolerances, the ones the masters were matched by,
@@ -5596,6 +5719,7 @@ impl CalibrationPlan {
             // No masters to judge a light against: the gate is moot.
             sessions: vec![CalibrationSession {
                 masters,
+                recipe: MasterRecipe::None,
                 applied: applied.clone(),
                 match_tolerances: seiza_calibration::MatchTolerances::default(),
             }],
@@ -5883,7 +6007,7 @@ pub(crate) fn resolve_or_build_master_plan_with_options(
             .iter()
             .find(|detail| detail.fingerprint == fingerprint)
             .and_then(|detail| detail.estimated_pedestal_adu);
-        let (masters, applied) = resolve_or_build_masters_pinned(
+        let (masters, applied, recipe) = resolve_masters_with_recipe(
             conn,
             calibration_root,
             lights,
@@ -5898,6 +6022,7 @@ pub(crate) fn resolve_or_build_master_plan_with_options(
         )?;
         sessions.push(CalibrationSession {
             masters,
+            recipe,
             applied,
             match_tolerances: gate,
         });

@@ -416,6 +416,7 @@ mod tests {
                 None,
             )
             .unwrap(),
+            recipe: crate::calibration::MasterRecipe::None,
             applied: AppliedCalibration::default(),
             match_tolerances: seiza_calibration::MatchTolerances::default(),
         }

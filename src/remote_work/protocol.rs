@@ -19,6 +19,10 @@ pub const LEASE_HEADER: &str = "x-psf-worker-lease";
 /// Holds the SHA-256 digest, in lowercase hex, of an uploaded output.
 pub const DIGEST_HEADER: &str = "x-psf-sha256";
 
+/// On a running image a worker sends (`PUT …/tasks/{task}/preview`), how
+/// many frames the image integrates.
+pub const FRAMES_HEADER: &str = "x-psf-frames";
+
 /// The protocol version. A server refuses a worker that speaks another one,
 /// and the error message explains which release to install.
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -51,6 +55,17 @@ pub struct Offers {
     /// when rc-astro is not installed there or `--work` leaves it out.
     #[serde(default)]
     pub rc_astro: Vec<seiza_stacking::ExternalToolSchema>,
+    /// The Seiza stacking output version the worker stacks with, when it
+    /// takes stack builds. A server sends a channel only to a worker whose
+    /// version matches its own, so a stack does not change with the
+    /// machine that built it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stacking_version: Option<String>,
+    /// The PSF Guard release the worker stacks with, when it takes stack
+    /// builds: the method and the final pass are PSF Guard's, so a server
+    /// sends a channel only to a worker on its own release.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stacking_release: Option<String>,
 }
 
 fn one_slot() -> usize {
@@ -159,6 +174,8 @@ pub enum TaskKind {
     /// One RC-Astro tool over one image. See
     /// [`crate::remote_work::rc_astro`].
     RcAstroStep,
+    /// One channel of a stack build: its frames integrated into a stack.
+    StackChannel,
 }
 
 /// A file the task reads.
@@ -190,14 +207,31 @@ pub struct OutputFile {
 pub struct Progress {
     /// How much of the task is done, from 0 to 1.
     pub fraction: f32,
+    /// What happened since the server last heard, as the task's kind
+    /// defines it, such as each frame a stack decided on.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub events: Vec<serde_json::Value>,
+    /// The number of the first of `events`, counting from 0 over the whole
+    /// task. The server skips events it already has, so a report sent again
+    /// after a lost answer does not repeat them.
+    #[serde(default)]
+    pub first_event: u64,
 }
 
 /// The server's answer to a progress report.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProgressReply {
-    /// The task was stopped, or went to another worker: the worker stops it
-    /// and sends nothing more about it.
+    /// The task was stopped, or went to another worker: the worker drops it.
     pub stop: bool,
+    /// The task was stopped, and the server wants what it has: the worker
+    /// stops the work at its next checkpoint and completes the task with
+    /// it, such as a stack channel with the frames it integrated.
+    #[serde(default)]
+    pub finish: bool,
+    /// How many of the task's events the server has, so the worker sends
+    /// only the ones after them.
+    #[serde(default)]
+    pub events_received: u64,
 }
 
 /// `POST …/tasks/{task}/complete`

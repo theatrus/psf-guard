@@ -46,7 +46,7 @@ pub(super) fn integrate(
     let load = |index: usize| {
         let (source_index, record) = admitted[index];
         let source = &group.frames[source_index];
-        if super::source_fingerprint(&source.path) != source.source_fingerprint {
+        if super::source_fingerprint(&source.path) != source.fingerprint_while_read() {
             return Err(seiza_stacking::Error::Stack(format!(
                 "Image {} changed during stacking; rebuild the stack",
                 source.image_id
@@ -69,7 +69,7 @@ pub(super) fn integrate(
             method.seiza_interpolation(),
             &gpu,
         )?;
-        if super::source_fingerprint(&source.path) != source.source_fingerprint {
+        if super::source_fingerprint(&source.path) != source.fingerprint_while_read() {
             return Err(seiza_stacking::Error::Stack(format!(
                 "Image {} changed while being read; rebuild the stack",
                 source.image_id
@@ -515,6 +515,7 @@ mod tests {
                 path,
                 expected_target: None,
                 exposure_seconds: 60.0,
+                read_fingerprint: None,
             };
             let mut decision = super::super::rejected_decision(&source, "Excluded fixture".into());
             if index != 1 {

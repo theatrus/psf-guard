@@ -5243,6 +5243,8 @@ export interface WorkerSessionSummary {
   slots: number;
   /** The RC-Astro tools it takes, as "RC-Astro StarXTerminator 2.6.10". */
   rc_astro: string[];
+  /** The Seiza stacking version it stacks builds with, when it takes them. */
+  stacking_version?: string;
   file_mode: 'remote' | 'shared';
   /** Whether task files reach it by path. */
   exchange_shared: boolean;
@@ -5262,7 +5264,7 @@ export interface WorkersSettings {
   default_exchange_folder: string;
   /** The folder inside the exchange folder that holds task files. */
   exchange_subfolder: string;
-  placement: { rc_astro: WorkPlacement };
+  placement: { rc_astro: WorkPlacement; stack?: WorkPlacement };
 }
 
 export interface CreatedWorkerToken {
