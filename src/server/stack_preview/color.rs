@@ -4565,13 +4565,23 @@ fn compose_color(
                     .as_ref()
                     .and_then(|p| p.narrowband.as_ref())
                     .map_or(0.0, |p| p.star_reduction);
-                seiza_stacking::screen_rgb_stars_reduced(
-                    &mut composition.image,
-                    &original,
-                    &starless,
-                    reduction,
-                )
-                .map_err(|error| error.to_string())?;
+                if let Some(layer) = stars.layer {
+                    let layer = layer.crop(composition.region).map_err(|e| e.to_string())?;
+                    seiza_stacking::screen_rgb_star_layer(
+                        &mut composition.image,
+                        &layer,
+                        reduction,
+                    )
+                    .map_err(|e| e.to_string())?;
+                } else {
+                    seiza_stacking::screen_rgb_stars_reduced(
+                        &mut composition.image,
+                        &original,
+                        &starless,
+                        reduction,
+                    )
+                    .map_err(|error| error.to_string())?;
+                }
             }
             composition.transfer = ColorTransfer::DisplayReferred;
         }
@@ -9719,6 +9729,7 @@ mod tests {
         let mut reduced = first.clone();
         reduced.narrowband = Some(narrowband::NarrowbandProcessing {
             star_reduction: 0.5,
+            rgb_star_stretch: Some(3.0),
             ..Default::default()
         });
         assert_eq!(

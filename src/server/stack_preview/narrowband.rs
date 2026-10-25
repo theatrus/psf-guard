@@ -20,6 +20,10 @@ pub struct NarrowbandProcessing {
     /// Optional sharpening/denoising on linear RGB before calibration and SXT.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rgb_star_processing: Option<super::super::rc_astro::RcAstroProcessing>,
+    /// Independent SetiAstro-style linear star residual stretch [0,8].
+    /// None preserves the legacy paired RGB Auto MTF transfer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rgb_star_stretch: Option<f64>,
     /// Aesthetic green excess reduction on mapped display nebula, before RGB stars.
     #[serde(default)]
     pub green_reduction: f64,
@@ -34,6 +38,12 @@ fn stars_unreduced(amount: &f64) -> bool {
 
 impl NarrowbandProcessing {
     pub(crate) fn validate(&self) -> Result<(), String> {
+        if self
+            .rgb_star_stretch
+            .is_some_and(|a| !a.is_finite() || !(0.0..=8.0).contains(&a))
+        {
+            return Err("RGB star stretch amount must be between zero and eight".into());
+        }
         if !self.star_reduction.is_finite() || !(0.0..=1.0).contains(&self.star_reduction) {
             return Err("RGB star reduction must be between zero and one".into());
         }
@@ -390,6 +400,7 @@ pub(super) fn defer_channel_star_removal(processing: &mut StackColorProcessing) 
 }
 
 pub(super) struct RgbStarsDisplay {
+    pub layer: Option<LinearImage>,
     pub original: LinearImage,
     pub starless: LinearImage,
 }
@@ -557,6 +568,17 @@ pub(super) fn separate_stars(
             let original = combine(images, RGB_ROLES)?;
             let output = run(&plan.rgb_chain, &original, "RGB stars")?;
             stop.check()?;
+            // SXT has run on calibrated LINEAR RGB. Extract and stretch the
+            // linear residual before any display transfer. The separate
+            // starless RGB display below still supplies broadband structure.
+            let layer = job
+                .processing
+                .as_ref()
+                .and_then(|p| p.narrowband.as_ref())
+                .and_then(|p| p.rgb_star_stretch)
+                .map(|amount| seiza_stacking::stretch_rgb_stars(&original, &output.image, amount))
+                .transpose()
+                .map_err(|e| e.to_string())?;
             // Resolve once from star-containing calibrated RGB, then apply
             // exactly that same display transfer to its starless counterpart.
             let curve = super::super::stretch::default_linear_config()
@@ -580,6 +602,7 @@ pub(super) fn separate_stars(
                 }
             }
             Some(RgbStarsDisplay {
+                layer,
                 original: LinearImage::new(original.width, original.height, 3, display_original)
                     .map_err(|error| error.to_string())?,
                 starless: LinearImage::new(original.width, original.height, 3, display_starless)
@@ -811,6 +834,53 @@ mod tests {
             ["bxt", "nxt"]
         );
         assert_eq!(processing.color_rc_astro.unwrap().steps.len(), 2);
+    }
+
+    #[test]
+    fn star_stretch_validates_and_only_changes_final_identity() {
+        let mut request = request(None);
+        let sources = vec![source(StackColorRole::Ha), source(StackColorRole::Oiii)];
+        let mut ids = std::collections::HashSet::new();
+        for amount in [None, Some(0.0), Some(3.0), Some(5.0)] {
+            let config = NarrowbandProcessing {
+                rgb_star_stretch: amount,
+                ..Default::default()
+            };
+            config.validate().unwrap();
+            request.processing = Some(StackColorProcessing {
+                narrowband: Some(config),
+                ..Default::default()
+            });
+            ids.insert(
+                color_job_id(&ColorJobIdentity {
+                    database_id: "db",
+                    project_id: 1,
+                    request: &request,
+                    label: "SHO",
+                    channel_tools_input_id: None,
+                    color_rc_astro_id: None,
+                    background_protection: &BTreeMap::new(),
+                    color_calibration_basis: None,
+                    sources: &sources,
+                })
+                .unwrap(),
+            );
+        }
+        assert_eq!(ids.len(), 4);
+        let legacy: NarrowbandProcessing = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(legacy.rgb_star_stretch.is_none());
+        assert!(serde_json::to_value(legacy)
+            .unwrap()
+            .get("rgb_star_stretch")
+            .is_none());
+        for amount in [f64::NAN, f64::INFINITY, -0.1, 8.1] {
+            assert!(NarrowbandProcessing {
+                rgb_star_stretch: Some(amount),
+                ..Default::default()
+            }
+            .validate()
+            .is_err());
+        }
     }
 
     #[test]

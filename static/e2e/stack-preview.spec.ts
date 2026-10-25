@@ -2195,6 +2195,8 @@ test('keeps narrowband and RGB star processing consistent on desktop and phone',
   } }));
   await page.goto(`/#/stacks?db=${encodeURIComponent(dbId)}&project=2`);
   const card = page.locator('article.stack-color-card[data-color-kind="narrowband"]:not([data-color-combination])');
+  await expect(card.locator('.stack-color-star-policy > span')).toHaveText('✨ Stars');
+  await expect(card.locator('.stack-color-star-policy > span')).toBeVisible();
   const processing = card.locator('.stack-color-processing');
   await processing.locator(':scope > summary').click();
   const setups = processing.locator('.processing-setups-bar');
@@ -2205,6 +2207,10 @@ test('keeps narrowband and RGB star processing consistent on desktop and phone',
   for (const [size, width] of [['desktop', 1440], ['phone', 390]] as const) {
     await page.setViewportSize({ width, height: 1000 });
     expect(await processing.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+    const heading = card.locator(':scope > header');
+    await expect(heading.locator('.stack-color-star-policy > span')).toBeVisible();
+    expect(await heading.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+    await heading.screenshot({ path: testInfo.outputPath(`card-header-${size}.png`), style: captureStyle });
     await processing.screenshot({ path: testInfo.outputPath(`flow-${size}.png`), style: captureStyle });
   }
   const linear = processing.getByRole('group', { name: 'Process linear color', exact: true });
@@ -2215,6 +2221,9 @@ test('keeps narrowband and RGB star processing consistent on desktop and phone',
   await stars.getByRole('checkbox', { name: 'RC-Astro BlurXTerminator' }).check();
   await stars.getByRole('spinbutton', { name: 'Sharpen Stars' }).fill('0.6');
   await stars.getByRole('spinbutton', { name: 'Adjust Star Halos' }).fill('-0.1');
+  const tone = combine.getByRole('spinbutton', { name: 'RGB star stretch amount' });
+  await expect(tone).toHaveValue('5');
+  await tone.fill('3');
   const reduction = combine.getByRole('spinbutton', { name: 'RGB star reduction' });
   await reduction.fill('0.4');
   await setups.getByRole('button', { name: 'Save as…' }).click();
@@ -2222,10 +2231,12 @@ test('keeps narrowband and RGB star processing consistent on desktop and phone',
   await setups.getByRole('button', { name: 'Save current settings', exact: true }).click();
   await expect(setups).toContainText('Saved “RGB stars flow”');
   await reduction.fill('0.1');
+  await tone.fill('6');
   await setups.getByRole('combobox').selectOption('saved:RGB stars flow');
   await setups.getByRole('button', { name: 'Apply setup', exact: true }).click();
   await expect(setups).toContainText('click Apply processing stack to render it');
   await expect(reduction).toHaveValue('0.4');
+  await expect(tone).toHaveValue('3');
   await expect(stars.getByRole('spinbutton', { name: 'Sharpen Stars' })).toHaveValue('0.6');
   await expect(stars.getByRole('spinbutton', { name: 'Adjust Star Halos' })).toHaveValue('-0.1');
   const hint = linear.locator('.stack-color-channel-tools > .processing-setups-hint').first();

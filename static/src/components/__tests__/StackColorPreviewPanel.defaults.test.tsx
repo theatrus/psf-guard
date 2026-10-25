@@ -138,6 +138,7 @@ describe('automatic narrowband on a regular card', () => {
     const ui = within(card);
     expect(ui.getByRole('combobox', { name: /narrowband palette/ })).toHaveValue('automatic');
     expect(ui.getByRole('combobox', { name: /SHO stars/ })).toHaveValue('automatic');
+    expect(ui.getByText('Stars', { exact: false, selector: '.stack-color-star-policy > span' })).toHaveTextContent('✨ Stars');
     const custom = ui.getByText('Custom combination').closest('details')!;
     expect(custom).not.toHaveAttribute('open');
     await userEvent.click(ui.getByText('Custom combination'));

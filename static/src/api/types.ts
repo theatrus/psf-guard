@@ -1460,6 +1460,8 @@ export interface StackColorProcessing {
     rgb_star_processing?: RcAstroProcessing | null;
     green_reduction?: number;
     star_reduction?: number;
+    /** Independent linear RGB star stretch [0,8]; absent keeps legacy Auto MTF. */
+    rgb_star_stretch?: number | null;
     balance?: { has_sii: boolean; shadow_protection: number; oiii_boost: number; sii_boost: number; max_samples: number; star_mask_radius?: number | null } | null;
   } | null;
   input_processing?: StackColorInputProcessing;

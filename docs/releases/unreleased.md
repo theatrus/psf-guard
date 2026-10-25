@@ -128,3 +128,9 @@
   scoring settings changed** after an automatic refresh are rebuilt with the
   defaults on the next automatic refresh, and stop showing it. Saving new defaults in **Settings › Review**
   rebuilds stacks scored another way when automatic previews are on.
+
+- New automatic narrowband recipes stretch the linear RGB stars independently
+  with a SetiAstro-style Star Stretch. Lower the amount in **Combine and restore
+  stars** to keep stars fainter. Saved setups keep their existing Auto MTF
+  rendering until you switch.
+- Narrowband cards show a visible ✨ Stars label beside the star-policy selector.

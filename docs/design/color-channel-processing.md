@@ -289,8 +289,21 @@ neutral pixels are unchanged. This is an aesthetic operation with no SCNR
 parity claim. It runs after mapping, before broadband structure and RGB stars.
 
 An RGB-star branch optionally runs BXT/NXT on linear RGB, then the selected
-Gaia calibration and SXT. The RGB original and starless copy share the same
-color-preserving stretch before screen recombination. Gaia settings, its
+Gaia calibration and SXT, always before a display stretch. With
+`rgb_star_stretch` set, Seiza extracts the linear residual and applies the
+SetiAstro-style rational tone only to those stars. The optional amount is [0,8],
+with 5 seeded into new automatic recipes. A lower amount subdues stars; zero
+keeps the normalized linear residual. One linked source range matches the
+external-tool normalization; the background offset cancels in the residual.
+The stars-only layer is never independently normalized to its own peak.
+
+An absent/null field preserves the legacy common Auto MTF transfer of the RGB
+original/starless pair. The starless RGB still receives that display transfer
+for optional broadband structure. The independent star layer is screened once,
+after optional linked star reduction. Only the final composition identity
+includes the tone amount: linear input, BXT, Gaia and SXT artifacts remain
+reusable. C/Python/CLI surfaces live in Seiza. This implements the published
+tone, without claiming parity with PixInsight ColorSaturation/SCNR. Gaia settings, its
 pixel-solve/catalog basis and RC-Astro/model versions participate in the RGB
 SXT cache identity. Disabling Gaia preserves the RGB processing branch.
 
@@ -449,8 +462,8 @@ changes the final composition identity, with linear inputs, BXT and SXT still
 reusable. It applies only during RGB restoration, after mapping/green reduction
 and broadband-structure blending. Native stars and natural RGB/LRGB are unchanged.
 
-Seiza derives the display screen-star layer from the consistently stretched RGB
-original/starless pair. Its maximum RGB component supplies an intensity plane.
+Seiza uses the independently stretched linear residual when selected; legacy
+mode derives its screen-star layer from the consistently stretched RGB pair. Its maximum RGB component supplies an intensity plane.
 Blend that plane toward a one-pixel cross erosion, then apply the resulting
 common gain to all three star components before screen recombination. This
 preserves layer RGB ratios and cannot brighten stars. Invalid neighbours and
@@ -520,8 +533,3 @@ RGB/LRGB emission cards; saved setups still use the existing role reconciler.
 - [ ] For automatic RGB-star source selection, prefer the shortest available
   RGB exposure group (for example, 60s rather than 300s) when several exposure
   groups qualify. Preserve explicit source choices in Custom combination.
-- [ ] Match the RGB-star stretch to SetiAstro's Star Stretch script rather than
-  the current general-purpose Auto-MTF/shared display stretch. Research the
-  script's behavior and parity requirements. Add a dedicated operation in
-  Seiza if needed, carry it through the C/Python/CLI surfaces, and expose the
-  matching RGB-star control in PSF Guard.

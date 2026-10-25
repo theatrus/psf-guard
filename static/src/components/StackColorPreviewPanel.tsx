@@ -305,8 +305,8 @@ function ColorCard({
               </select>
             </label>
           ) : <span className="stack-preview-channel">{baseLabel}</span>}
-          {kind === 'narrowband' && <label className="stack-color-palette">
-            <span>Stars</span>
+          {kind === 'narrowband' && <label className="stack-color-palette stack-color-star-policy">
+            <span><span aria-hidden="true">✨</span> Stars</span>
             <select aria-label={`${target.target_name} ${label} stars`} value={stars} disabled={busy}
               onChange={(event) => onStarsChange?.(event.target.value as StarsSelection)}>
               {!combination && stars === 'channels' && <option value="channels">From channel cards</option>}

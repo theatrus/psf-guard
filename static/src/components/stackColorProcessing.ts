@@ -91,6 +91,7 @@ export function automaticNarrowbandProcessing(processing: StackColorProcessing):
   return {
     ...processing,
     narrowband: {
+      rgb_star_stretch: 5,
       shared_stretch: stages.every((value) => value === stages[0]),
       balance: { has_sii: true, shadow_protection: 1, oiii_boost: 1, sii_boost: 1, max_samples: 1_000_000 },
     },
