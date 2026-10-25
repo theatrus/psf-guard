@@ -528,6 +528,30 @@ stored amount. Stored processing fields, algorithms and cache identity are
 unchanged by the layout. The narrowband-only built-in setup is hidden on natural
 RGB/LRGB emission cards; saved setups still use the existing role reconciler.
 
+### Independent star-stretch validation
+
+A fresh RC-Astro 2.6.10 run on SNR G132 compared legacy Auto MTF with Star
+Stretch amounts 5, 4 and 3, plus amount 3 with reduction 0.4. Each result uses
+BXT ML5, solar Gaia calibration and linear SXT ML11. Continuum is off,
+broadband structure is 0, and green reduction is 0.2. Every result shares the
+same 4757 × 3156 grid, linear-input identity and three RC-Astro identities.
+Changes after the first tool run completed in about 16–18 seconds using the
+cached branches. Amounts 3 → 4 → 5 brighten monotonically on every finite pixel;
+the nebula processing is identical.
+
+The native 800 × 800 crops cover (1978,1178)–(2778,1978), without resizing.
+[Validation data](../images/snrg132-star-stretch.json) records settings,
+identities, checksums and timings. The separate local smoke test used registered
+512 × 512 RGB and RC-Astro 2.6.10 BXT ML5 → NXT ML3 → linear SXT ML11 before
+Seiza's tone. SXT's positive residual agreed within 6e-8; negative residuals
+were clipped only in the derived display layer.
+
+![Legacy Auto MTF RGB stars](../images/snrg132-stars-legacy.png)
+
+![Independent Star Stretch amount 5](../images/snrg132-stars-stretch5.png)
+
+![Independent Star Stretch amount 3](../images/snrg132-stars-stretch3.png)
+
 ## Follow-up work
 
 - [ ] For automatic RGB-star source selection, prefer the shortest available

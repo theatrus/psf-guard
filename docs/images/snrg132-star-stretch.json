@@ -1,0 +1,110 @@
+{
+  "dimensions": [
+    4757,
+    3156
+  ],
+  "crop": [
+    1978,
+    1178,
+    2778,
+    1978
+  ],
+  "rc_astro": "2.6.10",
+  "bxt": "ML5, ss default0.5 / halo0",
+  "sxt": "ML11, linear before star stretch",
+  "gaia": "solar",
+  "continuum": "off",
+  "broadband_structure": 0,
+  "green_reduction": 0.2,
+  "maximum_monotonic_error": [
+    0.0,
+    0.0
+  ],
+  "sha256": {
+    "legacy-auto-mtf-crop.png": "9c3192ce5124ccdcbe072ab3ad1365a891f7183655593a694b157e70f82cc80e",
+    "legacy-auto-mtf-full.png": "1fe7cab2f3702f9a37fc86cdee3aac8aa9d7097b3772dfd5153652d29a3002a8",
+    "local-stars-0.png": "f57b41b4e7a5b6b5495556a000c61747368e2b5a857d319ddee0e6d02a40484c",
+    "local-stars-3.png": "5f9025bae9325ca3ef97881bde7455dca2122e14bd139a3559a9d13102681fa7",
+    "local-stars-4.png": "54aded46cec10a5c88cd047674d31b890450b418125c7b1d841f7b4b336b3cae",
+    "local-stars-5.png": "c98e8b34e1e8f6329ede01b5b4379e79d5e201b74bb386e1e1a221ab2d94febf",
+    "stack-rgb-star-stretch-desktop.png": "ef82898bfbbd4042408cb2958f446758da14c96cb11bf3f18ab6aa0c550f3f70",
+    "stack-rgb-star-stretch-phone.png": "ad34d36b08274677ef737aa43e133eaf9d22e34fde6869a37bc8eaadd857db66",
+    "stack-star-policy-desktop.png": "723cfc949b1714a04c3b365f7da2ecd8a4b0503320f5fb9371010086eb785439",
+    "stack-star-policy-phone.png": "c2a8ed2dec0625cb7a580786ffa0b7be3b35f2e17fbe2bc63412c55da127cd6b",
+    "star-stretch-3-crop.png": "ba0075cf8ec245a5d6e7f8baa2ccd077c864300847f8a2572d7947a9c7ab826d",
+    "star-stretch-3-full.png": "a2669b6d17818b42a0d0a93437d8ecfbec7065f2af13c26735ac17e84e4d7250",
+    "star-stretch-3-reduced-crop.png": "c0c71a1ef1e914fabec343e2c2eb6f28f4800b9167a1a341997bd8f260d76406",
+    "star-stretch-3-reduced-full.png": "8c1d1417eab6af3cd72fc06078f60e00ad609be328b490afb752a19a74b0b84d",
+    "star-stretch-4-crop.png": "f95e00d5635615f756d3a37bc94c627df0cbf7f0745427969f69f296c87d9495",
+    "star-stretch-4-full.png": "86868d17e2c716dd5beddb5a9f282c119fb8f4e9211b5f6e4ccd50a1f9bbceba",
+    "star-stretch-5-crop.png": "c05519eaea5050cf676f87a2044bd81d8f8bb6a40c907f5533f1f1887e1c83ae",
+    "star-stretch-5-full.png": "a344e9878f9d823fa9bc75546ae387234765b9ae17c0ba9ddc2d13467f33436c"
+  },
+  "jobs": [
+    {
+      "name": "legacy-auto-mtf",
+      "amount": null,
+      "reduction": 0,
+      "job_id": "59438794e070b178b7daaf8028f8e5a4cb353962dd8cb255a16d0afa96394754",
+      "seconds": 360.96,
+      "rc_astro_ids": [
+        "e35fb9a3ff338a8dd60ea14a45608cc2d257486b55860aa9b592889e8d85c1e1",
+        "7be4806688a3ce2b7e84d67ca965ce6870404e1874f8ae346eeb1504ee5baa1a",
+        "076d26251a8b3596c8d3434d92ba8140d3e1d0c5ba209d34d2101bdf78ada298"
+      ],
+      "linear_input_id": "efc68e0694cda28fd9b5cbf117adb760e2e8ae20cb3e6c3879ffc6b0227561e1"
+    },
+    {
+      "name": "star-stretch-5",
+      "amount": 5,
+      "reduction": 0,
+      "job_id": "90fde6bb4d0b1918cdf300fa579d1e94552a8d3a1ac4e8104ca596877bdb3125",
+      "seconds": 2.2,
+      "rc_astro_ids": [
+        "e35fb9a3ff338a8dd60ea14a45608cc2d257486b55860aa9b592889e8d85c1e1",
+        "7be4806688a3ce2b7e84d67ca965ce6870404e1874f8ae346eeb1504ee5baa1a",
+        "076d26251a8b3596c8d3434d92ba8140d3e1d0c5ba209d34d2101bdf78ada298"
+      ],
+      "linear_input_id": "efc68e0694cda28fd9b5cbf117adb760e2e8ae20cb3e6c3879ffc6b0227561e1"
+    },
+    {
+      "name": "star-stretch-4",
+      "amount": 4,
+      "reduction": 0,
+      "job_id": "dde08ccd393e8b4049d902c250fec930472aff30ea299daf6f27c6500b6f385c",
+      "seconds": 10.18,
+      "rc_astro_ids": [
+        "e35fb9a3ff338a8dd60ea14a45608cc2d257486b55860aa9b592889e8d85c1e1",
+        "7be4806688a3ce2b7e84d67ca965ce6870404e1874f8ae346eeb1504ee5baa1a",
+        "076d26251a8b3596c8d3434d92ba8140d3e1d0c5ba209d34d2101bdf78ada298"
+      ],
+      "linear_input_id": "efc68e0694cda28fd9b5cbf117adb760e2e8ae20cb3e6c3879ffc6b0227561e1"
+    },
+    {
+      "name": "star-stretch-3",
+      "amount": 3,
+      "reduction": 0,
+      "job_id": "3be497e37eb70115d5d7a7dc486831362fd88e369bfc2d72b3613a5d0a8fb6be",
+      "seconds": 16.23,
+      "rc_astro_ids": [
+        "e35fb9a3ff338a8dd60ea14a45608cc2d257486b55860aa9b592889e8d85c1e1",
+        "7be4806688a3ce2b7e84d67ca965ce6870404e1874f8ae346eeb1504ee5baa1a",
+        "076d26251a8b3596c8d3434d92ba8140d3e1d0c5ba209d34d2101bdf78ada298"
+      ],
+      "linear_input_id": "efc68e0694cda28fd9b5cbf117adb760e2e8ae20cb3e6c3879ffc6b0227561e1"
+    },
+    {
+      "name": "star-stretch-3-reduced",
+      "amount": 3,
+      "reduction": 0.4,
+      "job_id": "bf3f819ac1c0c05fcef93949eb046c1c2d1d767b74d3dcfa243b8b1608342392",
+      "seconds": 18.2,
+      "rc_astro_ids": [
+        "e35fb9a3ff338a8dd60ea14a45608cc2d257486b55860aa9b592889e8d85c1e1",
+        "7be4806688a3ce2b7e84d67ca965ce6870404e1874f8ae346eeb1504ee5baa1a",
+        "076d26251a8b3596c8d3434d92ba8140d3e1d0c5ba209d34d2101bdf78ada298"
+      ],
+      "linear_input_id": "efc68e0694cda28fd9b5cbf117adb760e2e8ae20cb3e6c3879ffc6b0227561e1"
+    }
+  ]
+}
