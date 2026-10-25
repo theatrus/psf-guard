@@ -35,7 +35,8 @@ expanded canvas when Seiza can preserve its WCS; the source frame's solve is
 not reused for Gaia color calibration on that different grid.
 
 See the [Heart and Soul mosaic examples](examples/heart-and-soul/README.md)
-for RGB, shared-stretch/balanced SHO and HOO, RGB stars, and starless output.
+for RGB, shared-stretch/balanced SHO and HOO, RGB stars, starless output,
+broadband structure, and independent RGB-star stretching.
 
 ## Build a preview
 
