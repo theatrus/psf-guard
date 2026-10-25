@@ -15,6 +15,7 @@ pub mod color_calibration;
 mod execution;
 mod final_integration;
 pub mod gpu;
+mod integrate;
 mod janitor;
 pub mod journal;
 mod line_work;
