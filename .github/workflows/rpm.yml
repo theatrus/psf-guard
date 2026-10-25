@@ -79,6 +79,13 @@ jobs:
           psf-guard --help
           test -f /usr/lib/systemd/system/psf-guard.service
           test -f /etc/psf-guard/server.conf
+          # The worker is installed but not enabled, and its settings hold a
+          # token, so only root reads them.
+          test -f /usr/lib/systemd/system/psf-guard-worker.service
+          test "$(stat -c '%a %U' /etc/psf-guard/worker.conf)" = "600 root"
+          test ! -e /etc/systemd/system/multi-user.target.wants/psf-guard-worker.service
+          systemd-analyze verify /usr/lib/systemd/system/psf-guard.service \
+              /usr/lib/systemd/system/psf-guard-worker.service
 
       - uses: actions/upload-artifact@v7
         with:

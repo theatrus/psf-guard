@@ -64,6 +64,28 @@ a stack build checkpoints what it integrated, and imports and calibration
 grading stop at their next commit. Every five seconds the journal names what
 the stop still waits for. systemd's stop timeout still applies.
 
+## Systemd worker service
+
+The package also ships `psf-guard-worker.service`, which runs `psf-guard
+worker` for a PSF Guard server on another machine. It is **not** enabled by
+default.
+
+| Path                           | Purpose                                                              |
+| ------------------------------ | -------------------------------------------------------------------- |
+| `/etc/psf-guard/worker.conf`   | `EnvironmentFile`: server address, token, other options (mode 0600) |
+| `/var/lib/psf-guard-worker/`   | `StateDirectory`: task files while tasks run                         |
+
+```bash
+# Enter the server's address and a token from its Settings › Workers:
+sudoedit /etc/psf-guard/worker.conf
+sudo systemctl enable --now psf-guard-worker
+```
+
+The worker runs as a dynamic user in the `render` and `video` groups, so
+stacking can use the GPU, and has no system call filter. To use shared
+storage or a user's rc-astro licence, run it as that user with a drop-in. See
+[Run a worker as a Linux service](../../docs/REMOTE_WORKERS.md#run-a-worker-as-a-linux-service).
+
 ## Build locally
 
 ```bash

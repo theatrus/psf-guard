@@ -47,6 +47,61 @@ name by default. `--rc-astro PATH` gives the rc-astro executable when it is
 not on `PATH`. `--slots N` lets the worker run up to N tasks at once, from 1
 to 16; the default is 1, since each RC-Astro step uses the GPU.
 
+## Run a worker as a Linux service
+
+The Fedora RPM and the Debian package install a `psf-guard-worker` systemd
+service. It is not enabled, so it runs only after you set it up.
+
+1. On the server, open **Settings › Workers**, click **+ Add a worker**,
+   and create a token.
+2. On the worker, edit `/etc/psf-guard/worker.conf` as root. The Debian
+   package installs an example instead; copy it first and keep it readable
+   by root only, since it holds the token:
+
+   ```bash
+   sudo install -D -m 600 /usr/share/doc/psf-guard/worker.conf.example /etc/psf-guard/worker.conf
+   sudoedit /etc/psf-guard/worker.conf
+   ```
+
+3. Set `PSF_GUARD_WORKER_SERVER` to the server's address and
+   `PSF_GUARD_WORKER_TOKEN` to the token. Put other options for `psf-guard
+   worker`, such as `--work stack` or `--slots 2`, in
+   `PSF_GUARD_WORKER_EXTRA_ARGS`.
+4. Start the worker, and start it at boot:
+
+   ```bash
+   sudo systemctl enable --now psf-guard-worker
+   journalctl -u psf-guard-worker -f
+   ```
+
+The service runs as a user of its own, with its files in
+`/var/lib/psf-guard-worker`. `systemctl stop psf-guard-worker` stops the
+worker, and the server queues its running task again. While the server
+cannot be reached, the worker keeps trying. When the server refuses the
+token, or the token is missing, the worker stops, and the service starts it
+again every 30 seconds; `journalctl -u psf-guard-worker` shows why.
+
+- **GPU stacking.** The service joins the `render` and `video` groups, so
+  stacking can use an AMD or Intel GPU through Vulkan. NVIDIA GPUs need no
+  group.
+- **rc-astro with an NVIDIA GPU.** On a computer with no desktop session,
+  load the `nvidia-uvm` module at boot, since the service cannot load it:
+  add `nvidia-uvm` to a file in `/etc/modules-load.d/`.
+- **Shared storage, or rc-astro licensed by a user.** Run the service as a
+  user that can read and write the shared folders, or the user who
+  licensed rc-astro. Run `sudo systemctl edit psf-guard-worker` and add the
+  user and each shared folder:
+
+  ```ini
+  [Service]
+  DynamicUser=no
+  User=astro
+  ReadWritePaths=/mnt/astro
+  ```
+
+`PSF_GUARD_WORKER_EXTRA_ARGS` is split on spaces, so it cannot hold a path
+that contains one.
+
 ## Choose the work a worker accepts
 
 A worker accepts everything it can run unless you list its work with

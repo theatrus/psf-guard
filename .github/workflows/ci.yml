@@ -377,6 +377,15 @@ jobs:
       if: matrix.os == 'ubuntu-22.04'
       run: cargo tauri build --verbose
 
+    - name: Check the .deb carries the worker's systemd unit
+      if: matrix.os == 'ubuntu-22.04'
+      run: |
+        contents="$(dpkg-deb -c target/release/bundle/deb/*.deb)"
+        # Tauri lists paths without dpkg-deb's usual ./ prefix.
+        grep -Eq ' (\./)?usr/bin/psf-guard$' <<<"$contents"
+        grep -Eq ' (\./)?usr/lib/systemd/system/psf-guard-worker\.service$' <<<"$contents"
+        grep -Eq ' (\./)?usr/share/doc/psf-guard/worker\.conf\.example$' <<<"$contents"
+
     - name: Build Tauri desktop app (Windows, with bundled CLI)
       # Tauri auto-bundles every cargo bin target, so psf-guard-cli.exe (console
       # subsystem) ships next to the GUI app with no externalBin/sidecar needed.
