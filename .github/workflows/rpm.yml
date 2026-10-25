@@ -84,7 +84,8 @@ jobs:
           test -f /usr/lib/systemd/system/psf-guard-worker.service
           test "$(stat -c '%a %U' /etc/psf-guard/worker.conf)" = "600 root"
           test ! -e /etc/systemd/system/multi-user.target.wants/psf-guard-worker.service
-          systemd-analyze verify /usr/lib/systemd/system/psf-guard-worker.service
+          systemd-analyze verify /usr/lib/systemd/system/psf-guard.service \
+              /usr/lib/systemd/system/psf-guard-worker.service
 
       - uses: actions/upload-artifact@v7
         with:

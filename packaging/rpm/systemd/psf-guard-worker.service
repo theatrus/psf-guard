@@ -7,30 +7,36 @@ Wants=network-online.target
 [Service]
 Type=exec
 # A user of its own each time it starts, with no files outside the state
-# directory. To read task files on shared storage as an existing user, add
-# a drop-in with `systemctl edit psf-guard-worker`: DynamicUser=no and User=.
+# directory. To use task files on shared storage, or an rc-astro licensed
+# by a user, run as that user instead; see docs/REMOTE_WORKERS.md.
 DynamicUser=yes
+# GPU render nodes for Vulkan stacking on AMD and Intel GPUs.
+SupplementaryGroups=render video
 # The server's address, the token and any other options.
 EnvironmentFile=/etc/psf-guard/worker.conf
 ExecStart=/usr/bin/psf-guard worker \
     --server ${PSF_GUARD_WORKER_SERVER} \
-    --work-dir /var/lib/psf-guard-worker \
+    --work-dir /var/lib/psf-guard-worker/tasks \
     $PSF_GUARD_WORKER_EXTRA_ARGS
-# Stopping lets the worker leave the server, which queues its running task
-# again.
+# SIGINT reaches only the worker, which stops the tool it runs and leaves
+# the server; the server queues the running task again.
 KillSignal=SIGINT
+KillMode=mixed
 TimeoutStopSec=60
-# A server that is down or a revoked token: try again every 30 seconds.
+# The worker keeps trying to reach a server that is down. It exits when the
+# server refuses its token, and starts again after 30 seconds.
 Restart=on-failure
 RestartSec=30
 
-# Where tasks keep their files while they run.
+# The state directory holds the tasks' files while they run, and serves as
+# the home folder tools such as rc-astro write their caches to.
 StateDirectory=psf-guard-worker
 StateDirectoryMode=0700
+Environment=HOME=/var/lib/psf-guard-worker
 
-# Sandboxing. The worker writes only its state directory. It keeps the
-# devices, so stacking can use the GPU (Vulkan) and rc-astro can use CUDA,
-# and it has no system call filter, which some GPU drivers would trip.
+# Sandboxing. The worker writes only its state directory. The device nodes
+# stay visible so stacking can use a Vulkan GPU and rc-astro can use CUDA,
+# and there is no system call filter, which some GPU drivers would trip.
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=read-only

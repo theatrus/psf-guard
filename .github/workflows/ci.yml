@@ -381,9 +381,10 @@ jobs:
       if: matrix.os == 'ubuntu-22.04'
       run: |
         contents="$(dpkg-deb -c target/release/bundle/deb/*.deb)"
-        grep -q ' ./usr/bin/psf-guard$' <<<"$contents"
-        grep -q ' ./usr/lib/systemd/system/psf-guard-worker.service$' <<<"$contents"
-        grep -q ' ./usr/share/doc/psf-guard/worker.conf.example$' <<<"$contents"
+        # Tauri lists paths without dpkg-deb's usual ./ prefix.
+        grep -Eq ' (\./)?usr/bin/psf-guard$' <<<"$contents"
+        grep -Eq ' (\./)?usr/lib/systemd/system/psf-guard-worker\.service$' <<<"$contents"
+        grep -Eq ' (\./)?usr/share/doc/psf-guard/worker\.conf\.example$' <<<"$contents"
 
     - name: Build Tauri desktop app (Windows, with bundled CLI)
       # Tauri auto-bundles every cargo bin target, so psf-guard-cli.exe (console

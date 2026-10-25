@@ -59,7 +59,7 @@ service. It is not enabled, so it runs only after you set it up.
    by root only, since it holds the token:
 
    ```bash
-   sudo install -m 600 /usr/share/doc/psf-guard/worker.conf.example /etc/psf-guard/worker.conf
+   sudo install -D -m 600 /usr/share/doc/psf-guard/worker.conf.example /etc/psf-guard/worker.conf
    sudoedit /etc/psf-guard/worker.conf
    ```
 
@@ -74,20 +74,33 @@ service. It is not enabled, so it runs only after you set it up.
    journalctl -u psf-guard-worker -f
    ```
 
-The service runs as a user of its own, with its work folder in
-`/var/lib/psf-guard-worker`. It can use the GPU for stacking and for rc-astro.
-`systemctl stop psf-guard-worker` stops the worker, and the server queues
-its running task again. When the server cannot be reached, or the token is
-revoked, the service tries again every 30 seconds.
+The service runs as a user of its own, with its files in
+`/var/lib/psf-guard-worker`. `systemctl stop psf-guard-worker` stops the
+worker, and the server queues its running task again. While the server
+cannot be reached, the worker keeps trying. When the server refuses the
+token, or the token is missing, the worker stops, and the service starts it
+again every 30 seconds; `journalctl -u psf-guard-worker` shows why.
 
-To read task files on shared storage, the service needs a user that can
-read them. Run `sudo systemctl edit psf-guard-worker` and add:
+- **GPU stacking.** The service joins the `render` and `video` groups, so
+  stacking can use an AMD or Intel GPU through Vulkan. NVIDIA GPUs need no
+  group.
+- **rc-astro with an NVIDIA GPU.** On a computer with no desktop session,
+  load the `nvidia-uvm` module at boot, since the service cannot load it:
+  add `nvidia-uvm` to a file in `/etc/modules-load.d/`.
+- **Shared storage, or rc-astro licensed by a user.** Run the service as a
+  user that can read and write the shared folders, or the user who
+  licensed rc-astro. Run `sudo systemctl edit psf-guard-worker` and add the
+  user and each shared folder:
 
-```ini
-[Service]
-DynamicUser=no
-User=astro
-```
+  ```ini
+  [Service]
+  DynamicUser=no
+  User=astro
+  ReadWritePaths=/mnt/astro
+  ```
+
+`PSF_GUARD_WORKER_EXTRA_ARGS` is split on spaces, so it cannot hold a path
+that contains one.
 
 ## Choose the work a worker accepts
 

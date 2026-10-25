@@ -81,8 +81,9 @@ sudoedit /etc/psf-guard/worker.conf
 sudo systemctl enable --now psf-guard-worker
 ```
 
-The worker runs as a dynamic user, keeps the GPU devices for stacking and
-rc-astro, and has no system call filter. See
+The worker runs as a dynamic user in the `render` and `video` groups, so
+stacking can use the GPU, and has no system call filter. To use shared
+storage or a user's rc-astro licence, run it as that user with a drop-in. See
 [Run a worker as a Linux service](../../docs/REMOTE_WORKERS.md#run-a-worker-as-a-linux-service).
 
 ## Build locally

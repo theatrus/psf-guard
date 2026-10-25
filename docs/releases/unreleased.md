@@ -30,7 +30,9 @@
 - Run a worker as a Linux service. The Fedora RPM and the Debian package
   install a `psf-guard-worker` systemd service, not enabled. Enter the
   server's address and a worker token in `/etc/psf-guard/worker.conf`, then
-  run `sudo systemctl enable --now psf-guard-worker`.
+  run `sudo systemctl enable --now psf-guard-worker`. On Debian, copy
+  `/usr/share/doc/psf-guard/worker.conf.example` to that file first.
+
 - Stack builds on another computer. Start a worker with `--work stack`, then
   choose **Workers first** or **Workers only** for stack builds in
   **Settings › Workers**. Each channel stacks there from the frames, masters,
