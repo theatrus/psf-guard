@@ -113,6 +113,7 @@ fn start_worker_taking(
         work_dir: work_dir.to_path_buf(),
         tools: LocalTools {
             rc_astro: crate::remote_work::rc_astro::locate(None),
+            slots: 1,
         },
         work,
         slots: 1,

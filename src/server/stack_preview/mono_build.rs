@@ -645,7 +645,9 @@ pub(super) fn run_group(
         });
         let headers = crate::image_io::read_header(&group.frames[0].path)
             .map_err(|error| error.to_string())?;
-        let (wcs, source) = resolve_stack_wcs(state, &ctx, &group.frames[0], &headers)?;
+        // On the build's leased pool, as everything this build computes.
+        let (wcs, source) =
+            pool.install(|| resolve_stack_wcs(state, &ctx, &group.frames[0], &headers))?;
         state.stack_previews.update(job_id, |job| {
             job.groups[group.index].phase = "stacking".into();
         });
@@ -694,6 +696,7 @@ pub(super) fn run_group(
             stack_root,
             database_id,
             identity: identity.clone(),
+            listed_before: None,
         };
         integrate::integrate_channel(
             integrate::ChannelWork {
@@ -733,6 +736,7 @@ pub(super) fn run_group(
             stack_root,
             database_id,
             identity: identity.clone(),
+            listed_before: None,
         };
         let remote = remote_channel::run_on_worker(
             state,
@@ -760,14 +764,25 @@ pub(super) fn run_group(
             .map_err(|error| error.to_string())?;
         let integrated = match remote {
             Ok(outcome) => outcome,
-            Err(remote_channel::NotStacked::NoWorker(message))
-                if state
-                    .workers
-                    .board
-                    .placement(crate::remote_work::protocol::TaskKind::StackChannel)
-                    .allows(true) =>
+            // Under workers first, this server stacks a channel no worker
+            // could take, or one a worker failed, such as when it ran out
+            // of memory.
+            Err(
+                remote_channel::NotStacked::NoWorker(message)
+                | remote_channel::NotStacked::Failed(message),
+            ) if state
+                .workers
+                .board
+                .placement(crate::remote_work::protocol::TaskKind::StackChannel)
+                .allows(true) =>
             {
                 tracing::warn!(job_id, "{message}; this server stacks the channel");
+                add_note_to(
+                    state,
+                    job_id,
+                    group.index,
+                    &format!("{message}; stacked on this server"),
+                );
                 stack_here(&pool, checkpoint)?
             }
             Err(
@@ -813,16 +828,27 @@ pub(super) fn run_group(
     Ok(GroupOutcome::Built)
 }
 
+/// Add a sentence to a channel card's note.
+fn add_note_to(state: &AppState, job_id: &str, index: usize, sentence: &str) {
+    state.stack_previews.update(job_id, |job| {
+        add_note(&mut job.groups[index].resume_note, sentence);
+    });
+}
+
 /// A channel's integration, as it shows on this server's build card.
-struct CardEvents<'a> {
-    state: &'a Arc<AppState>,
-    job_id: &'a str,
-    index: usize,
+pub(super) struct CardEvents<'a> {
+    pub(super) state: &'a Arc<AppState>,
+    pub(super) job_id: &'a str,
+    pub(super) index: usize,
     /// The running image, for a channel this server stacks.
-    live: Option<live::Publisher<'a>>,
-    stack_root: &'a FsPath,
-    database_id: &'a str,
-    identity: integrate::CheckpointIdentity,
+    pub(super) live: Option<live::Publisher<'a>>,
+    pub(super) stack_root: &'a FsPath,
+    pub(super) database_id: &'a str,
+    pub(super) identity: integrate::CheckpointIdentity,
+    /// The frames the card listed before the channel started, such as those
+    /// the build left out. A worker that takes the channel over after
+    /// another starts from these again.
+    pub(super) listed_before: Option<Vec<StackFrameDecision>>,
 }
 
 impl CardEvents<'_> {
@@ -858,20 +884,36 @@ impl integrate::ChannelEvents for CardEvents<'_> {
             &self.identity.filter_name,
             self.identity.exposure_group_key.as_deref(),
         );
-        self.update(|status| status.resume_note = Some(why.into()));
+        self.update(|status| add_note(&mut status.resume_note, why));
     }
 
     fn frames_restored(&mut self, restored: integrate::RestoredFrames) {
+        if self.listed_before.is_none() {
+            self.listed_before = Some(
+                self.state
+                    .stack_previews
+                    .get(self.job_id)
+                    .and_then(|job| job.groups.get(self.index).map(|group| group.frames.clone()))
+                    .unwrap_or_default(),
+            );
+        }
+        let listed_before = self.listed_before.clone().unwrap_or_default();
         self.update(|status| {
             status.processed_frames = restored.frames.len();
             status.accepted_frames = restored.accepted;
             status.rejected_frames = restored.rejected;
-            if restored.reused > 0 {
-                status.reused_frames = restored.reused;
-            }
             status.output_channels = restored.output_channels;
             status.total_exposure_seconds = restored.total_exposure_seconds;
-            status.frames = restored.frames;
+            if restored.reused > 0 {
+                // A checkpoint's ledger is the whole list.
+                status.reused_frames = restored.reused;
+                status.frames = restored.frames;
+            } else {
+                // A fresh stack's reference joins the frames the build
+                // listed before, such as those it left out.
+                status.frames = listed_before;
+                status.frames.extend(restored.frames);
+            }
             if restored.snr.is_some() {
                 status.snr = restored.snr;
             }

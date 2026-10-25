@@ -18,6 +18,9 @@ use protocol::TaskKind;
 #[derive(Clone, Default)]
 pub struct LocalTools {
     pub rc_astro: Option<seiza_stacking::RcAstroCli>,
+    /// How many tasks the worker runs at once; a stack channel takes this
+    /// share of its cores and memory.
+    pub slots: usize,
 }
 
 impl LocalTools {
@@ -50,6 +53,9 @@ impl LocalTools {
                 stacking_version: choice
                     .takes_stack()
                     .then(|| crate::server::stack_preview::SEIZA_STACKING_OUTPUT_VERSION.into()),
+                stacking_release: choice
+                    .takes_stack()
+                    .then(|| env!("CARGO_PKG_VERSION").into()),
             },
             problem,
         )
@@ -133,13 +139,15 @@ impl WorkChoice {
 }
 
 /// Run a task on this machine. `inputs` gives where each input is;
-/// outputs are written into `output_dir` under their names. Returns the
-/// task's result.
+/// outputs are written into `output_dir` under their names, and scratch
+/// files go in `work_dir`. Returns the task's result.
+#[allow(clippy::too_many_arguments)]
 pub fn execute(
     kind: TaskKind,
     spec: serde_json::Value,
     inputs: &BTreeMap<String, PathBuf>,
     output_dir: &Path,
+    work_dir: &Path,
     tools: &LocalTools,
     stop: &crate::concurrency::Stop,
     report: &mut dyn TaskReport,
@@ -165,7 +173,13 @@ pub fn execute(
             serde_json::to_value(result).map_err(|error| error.to_string())
         }
         TaskKind::StackChannel => crate::server::stack_preview::remote_channel::execute(
-            spec, inputs, output_dir, stop, report,
+            spec,
+            inputs,
+            output_dir,
+            work_dir,
+            tools.slots,
+            stop,
+            report,
         ),
     }
 }

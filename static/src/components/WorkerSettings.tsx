@@ -344,7 +344,8 @@ export default function WorkerSettings() {
       ))}
       <p className="muted">
         A build stacked on a worker shows no running image, and the channel&apos;s
-        card says which worker stacked it. WBPP runs stay on this server.
+        card shows which worker stacked it. This server&apos;s GPU settings apply
+        on the worker. WBPP runs stay on this server.
       </p>
 
       <h4>Tokens</h4>

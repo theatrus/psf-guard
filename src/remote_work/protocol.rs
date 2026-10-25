@@ -57,6 +57,11 @@ pub struct Offers {
     /// machine that built it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stacking_version: Option<String>,
+    /// The PSF Guard release the worker stacks with, when it takes stack
+    /// builds: the method and the final pass are PSF Guard's, so a server
+    /// sends a channel only to a worker on its own release.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stacking_release: Option<String>,
 }
 
 fn one_slot() -> usize {

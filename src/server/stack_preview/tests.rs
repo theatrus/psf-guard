@@ -4945,3 +4945,77 @@ fn mosaic_preparation_groups_the_panels_but_keeps_panel_builds_separate() {
         "publishing panels must retain the mosaic"
     );
 }
+
+/// A fresh stack's reference joins the frames the card listed before, such
+/// as those the build left out; a worker that takes the channel over starts
+/// from those again; a checkpoint's ledger replaces the list.
+#[test]
+fn a_channel_s_card_keeps_the_frames_it_listed_before_the_stack_began() {
+    use integrate::ChannelEvents;
+    let state = test_state();
+    let frame = PreparedFrame {
+        image_id: 1,
+        acquired_date: None,
+        quality_score: None,
+        path: PathBuf::from("light.fits"),
+        source_fingerprint: "light".into(),
+        expected_target: None,
+        exposure_seconds: 60.0,
+        read_fingerprint: None,
+    };
+    let decision = |disposition: &str| {
+        let mut decision = rejected_decision(&frame, "fixture".into());
+        decision.disposition = disposition.into();
+        decision
+    };
+    let mut job = running_build("listed");
+    job.groups[0].frames = vec![decision("excluded")];
+    assert!(state.stack_previews.insert(job));
+    let root = tempfile::tempdir().unwrap();
+    let mut events = mono_build::CardEvents {
+        state: &state,
+        job_id: "listed",
+        index: 0,
+        live: None,
+        stack_root: root.path(),
+        database_id: "db-test",
+        identity: integrate::CheckpointIdentity {
+            target_id: 42,
+            filter_name: "Ha".into(),
+            exposure_group_key: None,
+        },
+        listed_before: None,
+    };
+    let restored = |frames: Vec<StackFrameDecision>, reused: usize| integrate::RestoredFrames {
+        accepted: frames.len(),
+        rejected: 0,
+        reused,
+        output_channels: 1,
+        total_exposure_seconds: 60.0,
+        snr: None,
+        frames,
+    };
+    let listed = |state: &AppState| {
+        state.stack_previews.get("listed").unwrap().groups[0]
+            .frames
+            .iter()
+            .map(|frame| frame.disposition.clone())
+            .collect::<Vec<_>>()
+    };
+    events.frames_restored(restored(vec![decision("reference")], 0));
+    events.frame(decision("accepted"), 60.0);
+    assert_eq!(listed(&state), ["excluded", "reference", "accepted"]);
+    // Another worker takes the channel over and starts again.
+    events.frames_restored(restored(vec![decision("reference")], 0));
+    assert_eq!(listed(&state), ["excluded", "reference"]);
+    // A checkpoint's ledger is the whole list.
+    events.frames_restored(restored(
+        vec![
+            decision("reference"),
+            decision("accepted"),
+            decision("accepted"),
+        ],
+        3,
+    ));
+    assert_eq!(listed(&state), ["reference", "accepted", "accepted"]);
+}

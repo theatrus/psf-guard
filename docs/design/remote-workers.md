@@ -1,6 +1,6 @@
 # Remote workers
 
-Status: **built for RC-Astro steps.** Stack builds are next.
+Status: **built for RC-Astro steps and stack builds' channels.**
 Last updated: 2026-10-24
 
 This record describes how PSF Guard hands work to another machine: the task
@@ -176,23 +176,58 @@ step whichever worker ran the earlier steps.
 - **Progress.** The stage reads `NoiseXTerminator on studio-pc` while a
   remote worker runs it.
 
-## Next: stack builds
+## Stack channels
 
-A stack build still reads this server's catalog while it runs: it chooses
-the reference frame from the WCS and score caches, builds calibration
-masters from the calibration catalog, and records each channel's progress
-on the build record. Before a build can be a task:
+Each channel of a stack build can be a task (`stack_channel`). The build's
+own work splits where the catalog stops:
 
-1. Choose the reference, the masters and the orientation anchors while the
-   build is prepared at its turn, and put them in the spec.
-2. Report a channel's progress through the task, and write the build record
-   from what the task reports.
-3. Make the stacked FITS, the frame decisions and the checkpoint the task's
-   outputs, published on this server as now.
-4. Send frames and masters by path to a shared worker, and through the
-   server otherwise. A stopped build's checkpoint is an output, so the build
-   can resume on another worker or on this server.
+- **This server prepares the channel** in `mono_build::run_group`, as it
+  does for itself: the reference (`choose_references`), the calibration plan
+  and its masters, the resume decision, and the orientation, including the
+  reference's plate solve for a north-up stack.
+- **The integration** (`stack_preview::integrate`) is the same code on
+  either machine: it opens or resumes the live stack, swaps each session's
+  masters, pushes the frames, checkpoints, measures the SNR curve, runs the
+  final pass, orients and writes the FITS. It reads neither the catalog nor
+  the build record, and reports through `ChannelEvents`.
+- **On a worker** (`stack_preview::remote_channel`), the spec carries the
+  group with its frames named by input, each session's masters as a
+  `MasterRecipe` (the bias, dark and flat files and how they combine, or a
+  flat with a fitted pedestal), the checkpoint's ledger, the method, the GPU
+  setting and the orientation. The worker loads the masters from their
+  files, so they match this server's, and reopens the checkpoint context.
+- **Events.** Each `ChannelEvents` call becomes an event in a progress
+  report, numbered over the task; the server skips numbers it already has,
+  and the worker keeps each event until the server acknowledges it. The
+  worker reports every two seconds while it runs, and sends every event
+  before it completes, so the card is filled before the result arrives.
+- **Outputs.** `stack.fits`, `clipped.fits`, and the checkpoint's context
+  and manifest. The server moves them into place and renders the previews.
+  The frame decisions keep this server's file fingerprints; the worker
+  checks its own copies (`PreparedFrame::read_fingerprint`) in the final
+  pass.
+- **Needs.** A worker that takes stack builds on this server's PSF Guard
+  release and Seiza stacking output version: the method and the final pass
+  are PSF Guard's, and the version is part of a stack's identity.
+- **Resources.** The worker gives a channel its share of its cores and
+  free memory, one per slot, and keeps the final pass's copies of the frames
+  in its work folder. This server's GPU setting applies on the worker.
+- **Placement.** `remote_workers.stack` in the registry, this server only by
+  default. This server stacks its own channels in process rather than
+  through its worker, for the running image on the card; under workers
+  first, it stacks the channel when no worker can take it. It releases its
+  CPU lease while a worker stacks, and leases again for the previews.
+- **Stop.** A stop on the build asks the worker to finish
+  (`ProgressReply::finish`): the integration stops at its next frame and
+  checkpoints, and the worker completes the task with the checkpoint, so the
+  next build continues from it. The server waits until two minutes after
+  the worker's last report or upload. A worker asked to finish before it
+  began drops the task, and the server keeps its checkpoint. A stopped task
+  goes to no new worker, and a requeued task's events start again from 0.
+- **Failure.** Under workers first, a channel a worker fails is stacked on
+  this server.
 
-A build would then need cores, memory and optionally a GPU rather than a
-tool. Assignment can weigh the bytes to send against waiting for this
-server.
+A test stacks one synthetic channel on this server and on a real worker,
+over HTTP in both file modes, and checks the pixels match bit for bit on
+one machine. A worker's GPU can make its passes differ slightly from a
+CPU's, as on this server.

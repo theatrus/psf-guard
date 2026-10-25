@@ -61,8 +61,12 @@ pub enum TaskNeeds {
         cli_version: String,
         ml_version: Option<i64>,
     },
-    /// Stacking at this Seiza stacking output version.
-    Stack { stacking_version: String },
+    /// Stacking at this Seiza stacking output version, on this PSF Guard
+    /// release.
+    Stack {
+        stacking_version: String,
+        release: String,
+    },
 }
 
 impl TaskNeeds {
@@ -82,9 +86,13 @@ impl TaskNeeds {
                             && schema.ml_version == *ml_version
                     })
             }
-            TaskNeeds::Stack { stacking_version } => {
+            TaskNeeds::Stack {
+                stacking_version,
+                release,
+            } => {
                 offers.work.contains(&TaskKind::StackChannel)
                     && offers.stacking_version.as_deref() == Some(stacking_version)
+                    && offers.stacking_release.as_deref() == Some(release)
             }
         }
     }
@@ -95,9 +103,10 @@ impl TaskNeeds {
             TaskNeeds::RcAstro {
                 name, cli_version, ..
             } => format!("{name} {cli_version}"),
-            TaskNeeds::Stack { stacking_version } => {
-                format!("stacking with Seiza stacking {stacking_version}")
-            }
+            TaskNeeds::Stack {
+                stacking_version,
+                release,
+            } => format!("stacking with PSF Guard {release} and Seiza stacking {stacking_version}"),
         }
     }
 }
@@ -196,6 +205,9 @@ struct Task {
     stop_requested: bool,
     /// Stops the work when this server's worker runs it.
     local_stop: Option<crate::concurrency::Stop>,
+    /// When the worker last reported or sent an output: a stop that lets
+    /// the worker finish waits while it keeps doing so.
+    last_report: Option<Instant>,
 }
 
 impl Task {
@@ -217,6 +229,11 @@ impl Task {
             _ => None,
         };
         self.attempts += 1;
+        // The next worker reports its events from the start, as the
+        // work's first events again.
+        self.events.clear();
+        self.events_received = 0;
+        self.last_report = None;
         tracing::warn!("{} went back in the queue: {why}", self.label);
         self.state = if self.attempts >= MAX_ATTEMPTS {
             TaskState::Finished(Err(format!(
@@ -791,6 +808,7 @@ impl Board {
                 events_received: 0,
                 stop_requested: false,
                 local_stop: None,
+                last_report: None,
             },
         );
         drop(inner);
@@ -871,7 +889,10 @@ impl Board {
             .tasks
             .iter()
             .filter(|(_, task)| {
-                matches!(task.state, TaskState::Queued) && inner.may_run(&found, task, now)
+                // A task its waiting work stopped goes to no new worker.
+                matches!(task.state, TaskState::Queued)
+                    && !task.stop_requested
+                    && inner.may_run(&found, task, now)
             })
             .min_by_key(|(_, task)| (!task.person, task.seq))
             .map(|(id, _)| id.clone());
@@ -1045,6 +1066,7 @@ impl Board {
         if let TaskState::Leased { expires, .. } = &mut found.state {
             *expires = now + self.timings.lease;
         }
+        found.last_report = Some(now);
         if progress.fraction.is_finite() {
             found.fraction = progress.fraction.clamp(0.0, 1.0);
         }
@@ -1108,6 +1130,7 @@ impl Board {
                 "The task has no output called {name}"
             )));
         }
+        found.last_report = Some(Instant::now());
         Ok(found.lease_dir(lease).join(name))
     }
 
@@ -1485,10 +1508,20 @@ impl Ticket {
                 )
             });
             let finishing = match (finish_on_stop, stop_deadline) {
-                (_, Some(deadline)) => now < deadline,
+                // The worker has until the limit after its last report or
+                // upload, so a slow upload of what it has still arrives.
+                (Some(limit), Some(deadline)) => {
+                    let reported = inner
+                        .tasks
+                        .get(&self.id)
+                        .and_then(|task| task.last_report)
+                        .map(|last| last + limit);
+                    now < reported.map_or(deadline, |reported| reported.max(deadline))
+                }
+                (None, Some(deadline)) => now < deadline,
                 (Some(limit), None) if running && stopped() => {
-                    // The worker hears at its next report, and finishes
-                    // with what it has.
+                    // The worker's next report is answered with a request
+                    // to finish with what it has.
                     let task = inner.tasks.get_mut(&self.id).expect("the task runs");
                     task.stop_requested = true;
                     if let Some(stop) = &task.local_stop {

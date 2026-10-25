@@ -32,6 +32,8 @@ use crate::server::state::AppState;
 
 /// The largest output a worker may upload.
 const MAX_OUTPUT_BYTES: u64 = 16 * 1024 * 1024 * 1024;
+/// The largest progress report a worker may send.
+const MAX_PROGRESS_BYTES: usize = 64 * 1024 * 1024;
 
 /// The routes workers call, nested under `/api/workers/v1`.
 pub fn worker_routes() -> Router<Arc<AppState>> {
@@ -40,7 +42,11 @@ pub fn worker_routes() -> Router<Arc<AppState>> {
         .route("/sessions/{session}/probe", post(answer_probe))
         .route("/sessions/{session}/claim", post(claim))
         .route("/sessions/{session}/leave", post(leave))
-        .route("/sessions/{session}/tasks/{task}/progress", post(progress))
+        .route(
+            "/sessions/{session}/tasks/{task}/progress",
+            // A report can carry a stack's whole checkpoint ledger.
+            post(progress).layer(axum::extract::DefaultBodyLimit::max(MAX_PROGRESS_BYTES)),
+        )
         .route(
             "/sessions/{session}/tasks/{task}/inputs/{name}",
             get(download_input),

@@ -61,6 +61,11 @@ const TOOL_STOP_LIMIT: Duration = Duration::from_secs(30);
 /// How often a running task reports, at most: a stack build's card shows
 /// the worker's frames this soon.
 const EVENT_INTERVAL: Duration = Duration::from_secs(2);
+/// The most events one progress report carries, so a backlog goes in
+/// reports of a bounded size.
+const EVENTS_PER_REPORT: usize = 200;
+/// How long a finished task keeps trying to send its last events.
+const FLUSH_LIMIT: Duration = Duration::from_secs(120);
 
 pub fn run(args: WorkerArgs) -> Result<()> {
     let _ = tracing_subscriber::fmt()
@@ -117,7 +122,10 @@ fn options(args: WorkerArgs) -> Result<WorkerOptions> {
             .work_dir
             .map(PathBuf::from)
             .unwrap_or_else(|| std::env::temp_dir().join("psf-guard-worker")),
-        tools: LocalTools { rc_astro },
+        tools: LocalTools {
+            rc_astro,
+            slots: args.slots,
+        },
         work: WorkChoice::parse(&args.work).map_err(anyhow::Error::msg)?,
         slots: {
             anyhow::ensure!(
@@ -749,10 +757,19 @@ impl Outbox {
         self.lock().events.push(event);
     }
 
-    /// The events to send, and the number of the first.
+    /// The events to send, at most [`EVENTS_PER_REPORT`], and the number of
+    /// the first.
     fn pending(&self) -> (u64, Vec<serde_json::Value>) {
         let state = self.lock();
-        (state.first, state.events.clone())
+        (
+            state.first,
+            state
+                .events
+                .iter()
+                .take(EVENTS_PER_REPORT)
+                .cloned()
+                .collect(),
+        )
     }
 
     fn is_empty(&self) -> bool {
@@ -843,17 +860,22 @@ impl Heartbeat<'_> {
     }
 
     /// Send every event still waiting, so the server has them all before
-    /// the task completes.
+    /// the task completes. A short outage is waited out.
     async fn flush(&mut self) -> Result<(), ClientError> {
-        for _ in 0..5 {
-            if self.outbox.is_empty() {
-                return Ok(());
-            }
+        let deadline = tokio::time::Instant::now() + FLUSH_LIMIT;
+        while !self.outbox.is_empty() {
+            let before = self.outbox.pending().0;
             self.report().await?;
+            if self.outbox.pending().0 == before {
+                if tokio::time::Instant::now() >= deadline {
+                    return Err(ClientError::Other(
+                        "The server did not take the task's last events".into(),
+                    ));
+                }
+                tokio::time::sleep(EVENT_INTERVAL).await;
+            }
         }
-        Err(ClientError::Other(
-            "The server did not take the task's last events".into(),
-        ))
+        Ok(())
     }
 }
 
@@ -894,6 +916,11 @@ async fn run_task_in(
         let path = match shared {
             Some(path) => path,
             None => {
+                // Asked to finish before the work began, there is nothing
+                // to hand back: the server keeps what it had.
+                if heartbeat.work_stop.requested() {
+                    return Err(ClientError::NotCurrent);
+                }
                 let to = scratch.join(&input.name);
                 heartbeat
                     .during(client.download(session, assignment, &input.name, &to))
@@ -924,12 +951,13 @@ async fn run_task_in(
             fraction: fraction_sender,
             outbox,
         };
-        let (kind, spec, tools, output_dir, stop) = (
+        let (kind, spec, tools, output_dir, stop, work_dir) = (
             assignment.kind,
             assignment.spec.clone(),
             options.tools.clone(),
             output_dir.clone(),
             stop.clone(),
+            scratch.join("work"),
         );
         tokio::task::spawn_blocking(move || {
             crate::remote_work::execute(
@@ -937,6 +965,7 @@ async fn run_task_in(
                 spec,
                 &inputs,
                 &output_dir,
+                &work_dir,
                 &tools,
                 &stop,
                 &mut report,

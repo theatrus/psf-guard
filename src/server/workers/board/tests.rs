@@ -2,6 +2,7 @@ use super::*;
 use crate::remote_work::protocol::{
     FileAccess, PathMap, Progress, WrittenOutput, PROTOCOL_VERSION,
 };
+use crate::server::workers::Waiting;
 
 fn schema(tool: &str, version: &str, licensed: bool) -> seiza_stacking::ExternalToolSchema {
     serde_json::from_value(serde_json::json!({
@@ -23,6 +24,7 @@ fn offers(tools: &[(&str, &str)]) -> Offers {
         slots: 1,
         work: vec![TaskKind::RcAstroStep],
         stacking_version: None,
+        stacking_release: None,
         rc_astro: tools
             .iter()
             .map(|(tool, version)| schema(tool, version, true))
@@ -815,4 +817,238 @@ fn a_task_a_worker_fails_falls_back_to_this_server_when_it_can_run_it() {
         noise.wait(&|| false, &mut |_, _| {}).unwrap_err(),
         WaitError::Failed("no licence (on gpu-box)".into())
     );
+}
+
+#[test]
+fn events_arrive_once_in_order_even_when_a_report_is_sent_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let board = board(dir.path(), Timings::default());
+    let ticket = board.ticket().unwrap();
+    ticket.submit(task("t", true, needs("bxt", "1"))).unwrap();
+    let session = board.register(
+        "token",
+        registration("w", offers(&[("bxt", "1")]), FileAccess::default()),
+        false,
+    );
+    let claimed = board.try_claim(&session).unwrap().unwrap();
+    let report = |first_event: u64, events: &[i32]| {
+        board
+            .progress(
+                &session,
+                &claimed.task,
+                &claimed.lease,
+                Progress {
+                    fraction: 0.5,
+                    events: events
+                        .iter()
+                        .map(|event| serde_json::json!(event))
+                        .collect(),
+                    first_event,
+                },
+            )
+            .unwrap()
+    };
+    assert_eq!(report(0, &[1, 2]).events_received, 2);
+    // The answer was lost, so the worker sends 1 and 2 again with 3.
+    assert_eq!(report(0, &[1, 2, 3]).events_received, 3);
+    // A gap is refused until the missing events come.
+    assert_eq!(report(5, &[6]).events_received, 3);
+    assert_eq!(report(3, &[4]).events_received, 4);
+    let out = written(&board, &session, &claimed, "out.bin", b"done");
+    board
+        .complete(
+            &session,
+            &claimed.task,
+            &claimed.lease,
+            Completion {
+                result: serde_json::json!({}),
+                outputs: vec![out],
+            },
+        )
+        .unwrap();
+    let mut heard = Vec::new();
+    ticket
+        .wait_with(Waiting {
+            stopped: &|| false,
+            progress: &mut |_, _| {},
+            events: &mut |event| heard.push(event.as_i64().unwrap()),
+            finish_on_stop: None,
+        })
+        .unwrap();
+    assert_eq!(heard, [1, 2, 3, 4]);
+}
+
+#[test]
+fn a_stop_that_lets_the_worker_finish_hands_back_what_it_made() {
+    let dir = tempfile::tempdir().unwrap();
+    let board = board(dir.path(), Timings::default());
+    let ticket = board.ticket().unwrap();
+    ticket.submit(task("t", true, needs("bxt", "1"))).unwrap();
+    let session = board.register(
+        "token",
+        registration("w", offers(&[("bxt", "1")]), FileAccess::default()),
+        false,
+    );
+    let claimed = board.try_claim(&session).unwrap().unwrap();
+    let worker = {
+        let (board, session, claimed) = (Arc::clone(&board), session.clone(), claimed.clone());
+        std::thread::spawn(move || {
+            // The worker is asked to finish, and completes with what it has.
+            loop {
+                let reply = board
+                    .progress(&session, &claimed.task, &claimed.lease, at(0.3))
+                    .unwrap();
+                assert!(!reply.stop);
+                if reply.finish {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            let path = board
+                .output_path(&session, &claimed.task, &claimed.lease, "out.bin")
+                .unwrap();
+            std::fs::write(&path, b"partial").unwrap();
+            let (sha256, size) = crate::remote_work::file_digest(&path).unwrap();
+            board
+                .complete(
+                    &session,
+                    &claimed.task,
+                    &claimed.lease,
+                    Completion {
+                        result: serde_json::json!({"built": false}),
+                        outputs: vec![WrittenOutput {
+                            name: "out.bin".into(),
+                            size,
+                            sha256,
+                        }],
+                    },
+                )
+                .unwrap();
+        })
+    };
+    let finished = ticket
+        .wait_with(Waiting {
+            stopped: &|| true,
+            progress: &mut |_, _| {},
+            events: &mut |_| {},
+            finish_on_stop: Some(Duration::from_secs(10)),
+        })
+        .unwrap();
+    worker.join().unwrap();
+    assert_eq!(finished.result["built"], false);
+    assert_eq!(
+        std::fs::read(&finished.outputs["out.bin"]).unwrap(),
+        b"partial"
+    );
+}
+
+#[test]
+fn only_a_worker_that_stacks_at_the_same_version_takes_a_channel() {
+    let dir = tempfile::tempdir().unwrap();
+    let board = board(dir.path(), Timings::default());
+    board.set_placement(TaskKind::StackChannel, WorkPlacement::WorkersFirst);
+    let stacker = |version: &str| Offers {
+        threads: 8,
+        slots: 1,
+        work: vec![TaskKind::StackChannel],
+        rc_astro: Vec::new(),
+        stacking_version: Some(version.into()),
+        stacking_release: Some("0.12".into()),
+    };
+    let older = board.register(
+        "token",
+        registration("older", stacker("37"), FileAccess::default()),
+        false,
+    );
+    let needs = TaskNeeds::Stack {
+        stacking_version: "38".into(),
+        release: "0.12".into(),
+    };
+    assert!(!board.remote_can_run(&needs));
+    let current = board.register(
+        "token",
+        registration("current", stacker("38"), FileAccess::default()),
+        false,
+    );
+    assert!(board.remote_can_run(&needs));
+    let ticket = board.ticket().unwrap();
+    let mut channel = task("channel", true, needs);
+    channel.kind = TaskKind::StackChannel;
+    ticket.submit(channel).unwrap();
+    assert!(board.try_claim(&older).unwrap().is_none());
+    assert_eq!(board.try_claim(&current).unwrap().unwrap().label, "channel");
+}
+
+#[test]
+fn a_requeued_task_takes_the_next_worker_s_events_from_the_start() {
+    let dir = tempfile::tempdir().unwrap();
+    let board = board(dir.path(), Timings::default());
+    let ticket = board.ticket().unwrap();
+    ticket.submit(task("t", true, needs("bxt", "1"))).unwrap();
+    let first = board.register(
+        "token",
+        registration("first", offers(&[("bxt", "1")]), FileAccess::default()),
+        false,
+    );
+    let claimed = board.try_claim(&first).unwrap().unwrap();
+    let event = |session: &str, claimed: &Assignment, number: u64| {
+        board
+            .progress(
+                session,
+                &claimed.task,
+                &claimed.lease,
+                Progress {
+                    fraction: 0.1,
+                    events: vec![serde_json::json!(number)],
+                    first_event: number,
+                },
+            )
+            .unwrap()
+    };
+    assert_eq!(event(&first, &claimed, 0).events_received, 1);
+    assert_eq!(event(&first, &claimed, 1).events_received, 2);
+    board.leave(&first);
+    let second = board.register(
+        "token",
+        registration("second", offers(&[("bxt", "1")]), FileAccess::default()),
+        false,
+    );
+    let again = board.try_claim(&second).unwrap().unwrap();
+    // The second worker's first event is taken, not skipped as a repeat.
+    assert_eq!(event(&second, &again, 0).events_received, 1);
+}
+
+#[test]
+fn a_stopped_task_goes_to_no_new_worker() {
+    let dir = tempfile::tempdir().unwrap();
+    let board = board(dir.path(), Timings::default());
+    let ticket = board.ticket().unwrap();
+    ticket.submit(task("t", true, needs("bxt", "1"))).unwrap();
+    let first = board.register(
+        "token",
+        registration("first", offers(&[("bxt", "1")]), FileAccess::default()),
+        false,
+    );
+    board.try_claim(&first).unwrap().unwrap();
+    let waiting = {
+        let board = Arc::clone(&board);
+        std::thread::spawn(move || {
+            ticket.wait_with(Waiting {
+                stopped: &|| true,
+                progress: &mut |_, _| {},
+                events: &mut |_| {},
+                finish_on_stop: Some(Duration::from_millis(400)),
+            })
+        })
+    };
+    // The stop is in place; the worker then leaves without finishing.
+    std::thread::sleep(Duration::from_millis(100));
+    board.leave(&first);
+    let second = board.register(
+        "token",
+        registration("second", offers(&[("bxt", "1")]), FileAccess::default()),
+        false,
+    );
+    assert!(board.try_claim(&second).unwrap().is_none());
+    assert_eq!(waiting.join().unwrap().unwrap_err(), WaitError::Stopped);
 }

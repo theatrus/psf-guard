@@ -117,6 +117,7 @@ fn run(board: &Arc<Board>, session: &str, assignment: Assignment) {
             spec,
             &input_paths,
             &output_dir,
+            &output_dir,
             &tools,
             &stop,
             &mut report,

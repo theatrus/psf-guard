@@ -183,6 +183,7 @@ impl Workers {
 pub(crate) fn local_tools() -> LocalTools {
     LocalTools {
         rc_astro: crate::remote_work::rc_astro::locate(None),
+        slots: 1,
     }
 }
 

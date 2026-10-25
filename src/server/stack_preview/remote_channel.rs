@@ -93,8 +93,9 @@ enum WireOrientation {
     },
 }
 
-/// What decided a half turn, back as the constant the orientation record
-/// names.
+/// What decided a half turn, as the constant the orientation record
+/// stores. A source this release does not know falls back to the exposure
+/// vote, with a warning.
 fn orientation_source(source: &str) -> &'static str {
     [
         orientation_source::SKY_ANCHOR,
@@ -103,7 +104,10 @@ fn orientation_source(source: &str) -> &'static str {
     ]
     .into_iter()
     .find(|known| *known == source)
-    .unwrap_or(orientation_source::EXPOSURE_MAJORITY)
+    .unwrap_or_else(|| {
+        tracing::warn!("Unknown orientation source {source:?}; recording the exposure vote");
+        orientation_source::EXPOSURE_MAJORITY
+    })
 }
 
 impl WireOrientation {
@@ -140,8 +144,8 @@ struct SessionSpec {
     match_tolerances: seiza_calibration::MatchTolerances,
 }
 
-/// Everything a worker needs to integrate a channel. Files are named by the
-/// task's inputs: the frames' paths and the master recipes' files.
+/// Everything a worker needs to integrate a channel. The frames' paths and
+/// the master recipes' files hold the names of the task's inputs.
 #[derive(Clone, Serialize, Deserialize)]
 struct ChannelSpec {
     job_id: String,
@@ -178,14 +182,14 @@ enum ChannelEvent {
         why: String,
     },
     FramesRestored {
-        restored: RestoredFrames,
+        restored: Box<RestoredFrames>,
     },
     Frame {
-        decision: StackFrameDecision,
+        decision: Box<StackFrameDecision>,
         exposure_seconds: f64,
     },
     Snr {
-        progressive: snr::ProgressiveSnr,
+        progressive: Box<snr::ProgressiveSnr>,
     },
     Phase {
         phase: String,
@@ -195,7 +199,7 @@ enum ChannelEvent {
         fractions: Vec<f32>,
     },
     SkyOrientation {
-        orientation: StackSkyOrientation,
+        orientation: Box<StackSkyOrientation>,
     },
 }
 
@@ -206,15 +210,15 @@ impl ChannelEvent {
             Self::CalibrationNote { note } => events.calibration_note(note),
             Self::ResumeNote { note } => events.resume_note(&note),
             Self::CheckpointUnusable { why } => events.checkpoint_unusable(&why),
-            Self::FramesRestored { restored } => events.frames_restored(restored),
+            Self::FramesRestored { restored } => events.frames_restored(*restored),
             Self::Frame {
                 decision,
                 exposure_seconds,
-            } => events.frame(decision, exposure_seconds),
-            Self::Snr { progressive } => events.snr(progressive),
+            } => events.frame(*decision, exposure_seconds),
+            Self::Snr { progressive } => events.snr(*progressive),
             Self::Phase { phase, final_pass } => events.phase(phase, final_pass),
             Self::IntegratedFractions { fractions } => events.integrated_fractions(fractions),
-            Self::SkyOrientation { orientation } => events.sky_orientation(orientation),
+            Self::SkyOrientation { orientation } => events.sky_orientation(*orientation),
         }
     }
 }
@@ -244,6 +248,11 @@ impl WorkerEvents<'_> {
     }
 }
 
+impl WorkerEvents<'_> {
+    /// The live pass is most of a channel's work, the final pass the rest.
+    const LIVE_SHARE: f32 = 0.8;
+}
+
 impl ChannelEvents for WorkerEvents<'_> {
     fn calibration_note(&mut self, note: String) {
         self.send(ChannelEvent::CalibrationNote { note });
@@ -259,24 +268,34 @@ impl ChannelEvents for WorkerEvents<'_> {
 
     fn frames_restored(&mut self, restored: RestoredFrames) {
         self.frames = restored.frames.len();
-        self.send(ChannelEvent::FramesRestored { restored });
+        self.send(ChannelEvent::FramesRestored {
+            restored: Box::new(restored),
+        });
     }
 
     fn frame(&mut self, decision: StackFrameDecision, exposure_seconds: f64) {
         self.frames += 1;
         self.report
-            .fraction(self.frames as f32 / self.total.max(1) as f32);
+            .fraction(Self::LIVE_SHARE * self.frames as f32 / self.total.max(1) as f32);
         self.send(ChannelEvent::Frame {
-            decision,
+            decision: Box::new(decision),
             exposure_seconds,
         });
     }
 
     fn snr(&mut self, progressive: snr::ProgressiveSnr) {
-        self.send(ChannelEvent::Snr { progressive });
+        self.send(ChannelEvent::Snr {
+            progressive: Box::new(progressive),
+        });
     }
 
     fn phase(&mut self, phase: String, final_pass: Option<FinalPassProgress>) {
+        if let Some(pass) = &final_pass {
+            let done = ((pass.pass - 1) as f32 + pass.frame as f32 / pass.frames.max(1) as f32)
+                / pass.passes.max(1) as f32;
+            self.report
+                .fraction(Self::LIVE_SHARE + (1.0 - Self::LIVE_SHARE) * done);
+        }
         self.send(ChannelEvent::Phase { phase, final_pass });
     }
 
@@ -285,7 +304,9 @@ impl ChannelEvents for WorkerEvents<'_> {
     }
 
     fn sky_orientation(&mut self, orientation: StackSkyOrientation) {
-        self.send(ChannelEvent::SkyOrientation { orientation });
+        self.send(ChannelEvent::SkyOrientation {
+            orientation: Box::new(orientation),
+        });
     }
 
     /// The running image shows only for a build this server stacks.
@@ -301,11 +322,16 @@ impl ChannelEvents for WorkerEvents<'_> {
 }
 
 /// Run a channel on this worker. `inputs` gives where each input is; the
-/// stack, the clipped map and the checkpoint are written into `output_dir`.
+/// stack, the clipped map and the checkpoint are written into `output_dir`,
+/// and the final pass keeps its copies of the frames in `work_dir`. The
+/// channel takes a `share` of the worker's cores and memory: one of the
+/// tasks it may run at once.
 pub(crate) fn execute(
     spec: serde_json::Value,
     inputs: &BTreeMap<String, PathBuf>,
     output_dir: &FsPath,
+    work_dir: &FsPath,
+    share: usize,
     stop: &Stop,
     report: &mut dyn TaskReport,
 ) -> Result<serde_json::Value, String> {
@@ -325,9 +351,16 @@ pub(crate) fn execute(
     }
     let mut sessions = Vec::with_capacity(spec.sessions.len());
     for session in spec.sessions {
-        let recipe = session
-            .recipe
-            .with_files(|name| input(name).unwrap_or_else(|_| name.to_path_buf()));
+        let mut missing = None;
+        let recipe = session.recipe.with_files(|name| {
+            input(name).unwrap_or_else(|problem| {
+                missing = Some(problem);
+                name.to_path_buf()
+            })
+        });
+        if let Some(problem) = missing {
+            return Err(problem);
+        }
         let masters = recipe
             .load(|path| path.to_path_buf())
             .map_err(|error| format!("{error:#}"))?;
@@ -350,11 +383,11 @@ pub(crate) fn execute(
         }),
         _ => None,
     };
-    let threads = crate::concurrency::logical_cores();
+    let share = share.max(1);
+    let threads = (crate::concurrency::logical_cores() / share).max(1);
     let pool = crate::concurrency::ComputePool::take("stack-worker", threads)
         .map_err(|error| error.to_string())?;
-    let scratch =
-        std::env::temp_dir().join(format!("psf-guard-stack-scratch-{}", uuid::Uuid::new_v4()));
+    let scratch = work_dir.join("final-pass");
     let policy = crate::concurrency::WorkerPolicy::default();
     let total = group.frames.len();
     let mut events = WorkerEvents {
@@ -389,7 +422,8 @@ pub(crate) fn execute(
             },
             pool: &pool,
             threads: execution::ThreadBudget::from_total(threads),
-            available_memory: crate::concurrency::available_memory_bytes(),
+            available_memory: crate::concurrency::available_memory_bytes()
+                .map(|bytes| bytes / share as u64),
             worker_policy: &policy,
             cancel: stop,
         },
@@ -413,6 +447,7 @@ pub(crate) fn execute(
 fn needs() -> TaskNeeds {
     TaskNeeds::Stack {
         stacking_version: SEIZA_STACKING_OUTPUT_VERSION.into(),
+        release: env!("CARGO_PKG_VERSION").into(),
     }
 }
 
@@ -489,16 +524,23 @@ pub(super) fn run_on_worker(
         inputs.push((name.clone(), frame.path.clone()));
         frame.path = PathBuf::from(name);
     }
-    let mut master = 0usize;
+    // A master several sessions share goes once.
+    let mut masters: BTreeMap<PathBuf, String> = BTreeMap::new();
     let sessions = channel
         .plan
         .sessions
         .iter()
         .map(|session| SessionSpec {
             recipe: session.recipe.with_files(|path| {
-                let name = input_name("master", master, path);
-                master += 1;
-                inputs.push((name.clone(), path.to_path_buf()));
+                let next = masters.len();
+                let name = masters
+                    .entry(path.to_path_buf())
+                    .or_insert_with(|| {
+                        let name = input_name("master", next, path);
+                        inputs.push((name.clone(), path.to_path_buf()));
+                        name
+                    })
+                    .clone();
                 PathBuf::from(name)
             }),
             applied: session.applied.clone(),
@@ -568,6 +610,8 @@ pub(super) fn run_on_worker(
     });
     let finished = match waited {
         Ok(finished) => finished,
+        // However the worker ended after a stop, the build was stopped.
+        Err(_) if channel.cancel.requested() => return Ok(integrate::ChannelOutcome::Cancelled),
         Err(WaitError::Stopped) => return Ok(integrate::ChannelOutcome::Cancelled),
         Err(WaitError::Failed(message)) if message.starts_with("No connected worker") => {
             return Err(NotStacked::NoWorker(message));
@@ -582,18 +626,21 @@ pub(super) fn run_on_worker(
     })?;
     let outputs = channel.outputs;
     // The checkpoint, when the worker wrote both halves, replaces this
-    // server's; otherwise a later build starts over.
-    match (
-        finished.outputs.get(CHECKPOINT_CONTEXT),
-        finished.outputs.get(CHECKPOINT_MANIFEST),
-    ) {
-        (Some(context), Some(manifest)) => {
-            place(context, &outputs.checkpoint_context).map_err(failed)?;
-            place(manifest, &outputs.checkpoint_manifest).map_err(failed)?;
-        }
-        _ => {
-            let _ = std::fs::remove_file(&outputs.checkpoint_context);
-            let _ = std::fs::remove_file(&outputs.checkpoint_manifest);
+    // server's; otherwise a later build starts over. A quality-ordered
+    // build writes none and keeps the capture-order one, as on this server.
+    if channel.order.resumable() {
+        match (
+            finished.outputs.get(CHECKPOINT_CONTEXT),
+            finished.outputs.get(CHECKPOINT_MANIFEST),
+        ) {
+            (Some(context), Some(manifest)) => {
+                place(context, &outputs.checkpoint_context).map_err(failed)?;
+                place(manifest, &outputs.checkpoint_manifest).map_err(failed)?;
+            }
+            _ => {
+                let _ = std::fs::remove_file(&outputs.checkpoint_context);
+                let _ = std::fs::remove_file(&outputs.checkpoint_manifest);
+            }
         }
     }
     if !result.built {
