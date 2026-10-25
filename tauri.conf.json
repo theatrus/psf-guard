@@ -58,7 +58,9 @@
       },
       "deb": {
         "files": {
-          "/usr/share/metainfo/com.theatrus.psf-guard.metainfo.xml": "packaging/linux/com.theatrus.psf-guard.metainfo.xml"
+          "/usr/share/metainfo/com.theatrus.psf-guard.metainfo.xml": "packaging/linux/com.theatrus.psf-guard.metainfo.xml",
+          "/usr/lib/systemd/system/psf-guard-worker.service": "packaging/rpm/systemd/psf-guard-worker.service",
+          "/usr/share/doc/psf-guard/worker.conf.example": "packaging/rpm/systemd/psf-guard-worker.conf"
         }
       }
     }

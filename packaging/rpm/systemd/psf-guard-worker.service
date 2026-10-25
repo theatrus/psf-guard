@@ -1,0 +1,49 @@
+[Unit]
+Description=PSF Guard worker: runs stack builds and RC-Astro tools for a PSF Guard server
+Documentation=https://github.com/theatrus/psf-guard/blob/main/docs/REMOTE_WORKERS.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+# A user of its own each time it starts, with no files outside the state
+# directory. To read task files on shared storage as an existing user, add
+# a drop-in with `systemctl edit psf-guard-worker`: DynamicUser=no and User=.
+DynamicUser=yes
+# The server's address, the token and any other options.
+EnvironmentFile=/etc/psf-guard/worker.conf
+ExecStart=/usr/bin/psf-guard worker \
+    --server ${PSF_GUARD_WORKER_SERVER} \
+    --work-dir /var/lib/psf-guard-worker \
+    $PSF_GUARD_WORKER_EXTRA_ARGS
+# Stopping lets the worker leave the server, which queues its running task
+# again.
+KillSignal=SIGINT
+TimeoutStopSec=60
+# A server that is down or a revoked token: try again every 30 seconds.
+Restart=on-failure
+RestartSec=30
+
+# Where tasks keep their files while they run.
+StateDirectory=psf-guard-worker
+StateDirectoryMode=0700
+
+# Sandboxing. The worker writes only its state directory. It keeps the
+# devices, so stacking can use the GPU (Vulkan) and rc-astro can use CUDA,
+# and it has no system call filter, which some GPU drivers would trip.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

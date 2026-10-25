@@ -47,6 +47,48 @@ name by default. `--rc-astro PATH` gives the rc-astro executable when it is
 not on `PATH`. `--slots N` lets the worker run up to N tasks at once, from 1
 to 16; the default is 1, since each RC-Astro step uses the GPU.
 
+## Run a worker as a Linux service
+
+The Fedora RPM and the Debian package install a `psf-guard-worker` systemd
+service. It is not enabled, so it runs only after you set it up.
+
+1. On the server, open **Settings › Workers**, click **+ Add a worker**,
+   and create a token.
+2. On the worker, edit `/etc/psf-guard/worker.conf` as root. The Debian
+   package installs an example instead; copy it first and keep it readable
+   by root only, since it holds the token:
+
+   ```bash
+   sudo install -m 600 /usr/share/doc/psf-guard/worker.conf.example /etc/psf-guard/worker.conf
+   sudoedit /etc/psf-guard/worker.conf
+   ```
+
+3. Set `PSF_GUARD_WORKER_SERVER` to the server's address and
+   `PSF_GUARD_WORKER_TOKEN` to the token. Put other options for `psf-guard
+   worker`, such as `--work stack` or `--slots 2`, in
+   `PSF_GUARD_WORKER_EXTRA_ARGS`.
+4. Start the worker, and start it at boot:
+
+   ```bash
+   sudo systemctl enable --now psf-guard-worker
+   journalctl -u psf-guard-worker -f
+   ```
+
+The service runs as a user of its own, with its work folder in
+`/var/lib/psf-guard-worker`. It can use the GPU for stacking and for rc-astro.
+`systemctl stop psf-guard-worker` stops the worker, and the server queues
+its running task again. When the server cannot be reached, or the token is
+revoked, the service tries again every 30 seconds.
+
+To read task files on shared storage, the service needs a user that can
+read them. Run `sudo systemctl edit psf-guard-worker` and add:
+
+```ini
+[Service]
+DynamicUser=no
+User=astro
+```
+
 ## Choose the work a worker accepts
 
 A worker accepts everything it can run unless you list its work with

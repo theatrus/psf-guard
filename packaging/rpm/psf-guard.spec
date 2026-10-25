@@ -75,26 +75,34 @@ install -Dpm0644 packaging/rpm/systemd/psf-guard.sysusers \
     %{buildroot}%{_sysusersdir}/%{name}.conf
 install -Dpm0644 packaging/rpm/systemd/psf-guard-server.conf \
     %{buildroot}%{_sysconfdir}/%{name}/server.conf
+# The worker: installed, not enabled. Its settings hold a token, so only
+# root reads them.
+install -Dpm0644 packaging/rpm/systemd/psf-guard-worker.service \
+    %{buildroot}%{_unitdir}/%{name}-worker.service
+install -Dpm0600 packaging/rpm/systemd/psf-guard-worker.conf \
+    %{buildroot}%{_sysconfdir}/%{name}/worker.conf
 
 # The psfguard system user is created by the sysusers.d file trigger that
 # systemd installs for %%{_sysusersdir}, so no %%pre useradd is needed.
 %post
-%systemd_post %{name}.service
+%systemd_post %{name}.service %{name}-worker.service
 
 %preun
-%systemd_preun %{name}.service
+%systemd_preun %{name}.service %{name}-worker.service
 
 %postun
-%systemd_postun_with_restart %{name}.service
+%systemd_postun_with_restart %{name}.service %{name}-worker.service
 
 %files
 %license LICENSE
 %doc README.md psf-guard.toml.example
 %{_bindir}/%{name}
 %{_unitdir}/%{name}.service
+%{_unitdir}/%{name}-worker.service
 %{_sysusersdir}/%{name}.conf
 %dir %{_sysconfdir}/%{name}
 %config(noreplace) %{_sysconfdir}/%{name}/server.conf
+%config(noreplace) %attr(0600,root,root) %{_sysconfdir}/%{name}/worker.conf
 
 %changelog
 * Fri Oct 23 2026 Yann Ramin <github@theatr.us> - 0.12.3-1
