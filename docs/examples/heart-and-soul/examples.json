@@ -1,0 +1,348 @@
+{
+  "psf_guard_commit": "162e14827cf3b9995ed265acb029aececacd0366",
+  "seiza_validation_commit": "567e05d",
+  "input_bin_per_axis": 4,
+  "source_accepted_frames": 1243,
+  "source_exposure_seconds": 164100.0,
+  "channels": [
+    {
+      "filter": "R",
+      "width": 2841,
+      "height": 1926,
+      "panels": 4,
+      "sha256": "6999fb21d220067af5f99d8b40f3b20241060b6c64373f931eba21b0f65582ac",
+      "accepted_frames": 240,
+      "exposure_seconds": 2400.0,
+      "panel_stacks": [
+        {
+          "target": "Heart and Soul Nebula Panel 1",
+          "job_id": "52638add13bc925d7404819cbfb4c1df03c19f97c695a2816eab2be9013b750f",
+          "accepted_frames": 60,
+          "exposure_seconds": 600.0,
+          "calibration": "none"
+        },
+        {
+          "target": "Heart and Soul Nebula Panel 2",
+          "job_id": "5286adc2eef9c2020f14c3195899702026ebd5fc27c5533e38b15345f1d7b87c",
+          "accepted_frames": 60,
+          "exposure_seconds": 600.0,
+          "calibration": "none"
+        },
+        {
+          "target": "Heart and Soul Nebula Panel 3",
+          "job_id": "ebe2b8ecfafea73d3c1b5e1802884d3bd3eb2a87afcf8aef2d9adbdc61ab35c5",
+          "accepted_frames": 60,
+          "exposure_seconds": 600.0,
+          "calibration": "none"
+        },
+        {
+          "target": "Heart and Soul Nebula Panel 4",
+          "job_id": "f2b6200411af39eeeaeeac6e75035898d946f5a4f18238e26c41f290d54b0ab4",
+          "accepted_frames": 60,
+          "exposure_seconds": 600.0,
+          "calibration": "none"
+        }
+      ]
+    },
+    {
+      "filter": "G",
+      "width": 2840,
+      "height": 1928,
+      "panels": 4,
+      "sha256": "7fe8271adcee758e08f941e6dd123a53732e4e8d1717f761c88cd35bf77490ea",
+      "accepted_frames": 240,
+      "exposure_seconds": 2400.0,
+      "panel_stacks": [
+        {
+          "target": "Heart and Soul Nebula Panel 1",
+          "job_id": "9925d0cfe8d49a9cb944c1f26751be55de4c9c6fb2e46a2faf869dd6a58820b1",
+          "accepted_frames": 60,
+          "exposure_seconds": 600.0,
+          "calibration": "none"
+        },
+        {
+          "target": "Heart and Soul Nebula Panel 2",
+          "job_id": "344d625c36f168e814dde8b154ccb560b77c662104da25ddb06a0eb5f1685b2e",
+          "accepted_frames": 60,
+          "exposure_seconds": 600.0,
+          "calibration": "none"
+        },
+        {
+          "target": "Heart and Soul Nebula Panel 3",
+          "job_id": "ba204118880b638f945b94b1f0a40c1e625006e21c507f718079bef63d70bbe0",
+          "accepted_frames": 60,
+          "exposure_seconds": 600.0,
+          "calibration": "none"
+        },
+        {
+          "target": "Heart and Soul Nebula Panel 4",
+          "job_id": "954614bc1767c6f5adfaaac8bb2fd48e62890afaacbd7ff38a558a6cb5739b1f",
+          "accepted_frames": 60,
+          "exposure_seconds": 600.0,
+          "calibration": "none"
+        }
+      ]
+    },
+    {
+      "filter": "B",
+      "width": 2842,
+      "height": 1943,
+      "panels": 4,
+      "sha256": "10af757658b21d5f0cd443d427ab103182894adb924f0dbdde7b2c7332c7a833",
+      "accepted_frames": 240,
+      "exposure_seconds": 2400.0,
+      "panel_stacks": [
+        {
+          "target": "Heart and Soul Nebula Panel 1",
+          "job_id": "332bddcfa4e099b7e0636b43201a338afa7af0a02a1564d89132507bca4d8d34",
+          "accepted_frames": 60,
+          "exposure_seconds": 600.0,
+          "calibration": "none"
+        },
+        {
+          "target": "Heart and Soul Nebula Panel 2",
+          "job_id": "a2f07350335e847cd96ef62712db11fb33d32c71a55bf51da43e96a37a7f1cc4",
+          "accepted_frames": 60,
+          "exposure_seconds": 600.0,
+          "calibration": "none"
+        },
+        {
+          "target": "Heart and Soul Nebula Panel 3",
+          "job_id": "b576be35cfbec43f35354f37d46747fea2e72c168353a0fd18ef48ec7e3a2edf",
+          "accepted_frames": 60,
+          "exposure_seconds": 600.0,
+          "calibration": "none"
+        },
+        {
+          "target": "Heart and Soul Nebula Panel 4",
+          "job_id": "c7e82d36118561136bd130793c91eabc27102a8e84ae0cc47a03308358ad2c0f",
+          "accepted_frames": 60,
+          "exposure_seconds": 600.0,
+          "calibration": "none"
+        }
+      ]
+    },
+    {
+      "filter": "HA",
+      "width": 2912,
+      "height": 1917,
+      "panels": 4,
+      "sha256": "46b6d89198975832f81cb440a75882dcb75a5996a1d5402e6e2e562a39b82768",
+      "accepted_frames": 163,
+      "exposure_seconds": 48900.0,
+      "panel_stacks": [
+        {
+          "target": "Heart and Soul Nebula Panel 1",
+          "job_id": "9bbbe4f29d83f3c33b87e8e32496b8913c09eaade73045f16f5d26332db2f97c",
+          "accepted_frames": 39,
+          "exposure_seconds": 11700.0,
+          "calibration": "applied"
+        },
+        {
+          "target": "Heart and Soul Nebula Panel 2",
+          "job_id": "fa94030267241cb3a367e9b2fac983343eba0c351dd87626a39f725cbbf59a72",
+          "accepted_frames": 34,
+          "exposure_seconds": 10200.0,
+          "calibration": "applied"
+        },
+        {
+          "target": "Heart and Soul Nebula Panel 3",
+          "job_id": "22328103c3f5ae8a525cbb43f0bc291707279f10b9ebbedb714dfa158dc770eb",
+          "accepted_frames": 45,
+          "exposure_seconds": 13500.0,
+          "calibration": "applied"
+        },
+        {
+          "target": "Heart and Soul Nebula Panel 4",
+          "job_id": "bdbdbc0690b642e6775c2ccc1368a15dfddd1ced52f658c5c01c470db5448fa1",
+          "accepted_frames": 45,
+          "exposure_seconds": 13500.0,
+          "calibration": "applied"
+        }
+      ]
+    },
+    {
+      "filter": "OIII",
+      "width": 2865,
+      "height": 1947,
+      "panels": 4,
+      "sha256": "db40c651b1581087da525857a48c68af9acf0aca621ccfb5d30c5e94a758de41",
+      "accepted_frames": 180,
+      "exposure_seconds": 54000.0,
+      "panel_stacks": [
+        {
+          "target": "Heart and Soul Nebula Panel 1",
+          "job_id": "dfd65569230fc662793cd9dd3c39135f8cda7eaadf8c14f9d4308fb7add6b5c5",
+          "accepted_frames": 45,
+          "exposure_seconds": 13500.0,
+          "calibration": "applied"
+        },
+        {
+          "target": "Heart and Soul Nebula Panel 2",
+          "job_id": "a58fb1bf15f29150f31d3a2b7eb5de4c3af97c6d5d0ff1477fb9687b0ae1fa9e",
+          "accepted_frames": 45,
+          "exposure_seconds": 13500.0,
+          "calibration": "applied"
+        },
+        {
+          "target": "Heart and Soul Nebula Panel 3",
+          "job_id": "6fcecd4e04092133f75400edc413c805f3473fcc64b96e2fa890cea198145e8e",
+          "accepted_frames": 45,
+          "exposure_seconds": 13500.0,
+          "calibration": "applied"
+        },
+        {
+          "target": "Heart and Soul Nebula Panel 4",
+          "job_id": "664e050e32ed4bb59e8a99068d798d1bb3cbdfa78a97913426a677c7466bb2d2",
+          "accepted_frames": 45,
+          "exposure_seconds": 13500.0,
+          "calibration": "applied"
+        }
+      ]
+    },
+    {
+      "filter": "SII",
+      "width": 2860,
+      "height": 1944,
+      "panels": 4,
+      "sha256": "525f9f0318a0f9d24f32895712f229f7f87e532ee627d517917c29b91825baf0",
+      "accepted_frames": 180,
+      "exposure_seconds": 54000.0,
+      "panel_stacks": [
+        {
+          "target": "Heart and Soul Nebula Panel 1",
+          "job_id": "a9d3502c5db0f832eff91b2c4357ec5518d0deee1068f317001b4b9537a950c9",
+          "accepted_frames": 45,
+          "exposure_seconds": 13500.0,
+          "calibration": "applied"
+        },
+        {
+          "target": "Heart and Soul Nebula Panel 2",
+          "job_id": "7cdd46651635bbfd57d6b39198a3174b2682e38a3aca11fed91ee7f608aa97b4",
+          "accepted_frames": 45,
+          "exposure_seconds": 13500.0,
+          "calibration": "applied"
+        },
+        {
+          "target": "Heart and Soul Nebula Panel 3",
+          "job_id": "a3a51bc3ec36219976be2332d0404397b32d819d99a53955d8c7349a1f6712d8",
+          "accepted_frames": 45,
+          "exposure_seconds": 13500.0,
+          "calibration": "applied"
+        },
+        {
+          "target": "Heart and Soul Nebula Panel 4",
+          "job_id": "73e88e4ce226ef9e864ffec3e6f3345f11b30610856eb3692c2d9c7b1587dfe2",
+          "accepted_frames": 45,
+          "exposure_seconds": 13500.0,
+          "calibration": "applied"
+        }
+      ]
+    }
+  ],
+  "examples": [
+    {
+      "id": "ha",
+      "title": "H-alpha mosaic",
+      "description": "All four panels on one canvas; automatic display stretch.",
+      "image": "images/ha.jpg",
+      "sha256": "bb5b2679e54141c286ac76c07b90b3f77d9fe4058e44ce87609a74b2d6f3bcc2"
+    },
+    {
+      "id": "rgb",
+      "title": "RGB",
+      "description": "Default color processing from the R, G and B mosaics.",
+      "image": "images/rgb.jpg",
+      "sha256": "d935e98e5f4dc58981debe38938349d2b39be61cbf097085cc3fcc81db6951c0",
+      "width": 2400,
+      "height": 1574,
+      "job_id": "8aca5c9c417782ee7b4edb15c8f7d8cf8af44caafd7c771b1e712ae5c63a2680",
+      "stars": null,
+      "coverage_fraction": 0.9278814189057061
+    },
+    {
+      "id": "sho-shared",
+      "title": "SHO \u00b7 shared Ha stretch",
+      "description": "One H-alpha stretch, original narrowband stars, balance off.",
+      "image": "images/sho-shared.jpg",
+      "sha256": "43b1d9138ce9a9e89cf9372fd4963aee3c243fd1e5f23af1a5ca2ee0b2abec2b",
+      "width": 2400,
+      "height": 1521,
+      "job_id": "b6a34d90b1e210a71220ddb905962da14313e10ddbf36c75d60c6349214017a0",
+      "stars": "narrowband",
+      "coverage_fraction": 0.8724720115565185
+    },
+    {
+      "id": "sho-balanced",
+      "title": "SHO \u00b7 balanced",
+      "description": "Shared H-alpha stretch and OIII/SII balance; original narrowband stars.",
+      "image": "images/sho-balanced.jpg",
+      "sha256": "bc402218358e06f32a69c4a34abcce812a606434fb0a0bfaa29cc1441a123c42",
+      "width": 2400,
+      "height": 1521,
+      "job_id": "34f30070cd22e9123b779c3aa991bd14a00984df1560372c3f20c4d69dde3b06",
+      "stars": "narrowband",
+      "coverage_fraction": 0.8724720115565185
+    },
+    {
+      "id": "hoo-balanced",
+      "title": "HOO \u00b7 balanced",
+      "description": "Shared H-alpha stretch and OIII balance; original narrowband stars.",
+      "image": "images/hoo-balanced.jpg",
+      "sha256": "d73e942ac39641ec875ae0818d6dd8b9c38db9a131245c2ec10153fae57d8cbc",
+      "width": 2400,
+      "height": 1515,
+      "job_id": "a31477b43d029a0b537033c059218f49f8c50ed3612c322057a42d63732c959b",
+      "stars": "narrowband",
+      "coverage_fraction": 0.8762489466714819
+    },
+    {
+      "id": "sho-rgb-stars",
+      "title": "SHO \u00b7 RGB stars",
+      "description": "Balanced SHO nebula with RGB stars through StarXTerminator.",
+      "image": "images/sho-rgb-stars.jpg",
+      "sha256": "b90b9899b79a1571eaa4d5360beef7b7f7b700b592e78003034f47b00048ab54",
+      "width": 2400,
+      "height": 1522,
+      "job_id": "20ed5fceea61b4b640865152dc95b7be50a340d24c000e89584d8c49de39a721",
+      "stars": "rgb",
+      "coverage_fraction": 0.8690970609984694
+    },
+    {
+      "id": "hoo-rgb-stars",
+      "title": "HOO \u00b7 RGB stars",
+      "description": "Balanced HOO nebula with RGB stars through StarXTerminator.",
+      "image": "images/hoo-rgb-stars.jpg",
+      "sha256": "83b9b3c1b49306fe7c98d8d0847e02bb443dd94ed09101fb32b9a9efe1fe43c9",
+      "width": 2400,
+      "height": 1520,
+      "job_id": "4de933a7b12bfdb245e018476efdead83bcf2a22a7d7f7e2aaf7d1acb1771988",
+      "stars": "rgb",
+      "coverage_fraction": 0.8703538897200869
+    },
+    {
+      "id": "sho-automatic-stars",
+      "title": "SHO \u00b7 Automatic stars",
+      "description": "Automatic selected RGB stars for the available mosaic channels.",
+      "image": "images/sho-automatic-stars.jpg",
+      "sha256": "b90b9899b79a1571eaa4d5360beef7b7f7b700b592e78003034f47b00048ab54",
+      "width": 2400,
+      "height": 1522,
+      "job_id": "ee3a96355a099f6c9f75fba781f21ae0d0bec6a46f1754dbc97105e1e2e35fd1",
+      "stars": "rgb",
+      "coverage_fraction": 0.8690970609984694
+    },
+    {
+      "id": "sho-starless",
+      "title": "SHO \u00b7 starless",
+      "description": "Balanced SHO with the stars removed through StarXTerminator.",
+      "image": "images/sho-starless.jpg",
+      "sha256": "2028dff09a5f0f5ce2ad6ec45f23a9e8029244936768cd7be805ba6806dc72f1",
+      "width": 2400,
+      "height": 1521,
+      "job_id": "67b04e7f3aef3bbe08a67506a83628e5b981a93920455881d6b3d7e4329374b2",
+      "stars": "none",
+      "coverage_fraction": 0.8724720115565185
+    }
+  ]
+}

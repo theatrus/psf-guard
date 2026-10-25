@@ -30,6 +30,9 @@ Bayer drizzle is not supported for mosaics. Mosaic FITS headers describe the
 expanded canvas when Seiza can preserve its WCS; the source frame's solve is
 not reused for Gaia color calibration on that different grid.
 
+See the [Heart and Soul mosaic examples](examples/heart-and-soul/README.md)
+for RGB, shared-stretch/balanced SHO and HOO, RGB stars, and starless output.
+
 ## Build a preview
 
 Open one project in **Stacks** and choose **Build stacks** to build
