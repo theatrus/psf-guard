@@ -752,8 +752,7 @@ fn place(source: &FsPath, destination: &FsPath) -> Result<(), String> {
 
 /// Stack one synthetic channel on this server and on a worker, for the
 /// worker command's tests, which run a real worker against a real server.
-/// Those tests run on Unix.
-#[cfg(all(test, unix))]
+#[cfg(test)]
 pub(crate) mod testing {
     use super::*;
 

@@ -1,12 +1,12 @@
-//! The worker command against a real server's workers routes, with a
-//! stand-in rc-astro on both sides.
-
-#![cfg(unix)]
+//! The worker command against a real server's workers routes. The
+//! RC-Astro tests run a stand-in rc-astro, a shell script, so they run on
+//! Unix; the rest run everywhere.
 
 use super::*;
 use crate::server::state::AppState;
 use crate::server::workers::board::{Board, Timings};
 use crate::server::workers::{tokens, Workers};
+#[cfg(unix)]
 use seiza_stacking::LinearImage;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -17,6 +17,9 @@ struct Server {
     secret: String,
     /// Inputs downloaded and outputs uploaded over HTTP.
     transfers: Arc<AtomicUsize>,
+    /// The server's exchange folder, removed with the server. Only the
+    /// shared-folder RC-Astro tests, which run on Unix, read its path.
+    #[cfg_attr(not(unix), allow(dead_code))]
     exchange: tempfile::TempDir,
 }
 
@@ -145,6 +148,7 @@ fn connected(server: &Server) -> Option<crate::server::workers::board::SessionSu
         .find(|worker| worker.name == "test-worker" && worker.connected)
 }
 
+#[cfg(unix)]
 fn noise_x() -> seiza_stacking::ExternalToolSchema {
     let cli = crate::remote_work::rc_astro::locate(None).unwrap();
     crate::remote_work::rc_astro::probe(&cli)
@@ -154,6 +158,7 @@ fn noise_x() -> seiza_stacking::ExternalToolSchema {
         .unwrap()
 }
 
+#[cfg(unix)]
 fn request() -> seiza_stacking::ExternalToolRequest {
     seiza_stacking::ExternalToolRequest {
         tool: "nxt".into(),
@@ -162,6 +167,7 @@ fn request() -> seiza_stacking::ExternalToolRequest {
     }
 }
 
+#[cfg(unix)]
 fn image() -> LinearImage {
     LinearImage::new(
         4,
@@ -173,6 +179,7 @@ fn image() -> LinearImage {
 }
 
 /// Run NoiseXTerminator on the board, as the server's processing would.
+#[cfg(unix)]
 async fn run_step(
     server: &Server,
     cancel: Option<seiza_stacking::CancelSignal>,
@@ -199,12 +206,14 @@ async fn run_step(
     .unwrap()
 }
 
+#[cfg(unix)]
 fn assert_same_pixels(processed: &LinearImage) {
     for (got, sent) in processed.data.iter().zip(&image().data) {
         assert!((got - sent).abs() < 1e-2, "{got} != {sent}");
     }
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_remote_worker_downloads_the_input_and_uploads_the_result() {
     let tool = crate::server::stack_preview::rc_astro::test_tool::install(false);
@@ -233,6 +242,7 @@ async fn a_remote_worker_downloads_the_input_and_uploads_the_result() {
     eventually("the worker leaves", || connected(&server).is_none()).await;
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_worker_advertises_only_the_tools_its_work_choices_list() {
     let _tool = crate::server::stack_preview::rc_astro::test_tool::install(false);
@@ -258,6 +268,7 @@ async fn a_worker_advertises_only_the_tools_its_work_choices_list() {
     worker.await.unwrap().unwrap();
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_shared_worker_reads_and_writes_through_its_map() {
     let tool = crate::server::stack_preview::rc_astro::test_tool::install(false);
@@ -292,6 +303,7 @@ async fn a_shared_worker_reads_and_writes_through_its_map() {
     worker.await.unwrap().unwrap();
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_shared_worker_that_cannot_see_the_folder_falls_back_to_the_server() {
     let tool = crate::server::stack_preview::rc_astro::test_tool::install(false);
@@ -319,6 +331,7 @@ async fn a_shared_worker_that_cannot_see_the_folder_falls_back_to_the_server() {
     worker.await.unwrap().unwrap();
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_stop_on_the_server_kills_the_tool_on_the_worker() {
     let tool = crate::server::stack_preview::rc_astro::test_tool::install(true);
@@ -416,6 +429,7 @@ fn maps_imply_shared_files_and_must_name_both_sides() {
 /// The real rc-astro on a remote worker, over HTTP, in both file modes.
 /// Needs a licensed rc-astro on this machine:
 /// `cargo test --lib real_rc_astro -- --ignored`.
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "needs a licensed rc-astro"]
 async fn real_rc_astro_runs_on_a_remote_worker() {
@@ -516,6 +530,7 @@ async fn real_rc_astro_runs_on_a_remote_worker() {
     }
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_slow_download_keeps_its_lease() {
     let tool = crate::server::stack_preview::rc_astro::test_tool::install(false);
@@ -531,6 +546,7 @@ async fn a_slow_download_keeps_its_lease() {
     worker.await.unwrap().unwrap();
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn revoking_the_token_stops_the_running_tool() {
     let tool = crate::server::stack_preview::rc_astro::test_tool::install(true);
