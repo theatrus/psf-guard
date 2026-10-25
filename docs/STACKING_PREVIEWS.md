@@ -1659,6 +1659,152 @@ keeps its saved result but does not replace the latest color preview.
   remain available, and selecting another palette builds or restores its own
   artifact.
 
+### Automatic narrowband and RGB stars
+
+Use the regular narrowband card beside RGB and LRGB. Its header has three
+choices: **Palette**, **Stars**, and **Edges**. You do not need to open a
+custom combination to use automatic processing.
+
+New narrowband previews start with **Palette → Automatic**. PSF Guard chooses
+SHO when one usable SII stack matches the selected narrowband exposure band;
+otherwise it chooses HOO. You can still choose a specific palette. An existing
+preview keeps its saved palette and processing when you rebuild it.
+
+**Stars** chooses what appears over the nebula:
+
+| Choice | Result |
+| --- | --- |
+| Automatic | Uses RGB stars when R, G, B and licensed StarXTerminator are usable; otherwise keeps narrowband stars and explains the fallback. |
+| RGB | Separates narrowband and RGB stars, then screens the RGB stars onto the starless narrowband nebula. A missing source or failed tool stops the build. |
+| Narrowband | Keeps stars in the narrowband inputs. |
+| None | Runs StarXTerminator and produces the starless narrowband nebula. |
+| From channel cards | Preserves the behavior of an older saved preview, including its channel-card star removal. |
+
+For the new star choices, the color build reuses channel-card sharpening and
+denoising before alignment, but defers StarXTerminator to the **Stars** choice.
+Star removal set on the color channels is also deferred. A failed explicit
+RGB or None build leaves the previous completed preview available.
+
+Open **Custom combination** within the card to choose exact source stacks.
+**RGB star inputs** can use shorter exposures than the nebula. Automatic RGB
+selection uses the same source origin as the nebula (PSF Guard stacks or WBPP
+masters); an explicit selection can use another origin. Multiple RGB candidates
+require a choice; Automatic keeps narrowband stars until the ambiguity is
+resolved. All selected channels register onto the H-alpha grid. **Edges** also
+respects RGB coverage when RGB stars are used.
+
+Open **Processing stack → Stretch and narrowband balance** to adjust the
+nebula. The initial narrowband recipe resolves one stretch from H-alpha and
+applies it to the physical H-alpha, OIII and SII planes, then balances OIII and
+SII toward H-alpha before the palette maps them to RGB. **OIII boost** and
+**SII boost** start at 1; **Shadow protection** starts at 1 to protect each
+channel's median background. Flat or noise-dominated channels stay unchanged;
+the completed preview reports the reason. This is a display balance inspired
+by Narrowband Normalization, with no claim of matching the PixInsight script.
+A default Color setup with different per-filter stretches keeps those stretches.
+
+RGB color calibration runs on star-containing linear RGB before star removal.
+The original and starless RGB then receive the same linked display stretch;
+their difference supplies the RGB stars without adding a second nebula. The
+nebula's output stretch stages run after recombination. Foraxx keeps its
+existing dynamic mapping and disables the new shared H-alpha stretch and
+narrowband balance controls.
+
+### Sharpen RGB stars with BlurXTerminator
+
+Open the narrowband card's **Processing stack → RGB star processing**. Enable
+**RC-Astro BlurXTerminator** and adjust **Sharpen Stars**, or add NoiseXTerminator. These
+steps run on the linear RGB branch before Gaia calibration and
+StarXTerminator. They apply when **Stars** uses RGB. The nebula keeps its own
+channel and color processing. BXT starts off; enabling it uses the tool's
+normal defaults, including stellar sharpening. The result reports the tools
+that ran. A failed explicit RGB build keeps the previous completed preview.
+
+### Combine broadband and narrowband images
+
+Open a collapsed **RGB + emission**, **LRGB + emission**, or
+**Narrowband + broadband structure** card below the ordinary previews. LRGB
+appears when an L stack exists. Choose exact stacks under that card's
+**Custom combination**; broadband and narrowband exposures may differ.
+Ordinary RGB/LRGB and narrowband cards retain their current recipe.
+
+Open **Processing stack → Continuum subtraction**:
+
+- **Automatic** fits isolated stars on aligned linear inputs. R supplies the
+  Ha/SII reference; G and B supply independently fitted OIII references.
+  Producer clipping maps exclude saturated stars. If those maps are missing,
+  enter known saturation limits for the exact prepared pixel units under
+  **Advanced fit and saturation limits**, or choose Manual/Off. The server
+  never guesses a ceiling from the image maximum.
+- **Manual** requires each reference weight. For OIII, leave **Stellar B/G
+  flux ratio** blank to use a measured ratio, or enter one if photometry
+  cannot measure it. Manual results are labeled as manual.
+- **Off** preserves the original narrowband signal, including continuum.
+  In RGB/LRGB + emission it adds no emission contribution.
+
+Each natural-color line starts with **Emission amount** 0.25. **Add positive
+emission only** starts on and affects only the display contribution; signed
+residual downloads retain negative pixels. Broadband star colors are calibrated
+before emission addition, with those gains applied to the contribution. L
+joins through the existing luminance step, then the result is stretched.
+A failed line is omitted and the broadband preview completes with warnings.
+
+A mapped palette starts with **Broadband structure** 0, using the mapped nebula.
+Increase it toward 1 to mix the prepared starless broadband structure. Choose
+RGB/Automatic stars to restore one RGB star layer, or None for a starless
+result. **RGB branch processing** applies BXT/NXT to the RGB branch used for
+broadband structure as well as its optional stars. SXT is required for both branches. A required line that fails Automatic
+stops that build and keeps the previous preview; inspect its fit, choose Manual
+or Off, or choose another palette. Continuum subtraction always precedes SXT on
+the exact linear inputs. No fitted plan is transferred onto changed starless
+pixels.
+
+Expand **Continuum results** to inspect weights, used and held-out star counts,
+RMS, the stellar residual plot, and the full report. Open **Residual preview**
+or download **Signed residual FITS**. The residual is not calibrated pure line
+flux: broadband filters can also transmit nebular lines, and aperture-level
+PSF compatibility does not guarantee perfect cancellation of every star.
+Fits examine eligibility before the 400 usable-star budget and validate the
+sample against the broader eligible pool. Automatic fits also require held-out
+pixel-profile validation: the 90th percentile noise-adjusted absolute residual
+must be at most 15% of stellar flux. The report shows separate core/halo
+fractions. This catches rings that an aperture-sum check can miss.
+
+Under **Advanced fit and saturation limits**, enable **Match continuum PSFs
+with Gaussian broadening** to prepare copies for fitting and subtraction.
+Leave **Target FWHM (pixels)** blank to choose 1.05 times the broadest measured
+profile, or enter a target at least as broad as every input.
+Default 8/12/20 photometry permits targets up to **8 pixels**. Larger targets
+require larger aperture/sky-annulus radii in the options JSON, with a hard
+target limit of 32 pixels. The result shows the target and kernel widths. Original RGB stars keep their
+own processing. Gaussian matching may leave different halo shapes; pixel
+validation still decides acceptance. Disable matching before choosing Manual.
+
+Under **Stretch and narrowband balance**, optionally enter an exclusion radius
+for stars in the balance statistics. Blank includes stars. **Reduce green
+excess** starts at 0; it changes mapped display nebula before broadband
+structure and RGB stars are restored. A value of 1 removes green above both
+red and blue, preserving neutral pixels.
+
+**Calibrated line-flux export** accepts a response calibration JSON for exact
+source objects from the full fit reports. Supply calibrated NB/reference
+responses, explicit calibrated residual zero levels, line labels, a revision
+and common flux unit. PSF Guard corrects
+broadband line leakage and exports signed **Calibrated line flux FITS** plus a
+**Response and uncertainty report**. Without calibration, downloads remain
+emission residuals. Unknown covariance is reported as unknown uncertainty;
+response and coefficient uncertainty are not included. Display amounts continue
+to use the signed residuals. Invalid calibration stops the build.
+
+Adjusting an emission amount reuses the exact fit and residual; changing sources,
+fit controls or matching rebuilds them. Color BXT/NXT on RGB/LRGB + emission
+processes the broadband base before Gaia calibration and emission addition.
+Channel SXT is unsupported for this natural-color recipe: choose **Set in this
+build** and remove SXT, or select a mapped recipe with RGB stars.
+
+See the [combined-image processing contract](design/color-channel-processing.md#subtract-continuum-for-combined-images)
+for cache boundaries, units and recovery behavior.
+
 With exposure grouping enabled, the default cards match channels by their
 recorded duration ranges, not their filter-specific group identifiers. Starting
 with the shortest range, a band accepts another channel only while its longest
@@ -2285,3 +2431,32 @@ in stack-image pixels:
 The response points to an asynchronous search. Poll its GET endpoint until the
 state is `completed` or `failed`; completed results include immutable crop
 URLs and per-frame outlier evidence.
+
+Automatic continuum validation separately inspects isolated stellar candidates
+excluded for clipping/saturation. They never train the fit. Every inspected
+clipped profile must be measurable and below the same absolute residual limit;
+reports show their count and worst residual. A clean unsaturated held-out sample
+cannot conceal a clipped core or ring. This checks observed residuals and does
+not reconstruct clipped flux.
+
+### Reduce RGB stars
+
+Open a narrowband card's **Processing stack** and adjust **RGB star reduction**.
+It applies when **Stars** resolves to RGB, after BXT/NXT, Gaia calibration and
+SXT extraction. Keep 0 for the original extracted stars; start around 0.3–0.4
+for a gentler star field. Higher amounts make stars smaller and fainter and
+can remove faint stars. One linked RGB adjustment preserves the star layer's
+color ratios. The starless nebula and linear downloads are unchanged.
+
+BXT's **Sharpen Stars** and **Adjust Star Halos** remain independently
+configurable under **RGB star processing** (or **RGB branch processing** on a
+combined card). Star reduction changes the restored display layer after
+extraction. Changing its amount reuses RGB preparation/SXT caches and rebuilds
+the final composition. It does not affect native narrowband stars or the
+retained broadband stars in natural RGB/LRGB recipes.
+
+Flux calibration also requires exact `continuumCoefficients` snapshots in each
+plan's reference order. The server rejects a changed fit/manual coefficient
+before exporting flux: retained source revisions do not establish that the
+previous residual zero levels still apply. Update the explicit zero-level
+calibration and coefficient snapshots when the subtraction model changes.

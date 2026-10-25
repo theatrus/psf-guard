@@ -1,0 +1,342 @@
+<div id="psf-narrowband-study" class="viz-dotted-background">
+  <style>
+    #psf-narrowband-study {
+      --color-bg-primary: light-dark(#f5f5f5, #1a1a1a);
+      --color-bg-secondary: light-dark(#ffffff, #252525);
+      --color-bg-tertiary: light-dark(#e9e9e9, #333333);
+      --color-input-bg: light-dark(#ffffff, #15171b);
+      --color-text-primary: light-dark(#242424, #e0e0e0);
+      --color-text-secondary: light-dark(#555555, #b0b0b0);
+      --color-border-primary: light-dark(#b8bdc4, #545a64);
+      --color-primary: light-dark(#006b87, #61dafb);
+      --color-warning: light-dark(#80500c, #e8bd72);
+      --state-on-bg: color-mix(in srgb, var(--color-primary) 15%, var(--color-bg-secondary));
+      --state-on-border: var(--color-primary);
+      --state-on-fg: var(--color-primary);
+      --state-focus-border: var(--color-primary);
+      padding: 16px 0;
+      font: 14px/1.5 system-ui, sans-serif;
+      color: var(--color-text-primary);
+    }
+    #psf-narrowband-study * { box-sizing: border-box; }
+    #psf-narrowband-study [hidden] { display: none !important; }
+    #psf-narrowband-study .psf-window { background: var(--color-bg-primary); border: 1px solid var(--color-border-primary); border-radius: 10px; overflow: clip; }
+    #psf-narrowband-study .psf-header, #psf-narrowband-study .psf-content, #psf-narrowband-study .psf-footer { padding: 16px; }
+    #psf-narrowband-study .psf-header, #psf-narrowband-study .psf-footer { background: var(--color-bg-secondary); }
+    #psf-narrowband-study .psf-title { font-size: 18px; font-weight: 500; margin: 0; }
+    #psf-narrowband-study .psf-note { color: var(--color-text-secondary); margin: 4px 0; }
+    #psf-narrowband-study .psf-controls { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
+    #psf-narrowband-study .psf-two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    #psf-narrowband-study .psf-field { display: grid; gap: 5px; min-width: 0; }
+    #psf-narrowband-study select, #psf-narrowband-study input[type="number"] { width: 100%; min-width: 0; padding: 8px; font: inherit; background: var(--color-input-bg); color: var(--color-text-primary); border: 1px solid var(--color-border-primary); border-radius: 5px; }
+    #psf-narrowband-study input { accent-color: var(--color-primary); }
+    #psf-narrowband-study input[type="range"] { width: 100%; }
+    #psf-narrowband-study button { padding: 8px 12px; border: 1px solid var(--color-border-primary); border-radius: 5px; background: var(--color-bg-tertiary); color: var(--color-text-primary); font: inherit; }
+    #psf-narrowband-study button[aria-pressed="true"], #psf-narrowband-study .psf-primary { background: var(--state-on-bg); color: var(--state-on-fg); border-color: var(--state-on-border); }
+    #psf-narrowband-study :is(button, input, select, summary):focus-visible { outline: 2px solid var(--state-focus-border); outline-offset: 3px; }
+    #psf-narrowband-study :disabled { opacity: .55; }
+    #psf-narrowband-study .psf-section { padding: 14px 0; border-bottom: 1px solid var(--color-border-primary); }
+    #psf-narrowband-study .psf-section:first-child { padding-top: 0; }
+    #psf-narrowband-study .psf-section:last-child { border-bottom: 0; }
+    #psf-narrowband-study h3 { font-size: 14px; font-weight: 500; margin: 0 0 8px; }
+    #psf-narrowband-study .psf-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+    #psf-narrowband-study .psf-between { justify-content: space-between; }
+    #psf-narrowband-study .psf-status { margin-top: 12px; background: var(--color-bg-secondary); border-radius: 5px; padding: 10px 12px; }
+    #psf-narrowband-study .psf-warning { color: var(--color-warning); }
+    #psf-narrowband-study .psf-footer { border-top: 1px solid var(--color-border-primary); }
+    #psf-narrowband-study .psf-report { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; margin: 10px 0; }
+    #psf-narrowband-study .psf-report dd { margin: 0; }
+    #psf-narrowband-study .psf-study-controls { padding: 0 0 14px; }
+    #psf-narrowband-study .psf-study-controls label { max-width: 400px; }
+    #psf-narrowband-study .psf-existing { padding: 12px 16px; border-bottom: 1px solid var(--color-border-primary); }
+    #psf-narrowband-study .psf-subdetails { padding: 12px 0 0; }
+    #psf-narrowband-study summary { user-select: none; }
+    #psf-narrowband-study output { font-variant-numeric: tabular-nums; }
+    #psf-narrowband-study ol { padding-left: 24px; }
+    @media (max-width: 540px) {
+      #psf-narrowband-study .psf-controls { grid-template-columns: 1fr; }
+      #psf-narrowband-study .psf-header, #psf-narrowband-study .psf-content, #psf-narrowband-study .psf-footer { padding: 12px; }
+      #psf-narrowband-study .psf-report { grid-template-columns: 1fr; gap: 2px; }
+      #psf-narrowband-study .psf-report dd { margin-bottom: 8px; }
+    }
+    @media (pointer: coarse) {
+      #psf-narrowband-study :is(button, select, summary) { min-height: 44px; }
+      #psf-narrowband-study :is(input, select) { font-size: 16px; }
+    }
+  </style>
+  <div class="psf-study-controls">
+    <p class="psf-note">Interface study · simulated sources, tools and builds</p>
+    <label class="psf-field" for="psf-study-scenario">Preview scenario
+      <select id="psf-study-scenario" data-field="scenario">
+        <option value="complete">LRGB + SHO · star separation available</option>
+        <option value="hoo">RGB + Hα/OIII · no SII</option>
+        <option value="nb-only">Narrowband only · no RGB</option>
+        <option value="no-tool">LRGB + SHO · no star-separation tool</option>
+        <option value="ambiguous">Two red stacks to choose from</option>
+        <option value="separation-failed">Star separation failed</option>
+        <option value="weak-fit">Continuum fit unreliable</option>
+      </select>
+    </label>
+  </div>
+  <section class="psf-window" aria-label="Combine channel stacks interface study">
+    <header class="psf-header">
+      <h2 class="psf-title">Combine channel stacks</h2>
+      <p class="psf-note">Teddy Bear Nebula</p>
+    </header>
+    <details class="psf-existing">
+      <summary class="cursor-interaction">RGB preview</summary>
+      <p class="psf-note">The existing RGB card keeps its sources, Processing stack and Edges controls.</p>
+    </details>
+    <details class="psf-existing">
+      <summary class="cursor-interaction">LRGB preview</summary>
+      <p class="psf-note">The existing LRGB card keeps its sources and luminance processing.</p>
+    </details>
+    <article aria-label="Narrowband preview card">
+      <header class="psf-header">
+        <h3>Narrowband preview</h3>
+        <div class="psf-controls">
+          <label class="psf-field" for="psf-study-palette">Palette
+            <select id="psf-study-palette" data-field="palette">
+              <option value="auto">Automatic</option>
+              <option value="SHO">SHO · SII / Hα / OIII</option>
+              <option value="SOH">SOH · SII / OIII / Hα</option>
+              <option value="HSO">HSO · Hα / SII / OIII</option>
+              <option value="HOS">HOS · Hα / OIII / SII</option>
+              <option value="OSH">OSH · OIII / SII / Hα</option>
+              <option value="OHS">OHS · OIII / Hα / SII</option>
+              <option value="HOO">HOO · Hα / OIII / OIII</option>
+              <option value="Foraxx SHO">Foraxx SHO</option>
+              <option value="Foraxx HOO">Foraxx HOO</option>
+            </select>
+          </label>
+          <label class="psf-field" for="psf-study-stars">Stars
+            <select id="psf-study-stars" data-field="stars">
+              <option value="auto">Automatic</option>
+              <option value="rgb">RGB</option>
+              <option value="narrowband">Narrowband</option>
+              <option value="none">None</option>
+            </select>
+          </label>
+          <label class="psf-field" for="psf-study-crop">Edges
+            <select id="psf-study-crop" data-field="crop">
+              <option value="none">Keep blank edges</option>
+              <option value="bounds">Trim to covered box</option>
+              <option value="inscribed">Trim to full coverage</option>
+            </select>
+          </label>
+        </div>
+        <div class="psf-status" role="status" aria-live="polite" data-role="result">Automatic → SHO nebula + RGB stars</div>
+        <p class="psf-note" data-role="reason">RGB stars from R/G/B · star separation available</p>
+      </header>
+      <div class="psf-content">
+        <details class="psf-section" data-role="processing">
+          <summary class="cursor-interaction">Processing stack <span class="psf-note" data-role="processing-summary">· Automatic narrowband</span></summary>
+          <div class="psf-controls psf-two">
+            <label class="psf-field" for="psf-study-setup">Setup
+              <select id="psf-study-setup" data-field="setup">
+                <option value="automatic">Automatic narrowband</option>
+                <option value="existing">Existing saved setup</option>
+              </select>
+            </label>
+          </div>
+          <p class="psf-note">From each channel card · automatic background correction</p>
+          <p data-role="recipe">Shared Hα stretch · balance to Hα · RGB output stages</p>
+          <details class="psf-subdetails">
+            <summary class="cursor-interaction">Continuum subtraction <span class="psf-note" data-role="continuum-summary">· Automatic</span></summary>
+            <div class="psf-controls psf-two">
+              <label class="psf-field" for="psf-study-continuum">Continuum mode
+                <select id="psf-study-continuum" data-field="continuum">
+                  <option value="auto">Automatic</option>
+                  <option value="off">Off</option>
+                </select>
+              </label>
+            </div>
+            <p class="psf-note" data-role="continuum-outcome">Fit on linear, star-containing inputs before star separation.</p>
+            <p class="psf-note">Manual coefficients and fit diagnostics belong here.</p>
+          </details>
+          <details class="psf-subdetails">
+            <summary class="cursor-interaction">Stretch and narrowband balance</summary>
+            <div class="psf-controls psf-two">
+              <label class="psf-field" for="psf-study-stretch">Channel stretch
+                <select id="psf-study-stretch" data-field="stretch">
+                  <option value="shared">Shared, reference Hα</option>
+                  <option value="separate">Separate channel stretches</option>
+                </select>
+              </label>
+              <label class="psf-row"><input data-field="balance" type="checkbox" checked /> Narrowband balance</label>
+              <label class="psf-field" for="psf-study-oiii">OIII boost <output data-output="oiii" aria-live="off">1.00×</output>
+                <input id="psf-study-oiii" data-field="oiii" type="range" min="0.5" max="2" step="0.05" value="1" />
+              </label>
+              <label class="psf-field" for="psf-study-sii" data-role="sii-field">SII boost <output data-output="sii" aria-live="off">1.00×</output>
+                <input id="psf-study-sii" data-field="sii" type="range" min="0.5" max="2" step="0.05" value="1" />
+              </label>
+            </div>
+            <p class="psf-note" data-role="balance-outcome">Balance applies to physical filter channels before palette mapping.</p>
+          </details>
+          <details class="psf-subdetails">
+            <summary class="cursor-interaction">RGB stars and output</summary>
+            <p class="psf-note">Calibrate RGB → extract stars → stretch consistently → recombine onto the starless nebula.</p>
+            <p class="psf-note">Star-separation settings, star intensity and existing RGB output stages belong here.</p>
+          </details>
+          <div class="psf-row psf-section">
+            <button type="button" class="cursor-interaction" data-action="apply">Apply processing stack</button>
+            <button type="button" class="cursor-interaction" data-action="reset">Reset defaults</button>
+          </div>
+        </details>
+        <details class="psf-section" data-role="sources">
+          <summary class="cursor-interaction">Custom combination <span class="psf-note" data-role="source-summary">· Hα/OIII/SII + R/G/B</span></summary>
+          <dl class="psf-report">
+            <dt>Nebula inputs</dt><dd data-role="nb-sources">Hα 300 s · OIII 300 s · SII 300 s</dd>
+            <dt>RGB star inputs</dt><dd data-role="rgb-sources">R 60 s · G 60 s · B 60 s</dd>
+          </dl>
+          <label class="psf-field" for="psf-study-red" data-role="red-choice" hidden>R source stack
+            <select id="psf-study-red" data-field="red">
+              <option value="">Choose a red stack</option>
+              <option value="60">R · 60 s</option>
+              <option value="180">R · 180 s</option>
+            </select>
+          </label>
+        </details>
+        <details class="psf-section">
+          <summary class="cursor-interaction">Resolved processing order</summary>
+          <ol data-role="steps"></ol>
+        </details>
+        <p class="psf-warning" data-role="warning" role="status" aria-live="polite" hidden></p>
+      </div>
+      <footer class="psf-footer">
+        <div class="psf-row psf-between">
+          <span data-role="build-status">Ready to build · simulated</span>
+          <button type="button" class="psf-primary cursor-interaction" data-action="build">Build</button>
+        </div>
+      </footer>
+    </article>
+    <details class="psf-existing">
+      <summary class="cursor-interaction">LRGB + emission preview · proposed</summary>
+      <p class="psf-note">A separate natural-color result with its own Processing stack and source selection.</p>
+    </details>
+  </section>
+</div>
+<script>
+(() => {
+  const root = document.getElementById('psf-narrowband-study');
+  const defaults = { scenario: 'complete', palette: 'auto', stars: 'auto', crop: 'none', setup: 'automatic', continuum: 'auto', stretch: 'shared', balance: true, oiii: 1, sii: 1, red: '' };
+  let state = { ...defaults };
+  let built = false;
+  const field = (key) => root.querySelector(`[data-field="${key}"]`);
+  const role = (key) => root.querySelector(`[data-role="${key}"]`);
+  const text = (key, value) => { role(key).textContent = value; };
+  function persist() {
+    window.openai?.setWidgetState?.({ modelContent: { version: 2, settings: { ...state } } }).catch(() => {});
+  }
+  function restore(saved) {
+    if (saved?.version !== 2 || !saved.settings) return false;
+    let changed = false;
+    for (const key of Object.keys(defaults)) {
+      const value = saved.settings[key];
+      const control = field(key);
+      const valid = control.tagName === 'SELECT' ? [...control.options].some((option) => option.value === value)
+        : control.type === 'checkbox' ? typeof value === 'boolean'
+        : typeof value === 'number' && Number.isFinite(value) && value >= Number(control.min) && value <= Number(control.max);
+      if (valid && value !== state[key]) { state[key] = value; changed = true; }
+    }
+    return changed;
+  }
+  function render() {
+    const hasSii = state.scenario !== 'hoo';
+    const hasRgb = state.scenario !== 'nb-only';
+    const ambiguous = state.scenario === 'ambiguous' && !state.red;
+    const tool = state.scenario !== 'no-tool';
+    const separation = tool && state.scenario !== 'separation-failed';
+    const rgbReady = hasRgb && !ambiguous && separation;
+    const palette = state.palette === 'auto' ? hasSii ? 'SHO' : 'HOO' : state.palette;
+    const hoo = palette === 'HOO' || palette === 'Foraxx HOO';
+    const starSource = state.stars === 'auto' ? rgbReady ? 'rgb' : 'narrowband' : state.stars;
+    const usesRgb = starSource === 'rgb' && rgbReady;
+    const extractionRequired = starSource === 'rgb' || starSource === 'none';
+    const missingSii = !hasSii && !hoo;
+    const starBlocked = extractionRequired && (!separation || (starSource === 'rgb' && (!hasRgb || ambiguous)));
+    const blocked = missingSii || starBlocked;
+    const canFit = state.continuum === 'auto' && hasRgb && !ambiguous && separation && extractionRequired;
+    const fitSucceeded = canFit && state.scenario !== 'weak-fit';
+    const foraxx = palette.startsWith('Foraxx ');
+    const balance = state.balance && !foraxx;
+    for (const key of Object.keys(defaults)) {
+      const control = field(key);
+      if (control.type === 'checkbox') control.checked = state[key];
+      else if (document.activeElement !== control) control.value = state[key];
+    }
+    field('palette').options[0].textContent = `Automatic (${hasSii ? 'SHO' : 'HOO'})`;
+    field('stars').options[0].textContent = `Automatic (${rgbReady ? 'RGB' : 'Narrowband'})`;
+    field('balance').disabled = foraxx;
+    field('stretch').disabled = foraxx;
+    field('oiii').disabled = !balance;
+    field('sii').disabled = !balance || hoo;
+    role('sii-field').hidden = hoo;
+    role('red-choice').hidden = state.scenario !== 'ambiguous';
+    root.querySelectorAll('[data-action="build"], [data-action="apply"]').forEach((button) => { button.disabled = blocked; });
+    const starsLabel = starSource === 'rgb' ? 'RGB stars' : starSource === 'none' ? 'no stars' : 'narrowband stars';
+    text('result', `${blocked ? 'Requested → ' : state.palette === 'auto' && state.stars === 'auto' ? 'Automatic → ' : ''}${palette} nebula + ${starsLabel}`);
+    const reasons = [];
+    if (!hasRgb) reasons.push('RGB stars unavailable: no complete RGB source set.');
+    else if (ambiguous) reasons.push('Choose a red source in Custom combination to use RGB stars.');
+    if (!tool) reasons.push('RGB star replacement unavailable: no star-separation tool configured.');
+    else if (!separation) reasons.push('Star separation failed.');
+    text('reason', reasons.length ? reasons.join(' ') : usesRgb ? 'RGB stars from R/G/B · star separation available' : starSource === 'none' ? 'Starless nebula · star separation available' : 'Stars from the narrowband inputs.');
+    text('processing-summary', `· ${state.setup === 'automatic' ? 'Automatic narrowband' : 'Existing saved setup'}`);
+    text('recipe', `${foraxx ? 'Foraxx display mapping' : state.stretch === 'shared' ? 'Shared Hα stretch' : 'Separate channel stretches'} · ${balance ? 'balance to Hα' : 'balance off'} · RGB output stages`);
+    text('continuum-summary', state.continuum === 'off' ? '· Off' : fitSucceeded ? '· Automatic: fitted' : '· Automatic: skipped');
+    text('continuum-outcome', state.continuum === 'off' ? 'Original narrowband channels retain continuum.' : fitSucceeded ? 'Example: fit on star-containing linear inputs; apply the validated model to the associated nebula branch.' : 'Continuum subtraction skipped. Original narrowband signal remains in use.');
+    text('balance-outcome', foraxx ? 'Foraxx uses its existing dynamic mapping; narrowband balance is unavailable.' : 'Balance applies to physical filter channels before palette mapping.');
+    text('source-summary', `· Hα/OIII${hasSii ? '/SII' : ''}${hasRgb ? ' + R/G/B' : ''}`);
+    text('nb-sources', `Hα 300 s · OIII 300 s${hasSii ? ' · SII 300 s' : ''}`);
+    text('rgb-sources', !hasRgb ? 'No RGB sources' : ambiguous ? 'R needs a choice · G 60 s · B 60 s' : `R ${state.red || '60'} s · G 60 s · B 60 s`);
+    root.querySelector('[data-output="oiii"]').textContent = `${Number(state.oiii).toFixed(2)}×`;
+    root.querySelector('[data-output="sii"]').textContent = `${Number(state.sii).toFixed(2)}×`;
+    const warnings = [];
+    if (missingSii) warnings.push(`${palette} requires SII. Choose HOO or provide an SII source.`);
+    if (starBlocked) warnings.push('The selected star source cannot be produced. Keep the previous preview and resolve the source or separation problem.');
+    if (!blocked && state.stars === 'auto' && !rgbReady) warnings.push('Automatic uses narrowband stars. The reason is shown above.');
+    if (state.continuum === 'auto' && !fitSucceeded) warnings.push('Continuum subtraction skipped; narrowband continuum remains.');
+    role('warning').hidden = warnings.length === 0;
+    text('warning', warnings.join(' '));
+    text('build-status', blocked ? 'Needs attention · previous preview kept' : built ? 'Simulated build ready' : warnings.length ? 'Ready with warnings · simulated' : 'Ready to build · simulated');
+    const steps = ['Channel tools → background correction → alignment'];
+    if (fitSucceeded) steps.push('Measure continuum on star-containing linear inputs');
+    if (usesRgb) steps.push('Calibrate RGB → separate RGB stars and narrowband nebula');
+    else if (starSource === 'none') steps.push('Remove narrowband stars');
+    if (fitSucceeded) steps.push('Apply the validated continuum model to the nebula branch');
+    steps.push(foraxx ? 'Foraxx display mapping' : `${state.stretch === 'shared' ? 'Shared Hα' : 'Separate channel'} stretch${balance ? ' → balance to Hα' : ''} → ${palette}`);
+    if (usesRgb) steps.push('Prepare RGB stars → recombine onto the starless nebula');
+    steps.push('RGB output stages → selected edge crop');
+    role('steps').replaceChildren(...steps.map((value) => { const item = document.createElement('li'); item.textContent = value; return item; }));
+  }
+  root.addEventListener('change', (event) => {
+    const control = event.target;
+    const key = control.dataset.field;
+    if (!key) return;
+    state[key] = control.type === 'checkbox' ? control.checked : control.type === 'range' ? control.valueAsNumber : control.value;
+    if (key === 'scenario') state.red = '';
+    if (key === 'setup') {
+      state.continuum = state.setup === 'existing' ? 'off' : 'auto';
+      state.stretch = state.setup === 'existing' ? 'separate' : 'shared';
+      state.balance = state.setup !== 'existing';
+    }
+    built = false; render(); persist();
+  });
+  root.addEventListener('input', (event) => {
+    const control = event.target;
+    if (control.type !== 'range') return;
+    state[control.dataset.field] = control.valueAsNumber; built = false; render(); persist();
+  });
+  for (const action of ['build', 'apply']) root.querySelector(`[data-action="${action}"]`).addEventListener('click', () => { built = true; render(); });
+  root.querySelector('[data-action="reset"]').addEventListener('click', () => {
+    state = { ...defaults, scenario: state.scenario, palette: state.palette, stars: state.stars, crop: state.crop, red: state.red };
+    built = false; render(); persist();
+  });
+  restore(window.openai?.widgetState?.modelContent);
+  render();
+  window.addEventListener('openai:set_globals', (event) => {
+    if (restore(event.detail?.globals?.widgetState?.modelContent)) { built = false; render(); }
+  });
+})();
+</script>

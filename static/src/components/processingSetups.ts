@@ -8,6 +8,7 @@ import {
   colorCalibrationApplies,
   defaultColorCalibration,
   defaultColorProcessing,
+  automaticNarrowbandProcessing,
 } from './stackColorProcessing';
 import { defaultStretchRequest } from './stackStretchModels';
 
@@ -51,6 +52,7 @@ export function builtinViewSetups(displayReferred: boolean): BuiltinViewSetup[] 
 export interface BuiltinColorSetup {
   name: string;
   settings: (roles: StackColorRole[]) => StackColorProcessing;
+  supports?: (roles: StackColorRole[]) => boolean;
 }
 
 export const builtinColorSetups: BuiltinColorSetup[] = [
@@ -61,6 +63,11 @@ export const builtinColorSetups: BuiltinColorSetup[] = [
   {
     name: 'No background correction',
     settings: (roles) => ({ ...defaultColorProcessing(roles), background_extraction: null }),
+  },
+  {
+    name: 'Automatic narrowband',
+    supports: (roles) => roles.includes('ha') && roles.includes('oiii'),
+    settings: (roles) => automaticNarrowbandProcessing(defaultColorProcessing(roles)),
   },
 ];
 
@@ -104,6 +111,8 @@ export function colorSetupForRoles(
   roles: StackColorRole[]
 ): StackColorProcessing {
   return {
+    ...(settings.emission ? { emission: structuredClone(settings.emission) } : {}),
+    ...(settings.narrowband ? { narrowband: structuredClone(settings.narrowband) } : {}),
     // A setup saved before the choice existed sets its inputs' tools itself.
     ...(settings.input_processing === 'channels' ? { input_processing: 'channels' as const } : {}),
     background_extraction: settings.background_extraction ?? null,

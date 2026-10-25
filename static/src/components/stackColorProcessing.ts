@@ -2,6 +2,7 @@ import type {
   StackBackgroundConfig,
   StackBackgroundExtraction,
   StackColorCalibration,
+  StackColorCombination,
   StackColorJob,
   StackColorProcessing,
   StackColorRole,
@@ -79,6 +80,36 @@ export function defaultColorProcessing(roles: StackColorRole[]): StackColorProce
   };
 }
 
+/** Explicit starting recipe for a new automatic narrowband card. Existing
+ *  artifacts keep their saved pipeline. Preserve custom per-filter stretches. */
+export function automaticNarrowbandProcessing(processing: StackColorProcessing): StackColorProcessing {
+  if (processing.narrowband) return processing;
+  const stages = ['ha', 'oiii', 'sii'].flatMap((role) => {
+    const value = processing.input_stretches[role as StackColorRole];
+    return value ? [JSON.stringify(value)] : [];
+  });
+  return {
+    ...processing,
+    narrowband: {
+      shared_stretch: stages.every((value) => value === stages[0]),
+      balance: { has_sii: true, shadow_protection: 1, oiii_boost: 1, sii_boost: 1, max_samples: 1_000_000 },
+    },
+  };
+}
+
+/** Drop tool settings for inputs that a changed star choice no longer uses. */
+export function retainColorInputRoles(processing: StackColorProcessing, roles: StackColorRole[]): StackColorProcessing {
+  const keep = <T,>(entries: Partial<Record<StackColorRole, T>>) => Object.fromEntries(
+    Object.entries(entries).filter(([role]) => roles.includes(role as StackColorRole))
+  );
+  return {
+    ...processing,
+    input_stretches: keep(processing.input_stretches),
+    input_deconvolutions: keep(processing.input_deconvolutions ?? {}),
+    input_rc_astro: keep(processing.input_rc_astro ?? {}),
+  };
+}
+
 /** What a color build of these channels runs: the preview's own processing,
  *  or, for a new or outdated preview, `defaults` for its channels. */
 export function processingForColorBuild(
@@ -103,4 +134,15 @@ export function processingForColorBuild(
     input_deconvolutions: processing.input_deconvolutions ?? {},
     input_rc_astro: processing.input_rc_astro ?? {},
   };
+}
+
+/** Combined recipes opt into continuum processing; ordinary saved recipes keep their settings. */
+export function combinedColorProcessing(processing: StackColorProcessing, combination: StackColorCombination | undefined, roles: StackColorRole[]): StackColorProcessing {
+  if (!combination) {
+    const next = { ...processing }; delete next.emission; return next;
+  }
+  const lines = Object.fromEntries(roles.filter((r) => ['ha', 'oiii', 'sii'].includes(r)).map((role) => [role,
+    processing.emission?.lines[role] ?? { amount: 0.25, coefficients: [], reference_flux_ratios: [] }]));
+  return { ...processing, emission: { mode: 'automatic', positive_contribution: true, broadband_amount: 0,
+    ...processing.emission, lines } };
 }

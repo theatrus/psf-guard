@@ -5223,9 +5223,9 @@ dependencies = [
 
 [[package]]
 name = "seiza"
-version = "0.42.2"
+version = "0.43.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5747f7f075de61311c9f678fc35f0913c22e1ef6396cafff0d2c7580ebbc14e7"
+checksum = "d220ce8625e7018fe5af4a9eff13c07508c769e0575a60ea3b80fd9f91ae604e"
 dependencies = [
  "directories",
  "image",
@@ -5351,9 +5351,9 @@ dependencies = [
 
 [[package]]
 name = "seiza-satellites"
-version = "0.22.0"
+version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e76e3f8f288ee7febe65e5dbc69b4af204577ce26273c157a1301ab5fab21366"
+checksum = "165606e41a43785ef218a7811b1a45745dd5c80e7bdfc9e7a4e3f7a9a772d45a"
 dependencies = [
  "directories",
  "fs2",
@@ -5369,12 +5369,13 @@ dependencies = [
 
 [[package]]
 name = "seiza-stacking"
-version = "0.46.1"
+version = "0.50.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e9a0ad734c07904abdbc03801364e4e3028173f8511b7c0dea6a88a807d27e0c"
+checksum = "85dd03878b887477e000e1c3a4338e4fdf3a8f583440748fa4fd907fd49f1ed6"
 dependencies = [
  "bytemuck",
  "multiversion",
+ "nalgebra",
  "objc2-metal",
  "pollster",
  "postcard",

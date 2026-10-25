@@ -1373,6 +1373,8 @@ export interface StackReprocessing {
 
 export type StackColorRole = 'luminance' | 'red' | 'green' | 'blue' | 'ha' | 'oiii' | 'sii';
 export type StackColorKind = 'rgb' | 'lrgb' | 'narrowband';
+export type StackColorCombination = 'emission' | 'broadband_structure';
+export type StackColorStars = 'automatic' | 'rgb' | 'narrowband' | 'none';
 export type StackNarrowbandPalette =
   | 'sho'
   | 'soh'
@@ -1415,7 +1417,44 @@ export type StackColorInputSources = Partial<Record<StackColorRole, StackColorSo
  *  Absent means `own`, as processing saved before the choice existed. */
 export type StackColorInputProcessing = 'own' | 'channels';
 
+export interface StackEmissionProcessing {
+  mode: 'automatic' | 'manual' | 'off';
+  flux_calibration?: Record<string, unknown> | null;
+  lines: Partial<Record<StackColorRole, { amount: number; coefficients: number[]; reference_flux_ratios: number[] }>>;
+  saturation?: Partial<Record<StackColorRole, number>>;
+  fit?: { maxStars?: number; minimumStars?: number; maxFractionalError?: number };
+  photometry?: { apertureRadius?: number; annulusInner?: number; annulusOuter?: number; maxPixelResidual?: number; psfMatching?: { targetFwhm?: number | null } | null };
+  positive_contribution: boolean;
+  broadband_amount: number;
+}
+export interface StackContinuumResult {
+  role: StackColorRole;
+  references: StackColorRole[];
+  status: 'applied' | 'manual' | 'skipped' | 'disabled';
+  detail: string;
+  plan?: { coefficients: number[]; referenceFluxRatios: number[]; origin: string; psfMatching?: { targetFwhm: number; measuredFwhm: number[]; kernelSigma: number[] } | null } | null;
+  diagnostics?: { candidateStars: number; eligibleStars: number; sampledStars: number; usedStars: number; validationStars: number; validationFractionalRms: number | null; samplingStabilityRms: number | null; rejected: Record<string, number>; psfMatching?: { targetFwhm: number; measuredFwhm: number[]; kernelSigma: number[] } | null; pixelValidation?: { clippedStars?: number; clippedProfiles?: number; clippedMaxAbsoluteFraction?: number | null; stars: number; p90AbsoluteFraction: number; medianCoreFraction: number; medianHaloFraction: number; limit: number; accepted: boolean } | null } | null;
+  flux_cache_id?: string | null;
+  flux_unit?: string | null;
+  flux_fits_url?: string | null;
+  flux_report_url?: string | null;
+  residual_fits_url?: string | null;
+  residual_preview_url?: string | null;
+  report_url?: string | null;
+  clipping_maps: boolean;
+  background_offset?: number | null;
+}
+
 export interface StackColorProcessing {
+  emission?: StackEmissionProcessing | null;
+  narrowband?: {
+    shared_stretch: boolean;
+    /** Optional BXT/NXT on the RGB star branch before calibration and SXT. */
+    rgb_star_processing?: RcAstroProcessing | null;
+    green_reduction?: number;
+    star_reduction?: number;
+    balance?: { has_sii: boolean; shadow_protection: number; oiii_boost: number; sii_boost: number; max_samples: number; star_mask_radius?: number | null } | null;
+  } | null;
   input_processing?: StackColorInputProcessing;
   background_extraction: StackBackgroundExtraction | null;
   input_deconvolutions: Partial<Record<StackColorRole, StackDeconvolutionConfig>>;
@@ -1601,8 +1640,10 @@ export type StackColorProgressPhase =
   | 'aligning_sources'
   | 'normalizing_inputs'
   | 'rc_astro_color'
+  | 'separating_stars'
   | 'calibrating_color'
   | 'stretching_inputs'
+  | 'balancing_narrowband'
   | 'rc_astro_inputs'
   | 'composing_color'
   | 'stretching_output'
@@ -1651,6 +1692,20 @@ export interface StackColorCropReport {
 }
 
 export interface StackColorJob {
+  automatic_palette?: boolean;
+  stars?: StackColorStars | null;
+  narrowband_resolution?: {
+    stars: StackColorStars;
+    detail: string;
+    available_sources: string;
+    rc_astro_ids: string[];
+    color_calibration?: StackColorCalibrationOutcome | null;
+    rgb_star_processing?: (StackRcAstroResult & { fits_url: string; stars_fits_url?: string | null }) | null;
+  } | null;
+  narrowband_balance?: { channels: {
+    channel: string; status: string; reason: string | null; samples: number;
+    median: number | null; background: number | null; positiveDeviation: number | null; midtone: number | null;
+  }[] } | null;
   source_family_key?: string;
   schema_version: number;
   job_id: string;
@@ -1659,6 +1714,8 @@ export interface StackColorJob {
   target_id: number;
   target_name: string;
   kind: StackColorKind;
+  combination?: StackColorCombination | null;
+  continuum?: StackContinuumResult[];
   palette: StackNarrowbandPalette | null;
   label: string;
   state: StackJobState;

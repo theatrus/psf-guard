@@ -5,13 +5,16 @@ import type {
   StackBackgroundFit,
   StackBackgroundProtection,
   StackColorProcessing,
+  StackColorCombination,
   StackColorJob,
   StackColorRole,
+  StackNarrowbandPalette,
   StackDeconvolutionResult,
   StackStretchRequest,
   ExternalToolSchema,
   RcAstroParameterValue,
 } from '../api/types';
+import StackEmissionControls from './StackEmissionControls';
 import StackDeconvolutionControls, { StackDeconvolutionSummary } from './StackDeconvolutionControls';
 import StackRcAstroControls from './StackRcAstroControls';
 import {
@@ -28,6 +31,8 @@ import {
   colorCalibrationApplies,
   defaultBackgroundModel,
   defaultBackgroundExtraction,
+  automaticNarrowbandProcessing,
+  combinedColorProcessing,
 } from './stackColorProcessing';
 import { useDefaultColorProcessing } from './defaultColorSetup';
 import ColorCalibrationSwitch from './ColorCalibrationSwitch';
@@ -64,11 +69,13 @@ function hasInvalidNumbers(processing: StackColorProcessing): boolean {
     ...Object.values(processing.input_stretches).flatMap((value) => value ?? []),
     ...processing.output_stretches,
   ];
-  return stages.some((stage) => Object.values(stage.model).some(
+  return !Number.isFinite(processing.narrowband?.star_reduction ?? 0) || !Number.isFinite(processing.narrowband?.green_reduction ?? 0)
+    || Object.values(processing.narrowband?.balance ?? {}).some((value) => typeof value === 'number' && !Number.isFinite(value))
+    || stages.some((stage) => Object.values(stage.model).some(
     (value) => typeof value === 'number' && !Number.isFinite(value)
   )) || Object.values(processing.input_deconvolutions).some((config) =>
     config && Object.values(config).some((value) => !Number.isFinite(value))
-  ) || [...Object.values(processing.input_rc_astro ?? {}), processing.color_rc_astro]
+  ) || [...Object.values(processing.input_rc_astro ?? {}), processing.color_rc_astro, processing.narrowband?.rgb_star_processing]
     .some((config) =>
       config?.steps.some((step) => Object.values(step.parameters).some((value) =>
         typeof value === 'number' && !Number.isFinite(value)
@@ -420,11 +427,12 @@ function BackgroundControls({
 
 function StageLane({
   label, stages, channels, deconvolution, deconvolutionResult, rcAstro, rcAstroResult, inherited,
-  disabled, onChange, onDeconvolutionChange, onRcAstroChange,
+  disabled, onChange, onDeconvolutionChange, onRcAstroChange, sharedReference,
 }: {
   label: string;
   stages: StackStretchRequest[];
   channels: 1 | 3;
+  sharedReference?: string;
   /** While the build follows the channel cards: what this input's card
    *  applied, in words, shown in place of the tool editors (`label`, null
    *  when the card applied no tools). `current` is present when the card
@@ -460,7 +468,7 @@ function StageLane({
     <section className="stack-color-stage-lane" aria-label={`${label} stretch stack`}>
       <header>
         <strong>{label}</strong>
-        <span>{stages.length} stage{stages.length === 1 ? '' : 's'}</span>
+        <span>{sharedReference ? 'Shared stretch' : `${stages.length} stage${stages.length === 1 ? '' : 's'}`}</span>
       </header>
       {inherited && (
         <p className="processing-setups-hint">
@@ -503,6 +511,7 @@ function StageLane({
           )}
         </div>
       )}
+      {sharedReference ? <p>Uses the stretch resolved from {sharedReference}.</p> : <>
       {stages.length === 0 && (
         <p>Normalized only — no stretch stages.</p>
       )}
@@ -537,6 +546,7 @@ function StageLane({
         onClick={() => onChange([...stages, defaultStretchRequest('auto-mtf')])}>
         Add stage
       </button>
+      </>}
     </section>
   );
 }
@@ -575,10 +585,16 @@ function channelProcessingSummary(
 export default function StackColorProcessingControls({
   label, roles, applied, backgrounds, protections, fallbacks, deconvolutions, rcAstro = {},
   colorRcAstro, channelProcessing = {}, followed, disabled, applyError, onApply,
+  automaticNarrowband = false, combination, palette, balanceReport, managesStars = false,
 }: {
   label: string;
   roles: StackColorRole[];
   applied: StackColorProcessing | null;
+  automaticNarrowband?: boolean;
+  combination?: StackColorCombination;
+  palette?: StackNarrowbandPalette;
+  balanceReport?: StackColorJob['narrowband_balance'];
+  managesStars?: boolean;
   backgrounds: Partial<Record<StackColorRole, StackBackgroundFit>>;
   protections: Partial<Record<StackColorRole, StackBackgroundProtection>>;
   fallbacks: Partial<Record<StackColorRole, string>>;
@@ -601,7 +617,10 @@ export default function StackColorProcessingControls({
   const rcAstroTools = rcAstroCapabilities?.tools;
   const calibrates = colorCalibrationApplies(roles);
   const colorDefaults = useDefaultColorProcessing();
-  const defaults = useMemo(() => colorDefaults(roles), [colorDefaults, roles]);
+  const defaults = useMemo(() => {
+    const processing = colorDefaults(roles);
+    return combinedColorProcessing(automaticNarrowband ? automaticNarrowbandProcessing(processing) : processing, combination, roles);
+  }, [colorDefaults, roles, automaticNarrowband, combination]);
   const baseline = applied
     ? { ...applied, input_deconvolutions: applied.input_deconvolutions ?? {},
         input_rc_astro: applied.input_rc_astro ?? {} }
@@ -620,6 +639,15 @@ export default function StackColorProcessingControls({
   const toolName = (tool: string) => rcAstroTools?.find((schema) => schema.key === tool)?.name ?? tool;
   const channelSummary = channelProcessingSummary(channelProcessing, roles, toolName);
   const followsCards = draft.input_processing === 'channels';
+  const narrowband = combination !== 'emission' && roles.includes('ha') && roles.includes('oiii');
+  const foraxx = palette === 'foraxx-sho' || palette === 'foraxx-hoo';
+  const sharedNarrowband = narrowband && !foraxx && draft.narrowband?.shared_stretch;
+  const changeNarrowband = (config: NonNullable<StackColorProcessing['narrowband']>) => setDraft((current) => {
+    if (!config.balance && !config.shared_stretch && !config.rgb_star_processing && (config.green_reduction ?? 0) === 0 && (config.star_reduction ?? 0) === 0) {
+      const next = { ...current }; delete next.narrowband; return next;
+    }
+    return { ...current, narrowband: config };
+  });
   // What each lane says its card applied: what the build ran, when it
   // followed the cards, and what the card applies now when that differs.
   // Before a build follows them, the cards' current steps are what it runs.
@@ -670,6 +698,29 @@ export default function StackColorProcessingControls({
       setError('Enter a finite value for every processing parameter');
       return;
     }
+    if (combination && draft.emission) {
+      const e = draft.emission;
+      if (!Number.isFinite(e.broadband_amount) || e.broadband_amount < 0 || e.broadband_amount > 1 ||
+        Object.values(e.lines).some((line) => !line || !Number.isFinite(line.amount) || line.amount < 0 || line.amount > 5 || line.coefficients.some((v) => !Number.isFinite(v) || v < 0) || line.reference_flux_ratios.some((v) => !Number.isFinite(v) || v <= 0)) ||
+        Object.values(e.saturation ?? {}).some((v) => v === undefined || !Number.isFinite(v) || v <= 0)) {
+        setError('Enter emission amounts from 0 to 5, structure from 0 to 1, and finite positive scales'); return;
+      }
+      const target = e.photometry?.psfMatching?.targetFwhm;
+      if (target != null && (!Number.isFinite(target) || target <= 0 || target > Math.min(32, e.photometry?.apertureRadius ?? 8, (e.photometry?.annulusInner ?? 12) / 1.5))) { setError('Continuum target FWHM must fit inside the photometry aperture and below the sky annulus'); return; }
+      if (e.mode === 'manual' && e.photometry?.psfMatching) { setError('Disable PSF matching before using Manual continuum weights'); return; }
+      if (e.mode === 'manual' && Object.entries(e.lines).some(([role, line]) => line?.coefficients.length !== (role === 'oiii' ? 2 : 1))) {
+        setError('Enter every reference weight for Manual continuum subtraction'); return;
+      }
+    }
+    if ((draft.narrowband?.star_reduction ?? 0)<0 || (draft.narrowband?.star_reduction ?? 0)>1) {setError('RGB star reduction must be between zero and one');return;}
+    if ((draft.narrowband?.green_reduction ?? 0) < 0 || (draft.narrowband?.green_reduction ?? 0) > 1) {
+      setError('Green reduction must be between zero and one'); return;
+    }
+    const balance = draft.narrowband?.balance;
+    if (balance && (balance.shadow_protection < 0 || balance.shadow_protection > 1 || balance.oiii_boost <= 0 || balance.sii_boost <= 0 || (balance.star_mask_radius != null && (balance.star_mask_radius < 1 || balance.star_mask_radius > 64))
+      || !Number.isInteger(balance.max_samples) || balance.max_samples < 4 || balance.max_samples > 1_000_000)) {
+      setError('Shadow protection must be 0 to 1, boosts positive, and balance samples 4 to 1000000'); return;
+    }
     const backgroundError = validateBackground(draft.background_extraction);
     if (backgroundError) {
       setError(backgroundError);
@@ -698,6 +749,8 @@ export default function StackColorProcessingControls({
       setError(`Color channels: ${colorProblem}`);
       return;
     }
+    const starProblem = rcAstroProblem(draft.narrowband?.rgb_star_processing, rcAstroTools);
+    if (starProblem) { setError(`RGB stars: ${starProblem}`); return; }
     setError(null);
     onApply(cloneProcessing(draft));
   };
@@ -724,7 +777,7 @@ export default function StackColorProcessingControls({
       <div className="stack-color-processing-body">
         <ProcessingSetupsBar
           kind="color"
-          builtins={builtinColorSetups.map((setup) => ({
+          builtins={builtinColorSetups.filter((setup) => !setup.supports || setup.supports(roles)).map((setup) => ({
             name: setup.name,
             settings: setup.settings(roles),
           }))}
@@ -732,7 +785,7 @@ export default function StackColorProcessingControls({
           disabled={disabled}
           onApply={(settings) => {
             setDraft(cloneProcessing(
-              colorSetupForRoles(settings as StackColorProcessing, roles)
+              combinedColorProcessing(colorSetupForRoles(settings as StackColorProcessing, roles), combination, roles)
             ));
             setError(null);
           }}
@@ -778,6 +831,11 @@ export default function StackColorProcessingControls({
                 : 'No channel card has deconvolution or RC-Astro steps applied, so the inputs run none.'}
           </span>
         </div>
+        {managesStars && <p className="processing-setups-hint">
+          {combination === 'emission' ? 'RGB/LRGB + emission retains broadband stars. Channel StarXTerminator cannot run in this recipe; choose Set in this build and remove SXT, or choose narrowband with RGB stars.' : 'The Stars choice on this color card controls star removal. Channel-card sharpening and denoising are reused; StarXTerminator steps are deferred until the stars branch is prepared.'}
+        </p>}
+        {combination && draft.emission && <StackEmissionControls value={draft.emission} combination={combination} disabled={disabled}
+          onChange={(emission) => setDraft((current) => ({ ...current, emission }))} />}
         <BackgroundControls
           extraction={draft.background_extraction}
           backgrounds={backgrounds}
@@ -813,6 +871,23 @@ export default function StackColorProcessingControls({
             )}
           </section>
         )}
+        {managesStars && narrowband && (rcAstroCapabilities?.available || draft.narrowband?.rgb_star_processing) && <section className="stack-color-channel-tools">
+          <StackRcAstroControls label={combination ? "RGB branch" : "RGB stars"} heading={combination ? "RGB branch processing" : "RGB star processing"}
+            config={draft.narrowband?.rgb_star_processing}
+            disabled={disabled} toolKeys={colorChannelTools}
+            onChange={(rgb_star_processing) => changeNarrowband({
+              ...draft.narrowband, shared_stretch: draft.narrowband?.shared_stretch ?? false,
+              rgb_star_processing,
+            })} />
+          <p className="processing-setups-hint">{combination ? "Runs BlurXTerminator or NoiseXTerminator on linear RGB before calibration and separation. This branch supplies broadband structure and optional RGB stars." : "Runs BlurXTerminator or NoiseXTerminator on linear RGB before star calibration and separation. Applies when Stars uses RGB. The narrowband nebula keeps its own processing."}</p>
+        </section>}
+        {managesStars && narrowband && <section aria-label="RGB star reduction">
+          <label className="stack-stretch-field">RGB star reduction
+            <input type="number" aria-label="RGB star reduction" min="0" max="1" step="0.05" value={draft.narrowband?.star_reduction ?? 0} disabled={disabled}
+              onChange={(event) => changeNarrowband({ ...draft.narrowband, shared_stretch: draft.narrowband?.shared_stretch ?? false, star_reduction: event.target.valueAsNumber })} />
+            <small>0 keeps the extracted RGB stars. Increase to make them smaller and fainter while preserving their color. Applies when Stars uses RGB; the starless nebula is unchanged.</small>
+          </label>
+        </section>}
         {calibrates && (
           <ColorCalibrationSwitch
             calibration={draft.color_calibration}
@@ -822,6 +897,49 @@ export default function StackColorProcessingControls({
             }))}
           />
         )}
+        {narrowband && <details className="stack-color-channel-tools">
+          <summary>Stretch and narrowband balance</summary>
+          <label className="stack-stretch-field">
+            <span>Channel stretch</span>
+            <select aria-label="Narrowband channel stretch" disabled={disabled || foraxx}
+              value={draft.narrowband?.shared_stretch ? 'shared' : 'separate'}
+              onChange={(event) => changeNarrowband({ ...draft.narrowband, shared_stretch: event.target.value === 'shared' })}>
+              <option value="shared">Shared, reference Hα</option>
+              <option value="separate">Separate channel stretches</option>
+            </select>
+          </label>
+          <label><input type="checkbox" aria-label="Narrowband balance" checked={!!draft.narrowband?.balance} disabled={disabled || foraxx}
+            onChange={(event) => changeNarrowband({
+              ...draft.narrowband,
+              shared_stretch: draft.narrowband?.shared_stretch ?? false,
+              balance: event.target.checked ? automaticNarrowbandProcessing({ ...draft, narrowband: undefined }).narrowband?.balance : undefined,
+            })} /> Narrowband balance</label>
+          {foraxx && <p className="processing-setups-hint">Foraxx uses its existing dynamic mapping; shared Hα stretching and narrowband balance are not applied.</p>}
+          {draft.narrowband?.balance && <div className="stack-color-stage-grid">
+            {(['oiii_boost', ...(roles.includes('sii') ? ['sii_boost'] : []), 'shadow_protection'] as const).map((key) => {
+              const balance = draft.narrowband!.balance!;
+              const field = key as 'oiii_boost' | 'sii_boost' | 'shadow_protection';
+              const label = field === 'oiii_boost' ? 'OIII boost' : field === 'sii_boost' ? 'SII boost' : 'Shadow protection';
+              return <label className="stack-stretch-field" key={field}><span>{label}</span>
+                <input type="number" aria-label={label} min={field === 'shadow_protection' ? 0 : 0.01}
+                  max={field === 'shadow_protection' ? 1 : undefined} step="0.05" disabled={disabled || foraxx} value={balance[field]}
+                  onChange={(event) => changeNarrowband({ ...draft.narrowband!, balance: { ...balance, [field]: event.target.valueAsNumber } })} />
+              </label>;
+            })}
+          </div>}
+          {draft.narrowband?.balance && <label className="stack-stretch-field">Exclude stars from balance statistics (radius in pixels)
+            <input type="number" aria-label="Balance star mask radius" min="1" max="64" step="1" disabled={disabled || foraxx} value={draft.narrowband.balance.star_mask_radius ?? ''}
+              onChange={(event) => changeNarrowband({ ...draft.narrowband!, balance: { ...draft.narrowband!.balance!, star_mask_radius: event.target.value === '' ? null : event.target.valueAsNumber } })} />
+            <small>Blank includes stars. This changes curve statistics and keeps output coverage.</small></label>}
+          <label className="stack-stretch-field">Reduce green excess
+            <input type="number" aria-label="Reduce green excess" min="0" max="1" step="0.05" disabled={disabled} value={draft.narrowband?.green_reduction ?? 0}
+              onChange={(event) => changeNarrowband({ ...draft.narrowband, shared_stretch: draft.narrowband?.shared_stretch ?? false, green_reduction: event.target.valueAsNumber })} />
+            <small>0 keeps mapped color; 1 removes green above both red and blue. Runs before broadband structure and RGB stars.</small></label>
+          {balanceReport && <ul>{balanceReport.channels.map((channel) => <li key={channel.channel}>
+            {roleLabels[channel.channel as StackColorRole] ?? channel.channel}: {channel.status}
+            {channel.reason && ` · ${channel.reason === 'too_little_signal' ? 'too little signal above the background' : channel.reason.replaceAll('_', ' ')}`}
+          </li>)}</ul>}
+        </details>}
         <div className="stack-color-stage-grid">
           {roles.map((role) => (
             <StageLane
@@ -829,6 +947,7 @@ export default function StackColorProcessingControls({
               label={`${roleLabels[role]} input`}
               stages={draft.input_stretches[role] ?? []}
               channels={1}
+              sharedReference={sharedNarrowband && role !== 'ha' ? 'Hα' : undefined}
               deconvolution={draft.input_deconvolutions[role]}
               deconvolutionResult={deconvolutions[role]}
               rcAstro={draft.input_rc_astro?.[role]}

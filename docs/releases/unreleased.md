@@ -20,6 +20,37 @@
   about every five seconds. The finished preview replaces it when processing
   completes; completed FITS downloads remain separate during a rebuild.
 
+- Narrowband previews can reduce the restored RGB stars independently of BXT.
+  Adjust **Processing stack → RGB star reduction** to make stars smaller and
+  fainter while preserving their color and the starless nebula. Zero preserves
+  the current result. BXT sharpening and halo controls remain configurable.
+
+- Combined color previews validate held-out stellar pixel profiles and can
+  explicitly match continuum PSFs with Gaussian broadening. Reports show
+  core/halo errors and the changed resolution. Narrowband controls also offer
+  star exclusions for balance statistics and green-excess reduction before
+  RGB stars are restored. Optional calibrated-response exports retain signed
+  line flux, exact source provenance and uncertainty assumptions.
+- RGB-star previews now honor the selected Gaia settings and separate their
+  SXT caches by those settings. Natural RGB/LRGB emission builds explain when
+  an inherited SXT step cannot run. Clearing the optional OIII B/G ratio
+  returns to measured photometry.
+
+- Narrowband previews can sharpen their RGB star branch with BlurXTerminator
+  before star extraction. Open **Processing stack → RGB star processing**.
+- Custom **RGB + emission**, **LRGB + emission**, and **Narrowband + broadband
+  structure** cards fit and subtract continuum on aligned linear inputs.
+  Automatic, Manual and Off controls retain signed residual downloads and
+  show per-line fit results. Failed natural-color lines are omitted with a
+  warning; a failed mapped line keeps the previous preview available.
+
+- New narrowband color cards offer automatic SHO/HOO selection, a shared
+  H-alpha stretch, and background-protected OIII/SII balance. Choose
+  **Stars → Automatic** to use RGB stars when the sources and StarXTerminator
+  are available, with an explained fallback to narrowband stars. Exact RGB
+  sources can use different exposures under the card's **Custom combination**.
+  Existing previews keep their saved palette and processing.
+
 - Automatic stack refreshes now compose a target's first color preview once
   its channels are stacked, as a build you start does. New color previews
   start from the Color setup marked as the default. PSF Guard adds one named

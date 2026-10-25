@@ -113,7 +113,8 @@ fn canonical_settings(
             // Every pipeline field is optional, so a foreign object would
             // otherwise parse as an empty pipeline and save silently. A
             // non-empty object must mention at least one pipeline field.
-            const COLOR_KEYS: [&str; 6] = [
+            const COLOR_KEYS: [&str; 7] = [
+                "narrowband",
                 "input_processing",
                 "background_extraction",
                 "input_deconvolutions",
@@ -137,6 +138,9 @@ fn canonical_settings(
             )
             .map_err(|error| bad_settings(kind, &error))
             .and_then(|parsed| {
+                if let Some(config) = &parsed.narrowband {
+                    config.validate().map_err(AppError::BadRequest)?;
+                }
                 for config in parsed.input_rc_astro.values() {
                     config.validate().map_err(AppError::BadRequest)?;
                 }

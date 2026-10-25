@@ -527,6 +527,10 @@ pub fn api_router(state: Arc<AppState>) -> Router {
             get(stack_preview::stretch::download_stack_stretch_stars_fits),
         )
         .route(
+            "/stack-previews/color/{job_id}/continuum/{role}/{kind}",
+            get(stack_preview::color::get_stack_color_continuum_artifact),
+        )
+        .route(
             "/stack-previews/color/{job_id}/fits",
             get(stack_preview::color::download_stack_color_fits),
         )
