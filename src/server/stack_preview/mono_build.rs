@@ -910,6 +910,9 @@ impl integrate::ChannelEvents for CardEvents<'_> {
         }
         let listed_before = self.listed_before.clone().unwrap_or_default();
         self.update(|status| {
+            // A worker's running image from before a requeue or a fallback
+            // no longer shows this stack.
+            status.live_preview = None;
             status.processed_frames = restored.frames.len();
             status.accepted_frames = restored.accepted;
             status.rejected_frames = restored.rejected;
@@ -990,6 +993,17 @@ impl integrate::ChannelEvents for CardEvents<'_> {
         if let Some(live) = &mut self.live {
             live.observe_batch(elapsed, frames);
         }
+    }
+
+    fn worker_image(&mut self, png: &[u8], accepted: u32) {
+        live::show_received(
+            self.state,
+            self.stack_root,
+            self.job_id,
+            self.index,
+            png,
+            accepted,
+        );
     }
 }
 

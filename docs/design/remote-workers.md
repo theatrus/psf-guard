@@ -139,6 +139,7 @@ All under `/api/workers/v1`, with `Authorization: Bearer psfw_…`:
 | `POST /sessions/{s}/claim` | `200` with a task, or `204` after 25 seconds without one |
 | `POST /sessions/{s}/tasks/{t}/progress` with a fraction | whether to stop |
 | `GET /sessions/{s}/tasks/{t}/inputs/{name}` | the file |
+| `PUT /sessions/{s}/tasks/{t}/preview` with a PNG and its frame count in `x-psf-frames` | `204` |
 | `PUT /sessions/{s}/tasks/{t}/outputs/{name}` with its digest | `204` |
 | `POST /sessions/{s}/tasks/{t}/complete` with the result and each output's size and digest | `204`, or why the check failed |
 | `POST /sessions/{s}/tasks/{t}/fail` with the error | `204` |
@@ -201,6 +202,16 @@ own work splits where the catalog stops:
   and the worker keeps each event until the server acknowledges it. The
   worker reports every two seconds while it runs, and sends every event
   before it completes, so the card is filled before the result arrives.
+- **Running image.** The worker renders the running image on this
+  server's cadence (`live::Cadence`, about every five seconds, with batches
+  sized to keep it). It sends the newest PNG once the server has
+  acknowledged every event reported before the image was rendered, so the
+  card never shows an image ahead of its frames; the last one goes after
+  the final events. The board keeps only the newest per task, in memory,
+  cleared on requeue; the waiting build reads it after the events and
+  writes it where this server writes its own running image. A restarted
+  stack (a requeue or a fallback) clears the card's image. A failed send is
+  not retried, and the image does not renew the lease.
 - **Outputs.** `stack.fits`, `clipped.fits`, and the checkpoint's context
   and manifest. The server moves them into place and renders the previews.
   The frame decisions keep this server's file fingerprints; the worker
@@ -214,8 +225,8 @@ own work splits where the catalog stops:
   in its work folder. This server's GPU setting applies on the worker.
 - **Placement.** `remote_workers.stack` in the registry, this server only by
   default. This server stacks its own channels in process rather than
-  through its worker, for the running image on the card; under workers
-  first, it stacks the channel when no worker can take it. It releases its
+  through its worker; under workers first, it stacks the channel when no
+  worker can take it. It releases its
   CPU lease while a worker stacks, and leases again for the previews.
 - **Stop.** A stop on the build asks the worker to finish
   (`ProgressReply::finish`): the integration stops at its next frame and

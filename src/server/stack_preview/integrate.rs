@@ -41,6 +41,9 @@ pub(super) trait ChannelEvents {
     /// its cadence.
     fn batch_frames(&self) -> usize;
     fn observe_batch(&mut self, elapsed: Duration, frames: usize);
+    /// A running image, as a PNG, that a worker stacking the channel
+    /// rendered and sent.
+    fn worker_image(&mut self, _png: &[u8], _accepted: u32) {}
 }
 
 /// The frames a stack starts from, for its card.

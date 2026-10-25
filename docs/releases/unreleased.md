@@ -30,8 +30,9 @@
 - Stack builds on another computer. Start a worker with `--work stack`, then
   choose **Workers first** or **Workers only** for stack builds in
   **Settings › Workers**. Each channel stacks there from the frames, masters,
-  checkpoint and settings the server would use, and its card shows which
-  worker stacked it. Stack builds stay on the server unless you choose
+  checkpoint and settings the server would use. Its card shows which
+  worker stacked it, and its **Live stack** preview shows the worker's
+  running image. Stack builds stay on the server unless you choose
   otherwise.
 
 - Run RC-Astro tools on another computer. Add a worker in **Settings ›

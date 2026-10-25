@@ -23,8 +23,10 @@ pub(super) fn path(root: &Path, job: &str, group: usize) -> PathBuf {
     stack_dir(root, job).join(format!("group-{group}-live.png"))
 }
 
+/// When a running image is due, and how many frames each batch pushes, so
+/// that a new image is due about every five seconds.
 #[derive(Default)]
-struct Cadence {
+pub(super) struct Cadence {
     last_attempt: Option<(Instant, u32)>,
     frame_time: Option<Duration>,
 }
@@ -36,7 +38,7 @@ impl Cadence {
         })
     }
 
-    fn observe_batch(&mut self, elapsed: Duration, frames: usize) {
+    pub fn observe_batch(&mut self, elapsed: Duration, frames: usize) {
         if frames > 0 {
             self.frame_time = Some(elapsed.div_f64(frames as f64));
         }
@@ -45,12 +47,81 @@ impl Cadence {
     // The accumulator is borrowed by Seiza during a batch. Size the next one
     // from measured throughput so even deep stacks keep yielding a display,
     // without cancelling preparation and throwing away prefetched frames.
-    fn batch_frames(&self) -> usize {
+    pub fn batch_frames(&self) -> usize {
         self.frame_time.map_or(1, |frame| {
             (INTERVAL.as_secs_f64() / frame.as_secs_f64().max(0.001))
                 .floor()
                 .max(1.0) as usize
         })
+    }
+
+    /// Render `stacker`'s running image to `destination` when one is due.
+    /// Returns `None` when none was due. A failure is not tried again until
+    /// the next image is due, so it cannot slow every frame.
+    pub fn render(
+        &mut self,
+        stacker: &LiveStacker,
+        accepted: u32,
+        force: bool,
+        pool: &rayon::ThreadPool,
+        destination: &Path,
+    ) -> Option<Result<(), String>> {
+        if !self.due(Instant::now(), accepted, force) {
+            return None;
+        }
+        let result = pool.install(|| {
+            // Export copies only the mean, with Seiza's coverage masking and
+            // Bayer-drizzle gap filling. Preparation buffers have been released.
+            let snapshot = stacker
+                .export_snapshot()
+                .map_err(|error| error.to_string())?;
+            render(snapshot.image, destination)
+        });
+        self.last_attempt = Some((Instant::now(), accepted));
+        Some(result)
+    }
+}
+
+/// Show the running image at [`path`] on a channel's card.
+fn show(state: &AppState, job_id: &str, group: usize, accepted: u32) {
+    let revision = uuid::Uuid::new_v4();
+    state.stack_previews.update(job_id, |job| {
+        job.groups[group].live_preview = Some(LiveStackPreview {
+            url: format!(
+                "/api/db/{}/stack-previews/{}/{}/preview?live=true&v={revision}",
+                job.database_id, job_id, group
+            ),
+            accepted_frames: accepted,
+        });
+    });
+}
+
+/// Show a running image a worker sent on a channel's card.
+pub(super) fn show_received(
+    state: &AppState,
+    root: &Path,
+    job_id: &str,
+    group: usize,
+    png: &[u8],
+    accepted: u32,
+) {
+    let destination = path(root, job_id, group);
+    let temporary = destination.with_extension(format!("{}.tmp.png", super::temporary_tag()));
+    // Nothing else writes to a fresh build's folder before the worker's
+    // outputs arrive.
+    let written = std::fs::create_dir_all(destination.parent().expect("a job folder"))
+        .and_then(|()| std::fs::write(&temporary, png))
+        .and_then(|()| std::fs::rename(&temporary, &destination));
+    match written {
+        Ok(()) => show(state, job_id, group, accepted),
+        Err(error) => {
+            let _ = std::fs::remove_file(&temporary);
+            tracing::warn!(
+                job_id,
+                group_index = group,
+                "A worker's running image could not be written: {error}"
+            );
+        }
     }
 }
 
@@ -90,34 +161,15 @@ impl<'a> Publisher<'a> {
     }
 
     pub fn publish(&mut self, stacker: &LiveStacker, accepted: u32, force: bool) {
-        if !self.cadence.due(Instant::now(), accepted, force) {
-            return;
-        }
         let destination = path(self.root, self.job, self.group);
-        let result = self.pool.install(|| {
-            // Export copies only the mean, with Seiza's coverage masking and
-            // Bayer-drizzle gap filling. Preparation buffers have been released.
-            let snapshot = stacker
-                .export_snapshot()
-                .map_err(|error| error.to_string())?;
-            render(snapshot.image, &destination)
-        });
-        // A display failure must not fail a build or retry on every frame.
-        self.cadence.last_attempt = Some((Instant::now(), accepted));
-        match result {
-            Ok(()) => {
-                let revision = uuid::Uuid::new_v4();
-                self.state.stack_previews.update(self.job, |job| {
-                    job.groups[self.group].live_preview = Some(LiveStackPreview {
-                        url: format!(
-                            "/api/db/{}/stack-previews/{}/{}/preview?live=true&v={revision}",
-                            job.database_id, self.job, self.group
-                        ),
-                        accepted_frames: accepted,
-                    });
-                });
-            }
-            Err(error) => tracing::warn!(
+        // A display failure must not fail a build.
+        match self
+            .cadence
+            .render(stacker, accepted, force, self.pool, &destination)
+        {
+            None => {}
+            Some(Ok(())) => show(self.state, self.job, self.group, accepted),
+            Some(Err(error)) => tracing::warn!(
                 job_id = self.job,
                 group_index = self.group,
                 "Live stack preview failed: {error}"

@@ -21,7 +21,7 @@ use crate::concurrency::Stop;
 use crate::remote_work::protocol::{
     valid_file_name, Assignment, Completion, Failure, FileAccess, FileMode, PathMap, ProbeAnswer,
     ProbeResult, Progress, ProgressReply, Registered, Registration, WrittenOutput, DIGEST_HEADER,
-    LEASE_HEADER, MAX_SLOTS, PROTOCOL_VERSION,
+    FRAMES_HEADER, LEASE_HEADER, MAX_SLOTS, PROTOCOL_VERSION,
 };
 use crate::remote_work::{file_digest, map_path, LocalTools, WorkChoice};
 
@@ -320,6 +320,26 @@ impl Client {
                 .json(progress),
         )
         .await
+    }
+
+    async fn preview(
+        &self,
+        session: &str,
+        assignment: &Assignment,
+        png: Vec<u8>,
+        frames: u32,
+    ) -> Result<(), ClientError> {
+        self.send(
+            // Short: the heartbeat waits for it, and a later image replaces
+            // one that does not arrive.
+            self.task(reqwest::Method::PUT, session, assignment, "preview")
+                .timeout(Duration::from_secs(10))
+                .header(FRAMES_HEADER, frames)
+                .header(reqwest::header::CONTENT_TYPE, "image/png")
+                .body(png),
+        )
+        .await
+        .map(drop)
     }
 
     async fn download(
@@ -735,7 +755,8 @@ struct Heartbeat<'a> {
 }
 
 /// Events a running task reported that the server has not acknowledged,
-/// numbered from 0 over the whole task.
+/// numbered from 0 over the whole task, and the newest running image not
+/// yet sent.
 #[derive(Clone, Default)]
 struct Outbox(Arc<std::sync::Mutex<OutboxState>>);
 
@@ -744,6 +765,16 @@ struct OutboxState {
     /// The number of `events[0]`.
     first: u64,
     events: Vec<serde_json::Value>,
+    /// The newest running image not yet sent.
+    preview: Option<PendingImage>,
+}
+
+/// A running image, and how many events the task had reported when it was
+/// rendered: the server must have those first.
+struct PendingImage {
+    png: Vec<u8>,
+    frames: u32,
+    after_events: u64,
 }
 
 impl Outbox {
@@ -776,6 +807,14 @@ impl Outbox {
         self.lock().events.is_empty()
     }
 
+    /// The newest running image, once the server has acknowledged the
+    /// events reported before it.
+    fn take_preview(&self) -> Option<PendingImage> {
+        let mut state = self.lock();
+        let first = state.first;
+        state.preview.take_if(|image| image.after_events <= first)
+    }
+
     /// Forget the events the server has.
     fn acknowledge(&self, received: u64) {
         let mut state = self.lock();
@@ -800,6 +839,16 @@ impl crate::remote_work::TaskReport for WorkerReport {
 
     fn event(&mut self, event: serde_json::Value) {
         self.outbox.push(event);
+    }
+
+    fn preview(&mut self, png: Vec<u8>, frames: u32) {
+        let mut state = self.outbox.lock();
+        let after_events = state.first + state.events.len() as u64;
+        state.preview = Some(PendingImage {
+            png,
+            frames,
+            after_events,
+        });
     }
 }
 
@@ -845,6 +894,7 @@ impl Heartbeat<'_> {
                 if reply.finish {
                     self.work_stop.request();
                 }
+                self.send_preview().await;
                 Ok(())
             }
             Err(
@@ -859,8 +909,29 @@ impl Heartbeat<'_> {
         }
     }
 
+    /// Send the newest running image, once the server has the events
+    /// reported before it. One that cannot be sent is dropped; the next
+    /// replaces it.
+    async fn send_preview(&mut self) {
+        if let Some(image) = self.outbox.take_preview()
+            && let Err(error) = self
+                .joined
+                .client
+                .preview(
+                    &self.joined.session,
+                    self.assignment,
+                    image.png,
+                    image.frames,
+                )
+                .await
+        {
+            tracing::debug!("A running image could not be sent: {error}");
+        }
+    }
+
     /// Send every event still waiting, so the server has them all before
-    /// the task completes. A short outage is waited out.
+    /// the task completes, and then the last running image, which the card
+    /// shows while the outputs upload. A short outage is waited out.
     async fn flush(&mut self) -> Result<(), ClientError> {
         let deadline = tokio::time::Instant::now() + FLUSH_LIMIT;
         while !self.outbox.is_empty() {
@@ -875,6 +946,7 @@ impl Heartbeat<'_> {
                 tokio::time::sleep(EVENT_INTERVAL).await;
             }
         }
+        self.send_preview().await;
         Ok(())
     }
 }
@@ -890,11 +962,15 @@ async fn run_task_in(
     let (fraction_sender, fraction) = tokio::sync::watch::channel(0.0f32);
     let outbox = Outbox::default();
     let stop = Stop::new();
+    // Often enough that a build's card follows the worker's frames. A slow
+    // report or image delays the next beat rather than bunching the ones
+    // it missed.
+    let mut beat = tokio::time::interval(joined.heartbeat.min(EVENT_INTERVAL));
+    beat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut heartbeat = Heartbeat {
         joined,
         assignment,
-        // Often enough that a build's card follows the worker's frames.
-        beat: tokio::time::interval(joined.heartbeat.min(EVENT_INTERVAL)),
+        beat,
         fraction,
         outbox: outbox.clone(),
         stopping,

@@ -20,7 +20,7 @@ use crate::db_registry::WorkerTokenRecord;
 use crate::remote_work::protocol::Offers;
 use crate::remote_work::LocalTools;
 
-pub use board::{Board, Finished, NewTask, TaskNeeds, Ticket, WaitError, Waiting};
+pub use board::{Board, Finished, NewTask, TaskNeeds, TaskPreview, Ticket, WaitError, Waiting};
 
 /// The token id this server's own worker registers under.
 pub const THIS_SERVER: &str = "this-server";
@@ -145,8 +145,8 @@ impl Workers {
             return offers.clone();
         }
         let tools = local_tools();
-        // This server stacks its builds in process, for their running
-        // image; its worker runs RC-Astro tools.
+        // This server stacks its own builds in process; its worker runs
+        // RC-Astro tools.
         let (offers, problem) = tools.offers(
             crate::concurrency::logical_cores(),
             &crate::remote_work::WorkChoice::rc_astro_only(),

@@ -673,6 +673,13 @@ async fn a_worker_stacks_a_channel_to_the_same_pixels_as_this_server() {
             "{:?}",
             remote.notes
         );
+        // The card showed the worker's running image; the last one went
+        // with the final events, before the outputs.
+        assert!(
+            remote.images.last() == Some(&5) && remote.images.iter().all(|frames| *frames <= 5),
+            "{:?}",
+            remote.images
+        );
         // Every frame went over HTTP in remote mode: five frames, then the
         // stack, the clipped map and the checkpoint's two halves.
         let transfers = server.transfers.load(Ordering::SeqCst);
@@ -684,4 +691,100 @@ async fn a_worker_stacks_a_channel_to_the_same_pixels_as_this_server() {
         drop(stop);
         worker.await.unwrap().unwrap();
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_server_keeps_a_running_image_only_from_the_current_lease_and_only_a_png() {
+    let server = server().await;
+    server.state.workers.board.set_placement(
+        crate::remote_work::protocol::TaskKind::StackChannel,
+        crate::server::workers::board::WorkPlacement::WorkersOnly,
+    );
+    let ticket = server.state.workers.board.ticket().unwrap();
+    ticket
+        .submit(crate::server::workers::NewTask {
+            kind: crate::remote_work::protocol::TaskKind::StackChannel,
+            label: "Stack".into(),
+            person: true,
+            needs: crate::server::workers::TaskNeeds::Stack {
+                stacking_version: crate::server::stack_preview::SEIZA_STACKING_OUTPUT_VERSION
+                    .into(),
+                release: env!("CARGO_PKG_VERSION").into(),
+            },
+            spec: serde_json::json!({}),
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+        })
+        .unwrap();
+    let client = Client::new(&server.address, &server.secret).unwrap();
+    let (offers, _) = LocalTools {
+        rc_astro: None,
+        slots: 1,
+    }
+    .offers(1, &WorkChoice::parse(&["stack".into()]).unwrap());
+    let session = client
+        .register(&Registration {
+            protocol: PROTOCOL_VERSION,
+            name: "test-worker".into(),
+            version: env!("CARGO_PKG_VERSION").into(),
+            offers,
+            files: FileAccess::default(),
+        })
+        .await
+        .unwrap()
+        .session;
+    let assignment = client
+        .claim(&session, Duration::from_secs(1))
+        .await
+        .unwrap()
+        .expect("the task");
+
+    let mut png = Vec::new();
+    image::RgbImage::new(4, 3)
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    let mut huge = png.clone();
+    huge[16..20].copy_from_slice(&5000u32.to_be_bytes());
+    let mut lost = assignment.clone();
+    lost.lease = "an earlier lease".into();
+    for (assignment, image, refused) in [
+        (&assignment, b"not a PNG".to_vec(), Some("not a PNG")),
+        (&assignment, huge, Some("larger than 4096")),
+        (&lost, png.clone(), Some("")),
+        (&assignment, png.clone(), None),
+    ] {
+        let sent = client.preview(&session, assignment, image, 2).await;
+        match refused {
+            Some(why) => assert!(
+                sent.as_ref()
+                    .is_err_and(|error| error.to_string().contains(why)),
+                "{:?}",
+                sent.map_err(|error| error.to_string())
+            ),
+            None => sent.unwrap(),
+        }
+    }
+    client
+        .complete(
+            &session,
+            &assignment,
+            &Completion {
+                result: serde_json::json!({}),
+                outputs: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+    let mut received = Vec::new();
+    tokio::task::block_in_place(|| {
+        ticket.wait_with(crate::server::workers::Waiting {
+            stopped: &|| false,
+            progress: &mut |_, _| {},
+            events: &mut |_| {},
+            preview: &mut |image| received.push((image.png.to_vec(), image.frames)),
+            finish_on_stop: None,
+        })
+    })
+    .unwrap();
+    assert_eq!(received, [(png, 2)]);
 }

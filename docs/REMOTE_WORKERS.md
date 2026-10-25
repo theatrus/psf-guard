@@ -105,7 +105,12 @@ checkpoint and renders the previews.
 While a worker stacks a channel:
 
 - The card fills in frame by frame, a few seconds behind the worker, and
-  shows **Stacked on** with the worker's name. No running image shows.
+  shows **Stacked on** with the worker's name.
+- The card's **Live stack** preview shows the worker's running image. The
+  worker renders it about every five seconds and sends the newest one after
+  the frames it includes. The server writes each image over the last as a
+  temporary file, and the finished preview replaces it. An image lost while
+  the server is unreachable is not sent again; the next one replaces it.
 - The server's cores are free for its other work.
 - A worker running several tasks (`--slots`) gives each channel its share
   of its cores and memory. The final pass keeps its copies of the frames in
@@ -115,8 +120,8 @@ While a worker stacks a channel:
   the next build continues from it on any worker or on the server. The
   server waits as long as the worker keeps reporting; a worker that stops
   answering for two minutes loses what it had.
-- Under **Workers first**, the server stacks the channel itself, with its
-  running image as usual, when no worker can take it or a worker fails it.
+- Under **Workers first**, the server stacks the channel itself when no
+  worker can take it or a worker fails it.
 
 ## Choose how files reach the worker
 

@@ -200,6 +200,9 @@ struct Task {
     events: Vec<serde_json::Value>,
     /// How many events the worker reported, all told.
     events_received: u64,
+    /// The newest running image the worker sent, until the waiting work
+    /// reads it.
+    preview: Option<TaskPreview>,
     /// The waiting work asked the worker to stop and finish with what it
     /// has.
     stop_requested: bool,
@@ -233,6 +236,7 @@ impl Task {
         // work's first events again.
         self.events.clear();
         self.events_received = 0;
+        self.preview = None;
         self.last_report = None;
         tracing::warn!("{} went back in the queue: {why}", self.label);
         self.state = if self.attempts >= MAX_ATTEMPTS {
@@ -244,6 +248,15 @@ impl Task {
         };
         old
     }
+}
+
+/// A running image of a task's work, as a worker sends it. Only the newest
+/// is kept, in memory: one lost in an outage is not sent again.
+#[derive(Debug, Clone)]
+pub struct TaskPreview {
+    pub png: axum::body::Bytes,
+    /// How many frames the image integrates.
+    pub frames: u32,
 }
 
 #[derive(Debug)]
@@ -806,6 +819,7 @@ impl Board {
                 refused_by: HashSet::new(),
                 events: Vec::new(),
                 events_received: 0,
+                preview: None,
                 stop_requested: false,
                 local_stop: None,
                 last_report: None,
@@ -1086,6 +1100,22 @@ impl Board {
         self.notify();
         self.sweep();
         Ok(reply)
+    }
+
+    /// Keep a running image a worker sent, in place of any the waiting work
+    /// has not read. It neither renews the lease nor counts as a report.
+    pub fn preview(
+        &self,
+        session: &str,
+        task: &str,
+        lease: &str,
+        preview: TaskPreview,
+    ) -> Result<(), Refusal> {
+        let mut inner = self.lock();
+        Self::current(&mut inner, session, task, lease)?.preview = Some(preview);
+        drop(inner);
+        self.notify();
+        Ok(())
     }
 
     /// Where an input is, for a worker to download it.
@@ -1472,6 +1502,7 @@ impl Ticket {
             stopped,
             progress,
             events: &mut |_| {},
+            preview: &mut |_| {},
             finish_on_stop: None,
         })
     }
@@ -1484,6 +1515,7 @@ impl Ticket {
             stopped,
             progress,
             events,
+            preview,
             finish_on_stop,
         } = waiting;
         let mut reported: Option<(f32, Option<String>)> = None;
@@ -1542,6 +1574,14 @@ impl Ticket {
                 for event in received {
                     events(event);
                 }
+                inner = self.board.lock();
+                continue;
+            }
+            // After the events, so the image is never shown before the frames
+            // it integrates.
+            if let Some(image) = task.preview.take() {
+                drop(inner);
+                preview(image);
                 inner = self.board.lock();
                 continue;
             }
@@ -1631,6 +1671,9 @@ pub struct Waiting<'a> {
     pub progress: &'a mut dyn FnMut(f32, Option<&str>),
     /// Told each event the worker reports, in order.
     pub events: &'a mut dyn FnMut(serde_json::Value),
+    /// Given the newest running image the worker sent. One that arrives
+    /// before the last was read replaces it.
+    pub preview: &'a mut dyn FnMut(TaskPreview),
     /// On a stop, how long a running task has to finish with what it has
     /// before it leaves the board. `None` takes it off the board at once.
     pub finish_on_stop: Option<Duration>,

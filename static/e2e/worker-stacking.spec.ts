@@ -6,8 +6,8 @@ import { registerFixtureDb, resetDatabases, waitForCacheReady } from './helpers'
 
 // A real `psf-guard worker` stacks a build's channel from the real fixture
 // frames, on storage it shares with the server, when Settings › Workers
-// sends stack builds to workers. The card fills in from the worker's frames
-// and says which worker stacked it.
+// sends stack builds to workers. The card fills in from the worker's frames,
+// shows the worker's running image, and says which worker stacked it.
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BINARY = process.env.PSF_GUARD_E2E_BINARY
@@ -68,7 +68,37 @@ test.afterEach(async ({ request }) => {
   await request.put('/api/workers/placement', { data: { rc_astro: 'workers_first', stack: 'this_server' } });
 });
 
-test('a worker stacks a channel, and its card says which worker did', async ({ page, request }, testInfo) => {
+// The running image the worker sent, as the build's record listed it while
+// the channel stacked.
+type RunningImage = { frames: number; status: number; type: string | undefined };
+
+// Read the build's record every 200 ms until `done`, and fetch the first
+// running image it lists. The image is on the card from the worker's first
+// report until the finished previews render, which the page's own polling
+// can miss.
+async function watchRunningImage(request: APIRequestContext, done: () => boolean) {
+  const db = encodeURIComponent(dbId);
+  while (!done()) {
+    const activity = await (await request.get('/api/stack-activity')).json();
+    for (const active of activity.data?.active ?? []) {
+      if (active.database_id !== dbId) continue;
+      const job = await (await request.get(`/api/db/${db}/projects/1/stack-previews/${active.job_id}`)).json();
+      const live = job.data?.groups?.[0]?.live_preview;
+      if (live) {
+        const image = await request.get(live.url);
+        return {
+          frames: live.accepted_frames,
+          status: image.status(),
+          type: image.headers()['content-type'],
+        } satisfies RunningImage;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  return null;
+}
+
+test('a worker stacks a channel, and its card shows its running image and which worker did', async ({ page, request }, testInfo) => {
   test.setTimeout(300_000);
   await page.setViewportSize({ width: 1440, height: 1600 });
   await page.route('**/images/*/preview?*', (route) => route.abort());
@@ -76,10 +106,28 @@ test('a worker stacks a channel, and its card says which worker did', async ({ p
 
   const panel = page.locator('.stack-preview-panel');
   await expect(panel).toBeVisible({ timeout: 15_000 });
+  let finished = false;
+  const running = watchRunningImage(request, () => finished);
+  // For the record, the card with the worker's running image, when the
+  // page shows it before the finished preview replaces it.
+  const pictured = running.then(async (found) => {
+    if (!found) return;
+    await panel.getByRole('img', { name: /live stack preview$/ }).waitFor({ timeout: 5_000 })
+      .then(() => panel.screenshot({ path: testInfo.outputPath('running-image-from-worker.png') }))
+      .catch(() => {});
+  });
   await panel.getByRole('button', { name: 'Build channel', exact: true }).click();
 
   const results = panel.locator('.stack-preview-results');
   await expect(results).toHaveAttribute('data-job-state', 'completed', { timeout: 210_000 });
+  finished = true;
+  const image = await running;
+  await pictured;
+  expect(image).not.toBeNull();
+  expect(image!.status).toBe(200);
+  expect(image!.type).toContain('image/png');
+  expect(image!.frames).toBeGreaterThanOrEqual(1);
+  expect(image!.frames).toBeLessThanOrEqual(3);
   await expect(panel.locator('.stack-group-state.ready')).toHaveText('ready');
   await expect(panel.locator('.stack-preview-progress')).toContainText('3/3 frames');
   await expect(panel).toContainText(`Stacked on ${WORKER}`);

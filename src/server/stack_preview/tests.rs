@@ -2067,6 +2067,25 @@ async fn live_preview_requests_are_not_cached_or_served_from_the_finished_previe
     }
 }
 
+#[test]
+fn a_worker_s_running_image_is_written_into_a_fresh_build_s_folder() {
+    let cache = tempfile::tempdir().unwrap();
+    let state = state_on_disk(cache.path(), None);
+    let job = "b".repeat(64);
+    let live_path = live::path(cache.path(), &job, 0);
+    assert!(!live_path.parent().unwrap().exists());
+    live::show_received(&state, cache.path(), &job, 0, b"first", 1);
+    live::show_received(&state, cache.path(), &job, 0, b"second", 2);
+    assert_eq!(std::fs::read(&live_path).unwrap(), b"second");
+    assert_eq!(
+        std::fs::read_dir(live_path.parent().unwrap())
+            .unwrap()
+            .count(),
+        1,
+        "no temporary file is left"
+    );
+}
+
 /// A test's turn with the process-wide setting, which re-apply tests
 /// share with the automatic refresh's. It is on again when the turn
 /// ends.

@@ -68,6 +68,9 @@ pub trait TaskReport: Send {
     fn fraction(&mut self, done: f32);
     /// Something that happened, as the task's kind defines it.
     fn event(&mut self, event: serde_json::Value);
+    /// A running image of the work, as a PNG, integrating `frames` frames.
+    /// Only the newest is sent, and one that cannot be sent is dropped.
+    fn preview(&mut self, _png: Vec<u8>, _frames: u32) {}
 }
 
 /// The work a worker takes, from its `--work` choices: everything it can

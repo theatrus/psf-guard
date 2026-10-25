@@ -8,8 +8,15 @@
 //! puts the stack, the clipped map and the checkpoint where it keeps them,
 //! and renders the previews.
 //!
-//! This server stacks its own builds in process, so their running image
-//! shows on the card; only a worker on another machine claims this task.
+//! The worker renders a running image of the stack as this server does for
+//! its own builds, and sends the newest one once the server has the events
+//! for the frames it integrates. The board keeps only the newest in memory;
+//! this server writes it over the card's running image, a temporary file
+//! the finished preview replaces. An image lost in an outage is not sent
+//! again.
+//!
+//! This server stacks its own builds in process; only a worker on another
+//! machine claims this task.
 
 use std::collections::BTreeMap;
 
@@ -237,6 +244,11 @@ struct WorkerEvents<'a> {
     report: &'a mut dyn TaskReport,
     frames: usize,
     total: usize,
+    /// When the next running image is due.
+    cadence: live::Cadence,
+    pool: &'a rayon::ThreadPool,
+    /// Where the running image is rendered before it is sent.
+    image: PathBuf,
 }
 
 impl WorkerEvents<'_> {
@@ -309,16 +321,30 @@ impl ChannelEvents for WorkerEvents<'_> {
         });
     }
 
-    /// The running image shows only for a build this server stacks.
-    fn live(&mut self, _: &seiza_stacking::LiveStacker, _: u32, _: bool) {}
-
-    /// No running image to keep a cadence for: each session pushes as one
-    /// batch, between the SNR curve's depths.
-    fn batch_frames(&self) -> usize {
-        usize::MAX
+    /// Render the running image when one is due, and send it. A display
+    /// failure must not fail the channel.
+    fn live(&mut self, stacker: &seiza_stacking::LiveStacker, accepted: u32, force: bool) {
+        let rendered = self
+            .cadence
+            .render(stacker, accepted, force, self.pool, &self.image)
+            .map(|rendered| {
+                rendered
+                    .and_then(|()| std::fs::read(&self.image).map_err(|error| error.to_string()))
+            });
+        match rendered {
+            None => {}
+            Some(Ok(png)) => self.report.preview(png, accepted),
+            Some(Err(error)) => tracing::warn!("A running image failed: {error}"),
+        }
     }
 
-    fn observe_batch(&mut self, _: std::time::Duration, _: usize) {}
+    fn batch_frames(&self) -> usize {
+        self.cadence.batch_frames()
+    }
+
+    fn observe_batch(&mut self, elapsed: std::time::Duration, frames: usize) {
+        self.cadence.observe_batch(elapsed, frames);
+    }
 }
 
 /// Run a channel on this worker. `inputs` gives where each input is; the
@@ -390,10 +416,15 @@ pub(crate) fn execute(
     let scratch = work_dir.join("final-pass");
     let policy = crate::concurrency::WorkerPolicy::default();
     let total = group.frames.len();
+    std::fs::create_dir_all(work_dir).map_err(|error| error.to_string())?;
+    let image = work_dir.join("running.png");
     let mut events = WorkerEvents {
         report,
         frames: 0,
         total,
+        cadence: live::Cadence::default(),
+        pool: &pool,
+        image: image.clone(),
     };
     let integrated = integrate::integrate_channel(
         integrate::ChannelWork {
@@ -430,6 +461,7 @@ pub(crate) fn execute(
         &mut events,
     );
     let _ = std::fs::remove_dir_all(&scratch);
+    let _ = std::fs::remove_file(&image);
     let result = match integrated? {
         integrate::ChannelOutcome::Built(built) => ChannelResult {
             built: true,
@@ -606,6 +638,7 @@ pub(super) fn run_on_worker(
             Ok(event) => event.apply(&mut **events.borrow_mut()),
             Err(error) => tracing::warn!("A stack event from a worker could not be read: {error}"),
         },
+        preview: &mut |image| events.borrow_mut().worker_image(&image.png, image.frames),
         finish_on_stop: Some(FINISH_ON_STOP),
     });
     let finished = match waited {
@@ -712,12 +745,16 @@ pub(crate) mod testing {
         pub matched_stars: Vec<Option<usize>>,
         pub notes: Vec<String>,
         pub checkpoint: bool,
+        /// The running images a worker sent, by the frames each integrates.
+        pub images: Vec<u32>,
     }
 
     #[derive(Default)]
     struct Recorder {
         decisions: Vec<StackFrameDecision>,
         notes: Vec<String>,
+        /// The running images a worker sent, by the frames each integrates.
+        images: Vec<u32>,
     }
 
     impl ChannelEvents for Recorder {
@@ -745,6 +782,10 @@ pub(crate) mod testing {
             usize::MAX
         }
         fn observe_batch(&mut self, _: std::time::Duration, _: usize) {}
+        fn worker_image(&mut self, png: &[u8], accepted: u32) {
+            assert!(image::load_from_memory(png).is_ok(), "a PNG");
+            self.images.push(accepted);
+        }
     }
 
     /// A channel's frames, for the tests outside this module.
@@ -850,6 +891,7 @@ pub(crate) mod testing {
                 .map(|decision| decision.matched_stars)
                 .collect(),
             notes: recorder.notes,
+            images: recorder.images,
             checkpoint: outputs.checkpoint_context.exists() && outputs.checkpoint_manifest.exists(),
         }
     }

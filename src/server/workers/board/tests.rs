@@ -875,10 +875,80 @@ fn events_arrive_once_in_order_even_when_a_report_is_sent_again() {
             stopped: &|| false,
             progress: &mut |_, _| {},
             events: &mut |event| heard.push(event.as_i64().unwrap()),
+            preview: &mut |_| {},
             finish_on_stop: None,
         })
         .unwrap();
     assert_eq!(heard, [1, 2, 3, 4]);
+}
+
+#[test]
+fn only_the_newest_running_image_reaches_the_waiting_work_after_the_events() {
+    let dir = tempfile::tempdir().unwrap();
+    let board = board(dir.path(), Timings::default());
+    let ticket = board.ticket().unwrap();
+    ticket.submit(task("t", true, needs("bxt", "1"))).unwrap();
+    let session = board.register(
+        "token",
+        registration("w", offers(&[("bxt", "1")]), FileAccess::default()),
+        false,
+    );
+    let claimed = board.try_claim(&session).unwrap().unwrap();
+    let image = |lease: &str, frames: u32| {
+        board.preview(
+            &session,
+            &claimed.task,
+            lease,
+            TaskPreview {
+                png: vec![frames as u8].into(),
+                frames,
+            },
+        )
+    };
+    image(&claimed.lease, 2).unwrap();
+    board
+        .progress(
+            &session,
+            &claimed.task,
+            &claimed.lease,
+            Progress {
+                fraction: 0.5,
+                events: vec![serde_json::json!(1), serde_json::json!(2)],
+                first_event: 0,
+            },
+        )
+        .unwrap();
+    // A newer image replaces the one not yet read.
+    image(&claimed.lease, 3).unwrap();
+    assert!(image("another lease", 4).is_err());
+    let out = written(&board, &session, &claimed, "out.bin", b"done");
+    board
+        .complete(
+            &session,
+            &claimed.task,
+            &claimed.lease,
+            Completion {
+                result: serde_json::json!({}),
+                outputs: vec![out],
+            },
+        )
+        .unwrap();
+    let heard = std::cell::RefCell::new(Vec::new());
+    ticket
+        .wait_with(Waiting {
+            stopped: &|| false,
+            progress: &mut |_, _| {},
+            events: &mut |event| heard.borrow_mut().push(format!("event {event}")),
+            preview: &mut |image| {
+                assert_eq!(image.png.as_ref(), [image.frames as u8]);
+                heard
+                    .borrow_mut()
+                    .push(format!("image of {}", image.frames));
+            },
+            finish_on_stop: None,
+        })
+        .unwrap();
+    assert_eq!(heard.into_inner(), ["event 1", "event 2", "image of 3"]);
 }
 
 #[test]
@@ -934,6 +1004,7 @@ fn a_stop_that_lets_the_worker_finish_hands_back_what_it_made() {
             stopped: &|| true,
             progress: &mut |_, _| {},
             events: &mut |_| {},
+            preview: &mut |_| {},
             finish_on_stop: Some(Duration::from_secs(10)),
         })
         .unwrap();
@@ -1010,7 +1081,24 @@ fn a_requeued_task_takes_the_next_worker_s_events_from_the_start() {
     };
     assert_eq!(event(&first, &claimed, 0).events_received, 1);
     assert_eq!(event(&first, &claimed, 1).events_received, 2);
+    board
+        .preview(
+            &first,
+            &claimed.task,
+            &claimed.lease,
+            TaskPreview {
+                png: vec![1].into(),
+                frames: 1,
+            },
+        )
+        .unwrap();
     board.leave(&first);
+    // The first worker's running image went with its lease.
+    assert!(board
+        .lock()
+        .tasks
+        .values()
+        .all(|task| task.preview.is_none()));
     let second = board.register(
         "token",
         registration("second", offers(&[("bxt", "1")]), FileAccess::default()),
@@ -1039,6 +1127,7 @@ fn a_stopped_task_goes_to_no_new_worker() {
                 stopped: &|| true,
                 progress: &mut |_, _| {},
                 events: &mut |_| {},
+                preview: &mut |_| {},
                 finish_on_stop: Some(Duration::from_millis(400)),
             })
         })

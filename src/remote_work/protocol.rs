@@ -19,6 +19,10 @@ pub const LEASE_HEADER: &str = "x-psf-worker-lease";
 /// Holds the SHA-256 digest, in lowercase hex, of an uploaded output.
 pub const DIGEST_HEADER: &str = "x-psf-sha256";
 
+/// On a running image a worker sends (`PUT …/tasks/{task}/preview`), how
+/// many frames the image integrates.
+pub const FRAMES_HEADER: &str = "x-psf-frames";
+
 /// The protocol version. A server refuses a worker that speaks another one,
 /// and the error message explains which release to install.
 pub const PROTOCOL_VERSION: u32 = 1;
