@@ -3404,7 +3404,9 @@ pub(crate) fn calibration_gaps<Flats: AsRef<[CalibrationFrame]>>(
         });
     }
     let limit = rules.flat_max_age_days;
-    if let (Some(flats_at), Some(light_at)) = (flat_session_at(selected), light.timestamp) {
+    if let Some(light_at) = light.timestamp
+        && let Some(flats_at) = nearest_master_flat_at(selected, light_at)
+    {
         let age = flats_at.abs_diff(light_at) as f64 / 86_400.0;
         if age > limit {
             let by = rules
@@ -3423,16 +3425,18 @@ pub(crate) fn calibration_gaps<Flats: AsRef<[CalibrationFrame]>>(
     Ok(gaps)
 }
 
-/// When the flats a master would take were shot: the median capture time
-/// of the coherent set, the way a stack reduces them.
-pub(crate) fn flat_session_at(selected: &CalibrationSelection) -> Option<i64> {
-    let subset = coherent_master_subset(CalibrationKind::Flat, &selected.flat, &selected.rules);
-    let mut times: Vec<i64> = subset
+/// The nearest dated flat that would actually contribute to this light's
+/// master. A median can move outside the age limit when older flats join
+/// fresh ones. Matching candidates that cannot join the master provide no
+/// coverage, so judge the coherent subset rather than the candidate list.
+pub(crate) fn nearest_master_flat_at(
+    selected: &CalibrationSelection,
+    light_at: i64,
+) -> Option<i64> {
+    coherent_master_subset(CalibrationKind::Flat, &selected.flat, &selected.rules)
         .iter()
         .filter_map(|frame| frame.captured_at)
-        .collect();
-    times.sort();
-    times.get(times.len() / 2).copied()
+        .min_by_key(|at| at.abs_diff(light_at))
 }
 
 // ---------- Project calibration report ----------
@@ -3495,11 +3499,11 @@ pub struct CalibrationNightFilter {
     pub dark_master_nights: usize,
     pub dark_flat_frames: usize,
     pub flat_frames: usize,
-    /// The capture day of the flat session a master would build from.
+    /// The imaging night of the nearest flat that would feed the master.
     pub flat_session: Option<String>,
-    /// That session's distance from this night, in days.
+    /// That flat's elapsed distance from the representative light, in days.
     pub flat_age_days: Option<f64>,
-    /// Whether flats were shot within a day of this night's lights.
+    /// Whether a contributing flat is within 24 hours of the representative light.
     pub nightly_flats: bool,
     /// Kinds with no matching frames at all for this configuration.
     pub missing: Vec<String>,
@@ -4582,12 +4586,8 @@ pub fn project_calibration_report(
             }
         }
 
-        let flat_session_at = flat_session_at(&selected);
-        let nightly_flats = selected.flat.iter().any(|frame| {
-            frame
-                .captured_at
-                .is_some_and(|at| at.abs_diff(light_at) <= day_seconds as u64)
-        });
+        let flat_session_at = nearest_master_flat_at(&selected, light_at);
+        let nightly_flats = age_days(flat_session_at).is_some_and(|age| age <= 1.0);
         if !selected.flat.is_empty() && !nightly_flats {
             nights_without_nightly_flats.push(night.clone());
         }

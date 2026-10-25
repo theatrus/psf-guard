@@ -16,6 +16,11 @@
 
 ## Changes
 
+- A fresh flat that contributes to a light's master now provides coverage even
+  when older flats in the same master move the median capture time beyond
+  the **Flat age limit**. Age checks and the calibration report use the nearest
+  contributing flat; a 1-day limit includes exactly 24 hours on either side.
+
 - Color processing now follows numbered, expandable steps from input preparation
   to RGB finishing. See color and RGB-star branches separately, inspect the
   resolved star policy, and edit saved setups with consistent field fonts and
