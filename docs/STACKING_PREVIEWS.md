@@ -9,6 +9,34 @@ than a final-processing workflow.
 
 ![A three-frame B-channel stack preview in the project grid](stack-preview.png)
 
+## Build a mosaic
+
+Choose the project's mosaic in the header, then open **Stacks** and choose
+**Build stacks**. PSF Guard integrates the panels' source frames into one FITS
+image per filter and exposure group. Each frame keeps its own calibration
+masters. Seiza aligns frames against the panels they overlap, including small
+panel overlaps and rotations between sessions.
+
+The mosaic channel images are available to the same RGB, LRGB and narrowband
+combinations as ordinary stacks. Panel coverage below the integrated stacks
+shows the individual panels' existing previews. Building a mosaic does not
+replace those panel stacks.
+
+Every panel must have eligible frames in a channel and contribute aligned
+frames; an incomplete mosaic shows an error with the missing panel targets.
+Inspect its frame decisions to check registration failures. Mosaic builds
+replan their canvas when inputs change; they do not extend a saved accumulator.
+With Local background normalization, Seiza matches panel backgrounds across
+the whole mosaic and tapers remaining smooth differences at their edges.
+Other normalization modes retain their selected behavior.
+
+Bayer drizzle is not supported for mosaics. Mosaic FITS headers describe the
+expanded canvas when Seiza can preserve its WCS; the source frame's solve is
+not reused for Gaia color calibration on that different grid.
+
+See the [Heart and Soul mosaic examples](examples/heart-and-soul/README.md)
+for RGB, shared-stretch/balanced SHO and HOO, RGB stars, and starless output.
+
 ## Build a preview
 
 Open one project in **Stacks** and choose **Build stacks** to build
@@ -757,7 +785,7 @@ cases.
 
 A caller can ask for the canonical celestial frame instead — north up, east
 left — by sending `north_up: true` when it starts a build. Several stacks then
-share one grid, which is what a sky mosaic needs. The UI never sets it; each
+share the north-up convention. Mosaic builds keep Seiza’s expanded canvas. The UI never sets it; each
 card and inspector shows the `N ↑ · E ←` marker only for a stack built this
 way.
 
@@ -2323,8 +2351,8 @@ immutable cached response for the rebuilt output.
 - RGB and LRGB color is calibrated against Gaia broadband colors, not
   spectrophotometrically; narrowband color is a visual channel combination.
   There is no custom mixing
-  matrix UI, mosaic, or cross-target integration, and no drizzle beyond Bayer
-  drizzle.
+  matrix UI or arbitrary cross-target integration. Mosaic integration uses
+  demosaiced frames; ordinary stacks also support Bayer drizzle.
 - Color frames are demosaiced with VNG. Seiza also offers MHC and bilinear,
   but PSF Guard's own replay cannot yet choose a demosaic, so the setting
   waits for Seiza to expose one. RC-Astro star removal runs on

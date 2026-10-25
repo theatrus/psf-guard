@@ -61,7 +61,12 @@ pub async fn get_images(
         for project_id in projects {
             exposure_groups.insert(
                 project_id,
-                crate::server::exposure_groups::cached_project_groups(&ctx, &conn, project_id)?,
+                crate::server::exposure_groups::cached_groups(
+                    &ctx,
+                    &conn,
+                    project_id,
+                    params.mosaic,
+                )?,
             );
         }
 

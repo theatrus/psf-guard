@@ -334,6 +334,7 @@ export type StackPreviewStartRequest = {
   force?: boolean;
   /** Reproject onto the shared north-up, east-left grid. Off by default. */
   north_up?: boolean;
+  mosaic?: boolean;
   /**
    * Integration order. `capture` (default) is chronological; `quality`
    * puts the best-graded frames first, which makes the progressive

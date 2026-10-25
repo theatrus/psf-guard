@@ -257,6 +257,9 @@ impl From<&crate::frame_derivatives::DerivativeRecord> for ImageCopy {
 
 #[derive(Debug, Deserialize)]
 pub struct ImageQuery {
+    /// Group exposure families across the project’s mosaic panels.
+    #[serde(default)]
+    pub mosaic: bool,
     pub project_id: Option<i32>,
     pub target_id: Option<i32>,
     pub status: Option<String>,

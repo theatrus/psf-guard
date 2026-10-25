@@ -361,6 +361,7 @@ mod tests {
 
     fn frame(image_id: i32, acquired_date: i64, quality_score: f64) -> PreparedFrame {
         PreparedFrame {
+            target_id: 0,
             image_id,
             acquired_date: Some(acquired_date),
             quality_score: Some(quality_score),

@@ -8520,6 +8520,245 @@ mod tests {
         assert!(available[0].narrowband_palettes.is_empty());
     }
 
+    /// Compose the local four-panel integrations on a smaller grid. Native
+    /// channel integration is checked separately; this checks real inter-filter
+    /// registration and every palette without writing eleven enormous RGB FITS.
+    #[test]
+    #[ignore = "requires PSF_GUARD_MOSAIC_CHANNEL_DIR containing R/G/B/HA/OIII/SII/mosaic.fits"]
+    fn heart_and_soul_color_combinations_keep_all_four_panels() {
+        let directory = PathBuf::from(std::env::var("PSF_GUARD_MOSAIC_CHANNEL_DIR").unwrap());
+        let cache = tempfile::tempdir().unwrap();
+        let root = cache.path();
+        super::super::gpu::configure(super::super::StackGpu {
+            enabled: false,
+            ..Default::default()
+        });
+        let export = std::env::var("PSF_GUARD_MOSAIC_EXAMPLES")
+            .ok()
+            .map(PathBuf::from);
+        if let Some(export) = &export {
+            std::fs::create_dir_all(export).unwrap();
+        }
+        let bin: u32 = std::env::var("PSF_GUARD_MOSAIC_COLOR_BIN")
+            .ok()
+            .map(|v| v.parse().unwrap())
+            .unwrap_or(4);
+        let mut groups = Vec::new();
+        for (index, filter) in ["R", "G", "B", "HA", "OIII", "SII", "L"]
+            .into_iter()
+            .enumerate()
+        {
+            // This project has no L exposures. R supplies the luminance plane
+            // solely to exercise LRGB composition with a mosaic-sized source.
+            let input_filter = if filter == "L" { "R" } else { filter };
+            let image = crate::image_io::open_linear_frame(
+                directory.join(input_filter).join("mosaic.fits"),
+            )
+            .unwrap()
+            .image
+            .binned(bin)
+            .unwrap();
+            let mut source = source_group(filter, index);
+            source.group.target_id = -21;
+            source.group.target_name = "Heart and Soul mosaic".into();
+            source.group.reference_image_id = None;
+            source.group.sky_orientation = Some(super::super::StackSkyOrientation::source_frame(
+                image.width,
+                image.height,
+                "mosaic canvas",
+            ));
+            let path = super::super::fits_path(root, &source.job_id, source.group.index);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            write_processed_image_fits_f32(&path, &image, &[], &[]).unwrap();
+            groups.push(source);
+        }
+        let latest = LatestStackPreviews {
+            schema_version: 1,
+            database_id: "db-test".into(),
+            project_id: 21,
+            updated_unix_seconds: 1,
+            groups,
+        };
+        let targets = collect_sources(root, &latest);
+        let state = Arc::new(AppState::new_for_test(
+            rusqlite::Connection::open_in_memory().unwrap(),
+        ));
+        let variants = [(StackColorKind::Rgb, None), (StackColorKind::Lrgb, None)]
+            .into_iter()
+            .chain(
+                StackNarrowbandPalette::all(true)
+                    .into_iter()
+                    .map(|palette| (StackColorKind::Narrowband, Some(palette))),
+            );
+        let variants = variants
+            .map(|(kind, palette)| (kind, palette, false, false))
+            .chain([
+                (
+                    StackColorKind::Narrowband,
+                    Some(StackNarrowbandPalette::Sho),
+                    true,
+                    false,
+                ),
+                (
+                    StackColorKind::Narrowband,
+                    Some(StackNarrowbandPalette::Sho),
+                    true,
+                    true,
+                ),
+                (
+                    StackColorKind::Narrowband,
+                    Some(StackNarrowbandPalette::Hoo),
+                    true,
+                    true,
+                ),
+            ]);
+        for (index, (kind, palette, shared, balanced)) in variants.enumerate() {
+            let processing = shared.then(|| {
+                let mut processing =
+                    crate::server::processing_setups::default_color_processing(&state);
+                processing.color_calibration = None;
+                processing.narrowband = Some(narrowband::NarrowbandProcessing {
+                    shared_stretch: true,
+                    balance: balanced.then(|| seiza_stacking::NarrowbandBalanceOptions {
+                        has_sii: palette.is_some_and(StackNarrowbandPalette::requires_sii),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                });
+                processing
+            });
+            let request = StackColorRequest {
+                combination: None,
+                automatic_palette: false,
+                stars: None,
+                target_id: -21,
+                kind,
+                palette,
+                force: false,
+                crop: StackColorCrop::None,
+                processing,
+                input_sources: BTreeMap::new(),
+            };
+            let sources = select_sources(&targets[&-21], &request).unwrap();
+            let reference = sources
+                .iter()
+                .find(|source| source.role == reference_role(kind))
+                .unwrap();
+            let reference_image = load_source_frame(root, reference).unwrap().image;
+            let expected = (reference_image.width, reference_image.height);
+            drop(reference_image);
+            let mut job =
+                running_color_job(&format!("{:064x}", index + 100), StackJobState::Running);
+            job.kind = kind;
+            job.palette = palette;
+            job.target_id = -21;
+            job.project_id = 21;
+            job.target_name = "Heart and Soul mosaic".into();
+            job.label = composition_label(kind, palette).into();
+            job.processing = request.processing.clone();
+            job.progress = color_progress(sources.len(), job.processing.as_ref());
+            job.sources = sources;
+            assert!(state.stack_previews.insert_color(job.clone()));
+            compose_color(
+                &state,
+                &job,
+                &BTreeMap::new(),
+                root,
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+                &ColorRcAstroPlan::default(),
+                None,
+                None,
+                &ColorStop {
+                    cancel: Stop::new(),
+                },
+            )
+            .unwrap();
+            let image = crate::image_io::open_linear_frame(color_fits_path(root, &job.job_id))
+                .unwrap()
+                .image;
+            assert_eq!(
+                (image.width, image.height),
+                expected,
+                "{} must retain the complete reference canvas",
+                job.label
+            );
+            assert_eq!(image.channels, 3);
+            assert!(
+                image.width > 2700 && image.height > 1800,
+                "{}: {} × {}",
+                job.label,
+                image.width,
+                image.height
+            );
+            if let Some(export) = &export {
+                let suffix = if balanced {
+                    "-balanced"
+                } else if shared {
+                    "-shared"
+                } else {
+                    ""
+                };
+                let name = format!("{}{suffix}", job.label.to_ascii_lowercase());
+                std::fs::copy(
+                    color_preview_path(root, &job.job_id),
+                    export.join(format!("{name}.png")),
+                )
+                .unwrap();
+                std::fs::write(
+                    export.join(format!("{name}-request.json")),
+                    serde_json::to_vec_pretty(&request).unwrap(),
+                )
+                .unwrap();
+                std::fs::write(
+                    export.join(format!("{name}-report.json")),
+                    serde_json::to_vec_pretty(
+                        &state.stack_previews.get_color(&job.job_id).unwrap(),
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            }
+            eprintln!("{}: {} × {}", job.label, image.width, image.height);
+        }
+    }
+
+    #[test]
+    fn mosaic_channels_offer_rgb_lrgb_and_every_supported_narrowband_palette() {
+        let cache = tempfile::tempdir().unwrap();
+        let groups = ["L", "R", "G", "B", "HA", "OIII", "SII"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, filter)| {
+                let mut source = source_group(filter, index);
+                source.group.target_id = -21;
+                source.group.target_name = "Heart and Soul mosaic".into();
+                source.group.reference_image_id = None;
+                let path =
+                    super::super::fits_path(cache.path(), &source.job_id, source.group.index);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(path, b"fixture").unwrap();
+                source
+            })
+            .collect();
+        let latest = LatestStackPreviews {
+            schema_version: 1,
+            database_id: "db".into(),
+            project_id: 21,
+            updated_unix_seconds: 1,
+            groups,
+        };
+        let targets = collect_sources(cache.path(), &latest);
+        let available = availability(&targets);
+        assert_eq!(available.len(), 1);
+        assert_eq!(available[0].target_id, -21);
+        assert!(available[0].rgb_available && available[0].lrgb_available);
+        assert_eq!(
+            available[0].narrowband_palettes,
+            StackNarrowbandPalette::all(true)
+        );
+    }
+
     #[test]
     fn rgb_is_available_without_a_luminance_stack() {
         let cache = tempfile::tempdir().unwrap();

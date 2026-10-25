@@ -87,7 +87,17 @@ test("a mosaic's panels open as one view in Images, Sequence and Stacks, and a l
   await expect(frames.getByRole('listitem')).toHaveCount(4, { timeout: 30_000 });
   await expect(frames.locator('.mosaic-sequence-panel')).toHaveCount(4);
 
+  let submitted: { mosaic?: boolean; image_ids?: number[] } | null = null;
+  await page.route('**/stack-previews/channels', async route => {
+    submitted = route.request().postDataJSON();
+    await route.fulfill({ json: { success: true, data: [], error: null } });
+  });
   await page.goto(`/#/stacks?db=${encodeURIComponent(dbId)}&project=1&mosaic=1`);
   await expect(page.locator('.mosaic-stacks-cell')).toHaveCount(4, { timeout: 30_000 });
   await expect(page.locator('.mosaic-stacks-cell figcaption strong')).toHaveText(['r1c1', 'r1c2', 'r2c1', 'r2c2']);
+  await expect(page.getByRole('heading', { name: 'Panel coverage' })).toBeVisible();
+  await page.getByRole('button', { name: 'Build stacks', exact: true }).click();
+  await expect.poll(() => submitted).toMatchObject({ mosaic: true });
+  expect(submitted!.image_ids).toHaveLength(4);
+  expect(new Set(submitted!.image_ids).size).toBe(4);
 });
