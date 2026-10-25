@@ -604,3 +604,83 @@ fn a_task_id_or_file_name_that_leaves_the_work_folder_is_refused() {
         );
     }
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_worker_stacks_a_channel_to_the_same_pixels_as_this_server() {
+    use crate::server::stack_preview::remote_channel::testing;
+    let frames = tempfile::tempdir().unwrap();
+    let group = testing::synthetic_group(frames.path());
+    let here = tempfile::tempdir().unwrap();
+    let local = {
+        let (group, directory) = (group.clone(), here.path().to_path_buf());
+        tokio::task::spawn_blocking(move || testing::stack_here(&group, &directory))
+            .await
+            .unwrap()
+    };
+    assert_eq!(
+        local.dispositions,
+        ["reference", "accepted", "accepted", "accepted", "accepted"],
+        "{:?}",
+        local.notes
+    );
+
+    for files in [
+        FileAccess::default(),
+        FileAccess {
+            mode: FileMode::Shared,
+            maps: Vec::new(),
+        },
+    ] {
+        let shared = files.mode == FileMode::Shared;
+        let server = server().await;
+        // Stack builds stay on the server unless Settings › Workers sends
+        // them out.
+        server.state.workers.board.set_placement(
+            crate::remote_work::protocol::TaskKind::StackChannel,
+            crate::server::workers::board::WorkPlacement::WorkersOnly,
+        );
+        let work = tempfile::tempdir().unwrap();
+        let (stop, worker) = start_worker_taking(
+            &server,
+            files,
+            work.path(),
+            WorkChoice::parse(&["stack".into()]).unwrap(),
+        );
+        eventually("the worker connects", || {
+            connected(&server).is_some_and(|worker| !shared || worker.exchange_shared)
+        })
+        .await;
+        let there = tempfile::tempdir().unwrap();
+        let remote = {
+            let (state, group, directory) = (
+                Arc::clone(&server.state),
+                group.clone(),
+                there.path().to_path_buf(),
+            );
+            tokio::task::spawn_blocking(move || {
+                testing::stack_on_worker(&state, &group, &directory)
+            })
+            .await
+            .unwrap()
+        };
+        assert_eq!(remote.dispositions, local.dispositions);
+        assert_eq!(remote.matched_stars, local.matched_stars);
+        assert_eq!(remote.pixels, local.pixels, "the same stack, bit for bit");
+        assert!(remote.checkpoint, "the checkpoint came back");
+        assert!(
+            remote.notes.contains(&"Stacked on test-worker".to_string()),
+            "{:?}",
+            remote.notes
+        );
+        // Every frame went over HTTP in remote mode: five frames, then the
+        // stack, the clipped map and the checkpoint's two halves.
+        let transfers = server.transfers.load(Ordering::SeqCst);
+        if shared {
+            assert_eq!(transfers, 0);
+        } else {
+            assert!(transfers >= 8, "{transfers}");
+        }
+        drop(stop);
+        worker.await.unwrap().unwrap();
+    }
+}

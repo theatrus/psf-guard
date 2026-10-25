@@ -28,6 +28,7 @@ mod processing_queue;
 pub mod rc_astro;
 pub(crate) mod reapply;
 mod reference;
+pub(crate) mod remote_channel;
 mod render;
 mod resume;
 pub mod snr;
@@ -1746,6 +1747,21 @@ struct PreparedFrame {
     /// pipeline opens frames on its own threads and reports back only the
     /// disposition, and PSF Guard already knows this from the import.
     exposure_seconds: f64,
+    /// The fingerprint of the copy a worker reads, when it is not this
+    /// server's file. The final pass checks that copy did not change;
+    /// `source_fingerprint` stays this server's, which the decisions and
+    /// the checkpoint record.
+    #[serde(skip)]
+    read_fingerprint: Option<String>,
+}
+
+impl PreparedFrame {
+    /// The fingerprint the file at `path` has while it is stacked.
+    fn fingerprint_while_read(&self) -> &str {
+        self.read_fingerprint
+            .as_deref()
+            .unwrap_or(&self.source_fingerprint)
+    }
 }
 
 /// Exposure length in seconds from an acquired-image record, or zero when the

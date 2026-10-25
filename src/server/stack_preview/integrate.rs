@@ -79,6 +79,7 @@ pub(super) struct CheckpointIdentity {
 }
 
 /// Where an integration writes.
+#[derive(Debug, Clone)]
 pub(super) struct ChannelOutputs {
     pub fits: PathBuf,
     pub clipped: PathBuf,

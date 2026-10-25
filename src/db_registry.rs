@@ -544,7 +544,7 @@ pub struct DbRegistry {
 }
 
 /// Who may join this server as a worker, and where task files go.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RemoteWorkerSettings {
     /// One token per worker; the secret is stored only as its hash.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -556,6 +556,21 @@ pub struct RemoteWorkerSettings {
     /// Where RC-Astro steps run.
     #[serde(default)]
     pub rc_astro: WorkPlacement,
+    /// Where stack builds' channels are stacked. This server unless chosen
+    /// otherwise.
+    #[serde(default = "WorkPlacement::this_server")]
+    pub stack: WorkPlacement,
+}
+
+impl Default for RemoteWorkerSettings {
+    fn default() -> Self {
+        Self {
+            tokens: Vec::new(),
+            exchange_folder: None,
+            rc_astro: WorkPlacement::default(),
+            stack: WorkPlacement::this_server(),
+        }
+    }
 }
 
 /// Where one kind of work runs: on workers, on this server, or on workers
@@ -574,6 +589,20 @@ pub enum WorkPlacement {
 }
 
 impl WorkPlacement {
+    /// Only this server: where stack builds run unless chosen otherwise.
+    pub fn this_server() -> Self {
+        WorkPlacement::ThisServer
+    }
+
+    /// Where a kind of work runs before anyone chooses: stack builds on
+    /// this server, everything else on workers first.
+    pub fn default_for(kind: crate::remote_work::protocol::TaskKind) -> Self {
+        match kind {
+            crate::remote_work::protocol::TaskKind::StackChannel => Self::this_server(),
+            crate::remote_work::protocol::TaskKind::RcAstroStep => Self::default(),
+        }
+    }
+
     /// Whether a worker may run the work: this server's own, or another
     /// machine's.
     pub fn allows(self, this_server: bool) -> bool {

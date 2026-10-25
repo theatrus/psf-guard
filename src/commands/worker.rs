@@ -58,6 +58,9 @@ const MAX_BACKOFF: Duration = Duration::from_secs(60);
 /// How long a stopped task waits for its tool to stop before its scratch
 /// folder is removed.
 const TOOL_STOP_LIMIT: Duration = Duration::from_secs(30);
+/// How often a running task reports, at most: a stack build's card shows
+/// the worker's frames this soon.
+const EVENT_INTERVAL: Duration = Duration::from_secs(2);
 
 pub fn run(args: WorkerArgs) -> Result<()> {
     let _ = tracing_subscriber::fmt()
@@ -301,16 +304,14 @@ impl Client {
         &self,
         session: &str,
         assignment: &Assignment,
-        fraction: f32,
-    ) -> Result<bool, ClientError> {
-        let reply: ProgressReply = self
-            .json(
-                self.task(reqwest::Method::POST, session, assignment, "progress")
-                    .timeout(Duration::from_secs(30))
-                    .json(&Progress { fraction }),
-            )
-            .await?;
-        Ok(reply.stop)
+        progress: &Progress,
+    ) -> Result<ProgressReply, ClientError> {
+        self.json(
+            self.task(reqwest::Method::POST, session, assignment, "progress")
+                .timeout(Duration::from_secs(30))
+                .json(progress),
+        )
+        .await
     }
 
     async fn download(
@@ -719,7 +720,70 @@ struct Heartbeat<'a> {
     assignment: &'a Assignment,
     beat: tokio::time::Interval,
     fraction: tokio::sync::watch::Receiver<f32>,
+    outbox: Outbox,
     stopping: tokio::sync::watch::Receiver<bool>,
+    /// Stops the task's work at its next checkpoint.
+    work_stop: Stop,
+}
+
+/// Events a running task reported that the server has not acknowledged,
+/// numbered from 0 over the whole task.
+#[derive(Clone, Default)]
+struct Outbox(Arc<std::sync::Mutex<OutboxState>>);
+
+#[derive(Default)]
+struct OutboxState {
+    /// The number of `events[0]`.
+    first: u64,
+    events: Vec<serde_json::Value>,
+}
+
+impl Outbox {
+    fn lock(&self) -> std::sync::MutexGuard<'_, OutboxState> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn push(&self, event: serde_json::Value) {
+        self.lock().events.push(event);
+    }
+
+    /// The events to send, and the number of the first.
+    fn pending(&self) -> (u64, Vec<serde_json::Value>) {
+        let state = self.lock();
+        (state.first, state.events.clone())
+    }
+
+    fn is_empty(&self) -> bool {
+        self.lock().events.is_empty()
+    }
+
+    /// Forget the events the server has.
+    fn acknowledge(&self, received: u64) {
+        let mut state = self.lock();
+        let done = received
+            .saturating_sub(state.first)
+            .min(state.events.len() as u64);
+        state.events.drain(..done as usize);
+        state.first += done;
+    }
+}
+
+/// A task's progress and events, as the worker's heartbeat sends them.
+struct WorkerReport {
+    fraction: tokio::sync::watch::Sender<f32>,
+    outbox: Outbox,
+}
+
+impl crate::remote_work::TaskReport for WorkerReport {
+    fn fraction(&mut self, done: f32) {
+        self.fraction.send_replace(done);
+    }
+
+    fn event(&mut self, event: serde_json::Value) {
+        self.outbox.push(event);
+    }
 }
 
 impl Heartbeat<'_> {
@@ -739,24 +803,57 @@ impl Heartbeat<'_> {
             tokio::select! {
                 done = &mut work => return done,
                 _ = self.stopping.changed() => return Err(ClientError::Stopping),
-                _ = self.beat.tick() => {
-                    let done = *self.fraction.borrow();
-                    match self
-                        .joined
-                        .client
-                        .progress(&self.joined.session, self.assignment, done)
-                        .await
-                    {
-                        Ok(false) => {}
-                        Ok(true) => return Err(ClientError::NotCurrent),
-                        Err(error @ (ClientError::NotCurrent
-                            | ClientError::UnknownSession
-                            | ClientError::Denied(_))) => return Err(error),
-                        Err(error) => tracing::warn!("A progress report failed: {error}"),
-                    }
-                }
+                _ = self.beat.tick() => self.report().await?,
             }
         }
+    }
+
+    /// Send how far the task got and the events not yet acknowledged.
+    async fn report(&mut self) -> Result<(), ClientError> {
+        let (first_event, events) = self.outbox.pending();
+        let progress = Progress {
+            fraction: *self.fraction.borrow(),
+            events,
+            first_event,
+        };
+        match self
+            .joined
+            .client
+            .progress(&self.joined.session, self.assignment, &progress)
+            .await
+        {
+            Ok(reply) if reply.stop => Err(ClientError::NotCurrent),
+            Ok(reply) => {
+                self.outbox.acknowledge(reply.events_received);
+                if reply.finish {
+                    self.work_stop.request();
+                }
+                Ok(())
+            }
+            Err(
+                error @ (ClientError::NotCurrent
+                | ClientError::UnknownSession
+                | ClientError::Denied(_)),
+            ) => Err(error),
+            Err(error) => {
+                tracing::warn!("A progress report failed: {error}");
+                Ok(())
+            }
+        }
+    }
+
+    /// Send every event still waiting, so the server has them all before
+    /// the task completes.
+    async fn flush(&mut self) -> Result<(), ClientError> {
+        for _ in 0..5 {
+            if self.outbox.is_empty() {
+                return Ok(());
+            }
+            self.report().await?;
+        }
+        Err(ClientError::Other(
+            "The server did not take the task's last events".into(),
+        ))
     }
 }
 
@@ -769,12 +866,17 @@ async fn run_task_in(
     let (client, session, options) = (&joined.client, joined.session.as_str(), &joined.options);
     let local_error = |error: std::io::Error| ClientError::Other(error.to_string());
     let (fraction_sender, fraction) = tokio::sync::watch::channel(0.0f32);
+    let outbox = Outbox::default();
+    let stop = Stop::new();
     let mut heartbeat = Heartbeat {
         joined,
         assignment,
-        beat: tokio::time::interval(joined.heartbeat),
+        // Often enough that a build's card follows the worker's frames.
+        beat: tokio::time::interval(joined.heartbeat.min(EVENT_INTERVAL)),
         fraction,
+        outbox: outbox.clone(),
         stopping,
+        work_stop: stop.clone(),
     };
     tokio::fs::create_dir_all(scratch)
         .await
@@ -817,8 +919,11 @@ async fn run_task_in(
         .await
         .map_err(local_error)?;
 
-    let stop = Stop::new();
     let mut executed = {
+        let mut report = WorkerReport {
+            fraction: fraction_sender,
+            outbox,
+        };
         let (kind, spec, tools, output_dir, stop) = (
             assignment.kind,
             assignment.spec.clone(),
@@ -827,24 +932,24 @@ async fn run_task_in(
             stop.clone(),
         );
         tokio::task::spawn_blocking(move || {
-            let cancel = seiza_stacking::CancelSignal::new(move || stop.requested());
             crate::remote_work::execute(
                 kind,
                 spec,
                 &inputs,
                 &output_dir,
                 &tools,
-                &cancel,
-                &mut |done| {
-                    fraction_sender.send_replace(done);
-                },
+                &stop,
+                &mut report,
             )
         })
     };
+    // Whether the work has ended, so it is not awaited a second time.
+    let ended = std::sync::atomic::AtomicBool::new(false);
     let ran = heartbeat
         .during(async {
-            (&mut executed)
-                .await
+            let output = (&mut executed).await;
+            ended.store(true, std::sync::atomic::Ordering::SeqCst);
+            output
                 .map_err(|error| {
                     ClientError::Other(format!("The task stopped unexpectedly: {error}"))
                 })?
@@ -852,13 +957,18 @@ async fn run_task_in(
         })
         .await;
     let result = match ran {
-        Ok(result) => result,
-        Err(ended) => {
+        Ok(result) => {
+            heartbeat.flush().await?;
+            result
+        }
+        Err(why) => {
             // The tool stops at its next check of the stop; wait for it, so
             // nothing writes to the scratch folder once it is removed.
-            stop.request();
-            let _ = tokio::time::timeout(TOOL_STOP_LIMIT, &mut executed).await;
-            return Err(ended);
+            if !ended.load(std::sync::atomic::Ordering::SeqCst) {
+                stop.request();
+                let _ = tokio::time::timeout(TOOL_STOP_LIMIT, &mut executed).await;
+            }
+            return Err(why);
         }
     };
     let mut written = Vec::new();

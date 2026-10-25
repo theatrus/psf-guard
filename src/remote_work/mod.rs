@@ -34,33 +34,57 @@ impl LocalTools {
             None => (Vec::new(), None),
         };
         rc_astro.retain(|schema| choice.takes_rc_astro_tool(&schema.key));
-        let work = if rc_astro.is_empty() {
-            Vec::new()
-        } else {
-            vec![TaskKind::RcAstroStep]
-        };
+        let mut work = Vec::new();
+        if !rc_astro.is_empty() {
+            work.push(TaskKind::RcAstroStep);
+        }
+        if choice.takes_stack() {
+            work.push(TaskKind::StackChannel);
+        }
         (
             protocol::Offers {
                 threads,
                 slots: 1,
                 work,
                 rc_astro,
+                stacking_version: choice
+                    .takes_stack()
+                    .then(|| crate::server::stack_preview::SEIZA_STACKING_OUTPUT_VERSION.into()),
             },
             problem,
         )
     }
 }
 
+/// What a running task tells whoever runs it.
+pub trait TaskReport: Send {
+    /// How much of the task is done, from 0 to 1.
+    fn fraction(&mut self, done: f32);
+    /// Something that happened, as the task's kind defines it.
+    fn event(&mut self, event: serde_json::Value);
+}
+
 /// The work a worker takes, from its `--work` choices: everything it can
 /// run when there are none.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WorkChoice {
     /// The RC-Astro tools it takes, or `None` for every one.
     rc_astro_tools: Option<Vec<String>>,
+    /// Whether it takes stack builds.
+    stack: bool,
+}
+
+impl Default for WorkChoice {
+    fn default() -> Self {
+        Self {
+            rc_astro_tools: None,
+            stack: true,
+        }
+    }
 }
 
 /// The `--work` choices, for the command's help and its errors.
-pub const WORK_CHOICES: &str = "rc-astro (every RC-Astro tool), bxt, nxt or sxt";
+pub const WORK_CHOICES: &str = "stack, rc-astro (every RC-Astro tool), bxt, nxt or sxt";
 
 impl WorkChoice {
     /// Read `--work` values: `rc-astro` takes every RC-Astro tool, and a
@@ -70,9 +94,11 @@ impl WorkChoice {
             return Ok(Self::default());
         }
         let mut tools = Vec::new();
+        let mut stack = false;
         for value in values {
             let value = value.trim().to_ascii_lowercase();
             match value.as_str() {
+                "stack" => stack = true,
                 "rc-astro" => tools.extend(rc_astro::TOOLS.iter().map(|tool| tool.to_string())),
                 tool if rc_astro::TOOLS.contains(&tool) => tools.push(tool.to_string()),
                 _ => return Err(format!("--work must be {WORK_CHOICES}, not '{value}'")),
@@ -82,7 +108,21 @@ impl WorkChoice {
         tools.dedup();
         Ok(Self {
             rc_astro_tools: Some(tools),
+            stack,
         })
+    }
+
+    /// RC-Astro tools only, as this server's own worker takes: this server
+    /// stacks its builds in process.
+    pub fn rc_astro_only() -> Self {
+        Self {
+            rc_astro_tools: None,
+            stack: false,
+        }
+    }
+
+    pub fn takes_stack(&self) -> bool {
+        self.stack
     }
 
     pub fn takes_rc_astro_tool(&self, tool: &str) -> bool {
@@ -101,8 +141,8 @@ pub fn execute(
     inputs: &BTreeMap<String, PathBuf>,
     output_dir: &Path,
     tools: &LocalTools,
-    cancel: &seiza_stacking::CancelSignal,
-    progress: &mut dyn FnMut(f32),
+    stop: &crate::concurrency::Stop,
+    report: &mut dyn TaskReport,
 ) -> Result<serde_json::Value, String> {
     match kind {
         TaskKind::RcAstroStep => {
@@ -115,9 +155,18 @@ pub fn execute(
             let input = inputs
                 .get(rc_astro::INPUT)
                 .ok_or_else(|| "The RC-Astro task has no input image".to_string())?;
-            let result = rc_astro::run(cli, &spec, input, output_dir, cancel, progress)?;
+            let cancel = {
+                let stop = stop.clone();
+                seiza_stacking::CancelSignal::new(move || stop.requested())
+            };
+            let result = rc_astro::run(cli, &spec, input, output_dir, &cancel, &mut |done| {
+                report.fraction(done)
+            })?;
             serde_json::to_value(result).map_err(|error| error.to_string())
         }
+        TaskKind::StackChannel => crate::server::stack_preview::remote_channel::execute(
+            spec, inputs, output_dir, stop, report,
+        ),
     }
 }
 
@@ -207,6 +256,12 @@ mod tests {
         assert!(!some.takes_rc_astro_tool("nxt"));
         let refused = WorkChoice::parse(&["gpu".into()]).unwrap_err();
         assert!(refused.contains("rc-astro"), "{refused}");
+        // Listing RC-Astro tools leaves stacking out, and `stack` takes it.
+        assert!(everything.takes_stack());
+        assert!(!some.takes_stack());
+        let stack = WorkChoice::parse(&["stack".into()]).unwrap();
+        assert!(stack.takes_stack());
+        assert!(!stack.takes_rc_astro_tool("bxt"));
     }
 
     fn everything_listed() -> WorkChoice {

@@ -1375,6 +1375,7 @@ pub(super) fn prepare_whole(
                     .get(&image.id)
                     .and_then(|framing| framing.expected),
                 exposure_seconds,
+                read_fingerprint: None,
             });
         }
 

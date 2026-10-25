@@ -20,7 +20,7 @@ use std::time::{Duration, Instant, SystemTime};
 pub use crate::db_registry::WorkPlacement;
 use crate::remote_work::protocol::{
     Assignment, Completion, ExchangeProbe, FileAccess, FileMode, InputFile, Offers, OutputFile,
-    ProbeAnswer, ProbeResult, Registration, TaskKind, MAX_SLOTS,
+    ProbeAnswer, ProbeResult, Progress, ProgressReply, Registration, TaskKind, MAX_SLOTS,
 };
 
 /// How long a lease lasts without a progress report. A worker reports six
@@ -61,6 +61,8 @@ pub enum TaskNeeds {
         cli_version: String,
         ml_version: Option<i64>,
     },
+    /// Stacking at this Seiza stacking output version.
+    Stack { stacking_version: String },
 }
 
 impl TaskNeeds {
@@ -80,6 +82,10 @@ impl TaskNeeds {
                             && schema.ml_version == *ml_version
                     })
             }
+            TaskNeeds::Stack { stacking_version } => {
+                offers.work.contains(&TaskKind::StackChannel)
+                    && offers.stacking_version.as_deref() == Some(stacking_version)
+            }
         }
     }
 
@@ -89,6 +95,9 @@ impl TaskNeeds {
             TaskNeeds::RcAstro {
                 name, cli_version, ..
             } => format!("{name} {cli_version}"),
+            TaskNeeds::Stack { stacking_version } => {
+                format!("stacking with Seiza stacking {stacking_version}")
+            }
         }
     }
 }
@@ -178,6 +187,15 @@ struct Task {
     /// Workers of other machines that failed it: this server runs it
     /// instead, when it can.
     refused_by: HashSet<String>,
+    /// Events the worker reported that the waiting work has not read yet.
+    events: Vec<serde_json::Value>,
+    /// How many events the worker reported, all told.
+    events_received: u64,
+    /// The waiting work asked the worker to stop and finish with what it
+    /// has.
+    stop_requested: bool,
+    /// Stops the work when this server's worker runs it.
+    local_stop: Option<crate::concurrency::Stop>,
 }
 
 impl Task {
@@ -280,7 +298,10 @@ struct Inner {
 
 impl Inner {
     fn placement(&self, kind: TaskKind) -> WorkPlacement {
-        self.placements.get(&kind).copied().unwrap_or_default()
+        self.placements
+            .get(&kind)
+            .copied()
+            .unwrap_or_else(|| WorkPlacement::default_for(kind))
     }
 
     /// Whether `session` may run `task`: it offers what the task needs, the
@@ -345,6 +366,10 @@ pub struct SessionSummary {
     pub slots: usize,
     /// The licensed RC-Astro tools it takes, as "StarXTerminator 2.6.6".
     pub rc_astro: Vec<String>,
+    /// The Seiza stacking version it stacks builds with, when it takes
+    /// stack builds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stacking_version: Option<String>,
     pub file_mode: FileMode,
     /// Whether task files reach it by path.
     pub exchange_shared: bool,
@@ -472,6 +497,16 @@ impl Board {
         }
     }
 
+    /// Whether a connected worker of another machine can run a task with
+    /// `needs`.
+    pub fn remote_can_run(&self, needs: &TaskNeeds) -> bool {
+        let now = Instant::now();
+        self.lock()
+            .sessions
+            .values()
+            .any(|found| !found.local && found.online(now) && needs.met_by(&found.offers))
+    }
+
     /// Where a kind of work runs.
     pub fn set_placement(&self, kind: TaskKind, placement: WorkPlacement) {
         self.lock().placements.insert(kind, placement);
@@ -483,10 +518,37 @@ impl Board {
     }
 
     /// Stop handing out work: claims answer at once, and this server's
-    /// worker ends.
+    /// worker stops what it runs and ends.
     pub fn close(&self) {
-        self.lock().closed = true;
+        let mut inner = self.lock();
+        inner.closed = true;
+        for stop in inner
+            .tasks
+            .values()
+            .filter_map(|task| task.local_stop.as_ref())
+        {
+            stop.request();
+        }
+        drop(inner);
         self.notify();
+    }
+
+    /// The stop this server's worker runs a task under: requested when the
+    /// task leaves the board or the waiting work stops it.
+    pub(super) fn attach_stop(
+        &self,
+        session: &str,
+        task: &str,
+        lease: &str,
+        stop: crate::concurrency::Stop,
+    ) -> Result<(), Refusal> {
+        let mut inner = self.lock();
+        let found = Self::current(&mut inner, session, task, lease)?;
+        if found.stop_requested {
+            stop.request();
+        }
+        found.local_stop = Some(stop);
+        Ok(())
     }
 
     pub fn is_closed(&self) -> bool {
@@ -725,6 +787,10 @@ impl Board {
                 fraction: 0.0,
                 unmatched_since: None,
                 refused_by: HashSet::new(),
+                events: Vec::new(),
+                events_received: 0,
+                stop_requested: false,
+                local_stop: None,
             },
         );
         drop(inner);
@@ -736,6 +802,13 @@ impl Board {
     /// report that the task was stopped.
     fn forget(&self, id: &str) {
         let mut inner = self.lock();
+        if let Some(stop) = inner
+            .tasks
+            .get(id)
+            .and_then(|task| task.local_stop.as_ref())
+        {
+            stop.request();
+        }
         if let Some(task) = inner.tasks.remove(id)
             && let TaskState::Leased { session, .. } | TaskState::Checking { session, .. } =
                 &task.state
@@ -950,8 +1023,8 @@ impl Board {
         session: &str,
         task: &str,
         lease: &str,
-        fraction: f32,
-    ) -> Result<bool, Refusal> {
+        progress: Progress,
+    ) -> Result<ProgressReply, Refusal> {
         let mut inner = self.lock();
         let now = Instant::now();
         self.expire(&mut inner, now);
@@ -960,26 +1033,46 @@ impl Board {
         }
         let found = match Self::current(&mut inner, session, task, lease) {
             Ok(found) => found,
-            Err(Refusal::NotCurrent) => return Ok(true),
+            Err(Refusal::NotCurrent) => {
+                return Ok(ProgressReply {
+                    stop: true,
+                    finish: false,
+                    events_received: 0,
+                })
+            }
             Err(refusal) => return Err(refusal),
         };
         if let TaskState::Leased { expires, .. } = &mut found.state {
             *expires = now + self.timings.lease;
         }
-        if fraction.is_finite() {
-            found.fraction = fraction.clamp(0.0, 1.0);
+        if progress.fraction.is_finite() {
+            found.fraction = progress.fraction.clamp(0.0, 1.0);
         }
+        // Events already received, from a report sent again, are skipped.
+        let skip = found.events_received.saturating_sub(progress.first_event) as usize;
+        if progress.first_event <= found.events_received {
+            let fresh = progress.events.into_iter().skip(skip).collect::<Vec<_>>();
+            found.events_received += fresh.len() as u64;
+            found.events.extend(fresh);
+        }
+        let reply = ProgressReply {
+            stop: false,
+            finish: found.stop_requested,
+            events_received: found.events_received,
+        };
         drop(inner);
         self.notify();
         self.sweep();
-        Ok(false)
+        Ok(reply)
     }
 
     /// Whether `lease` is still current for `session`'s task, read by this
     /// server's worker while it runs the task.
     pub fn still_wanted(&self, session: &str, task: &str, lease: &str) -> bool {
         let mut inner = self.lock();
-        !inner.closed && Self::current(&mut inner, session, task, lease).is_ok()
+        !inner.closed
+            && Self::current(&mut inner, session, task, lease)
+                .is_ok_and(|found| !found.stop_requested)
     }
 
     /// Where an input is, for a worker to download it.
@@ -1172,6 +1265,12 @@ impl Board {
                     .filter(|schema| schema.licensed)
                     .map(|schema| format!("{} {}", schema.name, schema.cli_version))
                     .collect(),
+                stacking_version: found
+                    .offers
+                    .work
+                    .contains(&TaskKind::StackChannel)
+                    .then(|| found.offers.stacking_version.clone())
+                    .flatten(),
                 file_mode: found.files.mode,
                 exchange_shared: found.exchange_shared,
                 exchange_problem: found.exchange_problem.clone(),
@@ -1355,12 +1454,53 @@ impl Ticket {
         stopped: &dyn Fn() -> bool,
         progress: &mut dyn FnMut(f32, Option<&str>),
     ) -> Result<Finished, WaitError> {
+        self.wait_with(Waiting {
+            stopped,
+            progress,
+            events: &mut |_| {},
+            finish_on_stop: None,
+        })
+    }
+
+    /// [`Ticket::wait`], with the events the worker reports, and, with
+    /// `finish_on_stop`, a stop that lets the worker finish with what it
+    /// has.
+    pub fn wait_with(&self, waiting: Waiting<'_>) -> Result<Finished, WaitError> {
+        let Waiting {
+            stopped,
+            progress,
+            events,
+            finish_on_stop,
+        } = waiting;
         let mut reported: Option<(f32, Option<String>)> = None;
+        let mut stop_deadline: Option<Instant> = None;
         let mut inner = self.board.lock();
         loop {
             let now = Instant::now();
             self.board.expire(&mut inner, now);
-            if stopped() {
+            let running = inner.tasks.get(&self.id).is_some_and(|task| {
+                matches!(
+                    task.state,
+                    TaskState::Leased { .. } | TaskState::Checking { .. }
+                )
+            });
+            let finishing = match (finish_on_stop, stop_deadline) {
+                (_, Some(deadline)) => now < deadline,
+                (Some(limit), None) if running && stopped() => {
+                    // The worker hears at its next report, and finishes
+                    // with what it has.
+                    let task = inner.tasks.get_mut(&self.id).expect("the task runs");
+                    task.stop_requested = true;
+                    if let Some(stop) = &task.local_stop {
+                        stop.request();
+                    }
+                    stop_deadline = Some(now + limit);
+                    self.board.notify();
+                    true
+                }
+                _ => false,
+            };
+            if !finishing && (stop_deadline.is_some() || stopped()) {
                 drop(inner);
                 self.board.forget(&self.id);
                 // A tool this server runs is killed and its files removed
@@ -1369,9 +1509,19 @@ impl Ticket {
                 self.board.wait_drained(&self.id, DRAIN_LIMIT);
                 return Err(WaitError::Stopped);
             }
-            let Some(task) = inner.tasks.get(&self.id) else {
+            let Some(task) = inner.tasks.get_mut(&self.id) else {
                 return Err(WaitError::Failed("The task left the board".into()));
             };
+            if !task.events.is_empty() {
+                let received = std::mem::take(&mut task.events);
+                drop(inner);
+                for event in received {
+                    events(event);
+                }
+                inner = self.board.lock();
+                continue;
+            }
+            let task = inner.tasks.get(&self.id).expect("the task is on the board");
             match &task.state {
                 TaskState::Finished(_) => {
                     let task = inner.tasks.remove(&self.id).expect("the task is finished");
@@ -1446,6 +1596,20 @@ impl Inner {
             && self.placement(task.kind).allows(session.local)
             && !task.refused_by.contains(&session.token_and_name())
     }
+}
+
+/// How [`Ticket::wait_with`] waits.
+pub struct Waiting<'a> {
+    /// Read every half second.
+    pub stopped: &'a dyn Fn() -> bool,
+    /// Told how much is done and which worker runs it: `None` for this
+    /// server's own.
+    pub progress: &'a mut dyn FnMut(f32, Option<&str>),
+    /// Told each event the worker reports, in order.
+    pub events: &'a mut dyn FnMut(serde_json::Value),
+    /// On a stop, how long a running task has to finish with what it has
+    /// before it leaves the board. `None` takes it off the board at once.
+    pub finish_on_stop: Option<Duration>,
 }
 
 impl Drop for Ticket {

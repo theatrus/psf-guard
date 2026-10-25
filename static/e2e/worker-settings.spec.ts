@@ -32,7 +32,7 @@ async function revokeNamed(request: APIRequestContext, name: string) {
 test.afterEach(async ({ request }, testInfo) => {
   worker?.kill();
   worker = null;
-  await request.put('/api/workers/placement', { data: { rc_astro: 'workers_first' } });
+  await request.put('/api/workers/placement', { data: { rc_astro: 'workers_first', stack: 'this_server' } });
   await revokeNamed(request, `e2e-worker-${testInfo.project.name}`);
 });
 
@@ -48,16 +48,19 @@ test('a worker joins with the token shown once, and stops when it is revoked', a
   await expect(local).toContainText('No RC-Astro tools');
   await expect(local).toContainText('Reads task files in place');
 
-  // Where RC-Astro runs saves at once; stack builds and WBPP stay here.
-  // Each radio shows the saved choice, so it turns on once the save returns.
-  const workersOnly = page.getByRole('radio', { name: /^Workers only/ });
+  // Where RC-Astro runs saves at once; stack builds stay on this server
+  // until chosen otherwise. Each radio shows the saved choice, so it turns
+  // on once the save returns.
+  const tools = page.getByRole('group', { name: 'RC-Astro tools' });
+  const stacks = page.getByRole('group', { name: 'Stack builds' });
+  await expect(stacks.getByRole('radio', { name: /^This server only/ })).toBeChecked();
+  const workersOnly = tools.getByRole('radio', { name: /^Workers only/ });
   await workersOnly.click();
   await expect(workersOnly).toBeChecked();
   await expect.poll(async () => (await (await request.get('/api/workers')).json()).data.placement.rc_astro)
     .toBe('workers_only');
-  await expect(page.getByText('Stack builds and WBPP runs stay on this server.')).toBeVisible();
-  await page.getByRole('radio', { name: /^Workers first/ }).click();
-  await expect(page.getByRole('radio', { name: /^Workers first/ })).toBeChecked();
+  await tools.getByRole('radio', { name: /^Workers first/ }).click();
+  await expect(tools.getByRole('radio', { name: /^Workers first/ })).toBeChecked();
 
   await page.getByRole('button', { name: '+ Add a worker' }).click();
   await page.getByLabel('Worker name').fill(name);

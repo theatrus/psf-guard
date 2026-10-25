@@ -369,6 +369,7 @@ mod tests {
             source_fingerprint: image_id.to_string(),
             expected_target: None,
             exposure_seconds: 60.0,
+            read_fingerprint: None,
         }
     }
 

@@ -1,5 +1,7 @@
 use super::*;
-use crate::remote_work::protocol::{FileAccess, PathMap, WrittenOutput, PROTOCOL_VERSION};
+use crate::remote_work::protocol::{
+    FileAccess, PathMap, Progress, WrittenOutput, PROTOCOL_VERSION,
+};
 
 fn schema(tool: &str, version: &str, licensed: bool) -> seiza_stacking::ExternalToolSchema {
     serde_json::from_value(serde_json::json!({
@@ -20,6 +22,7 @@ fn offers(tools: &[(&str, &str)]) -> Offers {
         threads: 8,
         slots: 1,
         work: vec![TaskKind::RcAstroStep],
+        stacking_version: None,
         rc_astro: tools
             .iter()
             .map(|(tool, version)| schema(tool, version, true))
@@ -55,6 +58,15 @@ fn task(label: &str, person: bool, needs: TaskNeeds) -> NewTask {
         spec: serde_json::json!({}),
         inputs: Vec::new(),
         outputs: vec![("out.bin".into(), true), ("extra.bin".into(), false)],
+    }
+}
+
+/// A progress report with no events.
+fn at(fraction: f32) -> Progress {
+    Progress {
+        fraction,
+        events: Vec::new(),
+        first_event: 0,
     }
 }
 
@@ -145,9 +157,12 @@ fn a_finished_task_hands_back_its_checked_outputs() {
     let claimed = board.try_claim(&session).unwrap().unwrap();
     // A remote worker is told no paths for outputs: it uploads them.
     assert!(claimed.outputs.iter().all(|output| output.path.is_none()));
-    assert!(!board
-        .progress(&session, &claimed.task, &claimed.lease, 0.5)
-        .unwrap());
+    assert!(
+        !board
+            .progress(&session, &claimed.task, &claimed.lease, at(0.5))
+            .unwrap()
+            .stop
+    );
     let out = written(&board, &session, &claimed, "out.bin", b"pixels");
     board
         .complete(
@@ -265,9 +280,12 @@ fn a_lost_lease_puts_the_task_back_and_a_late_answer_is_refused() {
     // The slow worker's lease ran out: it is told to stop, and its result
     // is refused. Its lease folder is gone, so it cannot write over the
     // next worker's outputs.
-    assert!(board
-        .progress(&slow, &first.task, &first.lease, 0.9)
-        .unwrap());
+    assert!(
+        board
+            .progress(&slow, &first.task, &first.lease, at(0.9))
+            .unwrap()
+            .stop
+    );
     assert!(!ticket.dir().join(&first.lease).exists());
     let out = written(&board, &fast, &second, "out.bin", b"late");
     assert_eq!(
@@ -368,9 +386,12 @@ fn a_stop_takes_the_task_off_the_board_and_the_worker_is_told() {
         ticket.wait(&|| true, &mut |_, _| {}).unwrap_err(),
         WaitError::Stopped
     );
-    assert!(board
-        .progress(&session, &claimed.task, &claimed.lease, 0.5)
-        .unwrap());
+    assert!(
+        board
+            .progress(&session, &claimed.task, &claimed.lease, at(0.5))
+            .unwrap()
+            .stop
+    );
     assert!(!board.still_wanted(&session, &claimed.task, &claimed.lease));
     // The worker is free for the next task.
     let next = board.ticket().unwrap();
@@ -392,10 +413,10 @@ fn a_revoked_token_disconnects_its_worker_and_requeues_its_task() {
     let claimed = board.try_claim(&revoked).unwrap().unwrap();
     board.revoke_token("revoked");
     assert_eq!(board.token_of(&revoked), None);
-    assert_eq!(
-        board.progress(&revoked, &claimed.task, &claimed.lease, 0.1),
+    assert!(matches!(
+        board.progress(&revoked, &claimed.task, &claimed.lease, at(0.1)),
         Err(Refusal::UnknownSession)
-    );
+    ));
     let kept = board.register(
         "kept",
         registration("b", offers(&[("bxt", "1")]), FileAccess::default()),

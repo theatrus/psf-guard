@@ -678,38 +678,108 @@ pub(super) fn run_group(
         scratch: crate::server::storage::stack_scratch(stack_root),
         mosaic_scratch: stack_dir(stack_root, job_id),
     };
-    let mut events = CardEvents {
-        state,
-        job_id,
-        index: group.index,
-        live: live::Publisher::new(state, stack_root, job_id, group.index, &pool),
-        stack_root,
-        database_id,
-        identity: identity.clone(),
-    };
-    let integrated = integrate::integrate_channel(
-        integrate::ChannelWork {
+    let stack_here = |pool: &crate::concurrency::ComputePool,
+                      checkpoint: Option<resume::ResumeState>| {
+        let mut events = CardEvents {
+            state,
             job_id,
-            group: &group,
-            plan: &plan,
-            checkpoint,
-            accepted_only,
-            scoring,
-            method,
-            gpu,
-            order,
-            calibration_fingerprint: &calibration_fingerprint,
-            identity,
-            orientation,
-            outputs,
-            pool: &pool,
-            threads,
-            available_memory,
-            worker_policy,
-            cancel,
-        },
-        &mut events,
-    )?;
+            index: group.index,
+            live: Some(live::Publisher::new(
+                state,
+                stack_root,
+                job_id,
+                group.index,
+                pool,
+            )),
+            stack_root,
+            database_id,
+            identity: identity.clone(),
+        };
+        integrate::integrate_channel(
+            integrate::ChannelWork {
+                job_id,
+                group: &group,
+                plan: &plan,
+                checkpoint,
+                accepted_only,
+                scoring,
+                method,
+                gpu,
+                order,
+                calibration_fingerprint: &calibration_fingerprint,
+                identity: identity.clone(),
+                orientation: orientation.clone(),
+                outputs: outputs.clone(),
+                pool,
+                threads,
+                available_memory,
+                worker_policy,
+                cancel,
+            },
+            &mut events,
+        )
+    };
+    // A worker on another machine stacks the channel when Settings ›
+    // Workers sends stack builds there. This server's cores are free for
+    // other work while it does, and are leased again for the previews.
+    let (integrated, lease, pool) = if remote_channel::wanted(state) {
+        drop(pool);
+        drop(lease);
+        let mut events = CardEvents {
+            state,
+            job_id,
+            index: group.index,
+            live: None,
+            stack_root,
+            database_id,
+            identity: identity.clone(),
+        };
+        let remote = remote_channel::run_on_worker(
+            state,
+            remote_channel::RemoteChannel {
+                job_id,
+                automatic: state.stack_previews.is_automatic(job_id),
+                group: &group,
+                plan: &plan,
+                checkpoint: checkpoint.clone(),
+                accepted_only,
+                scoring,
+                method,
+                gpu,
+                order,
+                calibration_fingerprint: &calibration_fingerprint,
+                identity: identity.clone(),
+                orientation: &orientation,
+                outputs: &outputs,
+                cancel,
+            },
+            &mut events,
+        );
+        let lease = state.lease_workers(priority, budget.workers);
+        let pool = crate::concurrency::ComputePool::take("stack-preview", lease.workers)
+            .map_err(|error| error.to_string())?;
+        let integrated = match remote {
+            Ok(outcome) => outcome,
+            Err(remote_channel::NotStacked::NoWorker(message))
+                if state
+                    .workers
+                    .board
+                    .placement(crate::remote_work::protocol::TaskKind::StackChannel)
+                    .allows(true) =>
+            {
+                tracing::warn!(job_id, "{message}; this server stacks the channel");
+                stack_here(&pool, checkpoint)?
+            }
+            Err(
+                remote_channel::NotStacked::NoWorker(message)
+                | remote_channel::NotStacked::Failed(message),
+            ) => return Err(message),
+        };
+        (integrated, lease, pool)
+    } else {
+        (stack_here(&pool, checkpoint)?, lease, pool)
+    };
+    let _held = lease;
     let built = match integrated {
         integrate::ChannelOutcome::Built(built) => built,
         integrate::ChannelOutcome::Cancelled => return Ok(GroupOutcome::Cancelled),
@@ -748,7 +818,8 @@ struct CardEvents<'a> {
     state: &'a Arc<AppState>,
     job_id: &'a str,
     index: usize,
-    live: live::Publisher<'a>,
+    /// The running image, for a channel this server stacks.
+    live: Option<live::Publisher<'a>>,
     stack_root: &'a FsPath,
     database_id: &'a str,
     identity: integrate::CheckpointIdentity,
@@ -851,15 +922,21 @@ impl integrate::ChannelEvents for CardEvents<'_> {
     }
 
     fn live(&mut self, stacker: &seiza_stacking::LiveStacker, accepted: u32, force: bool) {
-        self.live.publish(stacker, accepted, force);
+        if let Some(live) = &mut self.live {
+            live.publish(stacker, accepted, force);
+        }
     }
 
     fn batch_frames(&self) -> usize {
-        self.live.batch_frames()
+        self.live
+            .as_ref()
+            .map_or(usize::MAX, |live| live.batch_frames())
     }
 
     fn observe_batch(&mut self, elapsed: std::time::Duration, frames: usize) {
-        self.live.observe_batch(elapsed, frames);
+        if let Some(live) = &mut self.live {
+            live.observe_batch(elapsed, frames);
+        }
     }
 }
 

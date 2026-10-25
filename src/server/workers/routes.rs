@@ -22,8 +22,8 @@ use tokio::io::AsyncWriteExt;
 
 use super::board::{QueuedSummary, Refusal, SessionSummary, WorkPlacement, POLL};
 use crate::remote_work::protocol::{
-    valid_file_name, Completion, Failure, ProbeAnswer, Progress, ProgressReply, Registered,
-    Registration, TaskKind, DIGEST_HEADER, LEASE_HEADER, PROTOCOL_VERSION,
+    valid_file_name, Completion, Failure, ProbeAnswer, Progress, Registered, Registration,
+    TaskKind, DIGEST_HEADER, LEASE_HEADER, PROTOCOL_VERSION,
 };
 use crate::server::api::ApiResponse;
 use crate::server::auth::{AccessRole, RequestAccess};
@@ -231,9 +231,9 @@ async fn progress(
     match state
         .workers
         .board
-        .progress(&session, &task, &lease, progress.fraction)
+        .progress(&session, &task, &lease, progress)
     {
-        Ok(stop) => Json(ProgressReply { stop }).into_response(),
+        Ok(reply) => Json(reply).into_response(),
         Err(refused) => refused.into_response(),
     }
 }
@@ -447,11 +447,13 @@ pub struct WorkersResponse {
     pub placement: Placement,
 }
 
-/// Where each kind of work runs. Stack builds and WBPP runs stay on this
-/// server until they can run on workers.
+/// Where each kind of work runs. WBPP runs stay on this server.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct Placement {
     pub rc_astro: WorkPlacement,
+    /// Omitted keeps the current choice.
+    #[serde(default)]
+    pub stack: Option<WorkPlacement>,
 }
 
 /// `POST /api/workers/tokens`
@@ -522,6 +524,7 @@ fn summary(state: &AppState) -> WorkersResponse {
         exchange_subfolder: super::board::EXCHANGE_SUBFOLDER,
         placement: Placement {
             rc_astro: state.workers.board.placement(TaskKind::RcAstroStep),
+            stack: Some(state.workers.board.placement(TaskKind::StackChannel)),
         },
     }
 }
@@ -656,17 +659,19 @@ async fn set_placement(
 ) -> Result<Json<ApiResponse<WorkersResponse>>, AppError> {
     require_operator(&state, &access)?;
     update_registry(&state, |registry| {
-        registry
-            .remote_workers
-            .get_or_insert_with(Default::default)
-            .rc_astro = placement.rc_astro;
+        let settings = registry.remote_workers.get_or_insert_with(Default::default);
+        settings.rc_astro = placement.rc_astro;
+        if let Some(stack) = placement.stack {
+            settings.stack = stack;
+        }
         Ok(())
     })
     .await?;
-    state
-        .workers
-        .board
-        .set_placement(TaskKind::RcAstroStep, placement.rc_astro);
+    let board = &state.workers.board;
+    board.set_placement(TaskKind::RcAstroStep, placement.rc_astro);
+    if let Some(stack) = placement.stack {
+        board.set_placement(TaskKind::StackChannel, stack);
+    }
     Ok(Json(ApiResponse::success(summary(&state))))
 }
 
