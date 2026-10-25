@@ -98,6 +98,7 @@ enum WireOrientation {
         /// Whether the reference faces north up, and what decided it.
         anchor: Option<(bool, String)>,
     },
+    MosaicCanvas,
 }
 
 /// What decided a half turn, as the constant the orientation record
@@ -127,6 +128,7 @@ impl WireOrientation {
             integrate::Orientation::Reference { anchor } => Self::Reference {
                 anchor: anchor.map(|(north_up, source)| (north_up, source.to_string())),
             },
+            integrate::Orientation::MosaicCanvas => Self::MosaicCanvas,
         }
     }
 
@@ -139,6 +141,7 @@ impl WireOrientation {
             Self::Reference { anchor } => integrate::Orientation::Reference {
                 anchor: anchor.map(|(north_up, source)| (north_up, orientation_source(&source))),
             },
+            Self::MosaicCanvas => integrate::Orientation::MosaicCanvas,
         }
     }
 }
@@ -450,6 +453,7 @@ pub(crate) fn execute(
                 checkpoint_context: output_dir.join(CHECKPOINT_CONTEXT),
                 checkpoint_manifest: output_dir.join(CHECKPOINT_MANIFEST),
                 scratch: scratch.clone(),
+                mosaic_scratch: work_dir.join("mosaic"),
             },
             pool: &pool,
             threads: execution::ThreadBudget::from_total(threads),
@@ -839,6 +843,7 @@ pub(crate) mod testing {
             seiza_stacking::write_processed_image_fits_f32(&path, &image, &[], &[]).unwrap();
             frames.push(PreparedFrame {
                 image_id: index as i32,
+                target_id: 0,
                 acquired_date: None,
                 quality_score: None,
                 source_fingerprint: source_fingerprint(&path),
@@ -850,6 +855,8 @@ pub(crate) mod testing {
         }
         Channel(PreparedGroup {
             index: 0,
+            mosaic: false,
+            mosaic_panels: Vec::new(),
             calibration: crate::calibration::CalibrationMode::Off,
             flat_star_masking: false,
             frames,
@@ -863,6 +870,7 @@ pub(crate) mod testing {
             checkpoint_context: directory.join("resume.ctx"),
             checkpoint_manifest: directory.join("resume.json"),
             scratch: directory.join("scratch"),
+            mosaic_scratch: directory.join("mosaic"),
         }
     }
 

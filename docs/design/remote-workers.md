@@ -237,6 +237,9 @@ own work splits where the catalog stops:
   goes to no new worker, and a requeued task's events start again from 0.
 - **Failure.** Under workers first, a channel a worker fails is stacked on
   this server.
+- **Mosaics** stack on this server: their canvas planning and panel
+  matching run through the same integration
+  (`Orientation::MosaicCanvas`), but no worker takes them yet.
 
 A test stacks one synthetic channel on this server and on a real worker,
 over HTTP in both file modes, and checks the pixels match bit for bit on

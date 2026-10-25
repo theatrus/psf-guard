@@ -122,6 +122,7 @@ While a worker stacks a channel:
   answering for two minutes loses what it had.
 - Under **Workers first**, the server stacks the channel itself when no
   worker can take it or a worker fails it.
+- A mosaic always stacks on the server.
 
 ## Choose how files reach the worker
 

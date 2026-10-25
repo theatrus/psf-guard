@@ -148,6 +148,7 @@ mod tests {
             path,
             expected_target: None,
             exposure_seconds: 300.0,
+            read_fingerprint: None,
         }
     }
 
@@ -364,6 +365,7 @@ mod tests {
                     None,
                 )
                 .unwrap(),
+                recipe: crate::calibration::MasterRecipe::None,
                 applied: Default::default(),
                 match_tolerances: Default::default(),
             })

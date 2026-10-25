@@ -4974,6 +4974,7 @@ fn a_channel_s_card_keeps_the_frames_it_listed_before_the_stack_began() {
     let state = test_state();
     let frame = PreparedFrame {
         image_id: 1,
+        target_id: 0,
         acquired_date: None,
         quality_score: None,
         path: PathBuf::from("light.fits"),
