@@ -92,14 +92,14 @@ describe('a color composition being prepared', () => {
     let stage: 'preparing' | 'failed' = 'preparing';
     mount(() => ok(stage === 'preparing' ? preparing : {
       ...preparing, state: 'failed', phase: 'Could not be prepared', preparing: undefined,
-      error: 'RC-Astro on the color channels cannot run: rc-astro is not installed on this server',
+      error: 'RC-Astro on the color channels cannot run: rc-astro is not installed on this server or on a connected worker',
     }));
     await userEvent.click(await screen.findByRole('button', { name: 'Build RGB color preview' }));
     const build = await screen.findByRole('button', { name: 'Build RGB color preview' });
     await waitFor(() => expect(build).toHaveTextContent('Preparing…'));
     stage = 'failed';
     // The card has no preview yet, so the reason shows once, in its place.
-    const message = 'RC-Astro on the color channels cannot run: rc-astro is not installed on this server';
+    const message = 'RC-Astro on the color channels cannot run: rc-astro is not installed on this server or on a connected worker';
     expect(await screen.findByText(message, {}, { timeout: 3000 }))
       .toHaveClass('stack-preview-placeholder', 'error');
     expect(screen.getAllByText(message)).toHaveLength(1);

@@ -122,7 +122,7 @@ export default defineConfig({
     {
       name: 'webkit',
       use: { ...devices['Desktop Safari'], contextOptions: { reducedMotion: 'reduce' } },
-      testMatch: ['live-stack-preview.spec.ts', 'wbpp-storage.spec.ts', 'detail-scroll.spec.ts', 'detail-phone.spec.ts', 'view-choices.spec.ts', 'form-fields.spec.ts', 'astrobin-export.spec.ts', 'whats-new.spec.ts', 'server-info.spec.ts', 'auth.spec.ts', 'desktop-zoom.spec.ts', 'job-queue.spec.ts', 'sequence-dock.spec.ts', 'stack-method-settings.spec.ts', 'project-lifecycle.spec.ts', 'settings-scroll.spec.ts'],
+      testMatch: ['live-stack-preview.spec.ts', 'wbpp-storage.spec.ts', 'detail-scroll.spec.ts', 'detail-phone.spec.ts', 'view-choices.spec.ts', 'form-fields.spec.ts', 'astrobin-export.spec.ts', 'whats-new.spec.ts', 'server-info.spec.ts', 'auth.spec.ts', 'desktop-zoom.spec.ts', 'job-queue.spec.ts', 'sequence-dock.spec.ts', 'stack-method-settings.spec.ts', 'project-lifecycle.spec.ts', 'settings-scroll.spec.ts', 'worker-settings.spec.ts'],
     },
   ],
 
@@ -154,6 +154,8 @@ export default defineConfig({
         ...(dyldFallback ? { DYLD_FALLBACK_LIBRARY_PATH: dyldFallback } : {}),
         // Expose the tmp base to specs so they can reach the fixture files.
         PSF_GUARD_E2E_TMP: TMP_BASE,
+        // The specs expect no rc-astro, even on a machine that has one.
+        PSF_GUARD_RC_ASTRO: 'off',
         RUST_LOG: 'info',
       },
     },

@@ -869,7 +869,9 @@ fn cookie_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
 }
 
 fn uses_remote_bearer_token(path: &str) -> bool {
-    path.starts_with("/sync/v1/") || (path.starts_with("/db/") && path.ends_with("/images/upload"))
+    path.starts_with("/sync/v1/")
+        || path.starts_with("/workers/v1/")
+        || (path.starts_with("/db/") && path.ends_with("/images/upload"))
 }
 
 fn is_public_auth_path(path: &str) -> bool {

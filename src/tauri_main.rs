@@ -786,6 +786,7 @@ mod tests {
             pixinsight: None,
             backups: None,
             scoring: None,
+            remote_workers: None,
             peers: Vec::new(),
         }
     }

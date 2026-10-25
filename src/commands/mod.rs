@@ -28,6 +28,7 @@ pub mod update_grade;
 pub mod users;
 pub mod visualize_psf;
 pub mod visualize_psf_multi_common;
+pub mod worker;
 
 pub use analyze_fits::analyze_fits_and_compare;
 pub use annotate_stars::annotate_stars;

@@ -1,0 +1,89 @@
+import { expect, test, type APIRequestContext } from '@playwright/test';
+import { spawn, type ChildProcess } from 'child_process';
+import * as path from 'path';
+import { fileURLToPath } from 'url';
+import { openSettings } from './helpers';
+
+// Settings › Workers: a token is shown once inside the command to run, a real
+// `psf-guard worker` joins with it and shares the exchange folder, and
+// revoking the token disconnects the worker, which stops with the reason.
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const BINARY = process.env.PSF_GUARD_E2E_BINARY
+  ?? path.resolve(__dirname, '../../target/release/psf-guard');
+const BASE = `http://127.0.0.1:${Number(process.env.PSF_GUARD_E2E_PORT ?? 13099)}`;
+
+let worker: ChildProcess | null = null;
+
+async function revokeNamed(request: APIRequestContext, name: string) {
+  const listed = await (await request.get('/api/workers')).json();
+  for (const token of listed.data?.tokens ?? []) {
+    if (token.name === name) await request.delete(`/api/workers/tokens/${token.id}`);
+  }
+}
+
+test.afterEach(async ({ request }, testInfo) => {
+  worker?.kill();
+  worker = null;
+  await revokeNamed(request, `e2e-worker-${testInfo.project.name}`);
+});
+
+test('a worker joins with the token shown once, and stops when it is revoked', async ({ page, request }, testInfo) => {
+  const name = `e2e-worker-${testInfo.project.name}`;
+  await revokeNamed(request, name);
+  await page.goto('/');
+  await openSettings(page);
+  await page.getByRole('tab', { name: 'Workers' }).click();
+
+  // This server's own worker is listed even with no rc-astro here.
+  const local = page.locator('.worker-row', { has: page.getByText('This server', { exact: true }) });
+  await expect(local).toContainText('No RC-Astro tools');
+  await expect(local).toContainText('Reads task files in place');
+
+  await page.getByRole('button', { name: '+ Add a worker' }).click();
+  await page.getByLabel('Worker name').fill(name);
+  await page.getByRole('button', { name: 'Create token' }).click();
+  const secret = page.getByRole('status').filter({ hasText: 'Copy this command now.' });
+  const command = (await secret.locator('.token-secret-value').textContent()) ?? '';
+  expect(command).toContain(`psf-guard worker --server ${BASE}`);
+  const token = /PSF_GUARD_WORKER_TOKEN=(psfw_[0-9a-f]{64})/.exec(command)?.[1];
+  expect(token).toBeTruthy();
+  await secret.screenshot({ path: testInfo.outputPath('worker-token.png') });
+  await secret.getByRole('button', { name: 'Done' }).click();
+  await expect(page.getByText(token!)).toHaveCount(0);
+  const tokenRow = page.locator('.token-row', { hasText: name });
+  await expect(tokenRow).toContainText('Not connected');
+
+  // The worker shares this machine's disk with the server, so the exchange
+  // probe succeeds and task files go by path.
+  let output = '';
+  let exited: (code: number | null) => void = () => {};
+  const exit = new Promise<number | null>((resolve) => { exited = resolve; });
+  worker = spawn(BINARY, ['worker', '--server', BASE, '--name', name, '--files', 'shared'], {
+    env: { ...process.env, PSF_GUARD_WORKER_TOKEN: token!, PSF_GUARD_RC_ASTRO: 'off' },
+  });
+  worker.stdout?.on('data', (chunk) => { output += chunk; });
+  worker.stderr?.on('data', (chunk) => { output += chunk; });
+  worker.on('exit', (code) => exited(code));
+
+  const row = page.locator(`.worker-row[data-worker="${name}"]`);
+  await expect(row).toContainText('Connected', { timeout: 30_000 });
+  await expect(row).toContainText('Shared files');
+  await expect(row).toContainText('No RC-Astro tools');
+  await expect(tokenRow).toContainText('In use');
+  await row.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath('worker-connected.png') });
+
+  page.once('dialog', (dialog) => void dialog.accept());
+  await tokenRow.getByRole('button', { name: `Revoke the token for ${name}` }).click();
+  await expect(tokenRow).toHaveCount(0);
+  await expect(row).toHaveCount(0);
+  // The worker's next request is refused; it stops and says what to do.
+  const code = await Promise.race([
+    exit,
+    new Promise<string>((resolve) => setTimeout(() => resolve('still running'), 45_000)),
+  ]);
+  expect(code, output).not.toBe('still running');
+  expect(code, output).not.toBe(0);
+  expect(output).toContain('Settings › Workers');
+});

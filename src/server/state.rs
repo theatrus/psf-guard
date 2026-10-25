@@ -105,6 +105,9 @@ pub struct AppState {
     /// Process-global, single-flight project stacking preview jobs. Full-frame
     /// stacking is memory intensive, so groups and databases share one permit.
     pub stack_previews: crate::server::stack_preview::StackPreviewManager,
+    /// Workers that run tasks for this server, this server's own included,
+    /// and the tasks waiting for one.
+    pub workers: crate::server::workers::Workers,
     /// Refreshes of remembered stack previews waiting on new frames or grades.
     pub auto_stacks: crate::server::stack_preview::automatic::AutomaticStackRefresh,
     /// When each database's automatic import last ran, for the schedule.
@@ -564,6 +567,7 @@ impl AppState {
             worker_budgets: Arc::default(),
             preview_queue: crate::server::preview_queue::PreviewQueue::default(),
             stack_previews: crate::server::stack_preview::StackPreviewManager::default(),
+            workers: crate::server::workers::Workers::default(),
             auto_stacks: crate::server::stack_preview::automatic::AutomaticStackRefresh::default(),
             autoimport: crate::server::autoimport::AutoImportScheduler::default(),
             backups: crate::server::backup_job::BackupManager::default(),
@@ -900,6 +904,7 @@ impl AppState {
             worker_budgets: Arc::default(),
             preview_queue: crate::server::preview_queue::PreviewQueue::default(),
             stack_previews: crate::server::stack_preview::StackPreviewManager::default(),
+            workers: crate::server::workers::Workers::default(),
             auto_stacks: crate::server::stack_preview::automatic::AutomaticStackRefresh::default(),
             autoimport: crate::server::autoimport::AutoImportScheduler::default(),
             backups: crate::server::backup_job::BackupManager::default(),

@@ -1251,6 +1251,10 @@ export interface RcAstroCapabilities {
   available: boolean;
   executable?: string;
   tools: ExternalToolSchema[];
+  /** Whether this server has rc-astro. */
+  this_server?: boolean;
+  /** The connected workers that have rc-astro, by name. */
+  workers?: string[];
   error?: string;
 }
 
@@ -5192,4 +5196,47 @@ export interface FlatMeasureStatus {
 
 export interface CalibrationQualityStatus {
   progress: CalibrationQualityProgress;
+}
+
+/** A worker token, without its secret. */
+export interface WorkerTokenSummary {
+  id: string;
+  name: string;
+  created_at: number;
+}
+
+/** A worker connected to this server, as Settings › Workers lists it. */
+export interface WorkerSessionSummary {
+  session: string;
+  token_id: string;
+  name: string;
+  version: string;
+  /** This server's own worker. */
+  local: boolean;
+  connected: boolean;
+  connected_at: number;
+  seconds_since_seen: number;
+  threads: number;
+  /** The RC-Astro tools it offers, as "RC-Astro StarXTerminator 2.6.10". */
+  rc_astro: string[];
+  file_mode: 'remote' | 'shared';
+  /** Whether task files reach it by path. */
+  exchange_shared: boolean;
+  exchange_problem?: string;
+  running?: { label: string; fraction: number };
+}
+
+export interface WorkersSettings {
+  tokens: WorkerTokenSummary[];
+  workers: WorkerSessionSummary[];
+  queued: Array<{ label: string; needs: string }>;
+  exchange_folder: string;
+  exchange_folder_setting?: string;
+  default_exchange_folder: string;
+}
+
+export interface CreatedWorkerToken {
+  token: string;
+  summary: WorkerTokenSummary;
+  workers: WorkersSettings;
 }

@@ -1335,7 +1335,11 @@ that says `BOTTOM-UP`, and PSF Guard keeps rows in the order they are stored.
 A result cached before PSF Guard did this is used again only when its stack
 said `TOP-DOWN`; any other runs again. Find the CLI on `PATH`, or set its path in the `PSF_GUARD_RC_ASTRO`
 environment variable for service units with a minimal `PATH`.
-`GET /api/tools/rc-astro` reports the probe the UI uses.
+`PSF_GUARD_RC_ASTRO=off` leaves the tools to workers. Each tool runs on this
+server or on a connected [worker](REMOTE_WORKERS.md) that offers the same
+tool version; a server without rc-astro uses its workers' tools.
+`GET /api/tools/rc-astro` reports the tools the UI offers and where they
+run.
 
 A chain takes minutes on CPU. Every **Apply processing** — a stretch,
 deconvolution or RC-Astro chain — runs on the server as a *processing run*,

@@ -29,6 +29,7 @@ import StackAutomationSettings from './StackAutomationSettings';
 import StackMethodSettings from './StackMethodSettings';
 import StackGpuSettings from './StackGpuSettings';
 import WorkerShareSettings from './WorkerShareSettings';
+import WorkerSettings from './WorkerSettings';
 import StorageSettings from './StorageSettings';
 import BackupSettings from './BackupSettings';
 import ExportDefaultsSettings from './ExportDefaultsSettings';
@@ -69,7 +70,7 @@ import { describeUnsaved, useUnsavedLabels } from '../hooks/useUnsavedChanges';
 /**
  * Settings groups unrelated jobs into named tabs so each stays easy to find.
  */
-type SettingsTab = 'databases' | 'catalogs' | 'sync' | 'setups' | 'calibration' | 'stacking' | 'storage' | 'backups' | 'performance' | 'review' | 'rigs' | 'templates' | 'users' | 'agents' | 'server';
+type SettingsTab = 'databases' | 'catalogs' | 'sync' | 'setups' | 'calibration' | 'stacking' | 'storage' | 'backups' | 'performance' | 'workers' | 'review' | 'rigs' | 'templates' | 'users' | 'agents' | 'server';
 
 /** An intent that only picks a tab. */
 type TabIntent = Extract<SettingsIntent, SettingsTab>;
@@ -996,6 +997,12 @@ export default function TauriSettings({
     // How much of the processor stacking, quality scans and previews may use
     // together; server-wide and not management-gated, like Stacking.
     { id: 'performance', label: 'Performance' },
+    // A worker token lets another machine read the files of the tasks it
+    // runs, so workers take an editor on a server that allows database
+    // management.
+    ...(canEdit && managementAllowed
+      ? ([{ id: 'workers', label: 'Workers' }] as const)
+      : []),
     // Review preferences are stored in this browser, so no gate either.
     { id: 'review', label: 'Review' },
     // Rig setup and the exposure template library are Planning's configuration.
@@ -2122,6 +2129,8 @@ export default function TauriSettings({
               <WorkerShareSettings />
             </div>
           )}
+
+          {currentTab === 'workers' && <WorkerSettings />}
 
           {currentTab === 'storage' && (
             <div className="settings-setups">

@@ -1599,6 +1599,27 @@ pub fn main() -> Result<()> {
                 println!("     telescope capture counts, images, and grades were left unchanged");
             }
         },
+        Commands::Worker {
+            server,
+            token,
+            name,
+            files,
+            maps,
+            work_dir,
+            rc_astro,
+            work,
+        } => {
+            crate::commands::worker::run(crate::commands::worker::WorkerArgs {
+                server,
+                token,
+                name,
+                files,
+                maps,
+                work_dir,
+                rc_astro,
+                work,
+            })?;
+        }
         Commands::Users { action } => {
             crate::commands::users::manage_users(action)?;
         }

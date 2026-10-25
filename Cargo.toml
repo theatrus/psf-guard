@@ -83,6 +83,8 @@ reqwest = { version = "0.13.5", default-features = false, features = [
     "gzip",
 ] }
 tower = { version = "0.5", features = ["util"] }
+# Reads a worker's upload one frame at a time.
+http-body-util = "0.1"
 tower-http = { version = "0.7", features = ["fs", "trace", "cors"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -122,7 +124,6 @@ windows-sys = { version = "0.61", features = [
 
 [dev-dependencies]
 filetime = "0.2"
-http-body-util = "0.1"
 
 [features]
 default = []

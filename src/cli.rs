@@ -15,6 +15,16 @@ pub struct Cli {
 }
 
 /// CLI spelling of [`crate::server::stack_preview::snr::StackFrameOrder`].
+/// How a worker reaches task files.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
+pub enum WorkerFilesArg {
+    /// Through the server.
+    #[default]
+    Remote,
+    /// On storage shared with the server.
+    Shared,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
 pub enum StackOrderArg {
     /// Chronological.
@@ -1293,6 +1303,60 @@ pub enum Commands {
         /// measure everything again.
         #[arg(long)]
         fresh: bool,
+    },
+
+    /// Run tasks for a PSF Guard server on this machine.
+    ///
+    /// Create a token in the server's Settings › Workers, then run
+    /// `psf-guard worker --server http://host:3000`, with the token in
+    /// PSF_GUARD_WORKER_TOKEN or `--token`. The worker offers the RC-Astro
+    /// tools installed here, runs the tasks the server sends it, and keeps
+    /// running until you stop it with Ctrl-C.
+    Worker {
+        /// The server's address, such as `http://192.168.1.10:3000`.
+        #[arg(long)]
+        server: String,
+
+        /// The worker token from Settings › Workers. When omitted, the
+        /// token is read from PSF_GUARD_WORKER_TOKEN, which keeps it out of
+        /// the process list.
+        #[arg(long)]
+        token: Option<String>,
+
+        /// The name Settings › Workers shows for this machine (defaults to
+        /// its host name).
+        #[arg(long)]
+        name: Option<String>,
+
+        /// How task files reach this machine: `remote` sends every file
+        /// through the server; `shared` reads and writes them on storage
+        /// this machine shares with the server, and sends a file through
+        /// the server only when it cannot see it.
+        #[arg(long, value_enum, default_value_t = WorkerFilesArg::Remote)]
+        files: WorkerFilesArg,
+
+        /// Where a server folder is on this machine, as SERVER=LOCAL, for
+        /// shared files. Repeat for more folders. Implies `--files shared`.
+        /// Without a map, shared mode reads the server's paths as they are.
+        #[arg(long = "map", value_name = "SERVER=LOCAL")]
+        maps: Vec<String>,
+
+        /// Folder for downloaded inputs and for outputs before they are
+        /// uploaded (defaults to the system temporary folder).
+        #[arg(long)]
+        work_dir: Option<String>,
+
+        /// The rc-astro executable (defaults to PSF_GUARD_RC_ASTRO, then the
+        /// standard install).
+        #[arg(long)]
+        rc_astro: Option<String>,
+
+        /// Work this worker takes, which the server then sends here before
+        /// it runs that work itself: `rc-astro` for every RC-Astro tool, or
+        /// `bxt`, `nxt` or `sxt` for one. Repeat for more. Without it, the
+        /// worker takes everything it can run.
+        #[arg(long = "work", value_name = "WORK")]
+        work: Vec<String>,
     },
 
     /// Start the web server for API access and static file serving

@@ -571,9 +571,10 @@ Install the optional **Gaia colors** package under **Settings → Catalogs** to
 calibrate RGB, LRGB, and OSC stack colors against stars. The result shows the
 calibration's star count and gains, or why calibration could not run.
 
-With a licensed standalone RC-Astro CLI on the server, processing also offers
-BlurXTerminator, NoiseXTerminator, and StarXTerminator. Star removal keeps
-both the stars and starless results. Processing runs show queue position and
+With a licensed standalone RC-Astro CLI on the server, or on a
+[worker](docs/REMOTE_WORKERS.md) computer connected to it, processing also
+offers BlurXTerminator, NoiseXTerminator, and StarXTerminator. Star removal
+keeps both the stars and starless results. Processing runs show queue position and
 progress, support Stop, and can resume after a restart. Saved processing
 choices remain available when a stack rebuilds. With **Re-apply processing
 when a stack refreshes** on, each channel’s processing runs after a build

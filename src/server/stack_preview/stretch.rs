@@ -1027,6 +1027,7 @@ impl PreparedRun {
 /// The same request, sent again or read back from the job journal, comes
 /// out under the same id.
 async fn prepare_run(
+    state: &Arc<AppState>,
     database_id: &str,
     source_key: &str,
     source_revision: &str,
@@ -1051,12 +1052,13 @@ async fn prepare_run(
     // also pin the CLI and model versions into the cache identity.
     let rc_astro_schemas = match request.rc_astro.clone() {
         Some(config) => Some(
-            tokio::task::spawn_blocking(move || super::rc_astro::schemas_for(&config))
-                .await
-                .map_err(|error| {
-                    AppError::InternalError(format!("RC-Astro probe failed: {error}"))
-                })?
-                .map_err(AppError::BadRequest)?,
+            tokio::task::spawn_blocking({
+                let state = Arc::clone(state);
+                move || super::rc_astro::schemas_for(&state.workers, &config)
+            })
+            .await
+            .map_err(|error| AppError::InternalError(format!("RC-Astro probe failed: {error}")))?
+            .map_err(AppError::BadRequest)?,
         ),
         None => None,
     };
@@ -1151,6 +1153,7 @@ pub(super) async fn apply_to_fits(
         .map_err(AppError::InternalError)?;
     }
     let prepared = prepare_run(
+        &state,
         &database_id,
         &source.key,
         &source.revision,
@@ -1406,6 +1409,7 @@ async fn restore_processing(
     }
     validate_request(&request).map_err(NotRestored::Skip)?;
     let prepared = prepare_run(
+        state,
         &ctx.id,
         &source.key,
         &source.revision,
@@ -1517,6 +1521,7 @@ pub(super) async fn start_reapply(
     }
     validate_request(&request)?;
     let prepared = prepare_run(
+        state,
         &ctx.id,
         &source.key,
         &source.revision,
@@ -2445,6 +2450,10 @@ fn render_fits_variant(
         let cancel = stop.signal();
         rc_astro_outcome = Some(pool.install(|| {
             super::rc_astro::apply_rc_astro(
+                crate::server::workers::rc_astro::RcAstroRunner {
+                    workers: &state.workers,
+                    person: priority == crate::concurrency::Priority::Interactive,
+                },
                 stack_root,
                 chain_ids,
                 &rc_astro_config,
@@ -3648,7 +3657,10 @@ mod tests {
             calibration: Option<&StackCalibrationSource>,
             request: StackViewProcessingRequest,
         ) -> PreparedRun {
-            prepare_run("db", "mono:job:0", "rev", calibration, request)
+            let state = Arc::new(AppState::new_for_test(
+                rusqlite::Connection::open_in_memory().unwrap(),
+            ));
+            prepare_run(&state, "db", "mono:job:0", "rev", calibration, request)
                 .await
                 .unwrap()
         }

@@ -1,0 +1,501 @@
+//! The worker command against a real server's workers routes, with a
+//! stand-in rc-astro on both sides.
+
+#![cfg(unix)]
+
+use super::*;
+use crate::server::state::AppState;
+use crate::server::workers::board::{Board, Timings};
+use crate::server::workers::{tokens, Workers};
+use seiza_stacking::LinearImage;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+
+struct Server {
+    state: Arc<AppState>,
+    address: String,
+    secret: String,
+    /// Inputs downloaded and outputs uploaded over HTTP.
+    transfers: Arc<AtomicUsize>,
+    exchange: tempfile::TempDir,
+}
+
+async fn server() -> Server {
+    let exchange = tempfile::tempdir().unwrap();
+    let mut state = AppState::new_for_test(rusqlite::Connection::open_in_memory().unwrap());
+    state.workers = Workers::with_board(Board::with_timings(
+        exchange.path().to_path_buf(),
+        Timings {
+            lease: Duration::from_secs(3),
+            no_worker_grace: Duration::from_secs(10),
+        },
+    ));
+    let (secret, record) = tokens::mint("test").unwrap();
+    state
+        .workers
+        .configure(vec![record], exchange.path().to_path_buf());
+    let state = Arc::new(state);
+    let transfers = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&transfers);
+    let router = axum::Router::new()
+        .nest(
+            "/api/workers/v1",
+            crate::server::workers::routes::worker_routes(),
+        )
+        .layer(axum::middleware::from_fn(
+            move |request: axum::extract::Request, next: axum::middleware::Next| {
+                let counted = Arc::clone(&counted);
+                async move {
+                    let path = request.uri().path();
+                    if path.contains("/inputs/") || path.contains("/outputs/") {
+                        counted.fetch_add(1, Ordering::SeqCst);
+                    }
+                    next.run(request).await
+                }
+            },
+        ))
+        .with_state(Arc::clone(&state));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    Server {
+        state,
+        address,
+        secret,
+        transfers,
+        exchange,
+    }
+}
+
+/// Start a worker against `server`; it stops when the sender is dropped.
+fn start_worker(
+    server: &Server,
+    files: FileAccess,
+    work_dir: &Path,
+) -> (
+    tokio::sync::oneshot::Sender<()>,
+    tokio::task::JoinHandle<Result<()>>,
+) {
+    start_worker_taking(server, files, work_dir, WorkChoice::default())
+}
+
+/// Start a worker that takes only `work`.
+fn start_worker_taking(
+    server: &Server,
+    files: FileAccess,
+    work_dir: &Path,
+    work: WorkChoice,
+) -> (
+    tokio::sync::oneshot::Sender<()>,
+    tokio::task::JoinHandle<Result<()>>,
+) {
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let options = WorkerOptions {
+        server: server.address.clone(),
+        token: server.secret.clone(),
+        name: "test-worker".into(),
+        files,
+        work_dir: work_dir.to_path_buf(),
+        tools: LocalTools {
+            rc_astro: crate::remote_work::rc_astro::locate(None),
+        },
+        work,
+    };
+    let handle = tokio::spawn(serve(options, async {
+        let _ = stopped.await;
+    }));
+    (stop, handle)
+}
+
+async fn eventually(what: &str, mut ready: impl FnMut() -> bool) {
+    for _ in 0..200 {
+        if ready() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("{what} did not happen");
+}
+
+fn connected(server: &Server) -> Option<crate::server::workers::board::SessionSummary> {
+    server
+        .state
+        .workers
+        .board
+        .summary()
+        .0
+        .into_iter()
+        .find(|worker| worker.name == "test-worker" && worker.connected)
+}
+
+fn noise_x() -> seiza_stacking::ExternalToolSchema {
+    let cli = crate::remote_work::rc_astro::locate(None).unwrap();
+    crate::remote_work::rc_astro::probe(&cli)
+        .0
+        .into_iter()
+        .find(|schema| schema.key == "nxt")
+        .unwrap()
+}
+
+fn request() -> seiza_stacking::ExternalToolRequest {
+    seiza_stacking::ExternalToolRequest {
+        tool: "nxt".into(),
+        parameters: Default::default(),
+        device: None,
+    }
+}
+
+fn image() -> LinearImage {
+    LinearImage::new(
+        4,
+        2,
+        1,
+        vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0],
+    )
+    .unwrap()
+}
+
+/// Run NoiseXTerminator on the board, as the server's processing would.
+async fn run_step(
+    server: &Server,
+    cancel: Option<seiza_stacking::CancelSignal>,
+) -> (
+    Result<seiza_stacking::ProcessedStackImage, String>,
+    Vec<Option<String>>,
+) {
+    let board = Arc::clone(&server.state.workers.board);
+    tokio::task::spawn_blocking(move || {
+        let mut heard = Vec::new();
+        let ran = crate::server::workers::rc_astro::run_on_board(
+            &board,
+            true,
+            &noise_x(),
+            &request(),
+            &image(),
+            &[],
+            cancel.as_ref(),
+            &mut |_, worker| heard.push(worker.map(str::to_string)),
+        );
+        (ran, heard)
+    })
+    .await
+    .unwrap()
+}
+
+fn assert_same_pixels(processed: &LinearImage) {
+    for (got, sent) in processed.data.iter().zip(&image().data) {
+        assert!((got - sent).abs() < 1e-2, "{got} != {sent}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_remote_worker_downloads_the_input_and_uploads_the_result() {
+    let tool = crate::server::stack_preview::rc_astro::test_tool::install(false);
+    let server = server().await;
+    let work = tempfile::tempdir().unwrap();
+    let (stop, worker) = start_worker(&server, FileAccess::default(), work.path());
+    eventually("the worker connects", || connected(&server).is_some()).await;
+    let summary = connected(&server).unwrap();
+    assert_eq!(summary.rc_astro.len(), 3, "{:?}", summary.rc_astro);
+    assert!(!summary.exchange_shared);
+
+    let (ran, heard) = run_step(&server, None).await;
+    let processed = ran.unwrap();
+    assert_same_pixels(&processed.image);
+    assert!(heard.contains(&Some("test-worker".into())), "{heard:?}");
+    assert_eq!(tool.invocations(), 1);
+    // One download and one upload.
+    assert_eq!(server.transfers.load(Ordering::SeqCst), 2);
+    eventually("the worker clears its scratch folder", || {
+        std::fs::read_dir(work.path()).is_ok_and(|mut entries| entries.next().is_none())
+    })
+    .await;
+
+    drop(stop);
+    worker.await.unwrap().unwrap();
+    eventually("the worker leaves", || connected(&server).is_none()).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_worker_advertises_only_the_tools_its_work_choices_list() {
+    let _tool = crate::server::stack_preview::rc_astro::test_tool::install(false);
+    let server = server().await;
+    let work = tempfile::tempdir().unwrap();
+    let (stop, worker) = start_worker_taking(
+        &server,
+        FileAccess::default(),
+        work.path(),
+        WorkChoice::parse(&["bxt".into()]).unwrap(),
+    );
+    eventually("the worker connects", || connected(&server).is_some()).await;
+    let summary = connected(&server).unwrap();
+    assert_eq!(summary.rc_astro, ["RC-Astro BlurXTerminator 9.9.9-test"]);
+    // NoiseXTerminator is not this worker's work: the step waits for another
+    // worker and fails when none connects.
+    let (ran, _) = run_step(&server, None).await;
+    assert_eq!(
+        ran.unwrap_err(),
+        "No connected worker offers RC-Astro NoiseXTerminator 9.9.9-test"
+    );
+    drop(stop);
+    worker.await.unwrap().unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_shared_worker_reads_and_writes_through_its_map() {
+    let tool = crate::server::stack_preview::rc_astro::test_tool::install(false);
+    let server = server().await;
+    let work = tempfile::tempdir().unwrap();
+    // The worker sees the exchange folder at another path.
+    let mount = tempfile::tempdir().unwrap();
+    let seen_at = mount.path().join("exchange");
+    std::os::unix::fs::symlink(server.exchange.path(), &seen_at).unwrap();
+    let files = FileAccess {
+        mode: FileMode::Shared,
+        maps: vec![PathMap {
+            server: server.exchange.path().display().to_string(),
+            local: seen_at.display().to_string(),
+        }],
+    };
+    let (stop, worker) = start_worker(&server, files, work.path());
+    eventually("the worker shares the exchange folder", || {
+        connected(&server).is_some_and(|worker| worker.exchange_shared)
+    })
+    .await;
+
+    let (ran, _) = run_step(&server, None).await;
+    assert_same_pixels(&ran.unwrap().image);
+    assert_eq!(tool.invocations(), 1);
+    assert_eq!(
+        server.transfers.load(Ordering::SeqCst),
+        0,
+        "no file went through the server"
+    );
+    drop(stop);
+    worker.await.unwrap().unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_shared_worker_that_cannot_see_the_folder_falls_back_to_the_server() {
+    let tool = crate::server::stack_preview::rc_astro::test_tool::install(false);
+    let server = server().await;
+    let work = tempfile::tempdir().unwrap();
+    let files = FileAccess {
+        mode: FileMode::Shared,
+        maps: vec![PathMap {
+            server: server.exchange.path().display().to_string(),
+            local: "/nonexistent/psf-guard-exchange".into(),
+        }],
+    };
+    let (stop, worker) = start_worker(&server, files, work.path());
+    eventually("the worker connects", || connected(&server).is_some()).await;
+    eventually("the probe is answered", || {
+        connected(&server).is_some_and(|worker| worker.exchange_problem.is_some())
+    })
+    .await;
+
+    let (ran, _) = run_step(&server, None).await;
+    assert_same_pixels(&ran.unwrap().image);
+    assert_eq!(tool.invocations(), 1);
+    assert_eq!(server.transfers.load(Ordering::SeqCst), 2);
+    drop(stop);
+    worker.await.unwrap().unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stop_on_the_server_kills_the_tool_on_the_worker() {
+    let tool = crate::server::stack_preview::rc_astro::test_tool::install(true);
+    let server = server().await;
+    let work = tempfile::tempdir().unwrap();
+    let (stop, worker) = start_worker(&server, FileAccess::default(), work.path());
+    eventually("the worker connects", || connected(&server).is_some()).await;
+
+    let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let cancel = {
+        let cancelled = Arc::clone(&cancelled);
+        seiza_stacking::CancelSignal::new(move || cancelled.load(Ordering::SeqCst))
+    };
+    let step = {
+        let server_board = Arc::clone(&server.state.workers.board);
+        tokio::task::spawn_blocking(move || {
+            crate::server::workers::rc_astro::run_on_board(
+                &server_board,
+                true,
+                &noise_x(),
+                &request(),
+                &image(),
+                &[],
+                Some(&cancel),
+                &mut |_, _| {},
+            )
+        })
+    };
+    eventually("the tool starts on the worker", || tool.pid().is_some()).await;
+    let pid = tool.pid().unwrap();
+    cancelled.store(true, Ordering::SeqCst);
+    let refused = step.await.unwrap().unwrap_err();
+    assert!(refused.contains("was stopped"), "{refused}");
+    // The worker hears it at its next report, a second later here.
+    eventually("the worker kills the tool", || {
+        !std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+    })
+    .await;
+    eventually("the worker is free again", || {
+        connected(&server).is_some_and(|worker| worker.running.is_none())
+    })
+    .await;
+    drop(stop);
+    worker.await.unwrap().unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_worker_with_a_revoked_token_stops_with_the_reason() {
+    let server = server().await;
+    server.state.workers.set_tokens(Vec::new());
+    let work = tempfile::tempdir().unwrap();
+    let (_stop, worker) = start_worker(&server, FileAccess::default(), work.path());
+    let error = tokio::time::timeout(Duration::from_secs(20), worker)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap_err();
+    assert!(error.to_string().contains("Settings › Workers"), "{error}");
+}
+
+#[test]
+fn maps_imply_shared_files_and_must_name_both_sides() {
+    let args = |maps: &[&str]| WorkerArgs {
+        server: "http://server:3000/".into(),
+        token: Some("psfw_x".into()),
+        name: Some("n".into()),
+        files: WorkerFilesArg::Remote,
+        maps: maps.iter().map(|map| map.to_string()).collect(),
+        work_dir: None,
+        rc_astro: None,
+        work: Vec::new(),
+    };
+    let remote = options(args(&[])).unwrap();
+    assert_eq!(remote.files.mode, FileMode::Remote);
+    assert_eq!(remote.server, "http://server:3000");
+    let shared = options(args(&["/srv=/mnt"])).unwrap();
+    assert_eq!(shared.files.mode, FileMode::Shared);
+    assert_eq!(
+        shared.files.maps,
+        vec![PathMap {
+            server: "/srv".into(),
+            local: "/mnt".into()
+        }]
+    );
+    assert!(options(args(&["/srv"])).is_err());
+    assert!(options(args(&["=/mnt"])).is_err());
+}
+
+/// The real rc-astro on a remote worker, over HTTP, in both file modes.
+/// Needs a licensed rc-astro on this machine:
+/// `cargo test --lib real_rc_astro -- --ignored`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "needs a licensed rc-astro"]
+async fn real_rc_astro_runs_on_a_remote_worker() {
+    let cli = crate::remote_work::rc_astro::locate(None).expect("rc-astro is installed");
+    let schema = crate::remote_work::rc_astro::probe(&cli)
+        .0
+        .into_iter()
+        .find(|schema| schema.key == "nxt" && schema.licensed)
+        .expect("NoiseXTerminator is licensed");
+    // A 1024×1024 sky: a sloped background, noise and a grid of stars.
+    let (width, height) = (1024usize, 1024usize);
+    let mut seed = 7u64;
+    let mut noise = move || {
+        seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        ((seed >> 33) as f32 / (1u64 << 31) as f32) - 0.5
+    };
+    let mut data = vec![0.0f32; width * height];
+    for y in 0..height {
+        for x in 0..width {
+            let mut value = 500.0 + x as f32 * 0.05 + noise() * 40.0;
+            let (sx, sy) = ((x % 64) as f32 - 32.0, (y % 64) as f32 - 32.0);
+            value += 8000.0 * (-(sx * sx + sy * sy) / 4.0).exp();
+            data[y * width + x] = value;
+        }
+    }
+    let image = LinearImage::new(width, height, 1, data).unwrap();
+    for files in [
+        FileAccess::default(),
+        FileAccess {
+            mode: FileMode::Shared,
+            maps: Vec::new(),
+        },
+    ] {
+        let server = server().await;
+        let work = tempfile::tempdir().unwrap();
+        let shared = files.mode == FileMode::Shared;
+        let (stop, worker) = start_worker(&server, files, work.path());
+        eventually("the worker connects", || {
+            connected(&server).is_some_and(|worker| !shared || worker.exchange_shared)
+        })
+        .await;
+        let board = Arc::clone(&server.state.workers.board);
+        let (schema, sent) = (schema.clone(), image.clone());
+        let started = std::time::Instant::now();
+        let processed = tokio::task::spawn_blocking(move || {
+            crate::server::workers::rc_astro::run_on_board(
+                &board,
+                true,
+                &schema,
+                &seiza_stacking::ExternalToolRequest {
+                    tool: "nxt".into(),
+                    parameters: Default::default(),
+                    device: None,
+                },
+                &sent,
+                &[],
+                None,
+                &mut |fraction, worker| tracing::info!("{:.0}% on {worker:?}", fraction * 100.0),
+            )
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            (processed.image.width, processed.image.height),
+            (width, height)
+        );
+        let spread = |data: &[f32]| {
+            let mean = data.iter().sum::<f32>() / data.len() as f32;
+            (data.iter().map(|value| (value - mean).powi(2)).sum::<f32>() / data.len() as f32)
+                .sqrt()
+        };
+        // A background patch between stars is quieter after NoiseX.
+        let patch = |image: &LinearImage| {
+            (480usize..540)
+                .flat_map(|y| (480usize..540).map(move |x| (x, y)))
+                .filter(|(x, y)| (x % 64).abs_diff(32) > 12 && (y % 64).abs_diff(32) > 12)
+                .map(|(x, y)| image.data[y * width + x])
+                .collect::<Vec<_>>()
+        };
+        let (before, after) = (spread(&patch(&image)), spread(&patch(&processed.image)));
+        eprintln!(
+            "{} files: NoiseX in {:.1}s on {:?}, background spread {before:.1} → {after:.1}, transfers {}",
+            if shared { "shared" } else { "remote" },
+            started.elapsed().as_secs_f32(),
+            processed.device,
+            server.transfers.load(Ordering::SeqCst)
+        );
+        assert!(after < before, "{after} >= {before}");
+        assert_eq!(
+            server.transfers.load(Ordering::SeqCst),
+            if shared { 0 } else { 2 }
+        );
+        drop(stop);
+        worker.await.unwrap().unwrap();
+    }
+}

@@ -22,6 +22,16 @@
   spacing. Emission amounts and star reduction appear where they run in the
   pipeline; closing a step preserves its edits.
 
+- Run RC-Astro tools on another computer. Add a worker in **Settings ›
+  Workers**, then run `psf-guard worker --server …` there with its token.
+  The worker runs BlurXTerminator, NoiseXTerminator and StarXTerminator for
+  stack previews, color previews and narrowband stars, and the processing
+  panel shows which worker runs each step. A worker takes every tool it has,
+  or the ones `--work` lists, and this server runs a tool itself when no
+  worker that takes it is connected. Files go through the server, or, with
+  `--files shared`, through a folder the worker and the server share.
+  See [Workers](../REMOTE_WORKERS.md).
+
 - Watch a channel's in-progress stack in **Stacks**, with a live preview updated
   about every five seconds. The finished preview replaces it when processing
   completes; completed FITS downloads remain separate during a rebuild.

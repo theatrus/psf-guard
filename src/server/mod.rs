@@ -77,6 +77,7 @@ pub mod user_preferences;
 pub mod wbpp_queue;
 pub mod wbpp_run;
 pub mod wbpp_storage;
+pub mod workers;
 
 use axum::{
     extract::DefaultBodyLimit,
@@ -893,6 +894,8 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route("/sync/v1/exports/{export_id}", get(remote_sync::get_export))
         .route("/sync/v1/jobs/{job_id}", get(remote_sync::get_preview_job))
         .merge(backup_job::routes())
+        .nest("/workers/v1", workers::routes::worker_routes())
+        .merge(workers::routes::settings_routes())
         .nest("/db/{db_id}", db_routes)
         .nest_service("/mcp", mcp::service(Arc::clone(&state)))
         .layer(axum::middleware::from_fn(json_no_store))
@@ -1031,6 +1034,17 @@ async fn run_server_internal(
             state.set_worker_policy(config.worker_policy);
             state.set_preview_encoding(config.preview_encoding);
             state.set_preview_color_default(config.preview_color_default);
+            let remote_workers = registry
+                .as_ref()
+                .and_then(|registry| registry.remote_workers.clone())
+                .unwrap_or_default();
+            state.workers.configure(
+                remote_workers.tokens,
+                remote_workers
+                    .exchange_folder
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| startup_storage.roots.cache.join("workers")),
+            );
             remote_upload::configure_keep_failed_uploads(config.keep_failed_uploads);
             if config.keep_failed_uploads {
                 tracing::info!(
@@ -1214,6 +1228,11 @@ async fn run_server_internal(
 
     // Start preview pre-generation when the server was started with it on.
     preview_pregeneration::spawn(&state);
+    // Start this server's own worker; it probes for rc-astro first.
+    {
+        let state = Arc::clone(&state);
+        tokio::task::spawn_blocking(move || state.workers.refresh_local());
+    }
 
     // Per-DB routes — nested under /api/db/{db_id}/.
     let api_routes = api_router(Arc::clone(&state));
