@@ -1034,16 +1034,12 @@ async fn run_server_internal(
             state.set_worker_policy(config.worker_policy);
             state.set_preview_encoding(config.preview_encoding);
             state.set_preview_color_default(config.preview_color_default);
-            let remote_workers = registry
-                .as_ref()
-                .and_then(|registry| registry.remote_workers.clone())
-                .unwrap_or_default();
             state.workers.configure(
-                remote_workers.tokens,
-                remote_workers
-                    .exchange_folder
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| startup_storage.roots.cache.join("workers")),
+                registry
+                    .as_ref()
+                    .and_then(|registry| registry.remote_workers.clone())
+                    .unwrap_or_default(),
+                startup_storage.roots.cache.join("workers"),
             );
             remote_upload::configure_keep_failed_uploads(config.keep_failed_uploads);
             if config.keep_failed_uploads {

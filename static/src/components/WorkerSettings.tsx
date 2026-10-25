@@ -7,22 +7,36 @@ import type {
   CreatedWorkerToken,
   WorkerSessionSummary,
   WorkersSettings,
+  WorkPlacement,
 } from '../api/types';
 import { formatTokenDate } from '../utils/apiTokens';
+import { serverAddress } from '../utils/workerCommand';
 
 const WORKERS_QUERY_KEY = ['workers'] as const;
+
+const PLACEMENTS: Array<{ value: WorkPlacement; label: string; help: string }> = [
+  {
+    value: 'workers_first',
+    label: 'Workers first',
+    help: 'A connected worker that accepts the work runs it. This server runs it while no such worker is connected.',
+  },
+  {
+    value: 'workers_only',
+    label: 'Workers only',
+    help: 'Only workers run it. With no worker connected, the work fails rather than run here.',
+  },
+  {
+    value: 'this_server',
+    label: 'This server only',
+    help: 'This server runs it, and workers are not sent it.',
+  },
+];
 
 function errorMessage(error: unknown): string {
   if (axios.isAxiosError<ApiResponse<unknown>>(error)) {
     return error.response?.data?.error || error.message;
   }
   return error instanceof Error ? error.message : String(error);
-}
-
-/** The address a worker on another machine uses to reach this server. */
-function serverAddress(): string {
-  const { origin } = window.location;
-  return origin.startsWith('http') ? origin : 'http://SERVER:PORT';
 }
 
 function lastSeen(worker: WorkerSessionSummary): string {
@@ -60,17 +74,18 @@ function WorkerRow({ worker }: { worker: WorkerSessionSummary }) {
           <span className="muted">{fileAccess(worker)}</span>
           {!worker.local && (
             <span className="muted">
-              PSF Guard {worker.version} · {worker.threads} threads
+              PSF Guard {worker.version} · {worker.threads} threads ·{' '}
+              {worker.slots === 1 ? '1 task at a time' : `${worker.slots} tasks at a time`}
             </span>
           )}
         </div>
-        {worker.running && (
-          <div className="user-row-details">
+        {worker.running.map((task, index) => (
+          <div className="user-row-details" key={index}>
             <span>
-              Running {worker.running.label} · {Math.round(worker.running.fraction * 100)}%
+              Running {task.label} · {Math.round(task.fraction * 100)}%
             </span>
           </div>
-        )}
+        ))}
       </div>
     </div>
   );
@@ -78,7 +93,8 @@ function WorkerRow({ worker }: { worker: WorkerSessionSummary }) {
 
 /**
  * Settings › Workers: the machines that may run tasks for this server, the
- * tokens they join with, and the folder their task files go through.
+ * tokens they join with, where each kind of work runs, and the folder task
+ * files go through.
  */
 export default function WorkerSettings() {
   const queryClient = useQueryClient();
@@ -92,7 +108,7 @@ export default function WorkerSettings() {
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState('');
   const [created, setCreated] = useState<CreatedWorkerToken | null>(null);
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<'posix' | 'powershell' | null>(null);
   const savedFolder = workers.data?.exchange_folder_setting ?? '';
   const [folder, setFolder] = useState(savedFolder);
   useEffect(() => setFolder(savedFolder), [savedFolder]);
@@ -119,7 +135,7 @@ export default function WorkerSettings() {
       const result = await apiClient.createWorkerToken(name.trim());
       publish(result.workers);
       setCreated(result);
-      setCopied(false);
+      setCopied(null);
       setFormOpen(false);
       setName('');
     });
@@ -142,14 +158,25 @@ export default function WorkerSettings() {
     });
   };
 
-  const command = created
-    ? `PSF_GUARD_WORKER_TOKEN=${created.token} psf-guard worker --server ${serverAddress()}`
-    : '';
+  const choosePlacement = (rcAstro: WorkPlacement) => {
+    void run(async () => {
+      publish(await apiClient.setWorkerPlacement({ rc_astro: rcAstro }));
+    });
+  };
 
-  const copyCommand = async () => {
+  const address = serverAddress(window.location);
+  const commands = created
+    ? {
+      posix: `PSF_GUARD_WORKER_TOKEN=${created.token} psf-guard worker --server ${address}`,
+      powershell: `$env:PSF_GUARD_WORKER_TOKEN="${created.token}"; psf-guard worker --server ${address}`,
+    }
+    : null;
+
+  const copy = async (which: 'posix' | 'powershell') => {
+    if (!commands) return;
     try {
-      await navigator.clipboard.writeText(command);
-      setCopied(true);
+      await navigator.clipboard.writeText(commands[which]);
+      setCopied(which);
     } catch {
       setStatus('Copy failed; select the command and copy it by hand.');
     }
@@ -178,10 +205,7 @@ export default function WorkerSettings() {
             A worker is another computer that runs RC-Astro tools for this
             server, such as one with a GPU or an RC-Astro licence. Install PSF
             Guard there, create a token here, and run{' '}
-            <code>psf-guard worker</code> with it. A connected worker runs
-            the tools it takes ahead of this server. This server runs a tool
-            itself, when rc-astro is installed here, while no worker that
-            takes it is connected.
+            <code>psf-guard worker</code> with it.
           </p>
         </div>
         {!formOpen && (
@@ -227,18 +251,36 @@ export default function WorkerSettings() {
         </form>
       )}
 
-      {created && (
+      {created && commands && (
         <div className="token-secret" role="status">
           <p>
-            <strong>Copy this command now.</strong> The token in it is not shown
+            <strong>Copy a command now.</strong> The token in it is not shown
             again. Run it on {created.summary.name}:
           </p>
           <div className="token-secret-row">
-            <code className="token-secret-value">{command}</code>
-            <button type="button" className="browse-button" onClick={() => void copyCommand()}>
-              {copied ? 'Copied' : 'Copy'}
+            <code className="token-secret-value" data-shell="posix">{commands.posix}</code>
+            <button type="button" className="browse-button" onClick={() => void copy('posix')}>
+              {copied === 'posix' ? 'Copied' : 'Copy'}
             </button>
           </div>
+          <p className="muted">In Windows PowerShell:</p>
+          <div className="token-secret-row">
+            <code className="token-secret-value" data-shell="powershell">{commands.powershell}</code>
+            <button
+              type="button"
+              className="browse-button"
+              aria-label="Copy the PowerShell command"
+              onClick={() => void copy('powershell')}
+            >
+              {copied === 'powershell' ? 'Copied' : 'Copy'}
+            </button>
+          </div>
+          {address.includes('THIS-SERVER') && (
+            <p className="muted">
+              Replace <code>THIS-SERVER:PORT</code> with the address other
+              computers use to reach this server.
+            </p>
+          )}
           <p className="muted">
             Add <code>--files shared --map SERVER_FOLDER=LOCAL_FOLDER</code> when
             the worker sees this server&apos;s exchange folder on shared storage.
@@ -266,6 +308,27 @@ export default function WorkerSettings() {
           </ul>
         </>
       )}
+
+      <h4>Where work runs</h4>
+      <fieldset className="calibration-settings-group" disabled={saving}>
+        <legend>RC-Astro tools</legend>
+        {PLACEMENTS.map((placement) => (
+          <label key={placement.value} className="review-preference">
+            <input
+              type="radio"
+              name="worker-placement-rc-astro"
+              value={placement.value}
+              checked={data.placement.rc_astro === placement.value}
+              onChange={() => choosePlacement(placement.value)}
+            />
+            <span>
+              {placement.label}
+              <small>{placement.help}</small>
+            </span>
+          </label>
+        ))}
+      </fieldset>
+      <p className="muted">Stack builds and WBPP runs stay on this server.</p>
 
       <h4>Tokens</h4>
       {data.tokens.length === 0 && <p className="muted">No worker tokens yet.</p>}
@@ -299,9 +362,10 @@ export default function WorkerSettings() {
       <h4>Exchange folder</h4>
       <p className="muted">
         Task files go through this folder: the image a tool processes and the
-        result it returns. A worker in shared mode reads and writes them here
-        directly, so choose a folder on storage the workers can reach. Now:{' '}
-        <code>{data.exchange_folder}</code>
+        result it returns. PSF Guard keeps them in a{' '}
+        <code>{data.exchange_subfolder}</code> folder inside it. A worker in
+        shared mode reads and writes them there directly, so choose a folder on
+        storage the workers can reach. Now: <code>{data.exchange_folder}</code>
       </p>
       <form
         className="database-config"

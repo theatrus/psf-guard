@@ -40,6 +40,9 @@ pub struct Registration {
 pub struct Offers {
     /// Processor threads the worker may use.
     pub threads: usize,
+    /// How many tasks the worker runs at once.
+    #[serde(default = "one_slot")]
+    pub slots: usize,
     /// The kinds of task the worker takes: what it can run, or the part of
     /// that its `--work` choices list.
     #[serde(default)]
@@ -49,6 +52,13 @@ pub struct Offers {
     #[serde(default)]
     pub rc_astro: Vec<seiza_stacking::ExternalToolSchema>,
 }
+
+fn one_slot() -> usize {
+    1
+}
+
+/// The most tasks a worker may run at once.
+pub const MAX_SLOTS: usize = 16;
 
 /// How a worker reaches the files a task names.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -185,8 +195,8 @@ pub struct Progress {
 /// The server's answer to a progress report.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProgressReply {
-    /// The server no longer wants the task: the worker stops it and sends
-    /// nothing more about it.
+    /// The task was stopped, or went to another worker: the worker stops it
+    /// and sends nothing more about it.
     pub stop: bool,
 }
 

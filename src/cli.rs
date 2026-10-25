@@ -1351,12 +1351,19 @@ pub enum Commands {
         #[arg(long)]
         rc_astro: Option<String>,
 
-        /// Work this worker takes, which the server then sends here before
-        /// it runs that work itself: `rc-astro` for every RC-Astro tool, or
+        /// Work this worker accepts: `rc-astro` for every RC-Astro tool, or
         /// `bxt`, `nxt` or `sxt` for one. Repeat for more. Without it, the
-        /// worker takes everything it can run.
+        /// worker accepts everything it can run. The server sends accepted
+        /// work here ahead of running it itself, unless Settings › Workers
+        /// says otherwise. To pick up a new rc-astro licence or version,
+        /// restart the worker.
         #[arg(long = "work", value_name = "WORK")]
         work: Vec<String>,
+
+        /// How many tasks this worker runs at once, from 1 to 16. Each
+        /// RC-Astro step uses the GPU, so more than one seldom helps.
+        #[arg(long, default_value_t = 1)]
+        slots: usize,
     },
 
     /// Start the web server for API access and static file serving

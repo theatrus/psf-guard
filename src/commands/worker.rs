@@ -9,6 +9,7 @@
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -18,9 +19,9 @@ use tokio::io::AsyncWriteExt;
 use crate::cli::WorkerFilesArg;
 use crate::concurrency::Stop;
 use crate::remote_work::protocol::{
-    Assignment, Completion, Failure, FileAccess, FileMode, PathMap, ProbeAnswer, ProbeResult,
-    Progress, ProgressReply, Registered, Registration, WrittenOutput, DIGEST_HEADER, LEASE_HEADER,
-    PROTOCOL_VERSION,
+    valid_file_name, Assignment, Completion, Failure, FileAccess, FileMode, PathMap, ProbeAnswer,
+    ProbeResult, Progress, ProgressReply, Registered, Registration, WrittenOutput, DIGEST_HEADER,
+    LEASE_HEADER, MAX_SLOTS, PROTOCOL_VERSION,
 };
 use crate::remote_work::{file_digest, map_path, LocalTools, WorkChoice};
 
@@ -34,6 +35,7 @@ pub struct WorkerArgs {
     pub work_dir: Option<String>,
     pub rc_astro: Option<String>,
     pub work: Vec<String>,
+    pub slots: usize,
 }
 
 /// How a worker runs, once its arguments are read.
@@ -47,10 +49,15 @@ pub struct WorkerOptions {
     pub tools: LocalTools,
     /// The work it takes.
     pub work: WorkChoice,
+    /// How many tasks it runs at once.
+    pub slots: usize,
 }
 
 /// The longest wait between attempts to reach the server.
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
+/// How long a stopped task waits for its tool to stop before its scratch
+/// folder is removed.
+const TOOL_STOP_LIMIT: Duration = Duration::from_secs(30);
 
 pub fn run(args: WorkerArgs) -> Result<()> {
     let _ = tracing_subscriber::fmt()
@@ -63,7 +70,6 @@ pub fn run(args: WorkerArgs) -> Result<()> {
     let runtime = tokio::runtime::Runtime::new()?;
     runtime.block_on(serve(options, async {
         let _ = tokio::signal::ctrl_c().await;
-        tracing::info!("Stopping: the task in hand is dropped and the server queues it again");
     }))
 }
 
@@ -82,10 +88,10 @@ fn options(args: WorkerArgs) -> Result<WorkerOptions> {
         .map(|map| {
             let (server, local) = map
                 .split_once('=')
-                .with_context(|| format!("--map wants SERVER=LOCAL, got '{map}'"))?;
+                .with_context(|| format!("--map must be SERVER=LOCAL, not '{map}'"))?;
             anyhow::ensure!(
                 !server.is_empty() && !local.is_empty(),
-                "--map wants SERVER=LOCAL, got '{map}'"
+                "--map must be SERVER=LOCAL, not '{map}'"
             );
             Ok(PathMap {
                 server: server.into(),
@@ -110,6 +116,14 @@ fn options(args: WorkerArgs) -> Result<WorkerOptions> {
             .unwrap_or_else(|| std::env::temp_dir().join("psf-guard-worker")),
         tools: LocalTools { rc_astro },
         work: WorkChoice::parse(&args.work).map_err(anyhow::Error::msg)?,
+        slots: {
+            anyhow::ensure!(
+                (1..=MAX_SLOTS).contains(&args.slots),
+                "--slots must be from 1 to {MAX_SLOTS}, not {}",
+                args.slots
+            );
+            args.slots
+        },
     })
 }
 
@@ -132,8 +146,11 @@ enum ClientError {
     /// The server does not know this session, such as after it restarted:
     /// the worker registers again.
     UnknownSession,
-    /// The server no longer wants the task from this worker.
+    /// The task was stopped, or went to another worker after this
+    /// worker's lease ran out.
     NotCurrent,
+    /// This worker is stopping.
+    Stopping,
     /// The server refused the request, or could not be reached.
     Other(String),
 }
@@ -145,9 +162,10 @@ impl std::fmt::Display for ClientError {
                 formatter.write_str(message)
             }
             ClientError::UnknownSession => formatter.write_str("The server forgot this worker"),
-            ClientError::NotCurrent => {
-                formatter.write_str("The server no longer wants this task from this worker")
-            }
+            ClientError::NotCurrent => formatter.write_str(
+                "The task was stopped, or went to another worker after this worker's lease ran out",
+            ),
+            ClientError::Stopping => formatter.write_str("This worker is stopping"),
         }
     }
 }
@@ -386,29 +404,54 @@ impl Client {
     }
 }
 
-/// Run tasks for the server until `shutdown` completes. Returns an error
-/// only when the server refuses the token.
+/// What every slot of a joined worker shares: the client, the options and
+/// the session.
+struct Joined {
+    client: Client,
+    options: WorkerOptions,
+    session: String,
+    poll: Duration,
+    heartbeat: Duration,
+}
+
+/// How a slot stopped claiming tasks.
+enum SlotEnd {
+    /// The worker is stopping.
+    Stopped,
+    /// The server forgot the session: the worker registers again.
+    Rejoin,
+    /// The server refused the token.
+    Denied(String),
+}
+
+/// Run tasks for the server until `shutdown` completes, up to
+/// `options.slots` at once. Returns an error only when the server refuses
+/// the token.
 pub async fn serve(options: WorkerOptions, shutdown: impl Future<Output = ()>) -> Result<()> {
     let client = Client::new(&options.server, &options.token)?;
     tokio::pin!(shutdown);
     let (tools, work) = (options.tools.clone(), options.work.clone());
-    let (offers, problem) = tokio::task::spawn_blocking(move || {
+    let (mut offers, problem) = tokio::task::spawn_blocking(move || {
         tools.offers(crate::concurrency::logical_cores(), &work)
     })
     .await?;
-    if offers.rc_astro.is_empty() && options.tools.rc_astro.is_some() && problem.is_none() {
-        tracing::warn!("--work leaves out every RC-Astro tool; this worker takes no work yet");
-    } else if offers.rc_astro.is_empty() {
-        tracing::warn!(
-            "rc-astro is not installed here{}; this worker has no tools to offer yet",
-            problem
-                .map(|problem| format!(" ({problem})"))
-                .unwrap_or_default()
-        );
+    offers.slots = options.slots;
+    if offers.rc_astro.is_empty() {
+        match (&options.tools.rc_astro, problem) {
+            (None, _) => tracing::warn!(
+                "rc-astro is not installed here; this worker has no work to accept yet"
+            ),
+            (Some(_), Some(problem)) => tracing::warn!(
+                "rc-astro could not be read ({problem}); this worker has no work to accept yet"
+            ),
+            (Some(_), None) => tracing::warn!(
+                "--work leaves out every RC-Astro tool; this worker has no work to accept yet"
+            ),
+        }
     } else {
         for schema in &offers.rc_astro {
             tracing::info!(
-                "Offers {} {}{}",
+                "Accepts {} {}{}",
                 schema.name,
                 schema.cli_version,
                 if schema.licensed {
@@ -426,11 +469,14 @@ pub async fn serve(options: WorkerOptions, shutdown: impl Future<Output = ()>) -
         offers,
         files: options.files.clone(),
     };
+    let mut options = Some(options);
+    let mut client = Some(client);
     let mut backoff = Duration::from_secs(1);
     loop {
+        let registering = client.as_ref().expect("the client is idle");
         let registered = tokio::select! {
             () = &mut shutdown => return Ok(()),
-            registered = client.register(&registration) => registered,
+            registered = registering.register(&registration) => registered,
         };
         let registered = match registered {
             Ok(registered) => registered,
@@ -446,10 +492,16 @@ pub async fn serve(options: WorkerOptions, shutdown: impl Future<Output = ()>) -
             }
         };
         backoff = Duration::from_secs(1);
-        tracing::info!("Joined {} as {}", options.server, registration.name);
+        let settings = options.as_ref().expect("the options are idle");
+        tracing::info!(
+            "Joined {} as {}, running up to {} task(s) at once",
+            settings.server,
+            registration.name,
+            settings.slots
+        );
         if let Some(probe) = &registered.probe {
-            let answer = answer_probe(&options.files.maps, &probe.path, &probe.reply_path).await;
-            match client.answer_probe(&registered.session, &answer).await {
+            let answer = answer_probe(&settings.files.maps, &probe.path, &probe.reply_path).await;
+            match registering.answer_probe(&registered.session, &answer).await {
                 Ok(ProbeResult { shared: true, .. }) => tracing::info!(
                     "Shared files: this worker reads and writes task files in the server's exchange folder"
                 ),
@@ -460,53 +512,91 @@ pub async fn serve(options: WorkerOptions, shutdown: impl Future<Output = ()>) -
                 Err(error) => tracing::warn!("The shared-files check failed: {error}"),
             }
         }
-        let poll = Duration::from_secs(registered.poll_seconds);
-        let heartbeat = Duration::from_secs((registered.lease_seconds / 6).max(1));
-        loop {
-            let claimed = tokio::select! {
-                () = &mut shutdown => {
-                    client.leave(&registered.session).await;
-                    return Ok(());
-                }
-                claimed = client.claim(&registered.session, poll) => claimed,
-            };
-            match claimed {
-                Ok(None) => {}
-                Ok(Some(assignment)) => {
-                    let ran = run_task(
-                        &client,
-                        &options,
-                        &registered.session,
-                        &assignment,
-                        heartbeat,
-                    );
-                    tokio::select! {
-                        () = &mut shutdown => {
-                            // Leaving puts the task back in the queue for
-                            // another worker.
-                            client.leave(&registered.session).await;
-                            return Ok(());
-                        }
-                        () = ran => {}
-                    }
-                }
-                Err(ClientError::Denied(message)) => anyhow::bail!(message),
-                Err(ClientError::UnknownSession) => {
-                    tracing::warn!("The server forgot this worker; joining again");
-                    break;
-                }
-                Err(error) => {
-                    tracing::warn!("{error}; trying again in {}s", backoff.as_secs());
-                    tokio::select! {
-                        () = &mut shutdown => return Ok(()),
-                        () = tokio::time::sleep(backoff) => {}
-                    }
-                    backoff = (backoff * 2).min(MAX_BACKOFF);
-                    continue;
-                }
-            }
-            backoff = Duration::from_secs(1);
+        let joined = Arc::new(Joined {
+            client: client.take().expect("the client is idle"),
+            options: options.take().expect("the options are idle"),
+            session: registered.session,
+            poll: Duration::from_secs(registered.poll_seconds),
+            heartbeat: Duration::from_secs((registered.lease_seconds / 6).max(1)),
+        });
+        let (stopping, stop_receiver) = tokio::sync::watch::channel(false);
+        let mut slots = tokio::task::JoinSet::new();
+        for _ in 0..joined.options.slots {
+            slots.spawn(run_slot(Arc::clone(&joined), stop_receiver.clone()));
         }
+        let mut shutting_down = false;
+        let mut ended = None;
+        loop {
+            tokio::select! {
+                () = &mut shutdown, if !shutting_down => {
+                    tracing::info!("Stopping: running tasks stop, and the server queues them again");
+                    shutting_down = true;
+                    stopping.send_replace(true);
+                }
+                slot = slots.join_next() => match slot {
+                    None => break,
+                    Some(Ok(SlotEnd::Stopped)) => {}
+                    Some(Ok(end)) => {
+                        stopping.send_replace(true);
+                        if !matches!(ended, Some(SlotEnd::Denied(_))) {
+                            ended = Some(end);
+                        }
+                    }
+                    Some(Err(error)) => tracing::error!("A worker slot stopped unexpectedly: {error}"),
+                },
+            }
+        }
+        let joined = Arc::into_inner(joined).expect("every slot has ended");
+        if shutting_down {
+            joined.client.leave(&joined.session).await;
+            return Ok(());
+        }
+        match ended {
+            Some(SlotEnd::Denied(message)) => anyhow::bail!(message),
+            _ => tracing::warn!("The server forgot this worker; joining again"),
+        }
+        client = Some(joined.client);
+        options = Some(joined.options);
+    }
+}
+
+/// One slot: claim a task, run it, and claim the next, until the worker
+/// stops or the server forgets the session.
+async fn run_slot(
+    joined: Arc<Joined>,
+    mut stopping: tokio::sync::watch::Receiver<bool>,
+) -> SlotEnd {
+    let mut backoff = Duration::from_secs(1);
+    loop {
+        if *stopping.borrow() {
+            return SlotEnd::Stopped;
+        }
+        let claimed = tokio::select! {
+            _ = stopping.changed() => return SlotEnd::Stopped,
+            claimed = joined.client.claim(&joined.session, joined.poll) => claimed,
+        };
+        match claimed {
+            Ok(None) => {}
+            Ok(Some(assignment)) => match run_task(&joined, &assignment, stopping.clone()).await {
+                Ok(()) => {}
+                Err(ClientError::Stopping) => return SlotEnd::Stopped,
+                Err(ClientError::UnknownSession) => return SlotEnd::Rejoin,
+                Err(ClientError::Denied(message)) => return SlotEnd::Denied(message),
+                Err(_) => {}
+            },
+            Err(ClientError::Denied(message)) => return SlotEnd::Denied(message),
+            Err(ClientError::UnknownSession) => return SlotEnd::Rejoin,
+            Err(error) => {
+                tracing::warn!("{error}; trying again in {}s", backoff.as_secs());
+                tokio::select! {
+                    _ = stopping.changed() => return SlotEnd::Stopped,
+                    () = tokio::time::sleep(backoff) => {}
+                }
+                backoff = (backoff * 2).min(MAX_BACKOFF);
+                continue;
+            }
+        }
+        backoff = Duration::from_secs(1);
     }
 }
 
@@ -554,28 +644,62 @@ async fn answer_probe(maps: &[PathMap], probe: &str, reply: &str) -> ProbeAnswer
     })
 }
 
-/// Run one task and answer for it. Problems are logged and reported to the
-/// server; nothing here ends the worker.
+/// Refuse a task whose id or file names could reach outside this worker's
+/// folder: the id must be a task id the server minted, and each name a
+/// plain file name.
+fn check_assignment(assignment: &Assignment) -> Result<(), String> {
+    let minted =
+        uuid::Uuid::parse_str(&assignment.task).is_ok_and(|id| id.to_string() == assignment.task);
+    if !minted {
+        return Err(format!("The task id {:?} is not valid", assignment.task));
+    }
+    let names = assignment
+        .inputs
+        .iter()
+        .map(|input| &input.name)
+        .chain(assignment.outputs.iter().map(|output| &output.name));
+    for name in names {
+        if !valid_file_name(name) {
+            return Err(format!("The task file name {name:?} is not valid"));
+        }
+    }
+    Ok(())
+}
+
+/// Run one task and answer for it. Returns how the task ended when the
+/// slot cannot go on: the worker is stopping, or the server forgot the
+/// session or refused the token. Other problems are logged and reported.
 async fn run_task(
-    client: &Client,
-    options: &WorkerOptions,
-    session: &str,
+    joined: &Joined,
     assignment: &Assignment,
-    heartbeat: Duration,
-) {
+    stopping: tokio::sync::watch::Receiver<bool>,
+) -> Result<(), ClientError> {
+    let (client, session) = (&joined.client, joined.session.as_str());
+    if let Err(problem) = check_assignment(assignment) {
+        tracing::warn!("Refused a task: {problem}");
+        let _ = client.fail(session, assignment, problem).await;
+        return Ok(());
+    }
     tracing::info!(task = assignment.task, "Running {}", assignment.label);
-    let scratch = options.work_dir.join(&assignment.task);
-    let outcome = run_task_in(client, options, session, assignment, heartbeat, &scratch).await;
+    let scratch = joined.options.work_dir.join(&assignment.task);
+    let outcome = run_task_in(joined, assignment, stopping, &scratch).await;
     let _ = tokio::fs::remove_dir_all(&scratch).await;
     match outcome {
-        Ok(()) => tracing::info!(task = assignment.task, "Finished {}", assignment.label),
+        Ok(()) => {
+            tracing::info!(task = assignment.task, "Finished {}", assignment.label);
+            Ok(())
+        }
         Err(ClientError::NotCurrent) => {
             tracing::info!(
                 task = assignment.task,
-                "The server no longer wants {}",
+                "Dropped {}: it was stopped, or went to another worker",
                 assignment.label
-            )
+            );
+            Ok(())
         }
+        Err(
+            ended @ (ClientError::Stopping | ClientError::UnknownSession | ClientError::Denied(_)),
+        ) => Err(ended),
         Err(error) => {
             tracing::warn!(
                 task = assignment.task,
@@ -583,19 +707,75 @@ async fn run_task(
                 assignment.label
             );
             let _ = client.fail(session, assignment, error.to_string()).await;
+            Ok(())
+        }
+    }
+}
+
+/// Reports progress while a task's work runs, which renews its lease, and
+/// stops the work when the server or the worker says to.
+struct Heartbeat<'a> {
+    joined: &'a Joined,
+    assignment: &'a Assignment,
+    beat: tokio::time::Interval,
+    fraction: tokio::sync::watch::Receiver<f32>,
+    stopping: tokio::sync::watch::Receiver<bool>,
+}
+
+impl Heartbeat<'_> {
+    /// Run `work` while reporting progress. Returns the reason the work
+    /// must end early, dropping `work`, when the task was stopped or went to
+    /// another worker, the server forgot the session or refused the token,
+    /// or the worker is stopping.
+    async fn during<T>(
+        &mut self,
+        work: impl Future<Output = Result<T, ClientError>>,
+    ) -> Result<T, ClientError> {
+        tokio::pin!(work);
+        loop {
+            if *self.stopping.borrow() {
+                return Err(ClientError::Stopping);
+            }
+            tokio::select! {
+                done = &mut work => return done,
+                _ = self.stopping.changed() => return Err(ClientError::Stopping),
+                _ = self.beat.tick() => {
+                    let done = *self.fraction.borrow();
+                    match self
+                        .joined
+                        .client
+                        .progress(&self.joined.session, self.assignment, done)
+                        .await
+                    {
+                        Ok(false) => {}
+                        Ok(true) => return Err(ClientError::NotCurrent),
+                        Err(error @ (ClientError::NotCurrent
+                            | ClientError::UnknownSession
+                            | ClientError::Denied(_))) => return Err(error),
+                        Err(error) => tracing::warn!("A progress report failed: {error}"),
+                    }
+                }
+            }
         }
     }
 }
 
 async fn run_task_in(
-    client: &Client,
-    options: &WorkerOptions,
-    session: &str,
+    joined: &Joined,
     assignment: &Assignment,
-    heartbeat: Duration,
+    stopping: tokio::sync::watch::Receiver<bool>,
     scratch: &Path,
 ) -> Result<(), ClientError> {
+    let (client, session, options) = (&joined.client, joined.session.as_str(), &joined.options);
     let local_error = |error: std::io::Error| ClientError::Other(error.to_string());
+    let (fraction_sender, fraction) = tokio::sync::watch::channel(0.0f32);
+    let mut heartbeat = Heartbeat {
+        joined,
+        assignment,
+        beat: tokio::time::interval(joined.heartbeat),
+        fraction,
+        stopping,
+    };
     tokio::fs::create_dir_all(scratch)
         .await
         .map_err(local_error)?;
@@ -613,15 +793,15 @@ async fn run_task_in(
             Some(path) => path,
             None => {
                 let to = scratch.join(&input.name);
-                client
-                    .download(session, assignment, &input.name, &to)
+                heartbeat
+                    .during(client.download(session, assignment, &input.name, &to))
                     .await?;
                 to
             }
         };
         inputs.insert(input.name.clone(), path);
     }
-    // Outputs go straight into the server's task folder when it is
+    // Outputs go straight into the lease's folder on the server when it is
     // visible here, and are uploaded otherwise.
     let shared_output_dir = assignment
         .outputs
@@ -638,8 +818,7 @@ async fn run_task_in(
         .map_err(local_error)?;
 
     let stop = Stop::new();
-    let (fraction_sender, fraction) = tokio::sync::watch::channel(0.0f32);
-    let executed = {
+    let mut executed = {
         let (kind, spec, tools, output_dir, stop) = (
             assignment.kind,
             assignment.spec.clone(),
@@ -662,27 +841,26 @@ async fn run_task_in(
             )
         })
     };
-    tokio::pin!(executed);
-    let mut beat = tokio::time::interval(heartbeat);
-    let executed = loop {
-        tokio::select! {
-            executed = &mut executed => break executed,
-            _ = beat.tick() => {
-                let done = *fraction.borrow();
-                match client.progress(session, assignment, done).await {
-                    Ok(false) => {}
-                    Ok(true) | Err(ClientError::NotCurrent) => stop.request(),
-                    Err(error) => tracing::warn!("A progress report failed: {error}"),
-                }
-            }
+    let ran = heartbeat
+        .during(async {
+            (&mut executed)
+                .await
+                .map_err(|error| {
+                    ClientError::Other(format!("The task stopped unexpectedly: {error}"))
+                })?
+                .map_err(ClientError::Other)
+        })
+        .await;
+    let result = match ran {
+        Ok(result) => result,
+        Err(ended) => {
+            // The tool stops at its next check of the stop; wait for it, so
+            // nothing writes to the scratch folder once it is removed.
+            stop.request();
+            let _ = tokio::time::timeout(TOOL_STOP_LIMIT, &mut executed).await;
+            return Err(ended);
         }
     };
-    if stop.requested() {
-        return Err(ClientError::NotCurrent);
-    }
-    let result = executed
-        .map_err(|error| ClientError::Other(format!("The task stopped unexpectedly: {error}")))?
-        .map_err(ClientError::Other)?;
     let mut written = Vec::new();
     for output in &assignment.outputs {
         let path = output_dir.join(&output.name);
@@ -690,13 +868,17 @@ async fn run_task_in(
             continue;
         }
         let digested = path.clone();
-        let (sha256, size) = tokio::task::spawn_blocking(move || file_digest(&digested))
-            .await
-            .map_err(|error| ClientError::Other(error.to_string()))?
-            .map_err(local_error)?;
+        let (sha256, size) = heartbeat
+            .during(async {
+                tokio::task::spawn_blocking(move || file_digest(&digested))
+                    .await
+                    .map_err(|error| ClientError::Other(error.to_string()))?
+                    .map_err(local_error)
+            })
+            .await?;
         if shared_output_dir.is_none() {
-            client
-                .upload(session, assignment, &output.name, &path, &sha256)
+            heartbeat
+                .during(client.upload(session, assignment, &output.name, &path, &sha256))
                 .await?;
         }
         written.push(WrittenOutput {
@@ -705,6 +887,8 @@ async fn run_task_in(
             sha256,
         });
     }
+    // Not under the heartbeat: the server checks the outputs before it
+    // answers, and keeps the task while it does.
     client
         .complete(
             session,

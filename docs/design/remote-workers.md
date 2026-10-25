@@ -23,9 +23,9 @@ work on this server ──submit──► task board ◄──claim / report / c
 - **A task** is a kind, a JSON spec, named input files, named output files
   and what a worker must offer to run it (`TaskNeeds`). The shared types are
   in `src/remote_work/`.
-- **A worker advertises its work**: the task kinds it takes (`Offers.work`)
-  and, for RC-Astro, the tools it takes. `psf-guard worker --work` narrows
-  them; without it a worker takes everything it can run.
+- **A worker advertises its work**: the task kinds it accepts
+  (`Offers.work`) and, for RC-Astro, the tools it accepts. `psf-guard worker
+  --work` narrows them; without it a worker accepts everything it can run.
 - **Work on this server** submits a task and waits on its `Ticket`, on its
   own thread. Dropping the ticket takes the task off the board and removes
   its files.
@@ -43,23 +43,35 @@ entries to workers waits for the work below.
 ## Leases and priority
 
 - A claim gives the worker a lease that lasts a minute. Each progress report
-  renews it; the worker reports six times a lease.
-- A lease that runs out puts the task back in its place, with one more
-  attempt counted. A task that loses three leases fails.
-- A worker runs one task at a time. A claim while it holds a task gives that
-  task up. This server's own worker does too, so two processing runs no
-  longer run RC-Astro tools on this server at once; one GPU runs them
+  renews it; the worker reports six times a lease, through its downloads,
+  the run and its uploads.
+- A task goes back in its place when its lease runs out, or when its worker
+  leaves, registers again or has its token revoked. Each counts one attempt;
+  the third fails the task with the reason.
+- A worker runs as many tasks at once as its slots (`--slots`, 1 to 16,
+  default 1). This server's own worker has one slot, so two processing runs
+  no longer run RC-Astro tools on this server at once; one GPU runs them
   faster one after the other.
 - A person's task goes ahead of automatic work. Otherwise tasks run in the
   order they were submitted.
-- This server's worker is the fallback. It claims a task only when no
-  connected worker of another machine can run it, so a worker that takes a
-  tool runs it even while busy, and this server takes over once that worker
-  has not been heard from for 90 seconds.
+- **Placement.** Each kind of task has a `WorkPlacement`, set in Settings ›
+  Workers and stored in `remote_workers` in the registry: `workers_first`
+  (the default), `workers_only` or `this_server`. Under workers first, this
+  server's worker is the fallback: it claims a task only when no connected
+  worker of another machine can run it, so a worker that accepts a tool runs
+  it even while busy, and this server takes over once that worker has not
+  been heard from for 90 seconds. Stack builds and WBPP runs are not tasks
+  yet and stay on this server.
+- This server's worker always counts as connected, since a tool it runs may
+  report nothing for minutes.
 - A queued task that no connected worker can run waits 30 seconds for one,
   then fails with what it needs.
-- A stop takes the task off the board. The worker hears at its next report
-  that the server no longer wants it, and stops. A task this server's worker
+- A stop takes the task off the board. The worker's next report is
+  answered with a stop, and the worker stops the task.
+- A task that a worker of another machine fails goes back in the queue for
+  this server when this server can run it at the same version, such as
+  when the worker's GPU driver or licence broke. That worker is not sent the
+  task again. Otherwise the task fails with the worker's error. A task this server's worker
   runs is stopped before the stop returns, so a stopped tool is killed and
   its folder removed, as before.
 - This server's worker holds no expiring lease: it cannot vanish without the
@@ -67,7 +79,9 @@ entries to workers waits for the work below.
 
 ## Trust
 
-A worker gets a spec and the files that spec names, and nothing else.
+A worker in remote mode gets a spec and the files that spec lists, and
+nothing else. A worker in shared mode can also read the rest of the
+exchange folder through the share.
 
 - **Tokens.** Settings › Workers mints one token per worker (`psfw_` and 64
   hex digits). The registry keeps its SHA-256 (`remote_workers.tokens`).
@@ -90,10 +104,14 @@ A worker gets a spec and the files that spec names, and nothing else.
 
 ## Files
 
-A task's files live in its own folder in the exchange folder
-(`<exchange>/tasks/<task>/`). The exchange folder is `<cache>/workers`
-unless Settings › Workers names another; a server start clears what an
-earlier run left there.
+A task's files live in its own folder,
+`<exchange>/psf-guard-exchange/tasks/<task>/`, and each lease writes its
+outputs in `<task>/<lease>/`, so a worker that lost its lease cannot
+overwrite the next worker's outputs. The exchange folder is
+`<cache>/workers` unless one is chosen in Settings › Workers. PSF Guard
+removes only what it wrote: a server start removes task folders and probes
+older than six hours, named by a task or session id, since another server
+may share the folder.
 
 - **Remote mode.** The worker downloads each input
   (`GET …/inputs/{name}`) into its scratch folder, and uploads each output
@@ -103,7 +121,7 @@ earlier run left there.
   it through its maps when the size matches and downloads it otherwise. The
   server writes a probe file in the exchange folder at registration; a
   worker that reads it and writes the same bytes beside it is sent output
-  paths too, and writes its outputs straight into the task folder. A worker
+  paths too, and writes its outputs straight into its lease's folder. A worker
   that fails the probe uploads its outputs.
 
 Inputs that are already on shared storage, such as a stack build's frames,
@@ -126,9 +144,11 @@ All under `/api/workers/v1`, with `Authorization: Bearer psfw_…`:
 | `POST /sessions/{s}/tasks/{t}/fail` with the error | `204` |
 | `POST /sessions/{s}/leave` | `204`; its task goes back in the queue |
 
-`401` means the token is not valid, and the worker command stops. `404`
-means the session is unknown, such as after a server restart, and the worker
-registers again. A worker that registers again under its name replaces its
+`401` means the token is not valid: the worker stops its tasks and exits.
+`404` means the session is unknown, such as after a server restart: the
+worker stops its tasks and registers again. Either answer to a progress
+report stops the task in hand. The worker refuses an assignment whose task
+id is not a UUID or whose file names are not plain names. A worker that registers again under its name replaces its
 old session. The protocol has a version; a server refuses a worker that
 speaks another one and explains which release to install.
 
@@ -138,8 +158,11 @@ Each tool in a chain is one task (`rc_astro_step`). The chain's prefix
 caching stays on the server, so a chain resumes from its deepest cached
 step whichever worker ran the earlier steps.
 
-- **Schemas.** A chain's schemas come from the connected workers by name
-  first, then from this server's rc-astro, licensed first. A step falls
+- **Schemas.** A chain's schemas come from the connected workers that the
+  placement allows, by name first, then from this server's rc-astro,
+  licensed first. A processing run restored from the journal retries, for
+  up to 30 minutes, while no connected worker offers its tools, since
+  workers join again some time after a restart. A step falls
   back to this server only at the same version, since the version is part
   of the chain's cache identity; otherwise it fails, and the next apply picks
   this server's version. This server's

@@ -5,6 +5,7 @@ import { http, HttpResponse } from 'msw';
 import { describe, expect, it, vi } from 'vitest';
 import { server } from '../../test/msw-server';
 import WorkerSettings from '../WorkerSettings';
+import { serverAddress } from '../../utils/workerCommand';
 import type { WorkersSettings } from '../../api/types';
 
 function wrapper() {
@@ -29,9 +30,11 @@ const settings = (overrides: Partial<WorkersSettings> = {}): WorkersSettings => 
       connected_at: 1_760_000_000,
       seconds_since_seen: 0,
       threads: 16,
+      slots: 1,
       rc_astro: [],
       file_mode: 'shared',
       exchange_shared: true,
+      running: [],
     },
     {
       session: 's1',
@@ -43,16 +46,19 @@ const settings = (overrides: Partial<WorkersSettings> = {}): WorkersSettings => 
       connected_at: 1_760_000_000,
       seconds_since_seen: 3,
       threads: 32,
+      slots: 2,
       rc_astro: ['RC-Astro BlurXTerminator 2.6.10'],
       file_mode: 'shared',
       exchange_shared: false,
       exchange_problem: 'no --map reaches the server\'s exchange folder',
-      running: { label: 'RC-Astro BlurXTerminator on a 6248×4176 image', fraction: 0.42 },
+      running: [{ label: 'RC-Astro BlurXTerminator on a 6248×4176 image', fraction: 0.42 }],
     },
   ],
   queued: [{ label: 'RC-Astro NoiseXTerminator on a 100×100 image', needs: 'RC-Astro NoiseXTerminator 2.6.10' }],
   exchange_folder: '/cache/workers',
   default_exchange_folder: '/cache/workers',
+  exchange_subfolder: 'psf-guard-exchange',
+  placement: { rc_astro: 'workers_first' },
   ...overrides,
 });
 
@@ -69,6 +75,7 @@ describe('WorkerSettings', () => {
       within(row).getByText(/Files go through the server: no --map reaches/),
     ).toBeInTheDocument();
     expect(within(row).getByText(/Running RC-Astro BlurXTerminator .* 42%/)).toBeInTheDocument();
+    expect(within(row).getByText(/2 tasks at a time/)).toBeInTheDocument();
     expect(screen.getByText('This server', { selector: '.user-source-badge' })).toBeInTheDocument();
     expect(screen.getByText(/needs RC-Astro NoiseXTerminator 2.6.10/)).toBeInTheDocument();
     expect(screen.getByText('In use')).toBeInTheDocument();
@@ -93,7 +100,9 @@ describe('WorkerSettings', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Create token' }));
     const status = await screen.findByRole('status');
     expect(created).toEqual({ name: 'gpu-box' });
-    expect(within(status).getByText(/PSF_GUARD_WORKER_TOKEN=psfw_secret psf-guard worker --server/))
+    expect(within(status).getByText(/^PSF_GUARD_WORKER_TOKEN=psfw_secret psf-guard worker --server/))
+      .toBeInTheDocument();
+    expect(within(status).getByText(/^\$env:PSF_GUARD_WORKER_TOKEN="psfw_secret"; psf-guard worker --server/))
       .toBeInTheDocument();
     fireEvent.click(within(status).getByRole('button', { name: 'Done' }));
     expect(screen.queryByText(/psfw_secret/)).not.toBeInTheDocument();
@@ -140,5 +149,33 @@ describe('WorkerSettings', () => {
       { folder: '/mnt/nas/psf-exchange' },
       { folder: null },
     ]));
+  });
+
+  it('saves where RC-Astro tools run', async () => {
+    let saved: unknown = null;
+    server.use(
+      http.get('/api/workers', () => HttpResponse.json(ok(settings()))),
+      http.put('/api/workers/placement', async ({ request }) => {
+        saved = await request.json();
+        return HttpResponse.json(ok(settings({ placement: { rc_astro: 'workers_only' } })));
+      }),
+    );
+    render(<WorkerSettings />, { wrapper: wrapper() });
+    fireEvent.click(await screen.findByRole('radio', { name: /^Workers only/ }));
+    await waitFor(() => expect(saved).toEqual({ rc_astro: 'workers_only' }));
+    expect(await screen.findByRole('radio', { name: /^Workers only/ })).toBeChecked();
+    expect(screen.getByText('Stack builds and WBPP runs stay on this server.')).toBeInTheDocument();
+  });
+
+  it('puts a placeholder in the command when this address only works here', () => {
+    const at = (url: string) => {
+      const parsed = new URL(url);
+      return serverAddress({ protocol: parsed.protocol, hostname: parsed.hostname, host: parsed.host });
+    };
+    expect(at('http://192.168.1.10:3000/settings')).toBe('http://192.168.1.10:3000');
+    expect(at('https://psf.example.org/')).toBe('https://psf.example.org');
+    for (const local of ['http://localhost:3000/', 'http://127.0.0.1:3000/', 'http://tauri.localhost/', 'tauri://localhost/']) {
+      expect(at(local)).toBe('http://THIS-SERVER:PORT');
+    }
   });
 });

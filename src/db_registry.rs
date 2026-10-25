@@ -553,6 +553,36 @@ pub struct RemoteWorkerSettings {
     /// it in the cache folder. A worker in shared mode must see this folder.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exchange_folder: Option<String>,
+    /// Where RC-Astro steps run.
+    #[serde(default)]
+    pub rc_astro: WorkPlacement,
+}
+
+/// Where one kind of work runs: on workers, on this server, or on workers
+/// with this server as the fallback.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkPlacement {
+    /// A connected worker that takes the work runs it; this server runs it
+    /// while none is connected.
+    #[default]
+    WorkersFirst,
+    /// Only workers run it; this server never does.
+    WorkersOnly,
+    /// Only this server runs it.
+    ThisServer,
+}
+
+impl WorkPlacement {
+    /// Whether a worker may run the work: this server's own, or another
+    /// machine's.
+    pub fn allows(self, this_server: bool) -> bool {
+        match self {
+            WorkPlacement::WorkersFirst => true,
+            WorkPlacement::WorkersOnly => !this_server,
+            WorkPlacement::ThisServer => this_server,
+        }
+    }
 }
 
 /// A worker token: its name and the SHA-256 of its secret.

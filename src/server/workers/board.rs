@@ -3,19 +3,24 @@
 //!
 //! Work on this server submits a task and waits on its [`Ticket`]. A worker
 //! claims the first queued task it can run and holds a lease on it. Each
-//! progress report renews the lease; a lease that runs out puts the task
-//! back in the queue, and a task that loses [`MAX_ATTEMPTS`] leases fails.
-//! The server checks each output's size and digest before the waiting work
-//! reads it. A late answer under an old lease is refused.
+//! progress report renews the lease. A task goes back in the queue when its
+//! lease runs out or its worker leaves, and fails once that has happened
+//! [`MAX_ATTEMPTS`] times. The server checks each output's size and digest
+//! before the waiting work reads it. A late answer under an old lease is
+//! refused.
+//!
+//! Each kind of task has a [`WorkPlacement`]: workers first with this
+//! server's own worker as the fallback, workers only, or this server only.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
+pub use crate::db_registry::WorkPlacement;
 use crate::remote_work::protocol::{
     Assignment, Completion, ExchangeProbe, FileAccess, FileMode, InputFile, Offers, OutputFile,
-    ProbeAnswer, ProbeResult, Registration, TaskKind,
+    ProbeAnswer, ProbeResult, Registration, TaskKind, MAX_SLOTS,
 };
 
 /// How long a lease lasts without a progress report. A worker reports six
@@ -28,13 +33,23 @@ pub const POLL: Duration = Duration::from_secs(25);
 const ONLINE: Duration = Duration::from_secs(90);
 /// A worker not heard from for this long leaves the list.
 const FORGOTTEN: Duration = Duration::from_secs(3600);
-/// Leases a task may lose before it fails.
+/// The most sessions one token may hold; registering another removes the
+/// one heard from longest ago.
+const SESSIONS_PER_TOKEN: usize = 16;
+/// How many times a task may go back in the queue before it fails.
 pub const MAX_ATTEMPTS: u32 = 3;
 /// How long a queued task waits when no connected worker can run it, for
 /// one to connect, before it fails.
 const NO_WORKER_GRACE: Duration = Duration::from_secs(30);
 /// How long a stop waits for this server's worker to stop the task.
 const DRAIN_LIMIT: Duration = Duration::from_secs(30);
+/// The folder PSF Guard keeps task files in, inside the exchange folder.
+/// Only this folder's contents are ever removed.
+pub const EXCHANGE_SUBFOLDER: &str = "psf-guard-exchange";
+/// Task files older than this are left over from a server that stopped
+/// without removing them. A server start removes them; younger ones may
+/// belong to another server sharing the folder.
+const STALE_TASK_FILES: Duration = Duration::from_secs(6 * 3600);
 
 /// What a worker must offer to run a task.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,10 +124,32 @@ struct Session {
     probe: Option<Probe>,
     connected_at: i64,
     last_seen: Instant,
-    /// The task it holds a lease on.
-    task: Option<String>,
+    /// The tasks it holds leases on, at most its slots.
+    tasks: Vec<String>,
     /// This server's own worker.
     local: bool,
+}
+
+impl Session {
+    /// This server's worker counts as connected while the server runs: a
+    /// tool it runs may report nothing for minutes.
+    fn online(&self, now: Instant) -> bool {
+        self.local || now.duration_since(self.last_seen) < ONLINE
+    }
+
+    fn slots(&self) -> usize {
+        self.offers.slots.clamp(1, MAX_SLOTS)
+    }
+
+    fn release(&mut self, task: &str) {
+        self.tasks.retain(|held| held != task);
+    }
+
+    /// The worker, across its sessions: a worker that registers again keeps
+    /// what it failed.
+    fn token_and_name(&self) -> String {
+        format!("{}/{}", self.token_id, self.name)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -138,6 +175,40 @@ struct Task {
     fraction: f32,
     /// Since when no connected worker could run it, while it is queued.
     unmatched_since: Option<Instant>,
+    /// Workers of other machines that failed it: this server runs it
+    /// instead, when it can.
+    refused_by: HashSet<String>,
+}
+
+impl Task {
+    /// Where the worker holding `lease` writes the outputs. Each lease has
+    /// its own folder, so a worker that lost its lease cannot overwrite the
+    /// next worker's outputs.
+    fn lease_dir(&self, lease: &str) -> PathBuf {
+        self.dir.join(lease)
+    }
+
+    /// Put the task back in the queue, or fail it once it went back
+    /// [`MAX_ATTEMPTS`] times. `why` finishes "the task went back in the
+    /// queue because …". Returns the old lease's folder, for the caller to
+    /// remove once it has released the board's lock.
+    #[must_use]
+    fn requeue(&mut self, why: String) -> Option<PathBuf> {
+        let old = match &self.state {
+            TaskState::Leased { lease, .. } => Some(self.lease_dir(lease)),
+            _ => None,
+        };
+        self.attempts += 1;
+        tracing::warn!("{} went back in the queue: {why}", self.label);
+        self.state = if self.attempts >= MAX_ATTEMPTS {
+            TaskState::Finished(Err(format!(
+                "The task went back in the queue {MAX_ATTEMPTS} times; the last time {why}"
+            )))
+        } else {
+            TaskState::Queued
+        };
+        old
+    }
 }
 
 #[derive(Debug)]
@@ -185,9 +256,9 @@ impl std::fmt::Display for Refusal {
             Refusal::UnknownSession => {
                 formatter.write_str("This worker session is not known; register again")
             }
-            Refusal::NotCurrent => {
-                formatter.write_str("The server no longer wants this task from this worker")
-            }
+            Refusal::NotCurrent => formatter.write_str(
+                "The task was stopped, or went to another worker after this worker's lease ran out",
+            ),
             Refusal::Invalid(message) => formatter.write_str(message),
         }
     }
@@ -199,9 +270,34 @@ struct Inner {
     tasks: HashMap<String, Task>,
     /// Tasks taken off the board while this server's worker ran them, until
     /// that worker has stopped them.
-    draining: std::collections::HashSet<String>,
+    draining: HashSet<String>,
+    placements: HashMap<TaskKind, WorkPlacement>,
+    /// Lease folders to remove once the lock is released.
+    trash: Vec<PathBuf>,
     next_seq: u64,
     closed: bool,
+}
+
+impl Inner {
+    fn placement(&self, kind: TaskKind) -> WorkPlacement {
+        self.placements.get(&kind).copied().unwrap_or_default()
+    }
+
+    /// Whether `session` may run `task`: it offers what the task needs, the
+    /// task's placement allows it, and, for this server's worker under
+    /// workers first, no connected worker of another machine can run it.
+    fn may_run(&self, session: &Session, task: &Task, now: Instant) -> bool {
+        let placement = self.placement(task.kind);
+        if !self.may_run_queued(session, task) {
+            return false;
+        }
+        !(session.local
+            && placement == WorkPlacement::WorkersFirst
+            && self
+                .sessions
+                .values()
+                .any(|other| !other.local && other.online(now) && self.may_run_queued(other, task)))
+    }
 }
 
 /// The board. Shared by the workers' routes, this server's own worker, and
@@ -245,16 +341,17 @@ pub struct SessionSummary {
     pub connected_at: i64,
     pub seconds_since_seen: u64,
     pub threads: usize,
-    /// The RC-Astro tools it offers, as "StarXTerminator 2.6.6".
+    /// How many tasks it runs at once.
+    pub slots: usize,
+    /// The licensed RC-Astro tools it takes, as "StarXTerminator 2.6.6".
     pub rc_astro: Vec<String>,
     pub file_mode: FileMode,
     /// Whether task files reach it by path.
     pub exchange_shared: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exchange_problem: Option<String>,
-    /// What it runs now, with how much is done.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub running: Option<RunningSummary>,
+    /// The tasks it runs now, with how much of each is done.
+    pub running: Vec<RunningSummary>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -307,12 +404,33 @@ impl Board {
         self.claims.notify_waiters();
     }
 
-    /// The folder task files go through.
+    /// Remove the lease folders requeued tasks left, outside the lock: the
+    /// exchange folder may be on a slow share.
+    fn sweep(&self) {
+        let trash = std::mem::take(&mut self.lock().trash);
+        for folder in trash {
+            let _ = std::fs::remove_dir_all(folder);
+        }
+    }
+
+    /// Expire leases that ran out, and wake whoever waits when one did.
+    fn expire(&self, inner: &mut Inner, now: Instant) {
+        if expire(inner, now) {
+            self.notify();
+        }
+    }
+
+    /// The exchange folder chosen in Settings, or the default.
     pub fn exchange(&self) -> PathBuf {
         self.exchange
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
+    }
+
+    /// The folder inside the exchange folder that task files go in.
+    fn files(&self) -> PathBuf {
+        self.exchange().join(EXCHANGE_SUBFOLDER)
     }
 
     /// Move the exchange folder. Tasks already submitted keep theirs.
@@ -321,6 +439,47 @@ impl Board {
             .exchange
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = folder;
+    }
+
+    /// Remove task folders and probes a stopped server left in the exchange
+    /// folder. Only entries named by a task or session id and older than
+    /// six hours go: another server may share the folder.
+    pub fn remove_stale_files(&self) {
+        let files = self.files();
+        let now = SystemTime::now();
+        for (folder, directories) in [("tasks", true), ("probes", false)] {
+            let Ok(entries) = std::fs::read_dir(files.join(folder)) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let id = name.split('.').next().unwrap_or_default();
+                let stale = entry
+                    .metadata()
+                    .and_then(|metadata| metadata.modified())
+                    .ok()
+                    .and_then(|modified| now.duration_since(modified).ok())
+                    .is_some_and(|age| age > STALE_TASK_FILES);
+                if uuid::Uuid::parse_str(id).is_err() || !stale {
+                    continue;
+                }
+                let _ = if directories {
+                    std::fs::remove_dir_all(entry.path())
+                } else {
+                    std::fs::remove_file(entry.path())
+                };
+            }
+        }
+    }
+
+    /// Where a kind of work runs.
+    pub fn set_placement(&self, kind: TaskKind, placement: WorkPlacement) {
+        self.lock().placements.insert(kind, placement);
+        self.notify();
+    }
+
+    pub fn placement(&self, kind: TaskKind) -> WorkPlacement {
+        self.lock().placement(kind)
     }
 
     /// Stop handing out work: claims answer at once, and this server's
@@ -347,17 +506,29 @@ impl Board {
                     None
                 }
             });
+        let now = Instant::now();
         let mut inner = self.lock();
+        forget_quiet_sessions(&mut inner, now);
         // A worker that registers again under the same name, such as after a
-        // restart, replaces its old session: its task goes back in the queue.
-        let replaced = inner
+        // restart, replaces its old session: its tasks go back in the queue.
+        let mut replaced = inner
             .sessions
             .iter()
             .filter(|(_, old)| old.token_id == token_id && old.name == registration.name)
             .map(|(id, _)| id.clone())
             .collect::<Vec<_>>();
+        // One token holds a limited number of sessions.
+        let mut of_token = inner
+            .sessions
+            .iter()
+            .filter(|(id, old)| old.token_id == token_id && !replaced.contains(id))
+            .map(|(id, old)| (old.last_seen, id.clone()))
+            .collect::<Vec<_>>();
+        of_token.sort();
+        let excess = (of_token.len() + 1).saturating_sub(SESSIONS_PER_TOKEN);
+        replaced.extend(of_token.into_iter().take(excess).map(|(_, id)| id));
         for old in replaced {
-            remove_session(&mut inner, &old, "it connected again");
+            remove_session(&mut inner, &old, "connected again");
         }
         inner.sessions.insert(
             session.clone(),
@@ -371,18 +542,19 @@ impl Board {
                 files: registration.files,
                 probe,
                 connected_at: crate::auth_registry::unix_now(),
-                last_seen: Instant::now(),
-                task: None,
+                last_seen: now,
+                tasks: Vec::new(),
                 local,
             },
         );
         drop(inner);
         self.notify();
+        self.sweep();
         session
     }
 
     fn write_probe(&self, session: &str) -> std::io::Result<Probe> {
-        let folder = self.exchange().join("probes");
+        let folder = self.files().join("probes");
         std::fs::create_dir_all(&folder)?;
         let path = folder.join(format!("{session}.probe"));
         let reply_path = folder.join(format!("{session}.reply"));
@@ -478,12 +650,13 @@ impl Board {
             .map(|found| found.token_id.clone())
     }
 
-    /// A worker leaves: its task goes back in the queue.
+    /// A worker leaves: its tasks go back in the queue.
     pub fn leave(&self, session: &str) {
         let mut inner = self.lock();
-        remove_session(&mut inner, session, "it disconnected");
+        remove_session(&mut inner, session, "disconnected");
         drop(inner);
         self.notify();
+        self.sweep();
     }
 
     /// Every worker registered with a revoked token leaves.
@@ -496,10 +669,11 @@ impl Board {
             .map(|(id, _)| id.clone())
             .collect::<Vec<_>>();
         for session in sessions {
-            remove_session(&mut inner, &session, "its token was revoked");
+            remove_session(&mut inner, &session, "had its token revoked");
         }
         drop(inner);
         self.notify();
+        self.sweep();
     }
 
     /// A ticket for a task about to be submitted, with a folder of its own
@@ -507,7 +681,7 @@ impl Board {
     /// folder when it is dropped.
     pub fn ticket(self: &Arc<Self>) -> Result<Ticket, String> {
         let id = uuid::Uuid::new_v4().to_string();
-        let dir = self.exchange().join("tasks").join(&id);
+        let dir = self.files().join("tasks").join(&id);
         std::fs::create_dir_all(&dir).map_err(|error| {
             format!(
                 "The worker exchange folder {} could not be written: {error}",
@@ -550,6 +724,7 @@ impl Board {
                 attempts: 0,
                 fraction: 0.0,
                 unmatched_since: None,
+                refused_by: HashSet::new(),
             },
         );
         drop(inner);
@@ -557,17 +732,17 @@ impl Board {
         Ok(())
     }
 
-    /// Take a task off the board. A worker running it hears that the server
-    /// no longer wants it at its next report.
+    /// Take a task off the board. The worker running it learns at its next
+    /// report that the task was stopped.
     fn forget(&self, id: &str) {
         let mut inner = self.lock();
         if let Some(task) = inner.tasks.remove(id)
             && let TaskState::Leased { session, .. } | TaskState::Checking { session, .. } =
                 &task.state
             && let Some(found) = inner.sessions.get_mut(session)
-            && found.task.as_deref() == Some(id)
+            && found.tasks.iter().any(|held| held == id)
         {
-            found.task = None;
+            found.release(id);
             if found.local {
                 inner.draining.insert(id.to_string());
             }
@@ -601,54 +776,29 @@ impl Board {
         }
     }
 
-    /// Claim the first task `session` can run, without waiting.
+    /// Claim the first task `session` may run, without waiting. A worker
+    /// with every slot busy claims nothing.
     pub fn try_claim(&self, session: &str) -> Result<Option<Assignment>, Refusal> {
         let mut inner = self.lock();
         if inner.closed {
             return Ok(None);
         }
         let now = Instant::now();
-        expire(&mut inner, now);
+        self.expire(&mut inner, now);
         let found = inner
             .sessions
             .get_mut(session)
             .ok_or(Refusal::UnknownSession)?;
         found.last_seen = now;
-        if found.task.is_some() {
-            // A worker runs one task at a time: a claim while it holds one
-            // means it lost track of it, so the task goes back in the queue.
-            let held = found.task.take().expect("the session holds a task");
-            if let Some(task) = inner.tasks.get_mut(&held)
-                && matches!(task.state, TaskState::Leased { .. })
-            {
-                task.state = TaskState::Queued;
-                task.attempts += 1;
-            }
+        if found.tasks.len() >= found.slots() {
+            return Ok(None);
         }
-        let found = inner
-            .sessions
-            .get(session)
-            .expect("the session is known")
-            .clone();
-        // This server's worker is the fallback: it takes a task only when no
-        // connected worker of another machine can run it.
-        let remote_offers = if found.local {
-            inner
-                .sessions
-                .values()
-                .filter(|other| !other.local && now.duration_since(other.last_seen) < ONLINE)
-                .map(|other| other.offers.clone())
-                .collect::<Vec<_>>()
-        } else {
-            Vec::new()
-        };
+        let found = found.clone();
         let next = inner
             .tasks
             .iter()
             .filter(|(_, task)| {
-                matches!(task.state, TaskState::Queued)
-                    && task.needs.met_by(&found.offers)
-                    && !remote_offers.iter().any(|offers| task.needs.met_by(offers))
+                matches!(task.state, TaskState::Queued) && inner.may_run(&found, task, now)
             })
             .min_by_key(|(_, task)| (!task.person, task.seq))
             .map(|(id, _)| id.clone());
@@ -657,6 +807,7 @@ impl Board {
         };
         let lease = uuid::Uuid::new_v4().to_string();
         let task = inner.tasks.get_mut(&id).expect("the task is queued");
+        let lease_dir = task.lease_dir(&lease);
         task.state = TaskState::Leased {
             session: session.to_string(),
             lease: lease.clone(),
@@ -687,7 +838,7 @@ impl Board {
                     required: *required,
                     path: found
                         .exchange_shared
-                        .then(|| task.dir.join(name).display().to_string()),
+                        .then(|| lease_dir.join(name).display().to_string()),
                 })
                 .collect(),
         };
@@ -701,9 +852,16 @@ impl Board {
             .sessions
             .get_mut(session)
             .expect("the session is known")
-            .task = Some(id);
+            .tasks
+            .push(id);
         drop(inner);
         self.notify();
+        self.sweep();
+        // Outside the lock: the exchange folder may be on a slow share. The
+        // worker cannot write there before it has the assignment.
+        if let Err(error) = std::fs::create_dir_all(&lease_dir) {
+            tracing::warn!("{} could not be created: {error}", lease_dir.display());
+        }
         Ok(Some(assignment))
     }
 
@@ -725,7 +883,12 @@ impl Board {
             if self.is_closed() {
                 return Ok(None);
             }
-            if tokio::time::timeout_at(deadline, notified).await.is_err() {
+            // Leases run out with no other change, so look again at least
+            // each second.
+            let next = (tokio::time::Instant::now() + Duration::from_secs(1)).min(deadline);
+            if tokio::time::timeout_at(next, notified).await.is_err()
+                && tokio::time::Instant::now() >= deadline
+            {
                 return Ok(None);
             }
         }
@@ -780,7 +943,8 @@ impl Board {
     }
 
     /// A worker reports how far it got, which renews its lease. Answers
-    /// whether the server still wants the task.
+    /// whether the worker should stop: the task was stopped, or went to
+    /// another worker.
     pub fn progress(
         &self,
         session: &str,
@@ -790,13 +954,12 @@ impl Board {
     ) -> Result<bool, Refusal> {
         let mut inner = self.lock();
         let now = Instant::now();
-        expire(&mut inner, now);
+        self.expire(&mut inner, now);
         if let Some(found) = inner.sessions.get_mut(session) {
             found.last_seen = now;
         }
         let found = match Self::current(&mut inner, session, task, lease) {
             Ok(found) => found,
-            // The task is gone: the work that waited for it stopped.
             Err(Refusal::NotCurrent) => return Ok(true),
             Err(refusal) => return Err(refusal),
         };
@@ -808,6 +971,7 @@ impl Board {
         }
         drop(inner);
         self.notify();
+        self.sweep();
         Ok(false)
     }
 
@@ -833,10 +997,10 @@ impl Board {
             .iter()
             .find(|(input, _, _)| input == name)
             .map(|(_, path, _)| path.clone())
-            .ok_or_else(|| Refusal::Invalid(format!("The task has no input named {name}")))
+            .ok_or_else(|| Refusal::Invalid(format!("The task has no input called {name}")))
     }
 
-    /// Where an uploaded output goes.
+    /// Where an uploaded output goes: the lease's own folder.
     pub fn output_path(
         &self,
         session: &str,
@@ -848,15 +1012,15 @@ impl Board {
         let found = Self::current(&mut inner, session, task, lease)?;
         if !found.outputs.iter().any(|(output, _)| output == name) {
             return Err(Refusal::Invalid(format!(
-                "The task has no output named {name}"
+                "The task has no output called {name}"
             )));
         }
-        Ok(found.dir.join(name))
+        Ok(found.lease_dir(lease).join(name))
     }
 
     /// A worker finished a task. Checks each output it lists against the
-    /// file in the task folder, then hands the result to the waiting work.
-    /// Reads every output, so callers run it off the async runtime.
+    /// file in the lease's folder, then hands the result to the waiting
+    /// work. Reads every output, so callers run it off the async runtime.
     pub fn complete(
         &self,
         session: &str,
@@ -875,12 +1039,12 @@ impl Board {
             found.state = TaskState::Checking {
                 session: session.to_string(),
             };
-            (found.dir.clone(), found.outputs.clone(), worker)
+            (found.lease_dir(lease), found.outputs.clone(), worker)
         };
         let checked = check_outputs(&dir, &declared, &completion);
         let mut inner = self.lock();
         if let Some(found) = inner.sessions.get_mut(session) {
-            found.task = None;
+            found.release(task);
             found.last_seen = Instant::now();
         }
         let Some(found) = inner.tasks.get_mut(task) else {
@@ -921,28 +1085,51 @@ impl Board {
             .get(session)
             .map(|found| found.name.clone())
             .unwrap_or_default();
+        let refuser = inner.sessions.get(session).cloned();
         let found = Self::current(&mut inner, session, task, lease)?;
-        found.state = TaskState::Finished(Err(format!("{error} (on {worker})")));
+        let (needs, kind) = (found.needs.clone(), found.kind);
+        // A worker of another machine that fails the task, such as one whose
+        // GPU driver or licence broke, hands it to this server when this
+        // server can run it.
+        let fallback = refuser.as_ref().is_some_and(|refuser| !refuser.local)
+            && inner.placement(kind).allows(true)
+            && inner
+                .sessions
+                .values()
+                .any(|other| other.local && needs.met_by(&other.offers));
+        let found = inner.tasks.get_mut(task).expect("the task is current");
+        if let (true, Some(refuser)) = (fallback, &refuser) {
+            found.refused_by.insert(refuser.token_and_name());
+            let old = found.requeue(format!("{worker} could not run it: {error}"));
+            inner.trash.extend(old);
+        } else {
+            found.state = TaskState::Finished(Err(format!("{error} (on {worker})")));
+        }
         if let Some(found) = inner.sessions.get_mut(session) {
-            found.task = None;
+            found.release(task);
             found.last_seen = Instant::now();
         }
         drop(inner);
         self.notify();
+        self.sweep();
         Ok(())
     }
 
-    /// The RC-Astro schemas each connected worker takes: the other
-    /// machines' by name, then this server's, which runs a tool only when no
-    /// other worker can.
+    /// The RC-Astro schemas of each connected worker that may run RC-Astro
+    /// steps under their placement: other machines' by name, then this
+    /// server's, which is the fallback.
     pub fn rc_astro_offers(&self) -> Vec<(String, bool, Vec<seiza_stacking::ExternalToolSchema>)> {
         let now = Instant::now();
         let inner = self.lock();
+        let placement = inner.placement(TaskKind::RcAstroStep);
         let mut offers = inner
             .sessions
             .values()
-            .filter(|found| now.duration_since(found.last_seen) < ONLINE)
-            .filter(|found| !found.offers.rc_astro.is_empty())
+            .filter(|found| found.online(now) && placement.allows(found.local))
+            .filter(|found| {
+                found.offers.work.contains(&TaskKind::RcAstroStep)
+                    && !found.offers.rc_astro.is_empty()
+            })
             .map(|found| {
                 (
                     found.name.clone(),
@@ -956,13 +1143,13 @@ impl Board {
     }
 
     /// The connected workers and the queued tasks, for Settings › Workers.
+    /// Forgets workers not heard from for an hour.
     pub fn summary(&self) -> (Vec<SessionSummary>, Vec<QueuedSummary>) {
         let now = Instant::now();
+        self.sweep();
         let mut inner = self.lock();
-        expire(&mut inner, now);
-        inner
-            .sessions
-            .retain(|_, found| found.local || now.duration_since(found.last_seen) < FORGOTTEN);
+        self.expire(&mut inner, now);
+        forget_quiet_sessions(&mut inner, now);
         let mut sessions = inner
             .sessions
             .iter()
@@ -972,14 +1159,16 @@ impl Board {
                 name: found.name.clone(),
                 version: found.version.clone(),
                 local: found.local,
-                connected: now.duration_since(found.last_seen) < ONLINE,
+                connected: found.online(now),
                 connected_at: found.connected_at,
                 seconds_since_seen: now.duration_since(found.last_seen).as_secs(),
                 threads: found.offers.threads,
+                slots: found.slots(),
                 rc_astro: found
                     .offers
                     .rc_astro
                     .iter()
+                    .filter(|_| found.offers.work.contains(&TaskKind::RcAstroStep))
                     .filter(|schema| schema.licensed)
                     .map(|schema| format!("{} {}", schema.name, schema.cli_version))
                     .collect(),
@@ -987,13 +1176,14 @@ impl Board {
                 exchange_shared: found.exchange_shared,
                 exchange_problem: found.exchange_problem.clone(),
                 running: found
-                    .task
-                    .as_ref()
-                    .and_then(|task| inner.tasks.get(task))
+                    .tasks
+                    .iter()
+                    .filter_map(|task| inner.tasks.get(task))
                     .map(|task| RunningSummary {
                         label: task.label.clone(),
                         fraction: task.fraction,
-                    }),
+                    })
+                    .collect(),
             })
             .collect::<Vec<_>>();
         sessions.sort_by(|left, right| {
@@ -1019,11 +1209,11 @@ impl Board {
     }
 }
 
-/// Put leased tasks whose lease ran out back in the queue, or fail them
-/// once they lost [`MAX_ATTEMPTS`] leases.
-fn expire(inner: &mut Inner, now: Instant) {
+/// Put leased tasks whose lease ran out back in the queue. Returns whether
+/// any did.
+fn expire(inner: &mut Inner, now: Instant) -> bool {
     let mut lost = Vec::new();
-    for (id, task) in &mut inner.tasks {
+    for (id, task) in &inner.tasks {
         if let TaskState::Leased {
             session, expires, ..
         } = &task.state
@@ -1035,36 +1225,38 @@ fn expire(inner: &mut Inner, now: Instant) {
             lost.push((id.clone(), session.clone()));
         }
     }
+    let expired = !lost.is_empty();
     for (id, session) in lost {
         let worker = inner
             .sessions
             .get_mut(&session)
             .map(|found| {
-                if found.task.as_deref() == Some(id.as_str()) {
-                    found.task = None;
-                }
+                found.release(&id);
                 found.name.clone()
             })
-            .unwrap_or_else(|| "The worker".into());
+            .unwrap_or_else(|| "the worker".into());
         let task = inner.tasks.get_mut(&id).expect("the task is leased");
-        task.attempts += 1;
-        tracing::warn!(
-            task = id,
-            worker,
-            "A worker stopped answering about {}",
-            task.label
-        );
-        task.state = if task.attempts >= MAX_ATTEMPTS {
-            TaskState::Finished(Err(format!(
-                "{worker} stopped answering, and the task had lost {MAX_ATTEMPTS} workers"
-            )))
-        } else {
-            TaskState::Queued
-        };
+        let old = task.requeue(format!("{worker} stopped answering"));
+        inner.trash.extend(old);
+    }
+    expired
+}
+
+/// Remove sessions not heard from for an hour, other than this server's.
+fn forget_quiet_sessions(inner: &mut Inner, now: Instant) {
+    let quiet = inner
+        .sessions
+        .iter()
+        .filter(|(_, found)| !found.local && now.duration_since(found.last_seen) >= FORGOTTEN)
+        .map(|(id, _)| id.clone())
+        .collect::<Vec<_>>();
+    for session in quiet {
+        remove_session(inner, &session, "stopped answering");
     }
 }
 
-/// Remove a session; the task it held goes back in the queue.
+/// Remove a session and its probe files; its tasks go back in the queue.
+/// `why` finishes "the worker …".
 fn remove_session(inner: &mut Inner, session: &str, why: &str) {
     let Some(found) = inner.sessions.remove(session) else {
         return;
@@ -1073,13 +1265,14 @@ fn remove_session(inner: &mut Inner, session: &str, why: &str) {
         let _ = std::fs::remove_file(&probe.path);
         let _ = std::fs::remove_file(&probe.reply_path);
     }
-    tracing::info!(worker = found.name, "A worker left: {why}");
-    if let Some(id) = found.task
-        && let Some(task) = inner.tasks.get_mut(&id)
-        && matches!(task.state, TaskState::Leased { .. })
-    {
-        task.attempts += 1;
-        task.state = TaskState::Queued;
+    tracing::info!(worker = found.name, "A worker left: it {why}");
+    for id in &found.tasks {
+        if let Some(task) = inner.tasks.get_mut(id)
+            && matches!(task.state, TaskState::Leased { .. })
+        {
+            let old = task.requeue(format!("{} {why}", found.name));
+            inner.trash.extend(old);
+        }
     }
 }
 
@@ -1093,7 +1286,7 @@ fn check_outputs(
     let mut outputs = BTreeMap::new();
     for written in &completion.outputs {
         if !declared.iter().any(|(name, _)| *name == written.name) {
-            return Err(format!("it listed an output named {}", written.name));
+            return Err(format!("it listed an output called {}", written.name));
         }
         let path = dir.join(&written.name);
         let (digest, size) = crate::remote_work::file_digest(&path)
@@ -1115,7 +1308,7 @@ fn check_outputs(
     Ok(outputs)
 }
 
-/// A task submitted to the board. Waiting on it hands back what the worker
+/// A task submitted to the board. Waiting on it returns what the worker
 /// made; dropping it takes the task off the board and removes its files.
 pub struct Ticket {
     board: Arc<Board>,
@@ -1142,7 +1335,7 @@ impl std::fmt::Display for WaitError {
 
 impl Ticket {
     /// The task's own folder, where its inputs are written before it is
-    /// submitted and its outputs arrive.
+    /// submitted. Each lease's outputs go in a folder inside it.
     pub fn dir(&self) -> &Path {
         &self.dir
     }
@@ -1153,9 +1346,9 @@ impl Ticket {
     }
 
     /// Wait until a worker finishes the task, on this thread. `stopped` is
-    /// read every half second; once it answers true the task leaves the
+    /// read every half second; once it returns true the task leaves the
     /// board, and the worker running it stops at its next report.
-    /// `progress` hears how much is done and which worker runs it: `None`
+    /// `progress` is told how much is done and which worker runs it: `None`
     /// for this server's own.
     pub fn wait(
         &self,
@@ -1166,7 +1359,7 @@ impl Ticket {
         let mut inner = self.board.lock();
         loop {
             let now = Instant::now();
-            expire(&mut inner, now);
+            self.board.expire(&mut inner, now);
             if stopped() {
                 drop(inner);
                 self.board.forget(&self.id);
@@ -1176,33 +1369,40 @@ impl Ticket {
                 self.board.wait_drained(&self.id, DRAIN_LIMIT);
                 return Err(WaitError::Stopped);
             }
-            let online = inner
-                .sessions
-                .values()
-                .filter(|found| now.duration_since(found.last_seen) < ONLINE)
-                .map(|found| found.offers.clone())
-                .collect::<Vec<_>>();
-            let Some(task) = inner.tasks.get_mut(&self.id) else {
+            let Some(task) = inner.tasks.get(&self.id) else {
                 return Err(WaitError::Failed("The task left the board".into()));
             };
             match &task.state {
                 TaskState::Finished(_) => {
-                    let TaskState::Finished(outcome) =
-                        std::mem::replace(&mut task.state, TaskState::Queued)
-                    else {
+                    let task = inner.tasks.remove(&self.id).expect("the task is finished");
+                    let TaskState::Finished(outcome) = task.state else {
                         unreachable!("the task is finished");
                     };
-                    inner.tasks.remove(&self.id);
                     return outcome.map_err(WaitError::Failed);
                 }
                 TaskState::Queued => {
-                    if online.iter().any(|offers| task.needs.met_by(offers)) {
+                    let runnable = inner
+                        .sessions
+                        .values()
+                        .any(|found| found.online(now) && inner.may_run_queued(found, task));
+                    let placement = inner.placement(task.kind);
+                    let task = inner.tasks.get_mut(&self.id).expect("the task is queued");
+                    if runnable {
                         task.unmatched_since = None;
                     } else {
                         let since = *task.unmatched_since.get_or_insert(now);
                         if now.duration_since(since) >= self.board.timings.no_worker_grace {
-                            let message =
-                                format!("No connected worker offers {}", task.needs.describe());
+                            let message = format!(
+                                "No connected worker offers {}{}",
+                                task.needs.describe(),
+                                match placement {
+                                    WorkPlacement::WorkersOnly =>
+                                        ", and Settings › Workers keeps this work off this server",
+                                    WorkPlacement::ThisServer =>
+                                        "; Settings › Workers keeps this work on this server",
+                                    WorkPlacement::WorkersFirst => "",
+                                }
+                            );
                             inner.tasks.remove(&self.id);
                             return Err(WaitError::Failed(message));
                         }
@@ -1210,10 +1410,9 @@ impl Ticket {
                 }
                 TaskState::Leased { session, .. } | TaskState::Checking { session, .. } => {
                     let fraction = task.fraction;
-                    let session = session.clone();
                     let worker = inner
                         .sessions
-                        .get(&session)
+                        .get(session)
                         .filter(|found| !found.local)
                         .map(|found| found.name.clone());
                     if reported
@@ -1235,6 +1434,17 @@ impl Ticket {
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .0;
         }
+    }
+}
+
+impl Inner {
+    /// Whether `session` could run a queued task, ignoring the fallback
+    /// rule: this server's worker counts too, since it takes over once the
+    /// other workers are gone.
+    fn may_run_queued(&self, session: &Session, task: &Task) -> bool {
+        task.needs.met_by(&session.offers)
+            && self.placement(task.kind).allows(session.local)
+            && !task.refused_by.contains(&session.token_and_name())
     }
 }
 

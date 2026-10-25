@@ -135,6 +135,10 @@ pub struct RcAstroCapabilities {
     /// The connected workers that have rc-astro, by name.
     #[serde(default)]
     pub workers: Vec<String>,
+    /// For each tool, the connected workers that take it, by name. A tool
+    /// no worker takes runs on this server.
+    #[serde(default)]
+    pub tool_workers: BTreeMap<String, Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -150,6 +154,7 @@ fn capabilities(workers: &crate::server::workers::Workers) -> RcAstroCapabilitie
         tools: offered.tools,
         this_server: offered.this_server,
         workers: offered.workers,
+        tool_workers: offered.tool_workers,
         error: workers.local_rc_astro_problem(),
     }
 }

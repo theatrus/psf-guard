@@ -20,10 +20,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 
-use super::board::{QueuedSummary, Refusal, SessionSummary, POLL};
+use super::board::{QueuedSummary, Refusal, SessionSummary, WorkPlacement, POLL};
 use crate::remote_work::protocol::{
     valid_file_name, Completion, Failure, ProbeAnswer, Progress, ProgressReply, Registered,
-    Registration, DIGEST_HEADER, LEASE_HEADER, PROTOCOL_VERSION,
+    Registration, TaskKind, DIGEST_HEADER, LEASE_HEADER, PROTOCOL_VERSION,
 };
 use crate::server::api::ApiResponse;
 use crate::server::auth::{AccessRole, RequestAccess};
@@ -60,6 +60,7 @@ pub fn settings_routes() -> Router<Arc<AppState>> {
         .route("/workers/tokens", post(create_token))
         .route("/workers/tokens/{id}", delete(revoke_token))
         .route("/workers/exchange", put(set_exchange))
+        .route("/workers/placement", put(set_placement))
 }
 
 fn refusal(status: StatusCode, message: impl Into<String>) -> Response {
@@ -112,7 +113,12 @@ fn lease(headers: &HeaderMap) -> Result<String, Response> {
         .get(LEASE_HEADER)
         .and_then(|value| value.to_str().ok())
         .map(str::to_string)
-        .ok_or_else(|| refusal(StatusCode::BAD_REQUEST, "The request names no lease"))
+        .ok_or_else(|| {
+            refusal(
+                StatusCode::BAD_REQUEST,
+                format!("The request has no lease; send it in {LEASE_HEADER}"),
+            )
+        })
 }
 
 /// POST /api/workers/v1/register
@@ -269,7 +275,7 @@ async fn download_input(
 }
 
 /// PUT …/tasks/{task}/outputs/{name}: the output's bytes, checked against
-/// the digest header before the file takes its name.
+/// the digest header before the file is renamed to the output's name.
 async fn upload_output(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -435,6 +441,17 @@ pub struct WorkersResponse {
     pub exchange_folder_setting: Option<String>,
     /// Where task files go when no folder is chosen.
     pub default_exchange_folder: String,
+    /// The folder inside the exchange folder that holds task files.
+    pub exchange_subfolder: &'static str,
+    /// Where each kind of work runs.
+    pub placement: Placement,
+}
+
+/// Where each kind of work runs. Stack builds and WBPP runs stay on this
+/// server until they can run on workers.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct Placement {
+    pub rc_astro: WorkPlacement,
 }
 
 /// `POST /api/workers/tokens`
@@ -502,6 +519,10 @@ fn summary(state: &AppState) -> WorkersResponse {
         exchange_folder: state.workers.board.exchange().display().to_string(),
         exchange_folder_setting: setting,
         default_exchange_folder: default_exchange(state).display().to_string(),
+        exchange_subfolder: super::board::EXCHANGE_SUBFOLDER,
+        placement: Placement {
+            rc_astro: state.workers.board.placement(TaskKind::RcAstroStep),
+        },
     }
 }
 
@@ -624,6 +645,28 @@ async fn set_exchange(
     })
     .await?;
     state.workers.board.set_exchange(resolved);
+    Ok(Json(ApiResponse::success(summary(&state))))
+}
+
+/// PUT /api/workers/placement
+async fn set_placement(
+    State(state): State<Arc<AppState>>,
+    Extension(access): Extension<RequestAccess>,
+    Json(placement): Json<Placement>,
+) -> Result<Json<ApiResponse<WorkersResponse>>, AppError> {
+    require_operator(&state, &access)?;
+    update_registry(&state, |registry| {
+        registry
+            .remote_workers
+            .get_or_insert_with(Default::default)
+            .rc_astro = placement.rc_astro;
+        Ok(())
+    })
+    .await?;
+    state
+        .workers
+        .board
+        .set_placement(TaskKind::RcAstroStep, placement.rc_astro);
     Ok(Json(ApiResponse::success(summary(&state))))
 }
 

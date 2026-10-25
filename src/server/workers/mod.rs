@@ -12,6 +12,7 @@ pub mod rc_astro;
 pub mod routes;
 pub mod tokens;
 
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::{Duration, Instant};
 
@@ -41,16 +42,10 @@ pub struct Workers {
 
 impl Default for Workers {
     fn default() -> Self {
-        Self {
-            board: Arc::new(Board::default()),
-            tokens: RwLock::new(Vec::new()),
-            local: OnceLock::new(),
-            local_offers: Mutex::new(None),
-        }
+        Self::with_board(Board::default())
     }
 }
 
-#[cfg(test)]
 impl Workers {
     /// Workers on `board`, such as one with short leases.
     pub(crate) fn with_board(board: Board) -> Self {
@@ -71,14 +66,26 @@ impl Drop for Workers {
 }
 
 impl Workers {
-    /// Take the tokens and the exchange folder from the registry.
-    pub fn configure(&self, tokens: Vec<WorkerTokenRecord>, exchange: std::path::PathBuf) {
-        // Files of tasks from an earlier run of the server are of no use.
-        for stale in ["tasks", "probes"] {
-            let _ = std::fs::remove_dir_all(exchange.join(stale));
-        }
-        self.board.set_exchange(exchange);
-        self.set_tokens(tokens);
+    /// Take the tokens, the exchange folder and where each kind of work
+    /// runs from the registry.
+    pub fn configure(
+        &self,
+        settings: crate::db_registry::RemoteWorkerSettings,
+        default_exchange: PathBuf,
+    ) {
+        self.board.set_exchange(
+            settings
+                .exchange_folder
+                .map(PathBuf::from)
+                .unwrap_or(default_exchange),
+        );
+        // Files of tasks a stopped server left behind are of no use.
+        self.board.remove_stale_files();
+        self.board.set_placement(
+            crate::remote_work::protocol::TaskKind::RcAstroStep,
+            settings.rc_astro,
+        );
+        self.set_tokens(settings.tokens);
     }
 
     pub fn set_tokens(&self, tokens: Vec<WorkerTokenRecord>) {
@@ -170,5 +177,23 @@ impl Workers {
 pub(crate) fn local_tools() -> LocalTools {
     LocalTools {
         rc_astro: crate::remote_work::rc_astro::locate(None),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_a_current_worker_token_is_accepted() {
+        let workers = Workers::default();
+        let (secret, record) = tokens::mint("studio").unwrap();
+        workers.set_tokens(vec![record.clone()]);
+        assert_eq!(workers.token_id(&secret), Some(record.id));
+        // A user's API token, or anything else, is not a worker token.
+        assert_eq!(workers.token_id(&secret.replace("psfw_", "psfg_")), None);
+        assert_eq!(workers.token_id("psfw_unknown"), None);
+        workers.set_tokens(Vec::new());
+        assert_eq!(workers.token_id(&secret), None);
     }
 }

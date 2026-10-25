@@ -25,6 +25,7 @@ async function revokeNamed(request: APIRequestContext, name: string) {
 test.afterEach(async ({ request }, testInfo) => {
   worker?.kill();
   worker = null;
+  await request.put('/api/workers/placement', { data: { rc_astro: 'workers_first' } });
   await revokeNamed(request, `e2e-worker-${testInfo.project.name}`);
 });
 
@@ -40,12 +41,27 @@ test('a worker joins with the token shown once, and stops when it is revoked', a
   await expect(local).toContainText('No RC-Astro tools');
   await expect(local).toContainText('Reads task files in place');
 
+  // Where RC-Astro runs saves at once; stack builds and WBPP stay here.
+  // Each radio shows the saved choice, so it turns on once the save returns.
+  const workersOnly = page.getByRole('radio', { name: /^Workers only/ });
+  await workersOnly.click();
+  await expect(workersOnly).toBeChecked();
+  await expect.poll(async () => (await (await request.get('/api/workers')).json()).data.placement.rc_astro)
+    .toBe('workers_only');
+  await expect(page.getByText('Stack builds and WBPP runs stay on this server.')).toBeVisible();
+  await page.getByRole('radio', { name: /^Workers first/ }).click();
+  await expect(page.getByRole('radio', { name: /^Workers first/ })).toBeChecked();
+
   await page.getByRole('button', { name: '+ Add a worker' }).click();
   await page.getByLabel('Worker name').fill(name);
   await page.getByRole('button', { name: 'Create token' }).click();
-  const secret = page.getByRole('status').filter({ hasText: 'Copy this command now.' });
-  const command = (await secret.locator('.token-secret-value').textContent()) ?? '';
-  expect(command).toContain(`psf-guard worker --server ${BASE}`);
+  const secret = page.getByRole('status').filter({ hasText: 'Copy a command now.' });
+  const command = (await secret.locator('[data-shell="posix"]').textContent()) ?? '';
+  // This page is on 127.0.0.1, which another computer cannot reach, so the
+  // command has a placeholder and says to replace it.
+  expect(command).toContain('psf-guard worker --server http://THIS-SERVER:PORT');
+  await expect(secret).toContainText('Replace THIS-SERVER:PORT');
+  await expect(secret.locator('[data-shell="powershell"]')).toContainText('$env:PSF_GUARD_WORKER_TOKEN=');
   const token = /PSF_GUARD_WORKER_TOKEN=(psfw_[0-9a-f]{64})/.exec(command)?.[1];
   expect(token).toBeTruthy();
   await secret.screenshot({ path: testInfo.outputPath('worker-token.png') });

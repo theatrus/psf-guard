@@ -42,6 +42,7 @@ impl LocalTools {
         (
             protocol::Offers {
                 threads,
+                slots: 1,
                 work,
                 rc_astro,
             },
@@ -74,7 +75,7 @@ impl WorkChoice {
             match value.as_str() {
                 "rc-astro" => tools.extend(rc_astro::TOOLS.iter().map(|tool| tool.to_string())),
                 tool if rc_astro::TOOLS.contains(&tool) => tools.push(tool.to_string()),
-                _ => return Err(format!("--work takes {WORK_CHOICES}, not '{value}'")),
+                _ => return Err(format!("--work must be {WORK_CHOICES}, not '{value}'")),
             }
         }
         tools.sort();

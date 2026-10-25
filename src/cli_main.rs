@@ -1608,6 +1608,7 @@ pub fn main() -> Result<()> {
             work_dir,
             rc_astro,
             work,
+            slots,
         } => {
             crate::commands::worker::run(crate::commands::worker::WorkerArgs {
                 server,
@@ -1618,6 +1619,7 @@ pub fn main() -> Result<()> {
                 work_dir,
                 rc_astro,
                 work,
+                slots,
             })?;
         }
         Commands::Users { action } => {

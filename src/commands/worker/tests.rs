@@ -21,6 +21,12 @@ struct Server {
 }
 
 async fn server() -> Server {
+    server_with_slow_inputs(Duration::ZERO).await
+}
+
+/// A server whose input downloads start only after `delay`, as on a slow
+/// link.
+async fn server_with_slow_inputs(delay: Duration) -> Server {
     let exchange = tempfile::tempdir().unwrap();
     let mut state = AppState::new_for_test(rusqlite::Connection::open_in_memory().unwrap());
     state.workers = Workers::with_board(Board::with_timings(
@@ -31,9 +37,13 @@ async fn server() -> Server {
         },
     ));
     let (secret, record) = tokens::mint("test").unwrap();
-    state
-        .workers
-        .configure(vec![record], exchange.path().to_path_buf());
+    state.workers.configure(
+        crate::db_registry::RemoteWorkerSettings {
+            tokens: vec![record],
+            ..Default::default()
+        },
+        exchange.path().to_path_buf(),
+    );
     let state = Arc::new(state);
     let transfers = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&transfers);
@@ -49,6 +59,9 @@ async fn server() -> Server {
                     let path = request.uri().path();
                     if path.contains("/inputs/") || path.contains("/outputs/") {
                         counted.fetch_add(1, Ordering::SeqCst);
+                    }
+                    if path.contains("/inputs/") {
+                        tokio::time::sleep(delay).await;
                     }
                     next.run(request).await
                 }
@@ -102,6 +115,7 @@ fn start_worker_taking(
             rc_astro: crate::remote_work::rc_astro::locate(None),
         },
         work,
+        slots: 1,
     };
     let handle = tokio::spawn(serve(options, async {
         let _ = stopped.await;
@@ -348,7 +362,7 @@ async fn a_stop_on_the_server_kills_the_tool_on_the_worker() {
     })
     .await;
     eventually("the worker is free again", || {
-        connected(&server).is_some_and(|worker| worker.running.is_none())
+        connected(&server).is_some_and(|worker| worker.running.is_empty())
     })
     .await;
     drop(stop);
@@ -380,6 +394,7 @@ fn maps_imply_shared_files_and_must_name_both_sides() {
         work_dir: None,
         rc_astro: None,
         work: Vec::new(),
+        slots: 1,
     };
     let remote = options(args(&[])).unwrap();
     assert_eq!(remote.files.mode, FileMode::Remote);
@@ -497,5 +512,95 @@ async fn real_rc_astro_runs_on_a_remote_worker() {
         );
         drop(stop);
         worker.await.unwrap().unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_slow_download_keeps_its_lease() {
+    let tool = crate::server::stack_preview::rc_astro::test_tool::install(false);
+    // The download takes longer than the three-second lease.
+    let server = server_with_slow_inputs(Duration::from_secs(5)).await;
+    let work = tempfile::tempdir().unwrap();
+    let (stop, worker) = start_worker(&server, FileAccess::default(), work.path());
+    eventually("the worker connects", || connected(&server).is_some()).await;
+    let (ran, _) = run_step(&server, None).await;
+    assert_same_pixels(&ran.unwrap().image);
+    assert_eq!(tool.invocations(), 1, "the task ran once, under one lease");
+    drop(stop);
+    worker.await.unwrap().unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn revoking_the_token_stops_the_running_tool() {
+    let tool = crate::server::stack_preview::rc_astro::test_tool::install(true);
+    let server = server().await;
+    let work = tempfile::tempdir().unwrap();
+    let (_stop, worker) = start_worker(&server, FileAccess::default(), work.path());
+    eventually("the worker connects", || connected(&server).is_some()).await;
+    let board = Arc::clone(&server.state.workers.board);
+    let step = tokio::task::spawn_blocking(move || {
+        crate::server::workers::rc_astro::run_on_board(
+            &board,
+            true,
+            &noise_x(),
+            &request(),
+            &image(),
+            &[],
+            None,
+            &mut |_, _| {},
+        )
+    });
+    eventually("the tool starts on the worker", || tool.pid().is_some()).await;
+    let pid = tool.pid().unwrap();
+    server.state.workers.set_tokens(Vec::new());
+    // At its next report the worker learns the token is revoked: it stops
+    // the tool and exits with the reason.
+    let error = tokio::time::timeout(Duration::from_secs(20), worker)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap_err();
+    assert!(error.to_string().contains("Settings › Workers"), "{error}");
+    assert!(!std::process::Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .stderr(std::process::Stdio::null())
+        .status()
+        .unwrap()
+        .success());
+    drop(step);
+}
+
+#[test]
+fn a_task_id_or_file_name_that_leaves_the_work_folder_is_refused() {
+    use crate::remote_work::protocol::{InputFile, OutputFile, TaskKind};
+    let assignment = |task: &str, input: &str, output: &str| Assignment {
+        task: task.into(),
+        lease: "l".into(),
+        kind: TaskKind::RcAstroStep,
+        label: "t".into(),
+        spec: serde_json::json!({}),
+        inputs: vec![InputFile {
+            name: input.into(),
+            size: 1,
+            path: None,
+        }],
+        outputs: vec![OutputFile {
+            name: output.into(),
+            required: true,
+            path: None,
+        }],
+    };
+    let id = uuid::Uuid::new_v4().to_string();
+    assert!(check_assignment(&assignment(&id, "input.fits", "processed.fits")).is_ok());
+    for (task, input, output) in [
+        ("../../..", "input.fits", "processed.fits"),
+        (&id.to_uppercase(), "input.fits", "processed.fits"),
+        (&id, "../../.ssh/authorized_keys", "processed.fits"),
+        (&id, "input.fits", "/etc/passwd"),
+    ] {
+        assert!(
+            check_assignment(&assignment(task, input, output)).is_err(),
+            "{task} {input} {output}"
+        );
     }
 }

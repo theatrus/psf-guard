@@ -1255,6 +1255,9 @@ export interface RcAstroCapabilities {
   this_server?: boolean;
   /** The connected workers that have rc-astro, by name. */
   workers?: string[];
+  /** For each tool, the connected workers that take it. A tool no worker
+   *  takes runs on this server. */
+  tool_workers?: Record<string, string[]>;
   error?: string;
 }
 
@@ -5217,14 +5220,19 @@ export interface WorkerSessionSummary {
   connected_at: number;
   seconds_since_seen: number;
   threads: number;
-  /** The RC-Astro tools it offers, as "RC-Astro StarXTerminator 2.6.10". */
+  /** How many tasks it runs at once. */
+  slots: number;
+  /** The RC-Astro tools it takes, as "RC-Astro StarXTerminator 2.6.10". */
   rc_astro: string[];
   file_mode: 'remote' | 'shared';
   /** Whether task files reach it by path. */
   exchange_shared: boolean;
   exchange_problem?: string;
-  running?: { label: string; fraction: number };
+  running: Array<{ label: string; fraction: number }>;
 }
+
+/** Where one kind of work runs. */
+export type WorkPlacement = 'workers_first' | 'workers_only' | 'this_server';
 
 export interface WorkersSettings {
   tokens: WorkerTokenSummary[];
@@ -5233,6 +5241,9 @@ export interface WorkersSettings {
   exchange_folder: string;
   exchange_folder_setting?: string;
   default_exchange_folder: string;
+  /** The folder inside the exchange folder that holds task files. */
+  exchange_subfolder: string;
+  placement: { rc_astro: WorkPlacement };
 }
 
 export interface CreatedWorkerToken {

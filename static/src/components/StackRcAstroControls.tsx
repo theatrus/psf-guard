@@ -109,9 +109,12 @@ export default function StackRcAstroControls({
       </header>
       {!!capabilities.data.workers?.length && (
         <p className="stack-rc-astro-where">
-          Runs on {capabilities.data.workers.length === 1 ? 'the worker' : 'a worker'}{' '}
-          {capabilities.data.workers.join(', ')}
-          {capabilities.data.this_server && ', or on this server while no worker is connected'}
+          {tools.map((schema) => {
+            const workers = capabilities.data.tool_workers?.[schema.key] ?? [];
+            return `${schema.name.replace(/^RC-Astro /, '')} on ${workers.length ? workers.join(', ') : 'this server'}`;
+          }).join(' · ')}
+          {capabilities.data.this_server && tools.some((schema) => capabilities.data.tool_workers?.[schema.key]?.length)
+            && '. This server runs a tool while no worker that takes it is connected.'}
         </p>
       )}
       {!!config?.steps.length && (

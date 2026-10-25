@@ -28,6 +28,8 @@ pub struct Offered {
     pub this_server: bool,
     /// The connected workers that have rc-astro, by name.
     pub workers: Vec<String>,
+    /// For each tool, the connected workers that take it, by name.
+    pub tool_workers: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 impl Workers {
@@ -58,6 +60,19 @@ impl Workers {
                 .iter()
                 .filter(|(_, local, _)| !local)
                 .map(|(name, _, _)| name.clone())
+                .collect(),
+            tool_workers: task::TOOLS
+                .iter()
+                .map(|tool| {
+                    let names = offers
+                        .iter()
+                        .filter(|(_, local, schemas)| {
+                            !local && schemas.iter().any(|schema| schema.key == *tool)
+                        })
+                        .map(|(name, _, _)| name.clone())
+                        .collect();
+                    (tool.to_string(), names)
+                })
                 .collect(),
         }
     }
@@ -98,8 +113,8 @@ impl Workers {
 impl RcAstroRunner<'_> {
     /// Run one tool over `image` on the first worker that offers it at
     /// `schema`'s version. `cancel` takes the task off the board, and the
-    /// worker running it stops. `progress` hears how much is done and which
-    /// worker runs it: `None` for this server.
+    /// worker running it stops. `progress` is told how much is done and
+    /// which worker runs it: `None` for this server.
     pub fn run(
         &self,
         schema: &ExternalToolSchema,

@@ -1111,6 +1111,13 @@ export const apiClient = {
     return data.data;
   },
 
+  setWorkerPlacement: async (placement: WorkersSettings['placement']): Promise<WorkersSettings> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.put<ApiResponse<WorkersSettings>>('/workers/placement', placement);
+    if (!data.data) throw new Error(data.error || 'Failed to save where work runs');
+    return data.data;
+  },
+
   setWorkerExchangeFolder: async (folder: string | null): Promise<WorkersSettings> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.put<ApiResponse<WorkersSettings>>('/workers/exchange', { folder });

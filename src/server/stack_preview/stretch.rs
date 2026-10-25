@@ -1417,7 +1417,16 @@ async fn restore_processing(
         *request,
     )
     .await
-    .map_err(|error| NotRestored::Skip(format!("{error:?}")))?;
+    .map_err(|error| match &error {
+        // A server with no rc-astro of its own waits for its workers, which
+        // join again some time after a restart.
+        AppError::BadRequest(message)
+            if message.contains(crate::server::workers::rc_astro::NOT_INSTALLED) =>
+        {
+            NotRestored::Retry(message.clone())
+        }
+        _ => NotRestored::Skip(format!("{error:?}")),
+    })?;
     let stretch_id = prepared.stretch_id.clone();
     if stretch_id != run_id {
         tracing::info!(
