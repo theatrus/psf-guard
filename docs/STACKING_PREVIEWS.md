@@ -1496,6 +1496,8 @@ numbered steps below show the current choices. Expand a step to edit it.
 Closing a step keeps your edits, and applying a saved setup fills the steps
 without starting a build.
 
+![Numbered color processing steps with saved setups above the flow](stack-color-flow-desktop.png)
+
 - **Prepare inputs** chooses the channel-card tools and background correction.
   Expand **Per-channel tools** to inspect or override individual channels.
 - **Subtract continuum** appears for combined recipes. It contains the linear
@@ -1515,6 +1517,18 @@ without starting a build.
 Only the steps for the current recipe appear. The narrowband-only built-in
 setup is offered on narrowband cards. Click **Apply processing stack** to
 render the draft, or **Revert edits** to restore the applied settings.
+
+The linear-color step shows the nebula and RGB-star branches separately. This
+example uses edited BXT sharpening and halo values from a saved setup.
+
+![Separate narrowband-nebula and RGB-star processing branches](stack-color-linear-branches.png)
+
+On a phone, steps and controls wrap to the card's width:
+
+<p>
+  <img src="stack-color-flow-phone.png" alt="Color processing overview on a phone" width="350">
+  <img src="stack-color-balance-phone.png" alt="Expanded narrowband balance and stretch controls on a phone" width="301">
+</p>
 
 ## Named processing setups
 
