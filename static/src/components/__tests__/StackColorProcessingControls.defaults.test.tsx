@@ -79,3 +79,43 @@ describe('a new color preview\'s processing editor', () => {
     expect(apply).toBeDisabled();
   });
 });
+
+it('applies RGB-star BlurXTerminator independently of narrowband color tools', async () => {
+  server.use(http.get('/api/tools/rc-astro', () => HttpResponse.json({ success: true, data: {
+    available: true, tools: [{ schema_version: 6, cli_version: '2.6.6', key: 'bxt', name: 'RC-Astro BlurXTerminator', licensed: true,
+      parameters: [{ name: 'ss', flag: '--ss', label: 'Sharpen Stars', kind: { type: 'float', default: 0.5, min: 0, max: 0.7 } }] }],
+  } })));
+  const applied = vi.fn();
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  render(<QueryClientProvider client={queryClient}>
+    <StackColorProcessingControls label="SNR G132 SHO" roles={['ha', 'oiii', 'sii']}
+      applied={null} automaticNarrowband managesStars backgrounds={{}} protections={{}} fallbacks={{}}
+      deconvolutions={{}} disabled={false} onApply={applied} />
+  </QueryClientProvider>);
+  await userEvent.click(screen.getByText('Processing stack'));
+  const stars = await screen.findByRole('region', { name: 'RGB stars RC-Astro tools' });
+  await userEvent.click(within(stars).getByRole('checkbox', { name: 'RC-Astro BlurXTerminator' }));
+  await userEvent.click(screen.getByRole('button', { name: 'Apply processing stack' }));
+  expect(applied).toHaveBeenCalledWith(expect.objectContaining({ narrowband: expect.objectContaining({
+    rgb_star_processing: { steps: [{ tool: 'bxt', parameters: {} }] },
+  }) }));
+  expect(applied.mock.calls[0][0].color_rc_astro).toBeUndefined();
+});
+
+
+it('offers Automatic, Manual and Off only on an explicit combined recipe', async () => {
+  const applied = vi.fn();
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  render(<QueryClientProvider client={client}><StackColorProcessingControls label="SNR G132 RGB + emission"
+    roles={['red','green','blue','ha','oiii']} combination="emission" applied={null}
+    backgrounds={{}} protections={{}} fallbacks={{}} deconvolutions={{}} disabled={false} onApply={applied} /></QueryClientProvider>);
+  await userEvent.click(screen.getByText('Processing stack'));
+  expect(screen.getByRole('combobox', { name: 'Continuum mode' })).toHaveValue('automatic');
+  await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Continuum mode' }), 'manual');
+  await userEvent.click(screen.getByRole('button', { name: 'Apply processing stack' }));
+  expect(screen.getByRole('alert')).toHaveTextContent('Enter every reference weight');
+  expect(applied).not.toHaveBeenCalled();
+  await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Continuum mode' }), 'off');
+  await userEvent.click(screen.getByRole('button', { name: 'Apply processing stack' }));
+  expect(applied).toHaveBeenCalledWith(expect.objectContaining({ emission: expect.objectContaining({ mode: 'off' }) }));
+});

@@ -17,6 +17,9 @@ pub struct NarrowbandProcessing {
     pub shared_stretch: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub balance: Option<seiza_stacking::NarrowbandBalanceOptions>,
+    /// Optional sharpening/denoising on linear RGB before calibration and SXT.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rgb_star_processing: Option<super::super::rc_astro::RcAstroProcessing>,
 }
 
 impl NarrowbandProcessing {
@@ -31,6 +34,16 @@ impl NarrowbandProcessing {
         {
             return Err("Shadow protection must be 0 to 1, boosts positive and finite, and balance samples 4 to 1000000".into());
         }
+        if let Some(config) = &self.rgb_star_processing {
+            config.validate()?;
+            if config
+                .steps
+                .iter()
+                .any(|step| !matches!(step.tool.as_str(), "bxt" | "nxt"))
+            {
+                return Err("RGB star processing supports BlurXTerminator and NoiseXTerminator before star separation".into());
+            }
+        }
         Ok(())
     }
 }
@@ -44,13 +57,23 @@ pub struct NarrowbandResolution {
     pub rc_astro_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color_calibration: Option<StackColorCalibrationOutcome>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rgb_star_processing: Option<StackColorRcAstroResult>,
 }
 
 pub(super) fn rgb_calibration_settings(job: &StackColorJob) -> Option<StackColorCalibration> {
     job.narrowband_resolution
         .as_ref()
-        .filter(|resolution| resolution.stars == ColorStars::Rgb)
-        .map(|_| StackColorCalibration::default())
+        .filter(|resolution| {
+            resolution.stars == ColorStars::Rgb
+                || job.combination == Some(emission::CombinedColorRecipe::BroadbandStructure)
+        })
+        .map(|_| {
+            job.processing
+                .as_ref()
+                .and_then(|p| p.color_calibration)
+                .unwrap_or_default()
+        })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,6 +83,15 @@ pub(super) struct StarsPlan {
     pub nebula_chain: Vec<String>,
     pub rgb_chain: Vec<String>,
     pub calibration: Option<ColorCalibrationPlan>,
+    #[serde(default)]
+    pub rgb_preparation: Option<RgbStarPreparation>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct RgbStarPreparation {
+    pub config: super::super::rc_astro::RcAstroProcessing,
+    pub schemas: Vec<(String, seiza_stacking::ExternalToolSchema)>,
+    pub chain: Vec<String>,
 }
 
 pub(super) fn available_sources(target: &TargetSources) -> String {
@@ -103,6 +135,8 @@ pub(super) fn resolve(
     if request.kind != StackColorKind::Narrowband {
         return Ok((select_sources(target, request)?, None, None));
     }
+    let combined = request.combination == Some(emission::CombinedColorRecipe::BroadbandStructure);
+    let may_fallback = request.stars == Some(ColorStars::Automatic) && !combined;
     for (role, selected) in &request.input_sources {
         if !target.by_role.get(role).is_some_and(|values| {
             values.iter().any(|source| {
@@ -175,6 +209,7 @@ pub(super) fn resolve(
                 available_sources: available_sources(target),
                 rc_astro_ids: Vec::new(),
                 color_calibration: None,
+                rgb_star_processing: None,
             }),
             None,
         ));
@@ -185,6 +220,7 @@ pub(super) fn resolve(
         available_sources: available_sources(target),
         rc_astro_ids: Vec::new(),
         color_calibration: None,
+        rgb_star_processing: None,
     };
     if choice == ColorStars::Narrowband {
         return Ok((sources, Some(resolution), None));
@@ -200,7 +236,7 @@ pub(super) fn resolve(
     };
     let schemas = match super::super::rc_astro::schemas_for(&config) {
         Ok(schemas) => schemas,
-        Err(error) if choice == ColorStars::Automatic => {
+        Err(error) if may_fallback => {
             resolution.stars = ColorStars::Narrowband;
             resolution.detail = format!(
                 "Automatic uses narrowband stars: star separation is unavailable ({error})"
@@ -215,7 +251,7 @@ pub(super) fn resolve(
     };
     let config = match super::super::rc_astro::normalize_against_schemas(&config, &schemas) {
         Ok(config) => config,
-        Err(error) if choice == ColorStars::Automatic => {
+        Err(error) if may_fallback => {
             resolution.stars = ColorStars::Narrowband;
             resolution.detail = format!(
                 "Automatic uses narrowband stars: star separation is unavailable ({error})"
@@ -224,9 +260,10 @@ pub(super) fn resolve(
         }
         Err(error) => return Err(AppError::BadRequest(error)),
     };
-    if choice != ColorStars::None {
+    if choice != ColorStars::None || combined {
         let rgb_request = StackColorRequest {
             kind: StackColorKind::Rgb,
+            combination: None,
             palette: None,
             automatic_palette: false,
             stars: None,
@@ -256,8 +293,14 @@ pub(super) fn resolve(
                 .collect(),
         };
         match select_sources(&rgb_target, &rgb_request) {
-            Ok(rgb) => sources.extend(rgb),
-            Err(error) if choice == ColorStars::Automatic => {
+            Ok(rgb) => {
+                for source in rgb {
+                    if !sources.iter().any(|old| old.role == source.role) {
+                        sources.push(source);
+                    }
+                }
+            }
+            Err(error) if may_fallback => {
                 resolution.stars = ColorStars::Narrowband;
                 let error = match error {
                     AppError::BadRequest(message) => message,
@@ -270,8 +313,12 @@ pub(super) fn resolve(
             }
             Err(error) => return Err(error),
         }
-        resolution.stars = ColorStars::Rgb;
-        resolution.detail = "RGB stars replace narrowband stars on the starless nebula".into();
+        if choice != ColorStars::None {
+            resolution.stars = ColorStars::Rgb;
+            resolution.detail = "RGB stars replace narrowband stars on the starless nebula".into();
+        } else {
+            resolution.detail = "Starless narrowband and broadband structures".into();
+        }
     } else {
         resolution.detail = "Starless narrowband nebula".into();
     }
@@ -327,7 +374,7 @@ pub(super) struct RgbStarsDisplay {
     pub starless: LinearImage,
 }
 
-fn combine(
+pub(super) fn combine(
     images: &BTreeMap<StackColorRole, LinearImage>,
     roles: [StackColorRole; 3],
 ) -> Result<LinearImage, String> {
@@ -350,7 +397,7 @@ fn combine(
     .map_err(|error| error.to_string())
 }
 
-fn put_planes(
+pub(super) fn put_planes(
     images: &mut BTreeMap<StackColorRole, LinearImage>,
     combined: LinearImage,
     roles: [StackColorRole; 3],
@@ -421,19 +468,64 @@ pub(super) fn separate_stars(
     };
     let result = (|| {
         let rgb = if let Some(calibration) = &plan.calibration {
-            let outcome = match &calibration.placement {
-                Ok(placement) => calibrate_registered_channels(
-                    placement,
-                    &calibration.settings,
-                    images,
-                    None,
-                    open_catalog,
-                ),
-                Err(reason) => StackColorCalibrationOutcome::Skipped(reason.clone()),
-            };
+            if let Some(preparation) = &plan.rgb_preparation {
+                let combined = combine(images, RGB_ROLES)?;
+                let prepared = super::super::rc_astro::apply_rc_astro(
+                    root,
+                    &preparation.chain,
+                    &preparation.config,
+                    &preparation.schemas,
+                    &combined,
+                    headers,
+                    &mut |label, fraction| {
+                        progress.begin(
+                            phase,
+                            format!("RGB star processing: {label} ({:.0}%)", fraction * 100.0),
+                            None,
+                            None,
+                        );
+                        progress.partial(1, fraction);
+                    },
+                    Some(&stop.signal()),
+                    &mut || stop.check(),
+                )?;
+                let id = preparation
+                    .chain
+                    .last()
+                    .ok_or("RGB star processing chain is empty")?;
+                let report = StackColorRcAstroResult {
+                    result: prepared.result,
+                    fits_url: format!(
+                        "/api/db/{}/stack-previews/rc-astro/{id}/fits",
+                        job.database_id
+                    ),
+                    stars_fits_url: None,
+                };
+                put_planes(images, prepared.image, RGB_ROLES)?;
+                state.stack_previews.update_color(&job.job_id, |current| {
+                    if let Some(resolution) = &mut current.narrowband_resolution {
+                        resolution.rgb_star_processing = Some(report);
+                    }
+                });
+                progress.advance(phase, preparation.config.steps.len());
+                stop.check()?;
+            }
+            let outcome = calibration
+                .settings
+                .enabled
+                .then(|| match &calibration.placement {
+                    Ok(placement) => calibrate_registered_channels(
+                        placement,
+                        &calibration.settings,
+                        images,
+                        None,
+                        open_catalog,
+                    ),
+                    Err(reason) => StackColorCalibrationOutcome::Skipped(reason.clone()),
+                });
             state.stack_previews.update_color(&job.job_id, |current| {
                 if let Some(resolution) = &mut current.narrowband_resolution {
-                    resolution.color_calibration = Some(outcome);
+                    resolution.color_calibration = outcome;
                 }
             });
             let original = combine(images, RGB_ROLES)?;
@@ -499,7 +591,9 @@ pub(super) fn separate_stars(
         }
         Err(error) => {
             stop.check()?;
-            if job.stars != Some(ColorStars::Automatic) {
+            if job.stars != Some(ColorStars::Automatic)
+                || job.combination == Some(emission::CombinedColorRecipe::BroadbandStructure)
+            {
                 return Err(error);
             }
             // The nebula planes are committed only after both separations
@@ -652,6 +746,7 @@ mod tests {
             available_sources: String::new(),
             rc_astro_ids: vec![],
             color_calibration: None,
+            rgb_star_processing: None,
         };
         for stars in [ColorStars::Rgb, ColorStars::Narrowband, ColorStars::None] {
             resolution.stars = stars;
@@ -945,7 +1040,29 @@ mod tests {
         job.stars = Some(ColorStars::Rgb);
         job.sources = sources;
         job.narrowband_resolution = resolution;
+        let preparation_config = super::super::super::rc_astro::RcAstroProcessing {
+            steps: vec![super::super::super::rc_astro::RcAstroStep {
+                tool: "bxt".into(),
+                parameters: Default::default(),
+            }],
+        };
+        let preparation_schemas =
+            super::super::super::rc_astro::schemas_for(&preparation_config).unwrap();
+        let preparation_chain = super::super::super::rc_astro::rc_astro_chain_ids(
+            "db",
+            "rgb-prepare",
+            "first",
+            &preparation_config,
+            &preparation_schemas,
+            None,
+        )
+        .unwrap();
         let plan = StarsPlan {
+            rgb_preparation: Some(RgbStarPreparation {
+                config: preparation_config,
+                schemas: preparation_schemas,
+                chain: preparation_chain,
+            }),
             nebula_chain: super::super::super::rc_astro::rc_astro_chain_ids(
                 "db", "nebula", "first", &config, &schemas, None,
             )
@@ -1002,9 +1119,19 @@ mod tests {
         }
         assert_eq!(
             tool.invocations(),
-            2,
-            "each tool result must be reused on the second build"
+            3,
+            "BXT and both separations must be reused on the second build"
         );
+        assert_eq!(tool.invocations_log(), "bxt\nsxt\nsxt\n");
+        let prepared = state
+            .stack_previews
+            .get_color(&job.job_id)
+            .unwrap()
+            .narrowband_resolution
+            .unwrap()
+            .rgb_star_processing
+            .unwrap();
+        assert_eq!(prepared.result.steps[0].tool, "bxt");
         tool.fail_star_removal();
         let mut failing_plan = plan;
         failing_plan.nebula_chain = vec!["b".repeat(64)];

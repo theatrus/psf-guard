@@ -520,13 +520,12 @@ current refresh does, and show what changed. Missing policy fields preserve
 the old concrete palette and narrowband stars. Do not add Automatic to Seiza's
 physical `NarrowbandPalette` enum: source selection is PSF Guard's job.
 
-## Proposed: subtract continuum for combined images
+## Subtract continuum for combined images
 
 Support two explicit results rather than treating LRGB and SHO as interchangeable:
 
 - **LRGB + emission** retains broadband colors and adds continuum-subtracted
-  H-alpha, OIII and SII residuals. This is the proposed initial combined-image
-  default. Start with an emission amount of 0.25 as an artistic preset, with
+  H-alpha, OIII and SII residuals. This is the initial natural-color combined recipe. Start with an emission amount of 0.25 as an artistic preset, with
   each line independently adjustable; validate that starting amount on real
   data before shipping it.
 - **SHO + broadband** uses mapped line emission for the nebula, a separate
@@ -535,7 +534,8 @@ Support two explicit results rather than treating LRGB and SHO as interchangeabl
   same automatic/explicit RGB-stars path as the narrowband card. Never label
   a star-containing RGB blend “RGB stars.”
 
-Add explicit composition kinds and typed blend settings for these results.
+The request uses an explicit `combination` subtype (`emission` or
+`broadband_structure`) alongside its RGB/LRGB/narrowband kind and typed blend settings.
 Do not infer the result from the presence of seven input roles. Initially the
 user chooses a combined mode; the existing automatic first-color selection
 continues to choose LRGB, RGB or narrowband as documented. A combined result
@@ -553,7 +553,8 @@ than requiring all seven roles to share the existing factor-of-two band.
 ### Linear preparation and subtraction
 
 1. Resolve exact source revisions for the broadband and narrowband branches.
-   Align them to L when supplied, otherwise R. Use a common valid mask.
+   RGB + emission uses R's grid, LRGB + emission uses L's grid, and mapped
+   narrowband uses H-alpha's grid. Preserve contributing coverage masks.
 2. Keep the background-corrected, aligned linear samples before independent
    percentile scaling and before any stretch. The current normalized-input
    cache is too late to be the only input to this operation.
@@ -580,12 +581,11 @@ than requiring all seven roles to share the existing factor-of-two band.
    and balance the emission branch before its palette mapping, and then blend
    the separately prepared broadband structure and optional stars.
 
-First-pass photometry requires star-containing linear channels. If a followed
-card applies StarXTerminator, use a validated pre-removal chain prefix only
-when the subsequent starless branch is explicitly supported; otherwise report
-**Continuum subtraction skipped: star-containing linear inputs are required**.
-Never fit a continuum coefficient from starless images. Reusing a coefficient
-across a tool that changes flux requires evidence of equivalent photometry.
+First-pass photometry requires star-containing linear channels. Combined
+recipes defer followed channel-card and color-channel StarXTerminator steps.
+Fit and subtract on exact aligned linear inputs before SXT, then prepare the
+nebula and RGB star branches. Never fit from starless pixels or silently reuse
+a plan across a tool that changes the source revision.
 
 Broadband filters also transmit emission lines. A stellar continuum fit alone
 does not correct that contamination. Without known transmission responses,
@@ -596,8 +596,8 @@ alone. A later throughput-aware solve can correct line attenuation explicitly.
 ### Automatic outcomes and recovery
 
 **Continuum subtraction** offers **Automatic**, **Manual**, and **Off**.
-Automatic records an outcome for each requested line. Start with at most 400
-candidate stars; minimum usable stars, fit-error limits and PSF thresholds are
+Automatic records an outcome for each requested line. Start with a 400 usable-star budget, after eligibility checks, and validate
+against the complete eligible pool (at most 4096 measured candidates); minimum usable stars, fit-error limits and PSF thresholds are
 provisional until synthetic and real-frame tests set them. Interpret any peak
 limit against a known saturation scale; the existing arbitrary percentile
 white point is not a sensor saturation level.
@@ -605,8 +605,9 @@ white point is not a sensor saturation level.
 Show **Continuum fit** with its reference channels, fitted scales, stars used,
 rejected stars, residual plot and any warnings. Provide a signed residual
 preview and download, plus the original narrowband preview for comparison.
-Manual edits the fitted scale or reference weights; a blank field means use
-the measured value. Never report a manually overridden coefficient as fitted.
+Manual requires every reference weight. A blank OIII stellar B/G ratio uses
+the measured ratio; if no ratio is measurable, enter one explicitly. Never
+report a manually overridden coefficient as fitted.
 
 If one line fails in **LRGB + emission**, omit that line and show **Ready with
 warnings**, listing what was added and skipped. The unmodified broadband
@@ -616,7 +617,7 @@ and mark the new build as needing attention; offer an explicit choice of a
 different palette or **Off**. Changing **Automatic** to **Off** explains that
 the original narrowband channels will be used, including their continuum.
 
-### Jobs, cache identity and implementation sequence
+### Jobs and cache identity
 
 Retain the shared job line, stop controls, priority, worker leasing and
 `ComputePool`. Fit and image operations belong in the job runner. Add phases
@@ -638,33 +639,6 @@ Cache boundaries follow data dependence:
 - The final result keys on all plans, blend settings, source family, crop,
   output stages and the published Seiza output version. Keep dependencies in
   the manifest so the janitor retains every referenced artifact.
-
-Deliver in reviewable increments:
-
-1. Add Seiza's independent balance operation, reports, C/Python/CLI surfaces,
-   deterministic tests and output-version coverage. Compare real SHO/HOO
-   masters, including stars, faint OIII, gradients and cropped overlaps.
-2. Consume the published Seiza release in PSF Guard; add setup fields, the
-   shared stretch, controls and reports. Check old JSON, job ids, default
-   setup preservation, setup import/export and role mapping. Cover static
-   palette changes and separate stretches explicitly. Include automatic RGB
-   stars with the complete extraction/recombination path, policy resolution,
-   missing-source/tool outcomes and explicit-choice failures in this increment.
-3. Add Seiza continuum fitting and signed subtraction, then PSF Guard's
-   **LRGB + emission** sources, cache and outcome UI. Test known coefficients,
-   line contamination, mismatched PSFs, saturation, few stars and ill-conditioned
-   G/B references before enabling Automatic by default for this new kind.
-4. Add mapped SHO plus broadband structure, reusing the already supported
-   automatic RGB-stars branch. Validate luminance and structure blending
-   independently of star replacement.
-
-The paired development branches are `codex/narrowband-normalization` in
-`psf-guard-narrowband-normalization` and `seiza-narrowband-normalization`.
-Local Cargo patches can exercise a paired change without committing machine
-paths; PSF Guard's committed dependencies continue to use published crates.
-Before handoff of behavior changes, run the focused Rust and UI regression
-checks, lint/build, and the relevant browser tests through `e2e-local.mjs`,
-including WebKit scroll coverage. Record the actual checks in each PR.
 
 
 ### Build the paired feature worktrees
@@ -722,12 +696,14 @@ retains signed samples and missing coverage without stretching or a pedestal.
 The current contract applies only to those exact revisions. It deliberately
 refuses a plan applied to a different starless revision; associating pre-removal
 and starless branches with validated flux equivalence remains host work.
-PSF Guard must also add the tracked continuum job stage, cache identities,
-per-line outcomes, combined-image recipe and UI before enabling automatic
-LRGB+SHO subtraction. Its existing narrowband cards do not call these new APIs.
+PSF Guard now retains exact aligned linear inputs, fits and subtracts them in
+tracked job phases, and exposes per-line outcomes and combined recipe cards.
+Subtraction precedes SXT; no association between a fitted star-containing
+revision and changed starless pixels is needed. Original narrowband cards
+continue to use their saved recipe.
 
 The prepared workspace version is Seiza 0.43.0 with stacking/output version
-0.47.0. Keep the Seiza PR in draft; do not merge, tag or publish until all work
+0.49.0. Keep the Seiza PR in draft; do not merge, tag or publish until all work
 for the combined release is ready. PSF Guard's dependency and registry lockfile
 can be finalized only after that later publication.
 
@@ -764,9 +740,48 @@ negative cores: acceptable aperture flux errors do not prove pixel-level PSF
 cancellation. The color examples do not include continuum subtraction, and
 the grayscale residual examples have separate display stretches.
 
-After those Seiza checks, PSF Guard still needs the aligned linear cache and
-tracked continuum stage, explicit per-line outcomes, combined-image units and
-blending, validated starless-branch relationships, and the combined recipe/fit
-inspection UI. Keep the Seiza release on hold while that work is gathered and
-reviewed; the registry lockfile and hosted builds follow a later authorized
-publication.
+The follow-up adds eligibility-before-budget sampling, broader-pool stability
+validation, producer clipping maps, exact linear caches and subtraction before
+SXT. Combined cards now expose explicit units, per-line outcomes, manual/off
+recovery, signed downloads and fit inspection. RGB star processing can apply
+licensed BXT before calibration and SXT. Keep the Seiza release on hold while
+the complete feature set is reviewed; the registry lockfile and hosted builds
+follow a later authorized publication.
+
+
+### Final SNR G132 combined-image validation
+
+The paired drafts were rerun with producer-derived clipping maps on the binned
+4788×3194 planes. Automatic fitting uses a fixed maximum of 4096 candidate
+positions independently of the usable-star budget, checks eligibility before
+sampling, and audits the brightness-spanning sample against the full eligible
+pool. No working-unit saturation ceiling was guessed.
+
+| Line | 400-star coefficients | Training / held out | Held-out RMS | Sample/full prediction RMS difference |
+| --- | --- | --- | --- | --- |
+| Ha / R | 0.04777995 | 293 / 96 | 10.22% | 0.077% |
+| OIII / G+B | 0.04377472, 0.04798876 | 278 / 92 | 1.98% | 0.176% |
+| SII / R | 0.05519169 | 298 / 100 | 5.46% | 0.066% |
+
+All three default fits and the 1600-star check passed without relaxing the
+PSF, registration, error or inlier limits. The final RGB + emission recipe
+completed with BXT on linear RGB, amounts 0.25 and a linked composition stretch
+while Gaia was off. The broader fit reused BXT and completed in 14 seconds.
+Automatic HOO + 20% starless broadband structure also completed, subtracting
+Ha/OIII before SXT and restoring one BXT-processed RGB star layer. The original
+masters and live catalogs were unchanged; no separate L master was available.
+LRGB + emission was exercised on the synthetic application/browser path.
+
+Licensed RC-Astro 2.6.6 used BXT ML5 and SXT ML11 on CPU. The BXT star option
+uses the vendor defaults, including Sharpen Stars 0.5, before RGB calibration
+and SXT. Native-pixel crops and full-field comparisons were visually inspected.
+The final signed Ha/OIII/SII FITS retain negative samples and coverage gaps and
+record LINEAR / EMISSION-RESIDUAL metadata. The offline gallery, exact requests,
+plans, stellar diagnostics and signed artifacts are in the user's Dropbox.
+
+The mapped automatic result still shows colored residual rings around some
+bright stars. An accepted aperture fit does not establish pixel-perfect local
+PSF or saturated-core cancellation. The gallery documents that limitation and
+retains an explicit continuum-Off comparison. These are emission residuals,
+with no pure-line-flux or third-party numerical-parity claim. Keep both PRs
+draft and Seiza unreleased while the complete release is reviewed.

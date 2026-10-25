@@ -2,6 +2,7 @@ import type {
   StackBackgroundConfig,
   StackBackgroundExtraction,
   StackColorCalibration,
+  StackColorCombination,
   StackColorJob,
   StackColorProcessing,
   StackColorRole,
@@ -133,4 +134,15 @@ export function processingForColorBuild(
     input_deconvolutions: processing.input_deconvolutions ?? {},
     input_rc_astro: processing.input_rc_astro ?? {},
   };
+}
+
+/** Combined recipes opt into continuum processing; ordinary saved recipes keep their settings. */
+export function combinedColorProcessing(processing: StackColorProcessing, combination: StackColorCombination | undefined, roles: StackColorRole[]): StackColorProcessing {
+  if (!combination) {
+    const next = { ...processing }; delete next.emission; return next;
+  }
+  const lines = Object.fromEntries(roles.filter((r) => ['ha', 'oiii', 'sii'].includes(r)).map((role) => [role,
+    processing.emission?.lines[role] ?? { amount: 0.25, coefficients: [], reference_flux_ratios: [] }]));
+  return { ...processing, emission: { mode: 'automatic', positive_contribution: true, broadband_amount: 0,
+    ...processing.emission, lines } };
 }

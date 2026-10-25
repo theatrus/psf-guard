@@ -8,6 +8,7 @@ import type {
   StackColorCrop,
   StackColorJob,
   StackColorKind,
+  StackColorCombination,
   StackColorStars,
   StackColorProcessing,
   StackColorRole,
@@ -18,6 +19,7 @@ import type {
 import StackPreviewInspector from './StackPreviewInspector';
 import CalibrationMasterButton from './CalibrationMasterInspector';
 import StackColorProcessingControls from './StackColorProcessingControls';
+import StackContinuumResults from './StackContinuumResults';
 import StackColorCalibrationLine from './StackColorCalibrationLine';
 import {
   appliedProcessingQueryKey,
@@ -26,6 +28,7 @@ import {
 } from './channelProcessing';
 import {
   processingForColorBuild,
+  combinedColorProcessing,
   automaticNarrowbandProcessing,
   retainColorInputRoles,
 } from './stackColorProcessing';
@@ -62,6 +65,7 @@ interface ColorOperation {
   projectId: number;
   targetId: number;
   kind: StackColorKind;
+  combination?: StackColorCombination;
   palette?: StackNarrowbandPalette;
   force: boolean;
   operationKey: string;
@@ -132,8 +136,9 @@ function jobMatches(
   kind: StackColorKind,
   palette?: StackNarrowbandPalette,
   automaticPalette = false,
+  combination?: StackColorCombination,
 ) {
-  return job.target_id === targetId && job.kind === kind && (automaticPalette
+  return (job.combination ?? undefined) === combination && job.target_id === targetId && job.kind === kind && (automaticPalette
     ? job.automatic_palette === true : job.palette === (palette ?? null));
 }
 
@@ -191,6 +196,7 @@ function ColorCard({
   exposureLabel,
   custom,
   unavailableReason,
+  combination,
 }: {
   dbId: string;
   projectId: number;
@@ -198,6 +204,7 @@ function ColorCard({
   channelSources: StackColorSource[];
   target: StackColorTargetAvailability;
   kind: StackColorKind;
+  combination?: StackColorCombination;
   palette?: StackNarrowbandPalette;
   automaticPalette?: boolean;
   stars?: StarsSelection;
@@ -250,7 +257,7 @@ function ColorCard({
       : palette
         ? paletteLabels[palette].split(' · ')[0]
         : 'Narrowband';
-  const label = [baseLabel, exposureLabel, custom ? 'custom' : undefined].filter(Boolean).join(' ');
+  const label = [baseLabel, combination === 'emission' ? '+ emission' : combination ? '+ broadband structure' : undefined, exposureLabel, custom ? 'custom' : undefined].filter(Boolean).join(' ');
   const detailedProgress = activeJob?.progress ?? artifact?.progress;
   const processed = detailedProgress?.total_units
     ? detailedProgress.completed_units
@@ -273,6 +280,7 @@ function ColorCard({
     <article
       className={`stack-color-card ${artifact?.outdated || sourceStacksOutdated ? 'outdated' : ''}`}
       data-color-kind={kind}
+      data-color-combination={combination}
       data-target-id={target.target_id}
       data-source-family={artifact?.source_family_key ?? ''}
       data-exposure-set={exposureSetKey}
@@ -285,12 +293,12 @@ function ColorCard({
             <label className="stack-color-palette">
               <span>Palette</span>
               <select
-                aria-label={`${target.target_name} narrowband${exposureLabel ? ` ${exposureLabel}` : custom ? ' custom' : ''} palette`}
+                aria-label={`${target.target_name} ${combination ? 'combined ' : ''}narrowband${exposureLabel ? ` ${exposureLabel}` : custom ? ' custom' : ''} palette`}
                 value={automaticPalette ? 'automatic' : palette}
                 disabled={busy}
                 onChange={(event) => onPaletteChange?.(event.target.value as PaletteSelection)}
               >
-                <option value="automatic">Automatic ({baseLabel})</option>
+                {!combination && <option value="automatic">Automatic ({baseLabel})</option>}
                 {paletteChoices.map((choice) => (
                   <option key={choice} value={choice}>{paletteLabels[choice]}</option>
                 ))}
@@ -301,10 +309,10 @@ function ColorCard({
             <span>Stars</span>
             <select aria-label={`${target.target_name} ${label} stars`} value={stars} disabled={busy}
               onChange={(event) => onStarsChange?.(event.target.value as StarsSelection)}>
-              {stars === 'channels' && <option value="channels">From channel cards</option>}
+              {!combination && stars === 'channels' && <option value="channels">From channel cards</option>}
               <option value="automatic">Automatic</option>
               <option value="rgb">RGB</option>
-              <option value="narrowband">Narrowband</option>
+              {!combination && <option value="narrowband">Narrowband</option>}
               <option value="none">None</option>
             </select>
           </label>}
@@ -362,7 +370,7 @@ function ColorCard({
       {startError && !startError.processing && (
         <div className="stack-preview-message error" role="alert">{startError.message}</div>
       )}
-      {stars === 'channels' && sourceControls}
+      {stars === 'channels' && !combination && sourceControls}
       {kind === 'narrowband' && current?.narrowband_resolution && <div className="stack-color-unavailable">
         {current.narrowband_resolution.detail}
       </div>}
@@ -371,6 +379,9 @@ function ColorCard({
           <span>RGB star colors</span>
           <StackColorCalibrationLine outcome={current.narrowband_resolution.color_calibration} canInstall={canCompute} />
         </section>}
+      {current?.narrowband_resolution?.rgb_star_processing && <p className="processing-setups-hint">
+        {combination ? 'RGB branch' : 'RGB stars'} processed with {current.narrowband_resolution.rgb_star_processing.steps.map((step) => step.name).join(' → ')} before separation.
+      </p>}
       {unavailableReason && <div className="stack-color-unavailable">{unavailableReason}</div>}
 
       {(artifact?.outdated || sourceStacksOutdated) && (
@@ -416,6 +427,8 @@ function ColorCard({
           ))}
         </div>
       )}
+
+      {current && <StackContinuumResults dbId={dbId} job={current} />}
 
       {artifact?.color_calibration && (
         <StackColorCalibrationLine outcome={artifact.color_calibration} canInstall={canCompute} />
@@ -466,7 +479,8 @@ function ColorCard({
       <StackColorProcessingControls
         key={`${artifact?.job_id ?? 'new'}:${artifact?.artifact_revision ?? label}`}
         label={`${target.target_name} ${label}`}
-        roles={requiredRoles(kind, palette)}
+        roles={combination ? channelSources.map((source) => source.role) : requiredRoles(kind, palette)}
+        combination={combination}
         applied={artifact?.processing ?? null}
         automaticNarrowband={kind === 'narrowband' && !artifact}
         palette={palette}
@@ -485,7 +499,7 @@ function ColorCard({
         onApply={onProcessingApply}
       />
 
-      {stars !== 'channels' && (sourceControls || starSourceControls) && <details className="stack-color-combination">
+      {(stars !== 'channels' || combination) && (sourceControls || starSourceControls) && <details className="stack-color-combination">
         <summary>Custom combination</summary>
         {sourceControls}
         {starSourceControls}
@@ -565,6 +579,7 @@ export default function StackColorPreviewPanel({
     mutationFn: async (operation: ColorOperation) => apiClient.startStackColor(operation.dbId, operation.projectId, {
       target_id: operation.targetId,
       kind: operation.kind,
+      ...(operation.combination ? { combination: operation.combination } : {}),
       palette: operation.palette,
       ...(operation.automaticPalette ? { automatic_palette: true } : {}),
       ...(operation.stars ? { stars: operation.stars } : {}),
@@ -774,8 +789,9 @@ export default function StackColorPreviewPanel({
     palette?: StackNarrowbandPalette,
     matchesFamily: (job: StackColorJob) => boolean = () => true,
     automaticPalette = false,
+    combination?: StackColorCombination,
   ) => {
-    const mine = watchedJobs.filter((job) => jobMatches(job, targetId, kind, palette, automaticPalette) && matchesFamily(job));
+    const mine = watchedJobs.filter((job) => jobMatches(job, targetId, kind, palette, automaticPalette, combination) && matchesFamily(job));
     return mine[mine.length - 1];
   };
 
@@ -785,16 +801,19 @@ export default function StackColorPreviewPanel({
     palette?: StackNarrowbandPalette,
     exposureSet?: ExposureCardSet,
     automaticPalette = false,
+    combination?: StackColorCombination,
   ) => {
     const key = dbId + ':' + projectId + ':' + operationKey(target.target_id, kind, automaticPalette ? 'automatic' : palette)
-      + (exposureSet ? `:exposure:${exposureSet.key}` : '');
-    const roles = requiredRoles(kind, palette);
+      + (exposureSet ? `:exposure:${exposureSet.key}` : '') + (combination ? `:${combination}` : '');
+    const roles = [...requiredRoles(kind, palette), ...(combination === 'emission'
+      ? (['ha','oiii','sii'] as const).filter((role) => target.source_candidates?.some((source) => source.role === role))
+      : combination ? ['red','green','blue'] as StackColorRole[] : [])];
     const candidates = (target.source_candidates ?? []).filter((source) => !exposureSet
       || exposureSet.candidates.some((member) => sameColorSourceFamily(source, member)));
     const aware = target.source_candidates !== undefined;
     const resolved = resolveColorSources(candidates, roles, exposureSet ? {} : sourcesByCard[key] ?? {});
     const family = exposureSet ? resolveColorSources(exposureSet.candidates, roles, {}) : resolved;
-    const saved = (catalog.data?.jobs ?? []).filter((job) => jobMatches(job, target.target_id, kind, palette, automaticPalette));
+    const saved = (catalog.data?.jobs ?? []).filter((job) => jobMatches(job, target.target_id, kind, palette, automaticPalette, combination));
     const selectedSaved = exposureSet ? undefined : saved.find((job) => job.job_id === savedByCard[key]);
     // One still being prepared names no stacks yet: it shows on the card
     // that asked for it, or, picked up from the header, on the plain card.
@@ -812,7 +831,7 @@ export default function StackColorPreviewPanel({
         ? job.sources.filter((source) => roles.includes(source.role))
           .every((previous) => family.sources.some((source) => sameColorSourceFamily(source, previous)))
         : family.sources.every((source) => job.sources.some((previous) => sameColorSourceFamily(source, previous)))));
-    const showChoices = !exposureSet && (candidates.some((source) => source.exposure_group)
+    const showChoices = !exposureSet && (Boolean(combination) || candidates.some((source) => source.exposure_group)
       || target.ambiguous_roles.some((role) => roles.includes(role))
       || (!resolved.complete && roles.some((role) => sourcesByCard[key]?.[role] !== undefined))
       || saved.length > 1);
@@ -899,16 +918,17 @@ export default function StackColorPreviewPanel({
     paletteStateKey?: string,
     custom = false,
     automaticPalette = false,
+    combination?: StackColorCombination,
   ) => {
-    const sources = sourceSelection(target, kind, palette, exposureSet, automaticPalette);
-    const watched = newestWatched(target.target_id, kind, palette, sources.matchesFamily, automaticPalette);
+    const sources = sourceSelection(target, kind, palette, exposureSet, automaticPalette, combination);
+    const watched = newestWatched(target.target_id, kind, palette, sources.matchesFamily, automaticPalette, combination);
     const artifact = completedColorArtifact(watched, catalog.data?.jobs ?? [], sources.remembered);
     if (!available && !artifact && !watched && !exposureSet) return null;
     const key = sources.key;
     const starKey = paletteStateKey ?? key;
     const stars: StarsSelection = kind === 'narrowband'
       ? starsByCard[starKey] ?? artifact?.stars ?? (artifact ? 'channels' : 'automatic') : 'channels';
-    const usesRgbStars = kind === 'narrowband' && (stars === 'rgb' || stars === 'automatic');
+    const usesRgbStars = !combination && kind === 'narrowband' && (stars === 'rgb' || stars === 'automatic');
     const rgbKey = `${dbId}:${projectId}:${starKey}`;
     const rgbRoles: StackColorRole[] = ['red', 'green', 'blue'];
     const rgbCandidates = (target.source_candidates ?? []).filter((source) => rgbRoles.includes(source.role));
@@ -924,9 +944,10 @@ export default function StackColorPreviewPanel({
     }));
     const inputSources = usesRgbStars
       ? { ...sources.inputSources, ...rgbInputs } : sources.inputSources;
-    const processingRoles = [...requiredRoles(kind, palette),
+    const processingRoles = [...new Set([...requiredRoles(kind, palette),
+      ...(combination ? sources.sources.map((source) => source.role) : []),
       ...(automaticPalette ? ['sii' as const] : []),
-      ...(usesRgbStars ? rgbRoles : [])];
+      ...(usesRgbStars ? rgbRoles : [])])];
     const starSourceControls = usesRgbStars ? <section className="stack-color-source-selectors" aria-label="RGB star inputs">
       <h4>RGB star inputs</h4>
       {rgbRoles.map((role) => {
@@ -953,6 +974,7 @@ export default function StackColorPreviewPanel({
         channelSources={usesRgbStars ? [...sources.sources, ...chosenRgb.sources] : sources.sources}
         target={target}
         kind={kind}
+        combination={combination}
         palette={palette}
         automaticPalette={automaticPalette}
         stars={stars}
@@ -979,7 +1001,7 @@ export default function StackColorPreviewPanel({
         onCropChange={(next) => setCropByCard((current) => ({ ...current, [key]: next }))}
         onBuild={() => startColor({
           dbId, projectId,
-          targetId: target.target_id, kind, palette,
+          targetId: target.target_id, kind, palette, combination,
           automaticPalette, stars: kind === 'narrowband' && stars !== 'channels' ? stars : undefined,
           force: Boolean(artifact && !artifact.outdated),
           operationKey: key, cardKey: key, crop,
@@ -987,7 +1009,7 @@ export default function StackColorPreviewPanel({
           processing: (defaults) => {
             const processing = processingForColorBuild(artifact, requiredRoles(kind, palette), defaults);
             const selected = retainColorInputRoles(processing, processingRoles);
-            return kind === 'narrowband' && !artifact ? automaticNarrowbandProcessing(selected) : selected;
+            return combinedColorProcessing(kind === 'narrowband' && !artifact ? automaticNarrowbandProcessing(selected) : selected, combination, processingRoles);
           },
           inputSources,
         })}
@@ -995,9 +1017,9 @@ export default function StackColorPreviewPanel({
         startError={startErrorByCard[key] ?? (artifact ? preparationFailure(watched) : undefined)}
         onProcessingApply={(processing) => startColor({
           dbId, projectId,
-          targetId: target.target_id, kind, palette, force: false,
+          targetId: target.target_id, kind, palette, combination, force: false,
           automaticPalette, stars: kind === 'narrowband' && stars !== 'channels' ? stars : undefined,
-          operationKey: key + ':processing', cardKey: key, crop, processing: retainColorInputRoles(processing, processingRoles),
+          operationKey: key + ':processing', cardKey: key, crop, processing: combinedColorProcessing(retainColorInputRoles(processing, processingRoles), combination, processingRoles),
           inputSources,
         })}
       />
@@ -1005,8 +1027,8 @@ export default function StackColorPreviewPanel({
     return custom ? (
       <details key={key + ':custom'} className="stack-color-custom"
         data-color-kind={kind} data-target-id={target.target_id}
-        aria-label={target.target_name + ' ' + kind.toUpperCase() + ' custom combination'}>
-        <summary><span>Custom combination</span><small>{target.target_name} · {kind.toUpperCase()}</small></summary>
+        aria-label={target.target_name + ' ' + kind.toUpperCase() + (combination ? ' ' + combination : '') + ' custom combination'}>
+        <summary><span>{combination === 'emission' ? `${kind.toUpperCase()} + emission` : combination ? 'Narrowband + broadband structure' : 'Custom combination'}</span><small>{target.target_name} · {kind.toUpperCase()}</small></summary>
         <div className="stack-color-grid">{card}</div>
       </details>
     ) : card;
@@ -1045,7 +1067,7 @@ export default function StackColorPreviewPanel({
             const roles = requiredRoles(kind);
             const sets = exposureMode ? withRetainedColorExposureSets(
               buildColorExposureSets(candidates, roles),
-              jobs.filter((job) => job.kind === kind), roles,
+              jobs.filter((job) => job.kind === kind && !job.combination), roles,
             ) : [];
             const wbpp = wbppColorSet(candidates, roles, { exposureMode });
             for (const set of [...sets, ...(wbpp ? [{ ...wbpp, retained: false }] : [])]) {
@@ -1056,7 +1078,7 @@ export default function StackColorPreviewPanel({
           }
 
           const narrowbandRoles: StackColorRole[] = ['ha', 'oiii', 'sii'];
-          const narrowbandJobs = jobs.filter((job) => job.kind === 'narrowband');
+          const narrowbandJobs = jobs.filter((job) => job.kind === 'narrowband' && !job.combination);
           const paletteChoices = paletteOrder.filter((palette) =>
             target.narrowband_palettes.includes(palette)
             || narrowbandJobs.some((job) => job.palette === palette)
@@ -1100,6 +1122,19 @@ export default function StackColorPreviewPanel({
           if (palette) cards.push(renderCard(target, 'narrowband',
             target.narrowband_palettes.includes(palette), undefined, palette, paletteChoices,
             paletteKey, exposureMode, automaticPalette));
+          const hasRgb = ['red','green','blue'].every((role) => candidates.some((source) => source.role === role));
+          const hasEmission = candidates.some((source) => ['ha','oiii','sii'].includes(source.role));
+          if (hasRgb && hasEmission) {
+            cards.push(renderCard(target, 'rgb', true, undefined, undefined, [], undefined, true, false, 'emission'));
+            if (candidates.some((source) => source.role === 'luminance')) cards.push(renderCard(target, 'lrgb', true, undefined, undefined, [], undefined, true, false, 'emission'));
+            const combinedPaletteKey = target.target_id + ':broadband-structure';
+            const savedPalette = jobs.filter((job) => job.combination === 'broadband_structure')
+              .sort((a, b) => b.created_unix_seconds - a.created_unix_seconds)[0]?.palette;
+            const combinedSelection = paletteByCard[combinedPaletteKey] ?? savedPalette ?? palette;
+            const combinedPalette = combinedSelection === 'automatic' ? palette : combinedSelection;
+            if (combinedPalette) cards.push(renderCard(target, 'narrowband', true, undefined, combinedPalette, paletteChoices,
+              combinedPaletteKey, true, false, 'broadband_structure'));
+          }
           // A custom combination takes a whole row; set after the target's
           // cards, so the cards still flow several to a row.
           const custom = (node: ReactNode) => isValidElement(node) && String(node.key).endsWith(':custom');

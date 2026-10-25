@@ -20,6 +20,14 @@
   about every five seconds. The finished preview replaces it when processing
   completes; completed FITS downloads remain separate during a rebuild.
 
+- Narrowband previews can sharpen their RGB star branch with BlurXTerminator
+  before star extraction. Open **Processing stack → RGB star processing**.
+- Custom **RGB + emission**, **LRGB + emission**, and **Narrowband + broadband
+  structure** cards fit and subtract continuum on aligned linear inputs.
+  Automatic, Manual and Off controls retain signed residual downloads and
+  show per-line fit results. Failed natural-color lines are omitted with a
+  warning; a failed mapped line keeps the previous preview available.
+
 - New narrowband color cards offer automatic SHO/HOO selection, a shared
   H-alpha stretch, and background-protected OIII/SII balance. Choose
   **Stars → Automatic** to use RGB stars when the sources and StarXTerminator

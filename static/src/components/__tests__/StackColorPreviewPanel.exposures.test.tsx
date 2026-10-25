@@ -49,6 +49,7 @@ function job(sources: StackColorSource[], overrides: Partial<StackColorJob> = {}
 }
 
 interface BuildRequest {
+  combination?: string;
   input_sources?: StackColorInputSources;
   crop: string;
   processing: StackColorProcessing;
@@ -180,7 +181,7 @@ describe('automatic color exposure cards', () => {
     })));
     mount({ sources: [...candidates, ...narrowband], narrowbandPalettes: ['hoo'] });
     await screen.findByRole('button', { name: 'Build RGB 30 s color preview' });
-    await waitFor(() => expect(document.querySelectorAll('.stack-color-grid > details.stack-color-custom')).toHaveLength(2));
+    await waitFor(() => expect(document.querySelectorAll('.stack-color-grid > details.stack-color-custom')).toHaveLength(4));
     const items = [...document.querySelector('.stack-color-grid')!.children].map((child) => child.tagName);
     expect(items.filter((tag) => tag === 'ARTICLE').length).toBeGreaterThanOrEqual(3);
     // Interleaved, each whole-row fold would leave its card alone on a row.
@@ -340,4 +341,21 @@ describe('automatic color exposure cards', () => {
     }
     expect(build).toBeEnabled();
   });
+});
+
+
+it('keeps combined emission requests separate and allows shorter RGB than narrowband', async () => {
+  const rgb = atSeconds(30);
+  const narrowband = (['ha','oiii','sii'] as const).map((role, i) => ({ ...rgb[0], role, filter_name: role, job_id: role,
+    group_index: i + 3, exposure_group: { key: role + '-600', label: '600 s', min_seconds: 600, max_seconds: 600 } }));
+  const { submissions } = mount({ sources: [...rgb, ...narrowband], narrowbandPalettes: ['sho', 'hoo'] });
+  const summary = await screen.findByText('RGB + emission', { selector: 'summary > span' });
+  await userEvent.click(summary);
+  const card = summary.closest('details')!.querySelector('article')!;
+  expect(within(card).getByRole('button', { name: 'Build RGB + emission custom color preview' })).toBeEnabled();
+  await userEvent.click(within(card).getByRole('button', { name: 'Build RGB + emission custom color preview' }));
+  await waitFor(() => expect(submissions).toHaveLength(1));
+  expect(submissions[0].combination).toBe('emission');
+  expect(submissions[0].input_sources).toEqual(references([...rgb, ...narrowband]));
+  expect(submissions[0].processing.emission).toMatchObject({ mode: 'automatic', positive_contribution: true });
 });

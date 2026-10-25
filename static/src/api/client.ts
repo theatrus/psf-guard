@@ -145,6 +145,8 @@ import type { GuidFillReport, GuidReport,
   StackColorCrop,
   StackColorJob,
   StackColorKind,
+  StackColorRole,
+  StackColorCombination,
   StackColorProcessing,
   StackNarrowbandPalette,
   StackStretchPreview,
@@ -2935,6 +2937,7 @@ export const apiClient = {
     request: {
       target_id: number;
       kind: StackColorKind;
+      combination?: StackColorCombination;
       palette?: StackNarrowbandPalette;
       automatic_palette?: boolean;
       stars?: 'automatic' | 'rgb' | 'narrowband' | 'none';
@@ -2951,6 +2954,16 @@ export const apiClient = {
     );
     if (!data.data) throw new Error(data.error || 'Failed to start color preview');
     return normalizeColorJob(data.data);
+  },
+
+  getStackContinuumReport: async (dbId: string, jobId: string, role: StackColorRole): Promise<{
+    status: string;
+    plan?: { diagnostics?: { stars: { flux: number; used: boolean; validation: boolean; fractionalResidual: number | null }[] } };
+    diagnostics?: { stars: { flux: number; used: boolean; validation: boolean; fractionalResidual: number | null }[] };
+  }> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get(dbPath(dbId, `/stack-previews/color/${encodeURIComponent(jobId)}/continuum/${role}/report`));
+    return data;
   },
 
   getStackColorJob: async (

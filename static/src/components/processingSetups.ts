@@ -111,6 +111,7 @@ export function colorSetupForRoles(
   roles: StackColorRole[]
 ): StackColorProcessing {
   return {
+    ...(settings.emission ? { emission: structuredClone(settings.emission) } : {}),
     ...(settings.narrowband ? { narrowband: structuredClone(settings.narrowband) } : {}),
     // A setup saved before the choice existed sets its inputs' tools itself.
     ...(settings.input_processing === 'channels' ? { input_processing: 'channels' as const } : {}),

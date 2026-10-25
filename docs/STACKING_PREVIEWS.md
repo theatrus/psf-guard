@@ -1710,9 +1710,66 @@ nebula's output stretch stages run after recombination. Foraxx keeps its
 existing dynamic mapping and disables the new shared H-alpha stretch and
 narrowband balance controls.
 
-Continuum subtraction is a planned linear processing stage for combined
-LRGB+narrowband data. This version does not subtract broadband continuum;
-see the [continuum subtraction design](design/color-channel-processing.md).
+### Sharpen RGB stars with BlurXTerminator
+
+Open the narrowband card's **Processing stack → RGB star processing**. Enable
+**RC-Astro BlurXTerminator** and adjust **Sharpen Stars**, or add NoiseXTerminator. These
+steps run on the linear RGB branch before Gaia calibration and
+StarXTerminator. They apply when **Stars** uses RGB. The nebula keeps its own
+channel and color processing. BXT starts off; enabling it uses the tool's
+normal defaults, including stellar sharpening. The result reports the tools
+that ran. A failed explicit RGB build keeps the previous completed preview.
+
+### Combine broadband and narrowband images
+
+Open a collapsed **RGB + emission**, **LRGB + emission**, or
+**Narrowband + broadband structure** card below the ordinary previews. LRGB
+appears when an L stack exists. Choose exact stacks under that card's
+**Custom combination**; broadband and narrowband exposures may differ.
+Ordinary RGB/LRGB and narrowband cards retain their current recipe.
+
+Open **Processing stack → Continuum subtraction**:
+
+- **Automatic** fits isolated stars on aligned linear inputs. R supplies the
+  Ha/SII reference; G and B supply independently fitted OIII references.
+  Producer clipping maps exclude saturated stars. If those maps are missing,
+  enter known saturation limits for the exact prepared pixel units under
+  **Advanced fit and saturation limits**, or choose Manual/Off. The server
+  never guesses a ceiling from the image maximum.
+- **Manual** requires each reference weight. For OIII, leave **Stellar B/G
+  flux ratio** blank to use a measured ratio, or enter one if photometry
+  cannot measure it. Manual results are labeled as manual.
+- **Off** preserves the original narrowband signal, including continuum.
+  In RGB/LRGB + emission it adds no emission contribution.
+
+Each natural-color line starts with **Emission amount** 0.25. **Add positive
+emission only** starts on and affects only the display contribution; signed
+residual downloads retain negative pixels. Broadband star colors are calibrated
+before emission addition, with those gains applied to the contribution. L
+joins through the existing luminance step, then the result is stretched.
+A failed line is omitted and the broadband preview completes with warnings.
+
+A mapped palette starts with **Broadband structure** 0, using the mapped nebula.
+Increase it toward 1 to mix the prepared starless broadband structure. Choose
+RGB/Automatic stars to restore one RGB star layer, or None for a starless
+result. **RGB branch processing** applies BXT/NXT to the RGB branch used for
+broadband structure as well as its optional stars. SXT is required for both branches. A required line that fails Automatic
+stops that build and keeps the previous preview; inspect its fit, choose Manual
+or Off, or choose another palette. Continuum subtraction always precedes SXT on
+the exact linear inputs. No fitted plan is transferred onto changed starless
+pixels.
+
+Expand **Continuum results** to inspect weights, used and held-out star counts,
+RMS, the stellar residual plot, and the full report. Open **Residual preview**
+or download **Signed residual FITS**. The residual is not calibrated pure line
+flux: broadband filters can also transmit nebular lines, and aperture-level
+PSF compatibility does not guarantee perfect cancellation of every star.
+Fits examine eligibility before the 400 usable-star budget and validate the
+sample against the broader eligible pool. Adjusting an emission amount reuses
+the exact fit and signed residual; changing sources or fit controls rebuilds it.
+
+See the [combined-image processing contract](design/color-channel-processing.md#subtract-continuum-for-combined-images)
+for cache boundaries, units and recovery behavior.
 
 With exposure grouping enabled, the default cards match channels by their
 recorded duration ranges, not their filter-specific group identifiers. Starting
