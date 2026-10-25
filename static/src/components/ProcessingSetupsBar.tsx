@@ -61,6 +61,7 @@ export default function ProcessingSetupsBar({
     },
     onError: (cause) => fail(cause, 'Saving the setup failed'),
   });
+  const applyAction = kind === 'color' ? 'Apply processing stack' : 'Apply processing';
   const apply = () => {
     if (selected.startsWith(BUILTIN_PREFIX)) {
       const setup = builtins.find(
@@ -68,7 +69,7 @@ export default function ProcessingSetupsBar({
       );
       if (setup) {
         onApply(setup.settings);
-        report(`Applied “${setup.name}” — press Apply processing to render it`);
+        report(`Applied “${setup.name}” — click ${applyAction} to render it`);
       }
       return;
     }
@@ -77,7 +78,7 @@ export default function ProcessingSetupsBar({
     );
     if (setup) {
       onApply(setup.settings);
-      report(`Applied “${setup.name}” — press Apply processing to render it`);
+      report(`Applied “${setup.name}” — click ${applyAction} to render it`);
     }
   };
 

@@ -52,6 +52,15 @@ async function rebuildChannel(page: Page, panel: Locator): Promise<void> {
   });
 }
 
+async function openProcessingSteps(processing: Locator): Promise<void> {
+  if (!(await processing.evaluate((element) => (element as HTMLDetailsElement).open))) return;
+  for (const step of await processing.locator('.stack-processing-step').all()) {
+    if (!(await step.evaluate((element) => (element as HTMLDetailsElement).open))) await step.locator(':scope > summary').click();
+  }
+  const tools = processing.locator('.stack-processing-advanced').filter({ has: processing.page().getByText('Per-channel tools', { exact: true }) });
+  if (await tools.count() && !(await tools.evaluate((element) => (element as HTMLDetailsElement).open))) await tools.locator(':scope > summary').click();
+}
+
 function fitsIntegerCard(keyword: string, value: number): string {
   return `${keyword.padEnd(8)}= ${value.toString().padStart(20)}`.padEnd(80);
 }
@@ -325,11 +334,12 @@ test('builds automatic narrowband on its regular card and shows the resolved pro
   const processing = card.locator('.stack-color-processing');
   await expect(processing).not.toHaveAttribute('open');
   await processing.locator(':scope > summary').click();
-  await processing.getByText('Stretch and narrowband balance', { exact: true }).click();
+  await openProcessingSteps(processing);
   await expect(processing.getByRole('combobox', { name: 'Narrowband channel stretch' })).toHaveValue('shared');
   await expect(processing.getByRole('checkbox', { name: 'Narrowband balance', exact: true })).toBeChecked();
   await expect(processing.getByRole('spinbutton', { name: 'OIII boost' })).toHaveValue('1');
   await processing.locator(':scope > summary').click();
+  await openProcessingSteps(processing);
   const started = page.waitForResponse((response) => response.request().method() === 'POST'
     && /stack-previews\/color$/.test(new URL(response.url()).pathname));
   await card.getByRole('button', { name: 'Build SHO color preview', exact: true }).click();
@@ -346,7 +356,7 @@ test('builds automatic narrowband on its regular card and shows the resolved pro
   expect(download.ok()).toBe(true);
   expect((await download.body()).subarray(0, 2880).toString('ascii')).toContain("DISPLAY");
   await processing.locator(':scope > summary').click();
-  await processing.getByText('Stretch and narrowband balance', { exact: true }).click();
+  await openProcessingSteps(processing);
   await expect(processing).toContainText(/applied|identity|skipped/);
   const maskRadius = processing.getByRole('spinbutton', { name: 'Balance star mask radius' });
   if (!(await maskRadius.isVisible())) await processing.getByText('Stretch and narrowband balance', { exact: true }).click();
@@ -358,6 +368,7 @@ test('builds automatic narrowband on its regular card and shows the resolved pro
   expect((await updated).request().postDataJSON()).toMatchObject({ processing: { narrowband: { green_reduction: 0.2, star_reduction: 0.4, balance: { star_mask_radius: 8 } } } });
   await expect(card.locator('.stack-preview-progress')).toHaveAttribute('data-stack-color-state', 'completed', { timeout: 90_000 });
   await processing.locator(':scope > summary').click();
+  await openProcessingSteps(processing);
   await card.locator(':scope > header').scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath('automatic-narrowband.png') });
 });
@@ -372,6 +383,7 @@ test(`builds an explicit combined card (${kind.toUpperCase()}) and reports missi
   const card = custom.locator('article[data-color-combination="emission"]');
   const processing = card.locator('.stack-color-processing');
   await processing.locator(':scope > summary').click();
+  await openProcessingSteps(processing);
   await expect(processing.getByRole('combobox', { name: 'Continuum mode' })).toHaveValue('automatic');
   await processing.getByText('Advanced fit and saturation limits', { exact: true }).click();
   const matching = processing.getByRole('checkbox', { name: 'Match continuum PSFs' });
@@ -386,6 +398,7 @@ test(`builds an explicit combined card (${kind.toUpperCase()}) and reports missi
   await processing.getByRole('combobox', { name: 'Continuum mode' }).selectOption('automatic');
   await processing.screenshot({ path: testInfo.outputPath('combined-processing-controls.png') });
   await processing.locator(':scope > summary').click();
+  await openProcessingSteps(processing);
   await card.getByRole('button', { name: `Build ${kind.toUpperCase()} + emission custom color preview`, exact: true }).click();
   await expect(card.locator('.stack-preview-progress')).toHaveAttribute('data-stack-color-state', 'completed', { timeout: 90_000 });
   await expect(card.getByRole('region', { name: 'Continuum results' })).toContainText('Skipped');
@@ -398,6 +411,7 @@ test(`builds an explicit combined card (${kind.toUpperCase()}) and reports missi
   expect(report.ok()).toBe(true);
   expect((await report.json()).reason).toBe('unknown_saturation');
   await processing.locator(':scope > summary').click();
+  await openProcessingSteps(processing);
   await processing.getByRole('combobox', { name: 'Continuum mode' }).selectOption('off');
   const started = page.waitForResponse((response) => response.request().method() === 'POST' && /stack-previews\/color$/.test(new URL(response.url()).pathname));
   await processing.getByRole('button', { name: 'Apply processing stack' }).click();
@@ -444,9 +458,10 @@ test('refuses RC-Astro values past the tool range beside Apply, where the server
     } });
   });
   const processing = card.locator('.stack-color-processing');
-  await processing.locator('summary').click();
+  await processing.locator(':scope > summary').click();
+  await openProcessingSteps(processing);
   await processing.getByRole('radio', { name: 'Set in this build' }).click();
-  const red = processing.getByRole('region', { name: 'R input stretch stack' });
+  const red = processing.getByRole('region', { name: 'R input linear processing' });
   await red.getByRole('checkbox', { name: 'RC-Astro BlurXTerminator' }).check();
   await red.getByRole('spinbutton', { name: 'Sharpen Stars' }).fill('0.9');
   await red.getByRole('spinbutton', { name: 'Sharpen Nonstellar' }).fill('0.9');
@@ -503,7 +518,8 @@ test("follows the channel cards, and starts its own settings from a card's decon
     'data-stack-color-state', 'completed', { timeout: 90_000 }
   );
   const processing = card.locator('.stack-color-processing');
-  await processing.locator('summary').click();
+  await processing.locator(':scope > summary').click();
+  await openProcessingSteps(processing);
   // A new build follows the cards. The route above stands in for R's card
   // in the browser only, so the server's build found nothing to run.
   const channels = processing.getByRole('group', { name: 'Channel processing' });
@@ -513,7 +529,7 @@ test("follows the channel cards, and starts its own settings from a card's decon
     'Each input runs the steps its channel card applied (R: deconvolution).'
   );
   // The lane shows what the build ran, and what the card shows since.
-  const redLane = processing.getByRole('region', { name: 'R input stretch stack' });
+  const redLane = processing.getByRole('region', { name: 'R input linear processing' });
   await expect(redLane).toContainText(
     'Its channel card applied no deconvolution or RC-Astro steps. ' +
     'The card now applies: deconvolution.'
@@ -566,9 +582,10 @@ test('retains RC-Astro color steps in saved setups on desktop and mobile', async
     'data-stack-color-state', 'completed', { timeout: 90_000 }
   );
   const processing = card.locator('.stack-color-processing');
-  await processing.locator('summary').click();
+  await processing.locator(':scope > summary').click();
+  await openProcessingSteps(processing);
   await processing.getByRole('radio', { name: 'Set in this build' }).click();
-  const red = processing.getByRole('region', { name: 'R input stretch stack' });
+  const red = processing.getByRole('region', { name: 'R input linear processing' });
   await red.getByRole('checkbox', { name: 'RC-Astro BlurXTerminator' }).check();
   await red.getByRole('spinbutton', { name: 'Sharpen Stars' }).fill('0.2');
   const setups = processing.locator('.processing-setups-bar');
@@ -581,7 +598,8 @@ test('retains RC-Astro color steps in saved setups on desktop and mobile', async
   const saved = setupsDocument.setups.find((entry: { name: string }) => entry.name === 'RC color test');
   expect(saved.settings.input_rc_astro.red.steps).toEqual([{ tool: 'bxt', parameters: { ss: 0.2 } }]);
   await page.reload();
-  await processing.locator('summary').click();
+  await processing.locator(':scope > summary').click();
+  await openProcessingSteps(processing);
   await setups.getByRole('combobox', { name: 'Saved color processing setups' })
     .selectOption({ label: 'RC color test' });
   await setups.getByRole('button', { name: 'Apply setup' }).click();
@@ -648,14 +666,15 @@ test('runs RC-Astro on the color channels together', async ({ page }, testInfo) 
     .toHaveAttribute('data-phase-state', 'skipped');
 
   const processing = card.locator('.stack-color-processing');
-  await processing.locator('summary').click();
+  await processing.locator(':scope > summary').click();
+  await openProcessingSteps(processing);
   const together = processing.getByRole('region', { name: 'RC-Astro on the color channels together' });
   await expect(together.getByRole('checkbox', { name: 'RC-Astro StarXTerminator' })).toHaveCount(0);
   await together.getByRole('checkbox', { name: 'RC-Astro BlurXTerminator' }).check();
   await expect(together.getByRole('checkbox', { name: 'Correct only' })).toBeChecked();
   await expect(together.getByRole('spinbutton', { name: 'Sharpen Stars' })).toBeDisabled();
   await together.getByRole('checkbox', { name: 'RC-Astro NoiseXTerminator' }).check();
-  await expect(processing.locator('summary')).toContainText('Color RC-Astro 2');
+  await expect(processing.getByRole('group', { name: 'Process linear color', exact: true }).locator(':scope > summary')).toContainText('BXT + NXT');
   await together.evaluate((element) => element.scrollIntoView({ block: 'center' }));
   await together.screenshot({ path: testInfo.outputPath('color-channels-together-desktop.png') });
 
@@ -1717,7 +1736,8 @@ test('starts a first color preview from the default Color setup, chosen in Setti
     'data-stack-color-state', 'completed', { timeout: 90_000 }
   );
   const rgbProcessing = rgbCard.locator('.stack-color-processing');
-  await rgbProcessing.locator('summary').click();
+  await rgbProcessing.locator(':scope > summary').click();
+  await openProcessingSteps(rgbProcessing);
   await expect(rgbProcessing.getByRole('region', { name: 'Background extraction' })
     .getByRole('checkbox', { name: 'Background extraction' })).not.toBeChecked();
   await expect(rgbProcessing.getByRole('spinbutton', { name: 'RGB output stage 1 Target median' }))
@@ -1767,7 +1787,8 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
   const rgbImage = rgbCard.getByRole('img', { name: /RGB color stack preview/i });
   const defaultRgbSrc = await rgbImage.getAttribute('src');
   const rgbProcessing = rgbCard.locator('.stack-color-processing');
-  await rgbProcessing.locator('summary').click();
+  await rgbProcessing.locator(':scope > summary').click();
+  await openProcessingSteps(rgbProcessing);
   const backgroundControls = rgbProcessing.getByRole('region', { name: 'Background extraction' });
   await expect(backgroundControls.getByRole('checkbox', { name: 'Background extraction' }))
     .toBeChecked();
@@ -1789,7 +1810,7 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
     .toContainText('1 stage');
   // A new build follows the channel cards; set G's deconvolution here.
   await rgbProcessing.getByRole('radio', { name: 'Set in this build' }).click();
-  const greenLane = rgbProcessing.getByRole('region', { name: 'G input stretch stack' });
+  const greenLane = rgbProcessing.getByRole('region', { name: 'G input linear processing' });
   const greenDeconvolution = greenLane.getByRole('region', { name: 'G input deconvolution' });
   await expect(greenDeconvolution.getByRole('checkbox', { name: 'Deconvolution' }))
     .not.toBeChecked();
@@ -1833,6 +1854,7 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
   const colorInputsBeforeStretchEdit = fs.readdirSync(colorInputRoot).sort();
   const currentProcessing = rgbCard.locator('.stack-color-processing');
   await currentProcessing.locator(':scope > summary').click();
+  await openProcessingSteps(currentProcessing);
   const currentOutputLane = currentProcessing.getByRole('region', {
     name: 'RGB output stretch stack',
   });
@@ -1943,6 +1965,7 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
   // reload, round-trip through export/import, and delete cleanly.
   if (!(await currentProcessing.getAttribute('open'))) {
     await currentProcessing.locator(':scope > summary').click();
+  await openProcessingSteps(currentProcessing);
   }
   const rgbSetupsBar = currentProcessing.locator('.processing-setups-bar');
   await rgbSetupsBar.getByRole('button', { name: 'Save as…' }).click();
@@ -1965,6 +1988,7 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
   const narrowbandProcessing = narrowbandCard.locator('.stack-color-processing');
   if (!(await narrowbandProcessing.getAttribute('open'))) {
     await narrowbandProcessing.locator(':scope > summary').click();
+  await openProcessingSteps(narrowbandProcessing);
   }
   const narrowbandBar = narrowbandProcessing.locator('.processing-setups-bar');
   const narrowbandSelect = narrowbandBar.getByRole('combobox', {
@@ -1982,6 +2006,7 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
   await expect(section).toBeVisible({ timeout: 15_000 });
   const reloadedProcessing = rgbCard.locator('.stack-color-processing');
   await reloadedProcessing.locator(':scope > summary').click();
+  await openProcessingSteps(reloadedProcessing);
   const reloadedBar = reloadedProcessing.locator('.processing-setups-bar');
   const reloadedSelect = reloadedBar.getByRole('combobox', {
     name: 'Saved color processing setups',
@@ -2081,7 +2106,8 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
     await section.screenshot({ path: path.join(docs, 'stack-color-previews.png') });
     const currentRgbProcessing = rgbCard.locator('.stack-color-processing');
     if (!(await currentRgbProcessing.getAttribute('open'))) {
-      await currentRgbProcessing.locator('summary').click();
+      await currentRgbProcessing.locator(':scope > summary').click();
+  await openProcessingSteps(currentRgbProcessing);
     }
     await rgbCard.screenshot({ path: path.join(docs, 'stack-color-processing.png') });
   }
@@ -2149,4 +2175,89 @@ test('color calibrates a one-shot-color stack by default, says why it could not,
   const applied = (await processing.json()).data;
   expect(applied.color_calibration?.status).toBe('skipped');
   expect(applied.color_calibration_outdated ?? null).toBeNull();
+});
+
+
+test('keeps narrowband and RGB star processing consistent on desktop and phone', async ({ page }, testInfo) => {
+  seedSyntheticColorStacks(dbId, 2);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.route('**/api/tools/rc-astro', (route) => route.fulfill({ json: {
+    success: true, error: null, data: { available: true, tools: [{
+      schema_version: 6, cli_version: '2.6.6', key: 'bxt', name: 'RC-Astro BlurXTerminator',
+      ml_version: 5, licensed: true, license_message: null, parameters: [
+        { name: 'ss', flag: '--ss', label: 'Sharpen Stars', description: 'Stellar sharpening',
+          kind: { type: 'float', default: 0.5, min: 0, max: 1 } },
+        { name: 'ash', flag: '--ash', label: 'Adjust Star Halos', description: 'Stellar halo adjustment',
+          kind: { type: 'float', default: 0, min: -1, max: 1 } },
+      ],
+    }] },
+  } }));
+  await page.goto(`/#/stacks?db=${encodeURIComponent(dbId)}&project=2`);
+  const card = page.locator('article.stack-color-card[data-color-kind="narrowband"]:not([data-color-combination])');
+  const processing = card.locator('.stack-color-processing');
+  await processing.locator(':scope > summary').click();
+  const setups = processing.locator('.processing-setups-bar');
+  await setups.getByRole('combobox').selectOption('builtin:Automatic narrowband');
+  await setups.getByRole('button', { name: 'Apply setup', exact: true }).click();
+  await expect(processing.locator('.stack-processing-step[open]')).toHaveCount(0);
+  const captureStyle = '.app-header { visibility: hidden; }';
+  for (const [size, width] of [['desktop', 1440], ['phone', 390]] as const) {
+    await page.setViewportSize({ width, height: 1000 });
+    expect(await processing.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+    await processing.screenshot({ path: testInfo.outputPath(`flow-${size}.png`), style: captureStyle });
+  }
+  const linear = processing.getByRole('group', { name: 'Process linear color', exact: true });
+  const balance = processing.getByRole('group', { name: 'Stretch and narrowband balance', exact: true });
+  const combine = processing.getByRole('group', { name: 'Combine and restore stars', exact: true });
+  for (const step of [linear, balance, combine]) await step.locator(':scope > summary').click();
+  const stars = linear.getByRole('region', { name: 'RGB stars RC-Astro tools' });
+  await stars.getByRole('checkbox', { name: 'RC-Astro BlurXTerminator' }).check();
+  await stars.getByRole('spinbutton', { name: 'Sharpen Stars' }).fill('0.6');
+  await stars.getByRole('spinbutton', { name: 'Adjust Star Halos' }).fill('-0.1');
+  const reduction = combine.getByRole('spinbutton', { name: 'RGB star reduction' });
+  await reduction.fill('0.4');
+  await setups.getByRole('button', { name: 'Save as…' }).click();
+  await setups.getByRole('textbox', { name: 'New setup name' }).fill('RGB stars flow');
+  await setups.getByRole('button', { name: 'Save current settings', exact: true }).click();
+  await expect(setups).toContainText('Saved “RGB stars flow”');
+  await reduction.fill('0.1');
+  await setups.getByRole('combobox').selectOption('saved:RGB stars flow');
+  await setups.getByRole('button', { name: 'Apply setup', exact: true }).click();
+  await expect(setups).toContainText('click Apply processing stack to render it');
+  await expect(reduction).toHaveValue('0.4');
+  await expect(stars.getByRole('spinbutton', { name: 'Sharpen Stars' })).toHaveValue('0.6');
+  await expect(stars.getByRole('spinbutton', { name: 'Adjust Star Halos' })).toHaveValue('-0.1');
+  const hint = linear.locator('.stack-color-channel-tools > .processing-setups-hint').first();
+  expect(await hint.evaluate((element) => getComputedStyle(element).display)).toBe('block');
+  const font = (element: Element) => getComputedStyle(element).fontFamily;
+  expect(await setups.getByRole('combobox').evaluate(font)).toBe(await stars.getByRole('spinbutton', { name: 'Sharpen Stars' }).evaluate(font));
+  const fontSize = (element: Element) => getComputedStyle(element).fontSize;
+  expect(await balance.locator(':scope > summary strong').evaluate(fontSize)).toBe(await stars.locator(':scope > header strong').evaluate(fontSize));
+  expect(await balance.getByRole('checkbox', { name: 'Narrowband balance', exact: true }).locator('..').evaluate(fontSize)).toBe(await stars.getByRole('checkbox', { name: 'RC-Astro BlurXTerminator' }).locator('..').evaluate(fontSize));
+  await balance.locator(':scope > summary').focus();
+  await page.keyboard.press('Enter');
+  await expect(balance.locator(':scope > summary')).toHaveAttribute('aria-expanded', 'false');
+  await page.keyboard.press('Enter');
+  await expect(balance.locator(':scope > summary')).toHaveAttribute('aria-expanded', 'true');
+  for (const [size, width] of [['desktop', 1440], ['phone', 390]] as const) {
+    await page.setViewportSize({ width, height: 1000 });
+    for (const [name, step] of [['linear', linear], ['balance', balance], ['stars', combine]] as const) {
+      expect(await step.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+      await step.screenshot({ path: testInfo.outputPath(`${name}-${size}.png`), style: captureStyle });
+    }
+  }
+  const custom = page.locator('details.stack-color-custom[data-color-kind="rgb"]').filter({ has: page.locator('article[data-color-combination="emission"]') });
+  await custom.locator(':scope > summary').click();
+  const combined = custom.locator('.stack-color-processing');
+  await combined.locator(':scope > summary').click();
+  await expect(combined.locator('.processing-setups-bar option', { hasText: 'Automatic narrowband' })).toHaveCount(0);
+  await combined.getByText('Subtract continuum', { exact: true }).click();
+  await combined.getByText('Advanced fit and saturation limits', { exact: true }).click();
+  await combined.getByText('Calibrated line-flux export', { exact: true }).click();
+  for (const [size, width] of [['desktop', 1440], ['phone', 390]] as const) {
+    await page.setViewportSize({ width, height: 1000 });
+    const controls = combined.getByRole('region', { name: 'Continuum subtraction' });
+    expect(await controls.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+    await controls.screenshot({ path: testInfo.outputPath(`continuum-${size}.png`), style: captureStyle });
+  }
 });
