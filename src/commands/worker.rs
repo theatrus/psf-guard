@@ -917,9 +917,12 @@ async fn run_task_in(
             Some(path) => path,
             None => {
                 // Asked to finish before the work began, there is nothing
-                // to hand back: the server keeps what it had.
+                // to hand back. The task fails at once, and the server keeps
+                // what it had.
                 if heartbeat.work_stop.requested() {
-                    return Err(ClientError::NotCurrent);
+                    return Err(ClientError::Other(
+                        "The task was stopped before its work began".into(),
+                    ));
                 }
                 let to = scratch.join(&input.name);
                 heartbeat

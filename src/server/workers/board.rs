@@ -1088,15 +1088,6 @@ impl Board {
         Ok(reply)
     }
 
-    /// Whether `lease` is still current for `session`'s task, read by this
-    /// server's worker while it runs the task.
-    pub fn still_wanted(&self, session: &str, task: &str, lease: &str) -> bool {
-        let mut inner = self.lock();
-        !inner.closed
-            && Self::current(&mut inner, session, task, lease)
-                .is_ok_and(|found| !found.stop_requested)
-    }
-
     /// Where an input is, for a worker to download it.
     pub fn input(
         &self,

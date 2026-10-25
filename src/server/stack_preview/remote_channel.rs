@@ -145,7 +145,7 @@ struct SessionSpec {
 }
 
 /// Everything a worker needs to integrate a channel. The frames' paths and
-/// the master recipes' files hold the names of the task's inputs.
+/// the master recipes' files are the names of the task's inputs.
 #[derive(Clone, Serialize, Deserialize)]
 struct ChannelSpec {
     job_id: String,
@@ -625,6 +625,34 @@ pub(super) fn run_on_worker(
         ))
     })?;
     let outputs = channel.outputs;
+    // The stack first: when it cannot be placed, this server's checkpoint is
+    // left as it was, for a build on this server to continue.
+    let built = if result.built {
+        let stack = finished
+            .outputs
+            .get(STACK)
+            .ok_or_else(|| failed(format!("{} sent back no stack", finished.worker)))?;
+        let progressive = result
+            .progressive
+            .ok_or_else(|| failed(format!("{} sent back no SNR curve", finished.worker)))?;
+        // The map goes first, so a stack is never published beside an
+        // earlier build's map.
+        match finished.outputs.get(CLIPPED) {
+            Some(clipped) => place(clipped, &outputs.clipped).map_err(failed)?,
+            None => write_clipped(&outputs.clipped, None).map_err(failed)?,
+        }
+        place(stack, &outputs.fits).map_err(failed)?;
+        let image = crate::image_io::open_linear_frame(&outputs.fits)
+            .map_err(|error| failed(error.to_string()))?
+            .image;
+        Some(integrate::BuiltChannel {
+            image,
+            clipped: read_clipped(&outputs.clipped),
+            progressive,
+        })
+    } else {
+        None
+    };
     // The checkpoint, when the worker wrote both halves, replaces this
     // server's; otherwise a later build starts over. A quality-ordered
     // build writes none and keeps the capture-order one, as on this server.
@@ -643,32 +671,10 @@ pub(super) fn run_on_worker(
             }
         }
     }
-    if !result.built {
-        return Ok(integrate::ChannelOutcome::Cancelled);
-    }
-    let stack = finished
-        .outputs
-        .get(STACK)
-        .ok_or_else(|| failed(format!("{} sent back no stack", finished.worker)))?;
-    // The map goes first, so a stack is never published beside an earlier
-    // build's map.
-    match finished.outputs.get(CLIPPED) {
-        Some(clipped) => place(clipped, &outputs.clipped).map_err(failed)?,
-        None => write_clipped(&outputs.clipped, None).map_err(failed)?,
-    }
-    place(stack, &outputs.fits).map_err(failed)?;
-    let image = crate::image_io::open_linear_frame(&outputs.fits)
-        .map_err(|error| failed(error.to_string()))?
-        .image;
-    Ok(integrate::ChannelOutcome::Built(Box::new(
-        integrate::BuiltChannel {
-            image,
-            clipped: read_clipped(&outputs.clipped),
-            progressive: result
-                .progressive
-                .ok_or_else(|| failed(format!("{} sent back no SNR curve", finished.worker)))?,
-        },
-    )))
+    Ok(match built {
+        Some(built) => integrate::ChannelOutcome::Built(Box::new(built)),
+        None => integrate::ChannelOutcome::Cancelled,
+    })
 }
 
 /// Move a task's output to `destination`, through a temporary file beside

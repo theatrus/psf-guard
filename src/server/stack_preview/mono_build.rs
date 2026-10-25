@@ -680,6 +680,17 @@ pub(super) fn run_group(
         scratch: crate::server::storage::stack_scratch(stack_root),
         mosaic_scratch: stack_dir(stack_root, job_id),
     };
+    // What the card lists before the stack begins, such as the frames the
+    // build left out: a worker, and this server after it, start from it.
+    let listed_before = state
+        .stack_previews
+        .get(job_id)
+        .and_then(|job| {
+            job.groups
+                .get(group.index)
+                .map(|status| status.frames.clone())
+        })
+        .unwrap_or_default();
     let stack_here = |pool: &crate::concurrency::ComputePool,
                       checkpoint: Option<resume::ResumeState>| {
         let mut events = CardEvents {
@@ -696,7 +707,7 @@ pub(super) fn run_group(
             stack_root,
             database_id,
             identity: identity.clone(),
-            listed_before: None,
+            listed_before: Some(listed_before.clone()),
         };
         integrate::integrate_channel(
             integrate::ChannelWork {
@@ -736,7 +747,7 @@ pub(super) fn run_group(
             stack_root,
             database_id,
             identity: identity.clone(),
-            listed_before: None,
+            listed_before: Some(listed_before.clone()),
         };
         let remote = remote_channel::run_on_worker(
             state,

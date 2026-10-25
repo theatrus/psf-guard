@@ -394,7 +394,10 @@ fn a_stop_takes_the_task_off_the_board_and_the_worker_is_told() {
             .unwrap()
             .stop
     );
-    assert!(!board.still_wanted(&session, &claimed.task, &claimed.lease));
+    assert_eq!(
+        board.fail(&session, &claimed.task, &claimed.lease, "late".into()),
+        Err(Refusal::NotCurrent)
+    );
     // The worker is free for the next task.
     let next = board.ticket().unwrap();
     next.submit(task("next", true, needs("bxt", "1"))).unwrap();
@@ -1031,7 +1034,6 @@ fn a_stopped_task_goes_to_no_new_worker() {
     );
     board.try_claim(&first).unwrap().unwrap();
     let waiting = {
-        let board = Arc::clone(&board);
         std::thread::spawn(move || {
             ticket.wait_with(Waiting {
                 stopped: &|| true,

@@ -5008,6 +5008,25 @@ fn a_channel_s_card_keeps_the_frames_it_listed_before_the_stack_began() {
     // Another worker takes the channel over and starts again.
     events.frames_restored(restored(vec![decision("reference")], 0));
     assert_eq!(listed(&state), ["excluded", "reference"]);
+    events.frame(decision("accepted"), 60.0);
+    // This server stacks it after the worker failed, from the list the
+    // card had before the stack began.
+    let mut here = mono_build::CardEvents {
+        state: &state,
+        job_id: "listed",
+        index: 0,
+        live: None,
+        stack_root: root.path(),
+        database_id: "db-test",
+        identity: integrate::CheckpointIdentity {
+            target_id: 42,
+            filter_name: "Ha".into(),
+            exposure_group_key: None,
+        },
+        listed_before: Some(vec![decision("excluded")]),
+    };
+    here.frames_restored(restored(vec![decision("reference")], 0));
+    assert_eq!(listed(&state), ["excluded", "reference"]);
     // A checkpoint's ledger is the whole list.
     events.frames_restored(restored(
         vec![
