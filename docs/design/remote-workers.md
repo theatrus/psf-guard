@@ -237,9 +237,13 @@ own work splits where the catalog stops:
   goes to no new worker, and a requeued task's events start again from 0.
 - **Failure.** Under workers first, a channel a worker fails is stacked on
   this server.
-- **Mosaics** stack on this server: their canvas planning and panel
-  matching run through the same integration
-  (`Orientation::MosaicCanvas`), but no worker takes them yet.
+- **Mosaics** go to workers too. The spec carries each frame's panel
+  target and the group's panels; the worker plans the canvas in its work
+  folder and publishes on it (`Orientation::MosaicCanvas`). Planning, like
+  the final pass, checks the copy it reads (`read_fingerprint`). A mosaic
+  writes no checkpoint, and this server keeps its own. A test stacks a
+  synthetic four-panel mosaic here and on a worker, in both file modes,
+  and checks the pixels match bit for bit.
 
 A test stacks one synthetic channel on this server and on a real worker,
 over HTTP in both file modes, and checks the pixels match bit for bit on

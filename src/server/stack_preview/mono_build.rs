@@ -735,9 +735,8 @@ pub(super) fn run_group(
     };
     // A worker on another machine stacks the channel when Settings ›
     // Workers sends stack builds there. This server's cores are free for
-    // other work while it does, and are leased again for the previews. A
-    // mosaic stacks on this server.
-    let (integrated, lease, pool) = if !group.mosaic && remote_channel::wanted(state) {
+    // other work while it does, and are leased again for the previews.
+    let (integrated, lease, pool) = if remote_channel::wanted(state) {
         drop(pool);
         drop(lease);
         let mut events = CardEvents {

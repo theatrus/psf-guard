@@ -80,7 +80,7 @@ pub(super) fn plan(
             return Err("Mosaic planning cancelled".into());
         }
         let source = &group.frames[index];
-        if source_fingerprint(&source.path) != source.source_fingerprint {
+        if source_fingerprint(&source.path) != source.fingerprint_while_read() {
             return Err(format!(
                 "Image {} changed before mosaic planning; rebuild the stack",
                 source.image_id
@@ -106,7 +106,7 @@ pub(super) fn plan(
         let path = temporary.path().join(format!("{}.fits", source.image_id));
         seiza_stacking::write_processed_image_fits_f32(&path, &frame.image, &frame.headers, &[])
             .map_err(|e| e.to_string())?;
-        if source_fingerprint(&source.path) != source.source_fingerprint {
+        if source_fingerprint(&source.path) != source.fingerprint_while_read() {
             return Err(format!(
                 "Image {} changed while planning the mosaic; rebuild the stack",
                 source.image_id
@@ -131,6 +131,66 @@ pub(super) fn plan(
         },
     )
     .map_err(|e| e.to_string())
+}
+
+/// Four 600 × 440 panels of one synthetic star field, two frames each, laid
+/// out in a 2 × 2 grid with little overlap. Each panel has its own
+/// background, and its frames have the panel's target ID.
+#[cfg(test)]
+pub(super) fn synthetic_panels(directory: &FsPath) -> Vec<PreparedFrame> {
+    let (width, height) = (600, 440);
+    let mut stars = Vec::new();
+    let mut seed = 93_u64;
+    let mut random = || {
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+        (seed >> 32) as u32
+    };
+    for _ in 0..1700 {
+        stars.push((
+            random() as usize % 1160,
+            random() as usize % 850,
+            800.0 + (random() % 5000) as f32,
+        ));
+    }
+    let mut frames = Vec::new();
+    for panel in 0..4 {
+        for repeat in 0..2 {
+            let (left, top) = ((panel % 2) * 550 + repeat, (panel / 2) * 400 + repeat);
+            let mut data = vec![100.0 + panel as f32 * 100.0; width * height];
+            for &(sx, sy, amplitude) in &stars {
+                for dy in -5_i32..=5 {
+                    for dx in -5_i32..=5 {
+                        let x = sx as i32 + dx - left;
+                        let y = sy as i32 + dy - top;
+                        if x >= 0 && y >= 0 && x < width as i32 && y < height as i32 {
+                            data[y as usize * width + x as usize] +=
+                                amplitude * (-(dx * dx + dy * dy) as f32 / 4.5).exp();
+                        }
+                    }
+                }
+            }
+            let path = directory.join(format!("panel-{panel}-{repeat}.fits"));
+            seiza_stacking::write_processed_image_fits_f32(
+                &path,
+                &seiza_stacking::LinearImage::new(width, height, 1, data).unwrap(),
+                &[],
+                &[],
+            )
+            .unwrap();
+            frames.push(PreparedFrame {
+                image_id: panel * 2 + repeat,
+                target_id: panel + 1,
+                acquired_date: None,
+                quality_score: Some(1.0),
+                source_fingerprint: source_fingerprint(&path),
+                path,
+                expected_target: None,
+                exposure_seconds: 300.0,
+                read_fingerprint: None,
+            });
+        }
+    }
+    frames
 }
 
 #[cfg(test)]
@@ -301,47 +361,7 @@ mod tests {
     fn four_low_overlap_panels_integrate_on_one_canvas_and_replay_the_mappings() {
         let scratch = tempfile::tempdir().unwrap();
         let (width, height) = (600, 440);
-        let mut stars = Vec::new();
-        let mut seed = 93_u64;
-        let mut random = || {
-            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
-            (seed >> 32) as u32
-        };
-        for _ in 0..1700 {
-            stars.push((
-                random() as usize % 1160,
-                random() as usize % 850,
-                800.0 + (random() % 5000) as f32,
-            ));
-        }
-        let mut frames = Vec::new();
-        for panel in 0..4 {
-            for repeat in 0..2 {
-                let (left, top) = ((panel % 2) * 550 + repeat, (panel / 2) * 400 + repeat);
-                let mut data = vec![100.0 + panel as f32 * 100.0; width * height];
-                for &(sx, sy, amplitude) in &stars {
-                    for dy in -5_i32..=5 {
-                        for dx in -5_i32..=5 {
-                            let x = sx as i32 + dx - left;
-                            let y = sy as i32 + dy - top;
-                            if x >= 0 && y >= 0 && x < width as i32 && y < height as i32 {
-                                data[y as usize * width + x as usize] +=
-                                    amplitude * (-(dx * dx + dy * dy) as f32 / 4.5).exp();
-                            }
-                        }
-                    }
-                }
-                let path = scratch.path().join(format!("panel-{panel}-{repeat}.fits"));
-                seiza_stacking::write_processed_image_fits_f32(
-                    &path,
-                    &LinearImage::new(width, height, 1, data).unwrap(),
-                    &[],
-                    &[],
-                )
-                .unwrap();
-                frames.push(frame(path, panel + 1, panel * 2 + repeat));
-            }
-        }
+        let frames = synthetic_panels(scratch.path());
         let group = group(frames);
         let mut plan = crate::calibration::CalibrationPlan::without_calibration(group.frames.len());
         plan.assignments = group

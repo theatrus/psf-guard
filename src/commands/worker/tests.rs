@@ -788,3 +788,72 @@ async fn the_server_keeps_a_running_image_only_from_the_current_lease_and_only_a
     .unwrap();
     assert_eq!(received, [(png, 2)]);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_worker_stacks_a_mosaic_to_the_same_pixels_as_this_server() {
+    use crate::server::stack_preview::remote_channel::testing;
+    let frames = tempfile::tempdir().unwrap();
+    let mosaic = testing::synthetic_mosaic(frames.path());
+    let here = tempfile::tempdir().unwrap();
+    let local = {
+        let (mosaic, directory) = (mosaic.clone(), here.path().to_path_buf());
+        tokio::task::spawn_blocking(move || testing::stack_here(&mosaic, &directory))
+            .await
+            .unwrap()
+    };
+    assert_eq!(
+        local
+            .dispositions
+            .iter()
+            .filter(|d| *d == "accepted")
+            .count(),
+        8,
+        "{:?} {:?}",
+        local.dispositions,
+        local.notes
+    );
+
+    for files in [
+        FileAccess::default(),
+        FileAccess {
+            mode: FileMode::Shared,
+            maps: Vec::new(),
+        },
+    ] {
+        let shared = files.mode == FileMode::Shared;
+        let server = server().await;
+        server.state.workers.board.set_placement(
+            crate::remote_work::protocol::TaskKind::StackChannel,
+            crate::server::workers::board::WorkPlacement::WorkersOnly,
+        );
+        let work = tempfile::tempdir().unwrap();
+        let (stop, worker) = start_worker_taking(
+            &server,
+            files,
+            work.path(),
+            WorkChoice::parse(&["stack".into()]).unwrap(),
+        );
+        eventually("the worker connects", || {
+            connected(&server).is_some_and(|worker| !shared || worker.exchange_shared)
+        })
+        .await;
+        let there = tempfile::tempdir().unwrap();
+        let remote = {
+            let (state, mosaic, directory) = (
+                Arc::clone(&server.state),
+                mosaic.clone(),
+                there.path().to_path_buf(),
+            );
+            tokio::task::spawn_blocking(move || {
+                testing::stack_on_worker(&state, &mosaic, &directory)
+            })
+            .await
+            .unwrap()
+        };
+        assert_eq!(remote.dispositions, local.dispositions);
+        assert_eq!(remote.pixels, local.pixels, "the same mosaic, bit for bit");
+        assert!(!remote.checkpoint, "a mosaic keeps no checkpoint");
+        drop(stop);
+        worker.await.unwrap().unwrap();
+    }
+}

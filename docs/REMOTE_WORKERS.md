@@ -122,7 +122,10 @@ While a worker stacks a channel:
   answering for two minutes loses what it had.
 - Under **Workers first**, the server stacks the channel itself when no
   worker can take it or a worker fails it.
-- A mosaic always stacks on the server.
+- A mosaic stacks on a worker like any other channel: the worker plans
+  the canvas from the panels and keeps its temporary reference frames in
+  its `--work-dir`. A mosaic saves no checkpoint, so the server keeps any
+  checkpoint it had.
 
 ## Choose how files reach the worker
 

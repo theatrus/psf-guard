@@ -692,8 +692,9 @@ pub(super) fn run_on_worker(
     };
     // The checkpoint, when the worker wrote both halves, replaces this
     // server's; otherwise a later build starts over. A quality-ordered
-    // build writes none and keeps the capture-order one, as on this server.
-    if channel.order.resumable() {
+    // build and a mosaic write none and keep the capture-order one, as on
+    // this server.
+    if channel.order.resumable() && !channel.group.mosaic {
         match (
             finished.outputs.get(CHECKPOINT_CONTEXT),
             finished.outputs.get(CHECKPOINT_MANIFEST),
@@ -744,7 +745,9 @@ pub(crate) mod testing {
 
     /// What a stacked channel made, to compare.
     pub(crate) struct Stacked {
-        pub pixels: Vec<f32>,
+        /// The stack's samples as bits, so a mosaic's uncovered NaN
+        /// samples compare too.
+        pub pixels: Vec<u32>,
         pub dispositions: Vec<String>,
         pub matched_stars: Vec<Option<usize>>,
         pub notes: Vec<String>,
@@ -874,6 +877,42 @@ pub(crate) mod testing {
         }
     }
 
+    /// A mosaic is published on its canvas; a channel in its reference's
+    /// rotation.
+    fn orientation(group: &PreparedGroup) -> integrate::Orientation {
+        if group.mosaic {
+            integrate::Orientation::MosaicCanvas
+        } else {
+            integrate::Orientation::Reference { anchor: None }
+        }
+    }
+
+    /// A mosaic matches each panel's background locally, which brings in
+    /// the panel IDs; a channel uses the classic method.
+    fn method(group: &PreparedGroup) -> StackMethod {
+        if group.mosaic {
+            StackMethod {
+                normalization: method::StackNormalization::LocalBackground,
+                ..StackMethod::classic()
+            }
+        } else {
+            StackMethod::classic()
+        }
+    }
+
+    /// Four panels of one synthetic star field, two frames each, as one
+    /// mosaic channel.
+    pub(crate) fn synthetic_mosaic(directory: &FsPath) -> Channel {
+        Channel(PreparedGroup {
+            index: 0,
+            mosaic: true,
+            mosaic_panels: vec![1, 2, 3, 4],
+            calibration: crate::calibration::CalibrationMode::Off,
+            flat_star_masking: false,
+            frames: super::super::mosaic::synthetic_panels(directory),
+        })
+    }
+
     fn identity() -> integrate::CheckpointIdentity {
         integrate::CheckpointIdentity {
             target_id: 1,
@@ -887,7 +926,10 @@ pub(crate) mod testing {
             pixels: crate::image_io::open_linear_frame(&outputs.fits)
                 .unwrap()
                 .image
-                .data,
+                .data
+                .iter()
+                .map(|sample| sample.to_bits())
+                .collect(),
             dispositions: recorder
                 .decisions
                 .iter()
@@ -918,12 +960,12 @@ pub(crate) mod testing {
                 checkpoint: None,
                 accepted_only: true,
                 scoring: StackScoringSettings::default(),
-                method: StackMethod::classic(),
+                method: method(group),
                 gpu: StackGpu::default(),
                 order: snr::StackFrameOrder::Capture,
                 calibration_fingerprint: &plan.applied.fingerprint,
                 identity: identity(),
-                orientation: integrate::Orientation::Reference { anchor: None },
+                orientation: orientation(group),
                 outputs: outputs.clone(),
                 pool: &pool,
                 threads: execution::ThreadBudget::from_total(4),
@@ -957,12 +999,12 @@ pub(crate) mod testing {
                 checkpoint: None,
                 accepted_only: true,
                 scoring: StackScoringSettings::default(),
-                method: StackMethod::classic(),
+                method: method(group),
                 gpu: StackGpu::default(),
                 order: snr::StackFrameOrder::Capture,
                 calibration_fingerprint: &plan.applied.fingerprint,
                 identity: identity(),
-                orientation: &integrate::Orientation::Reference { anchor: None },
+                orientation: &orientation(group),
                 outputs: &outputs,
                 cancel: &Stop::new(),
             },
