@@ -1,6 +1,12 @@
 {
-  "psf_guard_commit": "162e14827cf3b9995ed265acb029aececacd0366",
-  "seiza_validation_commit": "567e05d",
+  "psf_guard_commit": "50e2d76f4114806cfde630ee160d6ad23bcd084c",
+  "seiza_version": "0.44.0",
+  "stacking_version": "0.51.0",
+  "stacking_output_version": "0.51.0",
+  "stretch_output_version": "0.3.0",
+  "rc_astro_version": "2.6.10",
+  "sxt_device": "gpu",
+  "generated_utc": "2026-10-25",
   "input_bin_per_axis": 4,
   "source_accepted_frames": 1243,
   "source_exposure_seconds": 164100.0,
@@ -10,7 +16,7 @@
       "width": 2841,
       "height": 1926,
       "panels": 4,
-      "sha256": "6999fb21d220067af5f99d8b40f3b20241060b6c64373f931eba21b0f65582ac",
+      "sha256": "f637d68ec9f91ec4d1eda168bd6061c275d7c7531a3c2233566af7ec6b37b09a",
       "accepted_frames": 240,
       "exposure_seconds": 2400.0,
       "panel_stacks": [
@@ -42,14 +48,15 @@
           "exposure_seconds": 600.0,
           "calibration": "none"
         }
-      ]
+      ],
+      "job_id": "9475f56bed1b535c7e15e5fa1537732d77a6ecf36504cb140d2ce240e7b9ccd9"
     },
     {
       "filter": "G",
       "width": 2840,
       "height": 1928,
       "panels": 4,
-      "sha256": "7fe8271adcee758e08f941e6dd123a53732e4e8d1717f761c88cd35bf77490ea",
+      "sha256": "97cca4b2abbdce237ed035eef9c647b89a58631e133bfeb54539254f3a11057a",
       "accepted_frames": 240,
       "exposure_seconds": 2400.0,
       "panel_stacks": [
@@ -81,14 +88,15 @@
           "exposure_seconds": 600.0,
           "calibration": "none"
         }
-      ]
+      ],
+      "job_id": "a2e06998e50f69054421b0fd06dabf558df524263d5f2936040fd1a5a17a2f80"
     },
     {
       "filter": "B",
       "width": 2842,
       "height": 1943,
       "panels": 4,
-      "sha256": "10af757658b21d5f0cd443d427ab103182894adb924f0dbdde7b2c7332c7a833",
+      "sha256": "c254629f6dcca8c4d6d9137b44386f7d696f4442f4dfe3b4f11f1cfbad7edaa6",
       "accepted_frames": 240,
       "exposure_seconds": 2400.0,
       "panel_stacks": [
@@ -120,14 +128,15 @@
           "exposure_seconds": 600.0,
           "calibration": "none"
         }
-      ]
+      ],
+      "job_id": "07d065a9af5c41b1f9a562ec6441b9a510570ff56edbd1b4ea56e9e6232a80e8"
     },
     {
       "filter": "HA",
       "width": 2912,
       "height": 1917,
       "panels": 4,
-      "sha256": "46b6d89198975832f81cb440a75882dcb75a5996a1d5402e6e2e562a39b82768",
+      "sha256": "850153bf4953e4fa235b888f517c521de6b5e5b281c67cc2a8d1877b92d6e5e3",
       "accepted_frames": 163,
       "exposure_seconds": 48900.0,
       "panel_stacks": [
@@ -159,14 +168,15 @@
           "exposure_seconds": 13500.0,
           "calibration": "applied"
         }
-      ]
+      ],
+      "job_id": "3459b160837fd44e38c59c7095cb12fe19d1447a5f0f7c7c838dd9a55a664d76"
     },
     {
       "filter": "OIII",
       "width": 2865,
       "height": 1947,
       "panels": 4,
-      "sha256": "db40c651b1581087da525857a48c68af9acf0aca621ccfb5d30c5e94a758de41",
+      "sha256": "f60979f040315390ca24d8cdec7690968f7419fcabd386f622a56f728bfc05c8",
       "accepted_frames": 180,
       "exposure_seconds": 54000.0,
       "panel_stacks": [
@@ -198,14 +208,15 @@
           "exposure_seconds": 13500.0,
           "calibration": "applied"
         }
-      ]
+      ],
+      "job_id": "eef59cf4bd8d48c70b4df55cf5a44e716007aec53579fe68b627d4f66e16aa17"
     },
     {
       "filter": "SII",
       "width": 2860,
       "height": 1944,
       "panels": 4,
-      "sha256": "525f9f0318a0f9d24f32895712f229f7f87e532ee627d517917c29b91825baf0",
+      "sha256": "12670e23360acb37929cf7f45e03734fb406dca557e75fc8b3cac707d0fef031",
       "accepted_frames": 180,
       "exposure_seconds": 54000.0,
       "panel_stacks": [
@@ -237,112 +248,1000 @@
           "exposure_seconds": 13500.0,
           "calibration": "applied"
         }
-      ]
+      ],
+      "job_id": "c26d3b4e43e531ab1f9b55beaed42b550f8432a7ef0f8aeec17114876cb41f97"
     }
   ],
   "examples": [
     {
       "id": "ha",
       "title": "H-alpha mosaic",
-      "description": "All four panels on one canvas; automatic display stretch.",
+      "description": "Four panels on one canvas; automatic display stretch.",
       "image": "images/ha.jpg",
-      "sha256": "bb5b2679e54141c286ac76c07b90b3f77d9fe4058e44ce87609a74b2d6f3bcc2"
+      "sha256": "4492ec3f8ca756813c80f1a08c596ff82636ae2dca90eae13b41f5269a95a51b",
+      "width": 2912,
+      "height": 1917,
+      "original_png_sha256": "624c375c18960cbef1d0b288d547d79e3f5bbd82003bf621f650ae28ede1615e"
     },
     {
       "id": "rgb",
       "title": "RGB",
-      "description": "Default color processing from the R, G and B mosaics.",
+      "description": "R, G and B mosaics with automatic background extraction and display stretch.",
       "image": "images/rgb.jpg",
-      "sha256": "d935e98e5f4dc58981debe38938349d2b39be61cbf097085cc3fcc81db6951c0",
-      "width": 2400,
-      "height": 1574,
-      "job_id": "8aca5c9c417782ee7b4edb15c8f7d8cf8af44caafd7c771b1e712ae5c63a2680",
+      "sha256": "a1259cf876f14e0d1fe19c36c90bf0376478d856033f5e64fbb6bb81b2534232",
+      "width": 2782,
+      "height": 1825,
+      "original_png_sha256": "55682ba253b420c051386c5677b9b4e8782e90768474291079cf0ab646d07661",
+      "job_id": "701e272a773c5e59c9627f507fd14553d573720e8d9a9cfb8566106626f15572",
       "stars": null,
-      "coverage_fraction": 0.9278814189057061
+      "coverage_fraction": 0.9278814189057061,
+      "request": {
+        "target_id": -2,
+        "kind": "rgb",
+        "crop": "inscribed",
+        "processing": {
+          "input_processing": "channels",
+          "background_extraction": {
+            "config": {
+              "model": {
+                "kind": "automatic",
+                "max_degree": 2,
+                "ridge": 1e-08,
+                "rbf_smoothing": 0.01,
+                "max_control_points": 192,
+                "allow_radial_basis": false,
+                "minimum_improvement": 0.08
+              },
+              "samples_per_axis": 12,
+              "sample_radius": null,
+              "search_steps": 4,
+              "sample_rejection_sigma": 3.5,
+              "fit_rejection_sigma": 3.0,
+              "fit_rejection_iterations": 3,
+              "border_fraction": 0.03,
+              "protected_regions": []
+            },
+            "correction_mode": "subtract",
+            "strength": 1.0,
+            "protect_catalog_emission": true
+          },
+          "input_stretches": {
+            "red": [
+              {
+                "model": {
+                  "type": "auto-mtf",
+                  "target_median": 0.2,
+                  "shadows_clip": -2.8
+                },
+                "color_strategy": "linked"
+              }
+            ],
+            "green": [
+              {
+                "model": {
+                  "type": "auto-mtf",
+                  "target_median": 0.2,
+                  "shadows_clip": -2.8
+                },
+                "color_strategy": "linked"
+              }
+            ],
+            "blue": [
+              {
+                "model": {
+                  "type": "auto-mtf",
+                  "target_median": 0.2,
+                  "shadows_clip": -2.8
+                },
+                "color_strategy": "linked"
+              }
+            ]
+          },
+          "output_stretches": [],
+          "color_calibration": null
+        }
+      }
     },
     {
       "id": "sho-shared",
-      "title": "SHO \u00b7 shared Ha stretch",
-      "description": "One H-alpha stretch, original narrowband stars, balance off.",
+      "title": "SHO · shared Ha stretch",
+      "description": "Shared H-alpha stretch, original narrowband stars, balance off.",
       "image": "images/sho-shared.jpg",
-      "sha256": "43b1d9138ce9a9e89cf9372fd4963aee3c243fd1e5f23af1a5ca2ee0b2abec2b",
-      "width": 2400,
-      "height": 1521,
-      "job_id": "b6a34d90b1e210a71220ddb905962da14313e10ddbf36c75d60c6349214017a0",
+      "sha256": "9faa8574243fdef21c95f0437af623f64a7b3d419eba7cdf6c6d914ba6ef5221",
+      "width": 2772,
+      "height": 1757,
+      "original_png_sha256": "62b3711bca9f65666704ae36168a320713636b53aacb140eb6c0e1ce608fc618",
+      "job_id": "132368af2b50f7429a81e6d0f589c3862ce8a801b57097342514ddb668dd4dc4",
       "stars": "narrowband",
-      "coverage_fraction": 0.8724720115565185
+      "coverage_fraction": 0.8724720115565185,
+      "request": {
+        "target_id": -2,
+        "kind": "narrowband",
+        "crop": "inscribed",
+        "processing": {
+          "input_processing": "channels",
+          "background_extraction": {
+            "config": {
+              "model": {
+                "kind": "automatic",
+                "max_degree": 2,
+                "ridge": 1e-08,
+                "rbf_smoothing": 0.01,
+                "max_control_points": 192,
+                "allow_radial_basis": false,
+                "minimum_improvement": 0.08
+              },
+              "samples_per_axis": 12,
+              "sample_radius": null,
+              "search_steps": 4,
+              "sample_rejection_sigma": 3.5,
+              "fit_rejection_sigma": 3.0,
+              "fit_rejection_iterations": 3,
+              "border_fraction": 0.03,
+              "protected_regions": []
+            },
+            "correction_mode": "subtract",
+            "strength": 1.0,
+            "protect_catalog_emission": true
+          },
+          "input_stretches": {
+            "ha": [
+              {
+                "model": {
+                  "type": "auto-mtf",
+                  "target_median": 0.2,
+                  "shadows_clip": -2.8
+                },
+                "color_strategy": "linked"
+              }
+            ],
+            "oiii": [
+              {
+                "model": {
+                  "type": "auto-mtf",
+                  "target_median": 0.2,
+                  "shadows_clip": -2.8
+                },
+                "color_strategy": "linked"
+              }
+            ],
+            "sii": [
+              {
+                "model": {
+                  "type": "auto-mtf",
+                  "target_median": 0.2,
+                  "shadows_clip": -2.8
+                },
+                "color_strategy": "linked"
+              }
+            ]
+          },
+          "output_stretches": [],
+          "color_calibration": null,
+          "narrowband": {
+            "shared_stretch": true,
+            "balance": null
+          }
+        },
+        "palette": "sho",
+        "automatic_palette": false,
+        "stars": "narrowband"
+      }
     },
     {
       "id": "sho-balanced",
-      "title": "SHO \u00b7 balanced",
+      "title": "SHO · balanced",
       "description": "Shared H-alpha stretch and OIII/SII balance; original narrowband stars.",
       "image": "images/sho-balanced.jpg",
-      "sha256": "bc402218358e06f32a69c4a34abcce812a606434fb0a0bfaa29cc1441a123c42",
-      "width": 2400,
-      "height": 1521,
-      "job_id": "34f30070cd22e9123b779c3aa991bd14a00984df1560372c3f20c4d69dde3b06",
+      "sha256": "ff057f298f7a9adfd82965bb349a5ff1a184667128579f338e9d6a5850f4365b",
+      "width": 2772,
+      "height": 1757,
+      "original_png_sha256": "0dd37204bc6cae241601dce1db00b5b2c10cca62e0a9b4a2a14c8cf55eb218f4",
+      "job_id": "9225eeec65b53fc1837d7611840bd7b38e0b81ce72a7fce04e90bc45ec8fea8a",
       "stars": "narrowband",
-      "coverage_fraction": 0.8724720115565185
+      "coverage_fraction": 0.8724720115565185,
+      "request": {
+        "target_id": -2,
+        "kind": "narrowband",
+        "crop": "inscribed",
+        "processing": {
+          "input_processing": "channels",
+          "background_extraction": {
+            "config": {
+              "model": {
+                "kind": "automatic",
+                "max_degree": 2,
+                "ridge": 1e-08,
+                "rbf_smoothing": 0.01,
+                "max_control_points": 192,
+                "allow_radial_basis": false,
+                "minimum_improvement": 0.08
+              },
+              "samples_per_axis": 12,
+              "sample_radius": null,
+              "search_steps": 4,
+              "sample_rejection_sigma": 3.5,
+              "fit_rejection_sigma": 3.0,
+              "fit_rejection_iterations": 3,
+              "border_fraction": 0.03,
+              "protected_regions": []
+            },
+            "correction_mode": "subtract",
+            "strength": 1.0,
+            "protect_catalog_emission": true
+          },
+          "input_stretches": {
+            "ha": [
+              {
+                "model": {
+                  "type": "auto-mtf",
+                  "target_median": 0.2,
+                  "shadows_clip": -2.8
+                },
+                "color_strategy": "linked"
+              }
+            ],
+            "oiii": [
+              {
+                "model": {
+                  "type": "auto-mtf",
+                  "target_median": 0.2,
+                  "shadows_clip": -2.8
+                },
+                "color_strategy": "linked"
+              }
+            ],
+            "sii": [
+              {
+                "model": {
+                  "type": "auto-mtf",
+                  "target_median": 0.2,
+                  "shadows_clip": -2.8
+                },
+                "color_strategy": "linked"
+              }
+            ]
+          },
+          "output_stretches": [],
+          "color_calibration": null,
+          "narrowband": {
+            "shared_stretch": true,
+            "balance": {
+              "has_sii": true,
+              "shadow_protection": 1,
+              "oiii_boost": 1,
+              "sii_boost": 1,
+              "max_samples": 1000000
+            }
+          }
+        },
+        "palette": "sho",
+        "automatic_palette": false,
+        "stars": "narrowband"
+      }
     },
     {
       "id": "hoo-balanced",
-      "title": "HOO \u00b7 balanced",
+      "title": "HOO · balanced",
       "description": "Shared H-alpha stretch and OIII balance; original narrowband stars.",
       "image": "images/hoo-balanced.jpg",
-      "sha256": "d73e942ac39641ec875ae0818d6dd8b9c38db9a131245c2ec10153fae57d8cbc",
-      "width": 2400,
-      "height": 1515,
-      "job_id": "a31477b43d029a0b537033c059218f49f8c50ed3612c322057a42d63732c959b",
+      "sha256": "250e5abff86e846fcbaec62b66a842cada9b2d4b7c09f50015376cf1f39e01f6",
+      "width": 2784,
+      "height": 1757,
+      "original_png_sha256": "1f8283708413b6f2d85f15dbd365b689438869dfedb52de196e28bcbb952d654",
+      "job_id": "9d599c0396c989e91d891c0d5342be0490c984137440b1731b66d46a82d93a6f",
       "stars": "narrowband",
-      "coverage_fraction": 0.8762489466714819
+      "coverage_fraction": 0.8762489466714819,
+      "request": {
+        "target_id": -2,
+        "kind": "narrowband",
+        "crop": "inscribed",
+        "processing": {
+          "input_processing": "channels",
+          "background_extraction": {
+            "config": {
+              "model": {
+                "kind": "automatic",
+                "max_degree": 2,
+                "ridge": 1e-08,
+                "rbf_smoothing": 0.01,
+                "max_control_points": 192,
+                "allow_radial_basis": false,
+                "minimum_improvement": 0.08
+              },
+              "samples_per_axis": 12,
+              "sample_radius": null,
+              "search_steps": 4,
+              "sample_rejection_sigma": 3.5,
+              "fit_rejection_sigma": 3.0,
+              "fit_rejection_iterations": 3,
+              "border_fraction": 0.03,
+              "protected_regions": []
+            },
+            "correction_mode": "subtract",
+            "strength": 1.0,
+            "protect_catalog_emission": true
+          },
+          "input_stretches": {
+            "ha": [
+              {
+                "model": {
+                  "type": "auto-mtf",
+                  "target_median": 0.2,
+                  "shadows_clip": -2.8
+                },
+                "color_strategy": "linked"
+              }
+            ],
+            "oiii": [
+              {
+                "model": {
+                  "type": "auto-mtf",
+                  "target_median": 0.2,
+                  "shadows_clip": -2.8
+                },
+                "color_strategy": "linked"
+              }
+            ]
+          },
+          "output_stretches": [],
+          "color_calibration": null,
+          "narrowband": {
+            "shared_stretch": true,
+            "balance": {
+              "has_sii": false,
+              "shadow_protection": 1,
+              "oiii_boost": 1,
+              "sii_boost": 1,
+              "max_samples": 1000000
+            }
+          }
+        },
+        "palette": "hoo",
+        "automatic_palette": false,
+        "stars": "narrowband"
+      }
     },
     {
       "id": "sho-rgb-stars",
-      "title": "SHO \u00b7 RGB stars",
-      "description": "Balanced SHO nebula with RGB stars through StarXTerminator.",
+      "title": "SHO · RGB stars",
+      "description": "Balanced SHO nebula with RGB stars; paired star stretch.",
       "image": "images/sho-rgb-stars.jpg",
-      "sha256": "b90b9899b79a1571eaa4d5360beef7b7f7b700b592e78003034f47b00048ab54",
-      "width": 2400,
-      "height": 1522,
-      "job_id": "20ed5fceea61b4b640865152dc95b7be50a340d24c000e89584d8c49de39a721",
+      "sha256": "1b5e0c735bf0691dc5599e3c6d56ca8d9d483a7a2c0d48ab6165e650ef1e71d4",
+      "width": 2766,
+      "height": 1754,
+      "original_png_sha256": "1bea2b6087cf0d9fdefc95a99e5a5bd497b70a60052dfd06b74f3405688edcb6",
+      "job_id": "f7babbc1b0a8d1148c846e9d770b050ac530e66e73b3899efaf198a426b5d532",
       "stars": "rgb",
-      "coverage_fraction": 0.8690970609984694
+      "coverage_fraction": 0.8690970609984694,
+      "request": {
+        "target_id": -2,
+        "kind": "narrowband",
+        "crop": "inscribed",
+        "processing": {
+          "input_processing": "channels",
+          "background_extraction": {
+            "config": {
+              "model": {
+                "kind": "automatic",
+                "max_degree": 2,
+                "ridge": 1e-08,
+                "rbf_smoothing": 0.01,
+                "max_control_points": 192,
+                "allow_radial_basis": false,
+                "minimum_improvement": 0.08
+              },
+              "samples_per_axis": 12,
+              "sample_radius": null,
+              "search_steps": 4,
+              "sample_rejection_sigma": 3.5,
+              "fit_rejection_sigma": 3.0,
+              "fit_rejection_iterations": 3,
+              "border_fraction": 0.03,
+              "protected_regions": []
+            },
+            "correction_mode": "subtract",
+            "strength": 1.0,
+            "protect_catalog_emission": true
+          },
+          "input_stretches": {
+            "ha": [
+              {
+                "model": {
+                  "type": "auto-mtf",
+                  "target_median": 0.2,
+                  "shadows_clip": -2.8
+                },
+                "color_strategy": "linked"
+              }
+            ],
+            "oiii": [
+              {
+                "model": {
+                  "type": "auto-mtf",
+                  "target_median": 0.2,
+                  "shadows_clip": -2.8
+                },
+                "color_strategy": "linked"
+              }
+            ],
+            "sii": [
+              {
+                "model": {
+                  "type": "auto-mtf",
+                  "target_median": 0.2,
+                  "shadows_clip": -2.8
+                },
+                "color_strategy": "linked"
+              }
+            ]
+          },
+          "output_stretches": [],
+          "color_calibration": null,
+          "narrowband": {
+            "shared_stretch": true,
+            "balance": {
+              "has_sii": true,
+              "shadow_protection": 1,
+              "oiii_boost": 1,
+              "sii_boost": 1,
+              "max_samples": 1000000
+            }
+          }
+        },
+        "palette": "sho",
+        "automatic_palette": false,
+        "stars": "rgb"
+      }
     },
     {
       "id": "hoo-rgb-stars",
-      "title": "HOO \u00b7 RGB stars",
-      "description": "Balanced HOO nebula with RGB stars through StarXTerminator.",
+      "title": "HOO · RGB stars",
+      "description": "Balanced HOO nebula with RGB stars; paired star stretch.",
       "image": "images/hoo-rgb-stars.jpg",
-      "sha256": "83b9b3c1b49306fe7c98d8d0847e02bb443dd94ed09101fb32b9a9efe1fe43c9",
-      "width": 2400,
-      "height": 1520,
-      "job_id": "4de933a7b12bfdb245e018476efdead83bcf2a22a7d7f7e2aaf7d1acb1771988",
+      "sha256": "506b872f8bd7ad2bf7fb0b60a9539ba3654f7c754fa8a986fa6f0b32d6c2fc17",
+      "width": 2770,
+      "height": 1754,
+      "original_png_sha256": "bf077f1eb4e75bf1c242f87121e429669762f67c843b3ea51ed9353e62dea29d",
+      "job_id": "cd2b3911db34da3fad8c7969a58ac24696727fdbe388ddb75788164b233275f6",
       "stars": "rgb",
-      "coverage_fraction": 0.8703538897200869
+      "coverage_fraction": 0.8703538897200869,
+      "request": {
+        "target_id": -2,
+        "kind": "narrowband",
+        "crop": "inscribed",
+        "processing": {
+          "input_processing": "channels",
+          "background_extraction": {
+            "config": {
+              "model": {
+                "kind": "automatic",
+                "max_degree": 2,
+                "ridge": 1e-08,
+                "rbf_smoothing": 0.01,
+                "max_control_points": 192,
+                "allow_radial_basis": false,
+                "minimum_improvement": 0.08
+              },
+              "samples_per_axis": 12,
+              "sample_radius": null,
+              "search_steps": 4,
+              "sample_rejection_sigma": 3.5,
+              "fit_rejection_sigma": 3.0,
+              "fit_rejection_iterations": 3,
+              "border_fraction": 0.03,
+              "protected_regions": []
+            },
+            "correction_mode": "subtract",
+            "strength": 1.0,
+            "protect_catalog_emission": true
+          },
+          "input_stretches": {
+            "ha": [
+              {
+                "model": {
+                  "type": "auto-mtf",
+                  "target_median": 0.2,
+                  "shadows_clip": -2.8
+                },
+                "color_strategy": "linked"
+              }
+            ],
+            "oiii": [
+              {
+                "model": {
+                  "type": "auto-mtf",
+                  "target_median": 0.2,
+                  "shadows_clip": -2.8
+                },
+                "color_strategy": "linked"
+              }
+            ]
+          },
+          "output_stretches": [],
+          "color_calibration": null,
+          "narrowband": {
+            "shared_stretch": true,
+            "balance": {
+              "has_sii": false,
+              "shadow_protection": 1,
+              "oiii_boost": 1,
+              "sii_boost": 1,
+              "max_samples": 1000000
+            }
+          }
+        },
+        "palette": "hoo",
+        "automatic_palette": false,
+        "stars": "rgb"
+      }
     },
     {
       "id": "sho-automatic-stars",
-      "title": "SHO \u00b7 Automatic stars",
-      "description": "Automatic selected RGB stars for the available mosaic channels.",
+      "title": "SHO · Automatic stars",
+      "description": "Automatic selects RGB stars from the available channels.",
       "image": "images/sho-automatic-stars.jpg",
-      "sha256": "b90b9899b79a1571eaa4d5360beef7b7f7b700b592e78003034f47b00048ab54",
-      "width": 2400,
-      "height": 1522,
-      "job_id": "ee3a96355a099f6c9f75fba781f21ae0d0bec6a46f1754dbc97105e1e2e35fd1",
+      "sha256": "1b5e0c735bf0691dc5599e3c6d56ca8d9d483a7a2c0d48ab6165e650ef1e71d4",
+      "width": 2766,
+      "height": 1754,
+      "original_png_sha256": "1bea2b6087cf0d9fdefc95a99e5a5bd497b70a60052dfd06b74f3405688edcb6",
+      "job_id": "7ddcfcfa30a1be1dba7294fdfc85e0aedce2f154dc42cdf08bcd6220beacc8c8",
       "stars": "rgb",
-      "coverage_fraction": 0.8690970609984694
+      "coverage_fraction": 0.8690970609984694,
+      "request": {
+        "target_id": -2,
+        "kind": "narrowband",
+        "crop": "inscribed",
+        "processing": {
+          "input_processing": "channels",
+          "background_extraction": {
+            "config": {
+              "model": {
+                "kind": "automatic",
+                "max_degree": 2,
+                "ridge": 1e-08,
+                "rbf_smoothing": 0.01,
+                "max_control_points": 192,
+                "allow_radial_basis": false,
+                "minimum_improvement": 0.08
+              },
+              "samples_per_axis": 12,
+              "sample_radius": null,
+              "search_steps": 4,
+              "sample_rejection_sigma": 3.5,
+              "fit_rejection_sigma": 3.0,
+              "fit_rejection_iterations": 3,
+              "border_fraction": 0.03,
+              "protected_regions": []
+            },
+            "correction_mode": "subtract",
+            "strength": 1.0,
+            "protect_catalog_emission": true
+          },
+          "input_stretches": {
+            "ha": [
+              {
+                "model": {
+                  "type": "auto-mtf",
+                  "target_median": 0.2,
+                  "shadows_clip": -2.8
+                },
+                "color_strategy": "linked"
+              }
+            ],
+            "oiii": [
+              {
+                "model": {
+                  "type": "auto-mtf",
+                  "target_median": 0.2,
+                  "shadows_clip": -2.8
+                },
+                "color_strategy": "linked"
+              }
+            ],
+            "sii": [
+              {
+                "model": {
+                  "type": "auto-mtf",
+                  "target_median": 0.2,
+                  "shadows_clip": -2.8
+                },
+                "color_strategy": "linked"
+              }
+            ]
+          },
+          "output_stretches": [],
+          "color_calibration": null,
+          "narrowband": {
+            "shared_stretch": true,
+            "balance": {
+              "has_sii": true,
+              "shadow_protection": 1,
+              "oiii_boost": 1,
+              "sii_boost": 1,
+              "max_samples": 1000000
+            }
+          }
+        },
+        "palette": "sho",
+        "automatic_palette": false,
+        "stars": "automatic"
+      }
     },
     {
       "id": "sho-starless",
-      "title": "SHO \u00b7 starless",
-      "description": "Balanced SHO with the stars removed through StarXTerminator.",
+      "title": "SHO · starless",
+      "description": "Balanced SHO with stars removed through StarXTerminator.",
       "image": "images/sho-starless.jpg",
-      "sha256": "2028dff09a5f0f5ce2ad6ec45f23a9e8029244936768cd7be805ba6806dc72f1",
-      "width": 2400,
-      "height": 1521,
-      "job_id": "67b04e7f3aef3bbe08a67506a83628e5b981a93920455881d6b3d7e4329374b2",
+      "sha256": "f95e637595c313a1abec187ea35e500d23179751f372a85a5506265db23f40dd",
+      "width": 2772,
+      "height": 1757,
+      "original_png_sha256": "4c55c9864e8000d70545c611ef83a4a2bd3a93d0c3880ec676c13b71258ce54f",
+      "job_id": "53caa98d91903107423cc4630ae28e70d8b87f8c44787f5b15db687b8b3e536b",
       "stars": "none",
-      "coverage_fraction": 0.8724720115565185
+      "coverage_fraction": 0.8724720115565185,
+      "request": {
+        "target_id": -2,
+        "kind": "narrowband",
+        "crop": "inscribed",
+        "processing": {
+          "input_processing": "channels",
+          "background_extraction": {
+            "config": {
+              "model": {
+                "kind": "automatic",
+                "max_degree": 2,
+                "ridge": 1e-08,
+                "rbf_smoothing": 0.01,
+                "max_control_points": 192,
+                "allow_radial_basis": false,
+                "minimum_improvement": 0.08
+              },
+              "samples_per_axis": 12,
+              "sample_radius": null,
+              "search_steps": 4,
+              "sample_rejection_sigma": 3.5,
+              "fit_rejection_sigma": 3.0,
+              "fit_rejection_iterations": 3,
+              "border_fraction": 0.03,
+              "protected_regions": []
+            },
+            "correction_mode": "subtract",
+            "strength": 1.0,
+            "protect_catalog_emission": true
+          },
+          "input_stretches": {
+            "ha": [
+              {
+                "model": {
+                  "type": "auto-mtf",
+                  "target_median": 0.2,
+                  "shadows_clip": -2.8
+                },
+                "color_strategy": "linked"
+              }
+            ],
+            "oiii": [
+              {
+                "model": {
+                  "type": "auto-mtf",
+                  "target_median": 0.2,
+                  "shadows_clip": -2.8
+                },
+                "color_strategy": "linked"
+              }
+            ],
+            "sii": [
+              {
+                "model": {
+                  "type": "auto-mtf",
+                  "target_median": 0.2,
+                  "shadows_clip": -2.8
+                },
+                "color_strategy": "linked"
+              }
+            ]
+          },
+          "output_stretches": [],
+          "color_calibration": null,
+          "narrowband": {
+            "shared_stretch": true,
+            "balance": {
+              "has_sii": true,
+              "shadow_protection": 1,
+              "oiii_boost": 1,
+              "sii_boost": 1,
+              "max_samples": 1000000
+            }
+          }
+        },
+        "palette": "sho",
+        "automatic_palette": false,
+        "stars": "none"
+      }
+    },
+    {
+      "id": "sho-rgb-structure",
+      "title": "SHO · broadband structure",
+      "description": "Balanced SHO with broadband structure amount 0.25 and RGB stars; continuum subtraction off.",
+      "image": "images/sho-rgb-structure.jpg",
+      "sha256": "68caa4a2b2283ff36246b1e16873643acf0e23731cb30ff44faa09c8321bf68a",
+      "width": 2766,
+      "height": 1754,
+      "original_png_sha256": "eb083b8133c56bfa53d9c47a11d682812f6a5dec89a0d1093647a8af2b0cae19",
+      "job_id": "646084aa2819280c9f68ed6a514a181bd00f66bf6d34d41e00e71e7085ba55a2",
+      "stars": "rgb",
+      "coverage_fraction": 0.8690970609984694,
+      "request": {
+        "target_id": -2,
+        "kind": "narrowband",
+        "crop": "inscribed",
+        "processing": {
+          "input_processing": "channels",
+          "background_extraction": {
+            "config": {
+              "model": {
+                "kind": "automatic",
+                "max_degree": 2,
+                "ridge": 1e-08,
+                "rbf_smoothing": 0.01,
+                "max_control_points": 192,
+                "allow_radial_basis": false,
+                "minimum_improvement": 0.08
+              },
+              "samples_per_axis": 12,
+              "sample_radius": null,
+              "search_steps": 4,
+              "sample_rejection_sigma": 3.5,
+              "fit_rejection_sigma": 3.0,
+              "fit_rejection_iterations": 3,
+              "border_fraction": 0.03,
+              "protected_regions": []
+            },
+            "correction_mode": "subtract",
+            "strength": 1.0,
+            "protect_catalog_emission": true
+          },
+          "input_stretches": {
+            "ha": [
+              {
+                "model": {
+                  "type": "auto-mtf",
+                  "target_median": 0.2,
+                  "shadows_clip": -2.8
+                },
+                "color_strategy": "linked"
+              }
+            ],
+            "oiii": [
+              {
+                "model": {
+                  "type": "auto-mtf",
+                  "target_median": 0.2,
+                  "shadows_clip": -2.8
+                },
+                "color_strategy": "linked"
+              }
+            ],
+            "sii": [
+              {
+                "model": {
+                  "type": "auto-mtf",
+                  "target_median": 0.2,
+                  "shadows_clip": -2.8
+                },
+                "color_strategy": "linked"
+              }
+            ]
+          },
+          "output_stretches": [],
+          "color_calibration": null,
+          "narrowband": {
+            "shared_stretch": true,
+            "balance": {
+              "has_sii": true,
+              "shadow_protection": 1,
+              "oiii_boost": 1,
+              "sii_boost": 1,
+              "max_samples": 1000000
+            }
+          },
+          "emission": {
+            "mode": "off",
+            "broadband_amount": 0.25
+          }
+        },
+        "palette": "sho",
+        "automatic_palette": false,
+        "stars": "rgb",
+        "combination": "broadband_structure"
+      }
+    },
+    {
+      "id": "sho-star-stretch-3",
+      "title": "SHO · RGB star stretch 3",
+      "description": "Balanced SHO with an independent linear RGB star stretch of 3.",
+      "image": "images/sho-star-stretch-3.jpg",
+      "sha256": "5d7ccc513d229da7672e9ecf4e3232552c52baebc96560b184e67f1b04d7504d",
+      "width": 2766,
+      "height": 1754,
+      "original_png_sha256": "3b6c05904ee6597c0841c18643d929c82fa239ccaeb096afcfafd82fbd498e9e",
+      "job_id": "ad082dccf1b6ec677084d263170baace17fbf29bb33e3499b3efede9f5f85321",
+      "stars": "rgb",
+      "coverage_fraction": 0.8690970609984694,
+      "request": {
+        "target_id": -2,
+        "kind": "narrowband",
+        "crop": "inscribed",
+        "processing": {
+          "input_processing": "channels",
+          "background_extraction": {
+            "config": {
+              "model": {
+                "kind": "automatic",
+                "max_degree": 2,
+                "ridge": 1e-08,
+                "rbf_smoothing": 0.01,
+                "max_control_points": 192,
+                "allow_radial_basis": false,
+                "minimum_improvement": 0.08
+              },
+              "samples_per_axis": 12,
+              "sample_radius": null,
+              "search_steps": 4,
+              "sample_rejection_sigma": 3.5,
+              "fit_rejection_sigma": 3.0,
+              "fit_rejection_iterations": 3,
+              "border_fraction": 0.03,
+              "protected_regions": []
+            },
+            "correction_mode": "subtract",
+            "strength": 1.0,
+            "protect_catalog_emission": true
+          },
+          "input_stretches": {
+            "ha": [
+              {
+                "model": {
+                  "type": "auto-mtf",
+                  "target_median": 0.2,
+                  "shadows_clip": -2.8
+                },
+                "color_strategy": "linked"
+              }
+            ],
+            "oiii": [
+              {
+                "model": {
+                  "type": "auto-mtf",
+                  "target_median": 0.2,
+                  "shadows_clip": -2.8
+                },
+                "color_strategy": "linked"
+              }
+            ],
+            "sii": [
+              {
+                "model": {
+                  "type": "auto-mtf",
+                  "target_median": 0.2,
+                  "shadows_clip": -2.8
+                },
+                "color_strategy": "linked"
+              }
+            ]
+          },
+          "output_stretches": [],
+          "color_calibration": null,
+          "narrowband": {
+            "shared_stretch": true,
+            "balance": {
+              "has_sii": true,
+              "shadow_protection": 1,
+              "oiii_boost": 1,
+              "sii_boost": 1,
+              "max_samples": 1000000
+            },
+            "rgb_star_stretch": 3.0
+          }
+        },
+        "palette": "sho",
+        "automatic_palette": false,
+        "stars": "rgb"
+      }
+    },
+    {
+      "id": "sho-star-stretch-5",
+      "title": "SHO · RGB star stretch 5",
+      "description": "Balanced SHO with an independent linear RGB star stretch of 5.",
+      "image": "images/sho-star-stretch-5.jpg",
+      "sha256": "f691456f51acd7e1993b00582ed8d3b10060d220a67e737c41681e7ea3bad00f",
+      "width": 2766,
+      "height": 1754,
+      "original_png_sha256": "98891cca9e14989864aabc3ce7cb1ae84c6c21ee5ca96873fd3e9a7a1e4bff73",
+      "job_id": "3db3b4f24d0de66e260ff32835382a8e04436bba3e40bd1f479645a21a179029",
+      "stars": "rgb",
+      "coverage_fraction": 0.8690970609984694,
+      "request": {
+        "target_id": -2,
+        "kind": "narrowband",
+        "crop": "inscribed",
+        "processing": {
+          "input_processing": "channels",
+          "background_extraction": {
+            "config": {
+              "model": {
+                "kind": "automatic",
+                "max_degree": 2,
+                "ridge": 1e-08,
+                "rbf_smoothing": 0.01,
+                "max_control_points": 192,
+                "allow_radial_basis": false,
+                "minimum_improvement": 0.08
+              },
+              "samples_per_axis": 12,
+              "sample_radius": null,
+              "search_steps": 4,
+              "sample_rejection_sigma": 3.5,
+              "fit_rejection_sigma": 3.0,
+              "fit_rejection_iterations": 3,
+              "border_fraction": 0.03,
+              "protected_regions": []
+            },
+            "correction_mode": "subtract",
+            "strength": 1.0,
+            "protect_catalog_emission": true
+          },
+          "input_stretches": {
+            "ha": [
+              {
+                "model": {
+                  "type": "auto-mtf",
+                  "target_median": 0.2,
+                  "shadows_clip": -2.8
+                },
+                "color_strategy": "linked"
+              }
+            ],
+            "oiii": [
+              {
+                "model": {
+                  "type": "auto-mtf",
+                  "target_median": 0.2,
+                  "shadows_clip": -2.8
+                },
+                "color_strategy": "linked"
+              }
+            ],
+            "sii": [
+              {
+                "model": {
+                  "type": "auto-mtf",
+                  "target_median": 0.2,
+                  "shadows_clip": -2.8
+                },
+                "color_strategy": "linked"
+              }
+            ]
+          },
+          "output_stretches": [],
+          "color_calibration": null,
+          "narrowband": {
+            "shared_stretch": true,
+            "balance": {
+              "has_sii": true,
+              "shadow_protection": 1,
+              "oiii_boost": 1,
+              "sii_boost": 1,
+              "max_samples": 1000000
+            },
+            "rgb_star_stretch": 5.0
+          }
+        },
+        "palette": "sho",
+        "automatic_palette": false,
+        "stars": "rgb"
+      }
     }
   ]
 }
