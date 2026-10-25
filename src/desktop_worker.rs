@@ -41,6 +41,8 @@ pub struct DesktopWorker {
     pub start_at_login: bool,
     /// The running worker's status, or `None` when it is not running.
     pub status: Option<WorkerStatus>,
+    /// The Windows service's state, when the service is installed.
+    pub service: Option<crate::commands::worker::service::ServiceState>,
     pub settings_path: String,
 }
 
@@ -91,6 +93,9 @@ async fn describe() -> Result<DesktopWorker, String> {
         }),
         start_at_login: login::enabled(),
         status: running_status().await?,
+        service: tokio::task::spawn_blocking(crate::commands::worker::service::state)
+            .await
+            .unwrap_or(None),
         settings_path: path.display().to_string(),
     })
 }

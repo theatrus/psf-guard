@@ -1411,8 +1411,8 @@ pub enum Commands {
     /// Run the worker as a Windows service, for a computer that runs work
     /// while nobody is logged in.
     ///
-    /// Save the worker's settings in the desktop app's Settings › Run a
-    /// worker first, or write a settings file. Then, from a terminal opened
+    /// Save the worker's settings in the desktop app's Settings › Workers ›
+    /// This computer first, or write a settings file. Then, from a terminal opened
     /// as administrator, run `psf-guard-cli worker-service install`. The
     /// service runs as Local System and starts with Windows.
     WorkerService {

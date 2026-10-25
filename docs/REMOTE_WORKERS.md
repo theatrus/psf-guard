@@ -165,11 +165,10 @@ that contains one.
 ## Run a worker as a Windows service
 
 A Windows PC that runs work while nobody is logged in can run the worker as
-a service instead of in the tray. The service starts with Windows and runs as
-Local System.
+a service instead of in the tray. The service starts with Windows.
 
-1. Save the worker's settings in **Settings › Run a worker**, as for the
-   tray. Leave **Start the worker when I log in** cleared, and stop the tray
+1. Save the worker's settings under **Settings › Workers › This
+   computer**, as for the tray. Clear **Start at login**, and stop the tray
    worker, so that only one worker runs on the computer.
 2. Open PowerShell as administrator, and run:
 
@@ -177,24 +176,43 @@ Local System.
    psf-guard-cli worker-service install
    ```
 
-   The service uses the settings you saved. To use another settings file,
-   add `--config FILE`.
+   To use another settings file, add `--config FILE`.
 
-The service appears as **PSF Guard Worker** in the Services console. It
-writes its log to files starting `worker` in
-`%ProgramData%\PSF Guard\logs`. When it fails, such as when the server
-refuses the token, Windows starts it again after 30 seconds. After you
-change the settings, restart the service from the Services console.
+The install copies PSF Guard to `C:\Program Files\PSF Guard Worker`, and
+the settings to `C:\ProgramData\PSF Guard Worker`, where only
+administrators and the service can read them; they contain the token. The
+service runs as its own account, `NT SERVICE\PSFGuardWorker`, and keeps its
+task files in that folder's `tasks` folder, whatever work folder the
+settings give.
+
+- **Change the settings, or update PSF Guard.** The service keeps using its
+  copies. Save the settings, or install the update, then run
+  `psf-guard-cli worker-service install` again; it stops the service,
+  updates the copies and starts it. The page's **Restart** button does not
+  restart the service.
+- **Logs.** The service writes its log to files starting `worker` in
+  `C:\ProgramData\PSF Guard Worker\logs`.
+- **Failures.** When the server refuses the token, the service stops, and
+  Windows starts it again after 30 seconds.
+- **Stopping.** Stopping the service, or shutting Windows down, lets the
+  worker leave the server, which queues its running task again.
+- **Sleep.** Windows may sleep while nobody is logged in. Set **Sleep** to
+  **Never** in the power settings of a computer that runs work overnight.
+- **RC-Astro tools.** The service runs the rc-astro on the computer's
+  `PATH`. rc-astro installed or licensed for one user may not run for the
+  service; then the service takes stack builds only. Run the tray worker on
+  such a computer instead.
+- **Shared storage.** The service's account can use network shares only
+  through the computer's own network identity. To read and write shared
+  task files, change the service's account in the Services console to a
+  user who can use the shares, give that user modify access to
+  `C:\ProgramData\PSF Guard Worker`, and enter each share in the shared
+  folders as a UNC path, such as `\\nas\astro`.
 
 To remove the service, run `psf-guard-cli worker-service uninstall` from
-PowerShell opened as administrator. The worker stops, and the server queues
-its running task again.
-
-Local System reads files on the computer, but not network shares mapped by
-a user. For task files on shared storage, change the service's account in
-the Services console to a user that can read and write the shares. Enter
-each share in the shared folders as a UNC path, such as `\\nas\astro`,
-since a drive letter mapped by a user does not exist for the service.
+PowerShell opened as administrator. The worker stops and the server queues
+its running task again; the copies, with the token, are deleted. Remove the
+service before you uninstall PSF Guard.
 
 ## Choose the work a worker accepts
 

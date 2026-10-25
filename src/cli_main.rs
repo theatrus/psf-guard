@@ -1650,7 +1650,8 @@ pub fn main() -> Result<()> {
                     };
                     service::install(&path)?;
                     println!(
-                        "Installed and started the PSF Guard Worker service with the settings in {}",
+                        "The PSF Guard Worker service runs with a copy of the settings in {}. \
+                         After you change them, or update PSF Guard, run this command again.",
                         path.display()
                     );
                 }

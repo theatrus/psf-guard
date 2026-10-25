@@ -18,6 +18,7 @@ test.beforeEach(async ({ page, request }) => {
       has_token: false,
       start_at_login: false,
       status: null,
+      service: null,
       settings_path: '/Users/ann/Library/Application Support/psf-guard/worker.json',
     };
     const calls: Array<{ command: string; args: unknown }> = [];

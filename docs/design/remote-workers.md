@@ -219,13 +219,24 @@ and registers no plugins.
 - **Desktop app.** `src/desktop_worker.rs` has the commands behind
   **Settings › Workers › Worker on this computer**. They read and save settings,
   start the tray process, and pause, resume and stop it through the control port.
-- **Windows service** (`commands/worker/service.rs`): `psf-guard
-  worker-service install` creates `PSFGuardWorker`, started automatically,
-  as Local System, running `worker-service run --config <settings>` from
-  the installing binary. Stop and shutdown quit the worker, which leaves the
-  server, while the service reports a stop pending for up to 40 seconds. A
-  failed run exits nonzero, and the failure actions start it again after 30
-  seconds. It serves no controls and has no tray.
+- **Windows service** (`commands/worker/service.rs`). The app installs per
+  user, in a folder its user can change, so the service never runs the
+  app's files: a user-writable binary or settings file run by a service is
+  a way past UAC. `worker-service install` copies the running binary to
+  `%ProgramFiles%\PSF Guard Worker\psf-guard-worker.exe` and the settings,
+  with `work_dir` set to the service's `tasks` folder, to
+  `%ProgramData%\PSF Guard Worker\worker.json`. `icacls` limits that folder
+  to SYSTEM, Administrators and the service's virtual account,
+  `NT SERVICE\PSFGuardWorker`, under which the service runs. Running
+  install again stops the service, updates the copies and its
+  configuration, and starts it. The service starts automatically, delayed;
+  stop and preshutdown quit the worker, which leaves the server, while the
+  service reports a stop pending with a rising checkpoint every five
+  seconds, for up to 60 seconds of preshutdown. A failed run logs its
+  reason, then exits with a service-specific code, and the failure actions
+  start it again after 30 seconds. `worker-service uninstall` stops it,
+  deletes it and removes the copies. The desktop app reads the service's
+  state and offers no tray worker while the service runs one.
 - **Start worker at login** (`commands/worker/login.rs`): a LaunchAgent with
   `RunAtLoad` on macOS, and a value under
   `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` on Windows. Both

@@ -22,6 +22,7 @@ beforeEach(() => {
     has_token: false,
     start_at_login: false,
     status: null,
+    service: null,
     settings_path: '/home/ann/.config/psf-guard/worker.json',
   };
   native.get.mockImplementation(async () => worker);
@@ -119,6 +120,21 @@ describe('this computer\'s worker', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Save worker settings' }));
     await waitFor(() => expect(native.save).toHaveBeenCalledTimes(1));
     expect(native.save.mock.calls[0][0]).toMatchObject({ token: null, work: ['stack'], slots: 2, name: 'studio-pc' });
+  });
+
+  it('offers no second worker while the Windows service runs one', async () => {
+    worker = {
+      ...worker,
+      has_token: true,
+      service: 'running',
+      settings: {
+        server: 'http://observatory:3000', name: null, files: 'remote', maps: [],
+        work_dir: null, rc_astro: null, work: [], slots: 1,
+      },
+    };
+    mount(<DesktopWorkerSettings />);
+    expect(await screen.findByText(/The PSF Guard Worker service runs a worker/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Start' })).toBeDisabled();
   });
 
   it('points Linux at the systemd service', async () => {
