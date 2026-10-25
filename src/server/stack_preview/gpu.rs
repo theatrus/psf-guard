@@ -10,10 +10,10 @@
 //! part of a stack's method or fingerprint, and changing it does not make
 //! built stacks out of date.
 //!
-//! Seiza 0.42 takes these options for the live pass and the final pass's
-//! integration only. Calls that take none use its defaults, every pass
-//! allowed: the final pass's frame preparation and resampling, artifact
-//! searches, and color previews' channel alignment.
+//! Every Seiza call that can run on the GPU follows the choice: the live
+//! pass, a stack reopened from its checkpoint, the final pass's frame
+//! preparation, resampling and integration, artifact searches, and color
+//! previews' channel alignment.
 
 use serde::{Deserialize, Serialize};
 use std::sync::{PoisonError, RwLock};
@@ -33,9 +33,12 @@ pub struct StackGpu {
     pub enabled: bool,
     /// Debayer a Bayer frame by VNG.
     pub debayer: bool,
-    /// Detect each frame's stars for registration.
+    /// Detect each frame's stars for registration, and the stars that align
+    /// a color preview's channels.
     pub detection: bool,
-    /// Resample each frame onto the reference grid.
+    /// Resample each frame onto the reference grid, a finished stack onto
+    /// the north-up grid, and a color preview's channels onto its reference
+    /// channel.
     pub resampling: bool,
     /// Keep the live stack's running mean on the GPU, and normalize and
     /// admit each frame there.
@@ -85,21 +88,8 @@ impl StackGpu {
         }
     }
 
-    /// Whether a live stack checkpointed under `other` accumulates where
-    /// this choice would: the same passes on the GPU, or none. Seiza
-    /// restores a checkpoint with the options it was saved under, so a
-    /// build whose choice differs starts over to follow the new one. The
-    /// final pass and the frame count are left out: each build passes its
-    /// own final-pass options, and the count changes no pass's place.
-    pub fn same_live_passes(&self, other: &Self) -> bool {
-        let passes = |gpu: &Self| {
-            gpu.enabled
-                .then_some((gpu.debayer, gpu.detection, gpu.resampling, gpu.accumulator))
-        };
-        passes(self) == passes(other)
-    }
-
-    /// The Seiza options for a build. PSF Guard learns no defect map, so
+    /// The Seiza options for a build, a color composition or an artifact
+    /// search. PSF Guard learns no defect map, so
     /// Seiza's defect screen follows the main switch.
     pub fn options(&self) -> seiza_stacking::GpuOptions {
         seiza_stacking::GpuOptions {
@@ -111,6 +101,7 @@ impl StackGpu {
             accumulator: self.accumulator,
             integration: self.integration,
             concurrency: self.clamped().concurrency as usize,
+            memory_bytes: None,
             trace: self.trace,
         }
     }
@@ -186,35 +177,6 @@ mod tests {
         // A field a later version drops does not refuse the registry.
         let read: StackGpu = serde_json::from_str(r#"{"enabled": false, "tiles": 4}"#).unwrap();
         assert!(!read.enabled);
-    }
-
-    #[test]
-    fn a_checkpoint_resumes_only_under_the_same_live_passes() {
-        let on = StackGpu::default();
-        let off = StackGpu {
-            enabled: false,
-            ..on
-        };
-        assert!(on.same_live_passes(&on));
-        assert!(!on.same_live_passes(&off));
-        assert!(!off.same_live_passes(&on));
-        // Off is off, whatever its passes say.
-        assert!(off.same_live_passes(&StackGpu {
-            enabled: false,
-            resampling: false,
-            ..on
-        }));
-        assert!(!on.same_live_passes(&StackGpu {
-            accumulator: false,
-            ..on
-        }));
-        // The final pass, the frame count and timing logs do not matter.
-        assert!(on.same_live_passes(&StackGpu {
-            integration: false,
-            concurrency: 1,
-            trace: true,
-            ..on
-        }));
     }
 
     #[test]

@@ -1318,7 +1318,7 @@ version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab8ecd87370524b461f8557c119c405552c396ed91fc0a8eec68679eab26f94a"
 dependencies = [
- "libloading 0.7.4",
+ "libloading 0.8.9",
 ]
 
 [[package]]
@@ -5223,9 +5223,9 @@ dependencies = [
 
 [[package]]
 name = "seiza"
-version = "0.42.0"
+version = "0.42.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "91b43ee39d2d6c123a59b5c81e717e31526b768ceb28c966729d08bfd03a35f1"
+checksum = "5747f7f075de61311c9f678fc35f0913c22e1ef6396cafff0d2c7580ebbc14e7"
 dependencies = [
  "directories",
  "image",
@@ -5369,12 +5369,13 @@ dependencies = [
 
 [[package]]
 name = "seiza-stacking"
-version = "0.45.0"
+version = "0.46.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "28eeb5908bd12748828538bd1e9b729403b6845a0e0bd094ad92b2b906925525"
+checksum = "e9a0ad734c07904abdbc03801364e4e3028173f8511b7c0dea6a88a807d27e0c"
 dependencies = [
  "bytemuck",
  "multiversion",
+ "objc2-metal",
  "pollster",
  "postcard",
  "rayon",
@@ -5393,6 +5394,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "wgpu",
+ "windows",
  "zstd",
 ]
 

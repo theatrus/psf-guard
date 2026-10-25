@@ -753,6 +753,8 @@ fn run_search_inner(
     let directory_tree = ctx
         .get_directory_tree()
         .map_err(|error| format!("Indexing calibration folders: {error}"))?;
+    // The GPU setting when the search starts, for every frame it reads.
+    let gpu = super::gpu::current().options();
     let mut all_results = Vec::new();
     let output_dir = artifact_dir(&prepared.stack_root, &prepared.public.search_id);
     std::fs::create_dir_all(&output_dir).map_err(|error| error.to_string())?;
@@ -839,7 +841,7 @@ fn run_search_inner(
                 ));
             }
             let masters = &plan.sessions[plan.assignments[source_index]].masters;
-            let crop = extract_source_crop(source, masters, prepared)?;
+            let crop = extract_source_crop(source, masters, prepared, &gpu)?;
             let analysis = sampled_luminance(&crop, max_samples_per_frame);
             crops.push(LoadedCrop {
                 source: source.clone(),
@@ -904,7 +906,7 @@ fn run_search_inner(
                     .position(|candidate| candidate.image_id == source.image_id)
                     .expect("ranked results come from group.sources");
                 let masters = &plan.sessions[plan.assignments[source_index]].masters;
-                let crop = extract_source_crop(source, masters, prepared)?;
+                let crop = extract_source_crop(source, masters, prepared, &gpu)?;
                 let original_path = artifact_crop_path(
                     &prepared.stack_root,
                     &prepared.public.search_id,
@@ -938,27 +940,36 @@ fn extract_source_crop(
     source: &SearchSource,
     masters: &CalibrationMasters,
     prepared: &PreparedSearch,
+    gpu: &seiza_stacking::GpuOptions,
 ) -> Result<seiza_stacking::LinearImage, String> {
     let mut frame =
         crate::image_io::open_linear_frame(&source.path).map_err(|error| error.to_string())?;
     masters
         .apply(&mut frame.image, frame.exposure_seconds, frame.bayer)
         .map_err(|error| error.to_string())?;
-    let frame = frame.into_prepared().map_err(|error| error.to_string())?;
+    let frame = frame
+        .into_prepared_with_gpu(gpu)
+        .map_err(|error| error.to_string())?;
     match source.output_transform {
         Some(output_transform) => source
             .mapping
-            .extract_region_after_affine(
+            .extract_region_after_affine_with_gpu(
                 &frame.image,
                 prepared.reference_width,
                 prepared.reference_height,
                 prepared.public.region,
                 output_transform,
+                gpu,
             )
             .map_err(|error| error.to_string()),
         None => source
             .mapping
-            .extract_region(&frame.image, prepared.public.region)
+            .extract_region_with_gpu(
+                &frame.image,
+                prepared.public.region,
+                seiza_stacking::Interpolation::Bilinear,
+                gpu,
+            )
             .map_err(|error| error.to_string()),
     }
 }
