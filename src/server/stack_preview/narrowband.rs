@@ -1353,8 +1353,12 @@ mod tests {
     fn separation_options_are_independent_and_defaults_reuse_existing_keys() {
         use super::super::super::rc_astro::{rc_astro_chain_ids, RcAstroProcessing};
         let _tool = super::super::super::rc_astro::test_tool::install(false);
-        let (_, _, resolved) =
-            resolve(&target(true, true), &mut request(Some(ColorStars::Rgb))).unwrap();
+        let (_, _, resolved) = resolve(
+            &Workers::default(),
+            &target(true, true),
+            &mut request(Some(ColorStars::Rgb)),
+        )
+        .unwrap();
         let (nebula, rgb, schemas) = resolved.unwrap();
         assert_eq!(nebula, rgb);
         let default_key =
@@ -1388,7 +1392,8 @@ mod tests {
             }),
             ..Default::default()
         });
-        let (_, _, resolved) = resolve(&target(true, true), &mut request).unwrap();
+        let (_, _, resolved) =
+            resolve(&Workers::default(), &target(true, true), &mut request).unwrap();
         let (nebula, rgb, _) = resolved.unwrap();
         assert_ne!(
             rc_astro_chain_ids("db", "linear", "first", &nebula, &schemas, None).unwrap(),
