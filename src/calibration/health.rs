@@ -26,7 +26,7 @@
 
 use super::quality::{self, StoredMeasurement};
 use super::{
-    calibration_gaps, coherent_master_subset, flat_session_at, rule_book, CalibrationFrame,
+    calibration_gaps, coherent_master_subset, nearest_master_flat_at, rule_book, CalibrationFrame,
     CalibrationKind, Check, CheckMode, ExternalMasterPolicy, LibrarySnapshot, Rules,
     MIN_MASTER_FRAMES, THIN_MASTER_FRAMES,
 };
@@ -45,8 +45,9 @@ use std::time::UNIX_EPOCH;
 /// is computed again. 2: each finding keeps its lights' ids. 3: measured
 /// flat groups: mixed nights only when unmeasured, flats across a change.
 /// 4: grouping by time checks mixed nights as version 2 did. 5: flats by
-/// measured response family.
-pub const HEALTH_ALGORITHM_VERSION: u32 = 5;
+/// measured response family. 6: flat age and nightly coverage use the nearest
+/// contributing flat, rather than the median of the master inputs.
+pub const HEALTH_ALGORITHM_VERSION: u32 = 6;
 
 /// Flats further than this from a light are worth a look, though they are
 /// within the age limit that makes a light one that cannot be calibrated,
@@ -594,7 +595,9 @@ impl HealthLibrary {
                 Grade::Ok => {}
             }
         }
-        if let (Some(flats_at), Some(light_at)) = (flat_session_at(&selected), light.timestamp) {
+        if let Some(light_at) = light.timestamp
+            && let Some(flats_at) = nearest_master_flat_at(&selected, light_at)
+        {
             let age = flats_at.abs_diff(light_at) as f64 / 86_400.0;
             // Past the limit, the gap rule has already spoken, unless its
             // check is off.
@@ -2120,6 +2123,138 @@ mod tests {
             reason(&fixture.health(1), HealthCode::OldFlats),
             "Its flats are 40 days from it (more than 39 days, set globally)"
         );
+    }
+
+    #[test]
+    fn fresh_flats_in_the_master_do_not_become_stale_when_older_flats_join() {
+        let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _rules = RulesInForce::global(&[("flat_max_age_days", json!(1))]);
+        let mut fixture = Fixture::new();
+        fixture.light(1, 1, LIGHT_AT, "Camera");
+        fixture.frames("BIAS", 10, "2026-09-09T12:00:00", 500.0);
+        fixture.frames("DARK", 10, "2026-09-09T13:00:00", 503.0);
+        // The light is at 04:00. Three flats from its own night combine
+        // with five from the previous morning, within the 24-hour session.
+        // The older majority puts the median more than one day away.
+        fixture.frames("FLAT", 3, "2026-09-10T02:00:00", 30_000.0);
+        fixture.frames("FLAT", 5, "2026-09-09T02:10:00", 30_000.0);
+        let light = read_frame_meta(&fixture.path("light-1.fits"));
+        let selected = super::super::select_for_light(&fixture.conn, &light).unwrap();
+        assert_eq!(
+            coherent_master_subset(CalibrationKind::Flat, &selected.flat, &selected.rules).len(),
+            8,
+            "the fresh flats must actually contribute to this master"
+        );
+        let health = fixture.health(1);
+        assert!(
+            !health
+                .findings
+                .iter()
+                .any(|f| f.code == HealthCode::CannotCalibrate),
+            "fresh contributing flats provide coverage: {:?}",
+            health.findings
+        );
+        assert_eq!(
+            super::super::calibration_gap(
+                &fixture.conn,
+                &light,
+                &selected,
+                &super::super::Nights::fixed(0)
+            )
+            .unwrap(),
+            None
+        );
+        assert!(
+            health
+                .findings
+                .iter()
+                .any(|f| f.code == HealthCode::MixedFlats),
+            "mixing unmeasured nights still warrants review"
+        );
+        let tree = crate::directory_tree::DirectoryTree::build(fixture.temp.path()).unwrap();
+        let report =
+            super::super::project_calibration_report(&fixture.conn, 1, &tree, false, None).unwrap();
+        let filter = &report.nights[0].filters[0];
+        assert!(filter.nightly_flats);
+        assert!(filter.flat_age_days.unwrap() <= 2.0 / 24.0);
+        assert!(filter.cannot_calibrate.is_none());
+    }
+
+    #[test]
+    fn a_nearby_flat_that_cannot_join_the_master_does_not_provide_coverage() {
+        let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _rules = RulesInForce::global(&[("flat_max_age_days", json!(1))]);
+        let mut fixture = Fixture::new();
+        fixture.light(1, 1, LIGHT_AT, "Camera");
+        fixture.frames("BIAS", 10, "2026-09-09T12:00:00", 500.0);
+        fixture.frames("DARK", 10, "2026-09-09T13:00:00", 503.0);
+        // The nearby singleton cannot make a master. The coherent old
+        // session wins and must still fail the age limit.
+        fixture.frames("FLAT", 1, "2026-09-10T02:00:00", 30_000.0);
+        fixture.frames("FLAT", 5, "2026-09-07T02:00:00", 30_000.0);
+        let light = read_frame_meta(&fixture.path("light-1.fits"));
+        let selected = super::super::select_for_light(&fixture.conn, &light).unwrap();
+        assert_eq!(selected.flat.len(), 6);
+        assert_eq!(
+            coherent_master_subset(CalibrationKind::Flat, &selected.flat, &selected.rules).len(),
+            5
+        );
+        assert_eq!(
+            codes(&fixture.health(1)),
+            [(HealthCode::CannotCalibrate, HealthLevel::Poor)]
+        );
+        let tree = crate::directory_tree::DirectoryTree::build(fixture.temp.path()).unwrap();
+        let report =
+            super::super::project_calibration_report(&fixture.conn, 1, &tree, false, None).unwrap();
+        let filter = &report.nights[0].filters[0];
+        assert!(!filter.nightly_flats);
+        assert!(filter.flat_age_days.unwrap() > 3.0);
+        assert!(filter.cannot_calibrate.is_some());
+    }
+
+    #[test]
+    fn one_day_flat_checks_include_exactly_24_hours_before_and_after_a_light() {
+        let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        for (key, code) in [
+            ("flat_max_age_days", HealthCode::CannotCalibrate),
+            ("flat_check_age_days", HealthCode::OldFlats),
+        ] {
+            let _rules = RulesInForce::global(&[(key, json!(1))]);
+            for offset in [-86_401_i64, -86_400, -86_399, 86_399, 86_400, 86_401] {
+                let mut fixture = Fixture::new();
+                fixture.light(1, 1, LIGHT_AT, "Camera");
+                fixture.frames("BIAS", 10, "2026-09-09T12:00:00", 500.0);
+                fixture.frames("DARK", 10, "2026-09-09T13:00:00", 503.0);
+                // Keep the nearest of the two one-minute-apart flats at
+                // the requested offset, on either side of the light.
+                let start = timestamp(LIGHT_AT) + offset - if offset < 0 { 60 } else { 0 };
+                let captured = chrono::DateTime::from_timestamp(start, 0)
+                    .unwrap()
+                    .format("%Y-%m-%dT%H:%M:%S")
+                    .to_string();
+                fixture.frames("FLAT", 2, &captured, 30_000.0);
+                let health = fixture.health(1);
+                assert_eq!(
+                    health.findings.iter().any(|f| f.code == code),
+                    offset.abs() > 86_400,
+                    "{key}, offset {offset}: {:?}",
+                    health.findings
+                );
+                let light = read_frame_meta(&fixture.path("light-1.fits"));
+                let selected = super::super::select_for_light(&fixture.conn, &light).unwrap();
+                let gap = super::super::calibration_gap(
+                    &fixture.conn,
+                    &light,
+                    &selected,
+                    &super::super::Nights::fixed(0),
+                )
+                .unwrap();
+                assert_eq!(
+                    gap.is_some(),
+                    key == "flat_max_age_days" && offset.abs() > 86_400
+                );
+            }
+        }
     }
 
     #[test]
