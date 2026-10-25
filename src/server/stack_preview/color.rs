@@ -8623,10 +8623,12 @@ mod tests {
                         has_sii: palette.is_some_and(StackNarrowbandPalette::requires_sii),
                         ..Default::default()
                     }),
+                    ..Default::default()
                 });
                 processing
             });
             let request = StackColorRequest {
+                combination: None,
                 automatic_palette: false,
                 stars: None,
                 target_id: -21,

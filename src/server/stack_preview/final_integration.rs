@@ -40,7 +40,8 @@ pub(super) fn integrate(
         .enumerate()
         .filter(|(_, frame)| frame.admitted())
         .collect::<Vec<_>>();
-    let options = batch_options(cancel, replay_weights(method.weighting, &admitted)?, gpu);
+    let mut options = batch_options(cancel, replay_weights(method.weighting, &admitted)?, gpu);
+    options.mosaic_panels = replay_panels(group, method.normalization, &admitted)?;
     let gpu = options.gpu;
     let load = |index: usize| {
         let (source_index, record) = admitted[index];
@@ -138,6 +139,28 @@ fn batch_options(
         gpu: gpu.options(),
         ..BatchStackOptions::default()
     }
+}
+
+/// Supply panel identity to Seiza's shared background matcher in the same
+/// admission order as the loader. The other normalization modes keep their
+/// selected behavior.
+fn replay_panels(
+    group: &PreparedGroup,
+    normalization: super::method::StackNormalization,
+    admitted: &[(usize, &resume::ResumeFrame)],
+) -> seiza_stacking::Result<Option<Vec<u32>>> {
+    if !group.mosaic || normalization != super::method::StackNormalization::LocalBackground {
+        return Ok(None);
+    }
+    admitted
+        .iter()
+        .map(|(index, _)| {
+            u32::try_from(group.frames[*index].target_id).map_err(|_| {
+                seiza_stacking::Error::Stack("A mosaic frame has an invalid panel target ID".into())
+            })
+        })
+        .collect::<seiza_stacking::Result<Vec<_>>>()
+        .map(Some)
 }
 
 /// The weights the live pass gave each admitted frame, in replay order, or
@@ -519,6 +542,35 @@ mod tests {
             },
             ledger,
         )
+    }
+
+    #[test]
+    fn mosaic_background_matching_uses_only_admitted_panel_ids_and_the_selected_mode() {
+        use super::super::method::StackNormalization;
+        let temporary = tempfile::tempdir().unwrap();
+        let (mut group, ledger) = fixture(temporary.path());
+        for (frame, id) in group.frames.iter_mut().zip([27, 99, 28, 27, 30]) {
+            frame.target_id = id;
+        }
+        let admitted = ledger
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| f.admitted())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            replay_panels(&group, StackNormalization::LocalBackground, &admitted).unwrap(),
+            None
+        );
+        group.mosaic = true;
+        assert_eq!(
+            replay_panels(&group, StackNormalization::LocalBackground, &admitted).unwrap(),
+            Some(vec![27, 28, 27, 30])
+        );
+        for mode in [StackNormalization::Global, StackNormalization::Local] {
+            assert_eq!(replay_panels(&group, mode, &admitted).unwrap(), None);
+        }
+        group.frames[0].target_id = -1;
+        assert!(replay_panels(&group, StackNormalization::LocalBackground, &admitted).is_err());
     }
 
     #[test]

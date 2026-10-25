@@ -26,6 +26,10 @@ Every panel must have eligible frames in a channel and contribute aligned
 frames; an incomplete mosaic shows an error with the missing panel targets.
 Inspect its frame decisions to check registration failures. Mosaic builds
 replan their canvas when inputs change; they do not extend a saved accumulator.
+With Local background normalization, Seiza matches panel backgrounds across
+the whole mosaic and tapers remaining smooth differences at their edges.
+Other normalization modes retain their selected behavior.
+
 Bayer drizzle is not supported for mosaics. Mosaic FITS headers describe the
 expanded canvas when Seiza can preserve its WCS; the source frame's solve is
 not reused for Gaia color calibration on that different grid.

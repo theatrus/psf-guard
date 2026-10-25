@@ -37,7 +37,8 @@
 - Build one integrated mosaic per channel in **Stacks**, then compose RGB,
   LRGB and narrowband color from those mosaics. Frames keep their calibration
   sessions and align against overlapping panels. Incomplete mosaics identify
-  panels with no aligned frames.
+  panels with no aligned frames. Local background normalization also matches
+  panel backgrounds through Seiza to reduce seam lines.
 
 - Watch a channel's in-progress stack in **Stacks**, with a live preview updated
   about every five seconds. The finished preview replaces it when processing
