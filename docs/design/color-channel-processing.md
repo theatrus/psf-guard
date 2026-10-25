@@ -1,8 +1,9 @@
 # Color previews and channel processing
 
-The paired draft implements channel-card processing reuse, color BXT/NXT,
+Color previews implement channel-card processing reuse, color BXT/NXT,
 narrowband display balance, RGB stars, explicit combined recipes, continuum
-validation and optional calibrated flux exports. Seiza remains unreleased.
+validation and optional calibrated flux exports through Seiza 0.43.0 and
+stacking/output 0.50.0.
 Last updated: 2026-10-24
 
 A channel card can run deconvolution and the RC-Astro tools
@@ -428,11 +429,10 @@ explain why Gaussian width matching alone does not establish profile equality.
 [Continuum-removal calibration research](https://arxiv.org/abs/1110.5636)
 explains the need for response calibration and stellar-color assumptions.
 
-The paired draft prepares Seiza 0.43.0 with stacking/output 0.50.0. It remains
-unreleased. Use local Cargo path patches for paired development. Keep both PRs
-draft; publishing Seiza and resolving PSF Guard's registry lockfile require
-later release authorization. Do not commit a path-resolved development lockfile
-as a registry release resolution.
+PSF Guard consumes published Seiza 0.43.0, stacking/output 0.50.0 and
+satellites 0.22.1 through its registry-resolved lockfile. Local Cargo path
+patches are only for paired development; do not commit a path-resolved
+development lockfile as a registry release resolution.
 
 Automatic continuum validation separately inspects isolated stellar candidates
 excluded for clipping/saturation. They never train the fit. Every inspected
