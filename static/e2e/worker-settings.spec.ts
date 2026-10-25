@@ -2,7 +2,7 @@ import { expect, test, type APIRequestContext } from '@playwright/test';
 import { spawn, type ChildProcess } from 'child_process';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
-import { openSettings } from './helpers';
+import { openSettings, registerFixtureDb, resetDatabases, waitForCacheReady } from './helpers';
 
 // Settings › Workers: a token is shown once inside the command to run, a real
 // `psf-guard worker` joins with it and shares the exchange folder, and
@@ -14,6 +14,13 @@ const BINARY = process.env.PSF_GUARD_E2E_BINARY
 const BASE = `http://127.0.0.1:${Number(process.env.PSF_GUARD_E2E_PORT ?? 13099)}`;
 
 let worker: ChildProcess | null = null;
+
+test.beforeEach(async ({ request }) => {
+  // With no catalog the app opens Settings on its own, over the menu.
+  await resetDatabases(request);
+  const entry = await registerFixtureDb(request, { name: 'Imaging Rig e2e', slug: 'imaging-rig-e2e' });
+  await waitForCacheReady(request, entry.id);
+});
 
 async function revokeNamed(request: APIRequestContext, name: string) {
   const listed = await (await request.get('/api/workers')).json();
