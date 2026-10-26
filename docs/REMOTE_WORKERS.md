@@ -227,7 +227,10 @@ update the Windows service. While the service is running or changing state,
   account, change the service account in Windows Services to a user with
   access to that share. Give that user modify access to
   `%ProgramData%\PSF Guard Worker`. Enter folder mappings with UNC paths,
-  such as `\nas\astro`, that the service account can access.
+  such as `\\nas\astro`, that the service account can access.
+  Reinstalling restores the default service account. After reinstalling,
+  stop the service, reapply your custom account, and start the service in
+  Windows Services.
 
 ### Remove the Windows service
 
