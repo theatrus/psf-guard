@@ -13,6 +13,11 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
+#[cfg(windows)]
+mod permissions;
+#[cfg(windows)]
+mod process;
+
 /// The service's name, as `sc.exe` and the Services console identify it.
 #[cfg_attr(not(windows), allow(dead_code))]
 const SERVICE_NAME: &str = "PSFGuardWorker";
@@ -84,25 +89,6 @@ fn launch_arguments(settings: &Path) -> Vec<std::ffi::OsString> {
         "run".into(),
         "--config".into(),
         settings.as_os_str().to_owned(),
-    ]
-}
-
-/// The `icacls` arguments that give the service's data folder to SYSTEM,
-/// Administrators and the service's account alone. SIDs, not names, for
-/// the two built-in groups, which other languages name differently.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn lock_down_arguments(folder: &Path) -> Vec<std::ffi::OsString> {
-    vec![
-        folder.as_os_str().to_owned(),
-        "/inheritance:r".into(),
-        "/grant:r".into(),
-        "*S-1-5-18:(OI)(CI)F".into(),
-        "/grant:r".into(),
-        "*S-1-5-32-544:(OI)(CI)F".into(),
-        "/grant:r".into(),
-        format!(r"NT SERVICE\{SERVICE_NAME}:(OI)(CI)M").into(),
-        "/T".into(),
-        "/Q".into(),
     ]
 }
 
@@ -191,13 +177,21 @@ mod platform {
         }
     }
 
-    /// Stop the service and wait until it has stopped.
+    /// Stop the service and wait until its process has released the binary.
     fn stop_and_wait(service: &Service) -> Result<()> {
-        let state = service.query_status()?.current_state;
-        if state == State::Stopped {
+        let status = service.query_status()?;
+        if status.current_state == State::Stopped {
             return Ok(());
         }
-        if state != State::StopPending {
+        // Keep a process handle before requesting Stop: the SCM no longer
+        // reports a PID once the worker publishes its Stopped status, even
+        // though the process can still be releasing its executable and logs.
+        let process = status
+            .process_id
+            .map(process::Process::open)
+            .transpose()?
+            .flatten();
+        if status.current_state != State::StopPending {
             service.stop()?;
         }
         let deadline = std::time::Instant::now() + STOP_WAIT + Duration::from_secs(10);
@@ -207,6 +201,9 @@ mod platform {
                 "The PSF Guard Worker service is still stopping; try again in a minute"
             );
             std::thread::sleep(Duration::from_millis(250));
+        }
+        if let Some(process) = process {
+            process.wait(deadline.saturating_duration_since(std::time::Instant::now()))?;
         }
         Ok(())
     }
@@ -259,15 +256,7 @@ mod platform {
                 .context("The service could not be created")?,
         };
         // Only now does the service's account exist to be granted access.
-        let locked = std::process::Command::new("icacls")
-            .args(lock_down_arguments(&data))
-            .status()
-            .context("running icacls")?;
-        anyhow::ensure!(
-            locked.success(),
-            "Could not set permissions on {} to allow only SYSTEM, Administrators and the PSF Guard Worker service account ({locked})",
-            data.display()
-        );
+        permissions::lock_down(&data, &format!(r"NT SERVICE\{SERVICE_NAME}"))?;
         service.set_description(DESCRIPTION)?;
         service.set_delayed_auto_start(true)?;
         // A restart or a shutdown gives the worker time to leave the server.
@@ -498,13 +487,6 @@ mod tests {
             service_settings(saved, tasks).work_dir.as_deref(),
             Some(r"C:\ProgramData\PSF Guard Worker\tasks")
         );
-        let locked = lock_down_arguments(Path::new(r"C:\ProgramData\PSF Guard Worker"))
-            .iter()
-            .map(|argument| argument.to_string_lossy().into_owned())
-            .collect::<Vec<_>>();
-        assert!(locked.contains(&"/inheritance:r".to_string()));
-        assert!(locked.contains(&r"NT SERVICE\PSFGuardWorker:(OI)(CI)M".to_string()));
-        assert!(!locked.iter().any(|argument| argument.contains("Users")));
     }
 
     #[test]

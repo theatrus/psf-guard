@@ -205,6 +205,10 @@ update the Windows service. While the service is running or changing state,
 
 - **Logs:** filenames start with `worker` in
   `%ProgramData%\PSF Guard Worker\logs`.
+- **Access denied:** if the service cannot read `worker.json`, update PSF Guard
+  and run `psf-guard-cli worker-service install` from PowerShell opened as
+  administrator. This repairs the service folder's permissions and starts
+  the worker.
 - **Failures:** if the server refuses the token, the service logs the reason
   and stops. Windows restarts it after 30 seconds. Replace a refused token
   in the desktop settings and run the install command again.

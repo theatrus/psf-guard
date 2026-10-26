@@ -19,6 +19,11 @@
 - FITS downloads in stack processing use compact controls with a download icon
   and explicit labels. Long labels wrap to fit narrow panels.
 
+- Windows worker services can now read their saved settings and start
+  successfully. Reinstalling the service also repairs permissions left by an
+  earlier installation and waits for the stopped worker process before
+  replacing its executable.
+
 - A fresh flat that contributes to a light's master now provides coverage even
   when older flats in the same master move the median capture time beyond
   the **Flat age limit**. Age checks and the calibration report use the nearest
