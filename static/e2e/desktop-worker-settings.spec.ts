@@ -105,7 +105,7 @@ test('this computer saves its worker settings, then starts and stops the worker'
   const status = computer.getByRole('group', { name: 'Worker status' });
   await expect(status).toContainText('Connected to http://observatory.local:3000.');
   await expect(status).toContainText('Stack of 42 frames, Ha channel: 37%');
-  await computer.screenshot({ path: testInfo.outputPath('this-computer.png') });
+  await page.screenshot({ path: testInfo.outputPath('this-computer.png') });
   await status.getByRole('button', { name: 'Stop worker' }).click();
   await expect(status).toContainText('Not running.');
 
@@ -119,5 +119,5 @@ test('this computer saves its worker settings, then starts and stops the worker'
     expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390);
   }
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
-  await computer.screenshot({ path: testInfo.outputPath('worker-on-this-computer-phone.png') });
+  await page.screenshot({ path: testInfo.outputPath('worker-on-this-computer-phone.png') });
 });
