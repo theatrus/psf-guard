@@ -122,19 +122,22 @@ describe('this computer\'s worker', () => {
     expect(native.save.mock.calls[0][0]).toMatchObject({ token: null, work: ['stack'], slots: 2, name: 'studio-pc' });
   });
 
-  it('offers no second worker while the Windows service runs one', async () => {
+  it.each(['running', 'changing'] as const)('prevents a desktop worker while the Windows service is %s', async (service) => {
     worker = {
       ...worker,
       has_token: true,
-      service: 'running',
+      service,
       settings: {
         server: 'http://observatory:3000', name: null, files: 'remote', maps: [],
         work_dir: null, rc_astro: null, work: [], slots: 1,
       },
     };
     mount(<DesktopWorkerSettings />);
-    expect(await screen.findByText(/The PSF Guard Worker service runs a worker/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Start' })).toBeDisabled();
+    expect(await screen.findByText(service === 'running'
+      ? 'The PSF Guard Worker Windows service is running.'
+      : 'The PSF Guard Worker Windows service has not stopped. Stop it in Windows Services to use the desktop worker.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Start worker' })).toBeDisabled();
+    expect(screen.getByText(/updates the service's copies/)).toBeInTheDocument();
   });
 
   it('points Linux at the systemd service', async () => {

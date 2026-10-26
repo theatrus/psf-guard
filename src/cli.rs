@@ -24,7 +24,8 @@ pub enum WorkerServiceAction {
         #[arg(long, value_name = "FILE")]
         config: Option<String>,
     },
-    /// Stop the service and remove it.
+    /// Stop and remove the service. Delete its copied executable, settings,
+    /// task files and logs.
     Uninstall,
     /// Run as the service. Windows starts this; it is not for a terminal.
     #[command(hide = true)]

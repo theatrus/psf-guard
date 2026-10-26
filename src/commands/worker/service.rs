@@ -32,8 +32,8 @@ pub fn install(settings: &Path) -> Result<()> {
         std::path::absolute(settings).with_context(|| format!("finding {}", settings.display()))?;
     let loaded = super::WorkerSettings::load(&settings)?.ok_or_else(|| {
         anyhow::anyhow!(
-            "There are no worker settings at {}; save them in PSF Guard's Settings › Workers › This \
-             computer, or give a settings file with --config",
+            "No worker settings file was found at {}. Save worker settings in PSF Guard's \
+             Settings › Workers › Worker on this computer, or choose a file with --config FILE",
             settings.display()
         )
     })?;
@@ -138,7 +138,7 @@ mod platform {
 
     const ERROR_ACCESS_DENIED: i32 = 5;
     const ERROR_SERVICE_DOES_NOT_EXIST: i32 = 1060;
-    const REFUSED: &str = "Windows refused; run this from PowerShell opened as administrator";
+    const REFUSED: &str = "Administrator access is required to manage the PSF Guard Worker service. Open PowerShell as administrator and run the command again.";
 
     static SETTINGS: OnceLock<PathBuf> = OnceLock::new();
 
@@ -148,7 +148,7 @@ mod platform {
     fn binary() -> Result<PathBuf> {
         let folder = std::env::var_os("ProgramFiles")
             .map(PathBuf::from)
-            .context("Windows did not give the Program Files folder")?;
+            .context("Windows did not report the Program Files folder")?;
         Ok(folder.join(FOLDER).join("psf-guard-worker.exe"))
     }
 
@@ -265,7 +265,7 @@ mod platform {
             .context("running icacls")?;
         anyhow::ensure!(
             locked.success(),
-            "icacls could not limit {} to administrators and the service ({locked})",
+            "Could not set permissions on {} to allow only SYSTEM, Administrators and the PSF Guard Worker service account ({locked})",
             data.display()
         );
         service.set_description(DESCRIPTION)?;
@@ -450,8 +450,8 @@ mod platform {
 mod platform {
     use super::*;
 
-    const ELSEWHERE: &str = "The worker runs as a service this way only on Windows. On Linux, use \
-         the psf-guard-worker systemd service; on a Mac, open PSF Guard's Settings › Workers";
+    const ELSEWHERE: &str = "This command is available only on Windows. On Linux, use the psf-guard-worker \
+         systemd service. On macOS, open PSF Guard and choose Settings › Workers › Worker on this computer.";
 
     pub fn install(_settings: crate::commands::worker::WorkerSettings) -> Result<()> {
         anyhow::bail!(ELSEWHERE)
@@ -514,7 +514,7 @@ mod tests {
         assert!(install(&missing)
             .unwrap_err()
             .to_string()
-            .contains("Settings › Workers › This computer"));
+            .contains("Settings › Workers › Worker on this computer"));
         std::fs::write(
             &missing,
             r#"{"server": "observatory:3000", "token": "psfw_secret"}"#,

@@ -235,8 +235,11 @@ and registers no plugins.
   seconds, for up to 60 seconds of preshutdown. A failed run logs its
   reason, then exits with a service-specific code, and the failure actions
   start it again after 30 seconds. `worker-service uninstall` stops it,
-  deletes it and removes the copies. The desktop app reads the service's
-  state and offers no tray worker while the service runs one.
+  deletes the service registration, copied executable, settings, task files
+  and logs. The desktop app disables **Start worker** while the service is
+  running or in another state that is not stopped. It shows a running
+  service separately from a service that has not stopped; it does not
+  report a connection to the processing server from the Windows service state.
 - **Start worker at login** (`commands/worker/login.rs`): a LaunchAgent with
   `RunAtLoad` on macOS, and a value under
   `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` on Windows. Both
