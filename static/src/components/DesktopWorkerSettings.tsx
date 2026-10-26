@@ -123,6 +123,9 @@ export default function DesktopWorkerSettings() {
   }
 
   const status = loaded.status;
+  // One worker per computer: while the Windows service runs one, the page
+  // offers no second.
+  const serviceRuns = loaded.service === 'running' || loaded.service === 'changing';
   const dirty = draft.token.trim() !== '' || !sameSettings(draft, loaded);
   const busy = action.isPending;
   const update = (change: Partial<Draft>) => setDraft({ ...draft, ...change });
@@ -176,12 +179,29 @@ export default function DesktopWorkerSettings() {
       </p>
 
       <div className="desktop-worker-status" aria-label="Worker status" role="group">
-        <p role="status">{status ? statusText(status) : 'Not running.'}</p>
+        <p role="status">
+          {status
+            ? statusText(status)
+            : loaded.service === 'running'
+              ? 'The PSF Guard Worker Windows service is running.'
+              : serviceRuns
+                ? 'The PSF Guard Worker Windows service has not stopped. Stop it in Windows Services to use the desktop worker.'
+                : 'Not running.'}
+        </p>
         {status?.tasks.map((task) => (
           <p key={task.id} className="muted">
             {task.label}: {Math.round(task.fraction * 100)}%
           </p>
         ))}
+        {serviceRuns && !status && (
+          <p className="muted">
+            To update the service, click Save worker settings, then run{' '}
+            <code>psf-guard-cli worker-service install</code> in PowerShell opened
+            as administrator. This command updates the service&apos;s copies of
+            the app and settings, then restarts the service. The desktop worker
+            controls do not control the Windows service.
+          </p>
+        )}
         <div className="db-row-actions">
           {status ? (
             <>
@@ -209,7 +229,7 @@ export default function DesktopWorkerSettings() {
             <button
               type="button"
               className="save-button"
-              disabled={busy || dirty || !loaded.settings || !loaded.has_token}
+              disabled={busy || dirty || serviceRuns || !loaded.settings || !loaded.has_token}
               onClick={() => action.mutate(desktopWorker.start)}
             >
               Start worker
@@ -217,16 +237,16 @@ export default function DesktopWorkerSettings() {
           )}
           <OpenLogsButton onError={setLogError} />
         </div>
-        {!status && (!loaded.settings || !loaded.has_token) && (
+        {!status && !serviceRuns && (!loaded.settings || !loaded.has_token) && (
           <p className="muted">Save a server address and a worker token before starting the worker.</p>
         )}
-        {!status && loaded.settings && loaded.has_token && dirty && (
+        {!status && !serviceRuns && loaded.settings && loaded.has_token && dirty && (
           <p className="muted">Save your changes before starting the worker.</p>
         )}
-        <p className="muted">
+        {!serviceRuns && <p className="muted">
           Pause lets running tasks finish. A task already requested from the server
           may still start. Stop returns unfinished tasks to the server&apos;s queue.
-        </p>
+        </p>}
       </div>
 
       <form className="user-form" onSubmit={save}>
@@ -399,6 +419,10 @@ export default function DesktopWorkerSettings() {
               </button>
             </div>
             <p className="muted" id="desktop-worker-folder-help">Leave blank to use the system temporary folder. The worker stores task files here while tasks run.</p>
+            {loaded.service != null && <p className="muted">
+              The Windows service uses <code>%ProgramData%\PSF Guard Worker\tasks</code> instead.
+              Temporary task folder applies to the desktop worker.
+            </p>}
           </div>
         </details>
         <div className="modal-buttons">

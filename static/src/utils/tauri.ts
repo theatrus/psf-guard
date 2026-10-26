@@ -224,6 +224,8 @@ export interface DesktopWorker {
   start_at_login: boolean;
   /** `null` while the worker is not running. */
   status: DesktopWorkerStatus | null;
+  /** The Windows service's state, when the service is installed. */
+  service: 'running' | 'stopped' | 'changing' | null;
   settings_path: string;
 }
 

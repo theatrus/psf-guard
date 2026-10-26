@@ -27,6 +27,7 @@ use crate::remote_work::{file_digest, map_path, LocalTools, WorkChoice};
 
 pub mod control;
 pub mod login;
+pub mod service;
 pub mod settings;
 
 pub use control::{WorkerControl, WorkerStatus};

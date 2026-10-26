@@ -19,6 +19,11 @@
 - FITS downloads in stack processing use compact controls with a download icon
   and explicit labels. Long labels wrap to fit narrow panels.
 
+- Windows worker services can now read their saved settings and start
+  successfully. Reinstalling the service also repairs permissions left by an
+  earlier installation and waits for the stopped worker process before
+  replacing its executable.
+
 - A fresh flat that contributes to a light's master now provides coverage even
   when older flats in the same master move the median capture time beyond
   the **Flat age limit**. Age checks and the calibration report use the nearest
@@ -37,6 +42,13 @@
   tray after you close the window. **Start worker at login** starts it when
   you log in. Opening PSF Guard while its window is open brings that window
   forward instead of starting a second copy.
+
+- Run a worker as a Windows service to process tasks before anyone logs in.
+  Open **Settings › Workers › Worker on this computer**, click **Save worker
+  settings**, then run `psf-guard-cli worker-service install` in PowerShell
+  opened as administrator. Run the command again after changing settings or
+  updating PSF Guard to update and restart the service. Desktop worker
+  controls do not control the service.
 
 - Run a worker as a Linux service. The Fedora RPM and the Debian package
   install a `psf-guard-worker` systemd service, not enabled. Enter the

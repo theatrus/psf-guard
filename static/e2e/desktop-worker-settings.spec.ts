@@ -18,10 +18,12 @@ test.beforeEach(async ({ page, request }) => {
       has_token: false,
       start_at_login: false,
       status: null,
+      service: null,
       settings_path: '/Users/ann/Library/Application Support/psf-guard/worker.json',
     };
     const calls: Array<{ command: string; args: unknown }> = [];
     (window as unknown as { __desktopWorkerCalls: typeof calls }).__desktopWorkerCalls = calls;
+    (window as unknown as { __desktopWorkerState: Worker }).__desktopWorkerState = worker;
     const origin = window.location.origin;
     const commands: Record<string, (args: Record<string, unknown>) => unknown> = {
       get_server_url: () => origin,
@@ -121,3 +123,31 @@ test('this computer saves its worker settings, then starts and stops the worker'
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   await page.screenshot({ path: testInfo.outputPath('worker-on-this-computer-phone.png') });
 });
+
+for (const service of ['running', 'changing'] as const) {
+  test(`Windows service ${service} explains how to apply saved settings`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 1280, height: 1400 });
+    await page.goto('/');
+    await page.evaluate((state) => {
+      const worker = (window as unknown as { __desktopWorkerState: Record<string, unknown> }).__desktopWorkerState;
+      worker.service = state;
+      worker.has_token = true;
+      worker.settings = {
+        server: 'http://observatory.local:3000', name: 'studio-pc', files: 'remote', maps: [],
+        work_dir: null, rc_astro: null, work: [], slots: 1,
+      };
+    }, service);
+    await openSettings(page);
+    await page.getByRole('tab', { name: 'Workers' }).click();
+    const computer = page.getByRole('region', { name: 'Worker on this computer' });
+    const status = computer.getByRole('group', { name: 'Worker status' });
+    await expect(status).toContainText(service === 'running'
+      ? 'The PSF Guard Worker Windows service is running.'
+      : 'The PSF Guard Worker Windows service has not stopped.');
+    await expect(status.getByRole('button', { name: 'Start worker' })).toBeDisabled();
+    await expect(status).toContainText('Save worker settings');
+    await expect(status).toContainText('psf-guard-cli worker-service install');
+    await expect(status).not.toContainText('Connected to');
+    await status.screenshot({ path: testInfo.outputPath(`windows-service-${service}.png`) });
+  });
+}

@@ -1639,6 +1639,29 @@ pub fn main() -> Result<()> {
                 ))?;
             }
         }
+        Commands::WorkerService { action } => {
+            use crate::cli::WorkerServiceAction;
+            use crate::commands::worker::{service, WorkerSettings};
+            match action {
+                WorkerServiceAction::Install { config } => {
+                    let path = match config {
+                        Some(config) => std::path::PathBuf::from(config),
+                        None => WorkerSettings::default_path()?,
+                    };
+                    service::install(&path)?;
+                    println!(
+                        "The PSF Guard Worker service runs with a copy of the settings in {}. \
+                         After you change them, or update PSF Guard, run this command again.",
+                        path.display()
+                    );
+                }
+                WorkerServiceAction::Uninstall => {
+                    service::uninstall()?;
+                    println!("Stopped and removed the PSF Guard Worker service");
+                }
+                WorkerServiceAction::Run { config } => service::run(config.into())?,
+            }
+        }
         Commands::Users { action } => {
             crate::commands::users::manage_users(action)?;
         }

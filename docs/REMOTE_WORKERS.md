@@ -162,6 +162,84 @@ again every 30 seconds; `journalctl -u psf-guard-worker` shows why.
 `PSF_GUARD_WORKER_EXTRA_ARGS` is split on spaces, so it cannot hold a path
 that contains one.
 
+## Run a worker as a Windows service
+
+Use a Windows service when the worker needs to run before anyone logs in.
+The service starts with Windows. It uses its own copies of the app and
+settings, separate from the desktop worker.
+
+1. Open **Settings › Workers › Worker on this computer** in the desktop
+   app and enter the worker settings. Turn off **Start worker at login**,
+   then click **Save worker settings**. If the desktop worker is running,
+   click **Stop worker** before installing the service.
+2. Open PowerShell as administrator and run:
+
+   ```powershell
+   psf-guard-cli worker-service install
+   ```
+
+   To use a different settings file, add `--config FILE`.
+
+The command installs and starts the **PSF Guard Worker** service. It copies
+the executable to `%ProgramFiles%\PSF Guard Worker` and settings to
+`%ProgramData%\PSF Guard Worker\worker.json`. SYSTEM, Administrators and
+the service account can access the service's data folder. The settings
+include the worker token.
+
+The service runs under its own account, `NT SERVICE\PSFGuardWorker`.
+Task files use `%ProgramData%\PSF Guard Worker\tasks`; the desktop app's
+**Temporary task folder** setting does not change the service's task folder.
+
+### Apply settings or app updates to the service
+
+After changing worker settings, click **Save worker settings**. After
+saving settings or updating PSF Guard, open PowerShell as administrator and
+run `psf-guard-cli worker-service install` again. The command stops the
+service, updates its copies of the app and settings, and restarts it.
+
+**Restart worker** controls the desktop worker. It does not restart or
+update the Windows service. While the service is running or changing state,
+**Start worker** is disabled to prevent a second worker from starting.
+
+### Check service logs and requirements
+
+- **Logs:** filenames start with `worker` in
+  `%ProgramData%\PSF Guard Worker\logs`.
+- **Access denied:** if the service cannot read `worker.json`, update PSF Guard
+  and run `psf-guard-cli worker-service install` from PowerShell opened as
+  administrator. This repairs the service folder's permissions and starts
+  the worker.
+- **Failures:** if the server refuses the token, the service logs the reason
+  and stops. Windows restarts it after 30 seconds. Replace a refused token
+  in the desktop settings and run the install command again.
+- **Stopping:** stop the service in Windows Services. The worker disconnects
+  and the server queues unfinished tasks again. Windows shutdown also gives
+  the worker time to disconnect.
+- **Sleep:** prevent the computer from sleeping while you need it to process
+  tasks. A worker cannot process tasks while Windows is asleep.
+- **RC-Astro tools:** the service uses rc-astro from its account's `PATH`,
+  or the executable specified in its settings. An installation or license
+  available only to your desktop account may be unavailable to the service.
+  If the service cannot run RC-Astro, it can still accept stack builds.
+  Use the desktop worker if RC-Astro requires your desktop account.
+- **Shared storage:** the default service account accesses network shares
+  through the computer's network identity. If a share requires a user
+  account, change the service account in Windows Services to a user with
+  access to that share. Give that user modify access to
+  `%ProgramData%\PSF Guard Worker`. Enter folder mappings with UNC paths,
+  such as `\\nas\astro`, that the service account can access.
+  Reinstalling restores the default service account. After reinstalling,
+  stop the service, reapply your custom account, and start the service in
+  Windows Services.
+
+### Remove the Windows service
+
+Before uninstalling PSF Guard, open PowerShell as administrator and run
+`psf-guard-cli worker-service uninstall`. This stops and removes the service
+and deletes its copied executable, settings including the token, task files,
+and logs. The server queues unfinished tasks again. The desktop app's
+saved worker settings remain in its own settings folder.
+
 ## Choose the work a worker accepts
 
 A worker accepts everything it can run unless you list its work with
