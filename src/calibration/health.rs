@@ -37,9 +37,8 @@ use seiza_calibration::{FlatMeasurement, Grade, FLAT_QUALITY_ALGORITHM_VERSION};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Mutex;
-use std::time::UNIX_EPOCH;
 
 /// Bump when the rules or what a result keeps change, so every kept result
 /// is computed again. 2: each finding keeps its lights' ids. 3: measured
@@ -157,6 +156,9 @@ pub struct ProjectHealth {
 #[derive(Debug, Clone)]
 pub struct ProjectLight {
     pub image_id: i32,
+    /// The light's guid, so its header is kept for it alone; a light
+    /// without one keeps none ([`crate::light_headers`]).
+    pub image_guid: Option<String>,
     pub path: PathBuf,
     pub night: String,
     pub filter: String,
@@ -172,23 +174,11 @@ pub struct LightResult {
     pub findings: Option<Vec<LightFinding>>,
 }
 
-/// A light's header as a pass read it, kept so the next pass reads it again
-/// only when the file changed: another place, size or modification time.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct KeptHeader {
-    pub path: PathBuf,
-    pub size: u64,
-    /// Nanoseconds since 1970.
-    pub modified_ns: u64,
-    pub meta: FrameMeta,
-}
-
-/// A file's size and modification time, or `None` when it cannot be read.
-fn file_stamp(path: &Path) -> Option<(u64, u64)> {
-    let metadata = std::fs::metadata(path).ok()?;
-    let modified = metadata.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
-    Some((metadata.len(), u64::try_from(modified.as_nanos()).ok()?))
-}
+use crate::light_headers::FileStamp;
+/// A light's header as a pass read it, kept in the catalog so the next pass
+/// reads it again only when the file changed: another place, size or
+/// modification time.
+pub use crate::light_headers::KeptHeader;
 
 /// What judging one light came to, with its header for the next pass.
 #[derive(Debug, Clone)]
@@ -442,9 +432,8 @@ impl HealthLibrary {
                 read: false,
             });
         }
-        let stamp = file_stamp(&light.path);
-        let unchanged = kept
-            .filter(|kept| kept.path == light.path && stamp == Some((kept.size, kept.modified_ns)));
+        let stamp = FileStamp::of(&light.path);
+        let unchanged = kept.filter(|kept| kept.holds(&light.path, stamp));
         let (meta, read) = match unchanged {
             Some(kept) => (kept.meta.clone(), false),
             None => (
@@ -462,11 +451,9 @@ impl HealthLibrary {
         let findings = self.findings(&meta)?;
         Ok(JudgedLight {
             result: result(Some(findings)),
-            header: stamp.map(|(size, modified_ns)| KeptHeader {
-                path: light.path.clone(),
-                size,
-                modified_ns,
-                meta,
+            header: stamp.map(|stamp| KeptHeader {
+                image_guid: light.image_guid.clone(),
+                ..KeptHeader::new(&light.path, stamp, meta)
             }),
             read,
         })
@@ -807,6 +794,8 @@ pub fn project_lights(
     let rows = crate::db::Database::new(conn)
         .query_images_scoped(None, Some(project_id), None, None, 0)
         .context("querying project lights")?;
+    // Headers are kept by guid; a light without one keeps none.
+    let mut guids = crate::light_headers::project_guids(conn, project_id).unwrap_or_default();
     let mut lights = Vec::new();
     let mut missing = 0;
     for (image, _project, _target) in rows {
@@ -821,6 +810,7 @@ pub fn project_lights(
         };
         lights.push(ProjectLight {
             image_id: image.id,
+            image_guid: guids.remove(&image.id),
             path,
             night: image
                 .acquired_date
@@ -1129,6 +1119,7 @@ mod tests {
     use super::super::{configure_flat_max_age, import_calibration_frames};
     use super::*;
     use crate::commands::import::headers::read_frame_meta;
+    use std::path::Path;
 
     const SIZE: (usize, usize) = (128, 128);
 
@@ -1221,8 +1212,8 @@ mod tests {
                 .execute(
                     "INSERT INTO acquiredimage
                         (Id, projectId, targetId, acquireddate, filtername, gradingStatus,
-                         metadata, profileId)
-                     VALUES (?1, ?2, ?2, ?3, 'Ha', 0, ?4, 'p')",
+                         metadata, profileId, guid)
+                     VALUES (?1, ?2, ?2, ?3, 'Ha', 0, ?4, 'p', 'light-' || ?1)",
                     rusqlite::params![
                         id,
                         project,
@@ -1921,6 +1912,7 @@ mod tests {
         let library = HealthLibrary::load(&fixture.conn).unwrap();
         let light = ProjectLight {
             image_id: 1,
+            image_guid: Some("light-1".into()),
             path: fixture.path("light-1.fits"),
             night: "2026-09-09".into(),
             filter: "Ha".into(),
@@ -1932,8 +1924,13 @@ mod tests {
             .clone()
             .expect("a readable light keeps its header");
         assert!(header.meta.readable);
+        assert_eq!(
+            header.image_guid.as_deref(),
+            Some("light-1"),
+            "for that light alone"
+        );
 
-        // The header survives a trip through the cache file.
+        // The header survives a trip through JSON, as the catalog keeps it.
         let header: KeptHeader =
             serde_json::from_slice(&serde_json::to_vec(&header).unwrap()).unwrap();
         let again = library.judge_light_kept(&light, Some(&header)).unwrap();
@@ -1962,6 +1959,31 @@ mod tests {
                 .unwrap()
                 .read
         );
+    }
+
+    #[test]
+    fn a_project_light_names_itself_so_its_header_is_kept_for_it_alone() {
+        let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let mut fixture = Fixture::new();
+        fixture.light(1, 1, LIGHT_AT, "Camera");
+        fixture.frames("BIAS", 10, "2026-09-09T12:00:00", 500.0);
+        let library = HealthLibrary::load(&fixture.conn).unwrap();
+        let tree = crate::directory_tree::DirectoryTree::build(fixture.temp.path()).unwrap();
+        let (lights, _) = project_lights(
+            &fixture.conn,
+            1,
+            &tree,
+            &library.light_nights(&fixture.conn),
+        )
+        .unwrap();
+        let guids = crate::light_headers::project_guids(&fixture.conn, 1).unwrap();
+        assert_eq!(lights[0].image_guid.as_ref(), Some(&guids[&1]));
+        let header = library
+            .judge_light_kept(&lights[0], None)
+            .unwrap()
+            .header
+            .unwrap();
+        assert_eq!(header.image_guid.as_ref(), Some(&guids[&1]));
     }
 
     #[test]

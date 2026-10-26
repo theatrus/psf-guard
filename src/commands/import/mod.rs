@@ -528,7 +528,11 @@ pub fn scan_frames_counted(
     files
         .par_iter()
         .map(|path| {
-            let meta = headers::read_frame_meta(path);
+            // Taken first, so a file written during the read is not kept
+            // as the header read.
+            let stamp = crate::light_headers::FileStamp::of(path);
+            let mut meta = headers::read_frame_meta(path);
+            meta.file_stamp = stamp;
             progress.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             meta
         })
@@ -1819,6 +1823,9 @@ fn insert_acquired_image(
             new_guid(),
         ],
     )?;
+    // The header was just read: keep it, so a stack or the health pass need
+    // not read it again while the file stands as it is.
+    crate::light_headers::record_imported(conn, conn.last_insert_rowid(), frame);
     Ok(())
 }
 
@@ -2702,6 +2709,30 @@ mod tests {
         assert!(value.get("FileName").is_some());
         assert!(value.get("DetectedStars").is_none());
         assert!(value.get("HFR").is_none());
+    }
+
+    #[test]
+    fn an_imported_light_keeps_its_header_in_the_catalog() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("M31_Ha_1000.fits");
+        std::fs::write(&path, b"the light's bytes").unwrap();
+        let mut conn = fresh_conn();
+        let frame = FrameMeta {
+            path: path.clone(),
+            file_stamp: crate::light_headers::FileStamp::of(&path),
+            ..light("M31", "Ha", 1_000)
+        };
+        import_frames(&mut conn, vec![frame], &ImportOptions::default()).unwrap();
+        let (image_id, project_id): (i32, i32) = conn
+            .query_row("SELECT Id, projectId FROM acquiredimage", [], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .unwrap();
+        let kept = crate::light_headers::project_headers(&conn, project_id).unwrap();
+        let header = &kept[&image_id];
+        assert!(header.holds(&path, crate::light_headers::FileStamp::of(&path)));
+        assert_eq!(header.meta.object.as_deref(), Some("M31"));
+        assert!(!header.located, "a stack's own lookup has not found it yet");
     }
 
     #[test]

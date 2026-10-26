@@ -16,6 +16,15 @@
 
 ## Changes
 
+- Preparing a stack build no longer opens every light and calibration file.
+  The catalog keeps each light's header and where the last build found it,
+  and trusts a calibration file whose size and modification time are those
+  it recorded, so files are read again only after they change. On a
+  1,263-light project on a network share, preparing took about 1.3 seconds
+  where it took about 2.3, and the calibration health pass, the
+  uncalibrated-lights check and Calibration's project scope share the same
+  kept headers.
+
 - A fresh flat that contributes to a light's master now provides coverage even
   when older flats in the same master move the median capture time beyond
   the **Flat age limit**. Age checks and the calibration report use the nearest

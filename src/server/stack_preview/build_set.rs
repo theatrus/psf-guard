@@ -65,12 +65,23 @@ pub(super) struct PreparationQueue {
     pending: VecDeque<Preparation>,
     /// Requests whose storage was not readable yet, with when to try again.
     retries: Vec<(Instant, Preparation)>,
+    /// The catalog whose light headers the last preparation read, kept once
+    /// the line has nothing else to prepare.
+    unwritten: Option<String>,
+}
+
+/// One step of a catalog's preparation line.
+pub(super) enum PreparationStep {
+    Prepare(Preparation),
+    /// Keep the light headers preparing read. The write gives up at once
+    /// on a busy catalog, so it never holds up a build.
+    KeepHeaders(String),
 }
 
 impl CatalogWork for Preparations {
     type Queue = PreparationQueue;
     type Status = ();
-    type Item = Preparation;
+    type Item = PreparationStep;
     const RUNNER: &'static str = "stack-preparation";
     /// Each preparation registers its own shutdown hold.
     const SHUTDOWN_WAITS_FOR: Option<&'static str> = None;
@@ -80,7 +91,7 @@ impl CatalogWork for Preparations {
         _: &str,
         queue: &mut PreparationQueue,
         now: Instant,
-    ) -> Step<Preparation> {
+    ) -> Step<PreparationStep> {
         let (due, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut queue.retries)
             .into_iter()
             .partition(|(at, _)| *at <= now);
@@ -89,7 +100,12 @@ impl CatalogWork for Preparations {
             .pending
             .extend(due.into_iter().map(|(_, preparation)| preparation));
         if let Some(preparation) = queue.pending.pop_front() {
-            return Step::Run(preparation);
+            return Step::Run(PreparationStep::Prepare(preparation));
+        }
+        // The line is empty: keep what preparing had to read. A click that
+        // comes meanwhile is prepared next.
+        if let Some(catalog) = queue.unwritten.take() {
+            return Step::Run(PreparationStep::KeepHeaders(catalog));
         }
         match queue.retries.iter().map(|(at, _)| *at).min() {
             Some(at) => Step::Sleep(at - now),
@@ -100,13 +116,25 @@ impl CatalogWork for Preparations {
     fn run(
         state: &Arc<AppState>,
         _: &str,
-        _: &CatalogJob<Self>,
-        preparation: Preparation,
+        job: &CatalogJob<Self>,
+        step: PreparationStep,
         _: &Stop,
     ) {
-        // Queueing what it prepares starts work on the async runtime.
-        let _runtime = preparation.runtime.enter();
-        prepare_one(state, preparation);
+        match step {
+            PreparationStep::Prepare(preparation) => {
+                let catalog = preparation.ctx.database_path.clone();
+                {
+                    // Queueing what it prepares starts work on the async
+                    // runtime.
+                    let _runtime = preparation.runtime.enter();
+                    prepare_one(state, preparation);
+                }
+                job.queue().unwritten = Some(catalog);
+            }
+            PreparationStep::KeepHeaders(catalog) => {
+                crate::server::light_header_writes::write_pending(&catalog)
+            }
+        }
     }
 
     /// The requests stay queued; the next request starts a new runner.
@@ -134,7 +162,10 @@ impl PreparationLine {
     pub(super) fn is_idle(&self, database_id: &str) -> bool {
         self.catalogs.existing(database_id).is_none_or(|job| {
             let queue = job.queue();
-            !queue.has_runner() && queue.pending.is_empty() && queue.retries.is_empty()
+            !queue.has_runner()
+                && queue.pending.is_empty()
+                && queue.retries.is_empty()
+                && queue.unwritten.is_none()
         })
     }
 }
@@ -1153,6 +1184,9 @@ pub(super) fn prepare_whole(
         )?;
         (relevant, framing, mapped_sources, exposure_groups, mosaic)
     };
+    // Where a build last found each light, and its header, so neither is
+    // looked up again while the file stands as it was.
+    let mut lights = crate::server::stack_preview::kept_lights::KeptLights::load(ctx, project_id);
 
     let quality = quality_results(
         ctx,
@@ -1339,26 +1373,17 @@ pub(super) fn prepare_whole(
                 ));
                 continue;
             };
-            let path = match crate::server::handlers::find_fits_file(
-                ctx,
-                &image,
-                &source_target_name,
-                &filename,
-            ) {
-                Ok(path) => path,
-                Err(AppError::Conflict(message)) => return Err(AppError::Conflict(message)),
-                Err(AppError::NotFound) => {
-                    missing_files += 1;
-                    decisions.push(excluded_decision(
-                        &image,
-                        &scored,
-                        "FITS file was not found".into(),
-                    ));
-                    continue;
-                }
-                Err(error) => return Err(error),
+            let Some((path, source_fingerprint)) =
+                lights.locate(ctx, &image, &source_target_name, &filename, &mapped_sources)?
+            else {
+                missing_files += 1;
+                decisions.push(excluded_decision(
+                    &image,
+                    &scored,
+                    "FITS file was not found".into(),
+                ));
+                continue;
             };
-            let source_fingerprint = source_fingerprint(&path);
             hasher.update(source_fingerprint.as_bytes());
             group_hasher.update(source_fingerprint.as_bytes());
             let exposure_seconds = exposure_seconds_from_metadata(&image.metadata);
@@ -1407,8 +1432,9 @@ pub(super) fn prepare_whole(
             let gaps = group_calibration != crate::calibration::CalibrationMode::Off
                 && exclude_uncalibrated;
             for frame in &frames {
+                let light = lights.meta(frame.image_id, &frame.path);
                 let (fingerprint, gap) = matcher
-                    .light_calibration(&frame.path, Some(&directory_tree), flat_star_masking, gaps)
+                    .light_calibration_of(&light, Some(&directory_tree), flat_star_masking, gaps)
                     .map_err(AppError::db)?;
                 fingerprints.insert(frame.image_id, fingerprint);
                 if let Some(reason) = gap {
@@ -1541,6 +1567,8 @@ pub(super) fn prepare_whole(
             frames,
         });
     }
+
+    lights.keep(&ctx.database_path, matcher.as_mut());
 
     let digest = hasher.finalize();
     let mut job_id = String::with_capacity(digest.len() * 2);
