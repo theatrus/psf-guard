@@ -5,7 +5,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 import Database from 'better-sqlite3';
 import { applyRealSchema } from './fixtures/sync';
-import { fixtureDbPath, fixtureImageDir, resetDatabases, tmpBase } from './helpers';
+import { fixtureDbPath, fixtureImageDir, resetDatabases, tmpBase, selectSettingsSection } from './helpers';
 
 // Opt in to reshoot the import guide. The normal suite covers these paths in
 // add-database.spec.ts; this run also saves each image's state and checksum.
@@ -100,7 +100,7 @@ test('capture the owned catalog import and sync flow', async ({ page, request, b
     INSERT INTO target(Id,projectid,name,active,ra,dec,epochcode,guid)
     VALUES(100,100,'Next night field',1,5.5,-5.4,0,'target-next-night');`); }
   finally { changed.close(); }
-  await modal.getByRole('tab', { name: 'Sync', exact: true }).click();
+  await selectSettingsSection(modal, 'sync');
   const transfer = modal.locator('.scheduler-sync-workspace');
   await transfer.getByRole('button', { name: 'Preview changes' }).click();
   await expect(transfer.getByRole('button', { name: 'Apply this preview' })).toBeVisible();

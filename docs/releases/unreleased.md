@@ -16,6 +16,13 @@
 
 ## Changes
 
+- Settings groups related pages in a desktop sidebar and a compact phone
+  selector. Find GPU controls under **Performance**, exposure templates and
+  processing setups under **Presets**, and export defaults, PixInsight and
+  AstroBin under **Exports & integrations**. Existing settings and shortcuts
+  are preserved. Settings asks before switching pages with unsaved edits.
+  See [Settings navigation](../SETTINGS.md).
+
 - Mosaic SNR plots report canvas coverage and mean pixel depth. They keep
   each checkpoint's measured signal and no longer apply same-field forecasts
   or plateau/degrading verdicts to frames covering different sky areas.
@@ -128,14 +135,14 @@
   its channels are stacked, as a build you start does. New color previews
   start from the Color setup marked as the default. PSF Guard adds one named
   **Default** with the current pipeline. To use another pipeline, open
-  **Settings → Setups** and click **Make default** on a Color setup, or save
+  **Settings → Presets → Processing setups** and click **Make default** on a Color setup, or save
   your changes over **Default**. Color previews you already have are not
   changed.
 
 - Save storage limits, folders, and WBPP retention together with **Save storage settings**.
   WBPP shares the **Limits** and **Folders** sections with the other storage options.
 
-- Manage WBPP work files under **Settings → Storage**: choose a
+- Manage WBPP work files under **Settings → Storage & backups → Folders & limits**: choose a
   dedicated folder and volume usage limit, remove intermediates before masters,
   and set separate retention periods. Intermediates default to seven days and
   masters to 90 days; **Keep WBPP masters forever** protects masters from cleanup.
@@ -150,11 +157,11 @@
   Apple M4 Max, 35 frames of 26 megapixels stacked in 5–6 seconds instead of
   12. Computers without a supported GPU, and frames under about a million
   pixels, stack on the CPU as before. To choose which passes run on the GPU,
-  open **Settings → Stacking → GPU**. With **Use the GPU** off, all stacking
+  open **Settings → Performance → GPU**. With **Use the GPU** off, all stacking
   work stays on the CPU, including artifact searches and the channel
   alignment of color previews.
-- In the Settings sections **Setups → PixInsight**, **Stacking → Stack
-  previews**, **Performance → Processor use** and, in the desktop app,
+- In the Settings sections **Exports & integrations → PixInsight**, **Stacking → Stack
+  previews**, **Performance → CPU & memory → Processor use** and, in the desktop app,
   **Server**, fields no longer appear blank, or show an Automatic port, for a
   moment while Settings loads. When
   the server reports new values, fields you have not edited update to match,
@@ -181,7 +188,7 @@
 - Automatic stack refreshes now score with the server's scoring defaults,
   the same values every view starts from. Stacks that showed **Out of date —
   scoring settings changed** after an automatic refresh are rebuilt with the
-  defaults on the next automatic refresh, and stop showing it. Saving new defaults in **Settings › Review**
+  defaults on the next automatic refresh, and stop showing it. Saving new defaults in **Settings → Review → Grading & display**
   rebuilds stacks scored another way when automatic previews are on.
 
 - New automatic narrowband recipes stretch the linear RGB stars independently
@@ -191,7 +198,7 @@
 - Narrowband cards show a visible ✨ Stars label beside the star-policy selector.
 
 - Configure StarXTerminator separately for the linear nebula and RGB-star branches in **Process linear color**. Finished compositions retain the cached linear starless/stars outputs, and display blend amounts reuse the SXT runs.
-- Set the processing memory budget in **Settings → Performance → Processing
+- Set the processing memory budget in **Settings → Performance → CPU & memory → Processing
   memory**. Color and stretch errors show the estimate and current budget, with
   the setting to adjust it.
 

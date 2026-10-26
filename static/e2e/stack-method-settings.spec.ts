@@ -1,9 +1,9 @@
 import { expect, test } from '@playwright/test';
-import { openSettings, registerFixtureDb, resetDatabases, waitForCacheReady } from './helpers';
+import { openSettings, registerFixtureDb, resetDatabases, waitForCacheReady, selectSettingsSection } from './helpers';
 
 // Settings › Stacking › Stacking method: the orientation group margin saves
 // when the field loses focus, refuses a value past the limit, and is off
-// while the best-graded frame is the reference. Settings › Stacking › GPU:
+// while the best-graded frame is the reference. Settings › Performance › GPU:
 // turning the GPU off saves and disables its passes, and Restore defaults
 // turns every pass back on.
 
@@ -28,7 +28,7 @@ test.afterEach(async ({ request }) => {
 test('the orientation group margin saves on blur and follows the reference choice', async ({ page, request }, testInfo) => {
   await page.goto('/');
   await openSettings(page);
-  await page.getByRole('tab', { name: 'Stacking' }).click();
+  await selectSettingsSection(page, 'stacking');
   const margin = page.getByRole('spinbutton', { name: /Degrees, 0 to 5/ });
   await expect(margin).toHaveValue('1');
   await margin.scrollIntoViewIfNeeded();
@@ -56,7 +56,7 @@ test('the orientation group margin saves on blur and follows the reference choic
 test('turning the GPU off saves, disables its passes, and the defaults come back', async ({ page, request }, testInfo) => {
   await page.goto('/');
   await openSettings(page);
-  await page.getByRole('tab', { name: 'Stacking' }).click();
+  await selectSettingsSection(page, 'gpu');
   const useGpu = page.getByRole('checkbox', { name: /^Use the GPU/ });
   await expect(useGpu).toBeChecked();
   const resampling = page.getByRole('checkbox', { name: /^Resampling/ });
@@ -83,7 +83,7 @@ test('processing memory budget persists, keeps CPU shares, and can restore defau
   const endpoint='/api/settings/workers';
   await request.put(endpoint,{data:{interactive_ratio:0.65,background_ratio:0.2,memory_budget_fraction:null}});
   try {
-    await page.goto('/');await openSettings(page);await page.getByRole('tab',{name:'Performance'}).click();
+    await page.goto('/');await openSettings(page);await selectSettingsSection(page, 'performance');
     const memory=page.getByRole('slider',{name:'Processing memory budget'});
     await expect(memory).toHaveValue('50');
     await memory.focus();await memory.press('Home');
@@ -97,7 +97,7 @@ test('processing memory budget persists, keeps CPU shares, and can restore defau
     // Older API clients may update CPU shares without knowing the memory field.
     await request.put(endpoint,{data:{interactive_ratio:0.7,background_ratio:0.2}});
     expect((await (await request.get(endpoint)).json()).data.memory_budget_fraction).toBe(0.75);
-    await page.reload();await openSettings(page);await page.getByRole('tab',{name:'Performance'}).click();
+    await page.reload();await openSettings(page);await selectSettingsSection(page, 'performance');
     await expect(memory).toHaveValue('75');
     await page.getByRole('group',{name:'Processing memory'}).screenshot({path:testInfo.outputPath('processing-memory-desktop.png')});
     await page.setViewportSize({width:390,height:900});

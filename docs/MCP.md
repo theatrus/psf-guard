@@ -9,7 +9,7 @@ answers, so a reverse proxy needs nothing extra.
 
 ## Connect
 
-On a server with user accounts, open **Settings › Users › API tokens** and
+On a server with user accounts, open **Settings › Server & access › Users › API tokens** and
 choose **Connect an agent**. It mints a token of your own (read only unless
 you tick **Let it grade and start jobs**) and shows the setup to paste for
 Claude Code and for Codex, with this server's URL. **+ New token** mints one
@@ -48,16 +48,16 @@ URL must end in `/api/mcp`.
 
 A loopback server with no accounts, which is what the desktop app and
 `psf-guard server` on a developer machine run, needs no token. Its
-**Settings › Agents** tab shows the setup:
+**Settings › Server & access › Agents (MCP)** page shows the setup:
 
 ```bash
 claude mcp add --transport http psf-guard http://127.0.0.1:3000/api/mcp
 ```
 
-In the desktop app, choose **Settings › Server › Fixed port**, save it, and
+In the desktop app, choose **Settings › Server & access › Server › Fixed port**, save it, and
 restart the server to keep this URL across restarts. This sets the port for
 the whole desktop HTTP server, including browser access and every API, as
-well as MCP. **Agents** links to the same Server controls. If the port is in
+well as MCP. **Agents (MCP)** links to the same Server controls. If the port is in
 use on a later start, the app reports the conflict and lets you change it
 instead of choosing another port. The CLI server already supports `--port`
 and `[server].port` in its TOML configuration.
@@ -225,7 +225,7 @@ the library changed since, saying what changed.
 ## Backups
 
 `get_backups`, `start_backup` and `cancel_backup` need write access and
-database management, as Settings › Backups does. An agent never handles
+database management, as Settings › Storage & backups › Backups does. An agent never handles
 secrets: `start_backup` refuses `include_secrets`, whoever signs in, and
 writes only to the download area or the folder the schedule already uses,
 not a folder of its choosing. It copies the server's settings and stores

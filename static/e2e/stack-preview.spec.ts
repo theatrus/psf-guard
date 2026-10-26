@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import type { StackCalibrationMasters, StackColorJob } from '../src/api/types';
-import { registerFixtureDb, resetDatabases, waitForCacheReady, openSettings } from './helpers';
+import { registerFixtureDb, resetDatabases, waitForCacheReady, openSettings, selectSettingsSection } from './helpers';
 import { jobRow, stubJobs } from './jobRows';
 
 // A stack FITS runs to hundreds of megabytes (244 MB for the three-frame
@@ -1766,7 +1766,7 @@ test('starts a first color preview from the default Color setup, chosen in Setti
   await page.goto(`/#/stacks?db=${encodeURIComponent(dbId)}&project=2`);
   await openSettings(page);
   const settingsModal = page.locator('.tauri-settings .modal-content');
-  await settingsModal.getByRole('tab', { name: 'Setups' }).click();
+  await selectSettingsSection(settingsModal, 'setups');
   const manager = settingsModal.locator('.processing-setups-manager');
   const seededRow = manager.locator('tbody tr', { hasText: /^Default/ });
   const faintRow = manager.locator('tbody tr', { hasText: 'Faint nebula' });
@@ -2084,11 +2084,11 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
   await expect(reloadedSelect.locator('option', { hasText: 'E2E color pipeline' }))
     .toHaveCount(1);
 
-  // Management moved to Settings → Setups: export the collection, re-import
+  // Management moved to Settings → Presets → Processing setups: export the collection, re-import
   // a renamed copy, and delete it from the table.
   await openSettings(page);
   const settingsModal = page.locator('.tauri-settings .modal-content');
-  await settingsModal.getByRole('tab', { name: 'Setups' }).click();
+  await selectSettingsSection(settingsModal, 'setups');
   const manager = settingsModal.locator('.processing-setups-manager');
   // The seeded Default and the saved pipeline.
   await expect(manager.locator('tbody tr')).toHaveCount(2);

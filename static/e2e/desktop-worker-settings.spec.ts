@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { openSettings, registerFixtureDb, resetDatabases, waitForCacheReady } from './helpers';
+import { openSettings, registerFixtureDb, resetDatabases, waitForCacheReady, selectSettingsSection } from './helpers';
 
 // Settings › Workers › Worker on this computer in the desktop app. The page runs in a browser
 // with a stand-in for the desktop app's commands: Rust tests cover the
@@ -70,7 +70,7 @@ test('this computer saves its worker settings, then starts and stops the worker'
   await page.setViewportSize({ width: 1280, height: 1400 });
   await page.goto('/');
   await openSettings(page);
-  await page.getByRole('tab', { name: 'Workers' }).click();
+  await selectSettingsSection(page, 'workers');
   const computer = page.getByRole('region', { name: 'Worker on this computer' });
   const start = computer.getByRole('button', { name: 'Start worker' });
   await expect(start).toBeDisabled();
@@ -138,7 +138,7 @@ for (const service of ['running', 'changing'] as const) {
       };
     }, service);
     await openSettings(page);
-    await page.getByRole('tab', { name: 'Workers' }).click();
+    await selectSettingsSection(page, 'workers');
     const computer = page.getByRole('region', { name: 'Worker on this computer' });
     const status = computer.getByRole('group', { name: 'Worker status' });
     await expect(status).toContainText(service === 'running'

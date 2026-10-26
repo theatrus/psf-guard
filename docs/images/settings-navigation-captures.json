@@ -1,0 +1,70 @@
+{
+  "date": "2026-10-26",
+  "state": "Isolated Playwright fixture catalogs; Planning availability and an empty exposure-template library are simulated in the navigation specs. No equipment is paired or user catalogs changed.",
+  "viewports_css": {
+    "desktop": [
+      1280,
+      900
+    ],
+    "phone": [
+      390,
+      844
+    ],
+    "first_run": [
+      1280,
+      720
+    ]
+  },
+  "source_base": "7af92709",
+  "frontend_asset": "index-DixPBeov.js",
+  "frontend_asset_sha256": "85e1f3386ba07ba3d43bcf1a2a3863e0d88827b011f4c1dadf60dada682cfa2a",
+  "backend": "Existing debug server binary serving this worktree static/dist; no backend code changed.",
+  "captures": [
+    {
+      "file": "settings-navigation-performance-desktop.png",
+      "browser": "WebKit",
+      "pixels": [
+        2560,
+        1800
+      ],
+      "sha256": "04c79c51c6317c6bcd24e0d8192b11330bd227fec5c81907b7f5cfe3e194172c"
+    },
+    {
+      "file": "settings-navigation-presets-desktop.png",
+      "browser": "WebKit",
+      "pixels": [
+        2560,
+        1800
+      ],
+      "sha256": "91a0258e1184bce66a57520595c2866e1b89a118612198ddf05ec261a7caf0c9"
+    },
+    {
+      "file": "settings-navigation-performance-phone.png",
+      "browser": "WebKit",
+      "pixels": [
+        780,
+        1688
+      ],
+      "sha256": "8021f48270f3fece53b5e638449708618acd88bf66702aebe76a6d05ee7aa9bb"
+    },
+    {
+      "file": "settings-navigation-presets-phone.png",
+      "browser": "WebKit",
+      "pixels": [
+        780,
+        1688
+      ],
+      "sha256": "c2ef531906bab4c10389cfe994555c55728d85c4e74088190cdbb780fa9369ea"
+    },
+    {
+      "file": "settings-navigation-first-run.png",
+      "browser": "Chromium",
+      "pixels": [
+        1280,
+        720
+      ],
+      "sha256": "a24398ab5468fec925850069dea759f9141f603c6f737b8052d29a69b3ae0e51"
+    }
+  ],
+  "edits": "PNG files copied without resizing or editing."
+}

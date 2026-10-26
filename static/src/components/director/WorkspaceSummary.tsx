@@ -95,7 +95,7 @@ export default function WorkspaceSummary({ projectId, projectName, back, rigs, o
       {rigs.map(rig => {
         const gaps = profiles.data ? rigGaps(profiles.data.find(entry => entry.rig.id === rig.id)) : [];
         return <span key={rig.id} className={`workspace-pill workspace-rig${gaps.length ? ' is-missing' : ' is-ok'}`}
-          title={gaps.length ? `${rig.name}: ${gaps.join(', ')}. Set it up under Settings → Rigs.` : `${rig.name} is set up`}>
+          title={gaps.length ? `${rig.name}: ${gaps.join(', ')}. Set it up under Settings → Databases & rigs → Rigs.` : `${rig.name} is set up`}>
           {gaps.length ? <TriangleAlert size={14} aria-hidden="true" /> : <Check size={14} aria-hidden="true" />}
           {rig.name}{gaps.length > 0 && <small> · {gaps.join(', ')}</small>}{rig.off && <small> · off</small>}
         </span>;

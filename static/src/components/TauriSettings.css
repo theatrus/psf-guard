@@ -18,7 +18,7 @@
   border: none;
   width: 100%;
   height: 100%;
-  overflow-y: auto;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   position: absolute;
@@ -65,8 +65,10 @@
 }
 
 .tauri-settings .modal-body {
-  padding: 3rem;
+  padding: 1.5rem 2rem;
   flex: 1;
+  min-width: 0;
+  min-height: 0;
   overflow-y: auto;
   max-width: 1400px;
   margin: 0 auto;
@@ -74,15 +76,54 @@
   box-sizing: border-box;
 }
 
-.tauri-settings .settings-tabs {
-  display: flex;
-  gap: 4px;
-  padding: 0 24px;
-  border-bottom: 1px solid var(--color-border-secondary);
-  flex-wrap: wrap;
-  max-width: 1400px;
-  margin: 0 auto;
+.tauri-settings .settings-layout {
+  display: grid;
+  grid-template-columns: 14rem minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+  max-width: 1640px;
   width: 100%;
+  align-self: center;
+  overflow: hidden;
+}
+
+.tauri-settings .settings-sidebar {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 1rem;
+  border-right: 1px solid var(--color-border-secondary);
+}
+
+.tauri-settings .settings-nav-group {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 0.85rem;
+}
+
+.tauri-settings .settings-nav-group-label {
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+.tauri-settings .settings-mobile-nav {
+  display: none;
+}
+
+.tauri-settings .settings-page-heading {
+  margin-bottom: 1.5rem;
+  color: var(--color-text-secondary);
+  font-size: 0.8rem;
+}
+
+.tauri-settings .settings-page-heading strong {
+  color: var(--color-text-primary);
+}
+
+.tauri-settings .settings-mobile-nav select {
+  width: 100%;
+  min-width: 0;
   box-sizing: border-box;
 }
 
@@ -90,13 +131,15 @@
   appearance: none;
   background: none;
   border: none;
-  border-bottom: 2px solid transparent;
+  border-left: 2px solid transparent;
+  border-radius: 4px;
   color: var(--color-text-secondary);
   cursor: pointer;
-  font-size: 14px;
+  font: inherit;
+  font-size: 0.85rem;
   font-weight: 500;
-  padding: 10px 14px;
-  margin-bottom: -1px;
+  padding: 0.4rem 0.6rem;
+  text-align: left;
 }
 
 .tauri-settings .settings-tab:hover {
@@ -105,7 +148,31 @@
 
 .tauri-settings .settings-tab[aria-selected='true'] {
   color: var(--state-on-fg);
-  border-bottom-color: var(--state-on-border);
+  background: var(--state-on-bg);
+  border-left-color: var(--state-on-border);
+}
+
+@media (max-width: 760px) {
+  .tauri-settings .settings-layout {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .tauri-settings .settings-sidebar {
+    display: none;
+  }
+
+  .tauri-settings .settings-mobile-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--color-border-secondary);
+  }
+
+  .tauri-settings .modal-body {
+    padding: 1rem;
+  }
 }
 
 .tauri-settings .settings-tab:focus-visible {

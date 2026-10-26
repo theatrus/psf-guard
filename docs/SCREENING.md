@@ -203,7 +203,7 @@ from the FITS header. API callers can change the margin with
 ### Scoring defaults
 
 **Defaults and the current view.** Every view starts from the server's
-scoring defaults, set in **Settings › Review › Sequence scoring**. The server
+scoring defaults, set in **Settings › Review › Grading & display › Sequence scoring**. The server
 keeps one copy for everyone who uses it, and automatic stack builds score
 with it too. Only an editor can change it. Each field shows
 its built-in value, and **Reset to built-in defaults** brings back the
@@ -409,7 +409,7 @@ a report's night links to the same lights and a same-night flat is the
 one Images would show beside it. The AstroBin
 export and the sky coverage still split at the catalog's split.
 
-**Nights end** in Settings › Calibration chooses **At each rig's noon**
+**Nights end** in Settings › Processing › Calibration chooses **At each rig's noon**
 (the default) or **Same time for all rigs**, the catalog's daytime gap
 when nothing is shot, for every
 rig or, as a rig's own setting, for one rig's lights; a light no rig is

@@ -2,7 +2,7 @@ import TsSyncSettings from './TsSyncSettings';
 import { useTsSyncJobs } from '../hooks/useTsSyncJobs';
 import { TS_SYNC_QUERY_KEY } from '../api/tsSyncTypes';
 import { JOBS_QUERY_KEY } from '../api/jobs';
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { isTauriApp, tauriConfig, tauriFileSystem } from '../utils/tauri';
 import OpenLogsButton from './OpenLogsButton';
@@ -66,18 +66,17 @@ import AgentConnect from './AgentConnect';
 import { useMcpUrl } from '../utils/agentSetup';
 import './TauriSettings.css';
 import PathField from './PathField';
-import { describeUnsaved, useUnsavedLabels } from '../hooks/useUnsavedChanges';
+import { describeUnsaved, UnsavedScopeContext, useUnsavedLabels } from '../hooks/useUnsavedChanges';
 
-/**
- * Settings groups unrelated jobs into named tabs so each stays easy to find.
- */
-type SettingsTab = 'databases' | 'catalogs' | 'sync' | 'setups' | 'calibration' | 'stacking' | 'storage' | 'backups' | 'performance' | 'workers' | 'review' | 'rigs' | 'templates' | 'users' | 'agents' | 'server';
+import SettingsNavigation from './SettingsNavigation';
+import { isSettingsSection, settingsGroups, settingsPage, type SettingsSection } from './settingsSections';
+
+type SettingsTab = SettingsSection;
 
 /** An intent that only picks a tab. */
 type TabIntent = Extract<SettingsIntent, SettingsTab>;
-const TAB_INTENTS: readonly TabIntent[] = ['rigs', 'templates', 'stacking', 'storage', 'backups', 'review', 'calibration', 'catalogs'];
 function isTabIntent(intent: SettingsIntent | null): intent is TabIntent {
-  return TAB_INTENTS.includes(intent as TabIntent);
+  return isSettingsSection(intent);
 }
 
 const DEFAULT_REMOTE_UPLOAD_DIRECTORY_TEMPLATE =
@@ -204,8 +203,13 @@ export default function TauriSettings({
   // Forms with edits their Save has not sent: closing asks first, so Done
   // does not drop a rig's new location without a word.
   const unsaved = useUnsavedLabels();
+  const unsavedScope = useRef(new Set<symbol>());
+  const navigationUnsaved = useUnsavedLabels(unsavedScope.current);
   const [confirmClose, setConfirmClose] = useState(false);
+  const [pendingSection, setPendingSection] = useState<SettingsTab | null>(null);
+  const pageBody = useRef<HTMLDivElement>(null);
   const requestClose = () => {
+    setPendingSection(null);
     if (unsaved.length > 0) setConfirmClose(true);
     else onClose();
   };
@@ -964,61 +968,26 @@ export default function TauriSettings({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tsJobs.data]);
 
-  if (!isOpen) return null;
-
   const hasDatabases = databases.length > 0;
 
   // Installing catalogs and syncing take an editor; sync has nothing to
   // talk about until a catalog exists.
-  const visibleTabs: Array<{ id: SettingsTab; label: string }> = [
-    { id: 'databases', label: 'Databases' },
-    ...(isTauri ? ([{ id: 'server', label: 'Server' }] as const) : []),
-    ...(canEdit
-      ? ([{ id: 'catalogs', label: 'Catalogs' }] as const)
-      : []),
-    ...(canEdit && hasDatabases
-      ? ([{ id: 'sync', label: 'Sync' }] as const)
-      : []),
-    // Setups are global display parameters, not filesystem paths, so the tab
-    // is not management-gated.
-    { id: 'setups', label: 'Setups' },
-    // Matching rules, master building and which lights stacks keep; shown to
-    // everyone, saved only with write access.
-    { id: 'calibration', label: 'Calibration' },
-    // Server-wide, like the setups, and not management-gated either.
-    { id: 'stacking', label: 'Stacking' },
-    // Where generated files live and how full their volumes may get; shown
-    // to everyone, changes need database management.
-    { id: 'storage', label: 'Storage' },
-    // An archive holds every catalog and the server's settings, so backups
-    // take an editor on a server that allows database management.
-    ...(canEdit && managementAllowed
-      ? ([{ id: 'backups', label: 'Backups' }] as const)
-      : []),
-    // How much of the processor stacking, quality scans and previews may use
-    // together; server-wide and not management-gated, like Stacking.
-    { id: 'performance', label: 'Performance' },
-    // A worker token lets another machine read the files of the tasks it
-    // runs, so workers take an editor on a server that allows database
-    // management.
-    // The desktop app also runs this computer's own worker from here.
-    ...(isTauri || (canEdit && managementAllowed)
-      ? ([{ id: 'workers', label: 'Workers' }] as const)
-      : []),
-    // Review preferences are stored in this browser, so no gate either.
-    { id: 'review', label: 'Review' },
-    // Rig setup and the exposure template library are Planning's configuration.
-    ...(planningEnabled
-      ? ([{ id: 'rigs', label: 'Rigs' }, { id: 'templates', label: 'Exposure templates' }] as const)
-      : []),
-    ...(!isTauri && access.status.authentication_required
-      ? ([{ id: 'users', label: 'Users' }] as const)
-      : []),
-    // With accounts, agents connect from Users with a token of their own.
-    ...(access.status.authentication_required
-      ? []
-      : ([{ id: 'agents', label: 'Agents' }] as const)),
+  const availableSections: SettingsSection[] = [
+    'databases',
+    ...(planningEnabled ? ['rigs', 'templates'] as const : []),
+    ...(canEdit && hasDatabases ? ['sync'] as const : []),
+    'setups', 'calibration', 'stacking', 'performance', 'gpu',
+    ...(isTauri || (canEdit && managementAllowed) ? ['workers'] as const : []),
+    'storage',
+    ...(canEdit && managementAllowed ? ['backups'] as const : []),
+    ...(canEdit ? ['catalogs'] as const : []),
+    'exports', 'pixinsight', 'astrobin', 'review',
+    ...(isTauri ? ['server'] as const : []),
+    ...(!isTauri && access.status.authentication_required ? ['users'] as const : []),
+    ...(access.status.authentication_required ? [] : ['agents'] as const),
   ];
+  const navigationGroups = settingsGroups(availableSections);
+  const visibleTabs = navigationGroups.flatMap(group => group.pages);
   // Derive rather than store: removing the last database takes the Sync tab
   // away, and the selection has to fall back in the same render.
   // A Planning tab asked for before Planning's status arrives waits for it
@@ -1028,16 +997,22 @@ export default function TauriSettings({
     ? activeTab
     : 'databases';
 
-  const onTabKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-    const step =
-      event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
-    if (step === 0) return;
-    event.preventDefault();
-    const index = visibleTabs.findIndex((tab) => tab.id === currentTab);
-    const next = visibleTabs[(index + step + visibleTabs.length) % visibleTabs.length];
-    setActiveTab(next.id);
-    document.getElementById(`settings-tab-${next.id}`)?.focus();
+  const currentGroup = navigationGroups.find(group => group.pages.some(page => page.id === currentTab));
+  const currentPage = settingsPage(currentTab);
+  const requestSection = (section: SettingsTab) => {
+    if (section === currentTab) return;
+    if (navigationUnsaved.length > 0) {
+      setPendingSection(section);
+      setConfirmClose(true);
+    } else {
+      setActiveTab(section);
+    }
   };
+  useLayoutEffect(() => {
+    if (pageBody.current) pageBody.current.scrollTop = 0;
+  }, [currentTab]);
+
+  if (!isOpen) return null;
 
   const renderDatabaseForm = (entry: DbEntry | null) => {
     const editorHeadingId = entry ? `database-editor-heading-${entry.id}` : undefined;
@@ -1815,6 +1790,7 @@ export default function TauriSettings({
     ) : null;
 
   return (
+    <UnsavedScopeContext.Provider value={unsavedScope.current}>
     <div className="tauri-settings modal-overlay" onClick={requestClose}>
       <div className="modal-content" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
@@ -1822,35 +1798,20 @@ export default function TauriSettings({
           <button className="close-button" aria-label="Close settings" onClick={requestClose}>×</button>
         </div>
 
-        <div
-          className="settings-tabs"
-          role="tablist"
-          aria-label="Settings sections"
-          onKeyDown={onTabKeyDown}
-        >
-          {visibleTabs.map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              role="tab"
-              id={`settings-tab-${tab.id}`}
-              aria-selected={tab.id === currentTab}
-              aria-controls={`settings-panel-${tab.id}`}
-              tabIndex={tab.id === currentTab ? 0 : -1}
-              className="settings-tab"
-              onClick={() => setActiveTab(tab.id)}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
+        <div className="settings-layout">
+        <SettingsNavigation groups={navigationGroups} current={currentTab} onChange={requestSection} />
 
         <div
           className="modal-body"
+          ref={pageBody}
           role="tabpanel"
           id={`settings-panel-${currentTab}`}
-          aria-labelledby={`settings-tab-${currentTab}`}
+          aria-labelledby="settings-section-heading"
         >
+          <header className="settings-page-heading" id="settings-section-heading">
+            <span>{currentGroup?.label}</span><span aria-hidden="true"> / </span>
+            <strong>{currentPage.label}</strong>
+          </header>
           {currentTab === 'review' && <div className="settings-setups"><ReviewPreferences /></div>}
           {currentTab === 'databases' && <>{tsJobs.data?.filter(job => job.running || job.error).map(job => <p key={job.id} role={job.error ? 'alert' : 'status'}>{job.name || 'Target Scheduler'}: {job.error || (job.stage === 'copying' ? `Copying database · ${job.pages_done}/${job.pages_total} pages` : job.stage === 'initializing' ? 'Preparing the working catalog…' : 'Syncing captures and grades…')}</p>)}</>}
           {currentTab === 'databases' && (
@@ -2105,9 +2066,6 @@ export default function TauriSettings({
           {currentTab === 'setups' && (
             <div className="settings-setups">
               <ProcessingSetupsManager />
-              <ExportDefaultsSettings />
-              <PixInsightSettings />
-              <AstroBinSettings />
             </div>
           )}
 
@@ -2121,7 +2079,6 @@ export default function TauriSettings({
           {currentTab === 'stacking' && (
             <div className="settings-setups">
               <StackMethodSettings />
-              <StackGpuSettings />
               <StackAutomationSettings />
             </div>
           )}
@@ -2131,6 +2088,11 @@ export default function TauriSettings({
               <WorkerShareSettings />
             </div>
           )}
+
+          {currentTab === 'gpu' && <div className="settings-setups"><StackGpuSettings /></div>}
+          {currentTab === 'exports' && <div className="settings-setups"><ExportDefaultsSettings /></div>}
+          {currentTab === 'pixinsight' && <div className="settings-setups"><PixInsightSettings /></div>}
+          {currentTab === 'astrobin' && <div className="settings-setups"><AstroBinSettings /></div>}
 
           {currentTab === 'workers' && (
             <>
@@ -2165,6 +2127,8 @@ export default function TauriSettings({
           )}
         </div>
 
+        </div>
+
         <div className="modal-footer">
           {statusMessage && (
             <div
@@ -2177,21 +2141,29 @@ export default function TauriSettings({
               {statusMessage}
             </div>
           )}
-          {confirmClose && unsaved.length > 0 && (
+          {confirmClose && (pendingSection ? navigationUnsaved : unsaved).length > 0 && (
             <div className="unsaved-confirm" role="alertdialog" aria-labelledby="unsaved-confirm-text">
               <p id="unsaved-confirm-text">
-                Unsaved changes in {describeUnsaved(unsaved)}. Close without saving them?
+                Unsaved changes in {describeUnsaved(pendingSection ? navigationUnsaved : unsaved)}. {pendingSection
+                  ? `Switch to ${settingsPage(pendingSection).label} without saving them?`
+                  : 'Close without saving them?'}
               </p>
               {/* Focus lands on the safe choice. */}
-              <button type="button" autoFocus onClick={() => setConfirmClose(false)}>
+              <button type="button" autoFocus onClick={() => { setConfirmClose(false); setPendingSection(null); }}>
                 Keep editing
               </button>
               <button
                 type="button"
                 className="unsaved-discard"
-                onClick={() => { setConfirmClose(false); onClose(); }}
+                onClick={() => {
+                  setConfirmClose(false);
+                  if (pendingSection) {
+                    setActiveTab(pendingSection);
+                    setPendingSection(null);
+                  } else onClose();
+                }}
               >
-                Close without saving
+                {pendingSection ? 'Discard changes and switch' : 'Close without saving'}
               </button>
             </div>
           )}
@@ -2221,6 +2193,7 @@ export default function TauriSettings({
         </div>
       </div>
     </div>
+    </UnsavedScopeContext.Provider>
   );
 }
 

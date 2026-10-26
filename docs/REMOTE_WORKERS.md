@@ -24,7 +24,7 @@ database management.
    tools on that computer. Run `rc-astro download-models` to download the
    models before the first task. Workers that only build stacks do not
    need rc-astro.
-3. On the server, open **Settings › Workers** and click **+ Add a worker**.
+3. On the server, open **Settings › Performance › Workers** and click **+ Add a worker**.
    Enter a name for the worker, such as `studio-pc`, and click **Create
    token**.
 4. Copy a command PSF Guard shows: one for macOS and Linux shells, one for
@@ -58,9 +58,9 @@ continues running when you close the app window.
 1. Install the same PSF Guard release on the worker computer and the server.
    To run RC-Astro tools, install rc-astro and license the tools on the
    worker computer too.
-2. On the server, open **Settings › Workers**, click **+ Add a worker**, and
+2. On the server, open **Settings › Performance › Workers**, click **+ Add a worker**, and
    create a token. Copy the token; PSF Guard shows it only once.
-3. On the worker computer, open PSF Guard and choose **Settings › Workers ›
+3. On the worker computer, open PSF Guard and choose **Settings › Performance › Workers ›
    Worker on this computer**.
 4. Enter the **Server address**, such as `http://192.168.1.10:3000`, and the
    **Worker token**. Leave **Worker name** blank to use the computer's host
@@ -112,7 +112,7 @@ service](#run-a-worker-as-a-linux-service).
 The Fedora RPM and the Debian package install a `psf-guard-worker` systemd
 service. It is not enabled, so it runs only after you set it up.
 
-1. On the server, open **Settings › Workers**, click **+ Add a worker**,
+1. On the server, open **Settings › Performance › Workers**, click **+ Add a worker**,
    and create a token.
 2. On the worker, edit `/etc/psf-guard/worker.conf` as root. The Debian
    package installs an example instead; copy it first and keep it readable
@@ -168,7 +168,7 @@ Use a Windows service when the worker needs to run before anyone logs in.
 The service starts with Windows. It uses its own copies of the app and
 settings, separate from the desktop worker.
 
-1. Open **Settings › Workers › Worker on this computer** in the desktop
+1. Open **Settings › Performance › Workers › Worker on this computer** in the desktop
    app and enter the worker settings. Turn off **Start worker at login**,
    then click **Save worker settings**. If the desktop worker is running,
    click **Stop worker** before installing the service.
@@ -251,12 +251,12 @@ A worker accepts everything it can run unless you list its work with
 
 For example, `--work bxt --work sxt` sends BlurXTerminator and
 StarXTerminator to a GPU computer, and leaves NoiseXTerminator and stack
-builds to the server. **Settings › Workers** lists the tools each worker
+builds to the server. **Settings › Performance › Workers** lists the tools each worker
 accepts, and whether it accepts stack builds.
 
 ## Choose where work runs
 
-Under **Where work runs** in **Settings › Workers**, choose where RC-Astro
+Under **Where work runs** in **Settings › Performance › Workers**, choose where RC-Astro
 tools run, and where stack builds run:
 
 - **Workers first.** A connected worker that accepts the work runs it. The
@@ -277,12 +277,12 @@ To stack builds on another computer, such as one with more cores or a GPU:
 1. Start the worker with `--work stack`, or with no `--work` at all. Use
    shared files when you can: a worker in remote mode downloads every frame
    of a channel before it stacks it, about 50 to 120 MB a frame.
-2. In **Settings › Workers**, under **Where work runs** › **Stack builds**,
+2. In **Settings › Performance › Workers**, under **Where work runs** › **Stack builds**,
    choose **Workers first** or **Workers only**.
 
 The server sends a channel only to a worker on its own PSF Guard release
 and Seiza stacking version, with the frames, masters, checkpoint and
-settings it would use itself. **Settings › Stacking › GPU** applies on the
+settings it would use itself. **Settings → Performance → GPU** applies on the
 worker too: with **Use the GPU** off, the worker stacks on its CPU even if
 it has a GPU. A GPU's passes can differ slightly from a CPU's, so a channel
 stacked on a worker with a GPU can differ slightly from one this server
@@ -336,7 +336,7 @@ Shared storage is optional. If the worker and server can access the same
 storage, such as an NFS or SMB share, the worker can read inputs and write
 results in that shared folder:
 
-1. On the server, in **Settings › Workers**, open **Shared storage**. Enter
+1. On the server, in **Settings › Performance › Workers**, open **Shared storage**. Enter
    a folder on the share as the server sees it, such as `/srv/astro`, and
    click **Save**.
 2. Start the worker with a map from the server's path to the worker's:
@@ -380,7 +380,7 @@ versions are part of the result's cache identity.
   name, such as **NoiseXTerminator on studio-pc**.
 - The server's own worker runs one step at a time. A person's work goes
   ahead of automatic re-applies.
-- **Settings › Workers** lists tasks waiting for a worker and what each
+- **Settings › Performance › Workers** lists tasks waiting for a worker and what each
   needs.
 
 When no connected worker offers a tool and the server has none, applying
@@ -417,7 +417,7 @@ restart it after you license or upgrade rc-astro there.
 
 ## Revoke a worker
 
-In **Settings › Workers**, click **Revoke** beside the worker's token. The
+In **Settings › Performance › Workers**, click **Revoke** beside the worker's token. The
 server disconnects the worker immediately and queues its tasks again. At its next
 progress report or claim, the worker stops its tool and exits with a message
 to create a new token.

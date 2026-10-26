@@ -381,7 +381,7 @@ Blank or undefined optional header values, such as `FILTER` in a PixInsight
 master bias XISF, are preserved in the cached FITS master. They do not prevent
 calibration, and the source file needs no header edits.
 
-**Settings › Calibration › Matching › External masters** decides
+**Settings › Processing › Calibration › Matching › External masters** decides
 how they take part: use one whenever it matches (the default), only when raw
 frames cannot build a master, or never. A rig can choose for itself.
 
@@ -916,7 +916,7 @@ Flat):
   much its flats depend on the rotator angle, counts the sessions not
   measured, shows `Measuring flats · 12 of 40 sessions` while the job
   measures a rig in view, and ends in
-  **Edit limits**. That opens **Settings › Calibration** on the dust
+  **Edit limits**. That opens **Settings › Processing › Calibration** on the dust
   limit, or on **Group flats** while the rig groups by time: the rig's
   own value when it sets one, else the global one.
 - The chosen flat session's title says which group it is in, its nights
@@ -1046,7 +1046,7 @@ does.
 
 ### Settings and checks
 
-Three settings sit under **Settings › Calibration › Flat groups**, global
+Three settings sit under **Settings › Processing › Calibration › Flat groups**, global
 or per rig (**Edit limits** in Frames leads there): **Group flats** (by measurement, or by time only as before),
 **Dust split** and **Light pattern split**. They
 are matching settings: a change rebuilds the masters and stacks whose
@@ -1345,7 +1345,7 @@ nearest cluster with enough frames builds the master, so a stray single flat
 near the lights cannot orphan a complete session from a week earlier.
 
 Darks keep for months, so a dark master can pool several nights, nearest
-first. Three settings under **Settings › Calibration › Dark masters** shape
+first. Three settings under **Settings › Processing › Calibration › Dark masters** shape
 it:
 
 - **Maximum time difference for darks** (default 183 days): darks outside this
@@ -1453,7 +1453,7 @@ filter over each calibrated light, and the card says so.
 ### Native sky-flat masks
 
 Enable **Mask stars in flats** under
-**Settings > Setups > Calibration > Flat masters** to exclude detected stars
+**Settings → Processing → Calibration → Flat masters** to exclude detected stars
 before flat integration. The setting is off by default, applies to every
 database on this server, and persists through a restart. It needs no
 StarXTerminator or other external tool. Imported masters
@@ -1530,7 +1530,7 @@ A light cannot be calibrated properly when:
   example, every flat for its filter was shot at another rotator angle);
 - neither a bias nor a dark matches it, though the library holds either; or
 - the flats that match were shot further from it than the **Flat age limit**
-  (**Settings › Calibration › Light checks**, default 60 days; 0 lifts it).
+  (**Settings › Processing › Calibration › Light checks**, default 60 days; 0 lifts it).
 
 The **Flat age limit** and **Flat age warning** measure the elapsed time to
 the nearest flat that will contribute to the light's master. A 1-day limit
@@ -1552,7 +1552,7 @@ reason. **Reject N lights** then sets them Rejected with the reason, so
 Target Scheduler shoots them again. It refuses, and asks for a new check,
 when the list changed after it was shown.
 
-Stacks keep such lights unless **Settings › Calibration › Stacks and exports ›
+Stacks keep such lights unless **Settings › Processing › Calibration › Stacks and exports ›
 Leave out lights that can't be calibrated** is on. With it on, and calibration
 on or automatic, stack previews leave them out, so they never mix with properly
 calibrated frames: the stack card counts them under **can't calibrate** and
@@ -1607,7 +1607,7 @@ The image views mark the same lights. In Images, Sequence and a mosaic's
 sequence, a **🧪** chip under the score chips is red on a Poor light and
 yellow on one to check; hover it for its findings, or click it to open the
 light on its **Calibration** panel. The chip has its own toggle beside the
-🌙 and layers toggles, and in **Settings › Review**.
+🌙 and layers toggles, and in **Settings → Review → Grading & display**.
 
 An image's detail view has a **Calibration** panel. It lists the light's
 findings in words, worst first, as the library stands now, and for bias,
@@ -1667,7 +1667,7 @@ lights does not clear the rest until the pass ends; Sequence holds back
 
 Every limit on this page that decides which frames calibrate a light, what
 the light checks flag, and where a calibration frame grades suspect or poor
-is a setting under **Settings › Calibration**. The defaults are the limits
+is a setting under **Settings › Processing › Calibration**. The defaults are the limits
 PSF Guard used before these settings existed, so a library nobody tunes
 behaves exactly as it did. A rig whose workflow is sound but unusual, such
 as one that shoots sky flats or cannot cap for darks, need not be flagged
@@ -1675,7 +1675,7 @@ for it.
 
 ### Where a value comes from
 
-1. The light's rig, when **Settings › Calibration › Rigs** sets the value
+1. The light's rig, when **Settings › Processing › Calibration › Rigs** sets the value
    for that rig.
 2. Otherwise the server's value, set in the same tab above the rigs.
 3. Otherwise the default.
@@ -1983,8 +1983,8 @@ read from WBPP's source; it has not yet been run through PixInsight.
 
 Choose the layout with `--layout wbpp` on the CLI, the `layout` query parameter
 on the export download, or in the dialog every Export action on the overview
-opens. The dialog starts from the **Export** default in Settings → Setups,
-which is server-wide and shared by the desktop and browser apps. With the WBPP
+opens. The dialog starts from **Settings → Exports & integrations → Export defaults**,
+which applies to both the desktop and browser apps. With the WBPP
 layout the dialog also asks for WBPP's settings (quality preset, Fast
 Integration, drizzle, autocrop, light rejection), which the runner script
 passes; see [Stacking with PixInsight's WBPP](WBPP.md), which also covers

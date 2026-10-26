@@ -1,7 +1,7 @@
 # Backups
 
 PSF Guard can back up its own settings and the catalogs it works on, now or
-on a schedule. Open **Settings › Backups**, or run `psf-guard backup`.
+on a schedule. Open **Settings › Storage & backups › Backups**, or run `psf-guard backup`.
 
 Backups need an editor on a server that allows database management: the
 desktop app, or a server started with `--allow-database-management`. An
@@ -73,11 +73,11 @@ PSF Guard makes these again, so a backup never holds them:
 - stack previews and their processing (the stacks folder);
 - calibration masters (the calibration folder);
 - astrometry solves, satellite elements and sky maps (the cache folder);
-- Seiza star catalogs, which Settings › Catalogs installs again;
+- Seiza star catalogs, which you can reinstall under **Settings → Storage & backups → Reference catalogs**;
 - the FITS and XISF frames themselves.
 
 On a working rig these folders are usually far larger than everything a
-backup holds: Settings › Storage shows their sizes.
+backup contains. Check their sizes under **Settings → Storage & backups → Folders & limits**.
 
 ### Secrets
 

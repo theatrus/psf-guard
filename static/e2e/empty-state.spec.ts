@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { resetDatabases } from './helpers';
+import { resetDatabases, selectSettingsSection } from './helpers';
 
 test.beforeEach(async ({ request }) => {
   await resetDatabases(request);
@@ -69,7 +69,7 @@ test('first run offers importing images as well as opening a N.I.N.A. database',
   await expect(modal.getByText('Image Directories:')).toBeVisible();
 });
 
-test('settings splits its jobs across tabs', async ({ page }) => {
+test('settings groups its configuration pages', async ({ page }, testInfo) => {
   await page.goto('/');
   await page.getByRole('heading', { name: /Welcome to PSF Guard/i }).waitFor();
 
@@ -87,7 +87,8 @@ test('settings splits its jobs across tabs', async ({ page }) => {
   await expect(
     modal.getByRole('heading', { name: 'Seiza Catalogs' })
   ).toBeHidden();
-  await modal.getByRole('tab', { name: 'Catalogs' }).click();
+  await page.screenshot({ path: testInfo.outputPath('settings-first-run.png') });
+  await selectSettingsSection(modal, 'catalogs');
   await expect(
     modal.getByRole('heading', { name: 'Seiza Catalogs' })
   ).toBeVisible();
@@ -100,8 +101,8 @@ test('settings splits its jobs across tabs', async ({ page }) => {
     modal.getByRole('heading', { name: 'Configured Databases' })
   ).toBeHidden();
 
-  // Arrow keys move along the tab strip, per the ARIA tabs pattern.
-  await modal.getByRole('tab', { name: 'Catalogs' }).press('ArrowLeft');
+  // Home selects the first section, per the ARIA tabs pattern.
+  await modal.getByRole('tab', { name: 'Reference catalogs' }).press('Home');
   await expect(modal.getByRole('tab', { name: 'Databases' })).toHaveAttribute(
     'aria-selected',
     'true'

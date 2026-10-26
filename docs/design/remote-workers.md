@@ -83,7 +83,7 @@ A worker in remote mode gets a spec and the files that spec lists, and
 nothing else. A worker in shared mode can also read the rest of the
 exchange folder through the share.
 
-- **Tokens.** Settings › Workers mints one token per worker (`psfw_` and 64
+- **Tokens.** Settings › Performance › Workers mints one token per worker (`psfw_` and 64
   hex digits). The registry keeps its SHA-256 (`remote_workers.tokens`).
   The workers' routes (`/api/workers/v1/`) skip the user sign-in, and each
   request is checked against the tokens. A token reaches only the sessions
@@ -108,7 +108,7 @@ A task's files live in its own folder,
 `<exchange>/psf-guard-exchange/tasks/<task>/`, and each lease writes its
 outputs in `<task>/<lease>/`, so a worker that lost its lease cannot
 overwrite the next worker's outputs. The exchange folder is
-`<cache>/workers` unless one is chosen in Settings › Workers. PSF Guard
+`<cache>/workers` unless one is chosen in Settings › Performance › Workers. PSF Guard
 removes only what it wrote: a server start removes task folders and probes
 older than six hours, named by a task or session id, since another server
 may share the folder.
@@ -217,7 +217,7 @@ and registers no plugins.
   its window is open brings that window forward and exits. It loads the
   registry and starts the desktop server in `setup`, after that check.
 - **Desktop app.** `src/desktop_worker.rs` has the commands behind
-  **Settings › Workers › Worker on this computer**. They read and save settings,
+  **Settings › Performance › Workers › Worker on this computer**. They read and save settings,
   start the tray process, and pause, resume and stop it through the control port.
 - **Windows service** (`commands/worker/service.rs`). Service startup uses
   copies that unprivileged processes cannot modify. `worker-service install`
@@ -296,7 +296,7 @@ own work splits where the catalog stops:
   free memory, one per slot, and keeps the final pass's copies of the frames
   in its work folder. This server's GPU setting applies on the worker. The
   worker plans memory with the default processing memory budget, not this
-  server's **Settings › Performance › Processing memory**, so a mosaic
+  server's **Settings › Performance › CPU & memory › Processing memory**, so a mosaic
   canvas that fits here can be too large for a worker.
 - **Placement.** `remote_workers.stack` in the registry, this server only by
   default. This server stacks its own channels in process rather than

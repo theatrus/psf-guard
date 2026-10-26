@@ -172,7 +172,7 @@ export default function ScoringDefaultsSettings() {
         change in a view's control applies to that view until you save it as
         the default. When automatic stack previews are on, saving new defaults
         rebuilds stacks scored another way, after the arrival delay set under
-        Settings › Stacking.
+        Settings › Processing › Stacking.
       </p>
       {!canWrite && (
         <p className="scoring-defaults-intro">Only an editor can change the defaults.</p>

@@ -67,7 +67,7 @@ plugin needs a direct Starfront connection. The independent
 provides the outer loop for Target Scheduler users without PSF Guard. Use one
 collaboration host for each remote agent to avoid duplicate assignments or reports.
 
-Open **Settings**, **Rigs**, then **Setup** for a rig. The selected rig's header
+Open **Settings**, **Databases & rigs**, **Rigs**, then **Setup** for a rig. The selected rig's header
 stays above its setup. **Optics**, **Site**, **Limits and delivery**, and
 **Collaboration** use a section rail on desktop and a compact strip on narrow
 screens, separate from the smaller collaboration tabs. Changes stay in
@@ -452,7 +452,7 @@ that used to talk has gone quiet, and opens **Live on the Sky** from any
 view: each reporting rig drawn on the coverage map where it points now, a
 list of the rigs beside the map (choosing one turns the map to it), and the
 full Live table under the map. Rig setup and the exposure template library
-are under **Settings › Rigs** and **Settings › Exposure templates**; a
+are under **Settings › Databases & rigs › Rigs** and **Settings → Presets → Exposure templates**; a
 read-only viewer cannot open Settings, so Live on the Sky shows them both
 under the table, read only. Choosing a
 project in the Review picker from the Library, Sky or a workspace opens
@@ -498,7 +498,7 @@ in (with saved frames grading has not yet accepted), and reported status, and
 which activated plans it is assigned to, each a link to the workspace. The
 table refreshes every fifteen seconds.
 
-**Settings › Rigs** lists every registered database as a rig: whether
+**Settings › Databases & rigs › Rigs** lists every registered database as a rig: whether
 planning is enabled, its field of view and pixel scale from the rig profile,
 whether the plugin has reported its camera, and the plugin's last live
 status. **Setup** expands the database's planning setup in place: enable
@@ -686,7 +686,7 @@ split, and the first and last capture with how long ago that was. A plan
 shot by several rigs is an outer pill, **N rigs**, with the plan's total
 progress, its stage and its Planning button, and one row per rig under it,
 since each rig holds its own targets and exposure plans and can be ahead of
-or behind the others. The Compact / Detailed choice is Settings → Review →
+or behind the others. The Compact / Detailed choice is Settings → Review → Grading & display →
 Library.
 
 The **Show** select narrows the Library family by family: Active, Inactive
@@ -985,7 +985,7 @@ server folds both back to the sensor before offering them. Typed models:
 ## Sites and horizons
 
 A site holds a location (latitude, east-positive longitude and elevation) and
-a horizon. Add and edit sites under **Settings**, **Rigs**, **Sites**. Each
+a horizon. Add and edit sites under **Settings**, **Databases & rigs**, **Rigs**, **Sites**. Each
 rig picks its **Planning site** in its Setup card and takes the site's
 location and horizon. A rig's own values win: a location typed into its card,
 and a horizon pasted there or reported by the N.I.N.A. plugin. Leave the
@@ -1380,7 +1380,7 @@ and [plan](../crates/director-meta/src/plan.rs).
 
 ## Exposure template library
 
-**Settings › Exposure templates** is Director's own list of templates: a name, the filter as the rig calls it, gain, offset, binning,
+**Settings → Presets → Exposure templates** is Director's own list of templates: a name, the filter as the rig calls it, gain, offset, binning,
 readout mode and a starting exposure. They belong to no database. A plan may
 bind a rig to one of them where the rig's database has no template for the
 band, and activation writes it into that database under the library's GUID,
