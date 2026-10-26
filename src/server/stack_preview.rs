@@ -18,6 +18,7 @@ pub mod gpu;
 mod integrate;
 mod janitor;
 pub mod journal;
+pub(crate) mod kept_lights;
 mod line_work;
 mod live;
 pub use live::LiveStackPreview;
@@ -2648,9 +2649,17 @@ fn excluded_decision_for(image_id: i32, reason: String) -> StackFrameDecision {
 }
 
 pub(crate) fn source_fingerprint(path: &FsPath) -> String {
+    source_fingerprint_from(path, path.metadata().ok().as_ref())
+}
+
+/// [`source_fingerprint`] from the file's metadata, when the caller has it.
+pub(crate) fn source_fingerprint_from(
+    path: &FsPath,
+    metadata: Option<&std::fs::Metadata>,
+) -> String {
     let mut hasher = Sha256::new();
     hasher.update(path.to_string_lossy().as_bytes());
-    if let Ok(metadata) = path.metadata() {
+    if let Some(metadata) = metadata {
         hasher.update(metadata.len().to_le_bytes());
         if let Ok(modified) = metadata.modified()
             && let Ok(duration) = modified.duration_since(UNIX_EPOCH)

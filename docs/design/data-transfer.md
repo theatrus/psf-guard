@@ -134,6 +134,7 @@ filters remain available.
 | Calibrated or registered copy record (`psf_guard_frame_derivative`) | `derivative_uuid`; its light by image GUID | Insert or update; skip a record whose light did not come across, or whose light already has its own record of that kind |
 | Flat group split or join by hand (`psf_guard_flat_group_override`) | First flat UUID of the session the edge comes before; skipped when the destination lacks that flat | Newer `chosen_at` wins, a reset included |
 | A light's flat side or group by hand (`psf_guard_flat_light_choice`) | Image GUID plus change key; skipped when the destination lacks the light | Newer `chosen_at` wins, a reset included |
+| Kept light headers and calibration file checks (`psf_guard_light_header`, `psf_guard_calibration_file_check`) | None | Never transferred: they hold the source machine's paths and file times |
 | Existing reviewed grade during merge | Image GUID | Destination wins |
 | Existing Pending grade during merge | Image GUID | Fill from source |
 | Explicit grade push | Image GUID | Source grade and reason win |
