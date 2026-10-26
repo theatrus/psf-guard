@@ -224,9 +224,9 @@ and registers no plugins.
   `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` on Windows. Both
   run `psf-guard worker --tray --config <settings>`.
 - **Windows console windows.** The tray reads the host name without starting
-  `hostname`. Seiza starts rc-astro with `CREATE_NO_WINDOW` from the release
-  after theatrus/seiza#378; until then, each rc-astro run opens a console
-  window on Windows.
+  `hostname`, and Seiza starts rc-astro with `CREATE_NO_WINDOW` (from
+  `seiza-stacking` 0.51.2), so a worker without a console opens no console
+  windows.
 
 ## Stack channels
 
