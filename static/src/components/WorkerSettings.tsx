@@ -54,11 +54,11 @@ function lastSeen(worker: WorkerSessionSummary): string {
 
 function fileAccess(worker: WorkerSessionSummary): string {
   if (worker.local) return 'Reads task files in place';
-  if (worker.exchange_shared) return 'Shared files';
+  if (worker.exchange_shared) return 'Shared storage';
   if (worker.file_mode === 'shared') {
-    return `Files go through the server: ${worker.exchange_problem ?? 'the exchange folder is not visible to the worker'}`;
+    return `Files transfer through the server: ${worker.exchange_problem ?? 'the shared folder is not visible to the worker'}`;
   }
-  return 'Files go through the server';
+  return 'Files transfer through the server';
 }
 
 function WorkerRow({ worker }: { worker: WorkerSessionSummary }) {
@@ -164,7 +164,7 @@ export default function WorkerSettings() {
   const saveFolder = (next: string | null) => {
     void run(async () => {
       publish(await apiClient.setWorkerExchangeFolder(next));
-      setStatus(next ? 'Exchange folder saved.' : 'The exchange folder is back to the default.');
+      setStatus(next ? 'Shared folder saved.' : 'Task files are back in the default folder.');
     });
   };
 
@@ -289,8 +289,8 @@ export default function WorkerSettings() {
             </button>
           </div>
           <p className="muted">
-            Or, in the PSF Guard app on a Mac or a Windows PC, open Settings ›
-            Run a worker and enter this server&apos;s address and the token:
+            Or enter this token in the PSF Guard app on that computer, in
+            Settings › Workers › This computer:
           </p>
           <div className="token-secret-row">
             <code className="token-secret-value" data-shell="token">{commands.token}</code>
@@ -310,9 +310,8 @@ export default function WorkerSettings() {
             </p>
           )}
           <p className="muted">
-            Add <code>--files shared --map SERVER_FOLDER=LOCAL_FOLDER</code> when
-            the worker sees this server&apos;s exchange folder on shared storage.
-            Otherwise every file goes through the server.
+            Task files transfer through this server. To use shared storage
+            instead, add <code>--files shared --map SERVER_FOLDER=LOCAL_FOLDER</code>.
           </p>
           <button type="button" className="cancel-button" onClick={() => setCreated(null)}>
             Done
@@ -393,44 +392,45 @@ export default function WorkerSettings() {
         </div>
       ))}
 
-      <h4>Exchange folder</h4>
-      <p className="muted">
-        Task files go through this folder: the image a tool processes and the
-        result it returns. PSF Guard keeps them in a{' '}
-        <code>{data.exchange_subfolder}</code> folder inside it. A worker in
-        shared mode reads and writes them there directly, so choose a folder on
-        storage the workers can reach. Now: <code>{data.exchange_folder}</code>
-      </p>
-      <form
-        className="database-config"
-        onSubmit={(event) => {
-          event.preventDefault();
-          saveFolder(folder.trim() || null);
-        }}
-      >
-        <label htmlFor="worker-exchange-folder">Folder</label>
-        <input
-          id="worker-exchange-folder"
-          className="file-path-input"
-          value={folder}
-          onChange={(event) => setFolder(event.target.value)}
-          placeholder={data.default_exchange_folder}
-          disabled={saving}
-        />
-        <div className="modal-buttons">
-          <button type="submit" className="save-button" disabled={saving || folder.trim() === savedFolder}>
-            Save folder
-          </button>
-          <button
-            type="button"
-            className="cancel-button"
-            disabled={saving || !savedFolder}
-            onClick={() => saveFolder(null)}
-          >
-            Use the default
-          </button>
-        </div>
-      </form>
+      <details className="worker-exchange" open={Boolean(savedFolder)}>
+        <summary>Shared storage</summary>
+        <p className="muted">
+          Workers download task files from this server and upload results. A
+          worker that shares storage with this server can read and write them
+          in a folder there instead. Task files are in{' '}
+          <code>{data.exchange_folder}</code>.
+        </p>
+        <form
+          className="database-config"
+          onSubmit={(event) => {
+            event.preventDefault();
+            saveFolder(folder.trim() || null);
+          }}
+        >
+          <label htmlFor="worker-exchange-folder">Shared folder</label>
+          <input
+            id="worker-exchange-folder"
+            className="file-path-input"
+            value={folder}
+            onChange={(event) => setFolder(event.target.value)}
+            placeholder={data.default_exchange_folder}
+            disabled={saving}
+          />
+          <div className="modal-buttons">
+            <button type="submit" className="save-button" disabled={saving || folder.trim() === savedFolder}>
+              Save
+            </button>
+            <button
+              type="button"
+              className="cancel-button"
+              disabled={saving || !savedFolder}
+              onClick={() => saveFolder(null)}
+            >
+              Use the default
+            </button>
+          </div>
+        </form>
+      </details>
 
       {status && <div className="status-message">{status}</div>}
     </div>

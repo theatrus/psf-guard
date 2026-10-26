@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { openSettings, registerFixtureDb, resetDatabases, waitForCacheReady } from './helpers';
 
-// Settings › Run a worker in the desktop app. The page runs in a browser
+// Settings › Workers › This computer in the desktop app. The page runs in a browser
 // with a stand-in for the desktop app's commands: Rust tests cover the
 // settings file, the start-at-login entries and the worker's controls, and
 // a real worker runs in the menu bar in manual testing.
@@ -68,20 +68,23 @@ test('this computer saves its worker settings, then starts and stops the worker'
   await page.setViewportSize({ width: 1280, height: 1400 });
   await page.goto('/');
   await openSettings(page);
-  await page.getByRole('tab', { name: 'Run a worker' }).click();
-  const start = page.getByRole('button', { name: 'Start the worker' });
+  await page.getByRole('tab', { name: 'Workers' }).click();
+  const computer = page.getByRole('region', { name: 'This computer' });
+  const start = computer.getByRole('button', { name: 'Start' });
   await expect(start).toBeDisabled();
 
-  await page.getByLabel('Server address').fill('http://observatory.local:3000');
-  await page.getByLabel('Worker token').fill(`psfw_${'a'.repeat(64)}`);
-  await page.getByLabel('Worker name').fill('studio-mac');
-  await page.getByRole('checkbox', { name: /RC-Astro tools/ }).uncheck();
-  await page.getByRole('radio', { name: /shares with the server/ }).check();
-  await page.getByLabel('Server folder 1').fill('/srv/astro');
-  await page.getByLabel("This computer's folder 1").fill('/Volumes/astro');
-  await page.getByRole('checkbox', { name: 'Start the worker when I log in' }).check();
-  await page.getByRole('button', { name: 'Save' }).click();
-  await expect(page.getByRole('status').filter({ hasText: 'Saved.' })).toBeVisible();
+  await computer.getByLabel('Server address').fill('http://observatory.local:3000');
+  await computer.getByLabel('Token').fill(`psfw_${'a'.repeat(64)}`);
+  await computer.getByLabel('Name').fill('studio-mac');
+  await computer.getByRole('checkbox', { name: 'RC-Astro tools' }).uncheck();
+  await computer.getByRole('checkbox', { name: 'Start at login' }).check();
+  // Shared storage is optional, under Files.
+  await computer.getByText('Files', { exact: true }).click();
+  await computer.getByRole('checkbox', { name: 'Use shared storage' }).check();
+  await computer.getByLabel('Server folder 1').fill('/srv/astro');
+  await computer.getByLabel('Folder on this computer 1').fill('/Volumes/astro');
+  await computer.getByRole('button', { name: 'Save' }).click();
+  await expect(computer.getByRole('status').filter({ hasText: 'Saved.' })).toBeVisible();
   const saved = await page.evaluate(() =>
     (window as unknown as { __desktopWorkerCalls: Array<{ command: string; args: { worker?: unknown } }> })
       .__desktopWorkerCalls.find((call) => call.command === 'save_desktop_worker')?.args.worker);
@@ -99,10 +102,10 @@ test('this computer saves its worker settings, then starts and stops the worker'
   });
 
   await start.click();
-  const status = page.getByRole('region', { name: 'Worker status' });
-  await expect(status).toContainText('Connected to http://observatory.local:3000 as studio-mac');
-  await expect(status).toContainText('Stack of 42 frames, Ha channel · 37%');
-  await page.locator('.desktop-worker-settings').screenshot({ path: testInfo.outputPath('run-a-worker.png') });
+  const status = computer.getByRole('group', { name: 'Worker status' });
+  await expect(status).toContainText('Connected to http://observatory.local:3000.');
+  await expect(status).toContainText('Stack of 42 frames, Ha channel: 37%');
+  await computer.screenshot({ path: testInfo.outputPath('this-computer.png') });
   await status.getByRole('button', { name: 'Stop' }).click();
   await expect(status).toContainText('Not running.');
 });

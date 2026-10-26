@@ -132,7 +132,7 @@ fn build_tray(
     let work = MenuItem::with_id(app, "work", &lines.work, false, None::<&str>)?;
     let pause = MenuItem::with_id(app, "pause", &lines.pause, true, None::<&str>)?;
     let open = MenuItem::with_id(app, "open", "Open PSF Guard", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit Worker", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
         &[
@@ -224,30 +224,26 @@ impl MenuLines {
         let connection = match status.connection {
             Connection::Connecting if status.server.is_empty() => "Starting".to_string(),
             Connection::Connecting => match &status.problem {
-                Some(_) => format!("Cannot reach {}; trying again", status.server),
+                Some(_) => format!("Cannot reach {}", status.server),
                 None => format!("Connecting to {}", status.server),
             },
-            Connection::Connected => format!("Connected to {} as {}", status.server, status.name),
+            Connection::Connected => format!("Connected to {}", status.server),
             Connection::Failed => format!(
                 "Stopped: {}",
                 status
                     .problem
                     .as_deref()
-                    .unwrap_or("the worker could not go on")
+                    .unwrap_or("the worker could not continue")
             ),
             Connection::Stopped => "Stopped".to_string(),
         };
         let work = match status.tasks.as_slice() {
-            [] if status.paused => "Paused: taking no new tasks".to_string(),
+            [] if status.paused => "Paused".to_string(),
             [] => "Waiting for tasks".to_string(),
-            [task] => format!("{} · {:.0}%", task.label, task.fraction * 100.0),
-            tasks => format!("Running {} tasks", tasks.len()),
+            [task] => format!("{}: {:.0}%", task.label, task.fraction * 100.0),
+            tasks => format!("{} tasks running", tasks.len()),
         };
-        let pause = if status.paused {
-            "Resume Taking Tasks"
-        } else {
-            "Pause Taking Tasks"
-        };
+        let pause = if status.paused { "Resume" } else { "Pause" };
         Self {
             connection,
             work,
@@ -296,12 +292,12 @@ mod tests {
         let lines = MenuLines::of(&status);
         assert_eq!(lines.connection, "Connecting to http://observatory:3000");
         assert_eq!(lines.work, "Waiting for tasks");
-        assert_eq!(lines.pause, "Pause Taking Tasks");
+        assert_eq!(lines.pause, "Pause");
 
         status.problem = Some("connection refused".into());
         assert_eq!(
             MenuLines::of(&status).connection,
-            "Cannot reach http://observatory:3000; trying again"
+            "Cannot reach http://observatory:3000"
         );
 
         status.connection = Connection::Connected;
@@ -312,17 +308,14 @@ mod tests {
             fraction: 0.456,
         });
         let lines = MenuLines::of(&status);
-        assert_eq!(
-            lines.connection,
-            "Connected to http://observatory:3000 as studio-pc"
-        );
-        assert_eq!(lines.work, "Stack of 30 frames, Ha channel · 46%");
+        assert_eq!(lines.connection, "Connected to http://observatory:3000");
+        assert_eq!(lines.work, "Stack of 30 frames, Ha channel: 46%");
 
         status.paused = true;
         status.tasks.clear();
         let lines = MenuLines::of(&status);
-        assert_eq!(lines.work, "Paused: taking no new tasks");
-        assert_eq!(lines.pause, "Resume Taking Tasks");
+        assert_eq!(lines.work, "Paused");
+        assert_eq!(lines.pause, "Resume");
 
         status.connection = Connection::Failed;
         status.problem = Some("The worker token was revoked".into());

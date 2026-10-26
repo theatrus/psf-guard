@@ -44,7 +44,7 @@ function draftOf(worker: DesktopWorker): Draft {
   };
 }
 
-/** The `--work` choices for the two boxes: none when both are ticked. */
+/** The `--work` choices for the two boxes: none when both are selected. */
 function workOf(draft: Draft): string[] {
   if (draft.stack && draft.rcAstro) return [];
   return [...(draft.stack ? ['stack'] : []), ...(draft.rcAstro ? ['rc-astro'] : [])];
@@ -55,18 +55,18 @@ function sameSettings(draft: Draft, worker: DesktopWorker): boolean {
   return JSON.stringify({ ...draft, token: '' }) === JSON.stringify(saved);
 }
 
-function connectionText(status: DesktopWorkerStatus): string {
+function statusText(status: DesktopWorkerStatus): string {
   switch (status.connection) {
     case 'connected':
-      return `Connected to ${status.server} as ${status.name}`;
+      return status.paused ? `Paused. Connected to ${status.server}.` : `Connected to ${status.server}.`;
     case 'failed':
-      return `Stopped: ${status.problem ?? 'the worker could not go on'}`;
+      return `Stopped: ${status.problem ?? 'the worker could not continue'}.`;
     case 'stopped':
-      return 'Stopped';
+      return 'Stopped.';
     default:
       return status.problem
-        ? `Cannot reach ${status.server}; trying again. ${status.problem}`
-        : `Connecting to ${status.server}`;
+        ? `Cannot reach ${status.server}. Trying again.`
+        : `Connecting to ${status.server}.`;
   }
 }
 
@@ -75,9 +75,9 @@ function errorText(error: unknown): string {
 }
 
 /**
- * Settings › Run a worker: this computer as a worker for a PSF Guard
+ * Settings › Workers › This computer: run a worker here for a PSF Guard
  * server. The worker runs in the menu bar or the system tray, a process of
- * its own, so it keeps working while this window is closed.
+ * its own, so it keeps running when this window is closed.
  */
 export default function DesktopWorkerSettings() {
   const client = useQueryClient();
@@ -93,23 +93,35 @@ export default function DesktopWorkerSettings() {
   useEffect(() => {
     if (loaded && draft === null) setDraft(draftOf(loaded));
   }, [loaded, draft]);
-  const publish = (next: DesktopWorker) => client.setQueryData(KEY, next);
   const action = useMutation({
     mutationFn: (run: () => Promise<DesktopWorker>) => run(),
-    onSuccess: publish,
+    onSuccess: (next) => client.setQueryData(KEY, next),
   });
 
-  if (worker.isPending || (loaded && !draft)) return <p>Loading the worker…</p>;
+  if (worker.isPending || (loaded && !draft)) return <p>Loading…</p>;
   if (worker.isError || !loaded || !draft) {
     return (
-      <div className="settings-section">
+      <section className="settings-section" aria-label="This computer">
         <p className="error-text" role="alert">
           The worker settings could not be read: {errorText(worker.error)}
         </p>
         <button type="button" onClick={() => void worker.refetch()}>Try again</button>
-      </div>
+      </section>
     );
   }
+
+  if (!loaded.supported) {
+    return (
+      <section className="settings-section desktop-worker-settings" aria-label="This computer">
+        <h3>This computer</h3>
+        <p>
+          On Linux, run the worker as the <code>psf-guard-worker</code> service.
+          See Workers in the documentation.
+        </p>
+      </section>
+    );
+  }
+
   const status = loaded.status;
   const dirty = draft.token.trim() !== '' || !sameSettings(draft, loaded);
   const busy = action.isPending;
@@ -118,7 +130,7 @@ export default function DesktopWorkerSettings() {
     event.preventDefault();
     setNotice('');
     if (!draft.stack && !draft.rcAstro) {
-      setNotice('Choose at least one kind of work.');
+      setNotice('Select at least one kind of work.');
       return;
     }
     action.mutate(
@@ -147,51 +159,29 @@ export default function DesktopWorkerSettings() {
     return desktopWorker.start();
   });
   const chooseFolder = async () => {
-    const picked = await tauriFileSystem.pickPath({ title: 'Choose the work folder' });
+    const picked = await tauriFileSystem.pickPath({ title: 'Work folder' });
     if (picked) update({ work_dir: picked });
   };
-
-  if (!loaded.supported) {
-    return (
-      <div className="settings-section desktop-worker-settings">
-        <h3>Run a worker on this computer</h3>
-        <p>
-          On Linux, run the worker with the <code>psf-guard-worker</code> systemd
-          service that the package installs. The Workers guide in the
-          documentation explains how to set it up.
-        </p>
-      </div>
-    );
-  }
+  const shared = draft.files === 'shared';
 
   return (
-    <div className="settings-section desktop-worker-settings">
+    <section className="settings-section desktop-worker-settings" aria-label="This computer">
       <UnsavedMark label="worker settings" dirty={dirty} />
-      <h3>Run a worker on this computer</h3>
+      <h3>This computer</h3>
       <p>
-        This computer can stack builds and run RC-Astro tools for a PSF Guard
-        server. The worker runs in the menu bar on macOS and in the system tray
-        on Windows, and keeps running when this window is closed. Create a token
-        in the server&apos;s Settings › Workers, then enter it here.
+        Run stack builds and RC-Astro tools here for another PSF Guard server. The
+        worker runs in the menu bar or the system tray, and keeps running after you
+        close this window. Get a token from the other server&apos;s Settings ›
+        Workers.
       </p>
 
-      <section className="desktop-worker-status" aria-label="Worker status" data-running={status !== null}>
-        {status ? (
-          <>
-            <p role="status">
-              <strong>Running.</strong> {connectionText(status)}
-              {status.paused && ' Paused: taking no new tasks.'}
-            </p>
-            {status.tasks.map((task) => (
-              <p key={task.id} className="muted">
-                {task.label} · {Math.round(task.fraction * 100)}%
-              </p>
-            ))}
-            {status.tasks.length === 0 && !status.paused && <p className="muted">Waiting for tasks.</p>}
-          </>
-        ) : (
-          <p role="status"><strong>Not running.</strong></p>
-        )}
+      <div className="desktop-worker-status" aria-label="Worker status" role="group">
+        <p role="status">{status ? statusText(status) : 'Not running.'}</p>
+        {status?.tasks.map((task) => (
+          <p key={task.id} className="muted">
+            {task.label}: {Math.round(task.fraction * 100)}%
+          </p>
+        ))}
         <div className="db-row-actions">
           {status ? (
             <>
@@ -201,7 +191,7 @@ export default function DesktopWorkerSettings() {
                 disabled={busy}
                 onClick={() => action.mutate(() => desktopWorker.pause(!status.paused))}
               >
-                {status.paused ? 'Resume taking tasks' : 'Pause taking tasks'}
+                {status.paused ? 'Resume' : 'Pause'}
               </button>
               <button type="button" className="browse-button" disabled={busy} onClick={restart}>
                 Restart
@@ -222,16 +212,15 @@ export default function DesktopWorkerSettings() {
               disabled={busy || dirty || !loaded.settings || !loaded.has_token}
               onClick={() => action.mutate(desktopWorker.start)}
             >
-              Start the worker
+              Start
             </button>
           )}
           <OpenLogsButton onError={setLogError} />
         </div>
         {!status && (!loaded.settings || !loaded.has_token) && (
-          <p className="muted">Save the server&apos;s address and a worker token to start the worker.</p>
+          <p className="muted">Save a server address and a token to start the worker.</p>
         )}
-        {!status && dirty && loaded.settings && <p className="muted">Save the changes to start the worker.</p>}
-      </section>
+      </div>
 
       <form className="user-form" onSubmit={save}>
         <div className="database-config">
@@ -247,21 +236,21 @@ export default function DesktopWorkerSettings() {
           />
         </div>
         <div className="database-config">
-          <label htmlFor="desktop-worker-token">Worker token</label>
+          <label htmlFor="desktop-worker-token">Token</label>
           <input
             id="desktop-worker-token"
             className="file-path-input"
             type="password"
             autoComplete="off"
             value={draft.token}
-            placeholder={loaded.has_token ? 'Saved; enter a new token to replace it' : 'psfw_…'}
+            placeholder={loaded.has_token ? 'Saved' : 'psfw_…'}
             onChange={(event) => update({ token: event.target.value })}
             required={!loaded.has_token}
             disabled={busy}
           />
         </div>
         <div className="database-config">
-          <label htmlFor="desktop-worker-name">Worker name</label>
+          <label htmlFor="desktop-worker-name">Name</label>
           <input
             id="desktop-worker-name"
             className="file-path-input"
@@ -273,7 +262,7 @@ export default function DesktopWorkerSettings() {
           />
         </div>
         <fieldset className="desktop-worker-work">
-          <legend>Work this computer accepts</legend>
+          <legend>Work</legend>
           <label>
             <input
               type="checkbox"
@@ -290,7 +279,7 @@ export default function DesktopWorkerSettings() {
               onChange={(event) => update({ rcAstro: event.target.checked })}
               disabled={busy}
             />
-            RC-Astro tools, when rc-astro is installed here
+            RC-Astro tools
           </label>
         </fieldset>
         <div className="database-config">
@@ -305,42 +294,42 @@ export default function DesktopWorkerSettings() {
             onChange={(event) => update({ slots: Number(event.target.value) })}
             disabled={busy}
           />
-          <p className="muted">Each task shares this computer&apos;s cores and memory with the others.</p>
         </div>
-        <fieldset className="desktop-worker-files">
-          <legend>How task files reach this computer</legend>
-          <label>
+        <label className="desktop-worker-login">
+          <input
+            type="checkbox"
+            checked={draft.startAtLogin}
+            onChange={(event) => update({ startAtLogin: event.target.checked })}
+            disabled={busy}
+          />
+          Start at login
+        </label>
+        <details className="desktop-worker-files" open={shared || Boolean(draft.work_dir)}>
+          <summary>Files</summary>
+          <p className="muted">
+            Task files transfer through the server. A worker that shares storage
+            with the server can read them there instead.
+          </p>
+          <label className="desktop-worker-login">
             <input
-              type="radio"
-              name="desktop-worker-files"
-              checked={draft.files === 'remote'}
-              onChange={() => update({ files: 'remote' })}
+              type="checkbox"
+              checked={shared}
+              onChange={(event) => update(event.target.checked
+                ? { files: 'shared', maps: draft.maps.length ? draft.maps : [{ server: '', local: '' }] }
+                : { files: 'remote' })}
               disabled={busy}
             />
-            Through the server
+            Use shared storage
           </label>
-          <label>
-            <input
-              type="radio"
-              name="desktop-worker-files"
-              checked={draft.files === 'shared'}
-              onChange={() => update({ files: 'shared', maps: draft.maps.length ? draft.maps : [{ server: '', local: '' }] })}
-              disabled={busy}
-            />
-            On storage this computer shares with the server
-          </label>
-          {draft.files === 'shared' && (
+          {shared && (
             <div className="desktop-worker-maps">
-              <p className="muted">
-                For each server folder, enter where this computer sees it. A file
-                this computer cannot see goes through the server.
-              </p>
+              <p className="muted">For each server folder, enter where this computer finds it.</p>
               {draft.maps.map((map, index) => (
                 <div className="token-secret-row" key={index}>
                   <input
                     className="file-path-input"
                     aria-label={`Server folder ${index + 1}`}
-                    placeholder="Server folder, such as /srv/astro"
+                    placeholder="/srv/astro"
                     value={map.server}
                     onChange={(event) => update({
                       maps: draft.maps.map((each, at) => at === index ? { ...each, server: event.target.value } : each),
@@ -349,8 +338,8 @@ export default function DesktopWorkerSettings() {
                   />
                   <input
                     className="file-path-input"
-                    aria-label={`This computer's folder ${index + 1}`}
-                    placeholder="This computer's folder, such as Z:\astro"
+                    aria-label={`Folder on this computer ${index + 1}`}
+                    placeholder="Z:\astro"
                     value={map.local}
                     onChange={(event) => update({
                       maps: draft.maps.map((each, at) => at === index ? { ...each, local: event.target.value } : each),
@@ -360,7 +349,7 @@ export default function DesktopWorkerSettings() {
                   <button
                     type="button"
                     className="cancel-button"
-                    aria-label={`Remove shared folder ${index + 1}`}
+                    aria-label={`Remove folder ${index + 1}`}
                     onClick={() => update({ maps: draft.maps.filter((_, at) => at !== index) })}
                     disabled={busy}
                   >
@@ -374,40 +363,28 @@ export default function DesktopWorkerSettings() {
                 onClick={() => update({ maps: [...draft.maps, { server: '', local: '' }] })}
                 disabled={busy}
               >
-                + Add a shared folder
+                + Add folder
               </button>
             </div>
           )}
-        </fieldset>
-        <div className="database-config">
-          <label htmlFor="desktop-worker-folder">Work folder</label>
-          <div className="token-secret-row">
-            <input
-              id="desktop-worker-folder"
-              className="file-path-input"
-              value={draft.work_dir ?? ''}
-              placeholder="The system temporary folder"
-              onChange={(event) => update({ work_dir: event.target.value })}
-              disabled={busy}
-            />
-            <button type="button" className="browse-button" onClick={() => void chooseFolder()} disabled={busy}>
-              Choose…
-            </button>
+          <div className="database-config">
+            <label htmlFor="desktop-worker-folder">Work folder</label>
+            <div className="token-secret-row">
+              <input
+                id="desktop-worker-folder"
+                className="file-path-input"
+                value={draft.work_dir ?? ''}
+                placeholder="System temporary folder"
+                onChange={(event) => update({ work_dir: event.target.value })}
+                disabled={busy}
+              />
+              <button type="button" className="browse-button" onClick={() => void chooseFolder()} disabled={busy}>
+                Choose…
+              </button>
+            </div>
+            <p className="muted">Task files stay here while a task runs.</p>
           </div>
-          <p className="muted">
-            Tasks keep their files here while they run, and a mosaic plans its canvas
-            here. Choose a disk with room for a few full-size frames.
-          </p>
-        </div>
-        <label className="desktop-worker-login">
-          <input
-            type="checkbox"
-            checked={draft.startAtLogin}
-            onChange={(event) => update({ startAtLogin: event.target.checked })}
-            disabled={busy}
-          />
-          Start the worker when I log in
-        </label>
+        </details>
         <div className="modal-buttons">
           <button type="submit" className="save-button" disabled={busy || !dirty}>
             {busy ? 'Saving…' : 'Save'}
@@ -419,6 +396,6 @@ export default function DesktopWorkerSettings() {
           {action.error ? errorText(action.error) : logError || notice}
         </p>
       )}
-    </div>
+    </section>
   );
 }

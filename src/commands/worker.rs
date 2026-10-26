@@ -127,7 +127,7 @@ pub async fn run_with(launch: WorkerLaunch, control: WorkerControl) -> Result<()
             let settings = settings.with_context(|| {
                 format!(
                     "There are no worker settings at {}; set up the worker in PSF Guard's \
-                     Settings › Run a worker, or start it with --server",
+                     Settings › Workers, or start it with --server",
                     path.display()
                 )
             })?;
@@ -639,13 +639,13 @@ pub async fn serve(options: WorkerOptions, shutdown: impl Future<Output = ()>) -
             let answer = answer_probe(&settings.files.maps, &probe.path, &probe.reply_path).await;
             match registering.answer_probe(&registered.session, &answer).await {
                 Ok(ProbeResult { shared: true, .. }) => tracing::info!(
-                    "Shared files: this worker reads and writes task files in the server's exchange folder"
+                    "Shared storage: this worker reads and writes task files in the server's shared folder"
                 ),
                 Ok(ProbeResult { reason, .. }) => tracing::warn!(
-                    "Shared files are off: {}. Task files go through the server.",
-                    reason.unwrap_or_else(|| "the server's exchange folder is not visible here".into())
+                    "Shared storage is off: {}. Task files transfer through the server.",
+                    reason.unwrap_or_else(|| "the server's shared folder is not visible here".into())
                 ),
-                Err(error) => tracing::warn!("The shared-files check failed: {error}"),
+                Err(error) => tracing::warn!("The shared storage check failed: {error}"),
             }
         }
         let joined = Arc::new(Joined {
@@ -764,7 +764,7 @@ async fn answer_probe(maps: &[PathMap], probe: &str, reply: &str) -> ProbeAnswer
         let (Some(probe), Some(reply)) = (probe, reply) else {
             return ProbeAnswer {
                 digest: None,
-                problem: Some("no --map reaches the server's exchange folder".into()),
+                problem: Some("no --map reaches the server's shared folder".into()),
             };
         };
         let content = match std::fs::read(&probe) {

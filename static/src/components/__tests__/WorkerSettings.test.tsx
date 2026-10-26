@@ -50,7 +50,7 @@ const settings = (overrides: Partial<WorkersSettings> = {}): WorkersSettings => 
       rc_astro: ['RC-Astro BlurXTerminator 2.6.10'],
       file_mode: 'shared',
       exchange_shared: false,
-      exchange_problem: 'no --map reaches the server\'s exchange folder',
+      exchange_problem: 'no --map reaches the server\'s shared folder',
       running: [{ label: 'RC-Astro BlurXTerminator on a 6248×4176 image', fraction: 0.42 }],
     },
   ],
@@ -72,7 +72,7 @@ describe('WorkerSettings', () => {
     const row = studio.closest('.worker-row') as HTMLElement;
     expect(within(row).getByText('RC-Astro BlurXTerminator 2.6.10')).toBeInTheDocument();
     expect(
-      within(row).getByText(/Files go through the server: no --map reaches/),
+      within(row).getByText(/Files transfer through the server: no --map reaches/),
     ).toBeInTheDocument();
     expect(within(row).getByText(/Running RC-Astro BlurXTerminator .* 42%/)).toBeInTheDocument();
     expect(within(row).getByText(/2 tasks at a time/)).toBeInTheDocument();
@@ -126,7 +126,7 @@ describe('WorkerSettings', () => {
     confirm.mockRestore();
   });
 
-  it('saves an exchange folder and can go back to the default', async () => {
+  it('saves a shared folder and can go back to the default', async () => {
     const saved: unknown[] = [];
     server.use(
       http.get('/api/workers', () => HttpResponse.json(ok(settings()))),
@@ -140,10 +140,10 @@ describe('WorkerSettings', () => {
       }),
     );
     render(<WorkerSettings />, { wrapper: wrapper() });
-    const field = await screen.findByLabelText('Folder');
+    const field = await screen.findByLabelText('Shared folder');
     fireEvent.change(field, { target: { value: '/mnt/nas/psf-exchange' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save folder' }));
-    expect(await screen.findByText('Exchange folder saved.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(await screen.findByText('Shared folder saved.')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Use the default' }));
     await waitFor(() => expect(saved).toEqual([
       { folder: '/mnt/nas/psf-exchange' },

@@ -71,7 +71,7 @@ import { describeUnsaved, useUnsavedLabels } from '../hooks/useUnsavedChanges';
 /**
  * Settings groups unrelated jobs into named tabs so each stays easy to find.
  */
-type SettingsTab = 'databases' | 'catalogs' | 'sync' | 'setups' | 'calibration' | 'stacking' | 'storage' | 'backups' | 'performance' | 'workers' | 'desktop-worker' | 'review' | 'rigs' | 'templates' | 'users' | 'agents' | 'server';
+type SettingsTab = 'databases' | 'catalogs' | 'sync' | 'setups' | 'calibration' | 'stacking' | 'storage' | 'backups' | 'performance' | 'workers' | 'review' | 'rigs' | 'templates' | 'users' | 'agents' | 'server';
 
 /** An intent that only picks a tab. */
 type TabIntent = Extract<SettingsIntent, SettingsTab>;
@@ -1001,11 +1001,10 @@ export default function TauriSettings({
     // A worker token lets another machine read the files of the tasks it
     // runs, so workers take an editor on a server that allows database
     // management.
-    ...(canEdit && managementAllowed
+    // The desktop app also runs this computer's own worker from here.
+    ...(isTauri || (canEdit && managementAllowed)
       ? ([{ id: 'workers', label: 'Workers' }] as const)
       : []),
-    // This computer as a worker for a server: local to the desktop app.
-    ...(isTauri ? ([{ id: 'desktop-worker', label: 'Run a worker' }] as const) : []),
     // Review preferences are stored in this browser, so no gate either.
     { id: 'review', label: 'Review' },
     // Rig setup and the exposure template library are Planning's configuration.
@@ -2133,8 +2132,12 @@ export default function TauriSettings({
             </div>
           )}
 
-          {currentTab === 'workers' && <WorkerSettings />}
-          {currentTab === 'desktop-worker' && <DesktopWorkerSettings />}
+          {currentTab === 'workers' && (
+            <>
+              {isTauri && <DesktopWorkerSettings />}
+              {canEdit && managementAllowed && <WorkerSettings />}
+            </>
+          )}
 
           {currentTab === 'storage' && (
             <div className="settings-setups">

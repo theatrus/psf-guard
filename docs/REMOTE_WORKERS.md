@@ -49,41 +49,41 @@ to 16; the default is 1, since each RC-Astro step uses the GPU.
 
 ## Run a worker from the desktop app
 
-On a Mac or a Windows PC, the PSF Guard app runs the worker for you: in the
-menu bar on macOS, and in the system tray on Windows. It keeps running when
-the app's window is closed.
+On a Mac or a Windows PC, the PSF Guard app runs the worker in the menu bar
+or the system tray. It keeps running after you close the app's window.
 
 1. Install the PSF Guard app on the worker computer, the same release as the
    server.
-2. On the server, open **Settings › Workers**, click **+ Add a worker**,
-   and create a token. Copy the token from the row under the commands.
-3. On the worker computer, open PSF Guard, then **Settings › Run a worker**.
-4. Enter the server's address, such as `http://192.168.1.10:3000`, and the
-   token. Choose the work the computer accepts, how many tasks it runs at
-   once, and how task files reach it; see [Choose how files reach the
-   worker](#choose-how-files-reach-the-worker).
-5. To start the worker each time you log in, select **Start the worker when
-   I log in**.
-6. Click **Save**, then **Start the worker**.
+2. On the server, open **Settings › Workers**, click **+ Add a worker**, and
+   create a token. Copy the token.
+3. On the worker computer, open PSF Guard, then **Settings › Workers**.
+4. Under **This computer**, enter the **Server address**, such as
+   `http://192.168.1.10:3000`, and the **Token**. Under **Work**, select
+   **Stack builds**, **RC-Astro tools** or both.
+5. To start the worker when you log in, select **Start at login**.
+6. Click **Save**, then **Start**.
 
-The page then shows whether the worker is connected and the task it is
-running. **Pause taking tasks** lets running tasks finish and takes no new
-ones until you click **Resume taking tasks**. **Stop** stops the worker, and
-the server queues its running task again. After you change the settings,
-click **Restart** to use them.
+**This computer** then shows whether the worker is connected and what it is
+running. **Pause** lets running tasks finish and takes no new ones;
+**Resume** takes them again. **Stop** stops the worker, and the server
+queues its running task again. After you change the settings, click
+**Restart**.
 
 The worker's menu in the menu bar or the tray shows the same status, with
-**Pause Taking Tasks**, **Open PSF Guard** and **Quit Worker**.
+**Pause**, **Open PSF Guard** and **Quit**.
 
+- Task files transfer through the server. To use shared storage instead,
+  open **Files** and select **Use shared storage**; see [Choose how files
+  reach the worker](#choose-how-files-reach-the-worker).
 - PSF Guard saves the settings, with the token, in `worker.json` in its
   settings folder, readable only by your user. `psf-guard worker --config
   FILE` runs a worker from such a file without the menu bar or the tray.
-- **Start the worker when I log in** adds a login item: a LaunchAgent,
-  `~/Library/LaunchAgents/com.theatrus.psf-guard.worker.plist`, on macOS,
-  and a **PSF Guard Worker** entry under the `Run` key in the registry on
-  Windows. Clear the box and click **Save** to remove it.
+- **Start at login** adds a LaunchAgent on macOS,
+  `~/Library/LaunchAgents/com.theatrus.psf-guard.worker.plist`, and a
+  **PSF Guard Worker** entry under the `Run` key in the registry on Windows.
+  Clear it and click **Save** to remove it.
 - The worker writes its log to files starting `worker` in the app's log
-  folder. Click **Open logs** on the page to see them.
+  folder. Click **Open logs** to see them.
 
 On Linux, the app does not run the worker in a tray; run it as a service
 instead, as [Run a worker as a Linux service](#run-a-worker-as-a-linux-service)
@@ -231,22 +231,18 @@ While a worker stacks a channel:
 
 ## Choose how files reach the worker
 
-Each RC-Astro step reads one image and writes one or two. Those files go
-through the server's *exchange folder*. PSF Guard keeps them in a
-`psf-guard-exchange` folder inside it and removes only what it wrote there.
+Task files transfer through the server by default (`--files remote`). The
+worker downloads each input over the server's API and uploads each result.
+It needs only the server's address. A 6000 × 4000 color image is about
+290 MB each way.
 
-- **Through the server** (the default, `--files remote`). The worker
-  downloads each input from the server and uploads each result. It needs only
-  the server's address. A 6000 × 4000 color image is about 290 MB each way.
-- **Shared files** (`--files shared`). The worker reads and writes the files
-  in the exchange folder itself, on storage it shares with the server, such
-  as an NFS or SMB share. No image crosses the network twice.
+Shared storage is optional. When the worker and the server share storage,
+such as an NFS or SMB share, the worker can read and write task files there,
+so no image crosses the network twice:
 
-For shared files, keep the exchange folder on the shared storage:
-
-1. In **Settings › Workers**, under **Exchange folder**, enter a folder on
-   the share as the server sees it, such as `/srv/astro`, and click **Save
-   folder**.
+1. On the server, in **Settings › Workers**, open **Shared storage**. Enter
+   a folder on the share as the server sees it, such as `/srv/astro`, and
+   click **Save**.
 2. Start the worker with a map from the server's path to the worker's:
 
    ```bash
@@ -256,14 +252,15 @@ For shared files, keep the exchange folder on the shared storage:
 
    Repeat `--map` for more folders. A map implies `--files shared`. With
    `--files shared` and no map, the worker uses the server's paths as they
-   are.
+   are. In the desktop app, open **Files**, select **Use shared storage**
+   and enter each folder instead.
 
-When the worker joins, the server writes a test file in the exchange folder.
+When the worker joins, the server writes a test file in the shared folder.
 The worker reads it and writes a reply beside it. When both work, the worker
-logs `Shared files` and **Settings › Workers** shows **Shared files**.
-Otherwise the worker logs the reason, and its files go through the server.
-A file the worker cannot see, or whose size does not match, also goes
-through the server.
+logs `Shared storage` and **Settings › Workers** shows **Shared storage**.
+Otherwise the worker logs the reason, and its files transfer through the
+server. A file the worker cannot see, or whose size does not match, also
+transfers through the server.
 
 ## Which worker runs a tool
 

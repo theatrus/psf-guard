@@ -74,7 +74,7 @@ test('a worker joins with the token shown once, and stops when it is revoked', a
   await expect(secret.locator('[data-shell="powershell"]')).toContainText('$env:PSF_GUARD_WORKER_TOKEN=');
   const token = /PSF_GUARD_WORKER_TOKEN=(psfw_[0-9a-f]{64})/.exec(command)?.[1];
   expect(token).toBeTruthy();
-  // The token alone, for the desktop app's Settings › Run a worker.
+  // The token alone, for the desktop app's Settings › Workers › This computer.
   await expect(secret.locator('[data-shell="token"]')).toHaveText(token!);
   await secret.screenshot({ path: testInfo.outputPath('worker-token.png') });
   await secret.getByRole('button', { name: 'Done' }).click();
@@ -96,7 +96,7 @@ test('a worker joins with the token shown once, and stops when it is revoked', a
 
   const row = page.locator(`.worker-row[data-worker="${name}"]`);
   await expect(row).toContainText('Connected', { timeout: 30_000 });
-  await expect(row).toContainText('Shared files');
+  await expect(row).toContainText('Shared storage');
   await expect(row).toContainText('No RC-Astro tools');
   await expect(tokenRow).toContainText('In use');
   await row.scrollIntoViewIfNeeded();

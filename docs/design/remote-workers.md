@@ -217,7 +217,7 @@ and registers no plugins.
   its window is open brings that window forward and exits. It loads the
   registry and starts the desktop server in `setup`, after that check.
 - **Desktop app.** `src/desktop_worker.rs` has the commands behind
-  **Settings › Run a worker**: read and save the settings, start the tray
+  **Settings › Workers › This computer**: read and save the settings, start the tray
   process, and pause, resume and stop it through the control port.
 - **Start at login** (`commands/worker/login.rs`): a LaunchAgent with
   `RunAtLoad` on macOS, and a value under

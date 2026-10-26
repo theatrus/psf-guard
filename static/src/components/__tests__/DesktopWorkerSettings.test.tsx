@@ -52,20 +52,20 @@ function mount(children: ReactNode) {
   return render(<QueryClientProvider client={client}>{children}</QueryClientProvider>);
 }
 
-describe('run a worker on this computer', () => {
+describe('this computer\'s worker', () => {
   it('saves the settings, then starts, shows and pauses the worker', async () => {
     mount(<DesktopWorkerSettings />);
-    const start = await screen.findByRole('button', { name: 'Start the worker' });
+    const start = await screen.findByRole('button', { name: 'Start' });
     expect(start).toBeDisabled();
-    expect(screen.getByText(/Save the server's address and a worker token/)).toBeInTheDocument();
+    expect(screen.getByText(/Save a server address and a token/)).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText('Server address'), { target: { value: 'http://observatory:3000' } });
-    fireEvent.change(screen.getByLabelText('Worker token'), { target: { value: 'psfw_secret' } });
-    await userEvent.click(screen.getByRole('checkbox', { name: /RC-Astro tools/ }));
-    await userEvent.click(screen.getByRole('radio', { name: /shares with the server/ }));
+    fireEvent.change(screen.getByLabelText('Token'), { target: { value: 'psfw_secret' } });
+    await userEvent.click(screen.getByRole('checkbox', { name: 'RC-Astro tools' }));
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Use shared storage' }));
     fireEvent.change(screen.getByLabelText('Server folder 1'), { target: { value: '/srv/astro' } });
-    fireEvent.change(screen.getByLabelText("This computer's folder 1"), { target: { value: 'Z:\\astro' } });
-    await userEvent.click(screen.getByRole('checkbox', { name: 'Start the worker when I log in' }));
+    fireEvent.change(screen.getByLabelText('Folder on this computer 1'), { target: { value: 'Z:\\astro' } });
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Start at login' }));
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(native.save).toHaveBeenCalledTimes(1));
@@ -81,18 +81,16 @@ describe('run a worker on this computer', () => {
       token: 'psfw_secret',
       start_at_login: true,
     });
-    expect(await screen.findByLabelText('Worker token')).toHaveAttribute(
-      'placeholder', 'Saved; enter a new token to replace it',
-    );
+    expect(await screen.findByLabelText('Token')).toHaveAttribute('placeholder', 'Saved');
 
-    await userEvent.click(await screen.findByRole('button', { name: 'Start the worker' }));
-    expect(await screen.findByText(/Connected to http:\/\/observatory:3000 as studio-pc/)).toBeInTheDocument();
-    expect(screen.getByText('Stack of 30 frames, Ha channel · 50%')).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole('button', { name: 'Start' }));
+    expect(await screen.findByText('Connected to http://observatory:3000.')).toBeInTheDocument();
+    expect(screen.getByText('Stack of 30 frames, Ha channel: 50%')).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole('button', { name: 'Pause taking tasks' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Pause' }));
     expect(native.pause).toHaveBeenCalledWith(true);
-    expect(await screen.findByText(/Paused: taking no new tasks/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Resume taking tasks' })).toBeInTheDocument();
+    expect(await screen.findByText('Paused. Connected to http://observatory:3000.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Resume' })).toBeInTheDocument();
   });
 
   it('keeps a saved token when the field is left blank, and refuses no work at all', async () => {
@@ -108,9 +106,9 @@ describe('run a worker on this computer', () => {
     const stack = await screen.findByRole('checkbox', { name: 'Stack builds' });
     expect(stack).toBeChecked();
     await userEvent.click(stack);
-    await userEvent.click(screen.getByRole('checkbox', { name: /RC-Astro tools/ }));
+    await userEvent.click(screen.getByRole('checkbox', { name: 'RC-Astro tools' }));
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
-    expect(await screen.findByText('Choose at least one kind of work.')).toBeInTheDocument();
+    expect(await screen.findByText('Select at least one kind of work.')).toBeInTheDocument();
     expect(native.save).not.toHaveBeenCalled();
 
     await userEvent.click(stack);

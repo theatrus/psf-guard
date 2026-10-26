@@ -698,7 +698,7 @@ async fn set_exchange(
             let path = std::path::PathBuf::from(folder);
             if !path.is_absolute() {
                 return Err(AppError::BadRequest(
-                    "Enter the exchange folder as an absolute path".into(),
+                    "Enter the shared folder as an absolute path".into(),
                 ));
             }
             path

@@ -1,4 +1,4 @@
-/* Settings › Run a worker. Spacing only; colours come from the shared form
+/* Settings › Workers › This computer. Spacing only; colours come from the shared form
    styles. */
 .desktop-worker-settings .database-config .file-path-input {
   width: 100%;
@@ -35,4 +35,12 @@
 
 .desktop-worker-maps > .browse-button {
   align-self: flex-start;
+}
+
+.desktop-worker-files > * + * {
+  margin-top: 0.5rem;
+}
+
+.desktop-worker-files > summary {
+  cursor: pointer;
 }
