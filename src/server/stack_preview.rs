@@ -12,6 +12,7 @@ mod build_set;
 pub mod calibration_masters;
 pub mod color;
 pub mod color_calibration;
+mod color_memory;
 mod execution;
 mod final_integration;
 pub mod gpu;

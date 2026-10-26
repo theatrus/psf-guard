@@ -32,6 +32,15 @@ pub struct Offered {
     pub tool_workers: std::collections::BTreeMap<String, Vec<String>>,
 }
 
+impl Offered {
+    /// Whether this server would run `tool` itself: it has rc-astro and no
+    /// connected worker on another machine takes the tool, which such a
+    /// worker would claim first.
+    pub fn runs_here(&self, tool: &str) -> bool {
+        self.this_server && self.tool_workers.get(tool).is_none_or(Vec::is_empty)
+    }
+}
+
 impl Workers {
     /// The schema each tool would run with: the first connected worker's by
     /// name that takes the tool, otherwise this server's. A licensed schema

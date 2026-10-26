@@ -174,6 +174,7 @@ pub(super) fn integrate_channel(
         reference_frame.image.channels as u64
     };
     let pixels = reference_frame.image.pixel_count();
+    let frame_size = (reference_frame.image.width, reference_frame.image.height);
     let mut pipeline_budget = execution::plan_pipeline(
         available_memory,
         worker_policy,
@@ -413,19 +414,33 @@ pub(super) fn integrate_channel(
         return Ok(ChannelOutcome::Cancelled);
     }
     let (mut stacker, mut ledger, mut points, mut orientation_vote) = initialized?;
-    // A mosaic's canvas, not its reference frame, sets the memory each
-    // frame needs.
+    // A mosaic's canvas sets the stack's own memory; each frame still
+    // arrives at its own size and lands on part of the canvas.
     if group.mosaic {
         let view = stacker.view();
-        pipeline_budget = execution::plan_pipeline(
+        pipeline_budget = execution::plan_mosaic_pipeline(
             available_memory,
             worker_policy,
-            view.width * view.height,
-            view.mean.len(),
+            (view.width, view.height),
+            view.channels,
+            frame_size,
             plan,
             &threads,
         )?;
         threads = pipeline_budget.threads;
+        tracing::info!(
+            job_id,
+            group_index = group.index,
+            canvas_width = view.width,
+            canvas_height = view.height,
+            frame_width = frame_size.0,
+            frame_height = frame_size.1,
+            compute_workers = threads.compute_workers,
+            preparation_workers = threads.preparation_workers,
+            serial = threads.serial,
+            memory = %pipeline_budget.summary(),
+            "Stack pipeline memory replanned for the mosaic canvas"
+        );
     }
     // The reference frame alone is the first depth on the curve and the
     // baseline every later depth is read against: one frame's noise.
@@ -836,9 +851,15 @@ pub(super) fn integrate_channel(
             // The final pass keeps each admitted frame in a scratch file,
             // four bytes a sample, when the scratch folder's disk has room
             // for all of them and a margin; otherwise it reads every frame
-            // on each pass instead.
+            // on each pass instead. A mosaic's frame keeps only the part of
+            // the canvas it reaches.
             let view = stacker.view();
-            let needed = (view.width * view.height * view.channels) as u64
+            let frame_pixels = if group.mosaic {
+                execution::footprint_pixels(frame_size, (view.width, view.height))
+            } else {
+                view.width * view.height
+            };
+            let needed = (frame_pixels * view.channels) as u64
                 * 4
                 * u64::from(accepted_frames);
             let volume = outputs

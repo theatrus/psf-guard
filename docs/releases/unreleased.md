@@ -28,6 +28,20 @@
   reuse that pixel solve. Older uncalibrated previews are marked out of date;
   **Build current set** refreshes them from the cached stacks.
 
+- Color composition memory estimates now follow what a composition uses. The
+  estimate counts each source channel and the composition's largest step,
+  instead of adding every step. It includes an RC-Astro tool's own memory
+  when the tool runs on this server. SHO with RGB stars on a 90-megapixel
+  mosaic is estimated at 22 GiB instead of 26 GiB with StarXTerminator on this
+  server, about what the two use together, and at 12 GiB when a worker runs
+  StarXTerminator. RC-Astro on the color channels is estimated higher than
+  before when it runs on this server, because its memory is now counted.
+
+- Mosaic stacks prepare several frames at once on machines with less memory.
+  Each frame in preparation is sized for the frame and the part of the canvas
+  it covers, instead of the whole canvas. With a 12.8 GiB budget, a four-panel
+  mosaic of 88 megapixels prepares three frames at once instead of one.
+
 - Mosaic SNR plots report canvas coverage and mean pixel depth. They keep
   each checkpoint's measured signal and no longer apply same-field forecasts
   or plateau/degrading verdicts to frames covering different sky areas.

@@ -13,6 +13,7 @@ use super::color_calibration::{
     self, ColorCalibrationPlan, StackColorCalibration, StackColorCalibrationBasis,
     StackColorCalibrationOutcome,
 };
+use super::color_memory;
 use super::{
     LatestStackPreviews, StackJobState, StackPreviewImageQuery, StackPreviewImageSize,
     StackPreviewManager, MAX_REMEMBERED_JOBS, SEIZA_STACKING_OUTPUT_VERSION,
@@ -61,13 +62,6 @@ const COLOR_INPUT_CACHE_VERSION: u32 = 4;
 const COLOR_CHANNEL_TOOLS_VERSION: u32 = 2;
 const SEIZA_BACKGROUND_VERSION: &str = env!("PSF_GUARD_SEIZA_BACKGROUND_VERSION");
 const MAX_REGISTRATION_RMS_PIXELS: f64 = 2.0;
-const COLOR_BYTES_PER_PIXEL: u64 = 64;
-const COLOR_DECONVOLUTION_BYTES_PER_PIXEL: u64 = 40;
-/// The interleaved RGB copy color calibration measures.
-const COLOR_CALIBRATION_BYTES_PER_PIXEL: u64 = 12;
-/// RC-Astro on the color channels: the three-channel copy, and the input,
-/// padded and output copies the chain holds, at 12 bytes a pixel each.
-const COLOR_RC_ASTRO_BYTES_PER_PIXEL: u64 = 48;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -3665,6 +3659,76 @@ fn run_color_rc_astro(
     })
 }
 
+/// The steps `job` runs, for its memory estimate. A tool step counts the
+/// RC-Astro process when its result is not cached and this server would
+/// run it.
+#[allow(clippy::too_many_arguments)]
+fn color_memory_plan(
+    state: &AppState,
+    job: &StackColorJob,
+    stack_root: &FsPath,
+    reused_inputs: bool,
+    calibration: bool,
+    rc_astro_chains: &BTreeMap<StackColorRole, Vec<String>>,
+    color_rc_astro: &ColorRcAstroPlan,
+    stars_plan: Option<&narrowband::StarsPlan>,
+) -> color_memory::ColorMemoryPlan {
+    use color_memory::ToolRun;
+    let processing = job.processing.as_ref();
+    let offered = std::cell::OnceCell::new();
+    let tool = |chains: &[(&[String], &super::rc_astro::RcAstroProcessing)]| {
+        let runs_here = chains.iter().any(|(chain, config)| {
+            !super::rc_astro::rc_astro_chain_cached(stack_root, chain, config)
+                && config.steps.iter().any(|step| {
+                    offered
+                        .get_or_init(|| state.workers.rc_astro_tools())
+                        .runs_here(&step.tool)
+                })
+        });
+        if runs_here {
+            ToolRun::Here
+        } else {
+            ToolRun::Elsewhere
+        }
+    };
+    let input_chains = rc_astro_chains
+        .iter()
+        .filter_map(|(role, chain)| {
+            let config = processing?.input_rc_astro.get(role)?;
+            Some((chain.as_slice(), config))
+        })
+        .collect::<Vec<_>>();
+    let color_chain = processing
+        .and_then(|processing| processing.color_rc_astro.as_ref())
+        .filter(|_| !color_rc_astro.chain.is_empty());
+    color_memory::ColorMemoryPlan {
+        channels: job.sources.len(),
+        calibration,
+        input_deconvolution: !reused_inputs && !job.input_deconvolution_ids.is_empty(),
+        input_rc_astro: (!reused_inputs && !input_chains.is_empty()).then(|| tool(&input_chains)),
+        emission: processing.is_some_and(|processing| processing.emission.is_some()),
+        color_rc_astro: color_chain
+            .map(|config| tool(&[(color_rc_astro.chain.as_slice(), config)])),
+        stars: stars_plan.map(|plan| {
+            let rgb = plan.calibration.is_some();
+            let mut chains = vec![(plan.nebula_chain.as_slice(), &plan.config)];
+            if rgb {
+                chains.push((
+                    plan.rgb_chain.as_slice(),
+                    plan.rgb_config.as_ref().unwrap_or(&plan.config),
+                ));
+                if let Some(preparation) = &plan.rgb_preparation {
+                    chains.push((preparation.chain.as_slice(), &preparation.config));
+                }
+            }
+            color_memory::StarsMemory {
+                rgb,
+                tool: tool(&chains),
+            }
+        }),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn compose_color(
     state: &Arc<AppState>,
@@ -3767,35 +3831,29 @@ fn compose_color(
         }
     });
     let pixels = reference.image.pixel_count();
-    let bytes_per_pixel = COLOR_BYTES_PER_PIXEL
-        + if job.combination.is_some() { 128 } else { 0 }
-        + if stars_plan.is_some() { 192 } else { 0 }
-        + if job.processing.as_ref().is_some_and(|processing| {
-            !processing.input_deconvolutions.is_empty() || !processing.input_rc_astro.is_empty()
-        }) {
-            COLOR_DECONVOLUTION_BYTES_PER_PIXEL
-        } else {
-            0
-        }
-        + if color_calibration.is_some() {
-            COLOR_CALIBRATION_BYTES_PER_PIXEL
-        } else {
-            0
-        }
-        + if job
-            .processing
-            .as_ref()
-            .is_some_and(|processing| processing.color_rc_astro.is_some())
-        {
-            COLOR_RC_ASTRO_BYTES_PER_PIXEL
-        } else {
-            0
-        };
-    let estimate = (pixels as u64).saturating_mul(bytes_per_pixel);
+    let memory = color_memory_plan(
+        state,
+        job,
+        stack_root,
+        reused_inputs,
+        color_calibration.is_some(),
+        rc_astro_chains,
+        color_rc_astro,
+        stars_plan,
+    )
+    .estimate(pixels);
+    tracing::info!(
+        "Stack color {}: {} MiB estimated, {} bytes a pixel for {} channel(s) of {pixels} pixels; largest step: {}",
+        job.job_id,
+        memory.bytes / (1024 * 1024),
+        memory.bytes_per_pixel,
+        job.sources.len(),
+        memory.step,
+    );
     let policy = state.worker_policy();
     crate::concurrency::check_processing_memory(
         "color-composition",
-        estimate,
+        memory.bytes,
         &policy,
         crate::concurrency::available_memory_bytes(),
     )?;
