@@ -1173,6 +1173,90 @@ fn a_failed_snr_sidecar_is_not_advertised() {
 }
 
 #[test]
+fn saved_mosaic_curves_do_not_keep_same_field_forecasts_in_client_replies() {
+    let points = [1, 2, 4]
+        .into_iter()
+        .map(|frames| snr::SnrPoint {
+            frames,
+            exposure_seconds: f64::from(frames) * 300.0,
+            noise: 20.0 / f64::from(frames).sqrt(),
+            background: 1000.0,
+            signal: f64::from(frames) * 100.0,
+            snr: 0.0,
+            channel_noise: vec![],
+            coverage: None,
+        })
+        .collect();
+    let curve = snr::ProgressiveSnr::new(snr::StackFrameOrder::Capture, points, &[300.0; 4]);
+    assert!(curve.analysis.is_some());
+    let mut mosaic = ready_group(-1, "Ha", 1);
+    mosaic.snr = Some(curve.clone());
+    mosaic.snr_url = Some("/curve?v=before".into());
+    let mut ordinary = mosaic.clone();
+    ordinary.target_id = 1;
+    mosaic.strip_for_client();
+    let corrected = mosaic.snr.as_ref().unwrap();
+    assert!(corrected.mosaic);
+    assert!(corrected.analysis.is_none());
+    assert_eq!(
+        corrected.points[0].snr, 5.0,
+        "use that area's measured signal, not the later panel's"
+    );
+    assert_eq!(
+        mosaic.snr_url.as_deref(),
+        Some("/curve?v=before&snr_model=mosaic-coverage-1")
+    );
+    mosaic.strip_for_client();
+    assert_eq!(
+        mosaic
+            .snr_url
+            .as_ref()
+            .unwrap()
+            .matches("snr_model=")
+            .count(),
+        1
+    );
+    ordinary.strip_for_client();
+    assert_eq!(ordinary.snr, Some(curve));
+    assert_eq!(ordinary.snr_url.as_deref(), Some("/curve?v=before"));
+}
+
+#[tokio::test]
+async fn a_saved_mosaic_snr_download_is_corrected_after_a_restart() {
+    let cache = tempfile::tempdir().unwrap();
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    let mut ctx = crate::server::database_context::DatabaseContext::new_for_test(conn);
+    ctx.use_storage_for_test(cache.path());
+    let ctx = Arc::new(ctx);
+    let job_id = "a".repeat(64);
+    let old: snr::ProgressiveSnr = serde_json::from_value(serde_json::json!({
+        "order": "capture", "analysis": null,
+        "points": [{"frames": 1, "exposure_seconds": 300.0, "noise": 20.0,
+            "background": 1000.0, "signal": 100.0, "snr": 20.0}]
+    }))
+    .unwrap();
+    write_snr_artifact(&snr_path(&ctx.stack_root, &job_id, 0), &old).unwrap();
+    let mut job = completed_job(&job_id, vec![ready_group(-7, "Ha", 1)]);
+    job.database_id = ctx.id.clone();
+    stretch::write_json_atomic(&manifest_path(&ctx.stack_root, &job_id), &job).unwrap();
+    let response = get_stack_preview_snr(
+        crate::server::extract::DbContext(ctx.clone()),
+        Path((ctx.id.clone(), job_id, 0)),
+    )
+    .await
+    .unwrap();
+    assert_eq!(response.headers()[CACHE_CONTROL], "private, no-cache");
+    let bytes = axum::body::to_bytes(response.into_body(), 1_000_000)
+        .await
+        .unwrap();
+    let sent: snr::ProgressiveSnr = serde_json::from_slice(&bytes).unwrap();
+    assert!(sent.mosaic);
+    assert!(sent.analysis.is_none());
+    assert_eq!(sent.points[0].snr, 5.0);
+    assert!(sent.points[0].coverage.is_none());
+}
+
+#[test]
 fn a_channel_whose_frames_are_now_rejected_loses_its_card() {
     let cache = tempfile::tempdir().unwrap();
     let built = completed_job(

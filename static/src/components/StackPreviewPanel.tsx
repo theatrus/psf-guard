@@ -1458,7 +1458,7 @@ export default function StackPreviewPanel({
                       />
                       </>
                     )}
-                    {!artifact && groupBusy && (
+                    {!artifact && !livePreview && groupBusy && (
                       <div className="stack-preview-placeholder">
                         <span className="stack-preview-spinner" aria-hidden="true" />
                         {activeGroup?.state === 'queued'

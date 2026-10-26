@@ -820,6 +820,7 @@ export interface SnrPoint {
   signal: number;
   snr: number;
   channel_noise?: number[];
+  coverage?: { covered_fraction: number; mean_depth: number } | null;
 }
 
 /** Where the curve stands, in one word. */
@@ -864,6 +865,7 @@ export interface SnrAnalysis {
 }
 
 export interface ProgressiveSnr {
+  mosaic?: boolean;
   order: StackFrameOrder;
   points: SnrPoint[];
   /** Absent until three depths have been measured. */

@@ -16,6 +16,13 @@
 
 ## Changes
 
+- Mosaic SNR plots report canvas coverage and mean pixel depth. They keep
+  each checkpoint's measured signal and no longer apply same-field forecasts
+  or plateau/degrading verdicts to frames covering different sky areas.
+  Saved mosaic plots use the corrected interpretation without rebuilding.
+- A live stack image replaces the waiting placeholder, so mosaic previews
+  no longer display a second, full-height spinner area beneath the image.
+
 - FITS downloads in stack processing use compact controls with a download icon
   and explicit labels. Long labels wrap to fit narrow panels.
 

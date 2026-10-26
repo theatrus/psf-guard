@@ -692,6 +692,19 @@ impl StackGroupStatus {
         for frame in &mut self.frames {
             frame.registered_mapping = None;
         }
+        // Integrated mosaics use the negative project ID. Correct old saved
+        // curves when serving them, without discarding their stacked pixels.
+        if self.target_id < 0
+            && let Some(curve) = self.snr.take()
+        {
+            self.snr = Some(snr::ProgressiveSnr::for_mosaic(curve.order, curve.points));
+            if let Some(url) = &mut self.snr_url
+                && !url.contains("snr_model=")
+            {
+                url.push_str(if url.contains('?') { "&" } else { "?" });
+                url.push_str("snr_model=mosaic-coverage-1");
+            }
+        }
     }
 }
 
@@ -2304,9 +2317,8 @@ pub async fn get_stack_preview_image(
         })
 }
 
-/// A group's progressive signal-to-noise curve. Served from the sidecar the
-/// build wrote, so it survives a server restart and outlives the in-memory
-/// job list.
+/// A group's progressive signal-to-noise curve, including interpretation
+/// corrections for mosaics whose sidecars predate coverage-aware reporting.
 pub async fn get_stack_preview_snr(
     ctx: DbContext,
     Path((_db_id, job_id, group_index)): Path<(String, String, usize)>,
@@ -2316,11 +2328,26 @@ pub async fn get_stack_preview_snr(
     let body = tokio::fs::read(&path)
         .await
         .map_err(|_| AppError::NotFound)?;
+    let mut curve: snr::ProgressiveSnr = serde_json::from_slice(&body)
+        .map_err(|error| AppError::InternalError(format!("Invalid stack SNR curve: {error}")))?;
+    if !curve.mosaic
+        && let Ok(bytes) = tokio::fs::read(manifest_path(&ctx.stack_root, &job_id)).await
+        && let Ok(job) = serde_json::from_slice::<StackPreviewJob>(&bytes)
+        && job
+            .groups
+            .get(group_index)
+            .is_some_and(|group| group.target_id < 0)
+    {
+        curve = snr::ProgressiveSnr::for_mosaic(curve.order, curve.points);
+    }
+    let body = serde_json::to_vec_pretty(&curve).map_err(|error| {
+        AppError::InternalError(format!("Failed to encode stack SNR curve: {error}"))
+    })?;
     Response::builder()
         .status(StatusCode::OK)
         .header(CONTENT_TYPE, "application/json")
         .header(CONTENT_LENGTH, body.len())
-        .header(CACHE_CONTROL, "private, max-age=31536000, immutable")
+        .header(CACHE_CONTROL, "private, no-cache")
         .body(Body::from(body))
         .map_err(|error| {
             AppError::InternalError(format!("Failed to build stack SNR response: {error}"))

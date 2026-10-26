@@ -114,7 +114,20 @@ pub struct SnrPoint {
     /// Per-channel noise. One entry for mono, three for a debayered stack.
     #[serde(default)]
     pub channel_noise: Vec<f64>,
+    /// The mosaic canvas sampled at this depth. Older curves did not record it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coverage: Option<SnrCoverage>,
 }
+
+/// Spatial depth of a mosaic, from the accumulator's valid observation counts.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct SnrCoverage {
+    pub covered_fraction: f64,
+    /// Mean accepted observations per covered sample, averaged over channels.
+    pub mean_depth: f64,
+}
+
+pub const MOSAIC_ANALYSIS_REASON: &str = "Mosaic frames cover different sky areas. Adding a panel can change the measured SNR; total frame count cannot predict the depth at each pixel. No square-root comparison or extra-frame estimate is shown.";
 
 /// Where the curve stands, in one word.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -201,6 +214,8 @@ pub struct SnrAnalysis {
 /// A group's curve and what it means.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProgressiveSnr {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mosaic: bool,
     pub order: StackFrameOrder,
     pub points: Vec<SnrPoint>,
     /// Absent until three depths have been measured, or when their exposure
@@ -247,12 +262,72 @@ impl ProgressiveSnr {
             None
         };
         Self {
+            mosaic: false,
             order,
             points,
             analysis,
             analysis_reason,
         }
     }
+
+    /// A mosaic does not have one fixed signal or one depth shared by every
+    /// pixel. Keep each checkpoint's own signal and withhold the same-field
+    /// frame-count model, including for curves saved by older builds.
+    pub fn for_mosaic(order: StackFrameOrder, mut points: Vec<SnrPoint>) -> Self {
+        for point in &mut points {
+            point.snr = if point.noise > 0.0 {
+                point.signal / point.noise
+            } else {
+                0.0
+            };
+        }
+        Self {
+            mosaic: true,
+            order,
+            points,
+            analysis: None,
+            analysis_reason: Some(MOSAIC_ANALYSIS_REASON.into()),
+        }
+    }
+
+    pub(super) fn for_group(
+        order: StackFrameOrder,
+        points: Vec<SnrPoint>,
+        exposures: &[f64],
+        mosaic: bool,
+    ) -> Self {
+        if mosaic {
+            Self::for_mosaic(order, points)
+        } else {
+            Self::new(order, points, exposures)
+        }
+    }
+}
+
+/// Seiza owns the noise measurement. The application also records how much
+/// sky contributed, so a mosaic's added area is not confused with added depth.
+pub(super) fn measure_point(
+    view: seiza_stacking::StackView<'_>,
+    exposure_seconds: f64,
+    mosaic: bool,
+) -> Option<SnrPoint> {
+    let sample = seiza_stacking::measure_depth(view)?;
+    let mut point = point(sample, exposure_seconds);
+    if mosaic {
+        let (covered, depth) = view
+            .coverage
+            .iter()
+            .zip(view.mean)
+            .filter(|(count, value)| **count > 0 && value.is_finite())
+            .fold((0_usize, 0.0), |(covered, depth), (&count, _)| {
+                (covered + 1, depth + f64::from(count))
+            });
+        point.coverage = Some(SnrCoverage {
+            covered_fraction: covered as f64 / view.coverage.len() as f64,
+            mean_depth: depth / covered as f64,
+        });
+    }
+    Some(point)
 }
 
 /// Turn one of Seiza's readings into a curve point, once its exposure is
@@ -266,6 +341,7 @@ pub fn point(sample: seiza_stacking::SnrSample, exposure_seconds: f64) -> SnrPoi
         signal: sample.signal,
         snr: sample.snr(),
         channel_noise: sample.channel_noise,
+        coverage: None,
     }
 }
 
@@ -545,6 +621,111 @@ fn summarize(
 mod tests {
     use super::*;
 
+    #[test]
+    fn adding_a_shallow_panel_changes_area_not_a_same_field_snr_trend() {
+        let measure = |left: u32, right: u32| {
+            let (width, height) = (400, 200);
+            let mut mean = Vec::new();
+            let mut coverage = Vec::new();
+            let mut random = 937_u32;
+            let mut uniform = || {
+                random ^= random << 13;
+                random ^= random >> 17;
+                random ^= random << 5;
+                (f64::from(random) + 1.0) / (f64::from(u32::MAX) + 2.0)
+            };
+            for y in 0..height {
+                for x in 0..width {
+                    let depth = if x < width / 2 { left } else { right };
+                    coverage.push(depth);
+                    let noise =
+                        (-2.0 * uniform().ln()).sqrt() * (std::f64::consts::TAU * uniform()).cos();
+                    let dx = (x % 200) as f64 - 100.0;
+                    let dy = y as f64 - 100.0;
+                    let object = if x < width / 2 { 1500.0 } else { 6000.0 }
+                        * (-(dx * dx + dy * dy) / 800.0).exp();
+                    mean.push(if depth == 0 {
+                        0.0
+                    } else {
+                        (1000.0 + object + noise * 40.0 / f64::from(depth).sqrt()) as f32
+                    });
+                }
+            }
+            measure_point(
+                seiza_stacking::StackView {
+                    width,
+                    height,
+                    channels: 1,
+                    mean: &mean,
+                    coverage: &coverage,
+                    rejected_samples: &[],
+                    accepted_frames: left + right,
+                    rejected_frames: 0,
+                },
+                f64::from(left + right) * 300.0,
+                true,
+            )
+            .unwrap()
+        };
+        let points = vec![
+            measure(16, 0),
+            measure(16, 1),
+            measure(16, 4),
+            measure(16, 8),
+            measure(16, 16),
+        ];
+        // Nothing worsened in the first panel: the increase is the shallow
+        // second panel entering the estimator, then improving with more data.
+        assert!(points[1].noise > points[0].noise * 1.2);
+        assert!(points[4].noise < points[1].noise * 0.8);
+        assert_eq!(
+            points[0].coverage.unwrap(),
+            SnrCoverage {
+                covered_fraction: 0.5,
+                mean_depth: 16.0
+            }
+        );
+        assert_eq!(
+            points[1].coverage.unwrap(),
+            SnrCoverage {
+                covered_fraction: 1.0,
+                mean_depth: 8.5
+            }
+        );
+        assert_eq!(points[4].coverage.unwrap().mean_depth, 16.0);
+        let same_field =
+            ProgressiveSnr::new(StackFrameOrder::Capture, points.clone(), &[300.0; 32]);
+        assert!(
+            same_field.analysis.is_some(),
+            "the old model would fit these incompatible areas"
+        );
+        let mosaic =
+            ProgressiveSnr::for_group(StackFrameOrder::Capture, points.clone(), &[300.0; 32], true);
+        assert!(mosaic.mosaic);
+        assert!(mosaic.analysis.is_none());
+        assert_eq!(
+            mosaic.analysis_reason.as_deref(),
+            Some(MOSAIC_ANALYSIS_REASON)
+        );
+        for (actual, measured) in mosaic.points.iter().zip(&points) {
+            assert_eq!(actual.signal, measured.signal);
+            assert_eq!(actual.snr, measured.signal / measured.noise);
+        }
+    }
+
+    #[test]
+    fn old_mosaic_measurements_can_be_reinterpreted_without_restacking() {
+        let points = curve(|n| 20.0 / f64::from(n).sqrt(), &[1, 2, 4]);
+        let old = ProgressiveSnr::new(StackFrameOrder::Capture, points, &[300.0; 4]);
+        let mut json = serde_json::to_value(&old).unwrap();
+        json.as_object_mut().unwrap().remove("mosaic");
+        let old: ProgressiveSnr = serde_json::from_value(json).unwrap();
+        assert!(!old.mosaic);
+        let mosaic = ProgressiveSnr::for_mosaic(old.order, old.points);
+        assert!(mosaic.analysis.is_none());
+        assert!(mosaic.points.iter().all(|point| point.coverage.is_none()));
+    }
+
     fn curve(noise_at: impl Fn(u32) -> f64, depths: &[u32]) -> Vec<SnrPoint> {
         depths
             .iter()
@@ -558,6 +739,7 @@ mod tests {
                     signal: 500.0,
                     snr: 500.0 / noise,
                     channel_noise: vec![noise],
+                    coverage: None,
                 }
             })
             .collect()
