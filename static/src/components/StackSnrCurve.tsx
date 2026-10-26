@@ -50,8 +50,11 @@ export default function StackSnrCurve({
     () => curve.points.filter((point) => point.frames >= 1 && point.snr > 0),
     [curve.points]
   );
-  const analysisReason = curve.analysis_reason?.trim() || null;
-  const showIdeal = analysisReason === null;
+  const mosaic = curve.mosaic === true;
+  const analysisReason = curve.analysis_reason?.trim() || (mosaic
+    ? 'Mosaic frames cover different sky areas. Total frame count cannot predict the depth at each pixel.'
+    : null);
+  const showIdeal = !mosaic && analysisReason === null;
   const geometry = useMemo(() => {
     if (points.length < 2) return null;
     const xs = points.map((point) => Math.log(point.frames));
@@ -85,13 +88,15 @@ export default function StackSnrCurve({
         frames: point.frames,
         snr: point.snr,
         seconds: point.exposure_seconds,
+        coverage: point.coverage,
       })),
     };
   }, [points, showIdeal]);
 
   if (points.length < 2) return null;
-  const analysis = analysisReason ? null : curve.analysis;
+  const analysis = mosaic || analysisReason ? null : curve.analysis;
   const verdict = analysis?.verdict;
+  const coverage = mosaic ? points.at(-1)?.coverage : null;
 
   return (
     <details
@@ -112,7 +117,7 @@ export default function StackSnrCurve({
       {/* The verdict rides in the summary, so folding the chart away leaves
           the answer on one line rather than taking it off the card. */}
       <summary className="stack-snr-head">
-        <strong>Signal-to-noise vs depth</strong>
+        <strong>{mosaic ? 'Mosaic SNR and coverage' : 'Signal-to-noise vs depth'}</strong>
         <span className="stack-snr-order">
           {curve.order === 'capture' ? 'Reference-first capture' : 'Quality order'}
         </span>
@@ -137,6 +142,7 @@ export default function StackSnrCurve({
             <circle key={mark.frames} cx={mark.x} cy={mark.y} r={2.5}>
               <title>
                 {`${mark.frames} frames (${formatHours(mark.seconds)}): ratio ${mark.snr.toFixed(1)}`}
+                {mark.coverage && `; ${(mark.coverage.covered_fraction * 100).toFixed(1)}% of canvas covered, ${mark.coverage.mean_depth.toFixed(1)} frames per covered pixel`}
               </title>
             </circle>
           ))}
@@ -158,11 +164,16 @@ export default function StackSnrCurve({
       )}
 
       <div className="stack-snr-legend" aria-label="Chart lines">
-        <span><i className="stack-snr-key measured" aria-hidden="true" />Measured</span>
+        <span><i className="stack-snr-key measured" aria-hidden="true" />{mosaic ? 'Measured covered area' : 'Measured'}</span>
         {showIdeal && (
           <span><i className="stack-snr-key ideal" aria-hidden="true" />Ideal square-root trend</span>
         )}
       </div>
+
+      {coverage && <div className="stack-snr-metrics">
+        <div><strong>{(coverage.covered_fraction * 100).toFixed(1)}%</strong><span>of canvas covered</span></div>
+        <div><strong>{coverage.mean_depth.toFixed(1)}</strong><span>mean frames per covered pixel</span></div>
+      </div>}
 
       {analysisReason ? (
         <p className="stack-snr-summary">{analysisReason}</p>
@@ -243,6 +254,7 @@ export default function StackSnrCurve({
                 <th scope="col">Background</th>
                 <th scope="col">Signal</th>
                 <th scope="col">SNR</th>
+                {mosaic && <><th scope="col">Canvas covered</th><th scope="col">Mean pixel depth</th></>}
               </tr>
             </thead>
             <tbody>
@@ -254,6 +266,10 @@ export default function StackSnrCurve({
                   <td>{formatMeasurement(point.background)}</td>
                   <td>{formatMeasurement(point.signal)}</td>
                   <td>{formatMeasurement(point.snr)}</td>
+                  {mosaic && <>
+                    <td>{point.coverage ? `${(point.coverage.covered_fraction * 100).toFixed(1)}%` : 'Not recorded'}</td>
+                    <td>{point.coverage ? formatMeasurement(point.coverage.mean_depth) : 'Not recorded'}</td>
+                  </>}
                 </tr>
               ))}
             </tbody>

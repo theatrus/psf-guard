@@ -430,9 +430,11 @@ pub(super) fn integrate_channel(
     // The reference frame alone is the first depth on the curve and the
     // baseline every later depth is read against: one frame's noise.
     if points.is_empty()
-        && let Some(sample) = pool.install(|| seiza_stacking::measure_depth(stacker.view()))
+        && let Some(point) = pool.install(|| {
+            snr::measure_point(stacker.view(), integrated_exposure(&ledger), group.mosaic)
+        })
     {
-        points.push(snr::point(sample, integrated_exposure(&ledger)));
+        points.push(point);
     }
     let save_checkpoint =
         |stacker: &LiveStacker, ledger: &[resume::ResumeFrame], points: &[snr::SnrPoint]| {
@@ -705,11 +707,18 @@ pub(super) fn integrate_channel(
             .is_none_or(|last| last.frames < accepted_frames);
         if (crossed || cancelled)
             && advanced
-            && let Some(sample) = pool.install(|| seiza_stacking::measure_depth(stacker.view()))
+            && let Some(point) = pool.install(|| {
+                snr::measure_point(stacker.view(), integrated_exposure(&ledger), group.mosaic)
+            })
         {
-            points.push(snr::point(sample, integrated_exposure(&ledger)));
+            points.push(point);
             let exposures = accepted_exposures(&ledger);
-            events.snr(snr::ProgressiveSnr::new(order, points.clone(), &exposures));
+            events.snr(snr::ProgressiveSnr::for_group(
+                order,
+                points.clone(),
+                &exposures,
+                group.mosaic,
+            ));
         }
         if !cancelled && !cancel.requested() {
             events.live(&stacker, accepted_frames, false);
@@ -1002,7 +1011,7 @@ pub(super) fn integrate_channel(
             .with_comment("rejected input frames"),
         );
         let exposures = accepted_exposures(&ledger);
-        let progressive = snr::ProgressiveSnr::new(order, points, &exposures);
+        let progressive = snr::ProgressiveSnr::for_group(order, points, &exposures, group.mosaic);
         output_cards.push(
             seiza_fits::WriteHeaderCard::new(
                 "SNRORDER",

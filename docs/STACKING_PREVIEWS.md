@@ -77,6 +77,9 @@ Slow frames can delay an update. The live image uses an automatic stretch and
 the reference frame's orientation; final processing and orientation follow when
 the build finishes.
 
+Once the live image is available, it replaces the waiting placeholder. The
+progress bar stays below the image throughout the build.
+
 On a rebuild, **Inspect completed stack** and **Download completed linear FITS**
 still open the previous completed result. Live images are temporary displays;
 they cannot be used for color composition, processing, or FITS downloads. When
@@ -596,6 +599,19 @@ towards the ideal as the weaker frames arrive.
 
 ### What is measured, and what is predicted
 
+Mosaics report SNR for the covered canvas at each checkpoint, together with
+the covered fraction and mean frames per covered pixel. Adding a panel changes
+the sky area and can add much shallower pixels, so the measured SNR can dip or
+flatten even when no frames have harmed the stack. PSF Guard keeps each
+checkpoint's own measured signal and withholds the same-field square-root
+comparison, verdict and extra-frame forecasts for mosaics.
+
+Saved mosaic curves also use this interpretation. Coverage is shown for new
+builds; older curves show **Not recorded** rather than estimating missing
+coverage. Existing stacks do not need rebuilding to correct their plots.
+
+![Mosaic SNR report with canvas coverage and mean pixel depth](images/mosaic-snr-coverage.png)
+
 The curve is measurement. The stack accumulator already holds the integration
 of every frame pushed so far, so the build reads it on the way past instead of
 integrating the same frames again once per depth: depths double — 1, 2, 4, 8,
@@ -615,8 +631,9 @@ At each depth the build records:
 - **Signal**, how far the brightest one percent of the frame sits above that
   background.
 
-Every depth's ratio is read against the deepest depth's signal, not its own. A
-target's flux does not change as a stack deepens; only the noise does. But the
+For a single field, every depth's ratio is read against the deepest depth's
+signal, not its own. A target's flux does not change as a stack deepens; only
+the noise does. But the
 brightest-percent statistic is itself lifted by noise where the stack is
 shallow — a one-frame stack's brightest percent is part star and part noise
 peak — so reading each depth against its own signal would write that bias into

@@ -611,6 +611,7 @@ mod tests {
                 signal: 500.0,
                 snr: 25.0,
                 channel_noise: vec![20.0],
+                coverage: None,
             },
             snr::SnrPoint {
                 frames: 2,
@@ -620,6 +621,7 @@ mod tests {
                 signal: 500.0,
                 snr: 35.5,
                 channel_noise: vec![14.1],
+                coverage: None,
             },
         ];
         store(cache.path(), &recorded);

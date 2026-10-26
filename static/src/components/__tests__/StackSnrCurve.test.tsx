@@ -46,6 +46,35 @@ function curve(overrides: Partial<ProgressiveSnr> = {}): ProgressiveSnr {
 }
 
 describe('StackSnrCurve', () => {
+  it('shows mosaic coverage without same-field forecasts or verdicts', async () => {
+    const measured = curve().points.map((point) => ({ ...point,
+      coverage: { covered_fraction: point.frames < 4 ? 0.5 : 0.9, mean_depth: point.frames / 2 },
+    }));
+    const { container } = render(<StackSnrCurve curve={curve({ mosaic: true, points: measured,
+      analysis_reason: 'Mosaic frames cover different sky areas.' })} label="Heart and Soul Ha" open onOpenChange={() => {}} />);
+    expect(screen.getByText('Mosaic SNR and coverage')).toBeInTheDocument();
+    expect(screen.getByText('Measured covered area')).toBeInTheDocument();
+    expect(screen.getByText('of canvas covered').parentElement).toHaveTextContent('90.0%');
+    expect(screen.getByText('mean frames per covered pixel').parentElement).toHaveTextContent('16.0');
+    expect(screen.queryByText('Still improving')).not.toBeInTheDocument();
+    expect(screen.queryByText('+7')).not.toBeInTheDocument();
+    expect(container.querySelector('.stack-snr-ideal')).toBeNull();
+    await userEvent.click(screen.getByText(/Exact measurements/));
+    expect(screen.getByRole('columnheader', { name: 'Canvas covered' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Mean pixel depth' })).toBeInTheDocument();
+    expect(screen.getAllByRole('cell', { name: '50.0%' })).toHaveLength(2);
+  });
+
+  it('does not invent coverage for a saved mosaic curve that predates coverage recording', async () => {
+    const { container } = render(<StackSnrCurve curve={curve({ mosaic: true })} label="Mosaic Ha" open onOpenChange={() => {}} />);
+    expect(screen.getByText(/Total frame count cannot predict/)).toBeInTheDocument();
+    expect(screen.queryByText('of canvas covered')).not.toBeInTheDocument();
+    expect(screen.queryByText('Still improving')).not.toBeInTheDocument();
+    expect(container.querySelector('.stack-snr-ideal')).toBeNull();
+    await userEvent.click(screen.getByText(/Exact measurements/));
+    expect(screen.getAllByRole('cell', { name: 'Not recorded' })).toHaveLength(12);
+  });
+
   it('shows the verdict, the fitted exponent and what more frames would buy', () => {
     render(<StackSnrCurve curve={curve()} label="M31 Ha" open onOpenChange={() => {}} />);
 
