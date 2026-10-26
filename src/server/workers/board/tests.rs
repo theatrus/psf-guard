@@ -539,6 +539,50 @@ fn a_shared_worker_gets_paths_once_it_answers_the_probe() {
 }
 
 #[test]
+fn this_server_would_run_a_step_only_when_no_other_worker_could_claim_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let board = board(dir.path(), Timings::default());
+    let step = needs("sxt", "1");
+    let here = || board.runs_here(TaskKind::RcAstroStep, &step);
+    assert!(!here(), "this server has not offered the tool");
+    board.register(
+        "this-server",
+        registration(
+            "This server",
+            offers(&[("sxt", "1")]),
+            FileAccess::default(),
+        ),
+        true,
+    );
+    assert!(here());
+    // Workers whose tool is unlicensed, or at another version, cannot
+    // claim the step.
+    let mut unlicensed = offers(&[("sxt", "1")]);
+    unlicensed.rc_astro[0].licensed = false;
+    board.register(
+        "token-a",
+        registration("unlicensed", unlicensed, FileAccess::default()),
+        false,
+    );
+    board.register(
+        "token-b",
+        registration("older", offers(&[("sxt", "0.9")]), FileAccess::default()),
+        false,
+    );
+    assert!(here());
+    board.register(
+        "token-c",
+        registration("gpu-box", offers(&[("sxt", "1")]), FileAccess::default()),
+        false,
+    );
+    assert!(!here(), "the worker that can claim it goes first");
+    board.set_placement(TaskKind::RcAstroStep, WorkPlacement::ThisServer);
+    assert!(here());
+    board.set_placement(TaskKind::RcAstroStep, WorkPlacement::WorkersOnly);
+    assert!(!here());
+}
+
+#[test]
 fn this_server_runs_a_task_only_while_no_other_worker_can() {
     let dir = tempfile::tempdir().unwrap();
     let board = board(dir.path(), Timings::default());

@@ -229,11 +229,12 @@ pub(super) fn integrate_channel(
             }
         });
         let mut orientation_vote = OrientationVote::default();
+        let mut largest_frame = frame_size;
         let (stacker, ledger, points) = if group.mosaic {
             events.phase("planning mosaic".into(), None);
             events.resume_note("Mosaic canvases are replanned when their inputs change");
             let limit = mosaic::maximum_samples(available_memory, worker_policy, plan)?;
-            let stacker = mosaic::plan(
+            let (stacker, panels) = mosaic::plan(
                 group,
                 plan,
                 method.stack_options(cosmetic, gpu),
@@ -247,6 +248,10 @@ pub(super) fn integrate_channel(
                     );
                 },
             )?;
+            largest_frame = (
+                largest_frame.0.max(panels.0),
+                largest_frame.1.max(panels.1),
+            );
             for note in stacker.expansion_planning_notes() {
                 events.resume_note(note);
             }
@@ -408,14 +413,15 @@ pub(super) fn integrate_channel(
             }
         }
         };
-        Ok::<_, String>((stacker, ledger, points, orientation_vote))
+        Ok::<_, String>((stacker, ledger, points, orientation_vote, largest_frame))
     });
     if cancel.requested() {
         return Ok(ChannelOutcome::Cancelled);
     }
-    let (mut stacker, mut ledger, mut points, mut orientation_vote) = initialized?;
+    let (mut stacker, mut ledger, mut points, mut orientation_vote, largest_frame) = initialized?;
     // A mosaic's canvas sets the stack's own memory; each frame still
-    // arrives at its own size and lands on part of the canvas.
+    // arrives at its own size and lands on part of the canvas. The largest
+    // of the first frame and the panels' frames stands for every frame.
     if group.mosaic {
         let view = stacker.view();
         pipeline_budget = execution::plan_mosaic_pipeline(
@@ -423,7 +429,7 @@ pub(super) fn integrate_channel(
             worker_policy,
             (view.width, view.height),
             view.channels,
-            frame_size,
+            largest_frame,
             plan,
             &threads,
         )?;
@@ -433,8 +439,8 @@ pub(super) fn integrate_channel(
             group_index = group.index,
             canvas_width = view.width,
             canvas_height = view.height,
-            frame_width = frame_size.0,
-            frame_height = frame_size.1,
+            frame_width = largest_frame.0,
+            frame_height = largest_frame.1,
             compute_workers = threads.compute_workers,
             preparation_workers = threads.preparation_workers,
             serial = threads.serial,
@@ -851,15 +857,9 @@ pub(super) fn integrate_channel(
             // The final pass keeps each admitted frame in a scratch file,
             // four bytes a sample, when the scratch folder's disk has room
             // for all of them and a margin; otherwise it reads every frame
-            // on each pass instead. A mosaic's frame keeps only the part of
-            // the canvas it reaches.
+            // on each pass instead.
             let view = stacker.view();
-            let frame_pixels = if group.mosaic {
-                execution::footprint_pixels(frame_size, (view.width, view.height))
-            } else {
-                view.width * view.height
-            };
-            let needed = (frame_pixels * view.channels) as u64
+            let needed = (view.width * view.height * view.channels) as u64
                 * 4
                 * u64::from(accepted_frames);
             let volume = outputs

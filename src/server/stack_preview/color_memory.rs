@@ -27,6 +27,9 @@ const EMISSION_BYTES_PER_PLANE: u64 = 5;
 /// The line contribution continuum subtraction builds. With six channels,
 /// the step measured 42 in all.
 const EMISSION_BYTES_PER_PIXEL: u64 = 16;
+/// The three-channel line contribution, kept from continuum subtraction
+/// through the tool steps until it is added to the color channels.
+const EMISSION_HELD_BYTES_PER_PIXEL: u64 = 12;
 /// The three-channel image a step combines the channels into.
 const COLOR_IMAGE_BYTES_PER_PIXEL: u64 = 12;
 /// An RC-Astro step's input copy, exchange buffers and result in PSF
@@ -107,21 +110,27 @@ impl ColorMemoryPlan {
                 EMISSION_BYTES_PER_PLANE * channels + EMISSION_BYTES_PER_PIXEL,
             ));
         }
+        let contribution = if self.emission {
+            EMISSION_HELD_BYTES_PER_PIXEL
+        } else {
+            0
+        };
         if let Some(tool) = self.color_rc_astro {
             steps.push((
                 "RC-Astro on the color channels",
-                COLOR_IMAGE_BYTES_PER_PIXEL + tool_step(3, tool),
+                contribution + COLOR_IMAGE_BYTES_PER_PIXEL + tool_step(3, tool),
             ));
         }
         if let Some(stars) = self.stars {
             let separation = COLOR_IMAGE_BYTES_PER_PIXEL + tool_step(3, stars.tool);
             steps.push((
                 "star replacement",
-                if stars.rgb {
-                    RGB_STARS_BYTES_PER_PIXEL.max(RGB_STARS_HELD_BYTES_PER_PIXEL + separation)
-                } else {
-                    separation
-                },
+                contribution
+                    + if stars.rgb {
+                        RGB_STARS_BYTES_PER_PIXEL.max(RGB_STARS_HELD_BYTES_PER_PIXEL + separation)
+                    } else {
+                        separation
+                    },
             ));
         }
         let (step, largest) = steps
@@ -207,6 +216,38 @@ mod tests {
         assert_eq!(
             emission(6).estimate(1).bytes_per_pixel - emission(4).estimate(1).bytes_per_pixel,
             2 * (PLANE_BYTES_PER_PIXEL + EMISSION_BYTES_PER_PLANE)
+        );
+    }
+
+    #[test]
+    fn the_line_contribution_stays_through_the_tool_steps() {
+        let color_tool = ColorMemoryPlan {
+            channels: 6,
+            color_rc_astro: Some(ToolRun::Elsewhere),
+            ..ColorMemoryPlan::default()
+        };
+        let with_lines = ColorMemoryPlan {
+            emission: true,
+            ..color_tool
+        };
+        assert_eq!(
+            with_lines.estimate(1).step,
+            "RC-Astro on the color channels"
+        );
+        assert_eq!(
+            with_lines.estimate(1).bytes_per_pixel - color_tool.estimate(1).bytes_per_pixel,
+            EMISSION_HELD_BYTES_PER_PIXEL
+        );
+        let stars = sho_with_rgb_stars(ToolRun::Here);
+        assert_eq!(
+            ColorMemoryPlan {
+                emission: true,
+                ..stars
+            }
+            .estimate(1)
+            .bytes_per_pixel
+                - stars.estimate(1).bytes_per_pixel,
+            EMISSION_HELD_BYTES_PER_PIXEL
         );
     }
 

@@ -406,11 +406,12 @@ Separate channels and queued stack jobs still run one at a time.
 A mosaic plans again once its canvas is known. The canvas sets the admission
 and serial-peak estimates. Each preparation worker is sized for one frame and
 the most of the canvas that frame can cover: its bounding box when turned 45
-degrees. Seiza prepares a frame at its own size and resamples it only where it
-lands, so a large canvas still prepares several frames at once. The log line
-`Stack pipeline memory replanned for the mosaic canvas` shows the canvas, the
-frame and the new plan. The final pass sizes each frame's scratch file the
-same way when it checks for disk space.
+degrees, at the 4% scale difference Seiza accepts, with no side longer than
+the canvas's. The frame is the largest of the group's first frame and each
+panel's reference frame. Seiza prepares a frame at its own size and resamples
+it only where it lands, so a large canvas still prepares several frames at
+once. The log line `Stack pipeline memory replanned for the mosaic canvas`
+shows the canvas, the frame and the new plan.
 
 Logs report the configured workers, estimated memory, and for each batch the
 pipeline mode, frames in preparation at once, integrated, rejected and failed
@@ -1038,8 +1039,11 @@ itself, input deconvolution, continuum subtraction, RC-Astro on the input or
 color channels, or star replacement. When an RC-Astro tool such as
 StarXTerminator runs on this server, the estimate also includes the tool's own
 process, about 48 bytes per sample of the image it processes. A tool whose
-result is cached, or that runs on a connected worker, is not counted. To lower
-a large star-replacement estimate, add a worker in **Settings › Workers**. The
+result is cached is not counted, nor one that a connected worker would claim
+when the composition starts: a worker with the same tool and version,
+licensed. A worker that disconnects later sends the step back to this server.
+To lower a large star-replacement estimate, add a worker in
+**Settings › Workers**. The
 server log shows each estimate and its largest step, for example
 `22566 MiB estimated, 264 bytes a pixel for 6 channel(s) of 89631126 pixels;
 largest step: star replacement`.

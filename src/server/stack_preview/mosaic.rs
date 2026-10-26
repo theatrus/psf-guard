@@ -79,7 +79,7 @@ pub(super) fn plan(
     maximum_samples: usize,
     cancel: &Stop,
     mut progress: impl FnMut(usize, usize, usize),
-) -> Result<LiveStacker, String> {
+) -> Result<(LiveStacker, (usize, usize)), String> {
     let references = panel_references(
         group,
         options.cfa_integration == seiza_stacking::CfaIntegration::BayerDrizzle,
@@ -94,6 +94,8 @@ pub(super) fn plan(
     // globally best frame (which can be a different panel for each filter).
     indices.sort_by_key(|&index| group.frames[index].target_id);
     let mut paths = Vec::new();
+    // The widest and tallest of the panels' frames, for the memory plan.
+    let mut largest = (0, 0);
     for index in indices {
         if cancel.requested() {
             return Err("Mosaic planning cancelled".into());
@@ -107,6 +109,10 @@ pub(super) fn plan(
         }
         let mut frame =
             crate::image_io::open_linear_frame(&source.path).map_err(|e| e.to_string())?;
+        largest = (
+            largest.0.max(frame.image.width),
+            largest.1.max(frame.image.height),
+        );
         let session = masters.assignments[index];
         let calibration = &masters.sessions[session];
         // Never seed the canvas with raw photometry when its lights will be
@@ -149,6 +155,7 @@ pub(super) fn plan(
             }
         },
     )
+    .map(|stacker| (stacker, largest))
     .map_err(|e| e.to_string())
 }
 
@@ -267,7 +274,7 @@ mod tests {
             options.normalization = normalization;
         }
         let cancel = Stop::new();
-        let mut stacker = super::plan(
+        let (mut stacker, largest) = super::plan(
             group,
             plan,
             options,
@@ -277,6 +284,7 @@ mod tests {
             |_, _, _| {},
         )
         .unwrap();
+        assert_eq!(largest, (600, 440), "the panels' frames");
         assert_eq!(
             stacker.view().accepted_frames,
             0,

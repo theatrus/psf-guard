@@ -175,18 +175,28 @@ impl PipelineBudget {
     }
 }
 
-/// The most pixels of a `canvas` one `frame` can reach once registered:
-/// its bounding box at the worst rotation, 45 degrees, which is a square
-/// whose side is the frame's width plus height over the square root of
-/// two, and never more than the canvas.
+/// Pixels past a registered frame's edges that resampling and a lens warp
+/// can still reach.
+const FOOTPRINT_MARGIN_PIXELS: f64 = 8.0;
+
+/// The most pixels of a `canvas` one `frame` can reach once registered.
+/// Seiza turns away a frame whose scale differs from the canvas's by more
+/// than its acceptance gate, so the frame is taken at that scale and a
+/// margin. Its bounding box covers the most when turned 45 degrees: a
+/// square whose side is the width plus the height over the square root of
+/// two. At any angle, no side of the box is longer than the frame's
+/// diagonal or the canvas's own side.
 pub(super) fn footprint_pixels(
     (frame_width, frame_height): (usize, usize),
     (canvas_width, canvas_height): (usize, usize),
 ) -> usize {
-    let side = (frame_width.saturating_add(frame_height) as f64 * std::f64::consts::FRAC_1_SQRT_2)
-        .ceil() as usize;
-    side.saturating_mul(side)
-        .min(canvas_width.saturating_mul(canvas_height))
+    let scale = 1.0 + seiza_stacking::FrameAcceptanceCriteria::default().maximum_scale_deviation;
+    let width = frame_width as f64 * scale + FOOTPRINT_MARGIN_PIXELS;
+    let height = frame_height as f64 * scale + FOOTPRINT_MARGIN_PIXELS;
+    let square = (width + height) * std::f64::consts::FRAC_1_SQRT_2;
+    let diagonal = width.hypot(height);
+    let within_canvas = diagonal.min(canvas_width as f64) * diagonal.min(canvas_height as f64);
+    (square * square).min(within_canvas).ceil() as usize
 }
 
 pub(super) fn plan_pipeline(
@@ -603,11 +613,20 @@ mod tests {
 
     #[test]
     fn a_frame_reaches_at_most_its_box_at_45_degrees_on_the_canvas() {
-        // 6248 by 4176 at 45 degrees is a square of 7371 pixels a side.
-        let footprint = footprint_pixels((6248, 4176), (20_000, 20_000));
-        assert_eq!(footprint, 7371 * 7371);
-        assert!(footprint > 6248 * 4176);
-        assert_eq!(footprint_pixels((6248, 4176), (7000, 5000)), 7000 * 5000);
+        let frame = (6248, 4176);
+        let open = footprint_pixels(frame, (20_000, 20_000));
+        // More than the frame turned 45 degrees at its own scale, and no
+        // more than that at the scale gate with the margin.
+        assert!(open > 7371 * 7371);
+        assert!(open < 7700 * 7700);
+        // A strip mosaic's short side bounds every frame on it.
+        let strip = footprint_pixels(frame, (12_000, 4_500));
+        assert!(strip < open);
+        assert!(strip < 12_000 * 4_500);
+        assert!(strip > 6248 * 4500);
+        // A tall frame on a canvas hardly wider than it still fits itself.
+        assert!(footprint_pixels((1000, 3000), (1100, 6000)) >= 1000 * 3000);
+        assert!(footprint_pixels(frame, (7000, 5000)) <= 7000 * 5000);
     }
 
     #[test]

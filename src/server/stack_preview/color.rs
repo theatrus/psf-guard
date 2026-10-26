@@ -3659,6 +3659,14 @@ fn run_color_rc_astro(
     })
 }
 
+/// An RC-Astro chain: its step ids, its steps, and the schema each tool
+/// runs with.
+type ToolChain<'a> = (
+    &'a [String],
+    &'a super::rc_astro::RcAstroProcessing,
+    &'a [(String, seiza_stacking::ExternalToolSchema)],
+);
+
 /// The steps `job` runs, for its memory estimate. A tool step counts the
 /// RC-Astro process when its result is not cached and this server would
 /// run it.
@@ -3669,20 +3677,22 @@ fn color_memory_plan(
     stack_root: &FsPath,
     reused_inputs: bool,
     calibration: bool,
+    rc_astro_schemas: &BTreeMap<StackColorRole, Vec<(String, seiza_stacking::ExternalToolSchema)>>,
     rc_astro_chains: &BTreeMap<StackColorRole, Vec<String>>,
     color_rc_astro: &ColorRcAstroPlan,
     stars_plan: Option<&narrowband::StarsPlan>,
 ) -> color_memory::ColorMemoryPlan {
     use color_memory::ToolRun;
     let processing = job.processing.as_ref();
-    let offered = std::cell::OnceCell::new();
-    let tool = |chains: &[(&[String], &super::rc_astro::RcAstroProcessing)]| {
-        let runs_here = chains.iter().any(|(chain, config)| {
+    let tool = |chains: &[ToolChain<'_>]| {
+        let runs_here = chains.iter().any(|(chain, config, schemas)| {
             !super::rc_astro::rc_astro_chain_cached(stack_root, chain, config)
                 && config.steps.iter().any(|step| {
-                    offered
-                        .get_or_init(|| state.workers.rc_astro_tools())
-                        .runs_here(&step.tool)
+                    // A step with no schema fails before any tool runs.
+                    schemas
+                        .iter()
+                        .find(|(tool, _)| *tool == step.tool)
+                        .is_some_and(|(_, schema)| state.workers.rc_astro_runs_here(schema))
                 })
         });
         if runs_here {
@@ -3695,7 +3705,8 @@ fn color_memory_plan(
         .iter()
         .filter_map(|(role, chain)| {
             let config = processing?.input_rc_astro.get(role)?;
-            Some((chain.as_slice(), config))
+            let schemas = rc_astro_schemas.get(role)?;
+            Some((chain.as_slice(), config, schemas.as_slice()))
         })
         .collect::<Vec<_>>();
     let color_chain = processing
@@ -3707,18 +3718,32 @@ fn color_memory_plan(
         input_deconvolution: !reused_inputs && !job.input_deconvolution_ids.is_empty(),
         input_rc_astro: (!reused_inputs && !input_chains.is_empty()).then(|| tool(&input_chains)),
         emission: processing.is_some_and(|processing| processing.emission.is_some()),
-        color_rc_astro: color_chain
-            .map(|config| tool(&[(color_rc_astro.chain.as_slice(), config)])),
+        color_rc_astro: color_chain.map(|config| {
+            tool(&[(
+                color_rc_astro.chain.as_slice(),
+                config,
+                color_rc_astro.schemas.as_slice(),
+            )])
+        }),
         stars: stars_plan.map(|plan| {
             let rgb = plan.calibration.is_some();
-            let mut chains = vec![(plan.nebula_chain.as_slice(), &plan.config)];
+            let mut chains = vec![(
+                plan.nebula_chain.as_slice(),
+                &plan.config,
+                plan.schemas.as_slice(),
+            )];
             if rgb {
                 chains.push((
                     plan.rgb_chain.as_slice(),
                     plan.rgb_config.as_ref().unwrap_or(&plan.config),
+                    plan.schemas.as_slice(),
                 ));
                 if let Some(preparation) = &plan.rgb_preparation {
-                    chains.push((preparation.chain.as_slice(), &preparation.config));
+                    chains.push((
+                        preparation.chain.as_slice(),
+                        &preparation.config,
+                        preparation.schemas.as_slice(),
+                    ));
                 }
             }
             color_memory::StarsMemory {
@@ -3837,6 +3862,7 @@ fn compose_color(
         stack_root,
         reused_inputs,
         color_calibration.is_some(),
+        rc_astro_schemas,
         rc_astro_chains,
         color_rc_astro,
         stars_plan,
