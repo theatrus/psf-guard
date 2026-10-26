@@ -1312,10 +1312,33 @@ pub enum Commands {
     /// PSF_GUARD_WORKER_TOKEN or `--token`. The worker offers the RC-Astro
     /// tools installed here, runs the tasks the server sends it, and keeps
     /// running until you stop it with Ctrl-C.
+    ///
+    /// With `--config`, the worker reads its settings from a file instead,
+    /// such as the one the desktop app writes. With `--tray`, the desktop
+    /// app runs the worker in the menu bar or the system tray.
     Worker {
         /// The server's address, such as `http://192.168.1.10:3000`.
-        #[arg(long)]
-        server: String,
+        /// Required unless the settings come from `--config` or `--tray`.
+        #[arg(long, required_unless_present_any = ["config", "tray"])]
+        server: Option<String>,
+
+        /// Read the worker's settings from this file, such as the one the
+        /// desktop app writes, instead of the other options.
+        #[arg(
+            long,
+            value_name = "FILE",
+            conflicts_with_all = ["server", "token", "name", "files", "maps", "work_dir", "rc_astro", "work", "slots"]
+        )]
+        config: Option<String>,
+
+        /// Run in the menu bar (macOS) or the system tray (Windows), with
+        /// the settings the desktop app saved, or those in `--config`.
+        /// Desktop app builds only.
+        #[arg(
+            long,
+            conflicts_with_all = ["server", "token", "name", "files", "maps", "work_dir", "rc_astro", "work", "slots"]
+        )]
+        tray: bool,
 
         /// The worker token from Settings › Workers. When omitted, the
         /// token is read from PSF_GUARD_WORKER_TOKEN, which keeps it out of
@@ -1353,10 +1376,9 @@ pub enum Commands {
 
         /// Work this worker accepts: `stack` for stack builds, `rc-astro`
         /// for every RC-Astro tool, or `bxt`, `nxt` or `sxt` for one. Repeat
-        /// for more. Without it, the worker accepts everything it can run. The server sends accepted
-        /// work here ahead of running it itself, unless Settings › Workers
-        /// says otherwise. To pick up a new rc-astro licence or version,
-        /// restart the worker.
+        /// for more. Without this option, the worker accepts every task type
+        /// it can run. Choose where tasks run in Settings › Workers.
+        /// Restart the worker after licensing or upgrading rc-astro.
         #[arg(long = "work", value_name = "WORK")]
         work: Vec<String>,
 

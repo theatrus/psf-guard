@@ -107,6 +107,20 @@ fn start_worker_taking(
     tokio::sync::oneshot::Sender<()>,
     tokio::task::JoinHandle<Result<()>>,
 ) {
+    start_controlled_worker(server, files, work_dir, work, WorkerControl::default())
+}
+
+/// Start a worker whose status and pause are `control`'s.
+fn start_controlled_worker(
+    server: &Server,
+    files: FileAccess,
+    work_dir: &Path,
+    work: WorkChoice,
+    control: WorkerControl,
+) -> (
+    tokio::sync::oneshot::Sender<()>,
+    tokio::task::JoinHandle<Result<()>>,
+) {
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
     let options = WorkerOptions {
         server: server.address.clone(),
@@ -120,6 +134,7 @@ fn start_worker_taking(
         },
         work,
         slots: 1,
+        control,
     };
     let handle = tokio::spawn(serve(options, async {
         let _ = stopped.await;
@@ -883,4 +898,97 @@ async fn a_worker_stacks_a_mosaic_to_the_same_pixels_as_this_server() {
         drop(stop);
         worker.await.unwrap().unwrap();
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_paused_worker_takes_no_new_task_until_it_resumes_and_lists_the_one_it_runs() {
+    use crate::server::stack_preview::remote_channel::testing;
+    let frames = tempfile::tempdir().unwrap();
+    let group = testing::synthetic_group(frames.path());
+    let server = server().await;
+    server.state.workers.board.set_placement(
+        crate::remote_work::protocol::TaskKind::StackChannel,
+        crate::server::workers::board::WorkPlacement::WorkersOnly,
+    );
+    let control = WorkerControl::default();
+    control.set_paused(true);
+    let work = tempfile::tempdir().unwrap();
+    let (stop, worker) = start_controlled_worker(
+        &server,
+        FileAccess::default(),
+        work.path(),
+        WorkChoice::parse(&["stack".into()]).unwrap(),
+        control.clone(),
+    );
+    eventually("the worker connects", || connected(&server).is_some()).await;
+    assert_eq!(control.status().connection, control::Connection::Connected);
+    let there = tempfile::tempdir().unwrap();
+    let stacked = {
+        let (state, group, directory) = (
+            Arc::clone(&server.state),
+            group.clone(),
+            there.path().to_path_buf(),
+        );
+        tokio::task::spawn_blocking(move || testing::stack_on_worker(&state, &group, &directory))
+    };
+    eventually("the channel is queued", || {
+        !server.state.workers.board.summary().1.is_empty()
+    })
+    .await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(
+        server.state.workers.board.summary().1.len(),
+        1,
+        "a paused worker leaves the channel in the queue"
+    );
+    control.set_paused(false);
+    eventually("the worker lists the channel it stacks", || {
+        !control.status().tasks.is_empty()
+    })
+    .await;
+    assert!(control.status().tasks[0]
+        .label
+        .starts_with("Stack of 5 frames"));
+    let stacked = stacked.await.unwrap();
+    assert_eq!(stacked.dispositions.len(), 5);
+    eventually("the finished channel leaves the list", || {
+        control.status().tasks.is_empty()
+    })
+    .await;
+    drop(stop);
+    worker.await.unwrap().unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_controls_answer_only_with_the_secret_and_go_away_when_the_worker_quits() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("worker-control.json");
+    let control = WorkerControl::default();
+    let quitting = control.clone();
+    let served = tokio::spawn(control::serve_control(
+        control.clone(),
+        file.clone(),
+        async move { quitting.quitting().await },
+    ));
+    eventually("the control file is written", || file.exists()).await;
+    let client = control::ControlClient::find(&file).unwrap();
+    assert!(!client.status().await.unwrap().paused);
+    client.pause().await.unwrap();
+    assert!(control.status().paused);
+    client.resume().await.unwrap();
+    assert!(!control.status().paused);
+
+    let written = control::ControlFile::read(&file).unwrap();
+    let refused = reqwest::Client::new()
+        .post(format!("http://127.0.0.1:{}/pause", written.port))
+        .header(control::SECRET_HEADER, "a guess")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), StatusCode::UNAUTHORIZED);
+    assert!(!control.status().paused);
+
+    client.quit().await.unwrap();
+    served.await.unwrap().unwrap();
+    assert!(!file.exists(), "the control file goes with the worker");
 }

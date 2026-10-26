@@ -252,15 +252,6 @@ pub fn main() {
     init_logging();
 
     let registry_path = DbRegistry::default_path().expect("Could not resolve config path");
-    let initial_registry = DbRegistry::load_or_init(&registry_path).unwrap_or_else(|err| {
-        eprintln!(
-            "Warning: failed to load config at {}: {} — starting with empty registry",
-            registry_path.display(),
-            err
-        );
-        DbRegistry::default()
-    });
-
     let server_config = TauriServerConfig {
         static_dir: None,
         pregeneration: PregenerationConfig::default(),
@@ -285,37 +276,70 @@ pub fn main() {
         server_task: Arc::new(Mutex::new(None)),
         server_stop: Arc::new(Mutex::new(None)),
     };
-    let settings = DesktopSettings::load(&DesktopSettings::path(&registry_path));
-    match settings.and_then(|settings| {
-        state.status.lock().unwrap().server_port = settings.server_port;
-        settings.bind()
-    }) {
-        Ok(listener) => {
-            let state = state.clone();
-            let base = server_config.clone();
-            rt.spawn(async move {
-                let _guard = state.lifecycle.lock().await;
-                let listener = match SharedTcpListener::from_std(listener) {
-                    Ok(listener) => listener,
-                    Err(error) => {
-                        state.note_error(&format!(
-                            "Could not prepare the desktop server socket: {error}"
-                        ));
-                        return;
-                    }
-                };
-                if let Err(error) = state.start_server(listener, initial_registry, base).await {
-                    state.note_error(&error);
-                }
-            });
-        }
-        Err(error) => state.note_error(&format!("{error:#}")),
-    }
-
     tauri::Builder::default()
+        // First, so a second launch exits before it starts anything: the
+        // open window comes forward instead.
+        .plugin(tauri_plugin_single_instance::init(
+            |app, _arguments, _folder| {
+                use tauri::Manager;
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.unminimize();
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            },
+        ))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // The desktop server starts once the single-instance check has
+        // passed, so a second launch never opens the registry.
+        .setup({
+            let state = state.clone();
+            let server_config = server_config.clone();
+            let runtime = rt.handle().clone();
+            move |_| {
+                let rt = runtime;
+                let initial_registry =
+                    DbRegistry::load_or_init(&registry_path).unwrap_or_else(|err| {
+                        eprintln!(
+                            "Warning: failed to load config at {}: {} — starting with empty registry",
+                            registry_path.display(),
+                            err
+                        );
+                        DbRegistry::default()
+                    });
+                let settings = DesktopSettings::load(&DesktopSettings::path(&registry_path));
+                match settings.and_then(|settings| {
+                    state.status.lock().unwrap().server_port = settings.server_port;
+                    settings.bind()
+                }) {
+                    Ok(listener) => {
+                        let state = state.clone();
+                        let base = server_config.clone();
+                        rt.spawn(async move {
+                            let _guard = state.lifecycle.lock().await;
+                            let listener = match SharedTcpListener::from_std(listener) {
+                                Ok(listener) => listener,
+                                Err(error) => {
+                                    state.note_error(&format!(
+                                        "Could not prepare the desktop server socket: {error}"
+                                    ));
+                                    return;
+                                }
+                            };
+                            if let Err(error) =
+                                state.start_server(listener, initial_registry, base).await
+                            {
+                                state.note_error(&error);
+                            }
+                        });
+                    }
+                    Err(error) => state.note_error(&format!("{error:#}")),
+                }
+                Ok(())
+            }
+        })
         .manage(state)
         .manage(server_config)
         .invoke_handler(tauri::generate_handler![
@@ -331,10 +355,22 @@ pub fn main() {
             restart_server,
             is_configuration_valid,
             get_log_folder,
-            open_log_folder
+            open_log_folder,
+            crate::desktop_worker::get_desktop_worker,
+            crate::desktop_worker::save_desktop_worker,
+            crate::desktop_worker::start_desktop_worker,
+            crate::desktop_worker::stop_desktop_worker,
+            crate::desktop_worker::pause_desktop_worker
         ])
-        .run(tauri::generate_context!())
+        .run(context())
         .expect("error while running tauri application");
+}
+
+/// The app's Tauri context: its configuration and embedded frontend. The
+/// macro embeds the frontend, so it appears once, for the app window and
+/// for the worker's tray.
+pub(crate) fn context() -> tauri::Context<tauri::Wry> {
+    tauri::generate_context!()
 }
 
 /// Log to the console, as the server does, and to the daily file in the

@@ -177,6 +177,57 @@ step whichever worker ran the earlier steps.
 - **Progress.** The stage reads `NoiseXTerminator on studio-pc` while a
   remote worker runs it.
 
+## Desktop worker
+
+`psf-guard worker --tray` runs the desktop app's worker: a second process of
+the app's binary, a Tauri app with a tray icon and no window
+(`src/worker_tray.rs`), so the worker keeps running when the app's window
+closes. On macOS it is an accessory app, with no Dock icon. It reuses the
+app's Tauri context (`tauri_main::context`), which embeds the frontend once,
+and registers no plugins.
+
+- **Settings.** `WorkerSettings` (`commands/worker/settings.rs`) is the
+  worker's arguments as a file, `worker.json` in the user's local settings
+  folder, written with mode 0600 on Unix. `--config FILE` runs a worker
+  from it. The desktop app never returns the token to the page; a blank
+  token on save keeps the saved one.
+- **Status and controls.** `WorkerControl` (`commands/worker/control.rs`)
+  keeps the worker's status (connection, running tasks and their progress,
+  the latest problem) and its pause and quit. A paused slot claims no new
+  task; running tasks finish, and a claim already waiting at the server can
+  still bring one task. A failed claim marks the worker as connecting, with
+  the error, until a claim succeeds.
+- **Control port.** The tray serves `GET /status` and `POST /pause`,
+  `/resume` and `/quit` on a localhost port, behind a random secret in the
+  `x-psf-worker-control` header, on a thread of its own. The port, the
+  secret and the process id go in `<settings stem>-control.json` beside the
+  settings, mode 0600. The port outlives the worker, so the app can show why
+  a worker stopped. A second `--tray` start that finds a worker answering
+  there exits.
+- **Ending.** Clicking **Quit worker** or calling `/quit` closes the tray
+  after the worker leaves the server, or after 35 seconds. The control file
+  is removed first. If a worker stops after a failure, its tray stays open
+  so the app can show the reason. **Start worker** closes that stopped tray
+  before starting a new worker.
+- **Opening the app.** The tray's process runs the app's executable, so
+  macOS counts it as the running PSF Guard and sends it the reopen request
+  when the app is opened from the Dock or the Finder. The tray answers that,
+  and **Open PSF Guard**, by starting the executable with no arguments. The
+  main app registers `tauri-plugin-single-instance` first, so a launch while
+  its window is open brings that window forward and exits. It loads the
+  registry and starts the desktop server in `setup`, after that check.
+- **Desktop app.** `src/desktop_worker.rs` has the commands behind
+  **Settings › Workers › Worker on this computer**. They read and save settings,
+  start the tray process, and pause, resume and stop it through the control port.
+- **Start worker at login** (`commands/worker/login.rs`): a LaunchAgent with
+  `RunAtLoad` on macOS, and a value under
+  `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` on Windows. Both
+  run `psf-guard worker --tray --config <settings>`.
+- **Windows console windows.** The tray reads the host name without starting
+  `hostname`, and Seiza starts rc-astro with `CREATE_NO_WINDOW` (from
+  `seiza-stacking` 0.51.2), so a worker without a console opens no console
+  windows.
+
 ## Stack channels
 
 Each channel of a stack build can be a task (`stack_channel`). The build's

@@ -49,7 +49,11 @@ pub mod zero_point;
 // Main entry points
 pub mod cli_main;
 #[cfg(feature = "tauri")]
+mod desktop_worker;
+#[cfg(feature = "tauri")]
 pub mod tauri_main;
+#[cfg(feature = "tauri")]
+mod worker_tray;
 
 #[cfg(test)]
 mod test_star_detection;

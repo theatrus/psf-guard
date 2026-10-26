@@ -7,6 +7,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { isTauriApp, tauriConfig, tauriFileSystem } from '../utils/tauri';
 import OpenLogsButton from './OpenLogsButton';
 import DesktopServerSettings from './DesktopServerSettings';
+import DesktopWorkerSettings from './DesktopWorkerSettings';
 import type {
   RemoteImageUploadDirectoryTemplateSource,
   ImportFolder,
@@ -1000,7 +1001,8 @@ export default function TauriSettings({
     // A worker token lets another machine read the files of the tasks it
     // runs, so workers take an editor on a server that allows database
     // management.
-    ...(canEdit && managementAllowed
+    // The desktop app also runs this computer's own worker from here.
+    ...(isTauri || (canEdit && managementAllowed)
       ? ([{ id: 'workers', label: 'Workers' }] as const)
       : []),
     // Review preferences are stored in this browser, so no gate either.
@@ -2130,7 +2132,12 @@ export default function TauriSettings({
             </div>
           )}
 
-          {currentTab === 'workers' && <WorkerSettings />}
+          {currentTab === 'workers' && (
+            <>
+              {isTauri && <DesktopWorkerSettings />}
+              {canEdit && managementAllowed && <WorkerSettings />}
+            </>
+          )}
 
           {currentTab === 'storage' && (
             <div className="settings-setups">

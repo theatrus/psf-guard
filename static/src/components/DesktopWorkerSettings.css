@@ -1,0 +1,50 @@
+/* Settings › Workers › Worker on this computer. Spacing only; colours come from the shared form
+   styles. */
+.desktop-worker-settings .database-config .file-path-input {
+  width: 100%;
+  max-width: 36rem;
+}
+
+.desktop-worker-settings #desktop-worker-slots {
+  width: 6rem;
+}
+
+.desktop-worker-settings fieldset,
+.desktop-worker-maps {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.desktop-worker-settings fieldset > label,
+.desktop-worker-login {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.desktop-worker-maps .token-secret-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.desktop-worker-map-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  flex: 1 1 14rem;
+  min-width: 0;
+}
+
+.desktop-worker-maps > .browse-button {
+  align-self: flex-start;
+}
+
+.desktop-worker-files > * + * {
+  margin-top: 0.5rem;
+}
+
+.desktop-worker-files > summary {
+  cursor: pointer;
+}

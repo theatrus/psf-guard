@@ -27,6 +27,14 @@
   spacing. Emission amounts and star reduction appear where they run in the
   pipeline; closing a step preserves its edits.
 
+- Run a worker from the PSF Guard app on macOS or Windows. Open
+  **Settings › Workers › Worker on this computer**, enter the **Server
+  address** and **Worker token**, then click **Save worker settings** and
+  **Start worker**. The worker continues running in the menu bar or system
+  tray after you close the window. **Start worker at login** starts it when
+  you log in. Opening PSF Guard while its window is open brings that window
+  forward instead of starting a second copy.
+
 - Run a worker as a Linux service. The Fedora RPM and the Debian package
   install a `psf-guard-worker` systemd service, not enabled. Enter the
   server's address and a worker token in `/etc/psf-guard/worker.conf`, then
@@ -164,3 +172,5 @@
 - Set the processing memory budget in **Settings → Performance → Processing
   memory**. Color and stretch errors show the estimate and current budget, with
   the setting to adjust it.
+
+- Worker settings distinguish the worker on this computer from workers connected to the server. Labels explain task types, concurrent tasks, temporary files and saved tokens; tray status distinguishes waiting for a connection from waiting for tasks.

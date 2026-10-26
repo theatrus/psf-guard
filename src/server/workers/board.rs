@@ -685,28 +685,29 @@ impl Board {
                 .clone()
                 .ok_or_else(|| Refusal::Invalid("This worker was sent no probe".into()))?
         };
-        let reason = match answer.digest {
-            None => Some(answer.problem.unwrap_or_else(|| {
-                "The worker could not read the server's exchange folder".into()
-            })),
-            Some(digest) if digest != probe.digest => {
-                Some("The file the worker read is not the probe the server wrote".into())
-            }
-            Some(_) => match std::fs::read(&probe.reply_path) {
-                Ok(reply)
-                    if crate::remote_work::hex(&{
-                        use sha2::{Digest, Sha256};
-                        Sha256::digest(&reply)
-                    }) == probe.digest =>
-                {
-                    None
+        let reason =
+            match answer.digest {
+                None => Some(answer.problem.unwrap_or_else(|| {
+                    "The worker could not read the server's shared folder".into()
+                })),
+                Some(digest) if digest != probe.digest => {
+                    Some("The file the worker read is not the probe the server wrote".into())
                 }
-                Ok(_) => Some("The reply the worker wrote does not match the probe".into()),
-                Err(_) => {
-                    Some("The worker's reply did not reach the server's exchange folder".into())
-                }
-            },
-        };
+                Some(_) => match std::fs::read(&probe.reply_path) {
+                    Ok(reply)
+                        if crate::remote_work::hex(&{
+                            use sha2::{Digest, Sha256};
+                            Sha256::digest(&reply)
+                        }) == probe.digest =>
+                    {
+                        None
+                    }
+                    Ok(_) => Some("The reply the worker wrote does not match the probe".into()),
+                    Err(_) => {
+                        Some("The worker's reply did not reach the server's shared folder".into())
+                    }
+                },
+            };
         let _ = std::fs::remove_file(&probe.path);
         let _ = std::fs::remove_file(&probe.reply_path);
         let mut inner = self.lock();
@@ -776,7 +777,7 @@ impl Board {
         let dir = self.files().join("tasks").join(&id);
         std::fs::create_dir_all(&dir).map_err(|error| {
             format!(
-                "The worker exchange folder {} could not be written: {error}",
+                "The folder for worker task files, {}, could not be written: {error}",
                 dir.display()
             )
         })?;

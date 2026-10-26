@@ -25,6 +25,13 @@ use crate::remote_work::protocol::{
 };
 use crate::remote_work::{file_digest, map_path, LocalTools, WorkChoice};
 
+pub mod control;
+pub mod login;
+pub mod settings;
+
+pub use control::{WorkerControl, WorkerStatus};
+pub use settings::WorkerSettings;
+
 /// The worker command's arguments, as the command line gives them.
 pub struct WorkerArgs {
     pub server: String,
@@ -51,6 +58,8 @@ pub struct WorkerOptions {
     pub work: WorkChoice,
     /// How many tasks it runs at once.
     pub slots: usize,
+    /// What it is doing, and its pause and quit controls.
+    pub control: WorkerControl,
 }
 
 /// The longest wait between attempts to reach the server.
@@ -67,18 +76,84 @@ const EVENTS_PER_REPORT: usize = 200;
 /// How long a finished task keeps trying to send its last events.
 const FLUSH_LIMIT: Duration = Duration::from_secs(120);
 
-pub fn run(args: WorkerArgs) -> Result<()> {
+/// Where the worker's settings come from.
+pub enum WorkerLaunch {
+    /// The command line's arguments.
+    Arguments(WorkerArgs),
+    /// A settings file.
+    Settings(PathBuf),
+}
+
+pub fn run(launch: WorkerLaunch) -> Result<()> {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::filter::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::filter::EnvFilter::new("info")),
         )
         .try_init();
-    let options = options(args)?;
     let runtime = tokio::runtime::Runtime::new()?;
-    runtime.block_on(serve(options, async {
-        let _ = tokio::signal::ctrl_c().await;
-    }))
+    let control = WorkerControl::default();
+    {
+        let control = control.clone();
+        runtime.spawn(async move {
+            let _ = tokio::signal::ctrl_c().await;
+            control.quit();
+        });
+    }
+    runtime.block_on(run_with(launch, control))
+}
+
+/// Run the worker in the menu bar or the system tray, with the settings at
+/// `settings`. Desktop app builds only.
+#[cfg(feature = "tauri")]
+pub fn run_tray(settings: PathBuf) -> Result<()> {
+    crate::worker_tray::run(settings)
+}
+
+#[cfg(not(feature = "tauri"))]
+pub fn run_tray(_settings: PathBuf) -> Result<()> {
+    anyhow::bail!(
+        "This build has no menu bar or tray; run `psf-guard worker --config FILE` instead, \
+         or install the desktop app"
+    )
+}
+
+/// Run a worker until `control` quits it or the server refuses its token.
+/// The status explains why the worker stopped.
+pub async fn run_with(launch: WorkerLaunch, control: WorkerControl) -> Result<()> {
+    let prepared = match launch {
+        WorkerLaunch::Arguments(args) => options(args),
+        WorkerLaunch::Settings(path) => WorkerSettings::load(&path).and_then(|settings| {
+            let settings = settings.with_context(|| {
+                format!(
+                    "There are no worker settings at {}; set up the worker in PSF Guard's \
+                     Settings › Workers, or start it with --server",
+                    path.display()
+                )
+            })?;
+            settings.validate()?;
+            options(settings.into_args())
+        }),
+    };
+    let served = match prepared {
+        Ok(mut options) => {
+            options.control = control.clone();
+            let quitting = control.clone();
+            serve(options, async move { quitting.quitting().await }).await
+        }
+        Err(error) => Err(error),
+    };
+    control.update(|status| {
+        status.tasks.clear();
+        match &served {
+            Ok(()) => status.connection = control::Connection::Stopped,
+            Err(error) => {
+                status.connection = control::Connection::Failed;
+                status.problem = Some(format!("{error:#}"));
+            }
+        }
+    });
+    served
 }
 
 fn options(args: WorkerArgs) -> Result<WorkerOptions> {
@@ -127,6 +202,7 @@ fn options(args: WorkerArgs) -> Result<WorkerOptions> {
             slots: args.slots,
         },
         work: WorkChoice::parse(&args.work).map_err(anyhow::Error::msg)?,
+        control: WorkerControl::default(),
         slots: {
             anyhow::ensure!(
                 (1..=MAX_SLOTS).contains(&args.slots),
@@ -138,13 +214,28 @@ fn options(args: WorkerArgs) -> Result<WorkerOptions> {
     })
 }
 
-/// This machine's host name, or "worker" when it cannot be read.
+/// This machine's host name, or "worker" when it cannot be read. It is read
+/// without starting a process, which on Windows would open a console window
+/// for the tray worker.
 fn host_name() -> String {
-    std::process::Command::new("hostname")
-        .output()
-        .ok()
-        .and_then(|output| String::from_utf8(output.stdout).ok())
-        .map(|name| name.trim().to_string())
+    #[cfg(windows)]
+    let name = std::env::var("COMPUTERNAME").ok();
+    #[cfg(unix)]
+    let name = {
+        let mut buffer = [0u8; 256];
+        // SAFETY: gethostname writes at most `buffer.len()` bytes into it.
+        let read = unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len()) };
+        (read == 0).then(|| {
+            let end = buffer
+                .iter()
+                .position(|byte| *byte == 0)
+                .unwrap_or(buffer.len());
+            String::from_utf8_lossy(&buffer[..end]).into_owned()
+        })
+    };
+    #[cfg(not(any(unix, windows)))]
+    let name: Option<String> = None;
+    name.map(|name| name.trim().to_string())
         .filter(|name| !name.is_empty())
         .unwrap_or_else(|| "worker".into())
 }
@@ -466,16 +557,18 @@ pub async fn serve(options: WorkerOptions, shutdown: impl Future<Output = ()>) -
     .await?;
     offers.slots = options.slots;
     if offers.rc_astro.is_empty() {
+        // Without RC-Astro tools, a worker may still take stack builds.
+        let then = if offers.work.is_empty() {
+            "this worker has no work to accept yet"
+        } else {
+            "this worker accepts stack builds only"
+        };
         match (&options.tools.rc_astro, problem) {
-            (None, _) => tracing::warn!(
-                "rc-astro is not installed here; this worker has no work to accept yet"
-            ),
-            (Some(_), Some(problem)) => tracing::warn!(
-                "rc-astro could not be read ({problem}); this worker has no work to accept yet"
-            ),
-            (Some(_), None) => tracing::warn!(
-                "--work leaves out every RC-Astro tool; this worker has no work to accept yet"
-            ),
+            (None, _) => tracing::warn!("rc-astro is not installed here; {then}"),
+            (Some(_), Some(problem)) => {
+                tracing::warn!("rc-astro could not be read ({problem}); {then}")
+            }
+            (Some(_), None) => tracing::info!("--work leaves out every RC-Astro tool; {then}"),
         }
     } else {
         for schema in &offers.rc_astro {
@@ -498,6 +591,12 @@ pub async fn serve(options: WorkerOptions, shutdown: impl Future<Output = ()>) -
         offers,
         files: options.files.clone(),
     };
+    let control = options.control.clone();
+    control.update(|status| {
+        status.server = options.server.clone();
+        status.name = options.name.clone();
+        status.connection = control::Connection::Connecting;
+    });
     let mut options = Some(options);
     let mut client = Some(client);
     let mut backoff = Duration::from_secs(1);
@@ -512,6 +611,10 @@ pub async fn serve(options: WorkerOptions, shutdown: impl Future<Output = ()>) -
             Err(ClientError::Denied(message)) => anyhow::bail!(message),
             Err(error) => {
                 tracing::warn!("{error}; trying again in {}s", backoff.as_secs());
+                control.update(|status| {
+                    status.connection = control::Connection::Connecting;
+                    status.problem = Some(error.to_string());
+                });
                 tokio::select! {
                     () = &mut shutdown => return Ok(()),
                     () = tokio::time::sleep(backoff) => {}
@@ -521,6 +624,10 @@ pub async fn serve(options: WorkerOptions, shutdown: impl Future<Output = ()>) -
             }
         };
         backoff = Duration::from_secs(1);
+        control.update(|status| {
+            status.connection = control::Connection::Connected;
+            status.problem = None;
+        });
         let settings = options.as_ref().expect("the options are idle");
         tracing::info!(
             "Joined {} as {}, running up to {} task(s) at once",
@@ -532,13 +639,13 @@ pub async fn serve(options: WorkerOptions, shutdown: impl Future<Output = ()>) -
             let answer = answer_probe(&settings.files.maps, &probe.path, &probe.reply_path).await;
             match registering.answer_probe(&registered.session, &answer).await {
                 Ok(ProbeResult { shared: true, .. }) => tracing::info!(
-                    "Shared files: this worker reads and writes task files in the server's exchange folder"
+                    "Shared storage: this worker reads and writes task files in the server's shared folder"
                 ),
                 Ok(ProbeResult { reason, .. }) => tracing::warn!(
-                    "Shared files are off: {}. Task files go through the server.",
-                    reason.unwrap_or_else(|| "the server's exchange folder is not visible here".into())
+                    "Shared storage is off: {}. Task files transfer through the server.",
+                    reason.unwrap_or_else(|| "the server's shared folder is not visible here".into())
                 ),
-                Err(error) => tracing::warn!("The shared-files check failed: {error}"),
+                Err(error) => tracing::warn!("The shared storage check failed: {error}"),
             }
         }
         let joined = Arc::new(Joined {
@@ -584,6 +691,7 @@ pub async fn serve(options: WorkerOptions, shutdown: impl Future<Output = ()>) -
             Some(SlotEnd::Denied(message)) => anyhow::bail!(message),
             _ => tracing::warn!("The server forgot this worker; joining again"),
         }
+        control.update(|status| status.connection = control::Connection::Connecting);
         client = Some(joined.client);
         options = Some(joined.options);
     }
@@ -596,14 +704,30 @@ async fn run_slot(
     mut stopping: tokio::sync::watch::Receiver<bool>,
 ) -> SlotEnd {
     let mut backoff = Duration::from_secs(1);
+    let mut paused = joined.options.control.paused();
     loop {
         if *stopping.borrow() {
             return SlotEnd::Stopped;
+        }
+        // While paused, take no new task.
+        if *paused.borrow_and_update() {
+            tokio::select! {
+                _ = stopping.changed() => return SlotEnd::Stopped,
+                _ = paused.wait_for(|paused| !*paused) => {}
+            }
+            continue;
         }
         let claimed = tokio::select! {
             _ = stopping.changed() => return SlotEnd::Stopped,
             claimed = joined.client.claim(&joined.session, joined.poll) => claimed,
         };
+        // A claim the server answered means the worker is connected again.
+        if claimed.is_ok() {
+            joined.options.control.update(|status| {
+                status.connection = control::Connection::Connected;
+                status.problem = None;
+            });
+        }
         match claimed {
             Ok(None) => {}
             Ok(Some(assignment)) => match run_task(&joined, &assignment, stopping.clone()).await {
@@ -617,6 +741,10 @@ async fn run_slot(
             Err(ClientError::UnknownSession) => return SlotEnd::Rejoin,
             Err(error) => {
                 tracing::warn!("{error}; trying again in {}s", backoff.as_secs());
+                joined.options.control.update(|status| {
+                    status.connection = control::Connection::Connecting;
+                    status.problem = Some(error.to_string());
+                });
                 tokio::select! {
                     _ = stopping.changed() => return SlotEnd::Stopped,
                     () = tokio::time::sleep(backoff) => {}
@@ -636,7 +764,7 @@ async fn answer_probe(maps: &[PathMap], probe: &str, reply: &str) -> ProbeAnswer
         let (Some(probe), Some(reply)) = (probe, reply) else {
             return ProbeAnswer {
                 digest: None,
-                problem: Some("no --map reaches the server's exchange folder".into()),
+                problem: Some("no --map reaches the server's shared folder".into()),
             };
         };
         let content = match std::fs::read(&probe) {
@@ -710,6 +838,10 @@ async fn run_task(
         return Ok(());
     }
     tracing::info!(task = assignment.task, "Running {}", assignment.label);
+    let _listed = joined
+        .options
+        .control
+        .task(&assignment.task, &assignment.label);
     let scratch = joined.options.work_dir.join(&assignment.task);
     let outcome = run_task_in(joined, assignment, stopping, &scratch).await;
     let _ = tokio::fs::remove_dir_all(&scratch).await;
@@ -877,8 +1009,18 @@ impl Heartbeat<'_> {
     /// Send how far the task got and the events not yet acknowledged.
     async fn report(&mut self) -> Result<(), ClientError> {
         let (first_event, events) = self.outbox.pending();
+        let fraction = *self.fraction.borrow();
+        self.joined.options.control.update(|status| {
+            if let Some(task) = status
+                .tasks
+                .iter_mut()
+                .find(|task| task.id == self.assignment.task)
+            {
+                task.fraction = fraction.clamp(0.0, 1.0);
+            }
+        });
         let progress = Progress {
-            fraction: *self.fraction.borrow(),
+            fraction,
             events,
             first_event,
         };
