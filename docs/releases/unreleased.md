@@ -171,3 +171,5 @@
 - Set the processing memory budget in **Settings → Performance → Processing
   memory**. Color and stretch errors show the estimate and current budget, with
   the setting to adjust it.
+
+- Worker settings distinguish the worker on this computer from workers connected to the server. Labels explain task types, concurrent tasks, temporary files and saved tokens; tray status distinguishes waiting for a connection from waiting for tasks.

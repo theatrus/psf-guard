@@ -1376,10 +1376,9 @@ pub enum Commands {
 
         /// Work this worker accepts: `stack` for stack builds, `rc-astro`
         /// for every RC-Astro tool, or `bxt`, `nxt` or `sxt` for one. Repeat
-        /// for more. Without it, the worker accepts everything it can run. The server sends accepted
-        /// work here ahead of running it itself, unless Settings › Workers
-        /// says otherwise. To pick up a new rc-astro licence or version,
-        /// restart the worker.
+        /// for more. Without this option, the worker accepts every task type
+        /// it can run. Choose where tasks run in Settings › Workers.
+        /// Restart the worker after licensing or upgrading rc-astro.
         #[arg(long = "work", value_name = "WORK")]
         work: Vec<String>,
 

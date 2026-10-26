@@ -204,11 +204,11 @@ and registers no plugins.
   settings, mode 0600. The port outlives the worker, so the app can show why
   a worker stopped. A second `--tray` start that finds a worker answering
   there exits.
-- **Ending.** Quit, from the menu or `/quit`, ends the tray once the worker
-  has left the server, or after 35 seconds; the control file is removed
-  first. A worker that stopped on its own, such as one the server refused or
-  one whose settings cannot run, keeps its tray. The app's Start quits such
-  a tray before it starts a new one.
+- **Ending.** Clicking **Quit worker** or calling `/quit` closes the tray
+  after the worker leaves the server, or after 35 seconds. The control file
+  is removed first. If a worker stops after a failure, its tray stays open
+  so the app can show the reason. **Start worker** closes that stopped tray
+  before starting a new worker.
 - **Opening the app.** The tray's process runs the app's executable, so
   macOS counts it as the running PSF Guard and sends it the reopen request
   when the app is opened from the Dock or the Finder. The tray answers that,
@@ -217,9 +217,9 @@ and registers no plugins.
   its window is open brings that window forward and exits. It loads the
   registry and starts the desktop server in `setup`, after that check.
 - **Desktop app.** `src/desktop_worker.rs` has the commands behind
-  **Settings › Workers › This computer**: read and save the settings, start the tray
-  process, and pause, resume and stop it through the control port.
-- **Start at login** (`commands/worker/login.rs`): a LaunchAgent with
+  **Settings › Workers › Worker on this computer**. They read and save settings,
+  start the tray process, and pause, resume and stop it through the control port.
+- **Start worker at login** (`commands/worker/login.rs`): a LaunchAgent with
   `RunAtLoad` on macOS, and a value under
   `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` on Windows. Both
   run `psf-guard worker --tray --config <settings>`.

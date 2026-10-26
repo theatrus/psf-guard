@@ -30,12 +30,12 @@ const PLACEMENTS: Array<{ value: WorkPlacement; label: string; help: string }> =
   {
     value: 'workers_only',
     label: 'Workers only',
-    help: 'Only workers run it. With no worker connected, the work fails rather than run here.',
+    help: 'Only connected workers run these tasks. A task fails if no connected worker can run it.',
   },
   {
     value: 'this_server',
     label: 'This server only',
-    help: 'This server runs it, and workers are not sent it.',
+    help: 'This server runs these tasks. They are not sent to workers.',
   },
 ];
 
@@ -49,7 +49,7 @@ function errorMessage(error: unknown): string {
 function lastSeen(worker: WorkerSessionSummary): string {
   if (worker.connected) return 'Connected';
   const minutes = Math.round(worker.seconds_since_seen / 60);
-  return minutes < 1 ? 'Not heard from for a minute' : `Not heard from for ${minutes} min`;
+  return minutes < 1 ? 'Disconnected · Last report less than a minute ago' : `Disconnected · Last report ${minutes} min ago`;
 }
 
 function fileAccess(worker: WorkerSessionSummary): string {
@@ -152,7 +152,7 @@ export default function WorkerSettings() {
   };
 
   const revoke = (id: string, tokenName: string) => {
-    if (!window.confirm(`Revoke the token for ${tokenName}? The worker disconnects, and its task goes back in the queue.`)) {
+    if (!window.confirm(`Revoke the token for ${tokenName}? Connected workers using this token will disconnect. Their unfinished tasks will return to the queue.`)) {
       return;
     }
     void run(async () => {
@@ -164,7 +164,7 @@ export default function WorkerSettings() {
   const saveFolder = (next: string | null) => {
     void run(async () => {
       publish(await apiClient.setWorkerExchangeFolder(next));
-      setStatus(next ? 'Shared folder saved.' : 'Task files are back in the default folder.');
+      setStatus(next ? 'Shared folder saved.' : 'Default task folder restored.');
     });
   };
 
@@ -199,7 +199,7 @@ export default function WorkerSettings() {
   if (workers.isError || !workers.data) {
     return (
       <div className="settings-section">
-        <h3>Workers</h3>
+        <h3>Workers for this server</h3>
         <p className="status-message error" role="alert">{errorMessage(workers.error)}</p>
       </div>
     );
@@ -213,12 +213,12 @@ export default function WorkerSettings() {
     <div className="settings-section user-management worker-settings">
       <div className="user-management-heading">
         <div>
-          <h3>Workers</h3>
+          <h3>Workers for this server</h3>
           <p>
-            A worker is another computer that runs RC-Astro tools or stacks
-            builds for this server, such as one with a GPU, more cores or an
-            RC-Astro licence. Install PSF Guard there, create a token here, and
-            run <code>psf-guard worker</code> with it.
+            Use other computers to build stacks and run RC-Astro tools for this
+            server. Create a worker token here, then use it to connect the PSF Guard
+            app or <code>psf-guard worker</code> on the worker computer. This server
+            stores the catalog and processing results.
           </p>
         </div>
         {!formOpen && (
@@ -267,8 +267,9 @@ export default function WorkerSettings() {
       {created && commands && (
         <div className="token-secret" role="status">
           <p>
-            <strong>Copy a command now.</strong> The token in it is not shown
-            again. Run it on {created.summary.name}:
+            <strong>Save the worker token now.</strong> It is shown only once.
+            To connect from a terminal on {created.summary.name}, copy and run this
+            command in a macOS or Linux shell:
           </p>
           <div className="token-secret-row">
             <code className="token-secret-value" data-shell="posix">{commands.posix}</code>
@@ -290,7 +291,7 @@ export default function WorkerSettings() {
           </div>
           <p className="muted">
             Or enter this token in the PSF Guard app on that computer, in
-            Settings › Workers › This computer:
+            Settings › Workers › Worker on this computer:
           </p>
           <div className="token-secret-row">
             <code className="token-secret-value" data-shell="token">{commands.token}</code>
@@ -310,7 +311,7 @@ export default function WorkerSettings() {
             </p>
           )}
           <p className="muted">
-            Task files transfer through this server. To use shared storage
+            The worker downloads task files from this server and uploads results. To use shared storage
             instead, add <code>--files shared --map SERVER_FOLDER=LOCAL_FOLDER</code>.
           </p>
           <button type="button" className="cancel-button" onClick={() => setCreated(null)}>
@@ -319,7 +320,7 @@ export default function WorkerSettings() {
         </div>
       )}
 
-      <h4>Connected</h4>
+      <h4>Worker connections</h4>
       {data.workers.map((worker) => (
         <WorkerRow key={worker.session} worker={worker} />
       ))}
@@ -358,9 +359,9 @@ export default function WorkerSettings() {
         </fieldset>
       ))}
       <p className="muted">
-        A build stacked on a worker shows no running image, and the channel&apos;s
-        card shows which worker stacked it. This server&apos;s GPU settings apply
-        on the worker. WBPP runs stay on this server.
+        Each stack channel shows which worker built it. Live stack previews show
+        the worker&apos;s progress. The GPU choice in Settings › Stacking also
+        applies to stack builds on workers. WBPP runs stay on this server.
       </p>
 
       <h4>Tokens</h4>
@@ -395,9 +396,9 @@ export default function WorkerSettings() {
       <details className="worker-exchange" open={Boolean(savedFolder)}>
         <summary>Shared storage</summary>
         <p className="muted">
-          Workers download task files from this server and upload results. A
-          worker that shares storage with this server can read and write them
-          in a folder there instead. Task files are in{' '}
+          By default, workers download task files from this server and upload
+          results. If workers can access the same storage, choose a shared folder
+          for task inputs and results. The current task folder on this server is{' '}
           <code>{data.exchange_folder}</code>.
         </p>
         <form
@@ -416,6 +417,7 @@ export default function WorkerSettings() {
             placeholder={data.default_exchange_folder}
             disabled={saving}
           />
+          <p className="muted">Leave blank to use the default folder: {data.default_exchange_folder}.</p>
           <div className="modal-buttons">
             <button type="submit" className="save-button" disabled={saving || folder.trim() === savedFolder}>
               Save

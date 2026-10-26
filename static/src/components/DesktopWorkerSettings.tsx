@@ -75,7 +75,7 @@ function errorText(error: unknown): string {
 }
 
 /**
- * Settings › Workers › This computer: run a worker here for a PSF Guard
+ * Settings › Workers › Worker on this computer: run a worker for a PSF Guard
  * server. The worker runs in the menu bar or the system tray, a process of
  * its own, so it keeps running when this window is closed.
  */
@@ -98,10 +98,10 @@ export default function DesktopWorkerSettings() {
     onSuccess: (next) => client.setQueryData(KEY, next),
   });
 
-  if (worker.isPending || (loaded && !draft)) return <p>Loading…</p>;
+  if (worker.isPending || (loaded && !draft)) return <p>Loading worker settings…</p>;
   if (worker.isError || !loaded || !draft) {
     return (
-      <section className="settings-section" aria-label="This computer">
+      <section className="settings-section" aria-label="Worker on this computer">
         <p className="error-text" role="alert">
           The worker settings could not be read: {errorText(worker.error)}
         </p>
@@ -112,11 +112,11 @@ export default function DesktopWorkerSettings() {
 
   if (!loaded.supported) {
     return (
-      <section className="settings-section desktop-worker-settings" aria-label="This computer">
-        <h3>This computer</h3>
+      <section className="settings-section desktop-worker-settings" aria-label="Worker on this computer">
+        <h3>Worker on this computer</h3>
         <p>
           On Linux, run the worker as the <code>psf-guard-worker</code> service.
-          See Workers in the documentation.
+          Follow “Run a worker as a Linux service” in the Workers guide.
         </p>
       </section>
     );
@@ -130,7 +130,7 @@ export default function DesktopWorkerSettings() {
     event.preventDefault();
     setNotice('');
     if (!draft.stack && !draft.rcAstro) {
-      setNotice('Select at least one kind of work.');
+      setNotice('Select at least one task type: Stack builds or RC-Astro tools.');
       return;
     }
     action.mutate(
@@ -149,7 +149,7 @@ export default function DesktopWorkerSettings() {
       {
         onSuccess: (saved) => {
           setDraft(draftOf(saved));
-          setNotice(saved.status ? 'Saved. Restart the worker to use the new settings.' : 'Saved.');
+          setNotice(saved.status ? 'Worker settings saved. Restart the worker to use them.' : 'Worker settings saved.');
         },
       },
     );
@@ -159,20 +159,20 @@ export default function DesktopWorkerSettings() {
     return desktopWorker.start();
   });
   const chooseFolder = async () => {
-    const picked = await tauriFileSystem.pickPath({ title: 'Work folder' });
+    const picked = await tauriFileSystem.pickPath({ title: 'Temporary task folder' });
     if (picked) update({ work_dir: picked });
   };
   const shared = draft.files === 'shared';
 
   return (
-    <section className="settings-section desktop-worker-settings" aria-label="This computer">
+    <section className="settings-section desktop-worker-settings" aria-label="Worker on this computer">
       <UnsavedMark label="worker settings" dirty={dirty} />
-      <h3>This computer</h3>
+      <h3>Worker on this computer</h3>
       <p>
-        Run stack builds and RC-Astro tools here for another PSF Guard server. The
-        worker runs in the menu bar or the system tray, and keeps running after you
-        close this window. Get a token from the other server&apos;s Settings ›
-        Workers.
+        Use this computer to build stacks and run RC-Astro tools for a PSF Guard
+        server. Enter that server&apos;s address and a worker token from its
+        Settings › Workers. After you start the worker, it keeps running in the
+        menu bar or system tray when you close this window.
       </p>
 
       <div className="desktop-worker-status" aria-label="Worker status" role="group">
@@ -191,10 +191,10 @@ export default function DesktopWorkerSettings() {
                 disabled={busy}
                 onClick={() => action.mutate(() => desktopWorker.pause(!status.paused))}
               >
-                {status.paused ? 'Resume' : 'Pause'}
+                {status.paused ? 'Resume worker' : 'Pause worker'}
               </button>
               <button type="button" className="browse-button" disabled={busy} onClick={restart}>
-                Restart
+                Restart worker
               </button>
               <button
                 type="button"
@@ -202,7 +202,7 @@ export default function DesktopWorkerSettings() {
                 disabled={busy}
                 onClick={() => action.mutate(desktopWorker.stop)}
               >
-                Stop
+                Stop worker
               </button>
             </>
           ) : (
@@ -212,14 +212,21 @@ export default function DesktopWorkerSettings() {
               disabled={busy || dirty || !loaded.settings || !loaded.has_token}
               onClick={() => action.mutate(desktopWorker.start)}
             >
-              Start
+              Start worker
             </button>
           )}
           <OpenLogsButton onError={setLogError} />
         </div>
         {!status && (!loaded.settings || !loaded.has_token) && (
-          <p className="muted">Save a server address and a token to start the worker.</p>
+          <p className="muted">Save a server address and a worker token before starting the worker.</p>
         )}
+        {!status && loaded.settings && loaded.has_token && dirty && (
+          <p className="muted">Save your changes before starting the worker.</p>
+        )}
+        <p className="muted">
+          Pause lets running tasks finish. A task already requested from the server
+          may still start. Stop returns unfinished tasks to the server&apos;s queue.
+        </p>
       </div>
 
       <form className="user-form" onSubmit={save}>
@@ -236,23 +243,28 @@ export default function DesktopWorkerSettings() {
           />
         </div>
         <div className="database-config">
-          <label htmlFor="desktop-worker-token">Token</label>
+          <label htmlFor="desktop-worker-token">Worker token</label>
           <input
             id="desktop-worker-token"
+            aria-describedby="desktop-worker-token-help"
             className="file-path-input"
             type="password"
             autoComplete="off"
             value={draft.token}
-            placeholder={loaded.has_token ? 'Saved' : 'psfw_…'}
+            placeholder={loaded.has_token ? 'Saved token' : 'psfw_…'}
             onChange={(event) => update({ token: event.target.value })}
             required={!loaded.has_token}
             disabled={busy}
           />
+          <p className="muted" id="desktop-worker-token-help">{loaded.has_token
+            ? 'Leave blank to keep the saved token.'
+            : 'Create a worker token in the server’s Settings › Workers, then paste it here.'}</p>
         </div>
         <div className="database-config">
-          <label htmlFor="desktop-worker-name">Name</label>
+          <label htmlFor="desktop-worker-name">Worker name</label>
           <input
             id="desktop-worker-name"
+            aria-describedby="desktop-worker-name-help"
             className="file-path-input"
             value={draft.name ?? ''}
             placeholder="This computer's name"
@@ -260,9 +272,10 @@ export default function DesktopWorkerSettings() {
             onChange={(event) => update({ name: event.target.value })}
             disabled={busy}
           />
+          <p className="muted" id="desktop-worker-name-help">Leave blank to use this computer&apos;s host name.</p>
         </div>
         <fieldset className="desktop-worker-work">
-          <legend>Work</legend>
+          <legend>Task types</legend>
           <label>
             <input
               type="checkbox"
@@ -283,9 +296,10 @@ export default function DesktopWorkerSettings() {
           </label>
         </fieldset>
         <div className="database-config">
-          <label htmlFor="desktop-worker-slots">Tasks at once</label>
+          <label htmlFor="desktop-worker-slots">Concurrent tasks</label>
           <input
             id="desktop-worker-slots"
+            aria-describedby="desktop-worker-slots-help"
             className="file-path-input"
             type="number"
             min={1}
@@ -294,6 +308,7 @@ export default function DesktopWorkerSettings() {
             onChange={(event) => update({ slots: Number(event.target.value) })}
             disabled={busy}
           />
+          <p className="muted" id="desktop-worker-slots-help">Maximum tasks this worker runs at the same time, from 1 to 16. Start with 1 for GPU work.</p>
         </div>
         <label className="desktop-worker-login">
           <input
@@ -302,13 +317,13 @@ export default function DesktopWorkerSettings() {
             onChange={(event) => update({ startAtLogin: event.target.checked })}
             disabled={busy}
           />
-          Start at login
+          Start worker at login
         </label>
         <details className="desktop-worker-files" open={shared || Boolean(draft.work_dir)}>
-          <summary>Files</summary>
+          <summary>Task files</summary>
           <p className="muted">
-            Task files transfer through the server. A worker that shares storage
-            with the server can read them there instead.
+            The worker downloads inputs from the server and uploads results by
+            default. Use shared storage if both computers can access the same folders.
           </p>
           <label className="desktop-worker-login">
             <input
@@ -323,10 +338,10 @@ export default function DesktopWorkerSettings() {
           </label>
           {shared && (
             <div className="desktop-worker-maps">
-              <p className="muted">For each server folder, enter where this computer finds it.</p>
+              <p className="muted">Enter each shared folder&apos;s path on the server and its path on this computer.</p>
               {draft.maps.map((map, index) => (
                 <div className="token-secret-row" key={index}>
-                  <input
+                  <label className="desktop-worker-map-field">Server folder {index + 1}<input
                     className="file-path-input"
                     aria-label={`Server folder ${index + 1}`}
                     placeholder="/srv/astro"
@@ -335,8 +350,8 @@ export default function DesktopWorkerSettings() {
                       maps: draft.maps.map((each, at) => at === index ? { ...each, server: event.target.value } : each),
                     })}
                     disabled={busy}
-                  />
-                  <input
+                  /></label>
+                  <label className="desktop-worker-map-field">Folder on this computer {index + 1}<input
                     className="file-path-input"
                     aria-label={`Folder on this computer ${index + 1}`}
                     placeholder="Z:\astro"
@@ -345,15 +360,15 @@ export default function DesktopWorkerSettings() {
                       maps: draft.maps.map((each, at) => at === index ? { ...each, local: event.target.value } : each),
                     })}
                     disabled={busy}
-                  />
+                  /></label>
                   <button
                     type="button"
                     className="cancel-button"
-                    aria-label={`Remove folder ${index + 1}`}
+                    aria-label={`Remove folder mapping ${index + 1}`}
                     onClick={() => update({ maps: draft.maps.filter((_, at) => at !== index) })}
                     disabled={busy}
                   >
-                    Remove
+                    Remove mapping
                   </button>
                 </div>
               ))}
@@ -363,15 +378,16 @@ export default function DesktopWorkerSettings() {
                 onClick={() => update({ maps: [...draft.maps, { server: '', local: '' }] })}
                 disabled={busy}
               >
-                + Add folder
+                Add folder mapping
               </button>
             </div>
           )}
           <div className="database-config">
-            <label htmlFor="desktop-worker-folder">Work folder</label>
+            <label htmlFor="desktop-worker-folder">Temporary task folder</label>
             <div className="token-secret-row">
               <input
                 id="desktop-worker-folder"
+                aria-describedby="desktop-worker-folder-help"
                 className="file-path-input"
                 value={draft.work_dir ?? ''}
                 placeholder="System temporary folder"
@@ -379,15 +395,15 @@ export default function DesktopWorkerSettings() {
                 disabled={busy}
               />
               <button type="button" className="browse-button" onClick={() => void chooseFolder()} disabled={busy}>
-                Choose…
+                Choose folder…
               </button>
             </div>
-            <p className="muted">Task files stay here while a task runs.</p>
+            <p className="muted" id="desktop-worker-folder-help">Leave blank to use the system temporary folder. The worker stores task files here while tasks run.</p>
           </div>
         </details>
         <div className="modal-buttons">
           <button type="submit" className="save-button" disabled={busy || !dirty}>
-            {busy ? 'Saving…' : 'Save'}
+            {busy ? 'Saving…' : 'Save worker settings'}
           </button>
         </div>
       </form>

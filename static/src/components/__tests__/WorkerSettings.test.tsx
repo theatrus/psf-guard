@@ -65,6 +65,16 @@ const settings = (overrides: Partial<WorkersSettings> = {}): WorkersSettings => 
 const ok = <T,>(data: T) => ({ success: true, data, error: null });
 
 describe('WorkerSettings', () => {
+  it('distinguishes a disconnected worker from the time of its last report', async () => {
+    const data = settings();
+    data.workers[1].connected = false;
+    data.workers[1].seconds_since_seen = 10;
+    data.workers[1].running = [];
+    server.use(http.get('/api/workers', () => HttpResponse.json(ok(data))));
+    render(<WorkerSettings />, { wrapper: wrapper() });
+    expect(await screen.findByText('Disconnected · Last report less than a minute ago')).toBeInTheDocument();
+  });
+
   it('lists each worker with what it runs and how its files travel', async () => {
     server.use(http.get('/api/workers', () => HttpResponse.json(ok(settings()))));
     render(<WorkerSettings />, { wrapper: wrapper() });
@@ -121,7 +131,7 @@ describe('WorkerSettings', () => {
     render(<WorkerSettings />, { wrapper: wrapper() });
     fireEvent.click(await screen.findByRole('button', { name: 'Revoke the token for studio-pc' }));
     await waitFor(() => expect(revoked).toBe(true));
-    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('its task goes back in the queue'));
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('Their unfinished tasks will return to the queue.'));
     expect(await screen.findByText('No worker tokens yet.')).toBeInTheDocument();
     confirm.mockRestore();
   });

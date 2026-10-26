@@ -1,8 +1,8 @@
 # Workers
 
-A worker is another computer that runs work for a PSF Guard server. Use one
-when the server lacks something the work needs: an RC-Astro licence, a GPU,
-or more processor cores. The server keeps the catalog and every result.
+A worker is a PSF Guard process that runs processing tasks for a server.
+Run a worker on another computer to use its RC-Astro licenses, GPU or
+processor cores. The server stores the catalog and processing results.
 
 Workers run two kinds of work:
 
@@ -16,12 +16,14 @@ WBPP runs stay on the server.
 
 ## Add a worker
 
-You need an editor account on a server that allows database management.
+To create a worker token, you need an editor account on a server that allows
+database management.
 
 1. Install PSF Guard on the worker computer, the same release as the server.
-2. Install rc-astro on the worker and license the tools there. Run
-   `rc-astro download-models` once, so the first run does not wait for the
-   models to download.
+2. If the worker will run RC-Astro tools, install rc-astro and license the
+   tools on that computer. Run `rc-astro download-models` to download the
+   models before the first task. Workers that only build stacks do not
+   need rc-astro.
 3. On the server, open **Settings › Workers** and click **+ Add a worker**.
    Enter a name for the worker, such as `studio-pc`, and click **Create
    token**.
@@ -49,45 +51,61 @@ to 16; the default is 1, since each RC-Astro step uses the GPU.
 
 ## Run a worker from the desktop app
 
-On a Mac or a Windows PC, the PSF Guard app runs the worker in the menu bar
-or the system tray. It keeps running after you close the app's window.
+On macOS and Windows, you can configure a worker in the PSF Guard app.
+After you start it, the worker runs in the menu bar or system tray and
+continues running when you close the app window.
 
-1. Install the PSF Guard app on the worker computer, the same release as the
-   server.
+1. Install the same PSF Guard release on the worker computer and the server.
+   To run RC-Astro tools, install rc-astro and license the tools on the
+   worker computer too.
 2. On the server, open **Settings › Workers**, click **+ Add a worker**, and
-   create a token. Copy the token.
-3. On the worker computer, open PSF Guard, then **Settings › Workers**.
-4. Under **This computer**, enter the **Server address**, such as
-   `http://192.168.1.10:3000`, and the **Token**. Under **Work**, select
-   **Stack builds**, **RC-Astro tools** or both.
-5. To start the worker when you log in, select **Start at login**.
-6. Click **Save**, then **Start**.
+   create a token. Copy the token; PSF Guard shows it only once.
+3. On the worker computer, open PSF Guard and choose **Settings › Workers ›
+   Worker on this computer**.
+4. Enter the **Server address**, such as `http://192.168.1.10:3000`, and the
+   **Worker token**. Leave **Worker name** blank to use the computer's host
+   name. Under **Task types**, select **Stack builds**, **RC-Astro tools**,
+   or both.
+5. Set **Concurrent tasks** to the maximum number of tasks this worker can
+   run at the same time, from 1 to 16. Start with 1 for GPU work.
+6. To start the worker when you log in, select **Start worker at login**.
+7. Click **Save worker settings**, then **Start worker**.
 
-**This computer** then shows whether the worker is connected and what it is
-running. **Pause** lets running tasks finish and takes no new ones;
-**Resume** takes them again. **Stop** stops the worker, and the server
-queues its running task again. After you change the settings, click
-**Restart**.
+**Worker on this computer** shows the connection status and running tasks.
+The controls affect the worker on this computer:
 
-The worker's menu in the menu bar or the tray shows the same status, with
-**Pause**, **Open PSF Guard** and **Quit**.
+- **Pause worker** stops new task requests and lets running tasks finish.
+  A request already sent to the server may still return one task.
+  **Resume worker** allows new task requests again.
+- **Stop worker** stops the worker and returns unfinished tasks to the
+  server's queue.
+- After changing settings, click **Save worker settings**, then **Restart
+  worker** to apply them to a running worker. Leave **Worker token** blank
+  to keep the saved token.
 
-- Task files transfer through the server. To use shared storage instead,
-  open **Files** and select **Use shared storage**; see [Choose how files
-  reach the worker](#choose-how-files-reach-the-worker).
-- PSF Guard saves the settings, with the token, in `worker.json` in its
-  settings folder, readable only by your user. `psf-guard worker --config
-  FILE` runs a worker from such a file without the menu bar or the tray.
-- **Start at login** adds a LaunchAgent on macOS,
-  `~/Library/LaunchAgents/com.theatrus.psf-guard.worker.plist`, and a
-  **PSF Guard Worker** entry under the `Run` key in the registry on Windows.
-  Clear it and click **Save** to remove it.
-- The worker writes its log to files starting `worker` in the app's log
-  folder. Click **Open logs** to see them.
+The menu bar or system tray shows the same status. It provides **Pause
+worker** or **Resume worker**, **Open PSF Guard**, and **Quit worker**.
+**Quit worker** stops the worker and closes its menu bar or tray icon.
 
-On Linux, the app does not run the worker in a tray; run it as a service
-instead, as [Run a worker as a Linux service](#run-a-worker-as-a-linux-service)
-explains.
+- Task files transfer through the server by default. To use shared storage,
+  open **Task files** and select **Use shared storage**; see [Choose how
+  files reach the worker](#choose-how-files-reach-the-worker).
+- Leave **Temporary task folder** blank to use the system temporary folder.
+  This folder stores task files while tasks run.
+- PSF Guard saves worker settings and the token in `worker.json` in its
+  settings folder. On macOS and Linux, only your user can read this file.
+  `psf-guard worker --config FILE` uses the same settings without a menu bar
+  or tray icon.
+- **Start worker at login** creates a LaunchAgent on macOS at
+  `~/Library/LaunchAgents/com.theatrus.psf-guard.worker.plist`, or a
+  **PSF Guard Worker** entry in the Windows registry's `Run` key.
+  To remove the login entry, turn off **Start worker at login** and click
+  **Save worker settings**.
+- Click **Open logs** to open the app's log folder. The worker's log
+  filenames start with `worker`.
+
+On Linux, follow [Run a worker as a Linux
+service](#run-a-worker-as-a-linux-service).
 
 ## Run a worker as a Linux service
 
@@ -236,9 +254,9 @@ worker downloads each input over the server's API and uploads each result.
 It needs only the server's address. A 6000 × 4000 color image is about
 290 MB each way.
 
-Shared storage is optional. When the worker and the server share storage,
-such as an NFS or SMB share, the worker can read and write task files there,
-so no image crosses the network twice:
+Shared storage is optional. If the worker and server can access the same
+storage, such as an NFS or SMB share, the worker can read inputs and write
+results in that shared folder:
 
 1. On the server, in **Settings › Workers**, open **Shared storage**. Enter
    a folder on the share as the server sees it, such as `/srv/astro`, and
@@ -252,14 +270,16 @@ so no image crosses the network twice:
 
    Repeat `--map` for more folders. A map implies `--files shared`. With
    `--files shared` and no map, the worker uses the server's paths as they
-   are. In the desktop app, open **Files**, select **Use shared storage**
-   and enter each folder instead.
+   are. In the desktop app, open **Task files**, select **Use shared storage**,
+   and enter each path under **Server folder** and **Folder on this computer**.
+   Use **Add folder mapping** for more folders. Leave **Shared folder** on
+   the server blank to use the default folder shown in Settings.
 
 When the worker joins, the server writes a test file in the shared folder.
-The worker reads it and writes a reply beside it. When both work, the worker
-logs `Shared storage` and **Settings › Workers** shows **Shared storage**.
-Otherwise the worker logs the reason, and its files transfer through the
-server. A file the worker cannot see, or whose size does not match, also
+The worker reads the test file and writes a reply in the same folder. If
+both checks succeed, the worker logs `Shared storage` and **Settings ›
+Workers** shows **Shared storage**. If either check fails, the worker logs
+the reason and downloads inputs from the server instead. A file the worker cannot see, or whose size does not match, also
 transfers through the server.
 
 ## Which worker runs a tool
@@ -300,8 +320,8 @@ restart it after you license or upgrade rc-astro there.
 
 ## Stop, failures and recovery
 
-- **Stop** on a processing run takes its task off the board. A tool on the
-  server is killed at once. A worker stops its tool at its next progress
+- **Stop** on a processing run removes its task from the server's queue
+  or cancels it if it is running. A tool on the server stops immediately. A worker stops its tool at its next progress
   report, within about ten seconds.
 - A worker reports at least every ten seconds while it downloads, runs and
   uploads a task. When it stops answering for a minute, the task goes back in
@@ -320,7 +340,7 @@ restart it after you license or upgrade rc-astro there.
 ## Revoke a worker
 
 In **Settings › Workers**, click **Revoke** beside the worker's token. The
-server forgets the worker at once and queues its tasks again. At its next
+server disconnects the worker immediately and queues its tasks again. At its next
 progress report or claim, the worker stops its tool and exits with a message
 to create a new token.
 

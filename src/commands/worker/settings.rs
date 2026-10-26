@@ -111,7 +111,7 @@ impl WorkerSettings {
         );
         anyhow::ensure!(
             (1..=MAX_SLOTS).contains(&self.slots),
-            "Choose from 1 to {MAX_SLOTS} tasks at once"
+            "Set Concurrent tasks to a number from 1 to {MAX_SLOTS}"
         );
         crate::remote_work::WorkChoice::parse(&self.work).map_err(anyhow::Error::msg)?;
         for map in &self.maps {
