@@ -7,18 +7,10 @@
  * making them find it again inside the modal.
  */
 
-/** Which form the settings modal should open on, if any. */
-export type SettingsIntent =
-  | 'add'
-  | 'create'
-  | 'rigs'
-  | 'templates'
-  | 'stacking'
-  | 'storage'
-  | 'backups'
-  | 'review'
-  | 'calibration'
-  | 'catalogs';
+import type { SettingsSection } from '../components/settingsSections';
+
+/** Section IDs stay stable when navigation labels or groups change. */
+export type SettingsIntent = 'add' | 'create' | SettingsSection;
 
 /** A calibration rig whose own settings the Calibration tab should open on. */
 export interface SettingsRig {

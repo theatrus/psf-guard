@@ -884,7 +884,7 @@ pub const NOT_INCLUDED: &[&str] = &[
     "stack previews and their processing (the stacks folder)",
     "calibration masters (the calibration folder)",
     "astrometry solves, satellite elements and sky maps (the cache folder)",
-    "Seiza star catalogs (Settings › Catalogs installs them again)",
+    "Seiza star catalogs (reinstall under Settings › Storage & backups › Reference catalogs)",
     "the FITS and XISF frames themselves",
 ];
 

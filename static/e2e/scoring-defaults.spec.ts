@@ -4,8 +4,7 @@ import {
   openSettings,
   registerFixtureDb,
   resetDatabases,
-  waitForCacheReady,
-} from './helpers';
+  waitForCacheReady, selectSettingsSection } from './helpers';
 
 // Sequence's scoring defaults: one copy on the server, set in Settings,
 // applied by every view, and changed per view in the toolbar until saved.
@@ -30,7 +29,7 @@ async function openScoring(page: Page) {
 
 async function openScoringDefaults(page: Page) {
   await openSettings(page);
-  await page.getByRole('tab', { name: 'Review' }).click();
+  await selectSettingsSection(page, 'review');
   return page.getByRole('region', { name: 'Sequence scoring' });
 }
 

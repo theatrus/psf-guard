@@ -1,4 +1,4 @@
-import { useEffect, useRef, useSyncExternalStore } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 
 /*
  * Forms with edits their Save has not sent yet. A form registers while it
@@ -7,6 +7,8 @@ import { useEffect, useRef, useSyncExternalStore } from 'react';
  */
 
 const pending = new Map<symbol, string>();
+/** A settings page change must not discard or warn about forms behind the modal. */
+export const UnsavedScopeContext = createContext<Set<symbol> | null>(null);
 const listeners = new Set<() => void>();
 let snapshot: readonly string[] = [];
 
@@ -34,21 +36,29 @@ function setPending(key: symbol, label: string | null) {
  *  Save has not sent. Leaving the page, or unmounting, takes it off. */
 export function useUnsavedChanges(label: string, dirty: boolean): void {
   const key = useRef<symbol>(Symbol(label)).current;
+  const scope = useContext(UnsavedScopeContext);
+  useEffect(() => {
+    scope?.add(key);
+    return () => { scope?.delete(key); };
+  }, [key, scope]);
   useEffect(() => {
     setPending(key, dirty ? label : null);
-  }, [dirty, key, label]);
+  }, [dirty, key, label, scope]);
   useEffect(() => () => setPending(key, null), [key]);
 }
 
-/** Every form with unsaved edits, by label, in the order they began. */
-export function useUnsavedLabels(): readonly string[] {
-  return useSyncExternalStore(
+/** Unsaved forms in registration order, optionally limited to one scope. */
+export function useUnsavedLabels(scope?: ReadonlySet<symbol>): readonly string[] {
+  const labels = useSyncExternalStore(
     (listener) => {
       listeners.add(listener);
       return () => { listeners.delete(listener); };
     },
     () => snapshot,
   );
+  return useMemo(() => scope
+    ? [...pending].filter(([key]) => scope.has(key)).map(([, label]) => label)
+    : labels, [labels, scope]);
 }
 
 /** The labels registered now, outside React. */

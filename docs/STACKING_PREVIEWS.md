@@ -142,7 +142,7 @@ not become excessively wide.
 
 ### Stacking method
 
-**Settings → Stacking → Stacking method** sets how every stack preview on the
+**Settings → Processing → Stacking → Stacking method** sets how every stack preview on the
 server integrates its frames. The default is **Recommended**, the Seiza
 stacking command line's defaults. On a 98-frame M45 night these gave
 sharper stars and higher SNR than WBPP. On 16 H-alpha frames of Sh2 230 in
@@ -269,7 +269,7 @@ several times the noise. The choice is therefore not part of the stacking
 method or the job id, and changing it does not make built stacks out of
 date.
 
-**Settings → Stacking → GPU** controls it for every build on the server:
+**Settings → Performance → GPU** controls it for every build on the server:
 
 - **Use the GPU** is on by default. Off keeps all stacking work on the CPU:
   the live pass, the final pass, artifact searches and the channel
@@ -901,7 +901,7 @@ What queues a refresh, and how long it waits first:
   minutes by default) because grading is interactive. Each further change
   pushes the refresh out again, up to four delays. New frames outrank waiting
   grades and pull the refresh in to the arrival delay.
-- **New scoring defaults**, saved in Settings › Review or with the Scoring
+- **New scoring defaults**, saved in Settings → Review → Grading & display or with the Scoring
   control's **Save as default**, refresh every database's projects after the
   arrival delay, when the values differ from the old ones. The first
   editor's copy at the update counts as a save. When that editor's values
@@ -924,7 +924,7 @@ moves, and peer pulls count as syncs.
 
 An automatic build uses the background share of the processor, 25% of the
 cores by default, while a build you start uses the interactive share, 50%.
-**Settings → Performance → Processor use** sets both; see below.
+**Settings → Performance → CPU & memory → Processor use** sets both; see below.
 
 ### After a restart
 
@@ -977,7 +977,7 @@ server without a registry keeps no journal.
 
 ## Processor use
 
-**Settings → Performance → Processor use** sets how many cores each kind of work
+**Settings → Performance → CPU & memory → Processor use** sets how many cores each kind of work
 may use, as a share of the logical cores:
 
 - **Interactive work**: stack builds you start, quality scans, and previews
@@ -1010,7 +1010,7 @@ more frames than half the free memory allows. `GET` and `PUT
 
 ### Adjust the processing memory budget
 
-Open **Settings → Performance → Processing memory** and change **Memory budget**.
+Open **Settings → Performance → CPU & memory → Processing memory** and change **Memory budget**.
 Release the slider or press Enter to save; moving focus also saves.
 The limit starts at 50% and can be set from 5% to 100%. The panel shows the
 current budget in GiB. macOS uses installed physical memory; Linux and Windows
@@ -1053,7 +1053,7 @@ in each:
 
 Stacks and masters go in the cache unless something sets their own folder.
 The command line wins over the config file. A folder neither sets can be
-chosen in Settings → **Storage** → **Folders**, in the desktop
+chosen in Settings → **Storage & backups** → **Folders & limits** → **Folders**, in the desktop
 app too; Settings shows a fixed folder but cannot change it. Choosing
 folders needs database management.
 
@@ -1078,7 +1078,7 @@ desktop app, **Restart now** restarts the whole app, because a server
 restarted inside a running app could still have the old server writing; such
 a restart keeps the old folders until the next full start.
 
-Settings → **Storage** → **Disk use** shows every volume the three folders sit
+Settings → **Storage & backups** → **Folders & limits** → **Disk use** shows every volume the three folders sit
 on: how full it is, which folders and databases it holds, and how much of it
 is previews, stacks and masters.
 
@@ -1127,7 +1127,7 @@ To give stacks more room, put the stack folder on a larger volume, such as a
 network share, and keep the cache on a fast local disk.
 
 WBPP work folders have their own path, percentage limit, and intermediate/master
-retention policy under **Settings → Storage**. WBPP uses the same **Limits**,
+retention policy under **Settings → Storage & backups → Folders & limits**. WBPP uses the same **Limits**,
 **Folders**, and **Save storage settings** action as the other storage options. See
 [Manage WBPP storage](WBPP.md#manage-wbpp-storage).
 
@@ -1408,7 +1408,7 @@ A result cached before PSF Guard did this is used again only when its stack
 said `TOP-DOWN`; any other runs again. Find the CLI on `PATH`, or set its path in the `PSF_GUARD_RC_ASTRO`
 environment variable for service units with a minimal `PATH`.
 Each tool runs on a connected [worker](REMOTE_WORKERS.md) that offers the
-same tool version, or on this server, as **Settings › Workers › Where work
+same tool version, or on this server, as **Settings › Performance › Workers › Where work
 runs** chooses; a server without rc-astro uses its workers' tools.
 `PSF_GUARD_RC_ASTRO=off` hides this server's rc-astro altogether.
 `GET /api/tools/rc-astro` reports the tools the UI offers and where they
@@ -1524,7 +1524,7 @@ in a row is not started a third time, and the log says so.
 Processing applies to one revision of a stack. When a stack rebuilds,
 PSF Guard can apply the previous stretch, deconvolution and RC-Astro settings
 to the new revision. **Re-apply processing when a stack refreshes**, under
-Settings → Stacking → Stack previews → Processing, is on by default.
+Settings → Processing → Stacking → Stack previews → Processing, is on by default.
 Reprocessing runs even when no page is open.
 
 - After a build you start, or an automatic build you take over, processing
@@ -1615,7 +1615,7 @@ back later. **Setups** at the top of **View processing** and the color
 setup**, and **Save as…**. Applying a setup only fills the editor; nothing
 renders until **Apply processing** runs it, so a setup is always inspectable
 before it costs anything. The rest of the management — the full list across
-both editors, deletion, import, and export — lives in **Settings → Setups**.
+both editors, deletion, import, and export — lives in **Settings → Presets → Processing setups**.
 
 Setups are global. One list serves every configured database, stored in
 `processing-setups.json` beside the database registry, so the desktop app and
@@ -1637,7 +1637,7 @@ that choice existed sets them itself. Saved tool settings remain visible and
 removable when a server lacks that tool or its license.
 
 The built-in setups are derived from the editors' own defaults and cannot be
-deleted. In **Settings → Setups**, **Export all** downloads every saved setup
+deleted. In **Settings → Presets → Processing setups**, **Export all** downloads every saved setup
 as one JSON file, and each row exports on its own; both use the same document
 shape, so any export feeds the import. **Import…** merges such a file,
 replacing setups of the same name, and refuses the whole file if any entry does not
@@ -1650,7 +1650,7 @@ parse, so a setup that saves is a setup a build can use.
 New color previews start from the Color setup marked as the default. This
 applies to the first color preview a build or an automatic refresh composes
 for a target, to **Build** on a color card that has no preview yet, and to
-**Reset defaults** in the color **Processing stack**. **Settings → Setups**
+**Reset defaults** in the color **Processing stack**. **Settings → Presets → Processing setups**
 labels it **Default for new color previews**.
 
 PSF Guard adds a Color setup named **Default** the first time it reads a
@@ -1667,7 +1667,7 @@ next change to the list: `processing-setups.json` beside `config.json`, or
 - To change the default pipeline, apply the default setup on a color card,
   edit it, and choose **Save as…** with the same name.
 - To use another pipeline, click **Make default** on that Color setup's row in
-  **Settings → Setups**.
+  **Settings → Presets → Processing setups**.
 
 You cannot delete the default setup until another Color setup is the default.
 You cannot save a view setup under its name either, with one exception: a view
@@ -2213,7 +2213,7 @@ The card shows what happened, as `Calibrated on 143 stars · R ×1.12, B ×0.87`
 or why it did not:
 
 - **Gaia colors not installed.** Install **Gaia colors** (about 480 MB) in
-  Settings › Catalogs. The card's **Install** opens Settings there.
+  Settings → Storage & backups → Reference catalogs. The card's **Install** opens Settings there.
 - **Reference frame not plate solved.** Solve that frame. Embedded FITS WCS
   does not count.
 - **Too few Gaia stars.** The catalog stops at G 15. Seiza needs 20 clean,

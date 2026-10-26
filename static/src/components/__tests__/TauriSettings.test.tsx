@@ -80,7 +80,7 @@ describe('TauriSettings import state', () => {
     );
 
     const usersTab = await screen.findByRole('tab', { name: 'Users' });
-    expect(screen.queryByRole('tab', { name: 'Agents' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Agents (MCP)' })).not.toBeInTheDocument();
     fireEvent.click(usersTab);
     expect(
       await screen.findByRole('heading', { name: 'Browser users' })
@@ -119,7 +119,9 @@ describe('TauriSettings import state', () => {
     render(<TauriSettings isOpen onClose={() => {}} initialIntent="rigs" />, { wrapper: createWrapper() });
     const tabs = await screen.findByRole('tab', { name: 'Rigs' });
     expect(tabs).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByRole('tab', { name: 'Exposure templates' })).toBeInTheDocument();
+    expect(tabs).toHaveAccessibleDescription('Databases & rigs');
+    expect(screen.getByRole('tab', { name: 'Databases' })).toHaveAccessibleDescription('Databases & rigs');
+    expect(screen.getByRole('tab', { name: 'Exposure templates' })).toHaveAccessibleDescription('Presets');
     expect(await screen.findByText(/Field 42.0′ × 30.0′, 0.41″\/px, camera not reported yet/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Setup C925' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('tab', { name: 'Exposure templates' }));
@@ -151,10 +153,29 @@ describe('TauriSettings import state', () => {
     expect(await screen.findByRole('tab', { name: 'Stacking' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.queryByRole('heading', { name: 'Disk use' })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Storage' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Folders & limits' }));
 
     expect(await screen.findByRole('heading', { name: 'Disk use' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Folders' })).toBeInTheDocument();
+  });
+
+  it('keeps a requested Planning page selected while its availability loads', async () => {
+    let release = () => {};
+    const ready = new Promise<void>(resolve => { release = resolve; });
+    server.use(
+      http.get('/api/director/v1/status', async () => {
+        await ready;
+        return HttpResponse.json({ success: true, error: null, data: { protocol_version: 1, enabled: true } });
+      }),
+      http.get('/api/director/v1/templates', () => HttpResponse.json({ success: true, error: null, data: [] })),
+    );
+    render(<TauriSettings isOpen initialIntent="templates" onClose={() => {}} />, { wrapper: createWrapper() });
+    try {
+      expect(screen.getByLabelText('Settings section')).toHaveValue('templates');
+      expect(screen.getByRole('option', { name: 'Exposure templates — Loading…' })).toBeDisabled();
+    } finally { release(); }
+    expect(await screen.findByRole('tab', { name: 'Exposure templates' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByLabelText('Settings section')).toHaveValue('templates');
   });
 
   it('keeps processor use on its own Performance tab', async () => {
@@ -178,10 +199,43 @@ describe('TauriSettings import state', () => {
     expect(await screen.findByRole('tab', { name: 'Stacking' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.queryByRole('heading', { name: 'Processor use' })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Performance' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'CPU & memory' }));
 
     expect(await screen.findByRole('heading', { name: 'Processor use' })).toBeInTheDocument();
     expect(screen.getByRole('slider', { name: 'Background work share of cores' })).toBeInTheDocument();
+  });
+
+  it('moves GPU and integrations to focused pages while keeping old section shortcuts', async () => {
+    const gpu = { enabled: true, debayer: true, detection: true, resampling: true, accumulator: true, integration: true, concurrency: 1, trace: false };
+    server.use(http.get('/api/settings/stacking/gpu', () => HttpResponse.json({ success: true, error: null, data: { gpu, recommended: gpu, max_concurrency: 16 } })));
+    const { rerender } = render(<TauriSettings isOpen initialIntent="stacking" onClose={() => {}} />, { wrapper: createWrapper() });
+    expect(await screen.findByRole('tab', { name: 'GPU' })).toHaveAccessibleDescription('Performance');
+    expect(screen.queryByRole('checkbox', { name: /^Use the GPU/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: 'GPU' }));
+    expect(await screen.findByRole('checkbox', { name: /^Use the GPU/ })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Stacking method' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Processing setups' }));
+    expect(screen.getByRole('tab', { name: 'Processing setups' })).toHaveAccessibleDescription('Presets');
+    expect(screen.queryByRole('heading', { name: 'PixInsight' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'AstroBin' })).not.toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'PixInsight' })).toHaveAccessibleDescription('Exports & integrations');
+    fireEvent.click(screen.getByRole('tab', { name: 'PixInsight' }));
+    expect(await screen.findByRole('heading', { name: 'PixInsight' })).toBeInTheDocument();
+
+    rerender(<TauriSettings isOpen initialIntent="catalogs" initialField="gaia_photometry" onClose={() => {}} />);
+    expect(await screen.findByRole('tab', { name: 'Reference catalogs' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tab', { name: 'Reference catalogs' })).toHaveAccessibleDescription('Storage & backups');
+  });
+
+  it('does not block section navigation for an unsaved form behind Settings', async () => {
+    render(<><TauriSettings isOpen onClose={() => {}} /><UnsavedMark label="Background rig profile" dirty /></>, { wrapper: createWrapper() });
+    fireEvent.click(await screen.findByRole('tab', { name: 'GPU' }));
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'GPU' })).toHaveAttribute('aria-selected', 'true');
+    fireEvent.change(screen.getByLabelText('Settings section'), { target: { value: 'stacking' } });
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Stacking' })).toHaveAttribute('aria-selected', 'true');
   });
 
   it('asks before Done, × or a click outside closes over unsaved edits', async () => {
@@ -210,7 +264,7 @@ describe('TauriSettings import state', () => {
 
   it('keeps calibration settings on their own tab, not under Setups', async () => {
     render(<TauriSettings isOpen onClose={() => {}} />, { wrapper: createWrapper() });
-    fireEvent.click(await screen.findByRole('tab', { name: 'Setups' }));
+    fireEvent.click(await screen.findByRole('tab', { name: 'Processing setups' }));
     expect(document.querySelector('.calibration-matching-settings')).toBeNull();
     fireEvent.click(screen.getByRole('tab', { name: 'Calibration' }));
     expect(await screen.findByRole('heading', { name: 'Calibration', level: 3 })).toBeInTheDocument();
@@ -218,7 +272,7 @@ describe('TauriSettings import state', () => {
 
   it('shows a server without accounts how to connect an agent, with no token', async () => {
     render(<TauriSettings isOpen onClose={() => {}} />, { wrapper: createWrapper() });
-    fireEvent.click(await screen.findByRole('tab', { name: 'Agents' }));
+    fireEvent.click(await screen.findByRole('tab', { name: 'Agents (MCP)' }));
     const url = `${window.location.origin}/api/mcp`;
     expect(await screen.findByText(`claude mcp add --transport http psf-guard ${url}`)).toBeInTheDocument();
     expect(screen.queryByText(/PSF_GUARD_TOKEN/)).not.toBeInTheDocument();
@@ -802,7 +856,7 @@ describe('TauriSettings first run', () => {
       screen.queryByRole('heading', { name: 'Seiza Catalogs' })
     ).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Catalogs' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Reference catalogs' }));
     expect(
       await screen.findByRole('heading', { name: 'Seiza Catalogs' })
     ).toBeInTheDocument();
@@ -819,7 +873,7 @@ describe('TauriSettings first run', () => {
     });
 
     expect(await screen.findByRole('tab', { name: 'Databases' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Catalogs' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Reference catalogs' })).toBeInTheDocument();
     // Sync has nothing to talk about with no databases configured.
     expect(screen.queryByRole('tab', { name: 'Sync' })).not.toBeInTheDocument();
   });

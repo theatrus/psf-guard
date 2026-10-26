@@ -70,7 +70,7 @@ missing, the export tries its neighbours and reports how many lights had
 no file. Columns PSF Guard cannot know (`iso`, `bortle`, `meanSqm`,
 `meanFwhm`) are left out; AstroBin treats an absent column as blank.
 
-With **Leave out lights that can't be calibrated** on (Settings › Calibration ›
+With **Leave out lights that can't be calibrated** on (Settings › Processing › Calibration ›
 Stacks and exports), either level counts only the lights a stack would
 integrate: each light's header is read and judged as a stack judges it, and
 the export notes how many it left out, with one and its reason. That needs the
@@ -111,7 +111,7 @@ The export dialog lists the filters the map does not cover and saves what
 you enter as open-ended entries in this catalog's map; give them nights in
 Settings when a filter changed over time.
 
-**Settings → Setups → AstroBin** holds server-wide defaults by name, used
+**Settings → Exports & integrations → AstroBin** holds server-wide defaults by name, used
 for a name no catalog entry covers. A filter with no id anywhere gets a
 blank cell, which AstroBin ignores, so the rest of the row still imports.
 

@@ -204,7 +204,7 @@ can expire on a date you pick, or never. A token cannot mint or revoke
 tokens; that takes a signed-in session, so a leaked token cannot renew
 itself.
 
-Mint tokens under **Settings → Users → API tokens**. Everyone signed in sees
+Mint tokens under **Settings → Server & access → Users → API tokens**. Everyone signed in sees
 and manages their own; an editor sees every token and can mint one for
 another user. The secret is shown once, on creation. Revoking a token cuts
 it off at once, and removing a user removes their tokens.

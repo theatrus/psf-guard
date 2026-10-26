@@ -1,7 +1,7 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
 import * as fs from 'fs';
 import * as path from 'path';
-import { fixtureDbPath, fixtureImageDir, resetDatabases, tmpBase, openSettings } from './helpers';
+import { fixtureDbPath, fixtureImageDir, resetDatabases, tmpBase, openSettings, selectSettingsSection } from './helpers';
 
 /**
  * Settings is tabbed. Data Transfer and Remote PSF Guard live on Sync, which
@@ -10,7 +10,7 @@ import { fixtureDbPath, fixtureImageDir, resetDatabases, tmpBase, openSettings }
  */
 async function openSyncTab(page: Page) {
   await openSettings(page);
-  await page.getByRole('tab', { name: 'Sync' }).click();
+  await selectSettingsSection(page, 'sync');
 }
 
 test.beforeEach(async ({ request }) => {

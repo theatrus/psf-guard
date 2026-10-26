@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { openSettings, registerFixtureDb } from './helpers';
+import { openSettings, registerFixtureDb, selectSettingsSection } from './helpers';
 
 // The native lifecycle is tested against real sockets in tauri_main. These
 // browser tests exercise the desktop bridge, settings, and recovery UI while
@@ -49,7 +49,7 @@ async function desktopBridge(page: Page, conflict = false) {
 
 async function openServerSettings(page: Page) {
   await openSettings(page);
-  await page.getByRole('tab', { name: 'Server', exact: true }).click();
+  await selectSettingsSection(page, 'server');
   return page.getByRole('region', { name: 'Desktop server' });
 }
 
@@ -74,7 +74,7 @@ test('desktop Server settings retain a fixed port through restart and show the s
   await expect(restored.getByRole('spinbutton')).toHaveValue(String(port));
   await expect(restored).toContainText(baseURL!);
   await page.screenshot({ path: testInfo.outputPath('server-settings.png'), fullPage: true });
-  await page.getByRole('tab', { name: 'Agents', exact: true }).click();
+  await selectSettingsSection(page, 'agents');
   await expect(page.getByText(`claude mcp add --transport http psf-guard ${baseURL}/api/mcp`, { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Choose a fixed server port' }).click();
   await expect(page.getByRole('tab', { name: 'Server', exact: true })).toHaveAttribute('aria-selected', 'true');
@@ -109,6 +109,6 @@ test('browser Settings leave the listener choice to the server operator', async 
   await registerFixtureDb(request, { slug: 'desktop-port-browser' });
   await page.goto('/');
   await openSettings(page);
-  await expect(page.getByRole('tab', { name: 'Agents', exact: true })).toBeVisible();
+  await expect(page.getByRole('tab', { name: 'Agents (MCP)', exact: true })).toBeVisible();
   await expect(page.getByRole('tab', { name: 'Server', exact: true })).toHaveCount(0);
 });

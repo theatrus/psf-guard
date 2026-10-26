@@ -488,7 +488,7 @@ export default function StackPreviewPanel({
             calibration: channelOverride(channel.key)!,
           })),
         // A target with no color preview gets its first one from the
-        // default Color setup, chosen in Settings → Setups.
+        // default Color setup, chosen in Settings → Presets → Processing setups.
         color_defaults: await fetchColorDefaults(queryClient),
         channel: variables.channel && {
           target_id: variables.channel.targetId,
@@ -980,7 +980,7 @@ export default function StackPreviewPanel({
                 <button
                   type="button"
                   className="link-button"
-                  title="Change how stacks integrate their frames in Settings, Stacking"
+                  title="Change how stacks integrate their frames in Settings → Processing → Stacking"
                   onClick={() => openSettings('stacking')}
                 >
                   {currentMethod ? methodName(currentMethod, stackMethod.data) : '…'}

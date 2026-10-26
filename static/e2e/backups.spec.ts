@@ -1,7 +1,7 @@
 import { expect, test, type APIRequestContext, type Page, type Route } from '@playwright/test';
 import * as fs from 'fs';
 import * as path from 'path';
-import { openSettings, registerFixtureDb, resetDatabases, tmpBase } from './helpers';
+import { openSettings, registerFixtureDb, resetDatabases, tmpBase, selectSettingsSection } from './helpers';
 import { jobRow, stubJobs } from './jobRows';
 
 /**
@@ -33,7 +33,7 @@ test.afterAll(async ({ request }) => {
 
 async function openBackups(page: Page) {
   await openSettings(page);
-  await page.getByRole('tab', { name: 'Backups' }).click();
+  await selectSettingsSection(page, 'backups');
 }
 
 test('backs up settings and catalogs now and downloads the archive', async ({ page, request }) => {

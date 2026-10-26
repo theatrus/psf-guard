@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import * as path from 'path';
-import { openSettings, registerFixtureDb, resetDatabases, tmpBase, waitForCacheReady } from './helpers';
+import { openSettings, registerFixtureDb, resetDatabases, tmpBase, waitForCacheReady, selectSettingsSection } from './helpers';
 
 test('WBPP storage fields fit a phone', async ({ page, request }) => {
   await resetDatabases(request);
@@ -9,7 +9,7 @@ test('WBPP storage fields fit a phone', async ({ page, request }) => {
   await page.setViewportSize({ width: 390, height: 900 });
   await page.goto('/');
   await openSettings(page);
-  await page.getByRole('tab', { name: 'Storage', exact: true }).click();
+  await selectSettingsSection(page, 'storage');
   const panel = page.getByRole('tabpanel');
   const folders = panel.getByRole('heading', { name: 'Folders' }).locator('..');
   await expect(folders.getByLabel('WBPP storage folder')).toBeVisible();
@@ -44,7 +44,7 @@ test('WBPP has a dedicated folder, percentage cap and optional forever masters',
   try {
     await page.goto('/');
     await openSettings(page);
-    await page.getByRole('tab', { name: 'Storage', exact: true }).click();
+    await selectSettingsSection(page, 'storage');
     const folder = page.getByLabel('WBPP storage folder');
     await folder.fill(path.join(tmpBase(), 'wbpp-runs'));
     const limit = page.getByRole('slider', { name: 'WBPP volume usage limit, in percent' });

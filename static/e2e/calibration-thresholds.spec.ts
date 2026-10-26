@@ -1,7 +1,7 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import * as fs from 'fs';
 import * as path from 'path';
-import { openSettings, resetDatabases, stubPixelWork, tmpBase, waitForCacheReady } from './helpers';
+import { openSettings, resetDatabases, stubPixelWork, tmpBase, waitForCacheReady, selectSettingsSection } from './helpers';
 
 /**
  * A light the calibration library flags becomes unflagged when the limit is
@@ -126,7 +126,7 @@ async function openCalibrationSettings(page: Page) {
   // From the Library: the image detail covers the header's menu.
   await page.goto('/');
   await openSettings(page);
-  await page.getByRole('tab', { name: 'Calibration', exact: true }).click();
+  await selectSettingsSection(page, 'calibration');
   return page.locator('.calibration-matching-settings');
 }
 

@@ -4596,7 +4596,7 @@
   font-size: 0.62rem;
 }
 
-/* Settings → Setups management table. */
+/* Settings → Presets → Processing setups management table. */
 .processing-setups-manager-actions {
   display: flex;
   flex-shrink: 0;

@@ -2,7 +2,7 @@ import { expect, test, type APIRequestContext } from '@playwright/test';
 import { spawn, type ChildProcess } from 'child_process';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
-import { openSettings, registerFixtureDb, resetDatabases, waitForCacheReady } from './helpers';
+import { openSettings, registerFixtureDb, resetDatabases, waitForCacheReady, selectSettingsSection } from './helpers';
 
 // Settings › Workers: a token is shown once inside the command to run, a real
 // `psf-guard worker` joins with it and shares the exchange folder, and
@@ -41,7 +41,7 @@ test('a worker joins with the token shown once, and stops when it is revoked', a
   await revokeNamed(request, name);
   await page.goto('/');
   await openSettings(page);
-  await page.getByRole('tab', { name: 'Workers' }).click();
+  await selectSettingsSection(page, 'workers');
 
   // This server's own worker is listed even with no rc-astro here.
   const local = page.locator('.worker-row', { has: page.getByText('This server', { exact: true }) });

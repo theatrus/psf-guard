@@ -102,7 +102,7 @@ frame's grade, the job reports a conflict and leaves the TS grade unchanged.
 Local pending changes survive restarts and can be retried safely.
 
 For a reviewed merge, planning export or explicit grade overwrite, open
-**Settings → Sync**. Select the working catalog and its **Target Scheduler**
+**Settings → Databases & rigs → Sync**. Select the working catalog and its **Target Scheduler**
 connection, preview the changes, then apply the preview. The source file does
 not need to be registered as a second catalog. If the source is unavailable,
 the working catalog remains usable and the sync job reports the problem.
@@ -163,18 +163,18 @@ exists, because database management picks paths the server then reads and
 writes. Only an editor can use those routes. `--allow-anonymous-access` opens
 them to everyone instead. See [server authentication](AUTHENTICATION.md).
 
-Settings opens on **Databases**, for catalogs and imports. **Catalogs** holds
-the Seiza data packages and **Sync** moves records between catalogs; both need
-an editor, and Sync appears once you have a catalog. The other tabs
-are **Setups**, **Stacking**, **Storage**, **Performance** and **Review**, then
-**Rigs** and **Exposure templates** for Planning, and **Users** on a server with
-accounts.
+Settings opens on **Databases** for catalogs and imports. The desktop sidebar
+groups related pages; on a phone, choose a page from **Settings section**.
+**Databases**, **Rigs** and **Sync** appear together under **Databases & rigs**.
+Install Seiza data packages under **Storage & backups → Reference catalogs**. Catalog installation needs an editor; **Sync** also needs an editor
+and appears once you have a catalog. Planning adds **Rigs** and **Exposure
+templates**. See [Settings navigation](SETTINGS.md) for the other pages.
 
-On a first run PSF Guard has none, so it opens Settings on the Databases tab
+On a first run PSF Guard has none, so it opens Settings on the Databases page
 and offers both starting points. The overview's empty state offers the same
 two.
 
-![First run: the Databases tab offering both starting points](settings-tabs.png)
+![First run: grouped Settings navigation with both database starting points](images/settings-navigation-first-run.png)
 
 Choose **New Database from Images**.
 
@@ -635,7 +635,7 @@ capture software's star counts, not the scan's, until they are analyzed (see
 These controls sit with each database on the **Databases** tab, with its
 options for new frames, star metadata and calibrated copies.
 
-![A database on the Databases tab: Analyze Missing Quality, Rescan All Quality and the per-database options](settings-database-options.png)
+![A database on the Databases page: Analyze Missing Quality, Rescan All Quality and the per-database options](settings-database-options.png)
 
 The backfill uses the N.I.N.A. Fast detector for star count and HFR, which keeps
 new values comparable with Target Scheduler data. It also stores the full-star

@@ -75,7 +75,7 @@ function errorText(error: unknown): string {
 }
 
 /**
- * Settings › Workers › Worker on this computer: run a worker for a PSF Guard
+ * Settings › Performance › Workers › Worker on this computer: run a worker for a PSF Guard
  * server. The worker runs in the menu bar or the system tray, a process of
  * its own, so it keeps running when this window is closed.
  */
@@ -174,7 +174,7 @@ export default function DesktopWorkerSettings() {
       <p>
         Use this computer to build stacks and run RC-Astro tools for a PSF Guard
         server. Enter that server&apos;s address and a worker token from its
-        Settings › Workers. After you start the worker, it keeps running in the
+        Settings › Performance › Workers. After you start the worker, it keeps running in the
         menu bar or system tray when you close this window.
       </p>
 
@@ -278,7 +278,7 @@ export default function DesktopWorkerSettings() {
           />
           <p className="muted" id="desktop-worker-token-help">{loaded.has_token
             ? 'Leave blank to keep the saved token.'
-            : 'Create a worker token in the server’s Settings › Workers, then paste it here.'}</p>
+            : 'Create a worker token in the server’s Settings › Performance › Workers, then paste it here.'}</p>
         </div>
         <div className="database-config">
           <label htmlFor="desktop-worker-name">Worker name</label>

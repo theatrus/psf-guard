@@ -1,7 +1,7 @@
 import { expect, request as playwrightRequest, test, type APIRequestContext } from '@playwright/test';
 import { randomUUID, createHash } from 'node:crypto';
 import { REVIEW_DB, REVIEW_TOKEN } from './fixtures/sync';
-import { openSettings } from './helpers';
+import { openSettings, selectSettingsSection } from './helpers';
 
 let review: APIRequestContext;
 const headers = { Authorization: `Bearer ${REVIEW_TOKEN}` };
@@ -33,7 +33,7 @@ test('invalidates selected flat coverage, retains decisions across stale snapsho
 
   await page.goto(`${process.env.PSF_GUARD_E2E_REVIEW_URL}/`);
   await openSettings(page);
-  await page.getByRole('tab', { name: 'Databases', exact: true }).click();
+  await selectSettingsSection(page, 'databases');
   await page.locator('.db-entry').filter({ has: page.locator('.db-row-slug', { hasText: REVIEW_DB }) })
     .getByRole('button', { name: 'Open Calibration', exact: true }).click();
   // Open Calibration leaves Settings for the database's calibration page.

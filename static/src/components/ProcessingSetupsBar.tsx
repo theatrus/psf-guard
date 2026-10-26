@@ -22,7 +22,7 @@ interface ProcessingSetupsBarProps {
  * Apply a named processing setup, or save the editor's current parameters as
  * one. Setups are global — one list serves every database — so this bar is
  * the same everywhere it appears; only `kind` scopes which setups it lists.
- * Deleting, importing, and exporting live in Settings → Setups.
+ * Deleting, importing, and exporting live in Settings → Presets → Processing setups.
  */
 export default function ProcessingSetupsBar({
   kind,
@@ -136,7 +136,7 @@ export default function ProcessingSetupsBar({
           </button>
         )}
         <span className="processing-setups-hint">
-          Manage, import, and export in Settings → Setups
+          Manage, import, and export in Settings → Presets → Processing setups
         </span>
       </div>
       {saveName !== null && (

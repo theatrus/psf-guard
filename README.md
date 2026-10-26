@@ -142,7 +142,7 @@ writes local grade changes back to TS.
 It runs when the app or server starts, when files change, and every five minutes
 by default. Change these options under the imported catalog in Settings.
 Conflicting TS grades remain unchanged and are reported for review. Planning
-transfers still require Preview and Apply in **Settings → Sync**. Director
+transfers still require Preview and Apply in **Settings → Databases & rigs → Sync**. Director
 activation sends reviewed planning through the saved TS connection; failed
 TS deliveries stay pending for retry. To import a standalone copy, turn off
 **Keep the source connected for Target Scheduler sync**. **Catalog storage**
@@ -267,7 +267,7 @@ exclusions and their reasons; the app keeps seven days.
 | macOS | `~/Library/Logs/com.theatrus.psf-guard` |
 | Linux | `~/.local/share/com.theatrus.psf-guard/logs` |
 
-Use **Settings → Server → Fixed port** if a browser, API client, or MCP
+Use **Settings → Server & access → Server → Fixed port** if a browser, API client, or MCP
 client needs a stable localhost address. Save the port and restart the
 server from that panel. **Automatic**, the default, chooses a free port at
 startup. A fixed-port conflict opens the Server controls so you can choose
@@ -481,9 +481,9 @@ can use its own exposure length, template, goal, and panel selection. The
 coverage check identifies a band or panel that no rig covers.
 
 Choose templates from the rig's Target Scheduler database or the shared
-**Settings → Exposure templates** library. Templates keep filter, gain,
+**Settings → Presets → Exposure templates** library. Templates keep filter, gain,
 offset, binning, and readout settings together. Set site and rig details under
-**Settings → Rigs**. In the workspace, **Rigs** shows scheduling limits and
+**Settings → Databases & rigs → Rigs**. In the workspace, **Rigs** shows scheduling limits and
 where each inherited value comes from; **Priority and defaults** sets project
 order and defaults. Limits include altitude, horizon, meridian window,
 filter switching, and dithering. Exposure templates can also set Moon rules.
@@ -567,7 +567,7 @@ uses the standard color card.
 
 **View processing** offers display stretches and optional Seiza deconvolution.
 **Median anchor** and **Layered** join Auto MTF, which stays the default.
-Install the optional **Gaia colors** package under **Settings → Catalogs** to
+Install the optional **Gaia colors** package under **Settings → Storage & backups → Reference catalogs** to
 calibrate RGB, LRGB, and OSC stack colors against stars. The result shows the
 calibration's star count and gains, or why calibration could not run.
 
@@ -589,7 +589,7 @@ over automatic builds, which pause and resume from their checkpoints.
 
 With **Chosen by Seiza**, the reference comes from the largest orientation
 group when plate solves show several rotator angles. Adjust **Orientation
-group margin** in **Settings → Stacking** if frames near the rotation limit
+group margin** in **Settings → Processing → Stacking** if frames near the rotation limit
 are still rejected. A color preview can wait for its target’s channel builds
 and then use their new stacks.
 
@@ -632,7 +632,7 @@ Use Stop, Pause, queue controls, or transfer Pause and Retry where the job offer
 them. **Move to top** makes a queued stack, processing or WBPP task run next
 after the current task finishes. A task waiting for review stays visible until
 you address it. Configure
-processor shares under **Settings → Performance**. See the
+processor shares under **Settings → Performance → CPU & memory**. See the
 [background job guide](docs/design/background-jobs.md) for priority and
 restart behavior.
 
@@ -669,7 +669,7 @@ Press `O` again to toggle the overlay.
 ### Install the Seiza catalogs
 
 PSF Guard includes the Seiza solver, but its star catalogs require a separate
-download. Open **Settings → Catalogs** to install, update, or validate them.
+download. Open **Settings → Storage & backups → Reference catalogs** to install, update, or validate them.
 Choose **Blind solving** for the usual setup. Browser access to these
 controls requires an editor and `--allow-database-management`.
 
@@ -828,7 +828,7 @@ and filter mapping.
 <a id="wbpp"></a>
 ## ⚗ Stack in WBPP from the Library
 
-Set the PixInsight path under **Settings → Setups → PixInsight**, then
+Set the PixInsight path under **Settings → Exports & integrations → PixInsight**, then
 choose **Stack in WBPP** on a Library project. PSF Guard runs
 WeightedBatchPreprocessing on the server using the source files and matched
 calibration frames. On a server without a display, it uses `xvfb-run`.
@@ -896,7 +896,7 @@ servers. No sync is needed when both tools open the same database.
 
 ### Transfer between database files
 
-Open **Settings → Sync**, choose the source and destination, then preview a
+Open **Settings → Databases & rigs → Sync**, choose the source and destination, then preview a
 merge, planning update, or grade transfer before **Apply**. The preview
 survives a page reload and refuses to apply if the destination changed.
 Pending grades are excluded from the UI grade push by default.
@@ -924,7 +924,7 @@ also support `--target` and `--status`.
 
 ### Transfer between PSF Guard servers
 
-Under **Settings → Sync → Remote PSF Guard**, add the peer URL and its
+Under **Settings → Databases & rigs → Sync → Remote PSF Guard**, add the peer URL and its
 manual API key, test the connection, then preview and apply a transfer.
 In the receiving catalog's editor, generate a **Remote API key** and enable
 **Accept remote scheduler sync**. Enable
@@ -966,7 +966,7 @@ previews, uploads, and identity checks, and the
 <a id="collaboration"></a>
 ## Collaboration and live rigs (early beta)
 
-Under **Settings → Rigs → Setup → Collaboration**, connect a Starfront server,
+Under **Settings → Databases & rigs → Rigs → Setup → Collaboration**, connect a Starfront server,
 browse compatible projects, and review assigned work before importing a draft.
 A collaboration assignment becomes an ordinary plan that you can inspect and
 activate. Joining a project does not start capture.
@@ -992,7 +992,7 @@ catalogs, quality evidence, calibration matches, plans, and background jobs.
 With write access it can grade frames, start scans and WBPP, manage flat-group
 choices, or create backups.
 
-Use **Settings → Agents** on a local instance, or **Settings → Users → API
+Use **Settings → Server & access → Agents (MCP)** on a local instance, or **Settings → Server & access → Users → API
 tokens → Connect an agent** on a server with accounts. Read-only tokens can
 inspect results; write tools use the same account permissions and database
 management checks as the UI. See [MCP setup and tools](docs/MCP.md) for Codex,
@@ -1136,7 +1136,7 @@ host = "0.0.0.0"
 # Interactive jobs (occlusion scans, on-demand previews, stack builds you
 # start) get scan_worker_ratio; background work (pre-generation, automatic
 # stack refreshes) gets background_worker_ratio, and pre-generation waits
-# while an interactive job runs. Settings → Performance → Processor use can
+# while an interactive job runs. Settings → Performance → CPU & memory → Processor use can
 # override both without a restart.
 #scan_worker_ratio = 0.5
 #background_worker_ratio = 0.25
@@ -1198,7 +1198,7 @@ Settings. Each account can include an optional email address. Changes made
 there take effect at once.
 
 Scripts and MCP clients use personal API tokens. Create one
-under **Settings → Users → API tokens** or with
+under **Settings → Server & access → Users → API tokens** or with
 `psf-guard users token create <user> --label "..."`, and send it as
 `Authorization: Bearer psfg_…`. The server is an MCP server at `/api/mcp`;
 see [MCP server for agents](docs/MCP.md).
@@ -1305,7 +1305,7 @@ permissions.
 <a id="backups"></a>
 ## Back up catalogs and settings
 
-Use **Settings → Backups** for a manual or scheduled archive of settings and
+Use **Settings → Storage & backups → Backups** for a manual or scheduled archive of settings and
 catalogs. SQLite's online backup supports catalogs that N.I.N.A. is still
 writing. The desktop app suggests `~/Documents/psf-guard/backups` and includes
 secrets by default for manual backups and new schedules. Existing schedules
@@ -1326,7 +1326,7 @@ for permissions, schedules, archive contents, and restoration.
 headers. They do not require a N.I.N.A. folder layout.
 
 - **Plate solving:** solving image pixels requires Seiza star catalogs; blind
-  solving also needs the blind index. Install them under **Settings → Catalogs**.
+  solving also needs the blind index. Install them under **Settings → Storage & backups → Reference catalogs**.
 - **Satellite prediction:** requires a solved frame, UTC exposure timing,
   observing-site coordinates and orbital elements. Missing inputs make the
   check unavailable; they do not count as an image fault. See

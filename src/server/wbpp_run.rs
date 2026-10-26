@@ -723,7 +723,7 @@ fn resolve_install(
             match detection.problem {
                 Some(problem) => message.push_str(&problem),
                 None => message.push_str(&format!(
-                    "Looked in {}. Name the executable under Settings → Setups → PixInsight.",
+                    "Looked in {}. Set the executable path under Settings → Exports & integrations → PixInsight.",
                     detection
                         .checked
                         .iter()

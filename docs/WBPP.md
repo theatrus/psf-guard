@@ -27,7 +27,7 @@ before WBPP builds its pipeline. The settings PSF Guard offers:
 | Light rejection | WBPP's default (automatic), or an algorithm | The pixel rejection for the light integration. |
 
 Pick them in the export dialog when the layout is WBPP, and in the run
-dialog. **Settings → Setups → Export** holds the defaults both start from.
+dialog. **Settings → Exports & integrations → Export defaults** holds the defaults both start from.
 A headless run starts from WBPP's own defaults, not from what its dialog
 last saved, so the settings above are the whole story.
 
@@ -40,7 +40,7 @@ or with `automationMode=true,paramList` on the command line.
 
 An export and a run hand WBPP the calibration frames a PSF Guard stack would
 take for each light, matched by the settings in force for that light's rig
-under **Settings › Calibration** (see
+under **Settings › Processing › Calibration** (see
 [Tune the checks](CALIBRATION_LIBRARY.md#tune-the-checks)). The flat rotation,
 focal length and session limits decide which flats share a light's
 `SESSION_<night>` folder; dark temperature, reach and choice decide its darks;
@@ -96,8 +96,7 @@ in the project's **Stacks** view, runs WBPP on the server. It needs an editor an
 can reach. The program and the runs folder come from the PixInsight settings, which need the database-management
 grant; without the grant a run may use a folder inside the runs folder only, and only an editor reads a run's files.
 
-1. Tell PSF Guard where PixInsight is, once, under **Settings → Setups →
-   PixInsight**. Leave the path empty to look in the standard places
+1. Tell PSF Guard where PixInsight is, once, under **Settings → Exports & integrations → PixInsight**. Leave the path empty to look in the standard places
    (`/opt/PixInsight`, `~/PixInsight`, the macOS application folder, or
    Program Files). The panel says what it found, which WBPP version, and
    whether the server has a display: a Linux server without one needs
@@ -112,7 +111,7 @@ grant; without the grant a run may use a folder inside the runs folder only, and
 
 A run writes gigabytes: calibrated and registered copies of every light,
 then the masters. So the run folder is yours to place. The **WBPP runs
-folder** under **Settings → Setups → PixInsight** puts every database's
+folder** under **Settings → Exports & integrations → PixInsight** puts every database's
 runs below it (`<folder>/<database>/<project>-<time>/`) and shows the
 space free there. Without one, a database's runs go under its export
 directory when it has one, and otherwise under its stack folder. The run
@@ -164,7 +163,7 @@ process, so a server restart forgets a finished run's progress and results too.
 
 ### Manage WBPP storage
 
-Open **Settings → Storage**. Set **WBPP volume usage limit** under **Limits**,
+Open **Settings → Storage & backups → Folders & limits**. Set **WBPP volume usage limit** under **Limits**,
 choose **WBPP runs** under **Folders**, and set **WBPP retention** for intermediate
 files and masters. Click **Save storage settings** to apply all your storage
 edits together. The folder is independent of the cache and stack folders. Changing it affects new runs; earlier managed folders remain

@@ -139,7 +139,7 @@ function UncalibratedLights({ dbId, projectId, onShow }: { dbId: string; project
       </div>
       <small className="calibration-report-muted">
         No matching flat, no bias or dark, or flats past the age limit. Rejecting them lets Target
-        Scheduler shoot them again; Settings › Calibration can also leave them out of stacks.
+        Scheduler shoot them again; Settings › Processing › Calibration can also leave them out of stacks.
       </small>
       {gaps && (
         <>

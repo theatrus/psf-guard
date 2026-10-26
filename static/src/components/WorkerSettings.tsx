@@ -102,7 +102,7 @@ function WorkerRow({ worker }: { worker: WorkerSessionSummary }) {
 }
 
 /**
- * Settings › Workers: the machines that may run tasks for this server, the
+ * Settings › Performance › Workers: the machines that may run tasks for this server, the
  * tokens they join with, where each kind of work runs, and the folder task
  * files go through.
  */
@@ -291,7 +291,7 @@ export default function WorkerSettings() {
           </div>
           <p className="muted">
             Or enter this token in the PSF Guard app on that computer, in
-            Settings › Workers › Worker on this computer:
+            Settings › Performance › Workers › Worker on this computer:
           </p>
           <div className="token-secret-row">
             <code className="token-secret-value" data-shell="token">{commands.token}</code>
@@ -360,7 +360,7 @@ export default function WorkerSettings() {
       ))}
       <p className="muted">
         Each stack channel shows which worker built it. Live stack previews show
-        the worker&apos;s progress. The GPU choice in Settings › Stacking also
+        the worker&apos;s progress. The GPU choice in Settings › Performance › GPU also
         applies to stack builds on workers. WBPP runs stay on this server.
       </p>
 
