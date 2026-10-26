@@ -37,6 +37,7 @@ pub mod imported_copies;
 pub mod job_line;
 pub mod job_text;
 pub mod jobs;
+pub mod light_header_writes;
 pub(crate) mod listener;
 pub mod master_cleanup;
 pub mod mcp;

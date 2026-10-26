@@ -285,11 +285,11 @@ fn project_ids(conn: &Connection) -> Vec<i32> {
 /// ([`crate::calibration::project_scope::catalog_revision`]), and when each
 /// project's headers were kept. Grading the library in the background
 /// moves it only where a grade keeps a frame out or lets one back in.
-fn revision(conn: &Connection, ctx: &DatabaseContext) -> anyhow::Result<String> {
+fn revision(conn: &Connection) -> anyhow::Result<String> {
     let mut hasher = Sha256::new();
     hasher.update(crate::calibration::project_scope::catalog_revision(conn)?);
     for project in project_ids(conn) {
-        let stamp = crate::server::calibration_health::headers_stamp(&ctx.cache_dir_path, project);
+        let stamp = crate::light_headers::project_stamp(conn, project);
         hasher.update(format!("\x1e{project}\x1f{stamp}"));
     }
     Ok(hasher.finalize()[..12]
@@ -321,7 +321,7 @@ fn work_out(state: &AppState, ctx: &DatabaseContext) -> anyhow::Result<FlatGroup
     for project in project_ids(&conn) {
         let (lights, missing) = crate::calibration::project_lights(&conn, project, &tree, &nights)?;
         unread += missing;
-        let headers = crate::server::calibration_health::kept_headers(&ctx.cache_dir_path, project);
+        let headers = crate::light_headers::project_headers(&conn, project).unwrap_or_default();
         for light in lights {
             match headers.get(&light.image_id) {
                 Some(header) if header.path == light.path && header.meta.readable => {
@@ -535,7 +535,7 @@ fn use_of_with(
     ctx: &Arc<DatabaseContext>,
     work: Work,
 ) -> anyhow::Result<FlatGroupUseView> {
-    let revision = revision(&read_only(&ctx.database_path)?, ctx)?;
+    let revision = revision(&read_only(&ctx.database_path)?)?;
     let kept = kept(state, &ctx.database_path);
     if let Some((kept_revision, view)) = &kept
         && *kept_revision == revision
@@ -779,7 +779,7 @@ mod tests {
             epochcode INTEGER, projectId INTEGER, guid TEXT);
         CREATE TABLE acquiredimage (Id INTEGER PRIMARY KEY, projectId INTEGER, targetId INTEGER,
             acquireddate INTEGER, filtername TEXT, gradingStatus INTEGER, metadata TEXT,
-            profileId TEXT);";
+            profileId TEXT, guid TEXT);";
 
     /// Review repro: a flat master recorded after a result was kept must
     /// move the revision, or "What it feeds" never lists it.
@@ -802,8 +802,7 @@ mod tests {
                  VALUES (1, 1, 1, 1789000000, 'Ha', 0, '{\"FileName\":\"l.fits\"}', 'p');",
         )
         .unwrap();
-        let ctx = DatabaseContext::new_for_test(Connection::open_in_memory().unwrap());
-        let before = revision(&conn, &ctx).unwrap();
+        let before = revision(&conn).unwrap();
         conn.execute(
             "INSERT INTO psf_guard_calibration_master (master_uuid, rig_uuid, kind, cache_path,
                  source_set_hash, source_count, source_frame_uuids, created_at, seiza_version,
@@ -813,7 +812,7 @@ mod tests {
         )
         .unwrap();
         assert_ne!(
-            revision(&conn, &ctx).unwrap(),
+            revision(&conn).unwrap(),
             before,
             "a new flat master leaves the kept result current"
         );
@@ -831,11 +830,10 @@ mod tests {
             |a, b| if a.night == b.night { 0.0 } else { 0.02 },
         );
         conn.execute_batch(MINIMAL_TS).unwrap();
-        let ctx = DatabaseContext::new_for_test(Connection::open_in_memory().unwrap());
-        let before = revision(&conn, &ctx).unwrap();
+        let before = revision(&conn).unwrap();
         // Measured again, now alike: one group instead of two.
         crate::calibration::flat_groups::testing::measure_as(&conn, |_, _| 0.0);
-        assert_ne!(revision(&conn, &ctx).unwrap(), before);
+        assert_ne!(revision(&conn).unwrap(), before);
     }
 
     /// Grading the library again in the background touches each frame's
@@ -850,7 +848,6 @@ mod tests {
             |a, b| if a.night == b.night { 0.0 } else { 0.02 },
         );
         conn.execute_batch(MINIMAL_TS).unwrap();
-        let ctx = DatabaseContext::new_for_test(Connection::open_in_memory().unwrap());
         let quality = |grade: &str, at: i64| {
             conn.execute(
                 "INSERT OR REPLACE INTO psf_guard_calibration_frame_quality
@@ -861,17 +858,17 @@ mod tests {
             .unwrap();
         };
         quality("ok", 1);
-        let before = revision(&conn, &ctx).unwrap();
+        let before = revision(&conn).unwrap();
         conn.execute(
             "UPDATE psf_guard_calibration_frame SET updated_at = updated_at + 1",
             [],
         )
         .unwrap();
         quality("suspect", 2);
-        assert_eq!(revision(&conn, &ctx).unwrap(), before);
+        assert_eq!(revision(&conn).unwrap(), before);
         // A grade that keeps flats out does move it.
         quality("poor", 3);
-        assert_ne!(revision(&conn, &ctx).unwrap(), before);
+        assert_ne!(revision(&conn).unwrap(), before);
     }
 
     /// A regrade that keeps out nothing new moves every project's health key
@@ -893,8 +890,9 @@ mod tests {
              INSERT INTO target (Id, name, active, epochcode, projectId, guid)
                  VALUES (1, 'M42', 1, 0, 1, 'tg');
              INSERT INTO acquiredimage (Id, projectId, targetId, acquireddate, filtername,
-                 gradingStatus, metadata, profileId)
-                 VALUES (1, 1, 1, 1789000000, 'Ha', 0, '{\"FileName\":\"l.fits\"}', 'p');",
+                 gradingStatus, metadata, profileId, guid)
+                 VALUES (1, 1, 1, 1789000000, 'Ha', 0, '{\"FileName\":\"l.fits\"}', 'p', 'l'),
+                        (2, 1, 1, 1789000060, 'Ha', 0, '{\"FileName\":\"m.fits\"}', 'p', 'm');",
         )
         .unwrap();
         let quality = |grade: &str, at: i64| {
@@ -907,22 +905,23 @@ mod tests {
             .unwrap();
         };
         quality("ok", 1);
-        let mut ctx = DatabaseContext::new_for_test(Connection::open_in_memory().unwrap());
-        ctx.cache_dir_path = temp.path().join("cache");
-        // The health pass keeps the light's header.
+        // The health pass keeps the light's header in the catalog.
         let header = |path: &str| crate::calibration::KeptHeader {
             path: path.into(),
             size: 1,
             modified_ns: 2,
+            changed_ns: 3,
             meta: FrameMeta::default(),
+            located: false,
+            image_guid: None,
         };
         let pass = |headers: BTreeMap<i32, crate::calibration::KeptHeader>| {
-            crate::server::calibration_health::write_headers(&ctx.cache_dir_path, 1, headers)
+            crate::light_headers::store(&conn, headers.iter().map(|(id, header)| (*id, header)))
                 .unwrap();
         };
         pass(BTreeMap::from([(1, header("l.fits"))]));
         let keys = crate::calibration::health_keys(&conn).unwrap();
-        let before = revision(&conn, &ctx).unwrap();
+        let before = revision(&conn).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
         quality("suspect", 2);
         assert_ne!(
@@ -931,13 +930,13 @@ mod tests {
             "the health pass judges the project again"
         );
         pass(BTreeMap::from([(1, header("l.fits"))]));
-        assert_eq!(revision(&conn, &ctx).unwrap(), before);
+        assert_eq!(revision(&conn).unwrap(), before);
         // A light it reads anew does move it.
         pass(BTreeMap::from([
             (1, header("l.fits")),
             (2, header("m.fits")),
         ]));
-        assert_ne!(revision(&conn, &ctx).unwrap(), before);
+        assert_ne!(revision(&conn).unwrap(), before);
     }
 
     /// A `group` key the answer does not hold, as after a regroup merged
