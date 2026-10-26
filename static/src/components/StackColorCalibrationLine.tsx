@@ -3,6 +3,7 @@ import { openSettings } from '../utils/settingsIntent';
 
 const skipText: Record<Exclude<StackColorCalibrationSkipReason, 'failed'>, string> = {
   no_plate_solve: 'reference frame not plate solved',
+  no_mosaic_solve: 'mosaic not plate solved',
   no_gaia_catalog: 'Gaia colors not installed',
   too_few_stars: 'too few Gaia stars',
 };

@@ -124,6 +124,12 @@ describe('StackColorCalibrationLine', () => {
     expect(screen.queryByRole('button', { name: 'Install' })).not.toBeInTheDocument();
 
     rerender(<StackColorCalibrationLine outcome={{
+      status: 'skipped', reason: 'no_mosaic_solve', detail: 'The mosaic canvas could not be plate solved: no match',
+    }} />);
+    expect(screen.getByText('Not color calibrated: mosaic not plate solved')).toBeInTheDocument();
+    expect(screen.queryByText('Not color calibrated: reference frame not plate solved')).not.toBeInTheDocument();
+
+    rerender(<StackColorCalibrationLine outcome={{
       status: 'skipped', reason: 'too_few_stars', detail: 'only 12 stars survived the red colour fit',
     }} />);
     expect(screen.getByText('Not color calibrated: too few Gaia stars')).toBeInTheDocument();

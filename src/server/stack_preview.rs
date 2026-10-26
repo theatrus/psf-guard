@@ -21,6 +21,7 @@ pub mod journal;
 mod line_work;
 mod live;
 pub use live::LiveStackPreview;
+mod canvas_astrometry;
 pub mod method;
 mod mono_build;
 mod mosaic;
@@ -2246,6 +2247,7 @@ pub async fn get_latest_stack_previews(
                 &ctx,
                 group.reference_image_id,
                 group.sky_orientation.clone(),
+                &fits_path(&ctx.stack_root, &entry.job_id, group.index),
             )
         });
     }
@@ -2537,6 +2539,7 @@ fn stack_processing_source(
                 ctx,
                 group.reference_image_id,
                 group.sky_orientation.clone(),
+                &fits_path(&ctx.stack_root, job_id, group.index),
             )
         }),
     })
@@ -2560,24 +2563,38 @@ fn preview_calibration_outdated(
     .map(|reason| format!("{reason}; click Build current set to render the preview again"))
 }
 
-/// What color calibration of a one-shot-color stack can use: its reference
-/// frame's fresh pixel solve, its layout, and the installed Gaia catalog.
+/// The pixel solve, layout and Gaia catalog for an OSC stack. A generated
+/// mosaic uses its own canvas solve rather than an acquired reference frame.
 fn osc_calibration_source(
     state: &AppState,
     ctx: &DatabaseContext,
     reference_image_id: Option<i32>,
     orientation: Option<StackSkyOrientation>,
+    stack_path: &FsPath,
 ) -> color_calibration::StackCalibrationSource {
-    color_calibration::StackCalibrationSource {
-        reference_image_id,
-        orientation,
-        solution: reference_image_id
+    let mosaic = canvas_astrometry::is_mosaic(orientation.as_ref());
+    let solution = if mosaic {
+        canvas_astrometry::solution(stack_path)
+    } else {
+        reference_image_id
             .and_then(|image_id| {
                 ctx.astrometry_evidence
                     .evidence_for_source(&ctx.cache_dir_path, image_id, None)
             })
-            .and_then(|analysis| analysis.solution),
-        catalog: state.astrometry.gaia_photometry_signature(),
+            .and_then(|analysis| analysis.solution)
+    };
+    let catalog = state.astrometry.gaia_photometry_signature();
+    let mosaic_retry_fingerprint = (mosaic && solution.is_none() && catalog.is_some())
+        .then(|| state.astrometry.solve_retry_fingerprint());
+    color_calibration::StackCalibrationSource {
+        solve_error: mosaic
+            .then(|| canvas_astrometry::failure(stack_path))
+            .flatten(),
+        mosaic_retry_fingerprint,
+        reference_image_id,
+        orientation,
+        solution,
+        catalog,
     }
 }
 

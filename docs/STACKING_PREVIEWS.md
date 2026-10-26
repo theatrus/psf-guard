@@ -2213,9 +2213,14 @@ The card shows what happened, as `Calibrated on 143 stars · R ×1.12, B ×0.87`
 or why it did not:
 
 - **Gaia colors not installed.** Install **Gaia colors** (about 480 MB) in
-  Settings → Storage & backups → Reference catalogs. The card's **Install** opens Settings there.
-- **Reference frame not plate solved.** Solve that frame. Embedded FITS WCS
-  does not count.
+  Settings → Storage & backups → Reference catalogs. The card's **Install**
+  opens Settings there.
+- **Reference frame not plate solved.** For a single-field stack, solve that
+  frame. Embedded FITS WCS does not count.
+- **Mosaic not plate solved.** PSF Guard solves the integrated mosaic when
+  color calibration runs. It caches that pixel solve with the mosaic and
+  retries after missing solver resources become available. The tooltip shows
+  the solver's failure reason when a solve could not be obtained.
 - **Too few Gaia stars.** The catalog stops at G 15. Seiza needs 20 clean,
   uncrowded stars down to G 13 for each fit, which a narrow field can lack.
 - Anything else shows Seiza's reason.
@@ -2223,9 +2228,15 @@ or why it did not:
 Turn calibration off with the **Color calibration** switch in the
 **Processing stack** editor.
 
+Mosaics have no single reference-frame ID. Their RGB, LRGB, RGB-star and OSC
+calibration uses a pixel solve of the integrated canvas, carried through any
+composition crop. PSF Guard does not reuse a panel's WCS after mosaic
+undistortion. Older uncalibrated previews are marked out of date; choose
+**Build current set** to refresh them from the cached channel stacks.
+
 A one-shot-color stack is calibrated the same way, on its own linear RGB
-pixels, through the solve of its own reference frame carried through its
-layout. Its card preview is calibrated when the stack is built, and its
+pixels, through its mosaic-canvas solve or its reference-frame solve carried
+through its layout. Its card preview is calibrated when the stack is built, and its
 **View processing** calibrates before the stretch unless its **Color
 calibration** switch is off. The stack's FITS stays as integrated. The
 default stretch is linked, so the balance survives it. A view whose stretch

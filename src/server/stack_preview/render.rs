@@ -30,6 +30,7 @@ pub(super) fn preview_needs_render(
                 ctx,
                 group.reference_image_id,
                 group.sky_orientation.clone(),
+                &fits_path(&ctx.stack_root, job_id, group.index),
             )
         })
         .is_some()
