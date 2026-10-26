@@ -1,4 +1,5 @@
 import StackStarSeparationControls from './StackStarSeparationControls';
+import StackFitsDownload from './StackFitsDownload';
 import { useMemo, useState, type ReactNode } from 'react';
 import type {
   StackBackgroundConfig,
@@ -526,12 +527,12 @@ function StageLane({
           disabled={disabled} onChange={onRcAstroChange} />
       )}
       {rcAstroResult && (
-        <div className="stack-stretch-actions">
-          <a href={rcAstroResult.fits_url} download>
-            {rcAstroResult.has_stars ? 'Starless FITS' : 'Processed FITS'}
-          </a>
+        <div className="stack-fits-downloads">
+          <StackFitsDownload href={rcAstroResult.fits_url}>
+            {label} {rcAstroResult.has_stars ? 'starless FITS' : 'processed FITS'}
+          </StackFitsDownload>
           {rcAstroResult.stars_fits_url && (
-            <a href={rcAstroResult.stars_fits_url} download>Stars FITS</a>
+            <StackFitsDownload href={rcAstroResult.stars_fits_url}>{label} stars FITS</StackFitsDownload>
           )}
         </div>
       )}
@@ -1081,10 +1082,10 @@ export default function StackColorProcessingControls({
                       also reduces color noise.
                     </span>
                     {colorRcAstro && (
-                      <div className="stack-stretch-actions">
-                        <a href={colorRcAstro.fits_url} download>
-                          Processed color channels FITS
-                        </a>
+                      <div className="stack-fits-downloads">
+                        <StackFitsDownload href={colorRcAstro.fits_url}>
+                          processed color channels FITS
+                        </StackFitsDownload>
                       </div>
                     )}
                   </section>

@@ -1,5 +1,6 @@
 import type { RcAstroProcessing, StackLinearStarSeparation } from '../api/types';
 import StackRcAstroControls from './StackRcAstroControls';
+import StackFitsDownload from './StackFitsDownload';
 
 const defaultSeparation: RcAstroProcessing = { steps: [{ tool: 'sxt', parameters: {} }] };
 const separationTools = ['sxt'] as const;
@@ -19,9 +20,9 @@ export default function StackStarSeparationControls({ label, config, result, dis
       toolKeys={separationTools} excludedParameters={outputParameters} onChange={onChange} />
     <p className="processing-setups-hint">Runs on linear data before stretching and keeps both the starless image and stars. Unscreen Stars stays off.
       Changing these settings runs this branch again. Stretch, palette and star-reduction edits reuse the cached linear outputs.</p>
-    {result && <div className="stack-stretch-actions">
-      <a href={result.fits_url} download>Linear {label} starless FITS</a>
-      {result.stars_fits_url && <a href={result.stars_fits_url} download>Linear {label} stars FITS</a>}
+    {result && <div className="stack-fits-downloads">
+      <StackFitsDownload href={result.fits_url}>linear {label} starless FITS</StackFitsDownload>
+      {result.stars_fits_url && <StackFitsDownload href={result.stars_fits_url}>linear {label} stars FITS</StackFitsDownload>}
     </div>}
   </section>;
 }

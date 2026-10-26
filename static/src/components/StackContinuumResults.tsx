@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import type { StackColorJob, StackContinuumResult } from '../api/types';
+import StackFitsDownload from './StackFitsDownload';
 const statuses = { applied: 'Applied', manual: 'Manual', skipped: 'Skipped', disabled: 'Off' };
 const labels: Record<string, string> = { ha: 'Hα', oiii: 'OIII', sii: 'SII', red: 'R', green: 'G', blue: 'B' };
 function Line({ dbId, jobId, line }: { dbId: string; jobId: string; line: StackContinuumResult }) {
@@ -23,9 +24,9 @@ function Line({ dbId, jobId, line }: { dbId: string; jobId: string; line: StackC
     {!!line.diagnostics?.pixelValidation?.clippedStars && <p>Clipped stellar cores: {line.diagnostics.pixelValidation.clippedProfiles} / {line.diagnostics.pixelValidation.clippedStars} profiles checked · maximum absolute residual {line.diagnostics.pixelValidation.clippedMaxAbsoluteFraction == null ? 'unavailable' : `${(line.diagnostics.pixelValidation.clippedMaxAbsoluteFraction * 100).toFixed(1)}%`}</p>}
     {matching && <p>Gaussian PSF target {matching.targetFwhm.toFixed(2)} px · kernel σ (NB, references): {matching.kernelSigma.map((v) => v.toFixed(2)).join(', ')} px</p>}
     {line.status !== 'disabled' && <p>{line.clipping_maps ? 'Producer clipping maps used' : line.status === 'manual' ? 'Manual weights; signed residual retained' : 'Review saturation evidence in the report'}</p>}
-    {line.flux_fits_url && <p><a href={line.flux_fits_url} download>Calibrated line flux FITS ({line.flux_unit})</a>{' '}
+    {line.flux_fits_url && <p><StackFitsDownload href={line.flux_fits_url}>calibrated {labels[line.role]} line flux FITS ({line.flux_unit})</StackFitsDownload>{' '}
       {line.flux_report_url && <a href={line.flux_report_url} target="_blank" rel="noreferrer">Response and uncertainty report</a>}</p>}
-    {line.residual_fits_url && <a href={line.residual_fits_url} download>Signed residual FITS</a>}{' '}
+    {line.residual_fits_url && <StackFitsDownload href={line.residual_fits_url}>signed {labels[line.role]} residual FITS</StackFitsDownload>}{' '}
     {line.residual_preview_url && <a href={line.residual_preview_url} target="_blank" rel="noreferrer">Residual preview</a>}{' '}
     {line.report_url && <><a href={line.report_url} target="_blank" rel="noreferrer">Full stellar fit report</a>{' '}
       <button type="button" onClick={() => setInspect((value) => !value)} aria-expanded={inspect}>Inspect stellar residuals</button></>}

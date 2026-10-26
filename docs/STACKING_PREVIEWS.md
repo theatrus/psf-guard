@@ -1283,6 +1283,12 @@ unstretched and contains the stack's WCS plus Seiza's accepted/rejected frame
 counters, making it suitable for inspection or as an input to a separate
 processing workflow.
 
+Processing results have compact **Download … FITS** controls with a download
+icon. Each label identifies the processed image, starless image, stars, or
+continuum result that the file contains.
+
+![Compact FITS download controls in processing results](images/stack-fits-downloads-desktop.png)
+
 ![Frame-by-frame stack admission details](stack-preview-decisions.png)
 
 ## Find a stack artifact in its source frames
