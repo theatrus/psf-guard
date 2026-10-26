@@ -3,8 +3,8 @@
 //! Seiza does the work (`seiza_stacking::calibrate_and_stretch` and its
 //! calibration half, `calibrate_color_image`). This module plans it and
 //! gives Seiza the solution of the image it calibrates: the reference
-//! frame's fresh pixel solve, carried through the reference stack's recorded
-//! sky layout and, for a composition, its crop, with
+//! frame's fresh pixel solve, or a solve of the generated mosaic canvas,
+//! carried through the stack's recorded layout and composition crop with
 //! `seiza_stacking::transform_wcs`.
 //!
 //! Narrowband palettes are false color and never calibrate.
@@ -89,9 +89,15 @@ impl StackColorWhiteReference {
 /// makes a new preview.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StackColorCalibrationBasis {
-    /// The frame the reference stack was registered to.
+    /// A generated mosaic has its own pixel solve, without an acquired-image ID.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mosaic_canvas: bool,
+    /// Available solver resources while an unsolved mosaic is awaiting a retry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mosaic_retry_fingerprint: Option<String>,
+    /// The acquired reference frame; absent for a generated mosaic canvas.
     pub reference_image_id: Option<i32>,
-    /// SHA-256 of that frame's fresh pixel solve.
+    /// SHA-256 of the reference-frame or mosaic-canvas pixel solve.
     pub solution_fingerprint: Option<String>,
     /// The Gaia photometry file, when one is installed.
     pub catalog: Option<AstrometryCatalogFileSignature>,
@@ -103,6 +109,8 @@ pub struct StackColorCalibrationBasis {
 pub enum StackColorCalibrationSkipReason {
     /// The reference frame has no fresh pixel solve.
     NoPlateSolve,
+    /// The generated mosaic canvas has no usable pixel solve.
+    NoMosaicSolve,
     /// No Gaia photometry catalog is installed.
     NoGaiaCatalog,
     /// Too few Gaia stars measured cleanly for the fits.
@@ -184,8 +192,8 @@ pub enum StackColorCalibrationOutcome {
     Skipped(StackColorCalibrationSkip),
 }
 
-/// How Gaia stars reach the composition grid: the reference frame's solve,
-/// that frame's size, and the reference stack's layout.
+/// How Gaia stars reach the composition grid: its pixel solve and layout.
+/// A mosaic's solution is already on the integrated canvas.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct StarPlacement {
     #[serde(with = "wcs_form")]
@@ -212,11 +220,27 @@ pub(super) fn plan(
 ) -> ColorCalibrationPlan {
     let solution_fingerprint = solution.map(solution_fingerprint);
     let basis = StackColorCalibrationBasis {
+        mosaic_canvas: super::canvas_astrometry::is_mosaic(orientation),
+        mosaic_retry_fingerprint: None,
         reference_image_id,
         solution_fingerprint,
         catalog: catalog.clone(),
     };
     let placement = match (solution, orientation) {
+        (None, Some(orientation)) if super::canvas_astrometry::is_mosaic(Some(orientation)) => {
+            Err(StackColorCalibrationSkip::new(
+                if catalog.is_none() {
+                    StackColorCalibrationSkipReason::NoGaiaCatalog
+                } else {
+                    StackColorCalibrationSkipReason::NoMosaicSolve
+                },
+                if catalog.is_none() {
+                    "Gaia colors are not installed"
+                } else {
+                    "The mosaic canvas has no usable pixel solve; PSF Guard solves it when color calibration runs"
+                },
+            ))
+        }
         (None, _) => Err(StackColorCalibrationSkip::new(
             StackColorCalibrationSkipReason::NoPlateSolve,
             "The reference frame has no plate solve",
@@ -359,11 +383,13 @@ pub(super) fn calibrate_channels(
     outcome.into()
 }
 
-/// What a one-shot-color stack offers color calibration: its reference
-/// frame, that frame's fresh pixel solve, the stack's sky layout, and the
-/// installed Gaia catalog, read when the stack's processing is asked for.
+/// What an OSC stack offers color calibration: its reference-frame or
+/// mosaic-canvas pixel solve, sky layout, and installed Gaia catalog, read
+/// when the stack's processing is requested.
 #[derive(Debug, Clone)]
 pub struct StackCalibrationSource {
+    pub(super) solve_error: Option<String>,
+    pub(super) mosaic_retry_fingerprint: Option<String>,
     pub(super) reference_image_id: Option<i32>,
     pub(super) orientation: Option<StackSkyOrientation>,
     pub(super) solution: Option<AstrometrySolutionResponse>,
@@ -374,6 +400,8 @@ impl StackCalibrationSource {
     /// What a calibration made now would rest on.
     pub(super) fn basis(&self) -> StackColorCalibrationBasis {
         StackColorCalibrationBasis {
+            mosaic_canvas: super::canvas_astrometry::is_mosaic(self.orientation.as_ref()),
+            mosaic_retry_fingerprint: self.mosaic_retry_fingerprint.clone(),
             reference_image_id: self.reference_image_id,
             solution_fingerprint: self.solution.as_ref().map(solution_fingerprint),
             catalog: self.catalog.clone(),
@@ -381,13 +409,21 @@ impl StackCalibrationSource {
     }
 
     pub(super) fn plan(&self, settings: StackColorCalibration) -> ColorCalibrationPlan {
-        plan(
+        let mut plan = plan(
             settings,
             self.reference_image_id,
             self.orientation.as_ref(),
             self.solution.as_ref(),
             self.catalog.clone(),
-        )
+        );
+        plan.basis.mosaic_retry_fingerprint = self.mosaic_retry_fingerprint.clone();
+        if let Err(skip) = &mut plan.placement
+            && skip.reason == StackColorCalibrationSkipReason::NoMosaicSolve
+            && let Some(error) = &self.solve_error
+        {
+            skip.detail = format!("The mosaic canvas could not be plate solved: {error}");
+        }
+        plan
     }
 }
 
@@ -406,6 +442,12 @@ pub(super) fn calibration_outdated(
     let Some(recorded) = recorded else {
         return match outcome {
             Some(StackColorCalibrationOutcome::Skipped(skip))
+                if now.mosaic_canvas
+                    && skip.reason == StackColorCalibrationSkipReason::NoPlateSolve =>
+            {
+                Some("Out of date — mosaic color calibration now uses the canvas plate solve")
+            }
+            Some(StackColorCalibrationOutcome::Skipped(skip))
                 if skip.reason == StackColorCalibrationSkipReason::NoGaiaCatalog
                     && now.catalog.is_some() =>
             {
@@ -420,11 +462,17 @@ pub(super) fn calibration_outdated(
             _ => None,
         };
     };
+    if recorded.mosaic_canvas != now.mosaic_canvas {
+        return Some("Out of date — mosaic color calibration now uses the canvas plate solve");
+    }
     match (&recorded.catalog, &now.catalog) {
         (None, Some(_)) => return Some("Out of date — Gaia colors were installed"),
         (Some(_), None) => return Some("Out of date — Gaia colors were removed"),
         (Some(then), Some(now)) if then != now => return Some("Out of date — Gaia colors changed"),
         _ => {}
+    }
+    if recorded.mosaic_retry_fingerprint != now.mosaic_retry_fingerprint {
+        return Some("Out of date — the mosaic plate-solving resources changed");
     }
     if recorded.reference_image_id != now.reference_image_id {
         return Some("Out of date — the reference frame changed");
@@ -555,6 +603,145 @@ pub(super) fn interleave(
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
+
+    #[test]
+    fn mosaic_calibration_uses_the_canvas_solve_without_a_reference_image() {
+        let directory = tempfile::tempdir().unwrap();
+        let layout = StackSkyOrientation {
+            source: "mosaic canvas".into(),
+            ..orientation(1200, 1000)
+        };
+        let placement = StarPlacement {
+            wcs: wcs(),
+            orientation: layout.clone(),
+        };
+        let ([mut red, mut green, mut blue], stars) = field(&placement);
+        let gaia = catalog(directory.path(), &stars);
+        let signature = AstrometryCatalogFileSignature {
+            name: "gaia_photometry".into(),
+            path: directory
+                .path()
+                .join("stars-gaia-photometry.bin")
+                .display()
+                .to_string(),
+            format: "SEIZAPH1".into(),
+            size_bytes: 1,
+            modified_unix_seconds: 1,
+            modified_subsec_nanos: 0,
+            sha256: None,
+        };
+        let mut solved = solution();
+        solved.image_width = 1200;
+        solved.image_height = 1000;
+        let plan = plan(
+            StackColorCalibration::default(),
+            None,
+            Some(&layout),
+            Some(&solved),
+            Some(signature),
+        );
+        assert!(plan.basis.mosaic_canvas);
+        assert_eq!(plan.basis.reference_image_id, None);
+        let stack = interleave(&red, &green, &blue).unwrap();
+        let placement = plan.placement.as_ref().unwrap();
+        let (ra, dec) = wcs().pixel_to_world(300.0, 200.0);
+        let (x, y) = placement
+            .wcs_on(Some(ReferenceRegion {
+                x: 100,
+                y: 80,
+                width: 1000,
+                height: 800,
+            }))
+            .unwrap()
+            .world_to_pixel(ra, dec)
+            .unwrap();
+        assert!(
+            (x - 200.0).abs() < 1e-6 && (y - 120.0).abs() < 1e-6,
+            "{x} {y}"
+        );
+        let outcome = calibrate_channels(
+            [&mut red, &mut green, &mut blue],
+            &placement.wcs_on(None).unwrap(),
+            &gaia,
+            &StackColorCalibration::default(),
+            None,
+        );
+        let StackColorCalibrationOutcome::Calibrated(report) = outcome else {
+            panic!("{outcome:?}");
+        };
+        assert!(report.stars_used >= 20);
+        assert!((report.gains[0] - 1.0 / 0.6).abs() < 0.03);
+        assert!((report.gains[2] - 1.0 / 1.4).abs() < 0.03);
+        let gaia = std::sync::Arc::new(gaia);
+        let (calibrated, outcome) = calibrate_stack(&plan, &stack, None, &|| Ok(gaia.clone()));
+        assert!(calibrated.is_some(), "{outcome:?}");
+        assert!(matches!(
+            outcome,
+            StackColorCalibrationOutcome::Calibrated(_)
+        ));
+    }
+
+    #[test]
+    fn an_unsolved_mosaic_reports_the_canvas_and_invalidates_legacy_previews() {
+        let layout = StackSkyOrientation {
+            source: "mosaic canvas".into(),
+            ..orientation(1000, 800)
+        };
+        let settings = StackColorCalibration::default();
+        let missing = plan(settings, None, Some(&layout), None, None);
+        assert_eq!(
+            missing.placement.unwrap_err().reason,
+            StackColorCalibrationSkipReason::NoGaiaCatalog
+        );
+        let signature = AstrometryCatalogFileSignature {
+            name: "gaia_photometry".into(),
+            path: "/test/gaia.bin".into(),
+            format: "SEIZAPH1".into(),
+            size_bytes: 1,
+            modified_unix_seconds: 1,
+            modified_subsec_nanos: 0,
+            sha256: None,
+        };
+        let current = StackCalibrationSource {
+            solve_error: None,
+            mosaic_retry_fingerprint: None,
+            reference_image_id: None,
+            orientation: Some(layout),
+            solution: None,
+            catalog: Some(signature),
+        };
+        let missing = current.plan(settings);
+        assert_eq!(
+            missing.placement.unwrap_err().reason,
+            StackColorCalibrationSkipReason::NoMosaicSolve
+        );
+        let mut old_basis = current.basis();
+        old_basis.mosaic_canvas = false;
+        assert!(calibration_outdated(Some(&old_basis), None, &current).is_some());
+        assert_eq!(
+            calibration_outdated(Some(&current.basis()), None, &current),
+            None
+        );
+        let mut retry = current.clone();
+        retry.mosaic_retry_fingerprint = Some("new solver resources".into());
+        retry.solve_error = Some("star catalog unavailable".into());
+        assert_eq!(
+            calibration_outdated(Some(&current.basis()), None, &retry),
+            Some("Out of date — the mosaic plate-solving resources changed")
+        );
+        assert!(retry
+            .plan(settings)
+            .placement
+            .unwrap_err()
+            .detail
+            .contains("star catalog unavailable"));
+        let mut without_gaia = current.basis();
+        without_gaia.catalog = None;
+        assert_eq!(
+            calibration_outdated(Some(&without_gaia), None, &retry),
+            Some("Out of date — Gaia colors were installed")
+        );
+    }
     use seiza_stacking::GaiaColorSource;
 
     fn orientation(width: usize, height: usize) -> StackSkyOrientation {
@@ -796,6 +983,8 @@ pub(super) mod tests {
         solution.image_width = 1200;
         solution.image_height = 1000;
         let source = StackCalibrationSource {
+            solve_error: None,
+            mosaic_retry_fingerprint: None,
             reference_image_id: Some(7),
             orientation: Some(orientation(1200, 1000)),
             solution: Some(solution),
@@ -890,6 +1079,8 @@ pub(super) mod tests {
             sha256: None,
         };
         let source = |solved: bool, catalog: Option<u64>| StackCalibrationSource {
+            solve_error: None,
+            mosaic_retry_fingerprint: None,
             reference_image_id: Some(7),
             orientation: Some(orientation(1000, 800)),
             solution: solved.then(tests::solution),

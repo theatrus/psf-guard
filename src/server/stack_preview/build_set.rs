@@ -573,12 +573,12 @@ fn prepare_and_queue(
                 }
                 _ => (**request).clone(),
             };
-            let prepared = color::prepare_color_job(
+            let prepared = color::prepare_color_job_with_mosaic_solve(
+                state,
                 ctx,
-                &state.astrometry,
-                &state.workers,
                 project_id,
                 &request,
+                super::job_priority(placement.automatic),
             )
             .map_err(|error| error.message())?;
             if preparation_stopped(state, preparation) {

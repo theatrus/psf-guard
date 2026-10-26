@@ -23,6 +23,11 @@
   are preserved. Settings asks before switching pages with unsaved edits.
   See [Settings navigation](../SETTINGS.md).
 
+- Mosaic color calibration now solves the integrated canvas instead of looking
+  for a single reference-frame solve. RGB, LRGB, RGB-star and OSC calibration
+  reuse that pixel solve. Older uncalibrated previews are marked out of date;
+  **Build current set** refreshes them from the cached stacks.
+
 - Mosaic SNR plots report canvas coverage and mean pixel depth. They keep
   each checkpoint's measured signal and no longer apply same-field forecasts
   or plateau/degrading verdicts to frames covering different sky areas.

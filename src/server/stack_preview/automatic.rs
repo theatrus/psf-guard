@@ -1436,19 +1436,23 @@ fn enqueue_color_after(
     automatic: bool,
     first: bool,
 ) {
-    let mut prepared =
-        match color::prepare_color_job(ctx, &state.astrometry, &state.workers, project_id, request)
-        {
-            Ok(prepared) => prepared,
-            Err(error) => {
-                tracing::warn!(
-                    db = %ctx.id,
-                    project_id,
-                    "could not prepare a color preview after a build: {error:?}"
-                );
-                return;
-            }
-        };
+    let mut prepared = match color::prepare_color_job_with_mosaic_solve(
+        state,
+        ctx,
+        project_id,
+        request,
+        super::job_priority(automatic),
+    ) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            tracing::warn!(
+                db = %ctx.id,
+                project_id,
+                "could not prepare a color preview after a build: {error:?}"
+            );
+            return;
+        }
+    };
     let color_id = prepared.public.job_id.clone();
     if let Some(existing) = state.stack_previews.get_color(&color_id)
         && (matches!(

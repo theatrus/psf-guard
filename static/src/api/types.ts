@@ -1493,6 +1493,7 @@ export interface StackColorCalibration {
 
 export type StackColorCalibrationSkipReason =
   | 'no_plate_solve'
+  | 'no_mosaic_solve'
   | 'no_gaia_catalog'
   | 'too_few_stars'
   | 'failed';

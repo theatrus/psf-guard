@@ -3648,6 +3648,8 @@ mod tests {
         let source =
             |solved: bool, catalog: Option<crate::astrometry::AstrometryCatalogFileSignature>| {
                 StackCalibrationSource {
+                    solve_error: None,
+                    mosaic_retry_fingerprint: None,
                     reference_image_id: Some(7),
                     orientation: Some(super::super::StackSkyOrientation {
                         convention: seiza_stacking::SKY_ORIENTATION_NAME.into(),

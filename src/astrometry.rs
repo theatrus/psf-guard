@@ -681,6 +681,32 @@ impl AstrometryContext {
         Some(catalog_file_signature("gaia_photometry", &fingerprint))
     }
 
+    /// Cheap identity of the resources a future pixel solve would use. This
+    /// lets a skipped mosaic retry after catalogs are installed, without
+    /// opening catalog payloads on a request thread.
+    pub(crate) fn solve_retry_fingerprint(&self) -> String {
+        use sha2::{Digest, Sha256};
+        use std::fmt::Write;
+        let files = [
+            ("stars", self.config.stars_path()),
+            ("blind_index", self.config.blind_index_path()),
+            ("objects", self.config.objects_path()),
+        ]
+        .map(|(name, path)| {
+            path.ok()
+                .flatten()
+                .and_then(|path| resource_fingerprint(&path).ok())
+                .map(|fingerprint| catalog_file_signature(name, &fingerprint))
+        });
+        let bytes = serde_json::to_vec(&(SEIZA_VERSION, SEIZA_FITS_VERSION, files))
+            .expect("solver resource signatures serialize");
+        let mut fingerprint = String::with_capacity(64);
+        for byte in Sha256::digest(bytes) {
+            write!(&mut fingerprint, "{byte:02x}").expect("writing to a String cannot fail");
+        }
+        fingerprint
+    }
+
     fn load_gaia_photometry(&self) -> Result<LoadedResource<PhotometryCatalog>, String> {
         load_cached(
             &self.gaia_photometry,

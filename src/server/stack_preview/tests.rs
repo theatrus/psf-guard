@@ -4889,6 +4889,8 @@ mod processing_runs {
 #[test]
 fn only_a_color_stack_preview_goes_out_of_date_with_the_calibration() {
     let current = || color_calibration::StackCalibrationSource {
+        solve_error: None,
+        mosaic_retry_fingerprint: None,
         reference_image_id: Some(1),
         orientation: None,
         solution: None,
@@ -4912,6 +4914,8 @@ fn only_a_color_stack_preview_goes_out_of_date_with_the_calibration() {
     color.output_channels = 3;
     color.color_calibration = Some(skipped.clone());
     color.color_calibration_basis = Some(color_calibration::StackColorCalibrationBasis {
+        mosaic_canvas: false,
+        mosaic_retry_fingerprint: None,
         reference_image_id: Some(1),
         solution_fingerprint: None,
         catalog: None,

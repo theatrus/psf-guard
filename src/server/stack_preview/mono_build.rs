@@ -1035,11 +1035,20 @@ pub(super) fn render_group_previews(
             .stack_previews
             .get(job_id)
             .and_then(|job| job.groups.get(group_index).cloned());
+        let stack_path = fits_path(stack_root, job_id, group_index);
+        if status.as_ref().is_some_and(|group| {
+            super::canvas_astrometry::is_mosaic(group.sky_orientation.as_ref())
+        }) && state.astrometry.gaia_photometry_signature().is_some()
+            && let Err(error) = super::canvas_astrometry::ensure(&state.astrometry, &stack_path)
+        {
+            tracing::warn!(%job_id, group_index, %error, "Could not plate solve the OSC mosaic for color calibration");
+        }
         let source = osc_calibration_source(
             state,
             ctx,
             status.as_ref().and_then(|status| status.reference_image_id),
             status.and_then(|status| status.sky_orientation),
+            &stack_path,
         );
         let plan = source.plan(color_calibration::StackColorCalibration::default());
         let open_catalog = || {

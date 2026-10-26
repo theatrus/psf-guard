@@ -1723,6 +1723,44 @@ fn refused_rc_astro_steps(role: StackColorRole, follows_cards: bool, error: Stri
     })
 }
 
+pub(super) fn prepare_color_job_with_mosaic_solve(
+    state: &AppState,
+    ctx: &crate::server::database_context::DatabaseContext,
+    project_id: i32,
+    request: &StackColorRequest,
+    priority: crate::concurrency::Priority,
+) -> Result<PreparedColorJob, AppError> {
+    let prepared = prepare_color_job(ctx, &state.astrometry, &state.workers, project_id, request)?;
+    let calibration = prepared.color_calibration.as_ref().or_else(|| {
+        prepared
+            .stars_plan
+            .as_ref()
+            .and_then(|plan| plan.calibration.as_ref())
+    });
+    if !calibration.is_some_and(|plan| {
+        plan.settings.enabled && plan.basis.mosaic_canvas && plan.basis.catalog.is_some()
+    }) {
+        return Ok(prepared);
+    }
+    let Some(reference) = prepared
+        .public
+        .sources
+        .iter()
+        .find(|source| source.role == reference_role(prepared.public.kind))
+    else {
+        return Ok(prepared);
+    };
+    let path = super::fits_path(&ctx.stack_root, &reference.job_id, reference.group_index);
+    match super::canvas_astrometry::ensure_in_job(state, &path, priority) {
+        Ok(true) => prepare_color_job(ctx, &state.astrometry, &state.workers, project_id, request),
+        Ok(false) => Ok(prepared),
+        Err(error) => {
+            tracing::warn!(path = %path.display(), %error, "Could not prepare mosaic astrometry for color calibration");
+            Ok(prepared)
+        }
+    }
+}
+
 pub(super) fn prepare_color_job(
     ctx: &crate::server::database_context::DatabaseContext,
     astrometry: &crate::astrometry::AstrometryContext,
@@ -2144,8 +2182,8 @@ pub(super) fn prepare_color_job(
 }
 
 /// Plan calibration onto the reference channel's grid, which every other
-/// channel is registered to: its stack's reference frame, that frame's fresh
-/// pixel solve, and the stack's sky layout.
+/// channel is registered to: its acquired reference frame's pixel solve,
+/// or its generated mosaic canvas's pixel solve, and the stack's sky layout.
 fn plan_color_calibration(
     ctx: &crate::server::database_context::DatabaseContext,
     astrometry: &crate::astrometry::AstrometryContext,
@@ -2157,19 +2195,43 @@ fn plan_color_calibration(
         .iter()
         .find(|source| source.role == reference_role(kind));
     let reference_image_id = reference.and_then(|source| source.reference_image_id);
-    let solution = reference_image_id
-        .and_then(|image_id| {
-            ctx.astrometry_evidence
-                .evidence_for_source(&ctx.cache_dir_path, image_id, None)
-        })
-        .and_then(|analysis| analysis.solution);
-    color_calibration::plan(
+    let mosaic = super::canvas_astrometry::is_mosaic(
+        reference.and_then(|source| source.sky_orientation.as_ref()),
+    );
+    let canvas_path = reference
+        .map(|source| super::fits_path(&ctx.stack_root, &source.job_id, source.group_index));
+    let solution = if mosaic {
+        canvas_path
+            .as_deref()
+            .and_then(super::canvas_astrometry::solution)
+    } else {
+        reference_image_id
+            .and_then(|image_id| {
+                ctx.astrometry_evidence
+                    .evidence_for_source(&ctx.cache_dir_path, image_id, None)
+            })
+            .and_then(|analysis| analysis.solution)
+    };
+    let mut plan = color_calibration::plan(
         settings,
         reference_image_id,
         reference.and_then(|source| source.sky_orientation.as_ref()),
         solution.as_ref(),
         astrometry.gaia_photometry_signature(),
-    )
+    );
+    if mosaic && solution.is_none() && plan.basis.catalog.is_some() {
+        plan.basis.mosaic_retry_fingerprint = Some(astrometry.solve_retry_fingerprint());
+    }
+    if mosaic
+        && let Err(skip) = &mut plan.placement
+        && skip.reason == color_calibration::StackColorCalibrationSkipReason::NoMosaicSolve
+        && let Some(error) = canvas_path
+            .as_deref()
+            .and_then(super::canvas_astrometry::failure)
+    {
+        skip.detail = format!("The mosaic canvas could not be plate solved: {error}");
+    }
+    plan
 }
 
 /// Everything a color job's pixels depend on: its cache identity.
@@ -2956,12 +3018,12 @@ fn prepare_color_at_turn(
         fail("The database was removed while the composition waited".into());
         return None;
     };
-    let prepared = match prepare_color_job(
+    let prepared = match prepare_color_job_with_mosaic_solve(
+        state,
         &ctx,
-        &state.astrometry,
-        &state.workers,
         spec.project_id,
         &spec.request,
+        super::job_priority(state.stack_previews.is_automatic(&spec.job_id)),
     ) {
         Ok(prepared) => prepared,
         Err(error) => {
@@ -8075,6 +8137,181 @@ mod tests {
     }
 
     #[test]
+    fn mosaic_rgb_lrgb_and_rgb_star_plans_use_the_artifact_solve() {
+        let root = tempfile::tempdir().unwrap();
+        let mut ctx = crate::server::database_context::DatabaseContext::new_for_test(
+            rusqlite::Connection::open_in_memory().unwrap(),
+        );
+        ctx.use_storage_for_test(root.path());
+        let gaia_path = root.path().join("stars-gaia-photometry.bin");
+        seiza::catalog::PhotometryCatalogBuilder::new(90, 2016.0, "test")
+            .write_to(&gaia_path)
+            .unwrap();
+        let astrometry =
+            crate::astrometry::AstrometryContext::new(crate::astrometry::AstrometryConfig {
+                gaia_photometry: Some(gaia_path.display().to_string()),
+                ..Default::default()
+            });
+        let job = "a".repeat(64);
+        let path = super::super::fits_path(root.path(), &job, 0);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let image = LinearImage::new(1000, 800, 1, vec![100.0; 800_000]).unwrap();
+        write_processed_image_fits_f32(&path, &image, &[], &[]).unwrap();
+        for (kind, role) in [
+            (StackColorKind::Rgb, StackColorRole::Red),
+            (StackColorKind::Lrgb, StackColorRole::Luminance),
+            (StackColorKind::Narrowband, StackColorRole::Ha),
+        ] {
+            let mut source = channel(role, "reference", &job, false);
+            source.sky_orientation = Some(StackSkyOrientation::source_frame(
+                1000,
+                800,
+                "mosaic canvas",
+            ));
+            let before = plan_color_calibration(
+                &ctx,
+                &astrometry,
+                kind,
+                &[source.clone()],
+                StackColorCalibration::default(),
+            );
+            if super::super::canvas_astrometry::solution(&path).is_none() {
+                assert_eq!(
+                    before.placement.unwrap_err().reason,
+                    color_calibration::StackColorCalibrationSkipReason::NoMosaicSolve
+                );
+                super::super::canvas_astrometry::tests::save_pixel_solution(&path);
+            }
+            let plan = plan_color_calibration(
+                &ctx,
+                &astrometry,
+                kind,
+                &[source],
+                StackColorCalibration::default(),
+            );
+            assert!(plan.placement.is_ok());
+            assert!(plan.basis.mosaic_canvas);
+            assert!(plan.basis.solution_fingerprint.is_some());
+            assert_eq!(plan.basis.reference_image_id, None);
+        }
+    }
+
+    #[test]
+    #[ignore = "requires PSF_GUARD_MOSAIC_CHANNEL_DIR and PSF_GUARD_TEST_GAIA_PHOTOMETRY"]
+    fn real_mosaic_rgb_is_calibrated_from_its_canvas_solve() {
+        let directory = PathBuf::from(std::env::var("PSF_GUARD_MOSAIC_CHANNEL_DIR").unwrap());
+        let gaia = std::env::var("PSF_GUARD_TEST_GAIA_PHOTOMETRY").unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let mut state = AppState::new_for_test(rusqlite::Connection::open_in_memory().unwrap());
+        state.astrometry = Arc::new(crate::astrometry::AstrometryContext::new(
+            crate::astrometry::AstrometryConfig {
+                gaia_photometry: Some(gaia),
+                ..Default::default()
+            },
+        ));
+        let state = Arc::new(state);
+        let mut ctx = crate::server::database_context::DatabaseContext::new_for_test(
+            rusqlite::Connection::open_in_memory().unwrap(),
+        );
+        ctx.use_storage_for_test(root.path());
+        let mut groups = Vec::new();
+        for (index, filter) in ["R", "G", "B"].into_iter().enumerate() {
+            let mut source = source_group(filter, index);
+            source.group.target_id = -21;
+            source.group.reference_image_id = None;
+            let path = super::super::fits_path(root.path(), &source.job_id, source.group.index);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::copy(directory.join(filter).join("mosaic.fits"), &path).unwrap();
+            let headers =
+                crate::astrometry_headers::FitsAstrometryHeaders::from_path(&path).unwrap();
+            source.group.sky_orientation = Some(StackSkyOrientation::source_frame(
+                headers.width.unwrap().value as usize,
+                headers.height.unwrap().value as usize,
+                "mosaic canvas",
+            ));
+            groups.push(source);
+        }
+        let latest = LatestStackPreviews {
+            schema_version: 1,
+            database_id: "test".into(),
+            project_id: 21,
+            updated_unix_seconds: 1,
+            groups,
+        };
+        let targets = collect_sources(root.path(), &latest);
+        let mut processing = defaults();
+        processing.color_calibration = Some(StackColorCalibration::default());
+        let request = StackColorRequest {
+            target_id: -21,
+            kind: StackColorKind::Rgb,
+            processing: Some(processing.clone()),
+            combination: None,
+            automatic_palette: false,
+            stars: None,
+            palette: None,
+            force: false,
+            crop: StackColorCrop::None,
+            input_sources: BTreeMap::new(),
+        };
+        let sources = select_sources(&targets[&-21], &request).unwrap();
+        let reference = sources
+            .iter()
+            .find(|source| source.role == StackColorRole::Red)
+            .unwrap();
+        let path = super::super::fits_path(root.path(), &reference.job_id, reference.group_index);
+        super::super::canvas_astrometry::ensure_in_job(
+            &state,
+            &path,
+            crate::concurrency::Priority::Interactive,
+        )
+        .unwrap();
+        let plan = plan_color_calibration(
+            &ctx,
+            &state.astrometry,
+            StackColorKind::Rgb,
+            &sources,
+            StackColorCalibration::default(),
+        );
+        assert!(plan.placement.is_ok(), "{:?}", plan.placement);
+        let mut job = running_color_job(&"b".repeat(64), StackJobState::Running);
+        job.database_id = "test".into();
+        job.target_id = -21;
+        job.project_id = 21;
+        job.kind = StackColorKind::Rgb;
+        job.palette = None;
+        job.sources = sources;
+        job.processing = Some(processing);
+        job.color_calibration_basis = Some(plan.basis.clone());
+        assert!(state.stack_previews.insert_color(job.clone()));
+        compose_color(
+            &state,
+            &job,
+            &BTreeMap::new(),
+            root.path(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &ColorRcAstroPlan::default(),
+            Some(&plan),
+            None,
+            &ColorStop {
+                cancel: Stop::new(),
+            },
+        )
+        .unwrap();
+        let completed = state.stack_previews.get_color(&job.job_id).unwrap();
+        let Some(StackColorCalibrationOutcome::Calibrated(report)) =
+            completed.color_calibration.as_ref()
+        else {
+            panic!("{:?}", completed.color_calibration);
+        };
+        assert!(report.stars_used >= 20, "{report:?}");
+        println!(
+            "Real mosaic RGB: {} Gaia stars; gains {:?}",
+            report.stars_used, report.gains
+        );
+    }
+
+    #[test]
     fn a_composed_preview_follows_its_newest_channels_and_keeps_its_family() {
         use StackColorRole::{Blue, Green, Red};
         let mut previous = running_color_job("old-rgb", StackJobState::Completed);
@@ -9586,6 +9823,8 @@ mod tests {
 
     fn calibration_basis(size_bytes: u64) -> StackColorCalibrationBasis {
         StackColorCalibrationBasis {
+            mosaic_canvas: false,
+            mosaic_retry_fingerprint: None,
             reference_image_id: Some(41),
             solution_fingerprint: Some("solve".into()),
             catalog: Some(crate::astrometry::AstrometryCatalogFileSignature {
