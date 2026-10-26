@@ -219,27 +219,27 @@ and registers no plugins.
 - **Desktop app.** `src/desktop_worker.rs` has the commands behind
   **Settings › Workers › Worker on this computer**. They read and save settings,
   start the tray process, and pause, resume and stop it through the control port.
-- **Windows service** (`commands/worker/service.rs`). The app installs per
-  user, in a folder its user can change, so the service never runs the
-  app's files: a user-writable binary or settings file run by a service is
-  a way past UAC. `worker-service install` copies the running binary to
-  `%ProgramFiles%\PSF Guard Worker\psf-guard-worker.exe` and the settings,
-  with `work_dir` set to the service's `tasks` folder, to
-  `%ProgramData%\PSF Guard Worker\worker.json`. `icacls` limits that folder
-  to SYSTEM, Administrators and the service's virtual account,
-  `NT SERVICE\PSFGuardWorker`, under which the service runs. Running
-  install again stops the service, updates the copies and its
-  configuration, and starts it. The service starts automatically, delayed;
-  stop and preshutdown quit the worker, which leaves the server, while the
-  service reports a stop pending with a rising checkpoint every five
-  seconds, for up to 60 seconds of preshutdown. A failed run logs its
-  reason, then exits with a service-specific code, and the failure actions
-  start it again after 30 seconds. `worker-service uninstall` stops it,
-  deletes the service registration, copied executable, settings, task files
-  and logs. The desktop app disables **Start worker** while the service is
-  running or in another state that is not stopped. It shows a running
-  service separately from a service that has not stopped; it does not
-  report a connection to the processing server from the Windows service state.
+- **Windows service** (`commands/worker/service.rs`). Service startup uses
+  copies that unprivileged processes cannot modify. `worker-service install`
+  copies the executable to `%ProgramFiles%\PSF Guard Worker\psf-guard-worker.exe`
+  and settings to `%ProgramData%\PSF Guard Worker\worker.json`. It sets
+  `work_dir` to the service's own `tasks` folder. The service runs as the
+  virtual account `NT SERVICE\PSFGuardWorker`.
+  `icacls` restricts the data folder to SYSTEM, Administrators and that
+  account. Settings and task files inherit the folder's permissions;
+  reinstalling repairs permissions left by earlier installs.
+  Running install again stops the service, updates its copies and
+  configuration, and restarts it. Installation and removal wait for the
+  stopped service's process to exit before replacing or deleting its
+  executable. Startup is automatic and delayed. During preshutdown, Windows
+  allows up to 60 seconds for the worker to disconnect; the service reports
+  `StopPending` with an increasing checkpoint every five seconds.
+  A failed run logs its reason and exits with a service-specific code;
+  Windows restarts it after 30 seconds. `worker-service uninstall` stops
+  and removes the service, then deletes its executable, settings, task files
+  and logs. The desktop app disables **Start worker** until the service
+  stops. A Windows service state does not prove a connection to the
+  processing server, so the UI reports it separately.
 - **Start worker at login** (`commands/worker/login.rs`): a LaunchAgent with
   `RunAtLoad` on macOS, and a value under
   `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` on Windows. Both

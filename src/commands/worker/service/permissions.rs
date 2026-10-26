@@ -22,7 +22,7 @@ pub(super) fn lock_down(folder: &Path, account: &str) -> Result<()> {
         .context("restricting the worker service data folder with icacls")?;
     anyhow::ensure!(
         locked.success(),
-        "icacls could not limit {} to administrators and the service ({locked})",
+        "Could not set permissions on {} to allow only SYSTEM, Administrators and the PSF Guard Worker service account ({locked})",
         folder.display()
     );
 
@@ -36,7 +36,7 @@ pub(super) fn lock_down(folder: &Path, account: &str) -> Result<()> {
         .context("restoring worker service file inheritance with icacls")?;
     anyhow::ensure!(
         inherited.success(),
-        "icacls could not restore permissions inside {} ({inherited})",
+        "Could not restore file permissions in {} ({inherited}). Run worker-service install from PowerShell opened as administrator.",
         folder.display()
     );
     Ok(())
