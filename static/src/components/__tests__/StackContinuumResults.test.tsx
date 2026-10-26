@@ -19,10 +19,15 @@ it('loads stellar diagnostics on demand and preserves signed artifact links', as
     ] } } });
   }));
   mount({ role: 'ha', references: ['red'], status: 'manual', detail: 'Explicit weights', clipping_maps: false,
-    plan: { coefficients: [0.2], referenceFluxRatios: [1], origin: 'manual' }, report_url: '/report', residual_fits_url: '/signed.fits' });
+    plan: { coefficients: [0.2], referenceFluxRatios: [1], origin: 'manual' }, report_url: '/report', residual_fits_url: '/signed.fits',
+    flux_fits_url: '/flux.fits', flux_unit: 'erg/s/cm²', flux_report_url: '/flux-report' });
   expect(fetched).not.toHaveBeenCalled();
   await userEvent.click(screen.getByText(/Hα · Manual/));
-  expect(screen.getByRole('link', { name: 'Signed residual FITS' })).toHaveAttribute('href', '/signed.fits');
+  expect(screen.getByRole('link', { name: 'Download signed Hα residual FITS' })).toHaveAttribute('href', '/signed.fits');
+  const flux = screen.getByRole('link', { name: 'Download calibrated Hα line flux FITS (erg/s/cm²)' });
+  expect(flux).toHaveAttribute('href', '/flux.fits');
+  expect(flux).toHaveAttribute('download');
+  expect(screen.getByRole('link', { name: 'Response and uncertainty report' })).toHaveAttribute('href', '/flux-report');
   await userEvent.click(screen.getByRole('button', { name: 'Inspect stellar residuals' }));
   const chart = await screen.findByRole('img', { name: /fractional stellar residual versus log flux/ });
   expect(chart.querySelectorAll('circle')).toHaveLength(2);

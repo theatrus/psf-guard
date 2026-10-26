@@ -2,7 +2,7 @@ import { expect, test, type APIRequestContext, type Locator, type Page } from '@
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
-import type { StackCalibrationMasters } from '../src/api/types';
+import type { StackCalibrationMasters, StackColorJob } from '../src/api/types';
 import { registerFixtureDb, resetDatabases, waitForCacheReady, openSettings } from './helpers';
 import { jobRow, stubJobs } from './jobRows';
 
@@ -620,6 +620,75 @@ test('retains RC-Astro color steps in saved setups on desktop and mobile', async
   expect(await mobileTools.evaluate((element) => element.scrollWidth <= element.clientWidth + 1))
     .toBe(true);
   await mobileTools.screenshot({ path: testInfo.outputPath('rc-astro-color-mobile.png') });
+});
+
+test('processing FITS downloads are explicit and fit desktop and phone panels', async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  seedSyntheticColorStacks(dbId, 2);
+  // Render real cached stacks, with deterministic processing-result metadata:
+  // this layout check needs no licensed RC-Astro tool on the test server.
+  await page.route('**/projects/2/stack-previews/color**', async (route) => {
+    if (route.request().method() !== 'GET') return route.continue();
+    const response = await route.fetch();
+    const body = await response.json();
+    const addResults = (job: StackColorJob) => {
+      if (job.state !== 'completed') return;
+      const fits = `/api/db/${dbId}/stack-previews/color/${job.job_id}/fits?v=${job.artifact_revision}`;
+      job.resolved_color_rc_astro = { cli_version: '2.6.6', steps: [], has_stars: false, fits_url: fits };
+      job.resolved_input_rc_astro = { red: {
+        cli_version: '2.6.6', steps: [], has_stars: true, fits_url: fits, stars_fits_url: fits,
+      } };
+    };
+    if (Array.isArray(body.data?.jobs)) body.data.jobs.forEach(addResults);
+    else if (body.data?.job_id) addResults(body.data);
+    await route.fulfill({ response, json: body });
+  });
+  await page.setViewportSize({ width: 1440, height: 1100 });
+  await page.goto(`/#/stacks?db=${encodeURIComponent(dbId)}&project=2`);
+  const card = page.locator('.stack-color-card[data-color-kind="rgb"]:not([data-color-combination])');
+  await card.getByRole('button', { name: 'Build RGB color preview' }).click();
+  await expect(card.locator('.stack-preview-progress')).toHaveAttribute('data-stack-color-state', 'completed', { timeout: 90_000 });
+  const processing = card.locator('.stack-color-processing');
+  await processing.locator(':scope > summary').click();
+  await openProcessingSteps(processing);
+  const red = processing.getByRole('region', { name: 'R input linear processing' });
+  const together = processing.getByRole('region', { name: 'RC-Astro on the color channels together' });
+  const download = together.getByRole('link', { name: 'Download processed color channels FITS' });
+  await expect(download).toBeVisible();
+  await expect(red.getByRole('link', { name: 'Download R input starless FITS' })).toBeVisible();
+  await expect(red.getByRole('link', { name: 'Download R input stars FITS' })).toBeVisible();
+  for (const [width, size] of [[1440, 'desktop'], [390, 'phone'], [320, 'narrow-phone']] as const) {
+    await page.setViewportSize({ width, height: 1100 });
+    for (const section of [red, together]) {
+      const links = section.locator('.stack-fits-download');
+      for (const link of await links.all()) {
+        await expect(link).toHaveAttribute('download', '');
+        expect(await link.evaluate((element) => {
+          const link = element.getBoundingClientRect();
+          const parent = element.parentElement!.getBoundingClientRect();
+          return element.scrollWidth <= element.clientWidth + 1 && link.left >= parent.left && link.right <= parent.right + 1;
+        })).toBe(true);
+        expect(await link.evaluate((element) => parseFloat(getComputedStyle(element).fontSize))).toBeLessThan(12);
+      }
+      expect(await section.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+    }
+    if (width === 320) {
+      expect(await download.locator('span').evaluate((element) =>
+        element.getBoundingClientRect().height > parseFloat(getComputedStyle(element).lineHeight) + 1
+      )).toBe(true);
+    }
+    await red.screenshot({ path: testInfo.outputPath(`fits-downloads-${size}.png`) });
+    await processing.getByRole('group', { name: 'Process linear color', exact: true })
+      .screenshot({ path: testInfo.outputPath(`color-fits-download-${size}.png`) });
+  }
+  await download.focus();
+  await page.keyboard.press('Tab');
+  await page.keyboard.press('Shift+Tab');
+  await expect(download).toBeFocused();
+  expect(await download.evaluate((element) => getComputedStyle(element).outlineStyle)).toBe('solid');
+  const saved = page.waitForEvent('download');
+  await page.keyboard.press('Enter');
+  expect((await saved).suggestedFilename()).toMatch(/\.fits$/i);
 });
 
 test('runs RC-Astro on the color channels together', async ({ page }, testInfo) => {
