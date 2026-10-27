@@ -78,9 +78,11 @@ for (const width of [1280, 390]) {
     await page.screenshot({ path: testInfo.outputPath(`quality-settings-${width}.png`), animations: 'disabled' });
     await selectSettingsSection(page, 'calibration');
     await expect(page.getByRole('region', { name: 'Calibrated copies', exact: true })).toBeVisible();
+    await expect(page.getByRole('group', { name: 'Matching', exact: true })).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath(`pairing-settings-${width}.png`), animations: 'disabled' });
     await selectSettingsSection(page, 'astrobin');
     await expect(page.getByRole('region', { name: 'C925 filter map' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'AstroBin', exact: true })).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath(`filter-settings-${width}.png`), animations: 'disabled' });
     await page.getByRole('button', { name: 'Close settings' }).click();
     await expect(page).toHaveURL(/db=c925/);

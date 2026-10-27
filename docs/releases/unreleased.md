@@ -22,7 +22,7 @@
   **Presets**. Sync consistently calls its local and remote stores databases.
 - Quality analysis is under **Review → Grading & display**; calibrated-copy
   pairing is under **Processing → Calibration**. Both offer shared defaults
-  and database overrides. Existing choices remain overrides; new databases
+  and database overrides. Your configured databases keep their choices as overrides; newly added databases
   inherit shared defaults. AstroBin filter maps are beside shared AstroBin
   defaults under **Exports & integrations → AstroBin**.
 

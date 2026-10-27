@@ -2139,11 +2139,6 @@ export default function TauriSettings({
             )}
           </div>}
 
-            {/* With no databases yet the welcome banner carries these same two
-                actions, so rendering them here too would just duplicate them. */}
-
-
-
           {managementAllowed && showAddForm && !editingId && renderDatabaseForm(null)}
           </div>
           )}

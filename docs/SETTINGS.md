@@ -82,8 +82,8 @@ manual quality-analysis actions. Grading and scoring appear before quality
 analysis; display preferences follow it.
 
 Open **Processing → Calibration → Calibrated copies** for **Pair calibrated
-and registered copies with their lights**. Shared defaults apply to new
-databases. Existing databases keep their previous choices as explicit
+and registered copies with their lights**. Shared defaults apply to newly added
+databases. Already configured databases keep their previous choices as explicit
 overrides, including choices that matched the old built-in defaults.
 
 Each page has **Shared defaults** and **Database overrides**. Expand a

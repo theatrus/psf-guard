@@ -100,7 +100,7 @@ export default function AstroBinSettings() {
       <div className="astrobin-settings-add">
         <input
           type="text"
-          placeholder="Filter name (as in the catalog)"
+          placeholder="Filter name (as in the database)"
           aria-label="Filter name"
           value={newName}
           onChange={(event) => setNewName(event.target.value)}

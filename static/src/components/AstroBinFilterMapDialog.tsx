@@ -153,7 +153,7 @@ export default function AstroBinFilterMapDialog({ dbId, dbName, canManage, onClo
       }
     >
       <p className="astrobin-filter-map-intro">
-        Link each filter name in this catalog to its filter in AstroBin&apos;s{' '}
+        Link each filter name in this database to its filter in AstroBin&apos;s{' '}
         <a href={ASTROBIN_FILTERS_URL} target="_blank" rel="noreferrer">
           equipment database
         </a>

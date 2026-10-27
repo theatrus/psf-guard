@@ -62,6 +62,7 @@ test('rig setup shares the opened database context with files and sync', async (
     await expect(page.locator('.scheduler-sync-workspace').getByLabel('Transfer destination')).toHaveValue(slugs[1]);
     await selectSettingsSection(page, 'sites');
     await expect(page.getByRole('region', { name: 'Sites', exact: true })).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Sites', exact: true }).getByText(/Loading sites/)).toBeHidden();
     await page.screenshot({ path: testInfo.outputPath('shared-sites-phone.png'), animations: 'disabled' });
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.screenshot({ path: testInfo.outputPath('shared-sites-desktop.png'), animations: 'disabled' });
