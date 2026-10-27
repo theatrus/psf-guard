@@ -14,7 +14,9 @@ APIs. No live database or paired acquisition client is involved.
 
 The gallery includes the overview, database files, Sync, New / import,
 quality analysis, calibrated-copy defaults, a saved database override,
-AstroBin filter maps, rig setup and shared Sites.
+AstroBin filter maps, rig setup and shared Sites. Automatic import is shown
+under **Database & files → Edit paths and import**. Those sample form edits
+are discarded by the test, so no import schedule is saved.
 
 Desktop captures use Chromium at 1280 × 900 CSS pixels, except Rig setup and
 Sites at 1440 × 1000. Phone captures use WebKit at 390 × 844 CSS pixels,

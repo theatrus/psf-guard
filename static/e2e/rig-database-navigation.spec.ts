@@ -146,6 +146,14 @@ test('shared pairing defaults respect explicit database values and reset to inhe
   expect(policies.databases.find((entry: { id: string }) => entry.id === 'ultracat').effective.pair_calibrated_copies).toBe(false);
   await page.locator('.tauri-settings .modal-body').evaluate(element => { element.scrollTop = 0; });
   await page.screenshot({ path: testInfo.outputPath('pairing-override-desktop.png'), animations: 'disabled' });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await own.evaluate(element => {
+    const item = element.closest('.calibration-rig-item')!;
+    const scroller = element.closest('.modal-body')!;
+    scroller.scrollTop += item.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+  });
+  expect(await own.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath('pairing-override-phone.png'), animations: 'disabled' });
   await override.click();
   await own.getByRole('button', { name: 'Save database' }).click();
   await expect(pairing.getByRole('button', { name: /^C925.*Uses global settings$/ })).toBeVisible();
