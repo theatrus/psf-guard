@@ -1,0 +1,145 @@
+{
+  "date": "2026-10-27",
+  "source_commit": "9f9722765a2f7bd5ef15176effc287449a4bbf39",
+  "source_note": "Frontend implementation at this commit; screenshot documentation is committed separately.",
+  "frontend_assets": {
+    "index-nLOW_eZv.js": "2f52e9ab8fb4254acec558b01e09fe6b15b3755b776b5da31d6d9b52b8476a6d",
+    "index-vOWmIgZn.css": "1cae3f0d144988c457f09aaca721304408c0e2b578275d9c5a22ad4d77e67467"
+  },
+  "backend": {
+    "version": "0.12.3",
+    "kind": "Existing debug executable serving this worktree static/dist; Rust behavior is unchanged by this PR.",
+    "sha256": "1aabfccde5d6ba7d4d9285effc5bc855f5f067dba9d49def6ac7c2ca5b1a77a6"
+  },
+  "environment": "macOS, Playwright, dark theme, isolated temporary registries and SQLite fixtures. No live catalogs. Viewport captures; no cropping, resizing or image edits.",
+  "captures": [
+    {
+      "file": "rig-databases-desktop.png",
+      "browser": "chromium",
+      "viewport_css": [
+        1280,
+        900
+      ],
+      "pixels": [
+        1280,
+        900
+      ],
+      "state": "Parent list with C925 and Ultra Cat; no database open. Planning status is stubbed off for this regression fixture.",
+      "sha256": "7885641001cc52ba92acf2f9de323e12fbfae2b43f27a47f14cfbed0308ef65b",
+      "test": "static/e2e/rig-database-navigation.spec.ts",
+      "captured_at": "2026-10-26T23:59:37.978970-07:00"
+    },
+    {
+      "file": "rig-databases-phone.png",
+      "browser": "webkit",
+      "viewport_css": [
+        390,
+        844
+      ],
+      "pixels": [
+        780,
+        1688
+      ],
+      "state": "Parent list with C925 and Ultra Cat; no database open. Planning status is stubbed off for this regression fixture.",
+      "sha256": "17fc8f34f23485c8098b18a758281f340506179b408021ef4c3632e61c087763",
+      "test": "static/e2e/rig-database-navigation.spec.ts",
+      "captured_at": "2026-10-26T23:59:42.115976-07:00"
+    },
+    {
+      "file": "database-files-desktop.png",
+      "browser": "chromium",
+      "viewport_css": [
+        1280,
+        900
+      ],
+      "pixels": [
+        1280,
+        900
+      ],
+      "state": "Ultra Cat opened on Database & files; editor collapsed; import, quality and calibration controls visible. Calibration summary finished loading. Planning status is stubbed off for this regression fixture.",
+      "sha256": "70318adc09a4a299c64e56f6783b233105f0a15f2d02ed848be8ca69805ffde9",
+      "test": "static/e2e/rig-database-navigation.spec.ts",
+      "captured_at": "2026-10-27T00:00:48.956919-07:00"
+    },
+    {
+      "file": "database-files-phone.png",
+      "browser": "webkit",
+      "viewport_css": [
+        390,
+        844
+      ],
+      "pixels": [
+        780,
+        1688
+      ],
+      "state": "Ultra Cat opened on Database & files; editor collapsed; import, quality and calibration controls visible. Planning status is stubbed off for this regression fixture.",
+      "sha256": "4e8ff8aaf14504f76337f229d563011f5df9e1e9a14157dd042dc30e59801f5b",
+      "test": "static/e2e/rig-database-navigation.spec.ts",
+      "captured_at": "2026-10-26T23:59:42.427922-07:00"
+    },
+    {
+      "file": "rig-sync-desktop.png",
+      "browser": "chromium",
+      "viewport_css": [
+        1280,
+        900
+      ],
+      "pixels": [
+        1280,
+        900
+      ],
+      "state": "Ultra Cat opened on Sync; Send planning selected; Ultra Cat is the fixed source and C925 is the other endpoint. Preview has not run. Planning status is stubbed off for this regression fixture.",
+      "sha256": "b14ad01c38318497e190abc9c2db96126819101f2a1fca60acf688b24dd0efde",
+      "test": "static/e2e/rig-database-navigation.spec.ts",
+      "captured_at": "2026-10-26T23:59:38.397369-07:00"
+    },
+    {
+      "file": "rig-sync-phone.png",
+      "browser": "webkit",
+      "viewport_css": [
+        390,
+        844
+      ],
+      "pixels": [
+        780,
+        1688
+      ],
+      "state": "Ultra Cat opened on Sync; Send planning selected; Ultra Cat is the fixed source and C925 is the other endpoint. Preview has not run. Planning status is stubbed off for this regression fixture.",
+      "sha256": "3536c54d64c387aca9e25632766a5fbb1c9cd84eadf86667d47a2bb7873ec59f",
+      "test": "static/e2e/rig-database-navigation.spec.ts",
+      "captured_at": "2026-10-26T23:59:42.568807-07:00"
+    },
+    {
+      "file": "rig-setup-desktop.png",
+      "browser": "chromium",
+      "viewport_css": [
+        1440,
+        1000
+      ],
+      "pixels": [
+        1440,
+        1000
+      ],
+      "state": "C925 selected on Rig setup, Optics. Saved real profile: 6248 \u00d7 4176 sensor, 3.76 \u00b5m pixels, 1645 mm focal length, 235 mm aperture, camera angle 0\u00b0. Disposable catalogs bound through preview/apply; no equipment paired.",
+      "sha256": "0da3cbeedd18c3d99c459db7dfa74d13d5e84634da28c25b4c19db9a37f5db6e",
+      "test": "static/e2e-director/settings-context.spec.ts",
+      "captured_at": "2026-10-26T23:59:44.515010-07:00"
+    },
+    {
+      "file": "rig-setup-phone.png",
+      "browser": "chromium",
+      "viewport_css": [
+        390,
+        844
+      ],
+      "pixels": [
+        390,
+        844
+      ],
+      "state": "C925 selected on Rig setup, Optics. Saved real profile: 6248 \u00d7 4176 sensor, 3.76 \u00b5m pixels, 1645 mm focal length, 235 mm aperture, camera angle 0\u00b0. Disposable catalogs bound through preview/apply; no equipment paired.",
+      "sha256": "656f879473231d88bcbee485e4db45df675286a9d1d8667de0287e148600d42d",
+      "test": "static/e2e-director/settings-context.spec.ts",
+      "captured_at": "2026-10-26T23:59:44.550908-07:00"
+    }
+  ]
+}

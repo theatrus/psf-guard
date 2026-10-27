@@ -40,6 +40,7 @@ for (const width of [1280, 390]) {
     await page.getByRole('button', { name: 'Open Ultra Cat', exact: true }).click();
     await expect(page.getByRole('region', { name: 'Ultra Cat', exact: true })).toBeVisible();
     await expect(page.getByRole('region', { name: 'C925', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Open Calibration', exact: true })).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath(`database-files-${width}.png`), animations: 'disabled' });
     await page.getByRole('navigation', { name: 'Settings for Ultra Cat' }).getByRole('button', { name: 'Sync', exact: true }).click();
     const transfer = page.locator('.scheduler-sync-workspace');

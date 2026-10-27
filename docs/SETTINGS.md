@@ -69,6 +69,8 @@ Use the buttons below the parent list to create a catalog or import a Target
 Scheduler database. After creation or import, PSF Guard opens the returned
 catalog. Plugin onboarding opens its pairing controls under **Sync**.
 
+![Choose a rig database from the Settings parent list](images/rig-database-settings/rig-databases-desktop.png)
+
 ## Keep edits when navigating
 
 When you choose another Settings page or return to the database list,
