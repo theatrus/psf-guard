@@ -26,6 +26,7 @@
   inherit shared defaults. AstroBin filter maps are beside shared AstroBin
   defaults under **Exports & integrations → AstroBin**.
 - Database overrides use the same controls as Calibration rig overrides.
+  Inherited values align with their override buttons.
   Each database has an **Import** page with directly editable scan rules,
   automatic-import settings and previews. Creating a database from image
   folders offers the same exclusion patterns and scan filters before the first import.

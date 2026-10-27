@@ -96,6 +96,20 @@ for (const width of [1280, 390]) {
     const quality = page.getByRole('region', { name: 'Quality analysis', exact: true });
     await expect(quality.getByRole('region', { name: 'Global settings' })).toBeVisible();
     await quality.getByRole('button', { name: /^C925.*Uses global settings$/ }).click();
+    for (const setting of await quality.getByRole('region', { name: 'C925 overrides', exact: true }).locator('.calibration-rule-setting').all()) {
+      const aligned = await setting.evaluate(element => {
+        const inherited = element.querySelector<HTMLElement>('.calibration-rule-inherited')!;
+        const button = element.querySelector('button')!;
+        const valueBounds = inherited.getBoundingClientRect();
+        const buttonBounds = button.getBoundingClientRect();
+        return {
+          marginBottom: getComputedStyle(inherited).marginBottom,
+          centerDifference: Math.abs(valueBounds.y + valueBounds.height / 2 - buttonBounds.y - buttonBounds.height / 2),
+        };
+      });
+      expect(aligned.marginBottom).toBe('0px');
+      expect(aligned.centerDifference).toBeLessThanOrEqual(1);
+    }
     await quality.evaluate(element => {
       const scroller = element.closest('.modal-body')!;
       scroller.scrollTop += element.getBoundingClientRect().top - scroller.getBoundingClientRect().top;

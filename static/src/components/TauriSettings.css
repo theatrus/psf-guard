@@ -2707,6 +2707,11 @@
   text-align: left;
 }
 
+/* Keep inherited values centered beside their override controls. */
+.tauri-settings .settings-setups .calibration-rule-inherited {
+  margin: 0;
+}
+
 @media (max-width: 640px) {
   .tauri-settings .settings-setups .calibration-matching-group .review-preference,
   .tauri-settings .settings-setups .wbpp-option,
