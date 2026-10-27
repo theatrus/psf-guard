@@ -102,7 +102,8 @@ test('pending uploads offer stacks and remain visible and controllable in backgr
   await settings.locator('.modal-body').evaluate(el => { el.scrollTop -= 200; });
   await page.screenshot({ path: testInfo.outputPath('exception-review-1440.png'), animations: 'disabled' });
   await files.getByRole('button', { name: 'Upload reviewed files' }).click(); await expect(files).toContainText('Uploading');
-  await settings.getByRole('button', { name: 'Done', exact: true }).click();
+  await settings.getByRole('button', { name: 'Close settings', exact: true }).click();
+  await expect(settings).toBeHidden();
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.getByRole('button', { name: /^Background jobs:/ }).click();
   const activity = page.getByRole('region', { name: 'Background jobs' }); await expect(activity).toContainText('Transfers');
