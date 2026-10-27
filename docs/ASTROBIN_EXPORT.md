@@ -84,7 +84,8 @@ address of that filter's page (for example `.../equipment/explorer/filter/4049/.
 
 A catalog's filter names are generic: "G" says nothing about which G, and
 two rigs' "G" are two filters. So each catalog keeps its own **filter
-map**, under **Settings → Databases → AstroBin filters**. An entry holds a
+map**: open the database under **Settings → Databases & rigs → Overview**,
+then choose **Database & files → AstroBin filters**. An entry holds a
 filter as the catalog spells it, the AstroBin id it stands for, what it is
 ("Antlia V-Pro G 36mm"), and, when the rig's filter changed, the first and
 last night the entry applies to. The dialog lists the filter names the

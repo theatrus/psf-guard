@@ -68,14 +68,14 @@ describe('CalibrationRigSettings', () => {
     ).toHaveTextContent('60 days · default');
   });
 
-  it('sends its note\'s Rigs link to Settings › Rigs', async () => {
+  it('sends its note\'s Rig setup link to Settings', async () => {
     server.use(http.get('/api/settings/calibration', () => HttpResponse.json(current([]))));
     const asked: OpenSettingsDetail[] = [];
     const listen = (event: Event) => asked.push((event as CustomEvent<OpenSettingsDetail>).detail);
     window.addEventListener(OPEN_SETTINGS_EVENT, listen);
     try {
       render(<CalibrationRigSettings />, { wrapper: wrapper() });
-      fireEvent.click(await screen.findByRole('button', { name: 'Rigs' }));
+      fireEvent.click(await screen.findByRole('button', { name: 'Rig setup' }));
       expect(asked).toEqual([{ intent: 'rigs' }]);
     } finally {
       window.removeEventListener(OPEN_SETTINGS_EVENT, listen);

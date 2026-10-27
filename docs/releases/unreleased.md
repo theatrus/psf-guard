@@ -16,6 +16,12 @@
 
 ## Changes
 
+- Open a database under **Settings → Databases & rigs → Overview**, then use
+  **Rig setup**, **Database & files**, or **Sync** for that database. The
+  breadcrumb returns to the list. Each form keeps its own Save control;
+  Settings asks before discarding edits. Sync uses the opened database as
+  its local endpoint and keeps transfer previews scoped to that database.
+
 - PSF Guard's zstd library is updated for memory-safety advisories in its
   stream and context handling. PSF Guard uses zstd to read and write
   compressed XISF files and saved stacking contexts, and to decompress HTTP

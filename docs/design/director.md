@@ -505,18 +505,18 @@ retryable. Do not silently rewrite a user's mappings or invent rigs at check-in.
 
 ### Rig and database normalization audit and plan
 
-Status: **Proposed.** This section describes follow-up work; it does not change
-runtime behavior or schemas. Audited against `835961cb` after the Settings
-navigation and header changes (#1009/#1010). The work below follows those
-changes in separate PRs.
+Status: **Navigation implemented; ownership follow-up proposed.** The source
+audit below records behavior at `835961cb` after #1009/#1010. Settings now
+uses a parent database list and separate **Rig setup**, **Database & files**
+and **Sync** pages for the opened registration. See [Settings navigation](../SETTINGS.md).
+The UI uses existing APIs and IDs. The joined identity view, name policy and
+binding repairs below remain follow-up work.
 
-The objective is one shared rig/catalog context across separate **Rigs**,
-**Databases**, and **Sync** editors, with clear ownership of each setting.
-Equipment configuration, file paths and transfer operations are different
-tasks; their common root does not require one combined editor or Save action.
-Preserve the operational model: activating a plan for a rig writes that rig's
-contribution into its image database. This work does not introduce several
-independently activatable rigs inside one catalog, or a separate user-maintained
+Equipment configuration, file paths and transfers are different tasks with a
+common catalog context. They keep separate forms, permissions and Save
+controls. Preserve the operational model: activating a plan for a rig writes
+that rig's contribution into its image database. This work does not introduce
+several independently activatable rigs inside one catalog, or a separate
 physical-equipment inventory.
 
 #### Correct the terminology before changing relationships
@@ -579,20 +579,24 @@ as well as Target Scheduler rows. Transferring those compatibility records does
 not make their UUIDs operational rig IDs. Catalog lineage and calibration
 compatibility remain separate contracts.
 
-#### Proposed Settings structure
+#### Settings navigation and context
 
-Keep **Databases & rigs** as the Settings group and keep **Databases**,
-**Rigs**, and **Sync** as separate destinations. They share a selected
-registration/catalog context and common identity/status information. This
-context resolves existing registration, catalog and rig IDs; it is not another
-persisted root entity or a new application-wide active-database mode.
+**Databases & rigs → Overview** lists registrations. Open a database, then
+choose **Rig setup**, **Database & files**, or **Sync** beneath its name.
+A breadcrumb returns to the parent list. There is no separate rig/catalog
+selector. These pages retain the selected registration slug and use their
+existing catalog and metadata APIs; there is no new persisted root entity
+or application-wide active-database mode.
 
-Show a shared rig/catalog selector in the page header for this Settings group.
-Keep its selection when moving between the three pages, and show the current
-name and role on every page. Reuse the same copy/unbound/conflict status rather than asking
-each editor to discover or default to a different first database. Unconfigured
-and Planning-disabled catalogs remain selectable for database and sync tasks.
-Preserve the outer project's/database's URL scope and scroll position on return.
+The parent list includes databases when Planning is off. Rig setup appears
+when Planning is available, and Sync requires an editor. Database-management
+controls keep their server gate. Missing selections show an unavailable state
+and a return action rather than falling back to another database. Navigation
+asks before discarding unsaved edits. The outer route keeps its URL scope.
+
+The UI preserves the current binding and copy behavior; it does not yet provide
+the joined identity/status view proposed below. That follow-up must resolve
+copy, unbound and conflicted states consistently across the editors.
 
 The context must retain the selected registration as well as any resolved
 catalog/rig UUIDs. Planning may resolve a copied registration to its canonical
@@ -602,11 +606,11 @@ not become a blanket restriction on permitted database/sync operations.
 
 | Page | Task and field ownership |
 |---|---|
-| **Rigs** | Equipment, current site/horizon, planning limits, setup provenance and reported status for the selected rig. Link to its database and sync settings. Calibration configurations represented in its images link to their existing override editor. |
-| **Databases** | Catalog location, image folders, import/scan options, exports, processed-output folder and catalog-management actions for the same root. Show connection summaries with links to Sync rather than another copy of its editable settings. |
+| **Rig setup** | Equipment, current site/horizon, planning limits, setup provenance and reported status for the selected rig. Link to its database and sync settings. Calibration configurations represented in its images link to their existing override editor. |
+| **Database & files** | Catalog location, image folders, import/scan options, exports, processed-output folder and catalog-management actions for the same root. Show connection summaries with links to Sync rather than another copy of its editable settings. |
 | **Sync** | Automatic TS connection settings, incoming Sync/remote-receiver configuration, staged previews and explicit transfers for that local catalog. Show peer/client links and their capability differences; shared peer records and credentials remain shared. |
 
-Creating/importing a catalog remains a Databases task, including the source
+Creating/importing a catalog starts from the parent list, including the source
 information needed to establish its initial TS connection. After it succeeds,
 select the returned catalog context; subsequent connection edits belong in
 Sync. Do not make a new, unsaved catalog depend on a pre-existing Sync context.
@@ -615,12 +619,12 @@ Rig setup and sync must expose reported values and their provenance without
 silently replacing saved settings. Planning/acquisition enrollment remains a
 rig task; configuring how catalog rows and images move remains a sync task.
 Link related controls and explain the distinction instead of duplicating the
-same control in both pages. The first UI implementation must inventory these
-fields and define one edit destination for each.
+same control in both pages. The pages above define the current edit destinations. The joined identity
+view must preserve these destinations while clarifying binding and copy status.
 
 Sync requires these additional rules:
 
-- The shared selection supplies the **local catalog**, not an implicit source
+- The opened registration supplies the **local catalog**, not an implicit source
   or destination. A pull brings data into it; a planning or grade push sends
   data from it. A local-to-local transfer must show both selected catalogs and
   their roles. Opening Sync must not reverse the direction or start a transfer.
@@ -652,8 +656,7 @@ permission to edit every page.
 
 Keep `databases`, `rigs` and `sync` Settings intents as separate destinations;
 extend their context handoff so contextual links open the correct selected
-catalog without another selection. A generic Settings entry may restore its
-last still-valid selection, but must label it clearly. If that catalog is gone,
+catalog without another selection. A generic Settings entry opens the parent list. If that catalog is gone,
 show a selection state rather than silently applying a remembered edit or
 preview to another database. Calibration shortcuts still focus the exact
 configuration, and global defaults remain under **Processing → Calibration**.
@@ -661,7 +664,7 @@ Keep shared exposure and processing presets under **Presets**.
 
 #### Delivery order and acceptance gates
 
-**PR 1 — establish field ownership and the shared context model.**
+**Follow-up — establish field ownership and the shared identity view.**
 
 - Add focused regression fixtures for the findings above, using disposable
   catalogs and registries. Reuse the adoption, activation and identity tests.
@@ -685,38 +688,31 @@ without writes. Both old and new clients can resolve the same identities.
 A local catalog and its external TS/peer endpoints remain distinct. Name
 changes through either supported path have a defined, tested outcome.
 
-**PR 2 — connect the separate editors through that context.**
+**Follow-up — complete identity and setup status in the connected editors.**
 
-- Keep Rigs, Databases and Sync separate. Add the shared selection, identity
-  summaries and contextual links without changing stored schemas, matching
-  keys or activation destinations. Move each editable field to its agreed
-  page while preserving its current save operation and permissions.
+The parent list, breadcrumb, scoped task pages and per-form saves are now
+implemented. Transfer forms pin the local endpoint, keep previews scoped by
+registration, and discard their obsolete preview when returning to the list.
+The parent list retains the all-catalog staged-preview overview. Regression
+coverage lives with the Settings and sync controls and their browser specs.
+
+Still needed after the shared identity view and ownership policy:
+
 - Add explicit initialization through the existing reviewed binding paths;
   retain Library onboarding compatibility until the replacement works.
-  Clearly distinguish “not configured,” “Planning unavailable,” “read-only,”
-  “catalog copy,” and “mapping needs review.”
-- Preserve old shortcuts, scoped links, native directory pickers and per-form
-  saves. Keep Planning-only controls conditional without hiding Databases or
-  otherwise permitted Sync operations.
-- Carry the selected local catalog into both automatic-sync settings and
-  explicit-transfer forms. Show both transfer endpoints and direction. Keep
-  the all-catalog preview/job overview available with explicit row scope.
-- Use **calibration configuration** where the UI currently conflates those
-  records with operational rigs. Update accessible labels, tests and current
-  guides together; preserve API and stored field names.
+- Distinguish unbound, Planning unavailable, read-only, copied and conflicted
+  mappings using one shared read. A read must not create a binding.
+- Clarify calibration configuration terminology across the product while
+  preserving API fields, signatures, UUIDs and override scope.
+- Cover copy/canonical resolution and name changes across Settings, Library,
+  workspace and activation before changing their policies.
 
-Gate: desktop Chromium, WebKit and phone checks cover opening from Library,
-rig setup and a calibration report; unsaved edits; Planning off/loading;
-read-only accounts and database-management restrictions; and return navigation
-with the previous project/database scope and scroll position intact. Also test
-that Databases → Rigs → Sync retains root A, opening from root B selects B,
-removing A never silently retargets its preview, and switching roots/endpoints
-requires a new Preview. Review and apply a remote-created preview from the
-all-catalog overview while another root is selected; it must act on its own
-recorded catalog. Reuse the sync tests for first-TS defaults, reload recovery,
-stale responses, same-file refusal, GUID matching and grade conflict behavior.
+Gate: these additions preserve contextual links, native pickers, per-form
+permissions and saves. A copy's planning exclusion must not block permitted
+file or sync operations. Reuse adoption/activation tests for legacy IDs and
+sync tests for stale previews, same-file refusal, GUID matching and grades.
 
-**PR 3 — address only proven ownership or migration defects.**
+**Follow-up — address only proven ownership or migration defects.**
 
 - Resolve legacy binding conflicts through preview/apply, with explicit old
   and proposed identities, affected plans/clients and stale-review checks.

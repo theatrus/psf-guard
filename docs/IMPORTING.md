@@ -8,7 +8,7 @@ detection, photometry, or plate solving.
 
 ## Import from Target Scheduler
 
-Open **Settings → Databases → Import from Target Scheduler**. The **Start a
+Open **Settings → Databases & rigs → Overview → Import from Target Scheduler**. The **Start a
 catalog** choices keep image-folder import available alongside both TS options.
 Choose **Image folders** to build a catalog from FITS or XISF folders; switching
 choices keeps any folders you have already added. To connect TS, choose:
@@ -82,7 +82,7 @@ that progress. If the import fails, correct the source path and try again.
 
 The source remains connected for automatic sync, with grade writeback enabled.
 The source needs the GUID columns provided by TS schema v22 or later. Under
-**Target Scheduler sync** on the imported catalog, choose:
+**Sync → Target Scheduler sync** for the imported catalog, choose:
 
 - **Sync when the desktop app or server starts** to import captures on startup.
 - **Sync when new images or grades arrive** to check database changes. Changes
@@ -102,8 +102,9 @@ frame's grade, the job reports a conflict and leaves the TS grade unchanged.
 Local pending changes survive restarts and can be retried safely.
 
 For a reviewed merge, planning export or explicit grade overwrite, open
-**Settings → Databases & rigs → Sync**. Select the working catalog and its **Target Scheduler**
-connection, preview the changes, then apply the preview. The source file does
+**Settings → Databases & rigs → Overview**, open the working catalog, then
+choose **Sync**. Select its **Target Scheduler** connection as the other
+endpoint, preview the changes, then apply the preview. The source file does
 not need to be registered as a second catalog. If the source is unavailable,
 the working catalog remains usable and the sync job reports the problem.
 
@@ -121,7 +122,7 @@ edits, and refreshing a preview in Settings does not approve an activation.
 
 **PSF Guard is moving to its own catalogs.**
 
-For new Target Scheduler databases, choose **Settings → Databases → Import
+For new Target Scheduler databases, choose **Settings → Databases & rigs → Overview → Import
 from Target Scheduler** to import the database and set up sync.
 
 Your current Target Scheduler setup will keep working in 0.12. A later update
@@ -163,16 +164,15 @@ exists, because database management picks paths the server then reads and
 writes. Only an editor can use those routes. `--allow-anonymous-access` opens
 them to everyone instead. See [server authentication](AUTHENTICATION.md).
 
-Settings opens on **Databases** for catalogs and imports. The desktop sidebar
-groups related pages; on a phone, choose a page from **Settings section**.
-**Databases**, **Rigs** and **Sync** appear together under **Databases & rigs**.
-Install Seiza data packages under **Storage & backups → Reference catalogs**. Catalog installation needs an editor; **Sync** also needs an editor
-and appears once you have a catalog. Planning adds **Rigs** and **Exposure
-templates**. See [Settings navigation](SETTINGS.md) for the other pages.
+Settings opens on **Databases & rigs → Overview**. Open a database to use
+**Rig setup**, **Database & files**, or **Sync** for that database. The
+breadcrumb returns to the parent list. Planning enables **Rig setup** and
+**Presets → Exposure templates**. **Sync** requires an editor.
+Install Seiza data packages under **Storage & backups → Reference catalogs**;
+catalog installation also requires an editor. See [Settings navigation](SETTINGS.md).
 
-On a first run PSF Guard has none, so it opens Settings on the Databases page
-and offers both starting points. The overview's empty state offers the same
-two.
+On a first run PSF Guard opens the empty parent list and offers both import
+starting points. The Library's empty state offers the same choices.
 
 ![First run: grouped Settings navigation with both database starting points](images/settings-navigation-first-run.png)
 
@@ -364,8 +364,8 @@ remove projects created by an import; always preview it first.
 Image folders often hold more than lights: autofocus frames, plate-solve
 tests, flats, pier-camera timelapses, processing output. Scan rules leave
 those out of every import from a database's folders, so you do not have to
-move your files to suit PSF Guard. Set them under **Settings → Databases →
-Edit → Scan rules**:
+move your files to suit PSF Guard. Open the database under **Settings → Databases & rigs → Overview**, then
+choose **Database & files → Edit → Scan rules**:
 
 - **Exclude**: one pattern per line. A file or folder that matches is left
   out, and a folder that matches is never entered, so nothing below it is
@@ -427,8 +427,8 @@ The rules travel with the database entry in the registry as `scan_rules`.
 
 A database can scan its image directories on its own and import what is
 new, so a night's frames are in the catalog by the time you sit down.
-Turn it on per database under **Settings → Databases → Edit → Automatic
-import**:
+Open the database under **Settings → Databases & rigs → Overview**, then
+turn on **Database & files → Edit → Automatic import**:
 
 - **Run when the app or server opens this database**: once at start, and
   once when you first enable it.
@@ -632,8 +632,8 @@ management. Without it, a target with many unmeasured frames is scored on the
 capture software's star counts, not the scan's, until they are analyzed (see
 [quality screening](SCREENING.md)).
 
-These controls sit with each database on the **Databases** tab, with its
-options for new frames, star metadata and calibrated copies.
+Open a database from **Settings → Databases & rigs → Overview**, then choose
+**Database & files** for quality analysis, star metadata and calibrated copies.
 
 ![A database on the Databases page: Analyze Missing Quality, Rescan All Quality and the per-database options](settings-database-options.png)
 
@@ -668,8 +668,10 @@ header name grouped them poorly.
 
 ## Sync with the telescope database
 
-Add both the local and telescope databases in Settings, then open the **Sync**
-tab and use **Data Transfer**:
+When transferring between registered catalogs, add both databases. Open the
+local database from **Settings → Databases & rigs → Overview**, choose **Sync**,
+then use **Data Transfer**. The opened database receives a merge and sends
+planning or grades. Choose the other endpoint and check both roles before Preview:
 
 ![The Sync tab, with Data Transfer between a source and a destination catalog](data-transfer.png)
 

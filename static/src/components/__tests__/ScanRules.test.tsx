@@ -269,7 +269,7 @@ describe("Settings scan rules and Review", () => {
       autoimport?: AutoImportSettings;
     }> = [];
     serveCatalog(saved, []);
-    render(<TauriSettings isOpen onClose={() => undefined} />, {
+    render(<TauriSettings isOpen initialIntent="databases" initialDatabaseId="rig" onClose={() => undefined} />, {
       wrapper: createWrapper(),
     });
     fireEvent.click(
@@ -328,7 +328,7 @@ describe("Settings scan rules and Review", () => {
       },
     };
     serveCatalog([], [], preview);
-    render(<TauriSettings isOpen onClose={() => undefined} />, {
+    render(<TauriSettings isOpen initialIntent="databases" initialDatabaseId="rig" onClose={() => undefined} />, {
       wrapper: createWrapper(),
     });
     fireEvent.click(
@@ -358,7 +358,7 @@ describe("Settings scan rules and Review", () => {
   it("reviews held frames by previewing an import of their folders", async () => {
     const imports: Array<{ dry_run?: boolean; image_dirs?: string[] }> = [];
     serveCatalog([], imports);
-    render(<TauriSettings isOpen onClose={() => undefined} />, {
+    render(<TauriSettings isOpen initialIntent="databases" initialDatabaseId="rig" onClose={() => undefined} />, {
       wrapper: createWrapper(),
     });
     await waitFor(

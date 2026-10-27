@@ -74,7 +74,7 @@ test('settings groups its configuration pages', async ({ page }, testInfo) => {
   await page.getByRole('heading', { name: /Welcome to PSF Guard/i }).waitFor();
 
   const modal = page.locator('.tauri-settings');
-  await expect(modal.getByRole('tab', { name: 'Databases' })).toHaveAttribute(
+  await expect(modal.getByRole('tab', { name: 'Overview' })).toHaveAttribute(
     'aria-selected',
     'true'
   );
@@ -103,7 +103,7 @@ test('settings groups its configuration pages', async ({ page }, testInfo) => {
 
   // Home selects the first section, per the ARIA tabs pattern.
   await modal.getByRole('tab', { name: 'Reference catalogs' }).press('Home');
-  await expect(modal.getByRole('tab', { name: 'Databases' })).toHaveAttribute(
+  await expect(modal.getByRole('tab', { name: 'Overview' })).toHaveAttribute(
     'aria-selected',
     'true'
   );

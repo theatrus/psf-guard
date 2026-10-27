@@ -31,7 +31,7 @@ test('desktop groups related settings, moves GPU and presets, and keeps section 
   await expectCompactHeader(page);
   const nav = page.getByRole('tablist', { name: 'Settings sections' });
   await expect(nav).toHaveAttribute('aria-orientation', 'vertical');
-  await expect(page.getByRole('tab', { name: 'Rigs', exact: true })).toHaveAccessibleDescription('Databases & rigs');
+  await expect(page.getByRole('tab', { name: 'Overview', exact: true })).toHaveAccessibleDescription('Databases & rigs');
   await expect(page.getByRole('tab', { name: 'Exposure templates' })).toHaveAccessibleDescription('Presets');
   await expect(page.getByLabel('Settings section', { exact: true })).toBeHidden();
 
@@ -60,9 +60,9 @@ test('desktop groups related settings, moves GPU and presets, and keeps section 
   await expect(page.getByRole('region', { name: 'Gaia colors' })).toBeVisible();
   await expect(page.getByRole('region', { name: 'Gaia colors' })).toBeInViewport();
   await catalogs.press('Home');
-  await expect(page.getByRole('tab', { name: 'Databases', exact: true })).toBeFocused();
-  await page.getByRole('tab', { name: 'Databases', exact: true }).press('ArrowDown');
-  await expect(page.getByRole('tab', { name: 'Rigs', exact: true })).toBeFocused();
+  await expect(page.getByRole('tab', { name: 'Overview', exact: true })).toBeFocused();
+  await page.getByRole('tab', { name: 'Overview', exact: true }).press('ArrowDown');
+  await expect(page.getByRole('tab', { name: 'Processing setups', exact: true })).toBeFocused();
   await page.evaluate(() => window.dispatchEvent(new CustomEvent('psf-guard:open-settings', {
     detail: { intent: 'astrobin' },
   })));

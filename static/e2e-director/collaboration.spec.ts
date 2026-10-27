@@ -48,8 +48,8 @@ test('rig setup reviews remote work and saved contributions before importing or 
     await page.goto('/#/');
     await openSettings(page);
     const settings = page.locator('.tauri-settings');
-    await settings.getByRole('tab', { name: 'Rigs' }).click();
-    await settings.getByRole('button', { name: 'Setup Collaboration rig' }).click();
+    await settings.getByRole('tab', { name: 'Overview', exact: true }).click();
+    await settings.getByRole('button', { name: 'Open Collaboration rig' }).click();
     await settings.getByRole('tab', { name: 'Collaboration', exact: true }).click();
     const collaboration = settings.getByRole('region', { name: 'Collaboration', exact: true });
     await expect(collaboration.getByRole('button', { name: "Pull tonight's work" })).toBeEnabled();

@@ -67,7 +67,8 @@ plugin needs a direct Starfront connection. The independent
 provides the outer loop for Target Scheduler users without PSF Guard. Use one
 collaboration host for each remote agent to avoid duplicate assignments or reports.
 
-Open **Settings**, **Databases & rigs**, **Rigs**, then **Setup** for a rig. The selected rig's header
+Open **Settings → Databases & rigs → Overview**, open the rig database, then
+choose **Rig setup**. The selected rig's header
 stays above its setup. **Optics**, **Site**, **Limits and delivery**, and
 **Collaboration** use a section rail on desktop and a compact strip on narrow
 screens, separate from the smaller collaboration tabs. Changes stay in
@@ -452,7 +453,8 @@ that used to talk has gone quiet, and opens **Live on the Sky** from any
 view: each reporting rig drawn on the coverage map where it points now, a
 list of the rigs beside the map (choosing one turns the map to it), and the
 full Live table under the map. Rig setup and the exposure template library
-are under **Settings › Databases & rigs › Rigs** and **Settings → Presets → Exposure templates**; a
+are under **Rig setup** for a database under **Settings → Databases & rigs → Overview**
+and **Settings → Presets → Exposure templates**; a
 read-only viewer cannot open Settings, so Live on the Sky shows them both
 under the table, read only. Choosing a
 project in the Review picker from the Library, Sky or a workspace opens
@@ -498,12 +500,11 @@ in (with saved frames grading has not yet accepted), and reported status, and
 which activated plans it is assigned to, each a link to the workspace. The
 table refreshes every fifteen seconds.
 
-**Settings › Databases & rigs › Rigs** lists every registered database as a rig: whether
-planning is enabled, its field of view and pixel scale from the rig profile,
-whether the plugin has reported its camera, and the plugin's last live
-status. **Setup** expands the database's planning setup in place: enable
-planning, the rig profile, and the project links. **Library** opens its
-catalog.
+**Settings → Databases & rigs → Overview** lists registered databases. Open a
+database and choose **Rig setup** to see its field of view, pixel scale,
+camera-reporting state and plugin status, then edit its equipment, site or
+limits. **Library** opens its catalog. Use **Database & files** or **Sync**
+for the same database, or the breadcrumb to return to the list.
 
 The **workspace** for one plan has a summary at the top and four tabs. It
 opens on **Framing**, which places the target, unless the address picks
@@ -619,8 +620,8 @@ A project row without a GUID is skipped until it gets one. Target
 Scheduler added GUID columns in its schema 22 and meant to give every
 existing row one, but it only does so when a database stops at 22: one
 upgraded from 21 or earlier straight to 23 in a single start keeps empty
-GUIDs on every row older than the upgrade. Settings › Databases says so for
-such a database and offers **Fill in GUIDs**, which copies the file beside
+GUIDs on every row older than the upgrade. Open the database under **Settings → Databases & rigs → Overview**, then
+choose **Database & files**. The page explains missing GUIDs and offers **Fill in GUIDs**, which copies the file beside
 itself (`<file>.before-guid-fill-<seconds>`) and then gives each empty row
 in `project`, `target`, `exposureplan`, `exposuretemplate`,
 `acquiredimage` and `profilepreference` a new GUID, touching nothing else;
@@ -985,7 +986,8 @@ server folds both back to the sensor before offering them. Typed models:
 ## Sites and horizons
 
 A site holds a location (latitude, east-positive longitude and elevation) and
-a horizon. Add and edit sites under **Settings**, **Databases & rigs**, **Rigs**, **Sites**. Each
+a horizon. Open a database under **Settings → Databases & rigs → Overview**, then add
+or edit sites under **Rig setup → Sites**. Each
 rig picks its **Planning site** in its Setup card and takes the site's
 location and horizon. A rig's own values win: a location typed into its card,
 and a horizon pasted there or reported by the N.I.N.A. plugin. Leave the
@@ -1653,7 +1655,8 @@ Scheduler plugin can run them until Director acquisition arrives.
 ### Activate through a connected TS file
 
 When an imported catalog keeps its TS source connected, activation uses
-that connection saved under **Settings → Databases**. No separate Director
+that connection saved on the database’s **Sync** page under
+**Settings → Databases & rigs → Overview**. No separate Director
 destination is needed. The activation preview shows the TS file and counts of
 new and updated projects, targets, exposure templates, exposure plans and rule
 weights. This transfer includes only the project being activated and its

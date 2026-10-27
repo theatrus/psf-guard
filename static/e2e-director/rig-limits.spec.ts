@@ -32,8 +32,8 @@ test("a rig's Target Scheduler limits reach every project in its database on App
 
     await page.goto('/#/sky');
     await openSettings(page);
-    await page.getByRole('tab', { name: 'Rigs', exact: true }).click();
-    await page.getByRole('button', { name: 'Setup Limits rig', exact: true }).click();
+    await page.getByRole('tab', { name: 'Overview', exact: true }).click();
+    await page.getByRole('button', { name: 'Open Limits rig', exact: true }).click();
     await page.getByRole('tab', { name: 'Limits and delivery', exact: true }).click();
     const fields = page.getByRole('group', { name: 'Rig Target Scheduler limits' });
     const projects = page.getByRole('region', { name: 'Target Scheduler projects' });

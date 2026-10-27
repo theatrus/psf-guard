@@ -27,6 +27,7 @@ import { isTauriApp, tauriConfig } from './utils/tauri';
 import {
   OPEN_SETTINGS_EVENT,
   settingsFieldOf,
+  settingsDatabaseOf,
   settingsIntentOf,
   settingsRigOf,
   type SettingsIntent,
@@ -73,6 +74,8 @@ function AppContent({ zoom }: { zoom?: DesktopZoom }) {
   const [settingsIntent, setSettingsIntent] = useState<SettingsIntent | null>(
     null
   );
+  // Registration slug for a database-specific Settings page.
+  const [settingsDatabase, setSettingsDatabase] = useState<string | null>(null);
   // With the Calibration tab: the rig whose own settings to open.
   const [settingsRig, setSettingsRig] = useState<SettingsRig | null>(null);
   // With the Calibration tab: the setting to bring into view.
@@ -147,6 +150,7 @@ function AppContent({ zoom }: { zoom?: DesktopZoom }) {
       // Clear first so asking twice for the same form still lands on it.
       setSettingsIntent(null);
       setSettingsRig(settingsRigOf(event));
+      setSettingsDatabase(settingsDatabaseOf(event));
       setSettingsField(settingsFieldOf(event));
       queueMicrotask(() => setSettingsIntent(settingsIntentOf(event)));
       setShowSettings(true);
@@ -304,12 +308,14 @@ function AppContent({ zoom }: { zoom?: DesktopZoom }) {
         <TauriSettings
           isOpen={showSettings}
           initialIntent={settingsIntent}
+          initialDatabaseId={settingsDatabase}
           initialRig={settingsRig}
           initialField={settingsField}
           onClose={() => {
             setShowSettings(false);
             setSettingsIntent(null);
             setSettingsRig(null);
+            setSettingsDatabase(null);
             setSettingsField(null);
           }}
         />

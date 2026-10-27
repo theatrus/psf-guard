@@ -890,6 +890,10 @@
   gap: 10px;
 }
 
+.tauri-settings .scheduler-sync-endpoints:where([data-local-catalog]) {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .tauri-settings .scheduler-sync-endpoints label {
   display: grid;
   gap: 5px;
@@ -2981,4 +2985,89 @@
 .tauri-settings .worker-queue {
   margin: 0 0 12px;
   padding-left: 20px;
+}
+
+/* The catalog is chosen from its parent list; task pages keep that context. */
+.tauri-settings .settings-rig-databases {
+  display: grid;
+  gap: 0.75rem;
+  list-style: none;
+  margin: 1rem 0 0;
+  padding: 0;
+}
+
+.tauri-settings .settings-rig-database-open {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 1rem;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 6px;
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tauri-settings .settings-rig-database-open:hover {
+  background: var(--color-bg-hover);
+}
+
+.tauri-settings .settings-rig-database-open > span {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.tauri-settings .settings-rig-database-open small {
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.tauri-settings .settings-rig-database-open > svg {
+  flex-shrink: 0;
+}
+
+.tauri-settings .settings-rig-database-context {
+  display: grid;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.tauri-settings .settings-rig-database-breadcrumb,
+.tauri-settings .settings-rig-database-pages {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.tauri-settings .settings-rig-database-breadcrumb {
+  font-size: 0.9rem;
+}
+
+.tauri-settings .settings-rig-database-breadcrumb strong {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.tauri-settings .settings-rig-database-pages button {
+  padding: 0.4rem 0.75rem;
+  min-height: 2.1rem;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 6px;
+  background: var(--color-button-neutral-bg);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.tauri-settings .settings-rig-database-pages button[aria-current='page'] {
+  background: var(--state-on-bg);
+  border-color: var(--state-on-border);
+  color: var(--state-on-fg);
 }

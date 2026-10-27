@@ -56,18 +56,16 @@ test('every database project is a plan, shared GUIDs make one plan across rigs, 
     expect(mappings[0].items.find((item: { source_project_guid: string }) => item.source_project_guid === shared).project_id).toBe(mappings[1].items[0].project_id);
     expect(mappings[0].rig.id).not.toBe(mappings[1].rig.id);
 
-    // Rig setup lives under Settings › Rigs; Setup expands the rig profile in place.
+    // Open a database from the parent list to view its rig setup.
     await openSettings(page);
     const settings = page.locator('.tauri-settings');
-    await settings.getByRole('tab', { name: 'Rigs' }).click();
-    await settings.getByRole('button', { name: 'Setup C925 data' }).click();
+    await settings.getByRole('tab', { name: 'Overview', exact: true }).click();
+    await settings.getByRole('button', { name: 'Open C925 data' }).click();
     await expect(settings.getByRole('region', { name: 'Rig profile' })).toBeVisible();
     await expect(settings.getByRole('button', { name: 'Save rig profile' })).toBeVisible();
     const activeRig = settings.locator('.director-rig.is-open');
     await expect(activeRig).toHaveCount(1);
     await expect(activeRig.getByRole('heading', { name: 'C925 data', exact: true })).toBeVisible();
-    const setupButton = activeRig.getByRole('button', { name: 'Setup C925 data' });
-    expect(await setupButton.getAttribute('aria-controls')).toBe(await activeRig.locator(':scope > div[id]').getAttribute('id'));
     // A section rail distinguishes rig setup from Settings and collaboration tabs.
     for (const width of [1440, 900, 390, 320]) {
       await page.setViewportSize({ width, height: 1000 });
@@ -84,10 +82,11 @@ test('every database project is a plan, shared GUIDs make one plan across rigs, 
       await page.screenshot({ path: testInfo.outputPath(`rig-setup-hierarchy-${width}.png`) });
     }
     await page.setViewportSize({ width: 1440, height: 1000 });
-    await settings.getByRole('button', { name: 'Setup Redcat data' }).click();
+    await settings.getByRole('button', { name: 'Databases & rigs', exact: true }).click();
+    await settings.getByRole('button', { name: 'Open Redcat data' }).click();
     await expect(settings.locator('.director-rig.is-open')).toHaveCount(1);
     await expect(settings.locator('.director-rig.is-open').getByRole('heading', { name: 'Redcat data', exact: true })).toBeVisible();
-    await expect(settings.getByRole('button', { name: 'Setup C925 data' })).toHaveAttribute('aria-expanded', 'false');
+    await expect(settings.getByRole('navigation', { name: 'Settings for Redcat data' })).toBeVisible();
     await settings.getByRole('button', { name: 'Close settings' }).click();
     await expect(page.getByRole('dialog')).toHaveCount(0);
 

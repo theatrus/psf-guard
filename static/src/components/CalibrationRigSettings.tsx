@@ -92,11 +92,11 @@ export default function CalibrationRigSettings({ focusRig = null, focusField = n
       <h3>Rigs</h3>
       <p className="review-preferences-note">
         Rig overrides replace the global settings. All other fields use the global values. A rig here is a telescope, camera,
-        frame size and binning; each catalog's{' '}
+        frame size and binning. Open{' '}
         <button type="button" className="link-button" onClick={() => openSettings('rigs')}>
-          Rigs
+          Rig setup
         </button>{' '}
-        entry links to the ones it records.
+        for a database to find the configurations recorded in its images.
       </p>
       {rigs.length === 0 ? (
         <p className="calibration-group-note">

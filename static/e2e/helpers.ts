@@ -1,5 +1,5 @@
 import type { APIRequestContext, Locator, Page } from '@playwright/test';
-import { settingsPage, type SettingsSection } from '../src/components/settingsSections';
+import { isRigDatabasePage, settingsPage, type SettingsSection } from '../src/components/settingsSections';
 import * as os from 'os';
 import * as path from 'path';
 
@@ -101,7 +101,18 @@ export async function openSettings(page: Page): Promise<void> {
 }
 
 /** Settings uses a vertical sidebar on desktop and one grouped selector on phones. */
-export async function selectSettingsSection(surface: Page | Locator, section: SettingsSection): Promise<void> {
+export async function selectSettingsSection(surface: Page | Locator, section: SettingsSection, databaseName?: string): Promise<void> {
+  if (isRigDatabasePage(section)) {
+    const context = surface.getByRole('navigation', { name: /^Settings for / });
+    if (databaseName || !(await context.isVisible())) {
+      await selectSettingsSection(surface, 'rig-databases');
+      const record = surface.getByRole('region', { name: 'Rig databases', exact: true }).getByRole('button', { name: databaseName ? `Open ${databaseName}` : /^Open /, exact: !!databaseName });
+      await record.first().click();
+    }
+    await surface.getByRole('navigation', { name: /^Settings for / })
+      .getByRole('button', { name: settingsPage(section).label, exact: true }).click();
+    return;
+  }
   const chooser = surface.getByLabel('Settings section', { exact: true });
   if (await chooser.isVisible()) await chooser.selectOption(section);
   else await surface.getByRole('tab', { name: settingsPage(section).label, exact: true }).click();

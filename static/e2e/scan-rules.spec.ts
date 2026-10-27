@@ -128,7 +128,7 @@ test('auto-import keeps autofocus frames out and holds a new target for Review',
 
   await page.goto('/');
   const alreadyOpen = await page
-    .getByRole('tab', { name: 'Databases' })
+    .getByRole('tab', { name: 'Overview' })
     .waitFor({ state: 'visible', timeout: 2000 })
     .then(
       () => true,

@@ -3,7 +3,7 @@ import { mkdtempSync, realpathSync } from 'node:fs';
 import Database from 'better-sqlite3';
 import { applyRealSchema } from './fixtures/sync';
 import * as path from 'node:path';
-import { fixtureDbPath, fixtureImageDir, resetDatabases, tmpBase } from './helpers';
+import { fixtureDbPath, fixtureImageDir, resetDatabases, tmpBase, selectSettingsSection } from './helpers';
 
 // New file imports require the stable GUIDs supplied by current TS. The
 // shared legacy fixture still exercises direct-open compatibility elsewhere.
@@ -118,6 +118,7 @@ test('import a Target Scheduler database via settings → see it in the Overview
   expect(catalog.database_path).not.toBe(source);
   expect(catalog.ts_sync.source_path).toBe(source);
   expect(catalog.ts_sync.writeback).toBe(true);
+  await selectSettingsSection(page, 'sync');
   await expect(page.getByRole('checkbox', { name: 'Sync when new images or grades arrive' })).toBeChecked();
 
   // Close the modal and verify the Overview reflects both projects from the
@@ -208,9 +209,11 @@ test('add then remove a database', async ({ page }) => {
   page.on('dialog', (dialog) => dialog.accept());
   await row.getByRole('button', { name: 'Remove' }).click();
 
+  await expect(page.getByText(/Removed/i)).toBeVisible();
+  await page.getByRole('button', { name: 'Databases & rigs', exact: true }).click();
+
   // After removing the only DB, the registry is empty again and the welcome
   // banner returns with both starting points on offer.
-  await expect(page.getByText(/Removed/i)).toBeVisible();
   await expect(
     page.getByRole('heading', { name: /Welcome to PSF Guard/i })
   ).toBeVisible();

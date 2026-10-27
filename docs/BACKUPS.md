@@ -212,7 +212,8 @@ catalog N.I.N.A. is using. To restore:
    them.
 
 To move to a new machine, restore the same way and then fix catalog and
-image folder paths in Settings › Databases if they differ.
+image folder paths if they differ: open the database under **Settings →
+Databases & rigs → Overview**, then choose **Database & files → Edit**.
 
 ## Engineering notes
 

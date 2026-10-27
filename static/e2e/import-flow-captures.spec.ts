@@ -84,6 +84,7 @@ test('capture the owned catalog import and sync flow', async ({ page, request, b
   await form.getByRole('checkbox', { name: 'Use a custom database path (advanced)' }).uncheck();
   await form.getByRole('button', { name: 'Import from Target Scheduler', exact: true }).click();
   await expect(modal.getByText('Target Scheduler import complete. Automatic sync and grade writeback are enabled.')).toBeVisible();
+  await selectSettingsSection(modal, 'sync');
   const settings = modal.getByRole('region', { name: 'Target Scheduler sync', exact: true });
   await expect(settings.getByRole('checkbox', { name: 'Sync when new images or grades arrive' })).toBeChecked();
   await capture('import-automatic-sync.png', settings, 'Import complete. Own catalog created. Defaults saved: startup on, change detection on, interval 5 minutes, automatic grade writeback on.');

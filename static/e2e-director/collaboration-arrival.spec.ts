@@ -134,8 +134,8 @@ test(`${executor}: arriving M31 files review measured data and replay a queued s
     await page.goto('/#/');
     await openSettings(page);
     const settings = page.locator('.tauri-settings');
-    await settings.getByRole('tab', { name: 'Rigs' }).click();
-    await settings.getByRole('button', { name: 'Setup Arrival rig' }).click();
+    await settings.getByRole('tab', { name: 'Overview', exact: true }).click();
+    await settings.getByRole('button', { name: 'Open Arrival rig' }).click();
     await settings.getByRole('tab', { name: 'Collaboration', exact: true }).click();
     const collaboration = settings.getByRole('region', { name: 'Collaboration', exact: true });
     await collaboration.getByRole('tab', { name: 'Reports' }).click();
@@ -245,8 +245,8 @@ test(`${executor}: arriving M31 files review measured data and replay a queued s
     await reopened.goto('/#/sky');
     await openSettings(reopened);
     const reopenedSettings = reopened.locator('.tauri-settings');
-    await reopenedSettings.getByRole('tab', { name: 'Rigs' }).click();
-    await reopenedSettings.getByRole('button', { name: 'Setup Arrival rig' }).click();
+    await reopenedSettings.getByRole('tab', { name: 'Overview', exact: true }).click();
+    await reopenedSettings.getByRole('button', { name: 'Open Arrival rig' }).click();
     await reopenedSettings.getByRole('tab', { name: 'Collaboration', exact: true }).click();
     await reopenedSettings.getByRole('tab', { name: 'Automation' }).click();
     const rejection = reopenedSettings.getByRole('region', { name: 'Rejected contributions' });

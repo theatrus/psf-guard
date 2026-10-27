@@ -1,11 +1,12 @@
 import type { ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { server } from '../../test/msw-server';
 import SchedulerSyncControls from '../SchedulerSyncControls';
+import { discardCatalogSyncPreview } from '../../utils/syncPreview';
 
 const local = {
   id: 'local',
@@ -36,6 +37,40 @@ describe('SchedulerSyncControls', () => {
     sessionStorage.clear();
   });
 
+  it('pins the opened catalog to the local side for every operation', async () => {
+    const user = userEvent.setup();
+    render(<SchedulerSyncControls databases={[telescope, local]} localDatabaseId="local" />, { wrapper: wrapper() });
+    expect(screen.getByLabelText('Transfer destination')).toHaveValue('local');
+    expect(screen.getByLabelText('Transfer destination')).toBeDisabled();
+    expect(screen.getByLabelText('Transfer source')).toHaveValue('scope');
+    expect(screen.queryByRole('button', { name: 'Swap source and destination' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Send planning' }));
+    expect(screen.getByLabelText('Transfer source')).toHaveValue('local');
+    expect(screen.getByLabelText('Transfer source')).toBeDisabled();
+    expect(screen.getByLabelText('Transfer destination')).toHaveValue('scope');
+    expect(screen.getByLabelText('Transfer destination')).toBeEnabled();
+    await user.click(screen.getByRole('button', { name: 'Send reviewed grades' }));
+    expect(screen.getByLabelText('Transfer source')).toHaveValue('local');
+  });
+
+  it('leaves another catalog’s saved preview alone when opening or leaving this catalog', async () => {
+    const reference = JSON.stringify({ localDbId: 'scope', previewId: 'foreign' });
+    sessionStorage.setItem('psf-guard.scheduler-sync-preview', reference);
+    sessionStorage.setItem('psf-guard.scheduler-sync-preview:scope', reference);
+    const fetchPreview = vi.fn();
+    server.use(http.get('/api/databases/scope/sync/previews/foreign', () => {
+      fetchPreview();
+      return HttpResponse.json({ success: false });
+    }));
+    render(<SchedulerSyncControls databases={[telescope, local]} localDatabaseId="local" />, { wrapper: wrapper() });
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(fetchPreview).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'Apply this preview' })).not.toBeInTheDocument();
+    discardCatalogSyncPreview('local');
+    expect(sessionStorage.getItem('psf-guard.scheduler-sync-preview:scope')).toBe(reference);
+    expect(sessionStorage.getItem('psf-guard.scheduler-sync-preview')).toBe(reference);
+  });
+
   it('defaults a TS connection to its own catalog when another catalog appears first', () => {
     render(<SchedulerSyncControls databases={[telescope, { ...local, ts_sync: { source_path: '/TS.sqlite', writeback: true, on_open: true, on_change: true, interval_minutes: 5 } }]} />, { wrapper: wrapper() });
     const selects = screen.getAllByRole('combobox');
@@ -60,7 +95,7 @@ describe('SchedulerSyncControls', () => {
     expect(requests[1]).toMatchObject({ peer_db_id: 'ts:local', kind: 'push_grades' });
   });
 
-  it('restores a durable preview after the Settings UI reloads', async () => {
+  it('restores a durable preview, then discards it if an endpoint disappears', async () => {
     const result = {
       kind: 'push_planning' as const,
       dry_run: true,
@@ -84,7 +119,12 @@ describe('SchedulerSyncControls', () => {
       'psf-guard.scheduler-sync-preview',
       JSON.stringify({ localDbId: 'local', previewId: 'restored-preview' })
     );
+    const discarded: string[] = [];
     server.use(
+      http.delete('/api/databases/local/sync/previews/restored-preview', ({ request }) => {
+        discarded.push(new URL(request.url).pathname);
+        return HttpResponse.json({ success: true, data: true });
+      }),
       http.get(
         '/api/databases/local/sync/previews/restored-preview',
         () => HttpResponse.json({
@@ -101,7 +141,7 @@ describe('SchedulerSyncControls', () => {
       )
     );
 
-    render(<SchedulerSyncControls databases={[local, telescope]} />, {
+    const { rerender } = render(<SchedulerSyncControls databases={[local, telescope]} />, {
       wrapper: wrapper(),
     });
 
@@ -111,6 +151,10 @@ describe('SchedulerSyncControls', () => {
       .toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Send planning' }))
       .toHaveAttribute('aria-pressed', 'true');
+    rerender(<SchedulerSyncControls databases={[local]} />);
+    await waitFor(() => expect(discarded).toEqual(['/api/databases/local/sync/previews/restored-preview']));
+    expect(screen.queryByRole('button', { name: 'Apply this preview' })).not.toBeInTheDocument();
+    expect(sessionStorage.getItem('psf-guard.scheduler-sync-preview')).toBeNull();
   });
 
   it('previews before applying a planning-only push', async () => {

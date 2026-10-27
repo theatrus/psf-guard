@@ -83,7 +83,7 @@ scope.
 
 1. [Install the desktop app](#desktop-app-windows--macos--linux), or
    [set up a server](#docker-linux-servers--nas).
-2. Open **Settings → Databases → New Database from Images**.
+2. Open **Settings → Databases & rigs → Overview → New Database from Images**.
 3. Add your image folders and choose **Create & Import**. In a browser, use
    paths on the server.
 4. Choose a project in the **Library**, then open **Images** or **Sequence**.
@@ -108,10 +108,11 @@ calibration frames also work without Target Scheduler.
 1. In N.I.N.A., open **Options → General → Plugin Repositories** and add
    `https://nina-plugins.psf-guard.com/`. Install **PSF Guard Sync** from
    **Plugins → Available**, then restart N.I.N.A.
-2. In PSF Guard, open **Settings → Databases → Import from Target Scheduler**,
+2. In PSF Guard, open **Settings → Databases & rigs → Overview → Import from Target Scheduler**,
    choose **Use the PSF Guard Sync plugin**, add a shared or empty image folder,
    and click **Create catalog for plugin**. No local TS file is required.
-   To use an existing catalog, click its **Edit** button instead.
+   To use an existing catalog, open it from **Overview**, choose **Sync**,
+   then click **Edit remote receive and pairing**.
 3. Choose **Generate pairing code** in the catalog's pairing controls. In the
    N.I.N.A. plugin, enter the server URL and code, then click **Pair** and
    **Test connection**.
@@ -130,7 +131,7 @@ not required for this workflow.
 <a id="existing-database"></a>
 ### Import a Target Scheduler database
 
-Open **Settings → Databases → Import from Target Scheduler**. Choose **Use the
+Open **Settings → Databases & rigs → Overview → Import from Target Scheduler**. Choose **Use the
 PSF Guard Sync plugin** for a network connection, or **Import a local TS file**
 to select the SQLite file, add its image folders, and click **Import from Target
 Scheduler**. On Windows, the default source is
@@ -142,7 +143,8 @@ writes local grade changes back to TS.
 It runs when the app or server starts, when files change, and every five minutes
 by default. Change these options under the imported catalog in Settings.
 Conflicting TS grades remain unchanged and are reported for review. Planning
-transfers still require Preview and Apply in **Settings → Databases & rigs → Sync**. Director
+transfers still require Preview and Apply. Open the catalog under
+**Settings → Databases & rigs → Overview**, then choose **Sync**. Director
 activation sends reviewed planning through the saved TS connection; failed
 TS deliveries stay pending for retry. To import a standalone copy, turn off
 **Keep the source connected for Target Scheduler sync**. **Catalog storage**
@@ -151,7 +153,7 @@ also offers a custom destination path. See
 
 **PSF Guard is moving to its own catalogs.**
 
-For new Target Scheduler databases, choose **Settings → Databases → Import
+For new Target Scheduler databases, choose **Settings → Databases & rigs → Overview → Import
 from Target Scheduler** to import the database and set up sync.
 
 Your current Target Scheduler setup will keep working in 0.12. A later update
@@ -483,7 +485,8 @@ coverage check identifies a band or panel that no rig covers.
 Choose templates from the rig's Target Scheduler database or the shared
 **Settings → Presets → Exposure templates** library. Templates keep filter, gain,
 offset, binning, and readout settings together. Set site and rig details under
-**Settings → Databases & rigs → Rigs**. In the workspace, **Rigs** shows scheduling limits and
+**Settings → Databases & rigs → Overview**: open the database, then choose
+**Rig setup**. In the workspace, **Rigs** shows scheduling limits and
 where each inherited value comes from; **Priority and defaults** sets project
 order and defaults. Limits include altitude, horizon, meridian window,
 filter switching, and dithering. Exposure templates can also set Moon rules.
@@ -849,8 +852,8 @@ download. See [stack processing](docs/STACKING_PREVIEWS.md#reversible-view-proce
 
 ## 🗂️ Managing rejected files
 
-To remove rejected frames from a catalog, open **Settings → Databases →
-Purge Rejects**. Preview the selection before applying it. PSF Guard moves
+To remove rejected frames from a catalog, open the database under **Settings → Databases & rigs → Overview**, then
+choose **Database & files → Purge Rejects**. Preview the selection before applying it. PSF Guard moves
 files to `.psf-guard-trash` and saves the records needed to restore them.
 **Restore** recovers a removal batch while its files remain in the trash;
 **Empty trash** deletes files after their retention period.
@@ -896,8 +899,10 @@ servers. No sync is needed when both tools open the same database.
 
 ### Transfer between database files
 
-Open **Settings → Databases & rigs → Sync**, choose the source and destination, then preview a
-merge, planning update, or grade transfer before **Apply**. The preview
+Open the local database under **Settings → Databases & rigs → Overview**,
+then choose **Sync**. The opened database receives a merge and sends planning
+or grades. Choose the other endpoint, check **Source** and **Destination**,
+then preview the transfer before **Apply**. The preview
 survives a page reload and refuses to apply if the destination changed.
 Pending grades are excluded from the UI grade push by default.
 
@@ -924,9 +929,11 @@ also support `--target` and `--status`.
 
 ### Transfer between PSF Guard servers
 
-Under **Settings → Databases & rigs → Sync → Remote PSF Guard**, add the peer URL and its
-manual API key, test the connection, then preview and apply a transfer.
-In the receiving catalog's editor, generate a **Remote API key** and enable
+Open the local database under **Settings → Databases & rigs → Overview**,
+then choose **Sync → Remote PSF Guard**. Add the peer URL and its manual API
+key, test the connection, then preview and apply a transfer.
+In the receiving catalog's **Sync** page, click **Edit remote receive and pairing**,
+generate a **Remote API key** and enable
 **Accept remote scheduler sync**. Enable
 **Accept remote image uploads** separately if the client will send files.
 
@@ -966,7 +973,8 @@ previews, uploads, and identity checks, and the
 <a id="collaboration"></a>
 ## Collaboration and live rigs (early beta)
 
-Under **Settings → Databases & rigs → Rigs → Setup → Collaboration**, connect a Starfront server,
+Open the database under **Settings → Databases & rigs → Overview**, then
+choose **Rig setup → Collaboration** to connect a Starfront server,
 browse compatible projects, and review assigned work before importing a draft.
 A collaboration assignment becomes an ordinary plan that you can inspect and
 activate. Joining a project does not start capture.
@@ -1090,7 +1098,7 @@ separate from the server TOML:
 | Linux | `~/.config/psf-guard/config.json` |
 
 `psf-guard server <db> <dirs...>` **registers** that database on first run and
-reuses it afterwards. Manage the list in **Settings → Databases** or through
+reuses it afterwards. Manage the list in **Settings → Databases & rigs → Overview** or through
 `/api/databases`; a standalone server needs `--allow-database-management`
 for those controls. Pass `--registry /tmp/scratch.json` to use a separate
 registry for testing.

@@ -20,6 +20,8 @@ import { useAccess } from '../auth/access';
 import type { SettingsIntent, SettingsRig } from '../utils/settingsIntent';
 import ReviewPreferences from './ReviewPreferences';
 import DirectorRigs from './director/DirectorRigs';
+import { RigDatabaseList, RigDatabaseNavigation } from './RigDatabaseNavigation';
+import UnsavedMark from './UnsavedMark';
 import { Database as DatabaseIcon, Download, Pencil, Plus, Sparkles, Trash2 } from 'lucide-react';
 import TemplateLibrary from './director/TemplateLibrary';
 import './director/DirectorPage.css';
@@ -55,6 +57,7 @@ import AutoImportSummary from './AutoImportSummary';
 import ScanRulesFields from './ScanRulesFields';
 import RemotePeerSync from './RemotePeerSync';
 import SchedulerSyncControls from './SchedulerSyncControls';
+import { discardCatalogSyncPreview as discardSavedCatalogSyncPreview } from '../utils/syncPreview';
 import RemoteSyncPreviews from './RemoteSyncPreviews';
 import SeizaCatalogControls from './SeizaCatalogControls';
 import ProcessingSetupsManager from './ProcessingSetupsManager';
@@ -69,7 +72,7 @@ import PathField from './PathField';
 import { describeUnsaved, UnsavedScopeContext, useUnsavedLabels } from '../hooks/useUnsavedChanges';
 
 import SettingsNavigation from './SettingsNavigation';
-import { isSettingsSection, settingsGroups, settingsPage, type SettingsSection } from './settingsSections';
+import { isSettingsSection, isRigDatabasePage, settingsGroups, settingsPage, type SettingsSection } from './settingsSections';
 
 type SettingsTab = SettingsSection;
 
@@ -101,6 +104,7 @@ interface TauriSettingsProps {
    * image folders" instead of dropping them at the top of the modal.
    */
   initialIntent?: SettingsIntent | null;
+  initialDatabaseId?: string | null;
   /** With the `calibration` intent: the rig whose own settings to open. */
   initialRig?: SettingsRig | null;
   /** With the `calibration` intent: the setting to bring into view and
@@ -127,6 +131,7 @@ export default function TauriSettings({
   isOpen,
   onClose,
   initialIntent = null,
+  initialDatabaseId = null,
   initialRig = null,
   initialField = null,
 }: TauriSettingsProps) {
@@ -198,17 +203,19 @@ export default function TauriSettings({
   const [formRemoteUploadTokenCopyState, setFormRemoteUploadTokenCopyState] =
     useState<'idle' | 'copied' | 'failed'>('idle');
   const [showAddForm, setShowAddForm] = useState(false);
-  const [activeTab, setActiveTab] = useState<SettingsTab>(isTabIntent(initialIntent) ? initialIntent : 'databases');
+  const [activeTab, setActiveTab] = useState<SettingsTab>(isTabIntent(initialIntent) ? initialIntent : 'rig-databases');
+  const [selectedDatabaseId, setSelectedDatabaseId] = useState<string | null>(initialDatabaseId);
+  const [editOriginal, setEditOriginal] = useState<DbEntry | null>(null);
   const director = useDirectorStatus();
   // Closing Settings asks before discarding unsaved form edits.
   const unsaved = useUnsavedLabels();
   const unsavedScope = useRef(new Set<symbol>());
   const navigationUnsaved = useUnsavedLabels(unsavedScope.current);
   const [confirmClose, setConfirmClose] = useState(false);
-  const [pendingSection, setPendingSection] = useState<SettingsTab | null>(null);
+  const [pendingNavigation, setPendingNavigation] = useState<{ label: string; run: () => void } | null>(null);
   const pageBody = useRef<HTMLDivElement>(null);
   const requestClose = () => {
-    setPendingSection(null);
+    setPendingNavigation(null);
     if (unsaved.length > 0) setConfirmClose(true);
     else onClose();
   };
@@ -387,7 +394,9 @@ export default function TauriSettings({
   }, [isOpen, reload]);
 
   const resetForm = () => {
+    setPendingImageDir('');
     setEditingId(null);
+    setEditOriginal(null);
     setFormName('');
     setFormDbPath('');
     setFormImageDirs([]);
@@ -415,7 +424,9 @@ export default function TauriSettings({
   };
 
   const startEdit = (entry: DbEntry) => {
+    setPendingImageDir('');
     setEditingId(entry.id);
+    setEditOriginal(entry);
     // A pairing code is scoped to one database; never show it under another.
     setPairingCode(null);
     setPairingExpiresAt(null);
@@ -470,6 +481,7 @@ export default function TauriSettings({
 
   const startCreate = () => {
     setEditingId(null);
+    setEditOriginal(null);
     setFormName('');
     setFormDbPath('');
     setFormImageDirs([]);
@@ -494,6 +506,7 @@ export default function TauriSettings({
 
   const startAdd = async () => {
     setEditingId(null);
+    setEditOriginal(null);
     setFormName('');
     setFormImageDirs([]);
     setFormRemoteUploadEnabled(false);
@@ -526,15 +539,19 @@ export default function TauriSettings({
     }
   };
 
-  // Land on the form the caller asked for: at mount, and again when a panel
-  // inside the open modal (Settings › Rigs offers "Add database") asks for
-  // another one.
+  // Contextual callers supply a registration slug. Generic calls show the parent list.
   useEffect(() => {
-    if (initialIntent === 'create') { setActiveTab('databases'); startCreate(); }
-    if (initialIntent === 'add') { setActiveTab('databases'); void startAdd(); }
-    if (isTabIntent(initialIntent)) setActiveTab(initialIntent);
+    if (!initialIntent) return;
+    requestNavigation(isTabIntent(initialIntent) ? settingsPage(initialIntent).label : 'Add a database', () => {
+      resetForm();
+      if (selectedDatabaseId && selectedDatabaseId !== initialDatabaseId) discardCatalogSyncPreview(selectedDatabaseId);
+      setSelectedDatabaseId(initialDatabaseId);
+      if (initialIntent === 'create') { setActiveTab('rig-databases'); startCreate(); }
+      else if (initialIntent === 'add') { setActiveTab('rig-databases'); void startAdd(); }
+      else if (isTabIntent(initialIntent)) setActiveTab(initialIntent);
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialIntent]);
+  }, [initialIntent, initialDatabaseId]);
 
   // An image directory typed or picked, added with the Add button.
   const [pendingImageDir, setPendingImageDir] = useState('');
@@ -645,6 +662,8 @@ export default function TauriSettings({
         queryClient.invalidateQueries({ queryKey: ['db'] });
         setImportDbId(created.database.id);
         await reload();
+        setSelectedDatabaseId(created.database.id);
+        setActiveTab(pluginImport ? 'sync' : 'databases');
         if (pluginImport) {
           startEdit({ id: created.database.id, name: created.database.name,
             db_path: created.database.database_path, image_dirs: created.database.image_directories });
@@ -681,12 +700,13 @@ export default function TauriSettings({
       // mode, and updating live `AppState.databases` rather than waiting for
       // a server restart.
       if (editingId) {
-        if (formRemoteUploadEnabled && !formRemoteUploadDir) {
+        if (activeTab === 'sync' && formRemoteUploadEnabled && !formRemoteUploadDir) {
           setStatusMessage('Select an image directory for remote uploads');
           setIsApplying(false);
           return;
         }
         if (
+          activeTab === 'sync' &&
           formRemoteUploadEnabled &&
           formRemoteUploadPlacement === 'target_tree' &&
           formRemoteUploadLayoutChoice === 'preset' &&
@@ -697,6 +717,7 @@ export default function TauriSettings({
           return;
         }
         if (
+          activeTab === 'sync' &&
           formRemoteUploadToken.length > 0 &&
           formRemoteUploadToken.length < 24
         ) {
@@ -705,6 +726,7 @@ export default function TauriSettings({
           return;
         }
         if (
+          activeTab === 'sync' &&
           formRemoteUploadEnabled &&
           !formRemoteUploadTokenConfigured &&
           formRemoteUploadToken.length === 0
@@ -714,6 +736,7 @@ export default function TauriSettings({
           return;
         }
         if (
+          activeTab === 'sync' &&
           formRemoteSyncEnabled &&
           !formRemoteUploadTokenConfigured &&
           formRemoteUploadToken.length === 0
@@ -722,14 +745,7 @@ export default function TauriSettings({
           setIsApplying(false);
           return;
         }
-        await apiClient.updateDatabase(editingId, {
-          name: inferredName,
-          db_path: formDbPath.trim(),
-          image_dirs: formImageDirs,
-          export_dir: formExportDir.trim(),
-          process_dir: formProcessDir.trim(),
-          autoimport: formAutoImport,
-          scan_rules: formScanRules,
+        await apiClient.updateDatabase(editingId, activeTab === 'sync' ? {
           remote_image_upload: {
             enabled: formRemoteUploadEnabled,
             image_directory: formRemoteUploadDir || undefined,
@@ -758,6 +774,14 @@ export default function TauriSettings({
                 ? true
                 : undefined,
           },
+        } : {
+          name: inferredName,
+          db_path: formDbPath.trim(),
+          image_dirs: formImageDirs,
+          export_dir: formExportDir.trim(),
+          process_dir: formProcessDir.trim(),
+          autoimport: formAutoImport,
+          scan_rules: formScanRules,
         });
       } else {
         const job = await apiClient.importTsDatabase({
@@ -935,7 +959,11 @@ export default function TauriSettings({
         observedImports.current.add(key);
       } else if (observedImports.current.delete(key) && job.stage === 'complete' && job.catalog_id) {
         void reload();
-        if (showAddForm && !editingId && !createMode && tsImportMethod === 'file') resetForm();
+        if (showAddForm && !editingId && !createMode && tsImportMethod === 'file') {
+          setSelectedDatabaseId(job.catalog_id);
+          setActiveTab('databases');
+          resetForm();
+        }
         setStatusMessage(job.source_connected === false
           ? 'Catalog import complete. The source file is not connected for sync.'
           : 'Target Scheduler import complete. Automatic sync and grade writeback are enabled.');
@@ -950,7 +978,7 @@ export default function TauriSettings({
   // Installing catalogs and syncing take an editor; sync has nothing to
   // talk about until a catalog exists.
   const availableSections: SettingsSection[] = [
-    'databases',
+    'rig-databases', 'databases',
     ...(planningEnabled ? ['rigs', 'templates'] as const : []),
     ...(canEdit && hasDatabases ? ['sync'] as const : []),
     'setups', 'calibration', 'stacking', 'performance', 'gpu',
@@ -964,34 +992,79 @@ export default function TauriSettings({
     ...(access.status.authentication_required ? [] : ['agents'] as const),
   ];
   const navigationGroups = settingsGroups(availableSections);
-  const visibleTabs = navigationGroups.flatMap(group => group.pages);
-  // Derive rather than store: removing the last database takes the Sync tab
-  // away, and the selection has to fall back in the same render.
-  // A Planning tab asked for before Planning's status arrives waits for it
-  // rather than flashing Databases.
+  const selectedDatabase = databases.find(entry => entry.id === selectedDatabaseId);
   const waitingForPlanning = (activeTab === 'rigs' || activeTab === 'templates') && director.isPending;
-  const currentTab = visibleTabs.some((tab) => tab.id === activeTab) || waitingForPlanning
-    ? activeTab
-    : 'databases';
-
-  const currentGroup = navigationGroups.find(group => group.pages.some(page => page.id === currentTab));
+  const requested = availableSections.includes(activeTab) || waitingForPlanning ? activeTab
+    : selectedDatabaseId ? 'databases' : 'rig-databases';
+  const currentTab = isRigDatabasePage(requested) && !selectedDatabaseId ? 'rig-databases' : requested;
+  const navigationTab = isRigDatabasePage(currentTab) ? 'rig-databases' : currentTab;
+  const currentGroup = navigationGroups.find(group => group.pages.some(page => page.id === navigationTab));
   const currentPage = settingsPage(currentTab);
+  function discardCatalogSyncPreview(databaseId: string) {
+    void discardSavedCatalogSyncPreview(databaseId).then(() =>
+      queryClient.invalidateQueries({ queryKey: ['db', databaseId, 'sync-preview-list'] }));
+  }
+  function requestNavigation(label: string, run: () => void) {
+    if (isApplying) return;
+    if (navigationUnsaved.length > 0) {
+      setPendingNavigation({ label, run });
+      setConfirmClose(true);
+    } else run();
+  }
   const requestSection = (section: SettingsTab) => {
     if (section === currentTab) return;
-    if (navigationUnsaved.length > 0) {
-      setPendingSection(section);
-      setConfirmClose(true);
-    } else {
+    requestNavigation(settingsPage(section).label, () => {
+      resetForm();
       setActiveTab(section);
-    }
+      if (section === 'rig-databases') {
+        if (selectedDatabaseId) discardCatalogSyncPreview(selectedDatabaseId);
+        setSelectedDatabaseId(null);
+      }
+      setStatusMessage('');
+    });
+  };
+  const openDatabase = (entry: DbEntry) => requestNavigation(entry.name, () => {
+    resetForm();
+    if (selectedDatabaseId && selectedDatabaseId !== entry.id) discardCatalogSyncPreview(selectedDatabaseId);
+    setSelectedDatabaseId(entry.id);
+    const next = isRigDatabasePage(activeTab) && availableSections.includes(activeTab) ? activeTab
+      : planningEnabled ? 'rigs' : 'databases';
+    setActiveTab(next);
+    setStatusMessage('');
+  });
+  const openDatabasePage = (section: 'databases' | 'rigs' | 'sync') => {
+    if (section === currentTab) return;
+    requestNavigation(settingsPage(section).label, () => {
+      resetForm();
+      setActiveTab(section);
+      setStatusMessage('');
+    });
   };
   useLayoutEffect(() => {
     if (pageBody.current) pageBody.current.scrollTop = 0;
-  }, [currentTab]);
+  }, [currentTab, selectedDatabaseId]);
+
+  const fileValues = (entry: DbEntry) => [entry.name, entry.db_path, entry.image_dirs,
+    entry.export_dir ?? '', entry.process_dir ?? '',
+    { ...DEFAULT_AUTOIMPORT_SETTINGS, ...(entry.autoimport ?? {}) },
+    { ...DEFAULT_SCAN_RULES, ...(entry.scan_rules ?? {}) }];
+  const remoteValues = (entry: DbEntry) => [entry.remote_image_upload?.enabled ?? false,
+    entry.remote_image_upload?.sync_enabled ?? false,
+    entry.remote_image_upload?.image_dir ?? entry.image_dirs[0] ?? '',
+    entry.remote_image_upload?.placement ?? 'flat',
+    entry.remote_image_upload?.directory_template ?? DEFAULT_REMOTE_UPLOAD_DIRECTORY_TEMPLATE,
+    entry.remote_image_upload?.directory_template_source === 'catalog' ? 'catalog' : 'preset', '', false];
+  const editDirty = showAddForm && (editingId && editOriginal
+    ? (currentTab !== 'sync' && !!pendingImageDir) || JSON.stringify(currentTab === 'sync'
+      ? [formRemoteUploadEnabled, formRemoteSyncEnabled, formRemoteUploadDir, formRemoteUploadPlacement,
+        formRemoteUploadDirectoryTemplate, formRemoteUploadLayoutChoice, formRemoteUploadToken, formRemoteUploadRescanRequested]
+      : [formName, formDbPath, formImageDirs, formExportDir, formProcessDir, formAutoImport, formScanRules])
+      !== JSON.stringify(currentTab === 'sync' ? remoteValues(editOriginal) : fileValues(editOriginal))
+    : !!(formName || formDbPath || formImageDirs.length || pendingImageDir || importDestination));
 
   if (!isOpen) return null;
 
-  const renderDatabaseForm = (entry: DbEntry | null) => {
+  const renderDatabaseForm = (entry: DbEntry | null, sync = false) => {
     const editorHeadingId = entry ? `database-editor-heading-${entry.id}` : undefined;
 
     return (
@@ -1001,7 +1074,7 @@ export default function TauriSettings({
       >
         {entry ? (
           <div className="db-editor-heading">
-            <span className="db-editor-context">Editing database</span>
+            <span className="db-editor-context">{sync ? 'Remote receive and pairing' : 'Editing database'}</span>
             <h3 id={editorHeadingId}>
               {entry.name} <code className="db-row-slug">{entry.id}</code>
             </h3>
@@ -1010,6 +1083,7 @@ export default function TauriSettings({
           <h3>{createMode ? 'New Database from Images' : !pluginImport && !connectImportedSource ? 'Import a catalog copy' : 'Import from Target Scheduler'}</h3>
         )}
 
+        {!sync && <>
         {!editingId && <>
           <fieldset className="catalog-source-options" disabled={isApplying || tsImportRunning}>
             <legend>Start a catalog</legend>
@@ -1140,7 +1214,9 @@ export default function TauriSettings({
           )}
         </div>
 
-        {editingId && (
+        </>}
+
+        {editingId && sync && (
           <div className="database-config">
             <label>Connect PSF Guard Sync in N.I.N.A.:</label>
             <p>Install <strong>PSF Guard Sync</strong> from the N.I.N.A. plugin repository <code>https://nina-plugins.psf-guard.com/</code>, then restart N.I.N.A. Generate a pairing code and enter it with this server’s URL in the plugin. Click <strong>Pair</strong>, then <strong>Test connection</strong>. The plugin controls its own sync schedule. To receive image files too, enable <strong>Accept remote image uploads</strong> below and choose a <strong>Receive directory</strong>.</p>
@@ -1409,6 +1485,9 @@ export default function TauriSettings({
                 )}
               </>
             )}
+          </div>
+        )}
+        {editingId && !sync && <div className="database-config">
             <label htmlFor="server-export-directory">
               Server export directory:
             </label>
@@ -1435,8 +1514,7 @@ export default function TauriSettings({
             />
             <ScanRulesFields value={formScanRules} onChange={setFormScanRules} />
             <AutoImportFields value={formAutoImport} onChange={setFormAutoImport} />
-          </div>
-        )}
+          </div>}
 
         {createMode && (
           <label className="quality-analysis-option">
@@ -1468,7 +1546,7 @@ export default function TauriSettings({
             onClick={handleSaveForm}
             className="save-button"
             disabled={
-              (createMode || pluginImport ? formImageDirs.length === 0 : !formDbPath.trim() || formImageDirs.length === 0) || isApplying || (!editingId && !createMode && tsImportRunning)
+              (!sync && (createMode || pluginImport ? formImageDirs.length === 0 : !formDbPath.trim() || formImageDirs.length === 0)) || isApplying || (!editingId && !createMode && tsImportRunning)
             }
           >
             {pluginImport
@@ -1476,7 +1554,7 @@ export default function TauriSettings({
               : createMode
                 ? 'Create & Import'
               : editingId
-                ? 'Save Changes'
+                ? sync ? 'Save connection settings' : 'Save Changes'
                 : connectImportedSource ? 'Import from Target Scheduler' : 'Import catalog copy'}
           </button>
         </div>
@@ -1768,6 +1846,7 @@ export default function TauriSettings({
 
   return (
     <UnsavedScopeContext.Provider value={unsavedScope.current}>
+    <UnsavedMark label={currentTab === 'sync' ? 'sync connection' : 'database files'} dirty={!!editDirty} />
     <div className="tauri-settings modal-overlay" onClick={requestClose}>
       <div className="modal-content" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
@@ -1782,7 +1861,7 @@ export default function TauriSettings({
           </div>
         </div>
 
-        {(statusMessage || (confirmClose && (pendingSection ? navigationUnsaved : unsaved).length > 0)) && (
+        {(statusMessage || (confirmClose && (pendingNavigation ? navigationUnsaved : unsaved).length > 0)) && (
         <div className="settings-notices">
           {statusMessage && (
             <div
@@ -1796,15 +1875,15 @@ export default function TauriSettings({
               {statusMessage}
             </div>
           )}
-          {confirmClose && (pendingSection ? navigationUnsaved : unsaved).length > 0 && (
+          {confirmClose && (pendingNavigation ? navigationUnsaved : unsaved).length > 0 && (
             <div className="unsaved-confirm" role="alertdialog" aria-labelledby="unsaved-confirm-text">
               <p id="unsaved-confirm-text">
-                Unsaved changes in {describeUnsaved(pendingSection ? navigationUnsaved : unsaved)}. {pendingSection
-                  ? `Switch to ${settingsPage(pendingSection).label} without saving them?`
+                Unsaved changes in {describeUnsaved(pendingNavigation ? navigationUnsaved : unsaved)}. {pendingNavigation
+                  ? `Switch to ${pendingNavigation.label} without saving them?`
                   : 'Close without saving them?'}
               </p>
               {/* Focus lands on the safe choice. */}
-              <button type="button" autoFocus onClick={() => { setConfirmClose(false); setPendingSection(null); }}>
+              <button type="button" autoFocus onClick={() => { setConfirmClose(false); setPendingNavigation(null); }}>
                 Keep editing
               </button>
               <button
@@ -1812,13 +1891,13 @@ export default function TauriSettings({
                 className="unsaved-discard"
                 onClick={() => {
                   setConfirmClose(false);
-                  if (pendingSection) {
-                    setActiveTab(pendingSection);
-                    setPendingSection(null);
+                  if (pendingNavigation) {
+                    pendingNavigation.run();
+                    setPendingNavigation(null);
                   } else onClose();
                 }}
               >
-                {pendingSection ? 'Discard changes and switch' : 'Close without saving'}
+                {pendingNavigation ? 'Discard changes and switch' : 'Close without saving'}
               </button>
             </div>
           )}
@@ -1826,22 +1905,31 @@ export default function TauriSettings({
         )}
 
         <div className="settings-layout">
-        <SettingsNavigation groups={navigationGroups} current={currentTab} onChange={requestSection} />
+        <SettingsNavigation groups={navigationGroups} current={navigationTab} onChange={requestSection} />
 
         <div
           className="modal-body"
           ref={pageBody}
           role="tabpanel"
-          id={`settings-panel-${currentTab}`}
+          id={`settings-panel-${navigationTab}`}
           aria-labelledby="settings-section-heading"
         >
+          {isRigDatabasePage(currentTab) && selectedDatabase && <RigDatabaseNavigation
+            database={selectedDatabase} current={currentTab} planningEnabled={planningEnabled} canSync={canEdit}
+            onBack={() => requestSection('rig-databases')} onChange={openDatabasePage} />}
           <header className="settings-page-heading" id="settings-section-heading">
-            <span>{currentGroup?.label}</span><span aria-hidden="true"> / </span>
+            {!isRigDatabasePage(currentTab) && <><span>{currentGroup?.label}</span><span aria-hidden="true"> / </span></>}
             <strong>{currentPage.label}</strong>
           </header>
+          {isRigDatabasePage(currentTab) && !selectedDatabase && <p role="status">
+            {isLoading || !registry ? 'Loading the selected database…' : 'This database is no longer registered. Return to Databases & rigs to choose another.'}
+            <button type="button" className="link-button" onClick={() => requestSection('rig-databases')}>Databases &amp; rigs</button>
+          </p>}
+          {currentTab === 'rig-databases' && hasDatabases && !showAddForm && <RigDatabaseList databases={databases} onOpen={openDatabase} />}
+          {currentTab === 'rig-databases' && canEdit && hasDatabases && <RemoteSyncPreviews databases={databases} disabled={isApplying} />}
           {currentTab === 'review' && <div className="settings-setups"><ReviewPreferences /></div>}
           {currentTab === 'databases' && <>{tsJobs.data?.filter(job => job.running || job.error).map(job => <p key={job.id} role={job.error ? 'alert' : 'status'}>{job.name || 'Target Scheduler'}: {job.error || (job.stage === 'copying' ? `Copying database · ${job.pages_done}/${job.pages_total} pages` : job.stage === 'initializing' ? 'Preparing the working catalog…' : 'Syncing captures and grades…')}</p>)}</>}
-          {currentTab === 'databases' && (
+          {(currentTab === 'rig-databases' || (currentTab === 'databases' && selectedDatabase)) && (
           <div className="settings-setups">
           {!hasDatabases && managementAllowed && (
             <div className="welcome-message">
@@ -1900,8 +1988,8 @@ export default function TauriSettings({
             </div>
           )}
 
-          {(hasDatabases || isLoading || importPreviewPanel) && <div className="settings-section">
-            <h3>Configured Databases {hasDatabases && <span className="muted">({databases.length})</span>}</h3>
+          {(selectedDatabase || isLoading || importPreviewPanel) && <div className="settings-section">
+            {currentTab === 'rig-databases' && <h3>Import progress</h3>}
 
             {isLoading && <div className="detecting-database">Loading…</div>}
 
@@ -1911,7 +1999,7 @@ export default function TauriSettings({
               </div>
             )}
 
-            {databases.map((entry) => {
+            {(currentTab === 'databases' && selectedDatabase ? [selectedDatabase] : []).map((entry) => {
               const isEditing = showAddForm && editingId === entry.id;
               const editorId = `database-editor-${entry.id}`;
 
@@ -1948,7 +2036,7 @@ export default function TauriSettings({
                                 type="button"
                                 className="db-action-button"
                                 onClick={() => startEdit(entry)}
-                                disabled={isApplying}
+                                disabled={isApplying || isEditing}
                                 aria-label={`Edit ${entry.name}`}
                                 aria-expanded={isEditing}
                                 aria-controls={isEditing ? editorId : undefined}
@@ -2025,7 +2113,6 @@ export default function TauriSettings({
                     </div>
                   </div>
                   {isEditing && <div id={editorId}>{renderDatabaseForm(entry)}</div>}
-                  {managementAllowed && entry.ts_sync && <TsSyncSettings dbId={entry.id} settings={entry.ts_sync} onSaved={reload} />}
                   {importDbId === entry.id && importPreviewPanel && (
                     <div ref={importPreviewRef}>{importPreviewPanel}</div>
                   )}
@@ -2033,9 +2120,16 @@ export default function TauriSettings({
               );
             })}
 
+            {/* An import whose database is not in the list above (one just
+                created, before the list refreshes) still shows here. */}
+            {importPreviewPanel && (currentTab === 'rig-databases' || !databases.some((entry) => entry.id === importDbId)) && (
+              <div ref={importPreviewRef}>{importPreviewPanel}</div>
+            )}
+          </div>}
+
             {/* With no databases yet the welcome banner carries these same two
                 actions, so rendering them here too would just duplicate them. */}
-            {managementAllowed && hasDatabases && !showAddForm && (
+            {currentTab === 'rig-databases' && managementAllowed && hasDatabases && !showAddForm && (
               <div className="db-add-buttons">
                 <button
                   type="button"
@@ -2060,12 +2154,6 @@ export default function TauriSettings({
               </div>
             )}
 
-            {/* An import whose database is not in the list above (one just
-                created, before the list refreshes) still shows here. */}
-            {importPreviewPanel && !databases.some((entry) => entry.id === importDbId) && (
-              <div ref={importPreviewRef}>{importPreviewPanel}</div>
-            )}
-          </div>}
 
           {managementAllowed && showAddForm && !editingId && renderDatabaseForm(null)}
           </div>
@@ -2078,15 +2166,24 @@ export default function TauriSettings({
           )}
 
           {/* Planning's panels keep Planning's controls; the container adds no padding. */}
-          {currentTab === 'rigs' && <div className="settings-setups director-page director-embedded"><DirectorRigs /></div>}
+          {currentTab === 'rigs' && selectedDatabase && <div className="settings-setups director-page director-embedded"><DirectorRigs key={selectedDatabase.id} databaseId={selectedDatabase.id} /></div>}
 
           {currentTab === 'templates' && <div className="settings-setups director-page director-embedded"><TemplateLibrary /></div>}
 
-          {currentTab === 'sync' && (
+          {currentTab === 'sync' && selectedDatabase && (
             <div className="settings-setups">
-              <SchedulerSyncControls databases={databases} disabled={isApplying} />
-              <RemoteSyncPreviews databases={databases} disabled={isApplying} />
-              <RemotePeerSync databases={databases} disabled={isApplying} />
+              {managementAllowed && selectedDatabase.ts_sync && <TsSyncSettings key={selectedDatabase.id}
+                dbId={selectedDatabase.id} settings={selectedDatabase.ts_sync} onSaved={reload} />}
+              {managementAllowed && canEdit && (showAddForm && editingId === selectedDatabase.id
+                ? renderDatabaseForm(selectedDatabase, true)
+                : <section className="settings-section">
+                    <h3>Remote receive and pairing</h3>
+                    <p>Connect the PSF Guard Sync plugin in N.I.N.A. or configure incoming images and scheduler sync for {selectedDatabase.name}.</p>
+                    <button type="button" className="cancel-button" onClick={() => startEdit(selectedDatabase)}>Edit remote receive and pairing</button>
+                  </section>)}
+              <SchedulerSyncControls key={`scheduler:${selectedDatabase.id}`} databases={databases} localDatabaseId={selectedDatabase.id} disabled={isApplying} />
+              <RemoteSyncPreviews databases={[selectedDatabase]} disabled={isApplying} />
+              <RemotePeerSync key={`peer:${selectedDatabase.id}`} databases={databases} localDatabaseId={selectedDatabase.id} disabled={isApplying} />
             </div>
           )}
 

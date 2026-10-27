@@ -62,7 +62,7 @@ test('pending uploads offer stacks and remain visible and controllable in backgr
     await route.fulfill({ json: { success: true, data } });
   });
   await page.goto('/#/'); await openSettings(page); const settings = page.locator('.tauri-settings');
-  await settings.getByRole('tab', { name: 'Rigs' }).click(); await settings.getByRole('button', { name: 'Setup Transfer rig' }).click();
+  await settings.getByRole('tab', { name: 'Overview', exact: true }).click(); await settings.getByRole('button', { name: 'Open Transfer rig' }).click();
   await settings.getByRole('tab', { name: 'Collaboration', exact: true }).click();
   const collaboration = settings.getByRole('region', { name: 'Collaboration', exact: true });
   await collaboration.getByRole('tab', { name: 'Reports' }).click();

@@ -6,7 +6,7 @@ Only the selected page loads its controls.
 
 | Group | Pages |
 |---|---|
-| **Databases & rigs** | **Databases**, **Rigs**, **Sync** |
+| **Databases & rigs** | **Overview**, then a rig database’s **Rig setup**, **Database & files**, or **Sync** |
 | **Presets** | **Processing setups**, **Exposure templates** |
 | **Processing** | **Calibration**, **Stacking** |
 | **Performance** | **CPU & memory**, **GPU**, **Workers** |
@@ -15,7 +15,7 @@ Only the selected page loads its controls.
 | **Review** | **Grading & display** |
 | **Server & access** | **Server**, **Users**, **Agents (MCP)** |
 
-Pages depend on the connection and your permissions. Planning enables **Rigs**
+Pages depend on the connection and your permissions. Planning enables **Rig setup**
 and **Exposure templates**. **Sync** appears when you have a database and an
 editor account. **Server** configures the desktop app's server connection.
 The web interface shows **Users** and API tokens when server login is
@@ -40,21 +40,48 @@ also offers its own worker controls under **Workers**.
 - **Catalogs** is now **Storage & backups → Reference catalogs**, for
   downloaded astronomy data such as solver indexes and Gaia colors.
 
-**Databases** and **Rigs** remain separate pages in the same group.
-Database settings control files and imports. Rig profiles control optics,
-observing sites, scheduling and connections. Moving between these pages
-does not change the database or rig configuration.
+## Open a rig database
+
+Choose **Databases & rigs → Overview**, then open a database such as **C925**.
+Use **Rig setup**, **Database & files**, or **Sync** beneath its name:
+
+- **Rig setup** shows equipment, field of view, observing site, scheduling
+  limits and connections used by Planning. It keeps links to the Library and
+  calibration settings for configurations recorded in this database.
+- **Database & files** shows the catalog path, image folders, import and scan
+  options, quality analysis, exports and processed-output folder.
+- **Sync** configures the database's Target Scheduler connection, incoming
+  uploads and pairing. It also offers reviewed transfers to another catalog
+  or a remote PSF Guard. Peers and their credentials remain shared.
+
+The database stays selected as you move between these pages. Click
+**Databases & rigs** in the breadcrumb to return to the list and open another
+rig database. Each form keeps its own Save control and permissions.
+
+For **Data Transfer**, the opened database receives a **Merge catalogs**
+operation and sends a **Send planning** or **Send reviewed grades** operation.
+Choose the other endpoint, check **Source** and **Destination**, then click
+**Preview changes** before applying. Returning to the list discards this
+form's pending preview; unrelated staged previews remain in the overview
+with their recorded database scope. An applied job keeps running.
+
+Use the buttons below the parent list to create a catalog or import a Target
+Scheduler database. After creation or import, PSF Guard opens the returned
+catalog. Plugin onboarding opens its pairing controls under **Sync**.
 
 ## Keep edits when navigating
 
-When you choose another page in the sidebar or **Settings section** selector,
+When you choose another Settings page or return to the database list,
 Settings asks before discarding unsaved form edits. Choose **Keep editing**
 to return to the form. Choose **Discard changes and
 switch** to open the requested page without saving those edits. **Close**
 also asks before discarding unsaved changes.
 
 Shortcuts from the Library, calibration reports, processing cards and Sky
-still open the requested page, rig or catalog package. Saved settings keep
+still open the requested page, rig or catalog package. A shortcut without a
+selected database opens the parent list first. If an explicitly selected
+database is no longer registered, Settings shows that problem and lets you
+return to the list; it does not select a different database. Saved settings keep
 their existing scope and permissions: account preferences follow the
 account, server settings apply to that server, and desktop worker settings
 apply to the computer running the app.
