@@ -1,10 +1,10 @@
 {
   "date": "2026-10-27",
-  "source_commit": "7f71977eea60962daa78d5e21941e14bfae93734",
+  "source_commit": "00b98b0722a35bb70638c0cb9760b6e659ced676",
   "source_note": "Frontend implementation commit; capture documentation is committed separately.",
   "frontend_assets": {
-    "index-DLZ8qG55.css": "1a0476b48fdbca8f62f158daa90a8b9780efc50e55cf864cb61c46c32519173c",
-    "index-pkw8odc3.js": "0eebfd57e9ac940e0f0adb510359d9a641968ec6653ef65eb832454db9c16153"
+    "index-Cq3gQfnf.js": "262a6088d18c2f5f9ed7572c38ebede3e83ea22da79fb0a4344f3376986d7e94",
+    "index-DVbX8xf4.css": "054378feb17ab2aff1a78144ed9f2ea3fa7ba0afd223fbc114fdb475013c1664"
   },
   "backend": {
     "version": "0.12.3",
@@ -27,8 +27,8 @@
       ],
       "state": "Shared overview. C925 and Ultra Cat appear directly in the left navigation; New / import is separate. Planning availability is stubbed off; processing policies use the real backend.",
       "test": "static/e2e/rig-database-navigation.spec.ts",
-      "captured_at": "2026-10-27T10:46:22.785806-07:00",
-      "sha256": "93ab3c0c1a462540e103f647f3fe617f3569c66ff5776a8876bf07ff50cc18a5"
+      "captured_at": "2026-10-27T10:59:31.384462-07:00",
+      "sha256": "b047e929c105be5dbd272ffaf24bb4b80877c71d4446f737b014598b70f0cea1"
     },
     {
       "file": "rig-databases-phone.png",
@@ -43,8 +43,8 @@
       ],
       "state": "Shared overview. C925 and Ultra Cat appear directly in the left navigation; New / import is separate. Planning availability is stubbed off; processing policies use the real backend.",
       "test": "static/e2e/rig-database-navigation.spec.ts",
-      "captured_at": "2026-10-27T10:46:38.547705-07:00",
-      "sha256": "804947f1b8f3399517ed459cb8b48f357714ebb47c15ab4662f54f9a1d1f0711"
+      "captured_at": "2026-10-27T10:59:49.880746-07:00",
+      "sha256": "75c1d3bd9bb6b8540f9aa96c4d7a85046f7421a8c9fd7f3080f51d45c9b65cfe"
     },
     {
       "file": "database-files-desktop.png",
@@ -59,8 +59,8 @@
       ],
       "state": "Ultra Cat / Database & files. Paths and maintenance remain here. Import has its own navigation entry and a shortcut; scan rules and scheduling are not behind Edit database. Planning availability is stubbed off; database APIs use the real backend.",
       "test": "static/e2e/rig-database-navigation.spec.ts",
-      "captured_at": "2026-10-27T10:46:24.625016-07:00",
-      "sha256": "5dec7213bf24e4c96a1b98c23dc7bf72ef464ad73feed35534e018f252bb427e"
+      "captured_at": "2026-10-27T10:59:32.123649-07:00",
+      "sha256": "5d1466533b8896374adbcba8fcf8577c4cc0ba3d4cf070d3286bb2edabbacba7"
     },
     {
       "file": "database-files-phone.png",
@@ -75,8 +75,8 @@
       ],
       "state": "Ultra Cat / Database & files. Paths and maintenance remain here. Import has its own navigation entry and a shortcut; scan rules and scheduling are not behind Edit database. Planning availability is stubbed off; database APIs use the real backend.",
       "test": "static/e2e/rig-database-navigation.spec.ts",
-      "captured_at": "2026-10-27T10:46:39.459002-07:00",
-      "sha256": "763198489ca7a650f98b177a850f56d084866f1d9de49647ed542464d28ba0fb"
+      "captured_at": "2026-10-27T10:59:50.519528-07:00",
+      "sha256": "82855b233a62a42826d51bd79bff360050a121654b3bd05d01d3d3725c17189b"
     },
     {
       "file": "rig-sync-desktop.png",
@@ -91,8 +91,8 @@
       ],
       "state": "Ultra Cat / Sync. Send planning selected; fixed source Ultra Cat and destination C925. No transfer preview or apply. Planning availability is stubbed off; processing policies use the real backend.",
       "test": "static/e2e/rig-database-navigation.spec.ts",
-      "captured_at": "2026-10-27T10:46:24.791155-07:00",
-      "sha256": "7c748f07bcdd21324ea277e6c49c0188241b14c6792dabba2ea702f9ca8b024a"
+      "captured_at": "2026-10-27T10:59:32.246707-07:00",
+      "sha256": "4d585aadc9dded647e4e3f56cf8bfb049d68d853a0c3506f282edd2d38f406d3"
     },
     {
       "file": "rig-sync-phone.png",
@@ -107,7 +107,7 @@
       ],
       "state": "Ultra Cat / Sync. Send planning selected; fixed source Ultra Cat and destination C925. No transfer preview or apply. Planning availability is stubbed off; processing policies use the real backend.",
       "test": "static/e2e/rig-database-navigation.spec.ts",
-      "captured_at": "2026-10-27T10:46:39.637238-07:00",
+      "captured_at": "2026-10-27T10:59:50.630630-07:00",
       "sha256": "3e5e86d4283de306d42505ccbd4586abb05c3b2225ca05760a763205c1f25c3a"
     },
     {
@@ -123,7 +123,7 @@
       ],
       "state": "New / import. Starting choices shown; no database creation or import submitted. Planning availability is stubbed off; processing policies use the real backend.",
       "test": "static/e2e/rig-database-navigation.spec.ts",
-      "captured_at": "2026-10-27T10:46:24.876135-07:00",
+      "captured_at": "2026-10-27T10:59:32.318245-07:00",
       "sha256": "c2566d01c8e5384d66b26b5ddb7bc98141f577a118eae1ce88b2a079f1dac8a9"
     },
     {
@@ -139,7 +139,7 @@
       ],
       "state": "New / import. Starting choices shown; no database creation or import submitted. Planning availability is stubbed off; processing policies use the real backend.",
       "test": "static/e2e/rig-database-navigation.spec.ts",
-      "captured_at": "2026-10-27T10:46:39.687724-07:00",
+      "captured_at": "2026-10-27T10:59:50.662841-07:00",
       "sha256": "13b77f64c42767e4ce2fff9601c511a588d673dc6bfc3682b50589a9fd73580a"
     },
     {
@@ -155,8 +155,8 @@
       ],
       "state": "Review / Grading & display. Quality analysis scrolled into view below grading/scoring and before display. Global settings off; C925 expanded and inheriting. Planning availability is stubbed off; processing policies use the real backend.",
       "test": "static/e2e/rig-database-navigation.spec.ts",
-      "captured_at": "2026-10-27T10:46:25.076566-07:00",
-      "sha256": "8aceb2c2def1fe2e80161c7a612d9d084d6f8597f261334fdaacc96a0077d9cd"
+      "captured_at": "2026-10-27T10:59:32.511505-07:00",
+      "sha256": "4df0e4bdbfc7effa843df684c4cf3fb3fd470324ac7042ab20bc33052f6f6204"
     },
     {
       "file": "quality-settings-phone.png",
@@ -171,7 +171,7 @@
       ],
       "state": "Review / Grading & display. Quality analysis scrolled into view below grading/scoring and before display. Global settings off; C925 expanded and inheriting. Planning availability is stubbed off; processing policies use the real backend.",
       "test": "static/e2e/rig-database-navigation.spec.ts",
-      "captured_at": "2026-10-27T10:46:39.792227-07:00",
+      "captured_at": "2026-10-27T10:59:50.786530-07:00",
       "sha256": "d6f1ba984b1f882d67e4f73692bf314166441729ad6b8c3612a3e50761d799d1"
     },
     {
@@ -187,7 +187,7 @@
       ],
       "state": "Processing / Calibration. Global calibrated-copy pairing on. C925 and Ultra Cat inherit; database rows collapsed. Planning availability is stubbed off; processing policies use the real backend.",
       "test": "static/e2e/rig-database-navigation.spec.ts",
-      "captured_at": "2026-10-27T10:46:25.210410-07:00",
+      "captured_at": "2026-10-27T10:59:32.623343-07:00",
       "sha256": "0e6d733e8716ad150d31f4373d31ce78f18609985df02b5407da371a0dd0ec92"
     },
     {
@@ -203,7 +203,7 @@
       ],
       "state": "Processing / Calibration. Global calibrated-copy pairing on. C925 and Ultra Cat inherit; database rows collapsed. Planning availability is stubbed off; processing policies use the real backend.",
       "test": "static/e2e/rig-database-navigation.spec.ts",
-      "captured_at": "2026-10-27T10:46:39.886891-07:00",
+      "captured_at": "2026-10-27T10:59:50.844734-07:00",
       "sha256": "db57215239f9412acadd40d8814fbede995d03cae3b5a422cfc406e1d84003ed"
     },
     {
@@ -219,7 +219,7 @@
       ],
       "state": "Exports & integrations / AstroBin. Shared defaults and separately labeled database filter maps. Planning availability is stubbed off; processing policies use the real backend.",
       "test": "static/e2e/rig-database-navigation.spec.ts",
-      "captured_at": "2026-10-27T10:46:25.305485-07:00",
+      "captured_at": "2026-10-27T10:59:32.722199-07:00",
       "sha256": "24c51c4c814b6e61959661c51c0042eb123b23b0c42777082502dc9d5c75bb89"
     },
     {
@@ -235,7 +235,7 @@
       ],
       "state": "Exports & integrations / AstroBin. Shared defaults and separately labeled database filter maps. Planning availability is stubbed off; processing policies use the real backend.",
       "test": "static/e2e/rig-database-navigation.spec.ts",
-      "captured_at": "2026-10-27T10:46:39.956138-07:00",
+      "captured_at": "2026-10-27T10:59:50.893732-07:00",
       "sha256": "d352dabddbfae9a5a452c844d9cc08c13b733b2a87e71aac6f7934e9e866e877"
     },
     {
@@ -251,7 +251,7 @@
       ],
       "state": "C925 / Rig setup, Optics. Saved profile: 6248 \u00d7 4176 px, 3.76 \u00b5m, 1645 mm focal length, 235 mm aperture, 0\u00b0 camera angle. Shared Sites is not embedded in this database page. Real Director/profile APIs.",
       "test": "static/e2e-director/settings-context.spec.ts",
-      "captured_at": "2026-10-27T10:47:31.977779-07:00",
+      "captured_at": "2026-10-27T11:00:18.320668-07:00",
       "sha256": "a37138ede5793eb03a3254e975d1e4101367d1b480fe59e5f5444ca2670e02e1"
     },
     {
@@ -267,7 +267,7 @@
       ],
       "state": "Presets / Sites. Shared manager outside any database context. No site edited by the capture test.",
       "test": "static/e2e-director/settings-context.spec.ts",
-      "captured_at": "2026-10-27T10:47:32.292222-07:00",
+      "captured_at": "2026-10-27T11:00:18.612898-07:00",
       "sha256": "23f20d1af9668ddef3308430bddbbf871c2db344f4b71f21c7da67fb441f15df"
     },
     {
@@ -283,7 +283,7 @@
       ],
       "state": "C925 / Rig setup, Optics. Saved profile: 6248 \u00d7 4176 px, 3.76 \u00b5m, 1645 mm focal length, 235 mm aperture, 0\u00b0 camera angle. Shared Sites is not embedded in this database page. Real Director/profile APIs.",
       "test": "static/e2e-director/settings-context.spec.ts",
-      "captured_at": "2026-10-27T10:47:32.013310-07:00",
+      "captured_at": "2026-10-27T11:00:18.353221-07:00",
       "sha256": "3d11b04db574d4b2fb068d6183439736a18610c3485657a65914f6054e9c9eab"
     },
     {
@@ -299,7 +299,7 @@
       ],
       "state": "Presets / Sites. Shared manager outside any database context. No site edited by the capture test.",
       "test": "static/e2e-director/settings-context.spec.ts",
-      "captured_at": "2026-10-27T10:47:32.249094-07:00",
+      "captured_at": "2026-10-27T11:00:18.569518-07:00",
       "sha256": "3c290e9dd6842947d642b1f3946d1f529f4ccc48d7327d7d617b5b8abfe580bc"
     },
     {
@@ -315,7 +315,7 @@
       ],
       "state": "Processing / Calibration. Global pairing default saved off, C925 explicit override saved on, Ultra Cat inheriting off. This changes only the disposable fixture registry; the test then resets C925 to inheritance.",
       "test": "static/e2e/rig-database-navigation.spec.ts",
-      "captured_at": "2026-10-27T10:46:28.154116-07:00",
+      "captured_at": "2026-10-27T10:59:35.215959-07:00",
       "sha256": "793003274c691d3f029f93495a694f70fd6f3d24b55c7c2ad317a7ec8a0c03d3"
     },
     {
@@ -332,7 +332,7 @@
         900
       ],
       "sha256": "ff6fad8e200e7557176a9340065607a464414e144c4a613a22f3d402643e20f2",
-      "captured_at": "2026-10-27T10:46:23.510267-07:00"
+      "captured_at": "2026-10-27T10:59:31.622182-07:00"
     },
     {
       "file": "import-settings-phone.png",
@@ -348,7 +348,7 @@
         1688
       ],
       "sha256": "600cdb336655db0daa9dff73fc29e807b300333669f85ebcb9a54da799189625",
-      "captured_at": "2026-10-27T10:46:38.849758-07:00"
+      "captured_at": "2026-10-27T10:59:50.104614-07:00"
     },
     {
       "file": "pairing-override-phone.png",
@@ -364,7 +364,7 @@
         1688
       ],
       "sha256": "5a7f06345383a6a8a54fc0e698c8098d2c3d2c9595c1666fc4606c5f6a9882bf",
-      "captured_at": "2026-10-27T10:46:42.468534-07:00"
+      "captured_at": "2026-10-27T10:59:52.765440-07:00"
     },
     {
       "file": "import-rules-desktop.png",
@@ -380,7 +380,7 @@
         900
       ],
       "sha256": "d0b44ad53d4e9bb8c4b526e35beb9f5bab35b6cdb60a533660303ef2b7180e31",
-      "captured_at": "2026-10-27T10:46:23.288331-07:00"
+      "captured_at": "2026-10-27T10:59:31.543926-07:00"
     },
     {
       "file": "create-scan-rules-desktop.png",
@@ -395,8 +395,8 @@
         1280,
         900
       ],
-      "sha256": "9c1e3cf1149be98cf6ddf104ff90f39a911b02346c89cea6ba2aceed659035a1",
-      "captured_at": "2026-10-27T10:46:32.629631-07:00"
+      "sha256": "d7967aa5525f01ad65484a4e4f77011656514a333a9136da90873ff8a31cc09b",
+      "captured_at": "2026-10-27T10:59:39.548895-07:00"
     },
     {
       "file": "import-rules-phone.png",
@@ -412,7 +412,7 @@
         1688
       ],
       "sha256": "a4b1a3946aff1adca387f906091e4f2f35c41377a2799c911632794247908555",
-      "captured_at": "2026-10-27T10:46:38.736104-07:00"
+      "captured_at": "2026-10-27T10:59:50.020190-07:00"
     },
     {
       "file": "create-scan-rules-phone.png",
@@ -428,7 +428,7 @@
         1688
       ],
       "sha256": "454223dd690ad21ebdba793f3562a8f5c8f06ec55d8d6628809914c748377003",
-      "captured_at": "2026-10-27T10:46:47.168677-07:00"
+      "captured_at": "2026-10-27T10:59:56.924338-07:00"
     }
   ]
 }
