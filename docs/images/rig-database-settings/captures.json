@@ -1,17 +1,18 @@
 {
   "date": "2026-10-27",
-  "source_commit": "9f9722765a2f7bd5ef15176effc287449a4bbf39",
-  "source_note": "Frontend implementation at this commit; screenshot documentation is committed separately.",
+  "source_commit": "3707ae61e6d5fbf3186d93ce7a5c6c369ae531d2",
+  "source_note": "Frontend implementation commit; capture documentation is committed separately.",
   "frontend_assets": {
-    "index-nLOW_eZv.js": "2f52e9ab8fb4254acec558b01e09fe6b15b3755b776b5da31d6d9b52b8476a6d",
-    "index-vOWmIgZn.css": "1cae3f0d144988c457f09aaca721304408c0e2b578275d9c5a22ad4d77e67467"
+    "index-fCxS9uBx.js": "0e8415c94a916642cbbe520d9905ce69975feed0b8b28f3f4bb604da73ac2888",
+    "index-BIKUPgmU.css": "aea4c6aa7f29a8c460a05eb5db7aaf068b9aef78d904e70f9bd082fd39eb9efe"
   },
   "backend": {
     "version": "0.12.3",
-    "kind": "Existing debug executable serving this worktree static/dist; Rust behavior is unchanged by this PR.",
-    "sha256": "1aabfccde5d6ba7d4d9285effc5bc855f5f067dba9d49def6ac7c2ca5b1a77a6"
+    "kind": "Debug backend built for this implementation, serving this worktree static/dist.",
+    "sha256": "fcc2c792557990df6eebe6d4767fa96260a9ab350cefeff87b9fec3602bd477f",
+    "source_commit": "7a0eca92"
   },
-  "environment": "macOS, Playwright, dark theme, isolated temporary registries and SQLite fixtures. No live catalogs. Viewport captures; no cropping, resizing or image edits.",
+  "environment": "macOS, Playwright, dark theme, isolated registries and disposable SQLite fixtures. No live catalogs or paired acquisition clients. Exact viewport PNGs; no cropping, resizing, compositing or annotations.",
   "captures": [
     {
       "file": "rig-databases-desktop.png",
@@ -24,10 +25,10 @@
         1280,
         900
       ],
-      "state": "Parent list with C925 and Ultra Cat; no database open. Planning status is stubbed off for this regression fixture.",
-      "sha256": "7885641001cc52ba92acf2f9de323e12fbfae2b43f27a47f14cfbed0308ef65b",
+      "state": "Shared overview. C925 and Ultra Cat appear directly in the left navigation; New / import is separate. Planning availability is stubbed off; processing policies use the real backend.",
       "test": "static/e2e/rig-database-navigation.spec.ts",
-      "captured_at": "2026-10-26T23:59:37.978970-07:00"
+      "captured_at": "2026-10-27T00:58:39.429172-07:00",
+      "sha256": "8b283c4d2095022e2a006d7d3556c855db83224ef0cd0e45916e04961d51c442"
     },
     {
       "file": "rig-databases-phone.png",
@@ -40,10 +41,10 @@
         780,
         1688
       ],
-      "state": "Parent list with C925 and Ultra Cat; no database open. Planning status is stubbed off for this regression fixture.",
-      "sha256": "17fc8f34f23485c8098b18a758281f340506179b408021ef4c3632e61c087763",
+      "state": "Shared overview. C925 and Ultra Cat appear directly in the left navigation; New / import is separate. Planning availability is stubbed off; processing policies use the real backend.",
       "test": "static/e2e/rig-database-navigation.spec.ts",
-      "captured_at": "2026-10-26T23:59:42.115976-07:00"
+      "captured_at": "2026-10-27T00:58:45.850709-07:00",
+      "sha256": "bacc6826e12ebdb67df7d1b3b67ae418528ab29d7f178d373fe6196cd4f7e339"
     },
     {
       "file": "database-files-desktop.png",
@@ -56,10 +57,10 @@
         1280,
         900
       ],
-      "state": "Ultra Cat opened on Database & files; editor collapsed; import, quality and calibration controls visible. Calibration summary finished loading. Planning status is stubbed off for this regression fixture.",
-      "sha256": "70318adc09a4a299c64e56f6783b233105f0a15f2d02ed848be8ca69805ffde9",
+      "state": "Ultra Cat / Database & files. Paths, import and maintenance remain; analysis, pairing settings and AstroBin maps are absent. Planning availability is stubbed off; processing policies use the real backend.",
       "test": "static/e2e/rig-database-navigation.spec.ts",
-      "captured_at": "2026-10-27T00:00:48.956919-07:00"
+      "captured_at": "2026-10-27T00:58:39.796980-07:00",
+      "sha256": "875ec10026480f4839cc5203564696b3f6ce6783ace1178c38a1741a0dafdf53"
     },
     {
       "file": "database-files-phone.png",
@@ -72,10 +73,10 @@
         780,
         1688
       ],
-      "state": "Ultra Cat opened on Database & files; editor collapsed; import, quality and calibration controls visible. Planning status is stubbed off for this regression fixture.",
-      "sha256": "4e8ff8aaf14504f76337f229d563011f5df9e1e9a14157dd042dc30e59801f5b",
+      "state": "Ultra Cat / Database & files. Paths, import and maintenance remain; analysis, pairing settings and AstroBin maps are absent. Planning availability is stubbed off; processing policies use the real backend.",
       "test": "static/e2e/rig-database-navigation.spec.ts",
-      "captured_at": "2026-10-26T23:59:42.427922-07:00"
+      "captured_at": "2026-10-27T00:58:46.160377-07:00",
+      "sha256": "b2665f3f35764f9caecbdd47a3d8995b998d7d1d2e42a513aa0d60970909a062"
     },
     {
       "file": "rig-sync-desktop.png",
@@ -88,10 +89,10 @@
         1280,
         900
       ],
-      "state": "Ultra Cat opened on Sync; Send planning selected; Ultra Cat is the fixed source and C925 is the other endpoint. Preview has not run. Planning status is stubbed off for this regression fixture.",
-      "sha256": "b14ad01c38318497e190abc9c2db96126819101f2a1fca60acf688b24dd0efde",
+      "state": "Ultra Cat / Sync. Send planning selected; fixed source Ultra Cat and destination C925. No transfer preview or apply. Planning availability is stubbed off; processing policies use the real backend.",
       "test": "static/e2e/rig-database-navigation.spec.ts",
-      "captured_at": "2026-10-26T23:59:38.397369-07:00"
+      "captured_at": "2026-10-27T00:58:39.938719-07:00",
+      "sha256": "fb0e92316889473a56917b875897a28e84fc76dae5cfac1baae6cc2c9bca67d5"
     },
     {
       "file": "rig-sync-phone.png",
@@ -104,10 +105,138 @@
         780,
         1688
       ],
-      "state": "Ultra Cat opened on Sync; Send planning selected; Ultra Cat is the fixed source and C925 is the other endpoint. Preview has not run. Planning status is stubbed off for this regression fixture.",
-      "sha256": "3536c54d64c387aca9e25632766a5fbb1c9cd84eadf86667d47a2bb7873ec59f",
+      "state": "Ultra Cat / Sync. Send planning selected; fixed source Ultra Cat and destination C925. No transfer preview or apply. Planning availability is stubbed off; processing policies use the real backend.",
       "test": "static/e2e/rig-database-navigation.spec.ts",
-      "captured_at": "2026-10-26T23:59:42.568807-07:00"
+      "captured_at": "2026-10-27T00:58:46.272622-07:00",
+      "sha256": "3e5e86d4283de306d42505ccbd4586abb05c3b2225ca05760a763205c1f25c3a"
+    },
+    {
+      "file": "new-import-desktop.png",
+      "browser": "chromium",
+      "viewport_css": [
+        1280,
+        900
+      ],
+      "pixels": [
+        1280,
+        900
+      ],
+      "state": "New / import. Starting choices shown; no database creation or import submitted. Planning availability is stubbed off; processing policies use the real backend.",
+      "test": "static/e2e/rig-database-navigation.spec.ts",
+      "captured_at": "2026-10-27T00:58:40.001762-07:00",
+      "sha256": "b5f55580e8b0debc02b3d38fe57ad379b95a1db467eec702fb8b69317ee1655e"
+    },
+    {
+      "file": "new-import-phone.png",
+      "browser": "webkit",
+      "viewport_css": [
+        390,
+        844
+      ],
+      "pixels": [
+        780,
+        1688
+      ],
+      "state": "New / import. Starting choices shown; no database creation or import submitted. Planning availability is stubbed off; processing policies use the real backend.",
+      "test": "static/e2e/rig-database-navigation.spec.ts",
+      "captured_at": "2026-10-27T00:58:46.306462-07:00",
+      "sha256": "13b77f64c42767e4ce2fff9601c511a588d673dc6bfc3682b50589a9fd73580a"
+    },
+    {
+      "file": "quality-settings-desktop.png",
+      "browser": "chromium",
+      "viewport_css": [
+        1280,
+        900
+      ],
+      "pixels": [
+        1280,
+        900
+      ],
+      "state": "Review / Grading & display. Quality analysis scrolled into view below grading/scoring and before display. Shared defaults off; C925 expanded and inheriting. Planning availability is stubbed off; processing policies use the real backend.",
+      "test": "static/e2e/rig-database-navigation.spec.ts",
+      "captured_at": "2026-10-27T00:58:40.169905-07:00",
+      "sha256": "122c7c0b97c4b808de45bb056b7a486e720aff3fb9e21a2cd963673909d97202"
+    },
+    {
+      "file": "quality-settings-phone.png",
+      "browser": "webkit",
+      "viewport_css": [
+        390,
+        844
+      ],
+      "pixels": [
+        780,
+        1688
+      ],
+      "state": "Review / Grading & display. Quality analysis scrolled into view below grading/scoring and before display. Shared defaults off; C925 expanded and inheriting. Planning availability is stubbed off; processing policies use the real backend.",
+      "test": "static/e2e/rig-database-navigation.spec.ts",
+      "captured_at": "2026-10-27T00:58:46.429784-07:00",
+      "sha256": "bf139ceac89947b1aacd85f9a44bef04f89f044b3ac65b4d9188e891c2eb2272"
+    },
+    {
+      "file": "pairing-settings-desktop.png",
+      "browser": "chromium",
+      "viewport_css": [
+        1280,
+        900
+      ],
+      "pixels": [
+        1280,
+        900
+      ],
+      "state": "Processing / Calibration. Shared calibrated-copy pairing on. C925 and Ultra Cat inherit; database rows collapsed. Planning availability is stubbed off; processing policies use the real backend.",
+      "test": "static/e2e/rig-database-navigation.spec.ts",
+      "captured_at": "2026-10-27T00:58:40.288104-07:00",
+      "sha256": "d8e8908ba2e6d174878afd24f8801bfc8f0f3f83d130ac2da251a86d93f71d90"
+    },
+    {
+      "file": "pairing-settings-phone.png",
+      "browser": "webkit",
+      "viewport_css": [
+        390,
+        844
+      ],
+      "pixels": [
+        780,
+        1688
+      ],
+      "state": "Processing / Calibration. Shared calibrated-copy pairing on. C925 and Ultra Cat inherit; database rows collapsed. Planning availability is stubbed off; processing policies use the real backend.",
+      "test": "static/e2e/rig-database-navigation.spec.ts",
+      "captured_at": "2026-10-27T00:58:46.503649-07:00",
+      "sha256": "b02b8fcc47262bd0d1232b84de4d7fe7b59ebf50d55d800218932da290b17ffa"
+    },
+    {
+      "file": "filter-settings-desktop.png",
+      "browser": "chromium",
+      "viewport_css": [
+        1280,
+        900
+      ],
+      "pixels": [
+        1280,
+        900
+      ],
+      "state": "Exports & integrations / AstroBin. Shared defaults and separately labeled database filter maps. Planning availability is stubbed off; processing policies use the real backend.",
+      "test": "static/e2e/rig-database-navigation.spec.ts",
+      "captured_at": "2026-10-27T00:58:40.402477-07:00",
+      "sha256": "24c51c4c814b6e61959661c51c0042eb123b23b0c42777082502dc9d5c75bb89"
+    },
+    {
+      "file": "filter-settings-phone.png",
+      "browser": "webkit",
+      "viewport_css": [
+        390,
+        844
+      ],
+      "pixels": [
+        780,
+        1688
+      ],
+      "state": "Exports & integrations / AstroBin. Shared defaults and separately labeled database filter maps. Planning availability is stubbed off; processing policies use the real backend.",
+      "test": "static/e2e/rig-database-navigation.spec.ts",
+      "captured_at": "2026-10-27T00:58:46.545329-07:00",
+      "sha256": "d352dabddbfae9a5a452c844d9cc08c13b733b2a87e71aac6f7934e9e866e877"
     },
     {
       "file": "rig-setup-desktop.png",
@@ -120,10 +249,26 @@
         1440,
         1000
       ],
-      "state": "C925 selected on Rig setup, Optics. Saved real profile: 6248 \u00d7 4176 sensor, 3.76 \u00b5m pixels, 1645 mm focal length, 235 mm aperture, camera angle 0\u00b0. Disposable catalogs bound through preview/apply; no equipment paired.",
-      "sha256": "0da3cbeedd18c3d99c459db7dfa74d13d5e84634da28c25b4c19db9a37f5db6e",
+      "state": "C925 / Rig setup, Optics. Saved profile: 6248 \u00d7 4176 px, 3.76 \u00b5m, 1645 mm focal length, 235 mm aperture, 0\u00b0 camera angle. Shared Sites is not embedded in this database page. Real Director/profile APIs.",
       "test": "static/e2e-director/settings-context.spec.ts",
-      "captured_at": "2026-10-26T23:59:44.515010-07:00"
+      "captured_at": "2026-10-27T00:58:49.777269-07:00",
+      "sha256": "9d2887f077725529529df07bc69b43a3bbb3fd866d207efe3f57f3f2eadd71c9"
+    },
+    {
+      "file": "sites-desktop.png",
+      "browser": "chromium",
+      "viewport_css": [
+        1440,
+        1000
+      ],
+      "pixels": [
+        1440,
+        1000
+      ],
+      "state": "Presets / Sites. Shared manager outside any database context. No site edited by the capture test.",
+      "test": "static/e2e-director/settings-context.spec.ts",
+      "captured_at": "2026-10-27T00:58:50.092567-07:00",
+      "sha256": "10031023eebb1b2d7a8e767bed04a07729d512d142d2a349547c833f387a0fc1"
     },
     {
       "file": "rig-setup-phone.png",
@@ -136,10 +281,42 @@
         390,
         844
       ],
-      "state": "C925 selected on Rig setup, Optics. Saved real profile: 6248 \u00d7 4176 sensor, 3.76 \u00b5m pixels, 1645 mm focal length, 235 mm aperture, camera angle 0\u00b0. Disposable catalogs bound through preview/apply; no equipment paired.",
-      "sha256": "656f879473231d88bcbee485e4db45df675286a9d1d8667de0287e148600d42d",
+      "state": "C925 / Rig setup, Optics. Saved profile: 6248 \u00d7 4176 px, 3.76 \u00b5m, 1645 mm focal length, 235 mm aperture, 0\u00b0 camera angle. Shared Sites is not embedded in this database page. Real Director/profile APIs.",
       "test": "static/e2e-director/settings-context.spec.ts",
-      "captured_at": "2026-10-26T23:59:44.550908-07:00"
+      "captured_at": "2026-10-27T00:58:49.814742-07:00",
+      "sha256": "821e0e7ecdd518f6b5fe04acf730593921f513de2d2a7308d3db24bd3b42fac2"
+    },
+    {
+      "file": "sites-phone.png",
+      "browser": "chromium",
+      "viewport_css": [
+        390,
+        844
+      ],
+      "pixels": [
+        390,
+        844
+      ],
+      "state": "Presets / Sites. Shared manager outside any database context. No site edited by the capture test.",
+      "test": "static/e2e-director/settings-context.spec.ts",
+      "captured_at": "2026-10-27T00:58:50.046008-07:00",
+      "sha256": "fb548e18db0efe463d3581d0150ce26ede02f0bf2107613d4bc82a378d261a97"
+    },
+    {
+      "file": "pairing-override-desktop.png",
+      "browser": "chromium",
+      "viewport_css": [
+        1280,
+        900
+      ],
+      "pixels": [
+        1280,
+        900
+      ],
+      "state": "Processing / Calibration. Shared pairing default saved off, C925 explicit override saved on, Ultra Cat inheriting off. This changes only the disposable fixture registry; the test then resets C925 to inheritance.",
+      "test": "static/e2e/rig-database-navigation.spec.ts",
+      "captured_at": "2026-10-27T00:58:42.682362-07:00",
+      "sha256": "382bd52c1f63ed6af11c1543efa1aaec55a6372aabe214b2f172726c498c17b2"
     }
   ]
 }
