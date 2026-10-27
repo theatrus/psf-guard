@@ -15,8 +15,10 @@ APIs. No live database or paired acquisition client is involved.
 The gallery includes the overview, database files, Sync, New / import,
 quality analysis, calibrated-copy defaults, a saved database override,
 AstroBin filter maps, rig setup and shared Sites. Each database has a direct
-**Import** page with editable scan rules and automatic-import controls. Its
-sample edits are discarded, so no schedule is saved. The new-database form
+**Import** page with saved scan rules collapsed by default and an enabled
+**Preview import** action. Separate captures show the expanded filter editor
+and a manual preview offering to add one new frame to an existing database.
+No confirmation is submitted. The filter-editing sample edits are discarded, so no schedule is saved. The new-database form
 shows the same scan rules; that test applies them to the first import,
 checks the saved rules, edits them on Import, and previews without importing
 more frames.
