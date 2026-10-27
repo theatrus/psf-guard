@@ -226,6 +226,8 @@ test('new image databases apply scan rules immediately and keep them editable on
       scroller.scrollTop += element.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
     });
     await expect(page.getByRole('button', { name: 'Close settings' })).toBeInViewport();
+    expect(await page.locator('.tauri-settings .modal-body').evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+    expect(await preview.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
     await page.screenshot({ path: testInfo.outputPath(`manual-import-preview-${width}.png`), animations: 'disabled' });
   }
   expect(targetNames(summary.database_path)).toEqual(['M31']);

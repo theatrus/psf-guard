@@ -32,6 +32,7 @@
   folders offers the same exclusion patterns and scan filters before the first import.
 - Import uses saved filters by default. Expand **Scan rules** to edit them;
   saving closes the editor again. New-database filters start collapsed too.
+  Long folder paths wrap within the manual import preview on phones.
 
 - PSF Guard's zstd library is updated for memory-safety advisories in its
   stream and context handling. PSF Guard uses zstd to read and write
