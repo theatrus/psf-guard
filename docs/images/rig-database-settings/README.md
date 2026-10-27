@@ -14,9 +14,12 @@ APIs. No live database or paired acquisition client is involved.
 
 The gallery includes the overview, database files, Sync, New / import,
 quality analysis, calibrated-copy defaults, a saved database override,
-AstroBin filter maps, rig setup and shared Sites. Automatic import is shown
-under **Database & files → Edit paths and import**. Those sample form edits
-are discarded by the test, so no import schedule is saved.
+AstroBin filter maps, rig setup and shared Sites. Each database has a direct
+**Import** page with editable scan rules and automatic-import controls. Its
+sample edits are discarded, so no schedule is saved. The new-database form
+shows the same scan rules; that test applies them to the first import,
+checks the saved rules, edits them on Import, and previews without importing
+more frames.
 
 Desktop captures use Chromium at 1280 × 900 CSS pixels, except Rig setup and
 Sites at 1440 × 1000. Phone captures use WebKit at 390 × 844 CSS pixels,
@@ -27,7 +30,7 @@ inside Settings; the header and phone section chooser remain visible.
 To reshoot, build the frontend and backend from the same implementation,
 then run these specs through `scripts/e2e-local.mjs`, one run at a time:
 
-- Main suite: `static/e2e/rig-database-navigation.spec.ts`
+- Main suite: `static/e2e/rig-database-navigation.spec.ts` and `static/e2e/scan-rules.spec.ts`
 - Director suite: `static/e2e-director/settings-context.spec.ts`
 
 Copy the PNGs without editing them, update the capture record, and inspect
