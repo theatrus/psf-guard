@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { registerFixtureDb, resetDatabases, waitForCacheReady, openSettings } from './helpers';
+import { registerFixtureDb, resetDatabases, waitForCacheReady, openSettings, selectSettingsSection } from './helpers';
 
 let dbId: string;
 
@@ -138,7 +138,8 @@ test('the Overview opens the AstroBin dialog for a target and maps a filter from
 test('Settings shows each database its own filter map with night ranges', async ({ page }) => {
   await page.goto('/');
   await openSettings(page);
-  const summary = page.locator('.astrobin-filter-summary');
+  await selectSettingsSection(page, 'astrobin');
+  const summary = page.getByRole('region', { name: 'AstroBin Rig filter map' }).locator('.astrobin-filter-summary');
   await expect(summary).toContainText('none yet');
   await summary.getByRole('button', { name: 'Edit filters' }).click();
 
@@ -173,7 +174,8 @@ test('a filter map entry fits the dialog at every width, without scrolling sidew
 }) => {
   await page.goto('/');
   await openSettings(page);
-  await page.locator('.astrobin-filter-summary').getByRole('button', { name: 'Edit filters' }).click();
+  await selectSettingsSection(page, 'astrobin');
+  await page.getByRole('region', { name: 'AstroBin Rig filter map' }).getByRole('button', { name: 'Edit filters' }).click();
   const dialog = page.locator('.astrobin-filter-map');
   await dialog.getByRole('button', { name: /^Add B, / }).click();
   await dialog

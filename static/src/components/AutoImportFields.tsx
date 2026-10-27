@@ -72,7 +72,7 @@ export default function AutoImportFields({ value, onChange }: AutoImportFieldsPr
             className="file-path-input"
             value={value.new_targets ?? 'ask'}
             onChange={(event) => set({ new_targets: event.target.value as NewTargets })}
-            title="Lights that match no target in the catalog"
+            title="Lights that match no target in the database"
           >
             <option value="ask">Ask first</option>
             <option value="skip">Leave out</option>
@@ -100,7 +100,7 @@ export default function AutoImportFields({ value, onChange }: AutoImportFieldsPr
             </small>
           )}
           <small className="muted">
-            A run reads only files the catalog does not have yet, with the same
+            A run reads only files the database does not have yet, with the same
             matching rules as the Import button.
           </small>
         </>

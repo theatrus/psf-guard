@@ -2061,7 +2061,7 @@ export default function TauriSettings({
                                 aria-controls={isEditing ? editorId : undefined}
                               >
                                 <Pencil size={14} aria-hidden="true" />
-                                Edit
+                                Edit paths and import
                               </button>
                               <button
                                 type="button"
@@ -2108,6 +2108,13 @@ export default function TauriSettings({
                       )}
                     </dl>
                     <div className="db-row-details">
+                      <p className="review-preferences-note">
+                        Choose <strong>Edit paths and import</strong> for automatic import and scan rules.
+                        {' '}Other processing settings:{' '}
+                        <button type="button" className="link-button" onClick={() => requestSection('review')}>Quality analysis</button>
+                        {' · '}
+                        <button type="button" className="link-button" onClick={() => requestSection('calibration')}>Calibrated-copy pairing</button>.
+                      </p>
                       <CalibrationLibrarySummary
                         dbId={entry.id}
                         onOpen={onClose}

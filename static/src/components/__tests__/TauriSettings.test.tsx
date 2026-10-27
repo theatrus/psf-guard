@@ -437,7 +437,7 @@ describe('TauriSettings import state', () => {
       wrapper: createWrapper(),
     });
 
-    fireEvent.click(await screen.findByText('Archive · Uses global settings'));
+    fireEvent.click(await screen.findByRole('button', { name: /^Archive.*Uses global settings$/ }));
     expect(
       await screen.findByText(/Analyzing quality in the background… 1\/4 targets/)
     ).toBeInTheDocument();

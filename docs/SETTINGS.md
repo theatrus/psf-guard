@@ -86,13 +86,18 @@ and registered copies with their lights**. Shared defaults apply to newly added
 databases. Already configured databases keep their previous choices as explicit
 overrides, including choices that matched the old built-in defaults.
 
-Each page has **Shared defaults** and **Database overrides**. Expand a
+Each page has **Global settings** and **Databases**. Expand a
 database to review its values. Click **Override global setting** to set a
-value for that database, then click **Save database overrides**. Turn
+value for that database, then click **Save database**. Turn
 **Override global setting** off and save to use the shared value. A shared
 change affects only databases that inherit that setting. It does not replace
 another database's explicit choice. Save controls and unsaved-edit warnings
 work separately for defaults and each database.
+
+The database rows, override counts, On/Off selectors and inherited-value
+labels use the same controls as the rig overrides in **Calibration**.
+Choose **Use global settings for all fields**, then **Save database**, to
+reset all fields shown in that database editor.
 
 Turning automatic analysis on also queues frames already waiting for quality
 analysis. Pairing changes apply to future imports and pairing scans. Changing
@@ -103,6 +108,18 @@ remain unchanged.
 Open **Exports & integrations → AstroBin** for shared filter IDs and the
 **Database filter maps** below them. A database's matching filter/date entry
 replaces the shared ID. The maps retain their existing scope and storage.
+
+## Configure imports
+
+Choose a database, open **Database & files**, then click **Edit paths and
+import**. **Scan rules** controls which files an import includes.
+**Automatic import** controls its schedule, frame types, new targets and
+background analysis. Click **Save Changes** to apply the database's import settings.
+
+For a manual import, click **Import**. Its preview offers **Skip processed
+files**, **Include frames from other rigs**, and quality analysis for that
+import. These controls do not change the global quality-analysis defaults.
+See [Import new frames automatically](IMPORTING.md#import-new-frames-automatically).
 
 ## Keep edits when navigating
 

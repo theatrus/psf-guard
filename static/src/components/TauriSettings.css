@@ -3052,9 +3052,3 @@
 }
 .tauri-settings .settings-tab[aria-expanded] { display: flex; align-items: center; gap: 0.4rem; }
 .tauri-settings .settings-tab[aria-expanded='true'] > svg { transform: rotate(90deg); }
-
-.tauri-settings .processing-policy-editor .calibration-rule-setting > label {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-}

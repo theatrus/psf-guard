@@ -21,6 +21,8 @@ import {
 } from '../utils/calibrationRules';
 import { invalidateCalibrationViews } from '../utils/calibrationQueries';
 import CalibrationRuleControl from './CalibrationRuleControl';
+import SettingsOverrideItem from './SettingsOverrideItem';
+import SettingsRuleOverride from './SettingsRuleOverride';
 import { invalidateNightSplitViews } from '../hooks/useNightSplit';
 import UnsavedMark from './UnsavedMark';
 import { openSettings } from '../utils/settingsIntent';
@@ -113,20 +115,15 @@ export default function CalibrationRigSettings({ focusRig = null, focusField = n
               rig.frames > 0 ? plural(rig.frames, 'calibration frame') : null,
             ].filter(Boolean).join(' · ');
             return (
-              <li key={rig.rig_uuid} className="calibration-rig-item">
-                <button
-                  type="button"
-                  className="calibration-rig-toggle"
-                  aria-expanded={expanded}
-                  aria-controls={`calibration-rig-${rig.rig_uuid}`}
-                  onClick={() => setOpen(expanded ? null : rig.rig_uuid)}
-                >
-                  <span className="calibration-rig-name">{rig.name}</span>
-                  {meta && <span className="calibration-rig-meta">{meta}</span>}
-                  <span className={`calibration-rig-count${own > 0 ? ' has-own-values' : ''}`}>
-                    {own > 0 ? plural(own, 'override') : 'Uses global settings'}
-                  </span>
-                </button>
+              <SettingsOverrideItem
+                key={rig.rig_uuid}
+                name={rig.name}
+                meta={meta}
+                count={own}
+                expanded={expanded}
+                editorId={`calibration-rig-${rig.rig_uuid}`}
+                onToggle={() => setOpen(expanded ? null : rig.rig_uuid)}
+              >
                 {expanded && (
                   <RigEditor
                     rig={rig}
@@ -134,7 +131,7 @@ export default function CalibrationRigSettings({ focusRig = null, focusField = n
                     globalRules={data.rules ?? {}}
                   />
                 )}
-              </li>
+              </SettingsOverrideItem>
             );
           })}
         </ul>
@@ -295,29 +292,21 @@ function RigEditor({ rig, fields, globalRules }: RigEditorProps) {
                       <small>{field.help}</small>
                     </span>
                     <div className="calibration-rule-setting">
-                      {isOwn ? (
+                      <SettingsRuleOverride
+                        label={field.label}
+                        isOwn={isOwn}
+                        inheritedValue={describeRuleValue(field, from.value)}
+                        source={from.source}
+                        target="rig"
+                        onToggle={() => toggle(field)}
+                      >
                         <CalibrationRuleControl
                           field={field}
                           draft={own[field.key]}
                           invalid={!!error}
                           onChange={(draft) => setOwn((previous) => ({ ...previous, [field.key]: draft }))}
                         />
-                      ) : (
-                        <p className="calibration-rule-inherited">
-                          {describeRuleValue(field, from.value)}
-                          <small> · {from.source}</small>
-                        </p>
-                      )}
-                      <button
-                        type="button"
-                        className="calibration-rule-own"
-                        aria-pressed={isOwn}
-                        aria-label={`${field.label}: override global setting`}
-                        title={isOwn ? 'Use global setting' : 'Set a value for this rig'}
-                        onClick={() => toggle(field)}
-                      >
-                        Override global setting
-                      </button>
+                      </SettingsRuleOverride>
                       {error && <p className="error-text">{error}</p>}
                     </div>
                   </div>

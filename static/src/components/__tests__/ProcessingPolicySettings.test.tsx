@@ -34,29 +34,58 @@ describe('Shared processing settings', () => {
   it('saves only changed defaults and leaves database overrides intact', async () => {
     const updates = fixture();
     render(<ProcessingPolicySettings kind="quality" canManage />, { wrapper: wrapper() });
-    const shared = await screen.findByRole('region', { name: 'Shared defaults' });
-    fireEvent.click(within(shared).getByRole('checkbox', { name: 'Analyze new frames as they arrive' }));
-    fireEvent.click(within(shared).getByRole('button', { name: 'Save shared defaults' }));
+    const shared = await screen.findByRole('region', { name: 'Global settings' });
+    fireEvent.change(within(shared).getByRole('combobox', { name: 'Analyze new frames as they arrive' }), { target: { value: 'on' } });
+    fireEvent.click(within(shared).getByRole('button', { name: 'Save global settings' }));
     await waitFor(() => expect(updates).toEqual([{ values: { analyze_new_frames: true } }]));
     const c925 = screen.getByRole('region', { name: 'C925 overrides', hidden: true });
-    expect(within(c925).getByLabelText('Analyze new frames as they arrive')).not.toBeChecked();
+    expect(within(c925).getByLabelText('Analyze new frames as they arrive')).toHaveValue('off');
   });
   it('restores inheritance for one database without changing other fields', async () => {
     const updates = fixture();
     render(<ProcessingPolicySettings kind="pairing" canManage />, { wrapper: wrapper() });
-    fireEvent.click(await screen.findByText('C925 · Has overrides'));
+    fireEvent.click(await screen.findByRole('button', { name: /^C925.*1 override$/ }));
     const own = screen.getByRole('region', { name: 'C925 overrides' });
     fireEvent.click(within(own).getByRole('button', { name: /override global setting/ }));
-    expect(within(own).getByText('· from shared defaults')).toBeInTheDocument();
-    fireEvent.click(within(own).getByRole('button', { name: 'Save database overrides' }));
+    expect(within(own).getByText('· global')).toBeInTheDocument();
+    fireEvent.click(within(own).getByRole('button', { name: 'Save database' }));
     await waitFor(() => expect(updates).toEqual([{ database_id: 'c925', values: { pair_calibrated_copies: null } }]));
-    expect(await screen.findByText('C925 · Uses global settings')).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /^C925.*Uses global settings$/ })).toBeInTheDocument();
   });
   it('keeps inherited values visible but disables writes without database management', async () => {
     fixture();
     render(<ProcessingPolicySettings kind="pairing" canManage={false} />, { wrapper: wrapper() });
-    const shared = await screen.findByRole('region', { name: 'Shared defaults' });
-    expect(within(shared).getByRole('checkbox')).toBeDisabled();
-    expect(within(shared).getByRole('button', { name: 'Save shared defaults' })).toBeDisabled();
+    const shared = await screen.findByRole('region', { name: 'Global settings' });
+    expect(within(shared).getByRole('combobox')).toBeDisabled();
+    expect(within(shared).getByRole('button', { name: 'Save global settings' })).toBeDisabled();
+  });
+  it('keeps a database draft when its override row is collapsed', async () => {
+    const updates = fixture();
+    render(<ProcessingPolicySettings kind="pairing" canManage />, { wrapper: wrapper() });
+    const row = await screen.findByRole('button', { name: /^C925.*1 override$/ });
+    fireEvent.click(row);
+    const own = screen.getByRole('region', { name: 'C925 overrides' });
+    fireEvent.change(within(own).getByRole('combobox'), { target: { value: 'off' } });
+    fireEvent.click(row);
+    expect(own).not.toBeVisible();
+    fireEvent.click(row);
+    expect(within(own).getByRole('combobox')).toHaveValue('off');
+    fireEvent.click(within(own).getByRole('button', { name: 'Save database' }));
+    await waitFor(() => expect(updates).toEqual([{ database_id: 'c925', values: { pair_calibrated_copies: false } }]));
+  });
+  it('resets all displayed quality overrides only when the database is saved', async () => {
+    const updates = fixture();
+    render(<ProcessingPolicySettings kind="quality" canManage />, { wrapper: wrapper() });
+    fireEvent.click(await screen.findByRole('button', { name: /^C925.*2 overrides$/ }));
+    const own = screen.getByRole('region', { name: 'C925 overrides' });
+    fireEvent.click(within(own).getByRole('button', { name: 'Use global settings for all fields' }));
+    expect(within(own).queryByRole('combobox')).not.toBeInTheDocument();
+    expect(within(own).getAllByText('· global')).toHaveLength(2);
+    expect(updates).toEqual([]);
+    fireEvent.click(within(own).getByRole('button', { name: 'Save database' }));
+    await waitFor(() => expect(updates).toEqual([{
+      database_id: 'c925', values: { analyze_new_frames: null, scan_calibrated_copies: null },
+    }]));
+    expect(await screen.findByRole('button', { name: /^C925.*Uses global settings$/ })).toBeInTheDocument();
   });
 });

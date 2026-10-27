@@ -32,7 +32,7 @@ export default function AutoImportSummary({ dbId, settings, onReview }: AutoImpo
         className="browse-button"
         onClick={() => job.run()}
         disabled={job.isStarting || job.isRunning}
-        title="Scan the image directories now for frames the catalog does not have yet"
+        title="Scan the image directories now for frames the database does not have yet"
       >
         {job.isRunning ? 'Importing…' : 'Run now'}
       </button>

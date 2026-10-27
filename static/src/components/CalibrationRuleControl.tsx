@@ -1,5 +1,6 @@
 import type { CalibrationRuleField } from '../api/types';
 import { checkOptions, type RuleDraft } from '../utils/calibrationRules';
+import SettingsToggle from './SettingsToggle';
 
 interface CalibrationRuleControlProps {
   field: CalibrationRuleField;
@@ -47,14 +48,7 @@ export default function CalibrationRuleControl({
       );
     case 'toggle':
       return (
-        <select
-          value={draft === true ? 'on' : 'off'}
-          aria-label={label}
-          onChange={(event) => onChange(event.target.value === 'on')}
-        >
-          <option value="on">On</option>
-          <option value="off">Off</option>
-        </select>
+        <SettingsToggle label={label} value={draft === true} onChange={onChange} />
       );
     case 'choice':
       return (

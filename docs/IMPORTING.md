@@ -365,7 +365,7 @@ Image folders often hold more than lights: autofocus frames, plate-solve
 tests, flats, pier-camera timelapses, processing output. Scan rules leave
 those out of every import from a database's folders, so you do not have to
 move your files to suit PSF Guard. Open the database under **Settings → Databases & rigs → Overview**, then
-choose **Database & files → Edit → Scan rules**:
+choose **Database & files → Edit paths and import → Scan rules**:
 
 - **Exclude**: one pattern per line. A file or folder that matches is left
   out, and a folder that matches is never entered, so nothing below it is
@@ -427,8 +427,9 @@ The rules travel with the database entry in the registry as `scan_rules`.
 
 A database can scan its image directories on its own and import what is
 new, so a night's frames are in the catalog by the time you sit down.
-Open the database under **Settings → Databases & rigs → Overview**, then
-turn on **Database & files → Edit → Automatic import**:
+Choose the database in **Settings**, open **Database & files**, then click
+**Edit paths and import**. Turn on **Automatic import → Automatically import
+new frames**:
 
 - **Run when the app or server opens this database**: once at start, and
   once when you first enable it.
@@ -606,8 +607,9 @@ The same applies after you merge projects.
 
 ## Fill or refresh quality data
 
-Header import leaves pixel work for a separate, low-priority server job. Each
-database card in Settings has two actions:
+Header import leaves pixel work for a separate, low-priority server job.
+Open **Settings → Review → Grading & display → Quality analysis**, then
+expand a database for these actions:
 
 - **Analyze Missing Quality** keeps valid cached work and fills gaps.
 - **Rescan All Quality** recomputes star counts and all cached quality evidence.
@@ -637,7 +639,7 @@ analysis defaults and database overrides. Expand a database for manual analysis
 actions and the preference for writing missing star metadata. Find calibrated-copy
 pairing defaults and overrides under **Processing → Calibration → Calibrated copies**.
 
-![A database on the Databases page: Analyze Missing Quality, Rescan All Quality and the per-database options](settings-database-options.png)
+![Quality analysis defaults and database overrides in Grading & display](images/rig-database-settings/quality-settings-desktop.png)
 
 The backfill uses the N.I.N.A. Fast detector for star count and HFR, which keeps
 new values comparable with Target Scheduler data. It also stores the full-star
