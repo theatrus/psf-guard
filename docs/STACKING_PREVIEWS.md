@@ -403,6 +403,16 @@ These are reference-sized estimates, not a hard process-memory limit: larger
 source frames, decoder scratch buffers, and other activity can need more RAM.
 Separate channels and queued stack jobs still run one at a time.
 
+A mosaic plans again once its canvas is known. The canvas sets the admission
+and serial-peak estimates. Seiza prepares a frame at its own size and resamples
+it only where it lands, so it sizes each preparation worker for one frame and
+the most of the canvas that frame can cover. The frame is the largest panel
+reference frame the canvas was planned from, turned to any angle, at the 4%
+scale difference Seiza accepts, with no side longer than the canvas's. A large
+canvas therefore still prepares several frames at once. The log line
+`Stack pipeline memory replanned for the mosaic canvas` shows the canvas and
+the new plan.
+
 Logs report the configured workers, estimated memory, and for each batch the
 pipeline mode, frames in preparation at once, integrated, rejected and failed
 frames, and elapsed time. Final transient rejection still replays frames sequentially within the
@@ -1021,6 +1031,22 @@ When a color composition or stretch exceeds the budget, the error shows its
 estimated memory, the budget and the measured memory, with this Settings path.
 Change the budget if the server can use more memory, or use smaller input images.
 The estimate is a planning limit, rather than a reservation of memory.
+
+A color composition keeps every source channel in memory until it writes the
+result, and runs its steps one after another. Its estimate is 4 bytes per
+reference pixel for each channel, plus the largest step: the composition
+itself, input deconvolution, continuum subtraction, RC-Astro on the input or
+color channels, or star replacement. When an RC-Astro tool such as
+StarXTerminator runs on this server, the estimate also includes the tool's own
+process, about 48 bytes per sample of the image it processes. A tool whose
+result is cached is not counted, nor one that a connected worker would claim
+when the composition starts: a worker with the same tool and version,
+licensed. A worker that disconnects later sends the step back to this server.
+To lower a large star-replacement estimate, add a worker in
+**Settings › Workers**. The
+server log shows each estimate and its largest step, for example
+`22566 MiB estimated, 264 bytes a pixel for 6 channel(s) of 89631126 pixels;
+largest step: star replacement`.
 
 The choice is saved on the server for every database. **Use the default memory
 budget** restores `[server].memory_budget_fraction` from the TOML config, or 0.5

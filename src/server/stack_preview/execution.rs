@@ -183,7 +183,54 @@ pub(super) fn plan_pipeline(
     master_plan: &CalibrationPlan,
     threads: &ThreadBudget,
 ) -> Result<PipelineBudget, String> {
-    if output_pixels == 0 || output_samples < output_pixels {
+    plan_pipeline_with_frames(
+        available_bytes,
+        policy,
+        output_pixels,
+        output_samples,
+        PoolPipelineMemory::for_reference(output_pixels, output_samples),
+        master_plan,
+        threads,
+    )
+}
+
+/// [`plan_pipeline`] for a mosaic. The canvas sets the stack's own
+/// buffers and its serial peak. Seiza resamples each frame only into the
+/// part of the canvas it reaches, so `memory`, the stacker's
+/// [`seiza_stacking::LiveStacker::pipeline_memory`], sets what each
+/// preparation worker holds. Sizing workers by the canvas reserved several
+/// times what they use and ran a large canvas one frame at a time.
+pub(super) fn plan_mosaic_pipeline(
+    available_bytes: Option<u64>,
+    policy: &WorkerPolicy,
+    (canvas_width, canvas_height): (usize, usize),
+    channels: usize,
+    memory: PoolPipelineMemory,
+    master_plan: &CalibrationPlan,
+    threads: &ThreadBudget,
+) -> Result<PipelineBudget, String> {
+    let canvas_pixels = canvas_width.saturating_mul(canvas_height);
+    plan_pipeline_with_frames(
+        available_bytes,
+        policy,
+        canvas_pixels,
+        canvas_pixels.saturating_mul(channels),
+        memory,
+        master_plan,
+        threads,
+    )
+}
+
+fn plan_pipeline_with_frames(
+    available_bytes: Option<u64>,
+    policy: &WorkerPolicy,
+    output_pixels: usize,
+    output_samples: usize,
+    memory: PoolPipelineMemory,
+    master_plan: &CalibrationPlan,
+    threads: &ThreadBudget,
+) -> Result<PipelineBudget, String> {
+    if output_pixels == 0 || output_samples < output_pixels || memory.worker_bytes == 0 {
         return Err("Stack pipeline requires a non-empty reference image".into());
     }
     if output_samples
@@ -247,7 +294,6 @@ pub(super) fn plan_pipeline(
 
     // Seiza's budget includes the frame currently being integrated; do not
     // subtract that from the budget twice.
-    let memory = PoolPipelineMemory::for_reference(output_pixels, output_samples);
     let worker_bytes = memory.worker_bytes as u64;
     let integration_bytes = memory.integration_bytes as u64;
     let sequential_bytes = memory.sequential_bytes as u64;
@@ -532,6 +578,48 @@ mod tests {
         assert!(budget.summary().contains("available RAM unknown"));
         assert!(budget.summary().contains("serial peak cannot be checked"));
         assert!(budget.summary().contains("not an RSS limit"));
+    }
+
+    #[test]
+    fn a_mosaic_sizes_its_workers_by_the_frame_and_its_stack_by_the_canvas() {
+        let canvas = (400, 320);
+        let samples = 400 * 320;
+        let serial_peak = samples as u64 * super::super::STACK_BYTES_PER_OUTPUT_SAMPLE;
+        // A 100 x 80 frame resampled onto 120 x 100 of the canvas.
+        let frame = PoolPipelineMemory::for_reference(100 * 80, 120 * 100);
+        let mosaic = |total| {
+            plan_mosaic_pipeline(
+                Some(total),
+                &policy(),
+                canvas,
+                1,
+                frame,
+                &raw_plan(),
+                &allowance(8),
+            )
+        };
+        let budget = mosaic(2 * serial_peak).unwrap();
+        let by_canvas = plan_pipeline(
+            Some(2 * serial_peak),
+            &policy(),
+            samples,
+            samples,
+            &raw_plan(),
+            &allowance(8),
+        )
+        .unwrap();
+        assert_eq!(
+            budget.admission_baseline_bytes,
+            by_canvas.admission_baseline_bytes
+        );
+        assert_eq!(budget.serial_peak_bytes, serial_peak);
+        assert_eq!(budget.worker_bytes, frame.worker_bytes as u64);
+        assert!(budget.worker_bytes * 3 < by_canvas.worker_bytes);
+        assert_eq!(by_canvas.workers, 1);
+        assert_eq!(budget.workers, 4);
+        // The canvas's own peak is checked as before.
+        let error = mosaic(serial_peak - 1).err().unwrap();
+        assert!(error.contains("serial processing"));
     }
 
     #[test]

@@ -413,19 +413,32 @@ pub(super) fn integrate_channel(
         return Ok(ChannelOutcome::Cancelled);
     }
     let (mut stacker, mut ledger, mut points, mut orientation_vote) = initialized?;
-    // A mosaic's canvas, not its reference frame, sets the memory each
-    // frame needs.
+    // A mosaic's canvas sets the stack's own memory; each frame still
+    // arrives at its own size and lands on part of the canvas, which Seiza
+    // sizes from the frames it planned the canvas with.
     if group.mosaic {
         let view = stacker.view();
-        pipeline_budget = execution::plan_pipeline(
+        pipeline_budget = execution::plan_mosaic_pipeline(
             available_memory,
             worker_policy,
-            view.width * view.height,
-            view.mean.len(),
+            (view.width, view.height),
+            view.channels,
+            stacker.pipeline_memory(),
             plan,
             &threads,
         )?;
         threads = pipeline_budget.threads;
+        tracing::info!(
+            job_id,
+            group_index = group.index,
+            canvas_width = view.width,
+            canvas_height = view.height,
+            compute_workers = threads.compute_workers,
+            preparation_workers = threads.preparation_workers,
+            serial = threads.serial,
+            memory = %pipeline_budget.summary(),
+            "Stack pipeline memory replanned for the mosaic canvas"
+        );
     }
     // The reference frame alone is the first depth on the curve and the
     // baseline every later depth is read against: one frame's noise.

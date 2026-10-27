@@ -33,6 +33,14 @@ pub struct Offered {
 }
 
 impl Workers {
+    /// Whether this server would run a step with `schema` itself, were it
+    /// queued now. See [`super::board::Board::runs_here`].
+    pub fn rc_astro_runs_here(&self, schema: &ExternalToolSchema) -> bool {
+        self.refresh_local();
+        self.board
+            .runs_here(TaskKind::RcAstroStep, &TaskNeeds::rc_astro(schema))
+    }
+
     /// The schema each tool would run with: the first connected worker's by
     /// name that takes the tool, otherwise this server's. A licensed schema
     /// wins over an unlicensed one. Spawns short-lived processes when this
@@ -166,12 +174,7 @@ pub(crate) fn run_on_board(
             schema.name, image.width, image.height
         ),
         person,
-        needs: TaskNeeds::RcAstro {
-            tool: schema.key.clone(),
-            name: schema.name.clone(),
-            cli_version: schema.cli_version.clone(),
-            ml_version: schema.ml_version,
-        },
+        needs: TaskNeeds::rc_astro(schema),
         spec: serde_json::to_value(&spec).map_err(|error| error.to_string())?,
         inputs: vec![(task::INPUT.into(), input)],
         outputs: vec![(task::PROCESSED.into(), true), (task::STARS.into(), false)],

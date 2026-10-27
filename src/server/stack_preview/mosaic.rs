@@ -282,6 +282,19 @@ mod tests {
             0,
             "planning must not integrate its anchor"
         );
+        // Each frame is planned for at the panels' frame size, not the
+        // canvas's.
+        let view = stacker.view();
+        let canvas = seiza_stacking::PoolPipelineMemory::for_reference(
+            view.width * view.height,
+            view.width * view.height * view.channels,
+        );
+        let memory = stacker.pipeline_memory();
+        assert!(
+            memory.worker_bytes < canvas.worker_bytes,
+            "{memory:?} on {canvas:?}"
+        );
+        assert!(memory.worker_bytes >= 64 * 600 * 440, "{memory:?}");
         let mut ledger = Vec::new();
         for (index, source) in group.frames.iter().enumerate() {
             use_session(&mut stacker, &plan.sessions[plan.assignments[index]]).unwrap();

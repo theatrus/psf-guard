@@ -70,6 +70,17 @@ pub enum TaskNeeds {
 }
 
 impl TaskNeeds {
+    /// An RC-Astro step run with `schema`: its tool, licensed, at its CLI
+    /// and model version.
+    pub fn rc_astro(schema: &seiza_stacking::ExternalToolSchema) -> Self {
+        TaskNeeds::RcAstro {
+            tool: schema.key.clone(),
+            name: schema.name.clone(),
+            cli_version: schema.cli_version.clone(),
+            ml_version: schema.ml_version,
+        }
+    }
+
     fn met_by(&self, offers: &Offers) -> bool {
         match self {
             TaskNeeds::RcAstro {
@@ -545,6 +556,29 @@ impl Board {
 
     pub fn placement(&self, kind: TaskKind) -> WorkPlacement {
         self.lock().placement(kind)
+    }
+
+    /// Whether this server's own worker would run a task of `kind` with
+    /// `needs`, were it queued now, by the rule `Inner::may_run` applies: it
+    /// offers what the task needs, the placement allows this server, and
+    /// under workers first no connected worker of another machine could
+    /// claim it. A worker that connects, leaves or refuses the task later
+    /// can still change where it runs.
+    pub fn runs_here(&self, kind: TaskKind, needs: &TaskNeeds) -> bool {
+        let now = Instant::now();
+        let inner = self.lock();
+        let placement = inner.placement(kind);
+        let may_run =
+            |session: &Session| needs.met_by(&session.offers) && placement.allows(session.local);
+        inner
+            .sessions
+            .values()
+            .any(|session| session.local && may_run(session))
+            && !(placement == WorkPlacement::WorkersFirst
+                && inner
+                    .sessions
+                    .values()
+                    .any(|other| !other.local && other.online(now) && may_run(other)))
     }
 
     /// Stop handing out work: claims answer at once, and this server's
