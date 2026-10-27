@@ -45,7 +45,7 @@ test('desktop UI zoom works from the menu and shortcuts, including Settings, and
   await page.screenshot({ path: testInfo.outputPath('desktop-ui-zoom-settings.png') });
   await page.keyboard.press('Control+0');
   await expect.poll(() => page.evaluate(() => localStorage.getItem('psf-guard.ui-zoom-percent'))).toBe('100');
-  await page.getByRole('button', { name: 'Done', exact: true }).click();
+  await page.getByRole('button', { name: 'Close settings', exact: true }).click();
   await page.keyboard.press('Meta+-');
   await expect.poll(() => page.evaluate(() => localStorage.getItem('psf-guard.ui-zoom-percent'))).toBe('90');
   await page.reload();

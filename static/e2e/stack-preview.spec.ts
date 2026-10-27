@@ -1785,7 +1785,7 @@ test('starts a first color preview from the default Color setup, chosen in Setti
   await expect(faintRow.getByRole('button', { name: 'Delete' })).toBeDisabled();
   await expect(seededRow.getByRole('button', { name: 'Delete' })).toBeEnabled();
   await manager.screenshot({ path: testInfo.outputPath('default-color-setup-marked.png') });
-  await settingsModal.locator('.close-button').click();
+  await settingsModal.getByRole('button', { name: 'Close settings' }).click();
 
   // The first RGB build of this target asks for the marked setup's pipeline.
   const section = page.locator('.stack-color-section');
@@ -2134,7 +2134,7 @@ test('composes cached channel stacks into RGB, LRGB, and selectable narrowband p
   await importedRow.getByRole('button', { name: 'Delete' }).click();
   await expect(manager).toContainText('Deleted “Imported pipeline”');
   await expect(manager.locator('tbody tr')).toHaveCount(2);
-  await settingsModal.locator('.close-button').click();
+  await settingsModal.getByRole('button', { name: 'Close settings' }).click();
 
   // The whole stack panel collapses like the detail sections do, and the
   // preference survives a reload.

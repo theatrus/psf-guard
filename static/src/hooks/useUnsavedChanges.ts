@@ -1,9 +1,9 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 
 /*
- * Forms with edits their Save has not sent yet. A form registers while it
- * holds some (useUnsavedChanges); Settings asks before it closes or reloads
- * while any are registered, and the browser asks before the page goes.
+ * Forms register unsaved edits with useUnsavedChanges. Settings asks before
+ * closing, restart controls stay disabled, and the browser asks before
+ * unloading the page while forms have unsaved edits.
  */
 
 const pending = new Map<symbol, string>();

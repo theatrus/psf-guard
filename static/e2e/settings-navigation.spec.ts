@@ -1,5 +1,16 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { openSettings, registerFixtureDb, resetDatabases, selectSettingsSection, waitForCacheReady } from './helpers';
+
+async function expectCompactHeader(page: Page) {
+  const actions = page.getByRole('group', { name: 'Settings actions' });
+  await expect(actions.getByRole('button', { name: 'Close settings' })).toBeInViewport();
+  await expect(page.locator('.tauri-settings .modal-footer')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /^(Done|Reload Page|Restart Server)$/i })).toHaveCount(0);
+  const header = await page.locator('.tauri-settings .modal-header').boundingBox();
+  expect(header!.height).toBeLessThan(80);
+  const content = await page.getByRole('tabpanel').boundingBox();
+  expect(content!.y + content!.height).toBeCloseTo(page.viewportSize()!.height, 0);
+}
 
 test.beforeEach(async ({ page, request }) => {
   await resetDatabases(request);
@@ -17,6 +28,7 @@ test('desktop groups related settings, moves GPU and presets, and keeps section 
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto('/');
   await openSettings(page);
+  await expectCompactHeader(page);
   const nav = page.getByRole('tablist', { name: 'Settings sections' });
   await expect(nav).toHaveAttribute('aria-orientation', 'vertical');
   await expect(page.getByRole('tab', { name: 'Rigs', exact: true })).toHaveAccessibleDescription('Databases & rigs');
@@ -63,6 +75,7 @@ test('phone uses a compact grouped chooser for every settings destination', asyn
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/');
   await openSettings(page);
+  await expectCompactHeader(page);
   const chooser = page.getByLabel('Settings section', { exact: true });
   await expect(chooser).toBeVisible();
   await expect(page.getByRole('tablist', { name: 'Settings sections' })).toBeHidden();
@@ -88,6 +101,11 @@ test('phone uses a compact grouped chooser for every settings destination', asyn
   await expect(chooser).toHaveValue('storage');
   await warning.getByRole('button', { name: 'Keep editing' }).click();
   await expect(folder).toHaveValue('/tmp/settings-navigation-unsaved');
+  await page.getByRole('button', { name: 'Close settings' }).click();
+  await expect(warning).toContainText('Close without saving them?');
+  await expect(warning).toBeInViewport();
+  await page.screenshot({ path: testInfo.outputPath('settings-unsaved-phone.png'), animations: 'disabled' });
+  await warning.getByRole('button', { name: 'Keep editing' }).click();
   await selectSettingsSection(page, 'gpu');
   await warning.getByRole('button', { name: 'Discard changes and switch' }).click();
   await expect(chooser).toHaveValue('gpu');

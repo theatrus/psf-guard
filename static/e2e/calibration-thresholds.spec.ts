@@ -189,7 +189,7 @@ test('a thin-master flag clears when the limit is loosened globally, then for on
   await settings.getByRole('button', { name: 'Save', exact: true }).click();
   expect((await saved).ok()).toBeTruthy();
   await expectLevels(request, dbId, { [askar.project]: null, [redcat.project]: null });
-  await page.getByRole('button', { name: 'Done', exact: true }).click();
+  await page.getByRole('button', { name: 'Close settings', exact: true }).click();
   panel = await calibrationPanel(page, dbId, askar);
   await expect(panel.getByText('The library calibrates this light with no findings.')).toBeVisible();
   await expect(panel.getByRole('list', { name: 'Settings that differ from the defaults' }))
@@ -220,7 +220,7 @@ test('a thin-master flag clears when the limit is loosened globally, then for on
   await expect(page.getByRole('button', { name: new RegExp(`^${ASKAR_RIG}`) })).toContainText('1 override');
   await editor.screenshot({ path: testInfo.outputPath('rig-override.png') });
   await expectLevels(request, dbId, { [askar.project]: null, [redcat.project]: 'poor' });
-  await page.getByRole('button', { name: 'Done', exact: true }).click();
+  await page.getByRole('button', { name: 'Close settings', exact: true }).click();
 
   // The Askar's light is clear and says whose limit cleared it; the RedCat's is still flagged.
   panel = await calibrationPanel(page, dbId, askar);
