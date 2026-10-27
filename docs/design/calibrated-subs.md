@@ -262,7 +262,9 @@ builder options, exposure, session identity, flat-stability measurement/retries
 and flat-only pedestal acceptance. PSF Guard supplies its existing catalog rows,
 quality/override records, measured grouping book and effective global/rig settings.
 `library::plan_masters` resolves a verified selection without rematching it;
-`library::flat_retry` drives trim, alternate-session and original-master fallback
+The returned session is passed directly into `library::flat_retry`, retaining
+its policy, held-back inputs and resolved time window. The core rejects
+conflicting overrides and drives trim, alternate-session and original-master fallback
 from measured attempts. Defaults preserve PSF Guard's decisions. Hosts can disable
 individual retry stages or withhold unstable flats using explicit core options.
 
@@ -272,6 +274,6 @@ transitive invalidation, and UI formatting. Current grades/manual choices reach
 core planning so dark screening never overrides them; star masking is forwarded.
 The shared dip-only flat measurement keeps the existing version 2 cache contract,
 mono/RGB/CFA planes, and 65535 ADU scaling for declared-unit sources. Cached
-measurements remain reusable. Ordered input hashes and shared policy version 3
+measurements remain reusable. Ordered input hashes and shared policy version 4
 invalidate older master/stack decisions once. Published dependencies must replace
 the prototype's pinned core revision before merging.

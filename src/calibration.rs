@@ -4338,11 +4338,7 @@ fn resolve_masters_with_recipe(
                 &settings.watch,
                 cancel,
                 &selected.rules,
-                if kind == CalibrationKind::Flat {
-                    &selected.flat_held_back
-                } else {
-                    &[]
-                },
+                &plan,
             ) {
                 // The integrator reads the headers, so it catches what selection
                 // could not: a catalog holds only what it recorded at import.
@@ -6143,7 +6139,7 @@ fn build_master(
     watch: &MasterBuildWatch,
     cancel: Option<&AtomicBool>,
     rules: &Rules,
-    held_back: &[String],
+    session: &seiza_calibration::library::Session,
 ) -> Result<Option<BuiltMaster>> {
     let context = MasterBuildContext {
         conn,
@@ -6168,9 +6164,8 @@ fn build_master(
         return Ok(None);
     };
     let mut request = FlatRetryRequest {
+        session: Some(session.clone()),
         candidates: frames.iter().map(shared::frame).collect(),
-        held_back: held_back.to_vec(),
-        settings: rules.shared_settings(),
         first: first.feedback(),
         ..Default::default()
     };
@@ -7727,13 +7722,17 @@ fn master_subset_report(
     frames: &[CalibrationFrame],
     rules: &Rules,
 ) -> MasterSubset {
+    // Rules::resolve only retains schema-valid effective values. The core
+    // boundary validates them again; failure here is an internal schema drift,
+    // not a catalog frame failing a metadata check (coherence stays permissive).
     let subset = seiza_calibration::library::master_cohort(
         seiza_calibration::library::MasterCohortRequest {
             kind: shared::kind(kind),
             frames: frames.iter().map(shared::frame).collect(),
             settings: rules.shared_settings(),
         },
-    );
+    )
+    .expect("resolved PSF Guard settings satisfy the shared Seiza schema");
     let by_id: HashMap<_, _> = frames.iter().map(|f| (f.frame_uuid.as_str(), f)).collect();
     let rows = |ids: Vec<String>| {
         ids.into_iter()
