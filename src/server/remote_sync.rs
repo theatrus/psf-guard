@@ -1144,7 +1144,7 @@ pub(super) fn require_catalog(catalog: &DatabaseContext, requested: &str) -> Res
         Ok(())
     } else {
         Err(AppError::Forbidden(
-            "API token does not grant access to the requested catalog".into(),
+            "API token does not grant access to the requested database".into(),
         ))
     }
 }
@@ -1308,7 +1308,7 @@ fn classify_materialize_failure(error: &anyhow::Error) -> (AuditOutcome, AppErro
         (
             AuditOutcome::Failed,
             AppError::DatabaseError(format!(
-                "preparing remote sync could not access the live destination catalog{contention}: {error:#}"
+                "preparing remote sync could not access the live destination database{contention}: {error:#}"
             )),
         )
     } else if error_is_sqlite_operational_failure(error) {
@@ -1321,7 +1321,7 @@ fn classify_materialize_failure(error: &anyhow::Error) -> (AuditOutcome, AppErro
     } else {
         (
             AuditOutcome::Refused,
-            AppError::BadRequest(format!("invalid catalog bundle: {error:#}")),
+            AppError::BadRequest(format!("invalid database transfer bundle: {error:#}")),
         )
     }
 }
@@ -2022,7 +2022,7 @@ mod tests {
             assert_eq!(outcome, AuditOutcome::Failed);
             match app_error {
                 AppError::DatabaseError(message) => {
-                    assert!(message.contains("live destination catalog"));
+                    assert!(message.contains("live destination database"));
                     assert!(message.contains("busy or locked"));
                     assert!(message.contains("locked-scheduler.sqlite"));
                     assert!(message.contains("imagedata"));
@@ -2046,7 +2046,7 @@ mod tests {
         assert_eq!(outcome, AuditOutcome::Failed);
         match app_error {
             AppError::DatabaseError(message) => {
-                assert!(message.contains("live destination catalog"));
+                assert!(message.contains("live destination database"));
                 assert!(message.contains("destination-scheduler.sqlite"));
                 assert!(message.contains("exposureplan"));
                 assert!(message.contains("template schema could not be read"));
@@ -2064,7 +2064,7 @@ mod tests {
         assert_eq!(outcome, AuditOutcome::Refused);
         match app_error {
             AppError::BadRequest(message) => {
-                assert!(message.contains("invalid catalog bundle"));
+                assert!(message.contains("invalid database transfer bundle"));
                 assert!(message.contains("duplicate primary key"));
             }
             other => panic!("invalid bundle was misclassified: {other:?}"),

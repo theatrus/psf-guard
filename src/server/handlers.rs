@@ -1660,6 +1660,15 @@ pub async fn create_database_route(
         }
     }
 
+    // Reject invalid rules before creating a database or changing its registry.
+    if let Some(rules) = &req.scan_rules {
+        let roots: Vec<PathBuf> = req.image_dirs.iter().map(PathBuf::from).collect();
+        rules
+            .validate(&roots)
+            .map_err(|error| AppError::BadRequest(error.to_string()))?;
+    }
+    let scan_rules = req.scan_rules.as_ref().map(|rules| rules.normalized());
+
     let _registry_guard = state.registry_write.lock().await;
     let mut reg = DbRegistry::load_or_init(&registry_path)
         .map_err(|e| AppError::InternalError(format!("loading registry: {}", e)))?;
@@ -1685,7 +1694,7 @@ pub async fn create_database_route(
         .map_err(|e| AppError::InternalError(format!("bootstrap task failed: {}", e)))?
         .map_err(|e| AppError::BadRequest(format!("creating database: {}", e)))?;
 
-    let entry = reg
+    let id = reg
         .add(
             req.name.clone(),
             db_path.to_string_lossy().into_owned(),
@@ -1693,7 +1702,15 @@ pub async fn create_database_route(
             req.slug.clone(),
         )
         .map_err(|e| AppError::BadRequest(e.to_string()))?
+        .id
         .clone();
+    let entry = reg
+        .databases
+        .iter_mut()
+        .find(|entry| entry.id == id)
+        .ok_or_else(|| AppError::InternalError("registry update lost the new database".into()))?;
+    entry.scan_rules = scan_rules.filter(|rules| *rules != Default::default());
+    let entry = entry.clone();
 
     let ctx = Arc::new(
         DatabaseContext::from_entry(&entry, state.storage_roots.clone())
@@ -1773,28 +1790,16 @@ pub async fn update_analyze_new_frames(
     ctx: DbContext,
     Json(request): Json<AnalyzeNewFramesRequest>,
 ) -> Result<Json<ApiResponse<QualityBackfillStatusResponse>>, AppError> {
-    require_database_management_allowed(&state)?;
-    let db_id = ctx.id.clone();
-    update_registry(&state, |registry| {
-        let entry = registry
-            .databases
-            .iter_mut()
-            .find(|entry| entry.id == db_id)
-            .ok_or(AppError::NotFound)?;
-        entry.analyze_new_frames = request.enabled;
-        Ok(())
-    })
+    super::processing_settings::save(
+        &state,
+        super::processing_settings::UpdateProcessing {
+            database_id: Some(ctx.id.clone()),
+            values: [("analyze_new_frames".into(), Some(request.enabled))].into(),
+        },
+    )
     .await?;
-    // The live context, which a database edit may have replaced meanwhile.
-    if let Some(live) = state.get_database(&db_id) {
-        live.analyze_new_frames.set(request.enabled);
-    }
-    ctx.analyze_new_frames.set(request.enabled);
-    if request.enabled {
-        // Frames already waiting are analyzed as if they had just arrived.
-        crate::server::quality_arrival::note_arrival(&state, &ctx.id);
-    }
-    get_quality_backfill_progress(State(state), ctx).await
+    let current = state.get_database(&ctx.id).unwrap_or(ctx.0);
+    get_quality_backfill_progress(State(state), DbContext(current)).await
 }
 
 #[derive(Debug, Serialize)]
@@ -1845,33 +1850,23 @@ pub async fn update_calibrated_copies(
     ctx: DbContext,
     Json(request): Json<CalibratedCopiesRequest>,
 ) -> Result<Json<ApiResponse<CalibratedCopiesResponse>>, AppError> {
-    require_database_management_allowed(&state)?;
-    let db_id = ctx.id.clone();
-    update_registry(&state, |registry| {
-        let entry = registry
-            .databases
-            .iter_mut()
-            .find(|entry| entry.id == db_id)
-            .ok_or(AppError::NotFound)?;
-        if let Some(pair) = request.pair {
-            entry.pair_calibrated_copies = pair;
-        }
-        if let Some(scan) = request.scan_calibrated {
-            entry.scan_calibrated_copies = scan;
-        }
-        Ok(())
-    })
-    .await?;
-    let live = state.get_database(&db_id);
-    for context in live.iter().map(|live| &**live).chain([&*ctx.0]) {
-        if let Some(pair) = request.pair {
-            context.pair_calibrated_copies.set(pair);
-        }
-        if let Some(scan) = request.scan_calibrated {
-            context.scan_calibrated_copies.set(scan);
-        }
+    let mut values = std::collections::BTreeMap::new();
+    if let Some(value) = request.pair {
+        values.insert("pair_calibrated_copies".into(), Some(value));
     }
-    get_calibrated_copies(ctx).await
+    if let Some(value) = request.scan_calibrated {
+        values.insert("scan_calibrated_copies".into(), Some(value));
+    }
+    super::processing_settings::save(
+        &state,
+        super::processing_settings::UpdateProcessing {
+            database_id: Some(ctx.id.clone()),
+            values,
+        },
+    )
+    .await?;
+    let current = state.get_database(&ctx.id).unwrap_or(ctx.0);
+    get_calibrated_copies(DbContext(current)).await
 }
 
 pub async fn get_quality_backfill_progress(

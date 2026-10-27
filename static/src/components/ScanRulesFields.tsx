@@ -3,6 +3,7 @@ import type { ScanRules } from '../api/types';
 interface ScanRulesFieldsProps {
   value: ScanRules;
   onChange: (next: ScanRules) => void;
+  showLegend?: boolean;
 }
 
 /** One pattern per line; blank lines are dropped when the server saves. */
@@ -13,11 +14,11 @@ const lines = (text: string) => text.split('\n');
  * image folders leaves out. A `.psfguardignore` file skips its folder
  * whatever is set here.
  */
-export default function ScanRulesFields({ value, onChange }: ScanRulesFieldsProps) {
+export default function ScanRulesFields({ value, onChange, showLegend = true }: ScanRulesFieldsProps) {
   const set = (patch: Partial<ScanRules>) => onChange({ ...value, ...patch });
   return (
-    <fieldset className="autoimport-fields scan-rules-fields">
-      <legend>Scan rules</legend>
+    <fieldset className="calibration-settings-group autoimport-fields scan-rules-fields" aria-label={showLegend ? undefined : 'Scan rules'}>
+      {showLegend && <legend>Scan rules</legend>}
       <label htmlFor="scan-rules-exclude">Exclude:</label>
       <textarea
         id="scan-rules-exclude"

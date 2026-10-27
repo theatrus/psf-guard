@@ -3,10 +3,12 @@ import { useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import type { SchedulerSyncKind, SchedulerSyncResponse } from '../api/types';
 import type { DbEntry } from '../utils/tauri';
+import { STORED_PREVIEW_KEY } from '../utils/syncPreview';
 
 interface SchedulerSyncControlsProps {
   databases: DbEntry[];
   disabled?: boolean;
+  localDatabaseId?: string;
 }
 
 interface PendingSync {
@@ -16,12 +18,10 @@ interface PendingSync {
   result: SchedulerSyncResponse;
 }
 
-const STORED_PREVIEW_KEY = 'psf-guard.scheduler-sync-preview';
-
 const operationLabel = (kind: SchedulerSyncKind) => {
   switch (kind) {
     case 'pull':
-      return 'Merge catalogs';
+      return 'Merge databases';
     case 'push_planning':
       return 'Send planning';
     case 'push_grades':
@@ -40,7 +40,7 @@ const deletedProjectsLine = (result: SchedulerSyncResponse) => {
     (result.target.deleted ?? 0) > 0 ? plural(result.target.deleted ?? 0, 'target') : null,
     (result.exposureplan.deleted ?? 0) > 0 ? plural(result.exposureplan.deleted ?? 0, 'exposure plan') : null,
   ].filter((part): part is string => part !== null);
-  return `Deletes ${plural(projects, 'project')} that the source catalog deleted${
+  return `Deletes ${plural(projects, 'project')} that the source database deleted${
     parts.length > 0 ? `, with ${parts.join(' and ')}` : ''
   }. Nothing was captured for ${projects === 1 ? 'it' : 'them'} in the destination.`;
 };
@@ -68,13 +68,15 @@ const calibrationChoiceLine = (result: SchedulerSyncResponse) => {
 export default function SchedulerSyncControls({
   databases: catalogs,
   disabled = false,
+  localDatabaseId,
 }: SchedulerSyncControlsProps) {
   const databases = useMemo(() => catalogs.flatMap(catalog => [catalog, ...(catalog.ts_sync ? [{
     ...catalog, id: `ts:${catalog.id}`, name: `${catalog.name} — Target Scheduler`,
     db_path: catalog.ts_sync.source_path, ts_sync: undefined,
   }] : [])]), [catalogs]);
   const queryClient = useQueryClient();
-  const firstTs = databases.find(database => database.id.startsWith('ts:'));
+  const firstTs = databases.find(database => localDatabaseId ? database.id === `ts:${localDatabaseId}` : database.id.startsWith('ts:'));
+  const previewStorageKey = localDatabaseId ? `${STORED_PREVIEW_KEY}:${localDatabaseId}` : STORED_PREVIEW_KEY;
   const [sourceId, setSourceId] = useState(firstTs?.id ?? databases[0]?.id ?? '');
   const [destinationId, setDestinationId] = useState(firstTs?.id.slice(3) ?? databases[1]?.id ?? '');
   const [kind, setKind] = useState<SchedulerSyncKind>('pull');
@@ -93,17 +95,14 @@ export default function SchedulerSyncControls({
   const [message, setMessage] = useState('');
   const recoveryAttempted = useRef(false);
 
-  const source = useMemo(
-    () => databases.find((database) => database.id === sourceId) ?? databases.find(database => database.id.startsWith('ts:')) ?? databases[0],
-    [databases, sourceId]
-  );
-  const destination = useMemo(
-    () =>
-      databases.find((database) => database.id === destinationId) ??
-      databases.find((database) => source?.id === `ts:${database.id}`) ??
-      databases.find((database) => database.id !== source?.id),
-    [databases, destinationId, source?.id]
-  );
+  const local = databases.find(database => database.id === localDatabaseId);
+  const source = local && kind !== 'pull' ? local
+    : databases.find(database => database.id === sourceId && (!local || database.id !== local.id))
+      ?? firstTs ?? databases.find(database => !local || database.id !== local.id);
+  const destination = local && kind === 'pull' ? local
+    : databases.find(database => database.id === destinationId && database.id !== source?.id)
+      ?? databases.find(database => source?.id === `ts:${database.id}`)
+      ?? (firstTs?.id !== source?.id ? firstTs : undefined) ?? databases.find(database => database.id !== source?.id);
 
   const forgetPending = (discardServerPreview: boolean) => {
     if (pending && discardServerPreview) {
@@ -111,7 +110,7 @@ export default function SchedulerSyncControls({
         .deleteDatabaseSyncPreview(pending.localDbId, pending.previewId)
         .catch(() => undefined);
     }
-    sessionStorage.removeItem(STORED_PREVIEW_KEY);
+    sessionStorage.removeItem(previewStorageKey);
     setPending(null);
     setMessage('');
   };
@@ -130,7 +129,7 @@ export default function SchedulerSyncControls({
   useEffect(() => {
     if (recoveryAttempted.current || databases.length === 0) return;
     recoveryAttempted.current = true;
-    const stored = sessionStorage.getItem(STORED_PREVIEW_KEY);
+    const stored = sessionStorage.getItem(previewStorageKey) ?? sessionStorage.getItem(STORED_PREVIEW_KEY);
     if (!stored) return;
 
     let cancelled = false;
@@ -143,17 +142,25 @@ export default function SchedulerSyncControls({
         if (!reference.localDbId || !reference.previewId) {
           throw new Error('invalid stored preview');
         }
+        if (localDatabaseId && reference.localDbId !== localDatabaseId) return;
         const response = await apiClient.getDatabaseSyncPreview(
           reference.localDbId,
           reference.previewId
         );
         if (cancelled) return;
+        if (localDatabaseId && (response.result.kind === 'pull' ? response.result.destination_db_id : response.result.source_db_id) !== localDatabaseId)
+          throw new Error('The preview belongs to another local database.');
+        if (!databases.some(database => database.id === response.result.source_db_id)
+          || !databases.some(database => database.id === response.result.destination_db_id))
+          throw new Error('A preview endpoint is no longer available.');
         const restored = {
           localDbId: reference.localDbId,
           previewId: response.preview_id,
           expiresAt: response.expires_at,
           result: response.result,
         };
+        sessionStorage.setItem(previewStorageKey, JSON.stringify(reference));
+        if (previewStorageKey !== STORED_PREVIEW_KEY) sessionStorage.removeItem(STORED_PREVIEW_KEY);
         setPending(restored);
         setKind(response.result.kind);
         setSourceId(response.result.source_db_id);
@@ -161,13 +168,25 @@ export default function SchedulerSyncControls({
         setWithImageData(response.result.imagedata !== null);
         setMessage('Restored the pending transfer preview.');
       } catch {
-        sessionStorage.removeItem(STORED_PREVIEW_KEY);
+        sessionStorage.removeItem(previewStorageKey);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [databases]);
+  }, [databases, localDatabaseId, previewStorageKey]);
+
+  useEffect(() => () => { latestPreview.current += 1; }, []);
+
+  // A registration or connection can disappear while Settings is open.
+  // Do not show an old preview beside newly defaulted endpoints.
+  useEffect(() => {
+    if (!pending || (pending.result.source_db_id === source?.id && pending.result.destination_db_id === destination?.id)) return;
+    void apiClient.deleteDatabaseSyncPreview(pending.localDbId, pending.previewId).catch(() => undefined);
+    sessionStorage.removeItem(previewStorageKey);
+    setPending(null);
+    setMessage('The transfer endpoints changed. Preview the transfer again.');
+  }, [pending, source?.id, destination?.id, previewStorageKey]);
 
   const changeSource = (nextSourceId: string) => {
     setSourceId(nextSourceId);
@@ -205,7 +224,7 @@ export default function SchedulerSyncControls({
         await apiClient
           .deleteDatabaseSyncPreview(pending.localDbId, pending.previewId)
           .catch(() => undefined);
-        sessionStorage.removeItem(STORED_PREVIEW_KEY);
+        sessionStorage.removeItem(previewStorageKey);
         setPending(null);
       }
       await pendingStop.current;
@@ -232,7 +251,7 @@ export default function SchedulerSyncControls({
         result: response.result,
       });
       sessionStorage.setItem(
-        STORED_PREVIEW_KEY,
+        previewStorageKey,
         JSON.stringify({ localDbId, previewId: response.preview_id })
       );
     } catch (error) {
@@ -254,7 +273,7 @@ export default function SchedulerSyncControls({
         pending.localDbId,
         pending.previewId
       );
-      sessionStorage.removeItem(STORED_PREVIEW_KEY);
+      sessionStorage.removeItem(previewStorageKey);
       setPending(null);
       const deleted = result.project?.deleted ?? 0;
       setMessage(
@@ -278,7 +297,7 @@ export default function SchedulerSyncControls({
   if (databases.length < 2) {
     return (
       <div className="scheduler-sync-empty muted">
-        Add a second catalog to merge data or send planning and grades.
+        Add a second database to merge data or send planning and grades.
       </div>
     );
   }
@@ -289,7 +308,7 @@ export default function SchedulerSyncControls({
         <div>
           <h3>Data Transfer</h3>
           <p>
-            Move catalog records in one direction. Preview is always required before
+            Move database records in one direction. Preview is always required before
             Apply.
           </p>
         </div>
@@ -318,16 +337,16 @@ export default function SchedulerSyncControls({
         )}
       </div>
 
-      <div className="scheduler-sync-endpoints">
+      <div className="scheduler-sync-endpoints" data-local-catalog={local?.id}>
         <label>
           <span>Source</span>
           <select
             aria-label="Transfer source"
             value={source?.id ?? ''}
             onChange={(event) => changeSource(event.target.value)}
-            disabled={disabled || applying}
+            disabled={disabled || applying || (!!local && kind !== 'pull')}
           >
-            {databases.map((database) => (
+            {databases.filter(database => !local || (kind === 'pull' ? database.id !== local.id : database.id === local.id)).map((database) => (
               <option key={database.id} value={database.id}>
                 {database.name}
               </option>
@@ -336,7 +355,7 @@ export default function SchedulerSyncControls({
           <small>{source?.db_path}</small>
         </label>
 
-        <button
+        {!local && <button
           type="button"
           className="scheduler-sync-swap"
           onClick={swapEndpoints}
@@ -345,7 +364,7 @@ export default function SchedulerSyncControls({
           title="Swap source and destination"
         >
           ⇄
-        </button>
+        </button>}
 
         <label>
           <span>Destination</span>
@@ -353,9 +372,9 @@ export default function SchedulerSyncControls({
             aria-label="Transfer destination"
             value={destination?.id ?? ''}
             onChange={(event) => changeDestination(event.target.value)}
-            disabled={disabled || applying}
+            disabled={disabled || applying || (!!local && kind === 'pull')}
           >
-            {databases.map((database) => (
+            {databases.filter(database => !local || (kind === 'pull' ? database.id === local.id : database.id !== local.id)).map((database) => (
               <option key={database.id} value={database.id}>
                 {database.name}
               </option>
@@ -365,13 +384,13 @@ export default function SchedulerSyncControls({
         </label>
       </div>
 
-      {invalidDirection && <p role="alert">Import captures into a PSF Guard catalog. Send planning or grades from a PSF Guard catalog to Target Scheduler.</p>}
+      {invalidDirection && <p role="alert">Import captures into a PSF Guard database. Send planning or grades from a PSF Guard database to Target Scheduler.</p>}
       <div className="scheduler-sync-description">
         {kind === 'pull' && (
           <>
             <strong>Merge projects and captures</strong>
             <span>
-              Adds or updates catalog structure and captures. Reviewed grades already at
+              Adds or updates projects, targets and captures. Reviewed grades already at
               the destination win.
             </span>
             <label className="scheduler-sync-check">

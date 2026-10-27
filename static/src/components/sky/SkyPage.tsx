@@ -58,7 +58,7 @@ export default function SkyPage() {
       <DirectorDashboard />
       {canWrite ? <p className="director-muted">
         Rig setup and the exposure template library are under Settings:{' '}
-        <button type="button" className="director-link-button" onClick={() => openSettings('rigs')}>Rigs</button>
+        <button type="button" className="director-link-button" onClick={() => openSettings('rigs')}>Rig setup</button>
         {' and '}
         <button type="button" className="director-link-button" onClick={() => openSettings('templates')}>Exposure templates</button>.
       </p> : <><DirectorRigs /><TemplateLibrary /></>}

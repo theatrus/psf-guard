@@ -468,9 +468,11 @@ PSF Guard's own tables in a rig database (`psf_guard_catalog_identity` and
 the `psf_guard_director_*` side tables) are plain SQL with type CHECKs, never
 `STRICT`: the file is shared with N.I.N.A. and Target Scheduler, and a keyword
 their SQLite does not know would make the whole schema unreadable to them.
-Sync moves Target Scheduler tables only, so identity spreads by file copy
-alone; the Director treats two registered files with one identity as one
-catalog: it plans with the first by slug and reports the other as a copy.
+Catalog identity follows a file copy rather than a row sync. Sync also
+transfers PSF Guard calibration metadata; those compatibility records do not
+replace catalog lineage. Director treats two registered files with one
+identity as one catalog: it plans with the first by slug and reports the other
+as a copy.
 
 Keep stable catalog lineage for moves, renames and synchronized copies. A copy
 of a database does not become a second telescope or earn extra project credit.
@@ -500,6 +502,267 @@ Prototype links are migration history, not a second inventory. Migration
 must preview existing links, flag conflicts such as two independent catalogs
 sharing one prototype rig, retain source GUIDs/history, and be transactional and
 retryable. Do not silently rewrite a user's mappings or invent rigs at check-in.
+
+### Rig and database normalization audit and plan
+
+Status: **Navigation implemented; ownership follow-up proposed.** The source
+audit below records behavior at `835961cb` after #1009/#1010. Settings now
+uses a parent database list and separate **Rig setup**, **Database & files**
+and **Sync** pages for the opened registration. See [Settings navigation](../SETTINGS.md).
+The UI uses existing APIs and IDs. The joined identity view, name policy and
+binding repairs below remain follow-up work.
+
+Equipment configuration, file paths and transfers are different tasks with a
+common catalog context. They keep separate forms, permissions and Save
+controls. Preserve the operational model: activating a plan for a rig writes
+that rig's contribution into its image database. This work does not introduce
+several independently activatable rigs inside one catalog, or a separate
+physical-equipment inventory.
+
+#### Correct the terminology before changing relationships
+
+Two different concepts currently use **rig**. The image catalog's
+`psf_guard_rig` rows describe calibration compatibility. They are not the
+Director rigs that receive activated plans. Their presence does not justify
+changing the operational model to database → several planning rigs.
+
+| Concept | Current representation and meaning | Contract to preserve |
+|---|---|---|
+| Local database registration | `DbEntry` in the registry: slug, display name, file path, image folders, import/export options and TS connection. | The slug scopes URLs and generated artifacts. A registration is not a new federation identity. |
+| Image catalog identity | `psf_guard_catalog_identity` in the image database: catalog UUID and origin instance UUID. | Moving a file or changing its display name preserves lineage. Multiple registrations of a copied file do not create additional planning rigs. |
+| Operational / planning rig | Metadata `rig` plus the unique `catalog_rig` binding. | One durable catalog identity binds to one planning rig. Keep existing rig IDs, including legacy IDs that differ from the catalog UUID. |
+| Rig's current setup | Metadata `rig_profile`, associated site/preferences, and immutable setup/activation records. | Equipment revisions and their provenance describe the rig; they do not replace its identity or rewrite old captures. |
+| Calibration configuration | Image-database `psf_guard_rig` and `psf_guard_rig_binding`, calibration frames and masters; shared override values use the configuration UUID. | Matching uses telescope, camera, frame size and binning. One image database may contain several such configurations, and the same configuration key can appear in several catalogs. |
+| N.I.N.A. profile | Source `profileId`, project ownership, profile preferences and paired-client evidence. | A profile is external configuration/ownership evidence, not automatically another planning rig. |
+| Shared plan | Global metadata project/plan and its per-rig contributions and source-project links. | One plan can activate contributions into several rig databases. A catalog's local project row is not a second global plan. |
+| Sync connection and transfer | The registration's `ts_sync`/remote-receiver settings, shared `PeerEntry` records, and catalog-scoped preview/job records. | Sync uses the same local catalog context. The other endpoint, direction and operation remain explicit; linking endpoints does not merge their identities. |
+
+An empty image database can have a planning-rig binding without any calibration
+configuration rows. Conversely, several calibration configurations in one image
+database do not create several activation destinations. A calibration
+configuration UUID must never be substituted for a Director rig UUID.
+
+```mermaid
+flowchart LR
+  Plan["Shared plan"] --> A["Rig A ↔ image catalog A"]
+  Plan --> B["Rig B ↔ image catalog B"]
+  A --> Projects["Local projects, targets, exposures and images"]
+  A --> Setup["Current equipment/site and recorded revisions"]
+  A --> Calibration["Calibration configurations and capture-time evidence"]
+  A --> Sync["Sync connections and explicit transfer endpoints"]
+```
+
+The arrows describe ownership and use, not a proposal to move every record into
+one physical database. The registry owns local paths, the image catalog owns
+image records, and the metadata database coordinates plans and rig setup.
+
+#### What the code audit found
+
+These findings distinguish confirmed behavior from work that still needs a
+reproduction or design decision. Source links identify the implementation,
+not evidence from a live user catalog; this audit did not inspect or change one.
+
+| Finding | Evidence | Consequence for this work |
+|---|---|---|
+| The operational one-to-one relationship already exists. | [`catalog_rig` constraints](../../crates/director-meta/src/storage.rs), [`check_mapping` and `bind_on`](../../crates/director-meta/src/catalog_rig.rs), and activation's `rig_catalogs` in [`activation.rs`](../../src/server/director/activation.rs). | Keep this relationship. Calibration rows must not become the activation inventory. |
+| The two Settings lists already start from the same registrations. | [`TauriSettings`](../../static/src/components/TauriSettings.tsx) and [`DirectorRigs`](../../static/src/components/director/DirectorRigs.tsx) both list registered databases. | Reuse one context and identity resolver across the separate editors; repeated lists do not prove the tasks belong in one form. |
+| Local and metadata names have separate write paths. | `update_database_route` in [`handlers.rs`](../../src/server/handlers.rs) saves the registry/context; [`configuration_api::rename`](../../src/server/director/configuration_api.rs) calls `rename_rig` in metadata. | Add a regression fixture that renames each way and compares Settings, Library, workspace and activation labels. Agree on the field owner and compatibility behavior before changing either path. This is a divergence risk, not proof that a user's names are already inconsistent. |
+| Opening the Library can establish a missing planning binding. | [`plans::bind`](../../src/server/director/plans.rs); `DirectorRigs` can show “Open the Library to add this database as a rig.” | Rig setup must eventually have an explicit, permission-checked initialization path. A new joined read must not acquire this write side effect. Preserve existing onboarding until its replacement is tested. |
+| Registered copies and activation destinations are different counts. | [`identified_catalogs`](../../src/server/director.rs) selects one context per catalog UUID in slug order and reports copies; `DirectorRigs` iterates registrations. | Display copies as copies and link the canonical planning context. Do not offer them as missing rigs that need another binding. Preserve the current canonical-context selection while connecting the editors. |
+| Calibration rows and overrides deliberately span catalog boundaries. | `rig_signature`, `stable_uuid` and `sync_library` in [`calibration.rs`](../../src/calibration.rs); [`merge_rig_views`](../../src/server/calibration_settings.rs). | Clarify the user-facing terminology without changing signatures, UUIDs, stored `rig_uuid` fields, override scope or matching behavior. |
+| Sync has the same local catalog root, with several distinct endpoint types. | [`TsSyncSettings`](../../static/src/components/TsSyncSettings.tsx) saves through `updateDatabase(dbId)`; [`SchedulerSyncControls`](../../static/src/components/SchedulerSyncControls.tsx) expands connected TS files as endpoints; [`RemotePeerSync`](../../static/src/components/RemotePeerSync.tsx) selects a local database plus a shared peer; [`RemoteSyncPreviews`](../../static/src/components/RemoteSyncPreviews.tsx) lists previews by database. | Carry the selected local catalog into Sync. Keep automatic sync settings, explicit transfer reviews and shared peer credentials distinct. Preserve the owning catalog on every preview and job. |
+| Profile selection needs characterization before normalization. | `write_rig_inner` and `resolve_profile` in [`activation.rs`](../../src/server/director/activation.rs): a new project starts with a dominant/available profile; rows for an existing project use that project's profile. | Test mixed historical profiles and ties, and compare the result with paired-client and preview evidence. Do not label this a proven misrouting bug, or silently replace the policy in a UI refactor. |
+| Missing, copied and conflicted bindings already have different semantics. | [`database_rig` tests](../../src/server/director/tests/adoption/database_rig.rs) and the preview/apply paths in [`catalog_rig.rs`](../../src/server/director/catalog_rig.rs). | Preserve preview digests, stale-review refusal, exact retries and retained legacy IDs. Missing calibration data is not a binding conflict. |
+
+Sync includes PSF Guard calibration metadata, including `psf_guard_rig` rows,
+as well as Target Scheduler rows. Transferring those compatibility records does
+not make their UUIDs operational rig IDs. Catalog lineage and calibration
+compatibility remain separate contracts.
+
+#### Settings navigation and context
+
+Settings lists registrations directly in the left pane alongside the shared
+Overview and New / import pages. Selecting a database expands its Overview,
+Rig setup, Database & files and Sync destinations in that same navigation.
+Phones use one grouped Settings section control, including the database name
+for scoped pages. There is no second top tab row or independent rig selector.
+
+Shared Sites are under Presets. Quality defaults and database overrides are
+under Review → Grading & display; derivative pairing defaults and overrides
+are under Processing → Calibration. AstroBin's shared defaults and database
+filter maps share its integration page. These moves do not substitute
+calibration configurations for operational rig IDs.
+
+The UI preserves existing binding and copy behavior. The joined identity view
+proposed below must still distinguish copy, unbound and conflicted states.
+
+The context must retain the selected registration as well as any resolved
+catalog/rig UUIDs. Planning may resolve a copied registration to its canonical
+rig, but database and sync actions must still address the actual selected
+registration, or require an explicit switch. A copy's planning restriction must
+not become a blanket restriction on permitted database/sync operations.
+
+| Page | Task and field ownership |
+|---|---|
+| **Rig setup** | Equipment, current site/horizon, planning limits, setup provenance and reported status for the selected rig. Link to its database and sync settings. Calibration configurations represented in its images link to their existing override editor. |
+| **Database & files** | Catalog location, image folders, import/scan options, exports, processed-output folder and catalog-management actions for the same root. Show connection summaries with links to Sync rather than another copy of its editable settings. |
+| **Sync** | Automatic TS connection settings, incoming Sync/remote-receiver configuration, staged previews and explicit transfers for that local catalog. Show peer/client links and their capability differences; shared peer records and credentials remain shared. |
+
+Creating/importing a database starts from New / import, including the source
+information needed to establish its initial TS connection. After it succeeds,
+select the returned catalog context; subsequent connection edits belong in
+Sync. Do not make a new, unsaved catalog depend on a pre-existing Sync context.
+
+Rig setup and sync must expose reported values and their provenance without
+silently replacing saved settings. Planning/acquisition enrollment remains a
+rig task; configuring how catalog rows and images move remains a sync task.
+Link related controls and explain the distinction instead of duplicating the
+same control in both pages. The pages above define the current edit destinations. The joined identity
+view must preserve these destinations while clarifying binding and copy status.
+
+Sync requires these additional rules:
+
+- The opened registration supplies the **local catalog**, not an implicit source
+  or destination. A pull brings data into it; a planning or grade push sends
+  data from it. A local-to-local transfer must show both selected catalogs and
+  their roles. Opening Sync must not reverse the direction or start a transfer.
+- Show the other endpoint explicitly: connected TS file, another registered
+  catalog, or a remote peer/catalog. A TS source path is a connection to an
+  external file, not another rig registration. The current `ts:<slug>` UI
+  endpoint is not a registration or durable catalog UUID. Preserve the rule
+  that source and destination cannot be the same file.
+- Reuse existing connection/peer records. A shared peer can serve several
+  catalog contexts; moving between roots must not copy its credentials or
+  overwrite a persisted connection. Keep per-catalog permission checks.
+- On changing the local context or either endpoint, invalidate the active
+  form's preview using its original owning database and require a new Preview
+  before Apply. Stop only that form's obsolete preview request when needed;
+  leave unrelated staged previews intact. Never relabel a preview prepared
+  for one root as another. Preserve exact source/destination, operation,
+  options and stale-review checks.
+- Keep a useful all-catalog staged-preview/job overview. Every row must show
+  its owning catalog and endpoints and act on that recorded scope. Changing
+  the Settings selection must not cancel or retarget an already applied job.
+- Keep scheduled capture imports/conditional grade writeback distinct from
+  explicit merge, planning-push and grade-push review. Moving their controls
+  does not change which operations are automatic or their conflict rules.
+
+Reuse the focused forms and their Save controls. **Close** in the header keeps
+its current meaning. Page or context changes must preserve edits or offer the
+same discard confirmation. Shared context is not a global Save transaction or
+permission to edit every page.
+
+Keep `databases`, `rigs` and `sync` Settings intents as separate destinations;
+extend their context handoff so contextual links open the correct selected
+catalog without another selection. A generic Settings entry opens the parent list. If that catalog is gone,
+show a selection state rather than silently applying a remembered edit or
+preview to another database. Calibration shortcuts still focus the exact
+configuration, and global defaults remain under **Processing → Calibration**.
+Keep shared exposure and processing presets under **Presets**.
+
+#### Delivery order and acceptance gates
+
+**Follow-up — establish field ownership and the shared identity view.**
+
+- Add focused regression fixtures for the findings above, using disposable
+  catalogs and registries. Reuse the adoption, activation and identity tests.
+- Expose a shared context view keyed by the existing registration and durable
+  catalog/rig IDs, with references to sync connections and capabilities.
+  It may join existing reads; it does not require a single new endpoint or a
+  combined write API. Represent unbound, unavailable, copied and conflicted
+  records explicitly. Reading it must not create a rig, rewrite an identity,
+  scan image folders, enable Planning or start sync.
+- Publish field ownership and name policy. The recommended local display name
+  is the registration's existing name; retained metadata/historical names
+  must be identified rather than treated as a second editable current name.
+  Define how existing metadata rename clients behave, and prove revision and
+  preview-digest compatibility before adopting that policy.
+- Keep writes with their current owners and gates. A joined response is not a
+  copied settings store or permission to edit every included field.
+
+Gate: the view describes a populated catalog, an empty catalog, missing
+metadata, an offline peer, a registered copy and a conflicting legacy mapping
+without writes. Both old and new clients can resolve the same identities.
+A local catalog and its external TS/peer endpoints remain distinct. Name
+changes through either supported path have a defined, tested outcome.
+
+**Follow-up — complete identity and setup status in the connected editors.**
+
+The database navigation, breadcrumb, scoped task pages and per-form saves are now
+implemented. Transfer forms pin the local endpoint, keep previews scoped by
+registration, and discard their obsolete preview when returning to the list.
+The parent list retains the all-catalog staged-preview overview. Regression
+coverage lives with the Settings and sync controls and their browser specs.
+
+Still needed after the shared identity view and ownership policy:
+
+- Add explicit initialization through the existing reviewed binding paths;
+  retain Library onboarding compatibility until the replacement works.
+- Distinguish unbound, Planning unavailable, read-only, copied and conflicted
+  mappings using one shared read. A read must not create a binding.
+- Clarify calibration configuration terminology across the product while
+  preserving API fields, signatures, UUIDs and override scope.
+- Cover copy/canonical resolution and name changes across Settings, Library,
+  workspace and activation before changing their policies.
+
+Gate: these additions preserve contextual links, native pickers, per-form
+permissions and saves. A copy's planning exclusion must not block permitted
+file or sync operations. Reuse adoption/activation tests for legacy IDs and
+sync tests for stale previews, same-file refusal, GUID matching and grades.
+
+**Follow-up — address only proven ownership or migration defects.**
+
+- Resolve legacy binding conflicts through preview/apply, with explicit old
+  and proposed identities, affected plans/clients and stale-review checks.
+  Preserve existing IDs and immutable references. Never guess from names or
+  calibration signatures, create a new rig at check-in, or delete an unbound
+  legacy record merely because the new list does not display it.
+- Replace any conflicting name/update paths under the agreed ownership
+  policy. If a write genuinely spans registry and metadata stores, provide
+  recoverable commit/retry behavior; do not claim one SQLite transaction can
+  atomically update both stores.
+- Handle any demonstrated profile-selection ambiguity as a separate reviewed
+  behavior change. If an explicit profile choice is needed, include it in the
+  existing preview-digest and approved-client/configuration checks. Preserve
+  an existing project's profile. Do not silently reassign projects, pairings
+  or active allocations when current equipment changes.
+- Present a copy's existing planning exclusion clearly. Designing an
+  independent-catalog/fork operation requires its own reviewed lineage plan;
+  dropping an identity table manually is not the proposed Settings workflow.
+
+Gate: migration has a preview, backup/rollback or documented recovery, exact
+retry after interruption, and fixtures proving that source GUIDs, grades,
+project links, pairings and immutable setup/activation references survive.
+No repair or import runs against a live catalog as part of implementation.
+
+#### Invariants to verify throughout the work
+
+- One rig can receive several plan contributions in its image database; a
+  shared plan can activate into several rig databases. Never create a database
+  per target, per calibration configuration or per contribution.
+- Display-name changes and ordinary file moves preserve durable catalog and
+  rig identity. They must not implicitly change the URL slug. An explicit
+  slug change retains its existing artifact-relocation and link behavior.
+- Registered copies do not earn duplicate planning credit. Row sync,
+  calibration sync and backup/restore do not infer identity from a path/name.
+- Keep generated artifacts below the database slug. A label change alone must
+  not rebuild image processing. Calibration keys and override scope stay
+  unchanged; actual rule/input changes retain their existing invalidation.
+- Equipment/site revisions invalidate dependent planning previews and consent
+  under their existing contracts. Current setup must not replace a captured
+  frame's header evidence, historical site or calibration compatibility key.
+- Sync follows the same root while retaining explicit endpoint identities,
+  direction and catalog-scoped preview/job keys. It does not make connected
+  catalogs one identity or broaden credential scope.
+- Registration removal, source disconnect, data deletion and metadata conflict
+  resolution remain distinct actions. Preserve existing raw-file guarantees.
+
+This plan does not move image catalogs into the metadata database, redesign
+native catalog storage, merge unrelated catalog lineages, migrate every
+Target Scheduler schema, or commission acquisition equipment. Those changes
+retain their own design records and acceptance gates. Completed delivery
+checklists should be removed once current documentation and regression tests
+cover their behavior; retain the identity and ownership contracts.
 
 ### One project, multiple rigs
 

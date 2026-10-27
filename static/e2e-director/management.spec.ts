@@ -53,12 +53,12 @@ test('plans without a database survive reload, conflicts, and narrow viewports i
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
   await page.screenshot({ path: testInfo.outputPath('library-plans-mobile.png'), fullPage: true });
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
-  // Rig setup lives under Settings › Rigs; with no databases it offers to add one.
+  // The parent list offers import starting points when no database is registered.
   await page.setViewportSize({ width: 1280, height: 900 });
   await openSettings(page);
-  await page.getByRole('tab', { name: 'Rigs' }).click();
-  await expect(page.getByRole('heading', { name: 'Rigs' })).toBeVisible();
-  await expect(page.locator('.tauri-settings').getByRole('button', { name: 'Add database' })).toBeVisible();
+  await page.getByRole('tab', { name: 'Overview', exact: true }).click();
+  await expect(page.getByRole('heading', { name: /Welcome to PSF Guard/ })).toBeVisible();
+  await expect(page.locator('.tauri-settings').getByRole('button', { name: /Import from Target Scheduler/ })).toBeVisible();
   await expect(page.getByRole('button', { name: 'New rig' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'New site' })).toHaveCount(0);
   expect(browserErrors).toEqual([]);

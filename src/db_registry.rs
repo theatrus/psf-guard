@@ -81,6 +81,58 @@ pub struct DbEntry {
     /// instead of its raw file. Off unless a person turns it on.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub scan_calibrated_copies: bool,
+    /// Absent in older registries: preserve all three legacy choices as
+    /// explicit overrides. An empty block inherits the shared defaults.
+    /// The legacy booleans above remain resolved snapshots for older readers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub processing_overrides: Option<ProcessingOverrides>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct ProcessingDefaults {
+    pub analyze_new_frames: bool,
+    pub pair_calibrated_copies: bool,
+    pub scan_calibrated_copies: bool,
+}
+
+impl Default for ProcessingDefaults {
+    fn default() -> Self {
+        Self {
+            analyze_new_frames: false,
+            pair_calibrated_copies: true,
+            scan_calibrated_copies: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProcessingOverrides {
+    pub analyze_new_frames: Option<bool>,
+    pub pair_calibrated_copies: Option<bool>,
+    pub scan_calibrated_copies: Option<bool>,
+}
+
+impl DbEntry {
+    pub fn processing_overrides(&self) -> ProcessingOverrides {
+        self.processing_overrides.unwrap_or(ProcessingOverrides {
+            analyze_new_frames: Some(self.analyze_new_frames),
+            pair_calibrated_copies: Some(self.pair_calibrated_copies),
+            scan_calibrated_copies: Some(self.scan_calibrated_copies),
+        })
+    }
+    pub fn resolve_processing(&mut self, defaults: ProcessingDefaults) {
+        let own = self.processing_overrides();
+        self.analyze_new_frames = own
+            .analyze_new_frames
+            .unwrap_or(defaults.analyze_new_frames);
+        self.pair_calibrated_copies = own
+            .pair_calibrated_copies
+            .unwrap_or(defaults.pair_calibrated_copies);
+        self.scan_calibrated_copies = own
+            .scan_calibrated_copies
+            .unwrap_or(defaults.scan_calibrated_copies);
+    }
 }
 
 fn default_true() -> bool {
@@ -466,6 +518,8 @@ pub struct DbRegistry {
     pub schema_version: u32,
     #[serde(default)]
     pub databases: Vec<DbEntry>,
+    #[serde(default)]
+    pub processing_defaults: ProcessingDefaults,
     /// Hint for the UI: which DB was last interacted with. Optional; the
     /// merged-overview UI ignores it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -957,6 +1011,7 @@ impl Default for DbRegistry {
         Self {
             schema_version: CURRENT_SCHEMA_VERSION,
             databases: Vec::new(),
+            processing_defaults: ProcessingDefaults::default(),
             active_db_id: None,
             astrometry: None,
             peers: Vec::new(),
@@ -1009,6 +1064,9 @@ impl DbRegistry {
             Ok(mut reg) if reg.schema_version >= 1 => {
                 // Dedup any duplicate slugs introduced by hand-editing.
                 reg.dedup_and_validate()?;
+                for entry in &mut reg.databases {
+                    entry.resolve_processing(reg.processing_defaults);
+                }
                 if reg.retire_dated_catalog_layouts() {
                     // Persist the repair now: this loader serves read paths
                     // that never save, and a file left as it was would warn
@@ -1103,6 +1161,7 @@ impl DbRegistry {
                 analyze_new_frames: false,
                 pair_calibrated_copies: true,
                 scan_calibrated_copies: false,
+                processing_overrides: None,
             });
         }
         reg.save(path)?;
@@ -1175,9 +1234,10 @@ impl DbRegistry {
             process_dir: None,
             autoimport: None,
             scan_rules: None,
-            analyze_new_frames: false,
-            pair_calibrated_copies: true,
-            scan_calibrated_copies: false,
+            analyze_new_frames: self.processing_defaults.analyze_new_frames,
+            pair_calibrated_copies: self.processing_defaults.pair_calibrated_copies,
+            scan_calibrated_copies: self.processing_defaults.scan_calibrated_copies,
+            processing_overrides: Some(ProcessingOverrides::default()),
         });
         Ok(self.databases.last().unwrap())
     }
@@ -1296,6 +1356,35 @@ mod tests {
 
     fn write(path: &Path, body: &str) {
         std::fs::write(path, body).unwrap();
+    }
+
+    #[test]
+    fn old_missing_processing_fields_stay_explicit_and_new_entries_inherit() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("registry.json");
+        std::fs::write(&path, r#"{"schema_version":2,"databases":[{"id":"old","name":"Old","db_path":"old.sqlite"}],"processing_defaults":{"analyze_new_frames":true,"pair_calibrated_copies":false,"scan_calibrated_copies":true}}"#).unwrap();
+        let mut registry = DbRegistry::load_or_init(&path).unwrap();
+        let old = registry.find("old").unwrap();
+        assert!(!old.analyze_new_frames);
+        assert!(old.pair_calibrated_copies);
+        assert!(!old.scan_calibrated_copies);
+        let new = registry
+            .add(
+                "New".into(),
+                "new.sqlite".into(),
+                vec![],
+                Some("new".into()),
+            )
+            .unwrap();
+        assert!(new.analyze_new_frames);
+        assert!(!new.pair_calibrated_copies);
+        assert!(new.scan_calibrated_copies);
+        assert_eq!(new.processing_overrides(), ProcessingOverrides::default());
+        registry.save(&path).unwrap();
+        assert_eq!(
+            DbRegistry::load_or_init(&path).unwrap().databases,
+            registry.databases
+        );
     }
 
     #[test]
@@ -1423,6 +1512,7 @@ mod tests {
             analyze_new_frames: false,
             pair_calibrated_copies: true,
             scan_calibrated_copies: false,
+            processing_overrides: None,
         });
         reg.save(&path).unwrap();
 

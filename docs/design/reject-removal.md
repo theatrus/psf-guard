@@ -2,13 +2,14 @@
 
 Status: **Implemented.** `src/commands/reject_removal.rs` holds the core;
 the CLI commands and the server routes (`src/server/reject_removal.rs`) call
-it, and each database in Settings › Databases has a **Purge Rejects**
+it, and each database’s **Database & files** page in Settings has a **Purge Rejects**
 button (the eraser icon) beside **Import**.
 
 ## Where to run it
 
-In **Settings › Databases**, each database has **Purge Rejects**, the
-eraser icon, beside **Import** on its name line. It opens a dialog: a number of days, **Preview**, then **Remove**
+Open a database under **Settings → Databases & rigs → Overview**, then choose
+**Database & files**. Click **Purge Rejects** (the eraser icon) beside
+**Import**. It opens a dialog: a number of days, **Preview**, then **Remove**
 with how long to keep the files in the trash. Removed batches are listed with **Restore**; **Empty trash** appears
 once a batch is past its retention, and **Purge** once its files are gone. These need an editor;
 files move only between an image folder and its own trash, so the database-management gate does

@@ -27,9 +27,8 @@ test('overview shows the empty-state when no databases are configured', async ({
   // The empty state offers an action that re-opens settings — confirm it
   // actually triggers the modal again.
   await page.getByRole('button', { name: /Import from Target Scheduler/i }).click();
-  await expect(
-    page.getByRole('heading', { name: /Welcome to PSF Guard/i })
-  ).toBeVisible();
+  await expect(page.getByRole('tab', { name: 'New / import', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('heading', { name: 'Import from Target Scheduler', exact: true })).toBeVisible();
 });
 
 test('first run offers importing images as well as opening a N.I.N.A. database', async ({
@@ -74,7 +73,7 @@ test('settings groups its configuration pages', async ({ page }, testInfo) => {
   await page.getByRole('heading', { name: /Welcome to PSF Guard/i }).waitFor();
 
   const modal = page.locator('.tauri-settings');
-  await expect(modal.getByRole('tab', { name: 'Databases' })).toHaveAttribute(
+  await expect(modal.getByRole('tab', { name: 'Overview' })).toHaveAttribute(
     'aria-selected',
     'true'
   );
@@ -103,7 +102,7 @@ test('settings groups its configuration pages', async ({ page }, testInfo) => {
 
   // Home selects the first section, per the ARIA tabs pattern.
   await modal.getByRole('tab', { name: 'Reference catalogs' }).press('Home');
-  await expect(modal.getByRole('tab', { name: 'Databases' })).toHaveAttribute(
+  await expect(modal.getByRole('tab', { name: 'Overview' })).toHaveAttribute(
     'aria-selected',
     'true'
   );

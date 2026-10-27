@@ -104,6 +104,7 @@ async fn planning_and_grade_pushes_preview_before_writing() {
             analyze_new_frames: false,
             pair_calibrated_copies: true,
             scan_calibrated_copies: false,
+            processing_overrides: None,
         },
         DbEntry {
             ts_sync: None,
@@ -120,6 +121,7 @@ async fn planning_and_grade_pushes_preview_before_writing() {
             analyze_new_frames: false,
             pair_calibrated_copies: true,
             scan_calibrated_copies: false,
+            processing_overrides: None,
         },
     ];
     let state = Arc::new(
@@ -424,6 +426,7 @@ async fn a_pull_brings_structure_and_captures_down_and_keeps_local_grades() {
                     analyze_new_frames: false,
                     pair_calibrated_copies: true,
                     scan_calibrated_copies: false,
+                    processing_overrides: None,
                 },
                 DbEntry {
                     ts_sync: None,
@@ -440,6 +443,7 @@ async fn a_pull_brings_structure_and_captures_down_and_keeps_local_grades() {
                     analyze_new_frames: false,
                     pair_calibrated_copies: true,
                     scan_calibrated_copies: false,
+                    processing_overrides: None,
                 },
             ],
             dir.path().join("cache").to_string_lossy().into_owned(),

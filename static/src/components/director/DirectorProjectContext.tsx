@@ -27,7 +27,7 @@ export default function DirectorProjectContext({ instanceId, slug, projectId }: 
     {plans.isError && <div role="alert"><p>{plans.error.message}</p><button type="button" onClick={() => void plans.refetch()}>Retry</button></div>}
     {plans.data && <>
       <p role="alert">This project is not available for planning. Review the catalog warnings below, then retry.</p>
-      {project && !project.guid?.trim() && <p>This project has no Target Scheduler GUID. Settings › Databases offers <strong>Fill in GUIDs</strong> for that database.</p>}
+      {project && !project.guid?.trim() && <p>This project has no Target Scheduler GUID. Open the database under Settings → Databases &amp; rigs → Overview, then choose Database &amp; files → <strong>Fill in GUIDs</strong>.</p>}
       {projects.isSuccess && !project && <p>This project is no longer in the catalog.</p>}
       {projects.isError && <p role="alert">Could not check this project: {projects.error.message}</p>}
       <button type="button" disabled={plans.isFetching || projects.isFetching} onClick={() => { void plans.refetch(); void projects.refetch(); }}>Retry planning</button>

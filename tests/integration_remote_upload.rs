@@ -73,6 +73,7 @@ impl Fixture {
                 analyze_new_frames: false,
                 pair_calibrated_copies: true,
                 scan_calibrated_copies: false,
+                processing_overrides: None,
             },
             DbEntry {
                 ts_sync: None,
@@ -89,6 +90,7 @@ impl Fixture {
                 analyze_new_frames: false,
                 pair_calibrated_copies: true,
                 scan_calibrated_copies: false,
+                processing_overrides: None,
             },
         ];
         let state = Arc::new(
@@ -147,6 +149,7 @@ impl Fixture {
                     analyze_new_frames: false,
                     pair_calibrated_copies: true,
                     scan_calibrated_copies: false,
+                    processing_overrides: None,
                 }],
                 self._directory
                     .path()

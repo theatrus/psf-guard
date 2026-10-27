@@ -3825,6 +3825,8 @@ export interface CreateDatabaseRequest {
   /** Let the queued quality job write star count/HFR into imported images'
    *  metadata (missing keys only; default true). */
   fill_metadata?: boolean;
+  /** Applied to the first import and saved for later imports. */
+  scan_rules?: ScanRules;
 }
 
 export interface CreateDatabaseResponse {

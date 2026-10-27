@@ -6,8 +6,8 @@ Only the selected page loads its controls.
 
 | Group | Pages |
 |---|---|
-| **Databases & rigs** | **Databases**, **Rigs**, **Sync** |
-| **Presets** | **Processing setups**, **Exposure templates** |
+| **Databases & rigs** | **Overview**, each database and its pages, **New / import** |
+| **Presets** | **Processing setups**, **Exposure templates**, **Sites** |
 | **Processing** | **Calibration**, **Stacking** |
 | **Performance** | **CPU & memory**, **GPU**, **Workers** |
 | **Storage & backups** | **Folders & limits**, **Backups**, **Reference catalogs** |
@@ -15,7 +15,7 @@ Only the selected page loads its controls.
 | **Review** | **Grading & display** |
 | **Server & access** | **Server**, **Users**, **Agents (MCP)** |
 
-Pages depend on the connection and your permissions. Planning enables **Rigs**
+Pages depend on the connection and your permissions. Planning enables **Rig setup**
 and **Exposure templates**. **Sync** appears when you have a database and an
 editor account. **Server** configures the desktop app's server connection.
 The web interface shows **Users** and API tokens when server login is
@@ -40,21 +40,119 @@ also offers its own worker controls under **Workers**.
 - **Catalogs** is now **Storage & backups → Reference catalogs**, for
   downloaded astronomy data such as solver indexes and Gaia colors.
 
-**Databases** and **Rigs** remain separate pages in the same group.
-Database settings control files and imports. Rig profiles control optics,
-observing sites, scheduling and connections. Moving between these pages
-does not change the database or rig configuration.
+## Open a database
+
+Choose a database by name in the left pane. Its name opens the database overview. **Rig setup**, **Database & files**, **Import**
+and **Sync** appear beneath the database name. On a phone, choose
+the database in **Settings section**, then choose its page from the same
+control. The selected page includes the database name.
+
+- **Overview** shows the database and image-folder paths and links to its
+  calibration library.
+- **Rig setup** shows equipment, field of view, the selected observing site,
+  scheduling limits and planning connections. Sites are shared: edit them
+  under **Presets → Sites**, then choose a rig's **Planning site** in
+  **Rig setup → Site**.
+- **Database & files** contains database paths, image folders and maintenance.
+  Click **Edit database** to change the name and paths.
+- **Import** contains editable scan rules, automatic-import settings and
+  import previews. Exclusion and include patterns are editable directly;
+  there is no separate Edit step.
+- **Sync** configures the selected database's Target Scheduler connection,
+  incoming uploads and pairing. Transfers use the opened database as their
+  local endpoint. Peers and credentials remain shared.
+
+The shared **Overview** lists databases and staged transfer previews. Each
+preview acts on its recorded database and endpoints. Choose **New / import**
+to create a database from image folders, import a local database, or connect
+N.I.N.A. through PSF Guard Sync. Plugin onboarding opens the new database's
+pairing controls directly. The pages use the same saved IDs and permissions.
+
+For **Data Transfer**, the opened database receives **Merge databases** and
+sends **Send planning** or **Send reviewed grades**. Choose the other endpoint,
+check **Source** and **Destination**, then click **Preview changes** before
+applying. Changing databases discards this form's obsolete preview without
+retargeting unrelated staged previews or an applied job.
+
+![Databases listed directly in the Settings navigation](images/rig-database-settings/rig-databases-desktop.png)
+
+## Set shared defaults and database overrides
+
+Open **Review → Grading & display → Quality analysis** for **Analyze new
+frames as they arrive**, **Measure quality on the calibrated copy**, and
+manual quality-analysis actions. Grading and scoring appear before quality
+analysis; display preferences follow it.
+
+Open **Processing → Calibration → Calibrated copies** for **Pair calibrated
+and registered copies with their lights**. Shared defaults apply to newly added
+databases. Already configured databases keep their previous choices as explicit
+overrides, including choices that matched the old built-in defaults.
+
+Each page has **Global settings** and **Databases**. Expand a
+database to review its values. Click **Override global setting** to set a
+value for that database, then click **Save database**. Turn
+**Override global setting** off and save to use the shared value. A shared
+change affects only databases that inherit that setting. It does not replace
+another database's explicit choice. Save controls and unsaved-edit warnings
+work separately for defaults and each database.
+
+The database rows, override counts, On/Off selectors and inherited-value
+labels use the same controls as the rig overrides in **Calibration**.
+Choose **Use global settings for all fields**, then **Save database**, to
+reset all fields shown in that database editor.
+
+Turning automatic analysis on also queues frames already waiting for quality
+analysis. Pairing changes apply to future imports and pairing scans. Changing
+the quality source takes effect when quality analysis next measures a frame;
+the cache still distinguishes raw and calibrated sources. Raw image files
+remain unchanged.
+
+Open **Exports & integrations → AstroBin** for shared filter IDs and the
+**Database filter maps** below them. A database's matching filter/date entry
+replaces the shared ID. The maps retain their existing scope and storage.
+
+## Configure imports
+
+Choose a database, then open **Import** directly beneath its name.
+**Scan rules · Saved** starts collapsed. Manual imports use those saved
+rules without opening or saving the editor again. Expand the section to edit **Exclude** and
+**Include only** patterns, header requirements, target matching and the
+minimum exposure here. **Automatic import** controls its schedule, frame
+types, new targets and background analysis. Click **Save import settings**
+to apply your changes and collapse the filters. Unsaved changes must be saved before an import can run.
+
+When creating a database from image folders, the **Scan rules** fields offer
+all the same file filters in a collapsed **Scan rules · Defaults** section. PSF Guard applies them to the first scan and saves
+them for future imports. You can edit them later on that database's **Import** page.
+
+For a manual import, click **Preview import**. The preview lists which frames
+would attach to existing targets and which projects would be created. It also
+shows files excluded by scan rules or .psfguardignore. Choose folders and frame
+types, **Skip processed files** or **Include frames from other rigs**, then
+click **Update preview** if you change those choices. Click the green **Import**
+button with the frame count to confirm. The preview adds no images before
+that confirmation. Background quality analysis is optional for this import;
+its checkbox does not change the global analysis defaults.
+
+![Manual import with saved filters collapsed](images/rig-database-settings/manual-import-desktop.png)
+
+![Manual import preview before confirmation](images/rig-database-settings/manual-import-preview-desktop.png)
+
+See [Import new frames automatically](IMPORTING.md#import-new-frames-automatically).
 
 ## Keep edits when navigating
 
-When you choose another page in the sidebar or **Settings section** selector,
+When you choose another Settings page or database,
 Settings asks before discarding unsaved form edits. Choose **Keep editing**
 to return to the form. Choose **Discard changes and
 switch** to open the requested page without saving those edits. **Close**
 also asks before discarding unsaved changes.
 
 Shortcuts from the Library, calibration reports, processing cards and Sky
-still open the requested page, rig or catalog package. Saved settings keep
+still open the requested page, rig or catalog package. A shortcut without a
+selected database opens the parent list first. If an explicitly selected
+database is no longer registered, Settings shows that problem and lets you
+return to the list; it does not select a different database. Saved settings keep
 their existing scope and permissions: account preferences follow the
 account, server settings apply to that server, and desktop worker settings
 apply to the computer running the app.
