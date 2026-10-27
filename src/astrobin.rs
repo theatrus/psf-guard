@@ -806,7 +806,7 @@ fn night_filter_extras(
             continue;
         };
         let meta = crate::commands::import::headers::read_frame_meta(&path);
-        let selection = library.select(&meta);
+        let selection = library.select(&meta)?;
         let counts = crate::calibration::master_input_counts(&selection);
         extras.insert(
             key,

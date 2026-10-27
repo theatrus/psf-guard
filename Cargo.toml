@@ -170,3 +170,22 @@ panic = "unwind"
 [build-dependencies]
 tauri-build = { version = "2.7.3", features = [] }
 toml_edit = "0.25"
+
+# Prototype of Seiza #385. Replace these pinned Git patches with published
+# crate versions after the core PR is merged and released; do not ship this pin.
+[patch.crates-io]
+seiza = { git = "https://github.com/theatrus/seiza.git", rev = "b2dfdcb383602d38748957bf2989e9f2e44872b4" }
+seiza-background = { git = "https://github.com/theatrus/seiza.git", rev = "b2dfdcb383602d38748957bf2989e9f2e44872b4" }
+seiza-calibration = { git = "https://github.com/theatrus/seiza.git", rev = "b2dfdcb383602d38748957bf2989e9f2e44872b4" }
+seiza-core = { git = "https://github.com/theatrus/seiza.git", rev = "b2dfdcb383602d38748957bf2989e9f2e44872b4" }
+seiza-deconvolution = { git = "https://github.com/theatrus/seiza.git", rev = "b2dfdcb383602d38748957bf2989e9f2e44872b4" }
+seiza-download = { git = "https://github.com/theatrus/seiza.git", rev = "b2dfdcb383602d38748957bf2989e9f2e44872b4" }
+seiza-fits = { git = "https://github.com/theatrus/seiza.git", rev = "b2dfdcb383602d38748957bf2989e9f2e44872b4" }
+seiza-image-io = { git = "https://github.com/theatrus/seiza.git", rev = "b2dfdcb383602d38748957bf2989e9f2e44872b4" }
+seiza-imgproc = { git = "https://github.com/theatrus/seiza.git", rev = "b2dfdcb383602d38748957bf2989e9f2e44872b4" }
+seiza-satellites = { git = "https://github.com/theatrus/seiza.git", rev = "b2dfdcb383602d38748957bf2989e9f2e44872b4" }
+seiza-stacking = { git = "https://github.com/theatrus/seiza.git", rev = "b2dfdcb383602d38748957bf2989e9f2e44872b4" }
+seiza-stars = { git = "https://github.com/theatrus/seiza.git", rev = "b2dfdcb383602d38748957bf2989e9f2e44872b4" }
+seiza-stats = { git = "https://github.com/theatrus/seiza.git", rev = "b2dfdcb383602d38748957bf2989e9f2e44872b4" }
+seiza-stretch = { git = "https://github.com/theatrus/seiza.git", rev = "b2dfdcb383602d38748957bf2989e9f2e44872b4" }
+seiza-xisf = { git = "https://github.com/theatrus/seiza.git", rev = "b2dfdcb383602d38748957bf2989e9f2e44872b4" }

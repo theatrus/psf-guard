@@ -163,14 +163,14 @@ pub(crate) fn match_light(
     project: i32,
     image_id: i32,
     meta: &FrameMeta,
-) -> MatchedLight {
-    let selected = snapshot.select(meta);
-    MatchedLight {
+) -> anyhow::Result<MatchedLight> {
+    let selected = snapshot.select(meta)?;
+    Ok(MatchedLight {
         project,
         image_id,
         flats: master_frames(&selected, CalibrationKind::Flat),
         basis: selected.flat_basis,
-    }
+    })
 }
 
 /// Each group's masters and lights, from the group each measured flat is
@@ -344,7 +344,7 @@ fn work_out(state: &AppState, ctx: &DatabaseContext) -> anyhow::Result<FlatGroup
                     std::thread::sleep(YIELD_POLL);
                 }
                 anyhow::ensure!(!state.shutdown.is_stopping(), "the server is stopping");
-                Ok(match_light(&snapshot, *project, *image_id, meta))
+                match_light(&snapshot, *project, *image_id, meta)
             })
             .collect::<anyhow::Result<_>>()
     })?;
@@ -671,7 +671,7 @@ mod tests {
         let names = HashMap::from([(7, "M 44".to_string())]);
         let mut lights: Vec<MatchedLight> = [(1, &before), (2, &after), (3, &during)]
             .into_iter()
-            .map(|(id, meta)| match_light(&snapshot, 7, id, meta))
+            .map(|(id, meta)| match_light(&snapshot, 7, id, meta).unwrap())
             .collect();
         // A master that takes both nights' flats counts in both groups; one
         // from other software counts in none.

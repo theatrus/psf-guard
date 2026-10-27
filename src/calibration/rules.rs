@@ -17,8 +17,7 @@
 //! so one rig has the same key in every catalog, and a light's rig is read
 //! off its own header.
 
-use super::{DarkChoice, ExternalMasterPolicy, DEFAULT_COMPLETE_DARK_FRAMES};
-use super::{DEFAULT_DARK_REACH_DAYS, DEFAULT_FLAT_MAX_AGE_DAYS};
+use super::{DarkChoice, ExternalMasterPolicy};
 use crate::commands::import::headers::FrameMeta;
 use seiza_calibration::{BiasScreening, DarkScreening, FlatScreening, Limits, MatchTolerances};
 use serde::{Deserialize, Serialize};
@@ -196,66 +195,11 @@ impl GradeCheck {
     fn lower_is_worse(self) -> bool {
         self == GradeCheck::FlatDim
     }
-
-    /// Seiza's default limits for this check.
-    fn default_limits(self) -> Limits {
-        let (bias, dark, flat) = (
-            BiasScreening::default(),
-            DarkScreening::default(),
-            FlatScreening::default(),
-        );
-        match self {
-            GradeCheck::BiasLevel => bias.level,
-            GradeCheck::BiasNoise => bias.noise,
-            GradeCheck::BiasBanding => bias.banding,
-            GradeCheck::DarkLevel => dark.level_excess,
-            GradeCheck::DarkNoise => dark.noise,
-            GradeCheck::DarkHotPixels => dark.hot_pixels,
-            GradeCheck::DarkBanding => dark.banding,
-            GradeCheck::FlatClipped => flat.clipped,
-            GradeCheck::FlatBright => flat.bright,
-            GradeCheck::FlatDim => flat.dim,
-            GradeCheck::FlatIllumination => flat.illumination,
-            GradeCheck::FlatSpots => flat.features,
-            GradeCheck::FlatChangingSpots => flat.changing_features,
-            GradeCheck::FlatCarriedSpots => flat.carried_features,
-        }
-    }
 }
 
-/// Which layer a value came from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RuleSource {
-    Default,
-    Global,
-    Rig,
-}
-
-/// What changing a setting changes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Effect {
-    /// Which frames a light's masters take: stacks build new masters.
-    Matching,
-    /// What the light checks flag. Nothing is rebuilt; the checks run again
-    /// on the headers they kept.
-    Flags,
-    /// How calibration frames are graded. Grading runs again on the stored
-    /// measurements; a frame that turns poor leaves its masters.
-    Grades,
-}
-
-/// Where the panel shows a setting.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Group {
-    Matching,
-    Darks,
-    FlatGroups,
-    Checks,
-    Grades,
-}
+pub use seiza_calibration::library::{
+    ChoiceOption, Effect, FieldKind, FieldSpec, Group, RuleSource,
+};
 
 /// Where a rig's lights split into nights in Images, Sequence and the
 /// calibration reports: at its local noon, as its calibration frames do,
@@ -290,638 +234,23 @@ pub enum FlatGrouping {
     Time,
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct ChoiceOption {
-    pub value: &'static str,
-    pub label: &'static str,
-}
-
-/// What kind of value a setting holds, with its range.
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum FieldKind {
-    Number {
-        min: f64,
-        max: f64,
-        step: f64,
-        unit: &'static str,
-        /// What zero means, when it means something other than zero.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        zero: Option<&'static str>,
-    },
-    Count {
-        min: usize,
-        max: usize,
-        unit: &'static str,
-    },
-    Toggle,
-    Choice {
-        options: Vec<ChoiceOption>,
-    },
-    /// A light check's mode. `levels` are the levels it raises on its own,
-    /// so a check that only ever says "check" offers no advisory step.
-    Check {
-        levels: Vec<&'static str>,
-    },
-    /// A frame grade's two limits, `{"suspect": x, "poor": y}`, either of
-    /// which may be `null` for never. Stored as Seiza measures them;
-    /// `percent` asks the panel to show them times a hundred.
-    Limits {
-        min: f64,
-        max: f64,
-        step: f64,
-        unit: &'static str,
-        percent: bool,
-        lower_is_worse: bool,
-    },
-}
-
-/// One setting.
-#[derive(Debug, Clone, Serialize)]
-pub struct FieldSpec {
-    pub key: &'static str,
-    pub group: Group,
-    pub label: &'static str,
-    pub help: &'static str,
-    pub effect: Effect,
-    pub kind: FieldKind,
-    pub default: Value,
-}
-
-#[allow(clippy::too_many_arguments)]
-fn number(
-    key: &'static str,
-    group: Group,
-    effect: Effect,
-    label: &'static str,
-    help: &'static str,
-    (min, max, step): (f64, f64, f64),
-    unit: &'static str,
-    zero: Option<&'static str>,
-    default: f64,
-) -> FieldSpec {
-    FieldSpec {
-        key,
-        group,
-        label,
-        help,
-        effect,
-        kind: FieldKind::Number {
-            min,
-            max,
-            step,
-            unit,
-            zero,
-        },
-        default: json!(default),
-    }
-}
-
-fn check(check: Check, label: &'static str, help: &'static str, poor: bool) -> FieldSpec {
-    FieldSpec {
-        key: check.key(),
-        group: Group::Checks,
-        label,
-        help,
-        effect: Effect::Flags,
-        kind: FieldKind::Check {
-            levels: if poor { vec!["poor"] } else { vec!["check"] },
-        },
-        default: json!("flag"),
-    }
-}
-
-fn grade(
-    grade: GradeCheck,
-    label: &'static str,
-    help: &'static str,
-    (max, step): (f64, f64),
-    unit: &'static str,
-    percent: bool,
-) -> FieldSpec {
-    let limits = grade.default_limits();
-    FieldSpec {
-        key: grade.key(),
-        group: Group::Grades,
-        label,
-        help,
-        effect: Effect::Grades,
-        kind: FieldKind::Limits {
-            min: 0.0,
-            max,
-            step,
-            unit,
-            percent,
-            lower_is_worse: grade.lower_is_worse(),
-        },
-        default: json!({ "suspect": limits.suspect, "poor": limits.poor }),
-    }
-}
-
-/// The `night_zone` choices: automatic, then each UTC offset a zone keeps.
-const NIGHT_ZONES: &[(&str, &str)] = &[
-    ("auto", "Automatic (from frames)"),
-    ("-12", "UTC−12"),
-    ("-11", "UTC−11"),
-    ("-10", "UTC−10"),
-    ("-9.5", "UTC−9:30"),
-    ("-9", "UTC−9"),
-    ("-8", "UTC−8"),
-    ("-7", "UTC−7"),
-    ("-6", "UTC−6"),
-    ("-5", "UTC−5"),
-    ("-4", "UTC−4"),
-    ("-3.5", "UTC−3:30"),
-    ("-3", "UTC−3"),
-    ("-2", "UTC−2"),
-    ("-1", "UTC−1"),
-    ("0", "UTC"),
-    ("1", "UTC+1"),
-    ("2", "UTC+2"),
-    ("3", "UTC+3"),
-    ("3.5", "UTC+3:30"),
-    ("4", "UTC+4"),
-    ("4.5", "UTC+4:30"),
-    ("5", "UTC+5"),
-    ("5.5", "UTC+5:30"),
-    ("5.75", "UTC+5:45"),
-    ("6", "UTC+6"),
-    ("6.5", "UTC+6:30"),
-    ("7", "UTC+7"),
-    ("8", "UTC+8"),
-    ("8.75", "UTC+8:45"),
-    ("9", "UTC+9"),
-    ("9.5", "UTC+9:30"),
-    ("10", "UTC+10"),
-    ("10.5", "UTC+10:30"),
-    ("11", "UTC+11"),
-    ("12", "UTC+12"),
-    ("12.75", "UTC+12:45"),
-    ("13", "UTC+13"),
-    ("14", "UTC+14"),
-];
-
-/// A `night_zone` value as an offset from UTC in seconds; `None` for
-/// automatic, or a value this build cannot read.
 fn night_offset_seconds(value: &Value) -> Option<i64> {
     let hours: f64 = value.as_str()?.parse().ok()?;
     Some((hours * 3600.0).round() as i64)
 }
 
-static FIELDS: LazyLock<Vec<FieldSpec>> = LazyLock::new(|| {
-    let tolerances = MatchTolerances::default();
-    let mut thin_bias = check(
-        Check::ThinBias,
-        "Bias master has too few frames",
-        "The bias master has fewer than the minimum number of frames. Flag the light as Poor if it has no dark master, or Check if it has one.",
-        true,
-    );
-    thin_bias.kind = FieldKind::Check {
-        levels: vec!["poor", "check"],
-    };
-    let mut flat_spots = check(
-        Check::FlatSpots,
-        "Changing spots in flats",
-        "Spots that come and go across its flats, such as drying dew, end up in the \
-         master. The carried flat spots grade decides check or poor.",
-        true,
-    );
-    flat_spots.kind = FieldKind::Check {
-        levels: vec!["poor", "check"],
-    };
-    vec![
-        // Matching: which frames a light takes.
-        number(
-            "rotation_tolerance_deg",
-            Group::Matching,
-            Effect::Matching,
-            "Flat rotation",
-            "Maximum difference between the flat and light rotator angles. Flats within one master must still be within 2° of each other.",
-            (0.0, 180.0, 0.1),
-            "°",
-            None,
-            tolerances.rotation_deg,
-        ),
-        number(
-            "focal_length_tolerance_mm",
-            Group::Matching,
-            Effect::Matching,
-            "Flat focal length",
-            "Maximum difference between the flat and light focal lengths. Flats within one master must still be within 1 mm of each other.",
-            (0.0, 100.0, 0.1),
-            "mm",
-            None,
-            tolerances.focal_length_mm,
-        ),
-        number(
-            "dark_temperature_tolerance_c",
-            Group::Matching,
-            Effect::Matching,
-            "Dark temperature",
-            "Maximum sensor temperature difference between a dark and light, or between a dark flat and flat. Darks within one master must still be within 1 °C of each other.",
-            (0.0, MAX_DARK_TEMPERATURE_C, 0.1),
-            "°C",
-            None,
-            tolerances.dark_temperature_c,
-        ),
-        number(
-            "flat_session_hours",
-            Group::Matching,
-            Effect::Matching,
-            "Flat session",
-            "Maximum time span of flats combined into one master. With measured grouping, PSF Guard combines nights only when their flat measurements match.",
-            (1.0, 720.0, 1.0),
-            "h",
-            None,
-            tolerances.flat_session_seconds as f64 / 3600.0,
-        ),
-        FieldSpec {
-            key: "use_darks",
-            group: Group::Matching,
-            label: "Use darks",
-            help: "Turn off to calibrate lights with bias and flats only, without flagging missing darks.",
-            effect: Effect::Matching,
-            kind: FieldKind::Toggle,
-            default: json!(true),
-        },
-        FieldSpec {
-            key: "external_masters",
-            group: Group::Matching,
-            label: "External masters",
-            help: "Masters from PixInsight, Siril and other tools, matched by their headers.",
-            effect: Effect::Matching,
-            kind: FieldKind::Choice {
-                options: vec![
-                    ChoiceOption {
-                        value: "prefer",
-                        label: "Whenever one matches",
-                    },
-                    ChoiceOption {
-                        value: "fallback",
-                        label: "Only if raw frames can't build one",
-                    },
-                    ChoiceOption {
-                        value: "ignore",
-                        label: "Never",
-                    },
-                ],
-            },
-            default: json!("prefer"),
-        },
-        FieldSpec {
-            key: "night_zone",
-            group: Group::Matching,
-            label: "Rig's time zone",
-            help: "Calibration nights end at local noon so dawn flats remain in one session. Automatic uses the site longitude recorded in frame headers, then the clock if no longitude is available. Choose an offset if that information is missing or incorrect.",
-            // It picks no frames: grading screens flats by session, and
-            // sessions are nights, so a change grades again. Masters and
-            // stacks are keyed by the frames they take, which a new split
-            // changes only where a session's members change.
-            effect: Effect::Grades,
-            kind: FieldKind::Choice {
-                options: NIGHT_ZONES
-                    .iter()
-                    .map(|(value, label)| ChoiceOption { value, label })
-                    .collect(),
-            },
-            default: json!("auto"),
-        },
-        FieldSpec {
-            key: "light_nights",
-            group: Group::Matching,
-            label: "Nights end",
-            help: "Where a light's night ends: at its rig's local noon, or at one time for \
-                   the whole catalog, in the daytime gap when nothing is shot. A view can \
-                   switch it from its View panel.",
-            // It moves no calibration frame: only how lights are named and
-            // grouped by night. The light checks run again on their kept
-            // headers, which is all a report reads.
-            effect: Effect::Flags,
-            kind: FieldKind::Choice {
-                options: vec![
-                    ChoiceOption {
-                        value: "rig",
-                        label: "At each rig's noon",
-                    },
-                    ChoiceOption {
-                        value: "catalog",
-                        label: "Same time for all rigs",
-                    },
-                ],
-            },
-            default: json!("rig"),
-        },
-        // Dark masters.
-        number(
-            "dark_reach_days",
-            Group::Darks,
-            Effect::Matching,
-            "Maximum time difference for darks",
-            "Maximum time between a dark and the light it calibrates. Darks outside this range are excluded unless explicitly assigned to the light.",
-            (1.0, 3650.0, 1.0),
-            "days",
-            None,
-            DEFAULT_DARK_REACH_DAYS,
-        ),
-        FieldSpec {
-            key: "complete_dark_frames",
-            group: Group::Darks,
-            label: "Minimum darks for a single-night master",
-            help: "If the nearest night has this many matching darks, build the master from that night alone. Otherwise, combine nights within the allowed time range.",
-            effect: Effect::Matching,
-            kind: FieldKind::Count {
-                min: 2,
-                max: 64,
-                unit: "darks",
-            },
-            default: json!(DEFAULT_COMPLETE_DARK_FRAMES),
-        },
-        FieldSpec {
-            key: "dark_choice",
-            group: Group::Darks,
-            label: "Dark selection preference",
-            help: "Choose whether to prefer a complete set of darks over a nearer set with fewer frames. This preference also applies to bias masters and WBPP exports.",
-            effect: Effect::Matching,
-            kind: FieldKind::Choice {
-                options: vec![
-                    ChoiceOption {
-                        value: "complete",
-                        label: "Complete set first",
-                    },
-                    ChoiceOption {
-                        value: "nearest",
-                        label: "Nearest set",
-                    },
-                ],
-            },
-            default: json!("complete"),
-        },
-        // Flat groups.
-        FieldSpec {
-            key: "flat_grouping",
-            group: Group::FlatGroups,
-            label: "Group flats",
-            help: "By measurement: combine nights only when their flats match, and use flats from the same side of a measured change as the light. By time only: build one master per flat session.",
-            effect: Effect::Matching,
-            kind: FieldKind::Choice {
-                options: vec![
-                    ChoiceOption {
-                        value: "measured",
-                        label: "By measurement",
-                    },
-                    ChoiceOption {
-                        value: "time",
-                        label: "By time only",
-                    },
-                ],
-            },
-            default: json!("measured"),
-        },
-        number(
-            "flat_split_dust_pct",
-            Group::FlatGroups,
-            Effect::Matching,
-            "Dust split",
-            "Maximum dust difference between nights that share a flat master, as a percentage of the sky background.",
-            (0.1, 10.0, 0.1),
-            "%",
-            None,
-            DEFAULT_FLAT_SPLIT_DUST_PCT,
-        ),
-        number(
-            "flat_split_pattern_pct",
-            Group::FlatGroups,
-            Effect::Matching,
-            "Light pattern split",
-            "Maximum broad pattern difference between nights that share a flat master, after removing a linear gradient. This includes changes in vignetting.",
-            (0.2, 20.0, 0.1),
-            "%",
-            None,
-            DEFAULT_FLAT_SPLIT_PATTERN_PCT,
-        ),
-        // Light checks.
-        number(
-            "flat_max_age_days",
-            Group::Checks,
-            Effect::Flags,
-            "Flat age limit",
-            "Flag lights as uncalibratable when the elapsed time to the nearest flat contributing to their master exceeds this limit. One day includes exactly 24 hours before or after the light.",
-            (0.0, 3650.0, 1.0),
-            "days",
-            Some("no limit"),
-            DEFAULT_FLAT_MAX_AGE_DAYS,
-        ),
-        number(
-            "flat_check_age_days",
-            Group::Checks,
-            Effect::Flags,
-            "Flat age warning",
-            "Flag lights for review when the elapsed time to the nearest flat contributing to their master exceeds this warning threshold but remains within the age limit.",
-            (0.0, 3650.0, 1.0),
-            "days",
-            Some("off"),
-            DEFAULT_FLAT_CHECK_AGE_DAYS,
-        ),
-        FieldSpec {
-            key: "thin_master_frames",
-            group: Group::Checks,
-            label: "Minimum frames in bias and dark masters",
-            help: "Flag bias or dark masters with fewer source frames than this threshold because they can add read noise.",
-            effect: Effect::Flags,
-            kind: FieldKind::Count {
-                min: 2,
-                max: 64,
-                unit: "frames",
-            },
-            default: json!(DEFAULT_THIN_MASTER_FRAMES),
-        },
-        check(
-            Check::NoLibrary,
-            "No frames for its camera",
-            "No library frames match the light's camera and settings.",
-            true,
-        ),
-        check(
-            Check::NoFlat,
-            "No matching flat",
-            "No flat matches, though there are flats for its camera.",
-            true,
-        ),
-        check(
-            Check::NoBiasOrDark,
-            "No matching bias or dark",
-            "Neither a bias nor a dark matches, though the library has some.",
-            true,
-        ),
-        check(
-            Check::StaleFlats,
-            "Flats past the age limit",
-            "Its matching flats are past the flat age limit.",
-            true,
-        ),
-        check(
-            Check::ThinDark,
-            "Dark master has too few frames",
-            "The dark master has fewer than the minimum number of frames.",
-            true,
-        ),
-        thin_bias,
-        flat_spots,
-        check(
-            Check::OldFlats,
-            "Old flats",
-            "Its flats are past the flat age warning.",
-            false,
-        ),
-        check(
-            Check::MixedFlats,
-            "Flats from several nights",
-            "The master combines nights whose flats have not been compared. Nights with matching flat measurements do not trigger this check.",
-            false,
-        ),
-        check(
-            Check::FlatsDiffer,
-            "Flats from across a change",
-            "A measured change, such as new dust, lies between the light and its flats, or \
-             happened while it was shot.",
-            false,
-        ),
-        check(
-            Check::SuspectFrames,
-            "Suspect frames in calibration masters",
-            "The light's calibration masters include frames graded Suspect.",
-            false,
-        ),
-        check(
-            Check::ShortAfterKeepOut,
-            "Too few frames after manual exclusions",
-            "Manual exclusions leave the light's masters with fewer than the minimum number of frames.",
-            false,
-        ),
-        // Frame grades.
-        grade(
-            GradeCheck::BiasLevel,
-            "Bias level",
-            "Difference between a bias frame's level and the level of its comparison set, measured in units of the set's noise.",
-            (1000.0, 0.1),
-            "σ",
-            false,
-        ),
-        grade(
-            GradeCheck::BiasNoise,
-            "Bias noise",
-            "A bias's noise as a ratio to its set's.",
-            (100.0, 0.05),
-            "×",
-            false,
-        ),
-        grade(
-            GradeCheck::BiasBanding,
-            "Bias banding",
-            "Row or column banding as a ratio to the frame's own noise.",
-            (100.0, 0.05),
-            "×",
-            false,
-        ),
-        grade(
-            GradeCheck::DarkLevel,
-            "Dark stray light",
-            "How much the dark frame's level exceeds the quietest matching dark, measured in units of that dark's spread. Light leaks raise this value.",
-            (1000.0, 0.1),
-            "σ",
-            false,
-        ),
-        grade(
-            GradeCheck::DarkNoise,
-            "Dark noise",
-            "A dark's noise as a ratio to its peers'.",
-            (100.0, 0.05),
-            "×",
-            false,
-        ),
-        grade(
-            GradeCheck::DarkHotPixels,
-            "Dark hot pixels",
-            "A dark's hot pixels as a ratio to its peers'.",
-            (1000.0, 0.1),
-            "×",
-            false,
-        ),
-        grade(
-            GradeCheck::DarkBanding,
-            "Dark banding",
-            "Row or column banding as a ratio to the frame's own noise.",
-            (100.0, 0.05),
-            "×",
-            false,
-        ),
-        grade(
-            GradeCheck::FlatClipped,
-            "Flat clipping",
-            "Share of a flat's samples at full scale.",
-            (1.0, 0.0001),
-            "%",
-            true,
-        ),
-        grade(
-            GradeCheck::FlatBright,
-            "Flat too bright",
-            "The brightest channel's level as a share of full scale.",
-            (1.0, 0.01),
-            "%",
-            true,
-        ),
-        grade(
-            GradeCheck::FlatDim,
-            "Flat too dim",
-            "The dimmest channel's level as a share of full scale; lower is worse.",
-            (1.0, 0.01),
-            "%",
-            true,
-        ),
-        grade(
-            GradeCheck::FlatIllumination,
-            "Flat light pattern",
-            "How far a flat's light pattern departs from its session's. Sky flats vary \
-             more.",
-            (1.0, 0.001),
-            "%",
-            true,
-        ),
-        grade(
-            GradeCheck::FlatSpots,
-            "Flat spots",
-            "Clear spots in one flat.",
-            (100_000.0, 1.0),
-            "spots",
-            false,
-        ),
-        grade(
-            GradeCheck::FlatChangingSpots,
-            "Flat changing spots",
-            "Spots in one flat that change across its session.",
-            (100_000.0, 1.0),
-            "spots",
-            false,
-        ),
-        grade(
-            GradeCheck::FlatCarriedSpots,
-            "Carried flat spots",
-            "Changing spots present in most flats in a set can remain in the master. These thresholds determine the grade for the Changing spots in flats check.",
-            (100_000.0, 1.0),
-            "spots",
-            false,
-        ),
-    ]
-});
-
-/// Every setting, in the order the panel shows them.
+/// Settings definitions are owned by Seiza, including defaults and ranges.
 pub fn fields() -> &'static [FieldSpec] {
+    static FIELDS: LazyLock<Vec<FieldSpec>> = LazyLock::new(|| {
+        seiza_calibration::library::evaluate(Default::default())
+            .expect("empty calibration library")
+            .settings_schema
+    });
     &FIELDS
 }
 
 pub fn field(key: &str) -> Option<&'static FieldSpec> {
-    FIELDS.iter().find(|field| field.key == key)
+    fields().iter().find(|field| field.key == key)
 }
 
 fn finite(value: &Value) -> Option<f64> {
@@ -1317,6 +646,18 @@ impl Rules {
             .unwrap_or_default()
     }
 
+    /// Resolved values for one selected light. Rule provenance remains on
+    /// `Rules` for health/UI reporting; the core needs the effective values.
+    pub(super) fn shared_settings(&self) -> Vec<seiza_calibration::library::Setting> {
+        self.resolved
+            .iter()
+            .map(|(key, (value, _))| seiza_calibration::library::Setting {
+                key: (*key).into(),
+                value: value.clone(),
+            })
+            .collect()
+    }
+
     /// The settings that differ from their defaults for these rules, in
     /// the panel's order.
     pub fn notes(&self) -> Vec<RuleNote> {
@@ -1417,6 +758,32 @@ impl RuleBook {
             rigs,
             global_rules,
             rig_rules,
+        }
+    }
+
+    pub(super) fn shared_request(&self) -> seiza_calibration::library::Request {
+        use seiza_calibration::library::{Request, RigSettings, Setting};
+        let settings = |values: &RuleValues| {
+            values
+                .iter()
+                .map(|(key, value)| Setting {
+                    key: key.clone(),
+                    value: value.clone(),
+                })
+                .collect()
+        };
+        Request {
+            global_settings: settings(&self.global),
+            rigs: self
+                .rigs
+                .iter()
+                .map(|(id, layer)| RigSettings {
+                    rig_uuid: id.clone(),
+                    name: layer.name.clone(),
+                    settings: settings(&layer.values),
+                })
+                .collect(),
+            ..Request::default()
         }
     }
 

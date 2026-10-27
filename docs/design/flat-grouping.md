@@ -4,7 +4,7 @@ Status: **Built**, with flats matched by measured response (§2.3, §4.2)
 and splits, joins and a light's side chosen by hand (§8).
 Still open: gap lights (a light whose night has no flats between two
 groups that differ), and corrected flats in WBPP exports (§9).
-Last updated: 2026-10-16
+Last updated: 2026-10-27
 
 User-facing behaviour is in
 [Calibration libraries › Flat groups](../CALIBRATION_LIBRARY.md#flat-groups).
@@ -39,13 +39,27 @@ against several candidate responses. Their dust is `seiza_calibration::dust`
 (seiza #289), the one definition the frames' Spots use too: compact and
 irregular dips, out-of-focus disks and donuts found by their rim, patches
 of overlapping ones, and border-anchored vignetting apart. PSF Guard
-re-exports them as `flat_groups::measure::{metric, evidence, choice}` and
-keeps, in the same module, what it builds on the numbers with a pure API:
-`model` (response families, groups, change events, the angle term and
-placement), `lights` (angle epochs and which family a light takes) and
-`rows` (the data they share). A test fails if any of those names
-`crate::`, `rusqlite` or the file system. Only the background job
-(`job.rs`, `family_job.rs`) reads pixels.
+re-exports them as `flat_groups::measure::{metric, evidence, choice}`.
+The `model`, `lights`, `overrides` and `rows` modules now re-export Seiza's
+`flat_response::groups` models. Seiza owns response families, change events,
+angle epochs, uncertain placement and manual choice resolution.
+
+PSF Guard still loads its catalog rows and memoizes the immutable `Arc<Book>`
+by catalog, row/settings digest and imaging summary. Selection passes that
+same book to `seiza_calibration::library::evaluate_with_book`, with metadata,
+resolved settings and cached response availability. It does not reconstruct
+the book or read image pixels for each light. Grading supplies stored current
+measurements, site-derived night boundaries and global/per-rig settings to
+`library::evaluate`, then stores the returned grades in the existing tables.
+The settings panel reads Seiza's settings schema; local registry persistence,
+validation, health reports and UI wording remain in PSF Guard.
+
+Background measurement jobs, source verification/remapping, cache/staging,
+master builds, post-build stability/retry and export orchestration remain
+host responsibilities. Existing source/master fingerprints and transitive
+invalidation remain in force. This dependency-adoption PR is a prototype
+against a pinned Seiza revision; replace its Git patches with published
+crates after Seiza #385 is merged and released.
 
 A session's own dust is found on its kept response plane (`find_dust`), and
 the flats each shadow shows in by pairing it (`match_features`) with each
@@ -1025,8 +1039,13 @@ another target that shares a file name never takes another's choice
   the light-against-responses choice, and the dust they count (#289) are
   `seiza_calibration::flat_response` and `seiza_calibration::dust`;
   `MatchTolerances::light_rotation` lets the stacker's gate follow a
-  measured angle. PSF Guard keeps the families, events, placement, the
-  job, the store and the selection.
+  measured angle.
+- **Adopted in the Seiza #385 prototype**: response families, groups, changes,
+  uncertain placement, angle epochs, override resolution, peer grading,
+  candidate selection and the tunable settings schema. PSF Guard reuses its
+  cached native book and keeps catalog/cache I/O, background measurement jobs,
+  health/UI reporting and master execution. The dependency pin remains a
+  draft-only bridge until these core interfaces are released.
 - **Session dust from feature lists.** The rule for how many of a
   session's flats a shadow must show in, applied to the flats' stored
   features, is in `job.rs` for now; `dust::session_dust_from_lists` will

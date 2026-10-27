@@ -483,7 +483,7 @@ impl HealthLibrary {
     pub fn judge(&self, light: &FrameMeta, rules: &std::sync::Arc<Rules>) -> Result<Judgement> {
         let selected = self
             .snapshot
-            .select_with(light, std::sync::Arc::clone(rules));
+            .select_with(light, std::sync::Arc::clone(rules))?;
         let rules: &Rules = rules;
         let library = selected.library;
         let mut found = Gathered::new(rules);

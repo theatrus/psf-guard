@@ -1244,7 +1244,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d045de693cb712d0b22c6a64be5b953f67b3ce00ab5ad3dd5d8b441886ab8e1a"
 dependencies = [
  "quote",
- "syn 2.0.119",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -5456,8 +5456,7 @@ dependencies = [
 [[package]]
 name = "seiza"
 version = "0.45.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "775b7f6d3a3ed05cd5a6c1b8f33d88ff81c6ed1f21df95ebc07b730bf86fcc60"
+source = "git+https://github.com/theatrus/seiza.git?rev=b2dfdcb383602d38748957bf2989e9f2e44872b4#b2dfdcb383602d38748957bf2989e9f2e44872b4"
 dependencies = [
  "directories",
  "image",
@@ -5480,8 +5479,7 @@ dependencies = [
 [[package]]
 name = "seiza-background"
 version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6ec7fbc75e5e6fea680f4d32240c29d360613ba7152972ea95dbbcdb265fb532"
+source = "git+https://github.com/theatrus/seiza.git?rev=b2dfdcb383602d38748957bf2989e9f2e44872b4#b2dfdcb383602d38748957bf2989e9f2e44872b4"
 dependencies = [
  "multiversion",
  "rayon",
@@ -5493,28 +5491,27 @@ dependencies = [
 [[package]]
 name = "seiza-calibration"
 version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5bd25b5391a15fd9bc9240e60a83d45d924c17619d119fbbd2ab295c35a9c3b8"
+source = "git+https://github.com/theatrus/seiza.git?rev=b2dfdcb383602d38748957bf2989e9f2e44872b4#b2dfdcb383602d38748957bf2989e9f2e44872b4"
 dependencies = [
  "nalgebra",
  "rayon",
  "seiza-imgproc",
  "seiza-stats",
  "serde",
+ "serde_json",
+ "sha2 0.11.1",
  "thiserror 2.0.21",
 ]
 
 [[package]]
 name = "seiza-core"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dcc138b25739bdb6456c81373a8042bdddcfc957283e08af18ad9f6c083f95bc"
+source = "git+https://github.com/theatrus/seiza.git?rev=b2dfdcb383602d38748957bf2989e9f2e44872b4#b2dfdcb383602d38748957bf2989e9f2e44872b4"
 
 [[package]]
 name = "seiza-deconvolution"
 version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a85ee414469a1f075915a2efcf3fce4007a5b49f65a89ea6d8a745b634ce2aca"
+source = "git+https://github.com/theatrus/seiza.git?rev=b2dfdcb383602d38748957bf2989e9f2e44872b4#b2dfdcb383602d38748957bf2989e9f2e44872b4"
 dependencies = [
  "multiversion",
  "rayon",
@@ -5525,8 +5522,7 @@ dependencies = [
 [[package]]
 name = "seiza-download"
 version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3838b2a298fe5ad7d27f8f7fc5bf6189307b621684f87909839d168009bc84d"
+source = "git+https://github.com/theatrus/seiza.git?rev=b2dfdcb383602d38748957bf2989e9f2e44872b4#b2dfdcb383602d38748957bf2989e9f2e44872b4"
 dependencies = [
  "async-compression",
  "directories",
@@ -5544,8 +5540,7 @@ dependencies = [
 [[package]]
 name = "seiza-fits"
 version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3fc67df8f27c1c50bb080fbb978b9176a943c118aec380a03e30239373a68adc"
+source = "git+https://github.com/theatrus/seiza.git?rev=b2dfdcb383602d38748957bf2989e9f2e44872b4#b2dfdcb383602d38748957bf2989e9f2e44872b4"
 dependencies = [
  "flate2",
  "memmap2",
@@ -5558,8 +5553,7 @@ dependencies = [
 [[package]]
 name = "seiza-image-io"
 version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77fdd33ec82b3c044ac5c682110bf0fdd0844a6cb13d8aae10d307c442314f39"
+source = "git+https://github.com/theatrus/seiza.git?rev=b2dfdcb383602d38748957bf2989e9f2e44872b4#b2dfdcb383602d38748957bf2989e9f2e44872b4"
 dependencies = [
  "chrono",
  "image",
@@ -5575,8 +5569,7 @@ dependencies = [
 [[package]]
 name = "seiza-imgproc"
 version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43903045bca0b629b5bda14bfda11b26758bbb3fd51d24dedb253c0155020f1d"
+source = "git+https://github.com/theatrus/seiza.git?rev=b2dfdcb383602d38748957bf2989e9f2e44872b4#b2dfdcb383602d38748957bf2989e9f2e44872b4"
 dependencies = [
  "rayon",
 ]
@@ -5584,8 +5577,7 @@ dependencies = [
 [[package]]
 name = "seiza-satellites"
 version = "0.22.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1c64083feb27f6ce3cb1d7da9169ef94e961e52a9e0a9deeebda31faeac8742"
+source = "git+https://github.com/theatrus/seiza.git?rev=b2dfdcb383602d38748957bf2989e9f2e44872b4#b2dfdcb383602d38748957bf2989e9f2e44872b4"
 dependencies = [
  "directories",
  "fs2",
@@ -5602,8 +5594,7 @@ dependencies = [
 [[package]]
 name = "seiza-stacking"
 version = "0.52.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "520948d5aef2591c4c58251fe847ee6b4a7ee1946c62a0ed795ec14b3a6f567c"
+source = "git+https://github.com/theatrus/seiza.git?rev=b2dfdcb383602d38748957bf2989e9f2e44872b4#b2dfdcb383602d38748957bf2989e9f2e44872b4"
 dependencies = [
  "bytemuck",
  "multiversion",
@@ -5612,6 +5603,7 @@ dependencies = [
  "pollster",
  "postcard",
  "rayon",
+ "same-file",
  "seiza",
  "seiza-calibration",
  "seiza-fits",
@@ -5634,8 +5626,7 @@ dependencies = [
 [[package]]
 name = "seiza-stars"
 version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8d8f7ea3db9ae4e4ca1ad90f802ecb7167e918867ab749ef51c9065837a7e3c7"
+source = "git+https://github.com/theatrus/seiza.git?rev=b2dfdcb383602d38748957bf2989e9f2e44872b4#b2dfdcb383602d38748957bf2989e9f2e44872b4"
 dependencies = [
  "nalgebra",
  "rayon",
@@ -5645,8 +5636,7 @@ dependencies = [
 [[package]]
 name = "seiza-stats"
 version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b74a427de5fa507b58bfe35654c8eea086f996db3dae6ee8da031db8d9e4e03"
+source = "git+https://github.com/theatrus/seiza.git?rev=b2dfdcb383602d38748957bf2989e9f2e44872b4#b2dfdcb383602d38748957bf2989e9f2e44872b4"
 dependencies = [
  "bytemuck",
 ]
@@ -5654,8 +5644,7 @@ dependencies = [
 [[package]]
 name = "seiza-stretch"
 version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a1f98d4c8a11bff8c04b8f684967336f5f07f4f94df86b507a4a2f148a08b69"
+source = "git+https://github.com/theatrus/seiza.git?rev=b2dfdcb383602d38748957bf2989e9f2e44872b4#b2dfdcb383602d38748957bf2989e9f2e44872b4"
 dependencies = [
  "rayon",
  "seiza-stats",
@@ -5666,8 +5655,7 @@ dependencies = [
 [[package]]
 name = "seiza-xisf"
 version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ee46fc96cadcd3c3cef96454729f50f5ad636c982b9db74522b12e9c4d22d82e"
+source = "git+https://github.com/theatrus/seiza.git?rev=b2dfdcb383602d38748957bf2989e9f2e44872b4#b2dfdcb383602d38748957bf2989e9f2e44872b4"
 dependencies = [
  "flate2",
  "lz4_flex",
@@ -6746,7 +6734,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",

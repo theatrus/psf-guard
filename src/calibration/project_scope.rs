@@ -99,14 +99,14 @@ impl LightUse {
     pub(crate) fn of<'a>(
         snapshot: &LibrarySnapshot,
         lights: impl IntoIterator<Item = &'a FrameMeta>,
-    ) -> Self {
+    ) -> Result<Self> {
         let mut used = Self::default();
         let mut seen: HashSet<(CalibrationKind, BTreeSet<String>)> = HashSet::new();
         for light in lights {
             used.lights += 1;
-            used.add(snapshot, &snapshot.select(light), &mut seen);
+            used.add(snapshot, &snapshot.select(light)?, &mut seen);
         }
-        used
+        Ok(used)
     }
 
     fn add(
@@ -251,7 +251,7 @@ pub fn project_scope(
     unread: usize,
 ) -> Result<ProjectScope> {
     let snapshot = LibrarySnapshot::load(conn)?;
-    let used = LightUse::of(&snapshot, lights);
+    let used = LightUse::of(&snapshot, lights)?;
     let library = browse::library_frames(conn)?;
     let masters = browse::recorded_masters(conn)?;
     Ok(ProjectScope::of(
@@ -596,6 +596,60 @@ mod tests {
     }
 
     #[test]
+    fn shared_selection_keeps_global_and_both_rigs_flat_group_thresholds() {
+        use crate::calibration::{flat_groups, rules};
+        use serde_json::json;
+        let _settings = crate::calibration::tests::POLICY_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                rules::set_test_rule_book(None);
+            }
+        }
+        let _reset = Reset;
+        let library = Library::new();
+        library.frames("a-flat", "FLAT", RIG_A, "2026-09-10T14:00", "Ha");
+        library.frames("b-flat", "FLAT", RIG_B, "2026-09-10T14:00", "Ha");
+        let a = library.rig_of("a-flat");
+        let b = library.rig_of("b-flat");
+        let values = |dust| BTreeMap::from([("flat_split_dust_pct".into(), json!(dust))]);
+        rules::set_test_rule_book(Some(rules::RuleBook::new(
+            values(3.0),
+            BTreeMap::from([
+                (
+                    a.clone(),
+                    rules::RigLayer {
+                        name: Some("A".into()),
+                        values: values(5.0),
+                    },
+                ),
+                (
+                    b.clone(),
+                    rules::RigLayer {
+                        name: Some("B".into()),
+                        values: values(7.0),
+                    },
+                ),
+            ]),
+        )));
+        flat_groups::testing::measure_as(&library.conn, |_, _| 0.001);
+        let snapshot = LibrarySnapshot::load(&library.conn).unwrap();
+        for (name, size, rig, dust) in [("a", RIG_A, a, 5.0), ("b", RIG_B, b, 7.0)] {
+            let light = library.light(name, size, "2026-09-11T04:00:00");
+            let selected = snapshot.select(&light).unwrap();
+            assert_eq!(selected.flat.len(), 3);
+            assert_eq!(selected.rules.flat_split_dust_pct, dust);
+            assert_eq!(selected.flat[0].rig_uuid, rig);
+            assert_eq!(
+                snapshot.flat_book().limits(&rig).unwrap().dust,
+                dust / 100.0
+            );
+        }
+    }
+
+    #[test]
     fn a_flat_session_a_year_older_matches_but_is_not_in_scope() {
         let _settings = crate::calibration::tests::POLICY_LOCK
             .lock()
@@ -607,7 +661,10 @@ mod tests {
         library.frames("new-flat", "FLAT", RIG_A, "2026-09-10T14:00", "Ha");
         library.frames("dark", "DARK", RIG_A, "2026-09-10T15:00", "Ha");
         let light = library.light("light", RIG_A, "2026-09-11T04:00:00");
-        let selected = LibrarySnapshot::load(&library.conn).unwrap().select(&light);
+        let selected = LibrarySnapshot::load(&library.conn)
+            .unwrap()
+            .select(&light)
+            .unwrap();
         assert_eq!(selected.flat.len(), 6, "both sessions match");
 
         let rig = library.rig_of("dark");
