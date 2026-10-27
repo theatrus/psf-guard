@@ -158,7 +158,7 @@ test('auto-import keeps autofocus frames out and holds a new target for Review',
 
 test('new image databases apply scan rules immediately and keep them editable on Import', async ({ page, request }, testInfo) => {
   for (const [folder, object] of [['M31/LIGHT', 'M31'], ['Hocus Focus/LIGHT', 'Focus'], ['Other', 'Other'], ['Held/LIGHT', 'Held']]) {
-    writeFrame(path.join(root, folder, 'light.fits'), {
+    writeFrame(path.join(root, folder, `${object}.fits`), {
       object, ra: object === 'M31' ? 10.6847 : 50, dec: 41.2687,
       dateObs: '2026-01-10T01:00:00.000', exposure: 300,
     });
@@ -169,6 +169,7 @@ test('new image databases apply scan rules immediately and keep them editable on
   await page.getByLabel('Display name (optional):').fill('Filtered first import');
   await page.getByPlaceholder('Type an absolute path and press Add').fill(root);
   await page.getByRole('button', { name: 'Add', exact: true }).click();
+  await page.getByText('Scan rules · Defaults', { exact: true }).click();
   await page.getByLabel('Exclude:', { exact: true }).fill('**/Hocus Focus/**');
   await page.getByLabel('Include only:', { exact: true }).fill('LIGHT');
   await page.getByRole('checkbox', { name: 'Require LIGHT in the image-type header' }).check();
@@ -197,6 +198,9 @@ test('new image databases apply scan rules immediately and keep them editable on
   expect(targetNames(summary.database_path)).toEqual(['M31']);
   const editor = page.getByRole('region', { name: 'Filtered first import import', exact: true });
   await expect(editor).toBeVisible();
+  const savedRules = editor.getByText('Scan rules · Saved', { exact: true });
+  await expect(savedRules.locator('..')).not.toHaveAttribute('open');
+  await savedRules.click();
   await expect(editor.getByLabel('Exclude:', { exact: true })).toHaveValue('**/Hocus Focus/**');
   await expect(editor.getByLabel('Include only:', { exact: true })).toHaveValue('LIGHT');
   await expect(editor.getByRole('checkbox', { name: 'Lights need a target name' })).toBeChecked();
@@ -209,7 +213,20 @@ test('new image databases apply scan rules immediately and keep them editable on
   expect(saved.request().postDataJSON()).toEqual({ scan_rules: { ...rules, exclude: ['**/Other/**'] } });
   await expect(editor.getByRole('button', { name: 'Save import settings' })).toBeDisabled();
   expect(targetNames(summary.database_path)).toEqual(['M31']);
+  await expect(savedRules.locator('..')).not.toHaveAttribute('open');
+  await expect(editor.getByRole('button', { name: 'Preview import' })).toBeEnabled();
   await editor.getByRole('button', { name: 'Preview import' }).click();
-  await expect(page.locator('.import-progress-panel')).toContainText('Focus', { timeout: 30_000 });
+  const preview = page.locator('.import-progress-panel');
+  await expect(preview.locator('.import-project-list')).toContainText('NEW Focus', { timeout: 30_000 });
+  await expect(preview.getByRole('button', { name: 'Import 1 frame(s)', exact: true })).toBeVisible();
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
+    await preview.evaluate(element => {
+      const scroller = element.closest('.modal-body')!;
+      scroller.scrollTop += element.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+    });
+    await expect(page.getByRole('button', { name: 'Close settings' })).toBeInViewport();
+    await page.screenshot({ path: testInfo.outputPath(`manual-import-preview-${width}.png`), animations: 'disabled' });
+  }
   expect(targetNames(summary.database_path)).toEqual(['M31']);
 });

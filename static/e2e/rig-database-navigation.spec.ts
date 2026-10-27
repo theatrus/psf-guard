@@ -31,6 +31,11 @@ for (const width of [1280, 390]) {
     await expect(page.locator('.settings-rig-database-pages')).toHaveCount(0);
     await expect(page.getByRole('tab', { name: 'Rig setup' })).toHaveCount(0);
     await selectSettingsSection(page, 'database-import');
+    const savedRules = page.getByText('Scan rules · Saved', { exact: true });
+    await expect(savedRules.locator('..')).not.toHaveAttribute('open');
+    await expect(page.getByRole('button', { name: 'Preview import', exact: true })).toBeEnabled();
+    await page.screenshot({ path: testInfo.outputPath(`manual-import-${width}.png`), animations: 'disabled' });
+    await savedRules.click();
     await page.getByLabel('Exclude:', { exact: true }).fill('**/Hocus Focus/**');
     const scanRules = page.getByRole('group', { name: 'Scan rules', exact: true });
     await scanRules.evaluate(element => {

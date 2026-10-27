@@ -114,19 +114,30 @@ replaces the shared ID. The maps retain their existing scope and storage.
 ## Configure imports
 
 Choose a database, then open **Import** directly beneath its name.
-**Scan rules** controls which files an import includes. Edit **Exclude** and
+**Scan rules · Saved** starts collapsed. Manual imports use those saved
+rules without opening or saving the editor again. Expand the section to edit **Exclude** and
 **Include only** patterns, header requirements, target matching and the
 minimum exposure here. **Automatic import** controls its schedule, frame
 types, new targets and background analysis. Click **Save import settings**
-to apply your changes. Unsaved changes must be saved before an import can run.
+to apply your changes and collapse the filters. Unsaved changes must be saved before an import can run.
 
 When creating a database from image folders, the **Scan rules** fields offer
-all the same file filters. PSF Guard applies them to the first scan and saves
+all the same file filters in a collapsed **Scan rules · Defaults** section. PSF Guard applies them to the first scan and saves
 them for future imports. You can edit them later on that database's **Import** page.
 
-For a manual import, click **Preview import**. Its preview offers **Skip processed
-files**, **Include frames from other rigs**, and quality analysis for that
-import. These controls do not change the global quality-analysis defaults.
+For a manual import, click **Preview import**. The preview lists which frames
+would attach to existing targets and which projects would be created. It also
+shows files excluded by scan rules or .psfguardignore. Choose folders and frame
+types, **Skip processed files** or **Include frames from other rigs**, then
+click **Update preview** if you change those choices. Click the green **Import**
+button with the frame count to confirm. The preview adds no images before
+that confirmation. Background quality analysis is optional for this import;
+its checkbox does not change the global analysis defaults.
+
+![Manual import with saved filters collapsed](images/rig-database-settings/manual-import-desktop.png)
+
+![Manual import preview before confirmation](images/rig-database-settings/manual-import-preview-desktop.png)
+
 See [Import new frames automatically](IMPORTING.md#import-new-frames-automatically).
 
 ## Keep edits when navigating

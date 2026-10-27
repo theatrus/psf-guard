@@ -8,7 +8,7 @@ import { useAccess } from '../auth/access';
 import UnsavedMark from './UnsavedMark';
 import AutoImportFields from './AutoImportFields';
 import AutoImportSummary from './AutoImportSummary';
-import ScanRulesFields from './ScanRulesFields';
+import ScanRulesEditor from './ScanRulesEditor';
 
 /** Import rules have their own editor, independent of database paths. */
 export default function DatabaseImportSettings({ database, canManage, importing, onSaved, onPreview, onFiles }: {
@@ -23,6 +23,7 @@ export default function DatabaseImportSettings({ database, canManage, importing,
   const client = useQueryClient();
   const [rulesDraft, setRulesDraft] = useState<ScanRules | null>(null);
   const [autoDraft, setAutoDraft] = useState<AutoImportSettings | null>(null);
+  const [rulesOpen, setRulesOpen] = useState(false);
   const savedRules = { ...DEFAULT_SCAN_RULES, ...database.scan_rules };
   const savedAuto = { ...DEFAULT_AUTOIMPORT_SETTINGS, ...database.autoimport };
   const rules = rulesDraft ?? savedRules;
@@ -41,6 +42,7 @@ export default function DatabaseImportSettings({ database, canManage, importing,
       await onSaved();
       setRulesDraft(null);
       setAutoDraft(null);
+      setRulesOpen(false);
     },
   });
   const disabled = !canWrite || !canManage || save.isPending;
@@ -74,7 +76,13 @@ export default function DatabaseImportSettings({ database, canManage, importing,
         A .psfguardignore file skips its folder and everything below it; its contents are not read.
       </p>
       <fieldset className="database-import-fields" aria-label="Import settings" disabled={disabled}>
-        <ScanRulesFields value={rules} onChange={setRulesDraft} />
+        <ScanRulesEditor
+          value={rules}
+          onChange={setRulesDraft}
+          status={rulesChanged ? 'Unsaved changes' : 'Saved'}
+          open={rulesOpen}
+          onOpenChange={setRulesOpen}
+        />
         <AutoImportFields value={automatic} onChange={setAutoDraft} />
       </fieldset>
       {!canManage && (

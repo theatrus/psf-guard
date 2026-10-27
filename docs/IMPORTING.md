@@ -365,7 +365,9 @@ Image folders often hold more than lights: autofocus frames, plate-solve
 tests, flats, pier-camera timelapses, processing output. Scan rules leave
 those out of every import from a database's folders, so you do not have to
 move your files to suit PSF Guard. Choose the database in **Settings**, then
-open **Import → Scan rules**. These fields are also available when creating
+open **Import → Scan rules · Saved**. The editor starts collapsed; imports
+use the saved rules even while it is closed. Saving changes collapses it again.
+These fields are also available when creating
 a database from image folders, before the first import:
 
 - **Exclude**: one pattern per line. A file or folder that matches is left

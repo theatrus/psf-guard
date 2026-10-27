@@ -272,6 +272,7 @@ describe("Settings scan rules and Review", () => {
     render(<TauriSettings isOpen initialIntent="database-import" initialDatabaseId="rig" onClose={() => undefined} />, {
       wrapper: createWrapper(),
     });
+    fireEvent.click(await screen.findByText('Scan rules · Saved'));
     expect(await screen.findByLabelText("Exclude:")).toHaveValue("**/Hocus Focus/**");
     expect(
       screen.getByRole("checkbox", { name: "Lights need a target name" }),

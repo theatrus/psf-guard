@@ -53,7 +53,7 @@ import { starMetadataFillEnabled } from '../hooks/useStarMetadataFill';
 import { PurgeRejectsButton } from './RejectRemovalControls';
 import MissingGuidRepair from './MissingGuidRepair';
 import DatabaseImportSettings from './DatabaseImportSettings';
-import ScanRulesFields from './ScanRulesFields';
+import ScanRulesEditor from './ScanRulesEditor';
 import RemotePeerSync from './RemotePeerSync';
 import SchedulerSyncControls from './SchedulerSyncControls';
 import { discardCatalogSyncPreview as discardSavedCatalogSyncPreview } from '../utils/syncPreview';
@@ -1525,7 +1525,11 @@ export default function TauriSettings({
           </div>}
 
         {createMode && <div className="database-config">
-          <ScanRulesFields value={formScanRules} onChange={setFormScanRules} />
+          <ScanRulesEditor
+            value={formScanRules}
+            onChange={setFormScanRules}
+            status={JSON.stringify(formScanRules) === JSON.stringify(DEFAULT_SCAN_RULES) ? 'Defaults' : 'For first import'}
+          />
           <p className="muted">These rules apply to the first import and are saved for later imports. You can edit them on this database’s Import page. A .psfguardignore file skips its folder and everything below it.</p>
         </div>}
 
@@ -1770,7 +1774,7 @@ export default function TauriSettings({
               <div className="import-other-rig" key={other.rig}>
                 {other.frames} frame(s) from another rig left out — {other.rig}
                 {' '}(e.g. {other.example}). If that rig belongs in this
-                catalog, check <em>Include frames from other rigs</em> and
+                database, check <em>Include frames from other rigs</em> and
                 update the preview.
               </div>
             ))}
@@ -1815,9 +1819,8 @@ export default function TauriSettings({
                           <strong>Queue background quality analysis</strong>
                           <small>
                             Reads every image to measure stars, background, clouds,
-                            obstructions, and pointing. This can take a long time,
-                            especially in a debug build. You can run it later from this
-                            database&apos;s settings.
+                            obstructions, and pointing. This can take a long time.
+                            You can run it later under Grading &amp; display → Quality analysis.
                           </small>
                         </span>
                       </label>}
