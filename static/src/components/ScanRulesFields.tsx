@@ -16,7 +16,7 @@ const lines = (text: string) => text.split('\n');
 export default function ScanRulesFields({ value, onChange }: ScanRulesFieldsProps) {
   const set = (patch: Partial<ScanRules>) => onChange({ ...value, ...patch });
   return (
-    <fieldset className="autoimport-fields scan-rules-fields">
+    <fieldset className="calibration-settings-group autoimport-fields scan-rules-fields">
       <legend>Scan rules</legend>
       <label htmlFor="scan-rules-exclude">Exclude:</label>
       <textarea

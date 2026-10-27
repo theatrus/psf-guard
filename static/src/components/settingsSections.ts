@@ -1,6 +1,6 @@
 /** Stable section IDs also preserve shortcuts from other parts of the app. */
 export type SettingsSection =
-  | 'rig-databases' | 'database-overview' | 'database-add' | 'sites' | 'databases' | 'rigs' | 'sync'
+  | 'rig-databases' | 'database-overview' | 'database-add' | 'database-import' | 'sites' | 'databases' | 'rigs' | 'sync'
   | 'setups' | 'templates'
   | 'calibration' | 'stacking'
   | 'performance' | 'gpu' | 'workers'
@@ -68,10 +68,11 @@ export const RIG_DATABASE_PAGES = [
   { id: 'database-overview', label: 'Overview' },
   { id: 'rigs', label: 'Rig setup' },
   { id: 'databases', label: 'Database & files' },
+  { id: 'database-import', label: 'Import' },
   { id: 'sync', label: 'Sync' },
 ] as const;
 
-export function isRigDatabasePage(id: SettingsSection): id is 'database-overview' | 'rigs' | 'databases' | 'sync' {
+export function isRigDatabasePage(id: SettingsSection): id is 'database-overview' | 'rigs' | 'databases' | 'database-import' | 'sync' {
   return RIG_DATABASE_PAGES.some(page => page.id === id);
 }
 

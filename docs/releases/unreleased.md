@@ -26,8 +26,9 @@
   inherit shared defaults. AstroBin filter maps are beside shared AstroBin
   defaults under **Exports & integrations → AstroBin**.
 - Database overrides use the same controls as Calibration rig overrides.
-  **Database & files → Edit paths and import** opens automatic import and
-  scan rules, with links to quality analysis and calibrated-copy pairing.
+  Each database has an **Import** page with directly editable scan rules,
+  automatic-import settings and previews. Creating a database from image
+  folders offers the same exclusion patterns and scan filters before the first import.
 
 - PSF Guard's zstd library is updated for memory-safety advisories in its
   stream and context handling. PSF Guard uses zstd to read and write

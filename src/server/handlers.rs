@@ -1660,6 +1660,15 @@ pub async fn create_database_route(
         }
     }
 
+    // Reject invalid rules before creating a database or changing its registry.
+    if let Some(rules) = &req.scan_rules {
+        let roots: Vec<PathBuf> = req.image_dirs.iter().map(PathBuf::from).collect();
+        rules
+            .validate(&roots)
+            .map_err(|error| AppError::BadRequest(error.to_string()))?;
+    }
+    let scan_rules = req.scan_rules.as_ref().map(|rules| rules.normalized());
+
     let _registry_guard = state.registry_write.lock().await;
     let mut reg = DbRegistry::load_or_init(&registry_path)
         .map_err(|e| AppError::InternalError(format!("loading registry: {}", e)))?;
@@ -1685,7 +1694,7 @@ pub async fn create_database_route(
         .map_err(|e| AppError::InternalError(format!("bootstrap task failed: {}", e)))?
         .map_err(|e| AppError::BadRequest(format!("creating database: {}", e)))?;
 
-    let entry = reg
+    let id = reg
         .add(
             req.name.clone(),
             db_path.to_string_lossy().into_owned(),
@@ -1693,7 +1702,15 @@ pub async fn create_database_route(
             req.slug.clone(),
         )
         .map_err(|e| AppError::BadRequest(e.to_string()))?
+        .id
         .clone();
+    let entry = reg
+        .databases
+        .iter_mut()
+        .find(|entry| entry.id == id)
+        .ok_or_else(|| AppError::InternalError("registry update lost the new database".into()))?;
+    entry.scan_rules = scan_rules.filter(|rules| *rules != Default::default());
+    let entry = entry.clone();
 
     let ctx = Arc::new(
         DatabaseContext::from_entry(&entry, state.storage_roots.clone())

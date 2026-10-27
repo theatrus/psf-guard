@@ -263,23 +263,16 @@ describe("Settings scan rules and Review", () => {
     );
   }
 
-  it("shows the saved rules, asks first by default, and saves both", async () => {
+  it("shows saved rules, asks first by default, and saves only edited rules", async () => {
     const saved: Array<{
       scan_rules?: ScanRules;
       autoimport?: AutoImportSettings;
     }> = [];
     serveCatalog(saved, []);
-    render(<TauriSettings isOpen initialIntent="databases" initialDatabaseId="rig" onClose={() => undefined} />, {
+    render(<TauriSettings isOpen initialIntent="database-import" initialDatabaseId="rig" onClose={() => undefined} />, {
       wrapper: createWrapper(),
     });
-    fireEvent.click(
-      await screen.findByRole(
-        "button",
-        { name: "Edit Rig" },
-        { timeout: 5000 },
-      ),
-    );
-    expect(screen.getByLabelText("Exclude:")).toHaveValue("**/Hocus Focus/**");
+    expect(await screen.findByLabelText("Exclude:")).toHaveValue("**/Hocus Focus/**");
     expect(
       screen.getByRole("checkbox", { name: "Lights need a target name" }),
     ).toBeChecked();
@@ -288,7 +281,7 @@ describe("Settings scan rules and Review", () => {
     fireEvent.change(screen.getByLabelText("Exclude:"), {
       target: { value: "**/Hocus Focus/**\n**/PierCam/**" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save import settings" }));
     await waitFor(() => expect(saved).toHaveLength(1));
     expect(saved[0].scan_rules?.exclude).toEqual([
       "**/Hocus Focus/**",
@@ -297,7 +290,7 @@ describe("Settings scan rules and Review", () => {
     expect(saved[0].scan_rules?.require_object).toBe(true);
     // Stored rules from before the setting existed match by position.
     expect(saved[0].scan_rules?.match_by_position).toBe(true);
-    expect(saved[0].autoimport?.new_targets).toBe("ask");
+    expect(saved[0].autoimport).toBeUndefined();
   });
 
   it("says what the previewed import would change in the scheduler", async () => {
@@ -328,13 +321,13 @@ describe("Settings scan rules and Review", () => {
       },
     };
     serveCatalog([], [], preview);
-    render(<TauriSettings isOpen initialIntent="databases" initialDatabaseId="rig" onClose={() => undefined} />, {
+    render(<TauriSettings isOpen initialIntent="database-import" initialDatabaseId="rig" onClose={() => undefined} />, {
       wrapper: createWrapper(),
     });
     fireEvent.click(
       await screen.findByRole(
         "button",
-        { name: /^Import$/ },
+        { name: "Preview import" },
         { timeout: 5000 },
       ),
     );
@@ -358,7 +351,7 @@ describe("Settings scan rules and Review", () => {
   it("reviews held frames by previewing an import of their folders", async () => {
     const imports: Array<{ dry_run?: boolean; image_dirs?: string[] }> = [];
     serveCatalog([], imports);
-    render(<TauriSettings isOpen initialIntent="databases" initialDatabaseId="rig" onClose={() => undefined} />, {
+    render(<TauriSettings isOpen initialIntent="database-import" initialDatabaseId="rig" onClose={() => undefined} />, {
       wrapper: createWrapper(),
     });
     await waitFor(

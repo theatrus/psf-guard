@@ -6,6 +6,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 import { server } from '../../test/msw-server';
 import { AccessContext } from '../../auth/access';
+import { DEFAULT_SCAN_RULES } from '../../api/types';
 import type { AuthUserSummary } from '../../api/types';
 import TauriSettings from '../TauriSettings';
 import UnsavedMark from '../UnsavedMark';
@@ -356,7 +357,7 @@ describe('TauriSettings import state', () => {
     });
 
     fireEvent.click(await screen.findByRole('button', { name: 'Open Archive' }));
-    fireEvent.click(screen.getByRole('tab', { name: 'Database & files' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Import' }));
     expect(await screen.findByText('Scanning headers… 37/120')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Importing…' })).toBeDisabled();
   });
@@ -967,7 +968,7 @@ describe('TauriSettings first run', () => {
     fireEvent.change(screen.getByPlaceholderText('Type an absolute path and press Add'), { target: { value: '/images' } });
     fireEvent.click(screen.getByRole('button', { name: 'Add' }));
     fireEvent.click(screen.getByRole('button', { name: save }));
-    await waitFor(() => expect(requests).toEqual([{ name: 'Custom catalog', image_dirs: ['/images'], backfill: false, fill_metadata: true, db_path: '/srv/custom.sqlite' }]));
+    await waitFor(() => expect(requests).toEqual([{ name: 'Custom catalog', image_dirs: ['/images'], backfill: false, fill_metadata: true, db_path: '/srv/custom.sqlite', ...(source === 'Image folders' ? { scan_rules: DEFAULT_SCAN_RULES } : {}) }]));
   });
 
   it('validates a custom path and ignores it after managed storage is restored', async () => {

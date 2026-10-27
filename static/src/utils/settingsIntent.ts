@@ -22,7 +22,7 @@ export const OPEN_SETTINGS_EVENT = 'psf-guard:open-settings';
 
 export interface OpenSettingsDetail {
   intent?: SettingsIntent;
-  /** Registration slug for Rig setup, Database & files or Sync. */
+  /** Registration slug for a database's Settings page. */
   databaseId?: string;
   /** With `calibration`: the rig to open. */
   rig?: SettingsRig;

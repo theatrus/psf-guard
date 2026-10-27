@@ -42,7 +42,7 @@ also offers its own worker controls under **Workers**.
 
 ## Open a database
 
-Choose a database by name in the left pane. Its name opens the database overview. **Rig setup**, **Database & files**
+Choose a database by name in the left pane. Its name opens the database overview. **Rig setup**, **Database & files**, **Import**
 and **Sync** appear beneath the database name. On a phone, choose
 the database in **Settings section**, then choose its page from the same
 control. The selected page includes the database name.
@@ -53,9 +53,11 @@ control. The selected page includes the database name.
   scheduling limits and planning connections. Sites are shared: edit them
   under **Presets → Sites**, then choose a rig's **Planning site** in
   **Rig setup → Site**.
-- **Database & files** contains paths, imports, scan rules, automatic import
-  and database maintenance. Quality analysis, calibrated-copy pairing and
-  AstroBin filter maps have moved to the pages described below.
+- **Database & files** contains database paths, image folders and maintenance.
+  Click **Edit database** to change the name and paths.
+- **Import** contains editable scan rules, automatic-import settings and
+  import previews. Exclusion and include patterns are editable directly;
+  there is no separate Edit step.
 - **Sync** configures the selected database's Target Scheduler connection,
   incoming uploads and pairing. Transfers use the opened database as their
   local endpoint. Peers and credentials remain shared.
@@ -111,12 +113,18 @@ replaces the shared ID. The maps retain their existing scope and storage.
 
 ## Configure imports
 
-Choose a database, open **Database & files**, then click **Edit paths and
-import**. **Scan rules** controls which files an import includes.
-**Automatic import** controls its schedule, frame types, new targets and
-background analysis. Click **Save Changes** to apply the database's import settings.
+Choose a database, then open **Import** directly beneath its name.
+**Scan rules** controls which files an import includes. Edit **Exclude** and
+**Include only** patterns, header requirements, target matching and the
+minimum exposure here. **Automatic import** controls its schedule, frame
+types, new targets and background analysis. Click **Save import settings**
+to apply your changes. Unsaved changes must be saved before an import can run.
 
-For a manual import, click **Import**. Its preview offers **Skip processed
+When creating a database from image folders, the **Scan rules** fields offer
+all the same file filters. PSF Guard applies them to the first scan and saves
+them for future imports. You can edit them later on that database's **Import** page.
+
+For a manual import, click **Preview import**. Its preview offers **Skip processed
 files**, **Include frames from other rigs**, and quality analysis for that
 import. These controls do not change the global quality-analysis defaults.
 See [Import new frames automatically](IMPORTING.md#import-new-frames-automatically).

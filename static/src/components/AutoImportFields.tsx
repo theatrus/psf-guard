@@ -17,7 +17,7 @@ export default function AutoImportFields({ value, onChange }: AutoImportFieldsPr
     (choice) => choice.minutes === value.interval_minutes
   );
   return (
-    <fieldset className="autoimport-fields">
+    <fieldset className="calibration-settings-group autoimport-fields">
       <legend>Automatic import</legend>
       <label className="checkbox-label">
         <input

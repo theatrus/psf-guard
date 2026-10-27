@@ -364,8 +364,9 @@ remove projects created by an import; always preview it first.
 Image folders often hold more than lights: autofocus frames, plate-solve
 tests, flats, pier-camera timelapses, processing output. Scan rules leave
 those out of every import from a database's folders, so you do not have to
-move your files to suit PSF Guard. Open the database under **Settings → Databases & rigs → Overview**, then
-choose **Database & files → Edit paths and import → Scan rules**:
+move your files to suit PSF Guard. Choose the database in **Settings**, then
+open **Import → Scan rules**. These fields are also available when creating
+a database from image folders, before the first import:
 
 - **Exclude**: one pattern per line. A file or folder that matches is left
   out, and a folder that matches is never entered, so nothing below it is
@@ -427,9 +428,9 @@ The rules travel with the database entry in the registry as `scan_rules`.
 
 A database can scan its image directories on its own and import what is
 new, so a night's frames are in the catalog by the time you sit down.
-Choose the database in **Settings**, open **Database & files**, then click
-**Edit paths and import**. Turn on **Automatic import → Automatically import
-new frames**:
+Choose the database in **Settings**, then open **Import**. Turn on
+**Automatic import → Automatically import new frames**, choose the options
+below, and click **Save import settings**:
 
 - **Run when the app or server opens this database**: once at start, and
   once when you first enable it.

@@ -84,8 +84,10 @@ scope.
 1. [Install the desktop app](#desktop-app-windows--macos--linux), or
    [set up a server](#docker-linux-servers--nas).
 2. Open **Settings → Databases & rigs → New / import → New Database from Images**.
-3. Add your image folders and choose **Create & Import**. In a browser, use
-   paths on the server.
+3. Add your image folders. Set **Scan rules** to exclude folders or files,
+   require headers, or limit light exposures, then choose **Create & Import**.
+   In a browser, use paths on the server. You can edit the same rules later
+   under **Settings → [database] → Import**.
 4. Choose a project in the **Library**, then open **Images** or **Sequence**.
 
 The first import reads headers. Leave **Queue background quality analysis**

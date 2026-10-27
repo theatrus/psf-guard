@@ -24,7 +24,7 @@ import DirectorSites from './director/DirectorSites';
 import ProcessingPolicySettings from './ProcessingPolicySettings';
 import { RigDatabaseList, RigDatabaseNavigation } from './RigDatabaseNavigation';
 import UnsavedMark from './UnsavedMark';
-import { Database as DatabaseIcon, Download, Pencil, Trash2 } from 'lucide-react';
+import { Database as DatabaseIcon, Pencil, Trash2 } from 'lucide-react';
 import TemplateLibrary from './director/TemplateLibrary';
 import './director/DirectorPage.css';
 import { useDirectorStatus } from '../hooks/useDirectorStatus';
@@ -40,8 +40,8 @@ import BackupSettings from './BackupSettings';
 import ExportDefaultsSettings from './ExportDefaultsSettings';
 import AstroBinSettings from './AstroBinSettings';
 import PixInsightSettings from './PixInsightSettings';
-import type { AutoImportSettings, DatabaseSummary, ScanRules } from '../api/types';
-import { DEFAULT_AUTOIMPORT_SETTINGS, DEFAULT_SCAN_RULES } from '../api/types';
+import type { DatabaseSummary, ScanRules } from '../api/types';
+import { DEFAULT_SCAN_RULES } from '../api/types';
 import { planChanges, scanRuleNotes } from '../utils/importNotes';
 import {
   describeImportProgress,
@@ -52,8 +52,7 @@ import {
 import { starMetadataFillEnabled } from '../hooks/useStarMetadataFill';
 import { PurgeRejectsButton } from './RejectRemovalControls';
 import MissingGuidRepair from './MissingGuidRepair';
-import AutoImportFields from './AutoImportFields';
-import AutoImportSummary from './AutoImportSummary';
+import DatabaseImportSettings from './DatabaseImportSettings';
 import ScanRulesFields from './ScanRulesFields';
 import RemotePeerSync from './RemotePeerSync';
 import SchedulerSyncControls from './SchedulerSyncControls';
@@ -192,9 +191,6 @@ export default function TauriSettings({
   const [formExportDir, setFormExportDir] = useState('');
   const [formProcessDir, setFormProcessDir] = useState('');
   const [formScanRules, setFormScanRules] = useState<ScanRules>(DEFAULT_SCAN_RULES);
-  const [formAutoImport, setFormAutoImport] = useState<AutoImportSettings>(
-    DEFAULT_AUTOIMPORT_SETTINGS
-  );
   const [formRemoteUploadToken, setFormRemoteUploadToken] = useState('');
   const [formRemoteUploadTokenConfigured, setFormRemoteUploadTokenConfigured] =
     useState(false);
@@ -421,6 +417,7 @@ export default function TauriSettings({
     setImportDestination('');
     setCreateMode(false);
     setCreateAnalyzeQuality(false);
+    setFormScanRules(DEFAULT_SCAN_RULES);
   };
 
   const startEdit = (entry: DbEntry) => {
@@ -436,7 +433,6 @@ export default function TauriSettings({
     setFormImageDirs(entry.image_dirs);
     setFormExportDir(entry.export_dir ?? '');
     setFormProcessDir(entry.process_dir ?? '');
-    setFormAutoImport({ ...DEFAULT_AUTOIMPORT_SETTINGS, ...(entry.autoimport ?? {}) });
     setFormScanRules({ ...DEFAULT_SCAN_RULES, ...(entry.scan_rules ?? {}) });
     setFormRemoteUploadEnabled(entry.remote_image_upload?.enabled ?? false);
     setFormRemoteSyncEnabled(entry.remote_image_upload?.sync_enabled ?? false);
@@ -503,6 +499,7 @@ export default function TauriSettings({
     setShowAddForm(true);
     setCreateMode(true);
     setCreateAnalyzeQuality(false);
+    setFormScanRules(DEFAULT_SCAN_RULES);
   };
 
   const startAdd = async () => {
@@ -658,6 +655,7 @@ export default function TauriSettings({
           image_dirs: formImageDirs,
           backfill: !pluginImport && createAnalyzeQuality,
           fill_metadata: starMetadataFillEnabled(),
+          ...(createMode ? { scan_rules: formScanRules } : {}),
           ...(destination ? { db_path: destination } : {}),
         });
         queryClient.invalidateQueries({ queryKey: ['databases'] });
@@ -665,7 +663,7 @@ export default function TauriSettings({
         setImportDbId(created.database.id);
         await reload();
         setSelectedDatabaseId(created.database.id);
-        setActiveTab(pluginImport ? 'sync' : 'databases');
+        setActiveTab(pluginImport ? 'sync' : 'database-import');
         if (pluginImport) {
           startEdit({ id: created.database.id, name: created.database.name,
             db_path: created.database.database_path, image_dirs: created.database.image_directories });
@@ -782,8 +780,6 @@ export default function TauriSettings({
           image_dirs: formImageDirs,
           export_dir: formExportDir.trim(),
           process_dir: formProcessDir.trim(),
-          autoimport: formAutoImport,
-          scan_rules: formScanRules,
         });
       } else {
         const job = await apiClient.importTsDatabase({
@@ -980,7 +976,7 @@ export default function TauriSettings({
   // Installing catalogs and syncing take an editor; sync has nothing to
   // talk about until a catalog exists.
   const availableSections: SettingsSection[] = [
-    'rig-databases', 'database-overview', 'databases',
+    'rig-databases', 'database-overview', 'databases', 'database-import',
     ...(managementAllowed ? ['database-add'] as const : []),
     ...(planningEnabled ? ['rigs', 'templates', 'sites'] as const : []),
     ...(canEdit && hasDatabases ? ['sync'] as const : []),
@@ -1060,9 +1056,7 @@ export default function TauriSettings({
   }, [currentTab, selectedDatabaseId]);
 
   const fileValues = (entry: DbEntry) => [entry.name, entry.db_path, entry.image_dirs,
-    entry.export_dir ?? '', entry.process_dir ?? '',
-    { ...DEFAULT_AUTOIMPORT_SETTINGS, ...(entry.autoimport ?? {}) },
-    { ...DEFAULT_SCAN_RULES, ...(entry.scan_rules ?? {}) }];
+    entry.export_dir ?? '', entry.process_dir ?? ''];
   const remoteValues = (entry: DbEntry) => [entry.remote_image_upload?.enabled ?? false,
     entry.remote_image_upload?.sync_enabled ?? false,
     entry.remote_image_upload?.image_dir ?? entry.image_dirs[0] ?? '',
@@ -1073,9 +1067,10 @@ export default function TauriSettings({
     ? (currentTab !== 'sync' && !!pendingImageDir) || JSON.stringify(currentTab === 'sync'
       ? [formRemoteUploadEnabled, formRemoteSyncEnabled, formRemoteUploadDir, formRemoteUploadPlacement,
         formRemoteUploadDirectoryTemplate, formRemoteUploadLayoutChoice, formRemoteUploadToken, formRemoteUploadRescanRequested]
-      : [formName, formDbPath, formImageDirs, formExportDir, formProcessDir, formAutoImport, formScanRules])
+      : [formName, formDbPath, formImageDirs, formExportDir, formProcessDir])
       !== JSON.stringify(currentTab === 'sync' ? remoteValues(editOriginal) : fileValues(editOriginal))
-    : !!(formName || formDbPath || formImageDirs.length || pendingImageDir || importDestination));
+    : !!(formName || formDbPath || formImageDirs.length || pendingImageDir || importDestination
+      || (createMode && (createAnalyzeQuality || JSON.stringify(formScanRules) !== JSON.stringify(DEFAULT_SCAN_RULES)))));
 
   if (!isOpen) return null;
 
@@ -1527,9 +1522,12 @@ export default function TauriSettings({
               value={formProcessDir}
               onChange={setFormProcessDir}
             />
-            <ScanRulesFields value={formScanRules} onChange={setFormScanRules} />
-            <AutoImportFields value={formAutoImport} onChange={setFormAutoImport} />
           </div>}
+
+        {createMode && <div className="database-config">
+          <ScanRulesFields value={formScanRules} onChange={setFormScanRules} />
+          <p className="muted">These rules apply to the first import and are saved for later imports. You can edit them on this database’s Import page. A .psfguardignore file skips its folder and everything below it.</p>
+        </div>}
 
         {createMode && (
           <label className="quality-analysis-option">
@@ -2037,16 +2035,6 @@ export default function TauriSettings({
                       </h4>
                       {canEdit && (
                         <div className="db-row-actions">
-                          <button
-                            type="button"
-                            className="db-action-button is-primary"
-                            onClick={() => handleImport(entry)}
-                            disabled={isApplying || (importRunning && importDbId === entry.id)}
-                            title="Scan this database's image directories and import new frames"
-                          >
-                            <Download size={15} aria-hidden="true" />
-                            {importRunning && importDbId === entry.id ? 'Importing…' : 'Import'}
-                          </button>
                           <PurgeRejectsButton dbId={entry.id} dbName={entry.name} canManage={canEdit} disabled={isApplying} />
                           {/* Editing a database names its folders: the gate. */}
                           {managementAllowed && (
@@ -2061,7 +2049,7 @@ export default function TauriSettings({
                                 aria-controls={isEditing ? editorId : undefined}
                               >
                                 <Pencil size={14} aria-hidden="true" />
-                                Edit paths and import
+                                Edit database
                               </button>
                               <button
                                 type="button"
@@ -2109,8 +2097,8 @@ export default function TauriSettings({
                     </dl>
                     <div className="db-row-details">
                       <p className="review-preferences-note">
-                        Choose <strong>Edit paths and import</strong> for automatic import and scan rules.
-                        {' '}Other processing settings:{' '}
+                        <button type="button" className="link-button" onClick={() => requestSection('database-import')}>Import</button>
+                        {' · '}
                         <button type="button" className="link-button" onClick={() => requestSection('review')}>Quality analysis</button>
                         {' · '}
                         <button type="button" className="link-button" onClick={() => requestSection('calibration')}>Calibrated-copy pairing</button>.
@@ -2120,21 +2108,9 @@ export default function TauriSettings({
                         onOpen={onClose}
                       />
                       <MissingGuidRepair dbId={entry.id} dbName={entry.name} canManage={canEdit} />
-                      <AutoImportSummary
-                        dbId={entry.id}
-                        settings={entry.autoimport}
-                        onReview={
-                          canEdit
-                            ? (folders) => handleImport(entry, folders)
-                            : undefined
-                        }
-                      />
                     </div>
                   </div>
                   {isEditing && <div id={editorId}>{renderDatabaseForm(entry)}</div>}
-                  {importDbId === entry.id && importPreviewPanel && (
-                    <div ref={importPreviewRef}>{importPreviewPanel}</div>
-                  )}
                 </section>
               );
             })}
@@ -2148,6 +2124,23 @@ export default function TauriSettings({
 
           {managementAllowed && showAddForm && !editingId && renderDatabaseForm(null)}
           </div>
+          )}
+
+          {currentTab === 'database-import' && selectedDatabase && (
+            <div className="settings-setups">
+              <DatabaseImportSettings
+                key={selectedDatabase.id}
+                database={selectedDatabase}
+                canManage={managementAllowed}
+                importing={isApplying || (importRunning && importDbId === selectedDatabase.id)}
+                onSaved={reload}
+                onPreview={folders => void handleImport(selectedDatabase, folders)}
+                onFiles={() => requestSection('databases')}
+              />
+              {importDbId === selectedDatabase.id && importPreviewPanel && (
+                <section className="settings-section" ref={importPreviewRef}>{importPreviewPanel}</section>
+              )}
+            </div>
           )}
 
           {currentTab === 'catalogs' && (

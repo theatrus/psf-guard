@@ -1041,6 +1041,13 @@
   gap: 8px;
 }
 
+.tauri-settings .database-import-fields {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
 .tauri-settings .autoimport-fields legend {
   padding: 0 6px;
   font-weight: 600;

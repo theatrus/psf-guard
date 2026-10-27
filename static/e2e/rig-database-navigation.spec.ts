@@ -30,7 +30,14 @@ for (const width of [1280, 390]) {
     await selectSettingsSection(page, 'databases');
     await expect(page.locator('.settings-rig-database-pages')).toHaveCount(0);
     await expect(page.getByRole('tab', { name: 'Rig setup' })).toHaveCount(0);
-    await page.getByRole('button', { name: 'Edit C925', exact: true }).click();
+    await selectSettingsSection(page, 'database-import');
+    await page.getByLabel('Exclude:', { exact: true }).fill('**/Hocus Focus/**');
+    const scanRules = page.getByRole('group', { name: 'Scan rules', exact: true });
+    await scanRules.evaluate(element => {
+      const scroller = element.closest('.modal-body')!;
+      scroller.scrollTop += element.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+    });
+    await page.screenshot({ path: testInfo.outputPath(`import-rules-${width}.png`), animations: 'disabled' });
     await page.getByRole('checkbox', { name: 'Automatically import new frames' }).check();
     const automaticImport = page.getByRole('group', { name: 'Automatic import', exact: true });
     await expect(automaticImport.getByRole('checkbox', { name: 'Analyze quality of the new frames in the background' })).toBeVisible();
@@ -40,6 +47,13 @@ for (const width of [1280, 390]) {
       scroller.scrollTop += element.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
     });
     await page.screenshot({ path: testInfo.outputPath(`import-settings-${width}.png`), animations: 'disabled' });
+    await selectSettingsSection(page, 'databases');
+    await expect(page.getByRole('alertdialog')).toContainText('C925 import settings');
+    await page.getByRole('button', { name: 'Keep editing' }).click();
+    await expect(page.getByLabel('Exclude:', { exact: true })).toHaveValue('**/Hocus Focus/**');
+    await selectSettingsSection(page, 'databases');
+    await page.getByRole('button', { name: 'Discard changes and switch' }).click();
+    await page.getByRole('button', { name: 'Edit C925', exact: true }).click();
     await page.getByLabel('Display name (optional):').fill('C925 edited');
     await page.getByRole('button', { name: 'Quality analysis', exact: true }).click();
     await expect(page.getByRole('alertdialog')).toContainText('Unsaved changes in database files');
