@@ -174,7 +174,6 @@ pub(super) fn integrate_channel(
         reference_frame.image.channels as u64
     };
     let pixels = reference_frame.image.pixel_count();
-    let frame_size = (reference_frame.image.width, reference_frame.image.height);
     let mut pipeline_budget = execution::plan_pipeline(
         available_memory,
         worker_policy,
@@ -229,12 +228,11 @@ pub(super) fn integrate_channel(
             }
         });
         let mut orientation_vote = OrientationVote::default();
-        let mut largest_frame = frame_size;
         let (stacker, ledger, points) = if group.mosaic {
             events.phase("planning mosaic".into(), None);
             events.resume_note("Mosaic canvases are replanned when their inputs change");
             let limit = mosaic::maximum_samples(available_memory, worker_policy, plan)?;
-            let (stacker, panels) = mosaic::plan(
+            let stacker = mosaic::plan(
                 group,
                 plan,
                 method.stack_options(cosmetic, gpu),
@@ -248,10 +246,6 @@ pub(super) fn integrate_channel(
                     );
                 },
             )?;
-            largest_frame = (
-                largest_frame.0.max(panels.0),
-                largest_frame.1.max(panels.1),
-            );
             for note in stacker.expansion_planning_notes() {
                 events.resume_note(note);
             }
@@ -413,15 +407,15 @@ pub(super) fn integrate_channel(
             }
         }
         };
-        Ok::<_, String>((stacker, ledger, points, orientation_vote, largest_frame))
+        Ok::<_, String>((stacker, ledger, points, orientation_vote))
     });
     if cancel.requested() {
         return Ok(ChannelOutcome::Cancelled);
     }
-    let (mut stacker, mut ledger, mut points, mut orientation_vote, largest_frame) = initialized?;
+    let (mut stacker, mut ledger, mut points, mut orientation_vote) = initialized?;
     // A mosaic's canvas sets the stack's own memory; each frame still
-    // arrives at its own size and lands on part of the canvas. The largest
-    // of the first frame and the panels' frames stands for every frame.
+    // arrives at its own size and lands on part of the canvas, which Seiza
+    // sizes from the frames it planned the canvas with.
     if group.mosaic {
         let view = stacker.view();
         pipeline_budget = execution::plan_mosaic_pipeline(
@@ -429,7 +423,7 @@ pub(super) fn integrate_channel(
             worker_policy,
             (view.width, view.height),
             view.channels,
-            largest_frame,
+            stacker.pipeline_memory(),
             plan,
             &threads,
         )?;
@@ -439,8 +433,6 @@ pub(super) fn integrate_channel(
             group_index = group.index,
             canvas_width = view.width,
             canvas_height = view.height,
-            frame_width = largest_frame.0,
-            frame_height = largest_frame.1,
             compute_workers = threads.compute_workers,
             preparation_workers = threads.preparation_workers,
             serial = threads.serial,

@@ -175,30 +175,6 @@ impl PipelineBudget {
     }
 }
 
-/// Pixels past a registered frame's edges that resampling and a lens warp
-/// can still reach.
-const FOOTPRINT_MARGIN_PIXELS: f64 = 8.0;
-
-/// The most pixels of a `canvas` one `frame` can reach once registered.
-/// Seiza turns away a frame whose scale differs from the canvas's by more
-/// than its acceptance gate, so the frame is taken at that scale and a
-/// margin. Its bounding box covers the most when turned 45 degrees: a
-/// square whose side is the width plus the height over the square root of
-/// two. At any angle, no side of the box is longer than the frame's
-/// diagonal or the canvas's own side.
-pub(super) fn footprint_pixels(
-    (frame_width, frame_height): (usize, usize),
-    (canvas_width, canvas_height): (usize, usize),
-) -> usize {
-    let scale = 1.0 + seiza_stacking::FrameAcceptanceCriteria::default().maximum_scale_deviation;
-    let width = frame_width as f64 * scale + FOOTPRINT_MARGIN_PIXELS;
-    let height = frame_height as f64 * scale + FOOTPRINT_MARGIN_PIXELS;
-    let square = (width + height) * std::f64::consts::FRAC_1_SQRT_2;
-    let diagonal = width.hypot(height);
-    let within_canvas = diagonal.min(canvas_width as f64) * diagonal.min(canvas_height as f64);
-    (square * square).min(within_canvas).ceil() as usize
-}
-
 pub(super) fn plan_pipeline(
     available_bytes: Option<u64>,
     policy: &WorkerPolicy,
@@ -219,34 +195,27 @@ pub(super) fn plan_pipeline(
 }
 
 /// [`plan_pipeline`] for a mosaic. The canvas sets the stack's own
-/// buffers and its serial peak. A frame in preparation is decoded,
-/// calibrated and registered at its own size, `frame`, and Seiza
-/// resamples it only into the part of the canvas it reaches, so the
-/// frame and its footprint set what each preparation worker holds. Sizing
-/// workers by the canvas reserved several times what they use and ran a
-/// large canvas one frame at a time.
+/// buffers and its serial peak. Seiza resamples each frame only into the
+/// part of the canvas it reaches, so `memory`, the stacker's
+/// [`seiza_stacking::LiveStacker::pipeline_memory`], sets what each
+/// preparation worker holds. Sizing workers by the canvas reserved several
+/// times what they use and ran a large canvas one frame at a time.
 pub(super) fn plan_mosaic_pipeline(
     available_bytes: Option<u64>,
     policy: &WorkerPolicy,
     (canvas_width, canvas_height): (usize, usize),
     channels: usize,
-    (frame_width, frame_height): (usize, usize),
+    memory: PoolPipelineMemory,
     master_plan: &CalibrationPlan,
     threads: &ThreadBudget,
 ) -> Result<PipelineBudget, String> {
     let canvas_pixels = canvas_width.saturating_mul(canvas_height);
-    let footprint_samples =
-        footprint_pixels((frame_width, frame_height), (canvas_width, canvas_height))
-            .saturating_mul(channels);
     plan_pipeline_with_frames(
         available_bytes,
         policy,
         canvas_pixels,
         canvas_pixels.saturating_mul(channels),
-        PoolPipelineMemory::for_reference(
-            frame_width.saturating_mul(frame_height),
-            footprint_samples,
-        ),
+        memory,
         master_plan,
         threads,
     )
@@ -612,28 +581,12 @@ mod tests {
     }
 
     #[test]
-    fn a_frame_reaches_at_most_its_box_at_45_degrees_on_the_canvas() {
-        let frame = (6248, 4176);
-        let open = footprint_pixels(frame, (20_000, 20_000));
-        // More than the frame turned 45 degrees at its own scale, and no
-        // more than that at the scale gate with the margin.
-        assert!(open > 7371 * 7371);
-        assert!(open < 7700 * 7700);
-        // A strip mosaic's short side bounds every frame on it.
-        let strip = footprint_pixels(frame, (12_000, 4_500));
-        assert!(strip < open);
-        assert!(strip < 12_000 * 4_500);
-        assert!(strip > 6248 * 4500);
-        // A tall frame on a canvas hardly wider than it still fits itself.
-        assert!(footprint_pixels((1000, 3000), (1100, 6000)) >= 1000 * 3000);
-        assert!(footprint_pixels(frame, (7000, 5000)) <= 7000 * 5000);
-    }
-
-    #[test]
     fn a_mosaic_sizes_its_workers_by_the_frame_and_its_stack_by_the_canvas() {
-        let (frame, canvas) = ((100, 80), (400, 320));
+        let canvas = (400, 320);
         let samples = 400 * 320;
         let serial_peak = samples as u64 * super::super::STACK_BYTES_PER_OUTPUT_SAMPLE;
+        // A 100 x 80 frame resampled onto 120 x 100 of the canvas.
+        let frame = PoolPipelineMemory::for_reference(100 * 80, 120 * 100);
         let mosaic = |total| {
             plan_mosaic_pipeline(
                 Some(total),
@@ -660,11 +613,7 @@ mod tests {
             by_canvas.admission_baseline_bytes
         );
         assert_eq!(budget.serial_peak_bytes, serial_peak);
-        assert_eq!(
-            budget.worker_bytes,
-            PoolPipelineMemory::for_reference(100 * 80, footprint_pixels(frame, canvas))
-                .worker_bytes as u64
-        );
+        assert_eq!(budget.worker_bytes, frame.worker_bytes as u64);
         assert!(budget.worker_bytes * 3 < by_canvas.worker_bytes);
         assert_eq!(by_canvas.workers, 1);
         assert_eq!(budget.workers, 4);

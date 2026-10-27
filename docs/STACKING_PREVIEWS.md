@@ -404,14 +404,14 @@ source frames, decoder scratch buffers, and other activity can need more RAM.
 Separate channels and queued stack jobs still run one at a time.
 
 A mosaic plans again once its canvas is known. The canvas sets the admission
-and serial-peak estimates. Each preparation worker is sized for one frame and
-the most of the canvas that frame can cover: its bounding box when turned 45
-degrees, at the 4% scale difference Seiza accepts, with no side longer than
-the canvas's. The frame is the largest of the group's first frame and each
-panel's reference frame. Seiza prepares a frame at its own size and resamples
-it only where it lands, so a large canvas still prepares several frames at
-once. The log line `Stack pipeline memory replanned for the mosaic canvas`
-shows the canvas, the frame and the new plan.
+and serial-peak estimates. Seiza prepares a frame at its own size and resamples
+it only where it lands, so it sizes each preparation worker for one frame and
+the most of the canvas that frame can cover. The frame is the largest panel
+reference frame the canvas was planned from, turned to any angle, at the 4%
+scale difference Seiza accepts, with no side longer than the canvas's. A large
+canvas therefore still prepares several frames at once. The log line
+`Stack pipeline memory replanned for the mosaic canvas` shows the canvas and
+the new plan.
 
 Logs report the configured workers, estimated memory, and for each batch the
 pipeline mode, frames in preparation at once, integrated, rejected and failed
