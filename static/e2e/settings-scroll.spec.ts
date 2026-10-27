@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { openSettings, registerFixtureDb, resetDatabases, waitForCacheReady } from './helpers';
+import { openSettings, registerFixtureDb, resetDatabases, waitForCacheReady, selectSettingsSection } from './helpers';
 
 // Settings covers the page and is its only scroller. The page behind scrolls
 // in .app-main, so the document itself must never be taller than the window:
@@ -48,6 +48,12 @@ test('Settings is the only scroller over the Stacks page, which keeps its place'
   await openSettings(page);
   const settings = page.locator('.tauri-settings .modal-content');
   await expect(settings).toBeVisible();
+  // The database page can now fit without scrolling. Use a long settings page
+  // so this still checks wheel containment after removing the footer.
+  await selectSettingsSection(page, 'calibration');
+  await expect(page.getByRole('heading', { name: 'Calibration', exact: true })).toBeVisible();
+  await expect.poll(() => page.getByRole('tabpanel').evaluate(element =>
+    element.scrollHeight - element.clientHeight)).toBeGreaterThan(0);
   // Wheel past the end of Settings. The window must not scroll the page behind.
   await page.mouse.move(640, 400);
   for (let step = 0; step < 10; step += 1) await page.mouse.wheel(0, 2_000);
@@ -59,7 +65,7 @@ test('Settings is the only scroller over the Stacks page, which keeps its place'
   expect(await page.evaluate(() => window.scrollY)).toBe(0);
   expect(await documentFits()).toBe(true);
 
-  await page.getByRole('button', { name: 'Done' }).click();
+  await page.getByRole('button', { name: 'Close settings' }).click();
   await expect(settings).toBeHidden();
   expect(await page.evaluate(() => window.scrollY)).toBe(0);
   expect(await mainScrollTop()).toBe(pagePlace);

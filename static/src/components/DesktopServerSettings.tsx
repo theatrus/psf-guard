@@ -4,6 +4,7 @@ import { desktopServer, isTauriApp, tauriConfig } from '../utils/tauri';
 import OpenLogsButton from './OpenLogsButton';
 import './DesktopServerSettings.css';
 import UnsavedMark from './UnsavedMark';
+import { useUnsavedLabels } from '../hooks/useUnsavedChanges';
 
 const KEY = ['desktopServerSettings'] as const;
 
@@ -39,6 +40,7 @@ export function DesktopServerGate({ children }: { children: ReactNode }) {
 export default function DesktopServerSettings({
   onRestarted = () => window.location.reload(),
 }: { onRestarted?: () => void }) {
+  const unsaved = useUnsavedLabels();
   const client = useQueryClient();
   const settings = useServerSettings();
   // A choice without an edit (null) shows the saved port, so a refetch
@@ -105,9 +107,13 @@ export default function DesktopServerSettings({
     </form>
     {pending && <p role="status">{current.server_port === null ? 'Automatic port selection is saved.'
       : `Port ${current.server_port} is saved.`} Restart the server to apply it.</p>}
-    <button type="button" className="cancel-button" disabled={busy || dirty} onClick={() => restart.mutate()}>
-      {restart.isPending ? 'Restarting server…' : 'Restart server'}
-    </button>
-    <p className="muted">A restart waits for running work to finish safely, then reloads the interface.</p>
+    {(pending || current.error) && <>
+      <button type="button" className="cancel-button" disabled={busy || dirty || unsaved.length > 0}
+        onClick={() => restart.mutate()}>
+        {restart.isPending ? 'Restarting server…' : 'Restart server'}
+      </button>
+      {unsaved.length > 0 && <p className="muted">Save or discard unsaved changes before restarting.</p>}
+      <p className="muted">A restart waits for running work to finish safely, then reloads the interface.</p>
+    </>}
   </section>;
 }

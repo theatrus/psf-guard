@@ -2,9 +2,21 @@ import type { ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { server } from '../../test/msw-server';
 import StorageSettings from '../StorageSettings';
+import UnsavedMark from '../UnsavedMark';
+
+const native = vi.hoisted(() => ({ isTauriApp: vi.fn(), restartApplication: vi.fn() }));
+vi.mock('../../utils/tauri', async importOriginal => {
+  const original = await importOriginal<typeof import('../../utils/tauri')>();
+  return { ...original, isTauriApp: native.isTauriApp,
+    tauriConfig: { ...original.tauriConfig, restartApplication: native.restartApplication } };
+});
+beforeEach(() => {
+  native.isTauriApp.mockReturnValue(false);
+  native.restartApplication.mockResolvedValue(true);
+});
 
 function wrapper(queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })) {
   return function Wrapper({ children }: { children: ReactNode }) {
@@ -237,6 +249,32 @@ describe('StorageSettings', () => {
     await waitFor(() => expect(saved).toEqual({ stack_dir: '/mnt/stacks' }));
     expect(await screen.findByText(/Restart PSF Guard to use the new folders/)).toBeInTheDocument();
     expect(screen.getByText('/cache', { selector: 'code' })).toBeInTheDocument();
+  });
+
+  it('offers a full app restart only for saved folder changes and protects unsaved edits', async () => {
+    native.isTauriApp.mockReturnValue(true);
+    unifiedSaveServer();
+    const { rerender } = render(<><StorageSettings canManage /><UnsavedMark label="Rig profile" dirty={false} /></>, { wrapper: wrapper() });
+    const stacks = await screen.findByLabelText('Stacks');
+    expect(screen.queryByRole('button', { name: 'Restart now' })).not.toBeInTheDocument();
+    fireEvent.change(stacks, { target: { value: '/new/stacks' } });
+    expect(screen.queryByRole('button', { name: 'Restart now' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Save storage settings' }));
+    const restart = await screen.findByRole('button', { name: 'Restart now' });
+    await waitFor(() => expect(restart).toBeEnabled());
+    const wbpp = screen.getByRole('textbox', { name: 'WBPP storage folder' });
+    fireEvent.change(wbpp, { target: { value: '/new/wbpp' } });
+    expect(restart).toBeDisabled();
+    fireEvent.click(restart);
+    expect(native.restartApplication).not.toHaveBeenCalled();
+    fireEvent.change(wbpp, { target: { value: '/old/wbpp' } });
+    await waitFor(() => expect(restart).toBeEnabled());
+    rerender(<><StorageSettings canManage /><UnsavedMark label="Rig profile" dirty /></>);
+    expect(restart).toBeDisabled();
+    rerender(<><StorageSettings canManage /><UnsavedMark label="Rig profile" dirty={false} /></>);
+    await waitFor(() => expect(restart).toBeEnabled());
+    fireEvent.click(restart);
+    expect(native.restartApplication).toHaveBeenCalledOnce();
   });
 
   it('gives stacks and masters limits of their own when asked', async () => {

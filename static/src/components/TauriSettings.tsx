@@ -200,8 +200,7 @@ export default function TauriSettings({
   const [showAddForm, setShowAddForm] = useState(false);
   const [activeTab, setActiveTab] = useState<SettingsTab>(isTabIntent(initialIntent) ? initialIntent : 'databases');
   const director = useDirectorStatus();
-  // Forms with edits their Save has not sent: closing asks first, so Done
-  // does not drop a rig's new location without a word.
+  // Closing Settings asks before discarding unsaved form edits.
   const unsaved = useUnsavedLabels();
   const unsavedScope = useRef(new Set<symbol>());
   const navigationUnsaved = useUnsavedLabels(unsavedScope.current);
@@ -920,28 +919,6 @@ export default function TauriSettings({
       const msg = err instanceof Error ? err.message : String(err);
       setStatusMessage(`Failed to remove: ${msg}`);
     } finally {
-      setIsApplying(false);
-    }
-  };
-
-  // CRUD changes are applied to the live server immediately (HTTP endpoints
-  // update both registry file and AppState.databases). The restart button is
-  // only useful in rare cases where the live state diverged from disk — keep
-  // it as an opt-in escape hatch in Tauri mode.
-  const handleRestart = async () => {
-    if (!isTauri) {
-      setStatusMessage('Refreshing interface...');
-      setTimeout(() => window.location.reload(), 800);
-      return;
-    }
-    setIsApplying(true);
-    setStatusMessage('Restarting server...');
-    try {
-      await tauriConfig.restartServer();
-      window.location.reload();
-    } catch (err) {
-      console.error('restart failed:', err);
-      setStatusMessage(`Restart failed: ${err}`);
       setIsApplying(false);
     }
   };
@@ -1795,8 +1772,58 @@ export default function TauriSettings({
       <div className="modal-content" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h2>PSF Guard Settings</h2>
-          <button className="close-button" aria-label="Close settings" onClick={requestClose}>×</button>
+          <div className="settings-header-actions" role="group" aria-label="Settings actions">
+            {isTauri && <OpenLogsButton onError={setStatusMessage} />}
+            <button type="button" className="cancel-button" aria-label="Close settings"
+              disabled={isApplying} onClick={requestClose}
+              title={unsaved.length > 0 ? `Unsaved changes in ${describeUnsaved(unsaved)}` : undefined}>
+              Close
+            </button>
+          </div>
         </div>
+
+        {(statusMessage || (confirmClose && (pendingSection ? navigationUnsaved : unsaved).length > 0)) && (
+        <div className="settings-notices">
+          {statusMessage && (
+            <div
+              role={statusMessage.toLowerCase().includes('failed') ? 'alert' : 'status'}
+              className={`save-message ${
+                statusMessage.includes('Failed') || statusMessage.includes('failed')
+                  ? 'error'
+                  : 'success'
+              }`}
+            >
+              {statusMessage}
+            </div>
+          )}
+          {confirmClose && (pendingSection ? navigationUnsaved : unsaved).length > 0 && (
+            <div className="unsaved-confirm" role="alertdialog" aria-labelledby="unsaved-confirm-text">
+              <p id="unsaved-confirm-text">
+                Unsaved changes in {describeUnsaved(pendingSection ? navigationUnsaved : unsaved)}. {pendingSection
+                  ? `Switch to ${settingsPage(pendingSection).label} without saving them?`
+                  : 'Close without saving them?'}
+              </p>
+              {/* Focus lands on the safe choice. */}
+              <button type="button" autoFocus onClick={() => { setConfirmClose(false); setPendingSection(null); }}>
+                Keep editing
+              </button>
+              <button
+                type="button"
+                className="unsaved-discard"
+                onClick={() => {
+                  setConfirmClose(false);
+                  if (pendingSection) {
+                    setActiveTab(pendingSection);
+                    setPendingSection(null);
+                  } else onClose();
+                }}
+              >
+                {pendingSection ? 'Discard changes and switch' : 'Close without saving'}
+              </button>
+            </div>
+          )}
+        </div>
+        )}
 
         <div className="settings-layout">
         <SettingsNavigation groups={navigationGroups} current={currentTab} onChange={requestSection} />
@@ -2127,69 +2154,6 @@ export default function TauriSettings({
           )}
         </div>
 
-        </div>
-
-        <div className="modal-footer">
-          {statusMessage && (
-            <div
-              className={`save-message ${
-                statusMessage.includes('Failed') || statusMessage.includes('failed')
-                  ? 'error'
-                  : 'success'
-              }`}
-            >
-              {statusMessage}
-            </div>
-          )}
-          {confirmClose && (pendingSection ? navigationUnsaved : unsaved).length > 0 && (
-            <div className="unsaved-confirm" role="alertdialog" aria-labelledby="unsaved-confirm-text">
-              <p id="unsaved-confirm-text">
-                Unsaved changes in {describeUnsaved(pendingSection ? navigationUnsaved : unsaved)}. {pendingSection
-                  ? `Switch to ${settingsPage(pendingSection).label} without saving them?`
-                  : 'Close without saving them?'}
-              </p>
-              {/* Focus lands on the safe choice. */}
-              <button type="button" autoFocus onClick={() => { setConfirmClose(false); setPendingSection(null); }}>
-                Keep editing
-              </button>
-              <button
-                type="button"
-                className="unsaved-discard"
-                onClick={() => {
-                  setConfirmClose(false);
-                  if (pendingSection) {
-                    setActiveTab(pendingSection);
-                    setPendingSection(null);
-                  } else onClose();
-                }}
-              >
-                {pendingSection ? 'Discard changes and switch' : 'Close without saving'}
-              </button>
-            </div>
-          )}
-          <div className="modal-buttons">
-            <button
-              onClick={requestClose}
-              className="save-button"
-              disabled={isApplying}
-              title={unsaved.length > 0 ? `Unsaved changes in ${describeUnsaved(unsaved)}` : undefined}
-            >
-              Done
-            </button>
-            {isTauri && <OpenLogsButton onError={setStatusMessage} />}
-            {currentTab !== 'server' && <button
-              onClick={handleRestart}
-              className="cancel-button"
-              disabled={isApplying}
-              title={
-                isTauri
-                  ? 'Force a server restart (rarely needed — changes are applied live)'
-                  : 'Reload the page'
-              }
-            >
-              {isTauri ? 'Restart Server' : 'Reload Page'}
-            </button>}
-          </div>
         </div>
       </div>
     </div>

@@ -9,6 +9,7 @@ import AuthGate from '../../auth/AccessContext';
 import type { DesktopServerStatus } from '../../utils/tauri';
 import DesktopServerSettings, { DesktopServerGate } from '../DesktopServerSettings';
 import TauriSettings from '../TauriSettings';
+import UnsavedMark from '../UnsavedMark';
 
 const native = vi.hoisted(() => ({
   isTauriApp: vi.fn(), getSettings: vi.fn(), savePort: vi.fn(), restart: vi.fn(),
@@ -42,11 +43,12 @@ function mount(children: ReactNode, client = testClient()) {
 }
 
 describe('desktop server settings', () => {
-  it('keeps every restart control disabled while the port has unsaved edits', async () => {
+  it('keeps a pending port restart disabled while the port has unsaved edits', async () => {
+    status = { ...status, server_port: 3030 };
     mount(<MemoryRouter><TauriSettings isOpen onClose={() => {}} /></MemoryRouter>);
     await userEvent.click(await screen.findByRole('tab', { name: 'Server' }));
     await userEvent.click(await screen.findByRole('radio', { name: 'Fixed port' }));
-    fireEvent.change(screen.getByRole('spinbutton', { name: 'Server port' }), { target: { value: '3030' } });
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Server port' }), { target: { value: '4040' } });
     const buttons = screen.getAllByRole('button', { name: /^Restart server$/i });
     expect(buttons).toHaveLength(1);
     for (const button of buttons) {
@@ -54,6 +56,27 @@ describe('desktop server settings', () => {
       await userEvent.click(button);
     }
     expect(native.restart).not.toHaveBeenCalled();
+  });
+
+  it('offers no general restart when the active port matches the saved setting', async () => {
+    mount(<MemoryRouter><TauriSettings isOpen onClose={() => {}} /></MemoryRouter>);
+    expect(await screen.findByRole('button', { name: 'Open logs' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Restart server$/i })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('tab', { name: 'Server' }));
+    await screen.findByRole('radio', { name: 'Automatic' });
+    expect(screen.queryByRole('button', { name: /^Restart server$/i })).not.toBeInTheDocument();
+  });
+
+  it('does not restart over another form with unsaved edits', async () => {
+    status = { ...status, server_port: 3030 };
+    const reloaded = vi.fn();
+    const { rerender } = mount(<><DesktopServerSettings onRestarted={reloaded} /><UnsavedMark label="Rig profile" dirty /></>);
+    const restart = await screen.findByRole('button', { name: 'Restart server' });
+    expect(restart).toBeDisabled();
+    await userEvent.click(restart);
+    expect(native.restart).not.toHaveBeenCalled();
+    rerender(<QueryClientProvider client={testClient()}><DesktopServerSettings onRestarted={reloaded} /></QueryClientProvider>);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Restart server' })).toBeEnabled());
   });
 
   it('saves a fixed port separately from restarting, then reloads only after readiness', async () => {

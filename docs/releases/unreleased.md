@@ -16,6 +16,12 @@
 
 ## Changes
 
+- Settings uses a compact header with **Close** and, in the desktop app,
+  **Open logs**, leaving more room for the selected page. Each form keeps its
+  own Save controls. **Restart server** appears with a saved port change or
+  server startup error; folder changes keep **Restart now** beside the folders.
+  Restart controls stay disabled while forms have unsaved edits.
+
 - Settings groups related pages in a desktop sidebar and a compact phone
   selector. Find GPU controls under **Performance**, exposure templates and
   processing setups under **Presets**, and export defaults, PixInsight and
@@ -69,7 +75,7 @@
   pipeline; closing a step preserves its edits.
 
 - Run a worker from the PSF Guard app on macOS or Windows. Open
-  **Settings › Workers › Worker on this computer**, enter the **Server
+  **Settings › Performance › Workers › Worker on this computer**, enter the **Server
   address** and **Worker token**, then click **Save worker settings** and
   **Start worker**. The worker continues running in the menu bar or system
   tray after you close the window. **Start worker at login** starts it when
@@ -77,7 +83,7 @@
   forward instead of starting a second copy.
 
 - Run a worker as a Windows service to process tasks before anyone logs in.
-  Open **Settings › Workers › Worker on this computer**, click **Save worker
+  Open **Settings › Performance › Workers › Worker on this computer**, click **Save worker
   settings**, then run `psf-guard-cli worker-service install` in PowerShell
   opened as administrator. Run the command again after changing settings or
   updating PSF Guard to update and restart the service. Desktop worker
@@ -91,13 +97,13 @@
 
 - Stack builds on another computer. Start a worker with `--work stack`, then
   choose **Workers first** or **Workers only** for stack builds in
-  **Settings › Workers**. Each channel stacks there from the frames, masters,
+  **Settings › Performance › Workers**. Each channel stacks there from the frames, masters,
   checkpoint and settings the server would use. Mosaics stack there too.
   Each channel's card shows which worker stacked it, and its **Live stack**
   preview shows the worker's running image. Stack builds stay on the server
   unless you choose otherwise.
 
-- Run RC-Astro tools on another computer. Add a worker in **Settings ›
+- Run RC-Astro tools on another computer. Add a worker in **Settings › Performance ›
   Workers**, then run `psf-guard worker --server …` there with its token.
   The worker runs BlurXTerminator, NoiseXTerminator and StarXTerminator for
   stack previews, color previews and narrowband stars, and the processing
@@ -179,9 +185,9 @@
   open **Settings → Performance → GPU**. With **Use the GPU** off, all stacking
   work stays on the CPU, including artifact searches and the channel
   alignment of color previews.
-- In the Settings sections **Exports & integrations → PixInsight**, **Stacking → Stack
+- In the Settings sections **Exports & integrations → PixInsight**, **Processing → Stacking → Stack
   previews**, **Performance → CPU & memory → Processor use** and, in the desktop app,
-  **Server**, fields no longer appear blank, or show an Automatic port, for a
+  **Server & access → Server**, fields no longer appear blank, or show an Automatic port, for a
   moment while Settings loads. When
   the server reports new values, fields you have not edited update to match,
   and a field you are editing keeps what you typed. In PixInsight, **Check

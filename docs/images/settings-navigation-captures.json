@@ -1,69 +1,128 @@
 {
   "date": "2026-10-26",
-  "state": "Isolated Playwright fixture catalogs; Planning availability and an empty exposure-template library are simulated in the navigation specs. No equipment is paired or user catalogs changed.",
-  "viewports_css": {
-    "desktop": [
-      1280,
-      900
-    ],
-    "phone": [
-      390,
-      844
-    ],
-    "first_run": [
-      1280,
-      720
-    ]
-  },
-  "source_base": "7af92709",
-  "frontend_asset": "index-DixPBeov.js",
-  "frontend_asset_sha256": "85e1f3386ba07ba3d43bcf1a2a3863e0d88827b011f4c1dadf60dada682cfa2a",
-  "backend": "Existing debug server binary serving this worktree static/dist; no backend code changed.",
+  "state": "Isolated Playwright fixture catalogs. Planning availability and an empty exposure-template library are simulated in navigation specs. Native desktop calls are simulated. The pending folder move is a mocked read response; no folders are moved, equipment paired or user catalogs changed.",
+  "source_base": "29c224e5e59650baec136c1f6cc719ab22e399f5",
+  "source_commit": "bdfb5bf7b74a4f97bc129f261e3ffb99d459e2a5",
+  "frontend_asset": "index-Bc91-Zes.js",
+  "frontend_asset_sha256": "9ba598b678abb326e8a958193587989c3e5417bf0c37e8591346e507f933be20",
+  "backend": "Existing debug server binary serving this worktree static/dist; this PR changes frontend behavior and documentation only.",
   "captures": [
     {
       "file": "settings-navigation-performance-desktop.png",
       "browser": "WebKit",
+      "viewport_css": [
+        1280,
+        900
+      ],
       "pixels": [
         2560,
         1800
       ],
-      "sha256": "04c79c51c6317c6bcd24e0d8192b11330bd227fec5c81907b7f5cfe3e194172c"
+      "sha256": "646c83db41a91088ddade3ecf826ceb59ccd1f22d5f97a65beb47a12210797b4"
     },
     {
       "file": "settings-navigation-presets-desktop.png",
       "browser": "WebKit",
+      "viewport_css": [
+        1280,
+        900
+      ],
       "pixels": [
         2560,
         1800
       ],
-      "sha256": "91a0258e1184bce66a57520595c2866e1b89a118612198ddf05ec261a7caf0c9"
+      "sha256": "b5b32a3ed87bda78806c6b699c7f14af7092a104f575a2fd2a06a7d3f7b2f06f"
     },
     {
       "file": "settings-navigation-performance-phone.png",
       "browser": "WebKit",
+      "viewport_css": [
+        390,
+        844
+      ],
       "pixels": [
         780,
         1688
       ],
-      "sha256": "8021f48270f3fece53b5e638449708618acd88bf66702aebe76a6d05ee7aa9bb"
+      "sha256": "3cd86d429650bd7f0c278094190d28beb84cb3aa360f4b1a22c7a3a5c6bedfd5"
     },
     {
       "file": "settings-navigation-presets-phone.png",
       "browser": "WebKit",
+      "viewport_css": [
+        390,
+        844
+      ],
       "pixels": [
         780,
         1688
       ],
-      "sha256": "c2ef531906bab4c10389cfe994555c55728d85c4e74088190cdbb780fa9369ea"
+      "sha256": "34873d7f8a7cd03722e93d85c6b128e82710c646f38a96df33d90d019d4159c3"
     },
     {
       "file": "settings-navigation-first-run.png",
       "browser": "Chromium",
+      "viewport_css": [
+        1280,
+        720
+      ],
       "pixels": [
         1280,
         720
       ],
-      "sha256": "a24398ab5468fec925850069dea759f9141f603c6f737b8052d29a69b3ae0e51"
+      "sha256": "5fc67d8d726c7fd83454b9823f5267c81482377eb087a2d7b6fc50543c39b8db"
+    },
+    {
+      "file": "settings-actions-unsaved-phone.png",
+      "browser": "WebKit",
+      "viewport_css": [
+        390,
+        844
+      ],
+      "pixels": [
+        780,
+        1688
+      ],
+      "sha256": "6e510c72bac8e71d6c1eedf3882c4913f52274842ab34bf4601cc6793c27b9ea"
+    },
+    {
+      "file": "settings-actions-header-phone.png",
+      "browser": "WebKit",
+      "viewport_css": [
+        320,
+        844
+      ],
+      "pixels": [
+        640,
+        1688
+      ],
+      "sha256": "55aade27d70ad79be13106757d4565da099fd467e1c78644161ad46a4e6844a6"
+    },
+    {
+      "file": "settings-actions-port-restart.png",
+      "browser": "WebKit",
+      "viewport_css": [
+        1280,
+        720
+      ],
+      "pixels": [
+        2560,
+        1440
+      ],
+      "sha256": "53bb019aba057b08df9ac93503b7eafc19ecfb23b4cb86f0dab4be6527cc4327"
+    },
+    {
+      "file": "settings-actions-folder-restart.png",
+      "browser": "WebKit",
+      "viewport_css": [
+        1280,
+        900
+      ],
+      "pixels": [
+        2560,
+        1800
+      ],
+      "sha256": "96f8a35306130f96e18c6ea205264d884cc6c1ab6d055d2cd92903785b9d9176"
     }
   ],
   "edits": "PNG files copied without resizing or editing."
