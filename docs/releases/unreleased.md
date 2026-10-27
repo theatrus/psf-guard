@@ -16,6 +16,12 @@
 
 ## Changes
 
+- PSF Guard's zstd library is updated for memory-safety advisories in its
+  stream and context handling. PSF Guard uses zstd to read and write
+  compressed XISF files and saved stacking contexts, and to decompress HTTP
+  responses. It fixes RUSTSEC-2026-0391, RUSTSEC-2026-0398, RUSTSEC-2026-0403
+  and RUSTSEC-2026-0410.
+
 - Settings uses a compact header with **Close** and, in the desktop app,
   **Open logs**, leaving more room for the selected page. Each form keeps its
   own Save controls. **Restart server** appears with a saved port change or
