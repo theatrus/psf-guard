@@ -168,7 +168,7 @@ pub(crate) fn match_light(
     Ok(MatchedLight {
         project,
         image_id,
-        flats: master_frames(&selected, CalibrationKind::Flat),
+        flats: master_frames(&selected, CalibrationKind::Flat)?,
         basis: selected.flat_basis,
     })
 }
@@ -747,7 +747,8 @@ mod tests {
             flat_held_back: held.clone(),
             ..Default::default()
         };
-        let MasterFrames::Raw(used) = master_frames(&selected, CalibrationKind::Flat) else {
+        let MasterFrames::Raw(used) = master_frames(&selected, CalibrationKind::Flat).unwrap()
+        else {
             panic!("raw flats");
         };
         assert!(!used.is_empty());
@@ -767,7 +768,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            master_frames(&selected, CalibrationKind::Flat),
+            master_frames(&selected, CalibrationKind::Flat).unwrap(),
             MasterFrames::External("external".into())
         );
     }

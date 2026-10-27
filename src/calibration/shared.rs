@@ -67,3 +67,48 @@ pub(super) fn light(light: &FrameMeta) -> core::Light {
         timestamp: light.timestamp,
     }
 }
+
+/// Resolve the master's actual inputs/options after source verification.
+pub(super) fn request(
+    selected: &super::CalibrationSelection,
+    lights: Vec<core::Light>,
+    quality: Vec<core::QualityRecord>,
+    masking: bool,
+) -> core::MasterPlanRequest {
+    core::MasterPlanRequest {
+        frames: selected
+            .bias
+            .iter()
+            .chain(&selected.dark)
+            .chain(&selected.dark_flat)
+            .chain(&selected.flat)
+            .map(frame)
+            .collect(),
+        lights,
+        quality,
+        global_settings: selected.rules.shared_settings(),
+        flat_basis: selected.flat_basis.clone(),
+        flat_family: selected.flat_family.clone(),
+        flat_held_back: selected.flat_held_back.clone(),
+        flat_star_masking: masking,
+        ..Default::default()
+    }
+}
+pub(super) fn plan(
+    selected: &super::CalibrationSelection,
+    lights: Vec<core::Light>,
+    quality: Vec<core::QualityRecord>,
+    masking: bool,
+) -> anyhow::Result<core::Session> {
+    Ok(core::plan_masters(request(
+        selected, lights, quality, masking,
+    ))?)
+}
+pub(super) fn kind(kind: super::CalibrationKind) -> core::CalibrationKind {
+    match kind {
+        super::CalibrationKind::Bias => core::CalibrationKind::Bias,
+        super::CalibrationKind::Dark => core::CalibrationKind::Dark,
+        super::CalibrationKind::DarkFlat => core::CalibrationKind::DarkFlat,
+        super::CalibrationKind::Flat => core::CalibrationKind::Flat,
+    }
+}

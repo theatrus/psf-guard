@@ -222,34 +222,41 @@ pub(super) fn kept_out_reason(
 /// Whether every frame carries a person's choice or a grade this build made
 /// from its current file. Such a set needs no screen of its own: the grades
 /// already keep the poor frames out, and a choice must stand.
-pub(super) fn all_judged(conn: &Connection, frames: &[CalibrationFrame]) -> Result<bool> {
+/// Cached decisions for shared master policy; this query never reads pixels.
+pub(super) fn policy_records(
+    conn: &Connection,
+    frames: &[CalibrationFrame],
+) -> Result<Vec<seiza_calibration::library::QualityRecord>> {
+    use seiza_calibration::library::{QualityOverride, QualityRecord};
     if !table_exists(conn) {
-        return Ok(false);
+        return Ok(Vec::new());
     }
-    let mut statement = conn.prepare(
-        "SELECT 1 FROM psf_guard_calibration_frame_quality
-         WHERE frame_uuid = ?1
-           AND (override_choice IS NOT NULL
-                OR (grade IS NOT NULL AND algorithm_version = ?2
-                    AND source_fingerprint IS ?3))",
-    )?;
+    let mut statement = conn.prepare("SELECT source_fingerprint, algorithm_version, grade, reason, override_choice FROM psf_guard_calibration_frame_quality WHERE frame_uuid = ?1")?;
+    let mut records = Vec::new();
     for frame in frames {
-        let judged = statement
-            .query_row(
-                params![
-                    frame.frame_uuid,
-                    measure_version(frame.kind),
-                    frame.source_fingerprint
-                ],
-                |_| Ok(()),
-            )
+        if let Some(record) = statement
+            .query_row([&frame.frame_uuid], |row| {
+                let choice: Option<String> = row.get(4)?;
+                Ok(QualityRecord {
+                    frame_uuid: frame.frame_uuid.clone(),
+                    source_fingerprint: row.get(0)?,
+                    algorithm_version: row.get(1)?,
+                    grade: row.get(2)?,
+                    reason: row.get(3)?,
+                    override_choice: match choice.as_deref() {
+                        Some("use") => Some(QualityOverride::Use),
+                        Some("exclude") => Some(QualityOverride::Exclude),
+                        _ => None,
+                    },
+                    ..Default::default()
+                })
+            })
             .optional()?
-            .is_some();
-        if !judged {
-            return Ok(false);
+        {
+            records.push(record);
         }
     }
-    Ok(true)
+    Ok(records)
 }
 
 /// What was measured on one frame, as stored.

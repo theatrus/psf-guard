@@ -16,6 +16,11 @@
 
 ## Changes
 
+- Calibrated stacks keep distinct external-master choices and source metadata
+  anchors in separate sessions. Existing calibration masters and calibrated
+  stacks rebuild once. Flat trimming, fallback, manual choices and tunable
+  thresholds retain their current behavior through the shared Seiza policy.
+
 - PSF Guard's zstd library is updated for memory-safety advisories in its
   stream and context handling. PSF Guard uses zstd to read and write
   compressed XISF files and saved stacking contexts, and to decompress HTTP
