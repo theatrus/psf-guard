@@ -1,6 +1,6 @@
 /** Stable section IDs also preserve shortcuts from other parts of the app. */
 export type SettingsSection =
-  | 'rig-databases' | 'databases' | 'rigs' | 'sync'
+  | 'rig-databases' | 'database-overview' | 'database-add' | 'sites' | 'databases' | 'rigs' | 'sync'
   | 'setups' | 'templates'
   | 'calibration' | 'stacking'
   | 'performance' | 'gpu' | 'workers'
@@ -22,10 +22,12 @@ export interface SettingsGroup {
 const GROUPS: readonly SettingsGroup[] = [
   { id: 'data', label: 'Databases & rigs', pages: [
     { id: 'rig-databases', label: 'Overview' },
+    { id: 'database-add', label: 'New / import' },
   ] },
   { id: 'presets', label: 'Presets', pages: [
     { id: 'setups', label: 'Processing setups' },
     { id: 'templates', label: 'Exposure templates' },
+    { id: 'sites', label: 'Sites' },
   ] },
   { id: 'processing', label: 'Processing', pages: [
     { id: 'calibration', label: 'Calibration' },
@@ -63,12 +65,13 @@ export function settingsGroups(available: readonly SettingsSection[]): SettingsG
 }
 
 export const RIG_DATABASE_PAGES = [
+  { id: 'database-overview', label: 'Overview' },
   { id: 'rigs', label: 'Rig setup' },
   { id: 'databases', label: 'Database & files' },
   { id: 'sync', label: 'Sync' },
 ] as const;
 
-export function isRigDatabasePage(id: SettingsSection): id is 'rigs' | 'databases' | 'sync' {
+export function isRigDatabasePage(id: SettingsSection): id is 'database-overview' | 'rigs' | 'databases' | 'sync' {
   return RIG_DATABASE_PAGES.some(page => page.id === id);
 }
 
@@ -79,4 +82,13 @@ export function settingsPage(id: SettingsSection): SettingsPage {
 export function isSettingsSection(value: unknown): value is SettingsSection {
   return GROUPS.some(group => group.pages.some(page => page.id === value))
     || RIG_DATABASE_PAGES.some(page => page.id === value);
+}
+
+export function databaseSettingsId(databaseId: string, section: SettingsSection): string {
+  return `database:${encodeURIComponent(databaseId)}:${section}`;
+}
+export function parseDatabaseSettingsId(id: string): { databaseId: string; section: SettingsSection } | null {
+  const match = /^database:([^:]+):([^:]+)$/.exec(id);
+  if (!match || !isSettingsSection(match[2]) || !isRigDatabasePage(match[2])) return null;
+  try { return { databaseId: decodeURIComponent(match[1]), section: match[2] }; } catch { return null; }
 }

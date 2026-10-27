@@ -747,13 +747,6 @@
   color: var(--color-text-secondary);
 }
 
-.tauri-settings .db-add-buttons {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 4px;
-}
-
 .tauri-settings .import-progress-panel {
   margin-top: 12px;
   padding: 10px 12px;
@@ -3031,20 +3024,6 @@
   flex-shrink: 0;
 }
 
-.tauri-settings .settings-rig-database-context {
-  display: grid;
-  gap: 1rem;
-  margin-bottom: 1rem;
-}
-
-.tauri-settings .settings-rig-database-breadcrumb,
-.tauri-settings .settings-rig-database-pages {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-}
-
 .tauri-settings .settings-rig-database-breadcrumb {
   font-size: 0.9rem;
 }
@@ -3054,20 +3033,28 @@
   min-width: 0;
 }
 
-.tauri-settings .settings-rig-database-pages button {
-  padding: 0.4rem 0.75rem;
-  min-height: 2.1rem;
-  border: 1px solid var(--color-border-secondary);
-  border-radius: 6px;
-  background: var(--color-button-neutral-bg);
-  color: var(--color-text-primary);
-  font: inherit;
-  font-size: 0.9rem;
-  cursor: pointer;
+.tauri-settings .settings-tab[data-depth='1'] {
+  padding-left: 1.4rem;
+  font-size: 0.8rem;
 }
 
-.tauri-settings .settings-rig-database-pages button[aria-current='page'] {
-  background: var(--state-on-bg);
-  border-color: var(--state-on-border);
-  color: var(--state-on-fg);
+.tauri-settings .settings-tab[aria-expanded='true'] {
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+
+.tauri-settings .processing-policy-editor {
+  padding: 0.5rem 0;
+}
+
+.tauri-settings .settings-rig-database-breadcrumb {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem;
+}
+.tauri-settings .settings-tab[aria-expanded] { display: flex; align-items: center; gap: 0.4rem; }
+.tauri-settings .settings-tab[aria-expanded='true'] > svg { transform: rotate(90deg); }
+
+.tauri-settings .processing-policy-editor .calibration-rule-setting > label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
 }

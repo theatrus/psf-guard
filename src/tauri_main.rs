@@ -795,6 +795,7 @@ mod tests {
     fn registry_with_root(root: &Path) -> DbRegistry {
         DbRegistry {
             schema_version: CURRENT_SCHEMA_VERSION,
+            processing_defaults: Default::default(),
             databases: vec![DbEntry {
                 ts_sync: None,
                 id: "test".to_string(),
@@ -810,6 +811,7 @@ mod tests {
                 analyze_new_frames: false,
                 pair_calibrated_copies: true,
                 scan_calibrated_copies: false,
+                processing_overrides: None,
             }],
             active_db_id: None,
             astrometry: None,

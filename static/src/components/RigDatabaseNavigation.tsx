@@ -1,6 +1,5 @@
 import { Database, ChevronRight } from 'lucide-react';
 import type { DbEntry } from '../utils/tauri';
-import { RIG_DATABASE_PAGES, type SettingsSection } from './settingsSections';
 
 export function RigDatabaseList({ databases, onOpen }: {
   databases: readonly DbEntry[];
@@ -22,23 +21,11 @@ export function RigDatabaseList({ databases, onOpen }: {
   </section>;
 }
 
-export function RigDatabaseNavigation({ database, current, planningEnabled, canSync, onBack, onChange }: {
-  database: DbEntry;
-  current: SettingsSection;
-  planningEnabled: boolean;
-  canSync: boolean;
-  onBack: () => void;
-  onChange: (section: 'rigs' | 'databases' | 'sync') => void;
+export function RigDatabaseNavigation({ database, onBack }: {
+  database: DbEntry; onBack: () => void;
 }) {
-  return <div className="settings-rig-database-context">
-    <nav className="settings-rig-database-breadcrumb" aria-label="Rig database location">
-      <button type="button" className="link-button" onClick={onBack}>Databases &amp; rigs</button>
-      <ChevronRight size={14} aria-hidden="true" /><strong>{database.name}</strong>
-    </nav>
-    <nav className="settings-rig-database-pages" aria-label={`Settings for ${database.name}`}>
-      {RIG_DATABASE_PAGES.filter(page => (page.id !== 'rigs' || planningEnabled) && (page.id !== 'sync' || canSync))
-        .map(page => <button key={page.id} type="button" aria-current={current === page.id ? 'page' : undefined}
-          onClick={() => onChange(page.id)}>{page.label}</button>)}
-    </nav>
-  </div>;
+  return <nav className="settings-rig-database-breadcrumb" aria-label="Rig database location" data-database-id={database.id}>
+    <button type="button" className="link-button" onClick={onBack}>Databases &amp; rigs</button>
+    <ChevronRight size={14} aria-hidden="true" /><strong>{database.name}</strong>
+  </nav>;
 }

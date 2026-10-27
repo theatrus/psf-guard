@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { useAccess } from '../auth/access';
 import {
   setDisplayPreferences,
@@ -15,7 +16,7 @@ import ScoringDefaultsSettings from './ScoringDefaultsSettings';
  * user's follow their account (see useAccountPreferences); otherwise this
  * browser keeps them.
  */
-export default function ReviewPreferences() {
+export default function ReviewPreferences({ analysis }: { analysis?: ReactNode } = {}) {
   const preferences = useDisplayPreferences();
   const { status } = useAccess();
   const set = (patch: Partial<typeof preferences>) =>
@@ -84,6 +85,7 @@ export default function ReviewPreferences() {
       </section>
 
       <ScoringDefaultsSettings />
+      {analysis}
 
       <section className="review-preferences" aria-label="Display">
         <h3>Display</h3>

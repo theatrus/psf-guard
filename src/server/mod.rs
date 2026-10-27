@@ -46,6 +46,7 @@ pub mod peers;
 pub mod preview_pregeneration;
 pub mod preview_queue;
 pub mod previews;
+pub mod processing_settings;
 pub mod processing_setups;
 pub mod project_removal;
 pub mod quality_arrival;
@@ -715,6 +716,10 @@ pub fn api_router(state: Arc<AppState>) -> Router {
             "/settings/calibration/rigs/{rig_uuid}",
             put(calibration_settings::update_rig_calibration_settings)
                 .delete(calibration_settings::delete_rig_calibration_settings),
+        )
+        .route(
+            "/settings/processing",
+            get(processing_settings::get).put(processing_settings::update),
         )
         .route(
             "/settings/export",

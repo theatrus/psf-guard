@@ -86,13 +86,13 @@ export default function RemoteSyncPreviews({
       <h4>Staged previews</h4>
       <p className="remote-sync-previews-hint">
         Transfers waiting for review — including pushes a remote client
-        staged. Nothing changes the catalog until Apply.
+        staged. Nothing changes the database until Apply.
       </p>
       {rows.length > 0 && (
       <table>
         <thead>
           <tr>
-            <th>Catalog</th>
+            <th>Database</th>
             <th>Operation</th>
             <th>From</th>
             <th>Changes</th>

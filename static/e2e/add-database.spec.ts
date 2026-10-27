@@ -152,7 +152,7 @@ test('first-run plugin import creates a catalog and opens pairing without a TS f
   const destination = path.join(receive, 'plugin.sqlite');
   await page.getByLabel('Destination database path:').fill(destination);
   const createResponse = page.waitForResponse(response => response.url().endsWith('/api/databases/create') && response.request().method() === 'POST');
-  await page.getByRole('button', { name: 'Create catalog for plugin' }).click();
+  await page.getByRole('button', { name: 'Create database for plugin' }).click();
   const created = (await (await createResponse).json()).data.database;
   expect(realpathSync(created.database_path)).toBe(realpathSync(destination));
   await page.getByRole('button', { name: 'Generate pairing code' }).click();
@@ -242,8 +242,8 @@ test('import a standalone catalog copy to an advanced server path', async ({ pag
   await page.setViewportSize({ width: 390, height: 844 });
   const body = modal.locator('.modal-body');
   expect(await body.evaluate(element => element.scrollWidth <= element.clientWidth)).toBeTruthy();
-  await modal.getByRole('button', { name: 'Import catalog copy' }).click();
-  await expect(modal.getByText('Catalog import complete. The source file is not connected for sync.')).toBeVisible();
+  await modal.getByRole('button', { name: 'Import database copy' }).click();
+  await expect(modal.getByText('Database import complete. The source file is not connected for sync.')).toBeVisible();
   const databases = (await (await request.get('/api/databases')).json()).data;
   const catalog = databases.find((entry: { name: string }) => entry.name === 'Restored catalog');
   expect(catalog.ts_sync ?? null).toBeNull();

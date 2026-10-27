@@ -83,7 +83,7 @@ scope.
 
 1. [Install the desktop app](#desktop-app-windows--macos--linux), or
    [set up a server](#docker-linux-servers--nas).
-2. Open **Settings → Databases & rigs → Overview → New Database from Images**.
+2. Open **Settings → Databases & rigs → New / import → New Database from Images**.
 3. Add your image folders and choose **Create & Import**. In a browser, use
    paths on the server.
 4. Choose a project in the **Library**, then open **Images** or **Sequence**.
@@ -108,9 +108,9 @@ calibration frames also work without Target Scheduler.
 1. In N.I.N.A., open **Options → General → Plugin Repositories** and add
    `https://nina-plugins.psf-guard.com/`. Install **PSF Guard Sync** from
    **Plugins → Available**, then restart N.I.N.A.
-2. In PSF Guard, open **Settings → Databases & rigs → Overview → Import from Target Scheduler**,
+2. In PSF Guard, open **Settings → Databases & rigs → New / import → Import from Target Scheduler**,
    choose **Use the PSF Guard Sync plugin**, add a shared or empty image folder,
-   and click **Create catalog for plugin**. No local TS file is required.
+   and click **Create database for plugin**. No local TS file is required.
    To use an existing catalog, open it from **Overview**, choose **Sync**,
    then click **Edit remote receive and pairing**.
 3. Choose **Generate pairing code** in the catalog's pairing controls. In the
@@ -131,7 +131,7 @@ not required for this workflow.
 <a id="existing-database"></a>
 ### Import a Target Scheduler database
 
-Open **Settings → Databases & rigs → Overview → Import from Target Scheduler**. Choose **Use the
+Open **Settings → Databases & rigs → New / import → Import from Target Scheduler**. Choose **Use the
 PSF Guard Sync plugin** for a network connection, or **Import a local TS file**
 to select the SQLite file, add its image folders, and click **Import from Target
 Scheduler**. On Windows, the default source is
@@ -147,13 +147,13 @@ transfers still require Preview and Apply. Open the catalog under
 **Settings → Databases & rigs → Overview**, then choose **Sync**. Director
 activation sends reviewed planning through the saved TS connection; failed
 TS deliveries stay pending for retry. To import a standalone copy, turn off
-**Keep the source connected for Target Scheduler sync**. **Catalog storage**
+**Keep the source connected for Target Scheduler sync**. **Database storage**
 also offers a custom destination path. See
 [Target Scheduler imports](docs/IMPORTING.md#import-from-target-scheduler).
 
 **PSF Guard is moving to its own catalogs.**
 
-For new Target Scheduler databases, choose **Settings → Databases & rigs → Overview → Import
+For new Target Scheduler databases, choose **Settings → Databases & rigs → New / import → Import
 from Target Scheduler** to import the database and set up sync.
 
 Your current Target Scheduler setup will keep working in 0.12. A later update

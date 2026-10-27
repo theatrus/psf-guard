@@ -216,6 +216,7 @@ impl Harness {
                         analyze_new_frames: false,
                         pair_calibrated_copies: true,
                         scan_calibrated_copies: false,
+                        processing_overrides: None,
                     },
                     DbEntry {
                         ts_sync: None,
@@ -232,6 +233,7 @@ impl Harness {
                         analyze_new_frames: false,
                         pair_calibrated_copies: true,
                         scan_calibrated_copies: false,
+                        processing_overrides: None,
                     },
                 ],
                 directory
@@ -1041,6 +1043,7 @@ async fn an_upload_only_key_cannot_reach_the_sync_protocol() {
                 analyze_new_frames: false,
                 pair_calibrated_copies: true,
                 scan_calibrated_copies: false,
+                processing_overrides: None,
             }],
             directory
                 .path()

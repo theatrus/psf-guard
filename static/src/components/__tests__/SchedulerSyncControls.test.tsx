@@ -269,7 +269,7 @@ describe('SchedulerSyncControls', () => {
     await user.click(screen.getByRole('button', { name: 'Send planning' }));
     await user.click(screen.getByRole('button', { name: 'Preview changes' }));
     expect(await screen.findByText(
-      'Deletes 1 project that the source catalog deleted, with 2 targets and 1 exposure plan. Nothing was captured for it in the destination.',
+      'Deletes 1 project that the source database deleted, with 2 targets and 1 exposure plan. Nothing was captured for it in the destination.',
     )).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Apply this preview' }));

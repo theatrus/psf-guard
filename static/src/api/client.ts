@@ -1337,6 +1337,19 @@ export const apiClient = {
         .join('/')}`
     ),
 
+  getProcessingPolicies: async (): Promise<import('./processingPolicies').ProcessingPolicies> => {
+    const api = await getApi();
+    const { data } = await api.get<ApiResponse<import('./processingPolicies').ProcessingPolicies>>('/settings/processing');
+    if (!data.success || !data.data) throw new Error(data.error || 'Could not load processing settings.');
+    return data.data;
+  },
+  updateProcessingPolicies: async (update: { database_id?: string; values: Partial<import('./processingPolicies').PolicyOverrides> }): Promise<import('./processingPolicies').ProcessingPolicies> => {
+    const api = await getApi();
+    const { data } = await api.put<ApiResponse<import('./processingPolicies').ProcessingPolicies>>('/settings/processing', update);
+    if (!data.success || !data.data) throw new Error(data.error || 'Could not save processing settings.');
+    return data.data;
+  },
+
   getAstroBinSettings: async (): Promise<AstroBinSettings> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.get<ApiResponse<AstroBinSettings>>('/settings/astrobin');

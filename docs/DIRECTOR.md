@@ -571,8 +571,9 @@ then creates and links the Target Scheduler project in each rig database.
 Its **Library** link goes back with the scope it came from. A project
 Director has not taken in yet opens a page that finds or starts its plan.
 
-Sites are no longer edited as their own records; a rig's site lives in its
-rig profile. The identity API for sites remains for the plugin.
+Sites are shared records under **Settings → Presets → Sites**. Each rig
+chooses a **Planning site** in **Rig setup → Site** and can override that
+site's location or horizon in its own profile.
 
 ### Rigs and plans appear on their own
 
@@ -986,9 +987,8 @@ server folds both back to the sensor before offering them. Typed models:
 ## Sites and horizons
 
 A site holds a location (latitude, east-positive longitude and elevation) and
-a horizon. Open a database under **Settings → Databases & rigs → Overview**, then add
-or edit sites under **Rig setup → Sites**. Each
-rig picks its **Planning site** in its Setup card and takes the site's
+a horizon. Add or edit shared sites under **Settings → Presets → Sites**. Each
+rig chooses its **Planning site** under **Rig setup → Site** and takes the site's
 location and horizon. A rig's own values win: a location typed into its card,
 and a horizon pasted there or reported by the N.I.N.A. plugin. Leave the
 rig's fields empty to use the site's. The card says where planning takes each

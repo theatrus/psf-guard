@@ -20,9 +20,11 @@ import { useAccess } from '../auth/access';
 import type { SettingsIntent, SettingsRig } from '../utils/settingsIntent';
 import ReviewPreferences from './ReviewPreferences';
 import DirectorRigs from './director/DirectorRigs';
+import DirectorSites from './director/DirectorSites';
+import ProcessingPolicySettings from './ProcessingPolicySettings';
 import { RigDatabaseList, RigDatabaseNavigation } from './RigDatabaseNavigation';
 import UnsavedMark from './UnsavedMark';
-import { Database as DatabaseIcon, Download, Pencil, Plus, Sparkles, Trash2 } from 'lucide-react';
+import { Database as DatabaseIcon, Download, Pencil, Trash2 } from 'lucide-react';
 import TemplateLibrary from './director/TemplateLibrary';
 import './director/DirectorPage.css';
 import { useDirectorStatus } from '../hooks/useDirectorStatus';
@@ -48,8 +50,6 @@ import {
   useImportJob,
 } from '../hooks/useImportJob';
 import { starMetadataFillEnabled } from '../hooks/useStarMetadataFill';
-import QualityBackfillControls from './QualityBackfillControls';
-import CalibratedCopiesControls from './CalibratedCopiesControls';
 import { PurgeRejectsButton } from './RejectRemovalControls';
 import MissingGuidRepair from './MissingGuidRepair';
 import AutoImportFields from './AutoImportFields';
@@ -72,7 +72,7 @@ import PathField from './PathField';
 import { describeUnsaved, UnsavedScopeContext, useUnsavedLabels } from '../hooks/useUnsavedChanges';
 
 import SettingsNavigation from './SettingsNavigation';
-import { isSettingsSection, isRigDatabasePage, settingsGroups, settingsPage, type SettingsSection } from './settingsSections';
+import { isSettingsSection, isRigDatabasePage, settingsGroups, settingsPage, type SettingsSection, RIG_DATABASE_PAGES, databaseSettingsId, parseDatabaseSettingsId } from './settingsSections';
 
 type SettingsTab = SettingsSection;
 
@@ -480,6 +480,7 @@ export default function TauriSettings({
   };
 
   const startCreate = () => {
+    setActiveTab('database-add');
     setEditingId(null);
     setEditOriginal(null);
     setFormName('');
@@ -505,6 +506,7 @@ export default function TauriSettings({
   };
 
   const startAdd = async () => {
+    setActiveTab('database-add');
     setEditingId(null);
     setEditOriginal(null);
     setFormName('');
@@ -546,8 +548,8 @@ export default function TauriSettings({
       resetForm();
       if (selectedDatabaseId && selectedDatabaseId !== initialDatabaseId) discardCatalogSyncPreview(selectedDatabaseId);
       setSelectedDatabaseId(initialDatabaseId);
-      if (initialIntent === 'create') { setActiveTab('rig-databases'); startCreate(); }
-      else if (initialIntent === 'add') { setActiveTab('rig-databases'); void startAdd(); }
+      if (initialIntent === 'create') { setActiveTab('database-add'); startCreate(); }
+      else if (initialIntent === 'add') { setActiveTab('database-add'); void startAdd(); }
       else if (isTabIntent(initialIntent)) setActiveTab(initialIntent);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -667,7 +669,7 @@ export default function TauriSettings({
         if (pluginImport) {
           startEdit({ id: created.database.id, name: created.database.name,
             db_path: created.database.database_path, image_dirs: created.database.image_directories });
-          setStatusMessage('Catalog created. Generate a pairing code below to connect PSF Guard Sync in N.I.N.A.');
+          setStatusMessage('Database created. Generate a pairing code below to connect PSF Guard Sync in N.I.N.A.');
         } else {
           resetForm();
           setStatusMessage(`Created ${created.database.name}; importing frames…`);
@@ -793,7 +795,7 @@ export default function TauriSettings({
         });
         queryClient.setQueryData<import('../api/tsSyncTypes').TsSyncJob[]>(TS_SYNC_QUERY_KEY, old => [...(old ?? []).filter(item => item.id !== job.id), job]);
         void queryClient.invalidateQueries({ queryKey: JOBS_QUERY_KEY });
-        setStatusMessage(connectImportedSource ? 'Importing Target Scheduler into a PSF Guard catalog…' : 'Importing a standalone catalog copy…');
+        setStatusMessage(connectImportedSource ? 'Importing Target Scheduler into a PSF Guard database…' : 'Importing a standalone database copy…');
         return;
       }
 
@@ -924,7 +926,7 @@ export default function TauriSettings({
 
   const handleRemove = async (entry: DbEntry) => {
     if (!confirm(
-      `Remove "${entry.name}" from PSF Guard? Its catalog file and images stay on disk, and you can add it again.`
+      `Remove "${entry.name}" from PSF Guard? Its database file and images stay on disk, and you can add it again.`
     )) return;
     setIsApplying(true);
     try {
@@ -965,7 +967,7 @@ export default function TauriSettings({
           resetForm();
         }
         setStatusMessage(job.source_connected === false
-          ? 'Catalog import complete. The source file is not connected for sync.'
+          ? 'Database import complete. The source file is not connected for sync.'
           : 'Target Scheduler import complete. Automatic sync and grade writeback are enabled.');
       }
     }
@@ -978,8 +980,9 @@ export default function TauriSettings({
   // Installing catalogs and syncing take an editor; sync has nothing to
   // talk about until a catalog exists.
   const availableSections: SettingsSection[] = [
-    'rig-databases', 'databases',
-    ...(planningEnabled ? ['rigs', 'templates'] as const : []),
+    'rig-databases', 'database-overview', 'databases',
+    ...(managementAllowed ? ['database-add'] as const : []),
+    ...(planningEnabled ? ['rigs', 'templates', 'sites'] as const : []),
     ...(canEdit && hasDatabases ? ['sync'] as const : []),
     'setups', 'calibration', 'stacking', 'performance', 'gpu',
     ...(isTauri || (canEdit && managementAllowed) ? ['workers'] as const : []),
@@ -991,13 +994,21 @@ export default function TauriSettings({
     ...(!isTauri && access.status.authentication_required ? ['users'] as const : []),
     ...(access.status.authentication_required ? [] : ['agents'] as const),
   ];
-  const navigationGroups = settingsGroups(availableSections);
+  const baseGroups = settingsGroups(availableSections);
   const selectedDatabase = databases.find(entry => entry.id === selectedDatabaseId);
-  const waitingForPlanning = (activeTab === 'rigs' || activeTab === 'templates') && director.isPending;
+  const waitingForPlanning = (activeTab === 'rigs' || activeTab === 'templates' || activeTab === 'sites') && director.isPending;
   const requested = availableSections.includes(activeTab) || waitingForPlanning ? activeTab
     : selectedDatabaseId ? 'databases' : 'rig-databases';
   const currentTab = isRigDatabasePage(requested) && !selectedDatabaseId ? 'rig-databases' : requested;
-  const navigationTab = isRigDatabasePage(currentTab) ? 'rig-databases' : currentTab;
+  const navigationTab = isRigDatabasePage(currentTab) && selectedDatabaseId ? databaseSettingsId(selectedDatabaseId, currentTab) : currentTab;
+  const navigationGroups = baseGroups.map(group => group.id !== 'data' ? group : {
+    ...group, pages: [group.pages[0], ...databases.flatMap(entry => {
+      const expanded = isRigDatabasePage(currentTab) && selectedDatabaseId === entry.id;
+      return [{ id: databaseSettingsId(entry.id, 'database-overview'), label: entry.name, expanded },
+        ...(expanded ? RIG_DATABASE_PAGES.filter(page => page.id !== 'database-overview' && availableSections.includes(page.id))
+          .map(page => ({ id: databaseSettingsId(entry.id, page.id), label: page.label, mobileLabel: `${entry.name} / ${page.label}`, depth: 1 })) : [])];
+    }), ...group.pages.slice(1)],
+  });
   const currentGroup = navigationGroups.find(group => group.pages.some(page => page.id === navigationTab));
   const currentPage = settingsPage(currentTab);
   function discardCatalogSyncPreview(databaseId: string) {
@@ -1016,7 +1027,7 @@ export default function TauriSettings({
     requestNavigation(settingsPage(section).label, () => {
       resetForm();
       setActiveTab(section);
-      if (section === 'rig-databases') {
+      if (!isRigDatabasePage(section)) {
         if (selectedDatabaseId) discardCatalogSyncPreview(selectedDatabaseId);
         setSelectedDatabaseId(null);
       }
@@ -1028,15 +1039,19 @@ export default function TauriSettings({
     if (selectedDatabaseId && selectedDatabaseId !== entry.id) discardCatalogSyncPreview(selectedDatabaseId);
     setSelectedDatabaseId(entry.id);
     const next = isRigDatabasePage(activeTab) && availableSections.includes(activeTab) ? activeTab
-      : planningEnabled ? 'rigs' : 'databases';
+      : 'database-overview';
     setActiveTab(next);
     setStatusMessage('');
   });
-  const openDatabasePage = (section: 'databases' | 'rigs' | 'sync') => {
-    if (section === currentTab) return;
-    requestNavigation(settingsPage(section).label, () => {
+  const selectNavigation = (id: string) => {
+    const target = parseDatabaseSettingsId(id);
+    if (!target) { if (isSettingsSection(id)) requestSection(id); return; }
+    if (target.databaseId === selectedDatabaseId && target.section === currentTab) return;
+    requestNavigation(databases.find(entry => entry.id === target.databaseId)?.name ?? target.databaseId, () => {
       resetForm();
-      setActiveTab(section);
+      if (selectedDatabaseId && selectedDatabaseId !== target.databaseId) discardCatalogSyncPreview(selectedDatabaseId);
+      setSelectedDatabaseId(target.databaseId);
+      setActiveTab(target.section);
       setStatusMessage('');
     });
   };
@@ -1080,17 +1095,17 @@ export default function TauriSettings({
             </h3>
           </div>
         ) : (
-          <h3>{createMode ? 'New Database from Images' : !pluginImport && !connectImportedSource ? 'Import a catalog copy' : 'Import from Target Scheduler'}</h3>
+          <h3>{createMode ? 'New Database from Images' : !pluginImport && !connectImportedSource ? 'Import a database copy' : 'Import from Target Scheduler'}</h3>
         )}
 
         {!sync && <>
         {!editingId && <>
           <fieldset className="catalog-source-options" disabled={isApplying || tsImportRunning}>
-            <legend>Start a catalog</legend>
+            <legend>Start a database</legend>
             <div className="catalog-source-grid">
               <label className="catalog-source-option">
                 <input type="radio" name="catalog-source" aria-label="Image folders" aria-checked={createMode} checked={createMode} onChange={() => setCreateMode(true)} />
-                <span><strong>Image folders</strong><small>Import FITS or XISF folders into a new catalog.</small></span>
+                <span><strong>Image folders</strong><small>Import FITS or XISF folders into a new database.</small></span>
               </label>
               <label className="catalog-source-option">
                 <input type="radio" name="catalog-source" aria-label="Import a local TS file" aria-checked={!createMode && tsImportMethod === 'file'} checked={!createMode && tsImportMethod === 'file'} onChange={() => { setCreateMode(false); setTsImportMethod('file'); }} />
@@ -1103,12 +1118,12 @@ export default function TauriSettings({
             </div>
           </fieldset>
           {!createMode && <p className="muted">{pluginImport
-            ? 'Choose a shared image folder or an empty folder for incoming uploads. Create the catalog, then pair the plugin. The plugin controls its own sync schedule.'
-            : 'PSF Guard copies all catalog data, including existing PSF Guard data. Image files stay in their current folders.'}</p>}
+            ? 'Choose a shared image folder or an empty folder for incoming uploads. Create the database, then pair the plugin. The plugin controls its own sync schedule.'
+            : 'PSF Guard copies the complete database, including existing PSF Guard data. Image files stay in their current folders.'}</p>}
         </>}
         {createMode && (
           <p className="muted">
-            Builds a PSF Guard catalog from the selected image folders. Each target gets its own project. Nearby,
+            Builds a PSF Guard database from the selected image folders. Each target gets its own project. Nearby,
             similarly dated panels with matching panel names share a
             mosaic project. You can rename or reorganize them afterwards.
             The import reads headers only; pixel-based quality work is a
@@ -1133,15 +1148,15 @@ export default function TauriSettings({
         </div>
 
         {!editingId && <fieldset className="catalog-storage" disabled={isApplying || tsImportRunning}>
-          <legend>Catalog storage</legend>
-          <p className="muted">By default, PSF Guard stores new catalogs in the databases folder beside its registry.</p>
+          <legend>Database storage</legend>
+          <p className="muted">By default, PSF Guard stores new databases in the databases folder beside its registry.</p>
           <label className="checkbox-label"><input type="checkbox" checked={useCustomCatalogPath} aria-checked={useCustomCatalogPath}
             aria-controls="custom-catalog-location" onChange={event => setUseCustomCatalogPath(event.target.checked)} /> Use a custom database path (advanced)</label>
           {useCustomCatalogPath && <div id="custom-catalog-location" className="database-config">
             <label htmlFor="import-destination-path">Destination database path:</label>
             <input id="import-destination-path" className="file-path-input" type="text" value={importDestination}
               onChange={event => setImportDestination(event.target.value)} placeholder="e.g. /srv/psf-guard/catalog.sqlite" />
-            <p className="muted">Use an absolute path to a new file on the machine running PSF Guard. Existing catalogs are not replaced.</p>
+            <p className="muted">Use an absolute path to a new file on the machine running PSF Guard. Existing databases are not replaced.</p>
           </div>}
         </fieldset>}
 
@@ -1168,7 +1183,7 @@ export default function TauriSettings({
             onChange={e => setConnectImportedSource(e.target.checked)} /> Keep the source connected for Target Scheduler sync</label>
           <p className="muted">{connectImportedSource
             ? 'Automatic sync imports new captures and writes grade changes back. Director activation sends reviewed planning through this connection.'
-            : 'Create a standalone catalog copy. PSF Guard will not sync with or write back to the source file.'}
+            : 'Create a standalone database copy. PSF Guard will not sync with or write back to the source file.'}
             {' '}Server settings and saved Director plans require a full backup restore.</p>
         </>}
 
@@ -1389,14 +1404,14 @@ export default function TauriSettings({
                   className="file-path-input"
                 >
                   <option value="flat">Receive directory</option>
-                  <option value="target_tree">Match catalog</option>
+                  <option value="target_tree">Match database</option>
                 </select>
                 {formRemoteUploadPlacement === 'target_tree' && (
                   <>
                     {formRemoteUploadCatalogMatch && (
                       <small className="remote-upload-token-notice" role="status">
                         Detected from {formRemoteUploadCatalogMatch.samples}{' '}
-                        catalog {formRemoteUploadCatalogMatch.samples === 1
+                        database {formRemoteUploadCatalogMatch.samples === 1
                           ? 'image'
                           : 'images'}:{' '}
                         <code>{formRemoteUploadCatalogMatch.template}</code>
@@ -1438,7 +1453,7 @@ export default function TauriSettings({
                       >
                         {formRemoteUploadCatalogMatch && (
                           <option value="catalog">
-                            Match catalog: {formRemoteUploadCatalogMatch.template}
+                            Match database: {formRemoteUploadCatalogMatch.template}
                           </option>
                         )}
                         {REMOTE_UPLOAD_DIRECTORY_TEMPLATE_PRESETS.map((template) => (
@@ -1451,12 +1466,12 @@ export default function TauriSettings({
                       <button
                         type="button"
                         className="browse-button"
-                        aria-label="Rescan catalog layout"
+                        aria-label="Rescan database layout"
                         aria-pressed={formRemoteUploadRescanRequested}
                         title={
                           formRemoteUploadRescanRequested
-                            ? 'Catalog layout rescan queued for Save Changes'
-                            : 'Rescan catalog paths when changes are saved'
+                            ? 'Database layout rescan queued for Save connection settings'
+                            : 'Rescan database paths when changes are saved'
                         }
                         disabled={formRemoteUploadRescanRequested}
                         onClick={() => setFormRemoteUploadRescanRequested(true)}
@@ -1470,7 +1485,7 @@ export default function TauriSettings({
                       ) && (
                       <input
                         type="text"
-                        aria-label="Custom catalog layout:"
+                        aria-label="Custom database layout:"
                         className="file-path-input"
                         value={formRemoteUploadDirectoryTemplate}
                         onChange={(event) => {
@@ -1550,12 +1565,12 @@ export default function TauriSettings({
             }
           >
             {pluginImport
-              ? 'Create catalog for plugin'
+              ? 'Create database for plugin'
               : createMode
                 ? 'Create & Import'
               : editingId
                 ? sync ? 'Save connection settings' : 'Save Changes'
-                : connectImportedSource ? 'Import from Target Scheduler' : 'Import catalog copy'}
+                : connectImportedSource ? 'Import from Target Scheduler' : 'Import database copy'}
           </button>
         </div>
       </section>
@@ -1905,7 +1920,7 @@ export default function TauriSettings({
         )}
 
         <div className="settings-layout">
-        <SettingsNavigation groups={navigationGroups} current={navigationTab} onChange={requestSection} />
+        <SettingsNavigation groups={navigationGroups} current={navigationTab} onChange={selectNavigation} loading={isLoading} />
 
         <div
           className="modal-body"
@@ -1915,8 +1930,7 @@ export default function TauriSettings({
           aria-labelledby="settings-section-heading"
         >
           {isRigDatabasePage(currentTab) && selectedDatabase && <RigDatabaseNavigation
-            database={selectedDatabase} current={currentTab} planningEnabled={planningEnabled} canSync={canEdit}
-            onBack={() => requestSection('rig-databases')} onChange={openDatabasePage} />}
+            database={selectedDatabase} onBack={() => requestSection('rig-databases')} />}
           <header className="settings-page-heading" id="settings-section-heading">
             {!isRigDatabasePage(currentTab) && <><span>{currentGroup?.label}</span><span aria-hidden="true"> / </span></>}
             <strong>{currentPage.label}</strong>
@@ -1926,17 +1940,22 @@ export default function TauriSettings({
             <button type="button" className="link-button" onClick={() => requestSection('rig-databases')}>Databases &amp; rigs</button>
           </p>}
           {currentTab === 'rig-databases' && hasDatabases && !showAddForm && <RigDatabaseList databases={databases} onOpen={openDatabase} />}
+          {currentTab === 'database-overview' && selectedDatabase && <section className="settings-section">
+            <h3>{selectedDatabase.name}</h3><p>Choose a page beneath this database in the Settings navigation.</p>
+            <dl className="db-row-paths"><div><dt>Database</dt><dd>{selectedDatabase.db_path}</dd></div><div><dt>Image folders</dt><dd>{selectedDatabase.image_dirs.join(', ')}</dd></div></dl>
+            <CalibrationLibrarySummary dbId={selectedDatabase.id} onOpen={onClose} />
+          </section>}
           {currentTab === 'rig-databases' && canEdit && hasDatabases && <RemoteSyncPreviews databases={databases} disabled={isApplying} />}
-          {currentTab === 'review' && <div className="settings-setups"><ReviewPreferences /></div>}
-          {currentTab === 'databases' && <>{tsJobs.data?.filter(job => job.running || job.error).map(job => <p key={job.id} role={job.error ? 'alert' : 'status'}>{job.name || 'Target Scheduler'}: {job.error || (job.stage === 'copying' ? `Copying database · ${job.pages_done}/${job.pages_total} pages` : job.stage === 'initializing' ? 'Preparing the working catalog…' : 'Syncing captures and grades…')}</p>)}</>}
-          {(currentTab === 'rig-databases' || (currentTab === 'databases' && selectedDatabase)) && (
+          {currentTab === 'review' && <div className="settings-setups"><ReviewPreferences analysis={<ProcessingPolicySettings kind="quality" canManage={managementAllowed} />} /></div>}
+          {currentTab === 'databases' && <>{tsJobs.data?.filter(job => job.running || job.error).map(job => <p key={job.id} role={job.error ? 'alert' : 'status'}>{job.name || 'Target Scheduler'}: {job.error || (job.stage === 'copying' ? `Copying database · ${job.pages_done}/${job.pages_total} pages` : job.stage === 'initializing' ? 'Preparing the working database…' : 'Syncing captures and grades…')}</p>)}</>}
+          {(currentTab === 'rig-databases' || currentTab === 'database-add' || (currentTab === 'databases' && selectedDatabase)) && (
           <div className="settings-setups">
-          {!hasDatabases && managementAllowed && (
+          {(!hasDatabases || currentTab === 'database-add') && managementAllowed && (
             <div className="welcome-message">
-              <h3>🚀 Welcome to PSF Guard!</h3>
+              <h3>{currentTab === 'database-add' ? 'Create or import a database' : '🚀 Welcome to PSF Guard!'}</h3>
               {!showAddForm && <p>
                 Start from folders of FITS or XISF images, or from a N.I.N.A.
-                scheduler database you already have. You can add more catalogs
+                scheduler database you already have. You can add more databases
                 later.
               </p>}
               {!showAddForm && (
@@ -2061,7 +2080,7 @@ export default function TauriSettings({
                     </div>
                     <dl className="db-row-paths">
                       <div>
-                        <dt>{entry.ts_sync ? 'PSF Guard catalog' : 'Catalog'}</dt>
+                        <dt>{entry.ts_sync ? 'PSF Guard database' : 'Database'}</dt>
                         <dd>{entry.db_path}</dd>
                       </div>
                       {entry.image_dirs.length > 0 && (
@@ -2080,8 +2099,8 @@ export default function TauriSettings({
                             {entry.remote_image_upload.placement === 'target_tree'
                               ? entry.remote_image_upload.directory_template_source ===
                                 'catalog'
-                                ? `match catalog, ${entry.remote_image_upload.directory_template_samples ?? 0} ${entry.remote_image_upload.directory_template_samples === 1 ? 'sample' : 'samples'}`
-                                : 'match catalog'
+                                ? `match database, ${entry.remote_image_upload.directory_template_samples ?? 0} ${entry.remote_image_upload.directory_template_samples === 1 ? 'sample' : 'samples'}`
+                                : 'match database'
                               : 'receive directory'}
                             )
                           </dd>
@@ -2093,14 +2112,7 @@ export default function TauriSettings({
                         dbId={entry.id}
                         onOpen={onClose}
                       />
-                      <AstroBinFilterSummary
-                        dbId={entry.id}
-                        dbName={entry.name}
-                        canManage={canEdit}
-                      />
                       <MissingGuidRepair dbId={entry.id} dbName={entry.name} canManage={canEdit} />
-                      <QualityBackfillControls dbId={entry.id} canManage={managementAllowed} />
-                      <CalibratedCopiesControls dbId={entry.id} canManage={managementAllowed} />
                       <AutoImportSummary
                         dbId={entry.id}
                         settings={entry.autoimport}
@@ -2129,30 +2141,7 @@ export default function TauriSettings({
 
             {/* With no databases yet the welcome banner carries these same two
                 actions, so rendering them here too would just duplicate them. */}
-            {currentTab === 'rig-databases' && managementAllowed && hasDatabases && !showAddForm && (
-              <div className="db-add-buttons">
-                <button
-                  type="button"
-                  className="db-action-button"
-                  onClick={startAdd}
-                  disabled={isApplying}
-                  title="Import a PSF Guard catalog and keep Target Scheduler connected for sync"
-                >
-                  <Plus size={15} aria-hidden="true" />
-                  Import from Target Scheduler
-                </button>
-                <button
-                  type="button"
-                  className="db-action-button"
-                  onClick={startCreate}
-                  disabled={isApplying}
-                  title="Create a brand-new Target Scheduler database and import folders of images into it"
-                >
-                  <Sparkles size={15} aria-hidden="true" />
-                  New Database from Images
-                </button>
-              </div>
-            )}
+
 
 
           {managementAllowed && showAddForm && !editingId && renderDatabaseForm(null)}
@@ -2167,6 +2156,8 @@ export default function TauriSettings({
 
           {/* Planning's panels keep Planning's controls; the container adds no padding. */}
           {currentTab === 'rigs' && selectedDatabase && <div className="settings-setups director-page director-embedded"><DirectorRigs key={selectedDatabase.id} databaseId={selectedDatabase.id} /></div>}
+
+          {currentTab === 'sites' && <div className="settings-setups director-page director-embedded"><DirectorSites /></div>}
 
           {currentTab === 'templates' && <div className="settings-setups director-page director-embedded"><TemplateLibrary /></div>}
 
@@ -2195,6 +2186,7 @@ export default function TauriSettings({
 
           {currentTab === 'calibration' && (
             <div className="settings-setups">
+              <ProcessingPolicySettings kind="pairing" canManage={managementAllowed} />
               <CalibrationMatchingSettings focusField={initialRig ? null : initialField} />
               <CalibrationRigSettings focusRig={initialRig} focusField={initialRig ? initialField : null} />
             </div>
@@ -2216,7 +2208,10 @@ export default function TauriSettings({
           {currentTab === 'gpu' && <div className="settings-setups"><StackGpuSettings /></div>}
           {currentTab === 'exports' && <div className="settings-setups"><ExportDefaultsSettings /></div>}
           {currentTab === 'pixinsight' && <div className="settings-setups"><PixInsightSettings /></div>}
-          {currentTab === 'astrobin' && <div className="settings-setups"><AstroBinSettings /></div>}
+          {currentTab === 'astrobin' && <div className="settings-setups"><AstroBinSettings />
+            <section className="settings-section"><h3>Database filter maps</h3><p>Database entries override the shared AstroBin defaults for their matching filters and dates.</p>
+              {databases.map(entry => <section key={entry.id} aria-label={`${entry.name} filter map`}><h4>{entry.name}</h4><AstroBinFilterSummary dbId={entry.id} dbName={entry.name} canManage={canEdit} /></section>)}
+            </section></div>}
 
           {currentTab === 'workers' && (
             <>

@@ -84,6 +84,7 @@ fn setup() -> (
                 analyze_new_frames: false,
                 pair_calibrated_copies: true,
                 scan_calibrated_copies: false,
+                processing_overrides: None,
             }],
             temp.path().join("cache").to_string_lossy().into_owned(),
             crate::cli::PregenerationConfig::default(),

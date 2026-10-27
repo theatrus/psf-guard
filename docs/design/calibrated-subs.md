@@ -253,3 +253,22 @@ carry it explicitly:
    case, pull and remote sync, the database setting.
 3. **Using pairs**: the detail switch and marks, previews by source, the
    reject archive, and the quality-scan option.
+
+
+## Shared defaults and database overrides
+
+The registry stores processing defaults for automatic quality analysis,
+derivative pairing and measurement of calibrated copies. `processing_overrides`
+on a registration contains optional booleans; null inherits the shared value.
+An absent block preserves the registration's legacy boolean choices as
+explicit overrides. New registrations get an empty block and inherit.
+The legacy boolean fields remain resolved snapshots for older readers.
+Registry loading resolves inherited snapshots before constructing contexts.
+
+Settings writes change only submitted fields under the registry write lock,
+persist before publishing the live settings, and publish before releasing the
+lock. Existing per-database endpoints write explicit overrides through the
+same path. A failed write leaves live settings unchanged. Enabling arrival
+analysis uses the existing arrival queue. Source selection and its fingerprint
+remain in the existing quality cache; inherited policy does not create a new
+image identity or reuse raw evidence as calibrated evidence.

@@ -8,7 +8,6 @@ import { useAllDatabases } from '../../hooks/useDatabases';
 import { openSettings } from '../../utils/settingsIntent';
 import { formatDegrees } from './framingModel';
 import RigProfileCard from './RigProfileCard';
-import DirectorSites from './DirectorSites';
 import EarlyBeta from './EarlyBeta';
 import { retryWhenBusy } from './retry';
 
@@ -62,7 +61,7 @@ export default function DirectorRigs({ databaseId }: { databaseId?: string } = {
       </li>;
     })}</ul>
   </section>
-  <DirectorSites /></>;
+  </>;
 }
 
 /** A catalog's calibration rigs, each a link into its calibration settings

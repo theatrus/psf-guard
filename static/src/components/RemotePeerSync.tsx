@@ -123,7 +123,7 @@ export default function RemotePeerSync({ databases, disabled, localDatabaseId }:
       setCheck(result);
       setMessage(
         result.reachable
-          ? `${result.product ?? 'Peer'} ${result.product_version ?? ''} — catalog ${
+          ? `${result.product ?? 'Peer'} ${result.product_version ?? ''} — database ${
               result.catalogs[0] ?? 'unknown'
             }`.trim()
           : `Could not reach the peer: ${result.error ?? 'no reason given'}`
@@ -178,7 +178,7 @@ export default function RemotePeerSync({ databases, disabled, localDatabaseId }:
   if (databases.length === 0) {
     return (
       <div className="scheduler-sync-empty muted">
-        Add a catalog before syncing with a remote PSF Guard.
+        Add a database before syncing with a remote PSF Guard.
       </div>
     );
   }
@@ -267,7 +267,7 @@ export default function RemotePeerSync({ databases, disabled, localDatabaseId }:
               type="password"
               value={formToken}
               onChange={(event) => setFormToken(event.target.value)}
-              placeholder="The key that peer issued for its catalog"
+              placeholder="The key that peer issued for its database"
             />
           </label>
           {/* Outside the label: help text inside one becomes part of the
@@ -318,9 +318,9 @@ export default function RemotePeerSync({ databases, disabled, localDatabaseId }:
       <p className="muted">{DIRECTIONS.find((o) => o.value === direction)?.note}</p>
 
       <label className="remote-peer-local">
-        <span>Local catalog</span>
+        <span>Local database</span>
         <select
-          aria-label="Local catalog"
+          aria-label="Local database"
           value={selectedDb?.id ?? ''}
           onChange={(event) => {
             setLocalDbId(event.target.value);
@@ -376,7 +376,7 @@ export default function RemotePeerSync({ databases, disabled, localDatabaseId }:
 
       {preview && (
         <div className="remote-peer-preview" role="status">
-          <strong>{preview.peer_product}</strong> — catalog {preview.peer_catalog}
+          <strong>{preview.peer_product}</strong> — database {preview.peer_catalog}
           <p>{summaryLine(preview.summary)}</p>
         </div>
       )}

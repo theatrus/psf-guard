@@ -105,7 +105,7 @@ test('capture the owned catalog import and sync flow', async ({ page, request, b
   const transfer = modal.locator('.scheduler-sync-workspace');
   await transfer.getByRole('button', { name: 'Preview changes' }).click();
   await expect(transfer.getByRole('button', { name: 'Apply this preview' })).toBeVisible();
-  await capture('import-reviewed-transfer.png', transfer, 'Automatic sync and writeback saved off. Merge catalogs: Observatory — Target Scheduler to Observatory. Include thumbnails on. Preview of new project 100 and target 100; Apply not clicked.');
+  await capture('import-reviewed-transfer.png', transfer, 'Automatic sync and writeback saved off. Merge databases: Observatory — Target Scheduler to Observatory. Include thumbnails on. Preview of new project 100 and target 100; Apply not clicked.');
   await transfer.getByRole('button', { name: 'Apply this preview' }).click();
   await expect(transfer.getByRole('button', { name: 'Apply this preview' })).toBeHidden();
 
@@ -120,7 +120,7 @@ test('capture the owned catalog import and sync flow', async ({ page, request, b
   await form.getByRole('radio', { name: 'Use the PSF Guard Sync plugin' }).check();
   await form.getByLabel('Display name (optional):').fill('Remote observatory');
   await capture('import-sync-plugin.png', form, 'Sync plugin selected; Remote observatory name; shared fixture image folder retained when switching; no local TS file; managed storage; catalog not yet created.');
-  await form.getByRole('button', { name: 'Create catalog for plugin' }).click();
+  await form.getByRole('button', { name: 'Create database for plugin' }).click();
   const pairing = modal.locator('.database-config').filter({ has: page.getByRole('button', { name: 'Generate pairing code' }) });
   const pairingRow = pairing.locator('.remote-upload-token-row').first();
   await capture('import-plugin-pairing.png', pairing, 'Remote observatory catalog created. Pairing controls open automatically; no code issued, no client paired, no uploads enabled. Crop ends after Generate pairing code.', pairingRow);

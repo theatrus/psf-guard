@@ -136,6 +136,7 @@ test(`${executor}: arriving M31 files review measured data and replay a queued s
     const settings = page.locator('.tauri-settings');
     await settings.getByRole('tab', { name: 'Overview', exact: true }).click();
     await settings.getByRole('button', { name: 'Open Arrival rig' }).click();
+    await settings.getByRole('tab', { name: 'Rig setup', exact: true }).click();
     await settings.getByRole('tab', { name: 'Collaboration', exact: true }).click();
     const collaboration = settings.getByRole('region', { name: 'Collaboration', exact: true });
     await collaboration.getByRole('tab', { name: 'Reports' }).click();
@@ -247,6 +248,7 @@ test(`${executor}: arriving M31 files review measured data and replay a queued s
     const reopenedSettings = reopened.locator('.tauri-settings');
     await reopenedSettings.getByRole('tab', { name: 'Overview', exact: true }).click();
     await reopenedSettings.getByRole('button', { name: 'Open Arrival rig' }).click();
+    await reopenedSettings.getByRole('tab', { name: 'Rig setup', exact: true }).click();
     await reopenedSettings.getByRole('tab', { name: 'Collaboration', exact: true }).click();
     await reopenedSettings.getByRole('tab', { name: 'Automation' }).click();
     const rejection = reopenedSettings.getByRole('region', { name: 'Rejected contributions' });

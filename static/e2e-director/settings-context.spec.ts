@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import path from 'node:path';
 import { applyRealSchema } from '../e2e/fixtures/sync';
-import { openSettings } from '../e2e/helpers';
+import { openSettings, selectSettingsSection } from '../e2e/helpers';
 
 test('rig setup shares the opened database context with files and sync', async ({ page, request }, testInfo) => {
   const slugs: string[] = [];
@@ -41,6 +41,7 @@ test('rig setup shares the opened database context with files and sync', async (
     await page.goto('/#/sky');
     await openSettings(page);
     await page.getByRole('button', { name: 'Open C925', exact: true }).click();
+    await selectSettingsSection(page, 'rigs');
     await expect(page.getByRole('region', { name: 'Rig profile', exact: true })).toBeVisible();
     await expect(page.getByLabel('Focal length', { exact: true })).toHaveValue('1645');
     await page.screenshot({ path: testInfo.outputPath('rig-setup-desktop.png'), animations: 'disabled' });
@@ -48,16 +49,22 @@ test('rig setup shares the opened database context with files and sync', async (
     await page.screenshot({ path: testInfo.outputPath('rig-setup-phone.png'), animations: 'disabled' });
     expect(await page.locator('.tauri-settings').evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
     await page.getByLabel('Focal length', { exact: true }).fill('1500');
-    await page.getByRole('navigation', { name: 'Settings for C925' }).getByRole('button', { name: 'Database & files', exact: true }).click();
+    await selectSettingsSection(page, 'databases');
     await expect(page.getByRole('alertdialog')).toContainText('C925 setup');
     await page.getByRole('button', { name: 'Keep editing' }).click();
     await expect(page.getByLabel('Focal length', { exact: true })).toHaveValue('1500');
     await page.getByRole('button', { name: 'Databases & rigs', exact: true }).click();
     await page.getByRole('button', { name: 'Discard changes and switch' }).click();
     await page.getByRole('button', { name: 'Open Ultra Cat', exact: true }).click();
+    await selectSettingsSection(page, 'rigs');
     await expect(page.getByLabel('Focal length', { exact: true })).toHaveValue('250');
-    await page.getByRole('navigation', { name: 'Settings for Ultra Cat' }).getByRole('button', { name: 'Sync', exact: true }).click();
+    await selectSettingsSection(page, 'sync');
     await expect(page.locator('.scheduler-sync-workspace').getByLabel('Transfer destination')).toHaveValue(slugs[1]);
+    await selectSettingsSection(page, 'sites');
+    await expect(page.getByRole('region', { name: 'Sites', exact: true })).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath('shared-sites-phone.png'), animations: 'disabled' });
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.screenshot({ path: testInfo.outputPath('shared-sites-desktop.png'), animations: 'disabled' });
     await page.getByRole('button', { name: 'Close settings' }).click();
   } finally {
     for (const slug of slugs) await request.delete(`/api/databases/${slug}`);

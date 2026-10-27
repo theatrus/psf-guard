@@ -1,10 +1,16 @@
+import { ChevronRight } from 'lucide-react';
 import { useLayoutEffect, useRef, type KeyboardEvent } from 'react';
-import { settingsPage, type SettingsGroup, type SettingsSection } from './settingsSections';
+import { settingsPage, type SettingsSection } from './settingsSections';
 
-export default function SettingsNavigation({ groups, current, onChange }: {
-  groups: readonly SettingsGroup[];
-  current: SettingsSection;
-  onChange: (section: SettingsSection) => void;
+export interface NavigationGroup {
+  id: string; label: string; pages: readonly { id: string; label: string; mobileLabel?: string; depth?: number; expanded?: boolean; context?: string }[];
+}
+
+export default function SettingsNavigation({ groups, current, onChange, loading = false }: {
+  groups: readonly NavigationGroup[];
+  current: string;
+  loading?: boolean;
+  onChange: (section: string) => void;
 }) {
   const pages = groups.flatMap(group => group.pages);
   const navigationKey = pages.map(page => page.id).join(',');
@@ -45,19 +51,19 @@ export default function SettingsNavigation({ groups, current, onChange }: {
         {group.pages.map(page => <button key={page.id} type="button" role="tab"
           id={`settings-tab-${page.id}`} aria-selected={page.id === current}
           aria-controls={`settings-panel-${page.id}`} aria-describedby={`settings-group-${group.id}`}
-          tabIndex={page.id === current ? 0 : -1} className="settings-tab"
-          onClick={() => onChange(page.id)}>{page.label}</button>)}
+          tabIndex={page.id === current ? 0 : -1} className="settings-tab" data-depth={page.depth} aria-expanded={page.expanded}
+          onClick={() => onChange(page.id)}>{page.expanded !== undefined && <ChevronRight size={13} aria-hidden="true" />}{page.label}</button>)}
       </div>)}
     </div>
     <div className="settings-mobile-nav">
       <label htmlFor="settings-section-picker">Settings section</label>
-      <select id="settings-section-picker" value={current} onChange={event => onChange(event.target.value as SettingsSection)}
+      <select id="settings-section-picker" value={current} onChange={event => onChange(event.target.value)}
         aria-controls={`settings-panel-${current}`}>
         {!pages.some(page => page.id === current) && <option value={current} disabled>
-          {settingsPage(current).label} — Loading…
+          {current.startsWith('database:') ? (loading ? 'Loading selected database…' : 'Selected database unavailable') : `${settingsPage(current as SettingsSection)?.label ?? 'Settings'} — Loading…`}
         </option>}
         {groups.map(group => <optgroup key={group.id} label={group.label}>
-          {group.pages.map(page => <option key={page.id} value={page.id}>{page.label}</option>)}
+          {group.pages.map(page => <option key={page.id} value={page.id}>{page.mobileLabel ?? page.label}</option>)}
         </optgroup>)}
       </select>
     </div>

@@ -16,11 +16,15 @@
 
 ## Changes
 
-- Open a database under **Settings → Databases & rigs → Overview**, then use
-  **Rig setup**, **Database & files**, or **Sync** for that database. The
-  breadcrumb returns to the list. Each form keeps its own Save control;
-  Settings asks before discarding edits. Sync uses the opened database as
-  its local endpoint and keeps transfer previews scoped to that database.
+- Settings lists databases directly in the left pane, with **New / import**
+  for adding a database. Select a database to open **Rig setup**, **Database &
+  files** or **Sync** in the same navigation. Shared **Sites** are under
+  **Presets**. Sync consistently calls its local and remote stores databases.
+- Quality analysis is under **Review → Grading & display**; calibrated-copy
+  pairing is under **Processing → Calibration**. Both offer shared defaults
+  and database overrides. Existing choices remain overrides; new databases
+  inherit shared defaults. AstroBin filter maps are beside shared AstroBin
+  defaults under **Exports & integrations → AstroBin**.
 
 - PSF Guard's zstd library is updated for memory-safety advisories in its
   stream and context handling. PSF Guard uses zstd to read and write

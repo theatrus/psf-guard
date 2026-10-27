@@ -6,8 +6,8 @@ Only the selected page loads its controls.
 
 | Group | Pages |
 |---|---|
-| **Databases & rigs** | **Overview**, then a rig database’s **Rig setup**, **Database & files**, or **Sync** |
-| **Presets** | **Processing setups**, **Exposure templates** |
+| **Databases & rigs** | **Overview**, each database and its pages, **New / import** |
+| **Presets** | **Processing setups**, **Exposure templates**, **Sites** |
 | **Processing** | **Calibration**, **Stacking** |
 | **Performance** | **CPU & memory**, **GPU**, **Workers** |
 | **Storage & backups** | **Folders & limits**, **Backups**, **Reference catalogs** |
@@ -40,40 +40,73 @@ also offers its own worker controls under **Workers**.
 - **Catalogs** is now **Storage & backups → Reference catalogs**, for
   downloaded astronomy data such as solver indexes and Gaia colors.
 
-## Open a rig database
+## Open a database
 
-Choose **Databases & rigs → Overview**, then open a database such as **C925**.
-Use **Rig setup**, **Database & files**, or **Sync** beneath its name:
+Choose a database by name in the left pane. Its name opens the database overview. **Rig setup**, **Database & files**
+and **Sync** appear beneath the database name. On a phone, choose
+the database in **Settings section**, then choose its page from the same
+control. The selected page includes the database name.
 
-- **Rig setup** shows equipment, field of view, observing site, scheduling
-  limits and connections used by Planning. It keeps links to the Library and
-  calibration settings for configurations recorded in this database.
-- **Database & files** shows the catalog path, image folders, import and scan
-  options, quality analysis, exports and processed-output folder.
-- **Sync** configures the database's Target Scheduler connection, incoming
-  uploads and pairing. It also offers reviewed transfers to another catalog
-  or a remote PSF Guard. Peers and their credentials remain shared.
+- **Overview** shows the database and image-folder paths and links to its
+  calibration library.
+- **Rig setup** shows equipment, field of view, the selected observing site,
+  scheduling limits and planning connections. Sites are shared: edit them
+  under **Presets → Sites**, then choose a rig's **Planning site** in
+  **Rig setup → Site**.
+- **Database & files** contains paths, imports, scan rules, automatic import
+  and database maintenance. Quality analysis, calibrated-copy pairing and
+  AstroBin filter maps have moved to the pages described below.
+- **Sync** configures the selected database's Target Scheduler connection,
+  incoming uploads and pairing. Transfers use the opened database as their
+  local endpoint. Peers and credentials remain shared.
 
-The database stays selected as you move between these pages. Click
-**Databases & rigs** in the breadcrumb to return to the list and open another
-rig database. Each form keeps its own Save control and permissions.
+The shared **Overview** lists databases and staged transfer previews. Each
+preview acts on its recorded database and endpoints. Choose **New / import**
+to create a database from image folders, import a local database, or connect
+N.I.N.A. through PSF Guard Sync. Plugin onboarding opens the new database's
+pairing controls directly. The pages use the same saved IDs and permissions.
 
-For **Data Transfer**, the opened database receives a **Merge catalogs**
-operation and sends a **Send planning** or **Send reviewed grades** operation.
-Choose the other endpoint, check **Source** and **Destination**, then click
-**Preview changes** before applying. Returning to the list discards this
-form's pending preview; unrelated staged previews remain in the overview
-with their recorded database scope. An applied job keeps running.
+For **Data Transfer**, the opened database receives **Merge databases** and
+sends **Send planning** or **Send reviewed grades**. Choose the other endpoint,
+check **Source** and **Destination**, then click **Preview changes** before
+applying. Changing databases discards this form's obsolete preview without
+retargeting unrelated staged previews or an applied job.
 
-Use the buttons below the parent list to create a catalog or import a Target
-Scheduler database. After creation or import, PSF Guard opens the returned
-catalog. Plugin onboarding opens its pairing controls under **Sync**.
+![Databases listed directly in the Settings navigation](images/rig-database-settings/rig-databases-desktop.png)
 
-![Choose a rig database from the Settings parent list](images/rig-database-settings/rig-databases-desktop.png)
+## Set shared defaults and database overrides
+
+Open **Review → Grading & display → Quality analysis** for **Analyze new
+frames as they arrive**, **Measure quality on the calibrated copy**, and
+manual quality-analysis actions. Grading and scoring appear before quality
+analysis; display preferences follow it.
+
+Open **Processing → Calibration → Calibrated copies** for **Pair calibrated
+and registered copies with their lights**. Shared defaults apply to new
+databases. Existing databases keep their previous choices as explicit
+overrides, including choices that matched the old built-in defaults.
+
+Each page has **Shared defaults** and **Database overrides**. Expand a
+database to review its values. Click **Override global setting** to set a
+value for that database, then click **Save database overrides**. Turn
+**Override global setting** off and save to use the shared value. A shared
+change affects only databases that inherit that setting. It does not replace
+another database's explicit choice. Save controls and unsaved-edit warnings
+work separately for defaults and each database.
+
+Turning automatic analysis on also queues frames already waiting for quality
+analysis. Pairing changes apply to future imports and pairing scans. Changing
+the quality source takes effect when quality analysis next measures a frame;
+the cache still distinguishes raw and calibrated sources. Raw image files
+remain unchanged.
+
+Open **Exports & integrations → AstroBin** for shared filter IDs and the
+**Database filter maps** below them. A database's matching filter/date entry
+replaces the shared ID. The maps retain their existing scope and storage.
 
 ## Keep edits when navigating
 
-When you choose another Settings page or return to the database list,
+When you choose another Settings page or database,
 Settings asks before discarding unsaved form edits. Choose **Keep editing**
 to return to the form. Choose **Discard changes and
 switch** to open the requested page without saving those edits. **Close**

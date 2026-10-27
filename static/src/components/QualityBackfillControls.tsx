@@ -5,10 +5,12 @@ import { setStarMetadataFill, useStarMetadataFill } from '../hooks/useStarMetada
 export default function QualityBackfillControls({
   dbId,
   canManage = true,
+  showArrivalSetting = true,
 }: {
   dbId: string;
   /** Saving the arrival option needs database management on this server. */
   canManage?: boolean;
+  showArrivalSetting?: boolean;
 }) {
   const job = useQualityBackfill(dbId);
   const { canWrite } = useAccess();
@@ -52,7 +54,7 @@ export default function QualityBackfillControls({
             Resume
           </button>
         </div>
-        {arrivals}
+        {showArrivalSetting && arrivals}
       </>
     );
   }
@@ -64,7 +66,7 @@ export default function QualityBackfillControls({
           Analyzing quality in the background… {progress.processed_targets}/
           {progress.total_targets} targets
         </div>
-        {arrivals}
+        {showArrivalSetting && arrivals}
       </>
     );
   }
@@ -93,7 +95,7 @@ export default function QualityBackfillControls({
       >
         Rescan All Quality
       </button>
-      {arrivals}
+      {showArrivalSetting && arrivals}
       <div className="quality-backfill-option">
         <label title="Fill measured star count and HFR into images imported without them. Only missing values are written; N.I.N.A.-recorded measurements are never replaced. Remembered as the default for every analyze action.">
           <input
@@ -104,7 +106,7 @@ export default function QualityBackfillControls({
           Write star count and HFR into image metadata
         </label>
         <small>
-          Writes only to this catalog&apos;s database records. Your FITS and
+          Writes only to this database&apos;s records. Your FITS and
           XISF files are never modified.
         </small>
       </div>

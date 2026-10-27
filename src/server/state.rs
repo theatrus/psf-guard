@@ -834,6 +834,7 @@ impl AppState {
                 analyze_new_frames: false,
                 pair_calibrated_copies: true,
                 scan_calibrated_copies: false,
+                processing_overrides: None,
             }],
             cache_dir,
             pregeneration_config,

@@ -581,22 +581,20 @@ compatibility remain separate contracts.
 
 #### Settings navigation and context
 
-**Databases & rigs → Overview** lists registrations. Open a database, then
-choose **Rig setup**, **Database & files**, or **Sync** beneath its name.
-A breadcrumb returns to the parent list. There is no separate rig/catalog
-selector. These pages retain the selected registration slug and use their
-existing catalog and metadata APIs; there is no new persisted root entity
-or application-wide active-database mode.
+Settings lists registrations directly in the left pane alongside the shared
+Overview and New / import pages. Selecting a database expands its Overview,
+Rig setup, Database & files and Sync destinations in that same navigation.
+Phones use one grouped Settings section control, including the database name
+for scoped pages. There is no second top tab row or independent rig selector.
 
-The parent list includes databases when Planning is off. Rig setup appears
-when Planning is available, and Sync requires an editor. Database-management
-controls keep their server gate. Missing selections show an unavailable state
-and a return action rather than falling back to another database. Navigation
-asks before discarding unsaved edits. The outer route keeps its URL scope.
+Shared Sites are under Presets. Quality defaults and database overrides are
+under Review → Grading & display; derivative pairing defaults and overrides
+are under Processing → Calibration. AstroBin's shared defaults and database
+filter maps share its integration page. These moves do not substitute
+calibration configurations for operational rig IDs.
 
-The UI preserves the current binding and copy behavior; it does not yet provide
-the joined identity/status view proposed below. That follow-up must resolve
-copy, unbound and conflicted states consistently across the editors.
+The UI preserves existing binding and copy behavior. The joined identity view
+proposed below must still distinguish copy, unbound and conflicted states.
 
 The context must retain the selected registration as well as any resolved
 catalog/rig UUIDs. Planning may resolve a copied registration to its canonical
@@ -610,7 +608,7 @@ not become a blanket restriction on permitted database/sync operations.
 | **Database & files** | Catalog location, image folders, import/scan options, exports, processed-output folder and catalog-management actions for the same root. Show connection summaries with links to Sync rather than another copy of its editable settings. |
 | **Sync** | Automatic TS connection settings, incoming Sync/remote-receiver configuration, staged previews and explicit transfers for that local catalog. Show peer/client links and their capability differences; shared peer records and credentials remain shared. |
 
-Creating/importing a catalog starts from the parent list, including the source
+Creating/importing a database starts from New / import, including the source
 information needed to establish its initial TS connection. After it succeeds,
 select the returned catalog context; subsequent connection edits belong in
 Sync. Do not make a new, unsaved catalog depend on a pre-existing Sync context.
@@ -690,7 +688,7 @@ changes through either supported path have a defined, tested outcome.
 
 **Follow-up — complete identity and setup status in the connected editors.**
 
-The parent list, breadcrumb, scoped task pages and per-form saves are now
+The database navigation, breadcrumb, scoped task pages and per-form saves are now
 implemented. Transfer forms pin the local endpoint, keep previews scoped by
 registration, and discard their obsolete preview when returning to the list.
 The parent list retains the all-catalog staged-preview overview. Regression

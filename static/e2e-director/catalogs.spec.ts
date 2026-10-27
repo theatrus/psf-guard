@@ -61,6 +61,7 @@ test('every database project is a plan, shared GUIDs make one plan across rigs, 
     const settings = page.locator('.tauri-settings');
     await settings.getByRole('tab', { name: 'Overview', exact: true }).click();
     await settings.getByRole('button', { name: 'Open C925 data' }).click();
+    await settings.getByRole('tab', { name: 'Rig setup', exact: true }).click();
     await expect(settings.getByRole('region', { name: 'Rig profile' })).toBeVisible();
     await expect(settings.getByRole('button', { name: 'Save rig profile' })).toBeVisible();
     const activeRig = settings.locator('.director-rig.is-open');
@@ -84,9 +85,10 @@ test('every database project is a plan, shared GUIDs make one plan across rigs, 
     await page.setViewportSize({ width: 1440, height: 1000 });
     await settings.getByRole('button', { name: 'Databases & rigs', exact: true }).click();
     await settings.getByRole('button', { name: 'Open Redcat data' }).click();
+    await settings.getByRole('tab', { name: 'Rig setup', exact: true }).click();
     await expect(settings.locator('.director-rig.is-open')).toHaveCount(1);
     await expect(settings.locator('.director-rig.is-open').getByRole('heading', { name: 'Redcat data', exact: true })).toBeVisible();
-    await expect(settings.getByRole('navigation', { name: 'Settings for Redcat data' })).toBeVisible();
+    await expect(settings.getByRole('navigation', { name: 'Rig database location' })).toBeVisible();
     await settings.getByRole('button', { name: 'Close settings' }).click();
     await expect(page.getByRole('dialog')).toHaveCount(0);
 

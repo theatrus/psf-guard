@@ -8,7 +8,7 @@ detection, photometry, or plate solving.
 
 ## Import from Target Scheduler
 
-Open **Settings → Databases & rigs → Overview → Import from Target Scheduler**. The **Start a
+Open **Settings → Databases & rigs → New / import → Import from Target Scheduler**. The **Start a
 catalog** choices keep image-folder import available alongside both TS options.
 Choose **Image folders** to build a catalog from FITS or XISF folders; switching
 choices keeps any folders you have already added. To connect TS, choose:
@@ -16,7 +16,7 @@ choices keeps any folders you have already added. To connect TS, choose:
 - **Import a local TS file**: select the source SQLite file, enter a display
   name, add the image folders, then click **Import from Target Scheduler**.
 - **Use the PSF Guard Sync plugin**: add an empty image folder or a shared
-  folder containing your images, then click **Create catalog for plugin**.
+  folder containing your images, then click **Create database for plugin**.
   PSF Guard opens the catalog's pairing controls. Install **PSF Guard Sync**
   in N.I.N.A., click **Generate pairing code**, and enter the server URL and
   code in the plugin. Click **Pair**, then **Test connection**. The plugin
@@ -36,7 +36,7 @@ PSF Guard keeps this embedded data for both import modes.
 
 Leave **Keep the source connected for Target Scheduler sync** on to import
 captures, exchange grades and deliver activated planning through the saved TS
-connection. Turn it off and click **Import catalog copy** for a standalone
+connection. Turn it off and click **Import database copy** for a standalone
 copy. The standalone import does not connect to or write back to the source,
 and preserves embedded sync history without enabling it.
 Connecting the source starts new grade-sync tracking for that connection;
@@ -52,7 +52,7 @@ registry:
 | Windows | `%APPDATA%\psf-guard\databases\` |
 
 A server started with `--registry /srv/psf-guard/config.json` uses
-`/srv/psf-guard/databases/`. Under **Catalog storage**, select
+`/srv/psf-guard/databases/`. Under **Database storage**, select
 **Use a custom database path (advanced)** and enter **Destination database path:**
 to choose another location. This choice is available for image folders,
 database-file imports and Sync plugin catalogs. Use an absolute path to a new
@@ -82,7 +82,7 @@ that progress. If the import fails, correct the source path and try again.
 
 The source remains connected for automatic sync, with grade writeback enabled.
 The source needs the GUID columns provided by TS schema v22 or later. Under
-**Sync → Target Scheduler sync** for the imported catalog, choose:
+**Sync → Target Scheduler sync** for the imported database, choose:
 
 - **Sync when the desktop app or server starts** to import captures on startup.
 - **Sync when new images or grades arrive** to check database changes. Changes
@@ -122,7 +122,7 @@ edits, and refreshing a preview in Settings does not approve an activation.
 
 **PSF Guard is moving to its own catalogs.**
 
-For new Target Scheduler databases, choose **Settings → Databases & rigs → Overview → Import
+For new Target Scheduler databases, choose **Settings → Databases & rigs → New / import → Import
 from Target Scheduler** to import the database and set up sync.
 
 Your current Target Scheduler setup will keep working in 0.12. A later update
@@ -164,10 +164,10 @@ exists, because database management picks paths the server then reads and
 writes. Only an editor can use those routes. `--allow-anonymous-access` opens
 them to everyone instead. See [server authentication](AUTHENTICATION.md).
 
-Settings opens on **Databases & rigs → Overview**. Open a database to use
-**Rig setup**, **Database & files**, or **Sync** for that database. The
-breadcrumb returns to the parent list. Planning enables **Rig setup** and
-**Presets → Exposure templates**. **Sync** requires an editor.
+Settings lists each database in the left pane. Choose the database, then its
+**Rig setup**, **Database & files**, or **Sync** page. **New / import** has
+the starting choices for additional databases. Planning enables **Rig setup**,
+**Presets → Sites** and **Presets → Exposure templates**. **Sync** requires an editor.
 Install Seiza data packages under **Storage & backups → Reference catalogs**;
 catalog installation also requires an editor. See [Settings navigation](SETTINGS.md).
 
@@ -632,8 +632,10 @@ management. Without it, a target with many unmeasured frames is scored on the
 capture software's star counts, not the scan's, until they are analyzed (see
 [quality screening](SCREENING.md)).
 
-Open a database from **Settings → Databases & rigs → Overview**, then choose
-**Database & files** for quality analysis, star metadata and calibrated copies.
+Open **Settings → Review → Grading & display → Quality analysis** for shared
+analysis defaults and database overrides. Expand a database for manual analysis
+actions and the preference for writing missing star metadata. Find calibrated-copy
+pairing defaults and overrides under **Processing → Calibration → Calibrated copies**.
 
 ![A database on the Databases page: Analyze Missing Quality, Rescan All Quality and the per-database options](settings-database-options.png)
 
@@ -668,14 +670,14 @@ header name grouped them poorly.
 
 ## Sync with the telescope database
 
-When transferring between registered catalogs, add both databases. Open the
+When transferring between registered databases, add both databases. Open the
 local database from **Settings → Databases & rigs → Overview**, choose **Sync**,
 then use **Data Transfer**. The opened database receives a merge and sends
 planning or grades. Choose the other endpoint and check both roles before Preview:
 
 ![The Sync tab, with Data Transfer between a source and a destination catalog](data-transfer.png)
 
-- **Merge catalogs** copies new or changed projects, targets, templates, plans,
+- **Merge databases** copies new or changed projects, targets, templates, plans,
   captures, grades, rigs, and raw calibration-frame records from the selected
   source into the destination. Reviewed grades already at the destination win.
   Generated master paths stay local and rebuild on demand.

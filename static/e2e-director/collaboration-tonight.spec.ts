@@ -59,6 +59,7 @@ test('pull tonight, review and activate allowed work in the background', async (
     await openSettings(page);
     await page.getByRole('tab', { name: 'Overview', exact: true }).click();
     await page.getByRole('button', { name: 'Open Collaboration test rig', exact: true }).click();
+    await page.getByRole('tab', { name: 'Rig setup', exact: true }).click();
     await page.getByRole('tab', { name: 'Collaboration', exact: true }).click();
     const panel = page.getByRole('region', { name: 'Collaboration', exact: true });
     await panel.getByRole('button', { name: 'Connect server' }).click();

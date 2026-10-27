@@ -62,7 +62,7 @@ test('desktop groups related settings, moves GPU and presets, and keeps section 
   await catalogs.press('Home');
   await expect(page.getByRole('tab', { name: 'Overview', exact: true })).toBeFocused();
   await page.getByRole('tab', { name: 'Overview', exact: true }).press('ArrowDown');
-  await expect(page.getByRole('tab', { name: 'Processing setups', exact: true })).toBeFocused();
+  await expect(page.getByRole('tab', { name: 'Navigation fixture', exact: true })).toBeFocused();
   await page.evaluate(() => window.dispatchEvent(new CustomEvent('psf-guard:open-settings', {
     detail: { intent: 'astrobin' },
   })));
@@ -79,7 +79,7 @@ test('phone uses a compact grouped chooser for every settings destination', asyn
   const chooser = page.getByLabel('Settings section', { exact: true });
   await expect(chooser).toBeVisible();
   await expect(page.getByRole('tablist', { name: 'Settings sections' })).toBeHidden();
-  await expect(chooser.locator('optgroup[label="Presets"] option')).toHaveText(['Processing setups', 'Exposure templates']);
+  await expect(chooser.locator('optgroup[label="Presets"] option')).toHaveText(['Processing setups', 'Exposure templates', 'Sites']);
 
   await selectSettingsSection(page, 'gpu');
   await expect(chooser).toHaveValue('gpu');

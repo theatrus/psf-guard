@@ -21,7 +21,7 @@ interface PendingSync {
 const operationLabel = (kind: SchedulerSyncKind) => {
   switch (kind) {
     case 'pull':
-      return 'Merge catalogs';
+      return 'Merge databases';
     case 'push_planning':
       return 'Send planning';
     case 'push_grades':
@@ -40,7 +40,7 @@ const deletedProjectsLine = (result: SchedulerSyncResponse) => {
     (result.target.deleted ?? 0) > 0 ? plural(result.target.deleted ?? 0, 'target') : null,
     (result.exposureplan.deleted ?? 0) > 0 ? plural(result.exposureplan.deleted ?? 0, 'exposure plan') : null,
   ].filter((part): part is string => part !== null);
-  return `Deletes ${plural(projects, 'project')} that the source catalog deleted${
+  return `Deletes ${plural(projects, 'project')} that the source database deleted${
     parts.length > 0 ? `, with ${parts.join(' and ')}` : ''
   }. Nothing was captured for ${projects === 1 ? 'it' : 'them'} in the destination.`;
 };
@@ -149,7 +149,7 @@ export default function SchedulerSyncControls({
         );
         if (cancelled) return;
         if (localDatabaseId && (response.result.kind === 'pull' ? response.result.destination_db_id : response.result.source_db_id) !== localDatabaseId)
-          throw new Error('The preview belongs to another local catalog.');
+          throw new Error('The preview belongs to another local database.');
         if (!databases.some(database => database.id === response.result.source_db_id)
           || !databases.some(database => database.id === response.result.destination_db_id))
           throw new Error('A preview endpoint is no longer available.');
@@ -297,7 +297,7 @@ export default function SchedulerSyncControls({
   if (databases.length < 2) {
     return (
       <div className="scheduler-sync-empty muted">
-        Add a second catalog to merge data or send planning and grades.
+        Add a second database to merge data or send planning and grades.
       </div>
     );
   }
@@ -308,7 +308,7 @@ export default function SchedulerSyncControls({
         <div>
           <h3>Data Transfer</h3>
           <p>
-            Move catalog records in one direction. Preview is always required before
+            Move database records in one direction. Preview is always required before
             Apply.
           </p>
         </div>
@@ -384,13 +384,13 @@ export default function SchedulerSyncControls({
         </label>
       </div>
 
-      {invalidDirection && <p role="alert">Import captures into a PSF Guard catalog. Send planning or grades from a PSF Guard catalog to Target Scheduler.</p>}
+      {invalidDirection && <p role="alert">Import captures into a PSF Guard database. Send planning or grades from a PSF Guard database to Target Scheduler.</p>}
       <div className="scheduler-sync-description">
         {kind === 'pull' && (
           <>
             <strong>Merge projects and captures</strong>
             <span>
-              Adds or updates catalog structure and captures. Reviewed grades already at
+              Adds or updates projects, targets and captures. Reviewed grades already at
               the destination win.
             </span>
             <label className="scheduler-sync-check">

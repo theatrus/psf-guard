@@ -122,8 +122,8 @@ describe('TauriSettings import state', () => {
     expect(tabs).toHaveAccessibleDescription('Databases & rigs');
     expect(await screen.findByRole('tab', { name: 'Exposure templates' })).toHaveAccessibleDescription('Presets');
     fireEvent.click(await screen.findByRole('button', { name: 'Open C925' }));
-    expect(screen.getByRole('navigation', { name: 'Settings for C925' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Rig setup' })).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByRole('navigation', { name: 'Rig database location' })).toHaveTextContent('C925');
+    expect(screen.getByRole('tab', { name: 'Rig setup' })).toHaveAttribute('aria-selected', 'true');
     fireEvent.click(screen.getByRole('tab', { name: 'Exposure templates' }));
     expect(await screen.findByRole('region', { name: 'Exposure template library' })).toBeInTheDocument();
   });
@@ -356,6 +356,7 @@ describe('TauriSettings import state', () => {
     });
 
     fireEvent.click(await screen.findByRole('button', { name: 'Open Archive' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Database & files' }));
     expect(await screen.findByText('Scanning headers… 37/120')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Importing…' })).toBeDisabled();
   });
@@ -431,15 +432,16 @@ describe('TauriSettings import state', () => {
       )
     );
 
-    render(<TauriSettings isOpen onClose={() => undefined} />, {
+    server.use(http.get('/api/settings/processing', () => HttpResponse.json({ success: true, data: { defaults: { analyze_new_frames: false, pair_calibrated_copies: true, scan_calibrated_copies: false }, databases: [{ id: 'archive', name: 'Archive', overrides: { analyze_new_frames: null, pair_calibrated_copies: null, scan_calibrated_copies: null }, effective: { analyze_new_frames: false, pair_calibrated_copies: true, scan_calibrated_copies: false } }] } })));
+    render(<TauriSettings initialIntent="review" isOpen onClose={() => undefined} />, {
       wrapper: createWrapper(),
     });
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Open Archive' }));
+    fireEvent.click(await screen.findByText('Archive · Uses global settings'));
     expect(
       await screen.findByText(/Analyzing quality in the background… 1\/4 targets/)
     ).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Import' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Import' })).not.toBeInTheDocument();
   });
 
   it('edits the per-database remote image receiver without exposing its token', async () => {
@@ -550,7 +552,8 @@ describe('TauriSettings import state', () => {
     });
 
     fireEvent.click(await screen.findByRole('button', { name: 'Open Remote catalog' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Sync' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Database & files' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Sync' }));
     fireEvent.click(screen.getByRole('button', { name: 'Edit remote receive and pairing' }));
     expect(
       screen.getByRole('checkbox', { name: 'Accept remote image uploads' })
@@ -562,7 +565,7 @@ describe('TauriSettings import state', () => {
     const directoryTemplateSelect = screen.getByLabelText('Layout:');
     expect(directoryTemplateSelect).toHaveValue('catalog');
     expect(
-      screen.getByText('Detected from 18 catalog images:')
+      screen.getByText('Detected from 18 database images:')
     ).toBeInTheDocument();
     expect(
       screen.getByText('2026/%TARGET%/%NIGHT%/%TYPE%')
@@ -572,7 +575,7 @@ describe('TauriSettings import state', () => {
         .getAllByRole('option')
         .map((option) => option.textContent)
     ).toEqual([
-      'Match catalog: 2026/%TARGET%/%NIGHT%/%TYPE%',
+      'Match database: 2026/%TARGET%/%NIGHT%/%TYPE%',
       '%YEAR%/%TARGET%/%NIGHT%/%TYPE%',
       '%TARGET%/%NIGHT%/%TYPE%',
       '%TARGET%/%DATE%/%TYPE%',
@@ -597,7 +600,7 @@ describe('TauriSettings import state', () => {
     // Queue a rescan first, then choose Custom: the choice cancels the
     // rescan, because a scan would only find the same match again.
     const rescanButton = screen.getByRole('button', {
-      name: 'Rescan catalog layout',
+      name: 'Rescan database layout',
     });
     fireEvent.click(rescanButton);
     expect(rescanButton).toHaveAttribute('aria-pressed', 'true');
@@ -605,7 +608,7 @@ describe('TauriSettings import state', () => {
       target: { value: 'custom' },
     });
     expect(rescanButton).toHaveAttribute('aria-pressed', 'false');
-    fireEvent.change(screen.getByLabelText('Custom catalog layout:'), {
+    fireEvent.change(screen.getByLabelText('Custom database layout:'), {
       target: { value: '%TARGET%/%DATE%/%TYPE%/%FILTER%' },
     });
 
@@ -623,7 +626,7 @@ describe('TauriSettings import state', () => {
     await screen.findByText('Saved.');
     fireEvent.click(screen.getByRole('button', { name: 'Edit remote receive and pairing' }));
     expect(
-      screen.getByRole('button', { name: 'Rescan catalog layout' })
+      screen.getByRole('button', { name: 'Rescan database layout' })
     ).toHaveAttribute('aria-pressed', 'false');
 
     fireEvent.change(screen.getByLabelText('Folder layout:'), {
@@ -707,6 +710,7 @@ describe('TauriSettings import state', () => {
     });
 
     fireEvent.click(await screen.findByRole('button', { name: 'Open C925' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Database & files' }));
     const c925 = screen.getByRole('region', { name: 'C925' });
     fireEvent.click(within(c925).getByRole('button', { name: 'Edit C925' }));
     expect(within(c925).getByText('Editing database')).toBeInTheDocument();
@@ -717,12 +721,12 @@ describe('TauriSettings import state', () => {
     expect(screen.getByText(/Unsaved changes in database files/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }));
     expect(screen.getByLabelText('Display name (optional):')).toHaveValue('Changed C925');
-    fireEvent.click(screen.getByRole('button', { name: 'Sync' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Sync' }));
     fireEvent.click(screen.getByRole('button', { name: 'Discard changes and switch' }));
     expect(screen.queryByLabelText('Name:')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Databases & rigs' }));
     fireEvent.click(screen.getByRole('button', { name: 'Open Ultra Cat' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Database & files' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Database & files' }));
     const ultraCat = screen.getByRole('region', { name: 'Ultra Cat' });
     fireEvent.click(within(ultraCat).getByRole('button', { name: 'Edit Ultra Cat' }));
     expect(screen.getByLabelText('Display name (optional):')).toHaveValue('Ultra Cat');
@@ -734,7 +738,8 @@ describe('TauriSettings import state', () => {
     await screen.findByText('Removed Ultra Cat.');
 
     fireEvent.click(screen.getByRole('button', { name: 'Databases & rigs' }));
-    expect(await screen.findByRole('button', { name: 'Import from Target Scheduler' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('tab', { name: 'New / import' }));
+    expect(await screen.findByRole('button', { name: /Import from Target Scheduler/ })).toBeEnabled();
     expect(screen.queryByText('Editing database')).not.toBeInTheDocument();
   });
 });
@@ -827,7 +832,8 @@ describe('TauriSettings first run', () => {
     });
 
     fireEvent.click(await screen.findByRole('button', { name: 'Open Archive' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Sync' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Database & files' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Sync' }));
     expect(
       await screen.findByRole('heading', { name: 'Remote PSF Guard' })
     ).toBeInTheDocument();
@@ -937,13 +943,13 @@ describe('TauriSettings first run', () => {
     fireEvent.change(screen.getByLabelText('Destination database path:'), { target: { value: '/srv/catalogs/restored.sqlite' } });
     fireEvent.change(screen.getByPlaceholderText('Type an absolute path and press Add'), { target: { value: '/images' } });
     fireEvent.click(screen.getByRole('button', { name: 'Add' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Import catalog copy' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Import database copy' }));
     await waitFor(() => expect(requests).toEqual([{ name: 'Restored', db_path: '/backups/catalog.sqlite', image_dirs: ['/images'], connect_source: false, destination_path: '/srv/catalogs/restored.sqlite' }]));
   });
 
   it.each([
     ['Image folders', 'Create & Import'],
-    ['Use the PSF Guard Sync plugin', 'Create catalog for plugin'],
+    ['Use the PSF Guard Sync plugin', 'Create database for plugin'],
   ])('offers custom catalog storage for %s', async (source, save) => {
     serveEmptyRegistry();
     const requests: unknown[] = [];
@@ -954,7 +960,7 @@ describe('TauriSettings first run', () => {
     }));
     render(<TauriSettings isOpen initialIntent="add" onClose={() => undefined} />, { wrapper: createWrapper() });
     fireEvent.click(await screen.findByRole('radio', { name: source }));
-    expect(screen.getByRole('group', { name: 'Catalog storage' })).toBeVisible();
+    expect(screen.getByRole('group', { name: 'Database storage' })).toBeVisible();
     fireEvent.click(screen.getByRole('checkbox', { name: 'Use a custom database path (advanced)' }));
     fireEvent.change(screen.getByLabelText('Destination database path:'), { target: { value: '/srv/custom.sqlite' } });
     fireEvent.change(screen.getByLabelText('Display name (optional):'), { target: { value: 'Custom catalog' } });
@@ -1007,7 +1013,7 @@ describe('TauriSettings first run', () => {
     fireEvent.change(screen.getByPlaceholderText('e.g. Imaging Rig (defaults to filename)'), { target: { value: 'Plugin catalog' } });
     fireEvent.change(screen.getByPlaceholderText('Type an absolute path and press Add'), { target: { value: '/receive' } });
     fireEvent.click(screen.getByRole('button', { name: 'Add' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Create catalog for plugin' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create database for plugin' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Generate pairing code' }));
     expect(await screen.findByDisplayValue('ONE-USE-CODE')).toBeInTheDocument();
     expect(requests).toEqual([{ name: 'Plugin catalog', image_dirs: ['/receive'], backfill: false, fill_metadata: true }]);

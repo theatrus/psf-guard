@@ -15,7 +15,7 @@ export default function TsSyncSettings({ dbId, settings, onSaved }: {
   return <section aria-label="Target Scheduler sync" className="settings-section">
     <UnsavedMark label="Target Scheduler sync" dirty={dirty} />
     <h4>Target Scheduler sync</h4>
-    <p>PSF Guard uses its own catalog. Sync imports new captures from <code>{settings.source_path}</code>.</p>
+    <p>PSF Guard uses its own database. Sync imports new captures from <code>{settings.source_path}</code>.</p>
     <form onSubmit={event => {
       event.preventDefault();
       setBusy(true); setError('');
