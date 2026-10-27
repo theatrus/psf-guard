@@ -238,13 +238,23 @@ describe('TauriSettings import state', () => {
     expect(screen.getByRole('tab', { name: 'Stacking' })).toHaveAttribute('aria-selected', 'true');
   });
 
-  it('asks before Done, × or a click outside closes over unsaved edits', async () => {
+  it('keeps a neutral Close action in the header without a global save, reload or restart', async () => {
+    const onClose = vi.fn();
+    render(<TauriSettings isOpen onClose={onClose} />, { wrapper: createWrapper() });
+    const actions = await screen.findByRole('group', { name: 'Settings actions' });
+    expect(within(actions).getByRole('button', { name: 'Close settings' })).toHaveTextContent('Close');
+    expect(screen.queryByRole('button', { name: /^(Done|Reload Page|Restart Server)$/i })).not.toBeInTheDocument();
+    fireEvent.click(within(actions).getByRole('button', { name: 'Close settings' }));
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('asks before closing Settings with unsaved edits', async () => {
     const onClose = vi.fn();
     const { rerender } = render(
       <><TauriSettings isOpen onClose={onClose} /><UnsavedMark label="C925 setup" dirty /></>,
       { wrapper: createWrapper() },
     );
-    fireEvent.click(await screen.findByRole('button', { name: 'Done' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Close settings' }));
     const ask = screen.getByRole('alertdialog');
     expect(ask).toHaveTextContent('Unsaved changes in C925 setup. Close without saving them?');
     expect(onClose).not.toHaveBeenCalled();
@@ -255,9 +265,9 @@ describe('TauriSettings import state', () => {
     fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Close without saving' }));
     expect(onClose).toHaveBeenCalledTimes(1);
 
-    // Saved meanwhile: Done closes at once.
+    // With the edits saved, closing needs no confirmation.
     rerender(<><TauriSettings isOpen onClose={onClose} /><UnsavedMark label="C925 setup" dirty={false} /></>);
-    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close settings' }));
     expect(onClose).toHaveBeenCalledTimes(2);
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
   });

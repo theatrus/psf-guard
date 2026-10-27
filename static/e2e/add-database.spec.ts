@@ -65,7 +65,7 @@ test('create an empty sync destination and load its overview without errors', as
     expect(stats[field]).toBe(0);
   }
   expect(stats.date_range).toEqual({ earliest: null, latest: null, span_days: null });
-  await page.getByRole('button', { name: 'Done', exact: true }).click();
+  await page.getByRole('button', { name: 'Close settings', exact: true }).click();
   await expect(page.locator('.overview-summary')).toContainText('0 images');
   await expect(page.getByText('No projects with images yet.', { exact: true })).toBeVisible();
   await page.reload();
@@ -123,7 +123,7 @@ test('import a Target Scheduler database via settings → see it in the Overview
   // Close the modal and verify the Overview reflects both projects from the
   // new database. The merged-overview hooks fan out per-DB queries; give them
   // a moment to settle after the registry mutation.
-  await page.getByRole('button', { name: 'Done' }).click();
+  await page.getByRole('button', { name: 'Close settings' }).click();
   await expect(page.getByRole('heading', { name: 'Earlier work' })).toBeVisible({
     timeout: 15_000,
   });

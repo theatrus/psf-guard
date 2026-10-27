@@ -15,7 +15,7 @@ test('overview shows the empty-state when no databases are configured', async ({
     page.getByRole('heading', { name: /Welcome to PSF Guard/i })
   ).toBeVisible();
   // Close the modal to reach the underlying overview empty state.
-  await page.getByRole('button', { name: 'Done' }).click();
+  await page.getByRole('button', { name: 'Close settings' }).click();
   await expect(
     page.getByRole('heading', { name: 'No databases configured' })
   ).toBeVisible();
@@ -119,7 +119,7 @@ test('the overview import action opens settings on the create form', async ({
 }) => {
   await page.goto('/');
   await page.getByRole('heading', { name: /Welcome to PSF Guard/i }).waitFor();
-  await page.getByRole('button', { name: 'Done' }).click();
+  await page.getByRole('button', { name: 'Close settings' }).click();
   await page.getByRole('heading', { name: 'No databases configured' }).waitFor();
 
   // The intent rides along with the open-settings event, so the user lands on
@@ -135,7 +135,7 @@ test('the header menu offers Settings in browser mode', async ({ page }) => {
   // Wait for the auto-popup to appear, then close it so we can reach the
   // header menu beneath.
   await page.getByRole('heading', { name: /Welcome to PSF Guard/i }).waitFor();
-  await page.getByRole('button', { name: 'Done' }).click();
+  await page.getByRole('button', { name: 'Close settings' }).click();
   await page.getByRole('button', { name: 'Menu', exact: true }).click();
   await expect(page.getByRole('menuitem', { name: 'Settings' })).toBeVisible();
 });

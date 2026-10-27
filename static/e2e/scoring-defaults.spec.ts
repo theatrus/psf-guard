@@ -34,7 +34,7 @@ async function openScoringDefaults(page: Page) {
 }
 
 async function closeSettings(page: Page) {
-  await page.locator('.tauri-settings .close-button').click();
+  await page.getByRole('button', { name: 'Close settings' }).click();
   await expect(page.getByRole('heading', { name: 'PSF Guard Settings' })).toHaveCount(0);
 }
 

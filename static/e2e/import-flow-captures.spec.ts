@@ -108,7 +108,7 @@ test('capture the owned catalog import and sync flow', async ({ page, request, b
   await transfer.getByRole('button', { name: 'Apply this preview' }).click();
   await expect(transfer.getByRole('button', { name: 'Apply this preview' })).toBeHidden();
 
-  await modal.getByRole('button', { name: 'Done', exact: true }).click();
+  await modal.getByRole('button', { name: 'Close settings', exact: true }).click();
   await resetDatabases(request);
   await page.goto('/');
   await modal.getByRole('button', { name: /New Database from Images/ }).click();

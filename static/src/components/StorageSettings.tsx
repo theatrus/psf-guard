@@ -10,6 +10,7 @@ import type {
 import { isTauriApp, tauriConfig } from '../utils/tauri';
 import PathField from './PathField';
 import UnsavedMark from './UnsavedMark';
+import { useUnsavedLabels } from '../hooks/useUnsavedChanges';
 import WbppStorageSettings, { WbppStorageReport } from './WbppStorageSettings';
 import {
   useStorageSettingsForm,
@@ -111,6 +112,7 @@ function StorageFolders({
   form: StorageSettingsForm;
 }) {
   const [restarting, setRestarting] = useState(false);
+  const unsaved = useUnsavedLabels();
   const pending = current.folders.some((folder) => folder.path !== folder.next_path);
   const editable = canManage && current.can_choose_folders && !form.save.isPending;
   const restart = async () => {
@@ -185,11 +187,14 @@ function StorageFolders({
           Moving many files may delay startup.
         </p>
       )}
-      {pending && editable && isTauriApp() && (
-        <button type="button" className="btn btn-secondary" onClick={restart} disabled={restarting}>
-          {restarting ? 'Restarting…' : 'Restart now'}
-        </button>
-      )}
+      {pending && editable && isTauriApp() && <>
+        {(form.dirty || unsaved.length > 0) && <p className="muted">Save or discard unsaved changes before restarting.</p>}
+        <div className="storage-folder-actions">
+          <button type="button" className="cancel-button" onClick={restart} disabled={restarting || form.dirty || unsaved.length > 0}>
+            {restarting ? 'Restarting…' : 'Restart now'}
+          </button>
+        </div>
+      </>}
     </div>
   );
 }

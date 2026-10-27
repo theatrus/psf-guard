@@ -38,6 +38,7 @@ async function desktopBridge(page: Page, conflict = false) {
           case 'is_configuration_valid': return true;
           case 'get_current_configuration': return { schema_version: 2, databases: [] };
           case 'get_log_folder': return null;
+          case 'open_log_folder': throw new Error('Log folder is unavailable.');
           case 'plugin:updater|check': return null;
           case 'plugin:webview|set_webview_zoom': return;
           default: throw new Error(`Unmocked desktop command: ${command}`);
@@ -61,10 +62,11 @@ test('desktop Server settings retain a fixed port through restart and show the s
   const port = Number(new URL(baseURL!).port);
   await server.getByRole('spinbutton', { name: 'Server port' }).fill(String(port));
   const restart = page.getByRole('button', { name: /^Restart server$/i });
-  await expect(restart).toHaveCount(1);
-  await expect(restart).toBeDisabled();
+  await expect(restart).toHaveCount(0);
   await server.getByRole('button', { name: 'Save port' }).click();
   await expect(server.getByRole('status')).toContainText(`Port ${port} is saved`);
+  await expect(restart).toHaveCount(1);
+  await page.screenshot({ path: testInfo.outputPath('settings-port-restart.png'), animations: 'disabled' });
   await Promise.all([
     page.waitForEvent('load'),
     server.getByRole('button', { name: 'Restart server', exact: true }).click(),
@@ -73,11 +75,64 @@ test('desktop Server settings retain a fixed port through restart and show the s
   await expect(restored.getByRole('radio', { name: 'Fixed port' })).toBeChecked();
   await expect(restored.getByRole('spinbutton')).toHaveValue(String(port));
   await expect(restored).toContainText(baseURL!);
+  await expect(restored.getByRole('button', { name: 'Restart server', exact: true })).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath('server-settings.png'), fullPage: true });
   await selectSettingsSection(page, 'agents');
   await expect(page.getByText(`claude mcp add --transport http psf-guard ${baseURL}/api/mcp`, { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Choose a fixed server port' }).click();
   await expect(page.getByRole('tab', { name: 'Server', exact: true })).toHaveAttribute('aria-selected', 'true');
+});
+
+for (const width of [390, 320]) {
+  test(`desktop Settings keeps logs and Close in the header at ${width}px`, async ({ page, request }, testInfo) => {
+    await registerFixtureDb(request, { slug: `settings-header-${width}` });
+    await page.setViewportSize({ width, height: 844 });
+    await desktopBridge(page);
+    await page.goto('/');
+    await openSettings(page);
+    const actions = page.getByRole('group', { name: 'Settings actions' });
+    await expect(actions.getByRole('button', { name: 'Open logs' })).toBeInViewport();
+    await expect(actions.getByRole('button', { name: 'Close settings' })).toBeInViewport();
+    const header = await page.locator('.tauri-settings .modal-header').boundingBox();
+    expect(header!.height).toBeLessThan(80);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+    await expect(page.getByRole('button', { name: /^Restart server$/i })).toHaveCount(0);
+    await page.screenshot({ path: testInfo.outputPath('settings-header-phone.png'), animations: 'disabled' });
+    if (width === 390) {
+      await actions.getByRole('button', { name: 'Open logs' }).click();
+      const error = page.locator('.tauri-settings').getByRole('alert');
+      await expect(error).toHaveText('Failed to open the log folder: Log folder is unavailable.');
+      await expect(error).toBeInViewport();
+    }
+  });
+}
+
+test('saved storage folder changes keep a local app restart and protect later edits', async ({ page, request }, testInfo) => {
+  await registerFixtureDb(request, { slug: 'settings-folder-restart' });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await desktopBridge(page);
+  // Display a saved move without changing the fixture server's folders or moving files.
+  await page.route('**/api/settings/storage', async route => {
+    const response = await route.fetch();
+    const body = await response.json();
+    await route.fulfill({ response, json: { ...body, data: { ...body.data,
+      folders: body.data.folders.map((folder: { kind: string }) => folder.kind === 'stacks'
+        ? { ...folder, next_path: '/tmp/settings-actions/stacks', chosen: '/tmp/settings-actions/stacks', source: 'settings' }
+        : folder),
+    } } });
+  });
+  await page.goto('/');
+  await openSettings(page);
+  await selectSettingsSection(page, 'storage');
+  const restart = page.getByRole('button', { name: 'Restart now', exact: true });
+  await expect(restart).toBeEnabled();
+  await expect(page.getByRole('button', { name: /^Restart server$/i })).toHaveCount(0);
+  const wbpp = page.getByRole('textbox', { name: 'WBPP storage folder' });
+  await wbpp.fill('/tmp/settings-actions/unsaved-wbpp');
+  await expect(restart).toBeDisabled();
+  await expect(page.getByText('Save or discard unsaved changes before restarting.', { exact: true })).toBeVisible();
+  await restart.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath('settings-folder-restart.png'), animations: 'disabled' });
 });
 
 test('desktop startup can recover from a port conflict without contacting the conflicting server', async ({ page }, testInfo) => {
