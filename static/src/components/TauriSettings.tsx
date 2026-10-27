@@ -1541,7 +1541,7 @@ export default function TauriSettings({
               <small>
                 Reads every image to measure stars, background, clouds, obstructions,
                 and pointing. This can take a long time.
-                You can run it later from this database&apos;s settings.
+                You can run it later under Grading &amp; display → Quality analysis.
               </small>
             </span>
           </label>

@@ -18,7 +18,7 @@
 
 - Settings lists databases directly in the left pane, with **New / import**
   for adding a database. Select a database to open **Rig setup**, **Database &
-  files** or **Sync** in the same navigation. Shared **Sites** are under
+  files**, **Import** or **Sync** in the same navigation. Shared **Sites** are under
   **Presets**. Sync consistently calls its local and remote stores databases.
 - Quality analysis is under **Review → Grading & display**; calibrated-copy
   pairing is under **Processing → Calibration**. Both offer shared defaults

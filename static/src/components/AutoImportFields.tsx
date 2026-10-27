@@ -101,7 +101,7 @@ export default function AutoImportFields({ value, onChange }: AutoImportFieldsPr
           )}
           <small className="muted">
             A run reads only files the database does not have yet, with the same
-            matching rules as the Import button.
+            matching rules as a manual import.
           </small>
         </>
       )}

@@ -51,7 +51,7 @@ export default function DatabaseImportSettings({ database, canManage, importing,
       <h3>Import</h3>
       <p className="review-preferences-note">
         Import frames from this database’s image folders. Preview the results before confirming a manual import.
-        {' '}<button type="button" className="link-button" onClick={onFiles}>Edit image folders</button>.
+        {' '}Change the folders under <button type="button" className="link-button" onClick={onFiles}>Database &amp; files</button>.
       </p>
       <div className="settings-actions">
         <button
