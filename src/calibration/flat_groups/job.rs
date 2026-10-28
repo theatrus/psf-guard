@@ -1018,7 +1018,7 @@ fn session_evidence(
     // Lights found but nothing to fit, as when no map spans the change
     // alone: kept as undecided, so the pass does not read them again until
     // a map or reference changes the key.
-    Ok(Some(question.row(book, fits)))
+    Ok(Some(question.row(book, fits)?))
 }
 
 #[cfg(test)]
