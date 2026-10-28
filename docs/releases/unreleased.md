@@ -16,10 +16,12 @@
 
 ## Changes
 
-- Calibrated stacks keep distinct external-master choices and source metadata
-  anchors in separate sessions. Existing calibration masters and calibrated
-  stacks rebuild once. Flat trimming, fallback, manual choices and tunable
-  thresholds retain their current behavior through the shared Seiza policy.
+- A multi-session stack keeps lights that adopt different external masters in
+  separate calibration sessions, even when they match the same raw frames.
+  Calibration matching, grading, flat grouping and master building now run on
+  code Seiza holds, so the desktop apps calibrate as PSF Guard does. Masters,
+  grades, flat groups and stacks otherwise keep their results and do not
+  rebuild.
 
 - Settings lists databases directly in the left pane, with **New / import**
   for adding a database. Select a database to open **Rig setup**, **Database &

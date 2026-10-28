@@ -170,3 +170,22 @@ panic = "unwind"
 [build-dependencies]
 tauri-build = { version = "2.7.3", features = [] }
 toml_edit = "0.25"
+
+# Seiza's shared calibration library, pinned to theatrus/seiza#403 for
+# validation until it is released.
+[patch.crates-io]
+seiza = { git = "https://github.com/theatrus/seiza", rev = "57149ae3d881f941eed8feb9a3f46c2eb39d6e66" }
+seiza-background = { git = "https://github.com/theatrus/seiza", rev = "57149ae3d881f941eed8feb9a3f46c2eb39d6e66" }
+seiza-calibration = { git = "https://github.com/theatrus/seiza", rev = "57149ae3d881f941eed8feb9a3f46c2eb39d6e66" }
+seiza-core = { git = "https://github.com/theatrus/seiza", rev = "57149ae3d881f941eed8feb9a3f46c2eb39d6e66" }
+seiza-deconvolution = { git = "https://github.com/theatrus/seiza", rev = "57149ae3d881f941eed8feb9a3f46c2eb39d6e66" }
+seiza-download = { git = "https://github.com/theatrus/seiza", rev = "57149ae3d881f941eed8feb9a3f46c2eb39d6e66" }
+seiza-fits = { git = "https://github.com/theatrus/seiza", rev = "57149ae3d881f941eed8feb9a3f46c2eb39d6e66" }
+seiza-image-io = { git = "https://github.com/theatrus/seiza", rev = "57149ae3d881f941eed8feb9a3f46c2eb39d6e66" }
+seiza-imgproc = { git = "https://github.com/theatrus/seiza", rev = "57149ae3d881f941eed8feb9a3f46c2eb39d6e66" }
+seiza-satellites = { git = "https://github.com/theatrus/seiza", rev = "57149ae3d881f941eed8feb9a3f46c2eb39d6e66" }
+seiza-stacking = { git = "https://github.com/theatrus/seiza", rev = "57149ae3d881f941eed8feb9a3f46c2eb39d6e66" }
+seiza-stars = { git = "https://github.com/theatrus/seiza", rev = "57149ae3d881f941eed8feb9a3f46c2eb39d6e66" }
+seiza-stats = { git = "https://github.com/theatrus/seiza", rev = "57149ae3d881f941eed8feb9a3f46c2eb39d6e66" }
+seiza-stretch = { git = "https://github.com/theatrus/seiza", rev = "57149ae3d881f941eed8feb9a3f46c2eb39d6e66" }
+seiza-xisf = { git = "https://github.com/theatrus/seiza", rev = "57149ae3d881f941eed8feb9a3f46c2eb39d6e66" }
