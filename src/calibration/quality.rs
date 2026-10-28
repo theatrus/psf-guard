@@ -179,28 +179,32 @@ pub(super) fn table_exists(conn: &Connection) -> bool {
 pub(super) fn index_of(conn: &Connection, frames: &[CalibrationFrame]) -> Result<QualityIndex> {
     let mut rows = Vec::new();
     if table_exists(conn) {
+        let wanted: std::collections::HashSet<&str> = frames
+            .iter()
+            .map(|frame| frame.frame_uuid.as_str())
+            .collect();
         let mut statement = conn.prepare(
-            "SELECT source_fingerprint, algorithm_version, grade, reason, override_choice
-             FROM psf_guard_calibration_frame_quality WHERE frame_uuid = ?1",
+            "SELECT frame_uuid, source_fingerprint, algorithm_version, grade, reason,
+                    override_choice
+             FROM psf_guard_calibration_frame_quality",
         )?;
-        for frame in frames {
-            if let Some(row) = statement
-                .query_row([&frame.frame_uuid], |row| {
-                    Ok(QualityRecord {
-                        frame_uuid: frame.frame_uuid.clone(),
-                        source_fingerprint: row.get(0)?,
-                        algorithm_version: row.get(1)?,
-                        grade: row.get(2)?,
-                        reason: row.get(3)?,
-                        override_choice: row
-                            .get::<_, Option<String>>(4)?
-                            .as_deref()
-                            .and_then(QualityOverride::parse),
-                        ..Default::default()
-                    })
-                })
-                .optional()?
-            {
+        let all = statement.query_map([], |row| {
+            Ok(QualityRecord {
+                frame_uuid: row.get(0)?,
+                source_fingerprint: row.get(1)?,
+                algorithm_version: row.get(2)?,
+                grade: row.get(3)?,
+                reason: row.get(4)?,
+                override_choice: row
+                    .get::<_, Option<String>>(5)?
+                    .as_deref()
+                    .and_then(QualityOverride::parse),
+                ..Default::default()
+            })
+        })?;
+        for row in all {
+            let row = row?;
+            if wanted.contains(row.frame_uuid.as_str()) {
                 rows.push(row);
             }
         }

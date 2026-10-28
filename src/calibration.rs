@@ -1866,11 +1866,11 @@ fn table_column_names(conn: &Connection, table: &str) -> Result<Vec<String>> {
         .collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
-use seiza_calibration::library::coherent_cohort as master_subset_report;
 use seiza_calibration::library::matching::{
     dark_within_reach, exposure_matches, frame_signature, rotation_gap, signature_sensor_matches,
     temperature_admits, temperature_matches, validity_admits, Signature,
 };
+use seiza_calibration::library::{coherent_cohort as master_subset_report, flat_set_label};
 
 /// The frames a master of `kind` takes from `frames`, given nearest first.
 fn coherent_master_subset(
@@ -1928,6 +1928,8 @@ pub(crate) struct LibrarySnapshot {
     /// The frames newest first, the flat grouping book, and the responses a
     /// change's map can be made from.
     library: seiza_calibration::library::Library,
+    /// The frames' stored grades and choices.
+    quality: quality::QualityIndex,
 }
 
 impl LibrarySnapshot {
@@ -1940,6 +1942,7 @@ impl LibrarySnapshot {
         if !schema_supports_current_reads(conn) {
             return Ok(Self {
                 library: Default::default(),
+                quality: Default::default(),
             });
         }
         let mut statement = conn.prepare(&format!(
@@ -1972,8 +1975,10 @@ impl LibrarySnapshot {
                     .collect()
             })
             .unwrap_or_default();
+        let quality = quality::index_of(conn, &frames)?;
         Ok(Self {
             library: seiza_calibration::library::Library::new(frames, flat_book, available),
+            quality,
         })
     }
 
@@ -3739,9 +3744,6 @@ fn estimate_flat_pedestal(
     light_paths: &[PathBuf],
     hint: Option<f64>,
 ) -> Option<f32> {
-    const MAX_SAMPLE_LIGHTS: usize = 3;
-    const MAX_PEDESTAL_ADU: f32 = 13_107.0; // 20% of the 16-bit scale
-
     let flat = crate::image_io::open_linear_frame(flat_path).ok()?;
     // CFA data interleaves photosite responses that differ per channel;
     // the single-line model only holds for mono frames.
@@ -3749,23 +3751,9 @@ fn estimate_flat_pedestal(
         tracing::debug!("pedestal fit skipped: the flat is not a mono frame");
         return None;
     }
-
-    // Sample lights by sorted path so the estimate does not depend on the
-    // caller's frame order — the source-frame search must re-derive the
-    // same pedestal the stack build found.
-    let mut sorted = light_paths.to_vec();
-    sorted.sort();
-    sorted.dedup();
-    let sample_indices: Vec<usize> = match sorted.len() {
-        0 => return None,
-        1 => vec![0],
-        2 => vec![0, 1],
-        len => vec![0, len / 2, len - 1],
-    };
-
     let mut estimates = Vec::new();
-    for index in sample_indices {
-        let Ok(light) = crate::image_io::open_linear_frame(&sorted[index]) else {
+    for path in seiza_calibration::library::pedestal_sample_lights(light_paths) {
+        let Ok(light) = crate::image_io::open_linear_frame(&path) else {
             continue;
         };
         if light.bayer.is_some()
@@ -3778,39 +3766,10 @@ fn estimate_flat_pedestal(
         if let Some(pedestal) = fit_pedestal_against_flat(&light.image, &flat.image) {
             estimates.push(pedestal);
         }
-        if estimates.len() >= MAX_SAMPLE_LIGHTS {
-            break;
-        }
     }
-    if estimates.is_empty() {
-        tracing::debug!("pedestal fit skipped: no light produced a usable fit");
-        return None;
-    }
-    estimates.sort_by(f32::total_cmp);
-    let pedestal = estimates[estimates.len() / 2];
-    let spread = estimates[estimates.len() - 1] - estimates[0];
-    if spread > (pedestal * 0.25).max(64.0) {
-        tracing::debug!("pedestal fit skipped: per-light estimates disagree ({estimates:?} ADU)");
-        return None;
-    }
-    if !(0.0..=MAX_PEDESTAL_ADU).contains(&pedestal) {
-        tracing::debug!("pedestal fit skipped: {pedestal:.1} ADU is outside the sane range");
-        return None;
-    }
-    // A camera whose driver records its offset gives an independent
-    // prediction; a fit that contradicts it by more than 3x either way is
-    // more likely a sky-gradient artifact than a pedestal.
-    if let Some(hint) = hint {
-        let hint = hint as f32;
-        if pedestal < hint / 3.0 || pedestal > hint * 3.0 {
-            tracing::debug!(
-                "pedestal fit skipped: {pedestal:.1} ADU contradicts the camera's \
-                 recorded offset (~{hint:.0} ADU)"
-            );
-            return None;
-        }
-    }
-    Some(pedestal)
+    seiza_calibration::library::accept_pedestal(&estimates, hint)
+        .map_err(|refusal| tracing::debug!("pedestal fit skipped: {refusal}"))
+        .ok()
 }
 
 /// Fit the pedestal a camera added, by regressing each tile's sky against the
@@ -3845,14 +3804,11 @@ fn fit_pedestal_against_flat(
 }
 
 /// The camera's recorded offset as a pedestal in 16-bit ADU, for camera
-/// families whose driver mapping is known. ZWO ASI drivers apply the offset
-/// setting in 10-ADU steps at the 16-bit scale. Header metadata is a
+/// families whose driver mapping is known. Header metadata is a
 /// prediction, not pixel evidence, so this only corroborates a fitted
 /// pedestal — it is never applied on its own.
 fn header_pedestal_hint(light: &FrameMeta) -> Option<f64> {
-    let offset = light.offset.filter(|value| *value > 0)?;
-    let camera = light.camera.as_deref()?.to_ascii_uppercase();
-    (camera.contains("ZWO") || camera.contains("ASI")).then_some(offset as f64 * 10.0)
+    seiza_calibration::library::pedestal_hint(&library_light(light))
 }
 
 pub fn resolve_or_build_masters(
@@ -4035,13 +3991,9 @@ fn resolve_masters_with_recipe(
     // a dropped frame usually means the library holds something the selection
     // should not have offered.
     let mut set_aside: Vec<SetAside> = Vec::new();
-    let held_back = |kind: CalibrationKind, frame: &CalibrationFrame| {
-        kind == CalibrationKind::Flat && selected.flat_held_back.contains(&frame.frame_uuid)
-    };
     let build_or_warn = |kind: CalibrationKind,
                          frames: &[CalibrationFrame],
                          inputs: MasterInputs<'_>,
-                         skip_because: Option<&str>,
                          failures: &mut Vec<(CalibrationKind, String)>,
                          set_aside: &mut Vec<SetAside>|
      -> Option<BuiltMaster> {
@@ -4049,27 +4001,28 @@ fn resolve_masters_with_recipe(
             return None;
         }
         // An external master is used as it is, never integrated with raw
-        // frames. Candidates arrive nearest-first, so "the first master" is
-        // the one shot closest to the lights.
-        let (masters, raw): (Vec<&CalibrationFrame>, Vec<&CalibrationFrame>) =
-            frames.iter().partition(|frame| frame.is_master);
-        // A master from the far side of a measured change never stands in.
-        let masters: Vec<&CalibrationFrame> = masters
-            .into_iter()
-            .filter(|frame| !held_back(kind, frame))
+        // frames; a master from the far side of a measured change never
+        // stands in.
+        let adopt = seiza_calibration::library::adopted_master(
+            kind,
+            frames,
+            &selected.flat_held_back,
+            &selected.rules,
+        );
+        let raw: Vec<CalibrationFrame> = frames
+            .iter()
+            .filter(|frame| !frame.is_master)
+            .cloned()
             .collect();
-        let raw: Vec<CalibrationFrame> = raw.into_iter().cloned().collect();
-        let adopt = match selected.rules.external_masters {
-            ExternalMasterPolicy::Prefer => masters.first().copied(),
-            ExternalMasterPolicy::Fallback => {
-                if coherent_master_subset(kind, &raw, &selected.rules).len() >= MIN_MASTER_FRAMES {
-                    None
-                } else {
-                    masters.first().copied()
-                }
-            }
-            ExternalMasterPolicy::Ignore => None,
-        };
+        // A master whose dependency failed is skipped rather than built
+        // without it.
+        let skip_because = seiza_calibration::library::master_dependencies(kind)
+            .iter()
+            .find(|dependency| failures.iter().any(|(failed, _)| failed == *dependency))
+            .map(|dependency| match dependency {
+                CalibrationKind::DarkFlat => "dark-flat",
+                other => other.as_str(),
+            });
         if let Some(master) = adopt {
             return match adopt_external_master(
                 conn,
@@ -4181,16 +4134,10 @@ fn resolve_masters_with_recipe(
         CalibrationKind::Bias,
         &selected.bias,
         MasterInputs::default(),
-        None,
         &mut build_failures,
         &mut set_aside,
     );
     applied.bias_master = bias.as_ref().map(|master| master.label());
-    let bias_failed = !selected.bias.is_empty()
-        && bias.is_none()
-        && build_failures
-            .iter()
-            .any(|(kind, _)| *kind == CalibrationKind::Bias);
 
     let bias_image = bias
         .as_ref()
@@ -4206,15 +4153,9 @@ fn resolve_masters_with_recipe(
             bias_dependency: bias.as_ref(),
             ..Default::default()
         },
-        bias_failed.then_some("bias"),
         &mut build_failures,
         &mut set_aside,
     );
-    let dark_flat_failed = !selected.dark_flat.is_empty()
-        && dark_flat.is_none()
-        && build_failures
-            .iter()
-            .any(|(kind, _)| *kind == CalibrationKind::DarkFlat);
     applied.dark_flat_master = dark_flat.as_ref().map(|master| master.label());
     let flat_dark = dark_flat
         .as_ref()
@@ -4240,7 +4181,6 @@ fn resolve_masters_with_recipe(
             bias_dependency: bias.as_ref(),
             ..Default::default()
         },
-        bias_failed.then_some("bias"),
         &mut build_failures,
         &mut set_aside,
     );
@@ -4254,13 +4194,6 @@ fn resolve_masters_with_recipe(
             dark: flat_dark,
             bias_dependency: bias.as_ref(),
             dark_dependency: dark_flat.as_ref(),
-        },
-        if bias_failed {
-            Some("bias")
-        } else if dark_flat_failed {
-            Some("dark-flat")
-        } else {
-            None
         },
         &mut build_failures,
         &mut set_aside,
@@ -4693,46 +4626,24 @@ impl CalibrationPlan {
 }
 
 /// The master set a light's selection would build, as a comparable key.
-/// Two lights with equal keys calibrate identically — same coherent frame
-/// subsets per kind, therefore the same content-addressed masters. Keys
-/// differ across capture sessions (per-night flats), across a changed
+/// Two lights with equal keys calibrate identically — the same masters
+/// from the same frames, adopted or integrated alike, and the same gate.
+/// Keys differ across capture sessions (per-night flats), across a changed
 /// library, and across the selection horizon of very large libraries.
-fn session_key(selected: &CalibrationSelection) -> String {
-    let mut parts = Vec::new();
-    for (kind, frames) in [
-        (CalibrationKind::Bias, &selected.bias),
-        (CalibrationKind::Dark, &selected.dark),
-        (CalibrationKind::DarkFlat, &selected.dark_flat),
-        (CalibrationKind::Flat, &selected.flat),
-    ] {
-        let subset = coherent_master_subset(kind, frames, &selected.rules);
-        let mut values = subset
-            .iter()
-            .map(|frame| format!("{}:{}", frame.frame_uuid, frame.source_fingerprint))
-            .collect::<Vec<_>>();
-        values.sort();
-        parts.push(format!("{}={}", kind.as_str(), values.join(",")));
-    }
-    // Lights of two rigs whose settings match differently build apart,
-    // even from the same frames: a master's other choices follow its rules.
-    if let Some(rules) = selected.rules.matching_digest() {
-        parts.push(format!("rules={rules}"));
-    }
-    if let Some(correction) = selected.flat_basis.correction() {
-        parts.push(format!("flat-correction={}", correction.key));
-    }
-    // Its stack gate admits flats from another angle, and every light of
-    // one session shares the session's gate.
-    if let Some(tolerance) = selected.flat_basis.rotation_tolerance() {
-        parts.push(format!("flat-rotation-tolerance={tolerance:.3}"));
-    }
-    // So does a gate that reads the light at its flats' measured angle.
-    if let Some(family) = &selected.flat_family
-        && !family.light_rotation.is_recorded()
-    {
-        parts.push(format!("flat-light-rotation={:?}", family.light_rotation));
-    }
-    hex_digest(&parts.join("\u{1e}"))
+fn session_key(
+    selected: &CalibrationSelection,
+    quality: &quality::QualityIndex,
+    flat_star_masking: bool,
+) -> String {
+    seiza_calibration::library::resolve_session(
+        selected,
+        quality,
+        &seiza_calibration::library::SessionOptions {
+            flat_star_masking,
+            ..Default::default()
+        },
+    )
+    .key
 }
 
 /// Resolve every session a group of lights needs, building masters once per
@@ -4942,7 +4853,7 @@ pub(crate) fn resolve_or_build_master_plan_with_options(
     for path in light_paths {
         let light = crate::commands::import::headers::read_frame_meta(path);
         let selected = matcher.select_verified(&light, directory_tree);
-        let key = session_key(&selected);
+        let key = session_key(&selected, &matcher.snapshot.quality, flat_star_masking);
         let index = match keys.iter().position(|existing| existing == &key) {
             Some(index) => index,
             None => {
@@ -5992,13 +5903,11 @@ fn build_master(
         .as_ref()
         .map_or(0, |stability| stability.feature_pixels);
     let used = first.used.len();
-    let stable = used - drifting.len();
-    let spots = "spots that come and go across the run: dew or frost on the sensor window?";
 
     // A minority of odd frames: the rest of this set still make an honest
     // master. Only this set's frames are offered, so the trim cannot slide
     // onto another session while the card speaks of leaving frames out.
-    if stable >= MIN_MASTER_FRAMES && stable * 2 >= used {
+    if seiza_calibration::library::trims_to_majority(used, drifting.len()) {
         if let Err(stop) = stop_requested(cancel) {
             discard_attempt(first);
             return Err(stop);
@@ -6024,11 +5933,8 @@ fn build_master(
         if let Some(trimmed) = trimmed {
             if trimmed.drifting().is_empty() && !trimmed.memo {
                 set_aside_master(&context, first);
-                let note = format!(
-                    "Left out {} of {used} flats that disagreed with the rest of the set at \
-                     {feature_pixels} pixels ({spots})",
-                    drifting.len()
-                );
+                let note =
+                    seiza_calibration::library::trimmed_note(drifting.len(), used, feature_pixels);
                 return publish_master(&context, trimmed, Some(note)).map(Some);
             }
             set_aside_master(&context, trimmed);
@@ -6042,7 +5948,11 @@ fn build_master(
         discard_attempt(first);
         return Err(stop);
     }
-    let other = retry(&without(&same_session_as(&first.used, frames, rules)));
+    let other = retry(&without(&seiza_calibration::library::same_session_as(
+        &first.used,
+        frames,
+        rules.flat_session_seconds,
+    )));
     if let Err(stop) = stop_requested(cancel) {
         other.into_iter().for_each(discard_attempt);
         discard_attempt(first);
@@ -6050,11 +5960,10 @@ fn build_master(
     }
     if let Some(other) = other {
         if other.drifting().is_empty() && !other.memo {
-            let note = format!(
-                "The nearest {} disagree with each other at {feature_pixels} pixels ({spots}); \
-                 used {} instead",
-                flat_set_label(&first.used),
-                flat_set_label(&other.used)
+            let note = seiza_calibration::library::alternate_note(
+                &flat_set_label(&first.used),
+                &flat_set_label(&other.used),
+                feature_pixels,
             );
             set_aside_master(&context, first);
             return publish_master(&context, other, Some(note)).map(Some);
@@ -6072,38 +5981,9 @@ fn build_master(
     } else {
         first
     };
-    let note = format!(
-        "Built from an unstable flat set: {} of {used} frames disagree with the master at \
-         {feature_pixels} pixels ({spots}). Retake these flats",
-        drifting.len()
-    );
+    let note =
+        seiza_calibration::library::unstable_note(drifting.len(), used, feature_pixels, false);
     publish_master(&context, first, Some(note)).map(Some)
-}
-
-/// The candidates shot within one flat session of `set`: the set itself and
-/// whatever the clusterer left out of it from the same run.
-fn same_session_as(
-    set: &[CalibrationFrame],
-    candidates: &[CalibrationFrame],
-    rules: &Rules,
-) -> Vec<CalibrationFrame> {
-    let window = rules.flat_session_seconds as i64;
-    let first = set.iter().filter_map(|frame| frame.captured_at).min();
-    let last = set.iter().filter_map(|frame| frame.captured_at).max();
-    candidates
-        .iter()
-        .filter(|candidate| {
-            set.iter()
-                .any(|frame| frame.frame_uuid == candidate.frame_uuid)
-                || match (first, last, candidate.captured_at) {
-                    (Some(first), Some(last), Some(at)) => {
-                        at >= first - window && at <= last + window
-                    }
-                    _ => false,
-                }
-        })
-        .cloned()
-        .collect()
 }
 
 /// Make a built master real: move its staged file into place and record it,
@@ -6275,30 +6155,6 @@ fn append_warning(warning: &mut Option<String>, note: impl Into<String>) {
     });
 }
 
-/// "20 G flats from 2026-09-10", for a note about one flat set.
-fn flat_set_label(frames: &[CalibrationFrame]) -> String {
-    let filter = frames
-        .iter()
-        .find_map(|frame| frame.filter.as_deref())
-        .map(|name| format!("{name} "))
-        .unwrap_or_default();
-    let day = |timestamp: i64| {
-        chrono::DateTime::from_timestamp(timestamp, 0)
-            .map(|at| at.format("%Y-%m-%d").to_string())
-            .unwrap_or_else(|| timestamp.to_string())
-    };
-    let first = frames.iter().filter_map(|frame| frame.captured_at).min();
-    let last = frames.iter().filter_map(|frame| frame.captured_at).max();
-    let when = match (first, last) {
-        (Some(first), Some(last)) if day(first) != day(last) => {
-            format!(" from {} to {}", day(first), day(last))
-        }
-        (Some(first), _) => format!(" from {}", day(first)),
-        _ => String::new(),
-    };
-    format!("{} {filter}flats{when}", frames.len())
-}
-
 /// Edit the `flat_stability` object in a recorded master's statistics. A
 /// master without a record (recording blocked) is left alone.
 fn patch_flat_stability(
@@ -6388,6 +6244,8 @@ fn recorded_flat_stability(
         .map(|(uuid, count)| Some((uuid.as_str()?, count.as_u64()? as usize)))
         .collect::<Option<_>>()?;
     Some(FlatSetStability {
+        algorithm_version: FLAT_STABILITY_VERSION,
+        errors: Vec::new(),
         feature_pixels: stability["feature_pixels"].as_u64()? as usize,
         drift_threshold: stability["drift_threshold"].as_u64()? as usize,
         disagreement: frames
@@ -6402,136 +6260,10 @@ fn recorded_flat_stability(
     })
 }
 
-/// A master pixel counts as a feature when it falls below the smooth
-/// response around it by more than this fraction. Dust shadows sit at a few
-/// percent; a drying droplet reads at 3 to 70 percent of its surround.
-/// Only dips count: dew, frost and dust take light away, while a star in a
-/// sky flat adds it, sits on other pixels in every frame, and would make a
-/// good set look like a drying window.
-const FLAT_FEATURE_DEPTH: f32 = 0.10;
-/// The flat-set check's generation, recorded with each judgement. 2: dips
-/// only, so stars in sky flats are no longer taken for dew; a judgement the
-/// first generation made is made again.
-const FLAT_STABILITY_VERSION: u32 = 2;
-/// A frame disagrees with the master at a feature when its own value departs
-/// from the master's by more than this fraction of the local response. Half
-/// the feature depth, so a spot that only drifts slowly across the run still
-/// shows up in the frames on either side of the median. Photon noise in a
-/// flat sits near one percent.
-const FLAT_AGREEMENT_DEPTH: f32 = 0.05;
-/// Half-width of the box that estimates the smooth response. Wider than any
-/// droplet, narrower than a dust donut, which the frames all agree on anyway.
-const FLAT_SMOOTH_RADIUS: usize = 16;
-
 /// How the frames of one flat set agree about the features their master
-/// kept. A feature every frame shows the same way is a real property of the
-/// optical path (a dust shadow, a dead cluster) and corrects the lights. A
-/// feature the frames disagree about was changing while they were shot, and
-/// the master's copy of it corrects nothing.
-struct FlatSetStability {
-    /// Master pixels that depart from the smooth response around them.
-    feature_pixels: usize,
-    /// Disagreeing pixels at or above which a frame counts as drifting: a
-    /// share of the sensor rather than of the features, so a dusty optical
-    /// path with many honest features cannot hide a droplet run.
-    drift_threshold: usize,
-    /// Per input frame, in `frames` order: feature pixels at which the frame
-    /// disagrees with the master. Zero for a frame that could not be read
-    /// back or calibrated.
-    disagreement: Vec<usize>,
-}
-
-/// The sample grids a flat master is smooth on: one per colour channel of an
-/// RGB image, one per CFA phase of a raw colour frame (each phase has its
-/// own response, and a box mean across phases would call every pixel a
-/// feature), and one for a mono frame.
-struct SamplePlanes {
-    width: usize,
-    height: usize,
-    channels: usize,
-    cfa: bool,
-}
-
-impl SamplePlanes {
-    fn new(
-        image: &seiza_stacking::LinearImage,
-        bayer: Option<seiza_stacking::BayerLayout>,
-    ) -> Self {
-        let channels = image.channels.max(1);
-        Self {
-            width: image.width,
-            height: image.height,
-            channels,
-            cfa: channels == 1 && bayer.is_some(),
-        }
-    }
-
-    fn count(&self) -> usize {
-        if self.cfa {
-            4
-        } else {
-            self.channels
-        }
-    }
-
-    /// Which plane a sample index belongs to.
-    fn plane_of(&self, index: usize) -> usize {
-        if self.cfa {
-            let (x, y) = (index % self.width, index / self.width);
-            (y & 1) * 2 + (x & 1)
-        } else {
-            index % self.channels
-        }
-    }
-
-    /// The plane's own grid size.
-    fn size(&self, plane: usize) -> (usize, usize) {
-        if self.cfa {
-            let (ox, oy) = (plane & 1, plane >> 1);
-            (
-                (self.width + 1 - ox.min(self.width)) / 2,
-                (self.height + 1 - oy.min(self.height)) / 2,
-            )
-        } else {
-            (self.width, self.height)
-        }
-    }
-
-    /// Sample index of a plane-grid position.
-    fn index(&self, plane: usize, x: usize, y: usize) -> usize {
-        if self.cfa {
-            let (ox, oy) = (plane & 1, plane >> 1);
-            (2 * y + oy) * self.width + 2 * x + ox
-        } else {
-            (y * self.width + x) * self.channels + plane
-        }
-    }
-
-    /// The smooth response under every sample: a box mean on each plane.
-    fn smooth(&self, data: &[f32]) -> Vec<f32> {
-        let mut smooth = vec![0f32; data.len()];
-        let radius = if self.cfa {
-            FLAT_SMOOTH_RADIUS / 2
-        } else {
-            FLAT_SMOOTH_RADIUS
-        };
-        for plane in 0..self.count() {
-            let (width, height) = self.size(plane);
-            let values: Vec<f32> = (0..height)
-                .flat_map(|y| (0..width).map(move |x| (x, y)))
-                .map(|(x, y)| data[self.index(plane, x, y)])
-                .collect();
-            let blurred = box_mean_plane(&values, width, height, radius);
-            for y in 0..height {
-                for x in 0..width {
-                    smooth[self.index(plane, x, y)] = blurred[y * width + x];
-                }
-            }
-        }
-        smooth
-    }
-}
-
+/// kept: Seiza's dip-only check, which reads each frame as this server reads
+/// it, on the 16-bit scale.
+use seiza_stacking::{FlatSetStability, FLAT_STABILITY_VERSION};
 fn flat_set_stability(
     frames: &[CalibrationFrame],
     skipped: &[(PathBuf, String)],
@@ -6539,143 +6271,23 @@ fn flat_set_stability(
     bayer: Option<seiza_stacking::BayerLayout>,
     calibration: Option<&seiza_stacking::CalibrationMasters>,
 ) -> FlatSetStability {
-    let planes = SamplePlanes::new(master, bayer);
-    let pixels = master.width * master.height;
-    let smooth = planes.smooth(&master.data);
-    let features: Vec<usize> = (0..master.data.len())
-        .filter(|&index| {
-            let value = master.data[index];
-            let surround = smooth[index];
-            value.is_finite() && surround > 0.0 && surround - value > FLAT_FEATURE_DEPTH * surround
-        })
-        .collect();
-    // Below this many feature pixels there is nothing to judge a set by: a
-    // handful of dead pixels, or a clean master. A frame drifts once it
-    // disagrees at a fifth of the features, capped at one pixel in two
-    // hundred thousand of the sensor so a dusty optical path with many
-    // honest features cannot hide a droplet run, and never below sixteen so
-    // noise cannot reach it.
-    let minimum = (pixels / 100_000).max(16);
-    let drift_threshold = (pixels / 200_000).min(features.len() / 5).max(16);
-    if features.len() < minimum {
-        return FlatSetStability {
-            feature_pixels: features.len(),
-            drift_threshold,
-            disagreement: vec![0; frames.len()],
-        };
-    }
-    // Each frame is put on the master's scale by the median ratio of its
-    // samples to the master's, per plane, so a plane's own response does
-    // not read as disagreement.
-    let step = (master.data.len() / 200_000).max(1);
-    // A frame the integrator left out was never in the master and counts
-    // as agreeing; a frame the check cannot read back or calibrate is not
-    // trusted and counts as drifting.
-    let disagreement = frames
+    let inputs: Vec<_> = frames
         .iter()
-        .map(|frame| {
-            if skipped.iter().any(|(path, _)| *path == frame.source_path) {
-                return 0;
-            }
-            let mut opened = match crate::image_io::open_linear_frame(&frame.source_path) {
-                Ok(opened) => opened,
-                Err(error) => {
-                    tracing::warn!(
-                        "flat-set check could not read {}: {error}",
-                        frame.source_path.display()
-                    );
-                    return drift_threshold;
-                }
-            };
-            if opened.image.width != master.width
-                || opened.image.height != master.height
-                || opened.image.channels.max(1) != planes.channels
-            {
-                return drift_threshold;
-            }
-            // The integrator scaled any dark by the catalog's exposure; do
-            // the same rather than trusting a header the catalog may not.
-            let exposure = frame.exposure_s.or(opened.exposure_seconds);
-            if let Some(calibration) = calibration
-                && let Err(error) = calibration.apply(&mut opened.image, exposure, opened.bayer)
-            {
-                tracing::warn!(
-                    "flat-set check could not calibrate {}: {error}",
-                    frame.source_path.display()
-                );
-                return drift_threshold;
-            }
-            let data = &opened.image.data;
-            let mut ratios: Vec<Vec<f32>> = vec![Vec::new(); planes.count()];
-            for index in (0..data.len()).step_by(step) {
-                let (value, reference) = (data[index], master.data[index]);
-                if reference > 0.05 && reference.is_finite() && value.is_finite() {
-                    ratios[planes.plane_of(index)].push(value / reference);
-                }
-            }
-            let gains: Vec<f32> = ratios.into_iter().map(median_f32).collect();
-            features
-                .iter()
-                .filter(|&&index| {
-                    let gain = gains[planes.plane_of(index)];
-                    gain.is_finite()
-                        && gain > 0.0
-                        && (data[index] / gain - master.data[index]).abs()
-                            > FLAT_AGREEMENT_DEPTH * smooth[index]
-                })
-                .count()
+        .map(|frame| seiza_stacking::FlatStabilityInput {
+            path: frame.source_path.clone(),
+            exposure_seconds: frame.exposure_s,
+            skipped: skipped.iter().any(|(path, _)| path == &frame.source_path),
         })
         .collect();
-    FlatSetStability {
-        feature_pixels: features.len(),
-        drift_threshold,
-        disagreement,
+    let result =
+        seiza_stacking::measure_flat_stability(&inputs, master, bayer, calibration, Some(65_535.0));
+    for (index, error) in &result.errors {
+        tracing::warn!(
+            "flat-set check could not use {}: {error}",
+            frames[*index].source_path.display()
+        );
     }
-}
-
-fn median_f32(mut values: Vec<f32>) -> f32 {
-    if values.is_empty() {
-        return f32::NAN;
-    }
-    let middle = values.len() / 2;
-    let (_, median, _) = values.select_nth_unstable_by(middle, |a, b| a.total_cmp(b));
-    *median
-}
-
-/// Mean over a (2r+1)-square box clamped at the edges, in two separable
-/// passes. Non-finite samples count as zero.
-fn box_mean_plane(plane: &[f32], width: usize, height: usize, radius: usize) -> Vec<f32> {
-    let mut rows = vec![0f32; plane.len()];
-    let mut prefix = vec![0f64; width.max(height) + 1];
-    for y in 0..height {
-        let row = &plane[y * width..(y + 1) * width];
-        for x in 0..width {
-            let value = row[x];
-            prefix[x + 1] = prefix[x]
-                + if value.is_finite() {
-                    f64::from(value)
-                } else {
-                    0.0
-                };
-        }
-        for x in 0..width {
-            let low = x.saturating_sub(radius);
-            let high = (x + radius + 1).min(width);
-            rows[y * width + x] = ((prefix[high] - prefix[low]) / (high - low) as f64) as f32;
-        }
-    }
-    let mut out = vec![0f32; plane.len()];
-    for x in 0..width {
-        for y in 0..height {
-            prefix[y + 1] = prefix[y] + f64::from(rows[y * width + x]);
-        }
-        for y in 0..height {
-            let low = y.saturating_sub(radius);
-            let high = (y + radius + 1).min(height);
-            out[y * width + x] = ((prefix[high] - prefix[low]) / (high - low) as f64) as f32;
-        }
-    }
-    out
+    result
 }
 
 fn cached_flat_masking_statistics(
