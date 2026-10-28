@@ -1,12 +1,5 @@
 name: Docker Build and Publish
 
-# Linux (x64 and arm64) jobs run on ephemeral 32-core runners (tfinfra
-# roots/github-runners, docs/github-runners-plan.md). Windows, macOS and
-# every pull request from a fork stay on GitHub's runners: a fork's code
-# never runs on ours. (Windows ran on ours for a week; on-demand Windows
-# licensing made it cost more than it saved.) Job names are unchanged, so
-# the required checks still match.
-
 on:
   push:
     branches:
@@ -44,7 +37,7 @@ jobs:
   # job is skipped.
   build:
     if: inputs.retag_latest == ''
-    runs-on: ${{ github.event.pull_request.head.repo.fork && matrix.runner || fromJSON(matrix.runner == 'ubuntu-24.04-arm' && '["self-hosted","linux","ghr-linux-arm64"]' || '["self-hosted","linux","ghr-linux-x64"]') }}
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: write
@@ -125,7 +118,7 @@ jobs:
   # Assemble the per-arch digests into one multi-arch manifest and tag it.
   # Skipped on PRs (nothing was pushed).
   merge:
-    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || fromJSON('["self-hosted","linux","ghr-linux-x64"]') }}
+    runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' && inputs.retag_latest == ''
     needs: build
     permissions:
@@ -183,7 +176,7 @@ jobs:
   # release that published before the tag rule above existed or after a
   # mistaken push. Copies the multi-arch index as is; nothing is rebuilt.
   retag-latest:
-    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || fromJSON('["self-hosted","linux","ghr-linux-x64"]') }}
+    runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch' && inputs.retag_latest != ''
     permissions:
       contents: read

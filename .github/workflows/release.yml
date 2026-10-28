@@ -1,10 +1,5 @@
 name: Release
 
-# Linux builds on ephemeral 32-core runners (tfinfra roots/github-runners,
-# docs/github-runners-plan.md); Windows, macOS and the feed job stay on
-# GitHub's. Only a tag push or a dispatch by someone with write access
-# starts this workflow, so no fork's code reaches it.
-
 on:
   push:
     tags:
@@ -24,7 +19,7 @@ permissions:
 jobs:
   build:
     name: Build release on ${{ matrix.os }}
-    runs-on: ${{ (matrix.os == 'macos-latest' || matrix.os == 'windows-latest') && matrix.os || fromJSON('["self-hosted","linux","ghr-linux-x64"]') }}
+    runs-on: ${{ matrix.os }}
     # The Entra federated credential is bound to the subject
     # `repo:theatrus/psf-guard:environment:release`, so this job must run in the
     # `release` environment or the OIDC token will not match and azure/login
@@ -32,12 +27,6 @@ jobs:
     # `refs/tags/v*` cannot be expressed as a wildcard without the preview
     # flexible-federation feature, hence binding to the environment instead.
     environment: release
-    # No sccache, though our Linux runners turn it on. Every branch job in this
-    # repository can write to that S3 cache, so a branch that never merged
-    # could plant objects there for a release to link into signed binaries.
-    # A release compiles from source alone; on 32 cores that is minutes.
-    env:
-      RUSTC_WRAPPER: ""
     strategy:
       fail-fast: false
       matrix:
@@ -122,9 +111,6 @@ jobs:
     # before.
     - name: Cache cargo build
       uses: Swatinem/rust-cache@v2
-      # Only on GitHub's runners (macOS). CI on our runners no longer saves
-      # this cache, and fetching it into AWS is slow.
-      if: ${{ !startsWith(runner.name, 'ghr-') }}
       with:
         key: tauri
         save-if: false
