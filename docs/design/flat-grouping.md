@@ -55,11 +55,12 @@ The settings panel reads Seiza's settings schema; local registry persistence,
 validation, health reports and UI wording remain in PSF Guard.
 
 Background measurement jobs, source verification/remapping, cache/staging,
-master builds, post-build stability/retry and export orchestration remain
-host responsibilities. Existing source/master fingerprints and transitive
-invalidation remain in force. This dependency-adoption PR is a prototype
-against a pinned Seiza revision; replace its Git patches with published
-crates after Seiza #385 is merged and released.
+master execution and export orchestration remain host responsibilities. The host
+calls Seiza's post-build stability measurement and retry policy, then executes
+the returned decisions. Existing source/master fingerprints and transitive
+invalidation remain in force. This implementation consumes the published
+Seiza 0.46.0 release, with seiza-calibration 0.10.0 and seiza-stacking 0.53.0.
+It requires no Git patches or local Seiza checkout.
 
 A session's own dust is found on its kept response plane (`find_dust`), and
 the flats each shadow shows in by pairing it (`match_features`) with each
@@ -1040,12 +1041,12 @@ another target that shares a file name never takes another's choice
   `seiza_calibration::flat_response` and `seiza_calibration::dust`;
   `MatchTolerances::light_rotation` lets the stacker's gate follow a
   measured angle.
-- **Adopted in the Seiza #385 prototype**: response families, groups, changes,
+- **Adopted from Seiza #385, released in Seiza 0.46.0**: response families, groups, changes,
   uncertain placement, angle epochs, override resolution, peer grading,
   candidate selection and the tunable settings schema. PSF Guard reuses its
   cached native book and keeps catalog/cache I/O, background measurement jobs,
-  health/UI reporting and master execution. The dependency pin remains a
-  draft-only bridge until these core interfaces are released.
+  health/UI reporting and master execution. The application uses the published
+  crates for these shared core interfaces.
 - **Session dust from feature lists.** The rule for how many of a
   session's flats a shadow must show in, applied to the flats' stored
   features, is in `job.rs` for now; `dust::session_dust_from_lists` will
