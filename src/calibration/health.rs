@@ -24,12 +24,12 @@
 //! ([`KeptHeader`]), so a project judged again reads only the lights whose
 //! file changed.
 
-#[cfg(test)]
-use super::coherent_master_subset;
 use super::quality::{self, StoredMeasurement};
+use super::rules::SetBy;
 use super::{
-    calibration_gaps, nearest_master_flat_at, rule_book, CalibrationFrame, CalibrationKind, Check,
-    CheckMode, LibrarySnapshot, Rules, MIN_MASTER_FRAMES, THIN_MASTER_FRAMES,
+    calibration_gaps, coherent_master_subset, nearest_master_flat_at, rule_book, CalibrationFrame,
+    CalibrationKind, Check, CheckMode, ExternalMasterPolicy, LibrarySnapshot, Rules,
+    MIN_MASTER_FRAMES, THIN_MASTER_FRAMES,
 };
 use crate::commands::import::headers::FrameMeta;
 use anyhow::{Context, Result};
@@ -289,21 +289,27 @@ enum MasterInput {
 impl MasterInput {
     /// The rule a stack build follows: an external master by the policy,
     /// otherwise the raw frames' coherent subset.
-    fn of(recipe: &seiza_calibration::library::MasterRecipe, frames: &[CalibrationFrame]) -> Self {
+    fn of(kind: CalibrationKind, frames: &[CalibrationFrame], rules: &Rules) -> Self {
         if frames.is_empty() {
             return Self::None;
         }
-        if recipe.action == seiza_calibration::library::RecipeAction::External {
-            return Self::External;
+        let raw: Vec<CalibrationFrame> = frames
+            .iter()
+            .filter(|frame| !frame.is_master)
+            .cloned()
+            .collect();
+        let has_external = raw.len() < frames.len();
+        let subset = coherent_master_subset(kind, &raw, rules);
+        let external = match rules.external_masters {
+            ExternalMasterPolicy::Prefer => has_external,
+            ExternalMasterPolicy::Fallback => has_external && subset.len() < MIN_MASTER_FRAMES,
+            ExternalMasterPolicy::Ignore => false,
+        };
+        if external {
+            Self::External
+        } else {
+            Self::Raw(subset)
         }
-        let rows: HashMap<_, _> = frames.iter().map(|f| (f.frame_uuid.as_str(), f)).collect();
-        Self::Raw(
-            recipe
-                .coherent_inputs
-                .iter()
-                .map(|id| rows[id.as_str()].clone())
-                .collect(),
-        )
     }
 
     /// Whether a master would apply at all.
@@ -469,7 +475,7 @@ impl HealthLibrary {
 
     /// What the library would give this light, judged by its rig's rules.
     pub fn findings(&self, light: &FrameMeta) -> Result<Vec<LightFinding>> {
-        let rules = self.book.for_light(light);
+        let rules = self.book.for_rig(&super::rules::light_rig_uuid(light));
         Ok(self.judge(light, &rules)?.findings)
     }
 
@@ -478,7 +484,7 @@ impl HealthLibrary {
     pub fn judge(&self, light: &FrameMeta, rules: &std::sync::Arc<Rules>) -> Result<Judgement> {
         let selected = self
             .snapshot
-            .select_with(light, std::sync::Arc::clone(rules))?;
+            .select_with(light, std::sync::Arc::clone(rules));
         let rules: &Rules = rules;
         let library = selected.library;
         let mut found = Gathered::new(rules);
@@ -527,24 +533,10 @@ impl HealthLibrary {
                 poor(HealthCode::CannotCalibrate, gap.reason.clone()).about(kinds),
             );
         }
-        let plan = super::shared::plan(
-            &selected,
-            vec![super::shared::light(light)],
-            Vec::new(),
-            false,
-        )?;
-        let input = |kind, frames: &[CalibrationFrame]| -> Result<MasterInput> {
-            let recipe = plan
-                .recipes
-                .iter()
-                .find(|r| r.kind == super::shared::kind(kind))
-                .context("missing master policy recipe")?;
-            Ok(MasterInput::of(recipe, frames))
-        };
-        let bias = input(CalibrationKind::Bias, &selected.bias)?;
-        let dark = input(CalibrationKind::Dark, &selected.dark)?;
-        let dark_flat = input(CalibrationKind::DarkFlat, &selected.dark_flat)?;
-        let flat = input(CalibrationKind::Flat, &selected.flat)?;
+        let bias = MasterInput::of(CalibrationKind::Bias, &selected.bias, rules);
+        let dark = MasterInput::of(CalibrationKind::Dark, &selected.dark, rules);
+        let dark_flat = MasterInput::of(CalibrationKind::DarkFlat, &selected.dark_flat, rules);
+        let flat = MasterInput::of(CalibrationKind::Flat, &selected.flat, rules);
         let thin = rules.thin_master_frames;
         let thin_note = || limit_note(rules, "thin_master_frames", || format!("fewer than {thin}"));
 

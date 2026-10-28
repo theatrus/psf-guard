@@ -505,7 +505,8 @@ pub(crate) fn apply_light_choices(
                 .position(|family| family.sessions.contains(&session))
                 .ok_or(AppError::NotFound)?;
             let group = book.group_of(family, session).ok_or(AppError::NotFound)?;
-            let note = flat_groups::group_note(&book, family, group).ok_or(AppError::NotFound)?;
+            let note =
+                flat_groups::GroupNote::of(&book, family, group).ok_or(AppError::NotFound)?;
             let row = &book.sessions[session].row;
             // A group replaces the sides the person chose before.
             let mut rows = reset(&|row| row.change_key != overrides::GROUP_CHOICE_KEY);

@@ -210,18 +210,10 @@ pub(crate) fn lights_confirm_their_family(
         candidates.len() >= 2,
         "the lights are asked between families"
     );
-    // Fixture setup selects the explicitly recorded family, independently
-    // of the evidence this helper is about to insert into the shared book.
-    let chosen = candidates
-        .iter()
-        .copied()
-        .find(|family| {
-            book.families[*family].sessions.iter().any(|index| {
-                book.sessions[*index].row.rotation.is_some_and(|flat| {
-                    super::lights::wrap(angle - flat).abs() <= rules.rotation_deg
-                })
-            })
-        })
+    let chosen = book
+        .at_recorded(&candidates, angle, rules.rotation_deg)
+        .into_iter()
+        .next()
         .expect("a family at the light's angle");
     let session = book.imaging_session(&rig, at).expect("its imaging session");
     super::family_store::upsert(

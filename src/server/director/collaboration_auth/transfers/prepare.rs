@@ -201,7 +201,7 @@ pub(super) fn manifest(
                 "A selected frame's exposure does not match its assignment",
             ));
         }
-        let selected = library.select(&light).map_err(|_| invalid())?;
+        let selected = library.select(&light);
         let gap = calibration::calibration_gap(&conn, &light, &selected, &nights)
             .map_err(|_| invalid())?;
         if request.output.is_none() && gap.is_some() && calibration::exclude_uncalibrated_enabled()

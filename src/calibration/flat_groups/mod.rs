@@ -27,16 +27,18 @@ pub mod store;
 pub(crate) mod testing;
 
 pub use measure::{choice, evidence, lights, metric, model, overrides};
+pub use seiza_calibration::library::{
+    correction_key, describe_spots, edge_words, family_label, place_light, vignetting_leads,
+    AlikeRangeNote, ChoiceNote, EventNote, FlatBasis, FlatCorrection, FlatFamily, GroupNote,
+};
 pub use seiza_calibration::LightRotation;
 
+use super::rules::SetBy;
 use anyhow::Result;
 #[cfg(test)]
 use model::AngleTerm;
 use model::{Book, Event, Placement, Side};
 use rusqlite::Connection;
-pub use seiza_calibration::library::{
-    AlikeRangeNote, ChoiceNote, EventNote, FlatBasis, FlatCorrection, FlatFamily, GroupNote,
-};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
@@ -171,7 +173,7 @@ pub fn load_book(conn: &Connection) -> Result<Arc<Book>> {
         store::load_responses(conn)?,
         store::load_comparisons(conn)?,
         store::load_evidence(conn, evidence::EVIDENCE_ALGORITHM_VERSION)?,
-        model::imaging_sessions(lights, |profile| profile_rigs.rigs_of(profile))?,
+        model::imaging_sessions(lights, |profile| profile_rigs.rigs_of(profile)),
         rig_limits,
         override_store::load_group_overrides(conn)?,
         |rig, frame| nights.frame(rig, frame).boundary_seconds,
@@ -298,151 +300,19 @@ fn imaging_lights(conn: &Connection) -> Result<Vec<(i64, Option<String>, i64)>> 
     Ok(rows)
 }
 
-/// The grouping limits a rig's settings put in force.
-pub fn limits_of(rules: &super::Rules) -> model::Limits {
-    model::Limits {
-        measured: rules.flat_grouping == super::rules::FlatGrouping::Measured,
-        dust: rules.flat_split_dust_pct / 100.0,
-        broad: rules.flat_split_pattern_pct / 100.0,
-        window: rules.flat_session_seconds as i64,
-        rotation: rules.coherence_tolerances().rotation_deg,
-    }
-}
-
-/// [`limits_of`] the rig's settings in force.
+/// The grouping limits of the rig's settings in force.
 pub fn rig_limits(rig_uuid: &str) -> model::Limits {
-    limits_of(&super::rules::rules_for_rig(rig_uuid))
+    super::rules::rules_for_rig(rig_uuid).grouping_limits()
 }
 
-pub fn event_note(event: &Event) -> EventNote {
-    EventNote {
-        key: event.key.clone(),
-        start: event.start,
-        end: event.end,
-        dust: event.dust,
-        broad: event.broad,
-        camera_side: event.camera_side,
-        filters: event.filters.iter().cloned().collect(),
-        what: describe_what(event),
-        by_hand: event.by_hand,
-    }
-}
-/// What a change is, in a few words: that a person split the flats there,
-/// a change of vignetting where that leads, or its spots.
+/// What a change is, in a few words, by its rig's settings in force.
 pub fn describe_what(event: &Event) -> String {
-    if event.by_hand {
-        "split by you where the flats measure alike".into()
-    } else if vignetting_leads(
-        event.dust,
-        event.broad,
-        event.vignetting,
-        &rig_limits(&event.rig_uuid),
-    ) {
-        format!(
-            "vignetting changed at the {}",
-            event
-                .vignetting_changes
-                .first()
-                .map_or("border", |change| edge_words(change.vignetting.edge))
-        )
-    } else {
-        describe_spots(&event.spots, event.dust, event.broad)
-    }
+    seiza_calibration::library::describe_what(event, &super::rules::rules_for_rig(&event.rig_uuid))
 }
 
-/// Whether a change of vignetting, rather than dust or the light pattern,
-/// is what a change is named for: held to the light-pattern limit, as
-/// [`model::Limits::distance`] holds it, it is further past that than the
-/// dust is past its own, and larger than the light pattern.
-pub fn vignetting_leads(dust: f64, broad: f64, vignetting: f64, limits: &model::Limits) -> bool {
-    vignetting > broad && vignetting / limits.broad.max(1e-9) >= dust / limits.dust.max(1e-9)
-}
-
-/// An edge or corner in words.
-pub fn edge_words(edge: seiza_calibration::dust::Edge) -> &'static str {
-    use seiza_calibration::dust::Edge;
-    match edge {
-        Edge::Top => "top edge",
-        Edge::Bottom => "bottom edge",
-        Edge::Left => "left edge",
-        Edge::Right => "right edge",
-        Edge::TopLeft => "top-left corner",
-        Edge::TopRight => "top-right corner",
-        Edge::BottomLeft => "bottom-left corner",
-        Edge::BottomRight => "bottom-right corner",
-        _ => "edge",
-    }
-}
-
-/// The spots of a change in a few words.
-pub fn describe_spots(spots: &[metric::Spot], dust: f64, broad: f64) -> String {
-    use metric::SpotKind;
-    // Dust that moved within focus travel is drawn but not counted.
-    let strong: Vec<&metric::Spot> = spots
-        .iter()
-        .filter(|spot| !spot.within_tolerance)
-        .filter(|spot| f64::from(spot.peak) >= dust * 0.5)
-        .collect();
-    if strong.is_empty() {
-        return format!("the light pattern changed by {:.1}%", broad * 100.0);
-    }
-    let kind = if strong.iter().any(|s| s.kind == SpotKind::Moved) {
-        "dust moved"
-    } else if strong.iter().all(|s| s.kind == SpotKind::Gone) {
-        "dust gone"
-    } else {
-        "new dust"
-    };
-    let top = strong[0];
-    // Large shadows are named by their shape: a filter's dust casts disks,
-    // an SCT's donuts.
-    let (disks, donuts) = (
-        strong
-            .iter()
-            .filter(|s| s.shape == seiza_calibration::dust::DustShape::Disk)
-            .count(),
-        strong
-            .iter()
-            .filter(|s| s.shape == seiza_calibration::dust::DustShape::Donut)
-            .count(),
-    );
-    let noun = if donuts == strong.len() {
-        "donut"
-    } else if disks == strong.len() {
-        "disk"
-    } else {
-        "shadow"
-    };
-    let shadows = if strong.len() == 1 {
-        format!("1 {noun}")
-    } else {
-        format!("{} {noun}s", strong.len())
-    };
-    format!("{kind}: {shadows} near ({:.0}, {:.0})", top.x, top.y)
-}
-
-pub fn group_note(book: &Book, family: usize, group: usize) -> Option<GroupNote> {
-    let sessions = book.families.get(family)?.groups.get(group)?;
-    let night = |index: usize| book.sessions[index].row.night.clone();
-    Some(GroupNote {
-        family: family_label(book, family),
-        first_night: night(*sessions.first()?),
-        last_night: night(*sessions.last()?),
-        sessions: sessions.len(),
-    })
-}
-
-/// A family's filter and measured angle range: "OIII at 72.6° & 82.2°".
-pub fn family_label(book: &Book, family: usize) -> String {
-    format!(
-        "{} at {}",
-        book.families[family]
-            .filter
-            .as_deref()
-            .map(str::trim)
-            .unwrap_or("flats"),
-        book.angle_label(family)
-    )
+/// A change as a light's account names it, by its rig's settings in force.
+pub fn event_note(event: &Event) -> EventNote {
+    EventNote::of(event, &super::rules::rules_for_rig(&event.rig_uuid))
 }
 
 /// What a person can choose for one light's flats.
@@ -618,27 +488,6 @@ pub fn describe_family_flag(family: &FlatFamily) -> Option<String> {
         family.pointed.as_deref().unwrap_or("another"),
         family.light_angle
     ))
-}
-
-/// The key of one correction: both sessions, the side, and the pedestals
-/// taken out of them, since the map is made with those out.
-pub fn correction_key(
-    before: &str,
-    after: &str,
-    side: Side,
-    pedestals: (Option<f64>, Option<f64>),
-) -> String {
-    let digest = Sha256::digest(
-        format!(
-            "{}.{}\u{1f}{before}\u{1f}{after}\u{1f}{side:?}\u{1f}{:?}\u{1f}{:?}",
-            metric::COMPARE_ALGORITHM_VERSION,
-            metric::CHANGE_MAP_ALGORITHM_VERSION,
-            pedestals.0,
-            pedestals.1
-        )
-        .as_bytes(),
-    );
-    digest.iter().take(8).map(|b| format!("{b:02x}")).collect()
 }
 
 fn when(at: i64) -> String {

@@ -624,7 +624,7 @@ pub(crate) fn build_view_with_frames(
     let mut rigs: BTreeMap<String, RigView> = BTreeMap::new();
     let rig_view = |rig: &str, book: &model::Book| {
         let rules = crate::calibration::rules_for_rig(rig);
-        let limits = flat_groups::limits_of(&rules);
+        let limits = rules.grouping_limits();
         let term = book.angle_terms.get(rig).copied();
         RigView {
             rig_uuid: rig.to_string(),

@@ -192,39 +192,6 @@ const AFTER_OIII_0: Session = Session {
 };
 
 #[test]
-fn cached_book_selects_after_catalog_disconnect_without_raw_source_files() {
-    let _settings = settings_lock();
-    let dir = tempfile::tempdir().unwrap();
-    let (conn, _) = measured_library(dir.path(), &[BEFORE_HA_0, AFTER_HA_0]);
-    let library = crate::calibration::LibrarySnapshot::load(&conn).unwrap();
-    let book = super::load_book(&conn).unwrap();
-    assert!(std::sync::Arc::ptr_eq(&book, library.flat_book()));
-    let a = light(dir.path(), "2026-09-09T04:00:00", 0.0);
-    let b = light(dir.path(), "2026-09-15T04:00:00", 0.0);
-    let selected = |meta: &FrameMeta| {
-        let result = library.select(meta).unwrap();
-        (
-            result
-                .flat
-                .iter()
-                .map(|f| f.frame_uuid.clone())
-                .collect::<Vec<_>>(),
-            serde_json::to_value(&result.flat_basis).unwrap(),
-            result.match_tolerances(),
-        )
-    };
-    let expected = [selected(&a), selected(&b), selected(&a)];
-    for frame in library.frames() {
-        std::fs::remove_file(&frame.source_path).unwrap();
-    }
-    drop(conn);
-    for (meta, expected) in [&a, &b, &a].into_iter().zip(expected) {
-        assert_eq!(selected(meta), expected);
-    }
-    assert!(std::sync::Arc::ptr_eq(&book, library.flat_book()));
-}
-
-#[test]
 fn a_light_before_new_dust_takes_its_side_at_another_angle() {
     let _settings = settings_lock();
     let temp = tempfile::tempdir().unwrap();
