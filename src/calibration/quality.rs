@@ -13,19 +13,21 @@
 //! pixels, so it runs again after every pass.
 
 use super::{
-    exposure_matches, frame_select, row_to_frame, rules_for_rig, schema_supports_current_reads,
-    signature_sensor_consistent, signature_sensor_matches, temperature_matches,
-    CalibrationChoiceCounts, CalibrationFrame, CalibrationKind, CalibrationSyncCounts, Nights,
+    frame_select, row_to_frame, schema_supports_current_reads, CalibrationChoiceCounts,
+    CalibrationFrame, CalibrationKind, CalibrationSyncCounts, Nights,
 };
 use anyhow::{Context, Result};
 use rusqlite::types::Value;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
-use seiza_calibration::{
-    BiasScreening, DarkMeasureOptions, DarkMeasurement, DarkScreening, Finding, FindingCode,
-    FlatMeasureOptions, FlatMeasurement, FlatScreening, FrameVerdict, Grade, LinearImageRef,
-    FLAT_QUALITY_ALGORITHM_VERSION, FRAME_QUALITY_ALGORITHM_VERSION,
+pub use seiza_calibration::library::{
+    describe_finding, kept_out_reason, FlatRecord, Judged, QualityIndex, QualityOverride,
+    QualityRecord, StoredMeasurement,
 };
-use serde::{Deserialize, Serialize};
+use seiza_calibration::{
+    DarkMeasureOptions, FindingCode, FlatMeasureOptions, FlatMeasurement, FlatScreening, Grade,
+    LinearImageRef, FLAT_QUALITY_ALGORITHM_VERSION, FRAME_QUALITY_ALGORITHM_VERSION,
+};
+use serde::Serialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -173,119 +175,37 @@ pub(super) fn table_exists(conn: &Connection) -> bool {
     .unwrap_or(false)
 }
 
-/// A person's choice about one frame, which outranks its grade.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum QualityOverride {
-    /// Use the frame whatever its grade.
-    Use,
-    /// Keep the frame out of masters and exports whatever its grade.
-    Exclude,
-}
-
-impl QualityOverride {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Use => "use",
-            Self::Exclude => "exclude",
+/// The stored grades and choices of `frames`, as the library weighs them.
+pub(super) fn index_of(conn: &Connection, frames: &[CalibrationFrame]) -> Result<QualityIndex> {
+    let mut rows = Vec::new();
+    if table_exists(conn) {
+        let mut statement = conn.prepare(
+            "SELECT source_fingerprint, algorithm_version, grade, reason, override_choice
+             FROM psf_guard_calibration_frame_quality WHERE frame_uuid = ?1",
+        )?;
+        for frame in frames {
+            if let Some(row) = statement
+                .query_row([&frame.frame_uuid], |row| {
+                    Ok(QualityRecord {
+                        frame_uuid: frame.frame_uuid.clone(),
+                        source_fingerprint: row.get(0)?,
+                        algorithm_version: row.get(1)?,
+                        grade: row.get(2)?,
+                        reason: row.get(3)?,
+                        override_choice: row
+                            .get::<_, Option<String>>(4)?
+                            .as_deref()
+                            .and_then(QualityOverride::parse),
+                        ..Default::default()
+                    })
+                })
+                .optional()?
+            {
+                rows.push(row);
+            }
         }
     }
-
-    pub(super) fn from_db(value: Option<&str>) -> Option<Self> {
-        match value {
-            Some("use") => Some(Self::Use),
-            Some("exclude") => Some(Self::Exclude),
-            _ => None,
-        }
-    }
-}
-
-/// Why a frame stays out of masters and exports, or `None` when it serves.
-/// A person's choice comes first; then the grade; a frame not graded yet
-/// keeps the stray-light mark an older build may have left on it.
-pub(super) fn kept_out_reason(
-    stray_light: Option<String>,
-    grade: Option<&str>,
-    reason: Option<String>,
-    choice: Option<QualityOverride>,
-) -> Option<String> {
-    match choice {
-        Some(QualityOverride::Use) => None,
-        Some(QualityOverride::Exclude) => Some("by hand".into()),
-        None => match grade {
-            Some("poor") => Some(reason.unwrap_or_else(|| "graded poor".into())),
-            Some(_) => None,
-            None => stray_light,
-        },
-    }
-}
-
-/// Whether every frame carries a person's choice or a grade this build made
-/// from its current file. Such a set needs no screen of its own: the grades
-/// already keep the poor frames out, and a choice must stand.
-pub(super) fn all_judged(conn: &Connection, frames: &[CalibrationFrame]) -> Result<bool> {
-    if !table_exists(conn) {
-        return Ok(false);
-    }
-    let mut statement = conn.prepare(
-        "SELECT 1 FROM psf_guard_calibration_frame_quality
-         WHERE frame_uuid = ?1
-           AND (override_choice IS NOT NULL
-                OR (grade IS NOT NULL AND algorithm_version = ?2
-                    AND source_fingerprint IS ?3))",
-    )?;
-    for frame in frames {
-        let judged = statement
-            .query_row(
-                params![
-                    frame.frame_uuid,
-                    measure_version(frame.kind),
-                    frame.source_fingerprint
-                ],
-                |_| Ok(()),
-            )
-            .optional()?
-            .is_some();
-        if !judged {
-            return Ok(false);
-        }
-    }
-    Ok(true)
-}
-
-/// What was measured on one frame, as stored.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum StoredMeasurement {
-    /// A bias, dark or dark-flat.
-    Dark(DarkMeasurement),
-    /// A flat.
-    Flat(FlatRecord),
-}
-
-/// A flat's measurement, with the light cone its header recorded so its
-/// session's dust, found later on the stack, can be placed too. Stored as
-/// the measurement's own fields plus `optics`, so records from before it
-/// read as they are.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FlatRecord {
-    #[serde(flatten)]
-    pub measurement: FlatMeasurement,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub optics: Option<seiza_calibration::dust::Optics>,
-}
-
-impl std::ops::Deref for FlatRecord {
-    type Target = FlatMeasurement;
-    fn deref(&self) -> &FlatMeasurement {
-        &self.measurement
-    }
-}
-
-impl std::ops::DerefMut for FlatRecord {
-    fn deref_mut(&mut self) -> &mut FlatMeasurement {
-        &mut self.measurement
-    }
+    Ok(QualityIndex::new(rows)?)
 }
 
 /// A raw frame waiting to be measured.
@@ -568,19 +488,8 @@ fn record_measurements(
 /// One measured frame, ready to judge.
 struct Measured {
     frame: CalibrationFrame,
-    signature: super::Signature,
     measurement: StoredMeasurement,
     /// The stray-light mark as stored, which the grade keeps in step.
-    stray_light: Option<String>,
-}
-
-/// A frame's grade, and for a dark the stray-light mark older builds read.
-#[derive(Debug, Clone, PartialEq)]
-struct Judged {
-    grade: Grade,
-    code: Option<FindingCode>,
-    reason: Option<String>,
-    findings: Vec<Finding>,
     stray_light: Option<String>,
 }
 
@@ -597,9 +506,13 @@ pub fn grade_library(conn: &Connection) -> Result<GradeOutcome> {
         return Ok(GradeOutcome::default());
     }
     let measured = load_measured(conn)?;
-    let mut judged: HashMap<String, Judged> = HashMap::new();
-    judge_darks(&measured, &mut judged);
-    judge_flats(&measured, &Nights::load(conn), &mut judged);
+    let judged = seiza_calibration::library::grade(
+        measured
+            .iter()
+            .map(|entry| (&entry.frame, &entry.measurement)),
+        &super::rules::rule_book(),
+        &Nights::load(conn),
+    );
     store_grades(conn, &measured, &judged)
 }
 
@@ -634,236 +547,12 @@ fn load_measured(conn: &Connection) -> Result<Vec<Measured>> {
                 }
             };
             Some(Measured {
-                signature: super::frame_signature(&frame),
                 frame,
                 measurement,
                 stray_light,
             })
         })
         .collect())
-}
-
-/// Bias, darks and dark-flats, each against the frames that could stand in
-/// for it, the way the dark-level check grouped them.
-fn judge_darks(measured: &[Measured], judged: &mut HashMap<String, Judged>) {
-    let mut buckets: HashMap<(CalibrationKind, &str), Vec<(&Measured, &DarkMeasurement)>> =
-        HashMap::new();
-    for entry in measured {
-        if let StoredMeasurement::Dark(dark) = &entry.measurement
-            && entry.frame.kind != CalibrationKind::Flat
-        {
-            buckets
-                .entry((entry.frame.kind, entry.frame.rig_uuid.as_str()))
-                .or_default()
-                .push((entry, dark));
-        }
-    }
-    for ((kind, rig), frames) in buckets {
-        // Each rig's frames are graded by its own limits.
-        let rules = rules_for_rig(rig);
-        let (dark_screening, bias_screening): (&DarkScreening, &BiasScreening) =
-            (&rules.dark, &rules.bias);
-        for (entry, _) in &frames {
-            let peers: Vec<&(&Measured, &DarkMeasurement)> = frames
-                .iter()
-                .filter(|(other, _)| {
-                    signature_sensor_matches(&entry.signature, &other.signature)
-                        && exposure_matches(entry.frame.exposure_s, other.frame.exposure_s)
-                        && temperature_matches(
-                            entry.frame.camera_temp,
-                            other.frame.camera_temp,
-                            &rules,
-                        )
-                })
-                .collect();
-            let Some(index) = peers
-                .iter()
-                .position(|(other, _)| other.frame.frame_uuid == entry.frame.frame_uuid)
-            else {
-                continue;
-            };
-            let set: Vec<DarkMeasurement> = peers.iter().map(|(_, dark)| (*dark).clone()).collect();
-            let verdicts = if kind == CalibrationKind::Bias {
-                seiza_calibration::screen_bias(&set, bias_screening)
-            } else {
-                seiza_calibration::screen_darks(&set, dark_screening)
-            };
-            let Some(verdict) = verdicts.into_iter().nth(index) else {
-                continue;
-            };
-            let stray_light = (kind != CalibrationKind::Bias)
-                .then(|| stray_light_text(&verdict, &set, index))
-                .flatten();
-            judged.insert(
-                entry.frame.frame_uuid.clone(),
-                judge(verdict, stray_light, kind),
-            );
-        }
-    }
-}
-
-/// The library's stray-light words for a dark whose level is poor: how far
-/// above the quietest of its peers it sits.
-fn stray_light_text(
-    verdict: &FrameVerdict,
-    set: &[DarkMeasurement],
-    index: usize,
-) -> Option<String> {
-    let finding = verdict
-        .findings
-        .iter()
-        .find(|finding| finding.code == FindingCode::LevelExcess && finding.grade == Grade::Poor)?;
-    let quietest = set.iter().min_by(|a, b| a.level.total_cmp(&b.level))?;
-    let frame = set.get(index)?;
-    Some(format!(
-        "stray light: level {:.1} sits {:.1} above the quietest dark, {:.1} times its pixel \
-         spread of {:.1}",
-        frame.level,
-        frame.level - quietest.level,
-        finding.value,
-        quietest.sigma
-    ))
-}
-
-/// The key flats of one session share. Filters compare without case.
-#[derive(Clone, PartialEq, Eq, Hash)]
-struct FlatSessionKey {
-    rig: String,
-    night: String,
-    filter: Option<String>,
-    width: usize,
-    height: usize,
-}
-
-/// Flats by session, each session screened as one set.
-fn judge_flats(measured: &[Measured], nights: &Nights, judged: &mut HashMap<String, Judged>) {
-    for set in flat_sessions(measured, nights) {
-        let measurements: Vec<FlatMeasurement> = set
-            .iter()
-            .filter_map(|entry| match &entry.measurement {
-                StoredMeasurement::Flat(flat) => Some(flat.measurement.clone()),
-                StoredMeasurement::Dark(_) => None,
-            })
-            .collect();
-        // A session is one rig's, so its flats are graded by that rig's limits.
-        let Some(rig) = set.first().map(|entry| entry.frame.rig_uuid.as_str()) else {
-            continue;
-        };
-        let rules = rules_for_rig(rig);
-        let report = match seiza_calibration::screen_flats(&measurements, &rules.flat) {
-            Ok(report) => report,
-            Err(error) => {
-                tracing::warn!("calibration grade: a flat session was not screened: {error}");
-                continue;
-            }
-        };
-        for (entry, verdict) in set.iter().zip(report.frames) {
-            judged.insert(
-                entry.frame.frame_uuid.clone(),
-                judge(verdict, None, CalibrationKind::Flat),
-            );
-        }
-    }
-}
-
-/// Measured flats split into sessions: one night, rig and filter, one frame
-/// size, and sensor and optical settings that do not contradict the first
-/// frame of the session. Frames arrive in capture order.
-fn flat_sessions<'a>(measured: &'a [Measured], nights: &Nights) -> Vec<Vec<&'a Measured>> {
-    let mut sessions: Vec<(FlatSessionKey, Vec<&Measured>)> = Vec::new();
-    for entry in measured {
-        let StoredMeasurement::Flat(flat) = &entry.measurement else {
-            continue;
-        };
-        if entry.frame.kind != CalibrationKind::Flat {
-            continue;
-        }
-        let key = FlatSessionKey {
-            rig: entry.frame.rig_uuid.clone(),
-            night: entry
-                .frame
-                .captured_at
-                .map(|at| nights.night_of_frame(&entry.frame.rig_uuid, &entry.frame.frame_uuid, at))
-                .unwrap_or_else(|| "unknown".into()),
-            filter: entry
-                .frame
-                .filter
-                .as_deref()
-                .map(|filter| filter.trim().to_ascii_lowercase()),
-            width: flat.width,
-            height: flat.height,
-        };
-        let tolerances = rules_for_rig(&entry.frame.rig_uuid).tolerances();
-        let joins = |(session_key, frames): &&mut (FlatSessionKey, Vec<&Measured>)| {
-            *session_key == key
-                && frames.first().is_some_and(|first| {
-                    signature_sensor_consistent(&first.signature, &entry.signature)
-                        && seiza_calibration::optics_consistent(
-                            &first.signature.seiza,
-                            &entry.signature.seiza,
-                            &tolerances,
-                        )
-                })
-        };
-        match sessions.iter_mut().find(|session| joins(session)) {
-            Some((_, frames)) => frames.push(entry),
-            None => sessions.push((key, vec![entry])),
-        }
-    }
-    sessions.into_iter().map(|(_, frames)| frames).collect()
-}
-
-fn judge(verdict: FrameVerdict, stray_light: Option<String>, kind: CalibrationKind) -> Judged {
-    // The worst finding speaks for the frame; the first of equal grade.
-    let main = verdict
-        .findings
-        .iter()
-        .find(|finding| finding.grade == verdict.grade)
-        .filter(|_| verdict.grade != Grade::Ok);
-    let reason = main.map(|finding| match (&stray_light, finding.code) {
-        (Some(text), FindingCode::LevelExcess) if finding.grade == Grade::Poor => text.clone(),
-        _ => describe_finding(finding, kind),
-    });
-    Judged {
-        grade: verdict.grade,
-        code: main.map(|finding| finding.code),
-        reason,
-        findings: verdict.findings,
-        stray_light,
-    }
-}
-
-/// One finding in plain words, with its number.
-pub fn describe_finding(finding: &Finding, kind: CalibrationKind) -> String {
-    let value = finding.value;
-    let peers = if kind == CalibrationKind::Flat {
-        "its session"
-    } else {
-        "its peers"
-    };
-    match finding.code {
-        FindingCode::Clipped => format!("{:.2}% of samples clipped", value * 100.0),
-        FindingCode::Bright => format!("brightest channel at {:.0}% of full scale", value * 100.0),
-        FindingCode::Dim => format!("dimmest channel at {:.1}% of full scale", value * 100.0),
-        FindingCode::Illumination => {
-            format!(
-                "light falls {:.1}% off the pattern of {peers}",
-                value * 100.0
-            )
-        }
-        FindingCode::Features => format!("{value:.0} clear spots"),
-        FindingCode::ChangingFeatures => format!("{value:.0} spots that change across {peers}"),
-        FindingCode::CarriedFeatures => format!("{value:.0} changing spots in most frames"),
-        FindingCode::Level => format!("level {value:.1} times the noise from {peers}"),
-        FindingCode::LevelExcess => {
-            format!("level {value:.2} times its spread above the quietest dark")
-        }
-        FindingCode::Noise => format!("noise {value:.2} times that of {peers}"),
-        FindingCode::RowBanding => format!("row banding {value:.2} of the noise"),
-        FindingCode::ColumnBanding => format!("column banding {value:.2} of the noise"),
-        FindingCode::HotPixels => format!("{value:.1} times the hot pixels of {peers}"),
-        code => format!("{} {value:.3}", code.as_str()),
-    }
 }
 
 fn store_grades(
@@ -1148,7 +837,7 @@ pub(super) fn sync_quality(
 /// Count one frame's choice going from `before` to `after`.
 fn count_choice(choices: &mut CalibrationChoiceCounts, before: &Value, after: &Value) {
     let read = |value: &Value| match value {
-        Value::Text(text) => QualityOverride::from_db(Some(text)),
+        Value::Text(text) => QualityOverride::parse(text),
         _ => None,
     };
     let (before, after) = (read(before), read(after));

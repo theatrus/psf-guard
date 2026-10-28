@@ -291,6 +291,12 @@ pub struct Nights {
     frames: Arc<HashMap<String, Site>>,
 }
 
+impl seiza_calibration::library::NightSplit for Nights {
+    fn boundary(&self, rig_uuid: &str, frame_uuid: &str) -> i64 {
+        self.frame(rig_uuid, frame_uuid).boundary_seconds
+    }
+}
+
 impl Nights {
     /// Every rig and frame of the catalog, as settings and sites say.
     pub fn load(conn: &Connection) -> Self {

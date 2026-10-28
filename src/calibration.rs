@@ -1500,9 +1500,10 @@ pub(crate) fn frame_summaries(
                 grade: row.get(27)?,
                 grade_code: row.get(30)?,
                 grade_reason: row.get(28)?,
-                quality_override: QualityOverride::from_db(
-                    row.get::<_, Option<String>>(29)?.as_deref(),
-                ),
+                quality_override: row
+                    .get::<_, Option<String>>(29)?
+                    .as_deref()
+                    .and_then(QualityOverride::parse),
             };
             Ok((
                 row_to_frame(row)?,
@@ -1867,9 +1868,8 @@ fn table_column_names(conn: &Connection, table: &str) -> Result<Vec<String>> {
 
 use seiza_calibration::library::coherent_cohort as master_subset_report;
 use seiza_calibration::library::matching::{
-    dark_within_reach, exposure_matches, frame_signature, rotation_gap,
-    signature_sensor_consistent, signature_sensor_matches, temperature_admits, temperature_matches,
-    validity_admits, Signature,
+    dark_within_reach, exposure_matches, frame_signature, rotation_gap, signature_sensor_matches,
+    temperature_admits, temperature_matches, validity_admits, Signature,
 };
 
 /// The frames a master of `kind` takes from `frames`, given nearest first.
@@ -3396,16 +3396,9 @@ fn flat_near_miss_in(
 /// The imaging night a timestamp belongs to, for nights that split
 /// `boundary` seconds after 00:00 UTC: a rig's local noon for its
 /// calibration frames ([`Nights`]), the catalog's quiet hours for lights
-/// ([`crate::server::sky_coverage::night_boundary`]). An evening and the small
-/// hours after it share a date, and so do the flats shot at either end, the
-/// way N.I.N.A.'s local `DATEMINUS12` folders group them. Twelve hours off
-/// UTC would not: a site west of Greenwich would see its dawn flats a day
-/// late and its nights split at local evening.
-pub(crate) fn night_of(timestamp: i64, boundary: i64) -> String {
-    chrono::DateTime::from_timestamp(timestamp - boundary, 0)
-        .map(|when| when.date_naive().to_string())
-        .unwrap_or_else(|| "unknown".into())
-}
+/// ([`crate::server::sky_coverage::night_boundary`]). Seiza's, so the
+/// desktop apps name nights as this server does.
+pub(crate) use seiza_calibration::library::night_of;
 
 /// Where a project's nights split, for the date links of its report: the
 /// split of the profile most of its lights were shot under. A project
@@ -5582,11 +5575,13 @@ fn build_master_once(
     // not graded yet. Once every dark is graded or chosen, the grades have
     // kept the poor ones out, and the screen would only overrule a person
     // who chose to use one anyway.
-    let dark_level_screening = matches!(kind, CalibrationKind::Dark | CalibrationKind::DarkFlat)
-        && !quality::all_judged(conn, frames).unwrap_or_else(|error| {
+    let dark_level_screening = match quality::index_of(conn, frames) {
+        Ok(index) => seiza_calibration::library::dark_level_screening(kind, frames, &index),
+        Err(error) => {
             tracing::warn!("reading dark grades: {error:#}; screening every dark");
-            false
-        });
+            matches!(kind, CalibrationKind::Dark | CalibrationKind::DarkFlat)
+        }
+    };
     let source_hash = source_set_hash(
         frames,
         bias_dependency,
@@ -7626,7 +7621,9 @@ fn row_to_frame(row: &rusqlite::Row<'_>) -> rusqlite::Result<CalibrationFrame> {
             row.get(26)?,
             row.get::<_, Option<String>>(27)?.as_deref(),
             row.get(28)?,
-            quality::QualityOverride::from_db(row.get::<_, Option<String>>(29)?.as_deref()),
+            row.get::<_, Option<String>>(29)?
+                .as_deref()
+                .and_then(quality::QualityOverride::parse),
         ),
         source_verified: false,
     })
