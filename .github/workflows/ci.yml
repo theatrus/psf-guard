@@ -1,12 +1,5 @@
 name: CI
 
-# Linux (x64 and arm64) jobs run on ephemeral 32-core runners (tfinfra
-# roots/github-runners, docs/github-runners-plan.md). Windows, macOS and
-# every pull request from a fork stay on GitHub's runners: a fork's code
-# never runs on ours. (Windows ran on ours for a week; on-demand Windows
-# licensing made it cost more than it saved.) Job names are unchanged, so
-# the required checks still match.
-
 on:
   # Release branches (`release/v0.10`) ship point releases, so they get the
   # same checks as main without a hand-started run.
@@ -34,7 +27,7 @@ env:
 jobs:
   test:
     name: Test on ${{ matrix.os }}
-    runs-on: ${{ (github.event.pull_request.head.repo.fork || matrix.os == 'macos-latest' || matrix.os == 'windows-latest') && matrix.os || fromJSON('["self-hosted","linux","ghr-linux-x64"]') }}
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -88,9 +81,6 @@ jobs:
     # every branch from keeping its own copy of the same 2 GB.
     - name: Cache cargo build
       uses: Swatinem/rust-cache@v2
-      # Our runners compile through sccache in S3 instead; GitHub's cache would
-      # only duplicate it, and saving it to GitHub is slow from AWS.
-      if: ${{ !startsWith(runner.name, 'ghr-') }}
       with:
         key: test
         save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -160,7 +150,7 @@ jobs:
   # requires, and the steps' `matrix.os` tests.
   test-linux:
     name: Test on ${{ matrix.os }}
-    runs-on: ${{ github.event.pull_request.head.repo.fork && matrix.os || fromJSON('["self-hosted","linux","ghr-linux-x64"]') }}
+    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         os: [ubuntu-22.04]
@@ -168,7 +158,7 @@ jobs:
 
   e2e:
     name: Playwright end-to-end (Linux)
-    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-22.04' || fromJSON('["self-hosted","linux","ghr-linux-x64"]') }}
+    runs-on: ubuntu-22.04
     needs: test-linux
     steps:
     - uses: actions/checkout@v7
@@ -213,38 +203,13 @@ jobs:
     - name: Make binary executable
       run: chmod +x "${{ runner.temp }}/psf-guard-bin/psf-guard"
 
-    # The specs share one set of servers and reset its database list, so a
-    # run takes one test at a time (workers: 1). Shards side by side, each
-    # with servers of its own on its own ports and tmp directory, use the rest
-    # of a 32-vCPU runner: four here, one on a fork's 4-vCPU hosted runner.
-    # Playwright shards by file, so stack-preview.spec.ts (~5 min) sets the
-    # floor. Specs reach at most 8 ports above PSF_GUARD_E2E_PORT.
     - name: Run Playwright tests
       env:
         PSF_GUARD_E2E_BINARY: ${{ runner.temp }}/psf-guard-bin/psf-guard
         CI: 'true'
-        SHARDS: ${{ github.event.pull_request.head.repo.fork && '1' || '4' }}
       run: |
         cd static
-        pids=()
-        for i in $(seq "$SHARDS"); do
-          PSF_GUARD_E2E_PORT=$((13000 + 20 * i)) PSF_GUARD_E2E_TMP="$RUNNER_TEMP/e2e-$i" \
-            npx playwright test --shard="$i/$SHARDS" --output="test-results/shard-$i" \
-            > "$RUNNER_TEMP/e2e-$i.log" 2>&1 &
-          pids+=($!)
-        done
-        failed=0
-        for i in $(seq "$SHARDS"); do
-          status=0; wait "${pids[$((i - 1))]}" || status=$?
-          echo "::group::shard $i/$SHARDS (exit $status)"
-          cat "$RUNNER_TEMP/e2e-$i.log"
-          echo "::endgroup::"
-          if [ "$status" -ne 0 ]; then
-            failed=1
-            grep -E '^\s+[0-9]+\) |failed|passed \(' "$RUNNER_TEMP/e2e-$i.log" || true
-          fi
-        done
-        exit "$failed"
+        npx playwright test
 
     - name: Run isolated Director UI tests
       env:
@@ -267,7 +232,7 @@ jobs:
 
   test-tauri:
     name: Test Tauri Build on ${{ matrix.os }}
-    runs-on: ${{ (github.event.pull_request.head.repo.fork || matrix.os == 'macos-latest' || matrix.os == 'windows-latest') && matrix.os || fromJSON('["self-hosted","linux","ghr-linux-x64"]') }}
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -338,9 +303,6 @@ jobs:
 
     - name: Cache cargo build
       uses: Swatinem/rust-cache@v2
-      # Our runners compile through sccache in S3 instead; GitHub's cache would
-      # only duplicate it, and saving it to GitHub is slow from AWS.
-      if: ${{ !startsWith(runner.name, 'ghr-') }}
       with:
         key: tauri
         save-if: ${{ github.ref == 'refs/heads/main' }}

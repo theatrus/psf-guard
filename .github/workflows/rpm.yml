@@ -1,12 +1,5 @@
 name: RPM
 
-# Linux (x64 and arm64) jobs run on ephemeral 32-core runners (tfinfra
-# roots/github-runners, docs/github-runners-plan.md). Windows, macOS and
-# every pull request from a fork stay on GitHub's runners: a fork's code
-# never runs on ours. (Windows ran on ours for a week; on-demand Windows
-# licensing made it cost more than it saved.) Job names are unchanged, so
-# the required checks still match.
-
 on:
   push:
     branches: [ main, master, 'release/**' ]
@@ -24,13 +17,9 @@ permissions:
 jobs:
   build:
     name: Build RPM on Fedora ${{ matrix.fedora }}
-    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || fromJSON('["self-hosted","linux","ghr-linux-x64"]') }}
+    runs-on: ubuntu-latest
     container:
       image: fedora:${{ matrix.fedora }}
-    # Our Linux runners set RUSTC_WRAPPER=sccache; the Fedora container has no
-    # sccache, so build without a wrapper. Empty means none.
-    env:
-      RUSTC_WRAPPER: ""
     strategy:
       fail-fast: false
       matrix:
