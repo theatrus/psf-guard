@@ -8,7 +8,6 @@ import { useAllDatabases } from '../../hooks/useDatabases';
 import { openSettings } from '../../utils/settingsIntent';
 import { formatDegrees } from './framingModel';
 import RigProfileCard from './RigProfileCard';
-import DirectorSites from './DirectorSites';
 import EarlyBeta from './EarlyBeta';
 import { retryWhenBusy } from './retry';
 
@@ -19,7 +18,7 @@ function describeStatus(payload: Record<string, unknown>, at: number): string {
 }
 
 /** Every registered database as a rig: planning state, optics and last word from its plugin. */
-export default function DirectorRigs() {
+export default function DirectorRigs({ databaseId }: { databaseId?: string } = {}) {
   const id = useId();
   const databases = useAllDatabases();
   const [openSetup, setOpenSetup] = useState<string | null>(null);
@@ -34,15 +33,15 @@ export default function DirectorRigs() {
   // catalog records: its row links to their calibration settings.
   const calibration = useQuery({ queryKey: ['calibration-settings'], queryFn: apiClient.getCalibrationSettings, retry: false, refetchOnWindowFocus: false });
   return <><section aria-label="Rig databases" className="director-records director-rigs">
-    <div className="director-toolbar"><h2>Rigs</h2></div>
-    <p className="director-muted">Each registered database is one rig, and its projects are plans. Open Setup to change the rig's optics, site and limits. Target Scheduler and PSF Guard Sync run the rig; the N.I.N.A. Director plugin can also pair and report its status. <EarlyBeta /></p>
+    {!databaseId && <div className="director-toolbar"><h2>Rigs</h2></div>}
+    {!databaseId && <p className="director-muted">Each registered database is one rig, and its projects are plans. Open Setup to change the rig's optics, site and limits. Target Scheduler and PSF Guard Sync run the rig; the N.I.N.A. Director plugin can also pair and report its status. <EarlyBeta /></p>}
     {databases.isPending && <p role="status">Loading rig databases...</p>}
     {databases.isError && <div role="alert"><p>{databases.error.message}</p><button type="button" onClick={() => void databases.refetch()}>Retry</button></div>}
     {databases.data?.length === 0 && <button type="button" onClick={() => openSettings('add')}>Add database</button>}
-    <ul className="director-list director-rig-list">{databases.data?.map(db => {
+    <ul className="director-list director-rig-list">{databases.data?.filter(db => !databaseId || db.id === databaseId).map(db => {
       const profile = profiles.data?.find(entry => entry.catalog_slug === db.id);
       const status = profile && statuses.data?.find(entry => entry.rig.id === profile.rig.id);
-      const expanded = openSetup === db.id;
+      const expanded = !!databaseId || openSetup === db.id;
       const setupId = `${id}-${db.id}-setup`;
       return <li key={db.id} className={`director-rig${expanded ? ' is-open' : ''}`}>
         <div className="director-record director-record-wide">
@@ -56,13 +55,13 @@ export default function DirectorRigs() {
             <CalibrationRigLinks rigs={calibration.data?.rigs?.filter(rig => rig.database_ids?.includes(db.id)) ?? []} />
           </div>
           <Link to={`/?${new URLSearchParams({ db: db.id, dbfilter: db.id })}`}><BookOpen size={16} aria-hidden="true" />Library</Link>
-          <button type="button" aria-expanded={expanded} aria-controls={setupId} aria-label={`Setup ${db.name}`} title={`Setup ${db.name}`} onClick={() => { setOpenSetup(expanded ? null : db.id); setOpened(current => current.has(db.id) ? current : new Set(current).add(db.id)); }}>{expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}Setup</button>
+          {!databaseId && <button type="button" aria-expanded={expanded} aria-controls={setupId} aria-label={`Setup ${db.name}`} title={`Setup ${db.name}`} onClick={() => { setOpenSetup(expanded ? null : db.id); setOpened(current => current.has(db.id) ? current : new Set(current).add(db.id)); }}>{expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}Setup</button>}
         </div>
         <div id={setupId} hidden={!expanded}>{(expanded || opened.has(db.id)) && <RigProfileCard key={db.id} slug={db.id} />}</div>
       </li>;
     })}</ul>
   </section>
-  <DirectorSites /></>;
+  </>;
 }
 
 /** A catalog's calibration rigs, each a link into its calibration settings

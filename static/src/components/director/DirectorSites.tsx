@@ -45,7 +45,7 @@ export default function DirectorSites() {
   };
   return <section aria-label="Sites" className="director-records director-sites">
     <div className="director-toolbar"><h2>Sites</h2></div>
-    <p className="director-muted">A site defines a location and horizon. Choose a rig's planning site under Setup. The rig uses that site's settings unless you override them.</p>
+    <p className="director-muted">A site defines a location and horizon. Choose a rig's planning site under Rig setup → Site. The rig uses that site's settings unless you override them.</p>
     {sites.isPending && <p role="status">Loading sites...</p>}
     {sites.isError && <div role="alert"><p>{message(sites.error)}</p><button type="button" onClick={() => void sites.refetch()}>Retry</button></div>}
     {sites.data?.items.length === 0 && <p className="director-muted">No sites yet.</p>}

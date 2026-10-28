@@ -21,6 +21,24 @@
   stacks rebuild once. Flat trimming, fallback, manual choices and tunable
   thresholds retain their current behavior through the shared Seiza policy.
 
+- Settings lists databases directly in the left pane, with **New / import**
+  for adding a database. Select a database to open **Rig setup**, **Database &
+  files**, **Import** or **Sync** in the same navigation. Shared **Sites** are under
+  **Presets**. Sync consistently calls its local and remote stores databases.
+- Quality analysis is under **Review → Grading & display**; calibrated-copy
+  pairing is under **Processing → Calibration**. Both offer shared defaults
+  and database overrides. Your configured databases keep their choices as overrides; newly added databases
+  inherit shared defaults. AstroBin filter maps are beside shared AstroBin
+  defaults under **Exports & integrations → AstroBin**.
+- Database overrides use the same controls as Calibration rig overrides.
+  Inherited values align with their override buttons.
+  Each database has an **Import** page with directly editable scan rules,
+  automatic-import settings and previews. Creating a database from image
+  folders offers the same exclusion patterns and scan filters before the first import.
+- Import uses saved filters by default. Expand **Scan rules** to edit them;
+  saving closes the editor again. New-database filters start collapsed too.
+  Long folder paths wrap within the manual import preview on phones.
+
 - PSF Guard's zstd library is updated for memory-safety advisories in its
   stream and context handling. PSF Guard uses zstd to read and write
   compressed XISF files and saved stacking contexts, and to decompress HTTP

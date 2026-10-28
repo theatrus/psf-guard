@@ -804,6 +804,9 @@ pub struct CreateDatabaseRequest {
     /// imported images' metadata (missing keys only; default true).
     #[serde(default)]
     pub fill_metadata: Option<bool>,
+    /// Applied to the first import and saved for subsequent imports.
+    #[serde(default)]
+    pub scan_rules: Option<crate::commands::import::scan_rules::ScanRules>,
 }
 
 /// `POST /api/databases/create` response: the registered database plus the

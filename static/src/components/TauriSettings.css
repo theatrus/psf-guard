@@ -747,20 +747,24 @@
   color: var(--color-text-secondary);
 }
 
-.tauri-settings .db-add-buttons {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 4px;
-}
-
 .tauri-settings .import-progress-panel {
+  min-width: 0;
+  overflow-wrap: anywhere;
   margin-top: 12px;
   padding: 10px 12px;
   border: 1px solid var(--color-border-secondary);
   border-radius: 6px;
   background: var(--color-bg-secondary);
   font-size: 13px;
+}
+
+.tauri-settings .import-scope-choice {
+  flex-wrap: wrap;
+}
+
+.tauri-settings .import-scope-choice select {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .tauri-settings .import-progress-line {
@@ -888,6 +892,10 @@
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
   gap: 10px;
+}
+
+.tauri-settings .scheduler-sync-endpoints:where([data-local-catalog]) {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .tauri-settings .scheduler-sync-endpoints label {
@@ -1042,6 +1050,13 @@
   border-radius: 6px;
   display: grid;
   gap: 8px;
+}
+
+.tauri-settings .database-import-fields {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
 }
 
 .tauri-settings .autoimport-fields legend {
@@ -2119,6 +2134,7 @@
 }
 
 .tauri-settings .settings-setups > * {
+  min-width: 0;
   margin: 0;
   padding: 18px 20px 20px;
   border: 1px solid var(--color-border-secondary);
@@ -2703,6 +2719,11 @@
   text-align: left;
 }
 
+/* Keep inherited values centered beside their override controls. */
+.tauri-settings .settings-setups .calibration-rule-inherited {
+  margin: 0;
+}
+
 @media (max-width: 640px) {
   .tauri-settings .settings-setups .calibration-matching-group .review-preference,
   .tauri-settings .settings-setups .wbpp-option,
@@ -2982,3 +3003,76 @@
   margin: 0 0 12px;
   padding-left: 20px;
 }
+
+/* The catalog is chosen from its parent list; task pages keep that context. */
+.tauri-settings .settings-rig-databases {
+  display: grid;
+  gap: 0.75rem;
+  list-style: none;
+  margin: 1rem 0 0;
+  padding: 0;
+}
+
+.tauri-settings .settings-rig-database-open {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 1rem;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 6px;
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tauri-settings .settings-rig-database-open:hover {
+  background: var(--color-bg-hover);
+}
+
+.tauri-settings .settings-rig-database-open > span {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.tauri-settings .settings-rig-database-open small {
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.tauri-settings .settings-rig-database-open > svg {
+  flex-shrink: 0;
+}
+
+.tauri-settings .settings-rig-database-breadcrumb {
+  font-size: 0.9rem;
+}
+
+.tauri-settings .settings-rig-database-breadcrumb strong {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.tauri-settings .settings-tab[data-depth='1'] {
+  padding-left: 1.4rem;
+  font-size: 0.8rem;
+}
+
+.tauri-settings .settings-tab[aria-expanded='true'] {
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+
+.tauri-settings .processing-policy-editor {
+  padding: 0.5rem 0;
+}
+
+.tauri-settings .settings-rig-database-breadcrumb {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem;
+}
+.tauri-settings .settings-tab[aria-expanded] { display: flex; align-items: center; gap: 0.4rem; }
+.tauri-settings .settings-tab[aria-expanded='true'] > svg { transform: rotate(90deg); }

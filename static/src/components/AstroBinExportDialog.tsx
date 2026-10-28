@@ -206,7 +206,7 @@ export default function AstroBinExportDialog({ request, onClose }: Props) {
                 . Find the exact filter there and paste its address, or the number, here. Rows
                 for these filters have an empty filter cell until you do. What you enter is saved
                 to this catalog&apos;s filter map for every night; if the rig changed filters
-                over time, give the entries first and last nights under Settings → Databases.
+                over time, set the entries’ first and last nights under the database’s Database &amp; files → AstroBin filters page in Settings.
               </p>
               <div className="astrobin-unmapped-grid">
                 {unmapped.map((filter) => (

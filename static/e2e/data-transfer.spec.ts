@@ -10,7 +10,7 @@ import { fixtureDbPath, fixtureImageDir, resetDatabases, tmpBase, openSettings, 
  */
 async function openSyncTab(page: Page) {
   await openSettings(page);
-  await selectSettingsSection(page, 'sync');
+  await selectSettingsSection(page, 'sync', 'Review copy');
 }
 
 test.beforeEach(async ({ request }) => {
@@ -97,10 +97,6 @@ test('grade transfer requires a dry preview before Apply appears', async ({
   await openSyncTab(page);
 
   const workspace = page.locator('.scheduler-sync-workspace');
-  await workspace.getByLabel('Transfer source').selectOption({ label: 'Review copy' });
-  await workspace
-    .getByLabel('Transfer destination')
-    .selectOption({ label: 'Telescope scheduler' });
   await workspace.getByRole('button', { name: 'Send reviewed grades' }).click();
   await expect(
     workspace.getByRole('button', { name: 'Apply this preview' })
@@ -209,6 +205,7 @@ test('settings shows calibration coverage for each database rig', async ({ page 
   await page.goto('/');
   await openSettings(page);
 
+  await selectSettingsSection(page, 'databases', 'Review copy');
   const review = page.locator('.db-row').filter({ hasText: 'Review copy' });
   await expect(review.getByText(/Calibration library · 42 frames · 3 cached masters/)).toBeVisible();
   await expect(review.getByText('Ultracat · TestCam')).toBeVisible();
@@ -246,7 +243,7 @@ test('data transfer controls fit a compact settings view', async ({ page }) => {
   await expect(workspace.getByLabel('Transfer destination')).toBeVisible();
   await expect(
     workspace.getByRole('button', { name: 'Swap source and destination' })
-  ).toBeVisible();
+  ).toHaveCount(0);
 
   const overflows = await workspace.evaluate(
     (element) => element.scrollWidth > element.clientWidth + 1
@@ -301,10 +298,6 @@ test('a pending transfer preview returns after a page reload', async ({ page }) 
   await openSyncTab(page);
 
   let workspace = page.locator('.scheduler-sync-workspace');
-  await workspace.getByLabel('Transfer source').selectOption({ label: 'Review copy' });
-  await workspace
-    .getByLabel('Transfer destination')
-    .selectOption({ label: 'Telescope scheduler' });
   await workspace.getByRole('button', { name: 'Send planning' }).click();
   await workspace.getByRole('button', { name: 'Preview changes' }).click();
   await expect(

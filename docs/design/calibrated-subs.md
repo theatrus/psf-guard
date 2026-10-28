@@ -261,7 +261,7 @@ Seiza owns candidate coherence, external-master adoption, recipe dependencies,
 builder options, exposure, session identity, flat-stability measurement/retries
 and flat-only pedestal acceptance. PSF Guard supplies its existing catalog rows,
 quality/override records, measured grouping book and effective global/rig settings.
-`library::plan_masters` resolves a verified selection without rematching it;
+`library::plan_masters` resolves a verified selection without rematching it.
 The returned session is passed directly into `library::flat_retry`, retaining
 its policy, held-back inputs and resolved time window. The core rejects
 conflicting overrides and drives trim, alternate-session and original-master fallback
@@ -275,5 +275,23 @@ core planning so dark screening never overrides them; star masking is forwarded.
 The shared dip-only flat measurement keeps the existing version 2 cache contract,
 mono/RGB/CFA planes, and 65535 ADU scaling for declared-unit sources. Cached
 measurements remain reusable. Ordered input hashes and shared policy version 4
-invalidate older master/stack decisions once. Published dependencies must replace
-the prototype's pinned core revision before merging.
+invalidate older master/stack decisions once. The implementation consumes published
+Seiza 0.46.0, calibration 0.10.0 and stacking 0.53.0 from crates.io.
+
+## Shared defaults and database overrides
+
+The registry stores processing defaults for automatic quality analysis,
+derivative pairing and measurement of calibrated copies. `processing_overrides`
+on a registration contains optional booleans; null inherits the shared value.
+An absent block preserves the registration's legacy boolean choices as
+explicit overrides. New registrations get an empty block and inherit.
+The legacy boolean fields remain resolved snapshots for older readers.
+Registry loading resolves inherited snapshots before constructing contexts.
+
+Settings writes change only submitted fields under the registry write lock,
+persist before publishing the live settings, and publish before releasing the
+lock. Existing per-database endpoints write explicit overrides through the
+same path. A failed write leaves live settings unchanged. Enabling arrival
+analysis uses the existing arrival queue. Source selection and its fingerprint
+remain in the existing quality cache; inherited policy does not create a new
+image identity or reuse raw evidence as calibrated evidence.

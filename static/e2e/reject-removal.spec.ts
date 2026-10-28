@@ -41,9 +41,9 @@ test('old rejects are removed to the trash from Settings and restored', async ({
   };
   try {
     await page.goto('/');
-    const alreadyOpen = await page.getByRole('tab', { name: 'Databases' }).waitFor({ state: 'visible', timeout: 2000 }).then(() => true, () => false);
+    const alreadyOpen = await page.getByRole('tab', { name: 'Overview' }).waitFor({ state: 'visible', timeout: 2000 }).then(() => true, () => false);
     if (!alreadyOpen) await openSettings(page);
-    await selectSettingsSection(page, 'databases');
+    await selectSettingsSection(page, 'databases', name);
     await page.locator('.db-row', { hasText: name }).getByRole('button', { name: 'Purge Rejects' }).click();
     const dialog = page.getByRole('dialog', { name: `Purge rejects — ${name}` });
     const group = dialog.getByRole('group', { name: 'Remove rejects' });

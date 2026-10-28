@@ -122,7 +122,7 @@ export default defineConfig({
     {
       name: 'webkit',
       use: { ...devices['Desktop Safari'], contextOptions: { reducedMotion: 'reduce' } },
-      testMatch: ['mosaic-view.spec.ts', 'live-stack-preview.spec.ts', 'wbpp-storage.spec.ts', 'detail-scroll.spec.ts', 'detail-phone.spec.ts', 'view-choices.spec.ts', 'form-fields.spec.ts', 'astrobin-export.spec.ts', 'whats-new.spec.ts', 'server-info.spec.ts', 'auth.spec.ts', 'desktop-zoom.spec.ts', 'desktop-server.spec.ts', 'job-queue.spec.ts', 'sequence-dock.spec.ts', 'stack-method-settings.spec.ts', 'project-lifecycle.spec.ts', 'settings-scroll.spec.ts', 'settings-navigation.spec.ts', 'worker-settings.spec.ts', 'desktop-worker-settings.spec.ts'],
+      testMatch: ['mosaic-view.spec.ts', 'live-stack-preview.spec.ts', 'wbpp-storage.spec.ts', 'detail-scroll.spec.ts', 'detail-phone.spec.ts', 'view-choices.spec.ts', 'form-fields.spec.ts', 'astrobin-export.spec.ts', 'whats-new.spec.ts', 'server-info.spec.ts', 'auth.spec.ts', 'desktop-zoom.spec.ts', 'desktop-server.spec.ts', 'job-queue.spec.ts', 'sequence-dock.spec.ts', 'stack-method-settings.spec.ts', 'project-lifecycle.spec.ts', 'settings-scroll.spec.ts', 'settings-navigation.spec.ts', 'rig-database-navigation.spec.ts', 'scan-rules.spec.ts', 'worker-settings.spec.ts', 'desktop-worker-settings.spec.ts'],
     },
   ],
 

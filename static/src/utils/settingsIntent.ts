@@ -22,6 +22,8 @@ export const OPEN_SETTINGS_EVENT = 'psf-guard:open-settings';
 
 export interface OpenSettingsDetail {
   intent?: SettingsIntent;
+  /** Registration slug for a database's Settings page. */
+  databaseId?: string;
   /** With `calibration`: the rig to open. */
   rig?: SettingsRig;
   /** With `calibration`: the setting to bring into view and focus, by its
@@ -31,9 +33,10 @@ export interface OpenSettingsDetail {
 }
 
 /** Ask `App` to open settings, optionally on a specific form. */
-export function openSettings(intent?: SettingsIntent, options: { rig?: SettingsRig; field?: string } = {}): void {
+export function openSettings(intent?: SettingsIntent, options: { rig?: SettingsRig; field?: string; databaseId?: string } = {}): void {
   const detail: OpenSettingsDetail = {};
   if (intent) detail.intent = intent;
+  if (options.databaseId) detail.databaseId = options.databaseId;
   if (options.rig) detail.rig = options.rig;
   if (options.field) detail.field = options.field;
   window.dispatchEvent(new CustomEvent<OpenSettingsDetail>(OPEN_SETTINGS_EVENT, { detail }));
@@ -55,4 +58,10 @@ export function settingsRigOf(event: Event): SettingsRig | null {
 export function settingsFieldOf(event: Event): string | null {
   const detail = (event as CustomEvent<OpenSettingsDetail>).detail;
   return detail?.field ?? null;
+}
+
+/** The explicitly selected registration; never infer it from a rig name. */
+export function settingsDatabaseOf(event: Event): string | null {
+  const value = (event as CustomEvent<OpenSettingsDetail>).detail?.databaseId;
+  return typeof value === 'string' && value.length > 0 ? value : null;
 }

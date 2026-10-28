@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { apiClient } from '../api/client';
 import type { PeerCheck, RemoteSyncDirection, RemoteSyncResult } from '../api/types';
 import type { DbEntry } from '../utils/tauri';
@@ -7,6 +7,7 @@ import type { DbEntry } from '../utils/tauri';
 interface RemotePeerSyncProps {
   databases: DbEntry[];
   disabled?: boolean;
+  localDatabaseId?: string;
 }
 
 const DIRECTIONS: Array<{ value: RemoteSyncDirection; label: string; note: string }> = [
@@ -35,7 +36,7 @@ function summaryLine(summary: Record<string, number>): string {
   return shown.length ? shown.join(', ') : 'nothing to change';
 }
 
-export default function RemotePeerSync({ databases, disabled }: RemotePeerSyncProps) {
+export default function RemotePeerSync({ databases, disabled, localDatabaseId }: RemotePeerSyncProps) {
   const queryClient = useQueryClient();
   const peers = useQuery({
     queryKey: ['peers'],
@@ -59,7 +60,7 @@ export default function RemotePeerSync({ databases, disabled }: RemotePeerSyncPr
   const peerList = peers.data ?? [];
   const selectedPeer = peerList.find((peer) => peer.id === peerId) ?? peerList[0];
   const selectedDb =
-    databases.find((database) => database.id === localDbId) ?? databases[0];
+    databases.find((database) => database.id === (localDatabaseId ?? localDbId)) ?? (localDatabaseId ? undefined : databases[0]);
   const busy = disabled || peers.isLoading;
 
   /** Counts sync requests, so a replaced preview's reply is ignored. */
@@ -83,6 +84,8 @@ export default function RemotePeerSync({ databases, disabled }: RemotePeerSyncPr
       previewing.current = null;
     }
   };
+
+  useEffect(() => () => { latestRun.current += 1; }, []);
 
   const addPeer = useMutation({
     mutationFn: () =>
@@ -120,7 +123,7 @@ export default function RemotePeerSync({ databases, disabled }: RemotePeerSyncPr
       setCheck(result);
       setMessage(
         result.reachable
-          ? `${result.product ?? 'Peer'} ${result.product_version ?? ''} — catalog ${
+          ? `${result.product ?? 'Peer'} ${result.product_version ?? ''} — database ${
               result.catalogs[0] ?? 'unknown'
             }`.trim()
           : `Could not reach the peer: ${result.error ?? 'no reason given'}`
@@ -175,7 +178,7 @@ export default function RemotePeerSync({ databases, disabled }: RemotePeerSyncPr
   if (databases.length === 0) {
     return (
       <div className="scheduler-sync-empty muted">
-        Add a catalog before syncing with a remote PSF Guard.
+        Add a database before syncing with a remote PSF Guard.
       </div>
     );
   }
@@ -264,7 +267,7 @@ export default function RemotePeerSync({ databases, disabled }: RemotePeerSyncPr
               type="password"
               value={formToken}
               onChange={(event) => setFormToken(event.target.value)}
-              placeholder="The key that peer issued for its catalog"
+              placeholder="The key that peer issued for its database"
             />
           </label>
           {/* Outside the label: help text inside one becomes part of the
@@ -315,15 +318,15 @@ export default function RemotePeerSync({ databases, disabled }: RemotePeerSyncPr
       <p className="muted">{DIRECTIONS.find((o) => o.value === direction)?.note}</p>
 
       <label className="remote-peer-local">
-        <span>Local catalog</span>
+        <span>Local database</span>
         <select
-          aria-label="Local catalog"
+          aria-label="Local database"
           value={selectedDb?.id ?? ''}
           onChange={(event) => {
             setLocalDbId(event.target.value);
             invalidatePreview();
           }}
-          disabled={busy}
+          disabled={busy || !!localDatabaseId}
         >
           {databases.map((database) => (
             <option key={database.id} value={database.id}>
@@ -373,7 +376,7 @@ export default function RemotePeerSync({ databases, disabled }: RemotePeerSyncPr
 
       {preview && (
         <div className="remote-peer-preview" role="status">
-          <strong>{preview.peer_product}</strong> — catalog {preview.peer_catalog}
+          <strong>{preview.peer_product}</strong> — database {preview.peer_catalog}
           <p>{summaryLine(preview.summary)}</p>
         </div>
       )}

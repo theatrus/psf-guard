@@ -8,6 +8,8 @@ interface AutoImportSummaryProps {
   settings?: AutoImportSettings;
   /** Preview an import of these folders; offered for held frames. */
   onReview?: (folders: string[]) => void;
+  /** Save edited rules before starting a run with the saved settings. */
+  disabled?: boolean;
 }
 
 /**
@@ -16,7 +18,7 @@ interface AutoImportSummaryProps {
  * held because they match no project. Hidden when the database has never
  * turned the feature on.
  */
-export default function AutoImportSummary({ dbId, settings, onReview }: AutoImportSummaryProps) {
+export default function AutoImportSummary({ dbId, settings, onReview, disabled = false }: AutoImportSummaryProps) {
   const job = useAutoImport(dbId);
   const effective = job.status?.settings ?? settings;
   if (!effective?.enabled) return null;
@@ -31,8 +33,8 @@ export default function AutoImportSummary({ dbId, settings, onReview }: AutoImpo
         type="button"
         className="browse-button"
         onClick={() => job.run()}
-        disabled={job.isStarting || job.isRunning}
-        title="Scan the image directories now for frames the catalog does not have yet"
+        disabled={disabled || job.isStarting || job.isRunning}
+        title="Scan the image directories now for frames the database does not have yet"
       >
         {job.isRunning ? 'Importing…' : 'Run now'}
       </button>
@@ -50,6 +52,7 @@ export default function AutoImportSummary({ dbId, settings, onReview }: AutoImpo
                 <button
                   type="button"
                   className="browse-button"
+                  disabled={disabled}
                   onClick={() => onReview(unmatched.folders)}
                   title={`Preview an import of ${unmatched.folders.join(', ')}`}
                 >

@@ -1,0 +1,39 @@
+# Database navigation and shared Settings captures
+
+These are unedited viewport captures from the browser regression tests. The
+[capture record](captures.json) records the implementation commit, frontend
+asset hashes, fresh backend hash, fixture states, dimensions and PNG hashes.
+All earlier images in this directory have been regenerated.
+
+The main suite uses disposable C925 and Ultra Cat databases. Planning
+availability is stubbed off, while processing defaults, overrides and database
+APIs use the real backend. The pairing-override example saves a shared default
+of Off and a C925 override of On, then tests reset to inheritance. The Rig setup
+and Sites images use the real Director server, saved optics and shared site
+APIs. No live database or paired acquisition client is involved.
+
+The gallery includes the overview, database files, Sync, New / import,
+quality analysis, calibrated-copy defaults, a saved database override,
+AstroBin filter maps, rig setup and shared Sites. Each database has a direct
+**Import** page with saved scan rules collapsed by default and an enabled
+**Preview import** action. Separate captures show the expanded filter editor
+and a manual preview offering to add one new frame to an existing database.
+No confirmation is submitted. The filter-editing sample edits are discarded, so no schedule is saved. The new-database form
+shows the same scan rules; that test applies them to the first import,
+checks the saved rules, edits them on Import, and previews without importing
+more frames.
+
+Desktop captures use Chromium at 1280 × 900 CSS pixels, except Rig setup and
+Sites at 1440 × 1000. Phone captures use WebKit at 390 × 844 CSS pixels,
+except Rig setup and Sites, which use Chromium at that viewport. WebKit
+PNGs have a 2× device pixel ratio. Quality analysis is scrolled into view
+inside Settings; the header and phone section chooser remain visible.
+
+To reshoot, build the frontend and backend from the same implementation,
+then run these specs through `scripts/e2e-local.mjs`, one run at a time:
+
+- Main suite: `static/e2e/rig-database-navigation.spec.ts` and `static/e2e/scan-rules.spec.ts`
+- Director suite: `static/e2e-director/settings-context.spec.ts`
+
+Copy the PNGs without editing them, update the capture record, and inspect
+the final images before attaching them to a PR or using them in a guide.

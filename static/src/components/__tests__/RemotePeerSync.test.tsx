@@ -40,6 +40,14 @@ function withPeers(peers: unknown[]) {
 }
 
 describe('RemotePeerSync', () => {
+  it('uses the opened catalog even when another database appears first', async () => {
+    withPeers([peer]);
+    render(<RemotePeerSync databases={[{ ...local, id: 'other', name: 'Other rig' }, local]} localDatabaseId="local" />, { wrapper: wrapper() });
+    const selection = await screen.findByLabelText('Local database');
+    expect(selection).toHaveValue('local');
+    expect(selection).toBeDisabled();
+  });
+
   it('stops a preview whose direction changed and ignores its late reply', async () => {
     withPeers([peer]);
     let answer: (() => void) | undefined;

@@ -1527,3 +1527,87 @@ async fn import_scans_xisf_frames_alongside_fits() {
         "the XISF frame should be recorded with its own path: {filenames:?}"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn create_applies_and_persists_scan_rules_before_the_first_import() {
+    let dir = tempdir().unwrap();
+    let images = dir.path().join("images");
+    for (folder, object) in [
+        ("LIGHT", "Keep"),
+        ("ignore/LIGHT", "Excluded"),
+        ("OTHER", "NotIncluded"),
+        ("held/LIGHT", "IgnoredFolder"),
+    ] {
+        let folder = images.join(folder);
+        std::fs::create_dir_all(&folder).unwrap();
+        write_fits(
+            &folder.join("light.fits"),
+            object,
+            "L",
+            "2026-04-01T02:00:00.000",
+            10.0,
+        );
+    }
+    std::fs::write(images.join("held/.psfguardignore"), "").unwrap();
+    let state = state_with_management(dir.path());
+    let (status, body) = json_request(
+        build_app(state.clone()),
+        "POST",
+        "/api/databases/create",
+        Some(serde_json::json!({
+            "name": "Filtered first import",
+            "image_dirs": [images],
+            "scan_rules": {
+                "exclude": ["  **/ignore/**  ", ""],
+                "include": ["LIGHT"],
+                "lights_must_say_light": true,
+                "require_object": true,
+                "min_exposure_seconds": 200.0,
+                "match_by_position": false
+            }
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let slug = body["data"]["database"]["id"].as_str().unwrap();
+    let progress = wait_for_import(&state, slug).await;
+    assert_eq!(progress["stage"], "complete", "{progress}");
+    assert_eq!(progress["outcome"]["imported"], 1, "{progress}");
+    let ctx = state.get_database(slug).unwrap();
+    assert_eq!(ctx.scan_rules.exclude, ["**/ignore/**"]);
+    assert_eq!(ctx.scan_rules.include, ["LIGHT"]);
+    assert!(ctx.scan_rules.lights_must_say_light);
+    assert!(ctx.scan_rules.require_object);
+    assert_eq!(ctx.scan_rules.min_exposure_seconds, Some(200.0));
+    assert!(!ctx.scan_rules.match_by_position);
+    let saved: Value =
+        serde_json::from_slice(&std::fs::read(dir.path().join("config.json")).unwrap()).unwrap();
+    assert_eq!(
+        saved["databases"][0]["scan_rules"],
+        serde_json::to_value(&ctx.scan_rules).unwrap()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn create_refuses_invalid_scan_rules_before_creating_any_database() {
+    let dir = tempdir().unwrap();
+    let images = dir.path().join("images");
+    std::fs::create_dir_all(&images).unwrap();
+    let database_path = dir.path().join("should-not-exist.sqlite");
+    let state = state_with_management(dir.path());
+    let (status, body) = json_request(
+        build_app(state.clone()),
+        "POST",
+        "/api/databases/create",
+        Some(serde_json::json!({
+            "name": "Invalid rules",
+            "image_dirs": [images],
+            "db_path": database_path,
+            "scan_rules": { "exclude": [images.join("Hocus Focus")] }
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(!database_path.exists());
+    assert!(!dir.path().join("config.json").exists());
+}

@@ -366,7 +366,7 @@ export default function WbppRunDialog({ request, defaultOptions, onClose }: Prop
           ) : (
             <p className="wbpp-run-muted">
               To save masters beside your other finished work, give this database a process
-              directory under Settings → Databases.
+              directory: open the database under Settings → Databases &amp; rigs → Overview, then choose Database &amp; files → Edit.
             </p>
           )}
           {processDir && publishOnFinish && (

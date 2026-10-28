@@ -204,7 +204,8 @@ one job refreshes the result, the page shows the last cached result.
 
 **Browse calibration** in a project's Calibration report opens this page; the
 Library's calibration pill opens that report. **Open Calibration** on a
-database's summary in **Settings › Databases** also opens the page. Its URL,
+database's summary under **Settings → Databases & rigs → Overview**, then
+**Database & files**, also opens the page. Its URL,
 `#/calibration?db=…`, stores the database, tab, filters, session, frame and display
 settings, so a reload or shared link opens the same view.
 

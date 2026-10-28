@@ -72,6 +72,7 @@ const idleWbppRun = {
 };
 
 export const handlers = [
+  http.get('/api/settings/processing', () => HttpResponse.json({ success: true, data: { defaults: { analyze_new_frames: false, pair_calibrated_copies: true, scan_calibrated_copies: false }, databases: [] }, error: null })),
   http.get('/api/settings/pixinsight', () => HttpResponse.json({ success: true, error: null, data: {
     binary: null, runs_dir: null, runs_dir_free_bytes: null, ready: false,
     detection: { install: null, source: null, checked: [], problem: null }, display: { kind: 'missing' },
