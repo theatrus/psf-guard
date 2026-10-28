@@ -34,8 +34,8 @@ pub use night::{
     SiteBackfill, SiteBackfillOutcome,
 };
 pub use rules::{
-    rule_book, rules_for_light, rules_for_rig, Check, CheckMode, LightNightSplit, RuleBook,
-    RuleNote, RuleSource, RuleValues, Rules, SetBy,
+    rule_book, rules_for_light, rules_for_rig, Check, CheckMode, DarkChoice, ExternalMasterPolicy,
+    LightNightSplit, RuleBook, RuleNote, RuleSource, RuleValues, Rules, SetBy, SettingKey,
 };
 use std::sync::Arc;
 pub use twins::{
@@ -105,9 +105,9 @@ pub const CALIBRATION_SCHEMA_VERSION: i64 = 9;
 /// so bias and dark masters stay put when the check arrives.
 pub const MASTER_CACHE_VERSION: u32 = 3;
 pub use seiza_calibration::library::{
-    CalibrationFrame, CalibrationKind, CalibrationSelection, DarkChoice, ExternalMasterPolicy,
-    LibraryKinds, ValidDirection, DEFAULT_COMPLETE_DARK_FRAMES, DEFAULT_DARK_REACH_DAYS,
-    DEFAULT_FLAT_MAX_AGE_DAYS, MAX_MASTER_FRAMES, MIN_MASTER_FRAMES,
+    CalibrationFrame, CalibrationKind, CalibrationSelection, LibraryKinds, ValidDirection,
+    DEFAULT_COMPLETE_DARK_FRAMES, DEFAULT_DARK_REACH_DAYS, DEFAULT_FLAT_MAX_AGE_DAYS,
+    MAX_MASTER_FRAMES, MIN_MASTER_FRAMES,
 };
 
 /// How many frames of each kind a master built for one light would take.
@@ -1503,7 +1503,7 @@ pub(crate) fn frame_summaries(
                 quality_override: row
                     .get::<_, Option<String>>(29)?
                     .as_deref()
-                    .and_then(QualityOverride::parse),
+                    .and_then(|text| text.parse::<QualityOverride>().ok()),
             };
             Ok((
                 row_to_frame(row)?,
@@ -1870,7 +1870,10 @@ use seiza_calibration::library::matching::{
     dark_within_reach, exposure_matches, frame_signature, rotation_gap, signature_sensor_matches,
     temperature_admits, temperature_matches, validity_admits, Signature,
 };
-use seiza_calibration::library::{coherent_cohort as master_subset_report, flat_set_label};
+use seiza_calibration::library::{
+    coherent_cohort as master_subset_report, FlatAttempt, FlatRetry, FlatRetryAction,
+    FlatRetryPolicy, FlatUse, FlatWithoutMasters,
+};
 
 /// The frames a master of `kind` takes from `frames`, given nearest first.
 fn coherent_master_subset(
@@ -2358,7 +2361,7 @@ pub(crate) fn calibration_gaps<Flats: AsRef<[CalibrationFrame]>>(
                     .unwrap_or_default(),
                 miss.off_by_deg,
                 rules
-                    .set_by("rotation_tolerance_deg")
+                    .who_set(SettingKey::RotationToleranceDeg)
                     .map(|by| format!(" (limit {}°, {by})", miss.tolerance_deg))
                     .unwrap_or_default()
             ),
@@ -2380,7 +2383,7 @@ pub(crate) fn calibration_gaps<Flats: AsRef<[CalibrationFrame]>>(
             format!(
                 "No matching bias, and darks are not used ({})",
                 rules
-                    .set_by("use_darks")
+                    .who_set(SettingKey::UseDarks)
                     .unwrap_or_else(|| "set for this rig".into())
             )
         };
@@ -2397,7 +2400,7 @@ pub(crate) fn calibration_gaps<Flats: AsRef<[CalibrationFrame]>>(
         let age = flats_at.abs_diff(light_at) as f64 / 86_400.0;
         if age > limit {
             let by = rules
-                .set_by("flat_max_age_days")
+                .who_set(SettingKey::FlatMaxAgeDays)
                 .map(|by| format!(" {by}"))
                 .unwrap_or_default();
             gaps.push(CalibrationGap {
@@ -2740,7 +2743,7 @@ fn refusal(
     let (light_seiza, frame_seiza) = (&light_signature.seiza, &candidate_signature.seiza);
     if candidate.is_master && rules.external_masters == ExternalMasterPolicy::Ignore {
         let by = rules
-            .set_by("external_masters")
+            .who_set(SettingKey::ExternalMasters)
             .map(|by| format!(" ({by})"))
             .unwrap_or_default();
         return format!("masters from other software are ignored{by}");
@@ -2749,7 +2752,7 @@ fn refusal(
         return format!(
             "darks are not used ({})",
             rules
-                .set_by("use_darks")
+                .who_set(SettingKey::UseDarks)
                 .unwrap_or_else(|| "set for this rig".into())
         );
     }
@@ -2785,7 +2788,7 @@ fn refusal(
             }
             if !dark_within_reach(candidate, light.timestamp, rules) {
                 let by = rules
-                    .set_by("dark_reach_days")
+                    .who_set(SettingKey::DarkReachDays)
                     .map(|by| format!(" ({by})"))
                     .unwrap_or_default();
                 reasons.push(format!(
@@ -2805,22 +2808,21 @@ fn refusal(
                 frame_seiza,
                 &rules.tolerances(),
             );
-            let set: Vec<String> = ["rotation_tolerance_deg", "focal_length_tolerance_mm"]
-                .into_iter()
-                .filter_map(|key| {
-                    let by = rules.set_by(key)?;
-                    let spec = rules::field(key)?;
-                    let value = match key {
-                        "rotation_tolerance_deg" => rules.rotation_deg,
-                        _ => rules.focal_length_mm,
-                    };
-                    Some(format!(
-                        "{} {} {by}",
-                        spec.label.to_lowercase(),
-                        rules::describe(spec, &serde_json::json!(value))
-                    ))
-                })
-                .collect();
+            let set: Vec<String> = [
+                SettingKey::RotationToleranceDeg,
+                SettingKey::FocalLengthToleranceMm,
+            ]
+            .into_iter()
+            .filter_map(|key| {
+                let by = rules.who_set(key)?;
+                let spec = key.field();
+                Some(format!(
+                    "{} {} {by}",
+                    spec.label.to_lowercase(),
+                    spec.describe(rules.value(key))
+                ))
+            })
+            .collect();
             if !set.is_empty() {
                 reason.push_str(&format!(" ({})", set.join("; ")));
             }
@@ -2839,7 +2841,7 @@ fn temperature_refusal(light: Option<f64>, dark: Option<f64>, rules: &Rules) -> 
             let apart = dark - light;
             let way = if apart >= 0.0 { "warmer" } else { "colder" };
             let limit = rules.dark_temperature_c;
-            let by = rules.set_by_suffix("dark_temperature_tolerance_c");
+            let by = rules.who_set_suffix(SettingKey::DarkTemperatureToleranceC);
             format!(
                 "dark is {:.1} °C {way} than the light (limit {} °C{by})",
                 apart.abs(),
@@ -3772,7 +3774,7 @@ fn estimate_flat_pedestal(
             estimates.push(pedestal);
         }
     }
-    seiza_calibration::library::accept_pedestal(&estimates, hint)
+    seiza_calibration::library::pedestal_from_fits(&estimates, hint)
         .map_err(|refusal| tracing::debug!("pedestal fit skipped: {refusal}"))
         .ok()
 }
@@ -4021,13 +4023,11 @@ fn resolve_masters_with_recipe(
             .collect();
         // A master whose dependency failed is skipped rather than built
         // without it.
-        let skip_because = seiza_calibration::library::master_dependencies(kind)
+        let skip_because = kind
+            .dependencies()
             .iter()
             .find(|dependency| failures.iter().any(|(failed, _)| failed == *dependency))
-            .map(|dependency| match dependency {
-                CalibrationKind::DarkFlat => "dark-flat",
-                other => other.as_str(),
-            });
+            .map(|dependency| dependency.label());
         if let Some(master) = adopt {
             return match adopt_external_master(
                 conn,
@@ -4236,8 +4236,17 @@ fn resolve_masters_with_recipe(
     // dependency-aware hash rebuilds and applies it properly.
     let mut flat_note = None;
     let mut estimated_pedestal = None;
-    let flat = if flat.is_some() && bias.is_none() && dark.is_none() {
-        if mode == CalibrationMode::On {
+    let without_masters = if mode == CalibrationMode::On {
+        FlatWithoutMasters::Force
+    } else {
+        FlatWithoutMasters::FitPedestal
+    };
+    let flat = match FlatUse::decide(
+        flat.is_some(),
+        bias.is_some() || dark.is_some(),
+        without_masters,
+    ) {
+        FlatUse::ForcedWithoutPedestal => {
             // The caller forced calibration on, accepting the damage Auto
             // refuses. Say what to expect so a bright-edged result is not
             // mistaken for a broken flat.
@@ -4248,7 +4257,8 @@ fn resolve_masters_with_recipe(
                     .to_string(),
             );
             flat
-        } else {
+        }
+        FlatUse::NeedsPedestalFit => {
             // The pedestal the division needs removed can be fitted from
             // the lights themselves: background = sky * flat response +
             // pedestal, so the intercept of that line is the pedestal. A
@@ -4259,7 +4269,7 @@ fn resolve_masters_with_recipe(
                     estimate_flat_pedestal(&master.path, light_paths, header_pedestal_hint(&light))
                 })
             });
-            if estimated_pedestal.is_some() {
+            if FlatUse::after_fit(estimated_pedestal) == FlatUse::FittedPedestal {
                 flat
             } else {
                 let reason = "skipped: dividing a flat into a light with no bias or dark master \
@@ -4272,8 +4282,7 @@ fn resolve_masters_with_recipe(
                 None
             }
         }
-    } else {
-        flat
+        _ => flat,
     };
     applied.flat_master = flat.as_ref().map(|master| master.label());
 
@@ -5431,18 +5440,20 @@ struct StagedMaster {
 }
 
 impl BuiltAttempt {
-    /// Frames that disagree with the master at enough of its feature pixels
-    /// to have been looking at a different sensor window.
-    fn drifting(&self) -> Vec<CalibrationFrame> {
-        let Some(stability) = &self.stability else {
-            return Vec::new();
-        };
-        self.used
-            .iter()
-            .zip(&stability.disagreement)
-            .filter(|(_, disagree)| **disagree >= stability.drift_threshold)
-            .map(|(frame, _)| frame.clone())
-            .collect()
+    /// The build as the flat retry judges it: the frames it combined and
+    /// how far each disagreed with the master.
+    fn flat_attempt(&self) -> FlatAttempt {
+        let stability = self.stability.as_ref();
+        FlatAttempt {
+            used: self.used.iter().map(|f| f.frame_uuid.clone()).collect(),
+            disagreement: stability
+                .map(|s| s.disagreement.clone())
+                .unwrap_or_default(),
+            drift_threshold: stability.map_or(0, |s| s.drift_threshold),
+            feature_pixels: stability.map_or(0, |s| s.feature_pixels),
+            memo: self.memo,
+            label: None,
+        }
     }
 }
 
@@ -5874,19 +5885,6 @@ fn build_master(
             .map(|attempt| publish_master(&context, attempt, None))
             .transpose();
     }
-    // The next set never comes from the far side of a measured change.
-    let without = |excluded: &[CalibrationFrame]| -> Vec<CalibrationFrame> {
-        frames
-            .iter()
-            .filter(|frame| {
-                !held_back.contains(&frame.frame_uuid)
-                    && !excluded
-                        .iter()
-                        .any(|other| other.frame_uuid == frame.frame_uuid)
-            })
-            .cloned()
-            .collect()
-    };
     // A retry that fails must not fail the build: the first master exists
     // and is the honest fallback, named as such below.
     let retry = |candidates: &[CalibrationFrame]| match build(candidates, true) {
@@ -5899,96 +5897,112 @@ fn build_master(
     let Some(first) = build(frames, true)? else {
         return Ok(None);
     };
-    let drifting = first.drifting();
-    if drifting.is_empty() {
-        return publish_master(&context, first, None).map(Some);
-    }
-    let feature_pixels = first
-        .stability
-        .as_ref()
-        .map_or(0, |stability| stability.feature_pixels);
-    let used = first.used.len();
-
-    // A minority of odd frames: the rest of this set still make an honest
-    // master. Only this set's frames are offered, so the trim cannot slide
-    // onto another session while the card speaks of leaving frames out.
-    if seiza_calibration::library::trims_to_majority(used, drifting.len()) {
-        if let Err(stop) = stop_requested(cancel) {
-            discard_attempt(first);
-            return Err(stop);
-        }
-        let rest: Vec<CalibrationFrame> = first
-            .used
-            .iter()
-            .filter(|frame| {
-                !drifting
-                    .iter()
-                    .any(|other| other.frame_uuid == frame.frame_uuid)
-            })
-            .cloned()
-            .collect();
-        let trimmed = retry(&rest);
-        // A stop that lands inside the retry ends the build with no verdict:
-        // neither master is published or remembered.
-        if let Err(stop) = stop_requested(cancel) {
-            trimmed.into_iter().for_each(discard_attempt);
-            discard_attempt(first);
-            return Err(stop);
-        }
-        if let Some(trimmed) = trimmed {
-            if trimmed.drifting().is_empty() && !trimmed.memo {
-                set_aside_master(&context, first);
-                let note =
-                    seiza_calibration::library::trimmed_note(drifting.len(), used, feature_pixels);
-                return publish_master(&context, trimmed, Some(note)).map(Some);
-            }
-            set_aside_master(&context, trimmed);
-        }
-    }
-
-    // The set disagrees with itself: the next set takes its place when
-    // there is one. Everything shot around this set goes with it: the
-    // frames the clusterer dropped from the same noon saw the same window.
-    if let Err(stop) = stop_requested(cancel) {
-        discard_attempt(first);
-        return Err(stop);
-    }
-    let other = retry(&without(&seiza_calibration::library::same_session_as(
-        &first.used,
+    // Seiza decides what the set's stability calls for: leave a minority of
+    // drifting frames out, take the next session, or keep the first set
+    // with a note. This builds, stages and publishes what it asks for. The
+    // next set never comes from the far side of a measured change
+    // (`held_back`).
+    let mut retry_plan = match FlatRetry::new(
+        first.flat_attempt(),
         frames,
-        rules.flat_session_seconds,
-    )));
-    if let Err(stop) = stop_requested(cancel) {
-        other.into_iter().for_each(discard_attempt);
-        discard_attempt(first);
-        return Err(stop);
-    }
-    if let Some(other) = other {
-        if other.drifting().is_empty() && !other.memo {
-            let note = seiza_calibration::library::alternate_note(
-                &flat_set_label(&first.used),
-                &flat_set_label(&other.used),
-                feature_pixels,
-            );
-            set_aside_master(&context, first);
-            return publish_master(&context, other, Some(note)).map(Some);
+        held_back,
+        rules,
+        FlatRetryPolicy::default(),
+    ) {
+        Ok(plan) => plan,
+        Err(error) => {
+            tracing::warn!("judging the flat set: {error:#}; keeping the first build");
+            return publish_master(&context, first, None).map(Some);
         }
-        set_aside_master(&context, other);
-    }
-    // Nothing better: the first master serves. A memo has no file, so the
-    // set builds again for real.
-    let first = if first.memo {
-        stop_requested(cancel)?;
-        match build(frames, false)? {
-            Some(rebuilt) => rebuilt,
-            None => return Ok(None),
-        }
-    } else {
-        first
     };
-    let note =
-        seiza_calibration::library::unstable_note(drifting.len(), used, feature_pixels, false);
-    publish_master(&context, first, Some(note)).map(Some)
+    let mut trimmed: Option<BuiltAttempt> = None;
+    let mut alternate: Option<BuiltAttempt> = None;
+    loop {
+        let step = retry_plan.next();
+        // An attempt the decision does not publish is set aside before the
+        // next one builds.
+        if step.action != FlatRetryAction::PublishTrimmed {
+            trimmed
+                .take()
+                .into_iter()
+                .for_each(|t| set_aside_master(&context, t));
+        }
+        if step.action != FlatRetryAction::PublishAlternate {
+            alternate
+                .take()
+                .into_iter()
+                .for_each(|a| set_aside_master(&context, a));
+        }
+        match step.action {
+            FlatRetryAction::TryTrimmed | FlatRetryAction::TryAlternate => {
+                if let Err(stop) = stop_requested(cancel) {
+                    discard_attempt(first);
+                    return Err(stop);
+                }
+                let inputs: Vec<CalibrationFrame> =
+                    step.frames(frames).into_iter().cloned().collect();
+                let built = retry(&inputs);
+                // A stop that lands inside the retry ends the build with no
+                // verdict: neither master is published or remembered.
+                if let Err(stop) = stop_requested(cancel) {
+                    built.into_iter().for_each(discard_attempt);
+                    discard_attempt(first);
+                    return Err(stop);
+                }
+                let outcome = built.as_ref().map(BuiltAttempt::flat_attempt);
+                let recorded = if step.action == FlatRetryAction::TryTrimmed {
+                    trimmed = built;
+                    retry_plan.trimmed(outcome)
+                } else {
+                    alternate = built;
+                    retry_plan.alternate(outcome)
+                };
+                if let Err(error) = recorded {
+                    tracing::warn!("judging the flat retry: {error:#}; keeping the first build");
+                    trimmed
+                        .take()
+                        .into_iter()
+                        .for_each(|t| set_aside_master(&context, t));
+                    alternate
+                        .take()
+                        .into_iter()
+                        .for_each(|a| set_aside_master(&context, a));
+                    return publish_master(&context, first, None).map(Some);
+                }
+            }
+            FlatRetryAction::PublishTrimmed | FlatRetryAction::PublishAlternate => {
+                let chosen = if step.action == FlatRetryAction::PublishTrimmed {
+                    trimmed.take()
+                } else {
+                    alternate.take()
+                }
+                .expect("the retry decided on the build it was given");
+                set_aside_master(&context, first);
+                return publish_master(&context, chosen, step.note).map(Some);
+            }
+            FlatRetryAction::PublishFirst => {
+                // Nothing better: the first master serves. A memo has no
+                // file, so the set builds again for real.
+                let first = if first.memo {
+                    stop_requested(cancel)?;
+                    match build(frames, false)? {
+                        Some(rebuilt) => rebuilt,
+                        None => return Ok(None),
+                    }
+                } else {
+                    first
+                };
+                return publish_master(&context, first, step.note).map(Some);
+            }
+            FlatRetryAction::Withhold => {
+                if let Some(note) = &step.note {
+                    tracing::warn!("flat master withheld: {note}");
+                }
+                set_aside_master(&context, first);
+                return Ok(None);
+            }
+        }
+    }
 }
 
 /// Make a built master real: move its staged file into place and record it,
@@ -7193,7 +7207,7 @@ fn query_kind(conn: &Connection, kind: CalibrationKind) -> Result<Vec<Calibratio
 
 fn row_to_frame(row: &rusqlite::Row<'_>) -> rusqlite::Result<CalibrationFrame> {
     let raw_kind: String = row.get(3)?;
-    let kind = CalibrationKind::parse(&raw_kind).ok_or_else(|| {
+    let kind = raw_kind.parse::<CalibrationKind>().ok().ok_or_else(|| {
         rusqlite::Error::FromSqlConversionFailure(
             3,
             rusqlite::types::Type::Text,
@@ -7227,21 +7241,24 @@ fn row_to_frame(row: &rusqlite::Row<'_>) -> rusqlite::Result<CalibrationFrame> {
         valid_direction: row
             .get::<_, Option<String>>(23)?
             .as_deref()
-            .and_then(ValidDirection::parse),
+            .and_then(|text| text.parse::<ValidDirection>().ok()),
         // An empty string is the background pass's "read it, names none";
         // to matching that is the same as never recorded.
         readout_mode_name: row
             .get::<_, Option<String>>(24)?
             .filter(|name| !name.trim().is_empty()),
         is_master: row.get::<_, Option<i64>>(25)?.unwrap_or(0) != 0,
-        kept_out: quality::kept_out_reason(
-            row.get(26)?,
-            row.get::<_, Option<String>>(27)?.as_deref(),
-            row.get(28)?,
-            row.get::<_, Option<String>>(29)?
-                .as_deref()
-                .and_then(quality::QualityOverride::parse),
-        ),
+        kept_out: quality::KeptOut {
+            stray_light: row.get::<_, Option<String>>(26)?.as_deref(),
+            grade: row
+                .get::<_, Option<String>>(27)?
+                .and_then(|text| text.parse().ok()),
+            grade_reason: row.get::<_, Option<String>>(28)?.as_deref(),
+            choice: row
+                .get::<_, Option<String>>(29)?
+                .and_then(|text| text.parse().ok()),
+        }
+        .reason(),
         source_verified: false,
     })
 }
@@ -13171,7 +13188,7 @@ pub(crate) mod tests {
                 .rules
                 .notes
                 .iter()
-                .map(|note| (note.key, note.text.as_str(), note.source))
+                .map(|note| (note.key.as_str(), note.text.as_str(), note.source))
                 .collect::<Vec<_>>(),
             [("dark_temperature_tolerance_c", "1.5 °C", RuleSource::Global)]
         );
@@ -13216,7 +13233,7 @@ pub(crate) mod tests {
             Some("Scope · Camera")
         );
         assert_eq!(
-            selected.rules.source("dark_temperature_tolerance_c"),
+            selected.rules.source(SettingKey::DarkTemperatureToleranceC),
             RuleSource::Rig
         );
         let explained = explain_calibration(&conn, &light).unwrap();

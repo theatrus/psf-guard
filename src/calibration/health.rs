@@ -25,7 +25,7 @@
 //! file changed.
 
 use super::quality::{self, StoredMeasurement};
-use super::rules::SetBy;
+use super::rules::{GradeCheck, SetBy, SettingKey};
 use super::{
     calibration_gaps, coherent_master_subset, nearest_master_flat_at, rule_book, CalibrationFrame,
     CalibrationKind, Check, CheckMode, ExternalMasterPolicy, LibrarySnapshot, Rules,
@@ -244,9 +244,9 @@ impl<'a> Gathered<'a> {
     }
 
     /// Who set a check's mode, in words.
-    fn set_by(&self, check: Check) -> String {
+    fn who_set(&self, check: Check) -> String {
         self.rules
-            .set_by(check.key())
+            .who_set(check)
             .unwrap_or_else(|| "set for this rig".into())
     }
 
@@ -257,12 +257,12 @@ impl<'a> Gathered<'a> {
                 if finding.level == HealthLevel::Poor {
                     finding.level = HealthLevel::Check;
                     finding.reason =
-                        format!("{} (advisory, {})", finding.reason, self.set_by(check));
+                        format!("{} (advisory, {})", finding.reason, self.who_set(check));
                 }
                 self.judgement.findings.push(finding);
             }
             CheckMode::Off => {
-                finding.reason = format!("{} (check off, {})", finding.reason, self.set_by(check));
+                finding.reason = format!("{} (check off, {})", finding.reason, self.who_set(check));
                 self.judgement.waived.push(finding);
             }
         }
@@ -271,9 +271,9 @@ impl<'a> Gathered<'a> {
 
 /// `" (fewer than 4, set globally)"` after a finding whose limit someone
 /// set, or nothing for a default limit.
-fn limit_note(rules: &Rules, key: &str, limit: impl FnOnce() -> String) -> String {
+fn limit_note(rules: &Rules, key: SettingKey, limit: impl FnOnce() -> String) -> String {
     rules
-        .set_by(key)
+        .who_set(key)
         .map(|by| format!(" ({}, {by})", limit()))
         .unwrap_or_default()
 }
@@ -538,7 +538,11 @@ impl HealthLibrary {
         let dark_flat = MasterInput::of(CalibrationKind::DarkFlat, &selected.dark_flat, rules);
         let flat = MasterInput::of(CalibrationKind::Flat, &selected.flat, rules);
         let thin = rules.thin_master_frames;
-        let thin_note = || limit_note(rules, "thin_master_frames", || format!("fewer than {thin}"));
+        let thin_note = || {
+            limit_note(rules, SettingKey::ThinMasterFrames, || {
+                format!("fewer than {thin}")
+            })
+        };
 
         if let MasterInput::Raw(darks) = &dark
             && !darks.is_empty()
@@ -582,7 +586,11 @@ impl HealthLibrary {
             let reason = format!(
                 "Its flats carry {carried} changing spot{} into their master{}",
                 if carried == 1 { "" } else { "s" },
-                limit_note(rules, "grade_flat_carried_spots", || "spot limits".into())
+                limit_note(
+                    rules,
+                    SettingKey::Grade(GradeCheck::FlatCarriedSpots),
+                    || "spot limits".into()
+                )
             );
             match grade {
                 Grade::Poor => found.push(
@@ -605,7 +613,7 @@ impl HealthLibrary {
             let stale =
                 age > rules.flat_max_age_days && rules.mode(Check::StaleFlats) != CheckMode::Off;
             if age > rules.flat_check_age_days && !stale {
-                let note = limit_note(rules, "flat_check_age_days", || {
+                let note = limit_note(rules, SettingKey::FlatCheckAgeDays, || {
                     format!("more than {:.0} days", rules.flat_check_age_days)
                 });
                 found.push(
@@ -2299,7 +2307,7 @@ mod tests {
                 .rules
                 .notes
                 .iter()
-                .map(|note| (note.key, note.text.as_str(), note.source))
+                .map(|note| (note.key.as_str(), note.text.as_str(), note.source))
                 .collect::<Vec<_>>(),
             [("flat_max_age_days", "90 days", RuleSource::Rig)]
         );

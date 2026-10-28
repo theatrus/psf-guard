@@ -20,8 +20,8 @@ use anyhow::{Context, Result};
 use rusqlite::types::Value;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 pub use seiza_calibration::library::{
-    describe_finding, kept_out_reason, FlatRecord, Judged, QualityIndex, QualityOverride,
-    QualityRecord, StoredMeasurement,
+    describe_finding, FlatRecord, Judged, KeptOut, QualityIndex, QualityOverride, QualityRecord,
+    StoredMeasurement,
 };
 use seiza_calibration::{
     DarkMeasureOptions, FindingCode, FlatMeasureOptions, FlatMeasurement, FlatScreening, Grade,
@@ -101,18 +101,10 @@ pub(super) fn suspect_reasons(conn: &Connection) -> Result<HashMap<String, Strin
     Ok(rows)
 }
 
-/// The measure version a stored measurement of this kind must carry to be
-/// current. Seiza versions its flat measure apart from the bias and dark one,
-/// so a new dust measure re-measures the flats alone.
-pub(super) fn measure_version(kind: CalibrationKind) -> u32 {
-    if kind == CalibrationKind::Flat {
-        FLAT_QUALITY_ALGORITHM_VERSION
-    } else {
-        FRAME_QUALITY_ALGORITHM_VERSION
-    }
-}
-
-/// [`measure_version`] as SQL, for the frame row aliased `f`.
+/// The measure version a stored measurement must carry to be current
+/// ([`CalibrationKind::measurement_version`]) as SQL, for the frame row
+/// aliased `f`. Seiza versions its flat measure apart from the bias and
+/// dark one, so a new dust measure re-measures the flats alone.
 pub(super) fn measure_version_sql() -> String {
     format!(
         "(CASE WHEN f.kind = 'flat' THEN {FLAT_QUALITY_ALGORITHM_VERSION} \
@@ -193,12 +185,14 @@ pub(super) fn index_of(conn: &Connection, frames: &[CalibrationFrame]) -> Result
                 frame_uuid: row.get(0)?,
                 source_fingerprint: row.get(1)?,
                 algorithm_version: row.get(2)?,
-                grade: row.get(3)?,
+                grade: row
+                    .get::<_, Option<String>>(3)?
+                    .and_then(|text| text.parse::<Grade>().ok()),
                 reason: row.get(4)?,
                 override_choice: row
                     .get::<_, Option<String>>(5)?
                     .as_deref()
-                    .and_then(QualityOverride::parse),
+                    .and_then(|text| text.parse::<QualityOverride>().ok()),
                 ..Default::default()
             })
         })?;
@@ -295,7 +289,7 @@ pub fn pending_measurements(conn: &Connection) -> Result<Vec<PendingFrame>> {
         .filter_map(|(frame_uuid, kind, source_path, source_fingerprint)| {
             Some(PendingFrame {
                 frame_uuid,
-                kind: CalibrationKind::parse(&kind)?,
+                kind: kind.parse::<CalibrationKind>().ok()?,
                 source_path: PathBuf::from(source_path),
                 source_fingerprint,
             })
@@ -478,7 +472,7 @@ fn record_measurements(
             upsert.execute(params![
                 frame.frame_uuid,
                 frame.source_fingerprint,
-                measure_version(frame.kind),
+                frame.kind.measurement_version(),
                 json,
                 error,
                 now,
@@ -841,7 +835,7 @@ pub(super) fn sync_quality(
 /// Count one frame's choice going from `before` to `after`.
 fn count_choice(choices: &mut CalibrationChoiceCounts, before: &Value, after: &Value) {
     let read = |value: &Value| match value {
-        Value::Text(text) => QualityOverride::parse(text),
+        Value::Text(text) => text.parse::<QualityOverride>().ok(),
         _ => None,
     };
     let (before, after) = (read(before), read(after));
@@ -1522,7 +1516,7 @@ pub(super) mod tests {
         assert_eq!(pending.len(), 1);
         assert!(matches!(pending[0].kind, CalibrationKind::Flat));
         assert_eq!(
-            measure_version(CalibrationKind::Dark),
+            CalibrationKind::Dark.measurement_version(),
             FRAME_QUALITY_ALGORITHM_VERSION
         );
     }

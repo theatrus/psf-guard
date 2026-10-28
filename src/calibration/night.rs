@@ -1452,11 +1452,13 @@ mod tests {
     /// Flat-group sessions and the browser's sessions of a library.
     fn sessions(conn: &Connection) -> (Vec<(String, usize)>, Vec<String>) {
         let snapshot = super::super::LibrarySnapshot::load(conn).unwrap();
-        let plans =
-            super::super::flat_groups::job::plan_sessions(snapshot.frames(), &Nights::load(conn))
-                .into_iter()
-                .map(|plan| (plan.night, plan.frames.len()))
-                .collect();
+        let plans = super::super::flat_groups::job::plan_flat_sessions(
+            snapshot.frames(),
+            &Nights::load(conn),
+        )
+        .into_iter()
+        .map(|plan| (plan.night, plan.frames.len()))
+        .collect();
         let mut browsed: Vec<String> = super::super::browse::library_frames(conn)
             .unwrap()
             .frames

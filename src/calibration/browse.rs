@@ -1237,7 +1237,7 @@ pub fn recorded_masters(conn: &Connection) -> Result<Vec<RecordedLibraryMaster>>
                 camera_temp,
                 statistics,
             )| {
-                let kind = CalibrationKind::parse(&kind)?;
+                let kind = kind.parse::<CalibrationKind>().ok()?;
                 let sources: Vec<String> = serde_json::from_str(&sources).unwrap_or_default();
                 let known: Vec<_> = sources
                     .iter()

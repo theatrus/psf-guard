@@ -1269,7 +1269,7 @@ pub async fn remove_database_route(
 }
 
 fn nights_view(raw: Option<&str>) -> Option<crate::calibration::LightNightSplit> {
-    raw.and_then(crate::calibration::LightNightSplit::parse)
+    raw.and_then(|text| text.parse::<crate::calibration::LightNightSplit>().ok())
 }
 
 /// `GET /api/db/{db_id}/projects/{project_id}/calibration-report` — how the

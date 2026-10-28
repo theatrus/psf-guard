@@ -723,7 +723,7 @@ pub fn duplicate_snapshot(conn: &Connection) -> Result<DuplicateSnapshot> {
         .into_iter()
         .filter_map(|(kind, row)| {
             Some(RecordedRow {
-                kind: CalibrationKind::parse(&kind)?,
+                kind: kind.parse::<CalibrationKind>().ok()?,
                 ..row
             })
         })

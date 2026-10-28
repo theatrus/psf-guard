@@ -52,7 +52,7 @@ pub(crate) fn questions(
     ) else {
         return Ok(Vec::new());
     };
-    let mut lights_of = |session: &ImagingSession| -> Vec<EvidenceLight> {
+    let lights_of = |session: &ImagingSession| -> Vec<EvidenceLight> {
         let mut lights = Vec::new();
         for id in &session.lights {
             let row: Option<(Option<String>, String, Option<String>, i64)> = statement
@@ -85,15 +85,17 @@ pub(crate) fn questions(
         }
         lights
     };
-    let mut header = |path: &Path| {
-        crate::calibration::library_light(&crate::commands::import::headers::read_frame_meta(path))
+    let header = |path: &Path| {
+        Some(crate::calibration::library_light(
+            &crate::commands::import::headers::read_frame_meta(path),
+        ))
     };
     Ok(seiza_calibration::library::family_questions(
         library.library(),
         &crate::calibration::rules::rule_book(),
         for_rig,
-        &mut lights_of,
-        &mut header,
+        lights_of,
+        header,
     ))
 }
 
@@ -124,6 +126,7 @@ pub(crate) fn answer(
     // Each candidate's flats nearest the session in time, pedestal out.
     let representatives = question.representatives(book)?;
     let planes: Vec<Option<Plane>> = representatives
+        .sessions()
         .iter()
         .map(|index| session_plane(pass.dir, &book.sessions[*index].row))
         .collect();
@@ -148,9 +151,7 @@ pub(crate) fn answer(
     }
     frames_read.fetch_add(binned.len(), Ordering::Relaxed);
     let meta = crate::commands::import::headers::read_frame_meta(&picked[0].path);
-    let pedestal = pedestals
-        .pedestal_for(&question.rig, meta.gain, meta.offset, None)
-        .unwrap_or(0.0) as f32;
+    let pedestal = pedestals.light_pedestal(&question.rig, meta.gain, meta.offset);
     let row = pass.in_pool(|| question.decide(book, &representatives, binned, planes, pedestal));
     tracing::debug!(
         "family evidence {} {}: chose {:?} of {:?}",

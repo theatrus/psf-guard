@@ -13,7 +13,7 @@ use rusqlite::Connection;
 pub(crate) fn measure_as(conn: &Connection, dust: impl Fn(&ResponseRow, &ResponseRow) -> f64) {
     store::add_tables(conn).unwrap();
     let library = LibrarySnapshot::load(conn).unwrap();
-    let plans = super::job::plan_sessions(library.frames(), &Nights::load(conn));
+    let plans = super::job::plan_flat_sessions(library.frames(), &Nights::load(conn));
     for plan in plans
         .iter()
         .filter(|plan| plan.frames.len() >= super::metric::MIN_FRAMES)

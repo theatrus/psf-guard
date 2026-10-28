@@ -33,7 +33,7 @@ pub use seiza_calibration::library::{
 };
 pub use seiza_calibration::LightRotation;
 
-use super::rules::SetBy;
+use super::rules::{SetBy, SettingKey};
 use anyhow::Result;
 #[cfg(test)]
 use model::AngleTerm;
@@ -518,7 +518,8 @@ pub fn describe_change(event: &EventNote, rules: &super::Rules) -> String {
 /// The change in words with its size against the limit: "new dust: 2
 /// shadows near (1460, 3570), up to 1.6% of the sky background (limit 1%)".
 pub fn describe_event(event: &EventNote, rules: &super::Rules) -> String {
-    let limit = |key: &str, value: f64| format!("limit {}%{}", value, rules.set_by_suffix(key));
+    let limit =
+        |key: SettingKey, value: f64| format!("limit {}%{}", value, rules.who_set_suffix(key));
     if event.by_hand {
         return event.what.clone();
     }
@@ -527,13 +528,16 @@ pub fn describe_event(event: &EventNote, rules: &super::Rules) -> String {
             "{}, up to {:.1}% of the sky background ({})",
             event.what,
             event.dust * 100.0,
-            limit("flat_split_dust_pct", rules.flat_split_dust_pct)
+            limit(SettingKey::FlatSplitDustPct, rules.flat_split_dust_pct)
         )
     } else {
         format!(
             "{} ({})",
             event.what,
-            limit("flat_split_pattern_pct", rules.flat_split_pattern_pct)
+            limit(
+                SettingKey::FlatSplitPatternPct,
+                rules.flat_split_pattern_pct
+            )
         )
     }
 }

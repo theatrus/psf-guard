@@ -25,7 +25,8 @@ use anyhow::{Context, Result};
 use rayon::prelude::*;
 use rusqlite::Connection;
 pub use seiza_calibration::library::{
-    family_key, focal_classes, pedestal_moved, PedestalTable, SessionPlan,
+    family_key, focal_classes, pedestal_moved, FlatSessionPlan, PedestalLevel, PedestalTable,
+    ResponseRead,
 };
 use serde::Serialize;
 use std::collections::{BTreeSet, HashMap};
@@ -238,8 +239,8 @@ pub fn rig_is_measured(rig: &str) -> bool {
 /// Flat sessions in use: one night of one family, frames whose rotator
 /// angle lies within [`super::model::ROTATION_CLUSTER_DEG`] of the
 /// session's first.
-pub fn plan_sessions(frames: &[CalibrationFrame], nights: &Nights) -> Vec<SessionPlan> {
-    seiza_calibration::library::plan_sessions(
+pub fn plan_flat_sessions(frames: &[CalibrationFrame], nights: &Nights) -> Vec<FlatSessionPlan> {
+    seiza_calibration::library::plan_flat_sessions(
         frames,
         nights,
         &crate::calibration::rules::rule_book(),
@@ -273,8 +274,15 @@ pub fn pedestals(conn: &Connection) -> Result<PedestalTable> {
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     for (rig, gain, offset, kind, exposure, level) in rows {
-        if let Some(kind) = CalibrationKind::parse(&kind) {
-            out.insert(&rig, gain, offset, kind, exposure, level);
+        if let Ok(kind) = kind.parse::<CalibrationKind>() {
+            out.insert(PedestalLevel {
+                rig_uuid: &rig,
+                gain,
+                offset,
+                kind,
+                exposure_s: exposure,
+                level,
+            });
         }
     }
     Ok(out)
@@ -384,13 +392,13 @@ pub fn run(pass: Pass<'_>) -> Result<PassOutcome> {
     let conn = pass.conn;
     let mut outcome = PassOutcome::default();
     let library = LibrarySnapshot::load(conn)?;
-    let plans = plan_sessions(library.frames(), &Nights::load(conn));
+    let plans = plan_flat_sessions(library.frames(), &Nights::load(conn));
     let pedestal_table = pedestals(conn)?;
     let known: HashMap<String, ResponseRow> = store::load_responses(conn)?
         .into_iter()
         .map(|row| (row.response_key.clone(), row))
         .collect();
-    let measurable: Vec<&SessionPlan> = plans
+    let measurable: Vec<&FlatSessionPlan> = plans
         .iter()
         .filter(|plan| plan.frames.len() >= metric::MIN_FRAMES)
         .collect();
@@ -429,7 +437,7 @@ pub fn run(pass: Pass<'_>) -> Result<PassOutcome> {
         let left_before = (outcome.unreadable, outcome.lights_missing);
         if pass.scope.measures(rig) {
             measured_rigs.insert(rig.to_string());
-            let plans: Vec<&SessionPlan> = measurable
+            let plans: Vec<&FlatSessionPlan> = measurable
                 .iter()
                 .filter(|plan| plan.rig_uuid == rig)
                 .copied()
@@ -439,7 +447,7 @@ pub fn run(pass: Pass<'_>) -> Result<PassOutcome> {
             // `response_is_current`). One left with flats away or refused
             // is read again once they may read, and keeps its rig on the
             // retry ladder meanwhile; it is not read on every pass.
-            let mut todo: Vec<(&SessionPlan, String)> = Vec::new();
+            let mut todo: Vec<(&FlatSessionPlan, String)> = Vec::new();
             for plan in &plans {
                 let key = plan.response_key();
                 match known.get(&key) {
@@ -703,7 +711,7 @@ pub fn run(pass: Pass<'_>) -> Result<PassOutcome> {
 /// until one may read now ([`may_read_now`]). An older row that names no
 /// unread flats but combines fewer than its session holds is read once more
 /// to name them.
-fn response_is_current(dir: &Path, plan: &SessionPlan, row: &ResponseRow) -> bool {
+fn response_is_current(dir: &Path, plan: &FlatSessionPlan, row: &ResponseRow) -> bool {
     let combined = plan.combined();
     let back = row.unread.iter().any(|flat| {
         combined
@@ -775,7 +783,7 @@ fn unread_kind(error: &anyhow::Error, path: &Path) -> UnreadKind {
 /// not read and why.
 fn measure_session(
     pass: &Pass<'_>,
-    plan: &SessionPlan,
+    plan: &FlatSessionPlan,
     key: &str,
     pedestal_table: &PedestalTable,
     frames_read: &AtomicUsize,
@@ -816,7 +824,15 @@ fn measure_session(
     let pedestal = pedestal_table.for_session(plan);
     let binned: Vec<Plane> = planes.into_iter().map(|(plane, _)| plane).collect();
     let response = pass.in_pool(|| metric::build_response(&binned, bin));
-    let row = plan.response_row(pedestal, binned.len(), bin, response.as_ref(), unread);
+    let row = plan.measured_row(
+        pedestal,
+        ResponseRead {
+            read: binned.len(),
+            bin,
+            response: response.as_ref(),
+            unread,
+        },
+    );
     if let Some(response) = &response {
         write_plane(pass.dir, key, &response.plane)?;
         // A new plane, as when flats that were away came back: its dust
@@ -985,9 +1001,7 @@ fn session_evidence(
             .filter_map(Result::ok)
             .map(|(plane, _)| plane)
             .collect();
-        let pedestal = pedestals
-            .pedestal_for(&event.rig_uuid, metas[0].gain, metas[0].offset, None)
-            .unwrap_or(0.0) as f32;
+        let pedestal = pedestals.light_pedestal(&event.rig_uuid, metas[0].gain, metas[0].offset);
         match filter.fit(book, binned, &reference_plane, &map, pedestal) {
             Some(fit) => {
                 tracing::debug!(

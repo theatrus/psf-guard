@@ -28,22 +28,18 @@ use std::sync::{Arc, LazyLock, RwLock};
 pub trait SetBy {
     /// "set globally" or "set for SpaceCat61 · ASI2600MM Pro", or `None`
     /// when the value is the default.
-    fn set_by(&self, key: &str) -> Option<String>;
+    fn who_set(&self, key: impl Into<SettingKey>) -> Option<String>;
     /// `", set …"` after a limit, or nothing for a default.
-    fn set_by_suffix(&self, key: &str) -> String {
-        self.set_by(key)
+    fn who_set_suffix(&self, key: impl Into<SettingKey>) -> String {
+        self.who_set(key)
             .map(|by| format!(", {by}"))
             .unwrap_or_default()
     }
 }
 
 impl SetBy for Rules {
-    fn set_by(&self, key: &str) -> Option<String> {
-        let value = self.value(key)?;
-        if field(key).is_some_and(|spec| equivalent(&spec.default, value)) {
-            return None;
-        }
-        match self.source(key) {
+    fn who_set(&self, key: impl Into<SettingKey>) -> Option<String> {
+        match self.set_by(key)? {
             RuleSource::Default => None,
             RuleSource::Global => Some("set globally".into()),
             RuleSource::Rig => Some(format!(
@@ -103,7 +99,7 @@ pub(crate) fn edit_global(edit: impl FnOnce(&mut RuleValues)) {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut global = guard.global_values().clone();
     edit(&mut global);
-    *guard = Arc::new(RuleBook::new(global, guard.rigs().clone()));
+    *guard = Arc::new(guard.with_global(global));
 }
 
 /// The built-in defaults, whatever the settings: for questions about a
@@ -138,7 +134,7 @@ mod tests {
 
     #[test]
     fn a_value_says_who_set_it() {
-        assert_eq!(Rules::default().set_by("dark_reach_days"), None);
+        assert_eq!(Rules::default().who_set(SettingKey::DarkReachDays), None);
         let global = values(&[
             ("dark_reach_days", json!(90)),
             ("thin_master_frames", json!(4)),
@@ -150,18 +146,18 @@ mod tests {
         let book = RuleBook::new(global, BTreeMap::from([("rig-a".to_string(), rig)]));
         let rig_rules = book.for_rig("rig-a");
         assert_eq!(
-            rig_rules.set_by("dark_reach_days").as_deref(),
+            rig_rules.who_set(SettingKey::DarkReachDays).as_deref(),
             Some("set for SpaceCat61 · ASI2600MM Pro")
         );
         assert_eq!(
-            rig_rules.set_by("thin_master_frames").as_deref(),
+            rig_rules.who_set(SettingKey::ThinMasterFrames).as_deref(),
             Some("set globally")
         );
         assert_eq!(
-            rig_rules.set_by_suffix("thin_master_frames"),
+            rig_rules.who_set_suffix(SettingKey::ThinMasterFrames),
             ", set globally"
         );
-        assert_eq!(rig_rules.set_by("complete_dark_frames"), None);
+        assert_eq!(rig_rules.who_set(SettingKey::CompleteDarkFrames), None);
     }
 
     #[test]

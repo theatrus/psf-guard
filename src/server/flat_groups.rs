@@ -4,6 +4,7 @@
 //! sessions, drawn by the shared preview queue.
 
 use crate::calibration::flat_groups::{self, job, metric, model, overrides, store};
+use crate::calibration::SettingKey;
 use crate::server::api::ApiResponse;
 use crate::server::database_context::DatabaseContext;
 use crate::server::extract::DbContext;
@@ -370,7 +371,7 @@ pub struct RigView {
     pub pattern_limit_pct: f64,
     /// The flat-group settings this rig sets for itself; the rest it
     /// inherits from the global ones.
-    pub own_limits: Vec<&'static str>,
+    pub own_limits: Vec<SettingKey>,
     pub angle_term: Option<PairView>,
     pub angle_pairs: usize,
     /// The rig's clock over time ([`crate::calibration::night::clock_runs`]):
@@ -465,10 +466,10 @@ fn split_reason(
 }
 
 /// The settings that decide how a rig's flats group.
-const LIMIT_KEYS: [&str; 3] = [
-    "flat_grouping",
-    "flat_split_dust_pct",
-    "flat_split_pattern_pct",
+const LIMIT_KEYS: [SettingKey; 3] = [
+    SettingKey::FlatGrouping,
+    SettingKey::FlatSplitDustPct,
+    SettingKey::FlatSplitPatternPct,
 ];
 
 /// The browser's sessions holding `uuids`, in their order, each once.
@@ -634,7 +635,7 @@ pub(crate) fn build_view_with_frames(
             pattern_limit_pct: pct(limits.broad),
             own_limits: LIMIT_KEYS
                 .into_iter()
-                .filter(|key| rule_book.rig_sets(rig, key))
+                .filter(|key| rule_book.rig_sets(rig, *key))
                 .collect(),
             angle_term: term.map(|t| PairView {
                 dust_pct: pct(t.dust),
@@ -831,7 +832,7 @@ pub(crate) fn build_view_with_frames(
     }
     // Sessions the pass could not measure, or has not reached.
     let library = crate::calibration::LibrarySnapshot::load(conn)?;
-    for plan in job::plan_sessions(library.frames(), &nights) {
+    for plan in job::plan_flat_sessions(library.frames(), &nights) {
         let key = plan.response_key();
         let measured = book.session_by_response(&key).is_some();
         if measured {
@@ -1022,7 +1023,7 @@ pub(crate) fn place_of(conn: &rusqlite::Connection, session: &str) -> anyhow::Re
         })
         .collect();
     let nights = crate::calibration::Nights::load(conn);
-    Ok(job::plan_sessions(&frames, &nights)
+    Ok(job::plan_flat_sessions(&frames, &nights)
         .into_iter()
         .find(|plan| {
             plan.frames
@@ -1652,7 +1653,7 @@ pub(crate) mod tests {
             )],
         );
         let view = build_view(&conn).unwrap();
-        assert_eq!(view.rigs[0].own_limits, vec!["flat_split_dust_pct"]);
+        assert_eq!(view.rigs[0].own_limits, vec![SettingKey::FlatSplitDustPct]);
         assert_eq!(view.rigs[0].families[0].groups.len(), 1, "2% is within 3%");
     }
 

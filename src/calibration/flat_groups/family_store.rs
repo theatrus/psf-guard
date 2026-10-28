@@ -172,18 +172,12 @@ pub(crate) fn load(conn: &Connection) -> Result<Vec<FamilyEvidenceRow>> {
 
 /// Where a row is kept: session, filter, target, angle key and evidence
 /// key.
-pub(crate) type Kept = (String, String, String, String, String);
+pub(crate) type Kept = seiza_calibration::library::RetentionKey;
 
 /// The place a row is kept under.
 #[cfg(test)]
 pub(crate) fn kept(row: &FamilyEvidenceRow) -> Kept {
-    (
-        row.session_key.clone(),
-        row.filter.clone(),
-        row.target.clone(),
-        row.angle_key(),
-        row.key.clone(),
-    )
+    Kept::of(row)
 }
 
 /// Drop the rows a pass no longer asks for: of an older algorithm, of an
@@ -209,20 +203,20 @@ pub(crate) fn retain(
     let rows: Vec<(Kept, u32)> = statement
         .query_map([], |row| {
             Ok((
-                (
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                ),
+                Kept {
+                    session_key: row.get(0)?,
+                    filter: row.get(1)?,
+                    target: row.get(2)?,
+                    angle: row.get(3)?,
+                    key: row.get(4)?,
+                },
                 row.get(5)?,
             ))
         })?
         .collect::<rusqlite::Result<_>>()?;
     let mut removed = 0;
     for (place, version) in rows {
-        let session = &place.0;
+        let session = &place.session_key;
         let stale = version != FAMILY_EVIDENCE_VERSION
             || !all.contains(session)
             || (judged.contains(session) && !wanted.contains(&place));
@@ -231,7 +225,13 @@ pub(crate) fn retain(
                 "DELETE FROM psf_guard_flat_family_evidence
                  WHERE session_key = ?1 AND filter_name = ?2 AND target = ?3 AND angle_key = ?4
                    AND algorithm_version = ?5",
-                params![place.0, place.1, place.2, place.3, version],
+                params![
+                    place.session_key,
+                    place.filter,
+                    place.target,
+                    place.angle,
+                    version
+                ],
             )?;
         }
     }
