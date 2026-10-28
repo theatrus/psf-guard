@@ -1,8 +1,12 @@
 $ErrorActionPreference = 'Stop'
-$root = $env:PSF_GUARD_ACL_TEST_FOLDER
+# The folder as PowerShell names its items, not as the path was spelled:
+# on GitHub's runners TEMP is a short 8.3 path (RUNNER~1), and the root's
+# FullName is the long one, so comparing with the raw path missed the root.
+$rootItem = Get-Item -LiteralPath $env:PSF_GUARD_ACL_TEST_FOLDER
+$root = $rootItem.FullName
 $user = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $expected = @('S-1-5-18', 'S-1-5-32-544', $user) | Sort-Object
-$paths = @((Get-Item -LiteralPath $root)) + @(Get-ChildItem -LiteralPath $root -Recurse -Force)
+$paths = @($rootItem) + @(Get-ChildItem -LiteralPath $root -Recurse -Force)
 foreach ($item in $paths) {
     $acl = Get-Acl -LiteralPath $item.FullName
     $isRoot = $item.FullName -eq $root
