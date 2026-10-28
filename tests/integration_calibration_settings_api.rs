@@ -638,3 +638,19 @@ async fn tolerances_wider_than_the_stackers_defaults_are_accepted() {
     );
     reset();
 }
+
+#[test]
+fn shared_settings_retain_the_existing_ui_schema() {
+    // Captured by calling fields() on the original pre-adoption Rust library;
+    // preserve all controls, defaults, ranges and UI wording independently.
+    let captured: Value = serde_json::from_str(include_str!(
+        "fixtures/calibration-settings-before-seiza.json"
+    ))
+    .unwrap();
+    let expected = &captured["fields"];
+    let actual = serde_json::to_value(psf_guard::calibration::rules::fields()).unwrap();
+    assert_eq!(
+        &actual, expected,
+        "settings, ranges, defaults and help must remain compatible"
+    );
+}

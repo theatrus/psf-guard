@@ -30,8 +30,13 @@ pub use measure::{choice, evidence, lights, metric, model, overrides};
 pub use seiza_calibration::LightRotation;
 
 use anyhow::Result;
-use model::{AngleTerm, Book, Event, Placement, Side};
+#[cfg(test)]
+use model::AngleTerm;
+use model::{Book, Event, Placement, Side};
 use rusqlite::Connection;
+pub use seiza_calibration::library::{
+    AlikeRangeNote, ChoiceNote, EventNote, FlatBasis, FlatCorrection, FlatFamily, GroupNote,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
@@ -166,7 +171,7 @@ pub fn load_book(conn: &Connection) -> Result<Arc<Book>> {
         store::load_responses(conn)?,
         store::load_comparisons(conn)?,
         store::load_evidence(conn, evidence::EVIDENCE_ALGORITHM_VERSION)?,
-        model::imaging_sessions(lights, |profile| profile_rigs.rigs_of(profile)),
+        model::imaging_sessions(lights, |profile| profile_rigs.rigs_of(profile))?,
         rig_limits,
         override_store::load_group_overrides(conn)?,
         |rig, frame| nights.frame(rig, frame).boundary_seconds,
@@ -309,42 +314,19 @@ pub fn rig_limits(rig_uuid: &str) -> model::Limits {
     limits_of(&super::rules::rules_for_rig(rig_uuid))
 }
 
-/// A change as a light's account names it.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct EventNote {
-    pub key: String,
-    /// The window it happened in, Unix seconds.
-    pub start: i64,
-    pub end: i64,
-    /// Fractions of the background.
-    pub dust: f64,
-    pub broad: f64,
-    pub camera_side: bool,
-    pub filters: Vec<String>,
-    /// "new dust: 2 shadows near (1,460, 3,570)".
-    pub what: String,
-    /// A split a person made where the flats measure alike, not a
-    /// measured change.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub by_hand: bool,
-}
-
-impl EventNote {
-    pub fn of(event: &Event) -> Self {
-        Self {
-            key: event.key.clone(),
-            start: event.start,
-            end: event.end,
-            dust: event.dust,
-            broad: event.broad,
-            camera_side: event.camera_side,
-            filters: event.filters.iter().cloned().collect(),
-            what: describe_what(event),
-            by_hand: event.by_hand,
-        }
+pub fn event_note(event: &Event) -> EventNote {
+    EventNote {
+        key: event.key.clone(),
+        start: event.start,
+        end: event.end,
+        dust: event.dust,
+        broad: event.broad,
+        camera_side: event.camera_side,
+        filters: event.filters.iter().cloned().collect(),
+        what: describe_what(event),
+        by_hand: event.by_hand,
     }
 }
-
 /// What a change is, in a few words: that a person split the flats there,
 /// a change of vignetting where that leads, or its spots.
 pub fn describe_what(event: &Event) -> String {
@@ -439,107 +421,15 @@ pub fn describe_spots(spots: &[metric::Spot], dust: f64, broad: f64) -> String {
     format!("{kind}: {shadows} near ({:.0}, {:.0})", top.x, top.y)
 }
 
-/// The correction a light's flat master takes: the flats at its angle,
-/// from the other side of a change, carried across it by the change's map.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct FlatCorrection {
-    pub event: String,
-    /// The before and after sessions the map is measured from.
-    pub before_response: String,
-    pub after_response: String,
-    /// The side the light is on: `before` divides the flats by the map,
-    /// `after` multiplies.
-    pub light_side: Side,
-    /// Key of the correction, for master and stack identities.
-    pub key: String,
-}
-
-/// Why a light's flats are the ones they are.
-#[derive(Debug, Clone, PartialEq, Serialize, Default)]
-#[serde(tag = "basis", rename_all = "snake_case")]
-pub enum FlatBasis {
-    /// No measured change touches the light: the nearest flats, as always.
-    #[default]
-    Nearest,
-    /// Flats from the light's own side of each change near it.
-    SameSide {
-        event: EventNote,
-        placement: Placement,
-        /// Matching flats left out for being on the other side.
-        left_out: usize,
-    },
-    /// None at its angle on its side; flats from the nearest other angle on
-    /// its side, which this rig's measurements allow.
-    OtherAngle {
-        event: EventNote,
-        placement: Placement,
-        rotation: Option<f64>,
-        angle_term: AngleTerm,
-        /// The rotation tolerance the stacker must hold this light to so
-        /// those flats pass: the angle between them and the light, plus the
-        /// rig's own tolerance. Absent when either angle is unknown.
-        rotation_tolerance_deg: Option<f64>,
-    },
-    /// None on its side at any allowed angle; flats at its angle from the
-    /// other side, carried across by the change's map.
-    Corrected {
-        event: EventNote,
-        placement: Placement,
-        correction: FlatCorrection,
-    },
-    /// Its flats are all from the other side of a change, and nothing can
-    /// stand in.
-    NoSameSide {
-        event: EventNote,
-        placement: Placement,
-    },
-    /// Shot while a change happened; nothing tells which side it is on.
-    Undetermined {
-        event: EventNote,
-        placement: Placement,
-        /// What another change it does stand clear of chose, such as
-        /// another angle's flats or a correction: its flats and gate are
-        /// that one's, and the light keeps its Check for this one.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        then: Option<Box<FlatBasis>>,
-    },
-    /// A person chose the group its flats come from, over every change.
-    Group { group: GroupNote },
-}
-
-/// A group of one family, as a light's account names it.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct GroupNote {
-    /// The family's label: "R at 104.0°".
-    pub family: String,
-    pub first_night: String,
-    pub last_night: String,
-    pub sessions: usize,
-}
-
-impl GroupNote {
-    pub fn of(book: &Book, family: usize, group: usize) -> Option<Self> {
-        let sessions = book.families.get(family)?.groups.get(group)?;
-        let night = |index: usize| book.sessions[index].row.night.clone();
-        Some(Self {
-            family: family_label(book, family),
-            first_night: night(*sessions.first()?),
-            last_night: night(*sessions.last()?),
-            sessions: sessions.len(),
-        })
-    }
-
-    /// "R at 104.0°, 2026-08-12 to 2026-08-24".
-    pub fn label(&self) -> String {
-        if self.first_night == self.last_night {
-            format!("{}, {}", self.family, self.first_night)
-        } else {
-            format!(
-                "{}, {} to {}",
-                self.family, self.first_night, self.last_night
-            )
-        }
-    }
+pub fn group_note(book: &Book, family: usize, group: usize) -> Option<GroupNote> {
+    let sessions = book.families.get(family)?.groups.get(group)?;
+    let night = |index: usize| book.sessions[index].row.night.clone();
+    Some(GroupNote {
+        family: family_label(book, family),
+        first_night: night(*sessions.first()?),
+        last_night: night(*sessions.last()?),
+        sessions: sessions.len(),
+    })
 }
 
 /// A family's filter and measured angle range: "OIII at 72.6° & 82.2°".
@@ -598,266 +488,6 @@ pub struct GroupOption {
     pub current: bool,
     /// A person chose it for the light.
     pub chosen: bool,
-}
-
-/// A person's choice for a light, as its account shows it.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct ChoiceNote {
-    pub choice: overrides::LightChoice,
-    /// The change it is about, as recorded; none for a group.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub change_key: Option<String>,
-    /// What it was about, in words.
-    pub label: String,
-    pub chosen_at: i64,
-    /// Why it does not apply, when it finds nothing to apply to. It stays
-    /// recorded until a person resets it.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub orphaned: Option<String>,
-}
-
-impl ChoiceNote {
-    pub fn of(row: &overrides::LightChoiceRow, orphaned: Option<String>) -> Option<Self> {
-        Some(Self {
-            choice: row.choice?,
-            change_key: (row.change_key != overrides::GROUP_CHOICE_KEY)
-                .then(|| row.change_key.clone()),
-            label: row.label.clone(),
-            chosen_at: row.chosen_at,
-            orphaned,
-        })
-    }
-}
-
-impl FlatBasis {
-    /// Whether the light is worth a look for it.
-    pub fn flags(&self) -> bool {
-        matches!(
-            self,
-            FlatBasis::NoSameSide { .. } | FlatBasis::Undetermined { .. }
-        )
-    }
-
-    /// The change it chose around, when one touches the light.
-    pub fn event(&self) -> Option<&EventNote> {
-        match self {
-            FlatBasis::Nearest | FlatBasis::Group { .. } => None,
-            FlatBasis::SameSide { event, .. }
-            | FlatBasis::OtherAngle { event, .. }
-            | FlatBasis::Corrected { event, .. }
-            | FlatBasis::NoSameSide { event, .. }
-            | FlatBasis::Undetermined { event, .. } => Some(event),
-        }
-    }
-
-    /// Its name, as the light's explanation gives it.
-    pub fn name(&self) -> &'static str {
-        match self {
-            FlatBasis::Nearest => "nearest",
-            FlatBasis::SameSide { .. } => "same_side",
-            FlatBasis::OtherAngle { .. } => "other_angle",
-            FlatBasis::Corrected { .. } => "corrected",
-            FlatBasis::NoSameSide { .. } => "no_same_side",
-            FlatBasis::Undetermined { .. } => "undetermined",
-            FlatBasis::Group { .. } => "group",
-        }
-    }
-
-    /// The rotation tolerance this light's masters must carry, when its
-    /// flats are from another angle.
-    pub fn rotation_tolerance(&self) -> Option<f64> {
-        match self {
-            FlatBasis::OtherAngle {
-                rotation_tolerance_deg,
-                ..
-            } => *rotation_tolerance_deg,
-            FlatBasis::Undetermined {
-                then: Some(then), ..
-            } => then.rotation_tolerance(),
-            _ => None,
-        }
-    }
-
-    /// Whether an earlier change already left the light with flats from
-    /// its other side and nothing to stand in.
-    pub fn lacks_same_side(&self) -> bool {
-        match self {
-            FlatBasis::NoSameSide { .. } => true,
-            FlatBasis::Undetermined {
-                then: Some(then), ..
-            } => then.lacks_same_side(),
-            _ => false,
-        }
-    }
-
-    pub fn correction(&self) -> Option<&FlatCorrection> {
-        match self {
-            FlatBasis::Corrected { correction, .. } => Some(correction),
-            FlatBasis::Undetermined {
-                then: Some(then), ..
-            } => then.correction(),
-            _ => None,
-        }
-    }
-
-    /// `next`, chosen around a later change, in place of this basis. An
-    /// undetermined placement keeps its Check whatever comes after it: the
-    /// choice rides along inside it.
-    pub fn followed_by(self, next: FlatBasis) -> FlatBasis {
-        match (self, next) {
-            (
-                FlatBasis::Undetermined {
-                    event,
-                    placement,
-                    then,
-                },
-                next,
-            ) if !matches!(next, FlatBasis::Undetermined { .. }) => FlatBasis::Undetermined {
-                event,
-                placement,
-                then: Some(Box::new(match then {
-                    Some(earlier) => earlier.followed_by(next),
-                    None => next,
-                })),
-            },
-            // A second undetermined change, after another choice: the
-            // light is flagged, and keeps what was chosen.
-            (
-                earlier,
-                FlatBasis::Undetermined {
-                    event, placement, ..
-                },
-            ) => FlatBasis::Undetermined {
-                event,
-                placement,
-                then: match earlier {
-                    FlatBasis::Nearest => None,
-                    FlatBasis::Undetermined { then, .. } => then,
-                    other => Some(Box::new(other)),
-                },
-            },
-            (_, next) => next,
-        }
-    }
-}
-
-/// The response family a light's flats come from, when grouping measured
-/// it: which family, how it was chosen, and the gate a stack holds the
-/// light to for it.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct FlatFamily {
-    /// The family's key (`model::Family::key`).
-    pub key: String,
-    /// Its filter, as the flats name it, and measured angle range: "Ha at
-    /// 72.6° & 82.2°".
-    pub label: String,
-    /// How it was chosen.
-    #[serde(flatten)]
-    pub basis: lights::FamilyBasis,
-    /// The family its lights pointed to, when that move was not confirmed
-    /// (`disputed`).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pointed: Option<String>,
-    /// Whether the family has flats at the light's recorded angle.
-    pub at_recorded: bool,
-    /// The light's recorded angle, and how far the rotator's epochs turn
-    /// it into the family's nearest session.
-    pub light_angle: f64,
-    pub shift: f64,
-    /// The candidates within the angle prior, nearest first, as labels.
-    pub candidates: Vec<String>,
-    /// How the stacker's gate reads the light's angle: as recorded, or as
-    /// the angle of the flats its master is built from when measurement
-    /// gave it flats at another angle (seiza-calibration's
-    /// `LightRotation`).
-    pub light_rotation: LightRotation,
-    /// When those flats lie at another angle inside a span the family's
-    /// flats measure alike across: the span and its evidence.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub alike_range: Option<AlikeRangeNote>,
-}
-
-/// Where a light stands against a change, as selection reads it: the one
-/// place choosing flats asks. A side a person chose for the light comes
-/// first, over its time, its imaging session and its pixels
-/// (`Placement::Person`); otherwise the book places it.
-pub fn place_light(
-    book: &Book,
-    choices: &overrides::ResolvedChoices,
-    event: &model::Event,
-    at: i64,
-) -> model::Placement {
-    let chosen = book
-        .events
-        .iter()
-        .position(|candidate| std::ptr::eq(candidate, event))
-        .and_then(|index| choices.side_of(index));
-    match chosen {
-        Some(side) => model::Placement::Person { side },
-        None => book.place(event, at),
-    }
-}
-
-/// A family's [`model::AlikeRange`] as a light's account names it.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct AlikeRangeNote {
-    /// The angle of the flats the light's master is built from.
-    pub flats_angle: f64,
-    pub low: f64,
-    pub high: f64,
-    /// "101.9–102.2° and 104.2°": the angles at its two ends.
-    pub label: String,
-    pub pairs: usize,
-    pub nights: usize,
-    /// Its pairs were all measured in other groups of the family than the
-    /// flats', across camera-side dust changes only.
-    pub carried: bool,
-}
-
-impl AlikeRangeNote {
-    pub fn of(range: &model::AlikeRange, flats_angle: f64, flats_group: Option<usize>) -> Self {
-        Self {
-            flats_angle,
-            low: range.span.low,
-            high: range.span.high,
-            label: range.label(),
-            pairs: range.pairs,
-            nights: range.nights,
-            carried: flats_group.is_some_and(|group| !range.groups.contains(&group)),
-        }
-    }
-}
-
-impl FlatFamily {
-    pub fn of(book: &Book, choice: &lights::FamilyChoice) -> Self {
-        let label = |family: usize| family_label(book, family);
-        Self {
-            key: book.families[choice.family].key.clone(),
-            label: label(choice.family),
-            basis: choice.basis.clone(),
-            pointed: match &choice.basis {
-                lights::FamilyBasis::Disputed { pointed, .. } => Some(label(*pointed)),
-                _ => None,
-            },
-            at_recorded: choice.at_recorded,
-            light_angle: choice.light_angle,
-            shift: choice.shift,
-            candidates: choice.candidates.iter().map(|f| label(*f)).collect(),
-            light_rotation: LightRotation::Recorded,
-            alike_range: None,
-        }
-    }
-
-    /// Whether the light's own pixels chose it.
-    pub fn by_pixels(&self) -> bool {
-        matches!(self.basis, lights::FamilyBasis::Pixels { .. })
-    }
-
-    /// Whether the light is worth a look for it: its pixels pointed to
-    /// another family and nothing confirmed it.
-    pub fn flags(&self) -> bool {
-        matches!(self.basis, lights::FamilyBasis::Disputed { .. })
-    }
 }
 
 /// The lights and targets of a family's evidence, in words: "8 of M 27".

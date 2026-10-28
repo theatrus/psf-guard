@@ -16,6 +16,11 @@
 
 ## Changes
 
+- Calibrated stacks keep distinct external-master choices and source metadata
+  anchors in separate sessions. Existing calibration masters and calibrated
+  stacks rebuild once. Flat trimming, fallback, manual choices and tunable
+  thresholds retain their current behavior through the shared Seiza policy.
+
 - Settings lists databases directly in the left pane, with **New / import**
   for adding a database. Select a database to open **Rig setup**, **Database &
   files**, **Import** or **Sync** in the same navigation. Shared **Sites** are under

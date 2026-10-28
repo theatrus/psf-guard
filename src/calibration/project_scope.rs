@@ -23,10 +23,7 @@
 //!   shot with a second camera, or at another binning, spans two.
 
 use super::browse::{self, LibraryFrames};
-use super::{
-    coherent_master_subset, CalibrationFrame, CalibrationKind, CalibrationSelection,
-    ExternalMasterPolicy, LibrarySnapshot, MIN_MASTER_FRAMES,
-};
+use super::{CalibrationKind, CalibrationSelection, LibrarySnapshot};
 use crate::commands::import::headers::FrameMeta;
 use anyhow::Result;
 use rusqlite::types::ValueRef;
@@ -48,37 +45,28 @@ pub enum MasterFrames {
 /// flat from the far side of a change is never used, the frames are cut to
 /// the one coherent set a master takes, and an external master the policy
 /// adopts stands in for them.
-pub fn master_frames(selected: &CalibrationSelection, kind: CalibrationKind) -> MasterFrames {
-    let frames = match kind {
-        CalibrationKind::Bias => &selected.bias,
-        CalibrationKind::Dark => &selected.dark,
-        CalibrationKind::DarkFlat => &selected.dark_flat,
-        CalibrationKind::Flat => &selected.flat,
-    };
-    let held_back: HashSet<&str> = selected.flat_held_back.iter().map(String::as_str).collect();
-    let rules = &selected.rules;
-    let (externals, raw): (Vec<&CalibrationFrame>, Vec<&CalibrationFrame>) = frames
+pub fn master_frames(
+    selected: &CalibrationSelection,
+    kind: CalibrationKind,
+) -> Result<MasterFrames> {
+    // Project scope excludes held-back raws as well as external masters.
+    let mut selected = selected.clone();
+    selected
+        .flat
+        .retain(|f| !selected.flat_held_back.contains(&f.frame_uuid));
+    let plan = super::shared::plan(&selected, vec![Default::default()], Vec::new(), false)?;
+    let recipe = plan
+        .recipes
         .iter()
-        .filter(|frame| {
-            kind != CalibrationKind::Flat || !held_back.contains(frame.frame_uuid.as_str())
-        })
-        .partition(|frame| frame.is_master);
-    let raw: Vec<CalibrationFrame> = raw.into_iter().cloned().collect();
-    let subset = coherent_master_subset(kind, &raw, rules);
-    let adopted = match rules.external_masters {
-        ExternalMasterPolicy::Prefer => externals.first(),
-        ExternalMasterPolicy::Fallback if subset.len() < MIN_MASTER_FRAMES => externals.first(),
-        _ => None,
-    };
-    match adopted {
-        Some(master) => MasterFrames::External(master.frame_uuid.clone()),
-        None => MasterFrames::Raw(
-            subset
-                .iter()
-                .map(|frame| frame.frame_uuid.clone())
-                .collect(),
-        ),
-    }
+        .find(|r| r.kind == super::shared::kind(kind))
+        .ok_or_else(|| anyhow::anyhow!("missing master policy recipe"))?;
+    Ok(
+        if recipe.action == seiza_calibration::library::RecipeAction::External {
+            MasterFrames::External(recipe.inputs[0].clone())
+        } else {
+            MasterFrames::Raw(recipe.coherent_inputs.iter().cloned().collect())
+        },
+    )
 }
 
 /// What a project's lights take from the library, before it is named in
@@ -99,14 +87,14 @@ impl LightUse {
     pub(crate) fn of<'a>(
         snapshot: &LibrarySnapshot,
         lights: impl IntoIterator<Item = &'a FrameMeta>,
-    ) -> Self {
+    ) -> Result<Self> {
         let mut used = Self::default();
         let mut seen: HashSet<(CalibrationKind, BTreeSet<String>)> = HashSet::new();
         for light in lights {
             used.lights += 1;
-            used.add(snapshot, &snapshot.select(light), &mut seen);
+            used.add(snapshot, &snapshot.select(light)?, &mut seen)?;
         }
-        used
+        Ok(used)
     }
 
     fn add(
@@ -114,14 +102,14 @@ impl LightUse {
         snapshot: &LibrarySnapshot,
         selected: &CalibrationSelection,
         seen: &mut HashSet<(CalibrationKind, BTreeSet<String>)>,
-    ) {
+    ) -> Result<()> {
         for kind in [
             CalibrationKind::Bias,
             CalibrationKind::Dark,
             CalibrationKind::DarkFlat,
             CalibrationKind::Flat,
         ] {
-            match master_frames(selected, kind) {
+            match master_frames(selected, kind)? {
                 MasterFrames::External(uuid) => {
                     self.frames.insert(uuid);
                 }
@@ -144,6 +132,7 @@ impl LightUse {
                 }
             }
         }
+        Ok(())
     }
 
     /// Whether a recorded master of `kind` built from `sources` is one of
@@ -251,7 +240,7 @@ pub fn project_scope(
     unread: usize,
 ) -> Result<ProjectScope> {
     let snapshot = LibrarySnapshot::load(conn)?;
-    let used = LightUse::of(&snapshot, lights);
+    let used = LightUse::of(&snapshot, lights)?;
     let library = browse::library_frames(conn)?;
     let masters = browse::recorded_masters(conn)?;
     Ok(ProjectScope::of(
@@ -596,6 +585,60 @@ mod tests {
     }
 
     #[test]
+    fn shared_selection_keeps_global_and_both_rigs_flat_group_thresholds() {
+        use crate::calibration::{flat_groups, rules};
+        use serde_json::json;
+        let _settings = crate::calibration::tests::POLICY_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                rules::set_test_rule_book(None);
+            }
+        }
+        let _reset = Reset;
+        let library = Library::new();
+        library.frames("a-flat", "FLAT", RIG_A, "2026-09-10T14:00", "Ha");
+        library.frames("b-flat", "FLAT", RIG_B, "2026-09-10T14:00", "Ha");
+        let a = library.rig_of("a-flat");
+        let b = library.rig_of("b-flat");
+        let values = |dust| BTreeMap::from([("flat_split_dust_pct".into(), json!(dust))]);
+        rules::set_test_rule_book(Some(rules::RuleBook::new(
+            values(3.0),
+            BTreeMap::from([
+                (
+                    a.clone(),
+                    rules::RigLayer {
+                        name: Some("A".into()),
+                        values: values(5.0),
+                    },
+                ),
+                (
+                    b.clone(),
+                    rules::RigLayer {
+                        name: Some("B".into()),
+                        values: values(7.0),
+                    },
+                ),
+            ]),
+        )));
+        flat_groups::testing::measure_as(&library.conn, |_, _| 0.001);
+        let snapshot = LibrarySnapshot::load(&library.conn).unwrap();
+        for (name, size, rig, dust) in [("a", RIG_A, a, 5.0), ("b", RIG_B, b, 7.0)] {
+            let light = library.light(name, size, "2026-09-11T04:00:00");
+            let selected = snapshot.select(&light).unwrap();
+            assert_eq!(selected.flat.len(), 3);
+            assert_eq!(selected.rules.flat_split_dust_pct, dust);
+            assert_eq!(selected.flat[0].rig_uuid, rig);
+            assert_eq!(
+                snapshot.flat_book().limits(&rig).unwrap().dust,
+                dust / 100.0
+            );
+        }
+    }
+
+    #[test]
     fn a_flat_session_a_year_older_matches_but_is_not_in_scope() {
         let _settings = crate::calibration::tests::POLICY_LOCK
             .lock()
@@ -607,7 +650,10 @@ mod tests {
         library.frames("new-flat", "FLAT", RIG_A, "2026-09-10T14:00", "Ha");
         library.frames("dark", "DARK", RIG_A, "2026-09-10T15:00", "Ha");
         let light = library.light("light", RIG_A, "2026-09-11T04:00:00");
-        let selected = LibrarySnapshot::load(&library.conn).unwrap().select(&light);
+        let selected = LibrarySnapshot::load(&library.conn)
+            .unwrap()
+            .select(&light)
+            .unwrap();
         assert_eq!(selected.flat.len(), 6, "both sessions match");
 
         let rig = library.rig_of("dark");

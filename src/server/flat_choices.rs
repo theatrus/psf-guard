@@ -468,7 +468,7 @@ pub(crate) fn apply_light_choices(
                 .iter()
                 .find(|event| event.key == key)
                 .ok_or(AppError::NotFound)?;
-            let note = flat_groups::EventNote::of(event);
+            let note = flat_groups::event_note(event);
             let label = format!(
                 "{} the change of {} ({})",
                 side.as_str(),
@@ -505,8 +505,7 @@ pub(crate) fn apply_light_choices(
                 .position(|family| family.sessions.contains(&session))
                 .ok_or(AppError::NotFound)?;
             let group = book.group_of(family, session).ok_or(AppError::NotFound)?;
-            let note =
-                flat_groups::GroupNote::of(&book, family, group).ok_or(AppError::NotFound)?;
+            let note = flat_groups::group_note(&book, family, group).ok_or(AppError::NotFound)?;
             let row = &book.sessions[session].row;
             // A group replaces the sides the person chose before.
             let mut rows = reset(&|row| row.change_key != overrides::GROUP_CHOICE_KEY);
@@ -682,7 +681,7 @@ pub(crate) fn light_choice_options(
                 continue;
             }
             let entry = changes.entry(index).or_insert_with(|| {
-                let note = flat_groups::EventNote::of(event);
+                let note = flat_groups::event_note(event);
                 BulkChangeOption {
                     key: event.key.clone(),
                     rig_uuid: event.rig_uuid.clone(),
