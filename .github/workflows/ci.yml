@@ -1,10 +1,11 @@
 name: CI
 
-# Linux (x64 and arm64) and Windows jobs run on ephemeral 32-core runners
-# (tfinfra roots/github-runners, docs/github-runners-plan.md). macOS and
+# Linux (x64 and arm64) jobs run on ephemeral 32-core runners (tfinfra
+# roots/github-runners, docs/github-runners-plan.md). Windows, macOS and
 # every pull request from a fork stay on GitHub's runners: a fork's code
-# never runs on ours. Job names are unchanged, so the required checks still
-# match.
+# never runs on ours. (Windows ran on ours for a week; on-demand Windows
+# licensing made it cost more than it saved.) Job names are unchanged, so
+# the required checks still match.
 
 on:
   # Release branches (`release/v0.10`) ship point releases, so they get the
@@ -33,7 +34,7 @@ env:
 jobs:
   test:
     name: Test on ${{ matrix.os }}
-    runs-on: ${{ (github.event.pull_request.head.repo.fork || matrix.os == 'macos-latest') && matrix.os || fromJSON(matrix.os == 'windows-latest' && '["self-hosted","windows","ghr-windows-x64"]' || '["self-hosted","linux","ghr-linux-x64"]') }}
+    runs-on: ${{ (github.event.pull_request.head.repo.fork || matrix.os == 'macos-latest' || matrix.os == 'windows-latest') && matrix.os || fromJSON('["self-hosted","linux","ghr-linux-x64"]') }}
     strategy:
       fail-fast: false
       matrix:
@@ -266,7 +267,7 @@ jobs:
 
   test-tauri:
     name: Test Tauri Build on ${{ matrix.os }}
-    runs-on: ${{ (github.event.pull_request.head.repo.fork || matrix.os == 'macos-latest') && matrix.os || fromJSON(matrix.os == 'windows-latest' && '["self-hosted","windows","ghr-windows-x64"]' || '["self-hosted","linux","ghr-linux-x64"]') }}
+    runs-on: ${{ (github.event.pull_request.head.repo.fork || matrix.os == 'macos-latest' || matrix.os == 'windows-latest') && matrix.os || fromJSON('["self-hosted","linux","ghr-linux-x64"]') }}
     strategy:
       fail-fast: false
       matrix:

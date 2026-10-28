@@ -1,8 +1,8 @@
 name: Release
 
-# Linux and Windows build on ephemeral 32-core runners (tfinfra
-# roots/github-runners, docs/github-runners-plan.md); macOS and the feed job
-# stay on GitHub's. Only a tag push or a dispatch by someone with write access
+# Linux builds on ephemeral 32-core runners (tfinfra roots/github-runners,
+# docs/github-runners-plan.md); Windows, macOS and the feed job stay on
+# GitHub's. Only a tag push or a dispatch by someone with write access
 # starts this workflow, so no fork's code reaches it.
 
 on:
@@ -24,7 +24,7 @@ permissions:
 jobs:
   build:
     name: Build release on ${{ matrix.os }}
-    runs-on: ${{ matrix.os == 'macos-latest' && matrix.os || fromJSON(matrix.os == 'windows-latest' && '["self-hosted","windows","ghr-windows-x64"]' || '["self-hosted","linux","ghr-linux-x64"]') }}
+    runs-on: ${{ (matrix.os == 'macos-latest' || matrix.os == 'windows-latest') && matrix.os || fromJSON('["self-hosted","linux","ghr-linux-x64"]') }}
     # The Entra federated credential is bound to the subject
     # `repo:theatrus/psf-guard:environment:release`, so this job must run in the
     # `release` environment or the OIDC token will not match and azure/login
