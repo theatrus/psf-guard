@@ -1986,6 +1986,11 @@ impl LibrarySnapshot {
         self.library.flat_book()
     }
 
+    /// The library itself, for the stages that ask it directly.
+    pub(crate) fn library(&self) -> &seiza_calibration::library::Library {
+        &self.library
+    }
+
     pub(crate) fn frames(&self) -> &[CalibrationFrame] {
         self.library.frames()
     }
