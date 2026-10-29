@@ -30,8 +30,10 @@
   frame showed **Catalog only**. The frame keeps its grade and history and
   uses the new name. To clean up frames imported twice by earlier versions,
   open the database in **Settings** and click **Merge renamed lights**. PSF
-  Guard copies the database first. A catalog that syncs from Target
-  Scheduler, or that rigs sync their lights into, keeps the old behavior.
+  Guard copies the database first. This works in a catalog that syncs from
+  Target Scheduler, or that rigs sync their lights into, too: a sync that
+  sends the name N.I.N.A. wrote leaves the new name in place. While an image
+  folder is missing, **Settings** names it instead of checking.
   See [Renamed files](../IMPORTING.md#renamed-files).
 
 - A multi-session stack keeps lights that adopt different external masters in
