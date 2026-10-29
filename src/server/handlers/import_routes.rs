@@ -520,11 +520,8 @@ pub(super) fn run_import_blocking(
     let walked_everything = {
         let walked: std::collections::HashSet<&std::path::Path> =
             dirs.iter().map(|dir| dir.as_path()).collect();
-        crate::renamed_lights::synced_lights(
-            ctx.ts_sync.as_ref(),
-            ctx.remote_image_upload.as_ref(),
-        )
-        .is_none()
+        crate::renamed_lights::synced_lights(ctx.ts_sync.as_ref(), ctx.remote_image_upload.as_ref())
+            .is_none()
             && !ctx.image_dir_paths.is_empty()
             && ctx
                 .image_dir_paths

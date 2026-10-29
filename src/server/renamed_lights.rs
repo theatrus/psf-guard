@@ -95,10 +95,8 @@ pub async fn report(
         let path = std::path::Path::new(&ctx.database_path);
         let writable = crate::ts_guids::is_writable(path);
         let missing_folders = missing_folders(&ctx);
-        let synced = renamed_lights::synced_lights(
-            ctx.ts_sync.as_ref(),
-            ctx.remote_image_upload.as_ref(),
-        );
+        let synced =
+            renamed_lights::synced_lights(ctx.ts_sync.as_ref(), ctx.remote_image_upload.as_ref());
         if !missing_folders.is_empty() || synced.is_some() {
             return Ok(RenamedLightsReport {
                 pairs: Vec::new(),
