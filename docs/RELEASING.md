@@ -4,6 +4,12 @@ This guide covers a normal PSF Guard desktop, CLI, package, and server release.
 Prepare the release in a pull request. Do not tag until that exact pull request
 has merged and all required checks have passed.
 
+A minor release comes from `main`. When `main` carries work that should not
+ship yet, a patch release comes from that minor's release branch instead; see
+[Patch releases from a release branch](#patch-releases-from-a-release-branch).
+Between releases, `main` carries the next minor version; see
+[Main's version between releases](#mains-version-between-releases).
+
 ## 1. Check the release boundary
 
 1. Fetch `origin/main` and the tags.
@@ -211,11 +217,57 @@ offer an install action.
 `demo.psf-guard.com` rebuilds itself from the newest `vX.Y.Z` tag on the
 same release webhook (flotswarm action `deploy-psf-guard`, host
 `psf-guard-demo`), so it always runs what users download and never the main
-tip. Give it a quarter of an hour, then confirm its version:
+tip. Each asset upload edits the release and sends the webhook again, so give
+it a quarter of an hour after the last upload (the RPM), then confirm the
+version it runs:
 
 ```bash
-curl -s https://demo.psf-guard.com/api/update-notice
+curl -s https://demo.psf-guard.com/api/info
 ```
 
 Record the tag SHA, workflow run, release URL, downloaded checks, and website
 feed checks in the release issue or operator notes.
+
+## Patch releases from a release branch
+
+Release fixes from `release/vX.Y` when `main` holds unreleased work that must
+not ship in a patch. 0.12.4 was the first release made this way.
+
+1. If `release/vX.Y` does not exist, create it from the last `vX.Y.Z` tag and
+   push it.
+2. Merge each fix to `main` first, through its own pull request. Then
+   cherry-pick it onto a `release/vX.Y.Z` branch cut from `release/vX.Y`, and
+   resolve conflicts against the release branch. Code that exists only on
+   `main` stays out.
+3. Tag workflows run from the files at the tagged commit. When `main` changed
+   the runners or CI that the branch needs in order to build, bring those
+   workflow files over too, without jobs for code the branch lacks.
+4. Prepare the release as in section 2, in a pull request whose base is
+   `release/vX.Y`. Write the fixes' entries straight into `vVERSION.md`, and
+   leave the branch's `unreleased.md` reset.
+5. Run the local gates, then merge, tag and verify as in sections 3 to 7. As
+   for any release, Docker `latest`, `notice.json` and the demo move to the
+   patch when it is the newest version.
+
+The release branch's notes, highlights and RPM changelog entry do not reach
+`main` on their own. When the next minor release is prepared on `main`, copy
+`docs/releases/vX.Y.Z.md`, its `highlights.json` entry and its RPM changelog
+entry from the release branch, and remove the entries in `main`'s
+`unreleased.md` that the patch already shipped, so the minor's notes do not
+announce them a second time.
+
+## Main's version between releases
+
+Once a release branch exists, stamp `main` with the next minor version as an
+interim development version: `Cargo.toml`, the root package in `Cargo.lock`,
+`tauri.conf.json`, and the RPM spec, whose changelog gets the line "Interim
+development version on main; released builds come from release/* branches".
+Add no release notes or highlights for it. 0.11.0 (#545) and 0.13.0 were
+stamped this way.
+
+Under the last release's number, every build from `main` reports each new
+patch as an available update, though it already has the patch's fixes. The
+end-to-end servers run with
+`PSF_GUARD_UPDATE_NOTICE=off`, so a release does not change their pages
+whatever `main`'s version is. The minor release keeps the interim number and
+replaces the interim changelog line with its own entry.
