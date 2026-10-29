@@ -1489,7 +1489,10 @@ pub(crate) fn export_bundle(
         let where_clause =
             (operation == SyncOperation::PushGrades && reviewed_only && *name == "acquiredimage")
                 .then_some("gradingStatus <> 0");
-        let table = read_bundle_table(&connection, name, where_clause)?;
+        let mut table = read_bundle_table(&connection, name, where_clause)?;
+        if *name == "acquiredimage" {
+            send_source_file_names(&connection, &mut table)?;
+        }
         // Bound the export the same way we bound an import. A merge pulls
         // every acquiredimage row and every imagedata blob, so an unbounded
         // build is how the server runs itself out of memory answering one
@@ -1561,6 +1564,40 @@ pub(crate) fn export_bundle(
     let payload = serde_json::to_vec(&bundle)?;
     bundle.payload_sha256 = Some(digest_hex(&payload));
     Ok(bundle)
+}
+
+/// A light this catalog moved to a renamed file goes out under the name it
+/// had before, which is what a peer's own copy of the file has (#1020).
+fn send_source_file_names(connection: &Connection, table: &mut BundleTable) -> anyhow::Result<()> {
+    let renamed = crate::renamed_lights::renamed(connection)?;
+    if renamed.is_empty() {
+        return Ok(());
+    }
+    let position = |wanted: &str| {
+        table
+            .columns
+            .iter()
+            .position(|column| column.name.eq_ignore_ascii_case(wanted))
+    };
+    let (Some(guid), Some(metadata)) = (position("guid"), position("metadata")) else {
+        return Ok(());
+    };
+    for row in &mut table.rows {
+        let Some(renamed) = row.values[guid]
+            .value
+            .as_deref()
+            .and_then(|guid| renamed.get(guid))
+        else {
+            continue;
+        };
+        if let Some(sent) = row.values[metadata].value.as_deref()
+            && let Some(source) =
+                crate::renamed_lights::exported_metadata(connection, renamed, sent)?
+        {
+            row.values[metadata].value = Some(source);
+        }
+    }
+    Ok(())
 }
 
 fn read_bundle_table(

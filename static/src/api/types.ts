@@ -4665,8 +4665,6 @@ export interface RenamedLightsReport {
   writable: boolean;
   /** Image folders missing now; nothing is checked until they are back. */
   missing_folders: string[];
-  /** Why this catalog is not checked, when a sync writes its lights. */
-  synced: string | null;
 }
 /** What a merge did, and the copy taken first (none when there was nothing to merge). */
 export interface RenamedLightsMerged { merged: RenamedPair[]; held: HeldRenamedPair[]; backup_path: string | null }

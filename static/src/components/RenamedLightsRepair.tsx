@@ -13,7 +13,8 @@ function baseName(path: string): string {
 
 /** Lights an import catalogued twice because their file was renamed after
  *  it was imported. The first light of each pair shows as Catalog only,
- *  since its file is gone. Silent when there are none. */
+ *  since its file is gone. Names a missing image folder, which stops the
+ *  check; silent when there is nothing to say. */
 export default function RenamedLightsRepair({ dbId, dbName, canManage }: { dbId: string; dbName: string; canManage: boolean }) {
   const client = useQueryClient();
   const report = useQuery({ queryKey: ['db', dbId, 'renamed-lights'], queryFn: () => apiClient.getRenamedLights(dbId), staleTime: 60_000, retry: false });
@@ -33,6 +34,14 @@ export default function RenamedLightsRepair({ dbId, dbName, canManage }: { dbId:
     </div>;
   }
   const data = report.data;
+  const missing = data?.missing_folders ?? [];
+  if (missing.length > 0) {
+    return <div className="settings-note" role="note" aria-label={`Renamed lights in ${dbName}`}>
+      {missing.map((dir, index) => <span key={dir}>{index > 0 && ', '}<code>{dir}</code></span>)}{' '}
+      {missing.length === 1 ? 'is' : 'are'} missing, so renamed lights are not checked until{' '}
+      {missing.length === 1 ? 'it is' : 'they are'} back: a light whose file is there would look renamed.
+    </div>;
+  }
   if (!data || data.pairs.length + data.held.length === 0) return null;
   const pairs = data.pairs.length;
   return <div className="settings-note settings-warning" role="note" aria-label={`Renamed lights in ${dbName}`}>

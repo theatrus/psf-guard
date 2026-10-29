@@ -27,7 +27,7 @@ const held = {
 function mount(canManage: boolean, report: Partial<RenamedLightsReport> = {}) {
   const merge = vi.fn(() => ok({ merged: [pair], held: [held], backup_path: '/data/catalog.sqlite.before-renamed-merge-1790000000' }));
   server.use(
-    http.get('/api/db/veil/renamed-lights', () => ok({ pairs: [pair], held: [held], writable: true, missing_folders: [], synced: null, ...report })),
+    http.get('/api/db/veil/renamed-lights', () => ok({ pairs: [pair], held: [held], writable: true, missing_folders: [], ...report })),
     http.post('/api/db/veil/renamed-lights/merge', merge),
   );
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
@@ -57,6 +57,13 @@ describe('renamed light repair', () => {
   it('offers no button when only pairs that stay are left', async () => {
     mount(true, { pairs: [] });
     expect(await screen.findByRole('note')).toHaveTextContent('1 light was imported again');
+    expect(screen.queryByRole('button', { name: 'Merge renamed lights' })).not.toBeInTheDocument();
+  });
+
+  it('names the missing folders that stop the check', async () => {
+    mount(true, { pairs: [], held: [], missing_folders: ['/capture', '/archive'] });
+    const note = await screen.findByRole('note', { name: 'Renamed lights in Veil' });
+    expect(note).toHaveTextContent('/capture, /archive are missing, so renamed lights are not checked until they are back');
     expect(screen.queryByRole('button', { name: 'Merge renamed lights' })).not.toBeInTheDocument();
   });
 

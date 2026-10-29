@@ -515,14 +515,11 @@ pub(super) fn run_import_blocking(
     let collected = imp::collect_image_files(dirs, &path_filter)?;
     // A walk of every image folder sees each file the catalog's lights can
     // have, so the import can tell a renamed file's old light by its file
-    // being gone. A walk of fewer folders cannot, and in a catalog a sync
-    // writes, the next sync would put the old name back.
+    // being gone. A walk of fewer folders cannot.
     let walked_everything = {
         let walked: std::collections::HashSet<&std::path::Path> =
             dirs.iter().map(|dir| dir.as_path()).collect();
-        crate::renamed_lights::synced_lights(ctx.ts_sync.as_ref(), ctx.remote_image_upload.as_ref())
-            .is_none()
-            && !ctx.image_dir_paths.is_empty()
+        !ctx.image_dir_paths.is_empty()
             && ctx
                 .image_dir_paths
                 .iter()
