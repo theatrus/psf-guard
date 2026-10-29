@@ -17,6 +17,7 @@ import type {
   StackNarrowbandPalette,
 } from '../api/types';
 import StackPreviewInspector from './StackPreviewInspector';
+import { stackSolutionNote } from './viewer/useViewerReadout';
 import CalibrationMasterButton from './CalibrationMasterInspector';
 import StackColorProcessingControls from './StackColorProcessingControls';
 import StackContinuumResults from './StackContinuumResults';
@@ -566,6 +567,14 @@ export default function StackColorPreviewPanel({
   const [savedByCard, setSavedByCard] = useState<Record<string, string>>({});
   const [pendingCardKeys, setPendingCardKeys] = useState<ReadonlySet<string>>(new Set());
   const [inspector, setInspector] = useState<StackColorJob | null>(null);
+  // The stack's plate solution, for the inspector's RA/Dec and sky overlay.
+  const inspectorSolution = useQuery({
+    queryKey: ['db', dbId, 'stack-solution', inspector?.job_id, inspector?.artifact_revision],
+    queryFn: () => apiClient.getStackColorSolution(dbId, inspector!.job_id, inspector!.artifact_revision),
+    enabled: inspector !== null,
+    retry: false,
+    staleTime: 60_000,
+  });
 
   const catalog = useQuery({
     queryKey: catalogQueryKey(dbId, projectId, sourceRevision),
@@ -1178,6 +1187,8 @@ export default function StackColorPreviewPanel({
           }}
           artifactEnabled={canCompute}
           onOpenImage={onOpenImage}
+          solution={inspectorSolution.data ?? null}
+          solutionUnavailable={stackSolutionNote(inspectorSolution)}
           onClose={() => setInspector(null)}
         />
       )}

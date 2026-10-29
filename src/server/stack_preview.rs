@@ -2387,6 +2387,43 @@ pub async fn download_stack_preview_fits(
         })
 }
 
+/// GET …/stack-previews/{job}/{group}/fits/window: a rectangle of the stack
+/// FITS, for the inspector's pointer readout.
+pub async fn read_stack_preview_window(
+    ctx: DbContext,
+    Path((_db_id, job_id, group_index)): Path<(String, String, usize)>,
+    Query(window): Query<crate::server::pixel_window::WindowQuery>,
+) -> Result<Json<ApiResponse<crate::server::pixel_window::PixelWindowResponse>>, AppError> {
+    validate_job_id(&job_id)?;
+    crate::server::pixel_window::read(fits_path(&ctx.stack_root, &job_id, group_index), window)
+        .await
+}
+
+/// GET …/stack-previews/{job}/{group}/solution: the plate solution of the
+/// stack's grid, for the inspector's RA/Dec and sky overlay, or null when no
+/// integrated frame is solved.
+pub async fn get_stack_preview_solution(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+    Path((_db_id, job_id, group_index)): Path<(String, String, usize)>,
+) -> Result<Json<ApiResponse<Option<crate::server::sky_coverage::StackSolution>>>, AppError> {
+    let context = Arc::clone(&ctx.0);
+    let solution = tokio::task::spawn_blocking(move || {
+        let job = stack_job(&state, &context, &job_id)?;
+        let group = job
+            .groups
+            .into_iter()
+            .find(|group| group.index == group_index && group.state == StackGroupState::Ready)
+            .ok_or(AppError::NotFound)?;
+        Ok::<_, AppError>(crate::server::sky_coverage::mono_stack_solution(
+            &context, &group,
+        ))
+    })
+    .await
+    .map_err(|_| AppError::InternalError("The stack's plate solution lookup stopped".into()))??;
+    Ok(Json(ApiResponse::success(solution)))
+}
+
 pub async fn apply_stack_preview_stretch(
     State(state): State<Arc<AppState>>,
     ctx: DbContext,
@@ -2493,12 +2530,13 @@ pub(crate) fn contribution_outputs(
         .collect()
 }
 
-fn stack_processing_source(
+/// A stack job of this database: the live one while it runs, else its
+/// manifest.
+fn stack_job(
     state: &Arc<AppState>,
     ctx: &DatabaseContext,
     job_id: &str,
-    group_index: usize,
-) -> Result<stretch::StretchSource, AppError> {
+) -> Result<StackPreviewJob, AppError> {
     validate_job_id(job_id)?;
     let job = if let Some(job) = state.stack_previews.get(job_id) {
         job
@@ -2512,6 +2550,16 @@ fn stack_processing_source(
     if job.database_id != ctx.id {
         return Err(AppError::NotFound);
     }
+    Ok(job)
+}
+
+fn stack_processing_source(
+    state: &Arc<AppState>,
+    ctx: &DatabaseContext,
+    job_id: &str,
+    group_index: usize,
+) -> Result<stretch::StretchSource, AppError> {
+    let job = stack_job(state, ctx, job_id)?;
     let group = job
         .groups
         .get(group_index)

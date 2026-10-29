@@ -285,6 +285,13 @@ including while Settings is open. The desktop app changes the whole UI in 10%
 steps from 50% to 200% and saves the scale on this device. Image zoom has separate
 controls. In a browser, use the browser's zoom controls.
 
+#### Use the whole screen
+
+To fill the screen with the desktop app, choose **View → Enter Full Screen**
+on macOS, press Ctrl+Cmd+F, or click the window's green button. On Windows and
+Linux, press F11; press it again to return to a window. The image viewer and
+the stack inspector already fill the window.
+
 ### Docker (Linux servers / NAS)
 
 Create a persistent data volume and the first editor account before starting
@@ -441,7 +448,17 @@ is available:
 | S | Stars overlay | O | Solve / sky overlay |
 | T | Predict / satellite tracks | P | PSF view |
 | + / − | Zoom | Ctrl+Z | Undo |
-| Ctrl+Y | Redo | | |
+| Ctrl+Y | Redo | M | Value under the pointer |
+| R | RA/Dec under the pointer | | |
+
+To measure a frame or a stack, turn on **Value** or **RA/Dec** under the zoom
+buttons, or press M or R, then point at the image. A box in the corner shows
+the pixel's position, its linear value from the file, with one value for each
+color of an RGB image, and its right ascension and declination from the plate
+solution. The image viewer and the stack inspector share these settings. PSF
+Guard reads only the pixels near the pointer from the file, so a large stack
+does not have to load. RA/Dec needs a plate solution: solve the frame in
+**Sky context**, or, for a stack, solve one of its frames.
 
 Grades update the active catalog. When that catalog belongs to Target
 Scheduler, or you sync grades back to it, the scheduler can update accepted

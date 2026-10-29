@@ -22,6 +22,7 @@ import type {
   StackStretchPreview,
 } from '../api/types';
 import StackPreviewInspector from './StackPreviewInspector';
+import { stackSolutionNote } from './viewer/useViewerReadout';
 import CalibrationMasterButton from './CalibrationMasterInspector';
 import StackSnrCurve from './StackSnrCurve';
 import ScoringChangedNote from './ScoringChangedNote';
@@ -409,6 +410,14 @@ export default function StackPreviewPanel({
   // The Build button each build being prepared came from, by build.
   const preparingOperations = useRef(new Map<string, string>());
   const [inspector, setInspector] = useState<StackArtifact | null>(null);
+  // The stack's plate solution, for the inspector's RA/Dec and sky overlay.
+  const inspectorSolution = useQuery({
+    queryKey: ['db', dbId, 'stack-solution', inspector?.jobId, inspector?.group.index, inspector?.artifactRevision],
+    queryFn: () => apiClient.getStackSolution(dbId, inspector!.jobId, inspector!.group.index, inspector!.artifactRevision),
+    enabled: inspector !== null,
+    retry: false,
+    staleTime: 60_000,
+  });
   // Which channels currently show the stars image instead of the starless
   // one, keyed like `stretches`. Only meaningful while star removal is
   // applied to that channel.
@@ -1667,6 +1676,8 @@ export default function StackPreviewPanel({
           }}
           artifactEnabled={canCompute}
           onOpenImage={onOpenImage}
+          solution={inspectorSolution.data ?? null}
+          solutionUnavailable={stackSolutionNote(inspectorSolution)}
           onClose={() => setInspector(null)}
         />
       )}

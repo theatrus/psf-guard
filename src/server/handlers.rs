@@ -21,7 +21,7 @@ pub(crate) use image_files::find_fits_file_async;
 use image_files::{
     canonical_image_roots, find_fits_file_cached_async, find_fits_file_cached_with_roots,
 };
-pub use image_files::{find_fits_file, get_image_preview, get_image_stars};
+pub use image_files::{find_fits_file, get_image_preview, get_image_stars, get_image_window};
 #[cfg(test)]
 use image_files::{
     find_fits_file_cached, mapped_file_sha256, metadata_suffix_candidates,

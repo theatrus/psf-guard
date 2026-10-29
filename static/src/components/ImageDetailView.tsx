@@ -31,6 +31,9 @@ import { setSkyOverlay, useSkyOverlay } from '../hooks/useSkyOverlay';
 import { useDetailSection } from '../hooks/useDetailSections';
 import { useSidebarScrollAnchor } from '../hooks/useSidebarScrollAnchor';
 import { useAccess } from '../auth/access';
+import PointerReadout from './viewer/PointerReadout';
+import { MeasureToggles, ZoomControls } from './viewer/ViewerControls';
+import { useViewerReadout } from './viewer/useViewerReadout';
 
 interface ImageDetailViewProps {
   dbId: string;
@@ -327,6 +330,23 @@ export default function ImageDetailView({
   });
 
 
+  // The pointer readout's value and RA/Dec, shared with the stack inspector.
+  // The PSF diagnostic is not the frame's pixels, and a registered copy is
+  // on another grid than the frame's plate solution.
+  const readout = useViewerReadout({
+    container: zoom.containerRef,
+    view: zoom.zoomState,
+    bitmap: showPsf ? null : displayedBitmapDimensions,
+    grid: image?.id === imageId ? headerDimensions(image.metadata) : null,
+    windowPath: apiClient.getImageWindowPath(dbId, imageId, copy),
+    solution: geometryMatches ? astrometry?.solution : null,
+  });
+  const skyUnavailable = !geometryMatches
+    ? 'A registered copy is on another pixel grid than the frame’s plate solution'
+    : astrometry?.solution?.wcs
+      ? undefined
+      : 'This frame has no plate solution yet; solve it in Sky context';
+
   // Keyboard shortcuts
   useHotkeys('escape', onClose, [onClose]);
   useHotkeys('k,right', () => {
@@ -592,11 +612,20 @@ export default function ImageDetailView({
             <div 
               className={`image-container zoom-container ${hasOverflow ? 'has-overflow' : ''}`}
               ref={zoom.containerRef}
-              onWheel={zoom.handleWheel}
+              onWheel={(event) => {
+                zoom.handleWheel(event);
+                readout.track(event);
+              }}
               onMouseDown={zoom.handleMouseDown}
-              onMouseMove={zoom.handleMouseMove}
+              onMouseMove={(event) => {
+                zoom.handleMouseMove(event);
+                readout.track(event);
+              }}
               onMouseUp={zoom.handleMouseUp}
-              onMouseLeave={zoom.handleMouseUp}
+              onMouseLeave={(event) => {
+                zoom.handleMouseUp(event);
+                readout.leave();
+              }}
               onTouchStart={zoom.handleTouchStart}
               onTouchMove={zoom.handleTouchMove}
               onTouchEnd={zoom.handleTouchEnd}
@@ -773,6 +802,9 @@ export default function ImageDetailView({
                     />
                   )}
                 </>
+              )}
+              {!showPsf && !hideMainImage && (
+                <PointerReadout {...readout.readout} skyUnavailable={skyUnavailable} />
               )}
               {!showPsf &&
                 (asyncImg.state === 'generating' || asyncImg.state === 'loading') && (
@@ -1038,6 +1070,8 @@ export default function ImageDetailView({
                 <span>I Tilt {showTilt ? '✓' : ''}</span>
                 <span>P PSF {showPsf ? '✓' : ''}</span>
                 <span>O Sky {showAstrometry && astrometry?.solution ? '✓' : ''}</span>
+                <span>M Value {readout.options.value ? '✓' : ''}</span>
+                <span>R RA/Dec {readout.options.sky ? '✓' : ''}</span>
                 {viewCopies.length > 0 && <span>V View</span>}
                 <span>Z Size</span>
                 {grading && <span>⌘Z Undo</span>}
@@ -1047,40 +1081,16 @@ export default function ImageDetailView({
 
             {/* Compact Zoom Controls at Bottom */}
             <div className="zoom-section-bottom">
-              <div className="zoom-info-compact">
-                <span className="zoom-percentage-compact">{zoom.getZoomPercentage()}%</span>
-              </div>
-              <div className="zoom-buttons-compact">
-                <button 
-                  className="zoom-btn-compact" 
-                  onClick={zoom.zoomOut}
-                  title="Zoom Out (-)"
-                >
-                  -
-                </button>
-                <button 
-                  className="zoom-btn-compact" 
-                  onClick={zoom.zoomToFit}
-                  title="Fit to Screen (F)"
-                >
-                  Fit
-                </button>
-                <button 
-                  className="zoom-btn-compact" 
-                  onClick={zoom.zoomTo100}
-                  title="100% (1)"
-                >
-                  100%
-                </button>
-                <button 
-                  className="zoom-btn-compact" 
-                  onClick={zoom.zoomIn}
-                  title="Zoom In (+)"
-                >
-                  +
-                </button>
+              <ZoomControls
+                percentage={zoom.getZoomPercentage()}
+                onZoomOut={zoom.zoomOut}
+                onFit={zoom.zoomToFit}
+                onActualSize={zoom.zoomTo100}
+                onZoomIn={zoom.zoomIn}
+              >
                 <button
-                  className={`zoom-btn-compact${showColor ? ' active' : ''}`}
+                  className="zoom-btn-compact"
+                  type="button"
                   onClick={() => setColorPreview(!showColor)}
                   aria-pressed={showColor}
                   disabled={showStars}
@@ -1092,7 +1102,8 @@ export default function ImageDetailView({
                 >
                   Color
                 </button>
-              </div>
+              </ZoomControls>
+              <MeasureToggles options={readout.options} skyDisabled={skyUnavailable} />
             </div>
           </div>
         </div>

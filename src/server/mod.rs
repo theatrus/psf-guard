@@ -43,6 +43,7 @@ pub mod organization;
 pub mod page_build;
 pub mod pairing;
 pub mod peers;
+pub mod pixel_window;
 pub mod preview_pregeneration;
 pub mod preview_queue;
 pub mod previews;
@@ -345,6 +346,10 @@ pub fn api_router(state: Arc<AppState>) -> Router {
             get(calibration_browser::download_master_fits),
         )
         .route(
+            "/calibrations/masters/{master_uuid}/fits/window",
+            get(calibration_browser::read_master_window),
+        )
+        .route(
             "/projects/{project_id}",
             put(handlers::update_project_route),
         )
@@ -472,6 +477,10 @@ pub fn api_router(state: Arc<AppState>) -> Router {
             get(stack_preview::calibration_masters::download_fits),
         )
         .route(
+            "/stack-previews/{job_id}/{group_index}/calibration-masters/{master_id}/fits/window",
+            get(stack_preview::calibration_masters::read_window),
+        )
+        .route(
             "/stack-previews/color/{job_id}/calibration-masters",
             get(stack_preview::calibration_masters::get_catalog),
         )
@@ -484,12 +493,24 @@ pub fn api_router(state: Arc<AppState>) -> Router {
             get(stack_preview::calibration_masters::download_fits),
         )
         .route(
+            "/stack-previews/color/{job_id}/calibration-masters/{master_id}/fits/window",
+            get(stack_preview::calibration_masters::read_window),
+        )
+        .route(
             "/stack-previews/calibration-masters/generation-status",
             post(stack_preview::calibration_masters::post_generation_status),
         )
         .route(
             "/stack-previews/{job_id}/{group_index}/fits",
             get(stack_preview::download_stack_preview_fits),
+        )
+        .route(
+            "/stack-previews/{job_id}/{group_index}/fits/window",
+            get(stack_preview::read_stack_preview_window),
+        )
+        .route(
+            "/stack-previews/{job_id}/{group_index}/solution",
+            get(stack_preview::get_stack_preview_solution),
         )
         .route(
             "/stack-previews/{job_id}/{group_index}/snr",
@@ -524,6 +545,10 @@ pub fn api_router(state: Arc<AppState>) -> Router {
             get(stack_preview::stretch::download_stack_stretch_fits),
         )
         .route(
+            "/stack-previews/stretch/{stretch_id}/fits/window",
+            get(stack_preview::stretch::read_stack_stretch_window),
+        )
+        .route(
             "/stack-previews/stretch/{stretch_id}/stars",
             get(stack_preview::stretch::get_stack_stretch_stars_image),
         )
@@ -538,6 +563,14 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route(
             "/stack-previews/color/{job_id}/fits",
             get(stack_preview::color::download_stack_color_fits),
+        )
+        .route(
+            "/stack-previews/color/{job_id}/fits/window",
+            get(stack_preview::color::read_stack_color_window),
+        )
+        .route(
+            "/stack-previews/color/{job_id}/solution",
+            get(stack_preview::color::get_stack_color_solution),
         )
         .route("/images", get(handlers::get_images))
         .route(
@@ -563,6 +596,7 @@ pub fn api_router(state: Arc<AppState>) -> Router {
             get(handlers::get_image_preview),
         )
         .route("/images/{image_id}/stars", get(handlers::get_image_stars))
+        .route("/images/{image_id}/window", get(handlers::get_image_window))
         .route(
             "/images/{image_id}/calibration",
             get(handlers::get_image_calibration),

@@ -8,6 +8,7 @@ import { useCurrentPlan } from './components/header/useCurrentPlan';
 import ActivityChip from './components/header/ActivityChip';
 import LiveChip from './components/header/LiveChip';
 import { useDesktopZoom, type DesktopZoom } from './hooks/useDesktopZoom';
+import { useDesktopFullscreen } from './hooks/useDesktopFullscreen';
 import HeaderMenu from './components/header/HeaderMenu';
 import ViewTab from './components/header/ViewTab';
 import { ChartColumn, Crosshair, Images, LibraryBig, SquareStack, Telescope, TestTubeDiagonal } from 'lucide-react';
@@ -326,6 +327,7 @@ function AppContent({ zoom }: { zoom?: DesktopZoom }) {
 
 export default function App() {
   const desktopZoom = useDesktopZoom();
+  useDesktopFullscreen();
   return (
     <>
       {desktopZoom.error && <p role="alert" className="desktop-zoom-error">{desktopZoom.error}</p>}

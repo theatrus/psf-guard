@@ -1,0 +1,61 @@
+/* Shared by the image reviewer and the stack inspector. */
+
+.pointer-readout {
+  position: absolute;
+  left: 0.6rem;
+  bottom: 0.6rem;
+  z-index: 3;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 0.9rem;
+  max-width: calc(100% - 1.2rem);
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--color-bg-quaternary);
+  border-radius: 6px;
+  background: var(--color-overlay-light);
+  color: var(--color-text-primary);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  box-sizing: border-box;
+}
+
+.pointer-readout-pixel {
+  color: var(--color-text-muted);
+}
+
+.pointer-readout-value,
+.pointer-readout-sky {
+  white-space: nowrap;
+}
+
+.measure-toggles {
+  display: inline-flex;
+  gap: 0.25rem;
+}
+
+.measure-toggles .zoom-btn-compact {
+  min-width: 3.5rem;
+}
+
+.zoom-btn-compact[aria-pressed='true'] {
+  border-color: var(--state-on-border);
+  background: var(--state-on-bg);
+  color: var(--state-on-fg);
+}
+
+.zoom-btn-compact:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.zoom-section-bottom .measure-toggles {
+  display: flex;
+  margin-top: 0.5rem;
+}
+
+.zoom-section-bottom .measure-toggles .zoom-btn-compact {
+  flex: 1;
+}

@@ -10,6 +10,8 @@ import type {
   BackupsOverview,
 } from './backupTypes';
 import { getServerUrl } from '../utils/tauri';
+import type { OverlaySolution } from '@seiza/astro-overlay';
+import type { PixelRect, PixelWindow } from '../utils/pixelWindow';
 import { BUILD_HEADER, noteServerBuild } from '../updates/pageBuild';
 import type { DirectorAdoptionPlan, DirectorAdoptionReport, DirectorCollection, DirectorCutoutRequest, DirectorCutoutResult, DirectorDiscovery, DirectorFramingDraft, DirectorFramingDraftView, DirectorFramingPreview, DirectorFramingRequest, DirectorIdentity, DirectorIdentityPage, DirectorMappingPage, DirectorFeasibility, DirectorMosaicPreview, DirectorResolvedName,
   DirectorSkyMarks,
@@ -2842,6 +2844,72 @@ export const apiClient = {
       dbId,
       `/stack-previews/${encodeURIComponent(jobId)}/${groupIndex}/fits`
     )}${revision}`;
+  },
+
+  /**
+   * The window route beside a FITS download, which reads a rectangle of the
+   * same file: `…/fits?v=r` becomes `…/fits/window?v=r`, relative to the API.
+   */
+  fitsWindowPath: (fitsUrl: string): string => {
+    const base = `${getCachedServerUrl()}/api`;
+    const relative = fitsUrl.startsWith(base)
+      ? fitsUrl.slice(base.length)
+      : fitsUrl.startsWith('/api/') ? fitsUrl.slice('/api'.length) : fitsUrl;
+    const [path, query] = relative.split('?', 2);
+    return `${path}/window${query ? `?${query}` : ''}`;
+  },
+
+  /** The window route of a frame's file, or of one of its copies. */
+  getImageWindowPath: (dbId: string, imageId: number, copy?: string): string =>
+    dbPath(dbId, `/images/${imageId}/window${copy ? `?copy=${encodeURIComponent(copy)}` : ''}`),
+
+  getPixelWindow: async (path: string, rect: PixelRect): Promise<PixelWindow> => {
+    const apiInstance = await getApi();
+    const params = new URLSearchParams({
+      x: String(rect.x),
+      y: String(rect.y),
+      width: String(rect.width),
+      height: String(rect.height),
+    });
+    const { data } = await apiInstance.get<ApiResponse<PixelWindow>>(
+      `${path}${path.includes('?') ? '&' : '?'}${params.toString()}`
+    );
+    if (!data.data) throw new Error(data.error || 'Pixel values could not be read');
+    return data.data;
+  },
+
+  /**
+   * The plate solution of a mono stack's grid, from its reference frame's
+   * solve, or null when no integrated frame is solved.
+   */
+  getStackSolution: async (
+    dbId: string,
+    jobId: string,
+    groupIndex: number,
+    artifactRevision: string
+  ): Promise<OverlaySolution | null> => {
+    const apiInstance = await getApi();
+    const revision = artifactRevision ? `?v=${encodeURIComponent(artifactRevision)}` : '';
+    const { data } = await apiInstance.get<ApiResponse<OverlaySolution | null>>(
+      dbPath(dbId, `/stack-previews/${encodeURIComponent(jobId)}/${groupIndex}/solution${revision}`)
+    );
+    if (!data.success) throw new Error(data.error || 'The stack has no plate solution');
+    return data.data ?? null;
+  },
+
+  /** The plate solution of a colour stack's grid, as for a mono stack. */
+  getStackColorSolution: async (
+    dbId: string,
+    jobId: string,
+    artifactRevision: string
+  ): Promise<OverlaySolution | null> => {
+    const apiInstance = await getApi();
+    const revision = artifactRevision ? `?v=${encodeURIComponent(artifactRevision)}` : '';
+    const { data } = await apiInstance.get<ApiResponse<OverlaySolution | null>>(
+      dbPath(dbId, `/stack-previews/color/${encodeURIComponent(jobId)}/solution${revision}`)
+    );
+    if (!data.success) throw new Error(data.error || 'The stack has no plate solution');
+    return data.data ?? null;
   },
 
   startMonoArtifactSearch: async (

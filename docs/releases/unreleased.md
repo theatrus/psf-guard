@@ -16,6 +16,21 @@
 
 ## Changes
 
+- The stack inspector fills the browser or app window, as the image viewer
+  does, instead of a box in the middle of it.
+
+- The image viewer and the stack inspector can show the pixel under the
+  pointer. Turn on **Value** or **RA/Dec**, or press **M** or **R**, to see
+  the pixel's position, its linear value from the file (one per channel of a
+  colour stack), and its right ascension and declination from the plate
+  solution. PSF Guard reads only the pixels near the pointer, so a large stack
+  does not have to load. In the stack inspector, **Sky** (**O**) draws the
+  RA/Dec grid over a stack whose frames are solved.
+
+- In the desktop app on Windows and Linux, F11 puts the window into full
+  screen and back. On macOS, use **View → Enter Full Screen** or the window's
+  green button.
+
 - PSF Guard starts when one of a database's image folders is missing, for
   example after you move the folder or before its drive is mounted. Before,
   the server stopped with "Image directory not found" until the folder was

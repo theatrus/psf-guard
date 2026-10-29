@@ -6,10 +6,16 @@ import type {
 } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useHotkeys } from 'react-hotkeys-hook';
+import type { OverlaySolution } from '@seiza/astro-overlay';
 import { apiClient } from '../api/client';
 import type { ArtifactSearchJob, ArtifactSearchResult, PreviewDescriptor, ReferenceRegion } from '../api/types';
 import { useImageZoom } from '../hooks/useImageZoom';
 import { useAsyncImage } from '../hooks/useAsyncImage';
+import { setSkyOverlay, useSkyOverlay } from '../hooks/useSkyOverlay';
+import AstrometryOverlay from './AstrometryOverlay';
+import PointerReadout from './viewer/PointerReadout';
+import { MeasureToggles, ZoomControls } from './viewer/ViewerControls';
+import { useViewerReadout } from './viewer/useViewerReadout';
 import { morphologyLabel } from './artifactMorphology';
 import {
   artifactRegionFromPoints,
@@ -53,6 +59,14 @@ interface StackPreviewInspectorProps {
   loadingMessage?: string;
   errorMessage?: string;
   closeLabel?: string;
+  /**
+   * The plate solution of the stack's grid, for RA/Dec under the pointer and
+   * the sky overlay: null while none is known, absent for an image that has
+   * no sky position, such as a calibration master.
+   */
+  solution?: OverlaySolution | null;
+  /** Why RA/Dec cannot be shown, when `solution` is null. */
+  solutionUnavailable?: string;
   onOpenImage?: (imageId: number) => void;
   onClose: () => void;
 }
@@ -100,6 +114,8 @@ export default function StackPreviewInspector({
   loadingMessage = 'Loading full-resolution stack…',
   errorMessage = 'The full-resolution stack could not be loaded.',
   closeLabel = 'Close stack inspector',
+  solution,
+  solutionUnavailable = 'No integrated frame of this stack is plate-solved yet',
   onOpenImage,
   onClose,
 }: StackPreviewInspectorProps) {
@@ -115,6 +131,21 @@ export default function StackPreviewInspector({
   const [regionError, setRegionError] = useState<string | null>(null);
   const [searchId, setSearchId] = useState<string | null>(null);
   const zoom = useImageZoom({ minScale: 0.05, maxScale: 10 });
+  const readout = useViewerReadout({
+    container: zoom.containerRef,
+    view: zoom.zoomState,
+    bitmap: dimensions,
+    windowPath: fitsUrl ? apiClient.fitsWindowPath(fitsUrl) : null,
+    solution,
+  });
+  const skyUnavailable = solution === undefined
+    ? 'This image has no sky position'
+    : solution?.wcs ? undefined : solutionUnavailable;
+  const skyOverlay = useSkyOverlay();
+  const showSky = skyOverlay && !skyUnavailable && loaded && dimensions !== null;
+  useHotkeys('o', () => {
+    if (!skyUnavailable) setSkyOverlay(!skyOverlay);
+  }, [skyOverlay, skyUnavailable]);
   useHotkeys('escape', () => {
     if (selecting) {
       setSelecting(false);
@@ -241,6 +272,7 @@ export default function StackPreviewInspector({
   };
 
   const moveRegion = (event: ReactMouseEvent<HTMLDivElement>) => {
+    readout.track(event);
     if (!selecting || !dragStart) {
       zoom.handleMouseMove(event);
       return;
@@ -333,11 +365,15 @@ export default function StackPreviewInspector({
           <div
             className={`stack-inspector-canvas zoom-container ${zoom.hasOverflow ? 'has-overflow' : ''} ${selecting ? 'selecting-artifact-region' : ''}`}
             ref={zoom.containerRef}
-            onWheel={zoom.handleWheel}
+            onWheel={(event) => {
+              zoom.handleWheel(event);
+              readout.track(event);
+            }}
             onMouseDown={beginRegion}
             onMouseMove={moveRegion}
             onMouseUp={finishRegion}
             onMouseLeave={(event) => {
+              readout.leave();
               if (dragStart) finishRegion(event);
               else zoom.handleMouseUp(event);
             }}
@@ -386,6 +422,21 @@ export default function StackPreviewInspector({
                 }}
               />
             )}
+            {showSky && solution && dimensions && (
+              <AstrometryOverlay
+                solution={solution}
+                density={0.2}
+                className="stack-inspector-sky-overlay"
+                data-testid="stack-inspector-sky-overlay"
+                style={{
+                  width: `${dimensions.width}px`,
+                  height: `${dimensions.height}px`,
+                  transform: `translate(${zoom.zoomState.offsetX}px, ${zoom.zoomState.offsetY}px) scale(${zoom.zoomState.scale})`,
+                  transformOrigin: '0 0',
+                }}
+              />
+            )}
+            <PointerReadout {...readout.readout} skyUnavailable={skyUnavailable} />
             {displayedRegion && (
               <div
                 className="stack-artifact-region"
@@ -486,7 +537,7 @@ export default function StackPreviewInspector({
         <footer className="stack-inspector-toolbar">
           <div className="stack-inspector-hint">
             {!selecting
-              ? 'Wheel to zoom · drag to pan · F fit · 1 actual size'
+              ? 'Wheel to zoom · drag to pan · F fit · 1 actual size · M value · R RA/Dec · O sky overlay'
               : displayedRegion && isArtifactRegionCapped(displayedRegion)
                 ? `${MAX_ARTIFACT_REGION_EDGE}px is as wide as the search looks — drag from another corner to move the box`
                 : `Drag a box over the artifact, up to ${MAX_ARTIFACT_REGION_EDGE}px a side`}
@@ -530,15 +581,29 @@ export default function StackPreviewInspector({
             </span>
           )}
           {fitsUrl && <a className="stack-preview-download" href={fitsUrl} download>{downloadLabel}</a>}
-          <div className="zoom-info-compact">
-            <span className="zoom-percentage-compact">{zoom.getZoomPercentage()}%</span>
-          </div>
-          <div className="zoom-buttons-compact stack-inspector-zoom-buttons">
-            <button className="zoom-btn-compact" type="button" onClick={zoom.zoomOut} title="Zoom Out (-)">−</button>
-            <button className="zoom-btn-compact" type="button" onClick={zoom.zoomToFit} title="Fit to Screen (F)">Fit</button>
-            <button className="zoom-btn-compact" type="button" onClick={zoom.zoomTo100} title="100% (1)">100%</button>
-            <button className="zoom-btn-compact" type="button" onClick={zoom.zoomIn} title="Zoom In (+)">+</button>
-          </div>
+          <MeasureToggles
+            options={readout.options}
+            valueDisabled={fitsUrl ? undefined : 'This image has no linear file to read values from'}
+            skyDisabled={skyUnavailable}
+          />
+          <button
+            className="zoom-btn-compact stack-inspector-sky-toggle"
+            type="button"
+            aria-pressed={showSky}
+            disabled={!!skyUnavailable}
+            onClick={() => setSkyOverlay(!skyOverlay)}
+            title={skyUnavailable ?? 'Draw the RA/Dec grid over the stack (O)'}
+          >
+            Sky
+          </button>
+          <ZoomControls
+            percentage={zoom.getZoomPercentage()}
+            onZoomOut={zoom.zoomOut}
+            onFit={zoom.zoomToFit}
+            onActualSize={zoom.zoomTo100}
+            onZoomIn={zoom.zoomIn}
+            className="stack-inspector-zoom-buttons"
+          />
         </footer>
       </section>
     </div>

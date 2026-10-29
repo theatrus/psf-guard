@@ -1313,10 +1313,21 @@ stars, registration RMS, registration drift, overlap, and integrated-sample
 fraction; excluded or rejected frames retain their reason.
 
 Choose **Inspect full size** to open the native-resolution integration in PSF
-Guard's image inspector. It uses the same controls as individual images: scroll
-to zoom, drag to pan, **F** or **0** to fit, and **1** for one image pixel per
-screen pixel. The full-size stretched PNG is loaded only when the inspector is
-opened, so the project grid continues to use the smaller screen preview.
+Guard's image inspector, which fills the window. It uses the same controls as
+individual images: scroll to zoom, drag to pan, **F** or **0** to fit, and
+**1** for one image pixel per screen pixel. The full-size stretched PNG is
+loaded only when the inspector is opened, so the project grid continues to use
+the smaller screen preview.
+
+To measure the stack, turn on **Value** or **RA/Dec** in the inspector's
+toolbar, or press **M** or **R**, then point at the stack. A box in the corner
+shows the pixel's position and its linear value in the FITS that **Download
+linear FITS** saves: the processed image after deconvolution or RC-Astro, and
+one value for each channel of a colour stack. RA/Dec comes from the plate
+solution of the stack's reference frame, or of any integrated frame, carried
+onto the stack's grid. **Sky** (**O**) draws the RA/Dec grid over the stack.
+When no integrated frame is solved, RA/Dec and **Sky** are disabled until you
+solve one in **Sky context**. The image viewer uses the same settings.
 
 ![The native-resolution stack in PSF Guard's pan and zoom inspector](stack-preview-inspection.png)
 
