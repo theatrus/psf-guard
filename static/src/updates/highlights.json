@@ -1,5 +1,16 @@
 [
   {
+    "version": "0.12.5",
+    "deprecations": [],
+    "upgradeNotes": [],
+    "highlights": [
+      {
+        "title": "Renamed files in synced catalogs",
+        "body": "A catalog that syncs from Target Scheduler, or that rigs sync their lights into, now keeps a renamed file’s frame. A sync that sends the old name leaves the new one in place. To merge frames imported twice, open the database in Settings and click Merge renamed lights."
+      }
+    ]
+  },
+  {
     "version": "0.12.4",
     "deprecations": [],
     "upgradeNotes": [],
