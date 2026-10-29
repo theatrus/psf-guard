@@ -56,6 +56,7 @@ pub mod remote_audit;
 pub mod remote_sync;
 pub mod remote_upload;
 pub mod remote_upload_layout;
+pub mod renamed_lights;
 pub mod schedule;
 pub mod scheduler;
 pub mod shutdown;
@@ -344,6 +345,8 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         )
         .route("/guids", get(handlers::missing_guids_route))
         .route("/guids/fill", post(handlers::fill_guids_route))
+        .route("/renamed-lights", get(renamed_lights::report))
+        .route("/renamed-lights/merge", post(renamed_lights::merge))
         .route(
             "/projects/{project_id}/merge",
             post(handlers::merge_project_route),

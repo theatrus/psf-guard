@@ -160,6 +160,8 @@ pub async fn start_import_route(
         // A person asked for this import, and previews it first.
         new_targets: crate::commands::import::NewTargets::Create,
         admit_removed_names: false,
+        // The import job sets it when it walks every image folder.
+        find_files: None,
     };
     let started = spawn_import_job(
         &state,
@@ -511,6 +513,32 @@ pub(super) fn run_import_blocking(
         .path_filter(&ctx.image_dir_paths)
         .map_err(|error| anyhow::anyhow!("scan rules: {error:#}"))?;
     let collected = imp::collect_image_files(dirs, &path_filter)?;
+    // A walk of every image folder sees each file the catalog's lights can
+    // have, so the import can tell a renamed file's old light by its file
+    // being gone. A walk of fewer folders cannot, and in a catalog a sync
+    // writes, the next sync would put the old name back.
+    let walked_everything = {
+        let walked: std::collections::HashSet<&std::path::Path> =
+            dirs.iter().map(|dir| dir.as_path()).collect();
+        crate::renamed_lights::synced_lights(
+            ctx.ts_sync.as_ref(),
+            ctx.remote_image_upload.as_ref(),
+        )
+        .is_none()
+            && !ctx.image_dir_paths.is_empty()
+            && ctx
+                .image_dir_paths
+                .iter()
+                .all(|root| root.is_dir() && walked.contains(root.as_path()))
+    };
+    let walked_names: Option<std::collections::HashSet<String>> = walked_everything.then(|| {
+        collected
+            .files
+            .iter()
+            .filter_map(|path| path.file_name())
+            .map(|name| name.to_string_lossy().to_lowercase())
+            .collect()
+    });
     let scan_rule_report = collected.skipped;
     let mut files = collected.files;
     let mut prefiltered = 0usize;
@@ -580,6 +608,13 @@ pub(super) fn run_import_blocking(
     options.pair_derivatives &= ctx.pair_calibrated_copies.is_on();
     options.light_filter = light_filter;
     options.match_by_position = ctx.scan_rules.match_by_position;
+    options.find_files = walked_names.map(|walked| {
+        crate::renamed_lights::FileFinder::in_folders(
+            ctx.directory_tree_cache.read().unwrap().clone(),
+            ctx.image_dir_paths.clone(),
+            Some(walked),
+        )
+    });
     let mut outcome = imp::import_frames(&mut conn, frames, &options).map_err(|error| {
         if stop.requested() {
             anyhow::anyhow!("The import stopped; its transaction was rolled back.")
@@ -731,4 +766,106 @@ pub(crate) fn spawn_quality_backfill(
     fill_metadata: bool,
 ) -> bool {
     crate::server::quality_scans::queue_analysis(state, &ctx, target_ids, force, fill_metadata)
+}
+
+#[cfg(test)]
+mod renamed_file_tests {
+    use super::*;
+    use std::io::Write;
+    use std::path::Path;
+
+    fn card(output: &mut Vec<u8>, text: &str) {
+        let mut bytes = text.as_bytes().to_vec();
+        bytes.resize(80, b' ');
+        output.extend_from_slice(&bytes);
+    }
+
+    fn write_light(path: &Path) {
+        let mut header = Vec::new();
+        for text in [
+            "SIMPLE  =                    T",
+            "BITPIX  =                   16",
+            "NAXIS   =                    2",
+            "NAXIS1  =                   10",
+            "NAXIS2  =                   10",
+            "IMAGETYP= 'LIGHT'",
+            "OBJECT  = 'Jellyfish Nebula SHO'",
+            "FILTER  = 'SII'",
+            "DATE-OBS= '2026-10-27T23:06:46'",
+            "EXPTIME =                300.0",
+            "END",
+        ] {
+            card(&mut header, text);
+        }
+        header.resize(header.len().div_ceil(2880) * 2880, b' ');
+        let mut file = std::fs::File::create(path).unwrap();
+        file.write_all(&header).unwrap();
+        file.write_all(&[0u8; 2880]).unwrap();
+    }
+
+    /// #1020: the automatic import walks every image folder, so a file
+    /// renamed after it was imported keeps its light instead of making a
+    /// second one.
+    #[test]
+    fn an_automatic_import_gives_a_renamed_file_its_light() {
+        let temp = tempfile::tempdir().unwrap();
+        let database = temp.path().join("catalog.sqlite");
+        crate::ts_schema::create_fresh_db(&database).unwrap();
+        let images = temp.path().join("images");
+        std::fs::create_dir_all(&images).unwrap();
+        let ctx = DatabaseContext::new(
+            "test".into(),
+            "Test".into(),
+            database.to_string_lossy().into_owned(),
+            vec![images.to_string_lossy().into_owned()],
+            None,
+            None,
+            None,
+            temp.path().join("cache").to_string_lossy().into_owned(),
+        )
+        .unwrap();
+        let options = crate::commands::import::ImportOptions {
+            only_new: true,
+            ..Default::default()
+        };
+        let scheduler = crate::server::autoimport::AutoImportScheduler::default();
+        let run = || {
+            let claim = crate::server::import_job::try_begin(
+                &ctx.import_job,
+                ctx.image_dirs.clone(),
+                false,
+            )
+            .unwrap();
+            let outcome = run_import_blocking(
+                &scheduler,
+                &ctx,
+                &ctx.image_dir_paths,
+                &options,
+                claim,
+                &crate::concurrency::Stop::new(),
+                &|| false,
+            )
+            .unwrap();
+            crate::server::import_job::finish(&ctx.import_job, claim, None);
+            outcome
+        };
+        let old = images.join("Jellyfish_Session_2026-10-27_0051.fits");
+        let new = images.join("Jellyfish_Session_2026-10-27A_0051.fits");
+        write_light(&old);
+        assert_eq!(run().imported, 1);
+
+        std::fs::rename(&old, &new).unwrap();
+        let outcome = run();
+
+        assert_eq!((outcome.renamed, outcome.imported), (1, 0));
+        let conn = rusqlite::Connection::open(&database).unwrap();
+        let names: Vec<String> = conn
+            .prepare("SELECT json_extract(metadata, '$.FileName') FROM acquiredimage")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(names, vec![new.to_string_lossy().into_owned()]);
+    }
 }

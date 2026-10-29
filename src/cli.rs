@@ -661,6 +661,33 @@ pub enum Commands {
         registry: Option<String>,
     },
 
+    /// Merge lights catalogued twice because their file was renamed after
+    /// it was imported: the first light, whose file is gone, takes the
+    /// renamed file, and the second light is removed.
+    ///
+    /// Without `--apply` this only shows the pairs, and why any pair stays.
+    /// `--apply` copies the database beside itself first. Close N.I.N.A. on
+    /// that rig before applying.
+    MergeRenamedLights {
+        /// Slug of the database (from the registry) to operate on.
+        #[arg(long)]
+        db: String,
+
+        /// Merge the pairs shown; without it nothing changes.
+        #[arg(long)]
+        apply: bool,
+
+        /// The server's cache root (the `--cache-dir` the server runs
+        /// with); the removed lights' cache files under it are deleted.
+        #[arg(long, default_value = "./cache")]
+        cache_dir: String,
+
+        /// Path to the database registry JSON file (defaults to the platform
+        /// config directory).
+        #[arg(long)]
+        registry: Option<String>,
+    },
+
     /// Put removed rejects back from the trash: a whole batch, or frames by
     /// GUID. Never overwrites; a taken name gets a `.restored` suffix.
     RestoreRemoved {

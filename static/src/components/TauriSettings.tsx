@@ -50,6 +50,7 @@ import MissingGuidRepair from './MissingGuidRepair';
 import AutoImportFields from './AutoImportFields';
 import AutoImportSummary from './AutoImportSummary';
 import ScanRulesFields from './ScanRulesFields';
+import RenamedLightsRepair from './RenamedLightsRepair';
 import RemotePeerSync from './RemotePeerSync';
 import SchedulerSyncControls from './SchedulerSyncControls';
 import RemoteSyncPreviews from './RemoteSyncPreviews';
@@ -1746,6 +1747,7 @@ export default function TauriSettings({
               importDbId === confirmImport.id && (
                 <div className="modal-buttons import-confirm-buttons">
                   {importProgress.outcome.imported +
+                    (importProgress.outcome.renamed ?? 0) +
                     importProgress.outcome.calibration.imported +
                     importProgress.outcome.calibration.updated >
                   0 ? (
@@ -1776,6 +1778,7 @@ export default function TauriSettings({
                       >
                         Import{' '}
                         {importProgress.outcome.imported +
+                          (importProgress.outcome.renamed ?? 0) +
                           importProgress.outcome.calibration.imported +
                           importProgress.outcome.calibration.updated}{' '}
                         frame(s)
@@ -2013,6 +2016,7 @@ export default function TauriSettings({
                         canManage={canEdit}
                       />
                       <MissingGuidRepair dbId={entry.id} dbName={entry.name} canManage={canEdit} />
+                      <RenamedLightsRepair dbId={entry.id} dbName={entry.name} canManage={canEdit} />
                       <QualityBackfillControls dbId={entry.id} canManage={managementAllowed} />
                       <CalibratedCopiesControls dbId={entry.id} canManage={managementAllowed} />
                       <AutoImportSummary
