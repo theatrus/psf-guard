@@ -13,6 +13,10 @@
         "body": "An automatic import matches a file renamed after it was imported to its frame, which keeps its grade and history. To merge frames imported twice by earlier versions, open the database in Settings and click Merge renamed lights."
       },
       {
+        "title": "Flat coverage from the nearest flat",
+        "body": "A fresh flat in a light’s master now counts toward coverage even when older flats in the same master move its median capture time past the Flat age limit. Age checks and the calibration report use the nearest contributing flat."
+      },
+      {
         "title": "zstd security update",
         "body": "PSF Guard’s zstd library is updated for four memory-safety advisories in the code that reads and writes compressed XISF files and stacking contexts."
       }
