@@ -296,14 +296,17 @@ pub fn start(
     if ctx.image_dirs.is_empty() {
         anyhow::bail!("the database has no image directories");
     }
-    let missing = ctx
-        .image_dirs
-        .iter()
-        .filter(|dir| !std::path::Path::new(dir).is_dir())
-        .cloned()
-        .collect::<Vec<_>>();
-    if !missing.is_empty() {
+    // A missing folder is skipped; the rest are imported.
+    let (dirs, missing) = ctx.split_image_dirs();
+    if dirs.is_empty() {
         anyhow::bail!("image directory not found: {}", missing.join(", "));
+    }
+    if !missing.is_empty() {
+        tracing::warn!(
+            "📥 Automatic import for db={} skips missing image directories: {}",
+            ctx.id,
+            missing.join(", ")
+        );
     }
     // A remote upload in flight holds this lock; let it finish rather than
     // queue behind it and stall the next tick's decisions.
@@ -320,7 +323,7 @@ pub fn start(
     let started = crate::server::handlers::spawn_import_job_with_trigger(
         state,
         Arc::clone(ctx),
-        ctx.image_dirs.clone(),
+        dirs,
         options,
         settings.backfill,
         true,

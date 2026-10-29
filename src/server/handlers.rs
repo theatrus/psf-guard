@@ -731,7 +731,9 @@ fn remote_image_upload_summary(
     let config = ctx.remote_image_upload.as_ref();
     let directory_layout = config.and_then(|config| config.directory_layout.as_ref());
     RemoteImageUploadSummary {
-        enabled: ctx.remote_image_upload_dir.is_some(),
+        // As saved: a folder that is missing now refuses uploads but does
+        // not turn the setting off.
+        enabled: config.is_some_and(|config| config.enabled),
         image_directory: config
             .map(|config| config.image_dir.clone())
             .filter(|directory| !directory.is_empty()),
@@ -768,6 +770,40 @@ fn remote_image_upload_summary(
     }
 }
 
+/// Refuse an image folder a save adds that does not exist, so a typed path
+/// is checked. A folder the database already had may be missing (a drive
+/// not mounted): the database still opens, and other settings still save.
+fn require_added_image_dirs_exist(dirs: &[String], previous: &[String]) -> Result<(), AppError> {
+    for dir in dirs.iter().filter(|dir| !previous.contains(dir)) {
+        if !std::path::Path::new(dir).is_dir() {
+            return Err(AppError::BadRequest(format!(
+                "image directory does not exist: {dir}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod added_image_dir_tests {
+    use super::require_added_image_dirs_exist;
+
+    #[test]
+    fn only_a_folder_the_save_adds_must_exist() {
+        let tmp = tempfile::tempdir().unwrap();
+        let present = tmp.path().to_string_lossy().into_owned();
+        let moved = tmp.path().join("moved").to_string_lossy().into_owned();
+
+        assert!(require_added_image_dirs_exist(std::slice::from_ref(&present), &[]).is_ok());
+        assert!(require_added_image_dirs_exist(std::slice::from_ref(&moved), &[]).is_err());
+        // Kept from before: the drive may be unplugged, and the rest saves.
+        let kept = [moved, present.clone()];
+        assert!(require_added_image_dirs_exist(&kept, &kept).is_ok());
+        // Removing the missing one saves too.
+        assert!(require_added_image_dirs_exist(&[present], &kept).is_ok());
+    }
+}
+
 /// `POST /api/databases` — register a new database. Validates that the file
 /// opens, persists the registry, and inserts the new `DatabaseContext` into
 /// the in-memory map.
@@ -779,6 +815,7 @@ pub async fn add_database_route(
     use crate::server::database_context::DatabaseContext;
 
     require_database_management_allowed(&state)?;
+    require_added_image_dirs_exist(&req.image_dirs, &[])?;
     let registry_path = require_registry_path(&state)?;
     let _registry_guard = state.registry_write.lock().await;
     let mut reg = DbRegistry::load_or_init(&registry_path)
@@ -834,6 +871,9 @@ pub async fn update_database_route(
         .map_err(|e| AppError::InternalError(format!("loading registry: {}", e)))?;
 
     let previous_entry = reg.find(&db_id).cloned().ok_or(AppError::NotFound)?;
+    if let Some(image_dirs) = &req.image_dirs {
+        require_added_image_dirs_exist(image_dirs, &previous_entry.image_dirs)?;
+    }
 
     if previous_entry.ts_sync.is_some()
         && req
