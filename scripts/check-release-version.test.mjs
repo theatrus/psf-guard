@@ -12,11 +12,15 @@ test('release versions and notes agree', async () => {
   assert.match(version, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/);
   // On a release branch the version's notes exist and a tag check passes.
   // On main the version is the next release and its notes are still
-  // unreleased.md, so a tag check must refuse until they are cut.
+  // unreleased.md, so a tag check must refuse until they are cut. It may
+  // refuse for the missing highlights first: an interim version has neither.
   if (existsSync(path.join(repositoryRoot, 'docs/releases', `v${version}.md`))) {
     assert.equal(await checkReleaseVersion(repositoryRoot, `v${version}`), version);
   } else {
-    await assert.rejects(checkReleaseVersion(repositoryRoot, `v${version}`), /Release notes are missing/);
+    await assert.rejects(
+      checkReleaseVersion(repositoryRoot, `v${version}`),
+      /Release (notes|highlights) are missing/,
+    );
   }
 });
 
