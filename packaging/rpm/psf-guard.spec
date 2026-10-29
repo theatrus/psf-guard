@@ -8,7 +8,7 @@
 %global rustflags_debuginfo 0
 
 Name:           psf-guard
-Version:        0.12.3
+Version:        0.13.0
 Release:        1%{?dist}
 Summary:        Astronomical image analysis and quality assessment tool for N.I.N.A.
 
@@ -105,6 +105,9 @@ install -Dpm0600 packaging/rpm/systemd/psf-guard-worker.conf \
 %config(noreplace) %attr(0600,root,root) %{_sysconfdir}/%{name}/worker.conf
 
 %changelog
+* Thu Oct 29 2026 Yann Ramin <github@theatr.us> - 0.13.0-1
+- Interim development version on main; released builds come from release/* branches
+
 * Fri Oct 23 2026 Yann Ramin <github@theatr.us> - 0.12.3-1
 - Add project and plan removal, collaboration exit, and color-channel processing
 - Fix stack orientation, clipped star colors, and large-file downloads
