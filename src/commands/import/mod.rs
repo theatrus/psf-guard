@@ -119,6 +119,13 @@ pub struct ImportOptions {
     /// deletion's or a removed reject's. Off by default. An upload turns it
     /// on once the capture time shows a different frame with that name.
     pub admit_removed_names: bool,
+    /// Tells whether a catalogued light's file can be found. With it, a new
+    /// light that is a renamed copy of a light whose file is gone takes
+    /// that light's row instead of becoming a second one (see
+    /// [`crate::renamed_lights::relink_renamed`]). Only a run that walked
+    /// every image folder of the database sets it: a folder it did not walk
+    /// would make files there look gone.
+    pub find_files: Option<crate::renamed_lights::FileFinder>,
 }
 
 pub const DEFAULT_MATCH_RADIUS_DEG: f64 = 0.5;
@@ -140,6 +147,7 @@ impl Default for ImportOptions {
             light_filter: LightFilter::default(),
             new_targets: NewTargets::default(),
             admit_removed_names: false,
+            find_files: None,
         }
     }
 }
@@ -269,6 +277,10 @@ pub struct ImportOutcome {
     /// calibrated copy, instead of becoming a second row.
     #[serde(default)]
     pub raw_adopted: usize,
+    /// Renamed files that took over the light catalogued under their old
+    /// name, whose file was gone, instead of becoming a second light.
+    #[serde(default)]
+    pub renamed: usize,
     /// Frames outside the run's scope (lights during a calibration-only
     /// run, and the reverse).
     #[serde(default)]
@@ -634,6 +646,22 @@ pub fn import_frames(
                 .into_iter()
                 .enumerate()
                 .filter(|(index, _)| !adopted.contains(index))
+                .map(|(_, frame)| frame)
+                .collect();
+        }
+    }
+    // A renamed file takes over the light its old name made, when that
+    // light's file is gone.
+    if let Some(finder) = &options.find_files {
+        let relinked: HashSet<usize> = crate::renamed_lights::relink_renamed(&tx, &lights, finder)?
+            .into_iter()
+            .collect();
+        outcome.renamed = relinked.len();
+        if !relinked.is_empty() {
+            lights = lights
+                .into_iter()
+                .enumerate()
+                .filter(|(index, _)| !relinked.contains(index))
                 .map(|(_, frame)| frame)
                 .collect();
         }
@@ -1952,6 +1980,12 @@ pub fn print_outcome(outcome: &ImportOutcome) {
         println!(
             "  Raw frames that took over a calibrated light: {}",
             outcome.raw_adopted
+        );
+    }
+    if outcome.renamed > 0 {
+        println!(
+            "  Renamed files that took over their light: {}",
+            outcome.renamed
         );
     }
     if outcome.calibration.imported > 0

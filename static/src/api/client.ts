@@ -14,7 +14,7 @@ import { BUILD_HEADER, noteServerBuild } from '../updates/pageBuild';
 import type { DirectorAdoptionPlan, DirectorAdoptionReport, DirectorCollection, DirectorCutoutRequest, DirectorCutoutResult, DirectorDiscovery, DirectorFramingDraft, DirectorFramingDraftView, DirectorFramingPreview, DirectorFramingRequest, DirectorIdentity, DirectorIdentityPage, DirectorMappingPage, DirectorFeasibility, DirectorMosaicPreview, DirectorResolvedName,
   DirectorSkyMarks,
   DirectorSkyMarksQuery, DirectorActivation, DirectorActivationPushReport, DirectorActivationReport, DirectorPlanDraft, DirectorPlanList, DirectorPlanView, DirectorRigStatusView, DirectorRigProfileSummary, DirectorTemplateList, DirectorStatus, DirectorRigPlan, DirectorRigProfileEdit, DirectorRigProfileView, DirectorRigReport, DirectorSurvey, DirectorNameSearch, DirectorLibraryTemplate, DirectorAttached, DirectorTakenValues, DirectorRigScheduling, DirectorPlanProgress, DirectorPlanDeletion, DirectorPlanDeletionOutcome, DirectorCollaborationLeave, DirectorCollaborationLeft } from './directorTypes';
-import type { GuidFillReport, GuidReport,
+import type { GuidFillReport, GuidReport, RenamedLightsMerged, RenamedLightsReport,
   ProjectMosaic,
   ProjectProcessingSettings,
   StackColorInputSources,
@@ -1180,6 +1180,22 @@ export const apiClient = {
     const apiInstance = await getApi();
     const { data } = await apiInstance.post<ApiResponse<GuidFillReport>>(dbPath(dbId, '/guids/fill'));
     if (!data.data) throw new Error(data.error || 'Failed to fill missing GUIDs');
+    return data.data;
+  },
+
+  /** Lights catalogued twice because their file was renamed after it was imported. */
+  getRenamedLights: async (dbId: string): Promise<RenamedLightsReport> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<RenamedLightsReport>>(dbPath(dbId, '/renamed-lights'));
+    if (!data.data) throw new Error(data.error || 'Failed to check for renamed lights');
+    return data.data;
+  },
+
+  /** Copy the database beside itself, then fold each second light into the first. */
+  mergeRenamedLights: async (dbId: string): Promise<RenamedLightsMerged> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<RenamedLightsMerged>>(dbPath(dbId, '/renamed-lights/merge'));
+    if (!data.data) throw new Error(data.error || 'Failed to merge renamed lights');
     return data.data;
   },
 

@@ -655,6 +655,16 @@ fn publish_file_check_cache(
 }
 
 impl DatabaseContext {
+    /// The image folders that exist now, in their configured order, and the
+    /// ones that do not. A missing folder is skipped by an import of the
+    /// database's folders rather than failing it.
+    pub fn split_image_dirs(&self) -> (Vec<String>, Vec<String>) {
+        self.image_dirs
+            .iter()
+            .cloned()
+            .partition(|dir| std::path::Path::new(dir).is_dir())
+    }
+
     /// Open the database a registry entry describes. Every place that turns
     /// an entry into a live context goes through here, so a setting added to
     /// the entry reaches the context in one place.
@@ -709,11 +719,13 @@ impl DatabaseContext {
             return Err(anyhow::anyhow!("Database file not found: {}", db_path));
         }
 
+        // A folder that is missing (a drive not mounted, a folder moved) does
+        // not keep the database from opening: its frames show as not found,
+        // and Settings can change the folders. Scans and imports skip it.
         let mut image_dir_paths = Vec::new();
         for dir in &image_dirs {
-            let path = Path::new(dir);
-            if !path.exists() {
-                return Err(anyhow::anyhow!("Image directory not found: {}", dir));
+            if !Path::new(dir).is_dir() {
+                tracing::warn!(db = %id, "📁 Image directory not found, skipping it: {dir}");
             }
             image_dir_paths.push(PathBuf::from(dir));
         }
@@ -724,11 +736,18 @@ impl DatabaseContext {
             ));
         }
 
+        // An upload folder that cannot be used refuses uploads rather than
+        // the database. The update route validates what it saves.
         let remote_image_upload_dir = remote_image_upload
             .as_ref()
             .filter(|config| config.enabled)
-            .map(|config| config.validated_image_dir(&image_dirs))
-            .transpose()?;
+            .and_then(|config| match config.validated_image_dir(&image_dirs) {
+                Ok(dir) => Some(dir),
+                Err(error) => {
+                    tracing::warn!(db = %id, "📤 Remote image upload is unavailable: {error:#}");
+                    None
+                }
+            });
 
         // The directory itself may not exist yet (an operator can configure
         // it before mounting the drive); the export job creates it and
@@ -2392,6 +2411,63 @@ mod tests {
         assert_eq!(cache.targets_with_files.get(&10), Some(&true));
         assert_eq!(cache.targets_with_files.get(&20), Some(&false));
         assert_eq!(cache.targets_with_files.get(&30), Some(&false));
+    }
+
+    /// #1019: a folder that was moved, or a drive that is not mounted, does
+    /// not keep the database, or the server, from opening. Its frames show
+    /// as not found; the folders that are there are still searched.
+    #[tokio::test]
+    async fn a_missing_image_folder_does_not_keep_the_database_closed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("sched.sqlite");
+        make_file_refresh_db(&db_path);
+        let present = tmp.path().join("images");
+        std::fs::create_dir_all(&present).unwrap();
+        std::fs::write(present.join("present.fit"), b"fits").unwrap();
+        let moved = tmp.path().join("moved");
+        let dirs = vec![
+            moved.to_string_lossy().into_owned(),
+            present.to_string_lossy().into_owned(),
+        ];
+        // An upload folder that went with it refuses uploads, not the open.
+        let mut upload = crate::db_registry::RemoteImageUploadConfig {
+            enabled: true,
+            image_dir: moved.to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+        upload.set_token("a-token-long-enough-to-be-valid").unwrap();
+
+        let state = crate::server::state::AppState::from_databases(
+            vec![crate::db_registry::DbEntry {
+                ts_sync: None,
+                id: "moved".into(),
+                name: "Moved".into(),
+                db_path: db_path.to_string_lossy().into_owned(),
+                image_dirs: dirs.clone(),
+                reject_archive: None,
+                remote_image_upload: Some(upload),
+                export_dir: None,
+                process_dir: None,
+                autoimport: None,
+                scan_rules: None,
+                analyze_new_frames: false,
+                pair_calibrated_copies: true,
+                scan_calibrated_copies: false,
+            }],
+            tmp.path().join("cache").to_string_lossy().into_owned(),
+            crate::cli::PregenerationConfig::default(),
+        )
+        .expect("the server starts");
+        let ctx = state.get_database("moved").expect("the database is open");
+
+        assert_eq!(ctx.image_dirs, dirs);
+        assert_eq!(
+            ctx.split_image_dirs(),
+            (vec![dirs[1].clone()], vec![dirs[0].clone()])
+        );
+        assert!(ctx.remote_image_upload_dir.is_none());
+        let (checked, found, missing, _) = ctx.refresh_cache_unified_internal().await.unwrap();
+        assert_eq!((checked, found, missing), (4, 2, 2));
     }
 
     #[test]

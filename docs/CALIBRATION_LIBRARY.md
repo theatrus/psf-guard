@@ -1532,6 +1532,13 @@ A light cannot be calibrated properly when:
 - the flats that match were shot further from it than the **Flat age limit**
   (**Settings › Calibration › Light checks**, default 60 days; 0 lifts it).
 
+The **Flat age limit** and **Flat age warning** measure the elapsed time to
+the nearest flat that will contribute to the light's master. A 1-day limit
+includes flats exactly 24 hours before or after the light. Combining those
+flats with older frames does not make their coverage stale. A nearby flat
+that cannot join the master does not provide coverage. Mixed nights still
+have their separate check.
+
 Each of the three is a check that can be made advisory or turned off,
 for every rig or one (see [Tune the checks](#tune-the-checks)); only a gap
 whose check flags it makes a light one that cannot be calibrated.

@@ -1,12 +1,7 @@
 # The Director library and runtime the N.I.N.A. plugin loads, built and
-
-# Linux (x64 and arm64) and Windows jobs run on ephemeral 32-core runners
-# (tfinfra roots/github-runners, docs/github-runners-plan.md). macOS, releases,
-# and every pull request from a fork stay on GitHub's runners: a fork's code
-# never runs on ours. Job names are unchanged, so the required checks still
-# match.
 # called from .NET on each platform. The Rust tests for these crates run in
 # ci.yml; this checks the native boundary, so it runs only when that changes.
+
 name: Director native library
 
 on:
@@ -43,7 +38,7 @@ permissions:
 jobs:
   parity:
     name: Director native library (${{ matrix.os }})
-    runs-on: ${{ (github.event.pull_request.head.repo.fork || matrix.os == 'macos-latest') && matrix.os || fromJSON(matrix.os == 'windows-latest' && '["self-hosted","windows","ghr-windows-x64"]' || '["self-hosted","linux","ghr-linux-x64"]') }}
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:

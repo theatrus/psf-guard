@@ -709,6 +709,27 @@ fn bind_selection(path: &FsPath, generation: &str, stretch_id: &str) -> Result<(
 
 fn complete_selection(path: &FsPath, stretch_id: &str) -> Result<(), String> {
     let _guard = SELECTION_LOCK.lock().map_err(|error| error.to_string())?;
+    complete_selection_locked(path, stretch_id)
+}
+
+/// Write a finished run's manifest and record the channel's selection under
+/// [`SELECTION_LOCK`], which the apply path holds while it reads the
+/// manifest: a poll that sees the result also sees the selection that
+/// records it. The manifest is written first, so a failed write leaves the
+/// previous selection in place.
+fn publish_result(
+    stack_root: &FsPath,
+    stretch_id: &str,
+    selection_path: &FsPath,
+    response: &StackStretchPreview,
+) -> Result<(), String> {
+    let _guard = SELECTION_LOCK.lock().map_err(|error| error.to_string())?;
+    write_json_atomic(&stretch_manifest_path(stack_root, stretch_id), response)?;
+    complete_selection_locked(selection_path, stretch_id)
+}
+
+/// [`complete_selection`] for a caller that holds [`SELECTION_LOCK`].
+fn complete_selection_locked(path: &FsPath, stretch_id: &str) -> Result<(), String> {
     if let Some(mut selection) = read_selection(path)
         && selection.desired.as_deref() == Some(stretch_id)
     {
@@ -1145,18 +1166,29 @@ pub(super) async fn apply_to_fits(
         // for this stack; the same request takes the run over instead.
         super::reapply::replaced_by_person(&state, &source, Some(&stretch_id));
     }
-    if let Some(mut cached) = read_cached_manifest(&stack_root, &stretch_id) {
-        if cached.request.is_none() {
-            cached.request = Some(prepared.request());
-            let _guard = SELECTION_LOCK
-                .lock()
-                .map_err(|error| AppError::InternalError(error.to_string()))?;
-            write_json_atomic(&stretch_manifest_path(&stack_root, &stretch_id), &cached)
+    // Read under SELECTION_LOCK, which a run holds while it publishes its
+    // manifest and records the selection (`publish_result`): a poll that
+    // reads the manifest also sees the selection that records it. Recording
+    // it here too covers a run whose process stopped between the two
+    // writes. The selection changes only when this run is the one the
+    // person asked for.
+    let cached = {
+        let _guard = SELECTION_LOCK
+            .lock()
+            .map_err(|error| AppError::InternalError(error.to_string()))?;
+        let mut cached = read_cached_manifest(&stack_root, &stretch_id);
+        if let Some(cached) = &mut cached {
+            if cached.request.is_none() {
+                cached.request = Some(prepared.request());
+                write_json_atomic(&stretch_manifest_path(&stack_root, &stretch_id), &*cached)
+                    .map_err(AppError::InternalError)?;
+            }
+            complete_selection_locked(&selection_path, &stretch_id)
                 .map_err(AppError::InternalError)?;
         }
-        if select_processing {
-            complete_selection(&selection_path, &stretch_id).map_err(AppError::InternalError)?;
-        }
+        cached
+    };
+    if let Some(cached) = cached {
         return Ok(StretchApplyOutcome::Ready(Box::new(cached)));
     }
     // A detached run for this exact request already failed: hand the reason
@@ -2217,11 +2249,12 @@ impl super::LineWork for ProcessingWork {
         }
         let response =
             build_stretch_preview(&database_id, &identity, deconvolution.is_some(), rendered);
-        write_json_atomic(
-            &stretch_manifest_path(&stack_root, &identity.stretch_id),
+        publish_result(
+            &stack_root,
+            &identity.stretch_id,
+            &identity.selection_path,
             &response,
         )?;
-        complete_selection(&identity.selection_path, &identity.stretch_id)?;
         Ok(Processed::Rendered {
             response,
             seconds: started.elapsed().as_secs_f64(),
@@ -3137,6 +3170,49 @@ mod tests {
             red > blue,
             "colour follows the input: red {red}, blue {blue}"
         );
+    }
+
+    #[test]
+    fn a_published_result_is_selected_and_a_failed_write_keeps_the_previous_one() {
+        let cache = tempfile::tempdir().unwrap();
+        let previous = "a".repeat(64);
+        persisted_processing_fixture(cache.path(), &previous);
+        let path = selection_path(cache.path(), "mono:job:0", "revision1");
+        request_selection(&path, &previous).unwrap();
+        bind_selection(&path, &previous, &previous).unwrap();
+        complete_selection(&path, &previous).unwrap();
+        let selected = |cache: &FsPath| {
+            selected_processing(cache, "mono:job:0", "revision1")
+                .unwrap()
+                .map(|selected| selected.stretch_id)
+        };
+
+        // The person asks for another variant; its run publishes.
+        let next = "b".repeat(64);
+        request_selection(&path, &next).unwrap();
+        bind_selection(&path, &next, &next).unwrap();
+        // A run writes its images before it publishes the manifest.
+        let rendered = |cache: &FsPath, id: &str| {
+            std::fs::create_dir_all(stretch_dir(cache, id)).unwrap();
+            std::fs::write(stretch_preview_path(cache, id), b"preview").unwrap();
+            std::fs::write(stretch_original_preview_path(cache, id), b"original").unwrap();
+        };
+        rendered(cache.path(), &next);
+        let mut response = read_cached_manifest(cache.path(), &previous).unwrap();
+        response.stretch_id = next.clone();
+        publish_result(cache.path(), &next, &path, &response).unwrap();
+        assert_eq!(selected(cache.path()), Some(next.clone()));
+
+        // A run whose manifest cannot be written leaves that selection.
+        let failed = "c".repeat(64);
+        request_selection(&path, &failed).unwrap();
+        bind_selection(&path, &failed, &failed).unwrap();
+        rendered(cache.path(), &failed);
+        std::fs::create_dir_all(stretch_manifest_path(cache.path(), &failed)).unwrap();
+        let mut response = read_cached_manifest(cache.path(), &next).unwrap();
+        response.stretch_id = failed.clone();
+        assert!(publish_result(cache.path(), &failed, &path, &response).is_err());
+        assert_eq!(selected(cache.path()), Some(next));
     }
 
     #[test]

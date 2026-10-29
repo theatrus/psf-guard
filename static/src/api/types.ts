@@ -2679,6 +2679,11 @@ export interface ImportOutcome {
   unplanned?: ImportUnplannedSummary[];
   /** Existing exposure plans whose acquired count the run raises. */
   plans_raised?: number;
+  /**
+   * Renamed files that took over the frame catalogued under their old name,
+   * whose file was gone, instead of becoming a second frame.
+   */
+  renamed?: number;
   imported: number;
   /** Frames attached to targets that already existed. */
   attached: number;
@@ -4479,6 +4484,33 @@ export interface GuidGap { table: string; missing: number; total: number }
 export interface GuidReport { tables: GuidGap[]; missing: number; writable: boolean }
 /** What a fill did: rows given a GUID, and the copy taken first (none when nothing was missing). */
 export interface GuidFillReport { tables: GuidGap[]; filled: number; backup_path: string | null }
+
+/** A catalogued light, as a renamed-light pair shows it. */
+export interface RenamedLight {
+  id: number;
+  guid: string;
+  file_name: string;
+  target: string | null;
+  /** 0 pending, 1 accepted, 2 rejected. */
+  grade: number;
+  reject_reason: string | null;
+}
+/** A light whose file is gone, and the second light an import made of its renamed file. */
+export interface RenamedPair { kept: RenamedLight; twin: RenamedLight; takes_grade: boolean }
+/** A pair the merge leaves alone, and why. */
+export interface HeldRenamedPair { kept: RenamedLight; twin: RenamedLight; reason: string }
+/** Lights catalogued twice because their file was renamed after it was imported. */
+export interface RenamedLightsReport {
+  pairs: RenamedPair[];
+  held: HeldRenamedPair[];
+  writable: boolean;
+  /** Image folders missing now; nothing is checked until they are back. */
+  missing_folders: string[];
+  /** Why this catalog is not checked, when a sync writes its lights. */
+  synced: string | null;
+}
+/** What a merge did, and the copy taken first (none when there was nothing to merge). */
+export interface RenamedLightsMerged { merged: RenamedPair[]; held: HeldRenamedPair[]; backup_path: string | null }
 
 /** One volume holding database caches, as the last disk check found it. */
 export interface CacheVolumeReport {

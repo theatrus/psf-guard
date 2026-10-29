@@ -1,10 +1,5 @@
 name: 'Dependency Review'
 
-# Linux (x64 and arm64) and Windows jobs run on ephemeral 32-core runners
-# (tfinfra roots/github-runners, docs/github-runners-plan.md). macOS, releases,
-# and every pull request from a fork stay on GitHub's runners: a fork's code
-# never runs on ours. Job names are unchanged, so the required checks still
-# match.
 on: [pull_request]
 
 permissions:
@@ -12,7 +7,7 @@ permissions:
 
 jobs:
   dependency-review:
-    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || fromJSON('["self-hosted","linux","ghr-linux-x64"]') }}
+    runs-on: ubuntu-latest
     steps:
       - name: 'Checkout Repository'
         uses: actions/checkout@v7

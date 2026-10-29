@@ -149,6 +149,12 @@ pub fn is_writable(path: &Path) -> bool {
 /// already there: `<file>.before-guid-fill-<unix seconds>`, with the
 /// nanoseconds added if that name is taken.
 pub fn backup_beside(database_path: &Path) -> Result<PathBuf> {
+    backup_beside_as(database_path, "guid-fill")
+}
+
+/// [`backup_beside`] for another repair: `<file>.before-<repair>-<unix
+/// seconds>`.
+pub fn backup_beside_as(database_path: &Path, repair: &str) -> Result<PathBuf> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
@@ -158,7 +164,7 @@ pub fn backup_beside(database_path: &Path) -> Result<PathBuf> {
         .unwrap_or_else(|| "database".into());
     let beside = |suffix: String| database_path.with_file_name(format!("{name}{suffix}"));
     let partial = beside(format!(
-        ".before-guid-fill-{}-{}.partial",
+        ".before-{repair}-{}-{}.partial",
         std::process::id(),
         now.as_nanos()
     ));
@@ -177,10 +183,10 @@ pub fn backup_beside(database_path: &Path) -> Result<PathBuf> {
         let _ = std::fs::remove_file(&partial);
         return Err(error.context(format!("back up {} first", database_path.display())));
     }
-    let mut finished = beside(format!(".before-guid-fill-{}", now.as_secs()));
+    let mut finished = beside(format!(".before-{repair}-{}", now.as_secs()));
     if finished.exists() {
         finished = beside(format!(
-            ".before-guid-fill-{}-{}",
+            ".before-{repair}-{}-{}",
             now.as_secs(),
             now.subsec_nanos()
         ));
