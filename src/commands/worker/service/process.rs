@@ -45,26 +45,26 @@ impl Process {
 mod tests {
     use super::*;
     use std::io::Write;
+    use std::os::windows::process::CommandExt;
     use std::process::{Command, Stdio};
 
     #[test]
     fn waits_for_process_exit_after_the_worker_has_reported_stopped() {
         // Hold the child at stdin, as a worker can remain alive during
-        // shutdown after publishing its final status to the SCM.
-        let mut child = Command::new("powershell.exe")
-            .args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                "[Console]::In.ReadLine() | Out-Null",
-            ])
+        // shutdown after publishing its final status to the SCM. cmd starts
+        // in milliseconds; PowerShell could spend the whole wait starting up
+        // on a busy runner.
+        let mut child = Command::new("cmd.exe")
+            .raw_arg("/D /C set /p line=")
             .stdin(Stdio::piped())
             .spawn()
             .unwrap();
         let process = Process::open(child.id()).unwrap().unwrap();
         assert!(process.wait(Duration::ZERO).is_err());
-        child.stdin.take().unwrap().write_all(b"\n").unwrap();
-        process.wait(Duration::from_secs(15)).unwrap();
+        child.stdin.take().unwrap().write_all(b"stop\r\n").unwrap();
+        // The wait returns once the process exits; the bound only ends a
+        // child that never does.
+        process.wait(Duration::from_secs(60)).unwrap();
         assert!(child.wait().unwrap().success());
     }
 }
