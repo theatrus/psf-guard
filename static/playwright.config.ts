@@ -156,6 +156,9 @@ export default defineConfig({
         PSF_GUARD_E2E_TMP: TMP_BASE,
         // The specs expect no rc-astro, even on a machine that has one.
         PSF_GUARD_RC_ASTRO: 'off',
+        // Nor an update banner when a newer release is out; sky.spec.ts
+        // mocks its own.
+        PSF_GUARD_UPDATE_NOTICE: 'off',
         RUST_LOG: 'info',
       },
     },
@@ -183,6 +186,7 @@ export default defineConfig({
       reuseExistingServer,
       env: {
         ...(dyldFallback ? { DYLD_FALLBACK_LIBRARY_PATH: dyldFallback } : {}),
+        PSF_GUARD_UPDATE_NOTICE: 'off',
         RUST_LOG: 'info',
       },
     })),

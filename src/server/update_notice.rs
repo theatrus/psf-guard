@@ -46,12 +46,22 @@ pub struct UpdateNoticeManager {
     urls: Arc<[String]>,
 }
 
+/// `PSF_GUARD_UPDATE_NOTICE=off` reads no release feed, so the server shows
+/// no notice. The end-to-end specs set it: a release published while they
+/// run would otherwise put its banner above the pages they measure.
+fn feeds_off() -> bool {
+    std::env::var_os("PSF_GUARD_UPDATE_NOTICE")
+        .is_some_and(|value| value.eq_ignore_ascii_case("off"))
+}
+
 impl Default for UpdateNoticeManager {
     fn default() -> Self {
-        Self::new(
-            CACHE_TTL,
-            vec![WEBSITE_NOTICE_URL.to_owned(), GITHUB_NOTICE_URL.to_owned()],
-        )
+        let urls = if feeds_off() {
+            Vec::new()
+        } else {
+            vec![WEBSITE_NOTICE_URL.to_owned(), GITHUB_NOTICE_URL.to_owned()]
+        };
+        Self::new(CACHE_TTL, urls)
     }
 }
 
@@ -82,7 +92,7 @@ impl UpdateNoticeManager {
     /// Start a refresh only when the process cache is stale. HTTP handlers use
     /// this as a safety net; repeated page reloads only read the fresh cache.
     pub fn refresh_in_background_if_stale(&self) {
-        if !self.mark_refresh_started_if_stale() {
+        if self.urls.is_empty() || !self.mark_refresh_started_if_stale() {
             return;
         }
         let manager = self.clone();
@@ -231,5 +241,15 @@ mod tests {
         manager.run_marked_refresh().await;
         assert!(!manager.mark_refresh_started_if_stale());
         assert!(manager.snapshot().checked_at_unix_seconds.is_some());
+    }
+
+    #[tokio::test]
+    async fn no_feeds_are_never_checked() {
+        let manager = UpdateNoticeManager::new(Duration::from_secs(60), vec![]);
+        manager.refresh_in_background_if_stale();
+        let status = manager.snapshot();
+        assert!(!status.checking);
+        assert!(status.notice.is_none());
+        assert!(status.checked_at_unix_seconds.is_none());
     }
 }

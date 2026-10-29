@@ -14,7 +14,9 @@ keeps the website copy when both describe the same release. The process caches
 that result for 24 hours, refreshes once at startup and once per day, and serves
 the cached result to every browser. Reloading the UI never fetches either public
 feed. Tauri uses GitHub when the website updater feed is unavailable.
-Browser/server mode never downloads or installs an executable.
+Browser/server mode never downloads or installs an executable. A server started
+with `PSF_GUARD_UPDATE_NOTICE=off` reads neither feed and shows no notice; the
+end-to-end tests run that way so a new release does not change their pages.
 
 ## Check the running version and folders
 

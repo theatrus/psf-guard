@@ -54,5 +54,7 @@ export default defineConfig({
     url: `http://127.0.0.1:${port}/api/info`,
     reuseExistingServer: false,
     timeout: 180_000,
+    // No update banner when a newer release is out; see playwright.config.ts.
+    env: { PSF_GUARD_UPDATE_NOTICE: 'off' },
   },
 });
