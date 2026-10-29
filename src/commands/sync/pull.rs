@@ -840,6 +840,8 @@ fn upsert_acquired_images(
     let src_dups = source_dup_guids(src, table)?;
     // Rejects removed here stay removed: a pull does not bring them back.
     let removed = crate::commands::reject_removal::removed_guids(tx)?;
+    // Lights moved to a renamed file here, whose source sends the old name.
+    let renamed = crate::renamed_lights::renamed(tx)?;
     let source_guids: HashSet<String> = {
         let mut statement =
             src.prepare(&format!("SELECT guid FROM {table} WHERE guid IS NOT NULL"))?;
@@ -931,6 +933,15 @@ fn upsert_acquired_images(
         }
 
         let mut write_values: Vec<Value> = write_idx.iter().map(|&i| all_vals[i].clone()).collect();
+        // A light renamed here keeps its name while the source sends the
+        // one it had before (#1020).
+        if let (Some(index), Some(renamed)) = (metadata_w, renamed.get(&guid))
+            && let Value::Text(incoming) = &write_values[index]
+            && let Some(metadata) =
+                crate::renamed_lights::synced_metadata(tx, &guid, renamed, incoming)?
+        {
+            write_values[index] = Value::Text(metadata);
+        }
         // projectId/targetId are required FKs: skip the row if either parent
         // wasn't pulled, rather than retaining a source id that points at an
         // unrelated destination row.

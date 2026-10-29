@@ -8,7 +8,7 @@
 %global rustflags_debuginfo 0
 
 Name:           psf-guard
-Version:        0.12.4
+Version:        0.12.5
 Release:        1%{?dist}
 Summary:        Astronomical image analysis and quality assessment tool for N.I.N.A.
 
@@ -97,6 +97,10 @@ install -Dpm0644 packaging/rpm/systemd/psf-guard-server.conf \
 %config(noreplace) %{_sysconfdir}/%{name}/server.conf
 
 %changelog
+* Thu Oct 29 2026 Yann Ramin <github@theatr.us> - 0.12.5-1
+- Keep renamed lights renamed in catalogs a sync writes, and merge their twins
+- Name a missing image folder in the renamed-lights check
+
 * Wed Oct 28 2026 Yann Ramin <github@theatr.us> - 0.12.4-1
 - Start the server when an image folder is missing
 - Keep a renamed file's frame, and merge frames imported twice after a rename

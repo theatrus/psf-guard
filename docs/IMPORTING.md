@@ -518,9 +518,14 @@ exposure, filter and target. A file is matched only when exactly one frame
 fits and that frame's file is not found in any image folder. A copy of a
 file that is still there imports as a frame of its own, as before. An
 import of only some folders, and the command line's `import`, do not match
-renamed files. Neither does a catalog that syncs from Target Scheduler, or
-that rigs sync their lights into: the next sync would put the old file name
-back. In such a catalog, keep the file names N.I.N.A. wrote.
+renamed files.
+
+A catalog that syncs from Target Scheduler, or that rigs sync their lights
+into, gets the name N.I.N.A. wrote again on every sync. PSF Guard remembers
+the names it changed, so the frame keeps the new name, and a peer that
+pulls the catalog gets N.I.N.A.'s name, which its own copy of the file has.
+When a sync sends a name that is neither, the file was renamed where it
+came from, and that name is used.
 
 Earlier versions imported a renamed file as a second frame, and the first
 frame showed **Catalog only**. **Settings** lists such pairs under the
@@ -531,7 +536,8 @@ second frame is removed, and a sync does not bring it back. A pair stays as
 it is when the two frames have different grades, when the second frame is
 in a collaboration report or the reject archive, or when calibrated copies
 or a remote upload are recorded against it. The check waits while an image
-folder is missing, since a frame whose file is there would look renamed.
+folder is missing, since a frame whose file is there would look renamed;
+**Settings** names the missing folder.
 Close N.I.N.A. on that rig before merging. To merge from the command line,
 run `psf-guard merge-renamed-lights --db <slug>` to see the pairs, then
 again with `--apply`.
