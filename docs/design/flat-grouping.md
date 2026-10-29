@@ -4,7 +4,7 @@ Status: **Built**, with flats matched by measured response (§2.3, §4.2)
 and splits, joins and a light's side chosen by hand (§8).
 Still open: gap lights (a light whose night has no flats between two
 groups that differ), and corrected flats in WBPP exports (§9).
-Last updated: 2026-10-27
+Last updated: 2026-10-28
 
 User-facing behaviour is in
 [Calibration libraries › Flat groups](../CALIBRATION_LIBRARY.md#flat-groups).
@@ -40,27 +40,19 @@ against several candidate responses. Their dust is `seiza_calibration::dust`
 irregular dips, out-of-focus disks and donuts found by their rim, patches
 of overlapping ones, and border-anchored vignetting apart. PSF Guard
 re-exports them as `flat_groups::measure::{metric, evidence, choice}`.
-The `model`, `lights`, `overrides` and `rows` modules now re-export Seiza's
-`flat_response::groups` models. Seiza owns response families, change events,
-angle epochs, uncertain placement and manual choice resolution.
-
-PSF Guard still loads its catalog rows and memoizes the immutable `Arc<Book>`
-by catalog, row/settings digest and imaging summary. Selection passes that
-same book to `seiza_calibration::library::evaluate_with_book`, with metadata,
-resolved settings and cached response availability. It does not reconstruct
-the book or read image pixels for each light. Grading supplies stored current
-measurements, site-derived night boundaries and global/per-rig settings to
-`library::evaluate`, then stores the returned grades in the existing tables.
-The settings panel reads Seiza's settings schema; local registry persistence,
-validation, health reports and UI wording remain in PSF Guard.
-
-Background measurement jobs, source verification/remapping, cache/staging,
-master execution and export orchestration remain host responsibilities. The host
-calls Seiza's post-build stability measurement and retry policy, then executes
-the returned decisions. Existing source/master fingerprints and transitive
-invalidation remain in force. This implementation consumes the published
-Seiza 0.46.0 release, with seiza-calibration 0.10.0 and seiza-stacking 0.53.0.
-It requires no Git patches or local Seiza checkout.
+What is built on the numbers is Seiza's too, moved from PSF Guard so the
+desktop apps group flats as this server does: `model` (response families,
+groups, change events, the angle term and placement), `lights` (angle
+epochs and which family a light takes), `overrides` (a person's splits,
+joins and choices) and `rows` (the data they share), re-exported from
+`seiza_calibration::flat_response::groups`. So is the job's planning:
+which flat sessions a pass measures and under which keys, the pedestal
+under them, the response row a read makes, and which lights the family and
+change stages ask and what their answers are
+(`seiza_calibration::library::{plan_sessions, PedestalTable,
+family_questions, change_question}`). PSF Guard calls them where the job
+always asked itself; only the background job (`job.rs`, `family_job.rs`)
+reads the catalog, headers and pixels, and the store keeps the rows.
 
 A session's own dust is found on its kept response plane (`find_dust`), and
 the flats each shadow shows in by pairing it (`match_features`) with each
@@ -1041,12 +1033,11 @@ another target that shares a file name never takes another's choice
   `seiza_calibration::flat_response` and `seiza_calibration::dust`;
   `MatchTolerances::light_rotation` lets the stacker's gate follow a
   measured angle.
-- **Adopted from Seiza #385, released in Seiza 0.46.0**: response families, groups, changes,
-  uncertain placement, angle epochs, override resolution, peer grading,
-  candidate selection and the tunable settings schema. PSF Guard reuses its
-  cached native book and keeps catalog/cache I/O, background measurement jobs,
-  health/UI reporting and master execution. The application uses the published
-  crates for these shared core interfaces.
+- **Moved to Seiza** (theatrus/seiza#385, #403): the families, events,
+  placement, angle epochs, overrides, the light selection, grading, the
+  settings table, the master decisions and the job's planning. PSF Guard
+  keeps the catalog, the job's reads and progress, the store, the caches and
+  the wording of its reports, and calls the moved code as its own.
 - **Session dust from feature lists.** The rule for how many of a
   session's flats a shadow must show in, applied to the flats' stored
   features, is in `job.rs` for now; `dust::session_dust_from_lists` will

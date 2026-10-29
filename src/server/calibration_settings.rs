@@ -25,7 +25,7 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::calibration::rules::{self, FieldSpec, RuleValues};
+use crate::calibration::rules::{self, FieldSpec, RuleValues, SettingKey};
 use crate::calibration::{DarkChoice, ExternalMasterPolicy};
 use crate::db_registry::{CalibrationSettings, DbRegistry, RigCalibrationSettings};
 use crate::server::{
@@ -153,7 +153,8 @@ fn readable_values(values: &RuleValues) -> RuleValues {
     values
         .iter()
         .filter(|(key, value)| {
-            rules::field(key).is_some_and(|spec| rules::validate(spec, value).is_ok())
+            key.parse::<SettingKey>()
+                .is_ok_and(|key| key.field().validate(value).is_ok())
         })
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect()
@@ -166,24 +167,24 @@ fn current_response(
     let values = settings
         .map(|settings| readable_values(&settings.rules))
         .unwrap_or_default();
-    let number = |key: &str| values.get(key).and_then(Value::as_f64);
+    let number = |key: SettingKey| values.get(key.as_str()).and_then(Value::as_f64);
     let resolved = rules::RuleBook::new(values.clone(), BTreeMap::new()).global();
     CalibrationSettingsResponse {
-        rotation_tolerance_deg: number("rotation_tolerance_deg"),
+        rotation_tolerance_deg: number(SettingKey::RotationToleranceDeg),
         default_rotation_tolerance_deg: seiza_calibration::MatchTolerances::default().rotation_deg,
         external_masters: resolved.external_masters,
         flat_star_masking: settings
             .and_then(|settings| settings.flat_star_masking)
             .unwrap_or(false),
-        dark_reach_days: number("dark_reach_days"),
+        dark_reach_days: number(SettingKey::DarkReachDays),
         default_dark_reach_days: crate::calibration::DEFAULT_DARK_REACH_DAYS,
         complete_dark_frames: values
-            .get("complete_dark_frames")
+            .get(SettingKey::CompleteDarkFrames.as_str())
             .and_then(Value::as_u64)
             .map(|frames| frames as usize),
         default_complete_dark_frames: crate::calibration::DEFAULT_COMPLETE_DARK_FRAMES,
         dark_choice: resolved.dark_choice,
-        flat_max_age_days: number("flat_max_age_days"),
+        flat_max_age_days: number(SettingKey::FlatMaxAgeDays),
         default_flat_max_age_days: crate::calibration::DEFAULT_FLAT_MAX_AGE_DAYS,
         exclude_uncalibrated: settings
             .and_then(|settings| settings.exclude_uncalibrated)
@@ -196,13 +197,17 @@ fn current_response(
 
 /// Check one value against its setting; `null` passes as "unset".
 fn checked(key: &str, value: &Value) -> Result<(), AppError> {
-    let spec = rules::field(key)
-        .ok_or_else(|| AppError::BadRequest(format!("unknown calibration setting `{key}`")))?;
+    let setting: SettingKey = key
+        .parse()
+        .map_err(|_| AppError::BadRequest(format!("unknown calibration setting `{key}`")))?;
     if value.is_null() {
         return Ok(());
     }
-    rules::validate(spec, value).map_err(AppError::BadRequest)?;
-    rules::stacker_accepts(key, value).map_err(AppError::BadRequest)
+    setting
+        .field()
+        .validate(value)
+        .map_err(AppError::BadRequest)?;
+    rules::stacker_accepts(setting, value).map_err(AppError::BadRequest)
 }
 
 /// The global edits a request makes, key to new value (`None` clears),
@@ -213,25 +218,34 @@ fn global_edits(
     let mut edits: Vec<(String, Option<Value>)> = Vec::new();
     let mut set = |key: &str, value: Option<Value>| edits.push((key.to_string(), value));
     if let Some(sent) = request.rotation_tolerance_deg {
-        set("rotation_tolerance_deg", sent.map(Value::from));
+        set(
+            SettingKey::RotationToleranceDeg.as_str(),
+            sent.map(Value::from),
+        );
     }
     if let Some(policy) = request.external_masters {
-        set("external_masters", Some(Value::from(policy.as_str())));
+        set(
+            SettingKey::ExternalMasters.as_str(),
+            Some(Value::from(policy.as_str())),
+        );
     }
     if let Some(sent) = request.dark_reach_days {
-        set("dark_reach_days", sent.map(Value::from));
+        set(SettingKey::DarkReachDays.as_str(), sent.map(Value::from));
     }
     if let Some(sent) = request.complete_dark_frames {
-        set("complete_dark_frames", sent.map(Value::from));
+        set(
+            SettingKey::CompleteDarkFrames.as_str(),
+            sent.map(Value::from),
+        );
     }
     if let Some(choice) = request.dark_choice {
         set(
-            "dark_choice",
+            SettingKey::DarkChoice.as_str(),
             Some(serde_json::to_value(choice).expect("a choice serializes")),
         );
     }
     if let Some(sent) = request.flat_max_age_days {
-        set("flat_max_age_days", sent.map(Value::from));
+        set(SettingKey::FlatMaxAgeDays.as_str(), sent.map(Value::from));
     }
     if let Some(values) = &request.rules {
         for (key, value) in values {
@@ -250,8 +264,8 @@ fn apply_edits(values: &mut RuleValues, edits: Vec<(String, Option<Value>)>) {
     for (key, value) in edits {
         let is_default = value
             .as_ref()
-            .zip(rules::field(&key))
-            .is_some_and(|(value, spec)| rules::equivalent(value, &spec.default));
+            .zip(key.parse::<SettingKey>().ok())
+            .is_some_and(|(value, key)| key.field().is_default(value));
         match value {
             Some(value) if !is_default => {
                 values.insert(key, value);

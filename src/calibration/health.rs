@@ -24,12 +24,12 @@
 //! ([`KeptHeader`]), so a project judged again reads only the lights whose
 //! file changed.
 
-#[cfg(test)]
-use super::coherent_master_subset;
 use super::quality::{self, StoredMeasurement};
+use super::rules::{GradeCheck, SetBy, SettingKey};
 use super::{
-    calibration_gaps, nearest_master_flat_at, rule_book, CalibrationFrame, CalibrationKind, Check,
-    CheckMode, LibrarySnapshot, Rules, MIN_MASTER_FRAMES, THIN_MASTER_FRAMES,
+    calibration_gaps, coherent_master_subset, nearest_master_flat_at, rule_book, CalibrationFrame,
+    CalibrationKind, Check, CheckMode, ExternalMasterPolicy, LibrarySnapshot, Rules,
+    MIN_MASTER_FRAMES, THIN_MASTER_FRAMES,
 };
 use crate::commands::import::headers::FrameMeta;
 use anyhow::{Context, Result};
@@ -244,9 +244,9 @@ impl<'a> Gathered<'a> {
     }
 
     /// Who set a check's mode, in words.
-    fn set_by(&self, check: Check) -> String {
+    fn who_set(&self, check: Check) -> String {
         self.rules
-            .set_by(check.key())
+            .who_set(check)
             .unwrap_or_else(|| "set for this rig".into())
     }
 
@@ -257,12 +257,12 @@ impl<'a> Gathered<'a> {
                 if finding.level == HealthLevel::Poor {
                     finding.level = HealthLevel::Check;
                     finding.reason =
-                        format!("{} (advisory, {})", finding.reason, self.set_by(check));
+                        format!("{} (advisory, {})", finding.reason, self.who_set(check));
                 }
                 self.judgement.findings.push(finding);
             }
             CheckMode::Off => {
-                finding.reason = format!("{} (check off, {})", finding.reason, self.set_by(check));
+                finding.reason = format!("{} (check off, {})", finding.reason, self.who_set(check));
                 self.judgement.waived.push(finding);
             }
         }
@@ -271,9 +271,9 @@ impl<'a> Gathered<'a> {
 
 /// `" (fewer than 4, set globally)"` after a finding whose limit someone
 /// set, or nothing for a default limit.
-fn limit_note(rules: &Rules, key: &str, limit: impl FnOnce() -> String) -> String {
+fn limit_note(rules: &Rules, key: SettingKey, limit: impl FnOnce() -> String) -> String {
     rules
-        .set_by(key)
+        .who_set(key)
         .map(|by| format!(" ({}, {by})", limit()))
         .unwrap_or_default()
 }
@@ -289,21 +289,27 @@ enum MasterInput {
 impl MasterInput {
     /// The rule a stack build follows: an external master by the policy,
     /// otherwise the raw frames' coherent subset.
-    fn of(recipe: &seiza_calibration::library::MasterRecipe, frames: &[CalibrationFrame]) -> Self {
+    fn of(kind: CalibrationKind, frames: &[CalibrationFrame], rules: &Rules) -> Self {
         if frames.is_empty() {
             return Self::None;
         }
-        if recipe.action == seiza_calibration::library::RecipeAction::External {
-            return Self::External;
+        let raw: Vec<CalibrationFrame> = frames
+            .iter()
+            .filter(|frame| !frame.is_master)
+            .cloned()
+            .collect();
+        let has_external = raw.len() < frames.len();
+        let subset = coherent_master_subset(kind, &raw, rules);
+        let external = match rules.external_masters {
+            ExternalMasterPolicy::Prefer => has_external,
+            ExternalMasterPolicy::Fallback => has_external && subset.len() < MIN_MASTER_FRAMES,
+            ExternalMasterPolicy::Ignore => false,
+        };
+        if external {
+            Self::External
+        } else {
+            Self::Raw(subset)
         }
-        let rows: HashMap<_, _> = frames.iter().map(|f| (f.frame_uuid.as_str(), f)).collect();
-        Self::Raw(
-            recipe
-                .coherent_inputs
-                .iter()
-                .map(|id| rows[id.as_str()].clone())
-                .collect(),
-        )
     }
 
     /// Whether a master would apply at all.
@@ -469,7 +475,7 @@ impl HealthLibrary {
 
     /// What the library would give this light, judged by its rig's rules.
     pub fn findings(&self, light: &FrameMeta) -> Result<Vec<LightFinding>> {
-        let rules = self.book.for_light(light);
+        let rules = self.book.for_rig(&super::rules::light_rig_uuid(light));
         Ok(self.judge(light, &rules)?.findings)
     }
 
@@ -478,7 +484,7 @@ impl HealthLibrary {
     pub fn judge(&self, light: &FrameMeta, rules: &std::sync::Arc<Rules>) -> Result<Judgement> {
         let selected = self
             .snapshot
-            .select_with(light, std::sync::Arc::clone(rules))?;
+            .select_with(light, std::sync::Arc::clone(rules));
         let rules: &Rules = rules;
         let library = selected.library;
         let mut found = Gathered::new(rules);
@@ -527,26 +533,16 @@ impl HealthLibrary {
                 poor(HealthCode::CannotCalibrate, gap.reason.clone()).about(kinds),
             );
         }
-        let plan = super::shared::plan(
-            &selected,
-            vec![super::shared::light(light)],
-            Vec::new(),
-            false,
-        )?;
-        let input = |kind, frames: &[CalibrationFrame]| -> Result<MasterInput> {
-            let recipe = plan
-                .recipes
-                .iter()
-                .find(|r| r.kind == super::shared::kind(kind))
-                .context("missing master policy recipe")?;
-            Ok(MasterInput::of(recipe, frames))
-        };
-        let bias = input(CalibrationKind::Bias, &selected.bias)?;
-        let dark = input(CalibrationKind::Dark, &selected.dark)?;
-        let dark_flat = input(CalibrationKind::DarkFlat, &selected.dark_flat)?;
-        let flat = input(CalibrationKind::Flat, &selected.flat)?;
+        let bias = MasterInput::of(CalibrationKind::Bias, &selected.bias, rules);
+        let dark = MasterInput::of(CalibrationKind::Dark, &selected.dark, rules);
+        let dark_flat = MasterInput::of(CalibrationKind::DarkFlat, &selected.dark_flat, rules);
+        let flat = MasterInput::of(CalibrationKind::Flat, &selected.flat, rules);
         let thin = rules.thin_master_frames;
-        let thin_note = || limit_note(rules, "thin_master_frames", || format!("fewer than {thin}"));
+        let thin_note = || {
+            limit_note(rules, SettingKey::ThinMasterFrames, || {
+                format!("fewer than {thin}")
+            })
+        };
 
         if let MasterInput::Raw(darks) = &dark
             && !darks.is_empty()
@@ -590,7 +586,11 @@ impl HealthLibrary {
             let reason = format!(
                 "Its flats carry {carried} changing spot{} into their master{}",
                 if carried == 1 { "" } else { "s" },
-                limit_note(rules, "grade_flat_carried_spots", || "spot limits".into())
+                limit_note(
+                    rules,
+                    SettingKey::Grade(GradeCheck::FlatCarriedSpots),
+                    || "spot limits".into()
+                )
             );
             match grade {
                 Grade::Poor => found.push(
@@ -613,7 +613,7 @@ impl HealthLibrary {
             let stale =
                 age > rules.flat_max_age_days && rules.mode(Check::StaleFlats) != CheckMode::Off;
             if age > rules.flat_check_age_days && !stale {
-                let note = limit_note(rules, "flat_check_age_days", || {
+                let note = limit_note(rules, SettingKey::FlatCheckAgeDays, || {
                     format!("more than {:.0} days", rules.flat_check_age_days)
                 });
                 found.push(
@@ -2307,7 +2307,7 @@ mod tests {
                 .rules
                 .notes
                 .iter()
-                .map(|note| (note.key, note.text.as_str(), note.source))
+                .map(|note| (note.key.as_str(), note.text.as_str(), note.source))
                 .collect::<Vec<_>>(),
             [("flat_max_age_days", "90 days", RuleSource::Rig)]
         );

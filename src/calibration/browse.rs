@@ -18,6 +18,7 @@ use super::{
 };
 use anyhow::Result;
 use rusqlite::{Connection, OptionalExtension};
+use seiza_calibration::library::matching::rotation_gap;
 use seiza_calibration::Finding;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -549,12 +550,6 @@ impl FrameFilter {
         }
         true
     }
-}
-
-/// The angle between two rotator positions, at most 180°.
-fn rotation_gap(left: f64, right: f64) -> f64 {
-    let gap = (left - right).rem_euclid(360.0);
-    gap.min(360.0 - gap)
 }
 
 fn grade_rank(frame: &CalibrationFrameSummary) -> u8 {
@@ -1242,7 +1237,7 @@ pub fn recorded_masters(conn: &Connection) -> Result<Vec<RecordedLibraryMaster>>
                 camera_temp,
                 statistics,
             )| {
-                let kind = CalibrationKind::from_db(&kind)?;
+                let kind = kind.parse::<CalibrationKind>().ok()?;
                 let sources: Vec<String> = serde_json::from_str(&sources).unwrap_or_default();
                 let known: Vec<_> = sources
                     .iter()

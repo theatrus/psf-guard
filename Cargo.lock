@@ -5455,9 +5455,9 @@ dependencies = [
 
 [[package]]
 name = "seiza"
-version = "0.46.0"
+version = "0.47.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4a593e9811f9e0dc6877bd2bd13cca6ec300dc25335133af569d3faa06d7a95f"
+checksum = "68bac15d03932d9001c681beaeff4249dbedb031c28fc58150db078b52ab22be"
 dependencies = [
  "directories",
  "image",
@@ -5492,10 +5492,11 @@ dependencies = [
 
 [[package]]
 name = "seiza-calibration"
-version = "0.10.0"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e1816e88e0a9071015febd1f594699a7ec6d0c87f265ab5ccd22bf6897605b5"
+checksum = "ce08aa7f1e82fb9b1a42957c3b477a738b0a6e8e85c94b7d80af02ea9ef796f8"
 dependencies = [
+ "chrono",
  "nalgebra",
  "rayon",
  "seiza-imgproc",
@@ -5603,11 +5604,12 @@ dependencies = [
 
 [[package]]
 name = "seiza-stacking"
-version = "0.53.0"
+version = "0.54.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22bffc56a5bc3079ef9d62f2cc447854546a43c50531a18e56d067699a8c0c8d"
+checksum = "cc626115a1af2ee1dea357a0b02d6fb3e9b25bcb1c079cb65d7d18b2ec844ce1"
 dependencies = [
  "bytemuck",
+ "fs2",
  "multiversion",
  "nalgebra",
  "objc2-metal",

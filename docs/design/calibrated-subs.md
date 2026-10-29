@@ -1,7 +1,7 @@
 # Calibrated subs
 
 Status: **Built**. Still open: stacking from supplied calibrated frames.
-Last updated: 2026-10-04
+Last updated: 2026-10-28
 
 ## 1. Goal
 
@@ -255,29 +255,6 @@ carry it explicitly:
    reject archive, and the quality-scan option.
 
 
-## Shared calibration master decisions
-
-Seiza owns candidate coherence, external-master adoption, recipe dependencies,
-builder options, exposure, session identity, flat-stability measurement/retries
-and flat-only pedestal acceptance. PSF Guard supplies its existing catalog rows,
-quality/override records, measured grouping book and effective global/rig settings.
-`library::plan_masters` resolves a verified selection without rematching it.
-The returned session is passed directly into `library::flat_retry`, retaining
-its policy, held-back inputs and resolved time window. The core rejects
-conflicting overrides and drives trim, alternate-session and original-master fallback
-from measured attempts. Defaults preserve PSF Guard's decisions. Hosts can disable
-individual retry stages or withhold unstable flats using explicit core options.
-
-PSF Guard executes the returned recipes with Seiza's pixel builders and keeps
-file verification/remapping, cancellation, staging, master persistence, provenance,
-transitive invalidation, and UI formatting. Current grades/manual choices reach
-core planning so dark screening never overrides them; star masking is forwarded.
-The shared dip-only flat measurement keeps the existing version 2 cache contract,
-mono/RGB/CFA planes, and 65535 ADU scaling for declared-unit sources. Cached
-measurements remain reusable. Ordered input hashes and shared policy version 4
-invalidate older master/stack decisions once. The implementation consumes published
-Seiza 0.46.0, calibration 0.10.0 and stacking 0.53.0 from crates.io.
-
 ## Shared defaults and database overrides
 
 The registry stores processing defaults for automatic quality analysis,
@@ -295,3 +272,18 @@ same path. A failed write leaves live settings unchanged. Enabling arrival
 analysis uses the existing arrival queue. Source selection and its fingerprint
 remain in the existing quality cache; inherited policy does not create a new
 image identity or reuse raw evidence as calibrated evidence.
+
+## Calibration master decisions
+
+Matching a light's calibration frames, grading them and the decisions a
+master build makes are Seiza's (`seiza_calibration::library`), moved from
+PSF Guard so the desktop apps calibrate as this server does: the master
+cohort, which external master a light adopts, which masters depend on
+which, whether the integrator screens dark levels, the flat-only pedestal
+fit's samples and acceptance, the flat-set check and its retries (trim to a
+stable majority, the next session, or the nearest set with a warning), and
+the session key lights are partitioned by. PSF Guard asks for each where its
+build always decided it, and keeps the catalog, source verification and
+remapping, the master cache and its keys, adopting external files,
+cancellation, staging, publication, provenance and the notes' place on the
+stack.

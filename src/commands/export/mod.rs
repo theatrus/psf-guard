@@ -721,8 +721,8 @@ impl SettingsNotes {
             return;
         }
         self.held.push(std::sync::Arc::clone(rules));
-        use crate::calibration::rules::{field, fields, Effect};
-        use crate::calibration::RuleSource;
+        use crate::calibration::rules::{fields, Effect};
+        use crate::calibration::{Check, RuleSource, SettingKey};
         let rig = rules
             .rig
             .as_ref()
@@ -733,15 +733,13 @@ impl SettingsNotes {
                 .iter()
                 .position(|spec| spec.key == note.key)
                 .unwrap_or(usize::MAX);
-            let effect = field(note.key).map(|spec| spec.effect);
+            let effect = note.key.field().effect;
             let gap_check = matches!(
                 note.key,
-                "flat_max_age_days"
-                    | "check_no_flat"
-                    | "check_no_bias_or_dark"
-                    | "check_stale_flats"
+                SettingKey::FlatMaxAgeDays
+                    | SettingKey::Check(Check::NoFlat | Check::NoBiasOrDark | Check::StaleFlats)
             );
-            if effect == Some(Effect::Flags) && !(gaps_matter && gap_check) {
+            if effect == Effect::Flags && !(gaps_matter && gap_check) {
                 continue;
             }
             let line = match note.source {
@@ -761,10 +759,11 @@ impl SettingsNotes {
             self.lines.insert(line);
         }
         if !rules.use_darks {
-            self.without_darks.insert(match rules.source("use_darks") {
-                RuleSource::Rig => rig,
-                _ => "every rig".to_string(),
-            });
+            self.without_darks
+                .insert(match rules.source(SettingKey::UseDarks) {
+                    RuleSource::Rig => rig,
+                    _ => "every rig".to_string(),
+                });
         }
     }
 
