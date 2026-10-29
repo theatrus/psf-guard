@@ -34,8 +34,6 @@ pub struct RenamedLightsReport {
     /// Image folders that are missing now. A light whose file is in one
     /// would look renamed, so nothing is checked until they are back.
     pub missing_folders: Vec<String>,
-    /// Why this catalog is not checked, when a sync writes its lights.
-    pub synced: Option<String>,
 }
 
 /// What a merge did, and the copy it took first.
@@ -95,15 +93,12 @@ pub async fn report(
         let path = std::path::Path::new(&ctx.database_path);
         let writable = crate::ts_guids::is_writable(path);
         let missing_folders = missing_folders(&ctx);
-        let synced =
-            renamed_lights::synced_lights(ctx.ts_sync.as_ref(), ctx.remote_image_upload.as_ref());
-        if !missing_folders.is_empty() || synced.is_some() {
+        if !missing_folders.is_empty() {
             return Ok(RenamedLightsReport {
                 pairs: Vec::new(),
                 held: Vec::new(),
                 writable,
                 missing_folders,
-                synced: synced.map(str::to_string),
             });
         }
         let conn = crate::ts_guids::open_existing(path, false)?;
@@ -113,7 +108,6 @@ pub async fn report(
             held: report.held,
             writable,
             missing_folders,
-            synced: None,
         })
     })
     .await
@@ -129,14 +123,6 @@ pub async fn merge(
     State(state): State<Arc<AppState>>,
     ctx: DbContext,
 ) -> Result<Json<ApiResponse<RenamedLightsMerged>>, AppError> {
-    if let Some(reason) =
-        renamed_lights::synced_lights(ctx.ts_sync.as_ref(), ctx.remote_image_upload.as_ref())
-    {
-        return Err(AppError::BadRequest(format!(
-            "renamed lights are not merged in this catalog: {reason}, and the next sync \
-             would put the old file names back"
-        )));
-    }
     if let Some(dir) = missing_folders(&ctx).first() {
         return Err(AppError::BadRequest(format!(
             "image folder {dir} is missing; a light whose file is there would look renamed. \

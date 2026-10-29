@@ -10,6 +10,11 @@
 //!   into the first light: the first light takes the renamed file, and the
 //!   twin's grade when it has none of its own. The twin's row is removed,
 //!   with a record so that a sync does not bring it back.
+//! - Either way the light's new name is recorded beside the name it had.
+//!   A sync from the light's source, a rig or Target Scheduler, sends the
+//!   old name again: the light keeps its new one ([`synced_metadata`]), and
+//!   a peer that pulls this catalog gets the old one
+//!   ([`exported_metadata`]), which is what its own copy of the file has.
 //!
 //! Two rows are the same exposure when calibrated-copy pairing would say so:
 //! the same capture time, exposure, filter and target. A pair also needs
@@ -36,6 +41,16 @@ const MERGED_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS psf_guard_merged_light (
     kept_guid TEXT NOT NULL,
     file_name TEXT NOT NULL,
     merged_at INTEGER NOT NULL
+)";
+
+/// PSF Guard's record of each light it moved to a renamed file: the name
+/// the light had before, which its source still knows, and the name it has
+/// here.
+const RENAMED_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS psf_guard_renamed_light (
+    guid TEXT PRIMARY KEY NOT NULL,
+    source_name TEXT NOT NULL,
+    file_name TEXT NOT NULL,
+    renamed_at INTEGER NOT NULL
 )";
 
 /// Whether a light's file can be found, from the `FileName` its row
@@ -85,20 +100,119 @@ impl std::fmt::Debug for FileFinder {
     }
 }
 
-/// Why a catalog does not match renamed files, if it does not. A sync that
-/// writes the catalog's lights (from Target Scheduler, or from a rig)
-/// sends each light's file name again, and would put the old name back.
-pub fn synced_lights(
-    ts_sync: Option<&crate::ts_sync::Settings>,
-    upload: Option<&crate::db_registry::RemoteImageUploadConfig>,
-) -> Option<&'static str> {
-    if ts_sync.is_some() {
-        Some("it syncs from Target Scheduler")
-    } else if upload.is_some_and(|upload| upload.sync_enabled) {
-        Some("rigs sync their lights into it")
-    } else {
-        None
+/// A light this catalog moved to a renamed file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Renamed {
+    /// The name the light had before, which its source still sends.
+    pub source_name: String,
+    /// The name it has here.
+    pub file_name: String,
+}
+
+/// The lights this catalog moved to a renamed file, by guid.
+pub fn renamed(conn: &Connection) -> Result<HashMap<String, Renamed>> {
+    if !table_exists(conn, "psf_guard_renamed_light") {
+        return Ok(HashMap::new());
     }
+    let mut statement =
+        conn.prepare("SELECT guid, source_name, file_name FROM psf_guard_renamed_light")?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get(0)?,
+            Renamed {
+                source_name: row.get(1)?,
+                file_name: row.get(2)?,
+            },
+        ))
+    })?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+/// Record that a light now uses `file_name`. A light renamed again keeps
+/// the name it had first: that is the one its source knows.
+fn record_rename(
+    conn: &Connection,
+    guid: &str,
+    old_name: &str,
+    file_name: &str,
+    at: i64,
+) -> Result<()> {
+    conn.execute_batch(RENAMED_SCHEMA)?;
+    conn.execute(
+        "INSERT INTO psf_guard_renamed_light (guid, source_name, file_name, renamed_at)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT (guid) DO UPDATE
+             SET file_name = excluded.file_name, renamed_at = excluded.renamed_at",
+        params![guid, old_name, file_name, at],
+    )?;
+    Ok(())
+}
+
+fn file_name_in(metadata: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(metadata)
+        .ok()?
+        .get("FileName")?
+        .as_str()
+        .map(str::to_string)
+}
+
+/// The metadata with another `FileName`, written as the renames wrote it,
+/// so a sync that changes nothing else finds the row unchanged.
+fn with_file_name(conn: &Connection, metadata: &str, file_name: &str) -> Result<String> {
+    Ok(conn.query_row(
+        "SELECT json_set(?1, '$.FileName', ?2)",
+        params![metadata, file_name],
+        |row| row.get(0),
+    )?)
+}
+
+/// What a sync writes for a light this catalog renamed, given the metadata
+/// its source sent: the metadata with this catalog's name while the source
+/// sends the name the light had before. `None` leaves the metadata as it
+/// came. When the source sends a name that is neither, it renamed the file
+/// itself: its name stands, and the record goes.
+pub fn synced_metadata(
+    conn: &Connection,
+    guid: &str,
+    renamed: &Renamed,
+    incoming: &str,
+) -> Result<Option<String>> {
+    let Some(name) = file_name_in(incoming) else {
+        return Ok(None);
+    };
+    if same_name(&name, &renamed.source_name) {
+        return with_file_name(conn, incoming, &renamed.file_name).map(Some);
+    }
+    if !same_name(&name, &renamed.file_name) {
+        conn.execute(
+            "DELETE FROM psf_guard_renamed_light WHERE guid = ?1",
+            [guid],
+        )?;
+    }
+    Ok(None)
+}
+
+/// What an export sends for a light this catalog renamed: its metadata
+/// under the name it had before, which a peer's own copy of the file has.
+/// `None` leaves the metadata as it is.
+pub fn exported_metadata(
+    conn: &Connection,
+    renamed: &Renamed,
+    metadata: &str,
+) -> Result<Option<String>> {
+    match file_name_in(metadata) {
+        Some(name) if same_name(&name, &renamed.file_name) => {
+            with_file_name(conn, metadata, &renamed.source_name).map(Some)
+        }
+        _ => Ok(None),
+    }
+}
+
+fn now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 /// A file name without its folders, across either separator: Target
@@ -374,6 +488,7 @@ pub fn relink_renamed(
              WHERE Id = ?2",
             params![path, light.id],
         )?;
+        record_rename(conn, &light.guid, &light.file_name, &path, now())?;
         taken.insert(light.id);
         relinked.push(index);
     }
@@ -504,10 +619,7 @@ pub fn merge(
         });
     }
     tx.execute_batch(MERGED_SCHEMA)?;
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_secs() as i64)
-        .unwrap_or(0);
+    let now = now();
     let has_exposure_plans = has_column(&tx, "exposureplan", "acquired");
     for pair in &report.pairs {
         let (kept, twin) = (&pair.kept, &pair.twin);
@@ -516,6 +628,7 @@ pub fn merge(
              WHERE Id = ?2",
             params![twin.file_name, kept.id],
         )?;
+        record_rename(&tx, &kept.guid, &kept.file_name, &twin.file_name, now)?;
         if pair.takes_grade {
             tx.execute(
                 "UPDATE acquiredimage SET gradingStatus = ?1, rejectreason = ?2 WHERE Id = ?3",
@@ -549,6 +662,7 @@ pub fn merge(
             ),
             ("psf_guard_ts_sync_grade", "guid", twin.guid.clone()),
             ("psf_guard_ts_sync_pending", "guid", twin.guid.clone()),
+            ("psf_guard_renamed_light", "guid", twin.guid.clone()),
         ] {
             if table_exists(&tx, table) {
                 tx.execute(
@@ -857,6 +971,14 @@ mod tests {
             vec![(first.0, first.1.clone(), twin.2.clone(), 1)]
         );
         assert_eq!(catalog.plan_counts(), (1, 1));
+        // A sync that sends the first light's old name leaves the new one.
+        assert_eq!(
+            renamed(&catalog.conn).unwrap()[&first.1],
+            Renamed {
+                source_name: first.2.clone(),
+                file_name: twin.2.clone(),
+            }
+        );
         // A pull from a catalog that still has the twin leaves it out.
         assert!(
             crate::commands::reject_removal::removed_guids(&catalog.conn)
@@ -908,12 +1030,136 @@ mod tests {
         );
     }
 
+    fn pull(source: &Connection, catalog: &Connection) -> crate::commands::sync::PullSummary {
+        crate::commands::sync::sync_pull(
+            source,
+            catalog,
+            &crate::commands::sync::PullOptions {
+                dry_run: false,
+                with_image_data: false,
+                project_filter: None,
+                deletions: Default::default(),
+            },
+        )
+        .unwrap()
+    }
+
+    /// The catalog's light as a sync's source would send it: renamed here
+    /// after the copy is taken.
+    fn relinked_with_source() -> (Catalog, Connection, String) {
+        let mut catalog = Catalog::with_first_import();
+        let copy = catalog.db.with_file_name("source.sqlite");
+        catalog
+            .conn
+            .execute("VACUUM INTO ?1", [copy.to_string_lossy()])
+            .unwrap();
+        catalog.rename();
+        let finder = catalog.finder(Some(&[NEW_NAME]));
+        assert_eq!(catalog.import_new_name(Some(finder)).renamed, 1);
+        let new_path = catalog.images.join(NEW_NAME).to_string_lossy().into_owned();
+        (catalog, Connection::open(copy).unwrap(), new_path)
+    }
+
     #[test]
-    fn a_catalog_a_sync_writes_does_not_match_renamed_files() {
-        let mut upload = crate::db_registry::RemoteImageUploadConfig::default();
-        assert_eq!(synced_lights(None, Some(&upload)), None);
-        upload.sync_enabled = true;
-        assert!(synced_lights(None, Some(&upload)).is_some());
+    fn a_sync_that_sends_the_old_name_leaves_the_new_one() {
+        let (mut catalog, source, new_path) = relinked_with_source();
+        let [(_, guid, _, _)] = catalog.lights().try_into().unwrap();
+        let old_path = catalog.images.join(OLD_NAME).to_string_lossy().into_owned();
+        assert_eq!(
+            renamed(&catalog.conn).unwrap(),
+            HashMap::from([(
+                guid.clone(),
+                Renamed {
+                    source_name: old_path.clone(),
+                    file_name: new_path.clone(),
+                }
+            )])
+        );
+
+        // A rig's sync: nothing else changed, so nothing is written.
+        let summary = pull(&source, &catalog.conn);
+        assert_eq!(
+            (
+                summary.acquiredimage.unchanged,
+                summary.acquiredimage.updated
+            ),
+            (1, 0)
+        );
+        assert_eq!(catalog.lights()[0].2, new_path);
+
+        // A Target Scheduler sync.
+        let tx = catalog.conn.transaction().unwrap();
+        crate::commands::sync::sync_arrivals(&source, &tx, &HashSet::new(), &Default::default())
+            .unwrap();
+        tx.commit().unwrap();
+        assert_eq!(catalog.lights()[0].2, new_path);
+
+        // A peer that pulls this catalog gets the name its own copy has.
+        let bundle = crate::server::remote_sync::export_bundle(
+            &catalog.db,
+            "catalog",
+            crate::server::remote_sync::SyncOperation::Merge,
+            false,
+            false,
+            Default::default(),
+        )
+        .unwrap();
+        let table = &bundle.tables["acquiredimage"];
+        let metadata = table
+            .columns
+            .iter()
+            .position(|column| column.name.eq_ignore_ascii_case("metadata"))
+            .unwrap();
+        let sent = table.rows[0].values[metadata].value.as_deref().unwrap();
+        assert_eq!(file_name_in(sent).as_deref(), Some(old_path.as_str()));
+    }
+
+    #[test]
+    fn a_name_the_source_gives_the_file_itself_stands() {
+        let (catalog, source, _) = relinked_with_source();
+        let theirs = r"C:\Users\nina\Images\Jellyfish_SII_0051_final.fits";
+        source
+            .execute(
+                "UPDATE acquiredimage SET metadata = json_set(metadata, '$.FileName', ?1)",
+                [theirs],
+            )
+            .unwrap();
+
+        pull(&source, &catalog.conn);
+
+        assert_eq!(catalog.lights()[0].2, theirs);
+        assert!(renamed(&catalog.conn).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_light_renamed_twice_keeps_the_name_its_source_knows() {
+        let (mut catalog, source, _) = relinked_with_source();
+        const NEWEST: &str =
+            "Jellyfish Nebula SHO_LIGHT_SII_300.00s_2026-10-27_23-06-46_Session_2026-10-27C_0051.fits";
+        std::fs::rename(catalog.images.join(NEW_NAME), catalog.images.join(NEWEST)).unwrap();
+        let finder = catalog.finder(Some(&[NEWEST]));
+        let outcome = import_frames(
+            &mut catalog.conn,
+            vec![frame(&catalog.images.join(NEWEST))],
+            &ImportOptions {
+                find_files: Some(finder),
+                ..ImportOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(outcome.renamed, 1);
+
+        pull(&source, &catalog.conn);
+
+        let newest = catalog.images.join(NEWEST).to_string_lossy().into_owned();
+        assert_eq!(catalog.lights()[0].2, newest);
+        let [(_, record)] = renamed(&catalog.conn)
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+        assert!(record.source_name.ends_with(OLD_NAME), "{record:?}");
     }
 
     #[test]

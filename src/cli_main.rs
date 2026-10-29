@@ -848,15 +848,6 @@ pub fn main() -> Result<()> {
         } => {
             use crate::renamed_lights::{self, FileFinder, HeldPair, RenamedPair};
             let (registry_path, entry) = removal_entry(registry, &db)?;
-            if let Some(reason) = renamed_lights::synced_lights(
-                entry.ts_sync.as_ref(),
-                entry.remote_image_upload.as_ref(),
-            ) {
-                anyhow::bail!(
-                    "renamed lights are not merged in {db}: {reason}, and the next sync would \
-                     put the old file names back"
-                );
-            }
             let missing: Vec<&String> = entry
                 .image_dirs
                 .iter()
