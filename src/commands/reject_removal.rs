@@ -216,6 +216,8 @@ pub fn removed_guids(conn: &Connection) -> Result<HashSet<String>> {
     let mut guids: HashSet<String> = crate::commands::project_removal::removed_frame_guids(conn)?
         .into_iter()
         .collect();
+    // Twins merged into the light they were, which a pull must not add back.
+    guids.extend(crate::renamed_lights::merged_guids(conn)?);
     if table_exists(conn, "psf_guard_removed_image") {
         let mut statement =
             conn.prepare("SELECT acquired_image_guid FROM psf_guard_removed_image")?;

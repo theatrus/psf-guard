@@ -57,6 +57,13 @@ describe('describeImportProgress', () => {
       'Imported 0 light frame(s) — nothing new, 4 already present, 2 calibration frame(s) unchanged.'
     );
   });
+
+  it('counts renamed files that kept their frames', () => {
+    const progress = complete(outcome({ dry_run: true, skipped_existing: 4, renamed: 2 }));
+    expect(describeImportProgress(progress)).toBe(
+      'Preview: would import 0 light frame(s) — nothing new, 4 already present, 2 renamed file(s) matched to existing frame(s).'
+    );
+  });
 });
 
 describe('importFinishedMessage', () => {

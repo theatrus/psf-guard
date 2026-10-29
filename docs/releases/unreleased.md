@@ -25,6 +25,15 @@
   others. Remote image uploads to a missing folder are refused, and the
   upload setting stays on.
 
+- A file renamed after it was imported keeps its frame. Before, an
+  automatic import added the renamed file as a second frame, and the first
+  frame showed **Catalog only**. The frame keeps its grade and history and
+  uses the new name. To clean up frames imported twice by earlier versions,
+  open the database in **Settings** and click **Merge renamed lights**. PSF
+  Guard copies the database first. A catalog that syncs from Target
+  Scheduler, or that rigs sync their lights into, keeps the old behavior.
+  See [Renamed files](../IMPORTING.md#renamed-files).
+
 - A multi-session stack keeps lights that adopt different external masters in
   separate calibration sessions, even when they match the same raw frames.
   Calibration matching, grading, flat grouping and master building now run on

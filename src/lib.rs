@@ -32,6 +32,7 @@ pub mod preview_format;
 pub mod processing_setups;
 pub mod psf_fitting;
 pub mod remote_work;
+pub mod renamed_lights;
 pub mod satellites;
 pub mod sequence_analysis;
 pub mod server;

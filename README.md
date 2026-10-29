@@ -1074,6 +1074,7 @@ psf-guard -d database.sqlite show-images <IDS>
 psf-guard -d database.sqlite update-grade <ID> rejected
 psf-guard regrade database.sqlite [--dry-run]        # statistical re-grading
 psf-guard -d database.sqlite fill-guids [--dry-run]  # GUIDs Target Scheduler's upgrade skipped
+psf-guard merge-renamed-lights --db <slug> [--apply]  # lights imported twice after a rename
 ```
 
 Batch commands also support statistical outlier detection

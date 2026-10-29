@@ -52,6 +52,7 @@ import {
 import { starMetadataFillEnabled } from '../hooks/useStarMetadataFill';
 import { PurgeRejectsButton } from './RejectRemovalControls';
 import MissingGuidRepair from './MissingGuidRepair';
+import RenamedLightsRepair from './RenamedLightsRepair';
 import DatabaseImportSettings from './DatabaseImportSettings';
 import ScanRulesEditor from './ScanRulesEditor';
 import RemotePeerSync from './RemotePeerSync';
@@ -1803,6 +1804,7 @@ export default function TauriSettings({
               importDbId === confirmImport.id && (
                 <div className="modal-buttons import-confirm-buttons">
                   {importProgress.outcome.imported +
+                    (importProgress.outcome.renamed ?? 0) +
                     importProgress.outcome.calibration.imported +
                     importProgress.outcome.calibration.updated >
                   0 ? (
@@ -1832,6 +1834,7 @@ export default function TauriSettings({
                       >
                         Import{' '}
                         {importProgress.outcome.imported +
+                          (importProgress.outcome.renamed ?? 0) +
                           importProgress.outcome.calibration.imported +
                           importProgress.outcome.calibration.updated}{' '}
                         frame(s)
@@ -2111,6 +2114,7 @@ export default function TauriSettings({
                         onOpen={onClose}
                       />
                       <MissingGuidRepair dbId={entry.id} dbName={entry.name} canManage={canEdit} />
+                      <RenamedLightsRepair dbId={entry.id} dbName={entry.name} canManage={canEdit} />
                     </div>
                   </div>
                   {isEditing && <div id={editorId}>{renderDatabaseForm(entry)}</div>}
