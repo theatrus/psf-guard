@@ -103,7 +103,25 @@ pub async fn start_import_route(
             }
             dirs
         }
-        _ => ctx.image_dirs.clone(),
+        // The database's own folders: a missing one is skipped, as the
+        // automatic import skips it. One named in the request is not.
+        _ => {
+            let (dirs, missing) = ctx.split_image_dirs();
+            if dirs.is_empty() && !missing.is_empty() {
+                return Err(AppError::BadRequest(format!(
+                    "image directory does not exist: {}",
+                    missing.join(", ")
+                )));
+            }
+            if !missing.is_empty() {
+                tracing::warn!(
+                    db = %ctx.id,
+                    "Import skips missing image directories: {}",
+                    missing.join(", ")
+                );
+            }
+            dirs
+        }
     };
     if dirs.is_empty() {
         return Err(AppError::BadRequest(

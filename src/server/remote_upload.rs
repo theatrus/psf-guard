@@ -69,8 +69,12 @@ pub async fn upload_image(
         .ok_or_else(|| {
             AppError::Forbidden("remote image upload is disabled for this database".into())
         })?;
+    // Enabled, but its folder could not be used when the database opened.
     let upload_dir = ctx.remote_image_upload_dir.clone().ok_or_else(|| {
-        AppError::Forbidden("remote image upload is disabled for this database".into())
+        AppError::Forbidden(format!(
+            "the remote image upload folder {} is not available on this server",
+            config.image_dir
+        ))
     })?;
 
     require_database_identity(&headers, &ctx.id)?;
