@@ -602,6 +602,8 @@ pub fn main() -> Result<()> {
                 // A person ran this import; it creates what matches nothing.
                 new_targets: crate::commands::import::NewTargets::Create,
                 admit_removed_names: false,
+                // The folders named here may not be all of the catalog's.
+                find_files: None,
             };
             let mut outcome = import_frames(&mut conn, frames, &options)?;
             outcome.scan_rules = collected.skipped;
@@ -836,6 +838,116 @@ pub fn main() -> Result<()> {
                     .map(|at| at.format("%Y-%m-%d").to_string())
                     .unwrap_or_default()
             );
+        }
+
+        Commands::MergeRenamedLights {
+            db,
+            apply,
+            cache_dir,
+            registry,
+        } => {
+            use crate::renamed_lights::{self, FileFinder, HeldPair, RenamedPair};
+            let (registry_path, entry) = removal_entry(registry, &db)?;
+            if let Some(reason) = renamed_lights::synced_lights(
+                entry.ts_sync.as_ref(),
+                entry.remote_image_upload.as_ref(),
+            ) {
+                anyhow::bail!(
+                    "renamed lights are not merged in {db}: {reason}, and the next sync would \
+                     put the old file names back"
+                );
+            }
+            let missing: Vec<&String> = entry
+                .image_dirs
+                .iter()
+                .filter(|dir| !std::path::Path::new(dir).is_dir())
+                .collect();
+            if let Some(dir) = missing.first() {
+                anyhow::bail!(
+                    "image folder {dir} is missing; a light whose file is there would look \
+                     renamed. Connect it, or remove it from the database, first."
+                );
+            }
+            let protected = reported_image_guids(&registry_path)?;
+            let roots: Vec<std::path::PathBuf> = entry
+                .image_dirs
+                .iter()
+                .map(std::path::PathBuf::from)
+                .collect();
+            let refs: Vec<&std::path::Path> = roots.iter().map(|root| root.as_path()).collect();
+            let tree = crate::directory_tree::DirectoryTree::build_multiple(&refs)
+                .context("indexing image directories")?;
+            let finder = FileFinder::in_folders(Some(std::sync::Arc::new(tree)), roots, None);
+            let show = |pairs: &[RenamedPair], held: &[HeldPair], verb: &str| {
+                for pair in pairs {
+                    println!(
+                        "{verb} #{} {} <- #{} {}{}",
+                        pair.kept.id,
+                        pair.kept.file_name,
+                        pair.twin.id,
+                        pair.twin.file_name,
+                        if pair.takes_grade {
+                            " (takes its grade)"
+                        } else {
+                            ""
+                        }
+                    );
+                }
+                for held in held {
+                    println!(
+                        "KEEP  #{} {} and #{} {}: {}",
+                        held.kept.id,
+                        held.kept.file_name,
+                        held.twin.id,
+                        held.twin.file_name,
+                        held.reason
+                    );
+                }
+            };
+            let path = std::path::Path::new(&entry.db_path);
+            if !apply {
+                let conn = crate::ts_guids::open_existing(path, false)?;
+                let report = renamed_lights::plan(&conn, &finder, &protected)?;
+                show(&report.pairs, &report.held, "MERGE");
+                println!(
+                    "\n{} pair(s) to merge, {} left alone.",
+                    report.pairs.len(),
+                    report.held.len()
+                );
+                if !report.pairs.is_empty() {
+                    println!("Preview only; run again with --apply to merge them.");
+                }
+                return Ok(());
+            }
+            let repaired = renamed_lights::repair_database(path, &finder, &protected)?;
+            show(&repaired.outcome.merged, &repaired.outcome.held, "MERGED");
+            let removed: Vec<crate::commands::reject_removal::RemovedFrame> = repaired
+                .outcome
+                .merged
+                .iter()
+                .map(|pair| crate::commands::reject_removal::RemovedFrame {
+                    image_id: pair.twin.id,
+                    guid: pair.twin.guid.clone(),
+                    project_id: pair.twin.project_id,
+                    target_id: pair.twin.target_id,
+                })
+                .collect();
+            let caches = std::path::Path::new(&cache_dir).join(&entry.id);
+            let forgotten = crate::commands::reject_removal::forget_image_caches(&caches, &removed);
+            if forgotten > 0 {
+                println!(
+                    "Deleted {forgotten} cache file(s) under {}.",
+                    caches.display()
+                );
+            }
+            match &repaired.backup {
+                Some(backup) => println!(
+                    "Merged {} pair(s). The database was copied first to {}.",
+                    repaired.outcome.merged.len(),
+                    backup.display()
+                ),
+                None => println!("Nothing to merge; nothing was changed."),
+            }
         }
 
         Commands::RestoreRemoved {

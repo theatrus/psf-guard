@@ -542,7 +542,11 @@ fn remove_run(
 
 /// What the server holds about frames that left or came back: their cache
 /// files and pixel evidence, the file lookups, and the navigation counts.
-fn after_change(context: &DatabaseContext, conn: &rusqlite::Connection, frames: &[RemovedFrame]) {
+pub(crate) fn after_change(
+    context: &DatabaseContext,
+    conn: &rusqlite::Connection,
+    frames: &[RemovedFrame],
+) {
     if frames.is_empty() {
         return;
     }

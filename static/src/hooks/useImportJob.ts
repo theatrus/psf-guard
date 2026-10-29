@@ -65,6 +65,8 @@ export function describeImportProgress(
       const o = progress.outcome;
       if (!o) return 'Import complete.';
       const skipped = o.skipped_existing > 0 ? `, ${o.skipped_existing} already present` : '';
+      const renamed =
+        (o.renamed ?? 0) > 0 ? `, ${o.renamed} renamed file(s) matched to existing frame(s)` : '';
       const attached = o.attached > 0 ? `${o.attached} to existing target(s)` : '';
       const fresh =
         o.projects_created > 0
@@ -86,7 +88,7 @@ export function describeImportProgress(
         ? o.skipped_existing > 0
           ? `${o.skipped_existing} light frame(s) already present`
           : ''
-        : `${o.imported} light frame(s) — ${detail}${skipped}`;
+        : `${o.imported} light frame(s) — ${detail}${skipped}${renamed}`;
       const summary = (calibrationOnly ? [calibrationPart, lightPart] : [lightPart, calibrationPart])
         .filter(Boolean)
         .join(', ');

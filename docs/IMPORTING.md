@@ -285,6 +285,8 @@ it was, and stopping it while it writes rolls its one transaction back.
 The matching rules prevent common duplicates and splits:
 
 - a basename already stored in the database is skipped;
+- a renamed file keeps the frame its old name made, when that frame's file
+  is gone (see [Renamed files](#renamed-files));
 - an `OBJECT` name match attaches to the existing target;
 - otherwise, coordinates within 0.5 degrees attach to the existing target,
   unless the database's scan rules turn **Match targets by position** off; and
@@ -507,6 +509,36 @@ than the file it comes from.
 Files of the same name that hold different captures are not guessed at. When
 the frame's catalog row cannot tell them apart, the image shows an error
 that gives the file name, and you can remove or rename the extra file.
+
+### Renamed files
+
+PSF Guard knows a light by its file name. If you rename a file after it was
+imported, for example to give a session a new name, the old name no longer
+exists. An import of all the database's image folders, such as an automatic
+import, then matches the renamed file to its frame instead of adding it
+again. The frame keeps its grade, quality data and history, and uses the
+new file name. The file must be the same exposure: the same capture time,
+exposure, filter and target. A file is matched only when exactly one frame
+fits and that frame's file is not found in any image folder. A copy of a
+file that is still there imports as a frame of its own, as before. An
+import of only some folders, and the command line's `import`, do not match
+renamed files. Neither does a catalog that syncs from Target Scheduler, or
+that rigs sync their lights into: the next sync would put the old file name
+back. In such a catalog, keep the file names N.I.N.A. wrote.
+
+Earlier versions imported a renamed file as a second frame, and the first
+frame showed **Catalog only**. **Settings** lists such pairs under the
+database, with **Merge renamed lights**. A merge first copies the
+database beside itself. Each first frame then uses the renamed file and
+keeps its grade, or takes the second frame's grade when it had none. The
+second frame is removed, and a sync does not bring it back. A pair stays as
+it is when the two frames have different grades, when the second frame is
+in a collaboration report or the reject archive, or when calibrated copies
+or a remote upload are recorded against it. The check waits while an image
+folder is missing, since a frame whose file is there would look renamed.
+Close N.I.N.A. on that rig before merging. To merge from the command line,
+run `psf-guard merge-renamed-lights --db <slug>` to see the pairs, then
+again with `--apply`.
 
 ## Organize projects and targets
 

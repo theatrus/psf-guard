@@ -511,6 +511,10 @@ pub(super) const READABLE_ROUTES: &[(&str, &str)] = &[
         "Calibrated-copy pairing settings",
     ),
     ("/db/{db}/guids", "Rows missing GUIDs"),
+    (
+        "/db/{db}/renamed-lights",
+        "Lights catalogued twice under a renamed file",
+    ),
     ("/director/v1/status", "Whether Planning is on"),
     ("/director/v1/plans", "Plans across rigs"),
     ("/director/v1/projects", "Planning projects"),
