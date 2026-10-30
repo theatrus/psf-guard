@@ -1172,6 +1172,49 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
   expect(readoutBox.x).toBeCloseTo(canvasBox!.x + canvasBox!.width * 0.4 + 14, 0);
   expect(readoutBox.y).toBeCloseTo(canvasBox!.y + canvasBox!.height * 0.45 + 14, 0);
 
+  // The stack's Sky context solves the stack's own pixels, pointed by the
+  // solved frame carried onto its grid, and draws its sky as a frame's.
+  const skyContext = inspector.getByTestId('astrometry-panel');
+  await skyContext.getByRole('button', { name: /Solve field/ }).click();
+  await expect(skyContext).toContainText('Hinted solve', { timeout: 90_000 });
+  await expect(skyContext.getByText('M 44')).toBeVisible();
+  await skyContext.getByRole('button', { name: /Show sky overlay/ }).click();
+  const stackSky = inspector.getByTestId('stack-inspector-astrometry-overlay');
+  await expect(stackSky).toBeVisible();
+  await expect(stackSky.getByText('M 44')).toBeVisible();
+  await skyContext.getByRole('button', { name: /Sky overlay on/ }).click();
+  await expect(stackSky).toHaveCount(0);
+
+  // S marks the stack's stars and P shows its PSF view, as on a frame.
+  await page.keyboard.press('s');
+  await expect(fullSizeImage).toHaveAttribute('src', /\/fits\/annotated\?/);
+  await page.waitForFunction(
+    (element) => element instanceof HTMLImageElement && element.complete && element.naturalWidth > 0
+      && element.src.includes('/fits/annotated'),
+    await fullSizeImage.elementHandle(),
+    { timeout: 90_000 }
+  );
+  await page.keyboard.press('p');
+  const psfView = inspector.getByTestId('stack-inspector-psf');
+  await page.waitForFunction(
+    (element) => element instanceof HTMLImageElement && element.complete && element.naturalWidth > 0,
+    await psfView.elementHandle(),
+    { timeout: 90_000 }
+  );
+  // P took the stars' place, so turning it off shows the stack again.
+  await page.keyboard.press('p');
+  await expect(psfView).toHaveCount(0);
+  await expect(fullSizeImage).not.toHaveAttribute('src', /\/fits\/annotated/);
+  // Back to the view the artifact search below starts from.
+  await inspector.getByRole('button', { name: 'Fit', exact: true }).click();
+  await inspector.getByRole('button', { name: '100%' }).click();
+  await panFromCentre();
+  await expect
+    .poll(() => fullSizeImage.evaluate((image) => image.style.transform))
+    .toBe(transformAfterPan);
+  await page.mouse.move(canvasBox!.x + canvasBox!.width * 0.4, canvasBox!.y + canvasBox!.height * 0.45);
+  await expect(readout.getByTestId('pointer-readout-sky')).toHaveText(/^RA 08h\d\dm.* Dec \+\d\d°/);
+
   if (process.env.PSF_GUARD_CAPTURE_DOCS === '1') {
     const docs = path.resolve(process.cwd(), '..', 'docs');
     fs.mkdirSync(path.join(docs, 'images'), { recursive: true });
@@ -1184,6 +1227,7 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
       const box = (await canvas.boundingBox())!;
       await page.mouse.move(box.x + box.width * 0.4, box.y + box.height * 0.45);
       await expect(readout.getByTestId('pointer-readout-value')).toHaveText(/^-?\d/, { timeout: 15_000 });
+      await inspector.locator('.detail-info').evaluate((sidebar) => sidebar.scrollTo(0, 0));
       await inspector.screenshot({ path: path.join(docs, file), animations: 'disabled' });
     }
     // Back to the view the artifact search below starts from.

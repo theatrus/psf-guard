@@ -1203,6 +1203,15 @@ mod tests {
             "/db/test/images/12/astrometry",
             true,
         ));
+        // A stack's own solve is a frame's: display data for a reader who
+        // may compute.
+        for path in [
+            "/db/test/stack-previews/0123/0/fits/astrometry",
+            "/db/test/stack-previews/color/0123/fits/astrometry",
+        ] {
+            assert!(requires_write(&Method::POST, path, false));
+            assert!(!requires_write(&Method::POST, path, true));
+        }
         assert!(requires_write(
             &Method::PUT,
             "/db/test/images/12/grade",

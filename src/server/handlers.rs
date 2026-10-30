@@ -32,11 +32,11 @@ use image_routes::image_file_identity_cache_token;
 pub(crate) use image_routes::{
     annotated_cache_key, artifact_cache_path, generating_response, preview_cache_key,
     rendered_artifact_mapping_revision, resolve_copy, resolve_image_meta, serve_cached_png,
-    with_copy, ResolvedCopy,
+    source_file_cache_token, with_copy, ResolvedCopy,
 };
 use image_routes::{
-    apply_grades, psf_multi_cache_key, resolve_copy_async, source_file_cache_token,
-    star_detection_cache_key, tracked_cache_matches_source, write_cache_atomic,
+    apply_grades, psf_multi_cache_key, resolve_copy_async, star_detection_cache_key,
+    tracked_cache_matches_source, write_cache_atomic,
 };
 pub use image_routes::{batch_update_image_grades, get_image, get_images, update_image_grade};
 use import_routes::{fill_missing_star_metadata, sanitize_file_stem, unique_db_file};
@@ -608,7 +608,7 @@ pub async fn predict_image_satellites(
     Ok(Json(ApiResponse::success(prediction)))
 }
 
-async fn resolve_astrometry_input(
+pub(crate) async fn resolve_astrometry_input(
     ctx: &Arc<DatabaseContext>,
     image_id: i32,
 ) -> Result<(PathBuf, Option<(f64, f64)>), AppError> {

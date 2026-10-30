@@ -509,6 +509,19 @@ pub fn api_router(state: Arc<AppState>) -> Router {
             get(stack_preview::read_stack_preview_window),
         )
         .route(
+            "/stack-previews/{job_id}/{group_index}/fits/astrometry",
+            get(stack_preview::stack_image::get_mono_astrometry)
+                .post(stack_preview::stack_image::solve_mono_astrometry),
+        )
+        .route(
+            "/stack-previews/{job_id}/{group_index}/fits/annotated",
+            get(stack_preview::stack_image::mono_star_marks),
+        )
+        .route(
+            "/stack-previews/{job_id}/{group_index}/fits/psf",
+            get(stack_preview::stack_image::mono_psf),
+        )
+        .route(
             "/stack-previews/{job_id}/{group_index}/solution",
             get(stack_preview::get_stack_preview_solution),
         )
@@ -567,6 +580,19 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route(
             "/stack-previews/color/{job_id}/fits/window",
             get(stack_preview::color::read_stack_color_window),
+        )
+        .route(
+            "/stack-previews/color/{job_id}/fits/astrometry",
+            get(stack_preview::stack_image::get_colour_astrometry)
+                .post(stack_preview::stack_image::solve_colour_astrometry),
+        )
+        .route(
+            "/stack-previews/color/{job_id}/fits/annotated",
+            get(stack_preview::stack_image::colour_star_marks),
+        )
+        .route(
+            "/stack-previews/color/{job_id}/fits/psf",
+            get(stack_preview::stack_image::colour_psf),
         )
         .route(
             "/stack-previews/color/{job_id}/solution",

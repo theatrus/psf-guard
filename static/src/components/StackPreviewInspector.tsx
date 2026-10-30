@@ -5,13 +5,18 @@ import type {
   TouchEvent as ReactTouchEvent,
   ReactNode,
 } from 'react';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useHotkeys } from 'react-hotkeys-hook';
 import type { OverlaySolution } from '@seiza/astro-overlay';
 import { apiClient } from '../api/client';
 import type { ArtifactSearchJob, ArtifactSearchResult, PreviewDescriptor, ReferenceRegion } from '../api/types';
 import { useImageZoom } from '../hooks/useImageZoom';
 import { useAsyncImage } from '../hooks/useAsyncImage';
+import { useDetailSection } from '../hooks/useDetailSections';
+import { setSkyOverlay, useSkyOverlay } from '../hooks/useSkyOverlay';
+import { useAccess } from '../auth/access';
+import AstrometryOverlay from './AstrometryOverlay';
+import AstrometryPanel from './AstrometryPanel';
 import DetailSection from './DetailSection';
 import ImageViewerFrame from './viewer/ImageViewerFrame';
 import PointerReadout from './viewer/PointerReadout';
@@ -42,6 +47,12 @@ export type StackArtifactSource =
       artifactRevision: string;
     };
 
+/** One FITS file an inspector offers to download. */
+export interface FitsDownload {
+  label: string;
+  href: string;
+}
+
 interface StackPreviewInspectorProps {
   className?: string;
   eyebrow: string;
@@ -49,9 +60,17 @@ interface StackPreviewInspectorProps {
   label: string;
   summary: string[];
   imageUrl: string | null;
+  /** The FITS behind the image on screen, which the value readout reads. */
   fitsUrl: string | null;
   imageAlt: string;
-  downloadLabel: string;
+  /** Every FITS of this image, as its card lists them. */
+  downloads: FitsDownload[];
+  /**
+   * The stack's linear FITS, which the image viewer's tools work on: plate
+   * solving and the sky overlay (O), star marks (S) and the PSF view (P).
+   * Absent for an image with no sky, such as a calibration master.
+   */
+  analysisFitsUrl?: string;
   artifactSource?: StackArtifactSource;
   artifactEnabled?: boolean;
   controls?: ReactNode;
@@ -106,7 +125,8 @@ export default function StackPreviewInspector({
   imageUrl,
   fitsUrl,
   imageAlt,
-  downloadLabel,
+  downloads,
+  analysisFitsUrl,
   artifactSource,
   artifactEnabled = false,
   controls,
@@ -125,7 +145,10 @@ export default function StackPreviewInspector({
   const loaded = image.state === 'ready';
   const error = image.state === 'error';
   const loadedIdentity = useRef<string | null>(null);
+  // The bitmap on screen, and the stack's own size, which star marks drawn
+  // smaller do not change.
   const [dimensions, setDimensions] = useState<{ width: number; height: number } | null>(null);
+  const [stackSize, setStackSize] = useState<{ width: number; height: number } | null>(null);
   const [selecting, setSelecting] = useState(false);
   const [dragStart, setDragStart] = useState<ImagePoint | null>(null);
   const [dragEnd, setDragEnd] = useState<ImagePoint | null>(null);
@@ -133,16 +156,67 @@ export default function StackPreviewInspector({
   const [regionError, setRegionError] = useState<string | null>(null);
   const [searchId, setSearchId] = useState<string | null>(null);
   const zoom = useImageZoom({ minScale: 0.05, maxScale: 10 });
+  const queryClient = useQueryClient();
+  const { canCompute } = useAccess();
+  const skySection = useDetailSection('sky');
+  // Stars and the PSF view replace the stack on screen, as they replace a
+  // frame in the image viewer; the sky overlay is drawn over neither.
+  const [showStars, setShowStars] = useState(false);
+  const [showPsf, setShowPsf] = useState(false);
+  const [starsLoaded, setStarsLoaded] = useState<string | null>(null);
+  const astrometry = useQuery({
+    queryKey: ['stack-astrometry', analysisFitsUrl],
+    queryFn: () => apiClient.getStackAstrometry(analysisFitsUrl!),
+    enabled: !!analysisFitsUrl,
+    retry: false,
+  });
+  const solveAstrometry = useMutation({
+    mutationFn: (url: string) => apiClient.solveStackAstrometry(url),
+    onSuccess: (analysis, url) => queryClient.setQueryData(['stack-astrometry', url], analysis),
+  });
+  const ownSolution = astrometry.data?.solution;
+  const skyOverlay = useSkyOverlay();
+  const showAstrometry = skyOverlay && !showStars && !showPsf;
+  const toggleSkyOverlay = () => {
+    setShowStars(false);
+    setShowPsf(false);
+    setSkyOverlay(!showAstrometry);
+  };
+  const solve = () => {
+    if (analysisFitsUrl && canCompute && !solveAstrometry.isPending) solveAstrometry.mutate(analysisFitsUrl);
+  };
+  const starsSrc = showStars && analysisFitsUrl ? apiClient.getStackStarMarksUrl(analysisFitsUrl) : null;
+  const psfSrc = showPsf && analysisFitsUrl
+    ? apiClient.getStackPsfUrl(analysisFitsUrl, { num_stars: 9, psf_type: 'moffat', sort_by: 'r2', selection: 'top-n' })
+    : null;
+  // The stack's own solve, once it has one; until then a solved frame's,
+  // carried onto the stack's grid.
+  const readoutSolution = ownSolution ?? solution;
   const readout = useViewerReadout({
     container: zoom.containerRef,
     view: zoom.zoomState,
-    bitmap: dimensions,
+    bitmap: showPsf ? null : dimensions,
     windowPath: fitsUrl ? apiClient.fitsWindowPath(fitsUrl) : null,
-    solution,
+    solution: readoutSolution,
   });
-  const skyUnavailable = solution === undefined
+  const skyUnavailable = readoutSolution === undefined
     ? 'This image has no sky position'
-    : solution?.wcs ? undefined : solutionUnavailable;
+    : readoutSolution?.wcs ? undefined : solutionUnavailable;
+  useHotkeys('s', () => {
+    if (!analysisFitsUrl) return;
+    setShowStars((current) => !current);
+    setShowPsf(false);
+  }, [analysisFitsUrl]);
+  useHotkeys('p', () => {
+    if (!analysisFitsUrl) return;
+    setShowPsf((current) => !current);
+    setShowStars(false);
+  }, [analysisFitsUrl]);
+  useHotkeys('o', () => {
+    if (!analysisFitsUrl) return;
+    if (ownSolution) toggleSkyOverlay();
+    else solve();
+  }, [analysisFitsUrl, ownSolution, showAstrometry, canCompute, solveAstrometry.isPending]);
   useHotkeys('escape', () => {
     if (selecting) {
       setSelecting(false);
@@ -160,12 +234,15 @@ export default function StackPreviewInspector({
 
   useEffect(() => {
     setDimensions(null);
+    setStackSize(null);
     setSelecting(false);
     setDragStart(null);
     setDragEnd(null);
     setRegion(null);
     setRegionError(null);
     setSearchId(null);
+    setShowStars(false);
+    setShowPsf(false);
   }, [imageUrl]);
 
   const startSearch = useMutation({
@@ -359,6 +436,21 @@ export default function StackPreviewInspector({
           {image.state === 'generating' ? 'Generating preview…' : loadingMessage}
         </div>
       )}
+      {starsSrc && starsLoaded !== starsSrc && (
+        <div className="stack-inspector-loading" role="status">
+          <span className="stack-preview-spinner" aria-hidden="true" />
+          Marking stars…
+        </div>
+      )}
+      {psfSrc && (
+        <img
+          className="stack-inspector-psf"
+          src={psfSrc}
+          alt={`PSF view of ${imageAlt}`}
+          data-testid="stack-inspector-psf"
+          draggable={false}
+        />
+      )}
       {error ? (
         <div className="stack-inspector-loading error" role="alert">
           {image.error || errorMessage}
@@ -366,7 +458,7 @@ export default function StackPreviewInspector({
       ) : imageUrl && (
         <img
           ref={zoom.imageRef}
-          src={image.src}
+          src={starsSrc ?? image.src}
           alt={imageAlt}
           data-testid="stack-inspector-image"
           draggable={false}
@@ -374,6 +466,8 @@ export default function StackPreviewInspector({
           onLoad={(event) => {
             const { naturalWidth: width, naturalHeight: height } = event.currentTarget;
             if (!width || !height) return;
+            if (starsSrc) setStarsLoaded(starsSrc);
+            else setStackSize({ width, height });
             setDimensions({ width, height });
             zoom.setImageDimensions(width, height, true);
             const identity = imageIdentity ?? imageUrl;
@@ -382,10 +476,24 @@ export default function StackPreviewInspector({
             image.onLoad();
           }}
           style={{
-            visibility: loaded ? 'visible' : 'hidden',
+            visibility: loaded && !psfSrc && (!starsSrc || starsLoaded === starsSrc) ? 'visible' : 'hidden',
             transform: `translate(${zoom.zoomState.offsetX}px, ${zoom.zoomState.offsetY}px) scale(${zoom.zoomState.scale})`,
             transformOrigin: '0 0',
             cursor: selecting || readout.active ? 'crosshair' : (zoom.hasOverflow ? 'grab' : 'default'),
+          }}
+        />
+      )}
+      {showAstrometry && ownSolution && dimensions && !psfSrc && (
+        <AstrometryOverlay
+          solution={ownSolution}
+          density={0.2}
+          className="detail-astrometry-overlay"
+          data-testid="stack-inspector-astrometry-overlay"
+          style={{
+            width: `${dimensions.width}px`,
+            height: `${dimensions.height}px`,
+            transform: `translate(${zoom.zoomState.offsetX}px, ${zoom.zoomState.offsetY}px) scale(${zoom.zoomState.scale})`,
+            transformOrigin: '0 0',
           }}
         />
       )}
@@ -421,12 +529,36 @@ export default function StackPreviewInspector({
       <DetailSection title={eyebrow} open className="stack-inspector-details">
         <div className="stack-inspector-summary">
           {summary.map((item) => <span key={item}>{item}</span>)}
-          {dimensions && <span>{dimensions.width} × {dimensions.height}</span>}
+          {stackSize && <span>{stackSize.width} × {stackSize.height}</span>}
         </div>
-        {fitsUrl && <a className="stack-preview-download" href={fitsUrl} download>{downloadLabel}</a>}
+        {downloads.length > 0 && (
+          <ul className="stack-inspector-downloads">
+            {downloads.map((download) => (
+              <li key={download.href}>
+                <a className="stack-preview-download" href={download.href} download>{download.label}</a>
+              </li>
+            ))}
+          </ul>
+        )}
       </DetailSection>
 
       {controls}
+
+      {analysisFitsUrl && (
+        <AstrometryPanel
+          analysis={astrometry.data}
+          isLoading={astrometry.isLoading}
+          error={astrometry.error instanceof Error ? astrometry.error.message : undefined}
+          solveError={solveAstrometry.error instanceof Error ? solveAstrometry.error.message : undefined}
+          isSolving={solveAstrometry.isPending}
+          canSolve={canCompute}
+          open={skySection.open}
+          onToggleOpen={skySection.toggle}
+          overlayVisible={showAstrometry && !!ownSolution}
+          onToggleOverlay={toggleSkyOverlay}
+          onSolve={solve}
+        />
+      )}
 
       {artifactSource && (
         <DetailSection title="Source artifacts" open className="stack-artifact-section">
@@ -434,7 +566,7 @@ export default function StackPreviewInspector({
             <button
               className="stack-artifact-select"
               type="button"
-              disabled={!loaded || !artifactEnabled || startSearch.isPending}
+              disabled={!loaded || !artifactEnabled || startSearch.isPending || showStars || showPsf}
               aria-pressed={selecting}
               onClick={() => {
                 setSelecting((current) => !current);
@@ -462,7 +594,9 @@ export default function StackPreviewInspector({
           </div>
           <div className="stack-inspector-hint">
             {!selecting
-              ? 'Choose Find source artifact, then drag a box over the artifact to rank the frames that put it there.'
+              ? showStars || showPsf
+                ? 'Turn off star marks and the PSF view to search for an artifact.'
+                : 'Choose Find source artifact, then drag a box over the artifact to rank the frames that put it there.'
               : displayedRegion && isArtifactRegionCapped(displayedRegion)
                 ? `${MAX_ARTIFACT_REGION_EDGE}px is as wide as the search looks — drag from another corner to move the box`
                 : `Drag a box over the artifact, up to ${MAX_ARTIFACT_REGION_EDGE}px a side`}
@@ -562,6 +696,11 @@ export default function StackPreviewInspector({
         <span>Drag Pan</span>
         <span>F Fit</span>
         <span>1 Actual size</span>
+        {analysisFitsUrl && <>
+          <span>S Stars {showStars ? '✓' : ''}</span>
+          <span>P PSF {showPsf ? '✓' : ''}</span>
+          <span>O Sky {showAstrometry && ownSolution ? '✓' : ''}</span>
+        </>}
         <span>Esc Close</span>
       </ViewerShortcuts>
 

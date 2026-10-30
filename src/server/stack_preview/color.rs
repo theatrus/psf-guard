@@ -6384,7 +6384,7 @@ pub(super) fn color_original_preview_path(stack_root: &FsPath, job_id: &str) -> 
     color_dir(stack_root, job_id).join("preview-original.png")
 }
 
-fn color_fits_path(stack_root: &FsPath, job_id: &str) -> PathBuf {
+pub(super) fn color_fits_path(stack_root: &FsPath, job_id: &str) -> PathBuf {
     color_dir(stack_root, job_id).join("color.fits")
 }
 

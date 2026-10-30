@@ -18,8 +18,15 @@
 
 - The stack inspector opens in the image viewer's layout: it fills the
   browser or app window, with the stack beside a sidebar that holds its
-  details, its FITS download, the artifact search, the shortcuts and the zoom
-  controls. The calibration master inspector is the same.
+  details, every FITS its card offers, its **Sky context**, the artifact
+  search, the shortcuts and the zoom controls. The calibration master
+  inspector is the same. Both viewers' sidebars are narrower, so the image has
+  more of the window.
+
+- A stack takes the image viewer's tools. **Sky context** plate-solves the
+  stack's own pixels, starting from its frames, and draws the objects in the
+  field over it. **S** marks its stars with their HFR, and **P** shows its PSF
+  view.
 
 - The image viewer and the stack inspector can show the pixel under the
   pointer. Turn on **Value** or **RA/Dec**, or press **M** or **R**, to see

@@ -1650,14 +1650,16 @@
   pointer-events: none;
 }
 
+/* Both image viewers' sidebar: narrow, so the image keeps the window. */
 .detail-info {
-  width: 360px;
-  padding: 1.25rem;
+  width: 300px;
+  flex: none;
+  padding: 1rem;
   overflow-y: auto;
   background: var(--color-bg-surface);
 }
 
-/* Phone layout: the desktop row (image beside a 360px info panel) leaves the
+/* Phone layout: the desktop row (image beside a 300px info panel) leaves the
    image no width at all on a narrow screen. Stack instead: image pinned on
    top, info scrolling under it. The header wraps and the status banner drops
    its absolute centering so it cannot sit on the title. */
@@ -5337,9 +5339,27 @@
   font-size: 0.8rem;
 }
 
-.stack-inspector-details .stack-preview-download {
-  display: inline-block;
-  margin-top: 0.7rem;
+.stack-inspector-downloads {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0.7rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.stack-inspector-downloads .stack-preview-download {
+  overflow-wrap: anywhere;
+}
+
+/* The PSF view takes the stack's place, fitted and still, as in the image
+   viewer. */
+.zoom-container img.stack-inspector-psf {
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  object-fit: contain !important;
+  background: var(--color-bg-primary);
 }
 
 .stack-inspector-loading {

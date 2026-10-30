@@ -892,6 +892,38 @@ pub(crate) fn colour_stack_solution(
     StackSolution::on_grid(width, height, wcs?)
 }
 
+/// The frame a colour stack's reference channel was registered on.
+pub(crate) fn colour_reference_image(
+    context: &DatabaseContext,
+    job: &super::stack_preview::color::StackColorJob,
+) -> Option<i32> {
+    use super::stack_preview::LatestStackPreviews;
+    use crate::server::storage::stacks;
+    let source = colour_reference_source(job)?;
+    super::stack_preview::read_latest_indices::<LatestStackPreviews>(&stacks(&context.stack_root))
+        .into_iter()
+        .flat_map(|index| index.groups.into_iter().map(|latest| latest.group))
+        .find(|group| group.target_id == job.target_id && group.filter_name == source.filter_name)?
+        .reference_image_id
+}
+
+/// The channel a colour stack's grid is: red for RGB, luminance for LRGB, H-alpha
+/// for narrowband, or the first channel when that one is missing.
+fn colour_reference_source(
+    job: &super::stack_preview::color::StackColorJob,
+) -> Option<&super::stack_preview::color::StackColorSource> {
+    use super::stack_preview::color::{StackColorKind, StackColorRole};
+    let reference_role = match job.kind {
+        StackColorKind::Rgb => StackColorRole::Red,
+        StackColorKind::Lrgb => StackColorRole::Luminance,
+        StackColorKind::Narrowband => StackColorRole::Ha,
+    };
+    job.sources
+        .iter()
+        .find(|source| source.role == reference_role)
+        .or_else(|| job.sources.first())
+}
+
 /// The output grid of a mono stack and, when a solution reaches it, a TAN
 /// solution on that grid.
 fn mono_grid(
@@ -910,17 +942,7 @@ fn colour_grid(
     mono: &[super::stack_preview::StackGroupStatus],
     solution_for: &mut impl FnMut(i32) -> Option<crate::astrometry::AstrometrySolutionResponse>,
 ) -> (usize, usize, Option<SkyTanWcs>) {
-    use super::stack_preview::color::{StackColorKind, StackColorRole};
-    let reference_role = match job.kind {
-        StackColorKind::Rgb => StackColorRole::Red,
-        StackColorKind::Lrgb => StackColorRole::Luminance,
-        StackColorKind::Narrowband => StackColorRole::Ha,
-    };
-    let reference = job
-        .sources
-        .iter()
-        .find(|source| source.role == reference_role)
-        .or_else(|| job.sources.first());
+    let reference = colour_reference_source(job);
     let orientation = reference
         .and_then(|source| source.sky_orientation.as_ref())
         .filter(|orientation| orientation.is_current());

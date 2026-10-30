@@ -507,6 +507,16 @@ pub struct PointingResult {
     pub target_edge_margin_px: Option<f64>,
 }
 
+/// Where to look, and at what pixel scale, when solving pixels whose FITS
+/// says neither, as a stack's does not.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PixelSolveHint {
+    pub center: (f64, f64),
+    pub scale_arcsec_per_pixel: f64,
+    /// Where the hint came from, reported as the analysis's hint source.
+    pub source: &'static str,
+}
+
 /// Stable top-level per-image response. Header-only analysis fills catalog,
 /// embedded-WCS, and pointing fields; later solving phases keep the envelope.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1169,7 +1179,7 @@ impl AstrometryContext {
         path: &Path,
         expected_target: Option<(f64, f64)>,
     ) -> Result<AstrometryAnalysis, String> {
-        self.solve_image_with_policy(image_id, path, expected_target, false)
+        self.solve_image_with_policy(image_id, path, expected_target, false, None)
     }
 
     /// Run a fresh pixel solve even when the FITS file carries embedded WCS.
@@ -1181,7 +1191,21 @@ impl AstrometryContext {
         path: &Path,
         expected_target: Option<(f64, f64)>,
     ) -> Result<AstrometryAnalysis, String> {
-        self.solve_image_with_policy(image_id, path, expected_target, true)
+        self.solve_image_with_policy(image_id, path, expected_target, true, None)
+    }
+
+    /// Solve a stack's own pixels, as [`Self::solve_image_for_quality`] does a
+    /// frame's: a WCS the stack kept from its reference frame may not fit the
+    /// stack's grid. A stack's FITS keeps no pointing or pixel scale of its
+    /// own, so `hint` brings them from its frames.
+    pub fn solve_stack(
+        &self,
+        image_id: i32,
+        path: &Path,
+        expected_target: Option<(f64, f64)>,
+        hint: Option<PixelSolveHint>,
+    ) -> Result<AstrometryAnalysis, String> {
+        self.solve_image_with_policy(image_id, path, expected_target, true, hint)
     }
 
     fn solve_image_with_policy(
@@ -1190,6 +1214,7 @@ impl AstrometryContext {
         path: &Path,
         expected_target: Option<(f64, f64)>,
         force_pixels: bool,
+        given_hint: Option<PixelSolveHint>,
     ) -> Result<AstrometryAnalysis, String> {
         let started = Instant::now();
         let mut analysis = self.analyze_image(image_id, path, expected_target)?;
@@ -1204,15 +1229,27 @@ impl AstrometryContext {
 
         let headers = crate::astrometry_headers::FitsAstrometryHeaders::from_path(path)
             .map_err(|error| format!("failed to read FITS astrometry headers: {error}"))?;
+        if let Some(given) = given_hint {
+            analysis.hint_source = Some(AstrometryCoordinateSource {
+                ra_deg: given.center.0,
+                dec_deg: given.center.1,
+                source: given.source.to_string(),
+                header_keywords: Vec::new(),
+            });
+        }
         let hint = analysis
             .hint_source
             .as_ref()
             .or(analysis.expected_source.as_ref())
             .map(|source| (source.ra_deg, source.dec_deg));
-        let scale = headers
-            .pixel_scale_arcsec_per_pixel
-            .as_ref()
-            .map(|value| value.value);
+        let scale = given_hint
+            .map(|given| given.scale_arcsec_per_pixel)
+            .or_else(|| {
+                headers
+                    .pixel_scale_arcsec_per_pixel
+                    .as_ref()
+                    .map(|value| value.value)
+            });
         let stars_catalog = match self.load_star_catalog() {
             Ok(loaded) => loaded,
             Err(error) => {

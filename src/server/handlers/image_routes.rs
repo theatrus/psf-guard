@@ -424,7 +424,7 @@ pub(super) async fn image_copies_on_disk(
     .map_err(|error| AppError::InternalError(format!("copy lookup failed: {error}")))?
 }
 
-pub(super) fn source_file_cache_token(path: &FsPath) -> Option<String> {
+pub(crate) fn source_file_cache_token(path: &FsPath) -> Option<String> {
     let metadata = std::fs::metadata(path).ok()?;
     let mut hasher = Sha256::new();
     hasher.update(

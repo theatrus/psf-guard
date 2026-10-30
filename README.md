@@ -457,8 +457,8 @@ shows the pixel's position, its linear value from the file, with one value for e
 color of an RGB image, and its right ascension and declination from the plate
 solution. The image viewer and the stack inspector share these settings. PSF
 Guard reads only the pixels near the pointer from the file, so a large stack
-does not have to load. RA/Dec needs a plate solution: solve the frame in
-**Sky context**, or, for a stack, solve one of its frames.
+does not have to load. RA/Dec needs a plate solution: solve the frame, or the
+stack, in **Sky context**. A stack also takes a solved frame's position.
 
 ![A frame's linear value and RA/Dec under the pointer in the image viewer](docs/images/image-detail-readout-desktop.png)
 

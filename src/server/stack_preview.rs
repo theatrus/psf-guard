@@ -34,6 +34,7 @@ pub(crate) mod remote_channel;
 mod render;
 mod resume;
 pub mod snr;
+pub mod stack_image;
 pub mod stretch;
 pub mod wbpp_stacks;
 

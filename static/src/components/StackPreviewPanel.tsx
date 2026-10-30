@@ -21,7 +21,7 @@ import type {
   StackScoringSettings,
   StackStretchPreview,
 } from '../api/types';
-import StackPreviewInspector from './StackPreviewInspector';
+import StackPreviewInspector, { type FitsDownload } from './StackPreviewInspector';
 import { stackSolutionNote } from './viewer/useViewerReadout';
 import CalibrationMasterButton from './CalibrationMasterInspector';
 import StackSnrCurve from './StackSnrCurve';
@@ -318,6 +318,24 @@ function readCollapsed(): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Every FITS a mono stack's card offers: the linear stack, and the result and
+ * stars of the processing applied to it.
+ */
+function monoStackDownloads(linear: string, applied: StackStretchPreview | undefined): FitsDownload[] {
+  const downloads: FitsDownload[] = [{ label: 'Download linear FITS', href: linear }];
+  if (applied?.fits_url) {
+    const result = applied.rc_astro
+      ? applied.rc_astro.has_stars ? 'starless' : 'processed'
+      : 'deconvolved';
+    downloads.push({ label: `Download ${result} linear FITS`, href: applied.fits_url });
+  }
+  if (applied?.stars_fits_url) {
+    downloads.push({ label: 'Download stars linear FITS', href: applied.stars_fits_url });
+  }
+  return downloads;
 }
 
 export default function StackPreviewPanel({
@@ -1664,9 +1682,16 @@ export default function StackPreviewPanel({
               inspector.artifactRevision
             )}
           imageAlt={`Full-resolution stack for ${inspector.group.target_name} ${channelLabel(inspector.group.filter_name, inspector.group.exposure_group)}`}
-          downloadLabel={stretches[artifactStretchKey(inspector)]?.fits_url
-            ? 'Download deconvolved linear FITS'
-            : 'Download linear FITS'}
+          downloads={monoStackDownloads(
+            apiClient.getStackFitsUrl(dbId, inspector.jobId, inspector.group.index, inspector.artifactRevision),
+            stretches[artifactStretchKey(inspector)]
+          )}
+          analysisFitsUrl={apiClient.getStackFitsUrl(
+            dbId,
+            inspector.jobId,
+            inspector.group.index,
+            inspector.artifactRevision
+          )}
           artifactSource={{
             kind: 'mono',
             dbId,

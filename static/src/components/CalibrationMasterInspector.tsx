@@ -129,7 +129,7 @@ export function CalibrationMasterInspector({ dbId, source, title, label, initial
       imageIdentity={master ? `${dbId}:${source.kind === 'library' ? 'library' : source.artifactRevision}:${master.id}` : undefined}
       fitsUrl={master?.available ? master.fits_url : null}
       imageAlt={`${masterLabel} master for ${title}`}
-      downloadLabel="Download master FITS"
+      downloads={master?.available && master.fits_url ? [{ label: 'Download master FITS', href: master.fits_url }] : []}
       closeLabel="Close calibration master inspector"
       loadingMessage="Loading calibration master..."
       errorMessage="The calibration master preview could not be loaded."

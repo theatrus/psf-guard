@@ -48,7 +48,7 @@ function renderInspector(props: Partial<Parameters<typeof StackPreviewInspector>
         imageUrl="/stack.png"
         fitsUrl="/api/db/db-test/stack-previews/job/0/fits?v=rev"
         imageAlt="Stack preview"
-        downloadLabel="Download FITS"
+        downloads={[{ label: 'Download FITS', href: '/stack.fits' }]}
         solution={solution}
         onClose={() => undefined}
         {...props}
