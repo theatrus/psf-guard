@@ -177,7 +177,7 @@ toml_edit = "0.25"
 # move to it. seiza-core is pinned too, so seiza 0.47.0 sees one copy of its
 # types.
 [patch.crates-io]
-seiza-fits = { git = "https://github.com/theatrus/seiza", rev = "de566a132e83472f281884794da4e064af1ed272" }
-seiza-xisf = { git = "https://github.com/theatrus/seiza", rev = "de566a132e83472f281884794da4e064af1ed272" }
-seiza-image-io = { git = "https://github.com/theatrus/seiza", rev = "de566a132e83472f281884794da4e064af1ed272" }
-seiza-core = { git = "https://github.com/theatrus/seiza", rev = "de566a132e83472f281884794da4e064af1ed272" }
+seiza-fits = { git = "https://github.com/theatrus/seiza", rev = "772bc9d4aea7f3cbd33957b6878c21591b1887d0" }
+seiza-xisf = { git = "https://github.com/theatrus/seiza", rev = "772bc9d4aea7f3cbd33957b6878c21591b1887d0" }
+seiza-image-io = { git = "https://github.com/theatrus/seiza", rev = "772bc9d4aea7f3cbd33957b6878c21591b1887d0" }
+seiza-core = { git = "https://github.com/theatrus/seiza", rev = "772bc9d4aea7f3cbd33957b6878c21591b1887d0" }
