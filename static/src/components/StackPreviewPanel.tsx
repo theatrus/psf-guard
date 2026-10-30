@@ -21,7 +21,8 @@ import type {
   StackScoringSettings,
   StackStretchPreview,
 } from '../api/types';
-import StackPreviewInspector from './StackPreviewInspector';
+import StackPreviewInspector, { type FitsDownload } from './StackPreviewInspector';
+import { stackSolutionNote } from './viewer/useViewerReadout';
 import CalibrationMasterButton from './CalibrationMasterInspector';
 import StackSnrCurve from './StackSnrCurve';
 import ScoringChangedNote from './ScoringChangedNote';
@@ -319,6 +320,24 @@ function readCollapsed(): boolean {
   }
 }
 
+/**
+ * Every FITS a mono stack's card offers: the linear stack, and the result and
+ * stars of the processing applied to it.
+ */
+function monoStackDownloads(linear: string, applied: StackStretchPreview | undefined): FitsDownload[] {
+  const downloads: FitsDownload[] = [{ label: 'Download linear FITS', href: linear }];
+  if (applied?.fits_url) {
+    const result = applied.rc_astro
+      ? applied.rc_astro.has_stars ? 'starless' : 'processed'
+      : 'deconvolved';
+    downloads.push({ label: `Download ${result} linear FITS`, href: applied.fits_url });
+  }
+  if (applied?.stars_fits_url) {
+    downloads.push({ label: 'Download stars linear FITS', href: applied.stars_fits_url });
+  }
+  return downloads;
+}
+
 export default function StackPreviewPanel({
   dbId,
   projectId,
@@ -409,6 +428,14 @@ export default function StackPreviewPanel({
   // The Build button each build being prepared came from, by build.
   const preparingOperations = useRef(new Map<string, string>());
   const [inspector, setInspector] = useState<StackArtifact | null>(null);
+  // The stack's plate solution, for the inspector's RA/Dec and sky overlay.
+  const inspectorSolution = useQuery({
+    queryKey: ['db', dbId, 'stack-solution', inspector?.jobId, inspector?.group.index, inspector?.artifactRevision],
+    queryFn: () => apiClient.getStackSolution(dbId, inspector!.jobId, inspector!.group.index, inspector!.artifactRevision),
+    enabled: inspector !== null,
+    retry: false,
+    staleTime: 60_000,
+  });
   // Which channels currently show the stars image instead of the starless
   // one, keyed like `stretches`. Only meaningful while star removal is
   // applied to that channel.
@@ -1655,9 +1682,16 @@ export default function StackPreviewPanel({
               inspector.artifactRevision
             )}
           imageAlt={`Full-resolution stack for ${inspector.group.target_name} ${channelLabel(inspector.group.filter_name, inspector.group.exposure_group)}`}
-          downloadLabel={stretches[artifactStretchKey(inspector)]?.fits_url
-            ? 'Download deconvolved linear FITS'
-            : 'Download linear FITS'}
+          downloads={monoStackDownloads(
+            apiClient.getStackFitsUrl(dbId, inspector.jobId, inspector.group.index, inspector.artifactRevision),
+            stretches[artifactStretchKey(inspector)]
+          )}
+          analysisFitsUrl={apiClient.getStackFitsUrl(
+            dbId,
+            inspector.jobId,
+            inspector.group.index,
+            inspector.artifactRevision
+          )}
           artifactSource={{
             kind: 'mono',
             dbId,
@@ -1667,6 +1701,8 @@ export default function StackPreviewPanel({
           }}
           artifactEnabled={canCompute}
           onOpenImage={onOpenImage}
+          solution={inspectorSolution.data ?? null}
+          solutionUnavailable={stackSolutionNote(inspectorSolution)}
           onClose={() => setInspector(null)}
         />
       )}

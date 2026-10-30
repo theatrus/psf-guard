@@ -16,7 +16,8 @@ import type {
   StackColorTargetAvailability,
   StackNarrowbandPalette,
 } from '../api/types';
-import StackPreviewInspector from './StackPreviewInspector';
+import StackPreviewInspector, { type FitsDownload } from './StackPreviewInspector';
+import { stackSolutionNote } from './viewer/useViewerReadout';
 import CalibrationMasterButton from './CalibrationMasterInspector';
 import StackColorProcessingControls from './StackColorProcessingControls';
 import StackContinuumResults from './StackContinuumResults';
@@ -113,6 +114,52 @@ const paletteLabels: Record<StackNarrowbandPalette, string> = {
 const roleLabels: Record<string, string> = {
   luminance: 'L', red: 'R', green: 'G', blue: 'B', ha: 'Hα', oiii: 'OIII', sii: 'SII',
 };
+
+/**
+ * Every FITS a colour stack's card offers, as it labels them: the colour
+ * stack, each channel's linear stack, and what its processing made.
+ */
+function colorStackDownloads(dbId: string, job: StackColorJob): FitsDownload[] {
+  const downloads: FitsDownload[] = [{
+    label: job.label === 'RGB' ? 'Download RGB FITS' : `Download ${job.label} RGB FITS`,
+    href: apiClient.getStackColorFitsUrl(dbId, job.job_id, job.artifact_revision),
+  }];
+  for (const source of job.sources) {
+    downloads.push({
+      label: `Download ${roleLabels[source.role]} channel linear FITS`,
+      href: apiClient.getStackFitsUrl(dbId, source.job_id, source.group_index, source.artifact_revision),
+    });
+  }
+  for (const [role, result] of Object.entries(job.resolved_input_rc_astro ?? {})) {
+    if (!result) continue;
+    const label = `${roleLabels[role]} input`;
+    downloads.push({ label: `Download ${label} ${result.has_stars ? 'starless FITS' : 'processed FITS'}`, href: result.fits_url });
+    if (result.stars_fits_url) downloads.push({ label: `Download ${label} stars FITS`, href: result.stars_fits_url });
+  }
+  if (job.resolved_color_rc_astro) {
+    downloads.push({ label: 'Download processed color channels FITS', href: job.resolved_color_rc_astro.fits_url });
+  }
+  for (const [label, separation] of [
+    ['Narrowband nebula', job.narrowband_resolution?.nebula_star_separation],
+    ['RGB', job.narrowband_resolution?.rgb_star_separation],
+  ] as const) {
+    if (!separation) continue;
+    downloads.push({ label: `Download linear ${label} starless FITS`, href: separation.fits_url });
+    if (separation.stars_fits_url) downloads.push({ label: `Download linear ${label} stars FITS`, href: separation.stars_fits_url });
+  }
+  for (const line of job.continuum ?? []) {
+    if (line.flux_fits_url) {
+      downloads.push({
+        label: `Download calibrated ${roleLabels[line.role]} line flux FITS (${line.flux_unit})`,
+        href: line.flux_fits_url,
+      });
+    }
+    if (line.residual_fits_url) {
+      downloads.push({ label: `Download signed ${roleLabels[line.role]} residual FITS`, href: line.residual_fits_url });
+    }
+  }
+  return downloads;
+}
 
 function catalogQueryKey(dbId: string, projectId: number, sourceRevision: string) {
   return [...colorCatalogQueryPrefix(dbId, projectId), sourceRevision] as const;
@@ -566,6 +613,14 @@ export default function StackColorPreviewPanel({
   const [savedByCard, setSavedByCard] = useState<Record<string, string>>({});
   const [pendingCardKeys, setPendingCardKeys] = useState<ReadonlySet<string>>(new Set());
   const [inspector, setInspector] = useState<StackColorJob | null>(null);
+  // The stack's plate solution, for the inspector's RA/Dec and sky overlay.
+  const inspectorSolution = useQuery({
+    queryKey: ['db', dbId, 'stack-solution', inspector?.job_id, inspector?.artifact_revision],
+    queryFn: () => apiClient.getStackColorSolution(dbId, inspector!.job_id, inspector!.artifact_revision),
+    enabled: inspector !== null,
+    retry: false,
+    staleTime: 60_000,
+  });
 
   const catalog = useQuery({
     queryKey: catalogQueryKey(dbId, projectId, sourceRevision),
@@ -1167,9 +1222,10 @@ export default function StackColorPreviewPanel({
             dbId, inspector.job_id, inspector.artifact_revision
           )}
           imageAlt={`Full-resolution ${inspector.label} color preview for ${inspector.target_name}`}
-          downloadLabel={inspector.label === 'RGB'
-            ? 'Download RGB FITS'
-            : `Download ${inspector.label} RGB FITS`}
+          downloads={colorStackDownloads(dbId, inspector)}
+          analysisFitsUrl={apiClient.getStackColorFitsUrl(
+            dbId, inspector.job_id, inspector.artifact_revision
+          )}
           artifactSource={{
             kind: 'color',
             dbId,
@@ -1178,6 +1234,8 @@ export default function StackColorPreviewPanel({
           }}
           artifactEnabled={canCompute}
           onOpenImage={onOpenImage}
+          solution={inspectorSolution.data ?? null}
+          solutionUnavailable={stackSolutionNote(inspectorSolution)}
           onClose={() => setInspector(null)}
         />
       )}

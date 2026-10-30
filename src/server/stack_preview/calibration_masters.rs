@@ -830,6 +830,23 @@ pub async fn download_fits(
     serve_file(&path, "application/fits", Some(&master.label)).await
 }
 
+/// GET …/calibration-masters/{master}/fits/window: a rectangle of the master
+/// file that route downloads, for the inspector's pointer readout.
+pub async fn read_window(
+    State(state): State<Arc<AppState>>,
+    ctx: DbContext,
+    Path(path): Path<MasterPath>,
+    Query(query): Query<MasterQuery>,
+    Query(window): Query<crate::server::pixel_window::WindowQuery>,
+) -> Result<Json<ApiResponse<crate::server::pixel_window::PixelWindowResponse>>, AppError> {
+    let source = path.source(query.revision);
+    let id = path.master_id.ok_or(AppError::NotFound)?;
+    let (_, path) = tokio::task::spawn_blocking(move || resolve_master(&state, &ctx, &source, &id))
+        .await
+        .map_err(|_| AppError::InternalError("Master lookup failed".into()))??;
+    crate::server::pixel_window::read(path, window).await
+}
+
 pub(crate) async fn serve_file(
     path: &FsPath,
     content_type: &str,

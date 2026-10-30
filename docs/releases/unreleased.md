@@ -16,6 +16,29 @@
 
 ## Changes
 
+- The stack inspector opens in the image viewer's layout: it fills the
+  browser or app window, with the stack beside a sidebar that holds its
+  details, every FITS its card offers, its **Sky context**, the artifact
+  search, the shortcuts and the zoom controls. The calibration master
+  inspector is the same. Both viewers' sidebars are narrower, so the image has
+  more of the window.
+
+- A stack takes the image viewer's tools. **Sky context** plate-solves the
+  stack's own pixels, starting from its frames, and draws the objects in the
+  field over it. **S** marks its stars with their HFR, and **P** shows its PSF
+  view.
+
+- The image viewer and the stack inspector can show the pixel under the
+  pointer. Turn on **Value** or **RA/Dec**, or press **M** or **R**, to see
+  the pixel's position, its linear value from the file (one per channel of a
+  colour stack), and its right ascension and declination from the plate
+  solution, in a box that follows the pointer. PSF Guard reads only the pixels
+  near the pointer, so a large stack does not have to load.
+
+- In the desktop app on Windows and Linux, F11 puts the window into full
+  screen and back. On macOS, use **View → Enter Full Screen** or the window's
+  green button.
+
 - PSF Guard starts when one of a database's image folders is missing, for
   example after you move the folder or before its drive is mounted. Before,
   the server stopped with "Image directory not found" until the folder was

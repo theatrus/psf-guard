@@ -686,20 +686,10 @@ type Ranked<R> = HashMap<i32, Vec<(R, SkyPreview)>>;
 /// most integration first.
 pub(crate) fn stacks_for(context: &DatabaseContext) -> HashMap<i32, Vec<SkyPreview>> {
     use super::stack_preview::{
-        color::{LatestStackColorPreviews, StackColorKind, StackColorRole},
+        color::{LatestStackColorPreviews, StackColorKind},
         LatestStackPreviews, StackGroupState, StackGroupStatus, StackJobState,
     };
-    let mut solutions: HashMap<i32, Option<crate::astrometry::AstrometrySolutionResponse>> =
-        HashMap::new();
-    let mut solution_for = |image_id: i32| {
-        solutions
-            .entry(image_id)
-            .or_insert_with(|| {
-                crate::astrometry::persisted_pixel_analysis(&context.cache_dir_path, image_id)
-                    .and_then(|analysis| analysis.solution)
-            })
-            .clone()
-    };
+    let mut solution_for = solution_lookup(context);
 
     use crate::server::storage::{stack_folder, stack_kind, stacks};
     let stacks = stacks(&context.stack_root);
@@ -731,72 +721,7 @@ pub(crate) fn stacks_for(context: &DatabaseContext) -> HashMap<i32, Vec<SkyPrevi
             if colour.get(&slot).is_some_and(|(best, _)| *best >= rank) {
                 continue;
             }
-            let reference_role = match job.kind {
-                StackColorKind::Rgb => StackColorRole::Red,
-                StackColorKind::Lrgb => StackColorRole::Luminance,
-                StackColorKind::Narrowband => StackColorRole::Ha,
-            };
-            let reference = job
-                .sources
-                .iter()
-                .find(|source| source.role == reference_role)
-                .or_else(|| job.sources.first());
-            let orientation = reference
-                .and_then(|source| source.sky_orientation.as_ref())
-                .filter(|orientation| orientation.is_current());
-            // The colour grid is the reference channel's published grid. Any
-            // channel with a solved frame reaches it: frame → that channel's
-            // reference frame (its registration) → its published output (its
-            // orientation) → the colour grid (the channel registration).
-            let solution = reference
-                .into_iter()
-                .chain(
-                    job.sources
-                        .iter()
-                        .filter(|source| Some(*source) != reference),
-                )
-                .find_map(|source| {
-                    let group = mono.iter().find(|group| {
-                        group.target_id == job.target_id && group.filter_name == source.filter_name
-                    })?;
-                    let (solution, frame_to_group) =
-                        grid_solution(&group.frames, group.reference_image_id, &mut solution_for)?;
-                    let to_output = source
-                        .sky_orientation
-                        .as_ref()
-                        .filter(|orientation| orientation.is_current())
-                        .map_or(seiza_stacking::AffineTransform::IDENTITY, |orientation| {
-                            orientation.source_to_output
-                        });
-                    let to_colour = source
-                        .registration_transform
-                        .map_or(seiza_stacking::AffineTransform::IDENTITY, similarity_affine);
-                    Some((
-                        solution,
-                        compose(to_colour, compose(to_output, frame_to_group)),
-                    ))
-                });
-            let (grid_width, grid_height) = match (orientation, &solution) {
-                (Some(orientation), _) => (orientation.output_width, orientation.output_height),
-                (None, Some((solution, _))) => (
-                    solution.image_width as usize,
-                    solution.image_height as usize,
-                ),
-                (None, None) => (1, 1),
-            };
-            let (_, _, wcs) = preview_geometry(None, solution.as_ref());
-            let (width, height, wcs) = match &job.crop_report {
-                Some(crop) => (
-                    crop.width,
-                    crop.height,
-                    wcs.map(|wcs| SkyTanWcs {
-                        crpix1: wcs.crpix1 - crop.x as f64,
-                        crpix2: wcs.crpix2 - crop.y as f64,
-                        ..wcs
-                    }),
-                ),
-                None => (grid_width, grid_height, wcs),
-            };
+            let (width, height, wcs) = colour_grid(&job, &mono, &mut solution_for);
             colour.insert(
                 slot,
                 (
@@ -832,9 +757,7 @@ pub(crate) fn stacks_for(context: &DatabaseContext) -> HashMap<i32, Vec<SkyPrevi
         {
             continue;
         }
-        let solution = grid_solution(&group.frames, group.reference_image_id, &mut solution_for);
-        let (width, height, wcs) =
-            preview_geometry(group.sky_orientation.as_ref(), solution.as_ref());
+        let (width, height, wcs) = mono_grid(group, &mut solution_for);
         mono_best.insert(
             slot,
             (
@@ -881,6 +804,202 @@ pub(crate) fn stacks_for(context: &DatabaseContext) -> HashMap<i32, Vec<SkyPrevi
             (target, stacks)
         })
         .collect()
+}
+
+/// Each frame's persisted plate solution, read once per frame.
+fn solution_lookup(
+    context: &DatabaseContext,
+) -> impl FnMut(i32) -> Option<crate::astrometry::AstrometrySolutionResponse> + '_ {
+    let mut solutions: HashMap<i32, Option<crate::astrometry::AstrometrySolutionResponse>> =
+        HashMap::new();
+    move |image_id: i32| {
+        solutions
+            .entry(image_id)
+            .or_insert_with(|| {
+                crate::astrometry::persisted_pixel_analysis(&context.cache_dir_path, image_id)
+                    .and_then(|analysis| analysis.solution)
+            })
+            .clone()
+    }
+}
+
+/// A plate solution of a stack's output grid, in the shape the image viewers
+/// draw a frame's solution: its size, centre, scale and a TAN WCS whose
+/// CRPIX counts from 0.
+#[derive(Debug, Clone, Serialize)]
+pub struct StackSolution {
+    pub image_width: usize,
+    pub image_height: usize,
+    pub center_ra_deg: f64,
+    pub center_dec_deg: f64,
+    pub pixel_scale_arcsec_per_pixel: f64,
+    pub wcs: crate::astrometry::WcsResponse,
+}
+
+impl StackSolution {
+    fn on_grid(width: usize, height: usize, wcs: SkyTanWcs) -> Option<Self> {
+        if width <= 1 || height <= 1 {
+            return None;
+        }
+        let response = crate::astrometry::WcsResponse {
+            crval: [wcs.crval1, wcs.crval2],
+            crpix: [wcs.crpix1, wcs.crpix2],
+            cd: [[wcs.cd11, wcs.cd12], [wcs.cd21, wcs.cd22]],
+            ctype: ["RA---TAN".into(), "DEC--TAN".into()],
+            cunit: ["deg".into(), "deg".into()],
+            radesys: "ICRS".into(),
+            equinox: 2000.0,
+        };
+        let projection = crate::astrometry::wcs_from_response(&response);
+        let (center_ra_deg, center_dec_deg) =
+            projection.pixel_to_world((width as f64 - 1.0) / 2.0, (height as f64 - 1.0) / 2.0);
+        Some(Self {
+            image_width: width,
+            image_height: height,
+            center_ra_deg,
+            center_dec_deg,
+            pixel_scale_arcsec_per_pixel: projection.scale_arcsec_per_px(),
+            wcs: response,
+        })
+    }
+}
+
+/// The plate solution of a mono stack's output grid, from its reference
+/// frame's solution or any integrated frame's.
+pub(crate) fn mono_stack_solution(
+    context: &DatabaseContext,
+    group: &super::stack_preview::StackGroupStatus,
+) -> Option<StackSolution> {
+    let (width, height, wcs) = mono_grid(group, &mut solution_lookup(context));
+    StackSolution::on_grid(width, height, wcs?)
+}
+
+/// The plate solution of a colour stack's output grid, through any channel
+/// with a solved frame, as cropped.
+pub(crate) fn colour_stack_solution(
+    context: &DatabaseContext,
+    job: &super::stack_preview::color::StackColorJob,
+) -> Option<StackSolution> {
+    use super::stack_preview::LatestStackPreviews;
+    use crate::server::storage::stacks;
+    let mono: Vec<_> = super::stack_preview::read_latest_indices::<LatestStackPreviews>(&stacks(
+        &context.stack_root,
+    ))
+    .into_iter()
+    .flat_map(|index| index.groups.into_iter().map(|latest| latest.group))
+    .collect();
+    let (width, height, wcs) = colour_grid(job, &mono, &mut solution_lookup(context));
+    StackSolution::on_grid(width, height, wcs?)
+}
+
+/// The frame a colour stack's reference channel was registered on.
+pub(crate) fn colour_reference_image(
+    context: &DatabaseContext,
+    job: &super::stack_preview::color::StackColorJob,
+) -> Option<i32> {
+    use super::stack_preview::LatestStackPreviews;
+    use crate::server::storage::stacks;
+    let source = colour_reference_source(job)?;
+    super::stack_preview::read_latest_indices::<LatestStackPreviews>(&stacks(&context.stack_root))
+        .into_iter()
+        .flat_map(|index| index.groups.into_iter().map(|latest| latest.group))
+        .find(|group| group.target_id == job.target_id && group.filter_name == source.filter_name)?
+        .reference_image_id
+}
+
+/// The channel a colour stack's grid is: red for RGB, luminance for LRGB, H-alpha
+/// for narrowband, or the first channel when that one is missing.
+fn colour_reference_source(
+    job: &super::stack_preview::color::StackColorJob,
+) -> Option<&super::stack_preview::color::StackColorSource> {
+    use super::stack_preview::color::{StackColorKind, StackColorRole};
+    let reference_role = match job.kind {
+        StackColorKind::Rgb => StackColorRole::Red,
+        StackColorKind::Lrgb => StackColorRole::Luminance,
+        StackColorKind::Narrowband => StackColorRole::Ha,
+    };
+    job.sources
+        .iter()
+        .find(|source| source.role == reference_role)
+        .or_else(|| job.sources.first())
+}
+
+/// The output grid of a mono stack and, when a solution reaches it, a TAN
+/// solution on that grid.
+fn mono_grid(
+    group: &super::stack_preview::StackGroupStatus,
+    solution_for: &mut impl FnMut(i32) -> Option<crate::astrometry::AstrometrySolutionResponse>,
+) -> (usize, usize, Option<SkyTanWcs>) {
+    let solution = grid_solution(&group.frames, group.reference_image_id, solution_for);
+    preview_geometry(group.sky_orientation.as_ref(), solution.as_ref())
+}
+
+/// The output grid of a colour stack and, when a solution reaches it, a TAN
+/// solution on that grid, as cropped. Any channel with a solved frame
+/// reaches it; see the steps below.
+fn colour_grid(
+    job: &super::stack_preview::color::StackColorJob,
+    mono: &[super::stack_preview::StackGroupStatus],
+    solution_for: &mut impl FnMut(i32) -> Option<crate::astrometry::AstrometrySolutionResponse>,
+) -> (usize, usize, Option<SkyTanWcs>) {
+    let reference = colour_reference_source(job);
+    let orientation = reference
+        .and_then(|source| source.sky_orientation.as_ref())
+        .filter(|orientation| orientation.is_current());
+    // The colour grid is the reference channel's published grid. Any
+    // channel with a solved frame reaches it: frame → that channel's
+    // reference frame (its registration) → its published output (its
+    // orientation) → the colour grid (the channel registration).
+    let solution = reference
+        .into_iter()
+        .chain(
+            job.sources
+                .iter()
+                .filter(|source| Some(*source) != reference),
+        )
+        .find_map(|source| {
+            let group = mono.iter().find(|group| {
+                group.target_id == job.target_id && group.filter_name == source.filter_name
+            })?;
+            let (solution, frame_to_group) =
+                grid_solution(&group.frames, group.reference_image_id, &mut *solution_for)?;
+            let to_output = source
+                .sky_orientation
+                .as_ref()
+                .filter(|orientation| orientation.is_current())
+                .map_or(seiza_stacking::AffineTransform::IDENTITY, |orientation| {
+                    orientation.source_to_output
+                });
+            let to_colour = source
+                .registration_transform
+                .map_or(seiza_stacking::AffineTransform::IDENTITY, similarity_affine);
+            Some((
+                solution,
+                compose(to_colour, compose(to_output, frame_to_group)),
+            ))
+        });
+    let (grid_width, grid_height) = match (orientation, &solution) {
+        (Some(orientation), _) => (orientation.output_width, orientation.output_height),
+        (None, Some((solution, _))) => (
+            solution.image_width as usize,
+            solution.image_height as usize,
+        ),
+        (None, None) => (1, 1),
+    };
+    let (_, _, wcs) = preview_geometry(None, solution.as_ref());
+    let (width, height, wcs) = match &job.crop_report {
+        Some(crop) => (
+            crop.width,
+            crop.height,
+            wcs.map(|wcs| SkyTanWcs {
+                crpix1: wcs.crpix1 - crop.x as f64,
+                crpix2: wcs.crpix2 - crop.y as f64,
+                ..wcs
+            }),
+        ),
+        None => (grid_width, grid_height, wcs),
+    };
+    (width, height, wcs)
 }
 
 /// A plate solution on a stack's reference grid: the reference frame's own
@@ -1136,6 +1255,31 @@ mod tests {
                 && (turned.cd21 + 1.0 / 3600.0).abs() < 1e-12,
             "{turned:?}"
         );
+    }
+
+    #[test]
+    fn a_stack_solution_reports_its_grid_centre_and_scale() {
+        // North up at 2"/px with the reference pixel in the middle of a
+        // 101x51 grid: the centre is the reference point.
+        let wcs = SkyTanWcs {
+            crpix1: 50.0,
+            crpix2: 25.0,
+            crval1: 83.8,
+            crval2: -5.4,
+            cd11: -2.0 / 3600.0,
+            cd12: 0.0,
+            cd21: 0.0,
+            cd22: 2.0 / 3600.0,
+        };
+        let solution = StackSolution::on_grid(101, 51, wcs).expect("a solution on the grid");
+        assert_eq!((solution.image_width, solution.image_height), (101, 51));
+        assert!((solution.center_ra_deg - 83.8).abs() < 1e-9);
+        assert!((solution.center_dec_deg + 5.4).abs() < 1e-9);
+        assert!((solution.pixel_scale_arcsec_per_pixel - 2.0).abs() < 1e-6);
+        assert_eq!(solution.wcs.crpix, [50.0, 25.0]);
+        assert_eq!(solution.wcs.cd, [[-2.0 / 3600.0, 0.0], [0.0, 2.0 / 3600.0]]);
+        // The placeholder grid of a stack nothing reached has no solution.
+        assert!(StackSolution::on_grid(1, 1, wcs).is_none());
     }
 
     #[test]

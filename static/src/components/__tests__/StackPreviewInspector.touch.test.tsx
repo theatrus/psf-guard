@@ -18,7 +18,7 @@ describe('StackPreviewInspector touch selection', () => {
           imageUrl="/stack.png"
           fitsUrl="/stack.fits"
           imageAlt="Stack preview"
-          downloadLabel="Download FITS"
+          downloads={[{ label: 'Download FITS', href: '/stack.fits' }]}
           artifactSource={{
             kind: 'mono',
             dbId: 'db-test',

@@ -1312,13 +1312,39 @@ PSF Guard quality score and disposition. Accepted frames also report matched
 stars, registration RMS, registration drift, overlap, and integrated-sample
 fraction; excluded or rejected frames retain their reason.
 
-Choose **Inspect full size** to open the native-resolution integration in PSF
-Guard's image inspector. It uses the same controls as individual images: scroll
-to zoom, drag to pan, **F** or **0** to fit, and **1** for one image pixel per
-screen pixel. The full-size stretched PNG is loaded only when the inspector is
+Choose **Inspect full size** to open the native-resolution integration in the
+same full-window viewer as individual images: the stack on the left, and a
+sidebar on the right. The sidebar holds the stack's details and every FITS its
+card offers, its **Sky context**, the artifact search, the shortcuts and the
+view controls. It uses the same controls as individual images: scroll to zoom,
+drag to pan, **F** or **0** to fit, and **1** for one image pixel per screen
+pixel. The full-size stretched PNG is loaded only when the inspector is
 opened, so the project grid continues to use the smaller screen preview.
 
-![The native-resolution stack in PSF Guard's pan and zoom inspector](stack-preview-inspection.png)
+The image viewer's tools work on the stack's linear FITS, as they work on a
+frame:
+
+- **Sky context** plate-solves the stack's own pixels. Choose **Solve field**,
+  or press **O**. The solve starts from a solved frame's position carried onto
+  the stack's grid, or from the reference frame's pointing and pixel scale. It
+  is kept for that stack until it is rebuilt. Once it is solved, the panel
+  lists the objects in the field, and **Show sky overlay** (**O**) draws them
+  over the stack.
+- **S** marks the stack's stars with their HFR, and **P** shows its PSF view.
+  Each takes the stack's place until it is turned off. While either is shown,
+  the artifact search is off.
+
+To measure the stack, turn on **Value** or **RA/Dec** under the zoom buttons,
+or press **M** or **R**, then point at the stack. A box beside the pointer
+shows the pixel's position and its linear value in the FITS on screen: the
+processed image after deconvolution or RC-Astro, and one value for each
+channel of a colour stack. RA/Dec comes from the stack's own solve once there
+is one, and until then from the plate solution of its reference frame, or of
+any integrated frame, carried onto the stack's grid. When neither the stack
+nor any integrated frame is solved, RA/Dec is disabled. The image viewer uses
+the same settings.
+
+![The native-resolution stack in the full-window viewer, with its linear value and RA/Dec beside the pointer](stack-preview-inspection.png)
 
 Choose **Download linear FITS** on the card or in the inspector to retrieve the
 full-resolution floating-point integration from the cache. The FITS is

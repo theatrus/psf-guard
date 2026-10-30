@@ -971,6 +971,23 @@ pub async fn download_master_fits(
     stack_masters::serve_file(&path, "application/fits", Some(&label)).await
 }
 
+/// GET …/calibrations/masters/{uuid}/fits/window: a rectangle of the master
+/// file that route downloads, for the inspector's pointer readout.
+pub async fn read_master_window(
+    ctx: DbContext,
+    Path((_db_id, master_uuid)): Path<(String, String)>,
+    Query(window): Query<crate::server::pixel_window::WindowQuery>,
+) -> Result<Json<ApiResponse<crate::server::pixel_window::PixelWindowResponse>>, AppError> {
+    let master = recorded_master(&ctx, &master_uuid)?;
+    let label = label_of(&master);
+    let ctx = Arc::clone(&ctx.0);
+    let path =
+        tokio::task::spawn_blocking(move || stack_masters::master_file(&ctx, master.kind, &label))
+            .await
+            .map_err(joined)??;
+    crate::server::pixel_window::read(path, window).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

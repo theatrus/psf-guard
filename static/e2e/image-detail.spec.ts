@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import * as path from 'path';
 import {
   fixtureImageDir,
   registerFixtureDb,
@@ -206,6 +207,38 @@ test('detail view loads the large preview and renders pixels', async ({
   }));
   expect(dims.natW).toBeGreaterThan(500);
   expect(dims.natH).toBeGreaterThan(500);
+});
+
+test('detail view reads the value and RA/Dec under the pointer', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`/#/detail/1?db=${encodeURIComponent(dbId)}&project=1`);
+  const img = page.locator('.zoom-container img.detail-main-image').first();
+  await page.waitForFunction(
+    (el) => el instanceof HTMLImageElement && el.complete && el.naturalWidth > 0,
+    await img.elementHandle(),
+    { timeout: 30_000 }
+  );
+
+  // This frame's embedded WCS gives RA/Dec without a solve.
+  const toggles = page.getByRole('group', { name: 'Pointer readout' });
+  await expect(toggles.getByRole('button', { name: 'RA/Dec' })).toBeEnabled({ timeout: 30_000 });
+  await page.keyboard.press('m');
+  await page.keyboard.press('r');
+  await expect(toggles.getByRole('button', { name: 'Value' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(toggles.getByRole('button', { name: 'RA/Dec' })).toHaveAttribute('aria-pressed', 'true');
+
+  const box = (await page.locator('.zoom-container').first().boundingBox())!;
+  await page.mouse.move(box.x + box.width * 0.45, box.y + box.height * 0.45);
+  const readout = page.getByTestId('pointer-readout');
+  await expect(readout.getByTestId('pointer-readout-value')).toHaveText(/^-?\d/, { timeout: 15_000 });
+  await expect(readout.getByTestId('pointer-readout-sky')).toHaveText(/^RA 08h\d\dm.* Dec \+\d\d°/);
+
+  if (process.env.PSF_GUARD_CAPTURE_DOCS === '1') {
+    await page.screenshot({
+      path: path.resolve(process.cwd(), '..', 'docs', 'images', 'image-detail-readout-desktop.png'),
+      animations: 'disabled',
+    });
+  }
 });
 
 test('detail panels fold and stay folded from image to image and across a reload', async ({ page }) => {

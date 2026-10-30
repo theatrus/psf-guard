@@ -836,6 +836,22 @@ pub(super) fn basename_headers_match(path: &FsPath, image: &crate::models::Acqui
 }
 
 #[axum::debug_handler(state = Arc<AppState>)]
+/// GET …/images/{id}/window: a rectangle of the frame's file, or of one of
+/// its copies, for the image reviewer's pointer readout.
+pub async fn get_image_window(
+    ctx: DbContext,
+    Path((_db_id, image_id)): Path<(String, i32)>,
+    Query(copy_query): Query<CopyQuery>,
+    Query(window): Query<crate::server::pixel_window::WindowQuery>,
+) -> Result<Json<ApiResponse<crate::server::pixel_window::PixelWindowResponse>>, AppError> {
+    let (image, file_only, target_name) = resolve_image_meta(&ctx, image_id)?;
+    let path = match resolve_copy_async(&ctx.0, &image, copy_query.copy.as_deref()).await? {
+        Some(copy) => copy.path,
+        None => find_fits_file_async(&ctx.0, &image, &target_name, &file_only).await?,
+    };
+    crate::server::pixel_window::read(path, window).await
+}
+
 pub async fn get_image_stars(
     ctx: DbContext,
     Path((_db_id, image_id)): Path<(String, i32)>,

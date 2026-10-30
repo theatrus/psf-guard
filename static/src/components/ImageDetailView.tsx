@@ -31,6 +31,11 @@ import { setSkyOverlay, useSkyOverlay } from '../hooks/useSkyOverlay';
 import { useDetailSection } from '../hooks/useDetailSections';
 import { useSidebarScrollAnchor } from '../hooks/useSidebarScrollAnchor';
 import { useAccess } from '../auth/access';
+import PointerReadout from './viewer/PointerReadout';
+import ImageViewerFrame from './viewer/ImageViewerFrame';
+import { ViewerShortcuts, ViewerZoomSection } from './viewer/ViewerControls';
+import { useViewerReadout } from './viewer/useViewerReadout';
+import { useViewerZoomHotkeys } from './viewer/useViewerZoomHotkeys';
 
 interface ImageDetailViewProps {
   dbId: string;
@@ -327,6 +332,23 @@ export default function ImageDetailView({
   });
 
 
+  // The pointer readout's value and RA/Dec, shared with the stack inspector.
+  // The PSF diagnostic is not the frame's pixels, and a registered copy is
+  // on another grid than the frame's plate solution.
+  const readout = useViewerReadout({
+    container: zoom.containerRef,
+    view: zoom.zoomState,
+    bitmap: showPsf ? null : displayedBitmapDimensions,
+    grid: image?.id === imageId ? headerDimensions(image.metadata) : null,
+    windowPath: apiClient.getImageWindowPath(dbId, imageId, copy),
+    solution: geometryMatches ? astrometry?.solution : null,
+  });
+  const skyUnavailable = !geometryMatches
+    ? 'A registered copy is on another pixel grid than the frame’s plate solution'
+    : astrometry?.solution?.wcs
+      ? undefined
+      : 'This frame has no plate solution yet; solve it in Sky context';
+
   // Keyboard shortcuts
   useHotkeys('escape', onClose, [onClose]);
   useHotkeys('k,right', () => {
@@ -385,11 +407,7 @@ export default function ImageDetailView({
     predictSatellites.isPending,
   ]);
   useHotkeys('z', () => setImageSize(s => s === 'screen' ? 'large' : 'screen'), []);
-  useHotkeys('plus,equal', () => zoom.zoomIn(), [zoom.zoomIn]);
-  useHotkeys('minus', () => zoom.zoomOut(), [zoom.zoomOut]);
-  useHotkeys('0', () => zoom.resetZoom(), [zoom.resetZoom]);
-  useHotkeys('1', () => zoom.zoomTo100(), [zoom.zoomTo100]);
-  useHotkeys('f', () => zoom.zoomToFit(), [zoom.zoomToFit]);
+  useViewerZoomHotkeys(zoom);
 
   // Load original dimensions from metadata if available
   useEffect(() => {
@@ -571,534 +589,236 @@ export default function ImageDetailView({
     ?? null;
 
   return (
-    <div className="image-detail-overlay" onClick={onClose}>
-      <div className="image-detail" onClick={e => e.stopPropagation()}>
-        <div className="detail-header">
-          <h2>{image.target_name} - {image.filter_name || 'No filter'}</h2>
-          <div className={`status-banner ${getStatusClass()}`}>
-            {image.grading_status === GradingStatus.Accepted && '✓ ACCEPTED'}
-            {image.grading_status === GradingStatus.Rejected && '✗ REJECTED'}
-            {image.grading_status === GradingStatus.Pending && '○ PENDING'}
-          </div>
-          <button className="close-button" onClick={onClose}>×</button>
+    <ImageViewerFrame
+      title={<>{image.target_name} - {image.filter_name || 'No filter'}</>}
+      banner={(
+        <div className={`status-banner ${getStatusClass()}`}>
+          {image.grading_status === GradingStatus.Accepted && '✓ ACCEPTED'}
+          {image.grading_status === GradingStatus.Rejected && '✗ REJECTED'}
+          {image.grading_status === GradingStatus.Pending && '○ PENDING'}
         </div>
+      )}
+      onClose={onClose}
+      imageRef={detailImageRef}
+      imageStyle={frameAspect ? { '--detail-frame-aspect': String(frameAspect) } as CSSProperties : undefined}
+      sidebarRef={setSidebar}
+      image={(
+        <div 
+          className={`image-container zoom-container ${hasOverflow ? 'has-overflow' : ''}`}
+          ref={zoom.containerRef}
+          onWheel={(event) => {
+            zoom.handleWheel(event);
+            readout.track(event);
+          }}
+          onMouseDown={zoom.handleMouseDown}
+          onMouseMove={(event) => {
+            zoom.handleMouseMove(event);
+            readout.track(event);
+          }}
+          onMouseUp={zoom.handleMouseUp}
+          onMouseLeave={(event) => {
+            zoom.handleMouseUp(event);
+            readout.leave();
+          }}
+          onTouchStart={zoom.handleTouchStart}
+          onTouchMove={zoom.handleTouchMove}
+          onTouchEnd={zoom.handleTouchEnd}
+          onTouchCancel={zoom.handleTouchEnd}
+          tabIndex={0}
+          onKeyDown={zoom.handleKeyDown}
+        >
+          {/* Loading overlay for star detection and PSF views */}
+          {(showStars && starDataLoading) || (showPsf && psfImageLoading) ? (
+            <div className="image-loading-overlay">
+              <div className="loading-content">
+                <div className="loading-spinner"></div>
+                <span className="loading-text">
+                  {showStars && starDataLoading ? 'Loading star detection...' : 'Loading PSF analysis...'}
+                </span>
+              </div>
+            </div>
+          ) : null}
+          {imageError || (!showPsf && asyncImg.state === 'error') ? (
+            <div className="detail-image-error" style={{
+              width: '100%',
+              height: '100%',
+              minHeight: '500px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderRadius: '8px'
+            }}>
+              <div style={{
+                textAlign: 'center',
+                color: 'var(--color-text-muted)'
+              }}>
+                <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ marginBottom: '16px' }}>
+                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                  <line x1="9" y1="9" x2="15" y2="15" />
+                  <line x1="15" y1="9" x2="9" y2="15" />
+                </svg>
+                <h3 style={{ margin: '0 0 8px 0', fontSize: '1.2rem', fontWeight: 'normal' }}>Image not available</h3>
+                <p style={{ margin: 0, fontSize: '0.9rem', color: 'var(--color-text-hint)' }}>{asyncImg.error ?? 'The requested image could not be found on the server'}</p>
+              </div>
+            </div>
+          ) : (
+            <>
+            {!showPsf && visibleMainSrc !== asyncImg.src && asyncImg.state !== 'error' && (
+              <img
+                className="detail-image-preload"
+                src={asyncImg.src}
+                alt=""
+                aria-hidden="true"
+                loading="eager"
+                onError={asyncImg.onError}
+                onLoad={(e) => {
+                  asyncImg.onLoad();
+                  reportBitmapLoaded(e.currentTarget);
+                  setVisibleMainImage({
+                    key: mainImageKey,
+                    src: asyncImg.src,
+                    baseSrc: nonPsfSrc,
+                    loadedSrc: asyncImg.src,
+                  });
+                }}
+                draggable={false}
+              />
+            )}
+            <img
+              ref={zoom.imageRef}
+              key={`${imageId}-${showStars ? 'stars' : showPsf ? 'psf' : 'normal'}`}
+              className={[
+                'detail-main-image',
+                hideMainImage ? 'detail-image-hidden' : null,
+              ].filter(Boolean).join(' ')}
+              src={
+                showPsf
+                  ? apiClient.getPsfUrl(dbId, imageId, {
+                      num_stars: 9,
+                      psf_type: 'moffat',
+                      sort_by: 'r2',
+                      selection: 'top-n',
+                      copy,
+                    })
+                  : visibleMainSrc
+              }
+              alt={`${image.target_name} - ${image.filter_name || 'No filter'}`}
+              style={{
+                transform: `translate(${zoom.zoomState.offsetX}px, ${zoom.zoomState.offsetY}px) scale(${zoom.zoomState.scale})`,
+                cursor: readout.active ? 'crosshair' : zoom.zoomState.scale > 1 ? 'grab' : 'default',
+                transformOrigin: '0 0',
+              }}
+              onError={
+                showPsf
+                  ? () => setImageError(true)
+                  : visibleMainSrc === asyncImg.src
+                    ? asyncImg.onError
+                    : undefined
+              }
+              onLoad={(e) => {
+                // The PSF diagnostic image never feeds the zoom
+                // calibration — its dimensions are unrelated to the
+                // preview/original bitmaps.
+                if (showPsf) {
+                  setPsfImageLoading(false);
+                  return;
+                }
 
-        <div className="detail-content">
-          <div
-            className="detail-image"
-            ref={detailImageRef}
-            style={frameAspect ? { '--detail-frame-aspect': String(frameAspect) } as CSSProperties : undefined}
-          >
-            <div 
-              className={`image-container zoom-container ${hasOverflow ? 'has-overflow' : ''}`}
-              ref={zoom.containerRef}
-              onWheel={zoom.handleWheel}
-              onMouseDown={zoom.handleMouseDown}
-              onMouseMove={zoom.handleMouseMove}
-              onMouseUp={zoom.handleMouseUp}
-              onMouseLeave={zoom.handleMouseUp}
-              onTouchStart={zoom.handleTouchStart}
-              onTouchMove={zoom.handleTouchMove}
-              onTouchEnd={zoom.handleTouchEnd}
-              onTouchCancel={zoom.handleTouchEnd}
-              tabIndex={0}
-              onKeyDown={zoom.handleKeyDown}
-            >
-              {/* Loading overlay for star detection and PSF views */}
-              {(showStars && starDataLoading) || (showPsf && psfImageLoading) ? (
-                <div className="image-loading-overlay">
-                  <div className="loading-content">
-                    <div className="loading-spinner"></div>
-                    <span className="loading-text">
-                      {showStars && starDataLoading ? 'Loading star detection...' : 'Loading PSF analysis...'}
-                    </span>
-                  </div>
-                </div>
-              ) : null}
-              {imageError || (!showPsf && asyncImg.state === 'error') ? (
-                <div className="detail-image-error" style={{
-                  width: '100%',
-                  height: '100%',
-                  minHeight: '500px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  borderRadius: '8px'
-                }}>
-                  <div style={{
-                    textAlign: 'center',
-                    color: 'var(--color-text-muted)'
-                  }}>
-                    <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ marginBottom: '16px' }}>
-                      <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                      <line x1="9" y1="9" x2="15" y2="15" />
-                      <line x1="15" y1="9" x2="9" y2="15" />
-                    </svg>
-                    <h3 style={{ margin: '0 0 8px 0', fontSize: '1.2rem', fontWeight: 'normal' }}>Image not available</h3>
-                    <p style={{ margin: 0, fontSize: '0.9rem', color: 'var(--color-text-hint)' }}>{asyncImg.error ?? 'The requested image could not be found on the server'}</p>
-                  </div>
-                </div>
-              ) : (
-                <>
-                {!showPsf && visibleMainSrc !== asyncImg.src && asyncImg.state !== 'error' && (
-                  <img
-                    className="detail-image-preload"
-                    src={asyncImg.src}
-                    alt=""
-                    aria-hidden="true"
-                    loading="eager"
-                    onError={asyncImg.onError}
-                    onLoad={(e) => {
-                      asyncImg.onLoad();
-                      reportBitmapLoaded(e.currentTarget);
-                      setVisibleMainImage({
-                        key: mainImageKey,
-                        src: asyncImg.src,
-                        baseSrc: nonPsfSrc,
-                        loadedSrc: asyncImg.src,
-                      });
-                    }}
-                    draggable={false}
-                  />
-                )}
-                <img
-                  ref={zoom.imageRef}
-                  key={`${imageId}-${showStars ? 'stars' : showPsf ? 'psf' : 'normal'}`}
-                  className={[
-                    'detail-main-image',
-                    hideMainImage ? 'detail-image-hidden' : null,
-                  ].filter(Boolean).join(' ')}
-                  src={
-                    showPsf
-                      ? apiClient.getPsfUrl(dbId, imageId, {
-                          num_stars: 9,
-                          psf_type: 'moffat',
-                          sort_by: 'r2',
-                          selection: 'top-n',
-                          copy,
-                        })
-                      : visibleMainSrc
-                  }
-                  alt={`${image.target_name} - ${image.filter_name || 'No filter'}`}
+                if (visibleMainSrc === asyncImg.src) {
+                  asyncImg.onLoad();
+                }
+                if (!visibleMainSrcIsCurrent) {
+                  return;
+                }
+
+                reportBitmapLoaded(e.currentTarget);
+                setVisibleMainImage((current) =>
+                  current.key === mainImageKey && current.src === visibleMainSrc
+                    ? { ...current, loadedSrc: visibleMainSrc }
+                    : current
+                );
+              }}
+              draggable={false}
+            />
+            {!showPsf &&
+              showAstrometry &&
+              geometryMatches &&
+              !hideMainImage &&
+              displayedBitmapDimensions &&
+              astrometry?.solution && (
+                <AstrometryOverlay
+                  solution={astrometry.solution}
+                  density={0.2}
+                  className="detail-astrometry-overlay"
+                  data-testid="astrometry-overlay"
                   style={{
+                    width: `${displayedBitmapDimensions.width}px`,
+                    height: `${displayedBitmapDimensions.height}px`,
                     transform: `translate(${zoom.zoomState.offsetX}px, ${zoom.zoomState.offsetY}px) scale(${zoom.zoomState.scale})`,
-                    cursor: zoom.zoomState.scale > 1 ? 'grab' : 'default',
                     transformOrigin: '0 0',
                   }}
-                  onError={
-                    showPsf
-                      ? () => setImageError(true)
-                      : visibleMainSrc === asyncImg.src
-                        ? asyncImg.onError
-                        : undefined
-                  }
-                  onLoad={(e) => {
-                    // The PSF diagnostic image never feeds the zoom
-                    // calibration — its dimensions are unrelated to the
-                    // preview/original bitmaps.
-                    if (showPsf) {
-                      setPsfImageLoading(false);
-                      return;
-                    }
-
-                    if (visibleMainSrc === asyncImg.src) {
-                      asyncImg.onLoad();
-                    }
-                    if (!visibleMainSrcIsCurrent) {
-                      return;
-                    }
-
-                    reportBitmapLoaded(e.currentTarget);
-                    setVisibleMainImage((current) =>
-                      current.key === mainImageKey && current.src === visibleMainSrc
-                        ? { ...current, loadedSrc: visibleMainSrc }
-                        : current
-                    );
-                  }}
-                  draggable={false}
                 />
-                {!showPsf &&
-                  showAstrometry &&
-                  geometryMatches &&
-                  !hideMainImage &&
-                  displayedBitmapDimensions &&
-                  astrometry?.solution && (
-                    <AstrometryOverlay
-                      solution={astrometry.solution}
-                      density={0.2}
-                      className="detail-astrometry-overlay"
-                      data-testid="astrometry-overlay"
-                      style={{
-                        width: `${displayedBitmapDimensions.width}px`,
-                        height: `${displayedBitmapDimensions.height}px`,
-                        transform: `translate(${zoom.zoomState.offsetX}px, ${zoom.zoomState.offsetY}px) scale(${zoom.zoomState.scale})`,
-                        transformOrigin: '0 0',
-                      }}
-                    />
-                  )}
-                {!showPsf &&
-                  showSatellites &&
-                  geometryMatches &&
-                  !hideMainImage &&
-                  displayedBitmapDimensions &&
-                  satelliteStatus?.analysis && (
-                    <SatelliteTrackOverlay
-                      analysis={satelliteStatus.analysis}
-                      imageWidth={satelliteStatus.analysis.image_width}
-                      imageHeight={satelliteStatus.analysis.image_height}
-                      className="detail-satellite-overlay"
-                      style={{
-                        width: `${displayedBitmapDimensions.width}px`,
-                        height: `${displayedBitmapDimensions.height}px`,
-                        transform: `translate(${zoom.zoomState.offsetX}px, ${zoom.zoomState.offsetY}px) scale(${zoom.zoomState.scale})`,
-                        transformOrigin: '0 0',
-                      }}
-                    />
-                  )}
-                {!showPsf &&
-                  showQualityRegions &&
-                  geometryMatches &&
-                  !hideMainImage &&
-                  displayedBitmapDimensions &&
-                  quality?.spatial_overlay && (
-                    <QualityRegionOverlay
-                      overlay={quality.spatial_overlay}
-                      className="detail-quality-region-overlay"
-                      style={{
-                        width: `${displayedBitmapDimensions.width}px`,
-                        height: `${displayedBitmapDimensions.height}px`,
-                        transform: `translate(${zoom.zoomState.offsetX}px, ${zoom.zoomState.offsetY}px) scale(${zoom.zoomState.scale})`,
-                        transformOrigin: '0 0',
-                      }}
-                    />
-                  )}
-                </>
               )}
-              {!showPsf &&
-                (asyncImg.state === 'generating' || asyncImg.state === 'loading') && (
-                  <div className="image-loading-overlay">
-                    <div className="loading-content">
-                      <div className="loading-spinner"></div>
-                      <span className="loading-text">
-                        {asyncImg.state === 'generating'
-                          ? 'Generating preview…'
-                          : 'Loading…'}
-                      </span>
-                    </div>
-                  </div>
-                )}
-            </div>
-          </div>
-
-          <div className="detail-info" ref={setSidebar}>
-            <DetailSection
-              title="Image Information"
-              summary={infoSummary}
-              open={infoSection.open}
-              onToggle={infoSection.toggle}
-              data-testid="image-info-panel"
-            >
-              {/* Date on its own row */}
-              <div className="date-row">
-                <span className="date-label">Date:</span>
-                <span className="date-value">{formatDate(image.acquired_date)}</span>
-              </div>
-              
-              {/* Camera on its own row */}
-              {image.metadata?.Camera !== undefined && (
-                <div className="date-row">
-                  <span className="date-label">Camera:</span>
-                  <span className="date-value">{image.metadata.Camera}</span>
+            {!showPsf &&
+              showSatellites &&
+              geometryMatches &&
+              !hideMainImage &&
+              displayedBitmapDimensions &&
+              satelliteStatus?.analysis && (
+                <SatelliteTrackOverlay
+                  analysis={satelliteStatus.analysis}
+                  imageWidth={satelliteStatus.analysis.image_width}
+                  imageHeight={satelliteStatus.analysis.image_height}
+                  className="detail-satellite-overlay"
+                  style={{
+                    width: `${displayedBitmapDimensions.width}px`,
+                    height: `${displayedBitmapDimensions.height}px`,
+                    transform: `translate(${zoom.zoomState.offsetX}px, ${zoom.zoomState.offsetY}px) scale(${zoom.zoomState.scale})`,
+                    transformOrigin: '0 0',
+                  }}
+                />
+              )}
+            {!showPsf &&
+              showQualityRegions &&
+              geometryMatches &&
+              !hideMainImage &&
+              displayedBitmapDimensions &&
+              quality?.spatial_overlay && (
+                <QualityRegionOverlay
+                  overlay={quality.spatial_overlay}
+                  className="detail-quality-region-overlay"
+                  style={{
+                    width: `${displayedBitmapDimensions.width}px`,
+                    height: `${displayedBitmapDimensions.height}px`,
+                    transform: `translate(${zoom.zoomState.offsetX}px, ${zoom.zoomState.offsetY}px) scale(${zoom.zoomState.scale})`,
+                    transformOrigin: '0 0',
+                  }}
+                />
+              )}
+            </>
+          )}
+          {!showPsf && !hideMainImage && (
+            <PointerReadout {...readout.readout} skyUnavailable={skyUnavailable} />
+          )}
+          {!showPsf &&
+            (asyncImg.state === 'generating' || asyncImg.state === 'loading') && (
+              <div className="image-loading-overlay">
+                <div className="loading-content">
+                  <div className="loading-spinner"></div>
+                  <span className="loading-text">
+                    {asyncImg.state === 'generating'
+                      ? 'Generating preview…'
+                      : 'Loading…'}
+                  </span>
                 </div>
-              )}
-              
-              {/* Two-column layout for other metadata */}
-              <dl>
-                {starData && (
-                  <>
-                    <dt>Stars:</dt>
-                    <dd>{starData.detected_stars}</dd>
-                    <dt>Avg HFR:</dt>
-                    <dd>{starData.average_hfr.toFixed(2)}</dd>
-                    <dt>Avg FWHM:</dt>
-                    <dd>{starData.average_fwhm.toFixed(2)}</dd>
-                  </>
-                )}
-                
-                {image.metadata?.Min !== undefined && (
-                  <>
-                    <dt>Min:</dt>
-                    <dd>{typeof image.metadata.Min === 'number' ? image.metadata.Min.toFixed(0) : image.metadata.Min}</dd>
-                  </>
-                )}
-                
-                {image.metadata?.Mean !== undefined && (
-                  <>
-                    <dt>Mean:</dt>
-                    <dd>{typeof image.metadata.Mean === 'number' ? image.metadata.Mean.toFixed(1) : image.metadata.Mean}</dd>
-                  </>
-                )}
-                
-                {image.metadata?.Median !== undefined && (
-                  <>
-                    <dt>Median:</dt>
-                    <dd>{typeof image.metadata.Median === 'number' ? image.metadata.Median.toFixed(1) : image.metadata.Median}</dd>
-                  </>
-                )}
-                
-                {image.metadata?.HFR !== undefined && (
-                  <>
-                    <dt>HFR:</dt>
-                    <dd>{typeof image.metadata.HFR === 'number' ? image.metadata.HFR.toFixed(2) : image.metadata.HFR}</dd>
-                  </>
-                )}
-                
-                {image.metadata?.DetectedStars !== undefined && (
-                  <>
-                    <dt>Det. Stars:</dt>
-                    <dd>{image.metadata.DetectedStars}</dd>
-                  </>
-                )}
-                
-                {image.metadata?.Exposure !== undefined && (
-                  <>
-                    <dt>Exposure:</dt>
-                    <dd>{image.metadata.Exposure}s</dd>
-                  </>
-                )}
-                
-                {image.metadata?.Temperature !== undefined && (
-                  <>
-                    <dt>Temp:</dt>
-                    <dd>{image.metadata.Temperature}°C</dd>
-                  </>
-                )}
-                
-                {image.metadata?.Gain !== undefined && (
-                  <>
-                    <dt>Gain:</dt>
-                    <dd>{image.metadata.Gain}</dd>
-                  </>
-                )}
-              </dl>
-
-              <ImageFileLocation
-                dbId={dbId}
-                filesystemPath={image.filesystem_path}
-                catalogPath={
-                  typeof image.metadata?.FileName === 'string'
-                    ? image.metadata.FileName
-                    : null
-                }
-              />
-              
-              {image.reject_reason && (
-                <div className="reject-reason">
-                  <strong>Reject Reason:</strong>
-                  <p>{image.reject_reason}</p>
-                </div>
-              )}
-            </DetailSection>
-
-            {viewCopies.length > 0 && (
-              <div className="detail-copy-switch" role="group" aria-label="File shown">
-                {[
-                  { label: null as string | null, text: ownCopy?.label ?? 'Raw' },
-                  ...viewCopies.map((candidate) => ({ label: candidate.label, text: candidate.label })),
-                ].map((option) => {
-                  const active = (selectedCopy?.label ?? null) === option.label;
-                  return (
-                    <button
-                      key={option.label ?? 'own'}
-                      type="button"
-                      className={`zoom-btn-compact${active ? ' active' : ''}`}
-                      aria-pressed={active}
-                      onClick={() => setCopyLabel(option.label)}
-                      title={
-                        option.label === null
-                          ? 'The light\'s own file'
-                          : viewCopies.find((candidate) => candidate.label === option.label)?.file_name
-                      }
-                    >
-                      {option.text}
-                    </button>
-                  );
-                })}
-                {!geometryMatches && (
-                  <small className="detail-copy-note">
-                    Registered onto another frame: sky, satellite and quality overlays are hidden.
-                  </small>
-                )}
               </div>
             )}
-
-            {/* The score and reason follow scoring set in Sequence. */}
-            <ScoringChangedNote />
-
-            <QualityAnalysisSummary
-              quality={quality}
-              statusMessage={qualityStatus}
-              statusSummary={qualityStatusSummary}
-              open={qualitySection.open}
-              onToggleOpen={qualitySection.toggle}
-              overlayVisible={showQualityRegions && !!quality?.spatial_overlay}
-              onToggleOverlay={quality?.spatial_overlay ? () => {
-                setShowQualityRegions((visible) => !visible);
-                setShowStars(false);
-                setShowPsf(false);
-              } : undefined}
-            />
-
-            <CalibrationPanel dbId={dbId} imageId={imageId} projectId={projectId ?? null} />
-
-            <AstrometryPanel
-              analysis={astrometry}
-              isLoading={astrometryLoading}
-              error={astrometryError instanceof Error ? astrometryError.message : undefined}
-              solveError={solveMatchesCurrent && solveAstrometry.error instanceof Error
-                ? solveAstrometry.error.message
-                : undefined}
-              isSolving={solveMatchesCurrent && solveAstrometry.isPending}
-              canSolve={canCompute}
-              open={skySection.open}
-              onToggleOpen={skySection.toggle}
-              overlayVisible={showAstrometry && !!astrometry?.solution}
-              onToggleOverlay={toggleSkyOverlay}
-              onSolve={() => solveAstrometry.mutate({ dbId, imageId })}
-            />
-
-            <SatellitePanel
-              status={satelliteStatus}
-              isLoading={satellitesLoading}
-              error={satellitesError instanceof Error ? satellitesError.message : undefined}
-              predictError={satellitePredictionMatchesCurrent && predictSatellites.error instanceof Error
-                ? predictSatellites.error.message
-                : undefined}
-              isPredicting={satellitePredictionMatchesCurrent && predictSatellites.isPending}
-              canPredict={canCompute}
-              open={satelliteSection.open}
-              onToggleOpen={satelliteSection.toggle}
-              overlayVisible={showSatellites && !!satelliteStatus?.analysis}
-              onToggleOverlay={() => {
-                setShowSatellites((visible) => !visible);
-                setShowStars(false);
-                setShowPsf(false);
-              }}
-              onPredict={() => predictSatellites.mutate({ dbId, imageId })}
-            />
-
-            <div className="detail-actions">
-              <button 
-                className="action-button accept" 
-                onClick={(event) => onGrade('accepted', event.shiftKey)}
-                disabled={grading ? !grading.canWrite : false}
-              >
-                Accept (A)
-              </button>
-              <button 
-                className="action-button reject" 
-                onClick={(event) => onGrade('rejected', event.shiftKey)}
-                disabled={grading ? !grading.canWrite : false}
-              >
-                Reject (X)
-              </button>
-              <button 
-                className="action-button pending" 
-                onClick={(event) => onGrade('pending', event.shiftKey)}
-                disabled={grading ? !grading.canWrite : false}
-              >
-                Unmark (U)
-              </button>
-            </div>
-
-            {/* Undo/Redo Toolbar (only show if grading system is provided) */}
-            {grading && (
-              <UndoRedoToolbar
-                canUndo={grading.canUndo}
-                canRedo={grading.canRedo}
-                isProcessing={grading.isLoading}
-                undoStackSize={grading.undoStackSize}
-                redoStackSize={grading.redoStackSize}
-                onUndo={grading.undo}
-                onRedo={grading.redo}
-                getLastAction={grading.getLastAction}
-                getNextRedoAction={grading.getNextRedoAction}
-                className="compact"
-              />
-            )}
-
-            <div className="detail-shortcuts">
-              <div className="shortcut-grid">
-                <span>K/→ Next</span>
-                <span>J/← Prev</span>
-                <span>A Accept</span>
-                <span>X Reject</span>
-                <span>U Pending</span>
-                <span>S Stars {showStars ? '✓' : ''}</span>
-                <span>I Tilt {showTilt ? '✓' : ''}</span>
-                <span>P PSF {showPsf ? '✓' : ''}</span>
-                <span>O Sky {showAstrometry && astrometry?.solution ? '✓' : ''}</span>
-                {viewCopies.length > 0 && <span>V View</span>}
-                <span>Z Size</span>
-                {grading && <span>⌘Z Undo</span>}
-                {grading && <span>⌘Y Redo</span>}
-              </div>
-            </div>
-
-            {/* Compact Zoom Controls at Bottom */}
-            <div className="zoom-section-bottom">
-              <div className="zoom-info-compact">
-                <span className="zoom-percentage-compact">{zoom.getZoomPercentage()}%</span>
-              </div>
-              <div className="zoom-buttons-compact">
-                <button 
-                  className="zoom-btn-compact" 
-                  onClick={zoom.zoomOut}
-                  title="Zoom Out (-)"
-                >
-                  -
-                </button>
-                <button 
-                  className="zoom-btn-compact" 
-                  onClick={zoom.zoomToFit}
-                  title="Fit to Screen (F)"
-                >
-                  Fit
-                </button>
-                <button 
-                  className="zoom-btn-compact" 
-                  onClick={zoom.zoomTo100}
-                  title="100% (1)"
-                >
-                  100%
-                </button>
-                <button 
-                  className="zoom-btn-compact" 
-                  onClick={zoom.zoomIn}
-                  title="Zoom In (+)"
-                >
-                  +
-                </button>
-                <button
-                  className={`zoom-btn-compact${showColor ? ' active' : ''}`}
-                  onClick={() => setColorPreview(!showColor)}
-                  aria-pressed={showColor}
-                  disabled={showStars}
-                  title={
-                    showStars
-                      ? 'Star markers are drawn over a greyscale frame'
-                      : 'One-shot-color rendition (C) — off shows the luminance the grader measures'
-                  }
-                >
-                  Color
-                </button>
-              </div>
-            </div>
-          </div>
         </div>
-        {/* A phone grades from a bar under the panels, in reach of a thumb
-            however far they are scrolled; a wider screen hides it and grades
-            from the panel and the keys. */}
+      )}
+      footer={(
+        // A phone grades from a bar under the panels, in reach of a thumb
+        // however far they are scrolled; a wider screen hides it and grades
+        // from the panel and the keys.
         <div className="detail-phone-bar" role="group" aria-label="Grade and step">
           <button type="button" className="detail-phone-step" aria-label="Previous image" onClick={onPrevious}>
             <ChevronLeft size={20} aria-hidden="true" />
@@ -1131,13 +851,292 @@ export default function ImageDetailView({
             <ChevronRight size={20} aria-hidden="true" />
           </button>
         </div>
-      </div>
-      <TiltInspector
-        open={showTilt}
-        dbId={dbId}
-        imageId={imageId}
-        onClose={() => setShowTilt(false)}
+      )}
+      after={(
+        <TiltInspector
+          open={showTilt}
+          dbId={dbId}
+          imageId={imageId}
+          onClose={() => setShowTilt(false)}
+        />
+      )}
+    >
+      <DetailSection
+        title="Image Information"
+        summary={infoSummary}
+        open={infoSection.open}
+        onToggle={infoSection.toggle}
+        data-testid="image-info-panel"
+      >
+        {/* Date on its own row */}
+        <div className="date-row">
+          <span className="date-label">Date:</span>
+          <span className="date-value">{formatDate(image.acquired_date)}</span>
+        </div>
+        
+        {/* Camera on its own row */}
+        {image.metadata?.Camera !== undefined && (
+          <div className="date-row">
+            <span className="date-label">Camera:</span>
+            <span className="date-value">{image.metadata.Camera}</span>
+          </div>
+        )}
+        
+        {/* Two-column layout for other metadata */}
+        <dl>
+          {starData && (
+            <>
+              <dt>Stars:</dt>
+              <dd>{starData.detected_stars}</dd>
+              <dt>Avg HFR:</dt>
+              <dd>{starData.average_hfr.toFixed(2)}</dd>
+              <dt>Avg FWHM:</dt>
+              <dd>{starData.average_fwhm.toFixed(2)}</dd>
+            </>
+          )}
+          
+          {image.metadata?.Min !== undefined && (
+            <>
+              <dt>Min:</dt>
+              <dd>{typeof image.metadata.Min === 'number' ? image.metadata.Min.toFixed(0) : image.metadata.Min}</dd>
+            </>
+          )}
+          
+          {image.metadata?.Mean !== undefined && (
+            <>
+              <dt>Mean:</dt>
+              <dd>{typeof image.metadata.Mean === 'number' ? image.metadata.Mean.toFixed(1) : image.metadata.Mean}</dd>
+            </>
+          )}
+          
+          {image.metadata?.Median !== undefined && (
+            <>
+              <dt>Median:</dt>
+              <dd>{typeof image.metadata.Median === 'number' ? image.metadata.Median.toFixed(1) : image.metadata.Median}</dd>
+            </>
+          )}
+          
+          {image.metadata?.HFR !== undefined && (
+            <>
+              <dt>HFR:</dt>
+              <dd>{typeof image.metadata.HFR === 'number' ? image.metadata.HFR.toFixed(2) : image.metadata.HFR}</dd>
+            </>
+          )}
+          
+          {image.metadata?.DetectedStars !== undefined && (
+            <>
+              <dt>Det. Stars:</dt>
+              <dd>{image.metadata.DetectedStars}</dd>
+            </>
+          )}
+          
+          {image.metadata?.Exposure !== undefined && (
+            <>
+              <dt>Exposure:</dt>
+              <dd>{image.metadata.Exposure}s</dd>
+            </>
+          )}
+          
+          {image.metadata?.Temperature !== undefined && (
+            <>
+              <dt>Temp:</dt>
+              <dd>{image.metadata.Temperature}°C</dd>
+            </>
+          )}
+          
+          {image.metadata?.Gain !== undefined && (
+            <>
+              <dt>Gain:</dt>
+              <dd>{image.metadata.Gain}</dd>
+            </>
+          )}
+        </dl>
+
+        <ImageFileLocation
+          dbId={dbId}
+          filesystemPath={image.filesystem_path}
+          catalogPath={
+            typeof image.metadata?.FileName === 'string'
+              ? image.metadata.FileName
+              : null
+          }
+        />
+        
+        {image.reject_reason && (
+          <div className="reject-reason">
+            <strong>Reject Reason:</strong>
+            <p>{image.reject_reason}</p>
+          </div>
+        )}
+      </DetailSection>
+
+      {viewCopies.length > 0 && (
+        <div className="detail-copy-switch" role="group" aria-label="File shown">
+          {[
+            { label: null as string | null, text: ownCopy?.label ?? 'Raw' },
+            ...viewCopies.map((candidate) => ({ label: candidate.label, text: candidate.label })),
+          ].map((option) => {
+            const active = (selectedCopy?.label ?? null) === option.label;
+            return (
+              <button
+                key={option.label ?? 'own'}
+                type="button"
+                className={`zoom-btn-compact${active ? ' active' : ''}`}
+                aria-pressed={active}
+                onClick={() => setCopyLabel(option.label)}
+                title={
+                  option.label === null
+                    ? 'The light\'s own file'
+                    : viewCopies.find((candidate) => candidate.label === option.label)?.file_name
+                }
+              >
+                {option.text}
+              </button>
+            );
+          })}
+          {!geometryMatches && (
+            <small className="detail-copy-note">
+              Registered onto another frame: sky, satellite and quality overlays are hidden.
+            </small>
+          )}
+        </div>
+      )}
+
+      {/* The score and reason follow scoring set in Sequence. */}
+      <ScoringChangedNote />
+
+      <QualityAnalysisSummary
+        quality={quality}
+        statusMessage={qualityStatus}
+        statusSummary={qualityStatusSummary}
+        open={qualitySection.open}
+        onToggleOpen={qualitySection.toggle}
+        overlayVisible={showQualityRegions && !!quality?.spatial_overlay}
+        onToggleOverlay={quality?.spatial_overlay ? () => {
+          setShowQualityRegions((visible) => !visible);
+          setShowStars(false);
+          setShowPsf(false);
+        } : undefined}
       />
-    </div>
+
+      <CalibrationPanel dbId={dbId} imageId={imageId} projectId={projectId ?? null} />
+
+      <AstrometryPanel
+        analysis={astrometry}
+        isLoading={astrometryLoading}
+        error={astrometryError instanceof Error ? astrometryError.message : undefined}
+        solveError={solveMatchesCurrent && solveAstrometry.error instanceof Error
+          ? solveAstrometry.error.message
+          : undefined}
+        isSolving={solveMatchesCurrent && solveAstrometry.isPending}
+        canSolve={canCompute}
+        open={skySection.open}
+        onToggleOpen={skySection.toggle}
+        overlayVisible={showAstrometry && !!astrometry?.solution}
+        onToggleOverlay={toggleSkyOverlay}
+        onSolve={() => solveAstrometry.mutate({ dbId, imageId })}
+      />
+
+      <SatellitePanel
+        status={satelliteStatus}
+        isLoading={satellitesLoading}
+        error={satellitesError instanceof Error ? satellitesError.message : undefined}
+        predictError={satellitePredictionMatchesCurrent && predictSatellites.error instanceof Error
+          ? predictSatellites.error.message
+          : undefined}
+        isPredicting={satellitePredictionMatchesCurrent && predictSatellites.isPending}
+        canPredict={canCompute}
+        open={satelliteSection.open}
+        onToggleOpen={satelliteSection.toggle}
+        overlayVisible={showSatellites && !!satelliteStatus?.analysis}
+        onToggleOverlay={() => {
+          setShowSatellites((visible) => !visible);
+          setShowStars(false);
+          setShowPsf(false);
+        }}
+        onPredict={() => predictSatellites.mutate({ dbId, imageId })}
+      />
+
+      <div className="detail-actions">
+        <button 
+          className="action-button accept" 
+          onClick={(event) => onGrade('accepted', event.shiftKey)}
+          disabled={grading ? !grading.canWrite : false}
+        >
+          Accept (A)
+        </button>
+        <button 
+          className="action-button reject" 
+          onClick={(event) => onGrade('rejected', event.shiftKey)}
+          disabled={grading ? !grading.canWrite : false}
+        >
+          Reject (X)
+        </button>
+        <button 
+          className="action-button pending" 
+          onClick={(event) => onGrade('pending', event.shiftKey)}
+          disabled={grading ? !grading.canWrite : false}
+        >
+          Unmark (U)
+        </button>
+      </div>
+
+      {/* Undo/Redo Toolbar (only show if grading system is provided) */}
+      {grading && (
+        <UndoRedoToolbar
+          canUndo={grading.canUndo}
+          canRedo={grading.canRedo}
+          isProcessing={grading.isLoading}
+          undoStackSize={grading.undoStackSize}
+          redoStackSize={grading.redoStackSize}
+          onUndo={grading.undo}
+          onRedo={grading.redo}
+          getLastAction={grading.getLastAction}
+          getNextRedoAction={grading.getNextRedoAction}
+          className="compact"
+        />
+      )}
+
+      <ViewerShortcuts measure={readout.options}>
+        <span>K/→ Next</span>
+        <span>J/← Prev</span>
+        <span>A Accept</span>
+        <span>X Reject</span>
+        <span>U Pending</span>
+        <span>S Stars {showStars ? '✓' : ''}</span>
+        <span>I Tilt {showTilt ? '✓' : ''}</span>
+        <span>P PSF {showPsf ? '✓' : ''}</span>
+        <span>O Sky {showAstrometry && astrometry?.solution ? '✓' : ''}</span>
+        {viewCopies.length > 0 && <span>V View</span>}
+        <span>Z Size</span>
+        {grading && <span>⌘Z Undo</span>}
+        {grading && <span>⌘Y Redo</span>}
+      </ViewerShortcuts>
+
+      <ViewerZoomSection
+        percentage={zoom.getZoomPercentage()}
+        onZoomOut={zoom.zoomOut}
+        onFit={zoom.zoomToFit}
+        onActualSize={zoom.zoomTo100}
+        onZoomIn={zoom.zoomIn}
+        options={readout.options}
+        skyDisabled={skyUnavailable}
+      >
+        <button
+          className="zoom-btn-compact"
+          type="button"
+          onClick={() => setColorPreview(!showColor)}
+          aria-pressed={showColor}
+          disabled={showStars}
+          title={
+            showStars
+              ? 'Star markers are drawn over a greyscale frame'
+              : 'One-shot-color rendition (C) — off shows the luminance the grader measures'
+          }
+        >
+          Color
+        </button>
+      </ViewerZoomSection>
+    </ImageViewerFrame>
   );
 }

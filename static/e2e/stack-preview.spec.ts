@@ -1083,9 +1083,19 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
     });
   }
 
+  // RA/Dec in the inspector comes from an integrated frame's plate solution,
+  // so solve the frame that has only acquisition coordinates.
+  const solve = await page.request.post(
+    `/api/db/${encodeURIComponent(dbId)}/images/2/astrometry`,
+    { timeout: 60_000 }
+  );
+  expect(solve.ok()).toBeTruthy();
+
   await panel.getByRole('button', { name: 'Inspect full size' }).click();
   const inspector = page.getByRole('dialog', { name: /Alpha M44/i });
   await expect(inspector).toBeVisible();
+  // The inspector fills the window, as the reviewer's detail view does.
+  expect(await inspector.boundingBox()).toEqual({ x: 0, y: 0, width: 1440, height: 1600 });
 
   const fullSizeImage = inspector.getByTestId('stack-inspector-image');
   await page.waitForFunction(
@@ -1134,23 +1144,106 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
   const canvas = inspector.locator('.stack-inspector-canvas');
   const canvasBox = await canvas.boundingBox();
   expect(canvasBox).not.toBeNull();
-  await page.mouse.move(canvasBox!.x + canvasBox!.width / 2, canvasBox!.y + canvasBox!.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(
-    canvasBox!.x + canvasBox!.width / 2 + 120,
-    canvasBox!.y + canvasBox!.height / 2 + 80,
-    { steps: 4 }
-  );
-  await page.mouse.up();
+  const panFromCentre = async () => {
+    await page.mouse.move(canvasBox!.x + canvasBox!.width / 2, canvasBox!.y + canvasBox!.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(
+      canvasBox!.x + canvasBox!.width / 2 + 120,
+      canvasBox!.y + canvasBox!.height / 2 + 80,
+      { steps: 4 }
+    );
+    await page.mouse.up();
+  };
+  await panFromCentre();
   await expect
     .poll(() => fullSizeImage.evaluate((image) => image.style.transform))
     .not.toBe(transformBeforePan);
+  const transformAfterPan = await fullSizeImage.evaluate((image) => image.style.transform);
+
+  // M and R read the stack's linear value and sky position into a box that
+  // follows the pointer.
+  const readout = inspector.getByTestId('pointer-readout');
+  await page.keyboard.press('m');
+  await page.keyboard.press('r');
+  await page.mouse.move(canvasBox!.x + canvasBox!.width * 0.4, canvasBox!.y + canvasBox!.height * 0.45);
+  await expect(readout.getByTestId('pointer-readout-value')).toHaveText(/^-?\d/, { timeout: 15_000 });
+  await expect(readout.getByTestId('pointer-readout-sky')).toHaveText(/^RA 08h\d\dm.* Dec \+\d\d°/);
+  const readoutBox = (await readout.boundingBox())!;
+  expect(readoutBox.x).toBeCloseTo(canvasBox!.x + canvasBox!.width * 0.4 + 14, 0);
+  expect(readoutBox.y).toBeCloseTo(canvasBox!.y + canvasBox!.height * 0.45 + 14, 0);
+
+  // The stack's Sky context solves the stack's own pixels, pointed by the
+  // solved frame carried onto its grid, and draws its sky as a frame's.
+  const skyContext = inspector.getByTestId('astrometry-panel');
+  await skyContext.getByRole('button', { name: /Solve field/ }).click();
+  await expect(skyContext).toContainText('Hinted solve', { timeout: 90_000 });
+  await expect(skyContext.getByText('M 44')).toBeVisible();
+  await skyContext.getByRole('button', { name: /Show sky overlay/ }).click();
+  const stackSky = inspector.getByTestId('stack-inspector-astrometry-overlay');
+  await expect(stackSky).toBeVisible();
+  await expect(stackSky.getByText('M 44')).toBeVisible();
+  await skyContext.getByRole('button', { name: /Sky overlay on/ }).click();
+  await expect(stackSky).toHaveCount(0);
+
+  // S marks the stack's stars and P shows its PSF view, as on a frame.
+  await page.keyboard.press('s');
+  await expect(fullSizeImage).toHaveAttribute('src', /\/fits\/annotated\?/);
+  await page.waitForFunction(
+    (element) => element instanceof HTMLImageElement && element.complete && element.naturalWidth > 0
+      && element.src.includes('/fits/annotated'),
+    await fullSizeImage.elementHandle(),
+    { timeout: 90_000 }
+  );
+  await page.keyboard.press('p');
+  const psfView = inspector.getByTestId('stack-inspector-psf');
+  await page.waitForFunction(
+    (element) => element instanceof HTMLImageElement && element.complete && element.naturalWidth > 0,
+    await psfView.elementHandle(),
+    { timeout: 90_000 }
+  );
+  // P took the stars' place, so turning it off shows the stack again.
+  await page.keyboard.press('p');
+  await expect(psfView).toHaveCount(0);
+  await expect(fullSizeImage).not.toHaveAttribute('src', /\/fits\/annotated/);
+  // Back to the view the artifact search below starts from.
+  await inspector.getByRole('button', { name: 'Fit', exact: true }).click();
+  await inspector.getByRole('button', { name: '100%' }).click();
+  await panFromCentre();
+  await expect
+    .poll(() => fullSizeImage.evaluate((image) => image.style.transform))
+    .toBe(transformAfterPan);
+  await page.mouse.move(canvasBox!.x + canvasBox!.width * 0.4, canvasBox!.y + canvasBox!.height * 0.45);
+  await expect(readout.getByTestId('pointer-readout-sky')).toHaveText(/^RA 08h\d\dm.* Dec \+\d\d°/);
 
   if (process.env.PSF_GUARD_CAPTURE_DOCS === '1') {
     const docs = path.resolve(process.cwd(), '..', 'docs');
-    fs.mkdirSync(docs, { recursive: true });
-    await inspector.screenshot({ path: path.join(docs, 'stack-preview-inspection.png') });
+    fs.mkdirSync(path.join(docs, 'images'), { recursive: true });
+    for (const [viewport, file] of [
+      [{ width: 1440, height: 900 }, 'stack-preview-inspection.png'],
+      [{ width: 390, height: 844 }, 'images/stack-inspector-readout-phone.png'],
+    ] as const) {
+      await page.setViewportSize(viewport);
+      await inspector.getByRole('button', { name: 'Fit', exact: true }).click();
+      const box = (await canvas.boundingBox())!;
+      await page.mouse.move(box.x + box.width * 0.4, box.y + box.height * 0.45);
+      await expect(readout.getByTestId('pointer-readout-value')).toHaveText(/^-?\d/, { timeout: 15_000 });
+      await inspector.locator('.detail-info').evaluate((sidebar) => sidebar.scrollTo(0, 0));
+      await inspector.screenshot({ path: path.join(docs, file), animations: 'disabled' });
+    }
+    // Back to the view the artifact search below starts from.
+    await page.setViewportSize({ width: 1440, height: 1600 });
+    await inspector.getByRole('button', { name: 'Fit', exact: true }).click();
+    await inspector.getByRole('button', { name: '100%' }).click();
+    await panFromCentre();
+    await expect
+      .poll(() => fullSizeImage.evaluate((image) => image.style.transform))
+      .toBe(transformAfterPan);
   }
+
+  // Turn the readout off again for the artifact search below.
+  await page.keyboard.press('m');
+  await page.keyboard.press('r');
+  await expect(readout).toHaveCount(0);
 
   await inspector.getByRole('button', { name: 'Find source artifact' }).click();
 
@@ -1195,7 +1288,9 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
   if (process.env.PSF_GUARD_CAPTURE_DOCS === '1') {
     const docs = path.resolve(process.cwd(), '..', 'docs');
     fs.mkdirSync(docs, { recursive: true });
-    await inspector.screenshot({ path: path.join(docs, 'stack-artifact-finder.png') });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await inspector.screenshot({ path: path.join(docs, 'stack-artifact-finder.png'), animations: 'disabled' });
+    await page.setViewportSize({ width: 1440, height: 1600 });
   }
 
   await page.keyboard.press('Escape');

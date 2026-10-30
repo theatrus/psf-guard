@@ -2772,31 +2772,39 @@ pub async fn get_stack_stretch_image(
         })
 }
 
+/// The furthest-processed linear image of a processing result, and what to
+/// call it: RC-Astro's output already includes any deconvolution that ran
+/// before it.
+fn processed_fits_path(
+    stack_root: &FsPath,
+    stretch_id: &str,
+) -> Result<(PathBuf, &'static str), AppError> {
+    validate_job_id(stretch_id)?;
+    let manifest = std::fs::read(stretch_manifest_path(stack_root, stretch_id))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<StackStretchPreview>(&bytes).ok())
+        .ok_or(AppError::NotFound)?;
+    if let Some(rc_astro_id) = &manifest.rc_astro_id {
+        validate_job_id(rc_astro_id)?;
+        Ok((
+            super::rc_astro::rc_astro_fits_path(stack_root, rc_astro_id),
+            "processed",
+        ))
+    } else {
+        let deconvolution_id = manifest.deconvolution_id.ok_or(AppError::NotFound)?;
+        validate_job_id(&deconvolution_id)?;
+        Ok((
+            deconvolution_fits_path(stack_root, &deconvolution_id),
+            "deconvolved",
+        ))
+    }
+}
+
 pub async fn download_stack_stretch_fits(
     ctx: DbContext,
     Path((_db_id, stretch_id)): Path<(String, String)>,
 ) -> Result<Response, AppError> {
-    validate_job_id(&stretch_id)?;
-    let manifest = std::fs::read(stretch_manifest_path(&ctx.stack_root, &stretch_id))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<StackStretchPreview>(&bytes).ok())
-        .ok_or(AppError::NotFound)?;
-    // The furthest-processed linear image: RC-Astro's output already
-    // includes any deconvolution that ran before it.
-    let (path, label) = if let Some(rc_astro_id) = &manifest.rc_astro_id {
-        validate_job_id(rc_astro_id)?;
-        (
-            super::rc_astro::rc_astro_fits_path(&ctx.stack_root, rc_astro_id),
-            "processed",
-        )
-    } else {
-        let deconvolution_id = manifest.deconvolution_id.ok_or(AppError::NotFound)?;
-        validate_job_id(&deconvolution_id)?;
-        (
-            deconvolution_fits_path(&ctx.stack_root, &deconvolution_id),
-            "deconvolved",
-        )
-    };
+    let (path, label) = processed_fits_path(&ctx.stack_root, &stretch_id)?;
     let file = tokio::fs::File::open(&path)
         .await
         .map_err(|_| AppError::NotFound)?;
@@ -2821,6 +2829,17 @@ pub async fn download_stack_stretch_fits(
         .map_err(|error| {
             AppError::InternalError(format!("Failed to build processed FITS response: {error}"))
         })
+}
+
+/// GET /api/db/{db}/stack-previews/stretch/{id}/fits/window: a rectangle of
+/// the file that route downloads, for the inspector's pointer readout.
+pub async fn read_stack_stretch_window(
+    ctx: DbContext,
+    Path((_db_id, stretch_id)): Path<(String, String)>,
+    Query(window): Query<crate::server::pixel_window::WindowQuery>,
+) -> Result<Json<ApiResponse<crate::server::pixel_window::PixelWindowResponse>>, AppError> {
+    let (path, _) = processed_fits_path(&ctx.stack_root, &stretch_id)?;
+    crate::server::pixel_window::read(path, window).await
 }
 
 /// GET /api/db/{db}/stack-previews/stretch/{id}/stars

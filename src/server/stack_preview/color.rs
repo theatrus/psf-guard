@@ -1488,6 +1488,41 @@ pub async fn download_stack_color_fits(
     .await
 }
 
+/// GET …/stack-previews/color/{job}/solution: the plate solution of the
+/// colour stack's grid, for the inspector's RA/Dec and sky overlay, or null
+/// when no channel has a solved frame.
+pub async fn get_stack_color_solution(
+    ctx: DbContext,
+    Path((_db_id, job_id)): Path<(String, String)>,
+) -> Result<Json<ApiResponse<Option<crate::server::sky_coverage::StackSolution>>>, AppError> {
+    super::validate_job_id(&job_id)?;
+    let context = Arc::clone(&ctx.0);
+    let solution = tokio::task::spawn_blocking(move || {
+        let job = std::fs::read(color_manifest_path(&context.stack_root, &job_id))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<StackColorJob>(&bytes).ok())
+            .filter(|job| job.state == StackJobState::Completed)
+            .ok_or(AppError::NotFound)?;
+        Ok::<_, AppError>(crate::server::sky_coverage::colour_stack_solution(
+            &context, &job,
+        ))
+    })
+    .await
+    .map_err(|_| AppError::InternalError("The stack's plate solution lookup stopped".into()))??;
+    Ok(Json(ApiResponse::success(solution)))
+}
+
+/// GET …/stack-previews/color/{job}/fits/window: a rectangle of the colour
+/// FITS, for the inspector's pointer readout.
+pub async fn read_stack_color_window(
+    ctx: DbContext,
+    Path((_db_id, job_id)): Path<(String, String)>,
+    Query(window): Query<crate::server::pixel_window::WindowQuery>,
+) -> Result<Json<ApiResponse<crate::server::pixel_window::PixelWindowResponse>>, AppError> {
+    super::validate_job_id(&job_id)?;
+    crate::server::pixel_window::read(color_fits_path(&ctx.stack_root, &job_id), window).await
+}
+
 pub(super) async fn stream_artifact(
     path: PathBuf,
     content_type: &'static str,
@@ -6349,7 +6384,7 @@ pub(super) fn color_original_preview_path(stack_root: &FsPath, job_id: &str) -> 
     color_dir(stack_root, job_id).join("preview-original.png")
 }
 
-fn color_fits_path(stack_root: &FsPath, job_id: &str) -> PathBuf {
+pub(super) fn color_fits_path(stack_root: &FsPath, job_id: &str) -> PathBuf {
     color_dir(stack_root, job_id).join("color.fits")
 }
 

@@ -808,6 +808,21 @@ pub fn open(path: &Path) -> Result<FitsImage, ImageError> {
     }
 }
 
+/// Read a rectangle of an image's samples without decoding the rest of the
+/// file, with the normalization [`open`] applies: a float XISF frame that
+/// declares `bounds="0:1"` comes back on the 16-bit scale. Rows count in the
+/// order the file stores them, as [`open`] keeps them. For the viewers'
+/// pointer readout, which must not load a whole stack to show one pixel.
+pub fn read_window(
+    path: &Path,
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
+) -> Result<seiza_image_io::ImageWindow, seiza_image_io::Error> {
+    seiza_image_io::read_window(path, x, y, width, height, Some(NORMALIZED_FULL_SCALE))
+}
+
 /// Open a frame as linear samples for calibration and stacking, with the same
 /// normalization [`open`] applies.
 ///
@@ -1010,6 +1025,36 @@ mod tests {
         };
         assert_eq!(samples.first().copied(), Some(100.0));
         assert_eq!(samples.last().copied(), Some(30000.0));
+    }
+
+    /// A window of a frame reads the same values [`open`] gives, normalized
+    /// XISF included, so the viewers' readout matches what was measured.
+    #[test]
+    fn a_window_reads_what_open_gives_for_fits_and_xisf() {
+        let directory = tempfile::tempdir().unwrap();
+        let normalized = write_sample_xisf(directory.path(), "light.xisf");
+        let physical = write_xisf_spanning(directory.path(), "stack.xisf", 100.0, 30000.0);
+        let fits = directory.path().join("light.fits");
+        let pixels: Vec<f32> = (0..12).map(|index| index as f32 * 10.0).collect();
+        seiza_fits::write_f32_image(&fits, 4, 3, seiza_fits::F32ImageData::Mono(&pixels), &[])
+            .unwrap();
+
+        for path in [&normalized, &physical, &fits] {
+            let seiza_fits::Pixels::F32(samples) = open(path).unwrap().pixels else {
+                panic!("expected float samples");
+            };
+            // Two columns of the middle row, and one past the right edge.
+            let window = read_window(path, 2, 1, 3, 1).unwrap();
+            assert_eq!(
+                (window.x, window.y, window.width, window.height),
+                (2, 1, 2, 1)
+            );
+            assert_eq!(window.values, samples[6..8], "{}", path.display());
+        }
+        assert_eq!(
+            read_window(&normalized, 3, 2, 1, 1).unwrap().values,
+            [65535.0]
+        );
     }
 
     /// The measured value the grader actually compares across frames. Before

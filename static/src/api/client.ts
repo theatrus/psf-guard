@@ -10,6 +10,8 @@ import type {
   BackupsOverview,
 } from './backupTypes';
 import { getServerUrl } from '../utils/tauri';
+import type { OverlaySolution } from '@seiza/astro-overlay';
+import type { PixelRect, PixelWindow } from '../utils/pixelWindow';
 import { BUILD_HEADER, noteServerBuild } from '../updates/pageBuild';
 import type { DirectorAdoptionPlan, DirectorAdoptionReport, DirectorCollection, DirectorCutoutRequest, DirectorCutoutResult, DirectorDiscovery, DirectorFramingDraft, DirectorFramingDraftView, DirectorFramingPreview, DirectorFramingRequest, DirectorIdentity, DirectorIdentityPage, DirectorMappingPage, DirectorFeasibility, DirectorMosaicPreview, DirectorResolvedName,
   DirectorSkyMarks,
@@ -260,6 +262,27 @@ const getCachedServerUrl = (): string => {
 
 // Build a per-DB path under /api/db/{dbId}.
 const dbPath = (dbId: string, path: string) => `/db/${encodeURIComponent(dbId)}${path}`;
+
+/**
+ * A route beside a FITS download that works on the same file, relative to the
+ * API: `…/fits?v=r` becomes `…/fits/{leaf}?v=r`.
+ */
+function fitsSiblingPath(fitsUrl: string, leaf: string): string {
+  const base = `${getCachedServerUrl()}/api`;
+  const relative = fitsUrl.startsWith(base)
+    ? fitsUrl.slice(base.length)
+    : fitsUrl.startsWith('/api/') ? fitsUrl.slice('/api'.length) : fitsUrl;
+  const [path, query] = relative.split('?', 2);
+  return `${path}/${leaf}${query ? `?${query}` : ''}`;
+}
+
+/** As `fitsSiblingPath`, as a URL an `<img>` loads, with more query parameters. */
+function fitsSiblingUrl(fitsUrl: string, leaf: string, params: URLSearchParams): string {
+  const serverUrl = getCachedServerUrl();
+  const path = fitsSiblingPath(fitsUrl, leaf);
+  const extra = params.toString();
+  return `${serverUrl ? `${serverUrl}/api` : '/api'}${path}${extra ? `${path.includes('?') ? '&' : '?'}${extra}` : ''}`;
+}
 
 const withServerUrl = (path: string): string => `${getCachedServerUrl()}${path}`;
 
@@ -2842,6 +2865,108 @@ export const apiClient = {
       dbId,
       `/stack-previews/${encodeURIComponent(jobId)}/${groupIndex}/fits`
     )}${revision}`;
+  },
+
+  /**
+   * The window route beside a FITS download, which reads a rectangle of the
+   * same file: `…/fits?v=r` becomes `…/fits/window?v=r`, relative to the API.
+   */
+  fitsWindowPath: (fitsUrl: string): string => fitsSiblingPath(fitsUrl, 'window'),
+
+  /** A stack's header analysis, with its own plate solve once it has one. */
+  getStackAstrometry: async (fitsUrl: string): Promise<AstrometryAnalysis> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<AstrometryAnalysis>>(
+      fitsSiblingPath(fitsUrl, 'astrometry')
+    );
+    if (!data.data) throw new Error(data.error || 'Astrometry analysis unavailable');
+    return data.data;
+  },
+
+  /** Plate-solve a stack's own pixels, pointed by its frames. */
+  solveStackAstrometry: async (fitsUrl: string): Promise<AstrometryAnalysis> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<AstrometryAnalysis>>(
+      fitsSiblingPath(fitsUrl, 'astrometry')
+    );
+    if (!data.data) throw new Error(data.error || 'Plate solve failed');
+    return data.data;
+  },
+
+  /** A stack with its stars marked, as a frame's annotated image is. */
+  getStackStarMarksUrl: (
+    fitsUrl: string,
+    size: 'screen' | 'large' | 'original' = 'large',
+    maxStars?: number
+  ): string => {
+    const params = new URLSearchParams({ rv: RENDERED_ARTIFACT_URL_VERSION, size });
+    if (maxStars !== undefined) params.set('max_stars', String(maxStars));
+    return fitsSiblingUrl(fitsUrl, 'annotated', params);
+  },
+
+  /** A stack's PSF view, as a frame's is. */
+  getStackPsfUrl: (
+    fitsUrl: string,
+    options: { num_stars?: number; psf_type?: string; sort_by?: string; selection?: string } = {}
+  ): string => {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(options)) {
+      if (value !== undefined) params.set(key, String(value));
+    }
+    return fitsSiblingUrl(fitsUrl, 'psf', params);
+  },
+
+  /** The window route of a frame's file, or of one of its copies. */
+  getImageWindowPath: (dbId: string, imageId: number, copy?: string): string =>
+    dbPath(dbId, `/images/${imageId}/window${copy ? `?copy=${encodeURIComponent(copy)}` : ''}`),
+
+  getPixelWindow: async (path: string, rect: PixelRect): Promise<PixelWindow> => {
+    const apiInstance = await getApi();
+    const params = new URLSearchParams({
+      x: String(rect.x),
+      y: String(rect.y),
+      width: String(rect.width),
+      height: String(rect.height),
+    });
+    const { data } = await apiInstance.get<ApiResponse<PixelWindow>>(
+      `${path}${path.includes('?') ? '&' : '?'}${params.toString()}`
+    );
+    if (!data.data) throw new Error(data.error || 'Pixel values could not be read');
+    return data.data;
+  },
+
+  /**
+   * The plate solution of a mono stack's grid, from its reference frame's
+   * solve, or null when no integrated frame is solved.
+   */
+  getStackSolution: async (
+    dbId: string,
+    jobId: string,
+    groupIndex: number,
+    artifactRevision: string
+  ): Promise<OverlaySolution | null> => {
+    const apiInstance = await getApi();
+    const revision = artifactRevision ? `?v=${encodeURIComponent(artifactRevision)}` : '';
+    const { data } = await apiInstance.get<ApiResponse<OverlaySolution | null>>(
+      dbPath(dbId, `/stack-previews/${encodeURIComponent(jobId)}/${groupIndex}/solution${revision}`)
+    );
+    if (!data.success) throw new Error(data.error || 'The stack has no plate solution');
+    return data.data ?? null;
+  },
+
+  /** The plate solution of a colour stack's grid, as for a mono stack. */
+  getStackColorSolution: async (
+    dbId: string,
+    jobId: string,
+    artifactRevision: string
+  ): Promise<OverlaySolution | null> => {
+    const apiInstance = await getApi();
+    const revision = artifactRevision ? `?v=${encodeURIComponent(artifactRevision)}` : '';
+    const { data } = await apiInstance.get<ApiResponse<OverlaySolution | null>>(
+      dbPath(dbId, `/stack-previews/color/${encodeURIComponent(jobId)}/solution${revision}`)
+    );
+    if (!data.success) throw new Error(data.error || 'The stack has no plate solution');
+    return data.data ?? null;
   },
 
   startMonoArtifactSearch: async (
