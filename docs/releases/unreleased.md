@@ -16,16 +16,17 @@
 
 ## Changes
 
-- The stack inspector fills the browser or app window, as the image viewer
-  does, instead of a box in the middle of it.
+- The stack inspector opens in the image viewer's layout: it fills the
+  browser or app window, with the stack beside a sidebar that holds its
+  details, its FITS download, the artifact search, the shortcuts and the zoom
+  controls. The calibration master inspector is the same.
 
 - The image viewer and the stack inspector can show the pixel under the
   pointer. Turn on **Value** or **RA/Dec**, or press **M** or **R**, to see
   the pixel's position, its linear value from the file (one per channel of a
   colour stack), and its right ascension and declination from the plate
-  solution. PSF Guard reads only the pixels near the pointer, so a large stack
-  does not have to load. In the stack inspector, **Sky** (**O**) draws the
-  RA/Dec grid over a stack whose frames are solved.
+  solution, in a box that follows the pointer. PSF Guard reads only the pixels
+  near the pointer, so a large stack does not have to load.
 
 - In the desktop app on Windows and Linux, F11 puts the window into full
   screen and back. On macOS, use **View → Enter Full Screen** or the window's

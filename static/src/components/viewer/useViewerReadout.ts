@@ -21,7 +21,7 @@ interface ViewerReadoutInput {
  * The pointer readout's state for an image viewer: the shared Value and
  * RA/Dec choices with their M and R keys, the pixel under the pointer, its
  * samples and its sky position. Hand `track` and `leave` to the canvas and
- * `readout` to `PointerReadout`.
+ * `readout` to `PointerReadout`; `active` is true while either is on.
  */
 export function useViewerReadout({
   container,
@@ -45,11 +45,13 @@ export function useViewerReadout({
   const sky = options.sky && pixel && imageGrid ? skyAt(solution, pixel, imageGrid) : null;
   return {
     options,
+    active,
     track: pointer.track,
     leave: pointer.leave,
     readout: {
       options,
       pixel,
+      anchor: pointer.anchor,
       probe: windowPath ? probe : null,
       sky,
     },

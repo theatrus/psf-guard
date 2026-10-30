@@ -1160,17 +1160,17 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
     .not.toBe(transformBeforePan);
   const transformAfterPan = await fullSizeImage.evaluate((image) => image.style.transform);
 
-  // M and R read the stack's linear value and sky position under the
-  // pointer, and O draws the solved frame's sky grid over it.
+  // M and R read the stack's linear value and sky position into a box that
+  // follows the pointer.
   const readout = inspector.getByTestId('pointer-readout');
-  const skyOverlay = inspector.getByTestId('stack-inspector-sky-overlay');
   await page.keyboard.press('m');
   await page.keyboard.press('r');
-  await page.keyboard.press('o');
   await page.mouse.move(canvasBox!.x + canvasBox!.width * 0.4, canvasBox!.y + canvasBox!.height * 0.45);
   await expect(readout.getByTestId('pointer-readout-value')).toHaveText(/^-?\d/, { timeout: 15_000 });
   await expect(readout.getByTestId('pointer-readout-sky')).toHaveText(/^RA 08h\d\dm.* Dec \+\d\d°/);
-  await expect(skyOverlay).toBeVisible();
+  const readoutBox = (await readout.boundingBox())!;
+  expect(readoutBox.x).toBeCloseTo(canvasBox!.x + canvasBox!.width * 0.4 + 14, 0);
+  expect(readoutBox.y).toBeCloseTo(canvasBox!.y + canvasBox!.height * 0.45 + 14, 0);
 
   if (process.env.PSF_GUARD_CAPTURE_DOCS === '1') {
     const docs = path.resolve(process.cwd(), '..', 'docs');
@@ -1196,12 +1196,10 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
       .toBe(transformAfterPan);
   }
 
-  // Turn the readout and sky grid off again for the artifact search below.
+  // Turn the readout off again for the artifact search below.
   await page.keyboard.press('m');
   await page.keyboard.press('r');
-  await page.keyboard.press('o');
   await expect(readout).toHaveCount(0);
-  await expect(skyOverlay).toHaveCount(0);
 
   await inspector.getByRole('button', { name: 'Find source artifact' }).click();
 
@@ -1246,7 +1244,9 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
   if (process.env.PSF_GUARD_CAPTURE_DOCS === '1') {
     const docs = path.resolve(process.cwd(), '..', 'docs');
     fs.mkdirSync(docs, { recursive: true });
-    await inspector.screenshot({ path: path.join(docs, 'stack-artifact-finder.png') });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await inspector.screenshot({ path: path.join(docs, 'stack-artifact-finder.png'), animations: 'disabled' });
+    await page.setViewportSize({ width: 1440, height: 1600 });
   }
 
   await page.keyboard.press('Escape');

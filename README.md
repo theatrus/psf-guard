@@ -452,8 +452,8 @@ is available:
 | R | RA/Dec under the pointer | | |
 
 To measure a frame or a stack, turn on **Value** or **RA/Dec** under the zoom
-buttons, or press M or R, then point at the image. A box in the corner shows
-the pixel's position, its linear value from the file, with one value for each
+buttons, or press M or R, then point at the image. A box beside the pointer
+shows the pixel's position, its linear value from the file, with one value for each
 color of an RGB image, and its right ascension and declination from the plate
 solution. The image viewer and the stack inspector share these settings. PSF
 Guard reads only the pixels near the pointer from the file, so a large stack

@@ -24,6 +24,23 @@ export interface BitmapPosition {
   y: number;
 }
 
+/** Where the pointer is in the viewer, 0 to 1 across and down, for placing the readout. */
+export interface PointerAnchor {
+  left: number;
+  top: number;
+}
+
+/** Put the box beside the pointer, on whichever side keeps it in the viewer. */
+export function readoutPlacement(anchor: PointerAnchor) {
+  const right = anchor.left > 0.6;
+  const below = anchor.top < 0.55;
+  return {
+    left: `${anchor.left * 100}%`,
+    top: `${anchor.top * 100}%`,
+    transform: `translate(${right ? 'calc(-100% - 14px)' : '14px'}, ${below ? '14px' : 'calc(-100% - 14px)'})`,
+  };
+}
+
 /** The bitmap position under a client position, as the zoom places it. */
 export function bitmapPositionUnder(
   clientX: number,
@@ -72,19 +89,24 @@ export function skyAt(
 /**
  * Follow the pointer over a zoomed image: `track` from the canvas's mouse
  * moves and wheel events, `leave` when it leaves. The position is on the
- * displayed bitmap; `pixelAt` counts it on the image's grid.
+ * displayed bitmap, and `pixelAt` counts it on the image's grid; the anchor
+ * is where it is in the viewer.
  */
 export function useImagePointer(
   container: React.RefObject<HTMLElement | null>,
   view: ZoomView
 ) {
-  const [position, setPosition] = useState<BitmapPosition | null>(null);
+  const [pointer, setPointer] = useState<{ position: BitmapPosition; anchor: PointerAnchor } | null>(null);
   const track = useCallback((event: { clientX: number; clientY: number }) => {
-    const element = container.current;
-    setPosition(element
-      ? bitmapPositionUnder(event.clientX, event.clientY, element.getBoundingClientRect(), view)
+    const box = container.current?.getBoundingClientRect();
+    const position = box ? bitmapPositionUnder(event.clientX, event.clientY, box, view) : null;
+    setPointer(box && position && box.width > 0 && box.height > 0
+      ? {
+          position,
+          anchor: { left: (event.clientX - box.left) / box.width, top: (event.clientY - box.top) / box.height },
+        }
       : null);
   }, [container, view]);
-  const leave = useCallback(() => setPosition(null), []);
-  return { position, track, leave };
+  const leave = useCallback(() => setPointer(null), []);
+  return { position: pointer?.position ?? null, anchor: pointer?.anchor ?? null, track, leave };
 }

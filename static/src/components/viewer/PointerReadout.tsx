@@ -2,12 +2,14 @@ import { formatDec, formatRa } from '@seiza/astro-overlay';
 import type { MeasureOptions } from '../../hooks/useMeasureOptions';
 import type { PixelProbe } from '../../hooks/usePixelProbe';
 import { formatSample } from '../../utils/pixelWindow';
-import type { ImagePixel } from './imagePointer';
+import { readoutPlacement, type ImagePixel, type PointerAnchor } from './imagePointer';
 import './viewer.css';
 
 interface PointerReadoutProps {
   options: MeasureOptions;
   pixel: ImagePixel | null;
+  /** Where the pointer is in the viewer. */
+  anchor: PointerAnchor | null;
   /** The samples under the pointer; null when this image has no readable file. */
   probe: PixelProbe | null;
   /** The pointer's sky position; null when the image has no plate solution. */
@@ -40,22 +42,20 @@ function valueText(probe: PixelProbe | null, planeLabels: string[]): string {
 
 /**
  * The pixel under the pointer, with its linear value and sky position when
- * the viewer turned those on. Drawn over the image, clear of the pointer.
+ * the viewer turned those on, in a box that follows the pointer.
  */
 export default function PointerReadout({
   options,
   pixel,
+  anchor,
   probe,
   sky,
   skyUnavailable = 'No plate solution',
   planeLabels = RGB,
 }: PointerReadoutProps) {
-  if ((!options.value && !options.sky) || !pixel) return null;
+  if ((!options.value && !options.sky) || !pixel || !anchor) return null;
   return (
-    <div className="pointer-readout" role="status" aria-label="Pointer readout" data-testid="pointer-readout">
-      <span className="pointer-readout-pixel">
-        x {pixel.x} · y {pixel.y}
-      </span>
+    <div className="pointer-readout" aria-hidden="true" data-testid="pointer-readout" style={readoutPlacement(anchor)}>
       {options.value && (
         <span className="pointer-readout-value" data-testid="pointer-readout-value">
           {valueText(probe, planeLabels)}
@@ -63,9 +63,12 @@ export default function PointerReadout({
       )}
       {options.sky && (
         <span className="pointer-readout-sky" data-testid="pointer-readout-sky">
-          {sky ? `${formatRa(sky[0])} ${formatDec(sky[1])}` : skyUnavailable}
+          {sky ? <><span>{formatRa(sky[0])}</span> <span>{formatDec(sky[1])}</span></> : skyUnavailable}
         </span>
       )}
+      <span className="pointer-readout-pixel">
+        x {pixel.x} · y {pixel.y}
+      </span>
     </div>
   );
 }

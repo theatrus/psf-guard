@@ -74,3 +74,35 @@ export function MeasureToggles({ options, skyDisabled, valueDisabled }: MeasureT
     </div>
   );
 }
+
+interface ViewerShortcutsProps {
+  /** The readout's choices, ticked when on. */
+  measure: MeasureOptions;
+  /** The viewer's own keys. */
+  children?: ReactNode;
+}
+
+/** The keyboard cheat sheet in a viewer's sidebar, ending with the readout's keys. */
+export function ViewerShortcuts({ measure, children }: ViewerShortcutsProps) {
+  return (
+    <div className="detail-shortcuts">
+      <div className="shortcut-grid">
+        {children}
+        <span>M Value {measure.value ? '✓' : ''}</span>
+        <span>R RA/Dec {measure.sky ? '✓' : ''}</span>
+      </div>
+    </div>
+  );
+}
+
+interface ViewerZoomSectionProps extends Omit<ZoomControlsProps, 'className'>, MeasureTogglesProps {}
+
+/** The zoom buttons and the readout's toggles at the foot of a viewer's sidebar. */
+export function ViewerZoomSection({ options, skyDisabled, valueDisabled, children, ...zoom }: ViewerZoomSectionProps) {
+  return (
+    <div className="zoom-section-bottom">
+      <ZoomControls {...zoom}>{children}</ZoomControls>
+      <MeasureToggles options={options} skyDisabled={skyDisabled} valueDisabled={valueDisabled} />
+    </div>
+  );
+}

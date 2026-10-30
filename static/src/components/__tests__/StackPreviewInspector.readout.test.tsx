@@ -122,18 +122,26 @@ describe('StackPreviewInspector pointer readout', () => {
   it('explains a stack without a solution and keeps RA/Dec off', () => {
     renderInspector({ solution: null });
     expect(screen.getByRole('button', { name: 'RA/Dec' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Sky' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'RA/Dec' })).toHaveAttribute(
       'title',
       'No integrated frame of this stack is plate-solved yet',
     );
   });
 
-  it('draws the sky grid over a solved stack when the overlay is on', () => {
-    renderInspector();
-    fireEvent.click(screen.getByRole('button', { name: 'Sky' }));
-    expect(screen.getByTestId('stack-inspector-sky-overlay')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Sky' }));
-    expect(screen.queryByTestId('stack-inspector-sky-overlay')).not.toBeInTheDocument();
+  it('follows the pointer, on the side that keeps it in the viewer', () => {
+    const canvas = renderInspector();
+    fireEvent.click(screen.getByRole('button', { name: 'RA/Dec' }));
+
+    fireEvent.mouseMove(canvas, { clientX: 30, clientY: 24 });
+    const readout = screen.getByTestId('pointer-readout');
+    expect(readout.style.left).toBe('25%');
+    expect(readout.style.top).toBe('20%');
+    expect(readout.style.transform).toBe('translate(14px, 14px)');
+
+    // Near the bottom right, the box goes above and to the left.
+    fireEvent.mouseMove(canvas, { clientX: 108, clientY: 102 });
+    expect(readout.style.left).toBe('90%');
+    expect(readout.style.top).toBe('85%');
+    expect(readout.style.transform).toBe('translate(calc(-100% - 14px), calc(-100% - 14px))');
   });
 });

@@ -1,34 +1,31 @@
 /* Shared by the image reviewer and the stack inspector. */
 
+/* Follows the pointer; readoutPlacement keeps it inside the viewer. */
 .pointer-readout {
   position: absolute;
-  left: 0.6rem;
-  bottom: 0.6rem;
   z-index: 3;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0.35rem 0.9rem;
-  max-width: calc(100% - 1.2rem);
-  padding: 0.3rem 0.6rem;
+  display: grid;
+  gap: 0.1rem;
+  padding: 0.4rem 0.55rem;
   border: 1px solid var(--color-bg-quaternary);
-  border-radius: 6px;
-  background: var(--color-overlay-light);
+  border-radius: 4px;
+  background: var(--color-overlay-dark);
   color: var(--color-text-primary);
   font-family: var(--font-mono, monospace);
   font-size: 0.72rem;
+  line-height: 1.4;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
   pointer-events: none;
-  box-sizing: border-box;
+}
+
+.pointer-readout-sky {
+  display: grid;
+  gap: 0.1rem;
 }
 
 .pointer-readout-pixel {
   color: var(--color-text-muted);
-}
-
-.pointer-readout-value,
-.pointer-readout-sky {
-  white-space: nowrap;
 }
 
 .measure-toggles {

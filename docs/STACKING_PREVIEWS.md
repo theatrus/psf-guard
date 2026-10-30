@@ -1312,24 +1312,25 @@ PSF Guard quality score and disposition. Accepted frames also report matched
 stars, registration RMS, registration drift, overlap, and integrated-sample
 fraction; excluded or rejected frames retain their reason.
 
-Choose **Inspect full size** to open the native-resolution integration in PSF
-Guard's image inspector, which fills the window. It uses the same controls as
-individual images: scroll to zoom, drag to pan, **F** or **0** to fit, and
-**1** for one image pixel per screen pixel. The full-size stretched PNG is
-loaded only when the inspector is opened, so the project grid continues to use
-the smaller screen preview.
+Choose **Inspect full size** to open the native-resolution integration in the
+same full-window viewer as individual images: the stack on the left, and a
+sidebar with its details, its FITS download, the artifact search and the view
+controls on the right. It uses the same controls as individual images: scroll
+to zoom, drag to pan, **F** or **0** to fit, and **1** for one image pixel per
+screen pixel. The full-size stretched PNG is loaded only when the inspector is
+opened, so the project grid continues to use the smaller screen preview.
 
-To measure the stack, turn on **Value** or **RA/Dec** in the inspector's
-toolbar, or press **M** or **R**, then point at the stack. A box in the corner
+To measure the stack, turn on **Value** or **RA/Dec** under the zoom buttons,
+or press **M** or **R**, then point at the stack. A box beside the pointer
 shows the pixel's position and its linear value in the FITS that **Download
 linear FITS** saves: the processed image after deconvolution or RC-Astro, and
 one value for each channel of a colour stack. RA/Dec comes from the plate
 solution of the stack's reference frame, or of any integrated frame, carried
-onto the stack's grid. **Sky** (**O**) draws the RA/Dec grid over the stack.
-When no integrated frame is solved, RA/Dec and **Sky** are disabled until you
-solve one in **Sky context**. The image viewer uses the same settings.
+onto the stack's grid. When no integrated frame is solved, RA/Dec is disabled
+until you solve one in **Sky context**. The image viewer uses the same
+settings.
 
-![The native-resolution stack filling the window, with its linear value and RA/Dec under the pointer and the sky grid drawn over it](stack-preview-inspection.png)
+![The native-resolution stack in the full-window viewer, with its linear value and RA/Dec beside the pointer](stack-preview-inspection.png)
 
 Choose **Download linear FITS** on the card or in the inspector to retrieve the
 full-resolution floating-point integration from the cache. The FITS is

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
+  CSSProperties,
   MouseEvent as ReactMouseEvent,
   TouchEvent as ReactTouchEvent,
   ReactNode,
@@ -11,11 +12,12 @@ import { apiClient } from '../api/client';
 import type { ArtifactSearchJob, ArtifactSearchResult, PreviewDescriptor, ReferenceRegion } from '../api/types';
 import { useImageZoom } from '../hooks/useImageZoom';
 import { useAsyncImage } from '../hooks/useAsyncImage';
-import { setSkyOverlay, useSkyOverlay } from '../hooks/useSkyOverlay';
-import AstrometryOverlay from './AstrometryOverlay';
+import DetailSection from './DetailSection';
+import ImageViewerFrame from './viewer/ImageViewerFrame';
 import PointerReadout from './viewer/PointerReadout';
-import { MeasureToggles, ZoomControls } from './viewer/ViewerControls';
+import { ViewerShortcuts, ViewerZoomSection } from './viewer/ViewerControls';
 import { useViewerReadout } from './viewer/useViewerReadout';
+import { useViewerZoomHotkeys } from './viewer/useViewerZoomHotkeys';
 import { morphologyLabel } from './artifactMorphology';
 import {
   artifactRegionFromPoints,
@@ -60,9 +62,9 @@ interface StackPreviewInspectorProps {
   errorMessage?: string;
   closeLabel?: string;
   /**
-   * The plate solution of the stack's grid, for RA/Dec under the pointer and
-   * the sky overlay: null while none is known, absent for an image that has
-   * no sky position, such as a calibration master.
+   * The plate solution of the stack's grid, for RA/Dec under the pointer:
+   * null while none is known, absent for an image that has no sky position,
+   * such as a calibration master.
    */
   solution?: OverlaySolution | null;
   /** Why RA/Dec cannot be shown, when `solution` is null. */
@@ -141,11 +143,6 @@ export default function StackPreviewInspector({
   const skyUnavailable = solution === undefined
     ? 'This image has no sky position'
     : solution?.wcs ? undefined : solutionUnavailable;
-  const skyOverlay = useSkyOverlay();
-  const showSky = skyOverlay && !skyUnavailable && loaded && dimensions !== null;
-  useHotkeys('o', () => {
-    if (!skyUnavailable) setSkyOverlay(!skyOverlay);
-  }, [skyOverlay, skyUnavailable]);
   useHotkeys('escape', () => {
     if (selecting) {
       setSelecting(false);
@@ -155,10 +152,7 @@ export default function StackPreviewInspector({
     }
     onClose();
   }, { enableOnFormTags: true }, [onClose, selecting]);
-  useHotkeys('plus,equal', zoom.zoomIn, [zoom.zoomIn]);
-  useHotkeys('minus', zoom.zoomOut, [zoom.zoomOut]);
-  useHotkeys('0,f', zoom.zoomToFit, [zoom.zoomToFit]);
-  useHotkeys('1', zoom.zoomTo100, [zoom.zoomTo100]);
+  useViewerZoomHotkeys(zoom);
 
   useEffect(() => {
     zoom.containerRef.current?.focus();
@@ -334,123 +328,151 @@ export default function StackPreviewInspector({
       : null
   );
 
+  const canvas = (
+    <div
+      className={`image-container zoom-container stack-inspector-canvas ${zoom.hasOverflow ? 'has-overflow' : ''} ${selecting ? 'selecting-artifact-region' : ''}`}
+      ref={zoom.containerRef}
+      onWheel={(event) => {
+        zoom.handleWheel(event);
+        readout.track(event);
+      }}
+      onMouseDown={beginRegion}
+      onMouseMove={moveRegion}
+      onMouseUp={finishRegion}
+      onMouseLeave={(event) => {
+        readout.leave();
+        if (dragStart) finishRegion(event);
+        else zoom.handleMouseUp(event);
+      }}
+      onTouchStart={beginTouchRegion}
+      onTouchMove={moveTouchRegion}
+      onTouchEnd={finishTouchRegion}
+      onTouchCancel={finishTouchRegion}
+      onKeyDown={zoom.handleKeyDown}
+      tabIndex={0}
+    >
+      {!imageUrl ? (
+        <div className="stack-inspector-loading" role="status">{emptyMessage}</div>
+      ) : !loaded && !error && (
+        <div className="stack-inspector-loading">
+          <span className="stack-preview-spinner" aria-hidden="true" />
+          {image.state === 'generating' ? 'Generating preview…' : loadingMessage}
+        </div>
+      )}
+      {error ? (
+        <div className="stack-inspector-loading error" role="alert">
+          {image.error || errorMessage}
+        </div>
+      ) : imageUrl && (
+        <img
+          ref={zoom.imageRef}
+          src={image.src}
+          alt={imageAlt}
+          data-testid="stack-inspector-image"
+          draggable={false}
+          onError={image.onError}
+          onLoad={(event) => {
+            const { naturalWidth: width, naturalHeight: height } = event.currentTarget;
+            if (!width || !height) return;
+            setDimensions({ width, height });
+            zoom.setImageDimensions(width, height, true);
+            const identity = imageIdentity ?? imageUrl;
+            zoom.applyBitmapDimensions(width, height, loadedIdentity.current === identity ? 'preserve' : 'fit');
+            loadedIdentity.current = identity;
+            image.onLoad();
+          }}
+          style={{
+            visibility: loaded ? 'visible' : 'hidden',
+            transform: `translate(${zoom.zoomState.offsetX}px, ${zoom.zoomState.offsetY}px) scale(${zoom.zoomState.scale})`,
+            transformOrigin: '0 0',
+            cursor: selecting || readout.active ? 'crosshair' : (zoom.hasOverflow ? 'grab' : 'default'),
+          }}
+        />
+      )}
+      <PointerReadout {...readout.readout} skyUnavailable={skyUnavailable} />
+      {displayedRegion && (
+        <div
+          className="stack-artifact-region"
+          data-testid="stack-artifact-region"
+          style={{
+            left: zoom.zoomState.offsetX + displayedRegion.x * zoom.zoomState.scale,
+            top: zoom.zoomState.offsetY + displayedRegion.y * zoom.zoomState.scale,
+            width: displayedRegion.width * zoom.zoomState.scale,
+            height: displayedRegion.height * zoom.zoomState.scale,
+          }}
+        />
+      )}
+    </div>
+  );
+
   return (
-    <div className="stack-inspector-overlay" role="presentation" onClick={onClose}>
-      <section
-        className={`stack-inspector ${activeSearch ? 'with-artifact-results' : ''} ${className}`}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="stack-inspector-title"
-        onClick={(event) => event.stopPropagation()}
-      >
-        <header className="stack-inspector-header">
-          <div>
-            <div className="stack-preview-eyebrow">{eyebrow}</div>
-            <h2 id="stack-inspector-title">
-              {title} <span>{label}</span>
-            </h2>
-          </div>
-          <div className="stack-inspector-summary">
-            {summary.map((item) => <span key={item}>{item}</span>)}
-            {dimensions && <span>{dimensions.width} × {dimensions.height}</span>}
-          </div>
-          <button className="close-button" type="button" onClick={onClose} aria-label={closeLabel}>
-            ×
-          </button>
-        </header>
+    <ImageViewerFrame
+      dialog
+      overlayClassName="stack-inspector-overlay"
+      className={`stack-inspector ${className}`.trim()}
+      title={<>{title} <span>{label}</span></>}
+      closeLabel={closeLabel}
+      onClose={onClose}
+      image={canvas}
+      imageStyle={dimensions
+        ? { '--detail-frame-aspect': String(dimensions.width / dimensions.height) } as CSSProperties
+        : undefined}
+    >
+      <DetailSection title={eyebrow} open className="stack-inspector-details">
+        <div className="stack-inspector-summary">
+          {summary.map((item) => <span key={item}>{item}</span>)}
+          {dimensions && <span>{dimensions.width} × {dimensions.height}</span>}
+        </div>
+        {fitsUrl && <a className="stack-preview-download" href={fitsUrl} download>{downloadLabel}</a>}
+      </DetailSection>
 
-        {controls}
+      {controls}
 
-        <div className="stack-inspector-body">
-          <div
-            className={`stack-inspector-canvas zoom-container ${zoom.hasOverflow ? 'has-overflow' : ''} ${selecting ? 'selecting-artifact-region' : ''}`}
-            ref={zoom.containerRef}
-            onWheel={(event) => {
-              zoom.handleWheel(event);
-              readout.track(event);
-            }}
-            onMouseDown={beginRegion}
-            onMouseMove={moveRegion}
-            onMouseUp={finishRegion}
-            onMouseLeave={(event) => {
-              readout.leave();
-              if (dragStart) finishRegion(event);
-              else zoom.handleMouseUp(event);
-            }}
-            onTouchStart={beginTouchRegion}
-            onTouchMove={moveTouchRegion}
-            onTouchEnd={finishTouchRegion}
-            onTouchCancel={finishTouchRegion}
-            onKeyDown={zoom.handleKeyDown}
-            tabIndex={0}
-          >
-            {!imageUrl ? (
-              <div className="stack-inspector-loading" role="status">{emptyMessage}</div>
-            ) : !loaded && !error && (
-              <div className="stack-inspector-loading">
-                <span className="stack-preview-spinner" aria-hidden="true" />
-                {image.state === 'generating' ? 'Generating preview…' : loadingMessage}
-              </div>
-            )}
-            {error ? (
-              <div className="stack-inspector-loading error" role="alert">
-                {image.error || errorMessage}
-              </div>
-            ) : imageUrl && (
-              <img
-                ref={zoom.imageRef}
-                src={image.src}
-                alt={imageAlt}
-                data-testid="stack-inspector-image"
-                draggable={false}
-                onError={image.onError}
-                onLoad={(event) => {
-                  const { naturalWidth: width, naturalHeight: height } = event.currentTarget;
-                  if (!width || !height) return;
-                  setDimensions({ width, height });
-                  zoom.setImageDimensions(width, height, true);
-                  const identity = imageIdentity ?? imageUrl;
-                  zoom.applyBitmapDimensions(width, height, loadedIdentity.current === identity ? 'preserve' : 'fit');
-                  loadedIdentity.current = identity;
-                  image.onLoad();
+      {artifactSource && (
+        <DetailSection title="Source artifacts" open className="stack-artifact-section">
+          <div className="stack-artifact-actions">
+            <button
+              className="stack-artifact-select"
+              type="button"
+              disabled={!loaded || !artifactEnabled || startSearch.isPending}
+              aria-pressed={selecting}
+              onClick={() => {
+                setSelecting((current) => !current);
+                setDragStart(null);
+                setDragEnd(null);
+                setRegionError(null);
+              }}
+            >
+              {selecting ? 'Cancel selection' : 'Find source artifact'}
+            </button>
+            {region && (
+              <button
+                className="stack-artifact-search"
+                type="button"
+                disabled={!artifactEnabled || startSearch.isPending}
+                onClick={() => {
+                  setSearchId(null);
+                  startSearch.reset();
+                  startSearch.mutate(region);
                 }}
-                style={{
-                  visibility: loaded ? 'visible' : 'hidden',
-                  transform: `translate(${zoom.zoomState.offsetX}px, ${zoom.zoomState.offsetY}px) scale(${zoom.zoomState.scale})`,
-                  transformOrigin: '0 0',
-                  cursor: selecting ? 'crosshair' : (zoom.hasOverflow ? 'grab' : 'default'),
-                }}
-              />
-            )}
-            {showSky && solution && dimensions && (
-              <AstrometryOverlay
-                solution={solution}
-                density={0.2}
-                className="stack-inspector-sky-overlay"
-                data-testid="stack-inspector-sky-overlay"
-                style={{
-                  width: `${dimensions.width}px`,
-                  height: `${dimensions.height}px`,
-                  transform: `translate(${zoom.zoomState.offsetX}px, ${zoom.zoomState.offsetY}px) scale(${zoom.zoomState.scale})`,
-                  transformOrigin: '0 0',
-                }}
-              />
-            )}
-            <PointerReadout {...readout.readout} skyUnavailable={skyUnavailable} />
-            {displayedRegion && (
-              <div
-                className="stack-artifact-region"
-                data-testid="stack-artifact-region"
-                style={{
-                  left: zoom.zoomState.offsetX + displayedRegion.x * zoom.zoomState.scale,
-                  top: zoom.zoomState.offsetY + displayedRegion.y * zoom.zoomState.scale,
-                  width: displayedRegion.width * zoom.zoomState.scale,
-                  height: displayedRegion.height * zoom.zoomState.scale,
-                }}
-              />
+              >
+                {startSearch.isPending ? 'Starting…' : 'Search this region'}
+              </button>
             )}
           </div>
-
+          <div className="stack-inspector-hint">
+            {!selecting
+              ? 'Choose Find source artifact, then drag a box over the artifact to rank the frames that put it there.'
+              : displayedRegion && isArtifactRegionCapped(displayedRegion)
+                ? `${MAX_ARTIFACT_REGION_EDGE}px is as wide as the search looks — drag from another corner to move the box`
+                : `Drag a box over the artifact, up to ${MAX_ARTIFACT_REGION_EDGE}px a side`}
+          </div>
+          {regionError && <span className="stack-artifact-region-error" role="alert">{regionError}</span>}
+          {startSearch.error && (
+            <span className="stack-artifact-region-error" role="alert">
+              {startSearch.error instanceof Error ? startSearch.error.message : 'Search failed'}
+            </span>
+          )}
           {activeSearch && (
             <aside className="stack-artifact-results" aria-label="Source-frame search results">
               <header>
@@ -494,7 +516,7 @@ export default function StackPreviewInspector({
                     <article className={`stack-artifact-result ${result.evidence}`} key={result.image_id}>
                       <img
                         src={apiClient.getArtifactCropUrl(
-                          artifactSource!.dbId,
+                          artifactSource.dbId,
                           activeSearch.search_id,
                           result.image_id
                         )}
@@ -532,80 +554,27 @@ export default function StackPreviewInspector({
               )}
             </aside>
           )}
-        </div>
+        </DetailSection>
+      )}
 
-        <footer className="stack-inspector-toolbar">
-          <div className="stack-inspector-hint">
-            {!selecting
-              ? 'Wheel to zoom · drag to pan · F fit · 1 actual size · M value · R RA/Dec · O sky overlay'
-              : displayedRegion && isArtifactRegionCapped(displayedRegion)
-                ? `${MAX_ARTIFACT_REGION_EDGE}px is as wide as the search looks — drag from another corner to move the box`
-                : `Drag a box over the artifact, up to ${MAX_ARTIFACT_REGION_EDGE}px a side`}
-          </div>
-          {regionError && <span className="stack-artifact-region-error" role="alert">{regionError}</span>}
-          {artifactSource && (
-            <>
-              <button
-                className="stack-artifact-select"
-                type="button"
-                disabled={!loaded || !artifactEnabled || startSearch.isPending}
-                aria-pressed={selecting}
-                onClick={() => {
-                  setSelecting((current) => !current);
-                  setDragStart(null);
-                  setDragEnd(null);
-                  setRegionError(null);
-                }}
-              >
-                {selecting ? 'Cancel selection' : 'Find source artifact'}
-              </button>
-              {region && (
-                <button
-                  className="stack-artifact-search"
-                  type="button"
-                  disabled={!artifactEnabled || startSearch.isPending}
-                  onClick={() => {
-                    setSearchId(null);
-                    startSearch.reset();
-                    startSearch.mutate(region);
-                  }}
-                >
-                  {startSearch.isPending ? 'Starting…' : 'Search this region'}
-                </button>
-              )}
-            </>
-          )}
-          {startSearch.error && (
-            <span className="stack-artifact-region-error" role="alert">
-              {startSearch.error instanceof Error ? startSearch.error.message : 'Search failed'}
-            </span>
-          )}
-          {fitsUrl && <a className="stack-preview-download" href={fitsUrl} download>{downloadLabel}</a>}
-          <MeasureToggles
-            options={readout.options}
-            valueDisabled={fitsUrl ? undefined : 'This image has no linear file to read values from'}
-            skyDisabled={skyUnavailable}
-          />
-          <button
-            className="zoom-btn-compact stack-inspector-sky-toggle"
-            type="button"
-            aria-pressed={showSky}
-            disabled={!!skyUnavailable}
-            onClick={() => setSkyOverlay(!skyOverlay)}
-            title={skyUnavailable ?? 'Draw the RA/Dec grid over the stack (O)'}
-          >
-            Sky
-          </button>
-          <ZoomControls
-            percentage={zoom.getZoomPercentage()}
-            onZoomOut={zoom.zoomOut}
-            onFit={zoom.zoomToFit}
-            onActualSize={zoom.zoomTo100}
-            onZoomIn={zoom.zoomIn}
-            className="stack-inspector-zoom-buttons"
-          />
-        </footer>
-      </section>
-    </div>
+      <ViewerShortcuts measure={readout.options}>
+        <span>Wheel Zoom</span>
+        <span>Drag Pan</span>
+        <span>F Fit</span>
+        <span>1 Actual size</span>
+        <span>Esc Close</span>
+      </ViewerShortcuts>
+
+      <ViewerZoomSection
+        percentage={zoom.getZoomPercentage()}
+        onZoomOut={zoom.zoomOut}
+        onFit={zoom.zoomToFit}
+        onActualSize={zoom.zoomTo100}
+        onZoomIn={zoom.zoomIn}
+        options={readout.options}
+        valueDisabled={fitsUrl ? undefined : 'This image has no linear file to read values from'}
+        skyDisabled={skyUnavailable}
+      />
+    </ImageViewerFrame>
   );
 }
