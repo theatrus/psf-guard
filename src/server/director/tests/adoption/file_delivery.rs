@@ -10,7 +10,8 @@ use crate::{
 
 fn connect(a: &Activated) -> Connection {
     let source = a.f._dir.path().join("TargetScheduler.sqlite");
-    a.db.backup("main", &source, None).unwrap();
+    a.db.backup("main", &source, None::<fn(rusqlite::backup::Progress)>)
+        .unwrap();
     let context = a.f.state.get_database("rig").unwrap();
     let mut registry = DbRegistry::default();
     registry

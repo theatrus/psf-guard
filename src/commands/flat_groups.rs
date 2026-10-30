@@ -131,7 +131,11 @@ pub fn run(
         )
         .with_context(|| format!("opening {} read-only", catalog.display()))?;
         source
-            .backup(rusqlite::MAIN_DB, &copy, None)
+            .backup(
+                rusqlite::MAIN_DB,
+                &copy,
+                None::<fn(rusqlite::backup::Progress)>,
+            )
             .with_context(|| format!("copying the catalog to {}", copy.display()))?;
     } else {
         println!("Reusing the copy in {}", copy.display());

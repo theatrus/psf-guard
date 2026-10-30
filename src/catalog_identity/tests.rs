@@ -59,7 +59,9 @@ fn identity_survives_reopen_rename_backup_and_retry_without_touching_ts_history(
     let identity = candidate();
     assert_eq!(commit(&mut connection, identity).unwrap(), identity);
     assert_eq!(commit(&mut connection, identity).unwrap(), identity);
-    connection.backup(MAIN_DB, &backup, None).unwrap();
+    connection
+        .backup(MAIN_DB, &backup, None::<fn(rusqlite::backup::Progress)>)
+        .unwrap();
     drop(connection);
     std::fs::rename(&original, &renamed).unwrap();
     for path in [renamed, backup] {

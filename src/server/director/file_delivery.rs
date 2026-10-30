@@ -426,7 +426,7 @@ pub(super) fn stage(state: &AppState, context: &str, push: &mut Push) -> anyhow:
         let path = state
             .sync_previews
             .source_snapshot_path_for_file(&snapshot)?;
-        copy.backup("main", &path, None)?;
+        copy.backup("main", &path, None::<fn(rusqlite::backup::Progress)>)?;
         let record = state.sync_previews.store_activation(
             context.into(),
             request(context),

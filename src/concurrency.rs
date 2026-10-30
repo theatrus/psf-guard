@@ -182,7 +182,7 @@ impl Stop {
     /// Let this stop interrupt the statement `connection` runs: SQLite ends
     /// it with an interrupt error within a few thousand steps, and a
     /// transaction it was in rolls back when dropped.
-    pub fn interrupts(&self, connection: &rusqlite::Connection) {
+    pub fn interrupts(&self, connection: &mut rusqlite::Connection) {
         /// How many SQLite steps run between looks at the stop.
         const LOOK_EVERY: i32 = 10_000;
         let stop = self.clone();

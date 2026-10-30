@@ -310,12 +310,12 @@ pub(crate) async fn execute_scheduler_sync_paths(
             "The two configured entries point to the same database file."
         );
 
-        let (source, destination) =
+        let (mut source, mut destination) =
             open_scheduler_sync_connections(&source_path, &destination_path)?;
         let preview_stop = guard_mode.preview_stop().cloned();
         if let Some(stop) = &preview_stop {
-            stop.interrupts(&source);
-            stop.interrupts(&destination);
+            stop.interrupts(&mut source);
+            stop.interrupts(&mut destination);
         }
         // An interrupted statement fails with SQLite's interrupt error;
         // a preview reports that it stopped instead.

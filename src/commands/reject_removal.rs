@@ -940,7 +940,6 @@ fn snapshot(
     let mut statement = conn.prepare(&format!("SELECT * FROM \"{table}\" WHERE \"{key}\" = ?1"))?;
     let names: Vec<String> = statement
         .column_names()
-        .iter()
         .map(|name| name.to_string())
         .collect();
     let mut rows = statement.query([value])?;
