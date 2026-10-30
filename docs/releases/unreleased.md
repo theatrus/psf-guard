@@ -279,3 +279,9 @@
   the setting to adjust it.
 
 - Worker settings distinguish the worker on this computer from workers connected to the server. Labels explain task types, concurrent tasks, temporary files and saved tokens; tray status distinguishes waiting for a connection from waiting for tasks.
+
+- Plate solving starts from the solution PixInsight stores in an XISF
+  frame. PixInsight keeps a plate solution as the file's own properties,
+  not as FITS WCS keywords, so PSF Guard missed it and started from the
+  frame's other pointing headers. It now reads the solution as it reads a
+  solved FITS frame's WCS.

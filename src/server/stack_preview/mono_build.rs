@@ -46,7 +46,9 @@ pub(super) fn reference_anchors(
         return HashMap::new();
     };
     let orient = |reference: &PreparedFrame| {
-        let headers = crate::image_io::read_header(&reference.path).unwrap_or_default();
+        let headers = seiza_image_io::read_header(&reference.path)
+            .map(|header| header.cards)
+            .unwrap_or_default();
         ReferenceOrientation {
             north_up: cached_or_embedded_wcs(&ctx, reference, &headers)
                 .and_then(|(wcs, _)| faces_north_up(wcs.cd)),
@@ -86,7 +88,9 @@ pub(super) fn solved_orientation(
     frame: &PreparedFrame,
 ) -> Option<reference::Orientation> {
     let (wcs, _) = cached_or_embedded_wcs(ctx, frame, &[]).or_else(|| {
-        let headers = crate::image_io::read_header(&frame.path).ok()?;
+        let headers = seiza_image_io::read_header(&frame.path)
+            .map(|header| header.cards)
+            .ok()?;
         cached_or_embedded_wcs(ctx, frame, &headers)
     })?;
     crate::sequence_analysis::field_rotation_from_cd(wcs.cd)
@@ -643,7 +647,8 @@ pub(super) fn run_group(
         state.stack_previews.update(job_id, |job| {
             job.groups[group.index].phase = "orienting".into();
         });
-        let headers = crate::image_io::read_header(&group.frames[0].path)
+        let headers = seiza_image_io::read_header(&group.frames[0].path)
+            .map(|header| header.cards)
             .map_err(|error| error.to_string())?;
         // On the build's leased pool, as everything this build computes.
         let (wcs, source) =

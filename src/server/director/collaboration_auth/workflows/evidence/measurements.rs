@@ -1,13 +1,13 @@
 use crate::astrometry_headers::FitsAstrometryHeaders;
-use crate::image_io::FrameHeader;
 use psf_guard_director_core::{
     ephemeris,
     visibility::{IcrsPosition, Site},
 };
 use seiza_fits::HeaderValue;
+use seiza_image_io::FitsHeader;
 use std::sync::LazyLock;
 
-pub(super) fn number(header: &FrameHeader, key: &str, low: f64, high: f64) -> Option<f64> {
+pub(super) fn number(header: &FitsHeader, key: &str, low: f64, high: f64) -> Option<f64> {
     let value = &header
         .cards
         .iter()
@@ -22,7 +22,7 @@ pub(super) fn number(header: &FrameHeader, key: &str, low: f64, high: f64) -> Op
     (n.is_finite() && (low..=high).contains(&n)).then_some(n)
 }
 
-pub(super) fn bandpass(header: &FrameHeader) -> Option<f64> {
+pub(super) fn bandpass(header: &FitsHeader) -> Option<f64> {
     if let Some(n) = number(header, "PGBAND", f64::MIN_POSITIVE, 1e6) {
         return Some(n);
     }
@@ -85,7 +85,7 @@ pub(super) fn moon(
     (illumination, separation)
 }
 
-pub(super) fn director_capture(header: &FrameHeader) -> Result<Option<uuid::Uuid>, ()> {
+pub(super) fn director_capture(header: &FitsHeader) -> Result<Option<uuid::Uuid>, ()> {
     let mut values = header
         .cards
         .iter()
@@ -110,8 +110,8 @@ pub(super) fn director_capture(header: &FrameHeader) -> Result<Option<uuid::Uuid
 mod tests {
     use super::*;
 
-    fn header(cards: &[(&str, HeaderValue)]) -> FrameHeader {
-        FrameHeader {
+    fn header(cards: &[(&str, HeaderValue)]) -> FitsHeader {
+        FitsHeader {
             cards: cards
                 .iter()
                 .map(|(k, v)| ((*k).into(), v.clone()))
@@ -122,7 +122,7 @@ mod tests {
 
     #[test]
     fn measurements_need_recorded_units_and_do_not_fill_unknowns_from_requirements() {
-        let empty = FrameHeader::default();
+        let empty = FitsHeader::default();
         assert_eq!(number(&empty, "PGGRMS", 0.0, 1e6), None);
         assert_eq!(
             number(
@@ -194,7 +194,7 @@ mod tests {
 
     #[test]
     fn director_identity_is_explicit_and_bad_or_duplicate_headers_never_become_ts_captures() {
-        assert_eq!(director_capture(&FrameHeader::default()), Ok(None));
+        assert_eq!(director_capture(&FitsHeader::default()), Ok(None));
         let id = uuid::Uuid::new_v4();
         let valid = ("PGCAPID", HeaderValue::String(id.to_string()));
         assert_eq!(

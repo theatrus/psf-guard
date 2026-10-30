@@ -338,7 +338,7 @@ fn frames(
         if !fingerprints.insert(fingerprint.clone()) {
             return Err(held());
         }
-        let frame_header = crate::image_io::read_frame_header(&path, &path).map_err(|_| held())?;
+        let frame_header = seiza_image_io::read_header(&path).map_err(|_| held())?;
         let headers =
             crate::astrometry_headers::FitsAstrometryHeaders::from_headers(&frame_header.cards);
         let class = crate::image_io::classify_frame(&path, &path, &frame_header);
@@ -523,7 +523,7 @@ pub(in crate::server::director::collaboration_auth) fn selected_rows(
     }
     Ok(found.into_iter().collect())
 }
-fn frame_is_colour(header: &crate::image_io::FrameHeader) -> bool {
+fn frame_is_colour(header: &seiza_image_io::FitsHeader) -> bool {
     header
         .cards
         .iter()
@@ -700,14 +700,14 @@ mod tests {
     }
     #[test]
     fn colour_requires_saved_pixel_evidence() {
-        use crate::image_io::FrameHeader;
         use seiza_fits::HeaderValue;
-        assert!(!frame_is_colour(&FrameHeader::default()));
+        use seiza_image_io::FitsHeader;
+        assert!(!frame_is_colour(&FitsHeader::default()));
         for (key, value) in [
             ("BAYERPAT", HeaderValue::String("RGGB".into())),
             ("NAXIS3", HeaderValue::Integer(3)),
         ] {
-            assert!(frame_is_colour(&FrameHeader {
+            assert!(frame_is_colour(&FitsHeader {
                 cards: vec![(key.into(), value)],
                 ..Default::default()
             }));

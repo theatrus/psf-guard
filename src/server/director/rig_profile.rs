@@ -302,7 +302,7 @@ pub(super) fn header_defaults(catalog: &DatabaseContext, connection: &Connection
         let Some(path) = tree.find_file_first(base) else {
             continue;
         };
-        let Ok(headers) = crate::image_io::read_header(path) else {
+        let Ok(headers) = seiza_image_io::read_header(path).map(|header| header.cards) else {
             continue;
         };
         let parsed = crate::astrometry_headers::FitsAstrometryHeaders::from_headers(&headers);

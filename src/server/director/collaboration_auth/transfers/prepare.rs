@@ -382,7 +382,8 @@ fn hash_with_stop(
     path: &std::path::Path,
     stopping: impl Fn() -> bool,
 ) -> Result<(String, u64, u128), Failure> {
-    crate::image_io::read_header(path)
+    seiza_image_io::read_header(path)
+        .map(|header| header.cards)
         .map_err(|_| held("A package source is not a readable FITS/XISF frame"))?;
     let before = stamp(path)?;
     let mut file =

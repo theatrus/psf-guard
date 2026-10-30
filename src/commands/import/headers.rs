@@ -130,7 +130,9 @@ pub fn read_frame_meta_named(path: &Path, declared: &Path) -> FrameMeta {
         path: path.to_path_buf(),
         ..Default::default()
     };
-    let Ok(header) = crate::image_io::read_frame_header(path, declared) else {
+    let Ok(header) =
+        seiza_image_io::read_header_as(path, seiza_image_io::Format::astronomy(declared))
+    else {
         return meta;
     };
     meta.readable = true;

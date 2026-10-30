@@ -131,7 +131,9 @@ impl ColorFrame {
 impl FitsImage {
     /// Extract temperature from FITS headers
     pub fn extract_temperature(path: &Path) -> Option<f64> {
-        let headers = crate::image_io::read_header(path).ok()?;
+        let headers = seiza_image_io::read_header(path)
+            .map(|header| header.cards)
+            .ok()?;
         let temp_keywords = [
             "CCD-TEMP", "TEMP", "SET-TEMP", "CCD_TEMP", "TEMPERAT", "CCDTEMP",
         ];
@@ -145,7 +147,9 @@ impl FitsImage {
 
     /// Extract camera model from FITS headers
     pub fn extract_camera_model(path: &Path) -> Option<String> {
-        let headers = crate::image_io::read_header(path).ok()?;
+        let headers = seiza_image_io::read_header(path)
+            .map(|header| header.cards)
+            .ok()?;
         let camera_keywords = ["INSTRUME", "CAMERA", "DETECTOR", "CCD_NAME", "CCDNAME"];
         camera_keywords.iter().find_map(|keyword| {
             headers

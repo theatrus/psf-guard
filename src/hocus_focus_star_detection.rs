@@ -9,7 +9,8 @@ pub use seiza_stars::hocus_focus_star_detection::*;
 /// unreadable header falls back to the standard defaults, never an error —
 /// preset selection must not make a frame undetectable.
 pub fn params_for_frame_path(path: &std::path::Path) -> (HocusFocusParams, TelescopeClass) {
-    let (focal, pixel) = crate::image_io::read_header(path)
+    let (focal, pixel) = seiza_image_io::read_header(path)
+        .map(|header| header.cards)
         .map(|headers| {
             let value = |name: &str| {
                 headers
