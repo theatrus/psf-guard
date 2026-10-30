@@ -85,7 +85,12 @@ export async function startAccountsServer(name: string, offset: number): Promise
       await page.goto(`${base}/`);
       await page.getByLabel('Username').fill(user);
       await page.getByLabel('Password').fill(ACCOUNT_PASSWORD);
-      await page.getByRole('button', { name: 'Sign in' }).click();
+      // Signing in reloads the page once the sign-in screen has gone. Wait
+      // for that load, so the caller's next navigation is not cut short.
+      await Promise.all([
+        page.waitForEvent('load'),
+        page.getByRole('button', { name: 'Sign in' }).click(),
+      ]);
       await expect(page.getByRole('heading', { name: 'Sign in to PSF Guard' })).toHaveCount(0);
       if (!dbId) {
         dbId = await page.evaluate(async () => {
