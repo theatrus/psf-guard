@@ -48,17 +48,17 @@ regex = "1.12"
 globset = "0.4"
 semver = "1"
 byteorder = "1.5"
-seiza = "0.47.0"
+seiza = "0.48.0"
 seiza-download = "0.9.0"
 seiza-imgproc = { version = "0.3.2", features = ["parallel"] }
-seiza-fits = "=0.6.0"
-seiza-image-io = "0.11.0"
+seiza-fits = "=0.7.0"
+seiza-image-io = "0.12.0"
 seiza-satellites = { version = "0.22.2", features = ["serde"] }
-seiza-stacking = "0.54.0"
+seiza-stacking = "0.55.0"
 seiza-stretch = "0.3.2"
 # XISF reading. Already in the tree through seiza-stacking, which decodes both
 # containers into the same `seiza_fits::FitsImage`.
-seiza-xisf = "0.7.0"
+seiza-xisf = "0.8.0"
 seiza-background = "0.3.1"
 seiza-calibration = "0.11.0"
 seiza-deconvolution = "0.1.2"
@@ -171,13 +171,3 @@ panic = "unwind"
 [build-dependencies]
 tauri-build = { version = "2.7.3", features = [] }
 toml_edit = "0.25"
-
-# Seiza's shared header reads (theatrus/seiza#408), pinned by commit until
-# the Seiza release that ships them; then these go and the versions above
-# move to it. seiza-core is pinned too, so seiza 0.47.0 sees one copy of its
-# types.
-[patch.crates-io]
-seiza-fits = { git = "https://github.com/theatrus/seiza", rev = "772bc9d4aea7f3cbd33957b6878c21591b1887d0" }
-seiza-xisf = { git = "https://github.com/theatrus/seiza", rev = "772bc9d4aea7f3cbd33957b6878c21591b1887d0" }
-seiza-image-io = { git = "https://github.com/theatrus/seiza", rev = "772bc9d4aea7f3cbd33957b6878c21591b1887d0" }
-seiza-core = { git = "https://github.com/theatrus/seiza", rev = "772bc9d4aea7f3cbd33957b6878c21591b1887d0" }
