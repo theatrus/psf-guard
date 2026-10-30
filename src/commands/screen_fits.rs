@@ -775,7 +775,7 @@ pub(crate) struct FrameHeaders {
 /// Extract filter, exposure and observation time from the FITS header.
 pub(crate) fn extract_headers(path: &Path) -> FrameHeaders {
     let mut out = FrameHeaders::default();
-    let Ok(headers) = crate::image_io::read_header(path) else {
+    let Ok(headers) = seiza_image_io::read_header(path).map(|header| header.cards) else {
         return out;
     };
 

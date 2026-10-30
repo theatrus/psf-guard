@@ -453,13 +453,15 @@ fn cached_prefix_manifest(
 /// rc-astro reversed the rows of every other stack, so that result runs
 /// again.
 fn stored_top_down(fits: &FsPath) -> bool {
-    crate::image_io::read_header(fits).is_ok_and(|headers| {
-        headers.iter().any(|(key, value)| {
-            key == "ROWORDER"
-                && matches!(value, seiza_fits::HeaderValue::String(order)
+    seiza_image_io::read_header(fits)
+        .map(|header| header.cards)
+        .is_ok_and(|headers| {
+            headers.iter().any(|(key, value)| {
+                key == "ROWORDER"
+                    && matches!(value, seiza_fits::HeaderValue::String(order)
                     if order.trim().eq_ignore_ascii_case("TOP-DOWN"))
+            })
         })
-    })
 }
 
 /// Whether a whole chain's result is in the cache, without reading its

@@ -113,7 +113,9 @@ pub struct Candidate {
 
 /// The size a frame's header declares, read without its pixels.
 pub fn read_frame_size(path: &Path) -> Option<FrameSize> {
-    let headers = crate::image_io::read_header(path).ok()?;
+    let headers = seiza_image_io::read_header(path)
+        .map(|header| header.cards)
+        .ok()?;
     let axis = |key: &str| -> Option<u32> {
         headers
             .iter()

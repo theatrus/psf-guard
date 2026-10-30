@@ -45,7 +45,9 @@ pub fn stack_snr(paths: &[String], options: &StackSnrOptions) -> Result<()> {
     let mut candidates = files
         .into_iter()
         .map(|path| {
-            let headers = crate::image_io::read_header(&path).unwrap_or_default();
+            let headers = seiza_image_io::read_header(&path)
+                .map(|header| header.cards)
+                .unwrap_or_default();
             Candidate {
                 exposure_seconds: exposure_from_headers(&headers),
                 acquired: string_card(&headers, "DATE-OBS"),

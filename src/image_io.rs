@@ -1,10 +1,12 @@
 //! One door for reading an image frame, whichever container holds it.
 //!
-//! PSF Guard reads FITS and XISF. Seiza decodes both into the same
-//! [`seiza_fits::FitsImage`] with the same FITS-style header cards, so nothing
-//! downstream — statistics, star detection, stretching, solving, stacking —
-//! needs to know which one it opened. Route every read and every "is this a
-//! frame?" test through here so a new container only has to be added once.
+//! PSF Guard reads FITS and XISF through `seiza-image-io`, which decodes both
+//! into the same [`seiza_fits::FitsImage`] with the same FITS-style header
+//! cards, so nothing downstream — statistics, star detection, stretching,
+//! solving, stacking — needs to know which one it opened. This module adds
+//! PSF Guard's own choices: which files are frames, and the scale a
+//! normalized frame is put on. Route every read and every "is this a frame?"
+//! test through here so those choices hold everywhere.
 
 #[cfg(test)]
 use seiza_fits::WriteHeaderCard;
@@ -16,36 +18,6 @@ use std::path::Path;
 /// `fts` is the old 8.3-era spelling of `fits`; N.I.N.A. and PixInsight both
 /// still read it, so a catalog that contains one should not silently lose it.
 pub const IMAGE_EXTENSIONS: &[&str] = &["fits", "fit", "fts", "xisf"];
-
-/// Failure to read an image, whatever container it came from.
-#[derive(Debug)]
-pub enum ImageError {
-    Fits(seiza_fits::FitsError),
-    Xisf(seiza_xisf::XisfError),
-}
-
-impl std::fmt::Display for ImageError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Fits(error) => write!(f, "{error}"),
-            Self::Xisf(error) => write!(f, "{error}"),
-        }
-    }
-}
-
-impl std::error::Error for ImageError {}
-
-impl From<seiza_fits::FitsError> for ImageError {
-    fn from(error: seiza_fits::FitsError) -> Self {
-        Self::Fits(error)
-    }
-}
-
-impl From<seiza_xisf::XisfError> for ImageError {
-    fn from(error: seiza_xisf::XisfError) -> Self {
-        Self::Xisf(error)
-    }
-}
 
 /// Whether this extension names a frame container, with or without its
 /// leading dot (`xisf` and `.xisf` both answer yes).
@@ -85,62 +57,6 @@ pub fn strip_image_extension(filename: &str) -> &str {
         .rsplit_once('.')
         .map(|(base, _)| base)
         .unwrap_or(filename)
-}
-
-/// Read the header cards without decoding pixels.
-pub fn read_header(path: &Path) -> Result<Vec<(String, HeaderValue)>, ImageError> {
-    read_header_named(path, path)
-}
-
-/// [`read_header`] for a file whose own path does not name its container.
-///
-/// A remote upload streams into a temporary file inside a scanned image root.
-/// That file must not carry a frame extension — a scan would pick it up
-/// mid-write — so the decoder is chosen from the name the client declared
-/// while the bytes are read from `path`.
-pub fn read_header_named(
-    path: &Path,
-    declared: impl AsRef<Path>,
-) -> Result<Vec<(String, HeaderValue)>, ImageError> {
-    if seiza_xisf::is_xisf_path(declared.as_ref()) {
-        Ok(seiza_xisf::read_header(path)?)
-    } else {
-        Ok(seiza_fits::read_header(path)?)
-    }
-}
-
-/// A frame's header cards with the `HISTORY` and `COMMENT` text beside
-/// them.
-///
-/// Processing software records its steps there (Siril in `HISTORY`, ASTAP in
-/// `COMMENT`), which the plain card list leaves out. XISF frames carry
-/// PixInsight's history as properties instead, which [`classify_frame`]
-/// reads itself, so their commentary is empty.
-#[derive(Debug, Clone, Default)]
-pub struct FrameHeader {
-    pub cards: Vec<(String, HeaderValue)>,
-    pub history: Vec<String>,
-    pub comments: Vec<String>,
-}
-
-/// [`read_header_named`] with the commentary kept.
-pub fn read_frame_header(
-    path: &Path,
-    declared: impl AsRef<Path>,
-) -> Result<FrameHeader, ImageError> {
-    if seiza_xisf::is_xisf_path(declared.as_ref()) {
-        Ok(FrameHeader {
-            cards: seiza_xisf::read_header(path)?,
-            ..FrameHeader::default()
-        })
-    } else {
-        let header = seiza_fits::read_header_with_commentary(path)?;
-        Ok(FrameHeader {
-            cards: header.cards,
-            history: header.history,
-            comments: header.comments,
-        })
-    }
 }
 
 /// What processing a frame has been through, as far as its file can tell.
@@ -376,12 +292,17 @@ impl FrameClass {
 /// and `DATE-OBS` say nothing about processing. The marks the tools add
 /// decide, strongest first: integration keywords, then the processing
 /// history (PixInsight's XISF properties; FITS `HISTORY`, ASTAP's
-/// `COMMENT`, `CALSTAT`, `PEDESTAL`, read with [`read_frame_header`]), then
-/// the file name (WBPP and ASTAP suffixes, Siril prefixes, DeepSkyStacker's
-/// `.cal` and `.reg`). A name counts only for a frame with floating-point
+/// `COMMENT`, `CALSTAT`, `PEDESTAL`, read with
+/// [`seiza_image_io::read_header`]), then the file name (WBPP and ASTAP
+/// suffixes, Siril prefixes, DeepSkyStacker's `.cal` and `.reg`). A name
+/// counts only for a frame with floating-point
 /// samples: calibration output is float, camera data is integer, and a raw
 /// `M31_r.fits` shot through an r filter must stay raw.
-pub fn classify_frame(path: &Path, declared: impl AsRef<Path>, header: &FrameHeader) -> FrameClass {
+pub fn classify_frame(
+    path: &Path,
+    declared: impl AsRef<Path>,
+    header: &seiza_image_io::FitsHeader,
+) -> FrameClass {
     let declared = declared.as_ref();
     let headers = header.cards.as_slice();
     if has_integration_card(headers) || has_stack_count(headers) {
@@ -798,14 +719,10 @@ pub const NORMALIZED_FULL_SCALE: f32 = 65535.0;
 /// as a near-black outlier and its neighbours as blown. Only an exact `0:1`
 /// is converted; seiza declines any other declared range, because writers
 /// disagree about what it means.
-pub fn open(path: &Path) -> Result<FitsImage, ImageError> {
-    if seiza_xisf::is_xisf_path(path) {
-        let mut read = seiza_xisf::read_image(path)?;
-        read.rescale_normalized_to(NORMALIZED_FULL_SCALE);
-        Ok(read.image)
-    } else {
-        Ok(FitsImage::open(path)?)
-    }
+pub fn open(path: &Path) -> Result<FitsImage, seiza_image_io::Error> {
+    let mut read = seiza_image_io::read_astronomy(path)?;
+    read.rescale_normalized_to(NORMALIZED_FULL_SCALE);
+    Ok(read.image)
 }
 
 /// Read a rectangle of an image's samples without decoding the rest of the
@@ -932,7 +849,9 @@ mod tests {
     fn reads_xisf_headers_without_decoding_pixels() {
         let directory = tempfile::tempdir().unwrap();
         let path = write_sample_xisf(directory.path(), "light.xisf");
-        let headers = read_header(&path).expect("XISF headers should parse");
+        let headers = seiza_image_io::read_header(&path)
+            .expect("XISF headers should parse")
+            .cards;
         let text = |keyword: &str| {
             headers
                 .iter()
@@ -982,11 +901,14 @@ mod tests {
             "the temporary must stay invisible to scans"
         );
         assert!(
-            read_header(&bare).is_err(),
+            seiza_image_io::read_header(&bare).is_err(),
             "without the declared name this is read as FITS"
         );
 
-        let headers = read_header_named(&bare, "light.xisf").expect("declared name should decode");
+        let format = seiza_image_io::Format::astronomy(Path::new("light.xisf"));
+        let headers = seiza_image_io::read_header_as(&bare, format)
+            .expect("declared name should decode")
+            .cards;
         assert_eq!(
             headers
                 .iter()
@@ -1093,11 +1015,17 @@ mod tests {
     fn reports_which_container_failed() {
         let (_directory, path) = write_temp("broken.xisf", b"not an xisf file at all");
         let error = open(&path).expect_err("a non-XISF body must fail");
-        assert!(matches!(error, ImageError::Xisf(_)), "{error}");
+        assert!(
+            matches!(error.cause(), seiza_image_io::Cause::Xisf(_)),
+            "{error}"
+        );
 
         let (_directory, path) = write_temp("broken.fits", b"not a fits file at all");
         let error = open(&path).expect_err("a non-FITS body must fail");
-        assert!(matches!(error, ImageError::Fits(_)), "{error}");
+        assert!(
+            matches!(error.cause(), seiza_image_io::Cause::Fits(_)),
+            "{error}"
+        );
     }
 
     fn property(id: &str, value: Option<&str>) -> seiza_xisf::XisfProperty {
@@ -1307,7 +1235,7 @@ mod tests {
     }
 
     fn classify_path(path: &Path) -> FrameClass {
-        let header = read_frame_header(path, path).expect("header should read");
+        let header = seiza_image_io::read_header(path).expect("header should read");
         classify_frame(path, path, &header)
     }
 
