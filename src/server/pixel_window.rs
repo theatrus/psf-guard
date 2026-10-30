@@ -44,8 +44,8 @@ pub struct PixelWindowResponse {
     pub values: String,
 }
 
-impl From<seiza_fits::ImageWindow> for PixelWindowResponse {
-    fn from(window: seiza_fits::ImageWindow) -> Self {
+impl From<seiza_image_io::ImageWindow> for PixelWindowResponse {
+    fn from(window: seiza_image_io::ImageWindow) -> Self {
         let bytes: Vec<u8> = window
             .values
             .iter()
@@ -86,7 +86,8 @@ pub(crate) async fn read(
                     .map(|name| name.to_string_lossy().into_owned())
                     .unwrap_or_default();
                 AppError::InternalError(format!(
-                    "Pixel values could not be read from {name}: {error}"
+                    "Pixel values could not be read from {name}: {}",
+                    error.cause()
                 ))
             },
         )

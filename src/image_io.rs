@@ -819,14 +819,8 @@ pub fn read_window(
     y: usize,
     width: usize,
     height: usize,
-) -> Result<seiza_fits::ImageWindow, ImageError> {
-    if seiza_xisf::is_xisf_path(path) {
-        let mut read = seiza_xisf::read_window(path, x, y, width, height)?;
-        read.rescale_normalized_to(NORMALIZED_FULL_SCALE);
-        Ok(read.window)
-    } else {
-        Ok(seiza_fits::read_window(path, x, y, width, height)?)
-    }
+) -> Result<seiza_image_io::ImageWindow, seiza_image_io::Error> {
+    seiza_image_io::read_window(path, x, y, width, height, Some(NORMALIZED_FULL_SCALE))
 }
 
 /// Open a frame as linear samples for calibration and stacking, with the same
