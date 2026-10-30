@@ -460,6 +460,8 @@ Guard reads only the pixels near the pointer from the file, so a large stack
 does not have to load. RA/Dec needs a plate solution: solve the frame in
 **Sky context**, or, for a stack, solve one of its frames.
 
+![A frame's linear value and RA/Dec under the pointer in the image viewer](docs/images/image-detail-readout-desktop.png)
+
 Grades update the active catalog. When that catalog belongs to Target
 Scheduler, or you sync grades back to it, the scheduler can update accepted
 counts and replace rejected exposures. See [quality screening](docs/SCREENING.md)

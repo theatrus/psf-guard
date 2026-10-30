@@ -1329,7 +1329,7 @@ onto the stack's grid. **Sky** (**O**) draws the RA/Dec grid over the stack.
 When no integrated frame is solved, RA/Dec and **Sky** are disabled until you
 solve one in **Sky context**. The image viewer uses the same settings.
 
-![The native-resolution stack in PSF Guard's pan and zoom inspector](stack-preview-inspection.png)
+![The native-resolution stack filling the window, with its linear value and RA/Dec under the pointer and the sky grid drawn over it](stack-preview-inspection.png)
 
 Choose **Download linear FITS** on the card or in the inspector to retrieve the
 full-resolution floating-point integration from the cache. The FITS is

@@ -1083,9 +1083,19 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
     });
   }
 
+  // RA/Dec in the inspector comes from an integrated frame's plate solution,
+  // so solve the frame that has only acquisition coordinates.
+  const solve = await page.request.post(
+    `/api/db/${encodeURIComponent(dbId)}/images/2/astrometry`,
+    { timeout: 60_000 }
+  );
+  expect(solve.ok()).toBeTruthy();
+
   await panel.getByRole('button', { name: 'Inspect full size' }).click();
   const inspector = page.getByRole('dialog', { name: /Alpha M44/i });
   await expect(inspector).toBeVisible();
+  // The inspector fills the window, as the reviewer's detail view does.
+  expect(await inspector.boundingBox()).toEqual({ x: 0, y: 0, width: 1440, height: 1600 });
 
   const fullSizeImage = inspector.getByTestId('stack-inspector-image');
   await page.waitForFunction(
@@ -1134,23 +1144,64 @@ test('builds a real three-frame Seiza stack and exposes its frame decisions', as
   const canvas = inspector.locator('.stack-inspector-canvas');
   const canvasBox = await canvas.boundingBox();
   expect(canvasBox).not.toBeNull();
-  await page.mouse.move(canvasBox!.x + canvasBox!.width / 2, canvasBox!.y + canvasBox!.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(
-    canvasBox!.x + canvasBox!.width / 2 + 120,
-    canvasBox!.y + canvasBox!.height / 2 + 80,
-    { steps: 4 }
-  );
-  await page.mouse.up();
+  const panFromCentre = async () => {
+    await page.mouse.move(canvasBox!.x + canvasBox!.width / 2, canvasBox!.y + canvasBox!.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(
+      canvasBox!.x + canvasBox!.width / 2 + 120,
+      canvasBox!.y + canvasBox!.height / 2 + 80,
+      { steps: 4 }
+    );
+    await page.mouse.up();
+  };
+  await panFromCentre();
   await expect
     .poll(() => fullSizeImage.evaluate((image) => image.style.transform))
     .not.toBe(transformBeforePan);
+  const transformAfterPan = await fullSizeImage.evaluate((image) => image.style.transform);
+
+  // M and R read the stack's linear value and sky position under the
+  // pointer, and O draws the solved frame's sky grid over it.
+  const readout = inspector.getByTestId('pointer-readout');
+  const skyOverlay = inspector.getByTestId('stack-inspector-sky-overlay');
+  await page.keyboard.press('m');
+  await page.keyboard.press('r');
+  await page.keyboard.press('o');
+  await page.mouse.move(canvasBox!.x + canvasBox!.width * 0.4, canvasBox!.y + canvasBox!.height * 0.45);
+  await expect(readout.getByTestId('pointer-readout-value')).toHaveText(/^-?\d/, { timeout: 15_000 });
+  await expect(readout.getByTestId('pointer-readout-sky')).toHaveText(/^RA 08h\d\dm.* Dec \+\d\d°/);
+  await expect(skyOverlay).toBeVisible();
 
   if (process.env.PSF_GUARD_CAPTURE_DOCS === '1') {
     const docs = path.resolve(process.cwd(), '..', 'docs');
-    fs.mkdirSync(docs, { recursive: true });
-    await inspector.screenshot({ path: path.join(docs, 'stack-preview-inspection.png') });
+    fs.mkdirSync(path.join(docs, 'images'), { recursive: true });
+    for (const [viewport, file] of [
+      [{ width: 1440, height: 900 }, 'stack-preview-inspection.png'],
+      [{ width: 390, height: 844 }, 'images/stack-inspector-readout-phone.png'],
+    ] as const) {
+      await page.setViewportSize(viewport);
+      await inspector.getByRole('button', { name: 'Fit', exact: true }).click();
+      const box = (await canvas.boundingBox())!;
+      await page.mouse.move(box.x + box.width * 0.4, box.y + box.height * 0.45);
+      await expect(readout.getByTestId('pointer-readout-value')).toHaveText(/^-?\d/, { timeout: 15_000 });
+      await inspector.screenshot({ path: path.join(docs, file), animations: 'disabled' });
+    }
+    // Back to the view the artifact search below starts from.
+    await page.setViewportSize({ width: 1440, height: 1600 });
+    await inspector.getByRole('button', { name: 'Fit', exact: true }).click();
+    await inspector.getByRole('button', { name: '100%' }).click();
+    await panFromCentre();
+    await expect
+      .poll(() => fullSizeImage.evaluate((image) => image.style.transform))
+      .toBe(transformAfterPan);
   }
+
+  // Turn the readout and sky grid off again for the artifact search below.
+  await page.keyboard.press('m');
+  await page.keyboard.press('r');
+  await page.keyboard.press('o');
+  await expect(readout).toHaveCount(0);
+  await expect(skyOverlay).toHaveCount(0);
 
   await inspector.getByRole('button', { name: 'Find source artifact' }).click();
 
