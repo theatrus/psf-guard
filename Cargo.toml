@@ -31,7 +31,7 @@ psf-guard-director-core = { path = "crates/director-core" }
 psf-guard-director-meta = { path = "crates/director-meta" }
 psf-guard-director-interop = { path = "crates/director-interop" }
 clap = { version = "4", features = ["derive"] }
-rusqlite = { version = "0.40", features = ["backup", "bundled", "hooks"] }
+rusqlite = { version = "0.41", features = ["backup", "bundled", "hooks"] }
 serde = { version = "1.0", features = ["derive"] }
 # `float_roundtrip` makes float parsing correctly rounded. A workspace crate
 # turned it on in September 2026 and feature unification switched the whole
