@@ -171,3 +171,9 @@ panic = "unwind"
 [build-dependencies]
 tauri-build = { version = "2.7.4", features = [] }
 toml_edit = "0.25"
+
+# theatrus/seiza#410, for #1021, until its seiza-calibration release.
+[patch.crates-io]
+seiza-calibration = { git = "https://github.com/theatrus/seiza", rev = "fd03c997bfcca487ce54fcf1b9a4833ef054934c" }
+seiza-imgproc = { git = "https://github.com/theatrus/seiza", rev = "fd03c997bfcca487ce54fcf1b9a4833ef054934c" }
+seiza-stats = { git = "https://github.com/theatrus/seiza", rev = "fd03c997bfcca487ce54fcf1b9a4833ef054934c" }
