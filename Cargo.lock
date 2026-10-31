@@ -5470,7 +5470,7 @@ dependencies = [
 [[package]]
 name = "seiza-calibration"
 version = "0.11.0"
-source = "git+https://github.com/theatrus/seiza?rev=fd03c997bfcca487ce54fcf1b9a4833ef054934c#fd03c997bfcca487ce54fcf1b9a4833ef054934c"
+source = "git+https://github.com/theatrus/seiza?rev=33c61931dcec2f0931b47d2e5d0b3323f79fbb80#33c61931dcec2f0931b47d2e5d0b3323f79fbb80"
 dependencies = [
  "chrono",
  "nalgebra",
@@ -5554,7 +5554,7 @@ dependencies = [
 [[package]]
 name = "seiza-imgproc"
 version = "0.3.2"
-source = "git+https://github.com/theatrus/seiza?rev=fd03c997bfcca487ce54fcf1b9a4833ef054934c#fd03c997bfcca487ce54fcf1b9a4833ef054934c"
+source = "git+https://github.com/theatrus/seiza?rev=33c61931dcec2f0931b47d2e5d0b3323f79fbb80#33c61931dcec2f0931b47d2e5d0b3323f79fbb80"
 dependencies = [
  "rayon",
 ]
@@ -5625,7 +5625,7 @@ dependencies = [
 [[package]]
 name = "seiza-stats"
 version = "0.1.1"
-source = "git+https://github.com/theatrus/seiza?rev=fd03c997bfcca487ce54fcf1b9a4833ef054934c#fd03c997bfcca487ce54fcf1b9a4833ef054934c"
+source = "git+https://github.com/theatrus/seiza?rev=33c61931dcec2f0931b47d2e5d0b3323f79fbb80#33c61931dcec2f0931b47d2e5d0b3323f79fbb80"
 dependencies = [
  "bytemuck",
 ]

@@ -2767,16 +2767,29 @@ fn refusal(
         };
     }
     if !sensor_matches(light, candidate, rules) {
+        let gain_may_differ = candidate.is_master
+            && candidate.dark_subtracted
+            && candidate.kind == CalibrationKind::Flat;
+        if gain_may_differ && rules.allow_flat_gain_offset_mismatch {
+            // Gain and offset are let go: what else is not.
+            let mut at_its_gain = light_seiza.clone();
+            at_its_gain.gain = frame_seiza.gain;
+            at_its_gain.offset = frame_seiza.offset;
+            return seiza_calibration::describe_sensor_mismatch(&at_its_gain, frame_seiza);
+        }
         let mismatch = seiza_calibration::describe_sensor_mismatch(light_seiza, frame_seiza);
-        // A flat master kept out by its gain and offset alone: name the
-        // setting that would let it serve.
-        if candidate.is_master
-            && candidate.kind == CalibrationKind::Flat
-            && !rules.allow_flat_gain_offset_mismatch
-        {
+        // A flat master kept out by its gain and offset alone, whose optics
+        // match too: name the setting that would let it serve.
+        if gain_may_differ {
             let mut lenient = rules.clone();
             lenient.allow_flat_gain_offset_mismatch = true;
-            if sensor_matches(light, candidate, &lenient) {
+            if sensor_matches(light, candidate, &lenient)
+                && seiza_calibration::library::matching::flat_matches(
+                    &library_light(light),
+                    candidate,
+                    &lenient,
+                )
+            {
                 let setting = SettingKey::AllowFlatGainOffsetMismatch.field().label;
                 return format!("{mismatch} (turn on \"{setting}\" to use it)");
             }
@@ -7229,6 +7242,7 @@ fn row_to_frame(row: &rusqlite::Row<'_>) -> rusqlite::Result<CalibrationFrame> {
             format!("unknown calibration kind {raw_kind}").into(),
         )
     })?;
+    let is_master = row.get::<_, Option<i64>>(25)?.unwrap_or(0) != 0;
     Ok(CalibrationFrame {
         id: row.get(0)?,
         frame_uuid: row.get(1)?,
@@ -7262,7 +7276,11 @@ fn row_to_frame(row: &rusqlite::Row<'_>) -> rusqlite::Result<CalibrationFrame> {
         readout_mode_name: row
             .get::<_, Option<String>>(24)?
             .filter(|name| !name.trim().is_empty()),
-        is_master: row.get::<_, Option<i64>>(25)?.unwrap_or(0) != 0,
+        is_master,
+        // Adoption marks every external flat master `BIASSUB` and `DARKSUB`
+        // ([`adopt_external_master`]): PSF Guard calibrates with one as a
+        // dark-subtracted flat, so matching treats it as one too.
+        dark_subtracted: is_master && kind == CalibrationKind::Flat,
         kept_out: quality::KeptOut {
             stray_light: row.get::<_, Option<String>>(26)?.as_deref(),
             grade: row
@@ -8556,6 +8574,7 @@ pub(crate) mod tests {
             readout_mode: None,
             readout_mode_name: None,
             is_master: true,
+            dark_subtracted: false,
             bayer_pattern: None,
             exposure_s: Some(300.0),
             camera_temp: None,
@@ -8667,6 +8686,47 @@ pub(crate) mod tests {
             ["gain light=100 master=0; offset light=20 master=0 \
               (turn on \"External flat masters at another gain\" to use it)"]
         );
+
+        // The hint is only for a master its gain and offset alone keep out:
+        // one for another filter would not serve either way.
+        let master = query_kind(&conn, CalibrationKind::Flat).unwrap().remove(0);
+        assert!(master.dark_subtracted, "adopted as dark-subtracted");
+        let other_filter = CalibrationFrame {
+            filter: Some("OIII".into()),
+            ..master.clone()
+        };
+        let reason = refusal(
+            &light,
+            &light_signature(&light),
+            &other_filter,
+            &global_rules(),
+        );
+        assert_eq!(reason, "gain light=100 master=0; offset light=20 master=0");
+
+        // Set for the light's rig alone, it serves that rig's lights.
+        {
+            let rig = rules::light_rig_uuid(&light);
+            let _rules = RulesInForce::with(
+                &[],
+                &[(
+                    rig.as_str(),
+                    "Scope · Camera",
+                    &[("allow_flat_gain_offset_mismatch", serde_json::json!(true))],
+                )],
+            );
+            assert_eq!(select_for_light(&conn, &light).unwrap().flat.len(), 1);
+            // Once gain and offset are let go, a refusal names only the rest.
+            let other_camera = CalibrationFrame {
+                camera: Some("Other".into()),
+                ..master.clone()
+            };
+            let rules = rules::rules_for_light(&light);
+            let reason = refusal(&light, &light_signature(&light), &other_camera, &rules);
+            assert!(
+                reason.contains("Other") && !reason.contains("gain"),
+                "{reason}"
+            );
+        }
 
         // On: the master serves, is adopted, and the stack's gate for the
         // light takes it.
@@ -9963,6 +10023,7 @@ pub(crate) mod tests {
             readout_mode: None,
             readout_mode_name: None,
             is_master: false,
+            dark_subtracted: false,
             bayer_pattern: None,
             exposure_s: Some(5.0),
             camera_temp: Some(-9.8),
@@ -10022,6 +10083,7 @@ pub(crate) mod tests {
             readout_mode: None,
             readout_mode_name: None,
             is_master: false,
+            dark_subtracted: false,
             bayer_pattern: None,
             exposure_s: Some(0.0),
             camera_temp: Some(-10.0),
@@ -10062,6 +10124,7 @@ pub(crate) mod tests {
             readout_mode: None,
             readout_mode_name: None,
             is_master: false,
+            dark_subtracted: false,
             bayer_pattern: None,
             exposure_s: Some(300.0),
             camera_temp: Some(-10.0),
@@ -10109,6 +10172,7 @@ pub(crate) mod tests {
             readout_mode: None,
             readout_mode_name: None,
             is_master: false,
+            dark_subtracted: false,
             bayer_pattern: None,
             exposure_s: Some(3.0),
             camera_temp: Some(-10.0),
@@ -10154,6 +10218,7 @@ pub(crate) mod tests {
             readout_mode: None,
             readout_mode_name: None,
             is_master: false,
+            dark_subtracted: false,
             bayer_pattern: None,
             exposure_s: Some(300.0),
             camera_temp: Some(0.0),
@@ -10333,6 +10398,7 @@ pub(crate) mod tests {
             readout_mode: None,
             readout_mode_name: None,
             is_master: false,
+            dark_subtracted: false,
             bayer_pattern: None,
             exposure_s: Some(300.0),
             camera_temp: Some(-10.0),
@@ -10929,6 +10995,7 @@ pub(crate) mod tests {
             readout_mode: None,
             readout_mode_name: None,
             is_master: false,
+            dark_subtracted: false,
             bayer_pattern: None,
             exposure_s: Some(3.0),
             camera_temp: temp,
@@ -11871,6 +11938,7 @@ pub(crate) mod tests {
                     readout_mode: None,
                     readout_mode_name: None,
                     is_master: false,
+                    dark_subtracted: false,
                     bayer_pattern: None,
                     exposure_s: Some(2.0),
                     camera_temp: Some(-10.0),
@@ -13412,6 +13480,7 @@ pub(crate) mod tests {
             readout_mode: None,
             readout_mode_name: None,
             is_master: false,
+            dark_subtracted: false,
             bayer_pattern: None,
             exposure_s: Some(3.0),
             camera_temp: Some(-10.0),
@@ -13477,6 +13546,7 @@ pub(crate) mod tests {
             readout_mode: None,
             readout_mode_name: None,
             is_master: false,
+            dark_subtracted: false,
             bayer_pattern: None,
             exposure_s: Some(3.0),
             camera_temp: Some(-10.0),

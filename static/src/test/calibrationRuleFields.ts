@@ -106,7 +106,7 @@ export const CALIBRATION_RULE_FIELDS: CalibrationRuleField[] = [
     "key": "allow_flat_gain_offset_mismatch",
     "group": "matching",
     "label": "External flat masters at another gain",
-    "help": "Use an external flat master whose gain or offset differs from the light's. Turn on only when the master's own flat darks were subtracted, as its producer does when it records DARKSUB, and the camera's normalized response does not change with gain. Raw flats, darks and bias still match the light's gain and offset.",
+    "help": "Use an external flat master whose gain or offset differs from the light's, when its own flat darks were subtracted (its header records DARKSUB). Turn on only when the camera's normalized flat does not change with gain. Raw flats, darks and bias still match the light's gain and offset.",
     "effect": "matching",
     "kind": {
       "type": "toggle"
