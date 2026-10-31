@@ -597,7 +597,7 @@ pub(super) fn run_import_blocking(
         rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_URI,
     )
     .map_err(|e| anyhow::anyhow!("opening {} for import: {}", ctx.database_path, e))?;
-    stop.interrupts(&conn);
+    stop.interrupts(&mut conn);
     let mut options = options.clone();
     options.pair_derivatives &= ctx.pair_calibrated_copies.is_on();
     options.light_filter = light_filter;

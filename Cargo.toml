@@ -31,7 +31,7 @@ psf-guard-director-core = { path = "crates/director-core" }
 psf-guard-director-meta = { path = "crates/director-meta" }
 psf-guard-director-interop = { path = "crates/director-interop" }
 clap = { version = "4", features = ["derive"] }
-rusqlite = { version = "0.40", features = ["backup", "bundled", "hooks"] }
+rusqlite = { version = "0.41", features = ["backup", "bundled", "hooks"] }
 serde = { version = "1.0", features = ["derive"] }
 # `float_roundtrip` makes float parsing correctly rounded. A workspace crate
 # turned it on in September 2026 and feature unification switched the whole
@@ -96,13 +96,13 @@ include_dir = "0.7"
 mime_guess = "2.0"
 humantime = "2.3"
 tempfile = "3.27"
-tauri = { version = "2.12.4", features = ["custom-protocol", "tray-icon"], optional = true }
-tauri-plugin-dialog = { version = "2.8.3", optional = true }
+tauri = { version = "2.12.5", features = ["custom-protocol", "tray-icon"], optional = true }
+tauri-plugin-dialog = { version = "2.8.4", optional = true }
 tauri-plugin-process = { version = "2.4.0", optional = true }
 # One app window: a second launch, such as Open PSF Guard in the worker's
 # tray, brings the open window forward instead of starting another server.
-tauri-plugin-single-instance = { version = "2", optional = true }
-tauri-plugin-updater = { version = "2.14.0", optional = true }
+tauri-plugin-single-instance = { version = "2.5.5", optional = true }
+tauri-plugin-updater = { version = "2.14.1", optional = true }
 dirs = "7.0"
 dunce = "1"
 rpassword = "7.5.4"
@@ -169,5 +169,5 @@ inherits = "release"
 panic = "unwind"
 
 [build-dependencies]
-tauri-build = { version = "2.7.3", features = [] }
+tauri-build = { version = "2.7.4", features = [] }
 toml_edit = "0.25"

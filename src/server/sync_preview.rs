@@ -638,7 +638,6 @@ pub fn connection_fingerprint(
             .with_context(|| format!("reading {} for sync fingerprint", query.label))?;
         let columns: Vec<usize> = statement
             .column_names()
-            .iter()
             .enumerate()
             .filter(|(_, column)| {
                 !query

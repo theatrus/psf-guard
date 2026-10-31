@@ -161,12 +161,12 @@ async fn pull_from(
         materialize(&bundle, &staged_path, &local_path)
             .context("staging the peer's bundle as a scheduler database")?;
 
-        let source =
+        let mut source =
             open_scheduler_connection_with_flags(&staged_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
                 .context("opening the staged bundle")?;
-        let destination = open_local(&local_path, dry_run)?;
-        stop.interrupts(&source);
-        stop.interrupts(&destination);
+        let mut destination = open_local(&local_path, dry_run)?;
+        stop.interrupts(&mut source);
+        stop.interrupts(&mut destination);
         require_pull_capable(&source).context("the peer's catalog")?;
         require_pull_capable(&destination).context("the local database")?;
 
