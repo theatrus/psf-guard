@@ -386,6 +386,19 @@ calibration, and the source file needs no header edits.
 how they take part: use one whenever it matches (the default), only when raw
 frames cannot build a master, or never. A rig can choose for itself.
 
+A flat master integrated at another gain or offset than the lights, such as
+flats and flat darks shot at gain 0 for lights at gain 100, is refused by
+default, and the report says so: `gain light=100 master=0; offset light=80
+master=0`. **External flat masters at another gain**, in the same panel or
+a rig's own settings, lets such a master serve. PSF Guard takes every
+external flat master as already dark-subtracted (above), and this setting
+relies on that too. Turn it on only when your flat masters' own flat darks
+were subtracted before they were normalized, as a `DARKSUB = T` header
+records, and when your camera's normalized flat does not change with gain.
+Raw flats, darks and bias still match the lights' gain and offset. Turning
+it on changes the matching settings a rig's stacks are keyed by, so they
+build again.
+
 ## Files that move
 
 Capture software drops calibration frames where it likes; a filer or a hand
