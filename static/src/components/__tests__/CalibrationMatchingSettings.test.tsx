@@ -93,6 +93,25 @@ describe('CalibrationMatchingSettings', () => {
     expect(screen.getByLabelText('Maximum time difference for darks')).toHaveValue(90);
   });
 
+  it('lets external flat masters at another gain serve, off by default', async () => {
+    let saved: Record<string, unknown> | null = null;
+    server.use(
+      http.get('/api/settings/calibration', () => HttpResponse.json(current())),
+      http.put('/api/settings/calibration', async ({ request }) => {
+        saved = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json(current({ allow_flat_gain_offset_mismatch: true }));
+      }),
+    );
+    render(<CalibrationMatchingSettings />, { wrapper: wrapper() });
+    const allow = await screen.findByLabelText('External flat masters at another gain');
+    expect(allow).toHaveValue('off');
+    expect(allow.closest('fieldset')).toHaveTextContent('Matching');
+    fireEvent.change(allow, { target: { value: 'on' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(saved).toEqual({ rules: { allow_flat_gain_offset_mismatch: true } }));
+    await waitFor(() => expect(screen.getByLabelText('External flat masters at another gain')).toHaveValue('on'));
+  });
+
   it('makes a check advisory or turns it off', async () => {
     let saved: Record<string, unknown> | null = null;
     server.use(

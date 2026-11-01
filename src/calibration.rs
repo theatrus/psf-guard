@@ -1889,9 +1889,10 @@ fn light_signature(light: &FrameMeta) -> Signature {
     seiza_calibration::library::matching::light_signature(&library_light(light))
 }
 
-/// Whether a candidate's sensor settings admit this light.
-fn sensor_matches(light: &FrameMeta, candidate: &CalibrationFrame) -> bool {
-    seiza_calibration::library::matching::sensor_matches(&library_light(light), candidate)
+/// Whether a candidate's sensor settings admit this light under its rig's
+/// rules, as selection asks ([`Rules::admits_sensor`]).
+fn sensor_matches(light: &FrameMeta, candidate: &CalibrationFrame, rules: &Rules) -> bool {
+    rules.admits_sensor(&library_light(light), candidate)
 }
 
 /// A light as the library matches it: its header, under its rig's key.
@@ -2765,8 +2766,35 @@ fn refusal(
             _ => "marked for lights before it".to_string(),
         };
     }
-    if !sensor_matches(light, candidate) {
-        return seiza_calibration::describe_sensor_mismatch(light_seiza, frame_seiza);
+    if !sensor_matches(light, candidate, rules) {
+        let gain_may_differ = candidate.is_master
+            && candidate.dark_subtracted
+            && candidate.kind == CalibrationKind::Flat;
+        if gain_may_differ && rules.allow_flat_gain_offset_mismatch {
+            // Gain and offset are let go: what else is not.
+            let mut at_its_gain = light_seiza.clone();
+            at_its_gain.gain = frame_seiza.gain;
+            at_its_gain.offset = frame_seiza.offset;
+            return seiza_calibration::describe_sensor_mismatch(&at_its_gain, frame_seiza);
+        }
+        let mismatch = seiza_calibration::describe_sensor_mismatch(light_seiza, frame_seiza);
+        // A flat master kept out by its gain and offset alone, whose optics
+        // match too: name the setting that would let it serve.
+        if gain_may_differ {
+            let mut lenient = rules.clone();
+            lenient.allow_flat_gain_offset_mismatch = true;
+            if sensor_matches(light, candidate, &lenient)
+                && seiza_calibration::library::matching::flat_matches(
+                    &library_light(light),
+                    candidate,
+                    &lenient,
+                )
+            {
+                let setting = SettingKey::AllowFlatGainOffsetMismatch.field().label;
+                return format!("{mismatch} (turn on \"{setting}\" to use it)");
+            }
+        }
+        return mismatch;
     }
     match candidate.kind {
         CalibrationKind::Dark => {
@@ -3349,7 +3377,7 @@ fn flat_near_miss_in(
         if (candidate.is_master && policy == ExternalMasterPolicy::Ignore)
             || candidate.kept_out.is_some()
             || !validity_admits(candidate, light.timestamp)
-            || !sensor_matches(light, candidate)
+            || !sensor_matches(light, candidate, rules)
         {
             continue;
         }
@@ -7214,6 +7242,7 @@ fn row_to_frame(row: &rusqlite::Row<'_>) -> rusqlite::Result<CalibrationFrame> {
             format!("unknown calibration kind {raw_kind}").into(),
         )
     })?;
+    let is_master = row.get::<_, Option<i64>>(25)?.unwrap_or(0) != 0;
     Ok(CalibrationFrame {
         id: row.get(0)?,
         frame_uuid: row.get(1)?,
@@ -7247,7 +7276,11 @@ fn row_to_frame(row: &rusqlite::Row<'_>) -> rusqlite::Result<CalibrationFrame> {
         readout_mode_name: row
             .get::<_, Option<String>>(24)?
             .filter(|name| !name.trim().is_empty()),
-        is_master: row.get::<_, Option<i64>>(25)?.unwrap_or(0) != 0,
+        is_master,
+        // Adoption marks every external flat master `BIASSUB` and `DARKSUB`
+        // ([`adopt_external_master`]): PSF Guard calibrates with one as a
+        // dark-subtracted flat, so matching treats it as one too.
+        dark_subtracted: is_master && kind == CalibrationKind::Flat,
         kept_out: quality::KeptOut {
             stray_light: row.get::<_, Option<String>>(26)?.as_deref(),
             grade: row
@@ -8541,6 +8574,7 @@ pub(crate) mod tests {
             readout_mode: None,
             readout_mode_name: None,
             is_master: true,
+            dark_subtracted: false,
             bayer_pattern: None,
             exposure_s: Some(300.0),
             camera_temp: None,
@@ -8551,7 +8585,7 @@ pub(crate) mod tests {
             kept_out: None,
             source_verified: false,
         };
-        assert!(sensor_matches(&light, &master));
+        assert!(sensor_matches(&light, &master, &global_rules()));
         assert!(temperature_admits(
             light.camera_temp,
             &master,
@@ -8564,7 +8598,7 @@ pub(crate) mod tests {
             is_master: false,
             ..master.clone()
         };
-        assert!(!sensor_matches(&light, &raw));
+        assert!(!sensor_matches(&light, &raw, &global_rules()));
         assert!(!temperature_admits(
             light.camera_temp,
             &raw,
@@ -8576,7 +8610,149 @@ pub(crate) mod tests {
             camera: Some("Other".into()),
             ..master.clone()
         };
-        assert!(!sensor_matches(&light, &other));
+        assert!(!sensor_matches(&light, &other, &global_rules()));
+    }
+
+    /// A flat master another program integrated at gain 0, from flats and
+    /// flat darks of its own: `DARKSUB` and `FLATNORM` set, as in #1021.
+    fn write_flat_master_at_gain_zero(path: &Path) {
+        let mut header = Vec::new();
+        fits_card(&mut header, "SIMPLE  =                    T");
+        fits_card(&mut header, "BITPIX  =                  -32");
+        fits_card(&mut header, "NAXIS   =                    2");
+        fits_card(&mut header, "NAXIS1  =                    4");
+        fits_card(&mut header, "NAXIS2  =                    4");
+        fits_card(&mut header, "IMAGETYP= 'MASTER FLAT'");
+        fits_card(&mut header, "FILTER  = 'Ha'");
+        fits_card(&mut header, "EXPTIME =               3.9065");
+        fits_card(&mut header, "GAIN    =                    0");
+        fits_card(&mut header, "OFFSET  =                    0");
+        fits_card(&mut header, "XBINNING=                    1");
+        fits_card(&mut header, "YBINNING=                    1");
+        fits_card(&mut header, "TELESCOP= 'Scope'");
+        fits_card(&mut header, "INSTRUME= 'Camera'");
+        fits_card(&mut header, "DARKSUB =                    T");
+        fits_card(&mut header, "FLATNORM=                    T");
+        fits_card(&mut header, "DATE-OBS= '2025-11-11T08:52:21.616'");
+        fits_card(&mut header, "END");
+        header.resize(header.len().div_ceil(2880) * 2880, b' ');
+        let mut payload = Vec::new();
+        for _ in 0..16 {
+            payload.extend(1.0f32.to_be_bytes());
+        }
+        payload.resize(2880, 0);
+        let mut file = std::fs::File::create(path).unwrap();
+        file.write_all(&header).unwrap();
+        file.write_all(&payload).unwrap();
+    }
+
+    #[test]
+    fn an_external_flat_master_at_another_gain_serves_when_the_setting_allows_it() {
+        let _policy = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        configure_external_master_policy(None);
+        let temp = tempfile::tempdir().unwrap();
+        let master_path = temp.path().join("master_flat_Ha_fd.fits");
+        write_flat_master_at_gain_zero(&master_path);
+        let light_path = temp.path().join("light.fits");
+        write_test_fits(&light_path, "LIGHT", 1_100);
+        // A flat needs a dark or bias master beside it.
+        let dark_path = temp.path().join("masterDark_BIN-1_EXPOSURE-300.00s.fits");
+        write_pixinsight_master(&dark_path, "Master Dark", 0.02, None);
+        let metas = [&master_path, &dark_path]
+            .map(|path| crate::commands::import::headers::read_frame_meta(path));
+        let mut conn = Connection::open_in_memory().unwrap();
+        {
+            let tx = conn.transaction().unwrap();
+            let outcome = import_calibration_frames(&tx, &metas, Some("profile")).unwrap();
+            assert_eq!((outcome.flat, outcome.dark), (1, 1));
+            tx.commit().unwrap();
+        }
+        let light = crate::commands::import::headers::read_frame_meta(&light_path);
+
+        // Off, the default: the light is shot at gain 100 and offset 20, so
+        // the master is refused, and the refusal names the setting.
+        assert!(select_for_light(&conn, &light).unwrap().flat.is_empty());
+        let explained = explain_calibration(&conn, &light).unwrap();
+        let flat = explained
+            .kinds
+            .iter()
+            .find(|kind| kind.kind == "flat")
+            .unwrap();
+        assert_eq!(
+            flat.refused
+                .iter()
+                .map(|refused| refused.reason.as_str())
+                .collect::<Vec<_>>(),
+            ["gain light=100 master=0; offset light=20 master=0 \
+              (turn on \"External flat masters at another gain\" to use it)"]
+        );
+
+        // The hint is only for a master its gain and offset alone keep out:
+        // one for another filter would not serve either way.
+        let master = query_kind(&conn, CalibrationKind::Flat).unwrap().remove(0);
+        assert!(master.dark_subtracted, "adopted as dark-subtracted");
+        let other_filter = CalibrationFrame {
+            filter: Some("OIII".into()),
+            ..master.clone()
+        };
+        let reason = refusal(
+            &light,
+            &light_signature(&light),
+            &other_filter,
+            &global_rules(),
+        );
+        assert_eq!(reason, "gain light=100 master=0; offset light=20 master=0");
+
+        // Set for the light's rig alone, it serves that rig's lights.
+        {
+            let rig = rules::light_rig_uuid(&light);
+            let _rules = RulesInForce::with(
+                &[],
+                &[(
+                    rig.as_str(),
+                    "Scope · Camera",
+                    &[("allow_flat_gain_offset_mismatch", serde_json::json!(true))],
+                )],
+            );
+            assert_eq!(select_for_light(&conn, &light).unwrap().flat.len(), 1);
+            // Once gain and offset are let go, a refusal names only the rest.
+            let other_camera = CalibrationFrame {
+                camera: Some("Other".into()),
+                ..master.clone()
+            };
+            let rules = rules::rules_for_light(&light);
+            let reason = refusal(&light, &light_signature(&light), &other_camera, &rules);
+            assert!(
+                reason.contains("Other") && !reason.contains("gain"),
+                "{reason}"
+            );
+        }
+
+        // On: the master serves, is adopted, and the stack's gate for the
+        // light takes it.
+        let _rules =
+            RulesInForce::global(&[("allow_flat_gain_offset_mismatch", serde_json::json!(true))]);
+        let selection = select_for_light(&conn, &light).unwrap();
+        assert_eq!(selection.flat.len(), 1);
+        assert!(selection.flat[0].is_master);
+        let (masters, applied) = resolve_or_build_masters(
+            &conn,
+            &temp.path().join("cache"),
+            std::slice::from_ref(&light_path),
+            None,
+            None,
+            CalibrationMode::Auto,
+        )
+        .unwrap();
+        assert!(
+            applied.flat_master.is_some() && applied.dark_master.is_some(),
+            "{applied:?}"
+        );
+        let light_frame = crate::image_io::open_linear_frame(&light_path).unwrap();
+        assert!(masters.validate_light_frame(&light_frame).is_err());
+        masters
+            .validate_light_frame_with(&light_frame, &light_match_tolerances(&light))
+            .unwrap();
     }
 
     #[test]
@@ -9847,6 +10023,7 @@ pub(crate) mod tests {
             readout_mode: None,
             readout_mode_name: None,
             is_master: false,
+            dark_subtracted: false,
             bayer_pattern: None,
             exposure_s: Some(5.0),
             camera_temp: Some(-9.8),
@@ -9906,6 +10083,7 @@ pub(crate) mod tests {
             readout_mode: None,
             readout_mode_name: None,
             is_master: false,
+            dark_subtracted: false,
             bayer_pattern: None,
             exposure_s: Some(0.0),
             camera_temp: Some(-10.0),
@@ -9946,6 +10124,7 @@ pub(crate) mod tests {
             readout_mode: None,
             readout_mode_name: None,
             is_master: false,
+            dark_subtracted: false,
             bayer_pattern: None,
             exposure_s: Some(300.0),
             camera_temp: Some(-10.0),
@@ -9993,6 +10172,7 @@ pub(crate) mod tests {
             readout_mode: None,
             readout_mode_name: None,
             is_master: false,
+            dark_subtracted: false,
             bayer_pattern: None,
             exposure_s: Some(3.0),
             camera_temp: Some(-10.0),
@@ -10038,6 +10218,7 @@ pub(crate) mod tests {
             readout_mode: None,
             readout_mode_name: None,
             is_master: false,
+            dark_subtracted: false,
             bayer_pattern: None,
             exposure_s: Some(300.0),
             camera_temp: Some(0.0),
@@ -10048,7 +10229,7 @@ pub(crate) mod tests {
             kept_out: None,
             source_verified: false,
         };
-        assert!(!sensor_matches(&light, &candidate));
+        assert!(!sensor_matches(&light, &candidate, &global_rules()));
         assert!(!temperature_matches(
             light.camera_temp,
             candidate.camera_temp,
@@ -10217,6 +10398,7 @@ pub(crate) mod tests {
             readout_mode: None,
             readout_mode_name: None,
             is_master: false,
+            dark_subtracted: false,
             bayer_pattern: None,
             exposure_s: Some(300.0),
             camera_temp: Some(-10.0),
@@ -10813,6 +10995,7 @@ pub(crate) mod tests {
             readout_mode: None,
             readout_mode_name: None,
             is_master: false,
+            dark_subtracted: false,
             bayer_pattern: None,
             exposure_s: Some(3.0),
             camera_temp: temp,
@@ -11755,6 +11938,7 @@ pub(crate) mod tests {
                     readout_mode: None,
                     readout_mode_name: None,
                     is_master: false,
+                    dark_subtracted: false,
                     bayer_pattern: None,
                     exposure_s: Some(2.0),
                     camera_temp: Some(-10.0),
@@ -13296,6 +13480,7 @@ pub(crate) mod tests {
             readout_mode: None,
             readout_mode_name: None,
             is_master: false,
+            dark_subtracted: false,
             bayer_pattern: None,
             exposure_s: Some(3.0),
             camera_temp: Some(-10.0),
@@ -13361,6 +13546,7 @@ pub(crate) mod tests {
             readout_mode: None,
             readout_mode_name: None,
             is_master: false,
+            dark_subtracted: false,
             bayer_pattern: None,
             exposure_s: Some(3.0),
             camera_temp: Some(-10.0),

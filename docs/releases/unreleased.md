@@ -16,6 +16,13 @@
 
 ## Changes
 
+- **External flat masters at another gain**, a new setting in
+  **Settings › Processing › Calibration › Matching** and in each rig's
+  settings, lets a flat master from other software calibrate lights shot at
+  another gain or offset. Use it for a master whose own flat darks were
+  subtracted, such as one built from gain-0 flats for gain-100 lights. It is
+  off by default, and a master refused only for its gain and offset now
+  names the setting.
 - The stack inspector opens in the image viewer's layout: it fills the
   browser or app window, with the stack beside a sidebar that holds its
   details, every FITS its card offers, its **Sky context**, the artifact

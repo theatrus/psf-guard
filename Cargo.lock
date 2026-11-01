@@ -5432,9 +5432,9 @@ dependencies = [
 
 [[package]]
 name = "seiza"
-version = "0.48.0"
+version = "0.48.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8bcab05efeb3b535e5b010845cfb067423e8afc9419807f635f16548486b2bdc"
+checksum = "47927871f9d960e5c7553ca6fb9d24e66f5032a06f39fd79383295bd63f156ea"
 dependencies = [
  "directories",
  "image",
@@ -5469,9 +5469,9 @@ dependencies = [
 
 [[package]]
 name = "seiza-calibration"
-version = "0.11.0"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce08aa7f1e82fb9b1a42957c3b477a738b0a6e8e85c94b7d80af02ea9ef796f8"
+checksum = "7951baf7a4af4cfdf05a5e531f0fcc0bb9299d02a4820a1dece52521ba8c82ec"
 dependencies = [
  "chrono",
  "nalgebra",
@@ -5581,9 +5581,9 @@ dependencies = [
 
 [[package]]
 name = "seiza-stacking"
-version = "0.55.0"
+version = "0.56.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fbd98db3f697d0f02294d8de7bfa7984ebc2093fd66945c77f992cdb0a74e7bb"
+checksum = "e5e312f6e97ec102425ec2f49844b438f425d697b74a527a0fe2ae6dd66c72b0"
 dependencies = [
  "bytemuck",
  "fs2",
