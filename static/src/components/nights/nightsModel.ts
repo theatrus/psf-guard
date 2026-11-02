@@ -75,11 +75,32 @@ export function formatNightDate(date: string): string {
 }
 
 export function formatClock(ms: number, zone?: string): string {
-  return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', ...(zone ? { timeZone: zone } : {}) });
+  const usable = usableZone(zone);
+  return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', ...(usable ? { timeZone: usable } : {}) });
 }
 
 /** The browser's time zone, which times are read in when a site names none. */
 export const BROWSER_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+const knownZones = new Map<string, boolean>();
+
+/** A site's time zone when this browser knows it, else `undefined` for the
+ *  browser's own. The server checks only a name's shape, and browsers know
+ *  different zones. */
+export function usableZone(zone: string | null | undefined): string | undefined {
+  if (!zone) return undefined;
+  let known = knownZones.get(zone);
+  if (known === undefined) {
+    try {
+      new Intl.DateTimeFormat('en-US', { timeZone: zone });
+      known = true;
+    } catch {
+      known = false;
+    }
+    knownZones.set(zone, known);
+  }
+  return known ? zone : undefined;
+}
 
 /** The wall clock in `zone` at an instant. */
 function wallClock(ms: number, zone: string) {
@@ -99,8 +120,9 @@ function zoneOffsetMs(ms: number, zone: string): number {
 /** `HH:MM` in `zone`, or the browser's clock, for a time field. */
 export function clockValue(ms: number, zone?: string): string {
   const pad = (value: number) => String(value).padStart(2, '0');
-  if (zone) {
-    const wall = wallClock(ms, zone);
+  const usable = usableZone(zone);
+  if (usable) {
+    const wall = wallClock(ms, usable);
     return `${pad(wall.hour)}:${pad(wall.minute)}`;
   }
   const at = new Date(ms);
@@ -119,12 +141,13 @@ export function clockOnNight(date: string, clock: string, zone?: string): number
   if (hours > 23 || minutes > 59) return null;
   const [year, month, day] = date.split('-').map(Number);
   const onDay = hours < 12 ? day + 1 : day;
-  if (!zone) return new Date(year, month - 1, onDay, hours, minutes).getTime();
+  const usable = usableZone(zone);
+  if (!usable) return new Date(year, month - 1, onDay, hours, minutes).getTime();
   // The wall time read as UTC, less the zone's offset there; a second pass
   // settles a clock change between the guess and the answer.
   const wall = Date.UTC(year, month - 1, onDay, hours, minutes);
-  const guess = wall - zoneOffsetMs(wall, zone);
-  return wall - zoneOffsetMs(guess, zone);
+  const guess = wall - zoneOffsetMs(wall, usable);
+  return wall - zoneOffsetMs(guess, usable);
 }
 
 /**

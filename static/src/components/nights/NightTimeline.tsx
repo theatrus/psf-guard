@@ -102,8 +102,11 @@ interface Props {
  * planner chose its target.
  */
 export default function NightTimeline({ night, scheduled, colours, now, cloudThreshold, zone, bands = [], onMoveBlock }: Props) {
-  const [chosen, setChosen] = useState<number | null>(null);
-  const [drag, setDrag] = useState<{ index: number; x: number; dx: number } | null>(null);
+  // Blocks keep their key while a re-plan moves them, so a chosen or
+  // dragged block, and the focus on it, stay with it.
+  const keys = blockKeys(scheduled.blocks);
+  const [chosen, setChosen] = useState<string | null>(null);
+  const [drag, setDrag] = useState<{ key: string; x: number; dx: number } | null>(null);
   const track = useRef<HTMLDivElement>(null);
   // Set when a drag moved a block, so the click that ends it chooses nothing.
   const moved = useRef(false);
@@ -118,26 +121,29 @@ export default function NightTimeline({ night, scheduled, colours, now, cloudThr
   };
   const ticks: number[] = [];
   for (let t = Math.ceil(start / HOUR_MS) * HOUR_MS; t < end; t += HOUR_MS) ticks.push(t);
-  const block = chosen !== null ? scheduled.blocks[chosen] : null;
+  const chosenIndex = chosen === null ? -1 : keys.indexOf(chosen);
+  const block = chosenIndex >= 0 ? scheduled.blocks[chosenIndex] : null;
   const toMs = (dx: number) => {
     const width = track.current?.getBoundingClientRect().width ?? 0;
     return width > 0 ? Math.round((dx / width) * span / SNAP_MS) * SNAP_MS : 0;
   };
-  const press = (index: number, event: PointerEvent<HTMLButtonElement>) => {
+  const press = (key: string, event: PointerEvent<HTMLButtonElement>) => {
     if (!onMoveBlock) return;
     event.currentTarget.setPointerCapture?.(event.pointerId);
-    setDrag({ index, x: event.clientX, dx: 0 });
+    setDrag({ key, x: event.clientX, dx: 0 });
   };
   const slide = (event: PointerEvent<HTMLButtonElement>) => {
     if (drag) setDrag({ ...drag, dx: event.clientX - drag.x });
   };
   /** A drag of a snap or more moves the block; anything less is a click. */
-  const release = (index: number) => {
+  const release = () => {
     if (!drag || !onMoveBlock) return;
     const delta = toMs(drag.dx);
+    const index = keys.indexOf(drag.key);
     setDrag(null);
     moved.current = delta !== 0;
-    if (delta !== 0) onMoveBlock(scheduled.blocks[index], delta);
+    // A block the schedule no longer has is not moved.
+    if (delta !== 0 && index >= 0) onMoveBlock(scheduled.blocks[index], delta);
   };
   const nudge = (index: number, event: KeyboardEvent<HTMLButtonElement>) => {
     if (!onMoveBlock || (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft')) return;
@@ -168,20 +174,21 @@ export default function NightTimeline({ night, scheduled, colours, now, cloudThr
           const style = place(item.start_ms, item.end_ms);
           if (!style) return null;
           const frames = item.runs.reduce((sum, run) => sum + run.frames, 0);
-          const dragged = drag?.index === index ? { transform: `translateX(${drag.dx}px)` } : {};
-          return <button key={`block-${item.start_ms}`} type="button" className="nights-block" style={{ ...style, ...dragged }}
-            data-colour={colours.get(item.target.project_name) ?? 0} aria-pressed={chosen === index}
+          const key = keys[index];
+          const dragged = drag?.key === key ? { transform: `translateX(${drag.dx}px)` } : {};
+          return <button key={key} type="button" className="nights-block" style={{ ...style, ...dragged }}
+            data-colour={colours.get(item.target.project_name) ?? 0} aria-pressed={chosen === key}
             data-movable={onMoveBlock ? 'true' : undefined}
             aria-label={`${item.target.project_name}, ${item.target.target_name}: ${formatClock(item.start_ms)} – ${formatClock(item.end_ms)}, ${frames} frames${onMoveBlock ? '. Drag, or press the left and right arrow keys, to move it 15 minutes at a time.' : ''}`}
             title={`${item.target.target_name} · ${formatClock(item.start_ms)} – ${formatClock(item.end_ms)} · ${runSummary(item)}`}
-            onPointerDown={event => press(index, event)}
+            onPointerDown={event => press(key, event)}
             onPointerMove={slide}
-            onPointerUp={() => release(index)}
+            onPointerUp={release}
             onPointerCancel={() => setDrag(null)}
             onKeyDown={event => nudge(index, event)}
             onClick={() => {
               if (moved.current) moved.current = false;
-              else setChosen(chosen === index ? null : index);
+              else setChosen(chosen === key ? null : key);
             }}>
             {item.runs.map(run => {
               const inner = place(run.start_ms, run.end_ms);
@@ -216,6 +223,18 @@ export default function NightTimeline({ night, scheduled, colours, now, cloudThr
     {scheduled.blocks.length === 0 && <p className="director-muted">Nothing is scheduled this night.</p>}
     {block && <BlockReasons block={block} zone={zone} />}
   </div>;
+}
+
+/** A key per block that a re-plan keeps: its target, and how many blocks
+ *  on that target come before it. */
+function blockKeys(blocks: ScheduleBlock[]): string[] {
+  const seen = new Map<string, number>();
+  return blocks.map(block => {
+    const target = `${block.target.project_id}:${block.target.target_id}`;
+    const count = seen.get(target) ?? 0;
+    seen.set(target, count + 1);
+    return `block-${target}-${count}`;
+  });
 }
 
 /** The hours above the threshold in the drawn span, in words, for those

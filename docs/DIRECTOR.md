@@ -2046,10 +2046,13 @@ The schedule above shows the edit before it is saved, with a row above the
 timeline marking the pinned, left-out and held stretches. Drag a block
 along the timeline, or select it and press the left or right arrow key to
 move it 15 minutes at a time: the move pins the block's target to its new
-time and leaves the target out of the stretch it moved from. Moving the
-same block again replaces that pin. **Save overrides** keeps the edit and
-**Discard** drops it; saving an empty list returns the night to the rig's
-own program.
+time and leaves the target out of the stretch it moved from. A block moved
+again is measured from where it first stood, so its last move's pin and
+exclusion are replaced, and overrides entered by hand stay. A move onto
+another pin is refused. **Save overrides** keeps the edit and **Discard**
+drops it; saving an empty list returns the night to the rig's own program.
+If someone else saved the night's overrides while the edit was open, the
+save is refused and the night is read again.
 
 ![A Director rig's night with a pinned stretch and a hold, edited before it is saved](images/nights-overrides.png)
 
@@ -2071,7 +2074,11 @@ next pull takes the next night's order or the rig's own.
 A rig Target Scheduler runs refuses overrides: change its plans' priority,
 limits or rule weights in Target Scheduler instead. Until rig modes exist,
 a rig counts as Director's once it has reported its equipment and runs an
-enabled workload policy. Override times use the same time zone as marks.
+enabled workload policy. A rig that stops counting as Director's pulls its
+program without its overrides, and its nights can still be cleared. Saving
+refuses overrides that would leave the rig a program it cannot take, as
+many pins on a large mosaic can. Override times use the same time zone as
+marks; a zone the browser does not know falls back to the browser's own.
 
 ### Cloud forecasts
 
@@ -2148,8 +2155,8 @@ schedule on the **Nights** tab.
 | DELETE | `/night-availability/{scope}/{id}` | `expected_revision` and `dates`: returns those nights to the default. |
 | GET | `/rigs/{rig}/night-overrides` | `from` and `to` (`YYYY-MM-DD`). The rig's `runtime` and each night in the range with overrides. |
 | GET | `/rigs/{rig}/night-overrides/{date}` | One night's `entries`, its `revision` (0 while it has none) and the rig's `runtime`. |
-| PUT | `/rigs/{rig}/night-overrides/{date}` | `expected_revision` and `entries`, up to 32: `{"kind":"pin","subject":…,"window":{…}}`, `{"kind":"exclude","subject":…,"window":{…}}` (no `window` for the whole night), `{"kind":"hold","from_ms":…}` (no `from_ms` for the whole night) and `{"kind":"order","plans":[…]}`. A `subject` is `{"kind":"plan","plan_id":…}`, `{"kind":"target","target_guid":…}` or `{"kind":"exposure_plan","exposureplan_guid":…}`. Replaces the night's list; an empty list clears it. `409` on a stale revision or for a rig Target Scheduler runs; `422` for windows outside the night's noon-to-noon span, overlapping pins, a second order or hold, a night that has ended or a rig with no location. Editors only. |
-| DELETE | `/rigs/{rig}/night-overrides/{date}` | `expected_revision`: returns the night to the rig's own program. Editors only. |
+| PUT | `/rigs/{rig}/night-overrides/{date}` | `expected_revision` and `entries`, up to 32: `{"kind":"pin","subject":…,"window":{…}}`, `{"kind":"exclude","subject":…,"window":{…}}` (no `window` for the whole night), `{"kind":"hold","from_ms":…}` (no `from_ms` for the whole night) and `{"kind":"order","plans":[…]}`. A `subject` is `{"kind":"plan","plan_id":…}`, `{"kind":"target","target_guid":…}` or `{"kind":"exposure_plan","exposureplan_guid":…}`. Replaces the night's list; an empty list clears it. `409` on a stale revision, or for a non-empty list on a rig Target Scheduler runs; `422` for windows outside the night's noon-to-noon span, overlapping pins, a second order or hold, a night that has ended, a rig with no location, or a list that would leave the rig a program that does not validate. Editors only. |
+| DELETE | `/rigs/{rig}/night-overrides/{date}` | `expected_revision`: returns the night to the rig's own program, on any rig. Editors only. |
 | GET | `/sites/{site}/forecast` | The site's forecast `settings` (`provider`: `open_meteo` or `met_norway`, and `cloud_threshold_percent`), the provider's `attribution`, the stored `forecast` (each hour's total, low, mid and high cloud cover), whether night plans use it now (`fresh`), the last request's `status` (time, error and failures in a row) and `next_refresh_ms`. |
 | POST | `/sites/{site}/forecast/refresh` | Requests the site's forecast now and returns the same view; a failed request returns the view with the error in `status`. `422` when forecasts are off, the site has no location, another refresh is running, within 2 minutes of the last forecast or a minute of a failed request, or before the provider's `Expires` or `Retry-After` time; the error says how long to wait. Editors only. |
 

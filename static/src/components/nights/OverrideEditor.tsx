@@ -5,7 +5,7 @@ import { apiClient } from '../../api/client';
 import type { DirectorScheduleGoal, NightOverride, RigNight, RigNights, ScheduledNight } from '../../api/nightPlanTypes';
 import { httpStatus } from '../../utils/httpStatus';
 import { retryWhenBusy } from '../director/retry';
-import { BROWSER_ZONE, clockOnNight, formatClock, windowFor } from './nightsModel';
+import { BROWSER_ZONE, clockOnNight, formatClock, usableZone, windowFor } from './nightsModel';
 import { describeOverride, idlePins, subjectFromKey, subjectKey, subjectsOf } from './overridesModel';
 
 /** Everything a saved override changes: the night's own list, its schedule
@@ -39,12 +39,21 @@ interface Props {
   canEdit: boolean;
   /** The unsaved edit the schedule previews; `null` when none is open. */
   draft: NightOverride[] | null;
+  /** The revision the open edit started from, which Save sends back. */
+  base: number | null;
+  /** Open an edit of these overrides, read at this revision. */
+  onStart: (entries: NightOverride[], base: number) => void;
   onDraft: (entries: NightOverride[] | null) => void;
 }
 
 function failure(error: unknown): string {
-  if (httpStatus(error) === 409) return "The night's overrides changed since they were opened. They have been read again; make the change once more.";
-  return error instanceof Error ? error.message : 'The overrides could not be saved';
+  const message = error instanceof Error ? error.message : '';
+  if (httpStatus(error) === 409) {
+    // The rig no longer counts as Director's, or someone saved first.
+    return message.includes('Target Scheduler') ? message
+      : "The night's overrides changed since the edit started. They have been read again; make the change once more.";
+  }
+  return message || 'The overrides could not be saved';
 }
 
 /**
@@ -53,9 +62,9 @@ function failure(error: unknown): string {
  * before it is saved, and a saved change reaches a running session at its
  * next check-in.
  */
-export default function OverrideEditor({ rig, night, scheduled, goals, tonight, now, canEdit, draft, onDraft }: Props) {
+export default function OverrideEditor({ rig, night, scheduled, goals, tonight, now, canEdit, draft, base, onStart, onDraft }: Props) {
   const client = useQueryClient();
-  const zone = rig.time_zone ?? undefined;
+  const zone = usableZone(rig.time_zone);
   const stored = useQuery({
     queryKey: ['nightOverrides', rig.rig.id, night.date],
     queryFn: () => apiClient.getNightOverrides(rig.rig.id, night.date),
@@ -66,7 +75,9 @@ export default function OverrideEditor({ rig, night, scheduled, goals, tonight, 
   const refresh = () => { for (const queryKey of OVERRIDDEN_QUERIES) void client.invalidateQueries({ queryKey: [...queryKey] }); };
   const save = useMutation({
     mutationFn: (entries: NightOverride[]) => {
-      const revision = stored.data?.revision ?? 0;
+      // The revision the edit started from: a refresh during the edit must
+      // not let it overwrite a change saved meanwhile.
+      const revision = base ?? 0;
       return entries.length === 0
         ? apiClient.clearNightOverrides(rig.rig.id, night.date, revision)
         : apiClient.saveNightOverrides(rig.rig.id, night.date, revision, entries);
@@ -74,7 +85,12 @@ export default function OverrideEditor({ rig, night, scheduled, goals, tonight, 
     onSuccess: () => { setProblem(null); onDraft(null); refresh(); },
     onError: error => {
       setProblem(failure(error));
-      if (httpStatus(error) === 409) refresh();
+      // The edit started from a list that is gone: read the night again
+      // rather than save the edit over it.
+      if (httpStatus(error) === 409) {
+        onDraft(null);
+        refresh();
+      }
     },
   });
   const entries = draft ?? stored.data?.entries ?? [];
@@ -89,7 +105,8 @@ export default function OverrideEditor({ rig, night, scheduled, goals, tonight, 
   return <section className="nights-override-editor" aria-label="Overrides">
     <div className="nights-mark-row">
       <h4>Overrides</h4>
-      {canEdit && draft === null && !nightEnded && <button type="button" onClick={() => { setProblem(null); onDraft([...(stored.data?.entries ?? [])]); }}>Edit night</button>}
+      {canEdit && draft === null && !nightEnded && <button type="button" disabled={!stored.data || goals.length === 0}
+        onClick={() => { if (stored.data) { setProblem(null); onStart([...stored.data.entries], stored.data.revision); } }}>Edit night</button>}
     </div>
     {stored.isError && <p className="director-error" role="alert">{stored.error instanceof Error ? stored.error.message : "The night's overrides could not be loaded"}</p>}
     {entries.length === 0
@@ -103,18 +120,18 @@ export default function OverrideEditor({ rig, night, scheduled, goals, tonight, 
     {idle.map(window => <p key={window.start_ms} className="director-muted" role="note">
       Nothing pinned runs from {formatClock(window.start_ms, zone)} to {formatClock(window.end_ms, zone)}: the sky or the Moon rules it out there, so the rig stays idle in that window.
     </p>)}
+    {problem && <p className="director-error" role="alert">{problem}</p>}
     {draft !== null && <>
       <p className="director-muted">The schedule above shows this edit. Drag a block, or select it and press the left or right arrow key, to move it; the move pins its target to the new time. Nothing changes on the rig until the overrides are saved.</p>
       {night.availability.state === 'unavailable' && !entries.some(entry => entry.kind === 'hold') && <p className="nights-mark-row">
         <span className="director-muted">This night is marked not available, which changes the plans only. A hold keeps the rig from taking work.</span>
         <button type="button" onClick={() => add({ kind: 'hold' })}>Hold the rig all night</button>
       </p>}
-      {tonight && <LiveShifts night={night} goals={goals} now={now} zone={zone} onAdd={add} />}
-      <AddOverride night={night} goals={goals} zone={zone} onAdd={add} />
+      {tonight && <LiveShifts key={goals.map(goal => goal.goal_id).join()} night={night} goals={goals} now={now} zone={zone} onAdd={add} />}
+      <AddOverride key={goals.map(goal => goal.goal_id).join()} night={night} goals={goals} zone={zone} onAdd={add} />
       <p className="director-muted">{tonight
         ? 'A session already running takes saved overrides at its next check-in: it finishes the exposure under way, then follows the new program.'
         : 'Saved overrides apply to the program the rig pulls for this night.'}</p>
-      {problem && <p className="director-error" role="alert">{problem}</p>}
       <div className="nights-mark-row">
         <button type="button" disabled={save.isPending} onClick={() => save.mutate(entries)}>Save overrides</button>
         <button type="button" disabled={save.isPending} onClick={() => { setProblem(null); onDraft(null); }}>Discard</button>
@@ -176,6 +193,7 @@ function AddOverride({ night, goals, zone, onAdd }: { night: RigNight; goals: Di
       }
       const at = clockOnNight(night.date, from, zone);
       if (at === null) setProblem('Enter the time to hold from.');
+      else if (at < night.noon_ms || at >= night.noon_ms + 86_400_000) setProblem(`${from} falls outside this night, which runs from noon to noon at the site.`);
       else onAdd({ kind: 'hold', from_ms: at });
       return;
     }

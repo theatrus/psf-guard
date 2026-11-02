@@ -66,4 +66,35 @@ describe('NightTimeline', () => {
     fireEvent.click(movable);
     expect(movable).toHaveAttribute('aria-pressed', 'true');
   });
+
+  it('moves a dragged block by the time dragged, and a drag ends without choosing it', () => {
+    const base = night(0);
+    const block = {
+      target: { project_id: 7, project_name: 'Heart Nebula', target_id: 70, target_name: 'IC 1805' },
+      start_ms: base.dusk_ms! + HOUR, end_ms: base.dusk_ms! + 3 * HOUR, slew: true,
+      runs: [{ exposure_plan_id: 700, filter: 'Ha', exposure_seconds: 300, frames: 24, dithers: 0, start_ms: base.dusk_ms! + HOUR, end_ms: base.dusk_ms! + 3 * HOUR }],
+      decision: { kind: 'ranked' as const, candidates: [] },
+    };
+    const scheduled = { date: base.date, start_ms: base.noon_ms, end_ms: base.noon_ms + 24 * HOUR, blocks: [block], gaps: [], frames: 24, exposure_hours: 2, note: null };
+    // The drawn span, an hour before dusk to an hour after dawn, is 12 h:
+    // 1200 px make 100 px an hour.
+    const width = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ width: 1200, height: 38, x: 0, y: 0, top: 0, left: 0, right: 1200, bottom: 38, toJSON: () => ({}) } as DOMRect);
+    const moves = vi.fn();
+    render(<NightTimeline night={base} scheduled={scheduled} colours={new Map()} onMoveBlock={moves} />);
+    const shown = screen.getByRole('button', { name: /IC 1805/ });
+    fireEvent.pointerDown(shown, { clientX: 300, pointerId: 1 });
+    fireEvent.pointerMove(shown, { clientX: 350, pointerId: 1 });
+    fireEvent.pointerUp(shown, { clientX: 350, pointerId: 1 });
+    fireEvent.click(shown);
+    expect(moves).toHaveBeenCalledTimes(1);
+    expect(moves.mock.calls[0][1]).toBe(30 * 60_000);
+    expect(shown).toHaveAttribute('aria-pressed', 'false');
+    // A press with no drag is a click, and chooses the block.
+    fireEvent.pointerDown(shown, { clientX: 300, pointerId: 1 });
+    fireEvent.pointerUp(shown, { clientX: 300, pointerId: 1 });
+    fireEvent.click(shown);
+    expect(moves).toHaveBeenCalledTimes(1);
+    expect(shown).toHaveAttribute('aria-pressed', 'true');
+    width.mockRestore();
+  });
 });

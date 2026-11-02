@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { X } from 'lucide-react';
 import { apiClient } from '../../api/client';
-import type { NightAvailabilityState, NightMarkEdit, NightMarkScope, NightOverride, NightRuntime, RigNight, RigNights, ScheduleBlock, ScheduleFidelity, ScheduleRuntimeChoice } from '../../api/nightPlanTypes';
+import type { NightAvailabilityState, NightInterval, NightMarkEdit, NightMarkScope, NightOverride, NightRuntime, RigNight, RigNights, ScheduleBlock, ScheduleFidelity, ScheduleRuntimeChoice } from '../../api/nightPlanTypes';
 import { formatHours } from '../director/visibilityFormat';
 import { httpStatus } from '../../utils/httpStatus';
 import { retryWhenBusy } from '../director/retry';
@@ -10,7 +10,7 @@ import { describeNow } from '../director/dashboardModel';
 import { useDirectorClock } from '../../hooks/useDirectorClock';
 import NightTimeline from './NightTimeline';
 import OverrideEditor from './OverrideEditor';
-import { moveBlock, overrideBands, subjectKey } from './overridesModel';
+import { blockSubject, moveBlock, overrideBands, subjectKey } from './overridesModel';
 import {
   BROWSER_ZONE,
   RUNTIME_LABEL,
@@ -18,6 +18,7 @@ import {
   clockValue,
   describeDates,
   formatClock,
+  usableZone,
   formatNightDate,
   isTonight,
   completesOn,
@@ -32,7 +33,17 @@ import { PROVIDER_LABEL, PROVIDER_URL } from '../director/forecastLabels';
 /** A time on the rig's site clock, or the browser's when the site names no
  *  time zone. */
 function siteClock(rig: RigNights, ms: number): string {
-  return formatClock(ms, rig.time_zone ?? undefined);
+  return formatClock(ms, usableZone(rig.time_zone));
+}
+
+/** An open edit of one rig's night: its overrides as edited, the revision
+ *  the edit started from, which Save sends back, and for each target a
+ *  block move pinned, where its block stood first and what the move made. */
+interface OverrideEdit {
+  key: string;
+  base: number;
+  entries: NightOverride[];
+  moves: Record<string, { origin: NightInterval; entries: NightOverride[] }>;
 }
 
 interface Props {
@@ -53,12 +64,53 @@ export default function NightDetail({ rig, nights, colours, canMark, range, onCl
   const first = nights[0];
   const single = nights.length === 1;
   // An open edit of the night's overrides belongs to its rig and night.
-  const [edit, setEdit] = useState<{ key: string; entries: NightOverride[] } | null>(null);
+  const [stored, setEdit] = useState<OverrideEdit | null>(null);
   const editKey = `${rig.rig.id}:${first.date}`;
-  const draft = edit?.key === editKey ? edit.entries : null;
-  const setDraft = (entries: NightOverride[] | null) => setEdit(entries === null ? null : { key: editKey, entries });
+  const edit = stored?.key === editKey ? stored : null;
+  const draft = edit?.entries ?? null;
+  const setDraft = (entries: NightOverride[] | null) => setEdit(entries === null || !edit ? null : { ...edit, entries });
+  const startEdit = (entries: NightOverride[], base: number) => setEdit({ key: editKey, base, entries, moves: {} });
   const schedule = useNightSchedule(rig, first, range, single, draft);
   const director = rig.runtime === 'director' && schedule.shown === 'director';
+  const scheduled = schedule.detail?.schedule?.nights.find(n => n.date === first.date);
+  const goals = schedule.detail?.schedule?.goals ?? [];
+  const [moveProblem, setMoveProblem] = useState<string | null>(null);
+  const move = (block: ScheduleBlock, deltaMs: number) => {
+    if (!edit || !scheduled) return;
+    // A move made before the last one is planned would start from where the
+    // block no longer stands.
+    if (schedule.query.isFetching) {
+      setMoveProblem('Wait for the schedule to show the last change, then move the block again.');
+      return;
+    }
+    const subject = blockSubject(block, goals);
+    if (!subject) {
+      setMoveProblem("This block's target cannot be told from the rig's goals, so it cannot be moved.");
+      return;
+    }
+    const key = subjectKey(subject);
+    const before = edit.moves[key];
+    const moved = moveBlock(block, deltaMs, goals, { start_ms: scheduled.start_ms, end_ms: scheduled.end_ms }, before?.origin);
+    if (!moved) {
+      setMoveProblem('That move would take the block outside the night.');
+      return;
+    }
+    // A target moved again replaces what its last move made, and only that.
+    const replaced = before?.entries ?? [];
+    const [pin] = moved.entries;
+    const clash = pin.kind === 'pin' && edit.entries.some(entry => entry.kind === 'pin' && !replaced.includes(entry)
+      && entry.window.start_ms < pin.window.end_ms && entry.window.end_ms > pin.window.start_ms);
+    if (clash) {
+      setMoveProblem('The new time overlaps another pin. Remove that pin first, or move the block elsewhere.');
+      return;
+    }
+    setMoveProblem(null);
+    setEdit({
+      ...edit,
+      entries: [...edit.entries.filter(entry => !replaced.includes(entry)), ...moved.entries],
+      moves: { ...edit.moves, [key]: { origin: before?.origin ?? { start_ms: block.start_ms, end_ms: block.end_ms }, entries: moved.entries } },
+    });
+  };
   return <section className="nights-detail director-records" aria-label="Night details">
     <div className="director-toolbar">
       <h3>{rig.catalog_name} · {describeDates(nights.map(night => night.date))}</h3>
@@ -67,11 +119,11 @@ export default function NightDetail({ rig, nights, colours, canMark, range, onCl
     {single ? <NightFacts rig={rig} night={first} /> : <p className="director-muted">
       {formatHours(nights.reduce((sum, night) => sum + night.available_dark_hours, 0))} clear of {formatHours(nights.reduce((sum, night) => sum + night.dark_hours, 0))} dark over these nights.
     </p>}
-    {single && <NightSchedule rig={rig} night={first} colours={colours} view={schedule} draft={director ? draft : null} onDraft={setDraft} />}
+    {single && <NightSchedule rig={rig} night={first} colours={colours} view={schedule}
+      onMoveBlock={director && edit ? move : undefined} moveProblem={edit ? moveProblem : null} />}
     {single && director && <OverrideEditor rig={rig} night={first}
-      scheduled={schedule.detail?.schedule?.nights.find(n => n.date === first.date)}
-      goals={schedule.detail?.schedule?.goals ?? []} tonight={schedule.tonight} now={schedule.now}
-      canEdit={canMark} draft={draft} onDraft={setDraft} />}
+      scheduled={scheduled} goals={goals} tonight={schedule.tonight} now={schedule.now}
+      canEdit={canMark} draft={draft} base={edit?.base ?? null} onStart={(entries, base) => { setMoveProblem(null); startEdit(entries, base); }} onDraft={setDraft} />}
     {single && <PlanHours rig={rig} night={first} colours={colours} view={schedule} />}
     {rig.warnings.map(warning => <p key={warning} className="director-muted" role="note">{warning}</p>)}
     {canMark && <MarkEditor rig={rig} nights={nights} />}
@@ -115,8 +167,9 @@ function useNightSchedule(rig: RigNights, night: RigNight, range: Props['range']
     placeholderData: previous => previous,
   });
   const detail = query.data?.rigs.find(entry => entry.rig.id === rig.rig.id);
-  // The grid's schedule is the rig's own runtime, counted as a live run.
-  const asGrid = runtime === 'auto' && (shown !== 'target_scheduler' || fidelity === 'estimate');
+  // The grid's schedule is the rig's own runtime, counted as a live run,
+  // with the night's saved overrides: an unsaved edit is not the grid's.
+  const asGrid = previewed === null && runtime === 'auto' && (shown !== 'target_scheduler' || fidelity === 'estimate');
   return { runtime, setRuntime, fidelity, setFidelity, shown, other, now, tonight, query, detail, asGrid };
 }
 
@@ -124,37 +177,18 @@ type ScheduleView = ReturnType<typeof useNightSchedule>;
 
 /** The night's schedule from the runtime that drives the rig, or the other
  *  one to compare, with the planner's reasons for each block. */
-function NightSchedule({ rig, night, colours, view, draft, onDraft }: {
+function NightSchedule({ rig, night, colours, view, onMoveBlock, moveProblem }: {
   rig: RigNights; night: RigNight; colours: Map<string, number>; view: ScheduleView;
-  /** The open edit of the night's overrides, which block moves add to. */
-  draft: NightOverride[] | null;
-  onDraft: (entries: NightOverride[]) => void;
+  /** While the night's overrides are edited: move a block. */
+  onMoveBlock?: (block: ScheduleBlock, deltaMs: number) => void;
+  /** Why the last move was refused. */
+  moveProblem: string | null;
 }) {
   const { runtime, setRuntime, fidelity, setFidelity, shown, other, now, tonight, query, detail } = view;
   const scheduled = detail?.schedule?.nights.find(n => n.date === night.date);
   const goals = detail?.schedule?.goals ?? [];
-  const zone = rig.time_zone ?? undefined;
+  const zone = usableZone(rig.time_zone);
   const bands = scheduled?.overrides ? overrideBands(scheduled.overrides.entries, goals, { start_ms: scheduled.start_ms, end_ms: scheduled.end_ms }, zone) : [];
-  const [moveProblem, setMoveProblem] = useState<string | null>(null);
-  const move = (block: ScheduleBlock, deltaMs: number) => {
-    if (!draft || !scheduled) return;
-    const moved = moveBlock(block, deltaMs, goals, { start_ms: scheduled.start_ms, end_ms: scheduled.end_ms });
-    if (!moved) {
-      setMoveProblem("That move would take the block outside the night, or its target is not one of the rig's goals.");
-      return;
-    }
-    setMoveProblem(null);
-    const [pin] = moved;
-    if (pin.kind !== 'pin') return;
-    // A block moved again replaces the pin and exclusion its last move made.
-    const key = subjectKey(pin.subject);
-    const from = Math.min(block.start_ms, pin.window.start_ms);
-    const to = Math.max(block.end_ms, pin.window.end_ms);
-    const replaced = (entry: NightOverride) => (entry.kind === 'pin' || entry.kind === 'exclude')
-      && subjectKey(entry.subject) === key && entry.window !== undefined
-      && entry.window.start_ms < to && entry.window.end_ms > from;
-    onDraft([...draft.filter(entry => !replaced(entry)), ...moved]);
-  };
   // Tonight: what the rig says it is doing, beside what it is planned to do.
   const statuses = useQuery({ queryKey: ['directorRigStatuses'], queryFn: apiClient.getDirectorRigStatuses, enabled: tonight, retry: retryWhenBusy, retryDelay: 1200, refetchInterval: 15_000 });
   const live = statuses.data?.find(status => status.rig.id === rig.rig.id);
@@ -180,11 +214,11 @@ function NightSchedule({ rig, night, colours, view, draft, onDraft }: {
     {query.isPending && <p role="status">Planning {formatNightDate(night.date)}...</p>}
     {query.isError && <p className="director-error" role="alert">{query.error instanceof Error ? query.error.message : 'The schedule could not be computed'}</p>}
     {detail?.warnings.map(warning => <p key={warning} className="director-muted" role="note">{warning}</p>)}
-    {draft !== null && query.isFetching && <p className="director-muted" role="status">Planning the edit...</p>}
+    {onMoveBlock && query.isFetching && <p className="director-muted" role="status">Planning the edit...</p>}
     {moveProblem && <p className="director-error" role="alert">{moveProblem}</p>}
     {scheduled && <NightTimeline night={night} scheduled={scheduled} colours={colours} now={tonight ? now : undefined}
       cloudThreshold={rig.forecast?.cloud_threshold_percent} zone={zone} bands={bands}
-      onMoveBlock={draft !== null ? move : undefined} />}
+      onMoveBlock={onMoveBlock} />}
   </section>;
 }
 
@@ -311,7 +345,7 @@ function MarkForm({ rig, nights, scope, onScope }: { rig: RigNights; nights: Rig
   const [state, setState] = useState<NightAvailabilityState>(current?.state ?? 'unavailable');
   const limited = current?.state === 'limited' ? current.windows[0] : undefined;
   const extra = current?.state === 'limited' ? current.windows.slice(1) : [];
-  const zone = rig.time_zone ?? undefined;
+  const zone = usableZone(rig.time_zone);
   const [from, setFrom] = useState(limited ? clockValue(limited.start_ms, zone) : '');
   const [to, setTo] = useState(limited ? clockValue(limited.end_ms, zone) : '');
   const [note, setNote] = useState(current?.note ?? '');

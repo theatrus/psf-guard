@@ -236,15 +236,19 @@ describe('Night overrides', () => {
     const detail = screen.getByRole('region', { name: 'Night details' });
     const overrides = within(detail).getByRole('region', { name: 'Overrides' });
     expect(await within(overrides).findByText('None: the rig follows its own program this night.')).toBeInTheDocument();
+    // Editing waits for the night's goals, which name what an override covers.
+    await waitFor(() => expect(within(overrides).getByRole('button', { name: 'Edit night' })).toBeEnabled());
     fireEvent.click(within(overrides).getByRole('button', { name: 'Edit night' }));
     expect(within(overrides).getByText(/Times are in the site's time zone \(UTC\)/)).toBeInTheDocument();
     fireEvent.change(within(overrides).getByLabelText('From'), { target: { value: '21:00' } });
     fireEvent.change(within(overrides).getByLabelText('To'), { target: { value: '23:00' } });
     fireEvent.click(within(overrides).getByRole('button', { name: 'Add' }));
     expect(within(overrides).getByRole('listitem')).toHaveTextContent(/^Only IC 1805 from /);
-    // The schedule is planned again with the edit, unsaved.
+    // The schedule is planned again with the edit, unsaved, and the grid's
+    // saved schedule no longer says when a plan is done.
     await waitFor(() => expect(requests.some(r => r.override_draft?.entries[0]?.kind === 'pin')).toBe(true));
-    const drafted = requests.find(r => r.override_draft)!.override_draft!;
+    expect(within(detail).queryByRole('columnheader', { name: 'Done by' })).toBeNull();
+    const drafted = requests.find(r => r.override_draft?.entries[0]?.kind === 'pin')!.override_draft!;
     expect(drafted.entries[0].subject).toEqual({ kind: 'target', target_guid: 't1' });
     fireEvent.click(within(overrides).getByRole('button', { name: 'Save overrides' }));
     await waitFor(() => expect(saves).toHaveLength(1));

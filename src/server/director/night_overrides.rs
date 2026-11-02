@@ -1,10 +1,12 @@
 //! A Director rig's night overrides over HTTP: read a night's list or a
 //! range of nights, replace a night's list, and return a night to the rig's
 //! own program. A change reaches a running session at its next check-in,
-//! when the program it pulls carries it. A Target Scheduler rig refuses
-//! them: nothing here writes its database.
+//! when the program it pulls carries it. A Target Scheduler rig refuses new
+//! ones, but its nights can still be cleared: nothing here writes its
+//! database.
 
 use super::*;
+use crate::server::database_context::DatabaseContext;
 use psf_guard_director_core::night::NightDate;
 use psf_guard_director_meta::night_override::{
     check, NightOverride, NightOverrides, MAX_NIGHTS_PER_READ,
@@ -137,10 +139,21 @@ async fn write(
     entries: Vec<NightOverride>,
     expected_revision: u64,
 ) -> Result<Json<ApiResponse<Night>>, Error> {
-    let night = enabled(state)?
+    let service = enabled(state)?;
+    let catalogs: Vec<Arc<DatabaseContext>> = state
+        .databases
+        .read()
+        .map_err(|_| Error::Internal)?
+        .values()
+        .cloned()
+        .collect();
+    let instance = service.instance_id;
+    let night = service
         .with_writer(move |store| {
             let runtime = runtime(store, rig)?;
-            if runtime != night_plans::Runtime::Director {
+            // Clearing is always allowed, so a rig that stopped counting as
+            // Director's can drop overrides it no longer uses.
+            if runtime != night_plans::Runtime::Director && !entries.is_empty() {
                 return Err(Error::Mode(NOT_DIRECTOR.into()));
             }
             let profile = store.rig_profile(rig)?;
@@ -156,6 +169,20 @@ async fn write(
                 )));
             }
             check(&entries, span).map_err(|refusal| Error::Refused(refusal.to_string()))?;
+            if !entries.is_empty() {
+                let refused = super::program::check_overrides(
+                    store, &catalogs, instance, rig, date, &entries, now_ms(),
+                )
+                .map_err(|error| match error {
+                    super::program::PullError::Api(error) => error,
+                    _ => Error::Internal,
+                })?;
+                if let Some(why) = refused {
+                    return Err(Error::Refused(format!(
+                        "With these overrides the rig's program would not be valid ({why}). Use fewer pins or exclusions."
+                    )));
+                }
+            }
             let saved =
                 store.save_night_overrides(rig, date, &entries, expected_revision, now_ms())?;
             Ok(Night {

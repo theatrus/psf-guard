@@ -288,6 +288,15 @@ async fn overrides_reach_the_pulled_program_and_lapse_after_their_night() {
         "the other panel gives the pinned window up"
     );
 
+    // The rig ranks by its observing preferences, which a night's plan
+    // order sets aside.
+    let path = format!("/preferences/rig/{}", a.rig);
+    let (_, preferences) = call(&a.f.app, "GET", &path, Value::Null, None).await;
+    let mut settings = preferences["data"].clone();
+    settings["enabled"] = true.into();
+    let (status, enabled) = call(&a.f.app, "PUT", &path, settings, None).await;
+    assert_eq!(status, StatusCode::OK, "{enabled}");
+    assert!(!pull(&a).await["program"]["observing_preferences"].is_null());
     // A night's plan order lasts the night: the program ends with it.
     let order = json!({"expected_revision": saved["data"]["revision"], "entries": [pin, {"kind": "order", "plans": [a.project]}]});
     let (status, ordered) = call(&a.f.app, "PUT", &overrides_path(&a, date), order, None).await;
@@ -298,6 +307,12 @@ async fn overrides_reach_the_pulled_program_and_lapse_after_their_night() {
             .as_u64()
             .unwrap(),
         tonight.span(LONGITUDE).end_ms
+    );
+    // The night's order stands in place of the rig's observing preferences.
+    assert!(
+        capped["program"]["observing_preferences"].is_null(),
+        "{}",
+        capped["program"]
     );
 
     let (status, cleared) = call(
@@ -465,4 +480,97 @@ async fn directors_preview_plans_a_night_with_its_overrides_or_a_draft() {
     )
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+}
+
+/// A rig that stops counting as Director's pulls its program without the
+/// overrides it had, and its nights can still be cleared, though no new
+/// overrides are taken.
+#[tokio::test]
+async fn a_rig_no_longer_directors_drops_its_overrides_and_may_clear_them() {
+    let a = activated().await;
+    activate(&a).await;
+    drive_with_director(&a).await;
+    let now = now_ms();
+    let tonight = NightDate::at(now, LONGITUDE).unwrap();
+    let date = if tonight.span(LONGITUDE).end_ms > now + HOUR {
+        tonight
+    } else {
+        tonight.next().unwrap()
+    };
+    let (status, saved) = call(
+        &a.f.app,
+        "PUT",
+        &overrides_path(&a, date),
+        json!({"expected_revision": 0, "entries": [{"kind": "hold"}]}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    let held = pull(&a).await;
+    let span = date.span(LONGITUDE);
+    let goals = |program: &Value| -> Vec<Vec<(u64, u64)>> {
+        program["program"]["assignment"]["goals"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|goal| {
+                goal["eligible_windows"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|w| {
+                        (
+                            w["start_ms"].as_u64().unwrap(),
+                            w["end_ms"].as_u64().unwrap(),
+                        )
+                    })
+                    .collect()
+            })
+            .collect()
+    };
+    // The hold takes the night from every goal.
+    for windows in goals(&held) {
+        assert!(
+            windows
+                .iter()
+                .all(|(start, end)| *end <= span.start_ms || *start >= span.end_ms),
+            "{windows:?}"
+        );
+    }
+
+    Connection::open(a.f._dir.path().join("meta.sqlite"))
+        .unwrap()
+        .execute(
+            "UPDATE workload_policy SET payload=json_set(payload,'$.enabled',json('false')) WHERE rig_id=?1",
+            [a.rig.to_string()],
+        )
+        .unwrap();
+    let plain = pull(&a).await;
+    let assignment = &plain["program"]["assignment"];
+    let whole = (
+        assignment["valid_from_ms"].as_u64().unwrap(),
+        assignment["expires_at_ms"].as_u64().unwrap(),
+    );
+    for windows in goals(&plain) {
+        assert_eq!(windows, vec![whole]);
+    }
+    let (status, refused) = call(
+        &a.f.app,
+        "PUT",
+        &overrides_path(&a, date),
+        json!({"expected_revision": saved["data"]["revision"], "entries": [{"kind": "hold"}]}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    let (status, cleared) = call(
+        &a.f.app,
+        "DELETE",
+        &overrides_path(&a, date),
+        json!({"expected_revision": saved["data"]["revision"]}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{cleared}");
+    assert_eq!(cleared["data"]["entries"], json!([]));
 }

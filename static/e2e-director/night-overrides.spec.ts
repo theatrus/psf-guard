@@ -23,7 +23,9 @@ test('a Director rig\'s night takes overrides, planned before they are saved', a
   db.prepare('INSERT INTO exposuretemplate (Id,profileId,name,filtername,gain,offset,bin,readoutmode,guid) VALUES(1,?,?,?,100,30,1,0,?)').run('p', 'Ha', 'Ha', randomUUID());
   db.prepare("INSERT INTO project (Id,profileId,name,description,state,priority,isMosaic,flatsHandling,guid) VALUES(1,'p','Heart Nebula','',1,1,0,0,?)").run(randomUUID());
   db.prepare('INSERT INTO target (Id,name,active,ra,dec,epochcode,rotation,projectid,guid) VALUES(1,?,1,2.5466667,61.45,2,0,1,?)').run('Heart Nebula', randomUUID());
-  db.prepare('INSERT INTO exposureplan (Id,profileId,exposure,desired,acquired,accepted,targetid,exposureTemplateId,enabled,guid) VALUES(1,?,300,120,0,0,1,1,1,?)').run('p', randomUUID());
+  db.prepare('INSERT INTO exposureplan (Id,profileId,exposure,desired,acquired,accepted,targetid,exposureTemplateId,enabled,guid) VALUES(1,?,300,120,1,1,1,1,1,?)').run('p', randomUUID());
+  // One frame shot, so the project lists among those with images.
+  db.prepare('INSERT INTO acquiredimage (Id,projectId,targetId,acquireddate,filtername,gradingStatus,metadata,profileId,exposureId,guid) VALUES(1,1,1,1750000000,?,1,?,?,1,?)').run('Ha', JSON.stringify({ FileName: 'heart.fits' }), 'p', randomUUID());
   db.close();
   const slug = `overrides-${randomUUID().slice(0, 8)}`;
   await json(await request.post('/api/databases', { data: { name: 'Director rig', slug, db_path: dbPath, image_dirs: [root] } }));
@@ -119,7 +121,7 @@ test('a Director rig\'s night takes overrides, planned before they are saved', a
 
     // A hold three hours before dawn, from the form.
     await overrides.getByLabel('Hold', { exact: true }).check();
-    await overrides.getByLabel('From').fill('03:00');
+    await overrides.getByRole('textbox', { name: 'From', exact: true }).fill('03:00');
     await overrides.getByRole('button', { name: 'Add' }).click();
     await expect(list.getByRole('listitem').filter({ hasText: /^Hold the rig from/ })).toHaveCount(1);
     // The schedule shows the edit: the overrides above the timeline, and
@@ -129,7 +131,10 @@ test('a Director rig\'s night takes overrides, planned before they are saved', a
     await expect(bands.getByText('Held')).toBeVisible();
     await expect(detail.getByRole('list', { name: 'Legend' })).toContainText("Held: The night's overrides hold the rig.");
     await expect(detail.getByText('Planning the edit...')).toHaveCount(0);
+    // Tall enough that the panel fits without scrolling under the header.
+    await page.setViewportSize({ width: 1440, height: 2600 });
     await shot(detail, 'nights-overrides', name => testInfo.outputPath(name), false);
+    await page.setViewportSize({ width: 1440, height: 1100 });
 
     await overrides.getByRole('button', { name: 'Save overrides' }).click();
     await expect(overrides.getByRole('button', { name: 'Edit night' })).toBeVisible();

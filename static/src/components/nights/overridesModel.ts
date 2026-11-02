@@ -127,28 +127,39 @@ export function idlePins(entries: NightOverride[], scheduled: ScheduledNight, go
   return idle;
 }
 
-/** The target a block shoots, as an override names it. */
+/** The target a block shoots, as an override names it. `null` when no
+ *  goal, or more than one target, matches the block's rows, as when the
+ *  rig's database could not be read. */
 export function blockSubject(block: ScheduleBlock, goals: DirectorScheduleGoal[]): OverrideSubject | null {
-  const goal = goals.find(g => g.target_id === block.target.target_id && g.project_id === block.target.project_id);
-  return goal ? { kind: 'target', target_guid: goal.target_guid } : null;
+  const targets = new Set(goals
+    .filter(g => g.target_id === block.target.target_id && g.project_id === block.target.project_id)
+    .map(g => g.target_guid));
+  if (targets.size !== 1) return null;
+  const [target_guid] = targets;
+  return { kind: 'target', target_guid };
 }
 
 /**
- * The overrides that move a block by `delta_ms`: its target pinned to the
- * new stretch, and left out of the part of the old one the move uncovers,
- * so it does not simply run there first. `null` when the block's target is
- * unknown or the move leaves the night.
+ * The overrides that move a block by `deltaMs`: its target pinned to the
+ * new stretch, and left out of whatever of `origin`, where the block was
+ * before any move, the new stretch does not cover, so the target does not
+ * simply run there first. `null` when the move leaves the night or the
+ * block's target is unknown.
  */
-export function moveBlock(block: ScheduleBlock, deltaMs: number, goals: DirectorScheduleGoal[], night: NightInterval): NightOverride[] | null {
+export function moveBlock(block: ScheduleBlock, deltaMs: number, goals: DirectorScheduleGoal[], night: NightInterval, origin: NightInterval = block): { subject: OverrideSubject; entries: NightOverride[] } | null {
   const subject = blockSubject(block, goals);
   if (!subject || deltaMs === 0) return null;
   const window = { start_ms: block.start_ms + deltaMs, end_ms: block.end_ms + deltaMs };
   if (window.start_ms < night.start_ms || window.end_ms > night.end_ms) return null;
-  const uncovered = deltaMs > 0
-    ? { start_ms: block.start_ms, end_ms: Math.min(window.start_ms, block.end_ms) }
-    : { start_ms: Math.max(window.end_ms, block.start_ms), end_ms: block.end_ms };
-  return [
-    { kind: 'pin', subject, window },
-    { kind: 'exclude', subject, window: uncovered },
-  ];
+  const uncovered = [
+    { start_ms: origin.start_ms, end_ms: Math.min(origin.end_ms, window.start_ms) },
+    { start_ms: Math.max(origin.start_ms, window.end_ms), end_ms: origin.end_ms },
+  ].filter(part => part.end_ms > part.start_ms);
+  return {
+    subject,
+    entries: [
+      { kind: 'pin', subject, window },
+      ...uncovered.map(part => ({ kind: 'exclude' as const, subject, window: part })),
+    ],
+  };
 }

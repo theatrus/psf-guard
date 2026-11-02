@@ -848,7 +848,15 @@ moving blocks; steps the program cannot carry wait (question 12).
   out**, **Hold** and **Plan order**, a block moved by drag or the arrow
   keys, **Hold from now** and **Next hour to** tonight, and a hold offered
   on a night marked not available. Each edit previews as a draft. A pin
-  whose subject has no frames in its window is named as idle.
+  whose subject has no frames in its window is named as idle. An edit
+  saves against the revision it started from, and a block moved again is
+  measured from where it first stood, replacing only what its last move
+  made.
+- The pull applies overrides only on a rig that counts as Director's, and
+  any rig's nights can be cleared. A save refuses a list with which the
+  rig's program would no longer bind, as many pins on a large mosaic can:
+  check-in reports a program that cannot be built as unchanged, so the
+  rig would keep its old one without word.
 - An optional IANA `time_zone` per site (question 9), which marks,
   overrides and the night's panel use; the server checks its shape and the
   browser converts.

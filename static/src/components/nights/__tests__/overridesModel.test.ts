@@ -83,20 +83,38 @@ describe('idlePins', () => {
 
 describe('moveBlock', () => {
   const moved = block(1, NOON + 8 * HOUR, NOON + 10 * HOUR);
+  const target = { kind: 'target' as const, target_guid: 't1' };
 
   it('pins the target to the new stretch and leaves it out of the part the move uncovers', () => {
-    expect(moveBlock(moved, HOUR, goals, NIGHT)).toEqual([
-      { kind: 'pin', subject: { kind: 'target', target_guid: 't1' }, window: { start_ms: NOON + 9 * HOUR, end_ms: NOON + 11 * HOUR } },
-      { kind: 'exclude', subject: { kind: 'target', target_guid: 't1' }, window: { start_ms: NOON + 8 * HOUR, end_ms: NOON + 9 * HOUR } },
-    ]);
-    expect(moveBlock(moved, -HOUR, goals, NIGHT)?.[1]).toEqual(
-      { kind: 'exclude', subject: { kind: 'target', target_guid: 't1' }, window: { start_ms: NOON + 9 * HOUR, end_ms: NOON + 10 * HOUR } },
+    expect(moveBlock(moved, HOUR, goals, NIGHT)).toEqual({ subject: target, entries: [
+      { kind: 'pin', subject: target, window: { start_ms: NOON + 9 * HOUR, end_ms: NOON + 11 * HOUR } },
+      { kind: 'exclude', subject: target, window: { start_ms: NOON + 8 * HOUR, end_ms: NOON + 9 * HOUR } },
+    ] });
+    expect(moveBlock(moved, -HOUR, goals, NIGHT)?.entries[1]).toEqual(
+      { kind: 'exclude', subject: target, window: { start_ms: NOON + 9 * HOUR, end_ms: NOON + 10 * HOUR } },
     );
   });
 
-  it('refuses a move out of the night, or of a block with no known target', () => {
+  it('measures a block moved again from where it first stood, so nudges do not pile up', () => {
+    // The block now runs where the last move pinned it, a quarter hour on.
+    const nudged = block(1, NOON + 8 * HOUR + HOUR / 4, NOON + 10 * HOUR + HOUR / 4);
+    const origin = { start_ms: NOON + 8 * HOUR, end_ms: NOON + 10 * HOUR };
+    expect(moveBlock(nudged, HOUR / 4, goals, NIGHT, origin)?.entries).toEqual([
+      { kind: 'pin', subject: target, window: { start_ms: NOON + 8.5 * HOUR, end_ms: NOON + 10.5 * HOUR } },
+      { kind: 'exclude', subject: target, window: { start_ms: NOON + 8 * HOUR, end_ms: NOON + 8.5 * HOUR } },
+    ]);
+    // Back over the start: the target is left out of nothing.
+    expect(moveBlock(nudged, -HOUR / 4, goals, NIGHT, origin)?.entries).toEqual([
+      { kind: 'pin', subject: target, window: origin },
+    ]);
+  });
+
+  it('refuses a move out of the night, or of a block whose target cannot be told', () => {
     expect(moveBlock(moved, 15 * HOUR, goals, NIGHT)).toBeNull();
     expect(moveBlock({ ...moved, target: { ...moved.target, target_id: 99 } }, HOUR, goals, NIGHT)).toBeNull();
     expect(moveBlock(moved, 0, goals, NIGHT)).toBeNull();
+    // Rows the database did not give: every goal reads as target 0.
+    const unread = goals.map(g => ({ ...g, project_id: 0, target_id: 0 }));
+    expect(moveBlock({ ...moved, target: { ...moved.target, project_id: 0, target_id: 0 } }, HOUR, unread, NIGHT)).toBeNull();
   });
 });
