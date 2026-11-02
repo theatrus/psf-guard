@@ -71,6 +71,10 @@ pub struct CacheBudget {
     pass: Mutex<()>,
     /// Each volume's cache sizes, by device, with when they were measured.
     sizes: Mutex<HashMap<u64, (Instant, CacheSizes)>>,
+    /// Cache folders a test lets pre-generation fill however full their
+    /// volume is.
+    #[cfg(test)]
+    lifted_for_test: Mutex<Vec<std::path::PathBuf>>,
 }
 
 /// Apply the registry's choice. Stacks and masters without a limit of
@@ -105,13 +109,12 @@ pub fn limit_for(kind: StorageKind) -> u8 {
 
 impl CacheBudget {
     /// Let background work write previews into `dir` however full its
-    /// volume is, so a test does not depend on the disk it runs on.
+    /// volume is, so a test does not depend on the disk it runs on. The
+    /// folder is kept by path, since Windows gives no device to key a
+    /// volume's limit by.
     #[cfg(test)]
     pub(crate) fn lift_limit_for_test(&self, dir: &Path) {
-        std::fs::create_dir_all(dir).unwrap();
-        if let Some(device) = device_of(dir) {
-            self.volume_limits.lock().unwrap().insert(device, 100);
-        }
+        self.lifted_for_test.lock().unwrap().push(dir.to_path_buf());
     }
 }
 
@@ -120,6 +123,16 @@ impl CacheBudget {
 /// previews the next pass would delete. A preview someone opens is made
 /// either way. True when there is no limit or the volume cannot be read.
 pub fn room_for_previews(budget: &CacheBudget, cache_dir: &Path) -> bool {
+    #[cfg(test)]
+    if budget
+        .lifted_for_test
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|dir| dir == cache_dir)
+    {
+        return true;
+    }
     let limit = device_of(cache_dir)
         .and_then(|device| budget.volume_limits.lock().unwrap().get(&device).copied())
         .unwrap_or_else(max_volume_percent);
