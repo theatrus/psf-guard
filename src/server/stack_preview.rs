@@ -26,6 +26,7 @@ mod canvas_astrometry;
 pub mod method;
 mod mono_build;
 mod mosaic;
+mod partial_stacks;
 mod processing_queue;
 pub mod rc_astro;
 pub(crate) mod reapply;

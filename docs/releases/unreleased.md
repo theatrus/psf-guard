@@ -16,6 +16,13 @@
 
 ## Changes
 
+- **Stack each night apart**, a new choice in **Settings › Stacking ›
+  Nights**, stacks each calibration session of a channel on its own with
+  Seiza's distributed stacking and combines them. Each night's stack is kept
+  by a key computed from its frames' contents, so a rebuild after another
+  night stacks only that night. Transients are rejected within each night,
+  and a channel stacked this way has no progress curve. It is off by
+  default; mosaics and Bayer drizzle stack in one pass as before.
 - **External flat masters at another gain**, a new setting in
   **Settings › Processing › Calibration › Matching** and in each rig's
   settings, lets a flat master from other software calibrate lights shot at

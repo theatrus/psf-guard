@@ -21,4 +21,11 @@ describe('sameMethod', () => {
     expect(sameMethod(graded, { ...graded, reference_rotation_margin_degrees: 2.5 })).toBe(true);
     expect(sameMethod(graded, { ...auto, reference_rotation_margin_degrees: 2.5 })).toBe(false);
   });
+
+  it('reads a method recorded before partial stacks as not using them', () => {
+    expect(sameMethod(auto, { ...auto, partial_stacks: false })).toBe(true);
+    expect(sameMethod({ ...auto, partial_stacks: false }, auto)).toBe(true);
+    expect(sameMethod(auto, { ...auto, partial_stacks: true })).toBe(false);
+    expect(sameMethod({ ...auto, partial_stacks: true }, auto)).toBe(false);
+  });
 });

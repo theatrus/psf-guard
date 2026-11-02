@@ -46,6 +46,9 @@ pub mod stack_kind {
     pub const ARTIFACT_SEARCHES: &str = "artifact-searches";
     pub const REFERENCE_SCORES: &str = "reference-scores";
     pub const RESUME: &str = "resume";
+    /// Seiza's partial stacks, one per calibration session, each kept under
+    /// a key of its own and shared by every channel that holds the session.
+    pub const PARTIAL_STACKS: &str = "partial-stacks";
 }
 
 /// `<stack_root>/stack-previews`.

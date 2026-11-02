@@ -338,6 +338,28 @@ building again continues where the stop landed instead of starting over.
 Checkpoints live in the project cache and cost one full-frame state file per
 target/channel.
 
+### Stack each night apart
+
+**Settings › Stacking › Nights › Stack each night apart** stacks each
+calibration session of a channel on its own, with Seiza's distributed
+stacking, and combines them. Every session is registered, normalized and
+weighted against the channel's one reference frame, so the sessions combine
+into what one stack of every frame would give, apart from rejection: the
+final pass rejects transients within each session.
+
+Each session's stack is kept in `stack-previews/partial-stacks` under a key
+Seiza computes from the contents of its frames and masters and the stacking
+method, not from their paths. A later build stacks only the sessions whose
+key the store lacks, such as a night just added, and combines the kept
+stacks again without reading their frames. The card says which sessions it
+reused. A session's frames are still hashed on every build to compute its
+key.
+
+A channel stacked this way has no progress curve, since no single
+accumulator saw every frame, and it publishes in its reference frame's
+rotation, or north up, without the exposure vote over a meridian flip.
+Mosaics and Bayer drizzle stack in one pass as before.
+
 ### Seiza upgrades
 
 A Seiza upgrade keeps completed stacks, resume checkpoints, reference scores

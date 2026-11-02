@@ -290,6 +290,25 @@ export default function StackMethodSettings() {
             </span>
           </label>
         </fieldset>
+        <fieldset className="calibration-settings-group stack-method-group">
+          <legend>Nights</legend>
+          <label className="review-preference">
+            <input
+              type="checkbox"
+              checked={method.partial_stacks ?? false}
+              onChange={(event) => choose({ ...method, partial_stacks: event.target.checked })}
+            />
+            <span>
+              Stack each night apart
+              <small>
+                Stacks each calibration session on its own and keeps it, then combines them,
+                so a rebuild after another night stacks only that night. Transients are rejected
+                within each night, and the progress curve is not measured. Mosaics, and color
+                frames integrated by photosite, stack in one pass as before.
+              </small>
+            </span>
+          </label>
+        </fieldset>
       </fieldset>
       {save.isError && (
         <p className="error-text" role="alert">{(save.error as Error).message}</p>

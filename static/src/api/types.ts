@@ -771,6 +771,12 @@ export interface StackMethod {
    * must sit inside Seiza's 10° limit to count toward an orientation group.
    */
   reference_rotation_margin_degrees: number;
+  /**
+   * Stack each calibration session apart as a partial stack kept by key,
+   * and combine them, so a rebuild after another night stacks only that
+   * night. Absent in records written before it existed, which is off.
+   */
+  partial_stacks?: boolean;
 }
 
 export interface StackMethodSettings {

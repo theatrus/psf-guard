@@ -118,6 +118,12 @@ pub struct StackMethod {
     /// With an automatic reference, how far inside Seiza's rotation limit a
     /// frame must sit to count toward the reference's orientation group.
     pub reference_rotation_margin_degrees: f64,
+    /// Stack each calibration session of a channel apart, as a partial
+    /// stack kept under a key of its own, and combine them (Seiza's
+    /// distributed stacking). A rebuild after another night stacks only
+    /// that night. Rejection then runs within each session, and mosaics
+    /// stack as before.
+    pub partial_stacks: bool,
 }
 
 impl Default for StackMethod {
@@ -131,6 +137,7 @@ impl Default for StackMethod {
             reference: StackReference::default(),
             final_pass: StackFinalPass::default(),
             reference_rotation_margin_degrees: DEFAULT_REFERENCE_ROTATION_MARGIN_DEGREES,
+            partial_stacks: false,
         }
     }
 }
@@ -162,6 +169,7 @@ impl StackMethod {
             reference: StackReference::BestGraded,
             final_pass: StackFinalPass::Reintegrate,
             reference_rotation_margin_degrees: DEFAULT_REFERENCE_ROTATION_MARGIN_DEGREES,
+            partial_stacks: false,
         }
     }
 
@@ -237,7 +245,7 @@ impl StackMethod {
     /// The margin appears only when it can change the stack: with an
     /// automatic reference and a margin other than the default. Every other
     /// method keeps the bytes it had before the margin existed, so its stacks
-    /// still match.
+    /// still match. Partial stacks appear only when chosen, likewise.
     pub fn fingerprint(&self) -> String {
         #[derive(Serialize)]
         struct Fingerprint<'a> {
@@ -250,6 +258,8 @@ impl StackMethod {
             final_pass: &'a StackFinalPass,
             #[serde(skip_serializing_if = "Option::is_none")]
             reference_rotation_margin_degrees: Option<f64>,
+            #[serde(skip_serializing_if = "std::ops::Not::not")]
+            partial_stacks: bool,
         }
         let margin = self.reference_rotation_margin_degrees;
         serde_json::to_string(&Fingerprint {
@@ -263,6 +273,7 @@ impl StackMethod {
             reference_rotation_margin_degrees: (self.reference == StackReference::Auto
                 && margin != DEFAULT_REFERENCE_ROTATION_MARGIN_DEGREES)
                 .then_some(margin),
+            partial_stacks: self.partial_stacks,
         })
         .expect("a stacking method serializes")
     }
@@ -435,5 +446,27 @@ mod tests {
             ..full
         };
         assert!(!full.same_accumulator(&equal));
+    }
+
+    /// Partial stacks are a choice, never a default: neither preset uses
+    /// them, a method saved before they existed reads without them, and
+    /// without them a method's fingerprint is the one it had before, so no
+    /// existing stack rebuilds.
+    #[test]
+    fn partial_stacks_are_off_unless_chosen() {
+        assert!(!StackMethod::default().partial_stacks);
+        assert!(!StackMethod::classic().partial_stacks);
+        let saved: StackMethod =
+            serde_json::from_str(r#"{"normalization":"global","weighting":"equal"}"#).unwrap();
+        assert!(!saved.partial_stacks);
+        for method in [StackMethod::default(), StackMethod::classic()] {
+            assert!(!method.fingerprint().contains("partial_stacks"));
+            let chosen = StackMethod {
+                partial_stacks: true,
+                ..method
+            };
+            assert_ne!(chosen.fingerprint(), method.fingerprint());
+            assert!(!chosen.same_accumulator(&method));
+        }
     }
 }
