@@ -82,6 +82,88 @@ async fn feasibility_times_each_rig_with_a_site_and_names_the_rest() {
         (2..=3).contains(&nights_to_complete),
         "{nights_to_complete}"
     );
+    // At 09:00 the night has ended: the count starts with the coming night,
+    // as it does at 17:00 that day.
+    let (_, morning) = call(
+        &a.f.app,
+        "POST",
+        &path,
+        json!({"nights": 3, "start_ms": 1_790_294_400_000u64 + 16 * 3_600_000}),
+        None,
+    )
+    .await;
+    let (_, evening) = call(
+        &a.f.app,
+        "POST",
+        &path,
+        json!({"nights": 3, "start_ms": 1_790_294_400_000u64 + 24 * 3_600_000}),
+        None,
+    )
+    .await;
+    assert_eq!(
+        morning["data"]["rigs"][0]["nights_to_complete"],
+        evening["data"]["rigs"][0]["nights_to_complete"]
+    );
+    // At 04:00 the same night, its hours already past are gone.
+    let (_, late) = call(
+        &a.f.app,
+        "POST",
+        &path,
+        json!({"nights": 3, "start_ms": 1_790_294_400_000u64 + 11 * 3_600_000}),
+        None,
+    )
+    .await;
+    let late = late["data"]["rigs"][0]["nights_to_complete"]
+        .as_u64()
+        .unwrap();
+    assert!(
+        late > nights_to_complete,
+        "{late} at 04:00, {nights_to_complete} at 17:00"
+    );
+    assert!(rig["availability"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|n| n["state"] == "available" && n["marks"] == json!([])));
+    // Marking the first two nights out pushes the estimate later, and the
+    // nights show the marks.
+    let marks = json!({"expected_revision": 0, "marks": [
+        {"date": "2026-09-24", "state": "unavailable", "note": "dome motor"},
+        {"date": "2026-09-25", "state": "unavailable"},
+    ]});
+    let (status, saved) = call(
+        &a.f.app,
+        "PUT",
+        &format!("/night-availability/rig/{}", a.rig),
+        marks,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    let (_, marked) = call(
+        &a.f.app,
+        "POST",
+        &path,
+        json!({"nights": 3, "start_ms": 1_790_294_400_000u64}),
+        None,
+    )
+    .await;
+    let marked_rig = &marked["data"]["rigs"][0];
+    assert_eq!(marked_rig["availability"][0]["state"], "unavailable");
+    assert_eq!(
+        marked_rig["availability"][0]["marks"][0]["note"],
+        "dome motor"
+    );
+    assert_eq!(marked_rig["availability"][2]["state"], "available");
+    assert_eq!(
+        marked_rig["nights"][0]["targets"][0]["hours_up_available"],
+        0.0
+    );
+    let later = marked_rig["nights_to_complete"].as_u64().unwrap();
+    assert!(
+        later >= nights_to_complete + 2,
+        "{later} after {nights_to_complete}"
+    );
     let samples = rig["curve"]["samples"].as_array().unwrap();
     assert_eq!(samples.len(), 288);
     assert!(samples

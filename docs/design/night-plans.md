@@ -1,10 +1,10 @@
 # Night plans
 
-Status: **In progress**. Phases 1 to 4 are built: summaries, manual
-availability, the Target Scheduler emulation and the Director emulation,
-with each plan's completion night inside a scheduled range. Phase 5's
-availability-aware `nights_to_complete`, Phase 6 (overrides) and Phase 7
-(forecasts) are not. §5 says what each phase built and what is left. The
+Status: **In progress**. Phases 1 to 5 and 7 are built: summaries, manual
+availability, the Target Scheduler emulation, the Director emulation,
+projection (each plan's completion night by its rig's own schedule, and an
+availability-aware `nights_to_complete`), and cloud forecasts. Phase 6
+(overrides) is not. §5 says what each phase built and what is left. The
 answers in §7 marked *provisional* are what the code does now; confirm them
 or change them. Last updated: 2026-11-01. Tracks
 [#1037](https://github.com/theatrus/psf-guard/issues/1037).
@@ -398,15 +398,59 @@ A mark covers one night in one scope:
     night.
   - On a Director rig, holding the rig for a night is a separate,
     explicit override (§4.6).
-- **Forecasts later (Phase 7):**
-  - A forecast source per site supplies hourly cloud cover, which turns
-    into `limited` windows wherever cover is under the site's threshold.
-  - Each forecast mark records its provider, when it was fetched and
-    when it expires. An expired forecast counts as no information, not
-    as clear.
-  - A background job refreshes them.
-  - Observed weather stays separate. It is acquisition evidence and
-    belongs to the rig (Director, *Site and rig responsibilities*).
+- **Forecasts (Phase 7):** see §4.3.1.
+
+#### 4.3.1 Forecasts
+
+A site can take a cloud forecast. It turns into the site's availability
+wherever no manual mark says otherwise.
+
+- **Providers.** Each site chooses one, or none (the default).
+
+  | Provider | Clouds | Range | Coverage | Key | Terms |
+  | --- | --- | --- | --- | --- | --- |
+  | Open-Meteo (the default choice) | total, low, mid and high, hourly | up to 16 days | global; ECMWF, GFS and ICON blended, or one chosen | none | free for non-commercial use, 10,000 calls a day, CC BY 4.0; paid plans, and the service is open source, so it can be self-hosted |
+  | MET Norway Locationforecast | total, low, medium and high, plus fog; hourly, then every 6 hours | about 9 days | global, most detailed over Scandinavia | none; requests must identify the app and a contact | free, commercial use included, CC BY 4.0; obey `Expires`, send `If-Modified-Since`, coordinates to 4 decimals |
+
+  Each provider's base URL can be changed in the server's configuration,
+  so a commercial user can point Open-Meteo at a paid plan or an instance
+  of their own. Considered and left for later: the US National Weather
+  Service (US only), 7Timer! ASTRO (adds seeing and transparency, but
+  3-hourly, 3 days, non-commercial), keyed services (Pirate Weather,
+  OpenWeatherMap, Tomorrow.io, Visual Crossing) and paid astronomy
+  services (Meteoblue, Astrospheric).
+- **Opt-in and privacy.** Fetching a forecast sends the site's latitude and
+  longitude to the provider, and PSF Guard sends nothing about a site
+  anywhere today. So forecasts are off until an editor turns them on for a
+  site, which says what is sent and to whom. Coordinates go rounded to two
+  decimals, about a kilometre, which is finer than any model's grid.
+- **Clear or not.** An hour is clear when its total cloud cover is at or
+  under the site's threshold (30 % by default). Clear hours inside a night's
+  noon-to-noon span become that night's `limited` windows; a night with
+  none is `unavailable`; a night clear in every dark hour is `available`.
+  Weighting cloud layers (thin high cloud blocks less than low cloud) is a
+  later site option.
+- **Storage.** The meta store keeps each site's latest forecast: its
+  provider, when it was fetched, when it expires, and the hourly cover
+  (total and by layer). Windows are worked out when they are read, so a
+  changed threshold applies at once.
+- **Freshness.** A forecast is good for 12 hours after it was fetched. An
+  expired forecast counts as no information, not as clear, and hours past
+  a forecast's range are no information too. A night with no information
+  is available, as before, and says so.
+- **Refresh.** A background task refreshes each opted-in site's forecast
+  every three hours, sooner never than the provider's `Expires`, with
+  backoff after a failure. A failure keeps the last forecast with its
+  expiry and never fabricates a clear night. **Fetch now** in the site's
+  settings refreshes at once.
+- **Precedence.** At each scope a manual mark wins over a forecast. A
+  forecast is a site's: it is about the sky, so rigs take it through their
+  planning site, and a rig's own mark still meets it.
+- **Shown.** The Nights grid draws a forecast night like a marked one, with
+  a cloud glyph; the night's panel adds an hourly cloud strip to the
+  timeline, and every place a forecast shows credits its provider.
+- **Observed weather** stays separate. It is acquisition evidence and
+  belongs to the rig (Director, *Site and rig responsibilities*).
 
 ### 4.4 Summary per rig and night
 
@@ -692,8 +736,8 @@ refused.
   - A marked night shows the mark and its note everywhere it is drawn.
 - **Plans:**
   - The plan workspace shows the projected completion night per rig.
-  - Feasibility's `nights_to_complete` takes availability and the rig's
-    other plans into account once Phase 5 lands.
+  - Feasibility's `nights_to_complete` takes availability into account;
+    the projection takes the rig's other plans into account (Phase 5).
   - The Visibility strip's nights table shows the marks.
 
 ## 5. Phased plan
@@ -755,16 +799,25 @@ apart needs the geometry to say why, and is left for later.
   - The pull's program fingerprints are unchanged.
   - Every gap carries a reason from the table in §4.5.
 
-**Phase 5: projection.** *Partly built:* frames carry across the scheduled
-nights, both runtimes count them at the acceptance rules, and each plan
-gets its completion night within the range. Feasibility's
-`nights_to_complete` does not use availability or contention yet.
+**Phase 5: projection.** *Built.*
 - Carry-over across nights, the acceptance rules and completion nights for
   both runtimes.
-- Availability- and contention-aware `nights_to_complete`.
-- *Gate:* a plan with one goal on a rig completes on the night the frame
-  arithmetic says. A second plan ranked ahead of it pushes that night
-  later, by each runtime's own ranking.
+- Feasibility counts availability: its nights take the rig's marks and its
+  site's forecast (`rig_availability`, shared with night plans), each night
+  carries its marks for the Visibility table, and `nights_to_complete`
+  counts each night's hours up and available, nights past the range as
+  clear.
+- Contention: `POST /projects/{id}/projection` reads, for each rig the plan
+  is activated on, the night its own runtime's schedule plans the plan's
+  last frame, and the other plans that take the rig first. The Visibility
+  panel shows it. Feasibility's arithmetic estimate stays contention-free
+  and says so.
+- *Gate, met, by each runtime's own ranking:* `adoption::night_plans`
+  projects a plan alone on a rig to the night its planned frames reach what
+  it owes. On Target Scheduler, a high-priority project ranked ahead of it
+  moves that night later. On Director, which ranks only the plans activated
+  on the rig, the same project does not. A rig with every frame is done on
+  both, and a project set inactive by hand is reported, not projected.
 
 **Phase 6: Director overrides and fixed steps.** *Not built.*
 - `night_override` in the next meta schema, the overrides API,
@@ -777,12 +830,24 @@ gets its completion night within the range. Feasibility's
   - A Target Scheduler rig refuses overrides.
   - A night's overrides lapse after it.
 
-**Phase 7: forecast sources.** *Not built.*
-- A provider per site, the background refresh, expiry, and manual marks
-  overriding forecasts.
-- *Gate:* an expired forecast counts as no information. A manual mark
-  wins at its scope. A provider failure leaves the last marks with their
-  expiry and never fabricates a clear night.
+**Phase 7: forecast sources.** *Built.*
+- A provider per site (Open-Meteo or MET Norway, off by default), the
+  stored hourly forecast, the background refresh, expiry, manual marks
+  overriding forecasts, the cloud strip and attribution (§4.3.1).
+- *Gate, met:* an expired forecast counts as no information. A manual mark
+  overrides the forecast at its scope. A failed request keeps the stored
+  forecast until it expires and never makes up a clear night. Tests:
+  `server::forecast` reads each provider's response, sends rounded
+  coordinates and identifies PSF Guard; `adoption::forecasts` covers a
+  failed first request, the forecast's marks, a site mark and a rig mark
+  over them, a changed threshold, expiry and turning forecasts off;
+  `night_plans` judges forecast nights by their dark hours; the Director
+  e2e suite runs against a stand-in provider.
+- Built beside it: tests that a site's `.hrz` horizon reaches both runtimes'
+  schedules (`adoption::site_horizon`), checked locally against real patio
+  horizons as well.
+- Left for later: weighting cloud layers, and the US National Weather
+  Service and 7Timer! ASTRO as further providers.
 
 **Later:**
 - learned durations and uncertainty bands (Director, Phase 3);
@@ -818,7 +883,8 @@ simulation and for the per-rig night preview through the shared engine.
 1. **Runtime before the rig mode exists.** Proposal: Director for a rig
    with reported equipment and an enabled workload policy, and Target
    Scheduler otherwise. Once the rig mode is built, it decides.
-   *Provisional: built as proposed.*
+   *Settled: built as proposed, until rig modes exist; overrides follow
+   the same rule, and a Target Scheduler rig refuses them.*
 2. **N.I.N.A. profiles.** One database can hold projects for several
    profiles, and Target Scheduler plans per profile. Proposal: plan the
    profile the rig profile records. A database with several profiles and
@@ -854,22 +920,24 @@ simulation and for the per-rig night preview through the shared engine.
    longitude, and sites have no time zone yet (Director lists it as still
    required). Proposal: add an optional IANA time zone to the site profile,
    used to enter and show marks and overrides, falling back to the
-   browser's zone. *Provisional: marks are entered and shown in the
-   browser's clock; the Target Scheduler emulation plans its days by the
-   site's local mean time, which a request can override.*
+   browser's zone. *Settled: as proposed, for Phase 6. Until it lands,
+   marks are entered and shown in the browser's clock; the Target Scheduler
+   emulation plans its days by the site's local mean time, which a request
+   can override.*
 10. **Darkness in summaries:** feasibility counts dark below −12°, while
     Target Scheduler uses each template's twilight level. Proposal: keep
     −12° for summaries, and let each runtime's schedule use its own rule.
     *Provisional: built as proposed.*
 11. **Forecast provider:** one with hourly cloud cover, no key and fair terms
-    of use. Choose one in Phase 7.
+    of use. *Settled:* Open-Meteo by default and MET Norway beside it, with
+    changeable base URLs (§4.3.1).
 12. **Steps the program cannot carry:** an autofocus run, a park at a given
     time, flats at dawn. Proposal: leave them out of v1. Add them when the
     program contract and the plugin grow those operations.
 13. **An override saved mid-night:** should it reach a running session at
     its next check-in through the priority handoff, or only the next
     session? Proposal: the next check-in, with the editor saying when it
-    takes effect.
+    takes effect. *Settled: as proposed.*
 
 ## 8. Out of scope
 

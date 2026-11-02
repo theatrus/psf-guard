@@ -58,9 +58,11 @@ mod plan_progress;
 mod plans;
 mod program;
 mod remote_push;
+mod rig_availability;
 pub(crate) use remote_push::{peer_reached, resends_under_way};
 mod rig_profile;
 mod rig_scheduling;
+mod site_forecast;
 mod site_profile;
 mod sky_image;
 mod sky_objects;
@@ -179,6 +181,13 @@ pub struct Service {
     collaboration: collaboration_auth::SessionState,
     /// Peers a background resend is sending to now.
     resending: Mutex<std::collections::BTreeSet<String>>,
+    /// Held while a site's forecast is asked for, so asks go one at a time.
+    forecast_turn: tokio::sync::Mutex<()>,
+}
+
+/// Ask for each site's cloud forecast when it is due.
+pub(crate) fn spawn_site_forecasts(state: &Arc<AppState>) {
+    site_forecast::spawn(state);
 }
 
 pub(crate) fn spawn_collaboration(state: Arc<AppState>) {
@@ -224,6 +233,7 @@ impl Service {
             plans_memo: Mutex::new(plans::Memo::default()),
             collaboration: collaboration_auth::SessionState::default(),
             resending: Mutex::new(std::collections::BTreeSet::new()),
+            forecast_turn: tokio::sync::Mutex::new(()),
         })))
     }
 
@@ -722,6 +732,10 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
             axum::routing::post(feasibility::evaluate),
         )
         .route("/night-plans", axum::routing::post(night_plans::plan))
+        .route(
+            "/projects/{id}/projection",
+            axum::routing::post(night_plans::projection),
+        )
         .route("/projects/{id}/activation", get(activation::last))
         .route("/projects/{id}/mosaic", get(mosaic::get))
         .route(
@@ -772,6 +786,7 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
         .route("/projects/{id}/detach", axum::routing::post(detach_project))
         .merge(configuration_api::routes())
         .merge(site_profile::routes())
+        .merge(site_forecast::routes())
         .merge(night_availability::routes())
         .merge(preferences::routes())
         .merge(rig_scheduling::routes())

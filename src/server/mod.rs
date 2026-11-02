@@ -28,6 +28,7 @@ pub mod flat_group_use;
 pub mod flat_groups;
 pub mod flat_history;
 pub mod flat_measure;
+pub mod forecast;
 pub mod frame_shapes;
 pub mod frame_sites;
 pub mod handlers;
@@ -140,6 +141,8 @@ pub struct ServerConfig {
     pub preview_color_default: bool,
     /// Keep a failed remote upload's staging file for inspection.
     pub keep_failed_uploads: bool,
+    /// Where cloud forecasts come from, for the sites that take one.
+    pub forecasts: crate::config::ForecastsConfig,
     /// Process-global Seiza catalog configuration from the shared registry.
     pub astrometry_config: Option<crate::astrometry::AstrometryConfig>,
     /// The server's stop, when the caller wants to see what a stop waits
@@ -1094,6 +1097,9 @@ async fn run_server_internal(
                 .set_locations(config.config_path.clone(), director_meta.clone());
             state.set_allow_database_management(config.allow_database_management);
             state.set_site_banner(config.site_banner.clone());
+            state.set_forecast_client(crate::server::forecast::ForecastClient::new(
+                &config.forecasts,
+            ));
             state.set_server_auth(config.auth.clone());
             if let (Some(auth), Some(registry_path)) = (&config.auth, &config.registry_path) {
                 user_preferences::forget_removed_users(auth, registry_path);
@@ -1227,6 +1233,7 @@ async fn run_server_internal(
     // Periodic backups, when Settings turned them on.
     crate::server::backup_job::spawn(Arc::clone(&state));
     crate::server::director::spawn_collaboration(Arc::clone(&state));
+    crate::server::director::spawn_site_forecasts(&state);
 
     // Each catalog's upkeep (query indexes, then readout modes) on its
     // runner, off the request path and before cache refreshes start

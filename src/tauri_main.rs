@@ -647,6 +647,7 @@ async fn start_server_for_tauri(
         preview_encoding: crate::preview_format::PreviewEncoding::png(),
         preview_color_default: true,
         keep_failed_uploads: false,
+        forecasts: Default::default(),
         astrometry_config,
         shutdown: Some(stop),
         config_path: None,

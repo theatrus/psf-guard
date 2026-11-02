@@ -3,7 +3,7 @@ use rusqlite::backup::{Backup, StepResult};
 use tempfile::NamedTempFile;
 
 const APPLICATION_ID: i32 = 0x50474d44;
-const SCHEMA_VERSION: i32 = 33;
+const SCHEMA_VERSION: i32 = 34;
 
 impl MetaStore {
     /// Publish a complete database at a new path. Never adopt an existing empty
@@ -57,6 +57,7 @@ impl MetaStore {
         super::transfer::create_table(&tx)?;
         super::transfer::create_delivery_table(&tx)?;
         super::night_availability::create_tables(&tx)?;
+        super::site_forecast::create_tables(&tx)?;
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         tx.commit()?;
         conn.close().map_err(|(_, error)| Error::Sqlite(error))?;
@@ -168,6 +169,11 @@ impl MetaStore {
             }
             if version < 33 {
                 super::night_availability::create_tables(&tx)?;
+            }
+            // Schema 34 adds a site's forecast settings, an optional field
+            // older payloads read without, and its stored forecast.
+            if version < 34 {
+                super::site_forecast::create_tables(&tx)?;
             }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
@@ -384,6 +390,9 @@ fn validate(conn: &Connection) -> Result<Uuid, Error> {
     }
     if version >= 33 {
         super::night_availability::validate_tables(conn)?;
+    }
+    if version >= 34 {
+        super::site_forecast::validate_tables(conn)?;
     }
     let id: String = conn.query_row(
         "SELECT instance_id FROM meta WHERE singleton=1",

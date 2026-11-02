@@ -53,6 +53,19 @@ cors = true
 # link_text = "Learn about PSF Guard"
 # link_url = "https://psf-guard.com/"
 
+# Where cloud forecasts come from, for the sites that turn them on under
+# Settings > Sites. Omit this section to use the public Open-Meteo and
+# MET Norway services. MET Norway's terms ask each request to identify the
+# application and a way to contact it: PSF Guard sends its project page,
+# and contact adds an email address or web page of yours, so the provider
+# can reach whoever runs this server.
+#
+# [server.forecasts]
+# contact = "you@example.org"
+# open_meteo_url = "https://customer-api.open-meteo.com"
+# open_meteo_api_key = "your-key"
+# met_norway_url = "https://api.met.no"
+
 [cache]
 # Cache directory path (default: "./cache")
 directory = "./cache"

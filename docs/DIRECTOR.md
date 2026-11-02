@@ -1011,8 +1011,8 @@ azimuth; the error says which line.
 
 | Method | Route | Body or query |
 | --- | --- | --- |
-| GET | `/sites/{site}/profile` | The site and its profile: `location` and `horizon`, each `{value, source, reported_at_ms}` or `null`, and `revision` (0 when nothing is saved). `404` for an unknown site. |
-| PUT | `/sites/{site}/profile` | `expected_revision` plus `location` and `horizon`, each `{value, source}` or `null`. Sources may be `manual` or `frame_headers`; `409` when the revision moved. |
+| GET | `/sites/{site}/profile` | The site and its profile: `location` and `horizon`, each `{value, source, reported_at_ms}` or `null`, `forecast` (`{provider, cloud_threshold_percent}` or `null`), and `revision` (0 when nothing is saved). `404` for an unknown site. |
+| PUT | `/sites/{site}/profile` | `expected_revision` plus `location` and `horizon`, each `{value, source}` or `null`, and `forecast`: `{provider, cloud_threshold_percent}`, or `null` or left out to turn forecasts off. Sources may be `manual` or `frame_headers`; `409` when the revision moved. `422` for a forecast without a location. A new provider, or a location about a kilometre or more away, discards the stored forecast and requests a new one; turning forecasts off discards it. |
 | POST | `/horizons/parse` | `{text}` holding a `.hrz` file; returns the canonical `Horizon` or `400` with the line it could not read. Stores nothing. |
 
 `GET /rigs/profiles` carries each rig's resolved `site`: the planning `site`
@@ -1859,14 +1859,41 @@ the horizon curve at the target's azimuth (or the flat minimum), the Moon's
 track dashed, a marker at the target's meridian transit with the rig's
 meridian pause drawn as a broken red stretch and left out of the visible
 hours, and shaded bands for darkness and astronomical night. A table
-gives the same numbers for the coming week, and a rig in the plan gets the
-hours it still owes, its goal less the frames Target Scheduler already
-accepted there, and the nights that takes at this week's rate. Pick another
-rig from the list to compare sites.
+gives the same numbers for the coming week, with each night's clear hours
+and the marks or forecast that set them (see [Nights](#nights)). Pick
+another rig from the list to compare sites.
+
+A rig in the plan gets two estimates:
+
+- **The hours it still owes**, its goal less the frames Target Scheduler
+  already accepted there, and the nights that takes at the target's clear
+  hours this week. Tonight counts from now; nights marked out or forecast
+  cloudy count for less; nights past the week count as clear. This
+  estimate leaves out the rig's other plans.
+- **The rig's own schedule**, once the plan is activated there: the night
+  the rig's runtime, Target Scheduler or Director, plans the last of the
+  plan's frames over the next 14 nights. It ranks the plan against the
+  rig's other work, as the rig itself will, and lists the other plans the
+  rig shoots before then. A plan ranked behind others completes later than
+  the hours alone suggest. It is the same schedule as on the
+  [Nights](#nights) tab.
+  - It counts only the plan's own exposure plans, as activated, not plans
+    added to the Target Scheduler project by hand.
+  - When the rig has every frame the plan needs, the panel says so.
+  - When there is no projection, the panel explains why, for example:
+    - the project is not active in the rig's database;
+    - the database could not be read;
+    - the rig has no site location;
+    - the plan's project is in another N.I.N.A. profile.
+  - When the rig's program leaves some of the plan's exposure plans out,
+    the panel counts them and shows the rig's notes on why.
+
+![Visibility for a plan activated on a rig: the estimate with a night marked out, and the night the rig's own schedule finishes the plan](images/visibility-projection.png)
 
 | Method | Route | Body or query |
 | --- | --- | --- |
-| POST | `/projects/{id}/feasibility` | Optional `nights` (1 to 14, default 7), `center` (defaults to the saved framing's center; a rig framed on its own center is timed there), `rig_centers` (rig id to center: where the framing view has a separately framed rig now, saved or not; up to 64) and `start_ms` (default now; the first night is the one under way then). For every rig with a site: the `center` it was timed at, the applied `limits`, `nights` summaries, tonight's `curve` (five-minute samples of Sun, Moon and target altitude with the horizon at each azimuth), `hours_needed` (the plan's goal less accepted frames) and `nights_to_complete`; `warnings` lists rigs without a site. `400` for a `start_ms` outside 1970-01-02 to 2099-01-01; `422` until there is a center to time. |
+| POST | `/projects/{id}/feasibility` | Optional `nights` (1 to 14, default 7), `center` (defaults to the saved framing's center; a rig framed on its own center is timed there), `rig_centers` (rig id to center: where the framing view has a separately framed rig now, saved or not; up to 64) and `start_ms` (default now; the first night is the one under way then). For every rig with a site: the `center` it was timed at, the applied `limits`, `nights` summaries, tonight's `curve` (five-minute samples of Sun, Moon and target altitude with the horizon at each azimuth), `availability` (each night's state, clear windows and marks, as on the night plans), `hours_needed` (the plan's goal less accepted frames) and `nights_to_complete` (at the target's hours up and available, marks and forecast counted, tonight's from `start_ms` on; nights past these count as clear; the rig's other plans are not counted); `warnings` lists rigs without a site. `400` for a `start_ms` outside 1970-01-02 to 2099-01-01; `422` until there is a center to time. |
+| POST | `/projects/{id}/projection` | Optional `nights` (1 to 31, default 14), `start_ms` (plan from this instant; default now) and `runtime` (`auto`, the default, is each rig's own; or `target_scheduler` or `director`). One entry per rig the plan is activated on: `rig_id`, `catalog_name`, `runtime` and `outcome`. The `outcome` is `scheduled` (`completes_on`, the night the plan's last frame is planned or `null` when not within the nights, and `unscheduled`, its exposure plans that owe frames but the schedule leaves out), `done`, or `skipped` with a `reason`. For a scheduled rig, `dates`, `planned` (the plan's frames each night) and `others` (the rig's other plans scheduled while the plan owes frames, with their hours). Each entry's `notes` are the rig's night-plan warnings, and a push not yet applied. `warnings` lists rigs left out of the night plans. Writes nothing; a read-only account that may run calculations can call it. |
 
 Times come from the shared core's planning-grade Sun and Moon positions and
 the same horizon and limit rules the rig's geometry applies; they are
@@ -1923,7 +1950,7 @@ Choose a cell to open the night below the grid:
   The other targets fold into **Not this night**, each with its reason:
   - its plan is done on an earlier night;
   - its filters' Moon avoidance excludes every clear hour;
-  - it is above its limits only while the night is marked not clear;
+  - it is above its limits only in hours that are not clear;
   - it is not above its limits inside its meridian window during darkness;
   - it is not above its horizon and altitude limits during darkness;
   - the sky does not get dark that night.
@@ -1991,6 +2018,67 @@ Marks change night plans only. They never start, stop or block a rig, and
 never reach a program, the plugin, Target Scheduler or N.I.N.A.: the rig's
 safety monitor and N.I.N.A. still decide on the night.
 
+### Cloud forecasts
+
+A site can use a cloud forecast to mark its nights. Forecasts are off until
+an editor turns them on for a site:
+
+1. Open **Settings › Sites** and click **Edit** for the site.
+2. Enter the site's latitude and longitude if they are empty.
+3. Under **Cloud forecast**, choose a provider in **Forecast**:
+   - **Open-Meteo**: hourly, 16 days ahead; free for non-commercial use.
+   - **MET Norway**: hourly, then every 6 hours, about 9 days ahead; free
+     for any use.
+4. In **Clear at or under**, enter the cloud cover, in percent, at or under
+   which an hour counts as clear. The default is 30%.
+5. Click **Save site**. PSF Guard requests the first forecast at once.
+
+![A site's cloud forecast, with when it arrived and how long night plans use it](images/site-forecast.png)
+
+PSF Guard sends the site's latitude and longitude, rounded to about 1 km,
+to the provider when you save the site, every three hours, when you click
+**Fetch now**, and when it retries after a failed request. It sends
+nothing else, and nothing about a site whose forecast is off.
+
+- **Fetch now** requests a new forecast at once. Within 2 minutes after a
+  forecast arrives, within a minute after a failed request, or before the
+  provider's own `Expires` or `Retry-After` time, it sends nothing, and the
+  panel says when to try again.
+- After a failed request, the panel shows the error. PSF Guard tries again
+  after 15 minutes, then waits longer after each further failure, up to 6
+  hours. A failed **Fetch now** does not lengthen that wait.
+- MET Norway can reply that nothing has changed. The panel then shows when
+  MET Norway confirmed the forecast unchanged, and night plans use it for
+  12 more hours.
+- A new elevation or threshold keeps the forecast. A new provider, or a
+  move of the site by about a kilometre or more, discards it and requests
+  a new one.
+
+In night plans, a forecast works like a mark for every rig at the site:
+
+- Hours at or under the threshold count as clear. A night clear through
+  all its dark hours is available. A night clear at no time a schedule
+  could image (the Sun below −6°) is not available. Any other night is
+  limited to its clear hours, which may lie in twilight.
+- A mark set for the site overrides the forecast for that night. A rig's
+  own mark still applies with the forecast.
+- A forecast is used for 12 hours after it arrives. Hours after the
+  forecast's last hour, nights the forecast does not reach, and every night
+  once the forecast expires count as clear. Hours before its first hour
+  have passed, and count as not clear.
+- The **Nights** grid shows a cloud in each cell the forecast marks, and
+  credits each provider under the grid. A night's panel shows the
+  forecast's mark, the time the forecast arrived and the provider's
+  credit. The timeline adds a strip of each hour's cloud cover; hours
+  above the threshold have a red edge, and the legend lists them.
+
+![A night the forecast marks clear from 10 PM to 2 AM, with its hourly cloud under the schedule](images/nights-forecast.png)
+
+Like marks, forecasts change night plans only: they never start, stop or
+block a rig. To use a paid Open-Meteo plan, your own Open-Meteo instance,
+or to add contact details to each request, set `[server.forecasts]` in the
+server's configuration file; see the [README](../README.md).
+
 ### Tonight on the Live tab
 
 The table on **Rigs › Live** has a **Tonight** column: each rig's clear
@@ -2003,6 +2091,8 @@ schedule on the **Nights** tab.
 | GET | `/night-availability` | `scope` (`site` or `rig`), `id`, `from` and `to` (`YYYY-MM-DD`). The scope's marks and the `revision` to send back with a change. |
 | PUT | `/night-availability/{scope}/{id}` | `expected_revision` and `marks`: up to 62 nights, each a `date`, a `state` (`available`, `unavailable` or `limited`), `windows` (for `limited`: UTC instants inside that night's noon-to-noon span) and an optional `note`. Replaces those nights' marks in one transaction. `409` on a stale revision; `422` for hours outside the night or a scope with no location. |
 | DELETE | `/night-availability/{scope}/{id}` | `expected_revision` and `dates`: returns those nights to the default. |
+| GET | `/sites/{site}/forecast` | The site's forecast `settings` (`provider`: `open_meteo` or `met_norway`, and `cloud_threshold_percent`), the provider's `attribution`, the stored `forecast` (each hour's total, low, mid and high cloud cover), whether night plans use it now (`fresh`), the last request's `status` (time, error and failures in a row) and `next_refresh_ms`. |
+| POST | `/sites/{site}/forecast/refresh` | Requests the site's forecast now and returns the same view; a failed request returns the view with the error in `status`. `422` when forecasts are off, the site has no location, another refresh is running, within 2 minutes of the last forecast or a minute of a failed request, or before the provider's `Expires` or `Retry-After` time; the error says how long to wait. Editors only. |
 
 ## Framing drafts
 

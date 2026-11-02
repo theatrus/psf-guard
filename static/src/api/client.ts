@@ -497,6 +497,21 @@ export const apiClient = {
     return data.data;
   },
 
+  getSiteForecast: async (site: string): Promise<import('./directorTypes').SiteForecastView> => {
+    const api = await getApi();
+    const { data } = await api.get<ApiResponse<import('./directorTypes').SiteForecastView>>(`/director/v1/sites/${encodeURIComponent(site)}/forecast`);
+    if (!data.data) throw new Error(data.error || "Failed to load the site's forecast");
+    return data.data;
+  },
+
+  /** Ask the site's provider now. A failed ask still answers, with the error in its status. */
+  refreshSiteForecast: async (site: string): Promise<import('./directorTypes').SiteForecastView> => {
+    const api = await getApi();
+    const { data } = await api.post<ApiResponse<import('./directorTypes').SiteForecastView>>(`/director/v1/sites/${encodeURIComponent(site)}/forecast/refresh`);
+    if (!data.data) throw new Error(data.error || "Failed to fetch the site's forecast");
+    return data.data;
+  },
+
   /** Read N.I.N.A. `.hrz` text into a horizon; nothing is stored. */
   parseDirectorHorizon: async (text: string): Promise<import('./directorTypes').DirectorHorizon> => {
     const api = await getApi();
@@ -797,6 +812,14 @@ export const apiClient = {
     const api = await getApi();
     const { data } = await api.get<ApiResponse<DirectorResolvedName>>('/director/v1/sky/resolve', { params: { name } });
     if (!data.data) throw new Error(data.error || 'Name could not be resolved');
+    return data.data;
+  },
+
+  /** When each rig the plan is activated on finishes it, by its own schedule. */
+  getDirectorProjection: async (projectId: string, request: { nights?: number; start_ms?: number } = {}): Promise<import('./directorTypes').DirectorProjection> => {
+    const api = await getApi();
+    const { data } = await api.post<ApiResponse<import('./directorTypes').DirectorProjection>>(`/director/v1/projects/${encodeURIComponent(projectId)}/projection`, request);
+    if (!data.data) throw new Error(data.error || 'Failed to project the plan');
     return data.data;
   },
 

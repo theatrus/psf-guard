@@ -1,11 +1,13 @@
-//! A site's location and horizon, edited in Setup and inherited by every rig
-//! that names the site as its planning site. Horizons arrive as N.I.N.A.
-//! `.hrz` text and are checked by the shared core before they are stored.
+//! A site's location, horizon and forecast choice, edited in Setup and
+//! inherited by every rig that names the site as its planning site. Horizons
+//! arrive as N.I.N.A. `.hrz` text and are checked by the shared core before
+//! they are stored.
 
 use super::*;
 use psf_guard_director_core::visibility::{Horizon, Site};
 use psf_guard_director_meta::{
     profile::{Reported, Source},
+    site_forecast::ForecastSettings,
     site_profile::SiteProfile,
 };
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -32,6 +34,10 @@ struct Edit {
     expected_revision: u64,
     location: Option<Edited<Site>>,
     horizon: Option<Edited<Horizon>>,
+    /// The site's cloud forecast provider and threshold. Left out, forecasts
+    /// are off for the site, and PSF Guard sends nothing about it.
+    #[serde(default)]
+    forecast: Option<ForecastSettings>,
 }
 
 #[derive(Deserialize)]
@@ -83,7 +89,14 @@ async fn put_profile(
     {
         return Err(Error::Invalid);
     }
-    let view = enabled(&state)?
+    if edit.forecast.is_some() && edit.location.is_none() {
+        return Err(Error::Refused(
+            "A forecast needs the site's location. Enter its latitude and longitude.".into(),
+        ));
+    }
+    let service = enabled(&state)?;
+    let (view, refresh) = service
+        .clone()
         .run(move |store| {
             let identity = store.site(site)?.ok_or(StoreError::NotFound)?;
             let now = now_ms();
@@ -98,14 +111,29 @@ async fn put_profile(
                 now,
             );
             next.horizon = stamp(edit.horizon, previous.and_then(|p| p.horizon.as_ref()), now);
+            next.forecast = edit.forecast;
             next.updated_at_ms = now;
             let profile = store.save_site_profile(&next, edit.expected_revision)?;
-            Ok::<_, StoreError>(ProfileView {
-                site: identity,
-                profile,
-            })
+            // A forecast is for one provider and one place, to two
+            // decimals: a change to either, or no forecast at all, discards
+            // the stored one. A new elevation or threshold keeps it.
+            let before = previous.and_then(super::site_forecast::request_key);
+            let after = super::site_forecast::request_key(&profile);
+            if before != after {
+                store.clear_site_forecast(site)?;
+            }
+            Ok::<_, StoreError>((
+                ProfileView {
+                    site: identity,
+                    profile,
+                },
+                after.is_some() && before != after,
+            ))
         })
         .await?;
+    if refresh {
+        super::site_forecast::settings_changed(&state, service, site);
+    }
     Ok(Json(ApiResponse::success(view)))
 }
 

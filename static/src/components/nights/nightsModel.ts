@@ -1,4 +1,5 @@
-import type { NightAvailabilityState, NightInterval, NightPlanProject, NightPlanTarget, NightRuntime, NightTargetHours, NightSchedule, RigNight, RigNights, SchedulePlanProgress } from '../../api/nightPlanTypes';
+import type { NightAppliedMark, NightAvailabilityState, NightInterval, NightPlanProject, NightPlanTarget, NightRuntime, NightTargetHours, NightSchedule, RigNight, RigNights, SchedulePlanProgress } from '../../api/nightPlanTypes';
+import { PROVIDER_LABEL } from '../director/forecastLabels';
 import { withoutPlanningParams } from '../../hooks/useUrlState';
 
 const DAY_MS = 86_400_000;
@@ -131,12 +132,44 @@ export function availableShares(night: RigNight): Array<{ from: number; to: numb
   }
 }
 
-/** The glyph a cell shows for its mark: ✕ out, ◐ limited, ✓ marked clear,
- *  nothing when unmarked. */
+/** The mark the site's forecast set on a night, where no site mark says
+ *  otherwise. */
+export function forecastMark(night: RigNight): NightAppliedMark | undefined {
+  return night.availability.marks.find(mark => mark.source.kind === 'forecast');
+}
+
+/** Where a mark came from, in a word or two: "Site", "Rig", or the
+ *  forecast and when it was fetched. */
+export function markOrigin(mark: NightAppliedMark): string {
+  if (mark.source.kind === 'forecast') return `Forecast (${PROVIDER_LABEL[mark.source.provider]}, fetched ${formatClock(mark.source.fetched_at_ms)})`;
+  return mark.scope === 'site' ? 'Site' : 'Rig';
+}
+
+/** The glyph a cell shows for a mark set by hand: ✕ out, ◐ limited, ✓
+ *  marked clear. Nothing when no one marked the night: a night the site's
+ *  forecast marks shows a cloud instead. */
 export function markGlyph(night: RigNight): string {
-  if (night.availability.state === 'unavailable') return '✕';
-  if (night.availability.state === 'limited') return '◐';
-  return night.availability.marks.length > 0 ? '✓' : '';
+  const byHand = night.availability.marks.filter(mark => mark.source.kind === 'manual');
+  if (byHand.some(mark => mark.state === 'unavailable')) return '✕';
+  if (byHand.some(mark => mark.state === 'limited')) return '◐';
+  return byHand.length > 0 ? '✓' : '';
+}
+
+/** What set a night's state, for words such as "limited by the forecast":
+ *  marks set by hand, the site's forecast, both, or nothing. */
+export function decidedBy(night: RigNight): 'none' | 'manual' | 'forecast' | 'both' {
+  const marks = night.availability.marks;
+  const forecast = marks.find(mark => mark.source.kind === 'forecast');
+  const byHand = marks.filter(mark => mark.source.kind === 'manual');
+  if (night.availability.state === 'available') {
+    if (byHand.length > 0) return 'manual';
+    return forecast ? 'forecast' : 'none';
+  }
+  const handLimits = byHand.some(mark => mark.state !== 'available');
+  const forecastLimits = !!forecast && forecast.state !== 'available';
+  if (handLimits && forecastLimits) return 'both';
+  if (forecastLimits) return 'forecast';
+  return handLimits ? 'manual' : 'none';
 }
 
 /** A night's load in a few words: idle hours, or the hours overbooked. */
@@ -180,7 +213,8 @@ export type NightTargetStatus =
   | 'done'
   /** Up while the night is clear, but its filters' Moon rules turn it down. */
   | 'moon'
-  /** Up only while the night is marked not clear. */
+  /** Above its limits only in hours a mark or the forecast says are not
+   *  clear. */
   | 'not_clear'
   /** Not up inside its meridian window in the dark. */
   | 'outside_window'
@@ -193,7 +227,7 @@ export type NightTargetStatus =
  *  reason names the night. */
 export const OUT_REASON: Record<Exclude<NightTargetStatus, 'planned' | 'usable' | 'done'>, string> = {
   moon: "its filters' Moon avoidance excludes every clear hour",
-  not_clear: 'above its limits only while the night is marked not clear',
+  not_clear: 'above its limits only in hours that are not clear',
   outside_window: 'not above its limits inside its meridian window during darkness',
   below_limits: 'not above its horizon and altitude limits during darkness',
   no_darkness: 'the sky does not get dark this night',

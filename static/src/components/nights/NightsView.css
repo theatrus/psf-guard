@@ -21,6 +21,10 @@
   --nights-gap-complete: rgb(139 209 124 / 25%);
   --nights-gap-nothing: rgb(169 180 196 / 12%);
   --nights-track: rgb(255 255 255 / 4%);
+  /* A forecast hour's cloud, its opacity the cover; hours over the site's
+     threshold are edged. */
+  --nights-cloud: rgb(205 214 228);
+  --nights-cloud-over: rgb(255 107 107 / 70%);
   padding: 16px;
   min-width: 0;
 }
@@ -88,9 +92,10 @@
 .nights-page .nights-cell[aria-pressed='true']:hover:not(:disabled) { background: var(--state-on-bg); border-color: var(--state-on-border); }
 .nights-page .nights-cell.is-unavailable { background: var(--nights-out); }
 .nights-cell-top { display: flex; align-items: baseline; gap: 4px; }
-.nights-cell-hours { font-weight: 600; }
+.nights-cell-hours { font-weight: 600; white-space: nowrap; }
 .nights-cell-mark { color: var(--color-text-secondary); }
 .nights-cell-moon { margin-left: auto; color: var(--color-text-muted); font-size: 11px; }
+.nights-cell-forecast { display: inline-flex; color: var(--color-text-secondary); }
 /* Dusk to dawn: the dark night, with the clear part filled in. */
 .nights-cell-bar {
   position: relative;
@@ -212,6 +217,14 @@
 .nights-gap-key { display: inline-block; width: 14px; height: 10px; margin-right: 6px; border-radius: 2px; vertical-align: middle; }
 .nights-reasons { margin-top: 8px; padding: 8px 10px; border: 1px solid var(--color-border-secondary); border-radius: 6px; }
 .nights-reasons p { margin: 4px 0; font-size: 13px; }
+.nights-clouds { position: relative; height: 12px; margin-top: 4px; border-radius: 3px; background: var(--nights-track); overflow: hidden; }
+/* The hour's cover sets the fill's alpha, not the element's opacity, so the
+   red edge of a cloudy hour stays at full strength. */
+.nights-cloud { position: absolute; top: 0; bottom: 0; background: color-mix(in srgb, var(--nights-cloud) calc(var(--cloud-alpha, 1) * 100%), transparent); }
+.nights-cloud.is-cloudy { box-shadow: inset 0 -3px 0 var(--nights-cloud-over); }
+.nights-cloud-key { display: inline-block; width: 14px; height: 10px; margin-right: 6px; border-radius: 2px; vertical-align: middle; background: var(--nights-cloud); box-shadow: inset 0 -3px 0 var(--nights-cloud-over); }
+.nights-credits { margin: 4px 0 8px; font-size: 12px; }
+.nights-forecast-note { margin: 4px 0 8px; font-size: 12px; }
 .nights-now { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--state-on-border); pointer-events: none; }
 .nights-live { margin: 4px 0 8px; font-size: 13px; }
 .nights-plans { margin: 12px 0; }

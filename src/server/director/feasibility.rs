@@ -4,10 +4,11 @@
 //! Planning estimates from the shared core; the rig still decides at
 //! dispatch time.
 
+use super::rig_availability::{NightAvailability, RigConditions};
 use super::*;
 use psf_guard_director_core::{
     night::{
-        night_curve, night_summary, Night, NightCurve, NightRequest, NightTarget,
+        night_curve, night_summary, Night, NightCurve, NightDate, NightRequest, NightTarget,
         EARLIEST_START_MS, LATEST_START_MS,
     },
     visibility::{AltitudeLimits, Horizon, IcrsPosition, Site},
@@ -69,12 +70,17 @@ struct RigFeasibility {
     custom_horizon: bool,
     limits: AppliedLimits,
     nights: Vec<Night>,
+    /// Each night's availability: the marks for the rig and its site, and
+    /// the site's forecast. Alongside `nights`, one for one.
+    availability: Vec<NightAvailability>,
     /// The first night in full, for the altitude chart.
     curve: NightCurve,
     /// Hours this rig still owes the plan: its enabled contributions' goals
     /// less the frames already accepted.
     hours_needed: Option<f64>,
-    /// At this week's average, how many nights until it is done.
+    /// How many nights until it is done, counting each night's available
+    /// hours with the target up, and nights past these as clear. The rig's
+    /// other plans are not counted; `/projection` counts them.
     nights_to_complete: Option<u32>,
     /// Whether the plan has this rig ticked; unticked rigs still show.
     in_plan: bool,
@@ -132,12 +138,11 @@ pub(super) async fn evaluate(
     if nights == 0 || nights > 14 {
         return Err(Error::Invalid.into());
     }
-    let start_ms = request.start_ms.unwrap_or_else(|| {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0)
-    });
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let start_ms = request.start_ms.unwrap_or(now_ms);
     // The core times nights only in these years; past them the sums overflow.
     if !(EARLIEST_START_MS..=LATEST_START_MS).contains(&start_ms) {
         return Err(FeasibilityError::Rejected(
@@ -250,11 +255,27 @@ pub(super) async fn evaluate(
                     "{catalog_name}: Custom horizon is off in the scheduling limits, so Target Scheduler and these hours ignore the rig's horizon."
                 ));
             }
+            // The nights the summaries cover, and their marks and forecast.
+            let mut dates = Vec::new();
+            let mut conditions = None;
+            if let Some(site) = placed.location
+                && let Some(first) = NightDate::at(start_ms, site.longitude_degrees)
+            {
+                dates.push(first);
+                while dates.len() < nights as usize {
+                    let Some(next) = dates.last().and_then(|date| date.next()) else { break };
+                    dates.push(next);
+                }
+                let last = *dates.last().unwrap_or(&first);
+                conditions = Some(RigConditions::read(store, rig_id, &placed, first, last)?);
+            }
             inputs.push(RigInput {
                 rig,
                 catalog_name,
                 profile,
                 placed,
+                dates,
+                conditions,
                 scheduling,
                 contributions,
                 accepted,
@@ -267,10 +288,14 @@ pub(super) async fn evaluate(
         // night is thousands of SOFA transforms and the browser is waiting.
         use rayon::prelude::*;
         let outcomes: Vec<Result<RigFeasibility, String>> = inputs.into_par_iter().map(|input| {
-            let RigInput { rig, catalog_name, profile, placed, scheduling, contributions, accepted, center, panels } = input;
+            let RigInput { rig, catalog_name, profile, placed, dates, conditions, scheduling, contributions, accepted, center, panels } = input;
             let Some(site) = placed.location else {
                 return Err(format!("{catalog_name}: no site location; pick a site with one under Setup, type the rig's own, or let the plugin report it."));
             };
+            let available = conditions
+                .as_ref()
+                .filter(|_| dates.len() == nights as usize)
+                .map(|conditions| conditions.nights(&dates, site, now_ms));
             let (altitude, applied) = match applied_limits(&profile.limits.value, &scheduling) {
                 Ok(limits) => limits,
                 Err(limits) => return Err(format!("{catalog_name}: the altitude limits leave nothing to image ({limits}).")),
@@ -296,7 +321,7 @@ pub(super) async fn evaluate(
                 dark_below_degrees: DARK_BELOW_DEGREES,
                 meridian_exclusion: applied.meridian_exclusion,
                 meridian_window_ms: u64::from(applied.meridian_window_minutes) * 60_000,
-                available: None,
+                available: available.as_ref().and_then(|nights| nights.available.clone()),
             };
             let computed: Vec<Result<(Night, Option<NightCurve>), _>> = (0..nights)
                 .into_par_iter()
@@ -322,6 +347,14 @@ pub(super) async fn evaluate(
             let Some(curve) = curve else {
                 return Err(format!("{catalog_name}: tonight's curve could not be computed."));
             };
+            // The marks line up with the summaries by date; without marks,
+            // each night is available in full.
+            let mut marked = available.map(|nights| nights.nights.into_iter()).into_iter().flatten();
+            let mut availability = Vec::with_capacity(nights_out.len());
+            for (index, night) in nights_out.iter().enumerate() {
+                let entry = marked.next().filter(|_| dates.get(index).is_some_and(|date| date.to_string() == night.date));
+                availability.push(entry.map_or_else(NightAvailability::whole, |(_, shown)| shown));
+            }
             let in_plan = !contributions.is_empty();
             let hours_needed = plan.as_ref().and_then(|p| {
                 let mut total = 0.0;
@@ -343,14 +376,35 @@ pub(super) async fn evaluate(
                 }
                 in_plan.then_some(total)
             });
-            let mean_hours_up = nights_out
+            // Each night's hours up and clear; tonight's from now on, since
+            // the hours already past are gone.
+            let mut usable: Vec<f64> = nights_out
                 .iter()
-                .map(|n| n.targets.first().map_or(0.0, |t| t.hours_up))
-                .sum::<f64>()
-                / nights_out.len().max(1) as f64;
+                .map(|n| n.targets.first().map_or(0.0, |t| t.hours_up_available))
+                .collect();
+            if let Some(tonight) = usable.first_mut() {
+                let windows = night_request.available.as_deref();
+                let left = curve
+                    .samples
+                    .iter()
+                    .filter(|s| {
+                        s.t_ms >= start_ms
+                            && s.sun_altitude_degrees < DARK_BELOW_DEGREES
+                            && s.targets.first().is_some_and(|t| t.allowed && !t.meridian_blocked)
+                            && windows.is_none_or(|w| w.iter().any(|w| s.t_ms >= w.start_ms && s.t_ms < w.end_ms))
+                    })
+                    .count() as f64
+                    * STEP_MS as f64
+                    / 3_600_000.0;
+                *tonight = tonight.min(left);
+            }
+            // Between dawn and noon the night under way has ended: the count
+            // starts with the coming night.
+            let ended = nights_out
+                .first()
+                .is_some_and(|night| night.dawn_ms.is_some_and(|dawn| dawn <= start_ms)) as usize;
             let nights_to_complete = hours_needed
-                .filter(|_| mean_hours_up > 0.05)
-                .map(|needed| (needed / mean_hours_up).ceil() as u32);
+                .and_then(|needed| nights_until(needed, &usable[ended..], &nights_out[ended..]));
             Ok(RigFeasibility {
                 rig,
                 catalog_name,
@@ -359,6 +413,7 @@ pub(super) async fn evaluate(
                 custom_horizon: matches!(horizon, Horizon::Custom { .. }),
                 limits: applied,
                 nights: nights_out,
+                availability,
                 curve,
                 hours_needed,
                 nights_to_complete,
@@ -393,6 +448,10 @@ struct RigInput {
     catalog_name: String,
     profile: RigProfile,
     placed: psf_guard_director_meta::site_profile::RigSite,
+    /// The nights the summaries cover, at the rig's longitude; empty
+    /// without a location.
+    dates: Vec<NightDate>,
+    conditions: Option<RigConditions>,
     scheduling: SchedulingValues,
     contributions: Vec<psf_guard_director_meta::plan::Contribution>,
     /// Accepted frames by contribution, then panel.
@@ -400,6 +459,29 @@ struct RigInput {
     center: IcrsPosition,
     /// The panels of the grid this rig shoots.
     panels: Vec<String>,
+}
+
+/// How many nights until `needed` hours are shot: each night gives its
+/// `usable` hours, up and clear. Past the nights summarised, nights count as
+/// clear, at the average hours up of those nights. `None` when the target
+/// is never up.
+fn nights_until(needed: f64, usable: &[f64], nights: &[Night]) -> Option<u32> {
+    if needed <= 0.0 {
+        return Some(0);
+    }
+    let mut shot = 0.0;
+    for (index, hours) in usable.iter().enumerate() {
+        shot += hours;
+        if shot + 1e-9 >= needed {
+            return Some(index as u32 + 1);
+        }
+    }
+    let clear = nights
+        .iter()
+        .map(|n| n.targets.first().map_or(0.0, |t| t.hours_up))
+        .sum::<f64>()
+        / nights.len().max(1) as f64;
+    (clear > 0.05).then(|| nights.len() as u32 + ((needed - shot) / clear).ceil() as u32)
 }
 
 /// The rig profile's limits and the plan's scheduling limits together, as

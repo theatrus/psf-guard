@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
-import { Check, ChevronDown, ChevronRight, Plus } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, CloudDownload, Plus } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
-import type { DirectorHorizon, DirectorIdentity, DirectorSiteProfileView } from '../../api/directorTypes';
+import type { DirectorHorizon, DirectorIdentity, DirectorSiteProfileView, ForecastProvider } from '../../api/directorTypes';
+import { DEFAULT_CLOUD_THRESHOLD, PROVIDER_LABEL, PROVIDER_URL } from './forecastLabels';
 import HorizonEditor from './HorizonEditor';
 import { identityId } from './identityId';
 import { describeSource } from './rigProfileForm';
@@ -64,14 +65,32 @@ export default function DirectorSites() {
   </section>;
 }
 
-interface SiteForm { name: string; latitude: string; longitude: string; elevation: string; horizon: DirectorHorizon | null }
+interface SiteForm {
+  name: string; latitude: string; longitude: string; elevation: string; horizon: DirectorHorizon | null;
+  forecast: ForecastProvider | 'off';
+  threshold: string;
+}
+
+/** What each provider offers, for the choice. */
+const PROVIDER_HELP: Record<ForecastProvider, string> = {
+  open_meteo: 'hourly, 16 days ahead; free for non-commercial use',
+  met_norway: 'hourly, then every 6 hours, about 9 days ahead; free for any use',
+};
+
+/** The queries a site's forecast changes. */
+const FORECAST_QUERIES = [['nightPlans'], ['nightPlanDetail'], ['nightPlansTonight'], ['directorProjection'], ['directorFeasibility']] as const;
 
 const text = (value: number | undefined) => value === undefined ? '' : String(value);
 const num = (value: string) => value.trim() === '' ? null : Number(value);
 
 function formFrom(view: DirectorSiteProfileView): SiteForm {
   const location = view.profile.location?.value;
-  return { name: view.site.name, latitude: text(location?.latitude_degrees), longitude: text(location?.longitude_degrees), elevation: text(location?.elevation_meters), horizon: view.profile.horizon?.value ?? null };
+  const forecast = view.profile.forecast;
+  return {
+    name: view.site.name, latitude: text(location?.latitude_degrees), longitude: text(location?.longitude_degrees), elevation: text(location?.elevation_meters), horizon: view.profile.horizon?.value ?? null,
+    forecast: forecast?.provider ?? 'off',
+    threshold: String(forecast?.cloud_threshold_percent ?? DEFAULT_CLOUD_THRESHOLD),
+  };
 }
 
 function SiteProfileCard({ site }: { site: DirectorIdentity }) {
@@ -103,6 +122,7 @@ function SiteProfileCard({ site }: { site: DirectorIdentity }) {
         expected_revision: stored.revision,
         location: located ? { value: { latitude_degrees: lat, longitude_degrees: lon, elevation_meters: elev ?? 0 }, source: manual } : null,
         horizon: next.horizon ? { value: next.horizon, source: stored.horizon && stored.horizon.value === next.horizon ? stored.horizon.source : manual } : null,
+        forecast: next.forecast === 'off' ? null : { provider: next.forecast, cloud_threshold_percent: Number(next.threshold) },
       });
       return { ...saved, site: identity };
     },
@@ -113,6 +133,8 @@ function SiteProfileCard({ site }: { site: DirectorIdentity }) {
       void client.invalidateQueries({ queryKey: ['directorSites'] });
       void client.invalidateQueries({ queryKey: ['observingDefaults'] });
       void client.invalidateQueries({ queryKey: ['directorRigProfiles'] });
+      void client.invalidateQueries({ queryKey: ['siteForecast', site.id] });
+      for (const key of FORECAST_QUERIES) void client.invalidateQueries({ queryKey: [...key] });
     },
   });
   // The client wraps a reply that carries an error message; the status is on its cause.
@@ -129,12 +151,19 @@ function SiteProfileCard({ site }: { site: DirectorIdentity }) {
     if ([lat, lon, elev].some(value => value !== null && !Number.isFinite(value))) { setProblem('Latitude, longitude and elevation are numbers.'); return; }
     if (lat !== null && Math.abs(lat) > 90) { setProblem('Latitude runs from -90 to 90.'); return; }
     if (lon !== null && Math.abs(lon) > 180) { setProblem('Longitude runs from -180 to 180, east positive.'); return; }
+    if (form.forecast !== 'off') {
+      const threshold = Number(form.threshold);
+      if (lat === null) { setProblem("A forecast needs the site's location. Enter its latitude and longitude."); return; }
+      if (form.threshold.trim() === '' || !Number.isInteger(threshold) || threshold < 0 || threshold > 100) { setProblem('Enter the clear-sky threshold as a whole percent from 0 to 100.'); return; }
+    }
     save.mutate({ view: loaded.data, next: form });
   };
   const update = (patch: Partial<SiteForm>) => setForm(current => current ? { ...current, ...patch } : current);
   const data = loaded.data;
-  // Edits Save has not sent; Settings asks before closing over them.
-  const unsaved = !!data && !!form && canWrite && JSON.stringify(form) !== JSON.stringify(formFrom(data));
+  // Edits Save has not sent; Settings asks before discarding them. With
+  // forecasts off, the threshold is not saved, so it is not an edit.
+  const comparable = (value: SiteForm) => value.forecast === 'off' ? { ...value, threshold: '' } : value;
+  const unsaved = !!data && !!form && canWrite && JSON.stringify(comparable(form)) !== JSON.stringify(comparable(formFrom(data)));
   useUnsavedChanges(`site ${data?.site.name ?? site.name}`, unsaved);
   const disabled = !canWrite || save.isPending || stale;
   const field = (key: 'latitude' | 'longitude' | 'elevation', label: string, unit: string) => <label className="rig-profile-field" htmlFor={`${site.id}-${key}`}><span>{label}</span>
@@ -164,9 +193,82 @@ function SiteProfileCard({ site }: { site: DirectorIdentity }) {
           note={form.horizon && form.horizon === data.profile.horizon?.value ? describeSource(data.profile.horizon.source, data.profile.horizon.reported_at_ms).toLowerCase() : form.horizon ? 'not saved yet' : undefined}
           onChange={horizon => update({ horizon })} />
       </fieldset>
+      <fieldset disabled={disabled}>
+        <legend>Cloud forecast</legend>
+        <div className="rig-profile-grid">
+          <label className="rig-profile-field" htmlFor={`${site.id}-forecast`}><span>Forecast</span>
+            <span className="rig-profile-input"><select id={`${site.id}-forecast`} aria-label="Forecast" value={form.forecast} onChange={event => update({ forecast: event.target.value as SiteForm['forecast'] })}>
+              <option value="off">Off</option>
+              {(Object.keys(PROVIDER_LABEL) as ForecastProvider[]).map(provider => <option key={provider} value={provider}>{PROVIDER_LABEL[provider]}</option>)}
+            </select></span>
+          </label>
+          {form.forecast !== 'off' && <label className="rig-profile-field" htmlFor={`${site.id}-threshold`}><span>Clear at or under</span>
+            <span className="rig-profile-input"><input id={`${site.id}-threshold`} aria-label="Clear at or under" type="number" inputMode="numeric" min={0} max={100} step={1} value={form.threshold} onChange={event => update({ threshold: event.target.value })} /><small>% cloud</small></span>
+          </label>}
+        </div>
+        <p className="director-muted">{form.forecast === 'off'
+          ? 'Off: PSF Guard sends nothing about this site. Turn on a forecast to mark cloudy nights in the night plans of every rig at this site.'
+          : `${PROVIDER_LABEL[form.forecast]}: ${PROVIDER_HELP[form.forecast]}. PSF Guard sends this site's latitude and longitude, rounded to about 1 km, to ${PROVIDER_LABEL[form.forecast]} when you save, every three hours, when you click Fetch now, and when it retries after a failed request. It sends nothing else. In night plans, hours at or under the threshold count as clear, and a mark you set for the site overrides the forecast. A forecast never starts, stops or blocks a rig.`}</p>
+        {data.profile.forecast && <SiteForecastStatus site={site} />}
+      </fieldset>
       {(problem || (save.isError && !stale)) && <p className="director-error" role="alert">{problem || message(save.error)}</p>}
       {canWrite && <div className="director-actions"><button type="submit" disabled={disabled}><Check size={16} />{save.isPending ? 'Saving...' : 'Save site'}</button>{unsaved && !save.isPending && <span className="unsaved-note">Unsaved changes</span>}</div>}
       {!canWrite && <p className="director-muted">Read only</p>}
     </form>}
   </section>;
+}
+
+const when = (ms: number) => new Date(ms).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+/** The site's forecast: when it arrived, until when night plans use it,
+ *  the last failed request, and Fetch now. */
+function SiteForecastStatus({ site }: { site: DirectorIdentity }) {
+  const { canWrite } = useAccess();
+  const client = useQueryClient();
+  const queryKey = ['siteForecast', site.id];
+  const view = useQuery({
+    queryKey,
+    queryFn: () => apiClient.getSiteForecast(site.id),
+    retry: retryWhenBusy,
+    retryDelay: 1200,
+    refetchOnWindowFocus: false,
+    // The server requests the first forecast after Save: poll until it
+    // arrives, for a minute at most.
+    refetchInterval: query => {
+      const data = query.state.data;
+      return data?.settings && !data.forecast && !data.status && query.state.dataUpdateCount < 30 ? 2000 : 60_000;
+    },
+  });
+  // A forecast that arrives or changes changes the night plans too.
+  const arrived = view.data?.forecast ? `${view.data.forecast.fetched_at_ms}:${view.data.forecast.checked_at_ms ?? ''}` : '';
+  const seen = useRef(arrived);
+  useEffect(() => {
+    if (arrived === seen.current) return;
+    seen.current = arrived;
+    for (const key of FORECAST_QUERIES) void client.invalidateQueries({ queryKey: [...key] });
+  }, [arrived, client]);
+  const fetchNow = useMutation({
+    mutationFn: () => apiClient.refreshSiteForecast(site.id),
+    onSuccess: data => {
+      client.setQueryData(queryKey, data);
+      for (const key of FORECAST_QUERIES) void client.invalidateQueries({ queryKey: [...key] });
+    },
+  });
+  const data = view.data;
+  if (view.isPending) return <p role="status">Loading the forecast...</p>;
+  if (view.isError || !data) return <p className="director-error" role="alert">{message(view.error)}</p>;
+  const { forecast, status } = data;
+  const last = forecast?.hours.at(-1);
+  return <div className="site-forecast-status" role="group" aria-label="Forecast status">
+    {forecast
+      ? <p>Fetched {when(forecast.fetched_at_ms)}{last ? `; covers hours until ${when(last.end_ms)}` : ''}.{forecast.checked_at_ms !== null ? ` ${PROVIDER_LABEL[forecast.provider]} confirmed it unchanged at ${when(forecast.checked_at_ms)}.` : ''} {data.fresh ? `Night plans use it until ${when(forecast.expires_at_ms)}.` : 'This forecast has expired, so nights count as clear until a new forecast arrives.'}</p>
+      : <p>{status ? 'No forecast has arrived yet.' : 'Requesting the first forecast...'}</p>}
+    {status?.last_error && <p className="director-error" role="alert">The request at {when(status.last_attempt_ms)} failed: {status.last_error}{forecast && data.fresh ? ' Night plans keep using the stored forecast until it expires.' : ''}</p>}
+    {data.next_refresh_ms !== null && <p className="director-muted">Next refresh: {when(data.next_refresh_ms)}.</p>}
+    {canWrite && <div className="director-actions">
+      <button type="button" disabled={fetchNow.isPending} onClick={() => fetchNow.mutate()}><CloudDownload size={16} />{fetchNow.isPending ? 'Fetching...' : 'Fetch now'}</button>
+      {fetchNow.isError && <span className="director-error" role="alert">{message(fetchNow.error)}</span>}
+    </div>}
+    {data.attribution && data.settings && <p className="director-muted"><a href={PROVIDER_URL[data.settings.provider]} target="_blank" rel="noreferrer">{data.attribution}</a></p>}
+  </div>;
 }

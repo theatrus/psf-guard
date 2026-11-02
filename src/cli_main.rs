@@ -1919,6 +1919,7 @@ pub fn main() -> Result<()> {
             let preview_encoding = app_config.server.preview_encoding()?;
             let preview_color_default = app_config.server.preview_color();
             let site_banner = app_config.get_site_banner()?;
+            let forecasts = app_config.get_forecasts()?;
             let auth_registry_path =
                 crate::auth_registry::AuthRegistry::path_for_database_registry(&registry_path);
             let auth_registry = crate::auth_registry::AuthRegistry::load(&auth_registry_path)
@@ -1966,6 +1967,7 @@ pub fn main() -> Result<()> {
                     preview_encoding,
                     preview_color_default,
                     keep_failed_uploads: app_config.server.keep_failed_uploads(),
+                    forecasts,
                     astrometry_config,
                     shutdown: None,
                     config_path: server_config_path,

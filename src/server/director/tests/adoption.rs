@@ -7,6 +7,7 @@ mod checkin;
 mod database_rig;
 mod feasibility;
 mod file_delivery;
+mod forecasts;
 mod framing;
 mod mosaic;
 mod night_plans;
@@ -19,6 +20,7 @@ mod project_removal;
 mod remote_push;
 mod rig_profile;
 mod rig_scheduling;
+mod site_horizon;
 mod target_safety;
 
 const PREVIEW: &str = "/catalogs/catalog/adoption/preview";

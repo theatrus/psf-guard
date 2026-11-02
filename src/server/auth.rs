@@ -933,7 +933,8 @@ fn requires_write(method: &Method, path: &str, can_compute: bool) -> bool {
         || path.ends_with("/calibrations/flat-measure/watch")
         || path.contains("/stack-previews")
         || path == "/astrometry/catalogs/validate"
-        || path == "/director/v1/night-plans")
+        || path == "/director/v1/night-plans"
+        || (path.starts_with("/director/v1/projects/") && path.ends_with("/projection")))
 }
 
 fn api_path(path: &str) -> &str {
@@ -1127,6 +1128,23 @@ mod tests {
             &Method::PUT,
             "/director/v1/night-availability/rig/x",
             true
+        ));
+        // A plan's projection schedules the rigs and writes nothing.
+        assert!(!requires_write(
+            &Method::POST,
+            "/director/v1/projects/x/projection",
+            true
+        ));
+        // Fetch now sends a site's location to a provider: an editor's.
+        assert!(requires_write(
+            &Method::POST,
+            "/director/v1/sites/x/forecast/refresh",
+            true
+        ));
+        assert!(!requires_write(
+            &Method::GET,
+            "/director/v1/sites/x/forecast",
+            false
         ));
         // A backup holds every catalog: listing and downloading are an
         // editor's, as is starting one.

@@ -237,6 +237,8 @@ export interface DirectorSiteProfile {
   revision: number;
   location: DirectorReported<DirectorSite> | null;
   horizon: DirectorReported<DirectorHorizon> | null;
+  /** Where the site takes a cloud forecast from; null takes none. */
+  forecast: ForecastSettings | null;
   updated_at_ms: number;
 }
 export interface DirectorSiteProfileView { site: DirectorIdentity; profile: DirectorSiteProfile }
@@ -244,6 +246,59 @@ export interface DirectorSiteProfileEdit {
   expected_revision: number;
   location: DirectorEdited<DirectorSite> | null;
   horizon: DirectorEdited<DirectorHorizon> | null;
+  /** Left out or null, the site takes no forecast. */
+  forecast?: ForecastSettings | null;
+}
+
+export type ForecastProvider = 'open_meteo' | 'met_norway';
+export interface ForecastSettings {
+  provider: ForecastProvider;
+  /** An hour at or under this much total cloud cover counts as clear. */
+  cloud_threshold_percent: number;
+}
+/** Cloud cover in percent from start to end: an hour, or six further out. */
+export interface ForecastHour {
+  start_ms: number;
+  end_ms: number;
+  cloud_total: number;
+  cloud_low: number | null;
+  cloud_mid: number | null;
+  cloud_high: number | null;
+}
+export interface SiteForecast {
+  site_id: string;
+  provider: ForecastProvider;
+  /** When these hours arrived. */
+  fetched_at_ms: number;
+  /** When the provider last confirmed them unchanged. */
+  checked_at_ms: number | null;
+  /** After this the forecast counts as no information. */
+  expires_at_ms: number;
+  /** No new request before this: the provider's Expires. */
+  refresh_after_ms: number | null;
+  last_modified: string | null;
+  hours: ForecastHour[];
+}
+export interface ForecastStatus {
+  site_id: string;
+  last_attempt_ms: number;
+  /** Null when the last request succeeded. */
+  last_error: string | null;
+  /** The timer's failures in a row. */
+  failures: number;
+  /** No new request before this: the provider's Retry-After. */
+  retry_after_ms: number | null;
+}
+export interface SiteForecastView {
+  site: DirectorIdentity;
+  settings: ForecastSettings | null;
+  /** The credit the provider's licence asks for. */
+  attribution: string | null;
+  forecast: SiteForecast | null;
+  /** Whether planning uses the kept forecast now. */
+  fresh: boolean;
+  status: ForecastStatus | null;
+  next_refresh_ms: number | null;
 }
 export interface DirectorCutoutRequest {
   survey: string;
@@ -612,13 +667,19 @@ export interface DirectorSkyMarks {
 /** `catalogs` names the catalog prefixes to keep, comma-separated, and `hide` those to leave out; with neither the server hides PGC and HD. */
 export interface DirectorSkyMarksQuery { ra: number; dec: number; fov: number; aspect: number; at: number; limit?: number; hide?: string; catalogs?: string }
 
-export interface DirectorNightTarget { id: string; hours_up: number; hours_up_moon_down: number; hours_lost_to_meridian: number; transit_ms: number | null; max_altitude_degrees: number; min_moon_separation_degrees: number }
+export interface DirectorNightTarget {
+  id: string; hours_up: number; hours_up_moon_down: number; hours_lost_to_meridian: number; transit_ms: number | null; max_altitude_degrees: number; min_moon_separation_degrees: number;
+  /** Hours up inside the night's availability: marks and forecast counted. */
+  hours_up_available: number;
+}
 export interface DirectorNight {
   date: string;
   noon_ms: number;
   dusk_ms: number | null;
   dawn_ms: number | null;
   dark_hours: number;
+  /** Dark hours inside the night's availability. */
+  available_dark_hours: number;
   moon_illumination: number;
   moon_hours_up_in_dark: number;
   targets: DirectorNightTarget[];
@@ -639,10 +700,44 @@ export interface DirectorRigFeasibility {
   /** Where this rig was timed: its own framing's center, else the shared one. */
   center?: DirectorSkyPosition;
   nights: DirectorNight[];
+  /** Each night's marks and forecast, one for one with `nights`. */
+  availability: import('./nightPlanTypes').NightAvailabilityView[];
   curve: { night: DirectorNight; samples: DirectorNightSample[] };
   hours_needed: number | null;
+  /** Nights until done at the target's clear hours, marks and forecast
+   *  counted; the rig's other plans are not. */
   nights_to_complete: number | null;
   in_plan: boolean;
+}
+
+/** When each rig a plan is activated on finishes it, by the rig's own
+ *  schedule. */
+export interface DirectorProjection {
+  nights: number;
+  rigs: DirectorRigProjection[];
+  warnings: string[];
+}
+/** What a rig's schedule says of the plan. */
+export type DirectorProjectionOutcome =
+  /** Planned: the night the last frame is planned, null when not within
+   *  the nights; `unscheduled` exposure plans owe frames but are left out. */
+  | { kind: 'scheduled'; completes_on: string | null; unscheduled: number }
+  /** The rig has every frame the plan needs from it. */
+  | { kind: 'done' }
+  | { kind: 'skipped'; reason: string };
+export interface DirectorRigProjection {
+  rig_id: string;
+  catalog_name: string | null;
+  runtime: import('./nightPlanTypes').NightRuntime | null;
+  outcome: DirectorProjectionOutcome;
+  /** The scheduled nights, in order. */
+  dates: string[];
+  /** Frames planned for the plan each night. */
+  planned: number[];
+  /** Other plans scheduled while the plan still owes frames, the most hours first. */
+  others: Array<{ name: string; hours: number }>;
+  /** What the rig's night plans noted, such as goals left out of its program. */
+  notes: string[];
 }
 export interface DirectorFeasibility {
   center: DirectorSkyPosition;
