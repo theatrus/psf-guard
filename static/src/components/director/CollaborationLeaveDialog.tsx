@@ -74,10 +74,7 @@ export default function CollaborationLeaveDialog({ planId, onClose, onLeft }: Pr
           </ul>
           <p>{coordinatorPlan(preview.collaboration)}</p>
           {preview.warnings.map(warning => <p key={warning} className="project-delete-warning" role="note">{warning}</p>)}
-          <p className="project-delete-note">
-            The plan keeps its framing, exposures, priorities and activation record. Its rig projects keep their
-            targets, frames and grades, and the targets stay scheduled until you change them.
-          </p>
+          <p className="project-delete-note">The plan is kept, and its rig projects keep their frames and grades. The targets stay scheduled.</p>
         </>
       )}
       {!left && preview?.refusal && <p className="project-delete-error" role="alert">{preview.refusal}</p>}

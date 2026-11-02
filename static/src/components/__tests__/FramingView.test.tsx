@@ -49,7 +49,7 @@ function fixture(existing: DirectorFramingDraft | null = null) {
     ]))),
     http.get('/api/director/v1/rigs/profiles', () => HttpResponse.json(ok([rigA, rigB]))),
     http.get('/api/director/v1/projects/project/mosaic', () => HttpResponse.json(ok(unshot))),
-    http.post('/api/director/v1/projects/project/feasibility', () => HttpResponse.json(ok({ center: seed.center, target_name: 'M31', nights: 7, rigs: [], warnings: ['No rig has a site yet, so nothing can be timed.'] }))),
+    http.post('/api/director/v1/projects/project/feasibility', () => HttpResponse.json(ok({ center: seed.center, target_name: 'M31', nights: 7, rigs: [], warnings: ['No rig has a location yet.'] }))),
     http.get('/api/director/v1/sky/cutout', ({ request }) => {
       cutouts.push(new URL(request.url).search);
       if (cutouts.length === 1) return HttpResponse.json(ok({ state: 'generating' }), { status: 202 });
@@ -339,7 +339,7 @@ describe('Framing view', () => {
     server.use(http.get('/api/director/v1/projects/project/mosaic', () => HttpResponse.json(ok(mosaic))));
     mount();
     await waitFor(() => expect(screen.getByTestId('framing-stacks')).toBeInTheDocument());
-    expect(screen.getByText(/r1c1, RedCat 61: 36\/72 frames accepted; Ha stack placed by its solve\./)).toBeInTheDocument();
+    expect(screen.getByText(/r1c1, RedCat 61: 36\/72 frames accepted; Ha stack placed by its plate solve\./)).toBeInTheDocument();
     expect(screen.getByText(/r2c1, RedCat 61: 0\/72 frames accepted; no stack yet\./)).toBeInTheDocument();
     const image = await screen.findByTestId('framing-stack');
     expect(image).toHaveAttribute('href', solvedStack.url);
@@ -355,7 +355,7 @@ describe('Framing view', () => {
     const pick = screen.getByLabelText('Stack shown');
     expect([...pick.querySelectorAll('option')].map(option => option.textContent)).toEqual(['Best per panel', 'Ha', 'OIII']);
     fireEvent.change(pick, { target: { value: 'mono:OIII' } });
-    expect(screen.getByText(/r1c1, RedCat 61: 36\/72 frames accepted; the OIII stack has no plate solve yet/)).toBeInTheDocument();
+    expect(screen.getByText(/r1c1, RedCat 61: 36\/72 frames accepted; the OIII stack is not plate-solved yet/)).toBeInTheDocument();
     expect(screen.queryByTestId('framing-stack')).not.toBeInTheDocument();
     expect(window.localStorage.getItem('psf-guard.framing.stack.project')).toBe('mono:OIII');
     fireEvent.change(pick, { target: { value: 'mono:Ha' } });
@@ -426,7 +426,7 @@ describe('Framing view', () => {
     expect(await screen.findByText('Moved the target to NGC 7000.')).toBeInTheDocument();
     expect(screen.getByLabelText('Target name')).toHaveValue('NGC 7000');
     expect(screen.getByLabelText('Right ascension degrees')).toHaveValue(314.75);
-    expect(screen.getByText(/NGC 7000 from Seiza object catalog/)).toBeInTheDocument();
+    expect(screen.getByText(/NGC 7000, from Seiza object catalog/)).toBeInTheDocument();
     expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
     expect(resolves).toEqual([]);
     // A name typed in full is taken from the local list on Enter, with nothing highlighted.
@@ -1244,7 +1244,7 @@ describe('Mosaic panels', () => {
     await waitFor(() => expect(document.querySelector("[data-panel-id='r1c1']")).toHaveAttribute('data-panel-state', 'locked'));
     expect(screen.getByLabelText('Right ascension degrees')).toBeDisabled();
     expect(screen.getByLabelText('Position angle degrees')).toBeDisabled();
-    expect(screen.getByTestId('framing-held')).toHaveTextContent('Locked panels hold the center and camera angle');
+    expect(screen.getByTestId('framing-held')).toHaveTextContent('Locked panels prevent changes to the center and camera angle');
     expect(screen.queryByLabelText('Mosaic rows')).not.toBeInTheDocument();
     expect(within(screen.getByRole('list', { name: 'Panels' })).getByRole('button', { name: /r1c1/ })).toHaveTextContent('40 frames');
     // A column east, then a row north across both.
@@ -1305,7 +1305,7 @@ describe('Mosaic panels', () => {
     fireEvent.pointerDown(stage, pointer(bx, by));
     fireEvent.pointerMove(stage, { buttons: 1, pointerId: 1, clientX: nudge(0.12)[0], clientY: nudge(0.12)[1], altKey: true });
     fireEvent.pointerUp(stage, { pointerId: 1, clientX: nudge(0.12)[0], clientY: nudge(0.12)[1], altKey: true });
-    expect(screen.getByText(/Placed p2 off the rule/)).toBeInTheDocument();
+    expect(screen.getByText(/Placed p2, but/)).toBeInTheDocument();
     expect(screen.getByTestId('framing-issues')).toHaveTextContent('r1c1 and p2 overlap by only 8%, under the 20% minimum');
     fireEvent.click(screen.getByRole('button', { name: 'Save framing' }));
     await waitFor(() => expect(saves).toHaveLength(1));
@@ -1419,7 +1419,7 @@ describe('Mosaic panels', () => {
     fireEvent.pointerDown(stage, pointer(handle[0], handle[1]));
     fireEvent.pointerMove(stage, { buttons: 1, pointerId: 1, clientX: far[0], clientY: far[1], altKey: true });
     fireEvent.pointerUp(stage, { pointerId: 1, clientX: far[0], clientY: far[1], altKey: true });
-    expect(screen.getByText(/Turned p2 off the rule/)).toBeInTheDocument();
+    expect(screen.getByText(/Turned p2, but/)).toBeInTheDocument();
     const turn = Number((screen.getByLabelText('p2 turn degrees') as HTMLInputElement).value);
     expect(Math.abs(turn)).toBeGreaterThan(20);
     // Undo takes the turn back; the panel editor puts it back to the framing angle too.
@@ -1446,7 +1446,7 @@ describe('Mosaic panels', () => {
     fireEvent.click(within(screen.getByRole('list', { name: 'Panels' })).getByRole('button', { name: /r1c1/ }));
     expect(screen.queryByTestId('framing-turn-handle')).not.toBeInTheDocument();
     fireEvent.keyDown(stage, { key: ']', code: 'BracketRight' });
-    expect(screen.getByTestId('framing-mosaic-notice')).toHaveTextContent('r1c1 is locked: it keeps the angle it was shot at.');
+    expect(screen.getByTestId('framing-mosaic-notice')).toHaveTextContent('r1c1 is locked: unlock it to turn it.');
     fireEvent.click(within(screen.getByRole('list', { name: 'Panels' })).getByRole('button', { name: /p2/ }));
     expect(screen.getByTestId('framing-turn-handle')).toBeInTheDocument();
     fireEvent.keyDown(stage, { key: ']', code: 'BracketRight' });
@@ -1455,7 +1455,7 @@ describe('Mosaic panels', () => {
     fireEvent.keyDown(stage, { key: '[', code: 'BracketLeft' });
     expect(screen.getByLabelText('p2 turn degrees')).toHaveValue(10);
     // Each panel says its own camera angle, and nothing about how the rig reaches it.
-    expect(screen.getByTestId('framing-chosen-angle')).toHaveTextContent(/Camera angle here \d+\.\d° east of north, turned \+10\.0° from the framing\./);
+    expect(screen.getByTestId('framing-chosen-angle')).toHaveTextContent(/Camera angle \d+\.\d° east of north, turned \+10\.0° from the framing\./);
     expect(screen.queryByText(/by hand/)).not.toBeInTheDocument();
     fireEvent.keyDown(stage, { key: 'z', ctrlKey: true });
     expect(screen.getByLabelText('p2 turn degrees')).toHaveValue(11);
@@ -1512,7 +1512,7 @@ describe('Mosaic panels', () => {
     fireEvent.change(screen.getByLabelText('Mosaic columns'), { target: { value: '2' } });
     await waitFor(() => expect(document.querySelectorAll('.framing-panel polygon')).toHaveLength(2));
     expect(document.querySelector("[data-panel-id='r1c1']")).not.toHaveAttribute('data-panel-state');
-    expect(screen.queryByText(/went back to the saved place/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/moved back to the saved place/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Save framing' }));
     await waitFor(() => expect(saves).toHaveLength(1));
     expect(saves[0].layout.panels[0]).toMatchObject({ id: 'r1c1', locked: false, unlocked_by_hand: true });
@@ -1683,7 +1683,7 @@ describe('Mosaic panels', () => {
     expect(screen.getByLabelText('Right ascension degrees')).toBeDisabled();
     expect(screen.getByLabelText('Position angle degrees')).toBeDisabled();
     expect(screen.getByRole('combobox', { name: 'Find a target' })).toBeDisabled();
-    expect(screen.getByTestId('framing-held')).toHaveTextContent('Locked panels of C925 data follow the shared center and camera angle');
+    expect(screen.getByTestId('framing-held')).toHaveTextContent('Locked panels of C925 data prevent changes to the shared center and camera angle');
     // A locked planned panel off its center holds its panel size.
     expect(screen.getByLabelText('C925 data panel width degrees')).toBeDisabled();
     // Taking a center of its own where it is moves nothing, so it may; going back to the shared one may not.
@@ -1720,7 +1720,7 @@ describe('Mosaic panels', () => {
     expect(middle('p2')[0]).toBeCloseTo(bx, 1);
     // The notice offers to place it anyway, as one step to undo.
     fireEvent.click(screen.getByRole('button', { name: 'Place anyway' }));
-    expect(screen.getByText(/Placed p2 off the rule: r1c1 and p2 overlap by only 8%/)).toBeInTheDocument();
+    expect(screen.getByText(/Placed p2, but r1c1 and p2 overlap by only 8%/)).toBeInTheDocument();
     expect(middle('p2')[0]).toBeCloseTo(far[0], 0);
     fireEvent.click(screen.getByRole('button', { name: 'Undo panel change' }));
     expect(middle('p2')[0]).toBeCloseTo(bx, 1);
@@ -1781,10 +1781,10 @@ describe('Mosaic panels', () => {
     fireEvent.click(within(screen.getByRole('list', { name: 'Panels' })).getByRole('button', { name: /r1c1/ }));
     fireEvent.keyDown(stage, { key: 'Delete' });
     const notice = screen.getByTestId('framing-mosaic-notice');
-    const first = within(notice).getByText('r1c1 is the only panel: a framing requires at least one panel.');
+    const first = within(notice).getByText('r1c1 is the only panel. A framing needs at least one.');
     // The same words said again are a new announcement.
     fireEvent.keyDown(stage, { key: 'Delete' });
-    expect(within(notice).getByText('r1c1 is the only panel: a framing requires at least one panel.')).not.toBe(first);
+    expect(within(notice).getByText('r1c1 is the only panel. A framing needs at least one.')).not.toBe(first);
     // With the panel let go, adding beside it is not offered as chosen.
     fireEvent.click(screen.getByRole('button', { name: 'Beside r1c1' }));
     expect(screen.getByRole('button', { name: 'Beside r1c1' })).toHaveAttribute('aria-pressed', 'true');
@@ -1807,7 +1807,7 @@ describe('Mosaic panels', () => {
     await waitFor(() => expect(document.querySelector("[data-panel-id='p2']")).toHaveAttribute('data-panel-state', 'locked'));
     expect(middle('p2')[0]).toBeCloseTo(saved[0], 1);
     expect(middle('p2')[1]).toBeCloseTo(saved[1], 1);
-    expect(screen.getByTestId('framing-mosaic-notice')).toHaveTextContent('p2 has frames, so it went back to the saved place and is locked.');
+    expect(screen.getByTestId('framing-mosaic-notice')).toHaveTextContent('p2 has frames: moved back to the saved place and locked.');
   });
 
   it('keeps frames on the framing they were shot under until a separate framing is saved', async () => {
@@ -1854,7 +1854,7 @@ describe('Mosaic panels', () => {
     fireEvent.pointerUp(stage, { pointerId: 1, clientX: 300, clientY: 200 });
     expect((screen.getByLabelText('Right ascension degrees') as HTMLInputElement).value).toBe(ra);
     expect(screen.getByTestId('framing-view-center').textContent).not.toBe(view);
-    expect(screen.getByTestId('framing-mosaic-notice')).toHaveTextContent('Locked panels hold the mosaic where it is');
+    expect(screen.getByTestId('framing-mosaic-notice')).toHaveTextContent('Locked panels keep the mosaic in place');
     fireEvent.click(screen.getByRole('button', { name: 'Save framing' }));
     await waitFor(() => expect(saves).toHaveLength(1));
     expect(saves[0].center).toEqual(seed.center);
@@ -1875,6 +1875,6 @@ describe('Mosaic panels', () => {
     fireEvent.pointerMove(stage, { buttons: 1, pointerId: 1, clientX: 300, clientY: 200 });
     fireEvent.pointerUp(stage, { pointerId: 1, clientX: 300, clientY: 200 });
     expect((screen.getByLabelText('Right ascension degrees') as HTMLInputElement).value).toBe(ra);
-    expect(screen.getByTestId('framing-mosaic-notice')).toHaveTextContent('Locked panels of C925 data hold the mosaic where it is');
+    expect(screen.getByTestId('framing-mosaic-notice')).toHaveTextContent('Locked panels of C925 data keep the mosaic in place');
   });
 });

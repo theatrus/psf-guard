@@ -17,7 +17,7 @@ async fn feasibility_times_each_rig_with_a_site_and_names_the_rest() {
             .iter()
             .any(|w| {
                 let w = w.as_str().unwrap();
-                w.contains("no rig profile") || w.contains("no site")
+                w.contains("no rig profile") || w.contains("has no location")
             }),
         "{first}"
     );

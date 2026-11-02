@@ -56,16 +56,16 @@ describe('Leaving a collaboration', () => {
     expect(await screen.findByText(/comes from the collaboration at collab.example \(M31 halo, project 000000000002\)/)).toBeInTheDocument();
     expect(dialog).toHaveTextContent('Ends 6 open assignments in the rig databases, so new frames no longer count toward the collaboration.');
     expect(dialog).toHaveTextContent('Removes 1 imported nightly assignment.');
-    expect(dialog).toHaveTextContent("Deletes 1 report not yet sent. It will never reach the coordinator. To have it counted, deliver it first with Check in in the rig's Collaboration section.");
+    expect(dialog).toHaveTextContent("Deletes 1 report not yet sent. To have it counted, click Check in in the rig's Collaboration section first.");
     expect(dialog).toHaveTextContent('Removes the record of 2 reports already sent. The coordinator keeps the reports it received.');
     expect(dialog).toHaveTextContent('5 frames in reports lose their protection. Removing rejects and deleting the project in the Library can then remove them.');
     expect(dialog).toHaveTextContent('Cancels 1 file transfer that has not finished.');
     expect(dialog).toHaveTextContent('Stops nightly intake on Community from importing the project.');
     expect(dialog).toHaveTextContent('PSF Guard declines the tasks of RedCat at collab.example. Askar is not signed in to collab.example, so leave or decline the project there for that rig too.');
-    expect(dialog).toHaveTextContent('Its rig projects keep their targets, frames and grades');
+    expect(dialog).toHaveTextContent('The plan is kept, and its rig projects keep their frames and grades. The targets stay scheduled.');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Leave collaboration' }));
     const result = await within(dialog).findByText(/left the collaboration at collab.example/);
-    expect(result).toHaveTextContent('M31 left the collaboration at collab.example (M31 halo, project 000000000002). It is now a plan of your own. Ended 6 open assignments.');
+    expect(result).toHaveTextContent('M31 left the collaboration at collab.example (M31 halo, project 000000000002). Ended 6 open assignments.');
     expect(result).toHaveTextContent("collab.example declined 1 of the plan's 2 tasks. Askar is not signed in to this collaboration. Leave or decline the project on collab.example for the rest.");
     expect(changes).toEqual([[]]);
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
@@ -129,7 +129,7 @@ describe('Leaving a collaboration', () => {
     // The assignments still show, as the refresh returned them again.
     expect(screen.getByText(/RedCat · 2026-10-05/)).toBeInTheDocument();
     const status = screen.getByRole('status');
-    expect(status).toHaveTextContent("M31 left the collaboration at collab.example (M31 halo, project 000000000002). It is now a plan of your own. Ended 6 open assignments. collab.example declined the plan's task.");
+    expect(status).toHaveTextContent("M31 left the collaboration at collab.example (M31 halo, project 000000000002). Ended 6 open assignments. collab.example declined the plan's task.");
     await waitFor(() => expect(status).toHaveFocus());
   });
 });

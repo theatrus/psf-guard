@@ -89,7 +89,7 @@ export default function MosaicPanels(props: MosaicPanelsProps) {
       <summary>Lay out as a grid instead</summary>
       {props.gridBlocked
         ? <p className="director-muted">{props.gridBlocked}</p>
-        : <p className="director-muted">Replaces every panel with a grid of {rowsNow} × {columnsNow} at {layout.min_overlap_percent}% overlap. <button type="button" className="link-button" onClick={() => setGrid(rowsNow, columnsNow, layout.min_overlap_percent)}>Replace with grid</button></p>}
+        : <p className="director-muted">Replaces every panel with a {rowsNow} × {columnsNow} grid at {layout.min_overlap_percent}% overlap. <button type="button" className="link-button" onClick={() => setGrid(rowsNow, columnsNow, layout.min_overlap_percent)}>Replace with grid</button></p>}
     </details>}
     {grid && props.gridBlocked && <p className="director-muted framing-mosaic-note">{props.gridBlocked}</p>}
 
@@ -97,7 +97,7 @@ export default function MosaicPanels(props: MosaicPanelsProps) {
       <div className="framing-extend-head">
         <span className="framing-catalogs-title">Add panels</span>
         <div className="framing-scope" role="group" aria-label="Add beside">
-          <button type="button" aria-pressed={scope === 'panel' && !!chosen} disabled={!chosen} title={chosen ? `Beside ${chosen.id}` : 'Choose a panel on the sky or in the list'} onClick={() => props.onScope('panel')}>{chosen ? `Beside ${chosen.id}` : 'Beside a panel'}</button>
+          <button type="button" aria-pressed={scope === 'panel' && !!chosen} disabled={!chosen} title={chosen ? `Beside ${chosen.id}` : 'Choose a panel first'} onClick={() => props.onScope('panel')}>{chosen ? `Beside ${chosen.id}` : 'Beside a panel'}</button>
           <button type="button" aria-pressed={scope === 'mosaic' || !chosen} onClick={() => props.onScope('mosaic')}>Whole mosaic</button>
         </div>
       </div>
@@ -109,11 +109,11 @@ export default function MosaicPanels(props: MosaicPanelsProps) {
         </div>
         <div className="framing-extend-side">
           <label>Overlap<span className="framing-input"><NumberInput aria-label="Overlap of added panels percent" min={layout.min_overlap_percent} max={90} step={1} value={overlap} disabled={!canWrite} onChange={event => props.onOverlap(clamp(Math.round(number(event.target.value, overlap)), layout.min_overlap_percent, 90))} /><small>%</small></span></label>
-          <button type="button" disabled={!canWrite} title="A panel on every side of the whole mosaic, corners too" onClick={props.onRing}>Ring around</button>
+          <button type="button" disabled={!canWrite} title="Add a panel on every side and corner of the mosaic" onClick={props.onRing}>Ring around</button>
           <button type="button" disabled={!canWrite || layout.panels.length < 3} title="Fill the holes in the mosaic's rectangle" onClick={props.onFill}>Fill holes</button>
         </div>
       </div>
-      <p className="director-muted framing-mosaic-note">N, E, S and W are on the sky: each adds on the panel side facing nearest that way at this camera angle. Panels go in at {overlap}% overlap.</p>
+      <p className="director-muted framing-mosaic-note">N, E, S and W are sky directions.</p>
     </div>
 
     {/* Mounted before it has words, so a screen reader hears the first. */}
@@ -150,7 +150,7 @@ export default function MosaicPanels(props: MosaicPanelsProps) {
         {isLocked(chosen.id)
           ? <span className="director-muted">Locked.</span>
           : frames(chosen.id) > 0 ? <span className="director-muted">Has frames: a far move or a turn starts a new target.</span>
-          : <span className="director-muted">Drag it on the sky with Panel, nudge it with the arrow keys, or turn it with its handle or [ and ].</span>}
+          : null}
       </p>
       {(() => {
         const laid = props.shot?.(chosen.id);
@@ -160,7 +160,7 @@ export default function MosaicPanels(props: MosaicPanelsProps) {
         return <div className="framing-chosen-angle" data-testid="framing-chosen-angle">
           {laid.measured
             ? <p className="director-muted" data-testid="framing-chosen-shot">Drawn as shot: {formatDegrees(laid.measured.size.width_degrees)} × {formatDegrees(laid.measured.size.height_degrees)} at {angle}.</p>
-            : <p className="director-muted">Camera angle here {angle} east of north{turn !== 0 ? `, turned ${signed(turn)} from the framing` : ''}.</p>}
+            : <p className="director-muted">Camera angle {angle} east of north{turn !== 0 ? `, turned ${signed(turn)} from the framing` : ''}.</p>}
           {canWrite && !isLocked(chosen.id) && props.onTurn && <div className="framing-turn">
             <label>Turn<span className="framing-input"><NumberInput aria-label={`${chosen.id} turn degrees`} min={-180} max={180} step={0.1} value={Number(turn.toFixed(2))}
               onChange={event => { const value = Number(event.target.value); if (Number.isFinite(value)) props.onTurn!(chosen.id, value); }} /><small>°</small></span></label>

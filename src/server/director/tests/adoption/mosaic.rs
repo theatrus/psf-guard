@@ -595,7 +595,7 @@ async fn a_shot_panel_is_measured_from_its_frames_and_its_lock_holds_it() {
         refused["error"]
             .as_str()
             .unwrap()
-            .contains("Locked panel r1c1 would move. A locked panel keeps its place, its turn"),
+            .contains("Locked panel r1c1 would move: a locked panel keeps its place"),
         "{refused}"
     );
 

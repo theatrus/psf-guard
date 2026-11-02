@@ -113,11 +113,11 @@ export default function PlanDeleteDialog({ planId, name, onClose, onDeleted }: P
           </div>}
           {preview.databases.map(database => database.project && (database.synced_from
             ? <p key={`note-${database.source_project_guid}`} className="project-delete-note">
-                {database.catalog_name} copies from <code>{database.synced_from}</code>. The project stays in that
-                database, N.I.N.A. still schedules it there while it is Active, and the next sync adds it back here.
+                {database.catalog_name} copies from <code>{database.synced_from}</code>. The project stays there,
+                still scheduled while Active, and the next sync adds it back here.
               </p>
             : database.project.state === 1 && <p key={`note-${database.source_project_guid}`} className="project-delete-note">
-                On {database.catalog_name} the project is Active. When N.I.N.A. uses that database, it stops scheduling the project.
+                On {database.catalog_name} the project is Active: deleting it stops N.I.N.A. scheduling it.
               </p>))}
           {after && !busy && <p className="project-delete-error" role="alert">
             {[

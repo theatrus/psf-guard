@@ -383,7 +383,7 @@ pub(super) async fn hello(
         .and_then(|p| p.optics.as_ref())
         .ok_or(Failure(
             StatusCode::CONFLICT,
-            "Commission this rig's optics before requesting collaboration work",
+            "Set this rig's optics in Rig setup before requesting collaboration work",
         ))?;
     let now = now_ms()?;
     let presence = if settings.share_status {

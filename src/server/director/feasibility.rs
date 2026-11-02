@@ -235,7 +235,7 @@ pub(super) async fn evaluate(
             };
             let accepted = accepted.unwrap_or_else(|| {
                 warnings.push(format!(
-                    "{catalog_name}: frames already taken could not be read, so the hours owed count the whole goal."
+                    "{catalog_name}: the frames already taken could not be read, so the hours left count the whole goal."
                 ));
                 BTreeMap::new()
             });
@@ -252,7 +252,7 @@ pub(super) async fn evaluate(
                 && matches!(placed.horizon, Horizon::Custom { .. })
             {
                 warnings.push(format!(
-                    "{catalog_name}: Custom horizon is off in the scheduling limits, so Target Scheduler and these hours ignore the rig's horizon."
+                    "{catalog_name}: Custom horizon is off in Scheduling limits, so Target Scheduler does not use the rig's horizon."
                 ));
             }
             // The nights the summaries cover, and their marks and forecast.
@@ -290,7 +290,7 @@ pub(super) async fn evaluate(
         let outcomes: Vec<Result<RigFeasibility, String>> = inputs.into_par_iter().map(|input| {
             let RigInput { rig, catalog_name, profile, placed, dates, conditions, scheduling, contributions, accepted, center, panels } = input;
             let Some(site) = placed.location else {
-                return Err(format!("{catalog_name}: no site location; pick a site with one under Setup, type the rig's own, or let the plugin report it."));
+                return Err(format!("{catalog_name} has no location. Choose a site in Rig setup."));
             };
             let available = conditions
                 .as_ref()
@@ -428,7 +428,7 @@ pub(super) async fn evaluate(
         }
         rigs.sort_by(|a, b| b.in_plan.cmp(&a.in_plan).then_with(|| a.catalog_name.cmp(&b.catalog_name)));
         if rigs.is_empty() {
-            warnings.push("No rig has a site yet, so nothing can be timed.".into());
+            warnings.push("No rig has a location yet.".into());
         }
         Ok::<_, FeasibilityError>(View {
             center,

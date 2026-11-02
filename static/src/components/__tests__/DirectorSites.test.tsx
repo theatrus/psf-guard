@@ -172,7 +172,7 @@ describe('Director sites', () => {
     const card = await screen.findByRole('region', { name: 'Site Backyard' });
     const zone = await within(card).findByLabelText('Time zone');
     expect(zone).toHaveValue('');
-    expect(zone).toHaveAccessibleDescription(/marks and overrides for rigs at this site are entered and shown in this time zone/);
+    expect(zone).toHaveAccessibleDescription(/marks and overrides for rigs at this site use this time zone/);
     fireEvent.change(zone, { target: { value: 'Europe/Berlin' } });
     fireEvent.click(within(card).getByRole('button', { name: 'Save site' }));
     await waitFor(() => expect(saves).toHaveLength(1));

@@ -159,7 +159,7 @@ async fn write(
             let profile = store.rig_profile(rig)?;
             let location = store.rig_site(rig, profile.as_ref())?.location.ok_or_else(|| {
                 Error::Refused(
-                    "Give the rig a location, or a planning site with one, before overriding its nights.".into(),
+                    "The rig has no location. Choose a site in Rig setup.".into(),
                 )
             })?;
             let span = date.span(location.longitude_degrees);

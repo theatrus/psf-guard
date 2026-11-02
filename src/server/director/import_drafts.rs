@@ -541,7 +541,7 @@ pub(super) fn read_drafts(
                     && left_out.insert(unusable.id)
                 {
                     drafts.warnings.push(format!(
-                        "{project_name}: its exposure plans with template {} were left out of its plan; that template's Moon avoidance settings are outside what Director plans with.",
+                        "{project_name}: exposure plans with template {} were left out, because its Moon avoidance settings are outside what Director supports.",
                         unusable.name
                     ));
                 }

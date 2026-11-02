@@ -12,7 +12,7 @@ export default function SkyLive({ rigs, onFocus }: { rigs: PlacedRig[]; onFocus?
   const { search } = useLocation();
   return <aside className="sky-live" aria-label="Live rigs on the sky">
     <div className="early-beta-heading"><h2>Live</h2><EarlyBeta /></div>
-    <Link className="sky-live-table-link" to={scopedHref('/rigs', search)}>Open the Live table and tonight's plans</Link>
+    <Link className="sky-live-table-link" to={scopedHref('/rigs', search)}>Open the Live table</Link>
     {rigs.length === 0 && <p className="sky-live-empty">No rig has reported yet.</p>}
     <ul>
       {rigs.map(rig => (

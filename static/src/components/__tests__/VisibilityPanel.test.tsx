@@ -47,7 +47,7 @@ describe('visibility panel', () => {
   it('says how long the target is visible tonight, draws the chart, and estimates the nights owed', async () => {
     const bodies = mount({ center: { ra_degrees: 38.2, dec_degrees: 61.45 }, target_name: 'IC 1805', nights: 7, warnings: [],
       rigs: [rig('RedCat 61', 'a', 6.2, true, true), rig('C925 data', 'b', 0, false, false)] });
-    expect(await screen.findByTestId('visibility-verdict')).toHaveTextContent('Visible 6.2 h tonight from RedCat 61 (10.0 h dark, peak 71°, 1.5 h lost to the meridian pause). Moon 96% lit, 34° away, up 6.0 h of the dark.');
+    expect(await screen.findByTestId('visibility-verdict')).toHaveTextContent('Visible 6.2 h tonight from RedCat 61 (10.0 h dark, peak 71°, 1.5 h lost to the meridian pause). Moon 96% lit, 34° away, up 6.0 h.');
     expect(document.querySelector('.visibility-chart .paused')?.getAttribute('d')).toMatch(/^M/);
     expect(document.querySelector('.visibility-chart .transit')).toBeInTheDocument();
     expect(bodies[0]).toEqual({ center: { ra_degrees: 38.2, dec_degrees: 61.45 } });
@@ -56,9 +56,9 @@ describe('visibility panel', () => {
     expect(document.querySelector('.visibility-chart .horizon')?.getAttribute('d')).toMatch(/^M/);
     expect(document.querySelectorAll('.visibility-chart .band-dark, .visibility-chart .band-deep').length).toBeGreaterThan(0);
     expect(screen.getByText(/custom horizon and limit/)).toBeInTheDocument();
-    expect(screen.getByTestId('visibility-estimate')).toHaveTextContent("This rig owes the plan 12.0 h. At the target's clear hours this week, counting the nights marked or forecast cloudy, that is about 3 nights.");
+    expect(screen.getByTestId('visibility-estimate')).toHaveTextContent("12.0 h left on this rig: about 3 nights at the target's clear hours this week.");
     // The rig's own schedule ranks the plan against its other work.
-    expect(await screen.findByText(/^By this rig's own Target Scheduler schedule, the plan is done by .+\. Before then, the rig also shoots Soul Nebula \(9\.6 h\)\.$/)).toBeInTheDocument();
+    expect(await screen.findByText(/^Done by .+ on this rig's Target Scheduler schedule\. Before then, the rig also shoots Soul Nebula \(9\.6 h\)\.$/)).toBeInTheDocument();
     expect(screen.getAllByRole('row')).toHaveLength(3);
     // The nights show the clear hours and what set them.
     expect(screen.getAllByRole('row')[2]).toHaveTextContent(/2\.0 h.*Forecast \(Open-Meteo, fetched .+\): Limited/);
@@ -82,8 +82,8 @@ describe('visibility panel', () => {
   });
 
   it('shows the server warnings when no rig has a site', async () => {
-    mount({ center: { ra_degrees: 1, dec_degrees: 1 }, target_name: 'Target', nights: 7, rigs: [], warnings: ['No rig has a site yet, so nothing can be timed.'] });
-    expect(await screen.findByText('No rig has a site yet, so nothing can be timed.')).toBeInTheDocument();
+    mount({ center: { ra_degrees: 1, dec_degrees: 1 }, target_name: 'Target', nights: 7, rigs: [], warnings: ['No rig has a location yet.'] });
+    expect(await screen.findByText('No rig has a location yet.')).toBeInTheDocument();
     expect(formatHours(0)).toBe('none');
     expect(formatHours(0.5)).toBe('30 min');
   });
@@ -107,6 +107,6 @@ describe('visibility panel', () => {
   it('says when the rig already has every frame', async () => {
     const view = { center: { ra_degrees: 38.2, dec_degrees: 61.45 }, target_name: 'IC 1805', nights: 7, warnings: [], rigs: [rig('RedCat 61', 'a', 6.2, true, true)] };
     mount(view, false, undefined, { ...scheduled, outcome: { kind: 'done' } });
-    expect(await screen.findByText('This rig has every frame the plan needs from it.')).toBeInTheDocument();
+    expect(await screen.findByText('This rig has taken every frame.')).toBeInTheDocument();
   });
 });

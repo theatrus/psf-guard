@@ -161,7 +161,7 @@ pub(super) fn manifest(
     let mut calibration_sets = BTreeMap::new();
     let mut files = BTreeMap::new();
     let mut review_reasons = BTreeSet::new();
-    let mut warnings=vec!["Starfront stores these files but does not yet receive the record of calibration used for each light. PSF Guard keeps that record on this server.".to_owned()];
+    let mut warnings=vec!["Starfront does not yet receive which calibration each light used. PSF Guard keeps that record on this server.".to_owned()];
     for (guid, (image, target, target_guid)) in &rows {
         if stopping() {
             return Err(Failure(
@@ -283,7 +283,7 @@ pub(super) fn manifest(
             if !request.confirm_wbpp_membership {
                 return Err(held("Confirm the WBPP stack contains the selected contribution images. WBPP does not record exact input membership"));
             }
-            warnings.push("WBPP input membership is operator-confirmed, not verified. Uploading this stack grants no additional exposure credit.".into());
+            warnings.push("PSF Guard cannot check which images went into a WBPP stack. Uploading it adds no exposure credit.".into());
         } else {
             let integrated = entry
                 .group
@@ -313,7 +313,10 @@ pub(super) fn manifest(
         }
         output_manifest = json!({"job_id":entry.job_id,"revision":entry.artifact_revision,"group":entry.group,"wbpp":entry.wbpp,"source":stamp(&path)?});
         files.insert(("light".to_owned(), path), ());
-        warnings.push("This is an integrated stack, not a raw exposure. File delivery does not create a contribution report.".into());
+        warnings.push(
+            "This is a stack, not a raw exposure, so uploading it creates no contribution report."
+                .into(),
+        );
     }
     let paths = files.into_keys().collect::<Vec<_>>();
     warnings.extend(review_reasons.iter().cloned());

@@ -79,7 +79,7 @@ test('the Rigs tab carries the fleet, opens Live, and shows each rig on the sky 
     await expect(page.locator('.sky-map')).toHaveAttribute('data-center', /^10\.7,41\.3$/);
     // The table is on the Rigs page, not under the map; the list links to it.
     await expect(page.getByTestId('director-dashboard')).toHaveCount(0);
-    await expect(panel.getByRole('link', { name: "Open the Live table and tonight's plans" })).toHaveAttribute('href', '#/rigs?db=parked-catalog');
+    await expect(panel.getByRole('link', { name: 'Open the Live table' })).toHaveAttribute('href', '#/rigs?db=parked-catalog');
     // The Live chip in the controls takes the rigs off the map.
     await page.locator('.sky-controls').getByRole('button', { name: 'Live', exact: true }).click();
     await expect(page.locator('[data-rig]')).toHaveCount(0);

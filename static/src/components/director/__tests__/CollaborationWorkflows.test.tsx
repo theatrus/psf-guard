@@ -81,7 +81,7 @@ describe('Collaboration work transfer', () => {
     setup();
     await userEvent.click(screen.getByRole('button', { name: "Pull tonight's work" }));
     await userEvent.click(await screen.findByRole('button', { name: 'Review import' }));
-    expect(await screen.findByRole('note')).toHaveTextContent('This import rejoins your plan M31 halo, which left this project. The plan keeps its framing, exposures and recipes.');
+    expect(await screen.findByRole('note')).toHaveTextContent('This import rejoins your plan M31 halo and keeps its framing, exposures and recipes.');
   });
   it('offers a date-only override and clears a stale import review when it changes', async () => {
     const requests: Record<string, unknown>[] = [];

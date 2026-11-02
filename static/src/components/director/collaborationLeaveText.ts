@@ -26,8 +26,7 @@ export function leaveChanges(collaboration: DirectorPlanCollaboration, deleting 
   const unsent = collaboration.unsent_reports;
   if (unsent > 0) {
     const them = unsent === 1 ? 'it' : 'them';
-    changes.push(`Deletes ${count(unsent, 'report')} not yet sent. ${unsent === 1 ? 'It' : 'They'} will never reach the coordinator. `
-      + `To have ${them} counted, deliver ${them} first with Check in in the rig's Collaboration section.`);
+    changes.push(`Deletes ${count(unsent, 'report')} not yet sent. To have ${them} counted, click Check in in the rig's Collaboration section first.`);
   }
   if (collaboration.sent_reports > 0) {
     changes.push(`Removes the record of ${count(collaboration.sent_reports, 'report')} already sent. The coordinator keeps the reports it received.`);
@@ -83,7 +82,6 @@ export function coordinatorResult(told: DirectorCoordinatorOutcome): string {
 export function leftSummary(left: DirectorCollaborationLeft): string {
   return [
     `${left.name} left ${collaborationName(left.collaboration)}.`,
-    'It is now a plan of your own.',
     left.assignments_ended > 0
       ? `Ended ${left.assignments_ended.toLocaleString()} open assignment${left.assignments_ended === 1 ? '' : 's'}.`
       : '',

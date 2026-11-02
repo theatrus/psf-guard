@@ -40,7 +40,7 @@ export default function ObservingPreferences({ projectId, rigs, projects, folded
     <div className="observing-context">
       <label>Scope<select aria-label="Priority scope" value={scope} disabled={editing} title={editing ? 'Save or discard the priority change first' : undefined} onChange={e => setScope(e.target.value as PreferenceScope)}><option value="global">Global order</option><option value="site" disabled={!site}>Site override</option><option value="rig" disabled={!rig}>Rig override</option></select></label>
       <label>Rig<select aria-label="Priority rig" value={rig} disabled={editing} title={editing ? 'Save or discard the priority change first' : undefined} onChange={e => setRigPick(e.target.value)}>{choices.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}</select></label>
-      {effective.data && <span className="observing-mode">{effective.data.order_source ? `Following ${effective.data.order_source.scope} order` : 'Previous scheduling policy active'}</span>}
+      {effective.data && <span className="observing-mode">{effective.data.order_source ? `Following ${effective.data.order_source.scope} order` : 'No order set'}</span>}
     </div>
     {(settings.error || effective.error || defaults.error || available.error) && <p role="alert">{errorText(settings.error ?? effective.error ?? defaults.error ?? available.error)}</p>}
     {id && settings.isPending && <p role="status">Loading priority...</p>}
@@ -124,10 +124,10 @@ function PriorityEditor({ initial, globalOrder, globalScheduling, projects, curr
       {list.length > 256 && <p role="alert">A priority order supports up to 256 projects.</p>}
     </fieldset>
     {/* A rig's limits live with its setup, where Apply writes them into every project. */}
-    {initial.scope === 'rig' ? <p className="director-muted">This rig's Target Scheduler limits are in its Setup, under Limits and delivery.</p>
+    {initial.scope === 'rig' ? <p className="director-muted">This rig's limits are in Rig setup, under Limits and delivery.</p>
     : <fieldset disabled={!canWrite || save.isPending || reload.isPending} className="scheduling-defaults">
       <legend>Scheduling defaults{initial.scope === 'global' ? ' for every plan' : ' for this site'}</legend>
-      <p className="director-muted">{initial.scope === 'global' ? 'Each plan can change these on its Rigs tab' : 'Leave fields blank to use the parent defaults'}</p>
+      {initial.scope === 'global' && <p className="director-muted">Each plan can change these on its Rigs tab.</p>}
       <SchedulingFields label={`${initial.scope} scheduling defaults`} overrides={draft.scheduling ?? {}} onChange={next => change({ scheduling: compactOverrides(next) })}
         inherited={parentLimits.values} inheritedFrom={limit => parentLimits.from[limit]} disabled={!canWrite} />
     </fieldset>}

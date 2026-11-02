@@ -83,7 +83,7 @@ export function RigActivation({ rig, applied, take, objectiveLabel = () => '', s
     {showDeliveryError && rig.push?.ts_file && rig.push.error && <DeliveryError error={rig.push.error} />}
     {rig.push?.ts_file && <div role="note" aria-label="Target Scheduler planning delivery">
       <p>Planning destination: <code>{rig.push.ts_file.path}</code></p>
-      {!applied && <p>Activate sends this project's planning through the catalog's saved TS connection. Captures, grades, and acquisition counts stay in TS.</p>}
+      {!applied && <p>Activate sends this project's planning through the catalog's saved TS connection.</p>}
       {!applied && Object.keys(rig.push.summary).length > 0 && <ul>{[
         ['project', 'Projects'], ['target', 'Targets'], ['exposuretemplate', 'Exposure templates'], ['exposureplan', 'Exposure plans'], ['ruleweight', 'Rule weights'],
       ].map(([key, label]) => <li key={key}>{label}: {rig.push!.summary[`${key}_inserted`] ?? 0} new, {rig.push!.summary[`${key}_updated`] ?? 0} updated</li>)}</ul>}
@@ -368,7 +368,7 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere, o
     : notReady ? 'Nothing to activate until then.'
     : preview.loading || reconciling ? 'Waiting for the preview.'
     : preview.error ? 'No preview to activate.'
-    : nothingToWrite ? 'No rig database can take this plan yet.'
+    : nothingToWrite ? 'No rig can be activated yet.'
     : '';
   const changed = refused && (refused.found ?? (!reconciling ? preview.result : null));
   return <section className="activation" aria-label="Activation">
@@ -392,7 +392,7 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere, o
       : <p className="director-muted">Activated</p>)}
     {!last.data && last.isSuccess && !notReady && <p className="director-muted">{matches ? 'Activated' : notSynced}</p>}
     {canWrite && unsavedPlan && <div className="activation-unsaved" role="note" aria-label="Unsaved changes">
-      <p>Unsaved changes in {unsavedLabels.join(', ')}. Save your changes before activating. PSF Guard then updates the preview.</p>
+      <p>Unsaved changes in {unsavedLabels.join(', ')}. Save them before activating.</p>
       <div className="director-actions">
         <button type="button" disabled={writing} onClick={() => run(() => save.mutate())}><Save size={16} />{save.isPending ? 'Saving…' : 'Save and activate…'}</button>
       </div>
@@ -406,8 +406,8 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere, o
     {refused && <p className="activation-changed" role="alert">{changed
       ? `Changed since the preview: ${describeChange(refused.shown, changed).replace(/\.$/, '')}. Nothing was written. `
       : 'Changed since the preview. Nothing was written. '}
-      {reconciling ? 'Previewing again…' : 'This preview is new; check it, then activate.'}</p>}
-    {tookStale && <p className="activation-changed" role="alert">The saved plan changed since this preview, so nothing was taken. The preview has run again.</p>}
+      {reconciling ? 'Previewing again…' : 'Check the new preview, then activate.'}</p>}
+    {tookStale && <p className="activation-changed" role="alert">The saved plan changed, so nothing was taken. Check the new preview.</p>}
     {report && <div className="activation-report" role="region" aria-label="Preview" aria-busy={preview.loading || reconciling}>
       <p tabIndex={-1} ref={outcome}><strong>{report.applied ? fileDeliveryPending ? 'Activated locally; TS delivery pending' : 'Activated' : 'Preview'}</strong>: framing revision {report.framing_revision}, plan revision {report.plan_revision}, {report.panels} panel{report.panels === 1 ? '' : 's'}.{report.activation_revision !== null && ` Revision ${report.activation_revision} on the rigs.`}</p>
       {report.warnings.map(warning => <p key={warning} className="director-error" role="alert">{warning}</p>)}

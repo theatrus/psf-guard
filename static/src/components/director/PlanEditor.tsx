@@ -366,7 +366,6 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
     <form id={formId} onSubmit={event => { event.preventDefault(); if (!canWrite || save.isPending || stale) return; setNotice(''); const trouble = planProblem(plan); setProblem(trouble ?? ''); if (!trouble) save.mutate(plan); }}>
       <fieldset disabled={!canWrite || stale}>
         <legend>Objectives</legend>
-        <p className="director-muted">Hours or frames per filter</p>
         {plan.objectives.length === 0 && <p className="director-muted">No objectives yet</p>}
         <ul className="plan-objectives">
           {plan.objectives.map(objective => <li key={objective.id} className="plan-objective">
@@ -380,7 +379,7 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
             </select></label>
             <label>Goal<span className="plan-goal">
               <NumberInput aria-label="Objective goal" min={0} step="any" value={objective.goal.value} onChange={event => changeObjective(objective.id, { goal: { ...objective.goal, value: number(event.target.value, 0) } as DirectorObjective['goal'] })} />
-              <select aria-label="Objective goal unit" value={objective.goal.kind} title={`Switching units keeps the same goal, read through ${goalExposure(objective, plan, rigList, templatesByRig)} s exposures`}
+              <select aria-label="Objective goal unit" value={objective.goal.kind} title={`Converts at ${goalExposure(objective, plan, rigList, templatesByRig)} s per frame`}
                 onChange={event => changeObjective(objective.id, { goal: convertGoal(objective.goal, event.target.value as 'hours' | 'frames', goalExposure(objective, plan, rigList, templatesByRig)) })}>
                 <option value="hours">hours</option><option value="frames">frames per rig</option>
               </select></span></label>
@@ -392,7 +391,7 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
     </form>
     <section className="plan-rigs" aria-label={controls ? 'Exposures per rig' : 'Rigs'}>
       <h4 className="plan-rigs-heading">{controls ? 'Each rig' : 'Rigs'}</h4>
-      <p className="director-muted">{controls ? 'Add or drop rigs on the Rigs tab' : 'Tick a rig to shoot the objectives with a template from its database or the shared library.'}</p>
+      <p className="director-muted">{controls ? 'Add or drop rigs on the Rigs tab' : 'Tick a rig to add it to the plan.'}</p>
       {controls && !rigs.isPending && inPlan.length === 0 && <p className="director-muted">No rigs yet</p>}
       {rigs.isError && <p className="director-error" role="alert">Rigs could not be loaded: {message(rigs.error)} <button type="button" onClick={() => void rigs.refetch()}>Retry</button></p>}
       {!rigs.isError && rigList.length === 0 && <p className="director-muted">{rigs.isPending ? 'Loading rigs...' : 'No rig has planning enabled yet.'}</p>}

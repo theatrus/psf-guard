@@ -154,7 +154,7 @@ describe("The Library's plans with nothing captured yet", () => {
   it('waits through a busy answer instead of showing it as an error', async () => {
     let calls = 0;
     server.use(http.get('/api/director/v1/plans', () => ++calls === 1
-      ? HttpResponse.json({ error: 'Director metadata is busy; retry shortly' }, { status: 503 })
+      ? HttpResponse.json({ error: 'Director is busy. Try again in a moment.' }, { status: 503 })
       : HttpResponse.json(ok(list([row()])))));
     mount();
     expect(await screen.findByText('M31', {}, { timeout: 6000 })).toBeInTheDocument();

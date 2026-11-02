@@ -190,7 +190,8 @@ impl TsSaveView {
 }
 
 /// Why a server that may not write into rig databases offers no changes.
-const NO_DATABASE_MANAGEMENT: &str = "This server does not write into rig databases, so Target Scheduler's settings are not changed here. Allow database management to change them.";
+const NO_DATABASE_MANAGEMENT: &str =
+    "Changing Target Scheduler settings needs database management on this server.";
 
 fn not_here(peer: &str) -> String {
     format!(
@@ -246,7 +247,7 @@ async fn save(
                 == night_plans::Runtime::Director
             {
                 return Err(Error::Mode(
-                    "Director drives this rig, so Target Scheduler's settings do not decide its nights. Use the night's overrides instead.".into(),
+                    "Director picks this rig's targets, so its Target Scheduler settings have no effect. Use Edit night instead.".into(),
                 ));
             }
             let found = identified_catalogs(&catalogs, instance);
@@ -304,11 +305,12 @@ fn source_error(error: rusqlite::Error) -> Error {
         )
     {
         return Error::Unavailable(
-            "Target Scheduler's database is busy, perhaps with N.I.N.A. writing it, so nothing was saved. Try again in a moment.".into(),
+            "Target Scheduler's database is in use, probably by N.I.N.A. Try again in a moment."
+                .into(),
         );
     }
     Error::Refused(format!(
-        "Target Scheduler's database could not be written, so nothing was saved: {error}"
+        "Target Scheduler's database could not be written: {error}"
     ))
 }
 
@@ -355,11 +357,7 @@ fn write(context: &DatabaseContext, changes: &TsChanges) -> Result<Saved, Error>
         .map_err(store_error)?;
     let profile = super::activation::resolve_profile(&catalog_tx)
         .map_err(store_error)?
-        .ok_or_else(|| {
-            Error::Changed(
-                "The rig's database has no N.I.N.A. profile, so nothing was saved. Read the night again.".into(),
-            )
-        })?;
+        .ok_or_else(|| Error::Changed("The rig's database has no N.I.N.A. profile.".into()))?;
     for change in &changes.projects {
         let (guid, name): (Option<String>, String) = catalog_tx
             .query_row(
@@ -371,7 +369,7 @@ fn write(context: &DatabaseContext, changes: &TsChanges) -> Result<Saved, Error>
             .map_err(store_error)?
             .ok_or_else(|| {
                 Error::Changed(format!(
-                    "Project {} is no longer in the rig's database. Read the night again.",
+                    "Project {} is no longer in the rig's database.",
                     change.project_id
                 ))
             })?;
@@ -404,7 +402,7 @@ fn write(context: &DatabaseContext, changes: &TsChanges) -> Result<Saved, Error>
             .map_err(store_error)?
             .ok_or_else(|| {
                 Error::Changed(format!(
-                    "Target {} is no longer in the rig's database. Read the night again.",
+                    "Target {} is no longer in the rig's database.",
                     change.target_id
                 ))
             })?;
@@ -432,7 +430,7 @@ fn write(context: &DatabaseContext, changes: &TsChanges) -> Result<Saved, Error>
         tx.commit().map_err(|error| {
             tracing::warn!(%error, source = %sync.source_path, "Target Scheduler's database refused a commit the rig's database took");
             Error::Unavailable(format!(
-                "The rig's database took the changes, but Target Scheduler's database did not ({error}). Send planning from the rig's database to bring Target Scheduler into step."
+                "The changes were saved in the rig's database but not in Target Scheduler's ({error}). To copy them to Target Scheduler, use Send planning in the rig's Sync settings."
             ))
         })?;
         files.push(sync.source_path.clone());
@@ -446,7 +444,7 @@ fn write(context: &DatabaseContext, changes: &TsChanges) -> Result<Saved, Error>
 
 fn missing_guid(name: &str) -> Error {
     Error::Refused(format!(
-        "{name} has no GUID, so its row in Target Scheduler's database cannot be found. Fill the catalog's missing GUIDs first."
+        "{name} has no GUID, so it cannot be found in Target Scheduler's database. Use Fill in GUIDs in the rig's Database & files settings first."
     ))
 }
 
@@ -508,10 +506,10 @@ enum Where {
 fn changed(name: &str, place: Where) -> Error {
     Error::Changed(match place {
         Where::Catalog => format!(
-            "{name} changed in the rig's database since the night was read, so nothing was saved. Read the night again."
+            "{name} changed in the rig's database. Make your changes again."
         ),
         Where::Source => format!(
-            "{name} is set differently in Target Scheduler's database than in the rig's, or is missing there, so nothing was saved. Bring the two into step under the rig database's Sync settings, in Data Transfer: Merge databases takes Target Scheduler's settings, and Send planning sends the rig database's. Then read the night again."
+            "{name} differs between Target Scheduler's database and the rig's, or is missing from Target Scheduler's. In the rig's Sync settings, use Merge databases to keep Target Scheduler's settings, or Send planning to keep the rig's. Then make your changes again."
         ),
     })
 }

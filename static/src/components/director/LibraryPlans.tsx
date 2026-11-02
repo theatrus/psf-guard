@@ -137,14 +137,13 @@ export default function LibraryPlans({ search, show, listed, dbFilter = null, in
         {canWrite && <button type="button" disabled={!!edit} onClick={() => begin({ creating: true, record: { id: identityId(), name: '', revision: 1 } })}><Plus size={16} />New plan</button>}
       </div>
     </div>
-    <p className="director-muted">Plans appear here until a rig captures the first frame. After that, they appear in the project list.</p>
     {plans.query.data?.warnings.map(warning => <p key={warning} className="director-error" role="alert">{warning}</p>)}
     {incomplete && <p className="director-muted">Some databases could not be read, so their plans are left out here.</p>}
     {notice && <p ref={noticeRef} tabIndex={-1} className="library-plans-notice" role="status">{notice}</p>}
     {edit?.creating && form}
     {plans.loading && <p role="status">Loading plans...</p>}
     {plans.error && <p className="director-error" role="alert">{message(plans.query.error)}</p>}
-    {plans.query.isSuccess && shown.length === 0 && <p className="director-muted">{waiting.length === 0 ? 'Every plan has frames.' : 'No waiting plan matches.'}</p>}
+    {plans.query.isSuccess && shown.length === 0 && <p className="director-muted">{waiting.length === 0 ? 'Every plan has frames.' : 'No plan matches.'}</p>}
     <ul className="director-plan-list is-compact">{shown.map(item)}</ul>
     {deleting && <PlanDeleteDialog
       planId={deleting.project.id}

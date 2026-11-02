@@ -1107,7 +1107,7 @@ async fn the_plan_list_reads_rig_databases_beside_their_writers() {
     assert!(
         warns(
             &locked,
-            "NINA rig: is busy, so the list shows what it held at the last listing"
+            "NINA rig: is busy, so the list shows it as last read"
         ),
         "{locked}"
     );
@@ -1351,7 +1351,7 @@ async fn an_unreadable_record_or_database_costs_only_its_own_part_of_the_list() 
     assert!(
         warns(
             &listed,
-            "Pelican: its framing draft could not be read, so the list leaves it out"
+            "Pelican: its framing draft could not be read, so it is left out"
         ),
         "{listed}"
     );
@@ -1413,7 +1413,7 @@ async fn the_plan_list_names_what_it_leaves_out_and_why() {
     let listed: Value =
         serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
     assert!(
-        warns(&listed, "Big rig: holds more than 4096 projects"),
+        warns(&listed, "Big rig: has more than 4096 projects"),
         "{}",
         listed["data"]["warnings"]
     );

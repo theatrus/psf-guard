@@ -102,8 +102,8 @@ test('activation previews the saved TS connection, refuses stale planning, and r
     } })).ok()).toBeTruthy();
     await page.reload();
     const visibility = page.getByRole('region', { name: 'Visibility' });
-    await expect(visibility.getByTestId('visibility-projection')).toContainText("By this rig's own Target Scheduler schedule, the plan is", { timeout: 30_000 });
-    await expect(visibility.getByTestId('visibility-estimate')).toContainText('counting the nights marked or forecast cloudy');
+    await expect(visibility.getByTestId('visibility-projection')).toContainText(/on this rig's Target Scheduler schedule/, { timeout: 30_000 });
+    await expect(visibility.getByTestId('visibility-estimate')).toContainText(/ left on this rig: about \d+ nights? at the target's clear hours this week\./);
     await visibility.getByText(/^Legend and the next \d+ nights$/).click();
     await expect(visibility.getByRole('row').filter({ hasText: 'Rig: Not available' })).toBeVisible();
     await shot(visibility, 'visibility-projection', name => testInfo.outputPath(name), false);

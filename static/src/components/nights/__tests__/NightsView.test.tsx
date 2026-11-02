@@ -277,7 +277,7 @@ describe('Night overrides', () => {
 
   it('saves against the revision the edit started from, and drops the edit when that is gone', async () => {
     const { detail, edit, state, saves, client } = await openDirectorNight({
-      save: () => HttpResponse.json({ success: false, data: null, error: 'Director record conflicts with stored content; reload before retrying' }, { status: 409 }),
+      save: () => HttpResponse.json({ success: false, data: null, error: 'This record changed since it was loaded. Reload, then try again.' }, { status: 409 }),
     });
     fireEvent.click(edit);
     // Someone else saves while this edit is open, and the night is read again.

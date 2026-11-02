@@ -62,12 +62,12 @@ export default function CollaborationWorkflows({ connection, canWrite, refresh, 
     {work?.night && <p role="status">Observing night: {work.night.night}</p>}
     {work?.projects && <table><thead><tr><th>Project</th><th>Compatibility</th><th /></tr></thead><tbody>{work.projects.map(p => <tr key={p.project_id}><td>{p.name}</td><td>{p.compatible === null ? 'Unknown' : p.compatible ? 'Compatible' : 'Incompatible'}</td><td><button type="button" disabled={busy || !nightValid || p.joined || p.compatible === false} onClick={() => { if (window.confirm(`Join ${p.name} with this rig?`)) mutation.mutate({ operation: 'join', project: p.project_id, ...nightOverride }); }}><Link2 size={16} />{p.joined ? 'Joined' : 'Join'}</button></td></tr>)}</tbody></table>}
     {work?.shares?.map(share => <div key={share.task_id}><h4>{share.name ?? share.task_id}</h4>
-      <p>{share.demands.length} panel/filter visits; geometry version {share.version}</p>
+      <p>{share.demands.length} panel/filter visits; revision {share.version}</p>
       {share.review_reasons.length > 0 ? <p role="alert">Needs review: {share.review_reasons.join(', ')}</p> : <button type="button" disabled={busy || !work.night} onClick={() => { if (work.night) mutation.mutate({ operation: 'preview', task: share.task_id, night: work.night }); }}><Download size={16} />Review import</button>}
     </div>)}
     {preview?.result.preview && <section aria-label="Review collaboration import"><h4>Review import</h4>
       <p>{preview.result.plan?.share.name ?? preview.input.task}: {preview.result.plan?.share.demands.length} visits for {preview.input.night.night}</p>
-      {preview.result.preview.rejoins && <p role="note">This import rejoins your plan {preview.result.preview.rejoins}, which left this project. The plan keeps its framing, exposures and recipes.</p>}
+      {preview.result.preview.rejoins && <p role="note">This import rejoins your plan {preview.result.preview.rejoins} and keeps its framing, exposures and recipes.</p>}
       <table><thead><tr><th>Panel</th><th>Filter</th><th>Exposure (s)</th><th>Frames</th></tr></thead><tbody>{preview.result.plan?.share.demands.map(d => <tr key={`${d.panel_index}-${d.filter}`}><td>{d.panel_index}</td><td>{d.filter}</td><td>{d.exposure_ms / 1000}</td><td>{d.requested_frames}</td></tr>)}</tbody></table>
       <button type="button" disabled={busy} onClick={() => mutation.mutate({ ...preview.input, operation: 'apply', review_digest: preview.result.preview!.review_digest })}><Save size={16} />Import draft</button>
       {preview.result.plan && <Link to={`/plan?plan=${encodeURIComponent(preview.result.plan.project_id)}`}>Project plan</Link>}

@@ -66,6 +66,6 @@ describe('placing rigs on the sky', () => {
     expect(drawn[1]).toHaveClass('is-stale');
     expect(drawn[1]).not.toHaveClass('is-inferred');
     expect(drawn[1]).toHaveTextContent('RC51 (quiet)');
-    expect(drawn[1].querySelector('title')).toHaveTextContent('Where its mount reports it points.');
+    expect(drawn[1].querySelector('title')).toHaveTextContent('Reported mount position.');
   });
 });

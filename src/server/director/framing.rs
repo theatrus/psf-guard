@@ -309,7 +309,7 @@ fn locked_refusal(store: &MetaStore, moved: &[String]) -> Result<String, Error> 
         parts.push(format!("{} of {name}'s own framing", list(ids)));
     }
     Ok(format!(
-        "Locked {} would move. A locked panel keeps its place, its turn, and the center, camera angle and panel size it was placed with, including a shared center or angle a rig's own framing follows. Unlock {} first.",
+        "Locked {} would move: a locked panel keeps its place, angle and size, even when the shared center or angle changes. Unlock {} first.",
         parts.join(" and "),
         if moved.len() == 1 { "it" } else { "them" },
     ))

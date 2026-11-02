@@ -848,7 +848,7 @@ async fn activation_names_what_is_missing_and_skips_rigs_it_cannot_write() {
     assert!(remote["warnings"][0]
         .as_str()
         .unwrap()
-        .contains("no registered database"));
+        .contains("is not registered on this server"));
     assert_eq!(remote["changes"], json!([]));
     let _ = a.rig;
 }
@@ -1044,11 +1044,11 @@ async fn activation_takes_over_the_targets_own_exposure_plans_instead_of_doublin
         })
         .collect();
     assert!(
-        details[0].starts_with("IC 1805 r1c1 · Ha 300 · 300 s | takes over plan #11 (12 of 40 frames taken); desired 40 → 72"),
+        details[0].starts_with("IC 1805 r1c1 · Ha 300 · 300 s | uses plan #11 (12 of 40 frames taken); desired 40 → 72"),
         "{details:?}"
     );
     assert!(
-        details[1].contains("takes over plan #13 (5 of 30 frames taken)")
+        details[1].contains("uses plan #13 (5 of 30 frames taken)")
             && details[1].contains("template #2 → #1 Ha 300 (same settings)")
             && details[1].contains("turned on"),
         "{details:?}"
@@ -1712,7 +1712,7 @@ async fn a_separate_framings_gap_is_judged_against_every_framing_on_the_sky() {
         .collect();
     assert_eq!(
         differs,
-        ["Its field is 1.80° × 1.20°, the shared panels 2.00° × 1.50°: frame it separately, or size the shared mosaic by it."],
+        ["Its field is 1.80° × 1.20°, but the shared panels are 2.00° × 1.50°. Give it its own framing, or size the shared mosaic to fit it."],
         "{preview}"
     );
     // With rig B off, its framing is not part of the cover.

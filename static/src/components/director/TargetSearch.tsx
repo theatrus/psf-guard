@@ -58,7 +58,7 @@ export default function TargetSearch({ label, ariaLabel, placeholder, buttonLabe
   };
   const status = online.isPending ? 'Looking up...'
     : online.isError ? message(online.error)
-    : picked ? `${picked.name} from ${picked.source}; the target and view moved there.`
+    : picked ? `${picked.name}, from ${picked.source}.`
     : hint;
   return <label className="target-search">{label}
     <span className="framing-input">
@@ -84,7 +84,7 @@ export default function TargetSearch({ label, ariaLabel, placeholder, buttonLabe
           </li>)}
           {query && <li id={`${listId}-${local.length}`} role="option" aria-selected={active === local.length} className="target-search-online"
             onMouseEnter={() => setActive(local.length)} onClick={() => { setOpen(false); online.mutate(query); }}>
-            <Search size={13} />Look up “{query}” online{suggestions.data && !suggestions.data.local.available ? ' (no local catalog on this server)' : ''}
+            <Search size={13} />Look up “{query}” online{suggestions.data && !suggestions.data.local.available ? ' (no local catalog)' : ''}
           </li>}
         </ul>}
       </span>
