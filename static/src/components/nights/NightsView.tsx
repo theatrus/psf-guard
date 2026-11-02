@@ -6,13 +6,13 @@ import type { RigNight, RigNights } from '../../api/nightPlanTypes';
 import { useAccess } from '../../auth/access';
 import { useUrlParams } from '../../hooks/useUrlState';
 import { useDirectorClock } from '../../hooks/useDirectorClock';
-import { usePlans } from '../header/useCurrentPlan';
 import { retryWhenBusy } from '../director/retry';
 import { formatHours } from '../director/visibilityFormat';
 import EarlyBeta from '../director/EarlyBeta';
 import NightDetail from './NightDetail';
 import {
   NIGHT_COUNTS,
+  NIGHTS_PARAMS,
   RUNTIME_LABEL,
   STATE_LABEL,
   availableShares,
@@ -29,8 +29,7 @@ import {
   plansScheduled,
   scheduleDone,
 } from './nightsModel';
-import '../director/DirectorPage.css';
-import './NightsPage.css';
+import './NightsView.css';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Night plans could not be computed';
 
@@ -43,31 +42,29 @@ interface Selection {
 }
 
 /**
- * Every rig across the coming nights: how long each night is dark and
- * clear, what the Moon does, and how much of what the rig owes fits. Choose
- * a night to see its plans and to mark it available, out, or clear for some
- * hours.
+ * Every rig across the coming nights, on the Rigs page: how long each night
+ * is dark and clear, what the Moon does, and what each rig would shoot.
+ * Choose a night to see its schedule and plans, and to mark it available,
+ * out, or clear for some hours.
  */
-export default function NightsPage() {
+export default function NightsView() {
   const { getParam, updateParams } = useUrlParams();
   const { canWrite } = useAccess();
-  const plans = usePlans();
   const now = useDirectorClock();
   const today = localDate(new Date(now));
-  const from = isDate(getParam('from')) ? getParam('from')! : today;
-  const countParam = Number(getParam('n'));
+  const from = isDate(getParam(NIGHTS_PARAMS.from)) ? getParam(NIGHTS_PARAMS.from)! : today;
+  const countParam = Number(getParam(NIGHTS_PARAMS.count));
   const count = (NIGHT_COUNTS as readonly number[]).includes(countParam) ? countParam : NIGHT_COUNTS[0];
-  const hidden = useMemo(() => new Set((getParam('hide') ?? '').split(',').filter(Boolean)), [getParam]);
-  // A link may open one rig's night: `?rig=<id>&night=<date>`.
+  const hidden = useMemo(() => new Set((getParam(NIGHTS_PARAMS.hide) ?? '').split(',').filter(Boolean)), [getParam]);
+  // A link may open one rig's night.
   const [selection, setSelection] = useState<Selection | null>(() => {
-    const rig = getParam('rig');
-    const night = getParam('night');
+    const rig = getParam(NIGHTS_PARAMS.rig);
+    const night = getParam(NIGHTS_PARAMS.night);
     return rig && isDate(night) ? { rigId: rig, anchor: night, dates: [night] } : null;
   });
   const query = useQuery({
     queryKey: ['nightPlans', from, count],
     queryFn: () => apiClient.getNightPlans({ start_ms: eveningOf(from), nights: count, schedule_nights: count }),
-    enabled: plans.enabled,
     retry: retryWhenBusy,
     retryDelay: 1200,
     refetchInterval: 5 * 60_000,
@@ -95,22 +92,19 @@ export default function NightsPage() {
     const next = new Set(hidden);
     if (next.has(id)) next.delete(id);
     else next.add(id);
-    updateParams({ hide: next.size > 0 ? [...next].join(',') : null });
+    updateParams({ [NIGHTS_PARAMS.hide]: next.size > 0 ? [...next].join(',') : null });
   };
 
-  if (!plans.enabled) {
-    return <main className="nights-page director-page"><p className="director-muted">Night plans need Director, which is off on this server.</p></main>;
-  }
   return (
-    <main className="nights-page director-page">
+    <section className="nights-page" aria-label="Nights">
       <div className="director-toolbar">
         <div className="early-beta-heading"><h2>Nights</h2><EarlyBeta /></div>
         <div className="nights-controls">
-          <label>From <input type="date" value={from} onChange={event => { setSelection(null); updateParams({ from: isDate(event.target.value) && event.target.value !== today ? event.target.value : null }); }} /></label>
-          <label>Nights <select value={count} onChange={event => { setSelection(null); updateParams({ n: Number(event.target.value) === NIGHT_COUNTS[0] ? null : event.target.value }); }}>
+          <label>From <input type="date" value={from} onChange={event => { setSelection(null); updateParams({ [NIGHTS_PARAMS.from]: isDate(event.target.value) && event.target.value !== today ? event.target.value : null }); }} /></label>
+          <label>Nights <select value={count} onChange={event => { setSelection(null); updateParams({ [NIGHTS_PARAMS.count]: Number(event.target.value) === NIGHT_COUNTS[0] ? null : event.target.value }); }}>
             {NIGHT_COUNTS.map(option => <option key={option} value={option}>{option}</option>)}
           </select></label>
-          {from !== today && <button type="button" onClick={() => { setSelection(null); updateParams({ from: null }); }}>Tonight</button>}
+          {from !== today && <button type="button" onClick={() => { setSelection(null); updateParams({ [NIGHTS_PARAMS.from]: null }); }}>Tonight</button>}
           <button type="button" title="Compute again" aria-label="Compute again" disabled={query.isFetching} onClick={() => void query.refetch()}><RefreshCw size={16} /></button>
         </div>
       </div>
@@ -126,7 +120,7 @@ export default function NightsPage() {
       {query.isPending && <p role="status">Computing the nights...</p>}
       {query.isError && <div role="alert"><p>{message(query.error)}</p><button type="button" onClick={() => void query.refetch()}>Retry</button></div>}
       {query.data?.warnings.map(warning => <p key={warning} className="director-muted" role="note">{warning}</p>)}
-      {query.isSuccess && rigs.length === 0 && <p className="director-muted">No rig to plan yet. Give a rig a site under Settings › Rigs and its nights show here.</p>}
+      {query.isSuccess && rigs.length === 0 && <p className="director-muted">No rig to plan yet. Give a rig a site in its setup and its nights show here.</p>}
       {shown.length > 0 && <div className="nights-grid-scroll">
         <table className="nights-grid" data-testid="nights-grid">
           <thead><tr>
@@ -180,6 +174,6 @@ export default function NightsPage() {
         range={{ from, count }}
         onClose={() => setSelection(null)}
       />}
-    </main>
+    </section>
   );
 }

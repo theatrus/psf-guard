@@ -284,7 +284,7 @@ async fn a_target_scheduler_rig_gets_a_schedule_and_its_database_is_left_alone()
     project(&a, "Heart", 25.0, 400, 0);
     let path = a.f._dir.path().join("rig.sqlite");
     let before = std::fs::read(&path).unwrap();
-    let body = json!({"nights": 2, "start_ms": START_MS, "schedule_nights": 2, "explain": "2026-09-24", "fidelity": "target_scheduler_preview"});
+    let body = json!({"nights": 2, "start_ms": START_MS, "schedule_nights": 2, "explain": "2026-09-24", "fidelity": "target_scheduler_preview", "plan_from_ms": START_MS});
     let (status, planned) = call(&a.f.app, "POST", "/night-plans", body, None).await;
     assert_eq!(status, StatusCode::OK, "{planned}");
     let schedule = &planned["data"]["rigs"][0]["schedule"];
@@ -322,6 +322,20 @@ async fn a_target_scheduler_rig_gets_a_schedule_and_its_database_is_left_alone()
     // A preview reads the rig's database and writes nothing to it.
     drop(planned);
     assert_eq!(std::fs::read(&path).unwrap(), before);
+    // By default nothing is planned before now: these nights are past.
+    let (_, past) = call(
+        &a.f.app,
+        "POST",
+        "/night-plans",
+        json!({"nights": 1, "start_ms": START_MS, "schedule_nights": 1}),
+        None,
+    )
+    .await;
+    assert_eq!(
+        past["data"]["rigs"][0]["schedule"]["nights"][0]["frames"],
+        0
+    );
+    assert!(past["data"]["plan_from_ms"].as_u64().unwrap() > START_MS);
     // Without schedule_nights there is no schedule; more than the nights is refused.
     let (_, summary) = call(
         &a.f.app,
@@ -365,8 +379,7 @@ async fn a_director_schedule_runs_the_rigs_own_selection_over_the_pulled_program
     .await;
     assert_eq!(status, StatusCode::OK, "{applied}");
     place(&a).await;
-    let body =
-        json!({"nights": 2, "start_ms": START_MS, "schedule_nights": 2, "runtime": "director"});
+    let body = json!({"nights": 2, "start_ms": START_MS, "schedule_nights": 2, "runtime": "director", "plan_from_ms": START_MS});
     let (status, planned) = call(&a.f.app, "POST", "/night-plans", body.clone(), None).await;
     assert_eq!(status, StatusCode::OK, "{planned}");
     let rig = &planned["data"]["rigs"][0];

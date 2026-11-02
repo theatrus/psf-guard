@@ -98,16 +98,18 @@ split it chose.
 
 ## Live
 
-With Director on, the **Live** chip in the controls (or the header's Live
-chip, from any view) draws each rig that reports to Director on the map
-where it points now: a green ring while it exposes, gold while it does
+With Director on, the **Live** chip in the controls (or **Show the rigs on
+the sky** on the Rigs page) draws each rig that reports to Director on the
+map where it points now: a green ring while it exposes, gold while it does
 anything else, dashed red with "(quiet)" when it has stopped talking or
 "(old report)" when it talks but its last status is over ten minutes old.
 A dotted ring labelled "at target" sits on the rig's target, not on a
 position its mount reported. Saved pictures leave the
 rigs out. A list beside the map shows each rig, whether it is
 online, and what it says it is doing; choosing one turns the map to it and
-comes in close. The full Live table sits under the timeline. A rig is
+comes in close. The full Live table, and each rig's plans for tonight and
+the coming nights, are on the Rigs page, which the list links to and the
+header's rigs chip opens. A rig is
 placed from the mount position its plugin reports, or failing that at its
 target; see the status payload in [DIRECTOR.md](DIRECTOR.md).
 The choice lives in the URL (`live=1`).

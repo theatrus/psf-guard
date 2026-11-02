@@ -6,6 +6,8 @@ import type { NightAvailabilityState, NightMarkEdit, NightMarkScope, RigNight, R
 import { formatHours } from '../director/visibilityFormat';
 import { httpStatus } from '../../utils/httpStatus';
 import { retryWhenBusy } from '../director/retry';
+import { describeNow } from '../director/dashboardModel';
+import { useDirectorClock } from '../../hooks/useDirectorClock';
 import NightTimeline from './NightTimeline';
 import {
   RUNTIME_LABEL,
@@ -15,6 +17,7 @@ import {
   eveningOf,
   formatClock,
   formatNightDate,
+  isTonight,
   plansOnNight,
   windowFor,
 } from './nightsModel';
@@ -76,6 +79,11 @@ function NightSchedule({ rig, night, colours, range }: { rig: RigNights; night: 
   });
   const detail = query.data?.rigs.find(entry => entry.rig.id === rig.rig.id);
   const scheduled = detail?.schedule?.nights.find(n => n.date === night.date);
+  // Tonight: what the rig says it is doing, beside what it is planned to do.
+  const now = useDirectorClock();
+  const tonight = isTonight(night, now);
+  const statuses = useQuery({ queryKey: ['directorRigStatuses'], queryFn: apiClient.getDirectorRigStatuses, enabled: tonight, retry: retryWhenBusy, retryDelay: 1200, refetchInterval: 15_000 });
+  const live = statuses.data?.find(view => view.rig.id === rig.rig.id);
   return <section className="nights-schedule" aria-label="Schedule">
     <div className="nights-mark-row">
       <h4>{RUNTIME_LABEL[shown]} schedule</h4>
@@ -91,10 +99,14 @@ function NightSchedule({ rig, night, colours, range }: { rig: RigNights; night: 
       : "Director's own selection, stepped through the night's dark hours. The rig still decides on the night."}
       {detail?.schedule?.assumptions.overheads && ` Times include ${detail.schedule.assumptions.overheads.target_change_seconds} s per target change, ${detail.schedule.assumptions.overheads.filter_change_seconds} s per filter change and ${detail.schedule.assumptions.overheads.per_exposure_seconds} s per exposure.`}
     </p>
+    {tonight && <p className="nights-live" role="status">
+      <strong>Now:</strong> {live ? describeNow(live, now) : 'no report from the rig'}.
+      {' '}Tonight is planned from now, with the frames the rig has taken so far.
+    </p>}
     {query.isPending && <p role="status">Planning {formatNightDate(night.date)}...</p>}
     {query.isError && <p className="director-error" role="alert">{query.error instanceof Error ? query.error.message : 'The schedule could not be computed'}</p>}
     {detail?.warnings.map(warning => <p key={warning} className="director-muted" role="note">{warning}</p>)}
-    {scheduled && <NightTimeline night={night} scheduled={scheduled} colours={colours} />}
+    {scheduled && <NightTimeline night={night} scheduled={scheduled} colours={colours} now={tonight ? now : undefined} />}
   </section>;
 }
 

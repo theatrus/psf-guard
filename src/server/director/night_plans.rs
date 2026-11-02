@@ -69,6 +69,11 @@ pub(super) struct Request {
     /// its days by. By default, local mean time at the site's longitude.
     #[serde(default)]
     utc_offset_minutes: Option<i32>,
+    /// Schedules plan nothing before this instant: now by default, so the
+    /// night under way is planned from now with the rig's current counts.
+    /// `start_ms` only chooses the first night.
+    #[serde(default)]
+    plan_from_ms: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
@@ -98,6 +103,7 @@ pub(super) enum Fidelity {
 #[derive(Clone, Copy)]
 struct ScheduleOptions {
     nights: u32,
+    plan_from_ms: u64,
     explain: Option<NightDate>,
     runtime: RuntimeChoice,
     fidelity: Fidelity,
@@ -115,6 +121,8 @@ pub(super) enum Runtime {
 #[derive(Serialize)]
 pub(super) struct View {
     start_ms: u64,
+    /// Schedules plan nothing before this instant.
+    plan_from_ms: u64,
     nights: u32,
     rigs: Vec<RigNights>,
     /// Rigs left out, and why.
@@ -350,6 +358,7 @@ pub(super) async fn plan(
     let start_ms = request.start_ms.unwrap_or_else(now_ms);
     let options = ScheduleOptions {
         nights: request.schedule_nights.unwrap_or(0),
+        plan_from_ms: request.plan_from_ms.unwrap_or_else(now_ms),
         explain: request.explain,
         runtime: request.runtime.unwrap_or_default(),
         fidelity: request.fidelity.unwrap_or_default(),
@@ -498,6 +507,7 @@ pub(super) async fn plan(
             }
             Ok::<_, NightPlanError>(View {
                 start_ms,
+                plan_from_ms: options.plan_from_ms,
                 nights,
                 rigs,
                 warnings,
@@ -794,7 +804,7 @@ fn rig_nights(input: RigInput, start_ms: u64, nights: u32) -> Result<RigNights, 
                 location,
                 &dates[..options.nights as usize],
                 available.as_deref(),
-                start_ms,
+                options.plan_from_ms,
                 options,
             )),
             (Runtime::TargetScheduler, None) => None,
@@ -809,7 +819,7 @@ fn rig_nights(input: RigInput, start_ms: u64, nights: u32) -> Result<RigNights, 
                     &dates[..options.nights as usize],
                     &out[..options.nights as usize],
                     available.as_deref(),
-                    start_ms,
+                    options.plan_from_ms,
                     options,
                 ) {
                     Ok(view) => {

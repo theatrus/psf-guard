@@ -569,6 +569,11 @@ refused.
     widens eligibility, extends an allocation, or relaxes a limit.
   - A pinned goal that geometry or the Moon rules out in its window
     leaves that window idle. The editor shows that before saving.
+- **Live shifts:** an override saved while the night runs, from tonight's
+  timeline on the Rigs page: hold the rig, pin the next stretch to a
+  target, or move a block later. The preview re-plans the rest of the night
+  from now with the rig's current counts, and the program the rig pulls
+  carries the change at its next check-in (question 13).
 - **Previewing:**
   - The Director emulation applies the night's overrides, so the
     timeline shows their effect.
@@ -641,7 +646,10 @@ refused.
 ### 4.8 Interface
 
 - **Nights:**
-  - A view beside Sky in the header.
+  - A tab of the **Rigs** page, beside **Live**. Both are tables of rigs, so
+    they share one page, which the header's rigs chip opens on Live; the
+    Sky keeps the rigs on its map. Live's **Tonight** column opens tonight
+    on Nights.
   - Rigs are rows and nights are columns, for all rigs or a chosen set,
     starting at any date. Each row says which runtime it shows.
   - Each cell shows the available dark hours as a bar, the mark (✕
@@ -651,6 +659,11 @@ refused.
   - On a phone the grid scrolls inside its own box. The page itself
     never scrolls sideways.
 - **A night:**
+  - The night under way is planned from now with the rig's current counts
+    (`plan_from_ms`, default now), so each refresh re-plans the rest of it.
+    Its panel puts the rig's live status beside the schedule and marks now
+    on the timeline. This is where Director overrides and live shifts will
+    be made (§4.6).
   - Choosing a cell opens that rig's timeline from dusk to dawn: blocks
     per target and filter, drawn over the altitude chart
     `VisibilityPanel` already draws, with the gaps labelled by reason.

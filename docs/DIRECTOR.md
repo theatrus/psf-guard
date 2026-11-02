@@ -449,14 +449,17 @@ a workspace, the picker opens the chosen project's workspace; it also lists
 plans no database takes yet, which open straight into theirs. Every view
 button shows the page you are on the same way, filled. Beside the jobs slot a
 **Live** chip counts the fleet, `2 rigs · 1 exposing`, turns red when a rig
-that used to talk has gone quiet, and opens **Live on the Sky** from any
-view: each reporting rig drawn on the coverage map where it points now, a
-list of the rigs beside the map (choosing one turns the map to it), and the
-full Live table under the map. Rig setup and the exposure template library
-are under **Rig setup** for a database under **Settings → Databases & rigs → Overview**
-and **Settings → Presets → Exposure templates**; a
-read-only viewer cannot open Settings, so Live on the Sky shows them both
-under the table, read only. Choosing a
+that used to talk has gone quiet, and opens **Rigs** on its **Live** tab from
+any view. **Rigs**, beside **Sky** in the header, holds every rig in one
+place: **Live**, the table of what each rig is doing and plans tonight, and
+**[Nights](#nights)**, what each would shoot over the coming nights. **Show
+the rigs on the sky** turns on the Sky's **Live** view: each reporting rig
+drawn on the coverage map where it points now, with a list of the rigs
+beside the map (choosing one turns the map to it). Rig setup and the
+exposure template library are under **Rig setup** for a database under
+**Settings → Databases & rigs → Overview** and **Settings → Presets →
+Exposure templates**; a read-only viewer cannot open Settings, so **Rigs ›
+Live** shows them both under the table, read only. Choosing a
 project in the Review picker from the Library, Sky or a workspace opens
 Images for it, and the workspace's own URL parameter (`plan`) stays behind, so a
 plan you had open does not follow you into review.
@@ -1784,7 +1787,7 @@ program that does not bind is a `422` with the reason, never a partial pull.
 
 ## Check-in and live status
 
-Early beta. The **Live** table on the Sky reads these reports.
+Early beta. The **Live** table on the Rigs page reads these reports.
 
 | Method | Route | Body or query |
 | --- | --- | --- |
@@ -1869,8 +1872,8 @@ estimates for choosing targets and nights, not the rig's dispatch decision.
 
 ## Nights
 
-**Nights**, beside **Sky** in the header, shows every rig with a site across
-the coming nights: rigs are rows and nights are columns. Choose the first
+**Rigs › Nights** shows every rig with a site across the coming nights:
+rigs are rows and nights are columns. Choose the first
 night with **From** and how many with **Nights** (7, 14 or 31); **Tonight**
 returns to the night under way. The chips above the grid hide or show rigs.
 On a phone the grid scrolls inside its own box.
@@ -1932,7 +1935,11 @@ Scheduler to change the prediction.
   templates name; that configuration never reaches the rig.
 
 Frames planned on one night count on the next, so the schedule shows when
-each plan finishes. The schedule plans by the site's local mean time, from
+each plan finishes. Nothing is planned in the past: the night under way is
+planned from now, with the frames the rig has taken so far, so each time
+the page refreshes it re-plans the rest of tonight. Tonight's panel puts
+what the rig says it is doing beside its schedule, and a line marks now on
+the timeline. The schedule plans by the site's local mean time, from
 its longitude. It is an estimate of the order of work and roughly when it
 happens, not a promise of clock times.
 
@@ -1959,15 +1966,15 @@ Marks change night plans only. They never start, stop or block a rig, and
 never reach a program, the plugin, Target Scheduler or N.I.N.A.: the rig's
 safety monitor and N.I.N.A. still decide on the night.
 
-### Tonight in the Live table
+### Tonight on the Live tab
 
-The Live table under **Sky › Live** has a **Tonight** column: each rig's
-clear hours tonight and the plans it would shoot. The link opens that night
-on the Nights page.
+The table on **Rigs › Live** has a **Tonight** column: each rig's clear
+hours tonight and the plans it would shoot. The link opens tonight's
+schedule on the **Nights** tab.
 
 | Method | Route | Body or query |
 | --- | --- | --- |
-| POST | `/night-plans` | Optional `rigs` (ids; none is every rig with a site), `start_ms` (default now; the first night is the one under way then), `nights` (1 to 31, default 7), `schedule_nights` (how many nights from the first to schedule, default 0), `explain` (a scheduled night, `YYYY-MM-DD`, whose blocks list every candidate and its scores), `runtime` (`auto`, `target_scheduler` or `director`; `auto` is the rig's own), `fidelity` (`estimate` or `target_scheduler_preview`) and `utc_offset_minutes` (the clock the Target Scheduler emulation plans by; default local mean time). Per rig: the runtime, the plans it owes with their limits, `nights` (darkness, clear hours, marks, Moon, each target's hours and the load), `schedule` (blocks, gaps, frames per plan and the night each completes, and the assumptions), `mark_revisions` and `warnings`. Writes nothing. A read-only account that may run calculations can call it. |
+| POST | `/night-plans` | Optional `rigs` (ids; none is every rig with a site), `start_ms` (default now; the first night is the one under way then), `nights` (1 to 31, default 7), `schedule_nights` (how many nights from the first to schedule, default 0), `explain` (a scheduled night, `YYYY-MM-DD`, whose blocks list every candidate and its scores), `runtime` (`auto`, `target_scheduler` or `director`; `auto` is the rig's own), `fidelity` (`estimate` or `target_scheduler_preview`), `utc_offset_minutes` (the clock the Target Scheduler emulation plans by; default local mean time) and `plan_from_ms` (schedules plan nothing before it; default now). Per rig: the runtime, the plans it owes with their limits, `nights` (darkness, clear hours, marks, Moon, each target's hours and the load), `schedule` (blocks, gaps, frames per plan and the night each completes, and the assumptions), `mark_revisions` and `warnings`. Writes nothing. A read-only account that may run calculations can call it. |
 | GET | `/night-availability` | `scope` (`site` or `rig`), `id`, `from` and `to` (`YYYY-MM-DD`). The scope's marks and the `revision` to send back with a change. |
 | PUT | `/night-availability/{scope}/{id}` | `expected_revision` and `marks`: up to 62 nights, each a `date`, a `state` (`available`, `unavailable` or `limited`), `windows` (for `limited`: UTC instants inside that night's noon-to-noon span) and an optional `note`. Replaces those nights' marks in one transaction. `409` on a stale revision; `422` for hours outside the night or a scope with no location. |
 | DELETE | `/night-availability/{scope}/{id}` | `expected_revision` and `dates`: returns those nights to the default. |

@@ -64,6 +64,8 @@ interface Props {
   night: RigNight;
   scheduled: ScheduledNight;
   colours: Map<string, number>;
+  /** Draw a line at this instant: the night under way. */
+  now?: number;
 }
 
 /**
@@ -72,7 +74,7 @@ interface Props {
  * gaps with the reason nothing is shot. Choose a block to see why the
  * planner chose its target.
  */
-export default function NightTimeline({ night, scheduled, colours }: Props) {
+export default function NightTimeline({ night, scheduled, colours, now }: Props) {
   const [chosen, setChosen] = useState<number | null>(null);
   const start = (night.dusk_ms ?? scheduled.start_ms) - HOUR_MS;
   const end = (night.dawn_ms ?? scheduled.end_ms) + HOUR_MS;
@@ -111,6 +113,7 @@ export default function NightTimeline({ night, scheduled, colours }: Props) {
             })}
           </button>;
         })}
+        {now !== undefined && now > start && now < end && <span className="nights-now" style={{ left: `${((now - start) / span) * 100}%` }} title={`Now, ${formatClock(now)}`} />}
       </div>
       <div className="nights-timeline-axis" aria-hidden="true">
         {ticks.map(t => <span key={t} style={{ left: `${((t - start) / span) * 100}%` }}>{formatClock(t)}</span>)}

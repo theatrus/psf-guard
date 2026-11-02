@@ -3,6 +3,22 @@ import type { NightAvailabilityState, NightInterval, NightRuntime, RigNight, Rig
 const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
 
+/** The Rigs page's URL keys: which tab, and the Nights grid's range,
+ *  hidden rigs and chosen night. They stay on the Rigs page. */
+export const RIGS_TAB_PARAM = 'rigsTab';
+export const NIGHTS_PARAMS = {
+  from: 'nightsFrom',
+  count: 'nightsCount',
+  hide: 'nightsHide',
+  rig: 'nightRig',
+  night: 'night',
+} as const;
+
+/** The Rigs page's address for one rig's night. */
+export function nightHref(rigId: string, date: string): string {
+  return `/rigs?${new URLSearchParams({ [RIGS_TAB_PARAM]: 'nights', [NIGHTS_PARAMS.rig]: rigId, [NIGHTS_PARAMS.night]: date })}`;
+}
+
 /** Night counts the page offers. */
 export const NIGHT_COUNTS = [7, 14, 31] as const;
 /** How many plan colours the grid's palette has. */

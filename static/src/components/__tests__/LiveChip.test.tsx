@@ -45,15 +45,16 @@ describe('Live chip', () => {
     expect(liveSummary([leased], now).label).toBe('1 rig · 1 online');
   });
 
-  it('shows the fleet from any view and opens Live on the Sky, keeping the scope', async () => {
+  it('shows the fleet from any view and opens the Rigs page on Live, keeping the scope', async () => {
     mount([view('C925', 'online', 'exposing'), view('RC51', 'offline', null)], enabled, '/grid?db=c925&project=3&plan=abc');
     const chip = await screen.findByRole('button', { name: 'Live rigs: 2 rigs · 1 exposing' });
     expect(chip).toHaveClass('is-alert');
     fireEvent.click(chip);
-    expect(screen.getByTestId('location')).toHaveTextContent('/sky?db=c925&project=3&live=1');
+    expect(screen.getByTestId('location')).toHaveTextContent('/rigs?db=c925&project=3');
     expect(screen.getByRole('button', { name: 'Live rigs: 2 rigs · 1 exposing' })).toHaveAttribute('aria-current', 'page');
-    // Live stays with the Sky: it is one of the params other views drop.
-    expect(withoutPlanningParams('db=c925&live=1').toString()).toBe('db=c925');
+    // The Sky's rig markers and the Rigs page's tab and night stay behind
+    // when another view opens.
+    expect(withoutPlanningParams('db=c925&live=1&rigsTab=nights&nightRig=r&night=2026-11-03').toString()).toBe('db=c925');
   });
 
   it('stays out of the header without rigs, and never asks for rigs without Director', async () => {

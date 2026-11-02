@@ -10,7 +10,7 @@ import EarlyBeta from './EarlyBeta';
 import { planHref } from './planAddress';
 import { useDirectorClock } from '../../hooks/useDirectorClock';
 import { formatHours } from './visibilityFormat';
-import { plansScheduled } from '../nights/nightsModel';
+import { nightHref, plansScheduled } from '../nights/nightsModel';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Director request failed';
 
@@ -83,9 +83,9 @@ function TonightCell({ rig, pending }: { rig: RigNights | undefined; pending: bo
   const night = rig.nights[0];
   if (!night) return null;
   const plans = plansScheduled(rig, night.date);
-  const href = `/nights?${new URLSearchParams({ rig: rig.rig.id, night: night.date })}`;
+  const href = nightHref(rig.rig.id, night.date);
   const clear = night.availability.state === 'unavailable' ? 'not available' : `${formatHours(night.available_dark_hours)} clear`;
-  return <Link to={href} title="Open this night on the Nights page">
+  return <Link to={href} title="Open tonight's schedule on the Nights tab">
     {clear}{plans.length > 0 ? `: ${plans.slice(0, 2).map(plan => plan.name).join(', ')}${plans.length > 2 ? ` +${plans.length - 2}` : ''}` : night.available_dark_hours > 0 ? ', nothing planned' : ''}
   </Link>;
 }

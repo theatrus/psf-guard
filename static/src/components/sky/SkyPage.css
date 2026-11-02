@@ -710,8 +710,11 @@
   cursor: pointer;
 }
 
-.sky-live-table {
-  margin-top: 16px;
+.sky-live-table-link {
+  display: inline-block;
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--color-primary);
 }
 
 .sky-rig circle,

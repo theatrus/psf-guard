@@ -77,7 +77,7 @@ test('Nights shows every rig across the coming nights, a night\'s schedule, and 
     ]), { latitude_degrees: -31.3, longitude_degrees: 149.1 });
 
     await page.setViewportSize({ width: 1440, height: 1100 });
-    await page.goto('/#/nights?from=2026-11-12');
+    await page.goto('/#/rigs?rigsTab=nights&nightsFrom=2026-11-12');
     const grid = page.getByTestId('nights-grid');
     await expect(grid).toBeVisible({ timeout: 30_000 });
     await expect(grid.getByText('North rig', { exact: true })).toBeVisible();
@@ -126,14 +126,18 @@ test('Nights shows every rig across the coming nights, a night\'s schedule, and 
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
     await shot(page, 'nights-phone', name => testInfo.outputPath(name));
 
-    // The Live table says what each rig plans tonight and links to the night.
+    // Live says what each rig plans tonight and links to the night.
     await page.setViewportSize({ width: 1440, height: 1000 });
-    await page.goto('/#/sky?live=1');
+    await page.goto('/#/rigs');
     const tonight = page.getByTestId('director-dashboard').getByRole('link', { name: /clear/ }).first();
     await expect(tonight).toBeVisible({ timeout: 30_000 });
-    await shot(page.getByTestId('director-dashboard'), 'nights-live-tonight', name => testInfo.outputPath(name), false);
+    await shot(page, 'rigs-live', name => testInfo.outputPath(name));
     await tonight.click();
-    await expect(page.getByRole('region', { name: 'Night details' })).toBeVisible();
+    await expect(page.getByRole('tab', { name: 'Nights' })).toHaveAttribute('aria-selected', 'true');
+    const tonightDetail = page.getByRole('region', { name: 'Night details' });
+    await expect(tonightDetail).toBeVisible();
+    // Tonight is planned from now, beside what the rig says it is doing.
+    await expect(tonightDetail.getByText(/Tonight is planned from now/)).toBeVisible();
     expect(errors).toEqual([]);
   } finally {
     for (const slug of slugs) await request.delete(`/api/databases/${slug}`);

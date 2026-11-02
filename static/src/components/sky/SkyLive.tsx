@@ -1,4 +1,5 @@
 import { Crosshair } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import type { PlacedRig } from './liveRigs';
 import EarlyBeta from '../director/EarlyBeta';
 
@@ -9,6 +10,7 @@ const STATE_LABEL: Record<PlacedRig['connectivity'], string> = { online: 'Online
 export default function SkyLive({ rigs, onFocus }: { rigs: PlacedRig[]; onFocus?: (rig: PlacedRig) => void }) {
   return <aside className="sky-live" aria-label="Live rigs on the sky">
     <div className="early-beta-heading"><h2>Live</h2><EarlyBeta /></div>
+    <Link className="sky-live-table-link" to="/rigs">Open the Live table and tonight's plans</Link>
     {rigs.length === 0 && <p className="sky-live-empty">No rig has reported yet.</p>}
     <ul>
       {rigs.map(rig => (
