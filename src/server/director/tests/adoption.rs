@@ -9,6 +9,7 @@ mod feasibility;
 mod file_delivery;
 mod framing;
 mod mosaic;
+mod night_plans;
 mod plan;
 mod plan_progress;
 mod plan_removal;

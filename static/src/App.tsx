@@ -11,7 +11,7 @@ import { useDesktopZoom, type DesktopZoom } from './hooks/useDesktopZoom';
 import { useDesktopFullscreen } from './hooks/useDesktopFullscreen';
 import HeaderMenu from './components/header/HeaderMenu';
 import ViewTab from './components/header/ViewTab';
-import { ChartColumn, Crosshair, Images, LibraryBig, SquareStack, Telescope, TestTubeDiagonal } from 'lucide-react';
+import { CalendarRange, ChartColumn, Crosshair, Images, LibraryBig, SquareStack, Telescope, TestTubeDiagonal } from 'lucide-react';
 import { useHeaderFit } from './components/header/useHeaderFit';
 import { useTuckAway } from './components/header/useTuckAway';
 import KeyboardShortcutHelp from './components/KeyboardShortcutHelp';
@@ -22,7 +22,7 @@ import WhatsNew from './components/WhatsNew';
 import BuildRefresh from './components/BuildRefresh';
 import TauriSettings from './components/TauriSettings';
 import { DesktopServerGate } from './components/DesktopServerSettings';
-import { isOverviewPath, isPlanningPath, isSkyPath, useDbProjectTarget } from './hooks/useUrlState';
+import { isNightsPath, isOverviewPath, isPlanningPath, isSkyPath, useDbProjectTarget } from './hooks/useUrlState';
 import { scopeForView } from './utils/viewScope';
 import { isTauriApp, tauriConfig } from './utils/tauri';
 import {
@@ -174,6 +174,7 @@ function AppContent({ zoom }: { zoom?: DesktopZoom }) {
   const isOnStacks = location.pathname === '/stacks';
   const isOnCalibration = location.pathname === '/calibration';
   const isOnSky = isSkyPath(location.pathname);
+  const isOnNights = isNightsPath(location.pathname);
 
   return (
     <div className="app">
@@ -206,6 +207,15 @@ function AppContent({ zoom }: { zoom?: DesktopZoom }) {
             current={isOnSky}
             onClick={() => navigate(toScoped('/sky'))}
           />
+          {/* Every rig's coming nights; like the Sky, it follows no scope. */}
+          {plan.enabled && (
+            <ViewTab
+              label="Nights"
+              icon={CalendarRange}
+              current={isOnNights}
+              onClick={() => navigate(toScoped('/nights'))}
+            />
+          )}
           <ViewTab
             label="Library"
             icon={LibraryBig}

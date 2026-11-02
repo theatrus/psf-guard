@@ -2954,7 +2954,7 @@ fn required_frames(objective: &Objective, contribution: &Contribution) -> Option
 /// The profile that owns the database's projects, else its only preference
 /// row, else the templates' profile. Target Scheduler shows a project only
 /// under its own profile, so a fresh GUID would hide everything we write.
-fn resolve_profile(tx: &Connection) -> rusqlite::Result<Option<String>> {
+pub(super) fn resolve_profile(tx: &Connection) -> rusqlite::Result<Option<String>> {
     let dominant: Option<String> = tx
         .query_row(
             "SELECT profileId FROM project WHERE profileId IS NOT NULL AND profileId<>'' GROUP BY profileId ORDER BY COUNT(*) DESC, profileId LIMIT 1",

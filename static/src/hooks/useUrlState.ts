@@ -400,9 +400,14 @@ export function isSkyPath(pathname: string): boolean {
   return pathname === '/sky';
 }
 
+/** The night plans of every rig. */
+export function isNightsPath(pathname: string): boolean {
+  return pathname === '/nights';
+}
+
 /** Routes that show every database, where a parked `db` slug means nothing. */
 export function isMergedPath(pathname: string): boolean {
-  return isOverviewPath(pathname) || isSkyPath(pathname) || isPlanningPath(pathname);
+  return isOverviewPath(pathname) || isSkyPath(pathname) || isNightsPath(pathname) || isPlanningPath(pathname);
 }
 
 /**

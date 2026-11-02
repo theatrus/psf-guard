@@ -10,6 +10,7 @@ import type {
   BackupsOverview,
 } from './backupTypes';
 import { getServerUrl } from '../utils/tauri';
+import type { NightMarkEdit, NightMarks, NightMarkScope, NightPlans, NightPlansRequest } from './nightPlanTypes';
 import type { OverlaySolution } from '@seiza/astro-overlay';
 import type { PixelRect, PixelWindow } from '../utils/pixelWindow';
 import { BUILD_HEADER, noteServerBuild } from '../updates/pageBuild';
@@ -803,6 +804,34 @@ export const apiClient = {
     const api = await getApi();
     const { data } = await api.post<ApiResponse<DirectorFeasibility>>(`/director/v1/projects/${encodeURIComponent(projectId)}/feasibility`, request);
     if (!data.data) throw new Error(data.error || 'Failed to compute feasibility');
+    return data.data;
+  },
+
+  getNightPlans: async (request: NightPlansRequest): Promise<NightPlans> => {
+    const api = await getApi();
+    const { data } = await api.post<ApiResponse<NightPlans>>('/director/v1/night-plans', request);
+    if (!data.data) throw new Error(data.error || 'Night plans could not be computed');
+    return data.data;
+  },
+
+  getNightMarks: async (scope: NightMarkScope, id: string, from: string, to: string): Promise<NightMarks> => {
+    const api = await getApi();
+    const { data } = await api.get<ApiResponse<NightMarks>>('/director/v1/night-availability', { params: { scope, id, from, to } });
+    if (!data.data) throw new Error(data.error || 'Night marks could not be loaded');
+    return data.data;
+  },
+
+  saveNightMarks: async (scope: NightMarkScope, id: string, expected_revision: number, marks: NightMarkEdit[]): Promise<NightMarks> => {
+    const api = await getApi();
+    const { data } = await api.put<ApiResponse<NightMarks>>(`/director/v1/night-availability/${scope}/${encodeURIComponent(id)}`, { expected_revision, marks });
+    if (!data.data) throw new Error(data.error || 'The marks could not be saved');
+    return data.data;
+  },
+
+  clearNightMarks: async (scope: NightMarkScope, id: string, expected_revision: number, dates: string[]): Promise<{ revision: number }> => {
+    const api = await getApi();
+    const { data } = await api.delete<ApiResponse<{ revision: number }>>(`/director/v1/night-availability/${scope}/${encodeURIComponent(id)}`, { data: { expected_revision, dates } });
+    if (!data.data) throw new Error(data.error || 'The marks could not be cleared');
     return data.data;
   },
 

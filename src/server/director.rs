@@ -50,6 +50,8 @@ pub(crate) use activation::create_director_tables as create_rig_tables_for_tests
 pub(crate) use import_drafts::inferred_mosaic;
 mod measured;
 mod mosaic;
+mod night_availability;
+mod night_plans;
 pub(super) mod pairing;
 mod plan;
 mod plan_progress;
@@ -65,6 +67,7 @@ mod sky_objects;
 mod sky_search;
 mod take_values;
 mod templates;
+mod ts_snapshot;
 mod workload;
 
 /// The default store sits beside the registry, like `auth.json`, so a test
@@ -718,6 +721,7 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
             "/projects/{id}/feasibility",
             axum::routing::post(feasibility::evaluate),
         )
+        .route("/night-plans", axum::routing::post(night_plans::plan))
         .route("/projects/{id}/activation", get(activation::last))
         .route("/projects/{id}/mosaic", get(mosaic::get))
         .route(
@@ -768,6 +772,7 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
         .route("/projects/{id}/detach", axum::routing::post(detach_project))
         .merge(configuration_api::routes())
         .merge(site_profile::routes())
+        .merge(night_availability::routes())
         .merge(preferences::routes())
         .merge(rig_scheduling::routes())
         .merge(templates::routes())
