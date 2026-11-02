@@ -1129,6 +1129,23 @@ mod tests {
             "/director/v1/night-availability/rig/x",
             true
         ));
+        // A night's overrides change the program a Director rig pulls: an
+        // editor's to save or clear, anyone's to read.
+        assert!(requires_write(
+            &Method::PUT,
+            "/director/v1/rigs/x/night-overrides/2026-11-02",
+            true
+        ));
+        assert!(requires_write(
+            &Method::DELETE,
+            "/director/v1/rigs/x/night-overrides/2026-11-02",
+            true
+        ));
+        assert!(!requires_write(
+            &Method::GET,
+            "/director/v1/rigs/x/night-overrides/2026-11-02",
+            true
+        ));
         // A plan's projection schedules the rigs and writes nothing.
         assert!(!requires_write(
             &Method::POST,

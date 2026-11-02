@@ -74,28 +74,57 @@ export function formatNightDate(date: string): string {
   return new Date(year, month - 1, day).toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
 }
 
-export function formatClock(ms: number): string {
-  return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+export function formatClock(ms: number, zone?: string): string {
+  return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', ...(zone ? { timeZone: zone } : {}) });
 }
 
-/** `HH:MM` in the browser's clock, for a time field. */
-export function clockValue(ms: number): string {
+/** The browser's time zone, which times are read in when a site names none. */
+export const BROWSER_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+/** The wall clock in `zone` at an instant. */
+function wallClock(ms: number, zone: string) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: zone, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit',
+  }).formatToParts(new Date(ms));
+  const part = (type: Intl.DateTimeFormatPartTypes) => Number(parts.find(p => p.type === type)?.value ?? 0);
+  return { year: part('year'), month: part('month'), day: part('day'), hour: part('hour') % 24, minute: part('minute'), second: part('second') };
+}
+
+/** How far `zone`'s clock is ahead of UTC at an instant, in milliseconds. */
+function zoneOffsetMs(ms: number, zone: string): number {
+  const wall = wallClock(ms, zone);
+  return Date.UTC(wall.year, wall.month - 1, wall.day, wall.hour, wall.minute, wall.second) - Math.floor(ms / 1000) * 1000;
+}
+
+/** `HH:MM` in `zone`, or the browser's clock, for a time field. */
+export function clockValue(ms: number, zone?: string): string {
+  const pad = (value: number) => String(value).padStart(2, '0');
+  if (zone) {
+    const wall = wallClock(ms, zone);
+    return `${pad(wall.hour)}:${pad(wall.minute)}`;
+  }
   const at = new Date(ms);
-  return `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`;
+  return `${pad(at.getHours())}:${pad(at.getMinutes())}`;
 }
 
 /**
  * The instant a clock time falls on in a night: from noon on the evening's
  * date to noon the next day, so 01:30 is after midnight.
  */
-export function clockOnNight(date: string, clock: string): number | null {
+export function clockOnNight(date: string, clock: string, zone?: string): number | null {
   const match = /^(\d{1,2}):(\d{2})$/.exec(clock);
   if (!match) return null;
   const hours = Number(match[1]);
   const minutes = Number(match[2]);
   if (hours > 23 || minutes > 59) return null;
   const [year, month, day] = date.split('-').map(Number);
-  return new Date(year, month - 1, hours < 12 ? day + 1 : day, hours, minutes).getTime();
+  const onDay = hours < 12 ? day + 1 : day;
+  if (!zone) return new Date(year, month - 1, onDay, hours, minutes).getTime();
+  // The wall time read as UTC, less the zone's offset there; a second pass
+  // settles a clock change between the guess and the answer.
+  const wall = Date.UTC(year, month - 1, onDay, hours, minutes);
+  const guess = wall - zoneOffsetMs(wall, zone);
+  return wall - zoneOffsetMs(guess, zone);
 }
 
 /**
@@ -103,9 +132,9 @@ export function clockOnNight(date: string, clock: string): number | null {
  * dusk and an empty `to` ends at dawn. The window is clipped to the night,
  * noon to noon. `null` when nothing is left.
  */
-export function windowFor(night: Pick<RigNight, 'date' | 'noon_ms' | 'dusk_ms' | 'dawn_ms'>, from: string, to: string): NightInterval | null {
-  const start = from ? clockOnNight(night.date, from) : night.dusk_ms;
-  const end = to ? clockOnNight(night.date, to) : night.dawn_ms;
+export function windowFor(night: Pick<RigNight, 'date' | 'noon_ms' | 'dusk_ms' | 'dawn_ms'>, from: string, to: string, zone?: string): NightInterval | null {
+  const start = from ? clockOnNight(night.date, from, zone) : night.dusk_ms;
+  const end = to ? clockOnNight(night.date, to, zone) : night.dawn_ms;
   if (start === null || end === null) return null;
   const clippedStart = Math.max(start, night.noon_ms);
   const clippedEnd = Math.min(end, night.noon_ms + DAY_MS);

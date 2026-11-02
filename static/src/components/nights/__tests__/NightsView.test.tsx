@@ -187,3 +187,86 @@ describe('Nights', () => {
     expect(within(detail).queryByRole('button', { name: 'Save mark' })).toBeNull();
   });
 });
+
+describe('Night overrides', () => {
+  const HOUR = 3_600_000;
+
+  /** A Director rig whose night 0 is scheduled, on a UTC site clock. */
+  function directorRig() {
+    const base = night(0);
+    const block = {
+      target: { project_id: 7, project_name: 'Heart Nebula', target_id: 70, target_name: 'IC 1805' },
+      start_ms: base.dusk_ms!, end_ms: base.dusk_ms! + 2 * HOUR, slew: true,
+      runs: [{ exposure_plan_id: 700, filter: 'Ha', exposure_seconds: 300, frames: 24, dithers: 0, start_ms: base.dusk_ms!, end_ms: base.dusk_ms! + 2 * HOUR }],
+      decision: { kind: 'ranked' as const, candidates: [] },
+    };
+    return rig({
+      runtime: 'director',
+      time_zone: 'UTC',
+      schedule: {
+        runtime: 'director',
+        nights: [{ date: base.date, start_ms: base.noon_ms, end_ms: base.noon_ms + 24 * HOUR, blocks: [block], gaps: [], frames: 24, exposure_hours: 2, note: null }],
+        progress: [],
+        assumptions: { target_scheduler_version: null, fidelity: 'estimate', overheads: null, acceptance: 'plan_rate', utc_offset_minutes: -473 },
+        goals: [{ goal_id: 'e1', plan_id: 'p1', plan_name: 'Heart Nebula', target_guid: 't1', exposureplan_guid: 'e1', project_id: 7, target_id: 70, exposure_plan_id: 700, target_name: 'IC 1805', filter: 'Ha' }],
+      },
+    });
+  }
+
+  it('edits a Director night, previews the draft and saves it', async () => {
+    const director = directorRig();
+    mount(plans([director]));
+    const requests: Array<{ override_draft?: { entries: Array<{ kind: string; subject?: unknown }> } }> = [];
+    const saves: Array<{ expected_revision: number; entries: unknown[] }> = [];
+    server.use(
+      http.post('/api/director/v1/night-plans', async ({ request }) => {
+        requests.push(await request.json() as (typeof requests)[number]);
+        return HttpResponse.json(ok(plans([director])));
+      }),
+      http.get('/api/director/v1/rigs/:rig/night-overrides/:date', ({ params }) =>
+        HttpResponse.json(ok({ date: params.date, revision: 3, entries: [], runtime: 'director' }))),
+      http.put('/api/director/v1/rigs/:rig/night-overrides/:date', async ({ request, params }) => {
+        const body = await request.json() as (typeof saves)[number];
+        saves.push(body);
+        return HttpResponse.json(ok({ date: params.date, revision: 4, entries: body.entries, runtime: 'director' }));
+      }),
+    );
+    const grid = await screen.findByTestId('nights-grid');
+    fireEvent.click(within(grid).getAllByRole('button')[0]);
+    const detail = screen.getByRole('region', { name: 'Night details' });
+    const overrides = within(detail).getByRole('region', { name: 'Overrides' });
+    expect(await within(overrides).findByText('None: the rig follows its own program this night.')).toBeInTheDocument();
+    fireEvent.click(within(overrides).getByRole('button', { name: 'Edit night' }));
+    expect(within(overrides).getByText(/Times are in the site's time zone \(UTC\)/)).toBeInTheDocument();
+    fireEvent.change(within(overrides).getByLabelText('From'), { target: { value: '21:00' } });
+    fireEvent.change(within(overrides).getByLabelText('To'), { target: { value: '23:00' } });
+    fireEvent.click(within(overrides).getByRole('button', { name: 'Add' }));
+    expect(within(overrides).getByRole('listitem')).toHaveTextContent(/^Only IC 1805 from /);
+    // The schedule is planned again with the edit, unsaved.
+    await waitFor(() => expect(requests.some(r => r.override_draft?.entries[0]?.kind === 'pin')).toBe(true));
+    const drafted = requests.find(r => r.override_draft)!.override_draft!;
+    expect(drafted.entries[0].subject).toEqual({ kind: 'target', target_guid: 't1' });
+    fireEvent.click(within(overrides).getByRole('button', { name: 'Save overrides' }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0].expected_revision).toBe(3);
+    expect(saves[0].entries).toEqual(drafted.entries);
+    expect(await within(overrides).findByRole('button', { name: 'Edit night' })).toBeInTheDocument();
+  });
+
+  it('says in the grid which nights have overrides', async () => {
+    const director = directorRig();
+    mount(plans([{ ...director, nights: [night(0, { override_count: 2 }), night(1), night(2)] }]));
+    const grid = await screen.findByTestId('nights-grid');
+    const cells = within(grid).getAllByRole('button');
+    expect(cells[0]).toHaveAccessibleName(/, 2 overrides$/);
+    expect(cells[1]).not.toHaveAccessibleName(/override/);
+  });
+
+  it('shows no overrides for a Target Scheduler rig', async () => {
+    mount();
+    const grid = await screen.findByTestId('nights-grid');
+    fireEvent.click(within(grid).getAllByRole('button')[0]);
+    const detail = screen.getByRole('region', { name: 'Night details' });
+    expect(within(detail).queryByRole('region', { name: 'Overrides' })).toBeNull();
+  });
+});

@@ -20,6 +20,7 @@ pub mod framing;
 pub mod inbox;
 pub mod merge;
 pub mod night_availability;
+pub mod night_override;
 pub mod operation_inbox;
 pub mod plan;
 pub mod preferences;

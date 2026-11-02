@@ -102,6 +102,7 @@ describe('Director sites', () => {
       location: { value: { latitude_degrees: 34.2, longitude_degrees: -118.3, elevation_meters: 400 }, source: { kind: 'manual' } },
       horizon: { value: curve, source: { kind: 'manual' } },
       forecast: null,
+      time_zone: null,
     });
     expect(await within(card).findByText('Saved Backyard.')).toBeInTheDocument();
 
@@ -161,6 +162,21 @@ describe('Director sites', () => {
     expect(await within(status).findByText(/MET Norway confirmed it unchanged at .*\. Night plans use it until/)).toBeInTheDocument();
     expect(within(status).queryByRole('alert')).toBeNull();
     expect(asks).toHaveLength(1);
+  });
+
+  it('saves the site\'s time zone, or none for the browser\'s', async () => {
+    const { saves } = fixture();
+    mount();
+    fireEvent.change(await screen.findByLabelText('New site name'), { target: { value: 'Backyard' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add site' }));
+    const card = await screen.findByRole('region', { name: 'Site Backyard' });
+    const zone = await within(card).findByLabelText('Time zone');
+    expect(zone).toHaveValue('');
+    expect(zone).toHaveAccessibleDescription(/marks and overrides for rigs at this site are entered and shown in this time zone/);
+    fireEvent.change(zone, { target: { value: 'Europe/Berlin' } });
+    fireEvent.click(within(card).getByRole('button', { name: 'Save site' }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0].time_zone).toBe('Europe/Berlin');
   });
 
   it('refuses half a location before sending', async () => {

@@ -13,6 +13,7 @@ pub mod geometry;
 pub mod moon;
 pub mod night;
 pub mod optics;
+pub mod overrides;
 pub mod preparation;
 pub mod priority;
 pub mod program;

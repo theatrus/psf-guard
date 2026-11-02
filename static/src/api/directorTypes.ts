@@ -239,6 +239,8 @@ export interface DirectorSiteProfile {
   horizon: DirectorReported<DirectorHorizon> | null;
   /** Where the site takes a cloud forecast from; null takes none. */
   forecast: ForecastSettings | null;
+  /** The IANA time zone marks and overrides are entered and shown in; absent uses the browser's. */
+  time_zone?: string | null;
   updated_at_ms: number;
 }
 export interface DirectorSiteProfileView { site: DirectorIdentity; profile: DirectorSiteProfile }
@@ -248,6 +250,8 @@ export interface DirectorSiteProfileEdit {
   horizon: DirectorEdited<DirectorHorizon> | null;
   /** Left out or null, the site takes no forecast. */
   forecast?: ForecastSettings | null;
+  /** Left out or null, times use the browser's zone. */
+  time_zone?: string | null;
 }
 
 export type ForecastProvider = 'open_meteo' | 'met_norway';

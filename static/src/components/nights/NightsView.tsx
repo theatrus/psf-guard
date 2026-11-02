@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Cloud, RefreshCw } from 'lucide-react';
+import { Cloud, Pin, RefreshCw } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import type { RigNight, RigNights } from '../../api/nightPlanTypes';
 import { useAccess } from '../../auth/access';
@@ -161,11 +161,12 @@ export default function NightsView() {
               const cause = decided === 'forecast' ? ' by the forecast' : decided === 'both' ? ' by a mark and the forecast' : '';
               return <td key={date}>
                 <button type="button" className={`nights-cell is-${night.availability.state}`} aria-pressed={chosen}
-                  aria-label={`${rig.catalog_name}, ${formatNightDate(night.date)}: ${formatHours(night.available_dark_hours)} clear of ${formatHours(night.dark_hours)} dark, ${STATE_LABEL[night.availability.state].toLowerCase()}${cause}, Moon ${Math.round(night.moon_illumination * 100)}%`}
+                  aria-label={`${rig.catalog_name}, ${formatNightDate(night.date)}: ${formatHours(night.available_dark_hours)} clear of ${formatHours(night.dark_hours)} dark, ${STATE_LABEL[night.availability.state].toLowerCase()}${cause}, Moon ${Math.round(night.moon_illumination * 100)}%${night.override_count > 0 ? `, ${night.override_count} ${night.override_count === 1 ? 'override' : 'overrides'}` : ''}`}
                   onClick={event => choose(rig, night, event.shiftKey)}>
                   <span className="nights-cell-top">
                     <span className="nights-cell-hours">{formatHours(night.available_dark_hours)}</span>
                     {glyph && <span className="nights-cell-mark" aria-hidden="true">{glyph}</span>}
+                    {night.override_count > 0 && <span className="nights-cell-override" aria-hidden="true" title={`${night.override_count} ${night.override_count === 1 ? 'override' : 'overrides'} for this night`}><Pin size={12} /></span>}
                     {forecast && <span className="nights-cell-forecast" aria-hidden="true" title={`${markOrigin(forecast)}: ${STATE_LABEL[forecast.state].toLowerCase()}. ${rig.forecast?.attribution ?? ''}`}><Cloud size={12} /></span>}
                     <span className="nights-cell-moon" title={`Moon ${Math.round(night.moon_illumination * 100)}% lit, up ${formatHours(night.moon_hours_up_in_dark)} of the dark`}>☾ {Math.round(night.moon_illumination * 100)}%</span>
                   </span>

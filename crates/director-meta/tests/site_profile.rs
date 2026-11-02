@@ -126,3 +126,38 @@ fn a_rig_takes_its_own_values_first_then_its_planning_site() {
     assert_eq!(resolved.location, Some(place(40.0)));
     assert_eq!(resolved.location_from, Origin::Rig);
 }
+
+#[test]
+fn a_site_keeps_a_time_zone_shaped_like_an_iana_name() {
+    use psf_guard_director_meta::site_profile::time_zone_name;
+    for zone in [
+        "America/Los_Angeles",
+        "Etc/GMT+5",
+        "UTC",
+        "America/Argentina/Buenos_Aires",
+    ] {
+        assert!(time_zone_name(zone), "{zone}");
+    }
+    for zone in [
+        "",
+        "/UTC",
+        "Europe//Berlin",
+        "Europe/Berlin ",
+        "Mars;DROP",
+        &"A".repeat(65),
+    ] {
+        assert!(!time_zone_name(zone), "{zone:?}");
+    }
+    let dir = TempDir::new().unwrap();
+    let mut store = MetaStore::create(&dir.path().join("meta.sqlite")).unwrap();
+    let site = store.create_site(Uuid::new_v4(), "Backyard").unwrap();
+    let mut profile = SiteProfile::empty(site.id, 1_000);
+    profile.time_zone = Some("Europe/Berlin".into());
+    let saved = store.save_site_profile(&profile, 0).unwrap();
+    assert_eq!(saved.time_zone.as_deref(), Some("Europe/Berlin"));
+    profile.time_zone = Some("Berlin time".into());
+    assert!(matches!(
+        store.save_site_profile(&profile, 1),
+        Err(Error::InvalidInput)
+    ));
+}

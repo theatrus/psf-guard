@@ -51,6 +51,7 @@ pub(crate) use import_drafts::inferred_mosaic;
 mod measured;
 mod mosaic;
 mod night_availability;
+mod night_overrides;
 mod night_plans;
 pub(super) mod pairing;
 mod plan;
@@ -396,7 +397,12 @@ enum Error {
     Refused(String),
     /// The request needs more than this caller has, and what that is.
     Denied(&'static str),
+    /// The rig's mode does not take this request, and why.
+    Mode(String),
 }
+
+/// Why a Target Scheduler rig refuses overrides.
+const NOT_DIRECTOR: &str = "Overrides are for rigs Director drives. This rig runs Target Scheduler: change its plans' priority, limits or rule weights in Target Scheduler.";
 
 impl From<StoreError> for Error {
     fn from(error: StoreError) -> Self {
@@ -439,6 +445,7 @@ impl IntoResponse for Error {
     fn into_response(self) -> Response {
         let (status, message) = match self {
             Self::Refused(reason) => (StatusCode::UNPROCESSABLE_ENTITY, reason),
+            Self::Mode(reason) => (StatusCode::CONFLICT, reason),
             Self::Denied(reason) => (StatusCode::FORBIDDEN, reason.to_owned()),
             other => {
                 let (status, message) = match other {
@@ -461,7 +468,7 @@ impl IntoResponse for Error {
                         StatusCode::SERVICE_UNAVAILABLE,
                         "Director metadata is busy; retry shortly",
                     ),
-                    Self::Internal | Self::Refused(_) | Self::Denied(_) => (
+                    Self::Internal | Self::Refused(_) | Self::Denied(_) | Self::Mode(_) => (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         "Director metadata operation failed; see server logs",
                     ),
@@ -788,6 +795,7 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
         .merge(site_profile::routes())
         .merge(site_forecast::routes())
         .merge(night_availability::routes())
+        .merge(night_overrides::routes())
         .merge(preferences::routes())
         .merge(rig_scheduling::routes())
         .merge(templates::routes())

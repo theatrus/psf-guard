@@ -21,6 +21,7 @@ use psf_guard_director_core::{
     visibility::{AltitudeLimits, Horizon, IcrsPosition, Site},
     windows::Interval,
 };
+use psf_guard_director_meta::night_override::{check, NightOverride};
 use psf_guard_director_meta::{
     preferences::SchedulingValues,
     profile::{Limits, RigProfile},
@@ -28,6 +29,7 @@ use psf_guard_director_meta::{
     site_profile::RigSite,
 };
 use psf_guard_ts_planner::snapshot::{Project, ProjectPriority, ProjectState, Snapshot};
+use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const DEFAULT_NIGHTS: u32 = 7;
@@ -81,6 +83,47 @@ pub(super) struct Request {
     /// `start_ms` only chooses the first night.
     #[serde(default)]
     plan_from_ms: Option<u64>,
+    /// An unsaved edit of one Director rig's overrides for one night,
+    /// planned in place of the night's stored list. Nothing is stored.
+    #[serde(default)]
+    override_draft: Option<OverrideDraft>,
+}
+
+#[derive(Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub(super) struct OverrideDraft {
+    rig: Uuid,
+    date: NightDate,
+    entries: Vec<NightOverride>,
+}
+
+/// A night's overrides as a schedule applied them.
+#[derive(Clone, Serialize)]
+struct AppliedOverrides {
+    /// The stored list's revision; `None` for an unsaved draft.
+    revision: Option<u64>,
+    entries: Vec<NightOverride>,
+    /// Whether this is the request's unsaved draft rather than the stored
+    /// list.
+    draft: bool,
+}
+
+/// A goal of a Director schedule, by the ids its blocks use and the GUIDs
+/// an override names it by.
+#[derive(Serialize)]
+struct DirectorGoal {
+    goal_id: String,
+    /// The plan, as overrides and plan orders name it.
+    plan_id: Uuid,
+    plan_name: String,
+    target_guid: Uuid,
+    exposureplan_guid: Uuid,
+    /// The rig database's rows, as the schedule's blocks name them.
+    project_id: i64,
+    target_id: i64,
+    exposure_plan_id: i64,
+    target_name: String,
+    filter: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
@@ -166,6 +209,9 @@ struct RigNights {
     mark_revisions: MarkRevisions,
     /// The cloud forecast the rig's planning site takes, if it takes one.
     forecast: Option<RigForecast>,
+    /// The planning site's IANA time zone, in which marks and overrides are
+    /// entered and shown; `None` uses the browser's.
+    time_zone: Option<String>,
     warnings: Vec<String>,
     /// Every project of the planned profile, owed or not, for projections.
     #[serde(skip)]
@@ -198,6 +244,10 @@ struct ScheduleView {
     /// it completes.
     progress: Vec<psf_guard_ts_planner::PlanProgress>,
     assumptions: ScheduleAssumptions,
+    /// A Director schedule's goals, so an override can name what a block
+    /// runs. Empty for Target Scheduler.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    goals: Vec<DirectorGoal>,
 }
 
 #[derive(Serialize)]
@@ -205,6 +255,9 @@ struct ScheduledNight {
     date: NightDate,
     #[serde(flatten)]
     schedule: psf_guard_ts_planner::NightSchedule,
+    /// The Director rig's overrides the night was planned with.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    overrides: Option<AppliedOverrides>,
 }
 
 #[derive(Serialize)]
@@ -275,6 +328,9 @@ struct RigNight {
     load: Load,
     /// The forecast's cloud cover through the night; empty without one.
     clouds: Vec<ForecastHour>,
+    /// How many overrides a Director rig has for the night; 0 on any other
+    /// rig.
+    override_count: usize,
 }
 
 #[derive(Serialize)]
@@ -356,7 +412,28 @@ struct RigInput {
     dates: Vec<NightDate>,
     /// The marks and forecast the nights are planned against.
     conditions: RigConditions,
+    /// A Director rig's overrides by night, with any draft in place of its
+    /// night's stored list.
+    overrides: BTreeMap<NightDate, AppliedOverrides>,
+    time_zone: Option<String>,
     warnings: Vec<String>,
+}
+
+/// Open question 1 of the design, until rig modes exist: a rig that
+/// reported its equipment and runs an enabled workload policy is
+/// Director's; every other rig is Target Scheduler's. Overrides follow the
+/// same rule.
+pub(super) fn runtime_of(
+    store: &MetaStore,
+    rig: Uuid,
+    profile: Option<&RigProfile>,
+) -> Result<Runtime, StoreError> {
+    Ok(match (profile, store.workload_policy(rig)?) {
+        (Some(profile), Some(policy)) if profile.configuration.is_some() && policy.enabled => {
+            Runtime::Director
+        }
+        _ => Runtime::TargetScheduler,
+    })
 }
 
 pub(super) async fn plan(
@@ -401,6 +478,7 @@ async fn compute(state: &Arc<AppState>, request: Request) -> Result<View, NightP
         ));
     }
     let first_night = request.first_night;
+    let draft = request.override_draft;
     let chosen: Option<std::collections::BTreeSet<Uuid>> = request
         .rigs
         .filter(|rigs| !rigs.is_empty())
@@ -432,6 +510,11 @@ async fn compute(state: &Arc<AppState>, request: Request) -> Result<View, NightP
                     continue;
                 }
                 let stored = store.rig_profile(rig.id)?;
+                let runtime = runtime_of(store, rig.id, stored.as_ref())?;
+                let draft = draft.as_ref().filter(|draft| draft.rig == rig.id);
+                if draft.is_some() && runtime != Runtime::Director {
+                    return Err(Error::Mode(NOT_DIRECTOR.into()).into());
+                }
                 let placed = store.rig_site(rig.id, stored.as_ref())?;
                 let Some(location) = placed.location else {
                     warnings.push(format!(
@@ -439,13 +522,6 @@ async fn compute(state: &Arc<AppState>, request: Request) -> Result<View, NightP
                         catalog.name
                     ));
                     continue;
-                };
-                // Open question 1 of the design, until rig modes exist: a rig
-                // that reported its equipment and runs an enabled workload
-                // policy is Director's; every other rig is Target Scheduler's.
-                let runtime = match (&stored, store.workload_policy(rig.id)?) {
-                    (Some(profile), Some(policy)) if profile.configuration.is_some() && policy.enabled => Runtime::Director,
-                    _ => Runtime::TargetScheduler,
                 };
                 let profile = stored.unwrap_or_else(|| RigProfile::empty(rig.id, 0));
                 let rig_warnings = Vec::new();
@@ -467,6 +543,32 @@ async fn compute(state: &Arc<AppState>, request: Request) -> Result<View, NightP
                 }
                 let last = *dates.last().unwrap_or(&first);
                 let conditions = RigConditions::read(store, rig.id, &placed, first, last)?;
+                let time_zone = match &placed.site {
+                    Some(site) => store.site_profile(site.id)?.and_then(|profile| profile.time_zone),
+                    None => None,
+                };
+                let mut overrides = BTreeMap::new();
+                if runtime == Runtime::Director {
+                    for night in store.night_overrides(rig.id, first, last)? {
+                        overrides.insert(night.date, AppliedOverrides {
+                            revision: Some(night.revision),
+                            entries: night.entries,
+                            draft: false,
+                        });
+                    }
+                }
+                if let Some(draft) = draft {
+                    if !dates.contains(&draft.date) {
+                        return Err(NightPlanError::Rejected("override_draft must be for one of the nights planned.".into()));
+                    }
+                    check(&draft.entries, draft.date.span(location.longitude_degrees))
+                        .map_err(|refusal| Error::Refused(refusal.to_string()))?;
+                    overrides.insert(draft.date, AppliedOverrides {
+                        revision: None,
+                        entries: draft.entries.clone(),
+                        draft: true,
+                    });
+                }
                 inputs.push(RigInput {
                     schedule: options,
                     director,
@@ -481,9 +583,16 @@ async fn compute(state: &Arc<AppState>, request: Request) -> Result<View, NightP
                     snapshot: None,
                     dates,
                     conditions,
+                    overrides,
+                    time_zone,
                     warnings: rig_warnings,
                     rig,
                 });
+            }
+            if draft.as_ref().is_some_and(|draft| !inputs.iter().any(|input: &RigInput| input.rig.id == draft.rig)) {
+                return Err(NightPlanError::Rejected(
+                    "override_draft must be for a rig the request plans, with a site location.".into(),
+                ));
             }
             if let Some(chosen) = &chosen {
                 for missing in chosen.iter().filter(|rig| !seen.contains(rig)) {
@@ -586,6 +695,8 @@ fn rig_nights(input: RigInput, nights: u32) -> Result<RigNights, String> {
         snapshot,
         dates,
         conditions,
+        overrides,
+        time_zone,
         mut warnings,
     } = input;
     let location = placed
@@ -833,6 +944,10 @@ fn rig_nights(input: RigInput, nights: u32) -> Result<RigNights, String> {
                 overbooked_hours: (demand_hours - available_hours).max(0.0),
             },
             clouds,
+            override_count: overrides
+                .get(date)
+                .filter(|applied| !applied.draft)
+                .map_or(0, |applied| applied.entries.len()),
         });
     }
     let schedule = if options.nights == 0 {
@@ -866,6 +981,7 @@ fn rig_nights(input: RigInput, nights: u32) -> Result<RigNights, String> {
                     &dates[..options.nights as usize],
                     &out[..options.nights as usize],
                     available.as_deref(),
+                    &overrides,
                     options.plan_from_ms,
                     options,
                 ) {
@@ -905,6 +1021,7 @@ fn rig_nights(input: RigInput, nights: u32) -> Result<RigNights, String> {
             site: conditions.site_revision,
         },
         forecast,
+        time_zone,
         warnings,
         projects,
     })
@@ -970,11 +1087,13 @@ fn target_scheduler_schedule(
             ScheduledNight {
                 date: *date,
                 schedule,
+                overrides: None,
             }
         })
         .collect();
     ScheduleView {
         runtime: Runtime::TargetScheduler,
+        goals: Vec::new(),
         nights,
         progress: simulation.progress,
         assumptions: ScheduleAssumptions {
@@ -1040,6 +1159,7 @@ fn director_schedule(
     dates: &[NightDate],
     summaries: &[RigNight],
     available: Option<&[Interval]>,
+    overrides: &BTreeMap<NightDate, AppliedOverrides>,
     start_ms: u64,
     options: ScheduleOptions,
 ) -> Result<ScheduleView, String> {
@@ -1138,6 +1258,7 @@ fn director_schedule(
     let mut acceptance = BTreeMap::new();
     let rates = snapshot.map(acceptance_rates).unwrap_or_default();
     let mut references: BTreeMap<String, (TargetRef, i64, Option<String>)> = BTreeMap::new();
+    let mut goals = Vec::new();
     for link in gathered.goal_links() {
         let project = rows
             .as_ref()
@@ -1155,20 +1276,46 @@ fn director_schedule(
         {
             acceptance.insert(link.goal_id.to_owned(), *rate);
         }
+        let reference = TargetRef {
+            project_id: project.as_ref().map_or(0, |p| p.0),
+            project_name: project.map_or_else(|| link.project_name.to_owned(), |p| p.1),
+            target_id: target.as_ref().map_or(0, |t| t.0),
+            target_name: target.map_or_else(|| link.target_guid.to_string(), |t| t.1),
+        };
+        goals.push(DirectorGoal {
+            goal_id: link.goal_id.to_owned(),
+            plan_id: link.project_id,
+            plan_name: link.project_name.to_owned(),
+            target_guid: link.target_guid,
+            exposureplan_guid: link.exposureplan_guid,
+            project_id: reference.project_id,
+            target_id: reference.target_id,
+            exposure_plan_id: plan.map_or(0, |p| p.0),
+            target_name: reference.target_name.clone(),
+            filter: plan.and_then(|p| p.1.clone()),
+        });
         references.insert(
             link.goal_id.to_owned(),
             (
-                TargetRef {
-                    project_id: project.as_ref().map_or(0, |p| p.0),
-                    project_name: project.map_or_else(|| link.project_name.to_owned(), |p| p.1),
-                    target_id: target.as_ref().map_or(0, |t| t.0),
-                    target_name: target.map_or_else(|| link.target_guid.to_string(), |t| t.1),
-                },
+                reference,
                 plan.map_or(0, |p| p.0),
                 plan.and_then(|p| p.1.clone()),
             ),
         );
     }
+    let narrowings = dates
+        .iter()
+        .zip(&nights)
+        .map(|(date, night)| {
+            overrides
+                .get(date)
+                .map(|applied| gathered.narrowing(&applied.entries, night.span))
+                .transpose()
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| {
+            "No Director schedule: the night's overrides could not be applied.".to_string()
+        })?;
     let overheads = Overheads::default();
     let schedule = simulate(&ScheduleRequest {
         program: &program,
@@ -1178,6 +1325,7 @@ fn director_schedule(
         available,
         overheads,
         acceptance: &acceptance,
+        narrowings: &narrowings,
     })
     .map_err(|error| {
         format!("No Director schedule: the program did not bind for these nights ({error:?}).")
@@ -1251,6 +1399,8 @@ fn director_schedule(
                     CoreGap::BelowLimits => GapReason::BelowLimits,
                     CoreGap::Complete => GapReason::Complete,
                     CoreGap::NothingEligible => GapReason::NothingEligible,
+                    CoreGap::Held => GapReason::Held,
+                    CoreGap::Excluded => GapReason::Excluded,
                 },
                 waiting_for: None,
             })
@@ -1266,6 +1416,7 @@ fn director_schedule(
                 exposure_hours: hours,
                 note: None,
             },
+            overrides: overrides.get(date).cloned(),
         });
     }
     let progress = schedule
@@ -1289,6 +1440,7 @@ fn director_schedule(
         .collect();
     Ok(ScheduleView {
         runtime: Runtime::Director,
+        goals,
         nights: scheduled,
         progress,
         assumptions: ScheduleAssumptions {
@@ -1743,6 +1895,7 @@ mod tests {
                 exposure_hours: 0.0,
                 note: None,
             },
+            overrides: None,
         }
     }
 

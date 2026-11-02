@@ -69,7 +69,13 @@ interface SiteForm {
   name: string; latitude: string; longitude: string; elevation: string; horizon: DirectorHorizon | null;
   forecast: ForecastProvider | 'off';
   threshold: string;
+  /** An IANA zone, or empty for the browser's. */
+  timeZone: string;
 }
+
+/** Every zone the browser knows, for the site's clock. */
+const ZONES: string[] = typeof Intl.supportedValuesOf === 'function' ? Intl.supportedValuesOf('timeZone') : [];
+const BROWSER_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 /** What each provider offers, for the choice. */
 const PROVIDER_HELP: Record<ForecastProvider, string> = {
@@ -90,6 +96,7 @@ function formFrom(view: DirectorSiteProfileView): SiteForm {
     name: view.site.name, latitude: text(location?.latitude_degrees), longitude: text(location?.longitude_degrees), elevation: text(location?.elevation_meters), horizon: view.profile.horizon?.value ?? null,
     forecast: forecast?.provider ?? 'off',
     threshold: String(forecast?.cloud_threshold_percent ?? DEFAULT_CLOUD_THRESHOLD),
+    timeZone: view.profile.time_zone ?? '',
   };
 }
 
@@ -123,6 +130,7 @@ function SiteProfileCard({ site }: { site: DirectorIdentity }) {
         location: located ? { value: { latitude_degrees: lat, longitude_degrees: lon, elevation_meters: elev ?? 0 }, source: manual } : null,
         horizon: next.horizon ? { value: next.horizon, source: stored.horizon && stored.horizon.value === next.horizon ? stored.horizon.source : manual } : null,
         forecast: next.forecast === 'off' ? null : { provider: next.forecast, cloud_threshold_percent: Number(next.threshold) },
+        time_zone: next.timeZone || null,
       });
       return { ...saved, site: identity };
     },
@@ -184,7 +192,15 @@ function SiteProfileCard({ site }: { site: DirectorIdentity }) {
           {field('latitude', 'Latitude', '°')}
           {field('longitude', 'Longitude (east +)', '°')}
           {field('elevation', 'Elevation', 'm')}
+          <label className="rig-profile-field" htmlFor={`${site.id}-zone`}><span>Time zone</span>
+            <span className="rig-profile-input"><select id={`${site.id}-zone`} aria-label="Time zone" aria-describedby={`${site.id}-zone-help`} value={form.timeZone} onChange={event => update({ timeZone: event.target.value })}>
+              <option value="">This browser's ({BROWSER_ZONE})</option>
+              {form.timeZone && !ZONES.includes(form.timeZone) && <option value={form.timeZone}>{form.timeZone}</option>}
+              {ZONES.map(zone => <option key={zone} value={zone}>{zone}</option>)}
+            </select></span>
+          </label>
         </div>
+        <p id={`${site.id}-zone-help`} className="director-muted">Night marks and overrides for rigs at this site are entered and shown in this time zone. Nights still run from noon to noon at the site's longitude.</p>
         {data.profile.location && <p className="director-muted">{describeSource(data.profile.location.source, data.profile.location.reported_at_ms)}</p>}
       </fieldset>
       <fieldset disabled={disabled}>

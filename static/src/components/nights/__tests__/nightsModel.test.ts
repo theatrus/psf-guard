@@ -159,3 +159,18 @@ describe('night plan helpers', () => {
     expect(completesOn([entry(null, true)])).toBe(-1);
   });
 });
+
+describe('clocks in a site time zone', () => {
+  it('reads and shows times on the site clock, across a change to standard time', async () => {
+    const { clockOnNight, clockValue } = await import('../nightsModel');
+    // 1 November 2026: Los Angeles leaves daylight time at 02:00, so the
+    // evening and the small hours after it are both eight hours behind UTC.
+    expect(clockOnNight('2026-11-01', '21:00', 'America/Los_Angeles')).toBe(Date.UTC(2026, 10, 2, 5, 0));
+    expect(clockOnNight('2026-11-01', '01:30', 'America/Los_Angeles')).toBe(Date.UTC(2026, 10, 2, 9, 30));
+    // The evening before the change is still seven hours behind.
+    expect(clockOnNight('2026-10-31', '21:00', 'America/Los_Angeles')).toBe(Date.UTC(2026, 10, 1, 4, 0));
+    expect(clockOnNight('2026-07-01', '22:15', 'Europe/Berlin')).toBe(Date.UTC(2026, 6, 1, 20, 15));
+    expect(clockValue(Date.UTC(2026, 10, 2, 9, 30), 'America/Los_Angeles')).toBe('01:30');
+    expect(clockValue(Date.UTC(2026, 6, 1, 20, 15), 'Europe/Berlin')).toBe('22:15');
+  });
+});

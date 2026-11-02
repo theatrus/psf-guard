@@ -43,6 +43,17 @@
   shows each hour's cloud cover. Forecasts are off by default: PSF Guard
   sends a site's location, rounded to about 1 km, only after an editor
   turns its forecast on. See [Cloud forecasts](../DIRECTOR.md#cloud-forecasts).
+- On a rig Director drives, a night's panel under **Rigs › Nights** can
+  override the night: **Pin** a stretch to one plan, target or exposure
+  plan, **Leave out** one, **Hold** the rig from a time, or set the night's
+  **Plan order**. Drag a block on the timeline, or move it with the arrow
+  keys, to pin it to a new time. The schedule shows each edit before it is
+  saved, and a session already running takes saved overrides at its next
+  check-in. Overrides only narrow the program the rig pulls, and lapse when
+  the night ends. A rig Target Scheduler runs refuses them. A site's new
+  **Time zone** under **Settings › Presets › Sites** sets the clock marks
+  and overrides are entered and shown in. See
+  [Override a Director rig's night](../DIRECTOR.md#override-a-director-rigs-night).
 - **Visibility** in a plan's workspace estimates the nights a rig needs
   with the marks and the forecast counted, and shows each night's clear
   hours and marks. Once the plan is activated on a rig, it also shows the

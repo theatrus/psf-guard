@@ -1001,6 +1001,11 @@ from. Feasibility, the visibility chart and the program sent to the plugin all
 use this resolved location and horizon; without one, a rig has no location
 and the horizon is flat at its minimum altitude.
 
+A site's **Time zone** is the clock its rigs' night marks and overrides are
+entered and shown in, such as America/Los_Angeles. Left at the browser's,
+each browser shows its own. Nights still run from noon to noon at the
+site's longitude, whatever the zone.
+
 A horizon is a N.I.N.A. `.hrz` file: one `azimuth altitude` pair per line in
 degrees, `#` for comments. Paste it or upload it, and download it back as a
 `.hrz` for N.I.N.A. The server reads the file, sorts the points, and closes
@@ -1915,6 +1920,7 @@ Each cell is one rig's night, from dusk to dawn:
 - the clear dark hours, and a bar from dusk to dawn with the clear part
   filled in;
 - the night's mark: ✕ not available, ◐ limited, ✓ marked clear;
+- a pin on a Director rig's night that has overrides;
 - the Moon, lit percentage;
 - a dot for each plan the rig would shoot that night, in that plan's colour;
 - the hours it would shoot, or **all done** once every plan has its frames.
@@ -1935,8 +1941,9 @@ Choose a cell to open the night below the grid:
 - **The schedule** from the runtime that drives the rig: a timeline from an
   hour before dusk to an hour after dawn, with a block for each stretch on
   a target and its filter runs inside. Gaps are shaded by their reason:
-  twilight, not available, Moon, meridian, below limits, all done, or
-  nothing fits. Choose a block to see why that target was chosen.
+  twilight, not available, Moon, meridian, below limits, all done, nothing
+  fits, or, on a Director rig, held or left out by the night's overrides.
+  Choose a block to see why that target was chosen.
 - **The plans this night**: only the targets the night applies to. The
   table lists first the targets the schedule above plans, in its order,
   with the frames planned. Then it lists the targets that are up and clear
@@ -2000,8 +2007,9 @@ With editor access, the night's panel ends with **Mark this night**:
 1. Choose **Available**, **Not available**, or **Limited** with the hours
    that are clear. Leave **From** empty to start at dusk or **To** empty to
    end at dawn; times after midnight fall the next morning. The times are
-   in your browser's time zone, which the form names: for a rig in another
-   zone, enter its hours as your clock shows them.
+   in the site's time zone when its **Time zone** is set under **Settings →
+   Presets → Sites**, and in your browser's otherwise; the form names the
+   zone.
 2. Under **For**, choose **This rig only** for the rig (maintenance, a camera
    away) or **Every rig at** the rig's planning site for the sky (clouds).
 3. Add a note if you like, such as "dome motor" or "high cirrus", and click
@@ -2017,6 +2025,53 @@ time that is not clear.
 Marks change night plans only. They never start, stop or block a rig, and
 never reach a program, the plugin, Target Scheduler or N.I.N.A.: the rig's
 safety monitor and N.I.N.A. still decide on the night.
+
+### Override a Director rig's night
+
+On a rig Director drives, the night's panel lists the night's
+**Overrides**. With editor access, **Edit night** opens them. Four kinds
+narrow the program the rig pulls for that night:
+
+- **Pin**: between **From** and **To**, only the chosen plan, target or
+  exposure plan may run. If the sky or the Moon rules it out there, the rig
+  stays idle in that window, and the editor says so.
+- **Leave out**: the chosen plan, target or exposure plan gets no time
+  between **From** and **To**, or all night when both are empty.
+- **Hold**: the rig takes no more work from **From**, or all night when
+  **From** is empty.
+- **Plan order**: the night's plans in the order listed, in place of the
+  rig's own.
+
+The schedule above shows the edit before it is saved, with a row above the
+timeline marking the pinned, left-out and held stretches. Drag a block
+along the timeline, or select it and press the left or right arrow key to
+move it 15 minutes at a time: the move pins the block's target to its new
+time and leaves the target out of the stretch it moved from. Moving the
+same block again replaces that pin. **Save overrides** keeps the edit and
+**Discard** drops it; saving an empty list returns the night to the rig's
+own program.
+
+![A Director rig's night with a pinned stretch and a hold, edited before it is saved](images/nights-overrides.png)
+
+Tonight's panel adds **Hold from now**, and **Next hour to** with a target,
+which pins the next hour to it. A session already running takes saved
+overrides at its next check-in: it finishes the exposure under way, then
+follows the new program.
+
+Overrides only take time away. In the program the rig pulls they narrow
+each goal's windows, and a plan order sets the goals' priorities; the rig's
+own geometry still applies its altitude, meridian and Moon limits on top.
+An override never widens what a goal may do, extends an allocation or
+relaxes a limit, and one that names a plan, target or exposure plan the
+rig has no work for takes nothing. A night's overrides lapse when the
+night ends, at noon. While a night ahead of the program's end has a plan
+order, the program the rig pulls ends with the night under way, so the
+next pull takes the next night's order or the rig's own.
+
+A rig Target Scheduler runs refuses overrides: change its plans' priority,
+limits or rule weights in Target Scheduler instead. Until rig modes exist,
+a rig counts as Director's once it has reported its equipment and runs an
+enabled workload policy. Override times use the same time zone as marks.
 
 ### Cloud forecasts
 
@@ -2087,10 +2142,14 @@ schedule on the **Nights** tab.
 
 | Method | Route | Body or query |
 | --- | --- | --- |
-| POST | `/night-plans` | Optional `rigs` (ids; none is every rig with a site), `first_night` (`YYYY-MM-DD`: the same first night at every rig), `start_ms` (without `first_night`, each rig's first night is the one under way there at this instant; default now), `nights` (1 to 31, default 7), `schedule_nights` (how many nights from the first to schedule, default 0), `explain` (a scheduled night, `YYYY-MM-DD`, whose blocks list every candidate and its scores), `runtime` (`auto`, `target_scheduler` or `director`; `auto` is the rig's own), `fidelity` (`estimate` or `target_scheduler_preview`), `utc_offset_minutes` (the clock the Target Scheduler emulation plans by; default local mean time) and `plan_from_ms` (schedules plan nothing before it; default now). Per rig: the runtime, the plans it owes with their limits, `nights` (darkness, clear hours, marks, Moon, each target's hours and the load), `schedule` (blocks, gaps, frames per plan and the night each completes, and the assumptions), `mark_revisions` and `warnings`. Writes nothing. A read-only account that may run calculations can call it. |
+| POST | `/night-plans` | Optional `rigs` (ids; none is every rig with a site), `first_night` (`YYYY-MM-DD`: the same first night at every rig), `start_ms` (without `first_night`, each rig's first night is the one under way there at this instant; default now), `nights` (1 to 31, default 7), `schedule_nights` (how many nights from the first to schedule, default 0), `explain` (a scheduled night, `YYYY-MM-DD`, whose blocks list every candidate and its scores), `runtime` (`auto`, `target_scheduler` or `director`; `auto` is the rig's own), `fidelity` (`estimate` or `target_scheduler_preview`), `utc_offset_minutes` (the clock the Target Scheduler emulation plans by; default local mean time), `plan_from_ms` (schedules plan nothing before it; default now) and `override_draft` (`rig`, `date` and `entries`: an unsaved list of one Director rig's overrides for one planned night, planned in place of the stored list; `409` for a Target Scheduler rig, `422` for entries the night refuses). Per rig: the runtime, the plans it owes with their limits, `nights` (darkness, clear hours, marks, Moon, each target's hours, the load and `override_count`), `schedule` (blocks, gaps, frames per plan and the night each completes, the assumptions, each night's `overrides` and, for Director, `goals` with the GUIDs overrides name), `time_zone` (the planning site's), `mark_revisions` and `warnings`. Writes nothing. A read-only account that may run calculations can call it. |
 | GET | `/night-availability` | `scope` (`site` or `rig`), `id`, `from` and `to` (`YYYY-MM-DD`). The scope's marks and the `revision` to send back with a change. |
 | PUT | `/night-availability/{scope}/{id}` | `expected_revision` and `marks`: up to 62 nights, each a `date`, a `state` (`available`, `unavailable` or `limited`), `windows` (for `limited`: UTC instants inside that night's noon-to-noon span) and an optional `note`. Replaces those nights' marks in one transaction. `409` on a stale revision; `422` for hours outside the night or a scope with no location. |
 | DELETE | `/night-availability/{scope}/{id}` | `expected_revision` and `dates`: returns those nights to the default. |
+| GET | `/rigs/{rig}/night-overrides` | `from` and `to` (`YYYY-MM-DD`). The rig's `runtime` and each night in the range with overrides. |
+| GET | `/rigs/{rig}/night-overrides/{date}` | One night's `entries`, its `revision` (0 while it has none) and the rig's `runtime`. |
+| PUT | `/rigs/{rig}/night-overrides/{date}` | `expected_revision` and `entries`, up to 32: `{"kind":"pin","subject":…,"window":{…}}`, `{"kind":"exclude","subject":…,"window":{…}}` (no `window` for the whole night), `{"kind":"hold","from_ms":…}` (no `from_ms` for the whole night) and `{"kind":"order","plans":[…]}`. A `subject` is `{"kind":"plan","plan_id":…}`, `{"kind":"target","target_guid":…}` or `{"kind":"exposure_plan","exposureplan_guid":…}`. Replaces the night's list; an empty list clears it. `409` on a stale revision or for a rig Target Scheduler runs; `422` for windows outside the night's noon-to-noon span, overlapping pins, a second order or hold, a night that has ended or a rig with no location. Editors only. |
+| DELETE | `/rigs/{rig}/night-overrides/{date}` | `expected_revision`: returns the night to the rig's own program. Editors only. |
 | GET | `/sites/{site}/forecast` | The site's forecast `settings` (`provider`: `open_meteo` or `met_norway`, and `cloud_threshold_percent`), the provider's `attribution`, the stored `forecast` (each hour's total, low, mid and high cloud cover), whether night plans use it now (`fresh`), the last request's `status` (time, error and failures in a row) and `next_refresh_ms`. |
 | POST | `/sites/{site}/forecast/refresh` | Requests the site's forecast now and returns the same view; a failed request returns the view with the error in `status`. `422` when forecasts are off, the site has no location, another refresh is running, within 2 minutes of the last forecast or a minute of a failed request, or before the provider's `Expires` or `Retry-After` time; the error says how long to wait. Editors only. |
 

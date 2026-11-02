@@ -20,6 +20,12 @@
   --nights-gap-below: rgb(169 180 196 / 22%);
   --nights-gap-complete: rgb(139 209 124 / 25%);
   --nights-gap-nothing: rgb(169 180 196 / 12%);
+  --nights-gap-held: rgb(150 150 170 / 40%);
+  --nights-gap-excluded: rgb(229 140 255 / 16%);
+  /* A Director rig's overrides, above its schedule. */
+  --nights-pin: rgb(90 180 255 / 85%);
+  --nights-exclude: rgb(229 140 255 / 50%);
+  --nights-hold: rgb(150 150 170 / 55%);
   --nights-track: rgb(255 255 255 / 4%);
   /* A forecast hour's cloud, its opacity the cover; hours over the site's
      threshold are edged. */
@@ -96,6 +102,7 @@
 .nights-cell-mark { color: var(--color-text-secondary); }
 .nights-cell-moon { margin-left: auto; color: var(--color-text-muted); font-size: 11px; }
 .nights-cell-forecast { display: inline-flex; color: var(--color-text-secondary); }
+.nights-cell-override { display: inline-flex; color: var(--nights-pin); }
 /* Dusk to dawn: the dark night, with the clear part filled in. */
 .nights-cell-bar {
   position: relative;
@@ -173,6 +180,27 @@
 .nights-gap[data-reason='below_limits'], .nights-gap-key[data-reason='below_limits'] { background: var(--nights-gap-below); }
 .nights-gap[data-reason='complete'], .nights-gap-key[data-reason='complete'] { background: var(--nights-gap-complete); }
 .nights-gap[data-reason='nothing_eligible'], .nights-gap-key[data-reason='nothing_eligible'] { background: var(--nights-gap-nothing); }
+.nights-gap[data-reason='held'], .nights-gap-key[data-reason='held'] {
+  background: repeating-linear-gradient(45deg, var(--nights-gap-held) 0 4px, transparent 4px 8px);
+}
+.nights-gap[data-reason='excluded'], .nights-gap-key[data-reason='excluded'] { background: var(--nights-gap-excluded); }
+.nights-overrides { position: relative; height: 16px; margin-bottom: 4px; }
+.nights-override {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  padding: 0 4px;
+  overflow: hidden;
+  white-space: nowrap;
+  border-radius: 3px;
+  font-size: 10px;
+  color: var(--color-text-secondary);
+}
+.nights-override[data-kind='pin'] { border: 1px solid var(--nights-pin); background: color-mix(in srgb, var(--nights-pin) 15%, transparent); }
+.nights-override[data-kind='exclude'] { background: repeating-linear-gradient(135deg, var(--nights-exclude) 0 4px, transparent 4px 8px); }
+.nights-override[data-kind='hold'] { background: var(--nights-hold); }
 .nights-page .nights-block {
   --block-colour: var(--nights-plan-0);
   position: absolute;
@@ -202,6 +230,7 @@
 .nights-page .nights-timeline .nights-block:hover:not(:disabled) { background: var(--block-colour); border-color: var(--state-on-border); }
 .nights-page .nights-block[aria-pressed='true'] { outline: 2px solid var(--state-on-border); outline-offset: 1px; }
 .nights-page .nights-block:focus-visible { outline: 2px solid var(--state-focus-border); }
+.nights-page .nights-block[data-movable='true'] { cursor: grab; touch-action: none; }
 .nights-run {
   display: flex;
   align-items: center;
@@ -232,3 +261,8 @@
 .nights-other-plans { margin: 6px 0; font-size: 13px; }
 .nights-other-plans summary { cursor: pointer; color: var(--color-text-secondary); }
 .nights-other-plans ul { margin: 4px 0; padding-left: 18px; }
+
+.nights-override-editor { margin: 12px 0; }
+.nights-override-list { list-style: none; margin: 4px 0; padding: 0; display: grid; gap: 4px; }
+.nights-override-list li, .nights-order li { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.nights-order { margin: 4px 0; padding-left: 20px; display: grid; gap: 4px; }

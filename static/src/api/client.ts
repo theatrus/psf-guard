@@ -10,7 +10,7 @@ import type {
   BackupsOverview,
 } from './backupTypes';
 import { getServerUrl } from '../utils/tauri';
-import type { NightMarkEdit, NightMarks, NightMarkScope, NightPlans, NightPlansRequest } from './nightPlanTypes';
+import type { NightMarkEdit, NightMarks, NightMarkScope, NightOverride, NightOverridesNight, NightPlans, NightPlansRequest } from './nightPlanTypes';
 import type { OverlaySolution } from '@seiza/astro-overlay';
 import type { PixelRect, PixelWindow } from '../utils/pixelWindow';
 import { BUILD_HEADER, noteServerBuild } from '../updates/pageBuild';
@@ -855,6 +855,27 @@ export const apiClient = {
     const api = await getApi();
     const { data } = await api.delete<ApiResponse<{ revision: number }>>(`/director/v1/night-availability/${scope}/${encodeURIComponent(id)}`, { data: { expected_revision, dates } });
     if (!data.data) throw new Error(data.error || 'The marks could not be cleared');
+    return data.data;
+  },
+
+  getNightOverrides: async (rig: string, date: string): Promise<NightOverridesNight> => {
+    const api = await getApi();
+    const { data } = await api.get<ApiResponse<NightOverridesNight>>(`/director/v1/rigs/${encodeURIComponent(rig)}/night-overrides/${encodeURIComponent(date)}`);
+    if (!data.data) throw new Error(data.error || "The night's overrides could not be loaded");
+    return data.data;
+  },
+
+  saveNightOverrides: async (rig: string, date: string, expected_revision: number, entries: NightOverride[]): Promise<NightOverridesNight> => {
+    const api = await getApi();
+    const { data } = await api.put<ApiResponse<NightOverridesNight>>(`/director/v1/rigs/${encodeURIComponent(rig)}/night-overrides/${encodeURIComponent(date)}`, { expected_revision, entries });
+    if (!data.data) throw new Error(data.error || 'The overrides could not be saved');
+    return data.data;
+  },
+
+  clearNightOverrides: async (rig: string, date: string, expected_revision: number): Promise<NightOverridesNight> => {
+    const api = await getApi();
+    const { data } = await api.delete<ApiResponse<NightOverridesNight>>(`/director/v1/rigs/${encodeURIComponent(rig)}/night-overrides/${encodeURIComponent(date)}`, { data: { expected_revision } });
+    if (!data.data) throw new Error(data.error || 'The overrides could not be cleared');
     return data.data;
   },
 

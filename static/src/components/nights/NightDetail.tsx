@@ -2,14 +2,17 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { X } from 'lucide-react';
 import { apiClient } from '../../api/client';
-import type { NightAvailabilityState, NightMarkEdit, NightMarkScope, NightRuntime, RigNight, RigNights, ScheduleFidelity, ScheduleRuntimeChoice } from '../../api/nightPlanTypes';
+import type { NightAvailabilityState, NightMarkEdit, NightMarkScope, NightOverride, NightRuntime, RigNight, RigNights, ScheduleBlock, ScheduleFidelity, ScheduleRuntimeChoice } from '../../api/nightPlanTypes';
 import { formatHours } from '../director/visibilityFormat';
 import { httpStatus } from '../../utils/httpStatus';
 import { retryWhenBusy } from '../director/retry';
 import { describeNow } from '../director/dashboardModel';
 import { useDirectorClock } from '../../hooks/useDirectorClock';
 import NightTimeline from './NightTimeline';
+import OverrideEditor from './OverrideEditor';
+import { moveBlock, overrideBands, subjectKey } from './overridesModel';
 import {
+  BROWSER_ZONE,
   RUNTIME_LABEL,
   STATE_LABEL,
   clockValue,
@@ -25,6 +28,12 @@ import {
   type PlanRow,
 } from './nightsModel';
 import { PROVIDER_LABEL, PROVIDER_URL } from '../director/forecastLabels';
+
+/** A time on the rig's site clock, or the browser's when the site names no
+ *  time zone. */
+function siteClock(rig: RigNights, ms: number): string {
+  return formatClock(ms, rig.time_zone ?? undefined);
+}
 
 interface Props {
   rig: RigNights;
@@ -43,7 +52,13 @@ interface Props {
 export default function NightDetail({ rig, nights, colours, canMark, range, onClose }: Props) {
   const first = nights[0];
   const single = nights.length === 1;
-  const schedule = useNightSchedule(rig, first, range, single);
+  // An open edit of the night's overrides belongs to its rig and night.
+  const [edit, setEdit] = useState<{ key: string; entries: NightOverride[] } | null>(null);
+  const editKey = `${rig.rig.id}:${first.date}`;
+  const draft = edit?.key === editKey ? edit.entries : null;
+  const setDraft = (entries: NightOverride[] | null) => setEdit(entries === null ? null : { key: editKey, entries });
+  const schedule = useNightSchedule(rig, first, range, single, draft);
+  const director = rig.runtime === 'director' && schedule.shown === 'director';
   return <section className="nights-detail director-records" aria-label="Night details">
     <div className="director-toolbar">
       <h3>{rig.catalog_name} · {describeDates(nights.map(night => night.date))}</h3>
@@ -52,7 +67,11 @@ export default function NightDetail({ rig, nights, colours, canMark, range, onCl
     {single ? <NightFacts rig={rig} night={first} /> : <p className="director-muted">
       {formatHours(nights.reduce((sum, night) => sum + night.available_dark_hours, 0))} clear of {formatHours(nights.reduce((sum, night) => sum + night.dark_hours, 0))} dark over these nights.
     </p>}
-    {single && <NightSchedule rig={rig} night={first} colours={colours} view={schedule} />}
+    {single && <NightSchedule rig={rig} night={first} colours={colours} view={schedule} draft={director ? draft : null} onDraft={setDraft} />}
+    {single && director && <OverrideEditor rig={rig} night={first}
+      scheduled={schedule.detail?.schedule?.nights.find(n => n.date === first.date)}
+      goals={schedule.detail?.schedule?.goals ?? []} tonight={schedule.tonight} now={schedule.now}
+      canEdit={canMark} draft={draft} onDraft={setDraft} />}
     {single && <PlanHours rig={rig} night={first} colours={colours} view={schedule} />}
     {rig.warnings.map(warning => <p key={warning} className="director-muted" role="note">{warning}</p>)}
     {canMark && <MarkEditor rig={rig} nights={nights} />}
@@ -62,7 +81,7 @@ export default function NightDetail({ rig, nights, colours, canMark, range, onCl
 /** The schedule shown for a night: from the runtime that drives the rig,
  *  or the other one to compare, counted as a live run or as Target
  *  Scheduler's preview. The timeline and the plan table both read it. */
-function useNightSchedule(rig: RigNights, night: RigNight, range: Props['range'], enabled: boolean) {
+function useNightSchedule(rig: RigNights, night: RigNight, range: Props['range'], enabled: boolean, draft: NightOverride[] | null) {
   const [runtime, setRuntime] = useState<ScheduleRuntimeChoice>('auto');
   const [fidelity, setFidelity] = useState<ScheduleFidelity>('estimate');
   const index = rig.nights.findIndex(n => n.date === night.date);
@@ -70,8 +89,10 @@ function useNightSchedule(rig: RigNights, night: RigNight, range: Props['range']
   const other: NightRuntime = rig.runtime === 'target_scheduler' ? 'director' : 'target_scheduler';
   const now = useDirectorClock();
   const tonight = isTonight(night, now);
+  // Only Director's own schedule of a Director rig takes overrides.
+  const previewed = rig.runtime === 'director' && shown === 'director' ? draft : null;
   const query = useQuery({
-    queryKey: ['nightPlanDetail', rig.rig.id, range.first, range.count, night.date, runtime, shown === 'target_scheduler' ? fidelity : 'estimate'],
+    queryKey: ['nightPlanDetail', rig.rig.id, range.first, range.count, night.date, runtime, shown === 'target_scheduler' ? fidelity : 'estimate', previewed],
     queryFn: () => apiClient.getNightPlans({
       rigs: [rig.rig.id],
       ...(range.first ? { first_night: range.first } : {}),
@@ -81,6 +102,7 @@ function useNightSchedule(rig: RigNights, night: RigNight, range: Props['range']
       runtime,
       // The preview's counting is Target Scheduler's alone.
       ...(shown === 'target_scheduler' ? { fidelity } : {}),
+      ...(previewed ? { override_draft: { rig: rig.rig.id, date: night.date, entries: previewed } } : {}),
     }),
     enabled: enabled && index >= 0,
     retry: retryWhenBusy,
@@ -89,6 +111,8 @@ function useNightSchedule(rig: RigNights, night: RigNight, range: Props['range']
     // until the page asks again or a mark changes them.
     refetchInterval: tonight ? 2 * 60_000 : false,
     refetchOnWindowFocus: false,
+    // An edit keeps its last schedule on screen while the next is planned.
+    placeholderData: previous => previous,
   });
   const detail = query.data?.rigs.find(entry => entry.rig.id === rig.rig.id);
   // The grid's schedule is the rig's own runtime, counted as a live run.
@@ -100,9 +124,37 @@ type ScheduleView = ReturnType<typeof useNightSchedule>;
 
 /** The night's schedule from the runtime that drives the rig, or the other
  *  one to compare, with the planner's reasons for each block. */
-function NightSchedule({ rig, night, colours, view }: { rig: RigNights; night: RigNight; colours: Map<string, number>; view: ScheduleView }) {
+function NightSchedule({ rig, night, colours, view, draft, onDraft }: {
+  rig: RigNights; night: RigNight; colours: Map<string, number>; view: ScheduleView;
+  /** The open edit of the night's overrides, which block moves add to. */
+  draft: NightOverride[] | null;
+  onDraft: (entries: NightOverride[]) => void;
+}) {
   const { runtime, setRuntime, fidelity, setFidelity, shown, other, now, tonight, query, detail } = view;
   const scheduled = detail?.schedule?.nights.find(n => n.date === night.date);
+  const goals = detail?.schedule?.goals ?? [];
+  const zone = rig.time_zone ?? undefined;
+  const bands = scheduled?.overrides ? overrideBands(scheduled.overrides.entries, goals, { start_ms: scheduled.start_ms, end_ms: scheduled.end_ms }, zone) : [];
+  const [moveProblem, setMoveProblem] = useState<string | null>(null);
+  const move = (block: ScheduleBlock, deltaMs: number) => {
+    if (!draft || !scheduled) return;
+    const moved = moveBlock(block, deltaMs, goals, { start_ms: scheduled.start_ms, end_ms: scheduled.end_ms });
+    if (!moved) {
+      setMoveProblem("That move would take the block outside the night, or its target is not one of the rig's goals.");
+      return;
+    }
+    setMoveProblem(null);
+    const [pin] = moved;
+    if (pin.kind !== 'pin') return;
+    // A block moved again replaces the pin and exclusion its last move made.
+    const key = subjectKey(pin.subject);
+    const from = Math.min(block.start_ms, pin.window.start_ms);
+    const to = Math.max(block.end_ms, pin.window.end_ms);
+    const replaced = (entry: NightOverride) => (entry.kind === 'pin' || entry.kind === 'exclude')
+      && subjectKey(entry.subject) === key && entry.window !== undefined
+      && entry.window.start_ms < to && entry.window.end_ms > from;
+    onDraft([...draft.filter(entry => !replaced(entry)), ...moved]);
+  };
   // Tonight: what the rig says it is doing, beside what it is planned to do.
   const statuses = useQuery({ queryKey: ['directorRigStatuses'], queryFn: apiClient.getDirectorRigStatuses, enabled: tonight, retry: retryWhenBusy, retryDelay: 1200, refetchInterval: 15_000 });
   const live = statuses.data?.find(status => status.rig.id === rig.rig.id);
@@ -128,8 +180,11 @@ function NightSchedule({ rig, night, colours, view }: { rig: RigNights; night: R
     {query.isPending && <p role="status">Planning {formatNightDate(night.date)}...</p>}
     {query.isError && <p className="director-error" role="alert">{query.error instanceof Error ? query.error.message : 'The schedule could not be computed'}</p>}
     {detail?.warnings.map(warning => <p key={warning} className="director-muted" role="note">{warning}</p>)}
+    {draft !== null && query.isFetching && <p className="director-muted" role="status">Planning the edit...</p>}
+    {moveProblem && <p className="director-error" role="alert">{moveProblem}</p>}
     {scheduled && <NightTimeline night={night} scheduled={scheduled} colours={colours} now={tonight ? now : undefined}
-      cloudThreshold={rig.forecast?.cloud_threshold_percent} />}
+      cloudThreshold={rig.forecast?.cloud_threshold_percent} zone={zone} bands={bands}
+      onMoveBlock={draft !== null ? move : undefined} />}
   </section>;
 }
 
@@ -137,16 +192,16 @@ function NightFacts({ rig, night }: { rig: RigNights; night: RigNight }) {
   const { availability } = night;
   return <>
     <dl className="nights-facts">
-      <div><dt>Dark</dt><dd>{night.dusk_ms !== null && night.dawn_ms !== null ? `${formatClock(night.dusk_ms)} – ${formatClock(night.dawn_ms)}, ${formatHours(night.dark_hours)}` : 'No darkness'}</dd></div>
+      <div><dt>Dark</dt><dd>{night.dusk_ms !== null && night.dawn_ms !== null ? `${siteClock(rig, night.dusk_ms)} – ${siteClock(rig, night.dawn_ms)}, ${formatHours(night.dark_hours)}` : 'No darkness'}</dd></div>
       <div><dt>Clear</dt><dd>{availability.state === 'limited'
-        ? availability.windows.map(w => `${formatClock(w.start_ms)} – ${formatClock(w.end_ms)}`).join(', ') + `, ${formatHours(night.available_dark_hours)} dark`
+        ? availability.windows.map(w => `${siteClock(rig, w.start_ms)} – ${siteClock(rig, w.end_ms)}`).join(', ') + `, ${formatHours(night.available_dark_hours)} dark`
         : availability.state === 'unavailable' ? 'Not available' : `All night, ${formatHours(night.available_dark_hours)} dark`}</dd></div>
       <div><dt>Moon</dt><dd>{Math.round(night.moon_illumination * 100)}% lit, up {formatHours(night.moon_hours_up_in_dark)} of the dark</dd></div>
       <div><dt>Load</dt><dd>{describeLoad(night)}</dd></div>
     </dl>
     {availability.marks.length > 0 && <ul className="nights-marks">{availability.marks.map(mark => <li key={mark.scope}>
       {markOrigin(mark)}: {STATE_LABEL[mark.state]}
-      {mark.state === 'limited' && ` (${mark.windows.map(w => `${formatClock(w.start_ms)} – ${formatClock(w.end_ms)}`).join(', ')})`}
+      {mark.state === 'limited' && ` (${mark.windows.map(w => `${siteClock(rig, w.start_ms)} – ${siteClock(rig, w.end_ms)}`).join(', ')})`}
       {mark.note && <span className="director-muted"> · {mark.note}</span>}
     </li>)}</ul>}
     {rig.forecast && <ForecastNote rig={rig} night={night} />}
@@ -162,7 +217,7 @@ function ForecastNote({ rig, night }: { rig: RigNights; night: RigNight }) {
     ? `${rig.planning_site?.name ?? 'The site'}'s forecast from ${provider} has not arrived or has expired, so nights count as clear.`
     : night.clouds.length === 0
       ? `${provider}'s forecast does not cover this night, so the night counts as clear.`
-      : `Hours at or under ${forecast.cloud_threshold_percent}% cloud count as clear, from ${provider}'s forecast fetched ${formatClock(forecast.fetched_at_ms)}. A mark set for the site overrides the forecast.`;
+      : `Hours at or under ${forecast.cloud_threshold_percent}% cloud count as clear, from ${provider}'s forecast fetched ${siteClock(rig, forecast.fetched_at_ms)}. A mark set for the site overrides the forecast.`;
   return <p className="director-muted nights-forecast-note">
     {said} <a href={PROVIDER_URL[forecast.provider]} target="_blank" rel="noreferrer">{forecast.attribution}</a>
   </p>;
@@ -212,7 +267,7 @@ function PlanHours({ rig, night, colours, view }: { rig: RigNights; night: RigNi
           <td>{row.target.name}<span className="director-muted"> · {row.target.filters.join(', ')}</span></td>
           {scheduled && <td>{row.planned > 0 ? frames(row.planned) : <span className="director-muted">not planned</span>}</td>}
           <td>{formatHours(row.usable)}{blocked > 0 && <span className="director-muted"> · {formatHours(blocked)} excluded by the Moon</span>}</td>
-          <td>{row.hours && row.hours.max_altitude_degrees > -90 ? `${Math.round(row.hours.max_altitude_degrees)}°${row.hours.transit_ms ? ` at ${formatClock(row.hours.transit_ms)}` : ''}` : '—'}</td>
+          <td>{row.hours && row.hours.max_altitude_degrees > -90 ? `${Math.round(row.hours.max_altitude_degrees)}°${row.hours.transit_ms ? ` at ${siteClock(rig, row.hours.transit_ms)}` : ''}` : '—'}</td>
           <td>{formatHours(row.target.hours_owed)}<span className="director-muted"> · {frames(row.target.frames_owed)}</span></td>
           {doneBy && <td>{done === null || done < 0
             ? <span className="director-muted">not within these {doneBy.nights.length} nights</span>
@@ -244,9 +299,6 @@ function MarkEditor({ rig, nights }: { rig: RigNights; nights: RigNight[] }) {
   return <MarkForm key={scope} rig={rig} nights={nights} scope={scope} onScope={setScope} />;
 }
 
-/** The browser's time zone, which the From and To times are read in. */
-const BROWSER_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
-
 /** All the queries a mark changes: the grid, the open night and Live's
  *  Tonight column. */
 const MARKED_QUERIES = [['nightPlans'], ['nightPlanDetail'], ['nightPlansTonight'], ['directorProjection'], ['directorFeasibility']] as const;
@@ -259,8 +311,9 @@ function MarkForm({ rig, nights, scope, onScope }: { rig: RigNights; nights: Rig
   const [state, setState] = useState<NightAvailabilityState>(current?.state ?? 'unavailable');
   const limited = current?.state === 'limited' ? current.windows[0] : undefined;
   const extra = current?.state === 'limited' ? current.windows.slice(1) : [];
-  const [from, setFrom] = useState(limited ? clockValue(limited.start_ms) : '');
-  const [to, setTo] = useState(limited ? clockValue(limited.end_ms) : '');
+  const zone = rig.time_zone ?? undefined;
+  const [from, setFrom] = useState(limited ? clockValue(limited.start_ms, zone) : '');
+  const [to, setTo] = useState(limited ? clockValue(limited.end_ms, zone) : '');
   const [note, setNote] = useState(current?.note ?? '');
   const [problem, setProblem] = useState<string | null>(null);
   const scopeId = scope === 'site' ? rig.planning_site?.id ?? null : rig.rig.id;
@@ -289,7 +342,7 @@ function MarkForm({ rig, nights, scope, onScope }: { rig: RigNights; nights: Rig
         marks.push({ date: night.date, state, note: note.trim() });
         continue;
       }
-      const hours = windowFor(night, from, to);
+      const hours = windowFor(night, from, to, zone);
       if (!hours) {
         setProblem(`The hours from ${from || 'dusk'} to ${to || 'dawn'} leave nothing on ${night.date}.`);
         return;
@@ -310,10 +363,10 @@ function MarkForm({ rig, nights, scope, onScope }: { rig: RigNights; nights: Rig
       {state === 'limited' && <div className="nights-mark-row">
         <label>From <input type="time" value={from} onChange={event => setFrom(event.target.value)} aria-describedby="nights-limited-help" /></label>
         <label>To <input type="time" value={to} onChange={event => setTo(event.target.value)} aria-describedby="nights-limited-help" /></label>
-        <span id="nights-limited-help" className="director-muted">Times are in this browser's time zone ({BROWSER_ZONE}). Leave From empty to start at dusk, or To empty to end at dawn. Times after midnight fall the next morning.</span>
+        <span id="nights-limited-help" className="director-muted">Times are in {zone ? `the site's time zone (${zone})` : `this browser's time zone (${BROWSER_ZONE})`}. Leave From empty to start at dusk, or To empty to end at dawn. Times after midnight fall the next morning.</span>
       </div>}
       {state === 'limited' && extra.length > 0 && <p className="director-muted" role="note">
-        This mark also has {extra.map(w => `${formatClock(w.start_ms)} – ${formatClock(w.end_ms)}`).join(', ')}. Saving keeps only the hours entered here.
+        This mark also has {extra.map(w => `${siteClock(rig, w.start_ms)} – ${siteClock(rig, w.end_ms)}`).join(', ')}. Saving keeps only the hours entered here.
       </p>}
       <div className="nights-mark-row">
         <label>For <select value={scope} onChange={event => onScope(event.target.value as NightMarkScope)}>

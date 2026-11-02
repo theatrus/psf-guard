@@ -21,6 +21,7 @@ export function night(index: number, overrides: Partial<RigNight> = {}): RigNigh
     targets: [{ project_id: 7, target_id: 70, hours_up: 6, hours_up_available: 6, hours_moon_blocked: 1, max_altitude_degrees: 71.2, transit_ms: noon + 12 * HOUR }],
     load: { demand_hours: 5, available_hours: 10, idle_hours: 5, overbooked_hours: 0 },
     clouds: [],
+    override_count: 0,
     ...overrides,
   };
 }
@@ -43,6 +44,7 @@ export function rig(overrides: Partial<RigNights> = {}): RigNights {
     schedule: null,
     mark_revisions: { rig: 4, site: 0 },
     forecast: null,
+    time_zone: null,
     warnings: [],
     ...overrides,
   };
