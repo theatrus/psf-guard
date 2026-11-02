@@ -87,22 +87,22 @@
 }
 
 /* The Rigs view carries the fleet's status: a dot, green while the rigs
-   talk and red once one has gone quiet, and the count beside it. */
-.rigs-tab {
-  gap: 0.4rem;
-}
-
+   talk and red once one has gone quiet, and the count, which folds away
+   with the view's name like any other tab's. */
 .rigs-tab-dot {
   flex: none;
   width: 8px;
   height: 8px;
+  margin-left: 0.35rem;
   border-radius: 50%;
   background: var(--color-success);
   box-shadow: 0 0 0 2px var(--color-success-alpha-20);
 }
 
-.rigs-tab-status {
-  white-space: nowrap;
+.view-tab.rigs-tab[aria-current='page'] .rigs-tab-status,
+.view-tab.rigs-tab:hover .rigs-tab-status,
+.view-tab.rigs-tab:focus-visible .rigs-tab-status {
+  max-width: 14rem;
 }
 
 .rigs-tab.is-alert {
@@ -638,9 +638,7 @@ div.activity-error {
     height: 32px;
   }
 
-  /* The percent says how running work goes; only how many wait shows.
-     The Rigs tab keeps its dot; its count is in the tooltip. */
-  .rigs-tab .rigs-tab-status,
+  /* The percent says how running work goes; only how many wait shows. */
   .activity-chip .activity-count[data-job-state='running'] {
     display: none;
   }

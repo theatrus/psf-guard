@@ -13,10 +13,12 @@ interface RigsTabProps {
 }
 
 /**
- * The Rigs view in the header, carrying the fleet's status: how many rigs,
- * how many exposing, red when one that used to talk has gone quiet, and
- * each rig's state in the tooltip. Before the first rig it is a plain view
- * tab; with Director off it stays out of the header.
+ * The Rigs view in the header, carrying the fleet's status: a dot, red when
+ * a rig that used to talk has gone quiet, and each rig's state in the
+ * tooltip. Like every view tab it folds to its icon, and the dot, when it is
+ * not the current view; the count ("2 rigs · 1 exposing") slides out on
+ * hover or focus and stays while Rigs is open. Before the first rig it is a
+ * plain view tab; with Director off it stays out of the header.
  */
 export default function RigsTab({ current, onClick }: RigsTabProps) {
   const director = useDirectorStatus();
@@ -40,7 +42,7 @@ export default function RigsTab({ current, onClick }: RigsTabProps) {
       {summary
         ? <>
             <span className="rigs-tab-dot" aria-hidden="true" />
-            <span className="rigs-tab-status" aria-hidden="true">{summary.label}</span>
+            <span className="view-tab-name rigs-tab-status" aria-hidden="true">{summary.label}</span>
           </>
         : <span className="view-tab-name" aria-hidden="true">Rigs</span>}
     </button>

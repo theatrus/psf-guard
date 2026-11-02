@@ -448,9 +448,11 @@ nothing to choose. Used on
 a workspace, the picker opens the chosen project's workspace; it also lists
 plans no database takes yet, which open straight into theirs. Every view
 button shows the page you are on the same way, filled. **Rigs**, beside
-**Sky**, carries the fleet's status: a dot and `2 rigs · 1 exposing`, red
-when a rig that used to talk has gone quiet, with each rig's state in its
-tooltip (on a phone, the dot alone). It opens the **Rigs** page on its
+**Sky**, carries the fleet's status: a dot, red when a rig that used to
+talk has gone quiet, with each rig's state in its tooltip. Like the other
+views it folds to its icon, here with the dot, when it is not the current
+view; the count, such as `2 rigs · 1 exposing`, slides out under the
+pointer and stays while Rigs is open. It opens the **Rigs** page on its
 **Live** tab from any view. The page holds every rig in one place: **Live**, the table of what each rig is doing and plans tonight, and
 **[Nights](#nights)**, what each would shoot over the coming nights. **Show
 the rigs on the sky** turns on the Sky's **Live** view: each reporting rig

@@ -46,6 +46,13 @@ test('the Rigs tab carries the fleet, opens Live, and shows each rig on the sky 
     await page.goto('/#/?db=parked-catalog');
     const chip = page.getByRole('button', { name: 'Rigs: 2 rigs · 1 exposing' });
     await expect(chip).toBeVisible();
+    // Away from Rigs the tab folds to its icon and status dot, like the
+    // other views; the count slides out under the pointer.
+    await page.mouse.move(0, 500);
+    await expect.poll(async () => (await chip.boundingBox())!.width).toBeLessThan(60);
+    const folded = (await chip.boundingBox())!.width;
+    await chip.hover();
+    await expect.poll(async () => (await chip.boundingBox())!.width).toBeGreaterThan(folded + 60);
     await chip.click();
     await expect(page).toHaveURL(/#\/rigs\?db=parked-catalog$/);
     await expect(chip).toHaveAttribute('aria-current', 'page');
