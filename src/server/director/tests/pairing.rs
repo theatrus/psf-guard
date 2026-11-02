@@ -314,6 +314,21 @@ async fn pairing_wire_single_use_no_secrets_in_listing_and_revocation() {
     );
     let token = data["token"].as_str().unwrap();
     assert!(token.starts_with("psfdrc_"));
+    // A rig paired with a Director plugin is run by Director.
+    assert_eq!(
+        state
+            .director
+            .as_ref()
+            .unwrap()
+            .writer
+            .lock()
+            .unwrap()
+            .rig_profile(rig)
+            .unwrap()
+            .unwrap()
+            .mode,
+        Some(psf_guard_director_meta::profile::RigMode::Director)
+    );
     assert_eq!(
         call(&app, "POST", "/pair", input, None).await.0,
         StatusCode::UNAUTHORIZED

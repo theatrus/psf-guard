@@ -93,9 +93,11 @@ export interface RigNight {
   load: NightLoad;
   /** The forecast's cloud cover through the night; empty without one. */
   clouds: ForecastHour[];
+  /** How many overrides a Director rig has for the night; 0 on any other rig. */
+  override_count: number;
 }
 
-export type ScheduleGapReason = 'twilight' | 'unavailable' | 'moon' | 'meridian' | 'below_limits' | 'complete' | 'nothing_eligible';
+export type ScheduleGapReason = 'twilight' | 'unavailable' | 'moon' | 'meridian' | 'below_limits' | 'complete' | 'nothing_eligible' | 'held' | 'excluded';
 export type ScheduleDecisionKind = 'only' | 'scored' | 'continued' | 'ranked';
 export type ScheduleRule = 'meridian_flip_penalty' | 'meridian_window_priority' | 'mosaic_completion' | 'percent_complete' | 'project_priority' | 'setting_soonest' | 'smart_exposure_order' | 'target_switch_penalty';
 export type ScheduleTargetReason = 'complete' | 'never_rises' | 'not_visible' | 'not_yet_visible' | 'max_altitude' | 'meridian_window_clipped' | 'before_meridian_window' | 'meridian_flip_clipped' | 'twilight' | 'moon_avoidance' | 'lower_score' | 'all_exposure_plans' | 'project' | 'not_ready';
@@ -152,6 +154,52 @@ export interface ScheduledNight {
   frames: number;
   exposure_hours: number;
   note: string | null;
+  /** The Director rig's overrides the night was planned with. */
+  overrides?: AppliedNightOverrides;
+}
+
+/** What an override applies to. */
+export type OverrideSubject =
+  | { kind: 'plan'; plan_id: string }
+  | { kind: 'target'; target_guid: string }
+  | { kind: 'exposure_plan'; exposureplan_guid: string };
+
+/** One override of a Director rig's night. */
+export type NightOverride =
+  | { kind: 'exclude'; subject: OverrideSubject; window?: NightInterval }
+  | { kind: 'pin'; subject: OverrideSubject; window: NightInterval }
+  | { kind: 'order'; plans: string[] }
+  | { kind: 'hold'; from_ms?: number };
+
+export interface AppliedNightOverrides {
+  /** The stored list's revision; null for an unsaved draft. */
+  revision: number | null;
+  entries: NightOverride[];
+  draft: boolean;
+}
+
+/** One night's overrides, as the editor starts from them. */
+export interface NightOverridesNight {
+  date: string;
+  /** Send back with a change: 0 while the night has none. */
+  revision: number;
+  entries: NightOverride[];
+  runtime: NightRuntime;
+}
+
+/** A goal of a Director schedule: the ids its blocks use, and the GUIDs an
+ *  override names it by. */
+export interface DirectorScheduleGoal {
+  goal_id: string;
+  plan_id: string;
+  plan_name: string;
+  target_guid: string;
+  exposureplan_guid: string;
+  project_id: number;
+  target_id: number;
+  exposure_plan_id: number;
+  target_name: string;
+  filter: string | null;
 }
 
 export interface SchedulePlanProgress {
@@ -180,6 +228,8 @@ export interface NightSchedule {
     acceptance: 'plan_rate' | 'grader';
     utc_offset_minutes: number;
   };
+  /** A Director schedule's goals; absent for Target Scheduler. */
+  goals?: DirectorScheduleGoal[];
 }
 
 export interface RigNights {
@@ -197,7 +247,32 @@ export interface RigNights {
   mark_revisions: { rig: number; site: number | null };
   /** The cloud forecast the rig's planning site takes. */
   forecast: RigForecast | null;
+  /** The planning site's IANA time zone; null uses the browser's. */
+  time_zone: string | null;
+  /** Every project of the planned profile, in any state, as the rig's
+   *  database holds it; absent without a database to read. */
+  ts_projects?: TsProject[];
+  /** Where saving Target Scheduler changes writes, or why it cannot. */
+  ts_save: { files: string[]; refused: string | null };
   warnings: string[];
+}
+
+export type TsProjectState = 'draft' | 'active' | 'inactive' | 'closed';
+
+/** A Target Scheduler project, as the night's controls show it. */
+export interface TsProject {
+  project_id: number;
+  name: string;
+  state: TsProjectState;
+  priority: NightPlanPriority;
+  targets: Array<{ target_id: number; name: string; active: boolean }>;
+}
+
+/** Changes to a rig's Target Scheduler rows: with `was` and `was_active`
+ *  to save, without them to preview. */
+export interface TsChanges {
+  projects: Array<{ project_id: number; priority?: NightPlanPriority; state?: TsProjectState; was?: { priority: NightPlanPriority; state: TsProjectState } }>;
+  targets: Array<{ target_id: number; active: boolean; was_active?: boolean }>;
 }
 
 export interface RigForecast {
@@ -230,6 +305,14 @@ export interface NightPlansRequest {
   fidelity?: ScheduleFidelity;
   /** The site's clock, minutes east of UTC. */
   utc_offset_minutes?: number;
+  /** The first night, the evening's date at each rig's site. */
+  first_night?: string;
+  /** Schedules plan nothing before this instant; now by default. */
+  plan_from_ms?: number;
+  /** An unsaved edit of one Director rig's overrides for one night. */
+  override_draft?: { rig: string; date: string; entries: NightOverride[] };
+  /** Unsaved changes to one Target Scheduler rig's projects and targets. */
+  ts_draft?: { rig: string; changes: TsChanges };
 }
 
 /** One night to mark, as a person enters it. */

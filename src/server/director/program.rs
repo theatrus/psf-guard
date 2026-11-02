@@ -10,7 +10,9 @@ use axum::http::header::{ETAG, IF_NONE_MATCH};
 use axum::http::HeaderMap;
 use psf_guard_director_core::{
     bandpass::bandpass_for_filter,
+    night::NightDate,
     optics::Rotation,
+    overrides::Narrowing,
     program::{
         Binding, BoundProgram, Configuration, Control, Program, Recipe, Target, MAS_PER_DEGREE,
         PROGRAM_VERSION,
@@ -21,7 +23,9 @@ use psf_guard_director_core::{
 };
 use psf_guard_director_meta::{
     activation::Activation,
+    night_override::{NightOverride, NightOverrides, Subject},
     profile::{Limits, RigProfile},
+    site_profile::RigSite,
     CatalogIdentity,
 };
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
@@ -66,6 +70,32 @@ pub(super) fn apply_project_order(
         goal.priority = priorities[&key];
     }
     Ok(())
+}
+
+/// A project order with every project the links name: those it lists, in
+/// its order, then the rest by name and id, as the editor shows them. A
+/// project's objectives are never interleaved with another's.
+fn complete_order(order: &[Uuid], links: &[Link]) -> Vec<Uuid> {
+    let present: std::collections::BTreeSet<Uuid> = links.iter().map(|l| l.project_id).collect();
+    let mut complete: Vec<Uuid> = order
+        .iter()
+        .copied()
+        .filter(|id| present.contains(id))
+        .collect();
+    let unlisted: std::collections::BTreeSet<_> = links
+        .iter()
+        .filter(|link| !order.contains(&link.project_id))
+        .map(|link| (&link.project_name, link.project_id))
+        .collect();
+    complete.extend(unlisted.into_iter().map(|(_, id)| id));
+    complete
+}
+
+fn goal_projects(links: &[Link]) -> BTreeMap<String, Uuid> {
+    links
+        .iter()
+        .map(|l| (l.goal_id.clone(), l.project_id))
+        .collect()
 }
 
 #[derive(Deserialize)]
@@ -293,6 +323,226 @@ impl Gathered {
     }
 }
 
+impl Gathered {
+    /// What a night's overrides take from this program's goals; see
+    /// [`narrow`].
+    pub(super) fn narrowing(
+        &self,
+        entries: &[NightOverride],
+        night: Interval,
+    ) -> Result<Narrowing, Error> {
+        narrow(entries, night, &self.built.links, &self.built.goals)
+    }
+
+    /// The program issued under `id` over `span`, narrowed by each night's
+    /// overrides. Only the night under way at `now` gives its plan order;
+    /// see the issue lifetime in [`assemble`].
+    fn narrowed_program(
+        &self,
+        rig: Uuid,
+        span: Interval,
+        id: String,
+        nights: &[(&[NightOverride], Interval)],
+        now: u64,
+    ) -> Result<Program, Error> {
+        let mut program = self.program(rig, span, id);
+        for (entries, night) in nights {
+            let mut narrowing = self.narrowing(entries, *night)?;
+            if !(night.start_ms <= now && now < night.end_ms) {
+                narrowing.priorities = None;
+            }
+            if narrowing.priorities.is_some() {
+                program.observing_preferences = None;
+            }
+            narrowing.apply(&mut program.assignment.goals);
+        }
+        Ok(program)
+    }
+
+    /// Prove the program binds before it is handed out. The synthetic state
+    /// only supplies the identity and time the validator needs.
+    fn bind(
+        &self,
+        rig: Uuid,
+        program: &Program,
+        now: u64,
+    ) -> Result<(), psf_guard_director_core::program::Error> {
+        let limits = self
+            .profile
+            .as_ref()
+            .map(|p| p.limits.value)
+            .unwrap_or_default();
+        BoundProgram::new(
+            program.clone(),
+            &CoreState {
+                rig_id: rig.to_string(),
+                configuration_id: self.configuration.id.clone(),
+                now_ms: now,
+                conditions_valid_until_ms: program.assignment.expires_at_ms,
+                completion_deadline_ms: None,
+                safety: Safety::Unknown,
+                at_boundary: true,
+                operator_stop: false,
+                meridian_exclusion: limits.meridian_exclusion,
+            },
+        )
+        .map(|_| ())
+    }
+}
+
+/// Whether a night's overrides, with the rig's other nights', still leave
+/// a program the rig can take: every pin cuts a hole in the other goals'
+/// windows, and a large program with many pins can outgrow what the rig
+/// accepts. `Ok(None)` when it binds, or when the rig has no program yet to
+/// check; otherwise why it does not.
+pub(super) fn check_overrides(
+    store: &MetaStore,
+    catalogs: &[Arc<DatabaseContext>],
+    instance: Uuid,
+    rig: Uuid,
+    date: NightDate,
+    entries: &[NightOverride],
+    now: u64,
+) -> Result<Option<String>, PullError> {
+    let found = identified_catalogs(catalogs, instance);
+    let mut catalog = None;
+    for (identity, _) in found.iter() {
+        if store
+            .catalog_rig(identity.id)?
+            .is_some_and(|binding| binding.rig.id == rig)
+        {
+            catalog = Some(identity.id);
+            break;
+        }
+    }
+    let Some(catalog) = catalog else {
+        return Ok(None);
+    };
+    let gathered = match gather(store, catalogs, instance, rig, catalog, false) {
+        Ok(gathered) => gathered,
+        Err(PullError::NotReady(_)) => return Ok(None),
+        Err(other) => return Err(other),
+    };
+    let Some(location) = gathered.placed.location else {
+        return Ok(None);
+    };
+    if gathered.built.goals.is_empty() {
+        return Ok(None);
+    }
+    let stored = override_nights(store, rig, &gathered.placed, now)?;
+    let edited = date.span(location.longitude_degrees);
+    let mut nights: Vec<(&[NightOverride], Interval)> = stored
+        .iter()
+        .filter(|(night, _)| night.date != date)
+        .map(|(night, span)| (night.entries.as_slice(), *span))
+        .collect();
+    if edited.end_ms > now {
+        nights.push((entries, edited));
+    }
+    let span = Interval {
+        start_ms: now,
+        end_ms: now.saturating_add(VALIDITY.as_millis() as u64),
+    };
+    let program = gathered.narrowed_program(rig, span, "override-check".into(), &nights, now)?;
+    Ok(gathered
+        .bind(rig, &program, now)
+        .err()
+        .map(|error| format!("{error:?}")))
+}
+
+/// What a night's overrides take from a program's goals, found by each
+/// goal's plan, target and exposure plan. An override naming nothing in
+/// the program takes nothing, so a pin on a plan that is done or no longer
+/// activated leaves the rest of the rig's work alone.
+fn narrow(
+    entries: &[NightOverride],
+    night: Interval,
+    links: &[Link],
+    goals: &[Goal],
+) -> Result<Narrowing, Error> {
+    let names = |subject: &Subject, link: &Link| match subject {
+        Subject::Plan { plan_id } => link.project_id == *plan_id,
+        Subject::Target { target_guid } => link.target_guid == *target_guid,
+        Subject::ExposurePlan { exposureplan_guid } => link.exposureplan_guid == *exposureplan_guid,
+    };
+    let mut narrowing = Narrowing::none(night);
+    let mut lose = |link: &Link, window: Interval| {
+        narrowing
+            .lost
+            .entry(link.goal_id.clone())
+            .or_default()
+            .push(window);
+    };
+    for entry in entries {
+        match entry {
+            NightOverride::Exclude { subject, window } => {
+                for link in links.iter().filter(|link| names(subject, link)) {
+                    lose(link, window.unwrap_or(night));
+                }
+            }
+            NightOverride::Pin { subject, window } => {
+                if links.iter().any(|link| names(subject, link)) {
+                    for link in links.iter().filter(|link| !names(subject, link)) {
+                        lose(link, *window);
+                    }
+                }
+            }
+            NightOverride::Hold { .. } | NightOverride::Order { .. } => {}
+        }
+    }
+    for entry in entries {
+        match entry {
+            NightOverride::Hold { from_ms } => {
+                narrowing.hold_from_ms = Some(from_ms.unwrap_or(night.start_ms));
+            }
+            NightOverride::Order { plans } => {
+                let mut ordered = goals.to_vec();
+                apply_project_order(
+                    &mut ordered,
+                    &goal_projects(links),
+                    &complete_order(plans, links),
+                )?;
+                narrowing.priorities =
+                    Some(ordered.into_iter().map(|g| (g.id, g.priority)).collect());
+            }
+            NightOverride::Exclude { .. } | NightOverride::Pin { .. } => {}
+        }
+    }
+    Ok(narrowing)
+}
+
+/// The stored overrides a program issued at `now` may meet: each night's
+/// that has not ended and starts before the longest validity runs out, with
+/// the night's span. None for a rig without a location, whose nights have
+/// no dates.
+pub(super) fn override_nights(
+    store: &MetaStore,
+    rig: Uuid,
+    placed: &RigSite,
+    now: u64,
+) -> Result<Vec<(NightOverrides, Interval)>, StoreError> {
+    let Some(location) = placed.location else {
+        return Ok(Vec::new());
+    };
+    let longitude = location.longitude_degrees;
+    let until = now.saturating_add(VALIDITY.as_millis() as u64);
+    let (Some(first), Some(last)) = (
+        NightDate::at(now, longitude),
+        NightDate::at(until, longitude),
+    ) else {
+        return Ok(Vec::new());
+    };
+    Ok(store
+        .night_overrides(rig, first, last)?
+        .into_iter()
+        .map(|night| {
+            let span = night.date.span(longitude);
+            (night, span)
+        })
+        .filter(|(_, span)| span.end_ms > now && span.start_ms < until)
+        .collect())
+}
+
 /// A goal's links back to the plan and the rig's rows.
 pub(super) struct GoalLink<'a> {
     pub(super) goal_id: &'a str,
@@ -389,24 +639,10 @@ pub(super) fn gather(
     let assignment_revision = activations.iter().map(|a| a.revision).max().unwrap_or(1);
     let preference_settings = store.effective_observing_preferences(rig, None)?;
     if let Some(order) = &preference_settings.project_order {
-        // Newly created projects follow the saved list, in the same name/ID
-        // order displayed by the editor. Never interleave their objectives.
-        let mut complete_order = order.clone();
-        let unlisted: std::collections::BTreeSet<_> = built
-            .links
-            .iter()
-            .filter(|link| !order.contains(&link.project_id))
-            .map(|link| (&link.project_name, link.project_id))
-            .collect();
-        complete_order.extend(unlisted.into_iter().map(|(_, id)| id));
         apply_project_order(
             &mut built.goals,
-            &built
-                .links
-                .iter()
-                .map(|l| (l.goal_id.clone(), l.project_id))
-                .collect(),
-            &complete_order,
+            &goal_projects(&built.links),
+            &complete_order(order, &built.links),
         )?;
     }
     let observing_preferences =
@@ -557,6 +793,15 @@ pub(super) fn assemble(
 ) -> Result<Envelope, PullError> {
     let gathered = gather(store, catalogs, instance, rig, catalog_id, false)?;
     let now = now_ms();
+    // Overrides are Director's: a rig that no longer counts as Director's
+    // pulls its program without them.
+    let director = super::night_plans::runtime_of(store, rig, gathered.profile.as_ref())?
+        == super::night_plans::Runtime::Director;
+    let nights = if director {
+        override_nights(store, rig, &gathered.placed, now)?
+    } else {
+        Vec::new()
+    };
     if gathered.built.goals.is_empty() {
         return Err(PullError::NotReady(format!(
             "No executable activated plan for this rig. {}",
@@ -585,13 +830,39 @@ pub(super) fn assemble(
         ))
         .map_err(|_| Error::Internal)?,
     );
-    let issue = store.issue_program_preview(
-        rig,
-        catalog_id,
-        &fingerprint,
-        now,
-        VALIDITY.as_millis() as u64,
-    )?;
+    // Overrides change the fingerprint only when a night has some, so a
+    // rig without them keeps the program it had.
+    let fingerprint = if nights.is_empty() {
+        fingerprint
+    } else {
+        let revisions: Vec<(String, u64)> = nights
+            .iter()
+            .map(|(night, _)| (night.date.to_string(), night.revision))
+            .collect();
+        catalog_discovery::digest(
+            &serde_json::to_vec(&("night-overrides-v1", &fingerprint, revisions))
+                .map_err(|_| Error::Internal)?,
+        )
+    };
+    // A night's plan order lasts that night. A program issued while any
+    // night ahead has one ends with the night it starts in, so the pull
+    // after it takes the next night's order, or the rig's own.
+    let ordered = nights.iter().any(|(night, _)| {
+        night
+            .entries
+            .iter()
+            .any(|entry| matches!(entry, NightOverride::Order { .. }))
+    });
+    let lifetime = match gathered.placed.location {
+        Some(location) if ordered => NightDate::at(now, location.longitude_degrees)
+            .map(|tonight| tonight.span(location.longitude_degrees).end_ms)
+            .filter(|end| *end > now)
+            .map_or(VALIDITY.as_millis() as u64, |end| {
+                (end - now).min(VALIDITY.as_millis() as u64)
+            }),
+        _ => VALIDITY.as_millis() as u64,
+    };
+    let issue = store.issue_program_preview(rig, catalog_id, &fingerprint, now, lifetime)?;
     let revision = catalog_discovery::digest(
         &serde_json::to_vec(&(
             fingerprint,
@@ -605,37 +876,30 @@ pub(super) fn assemble(
         start_ms: issue.issued_at_ms,
         end_ms: issue.expires_at_ms,
     };
-    let program = gathered.program(rig, span, format!("assignment-{}", issue.id));
-    let Gathered {
-        profile,
-        placed,
-        configuration,
-        built,
-        ..
-    } = gathered;
-    // Prove the program binds before handing it out. The synthetic state
-    // only supplies the identity and time the validator needs.
-    let limits = profile.as_ref().map(|p| p.limits.value).unwrap_or_default();
-    BoundProgram::new(
-        program.clone(),
-        &CoreState {
-            rig_id: rig.to_string(),
-            configuration_id: configuration.id.clone(),
-            now_ms: now,
-            conditions_valid_until_ms: span.end_ms,
-            completion_deadline_ms: None,
-            safety: Safety::Unknown,
-            at_boundary: true,
-            operator_stop: false,
-            meridian_exclusion: limits.meridian_exclusion,
-        },
-    )
-    .map_err(|error| {
+    let narrowed: Vec<(&[NightOverride], Interval)> = nights
+        .iter()
+        .map(|(night, span)| (night.entries.as_slice(), *span))
+        .collect();
+    let program = gathered.narrowed_program(
+        rig,
+        span,
+        format!("assignment-{}", issue.id),
+        &narrowed,
+        now,
+    )?;
+    gathered.bind(rig, &program, now).map_err(|error| {
         tracing::warn!(?error, "Program from activation did not bind");
         PullError::NotReady(format!(
             "The activated plan does not form a valid program for this rig ({error:?}); review the plan and the rig's templates."
         ))
     })?;
+    let Gathered {
+        profile,
+        placed,
+        built,
+        ..
+    } = gathered;
+    let limits = profile.as_ref().map(|p| p.limits.value).unwrap_or_default();
     Ok(Envelope {
         coordinator_instance_id: instance,
         catalog_id,
@@ -1135,4 +1399,219 @@ fn read_target(
             },
         )
         .optional()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand::prelude::*;
+
+    const NIGHT: Interval = Interval {
+        start_ms: 1_790_280_000_000,
+        end_ms: 1_790_280_000_000 + 86_400_000,
+    };
+
+    /// Eight goals over three plans and four targets, with objective
+    /// priorities from 1 to 4 inside each plan.
+    fn program() -> (Vec<Link>, Vec<Goal>) {
+        let mut links = Vec::new();
+        let mut goals = Vec::new();
+        for index in 0..8u128 {
+            let id = Uuid::from_u128(100 + index).to_string();
+            links.push(Link {
+                goal_id: id.clone(),
+                project_id: Uuid::from_u128(1 + index % 3),
+                project_name: format!("Plan {}", index % 3),
+                activation_revision: 1,
+                objective_id: Uuid::from_u128(200 + index),
+                contribution_id: Uuid::from_u128(300 + index),
+                panel_id: "main".into(),
+                source_project_guid: Uuid::from_u128(1 + index % 3),
+                target_guid: Uuid::from_u128(10 + index % 4),
+                exposureplan_guid: Uuid::from_u128(100 + index),
+                bandpass_id: "ha".into(),
+                purpose: "science".into(),
+            });
+            goals.push(Goal {
+                id,
+                priority: 1 + (index % 4) as u32,
+                requested: 10,
+                accepted: 0,
+                pending: 0,
+                attempts_remaining: 15,
+                exposure_ms: 300_000,
+                overhead_ms: 15_000,
+                eligible_windows: vec![NIGHT],
+                transits: None,
+            });
+        }
+        (links, goals)
+    }
+
+    fn subject(rng: &mut StdRng) -> Subject {
+        // One in five names nothing the program holds.
+        match rng.random_range(0..5) {
+            0 => Subject::Plan {
+                plan_id: Uuid::from_u128(rng.random_range(1..4)),
+            },
+            1 => Subject::Target {
+                target_guid: Uuid::from_u128(rng.random_range(10..14)),
+            },
+            2 => Subject::ExposurePlan {
+                exposureplan_guid: Uuid::from_u128(rng.random_range(100..108)),
+            },
+            3 => Subject::Plan {
+                plan_id: Uuid::from_u128(rng.random_range(1..4)),
+            },
+            _ => Subject::Target {
+                target_guid: Uuid::from_u128(999),
+            },
+        }
+    }
+
+    fn window(rng: &mut StdRng) -> Interval {
+        let start = rng.random_range(NIGHT.start_ms..NIGHT.end_ms - 1);
+        let end = rng.random_range(start + 1..=NIGHT.end_ms);
+        Interval {
+            start_ms: start,
+            end_ms: end,
+        }
+    }
+
+    fn entry(rng: &mut StdRng) -> NightOverride {
+        match rng.random_range(0..4) {
+            0 => NightOverride::Exclude {
+                subject: subject(rng),
+                window: rng.random_bool(0.5).then(|| window(rng)),
+            },
+            1 => NightOverride::Pin {
+                subject: subject(rng),
+                window: window(rng),
+            },
+            2 => NightOverride::Hold {
+                from_ms: rng
+                    .random_bool(0.7)
+                    .then(|| rng.random_range(NIGHT.start_ms..NIGHT.end_ms)),
+            },
+            _ => {
+                let mut plans: Vec<Uuid> = (1..4).map(Uuid::from_u128).collect();
+                plans.shuffle(rng);
+                plans.truncate(rng.random_range(1..4));
+                NightOverride::Order { plans }
+            }
+        }
+    }
+
+    /// The first gate of Phase 6: random override lists, pins that overlap
+    /// and subjects the program does not hold included, only take time from
+    /// goals' windows. Each goal starts with a few windows of its own, so a
+    /// pin that gave its subject time outside them would show. Priorities
+    /// stay as they were unless the night has a plan order, which reorders
+    /// plans but never a plan's own objectives.
+    #[test]
+    fn random_overrides_only_narrow_the_program() {
+        let (links, mut goals) = program();
+        let mut rng = StdRng::seed_from_u64(1037);
+        for round in 0..2_000 {
+            for goal in &mut goals {
+                let mut windows: Vec<Interval> = (0..rng.random_range(1..4))
+                    .map(|_| window(&mut rng))
+                    .collect();
+                windows.sort_by_key(|w| w.start_ms);
+                let mut apart: Vec<Interval> = Vec::new();
+                for next in windows {
+                    match apart.last_mut() {
+                        Some(last) if next.start_ms <= last.end_ms => {
+                            last.end_ms = last.end_ms.max(next.end_ms)
+                        }
+                        _ => apart.push(next),
+                    }
+                }
+                goal.eligible_windows = apart;
+            }
+            let entries: Vec<NightOverride> = (0..rng.random_range(0..7))
+                .map(|_| entry(&mut rng))
+                .collect();
+            let narrowing = narrow(&entries, NIGHT, &links, &goals).unwrap();
+            let mut narrowed = goals.clone();
+            narrowing.apply(&mut narrowed);
+            for (before, after) in goals.iter().zip(&narrowed) {
+                assert!(
+                    after.eligible_windows.iter().all(|w| w.start_ms < w.end_ms
+                        && before
+                            .eligible_windows
+                            .iter()
+                            .any(|b| b.start_ms <= w.start_ms && w.end_ms <= b.end_ms)),
+                    "round {round}: {entries:?}"
+                );
+            }
+            let order = entries.iter().rev().find_map(|entry| match entry {
+                NightOverride::Order { plans } => Some(plans),
+                _ => None,
+            });
+            let Some(order) = order else {
+                assert!(
+                    goals
+                        .iter()
+                        .zip(&narrowed)
+                        .all(|(b, a)| b.priority == a.priority),
+                    "round {round}: {entries:?}"
+                );
+                continue;
+            };
+            let count = goals.len() as u32;
+            assert!(narrowed.iter().all(|g| (1..=count).contains(&g.priority)));
+            let rank = |plan: Uuid| order.iter().position(|p| *p == plan);
+            for (i, a) in goals.iter().enumerate() {
+                for (j, b) in goals.iter().enumerate() {
+                    let (plan_a, plan_b) = (links[i].project_id, links[j].project_id);
+                    let (after_a, after_b) = (narrowed[i].priority, narrowed[j].priority);
+                    if plan_a == plan_b {
+                        assert_eq!(
+                            a.priority.cmp(&b.priority),
+                            after_a.cmp(&after_b),
+                            "round {round}: a plan's own objectives keep their order"
+                        );
+                    } else if let (Some(ra), Some(rb)) = (rank(plan_a), rank(plan_b))
+                        && ra < rb
+                    {
+                        assert!(after_a > after_b, "round {round}: {order:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_pin_takes_its_window_from_every_other_goal_unless_it_names_none() {
+        let (links, goals) = program();
+        let pinned = Interval {
+            start_ms: NIGHT.start_ms + 9 * 3_600_000,
+            end_ms: NIGHT.start_ms + 11 * 3_600_000,
+        };
+        let pin = |target: u128| NightOverride::Pin {
+            subject: Subject::Target {
+                target_guid: Uuid::from_u128(target),
+            },
+            window: pinned,
+        };
+        let narrowing = narrow(&[pin(10)], NIGHT, &links, &goals).unwrap();
+        let on_target: Vec<&str> = links
+            .iter()
+            .filter(|l| l.target_guid == Uuid::from_u128(10))
+            .map(|l| l.goal_id.as_str())
+            .collect();
+        assert_eq!(on_target.len(), 2);
+        for link in &links {
+            let lost = narrowing.lost.get(&link.goal_id);
+            if on_target.contains(&link.goal_id.as_str()) {
+                assert!(lost.is_none());
+            } else {
+                assert_eq!(lost.unwrap(), &vec![pinned]);
+            }
+        }
+        // A target no goal shoots, say one whose frames are all in.
+        let none = narrow(&[pin(999)], NIGHT, &links, &goals).unwrap();
+        assert!(none.lost.is_empty());
+    }
 }

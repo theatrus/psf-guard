@@ -3,7 +3,7 @@ use rusqlite::backup::{Backup, StepResult};
 use tempfile::NamedTempFile;
 
 const APPLICATION_ID: i32 = 0x50474d44;
-const SCHEMA_VERSION: i32 = 34;
+const SCHEMA_VERSION: i32 = 35;
 
 impl MetaStore {
     /// Publish a complete database at a new path. Never adopt an existing empty
@@ -58,6 +58,7 @@ impl MetaStore {
         super::transfer::create_delivery_table(&tx)?;
         super::night_availability::create_tables(&tx)?;
         super::site_forecast::create_tables(&tx)?;
+        super::night_override::create_tables(&tx)?;
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         tx.commit()?;
         conn.close().map_err(|(_, error)| Error::Sqlite(error))?;
@@ -174,6 +175,12 @@ impl MetaStore {
             // older payloads read without, and its stored forecast.
             if version < 34 {
                 super::site_forecast::create_tables(&tx)?;
+            }
+            // Schema 35 adds a Director rig's night overrides, and two
+            // optional fields older payloads read without: a site's time
+            // zone and a rig's mode.
+            if version < 35 {
+                super::night_override::create_tables(&tx)?;
             }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
@@ -393,6 +400,9 @@ fn validate(conn: &Connection) -> Result<Uuid, Error> {
     }
     if version >= 34 {
         super::site_forecast::validate_tables(conn)?;
+    }
+    if version >= 35 {
+        super::night_override::validate_tables(conn)?;
     }
     let id: String = conn.query_row(
         "SELECT instance_id FROM meta WHERE singleton=1",

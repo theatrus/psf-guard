@@ -44,6 +44,18 @@ export interface Drafts {
 
 export const DraftContext = createContext<Drafts | null>(null);
 
+/** Section labels as a list in words: "A, B and C". */
+export const listed = (labels: string[]) => labels.length <= 1 ? labels.join('') : `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]}`;
+
+/** Ask before the page's unsaved edits are dropped, and drop them on a
+ *  yes. True when nothing is left unsaved, so the caller may go on. */
+export function confirmDiscard(drafts: Drafts): boolean {
+  if (drafts.unsaved.length === 0) return true;
+  if (!window.confirm(`Discard the unsaved changes in ${listed(drafts.unsaved.map(section => section.label))}?`)) return false;
+  drafts.discardAll();
+  return true;
+}
+
 /** Navigation state for an address rewrite that shows the same page, such
  *  as a plan's key becoming its canonical one: the leave guard lets it pass
  *  with edits unsaved. It names the address it rewrites, so a later step

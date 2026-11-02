@@ -279,13 +279,23 @@ async fn pair(
         let now = now_ms().map_err(IntoResponse::into_response)?;
         let client = service
             .run(move |store| {
-                store.redeem_client_pairing(
+                let client = store.redeem_client_pairing(
                     &pairing_hash,
                     &token_hash,
                     input.profile_id,
                     &input.client_name,
                     now,
-                )
+                )?;
+                // A rig paired with a Director plugin is run by Director.
+                // The pairing stands even if the mode cannot be written.
+                if let Err(error) = store.set_rig_mode(
+                    client.rig_id,
+                    psf_guard_director_meta::profile::RigMode::Director,
+                    u64::try_from(now).unwrap_or(0),
+                ) {
+                    tracing::warn!(?error, rig = %client.rig_id, "Paired rig's mode was not set to Director");
+                }
+                Ok(client)
             })
             .await
             .map_err(|e| match e {

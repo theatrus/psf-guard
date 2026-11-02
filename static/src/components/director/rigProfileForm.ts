@@ -1,4 +1,4 @@
-import type { DirectorEdited, DirectorFieldOfView, DirectorHorizon, DirectorOptics, DirectorReported, DirectorRigProfile, DirectorRigProfileEdit, DirectorRigProfileView, DirectorSource } from '../../api/directorTypes';
+import type { DirectorEdited, DirectorFieldOfView, DirectorHorizon, DirectorOptics, DirectorReported, DirectorRigMode, DirectorRigProfile, DirectorRigProfileEdit, DirectorRigProfileView, DirectorSource } from '../../api/directorTypes';
 
 /** Text fields for every number the form edits, so a half-typed value never throws. */
 export interface RigProfileForm {
@@ -12,6 +12,8 @@ export interface RigProfileForm {
   peerId: string;
   /** The rig's own horizon, which wins over its site's; null inherits. */
   horizon: DirectorEdited<DirectorHorizon> | null;
+  /** Who picks the rig's work; '' leaves it to PSF Guard's guess. */
+  mode: DirectorRigMode | '';
 }
 
 const text = (value: number | null | undefined) => value === null || value === undefined ? '' : String(value);
@@ -33,6 +35,7 @@ export function formFromProfile(profile: DirectorRigProfile): RigProfileForm {
     meridianBefore: text(limits.meridian_exclusion.before_ms / 60000), meridianAfter: text(limits.meridian_exclusion.after_ms / 60000),
     peerId: profile.peer_id ?? '',
     horizon: profile.horizon ? { value: profile.horizon.value, source: profile.horizon.source } : null,
+    mode: profile.mode ?? '',
   };
 }
 
@@ -104,6 +107,7 @@ export function editFromForm(form: RigProfileForm, profile: DirectorRigProfile):
     sky_quality: bortle !== null ? { value: { bortle_class: bortle, sqm_mag_per_arcsec2: finite(sqm) ? sqm : null }, source: manual } : null,
     limits: { value: { minimum_altitude_degrees: minAlt, maximum_altitude_degrees: maxAlt, meridian_exclusion: { before_ms: Math.round(before * 60000), after_ms: Math.round(after * 60000) } }, source: manual },
     peer_id: form.peerId || null,
+    mode: form.mode || null,
   };
 }
 

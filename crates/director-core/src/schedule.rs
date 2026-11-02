@@ -7,6 +7,7 @@
 //! There is no second scheduler here: every choice is the geometry's.
 
 use crate::geometry::{BoundGeometry, Constraints, Error as GeometryError};
+use crate::overrides::Narrowing;
 use crate::program::{BoundProgram, Program};
 use crate::windows::Interval;
 use crate::{Decision, Request, Safety, State, CONTRACT_VERSION};
@@ -58,6 +59,9 @@ pub struct ScheduleRequest<'a> {
     /// The share of frames each goal, by id, has had accepted; a goal not
     /// listed counts every frame.
     pub acceptance: &'a BTreeMap<String, f64>,
+    /// Each night's overrides, by the night's index; a night past the end
+    /// of the slice, or `None`, has none.
+    pub narrowings: &'a [Option<Narrowing>],
 }
 
 /// One planned exposure.
@@ -88,6 +92,10 @@ pub enum GapReason {
     Twilight,
     /// Outside the night's available windows.
     Unavailable,
+    /// The night's overrides hold the rig.
+    Held,
+    /// The night's overrides exclude every goal still owed.
+    Excluded,
     /// Work fits the sky, but no recipe's Moon rules allow it yet.
     Moon,
     /// No goal's target is inside its limits yet.
@@ -181,11 +189,68 @@ fn clear_at(available: Option<&[Interval]>, at: u64) -> Clear {
     next.map_or(Clear::Never, Clear::From)
 }
 
+/// A wait from `start` to `end`, labelled `reason` except where the
+/// night's overrides exclude every goal still owed.
+fn push_wait(
+    night: &mut PlannedNight,
+    narrowing: Option<&Narrowing>,
+    goals: &[crate::Goal],
+    start: u64,
+    end: u64,
+    reason: GapReason,
+) {
+    let Some(narrowing) = narrowing else {
+        push_gap(night, start, end, reason);
+        return;
+    };
+    // The stretches where exclusion can change: between the lost windows'
+    // starts and ends.
+    let mut cuts: Vec<u64> = narrowing
+        .lost
+        .values()
+        .flatten()
+        .flat_map(|window| [window.start_ms, window.end_ms])
+        .filter(|at| *at > start && *at < end)
+        .collect();
+    cuts.push(end);
+    cuts.sort_unstable();
+    cuts.dedup();
+    let mut from = start;
+    for cut in cuts {
+        let label = if excludes_every_owed_goal(narrowing, goals, from) {
+            GapReason::Excluded
+        } else {
+            reason
+        };
+        push_gap(night, from, cut, label);
+        from = cut;
+    }
+}
+
+/// Whether the night's overrides take `at` from every goal still owed.
+fn excludes_every_owed_goal(narrowing: &Narrowing, goals: &[crate::Goal], at: u64) -> bool {
+    let mut owed = goals
+        .iter()
+        .filter(|g| g.accepted < g.requested && g.attempts_remaining > 0)
+        .peekable();
+    owed.peek().is_some()
+        && owed.all(|goal| {
+            narrowing.lost.get(&goal.id).is_some_and(|lost| {
+                lost.iter()
+                    .any(|window| window.start_ms <= at && at < window.end_ms)
+            })
+        })
+}
+
 /// Run the rig's selection over the nights.
 pub fn simulate(request: &ScheduleRequest) -> Result<Schedule, Error> {
     let constraints = request.constraints;
     let rig = &constraints.rig;
     let mut goals = request.program.assignment.goals.clone();
+    // Each night starts from the program's priorities: a night's own plan
+    // order lasts that night only.
+    let priorities: BTreeMap<String, u32> =
+        goals.iter().map(|g| (g.id.clone(), g.priority)).collect();
     // Accepted frames as the run goes, fractional when frames count at an
     // acceptance rate.
     let mut accepted: BTreeMap<String, f64> = goals
@@ -223,7 +288,20 @@ pub fn simulate(request: &ScheduleRequest) -> Result<Schedule, Error> {
         program.assignment.expires_at_ms = night.span.end_ms;
         for goal in &mut goals {
             goal.eligible_windows = vec![night.span];
+            goal.priority = priorities[&goal.id];
         }
+        let narrowing = request.narrowings.get(index).and_then(Option::as_ref);
+        if let Some(narrowing) = narrowing {
+            narrowing.apply(&mut goals);
+            // The night's plan order stands in place of the rig's, as it
+            // does in the program the rig pulls.
+            if narrowing.priorities.is_some() {
+                program.observing_preferences = None;
+            }
+        }
+        let held_from = narrowing
+            .and_then(Narrowing::held)
+            .map(|held| held.start_ms);
         program.assignment.goals = goals.clone();
         let state = |now_ms: u64, deadline: Option<u64>| State {
             rig_id: rig.rig_id.clone(),
@@ -258,6 +336,13 @@ pub fn simulate(request: &ScheduleRequest) -> Result<Schedule, Error> {
         let mut steps = 0;
         while at < dark.end_ms && steps < MAX_STEPS_PER_NIGHT {
             steps += 1;
+            if let Some(held) = held_from
+                && at >= held
+            {
+                push_gap(&mut planned, at, dark.end_ms, GapReason::Held);
+                at = dark.end_ms;
+                break;
+            }
             let window_end = match clear_at(request.available, at) {
                 Clear::Until(until) => until,
                 Clear::From(from) => {
@@ -272,7 +357,10 @@ pub fn simulate(request: &ScheduleRequest) -> Result<Schedule, Error> {
                     break;
                 }
             };
-            let deadline = dark.end_ms.min(window_end);
+            let deadline = dark
+                .end_ms
+                .min(window_end)
+                .min(held_from.unwrap_or(u64::MAX));
             let assignment = geometry.assignment_with_progress(&goals);
             let decision = geometry
                 .evaluate(
@@ -348,7 +436,7 @@ pub fn simulate(request: &ScheduleRequest) -> Result<Schedule, Error> {
                         Some(next)
                             if next < deadline && reason != "observing_night_window_too_short" =>
                         {
-                            push_gap(&mut planned, at, next, gap);
+                            push_wait(&mut planned, narrowing, &goals, at, next, gap);
                             at = next;
                         }
                         _ => {
@@ -357,7 +445,7 @@ pub fn simulate(request: &ScheduleRequest) -> Result<Schedule, Error> {
                             } else {
                                 gap
                             };
-                            push_gap(&mut planned, at, deadline, reason);
+                            push_wait(&mut planned, narrowing, &goals, at, deadline, reason);
                             at = deadline;
                         }
                     }

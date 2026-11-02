@@ -1,7 +1,7 @@
 import { useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { UNSAFE_DataRouterContext, useBlocker, type Blocker } from 'react-router-dom';
 import { Check, Undo2 } from 'lucide-react';
-import { DraftContext, describeFailure, leavesPage, type Drafts, type SaveFailure } from './pageDraftsState';
+import { DraftContext, confirmDiscard, describeFailure, leavesPage, listed, type Drafts, type SaveFailure } from './pageDraftsState';
 import './pageDrafts.css';
 
 export function DraftProvider({ drafts, children }: { drafts: Drafts; children: ReactNode }) {
@@ -10,8 +10,6 @@ export function DraftProvider({ drafts, children }: { drafts: Drafts; children: 
 
 /** A section's changes the bar lists before "and N more". */
 const MAX_CHANGES_SHOWN = 4;
-
-const listed = (labels: string[]) => labels.length <= 1 ? labels.join('') : `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]}`;
 
 /** The one place a page's edits are saved or dropped. It stays on screen
  *  while anything is unsaved, and asks before the page is left with edits
@@ -63,8 +61,7 @@ function SaveBarView({ drafts, canWrite, blocker }: { drafts: Drafts; canWrite: 
     return !failed;
   };
   const discard = () => {
-    if (!window.confirm(`Discard the unsaved changes in ${listed(labels)}?`)) return;
-    drafts.discardAll();
+    if (!confirmDiscard(drafts)) return;
     setState({ kind: 'idle' });
   };
   if (!dirty && state.kind !== 'saved' && blocker?.state !== 'blocked') return null;

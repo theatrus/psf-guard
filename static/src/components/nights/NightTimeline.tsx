@@ -1,8 +1,10 @@
-import { useState, type CSSProperties } from 'react';
+import { useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react';
 import type { ForecastHour } from '../../api/directorTypes';
 import type { RigNight, ScheduleBlock, ScheduleGapReason, ScheduleRule, ScheduleTargetReason, ScheduledNight } from '../../api/nightPlanTypes';
 import { formatHours } from '../director/visibilityFormat';
-import { formatClock } from './nightsModel';
+import { formatClock as formatBrowserClock } from './nightsModel';
+import type { OverrideBand } from './overridesModel';
+import { BlockMenu, EditableBands, HoldHandle, SNAP_MS, STEP_MS, type TimelineEdit, type TimelineScale } from './TimelineEditing';
 
 const HOUR_MS = 3_600_000;
 
@@ -14,6 +16,8 @@ const GAP_LABEL: Record<ScheduleGapReason, string> = {
   below_limits: 'Below limits',
   complete: 'All done',
   nothing_eligible: 'Nothing fits',
+  held: 'Held',
+  excluded: 'Left out',
 };
 
 const GAP_HELP: Record<ScheduleGapReason, string> = {
@@ -24,6 +28,14 @@ const GAP_HELP: Record<ScheduleGapReason, string> = {
   below_limits: 'Nothing owed is above its horizon and limits for its minimum time.',
   complete: 'Every plan has its frames.',
   nothing_eligible: 'Plans are owed, but none can start before the night or the clear hours end.',
+  held: "The night's overrides hold the rig.",
+  excluded: "The night's overrides leave out every plan still owed.",
+};
+
+const BAND_LABEL: Record<OverrideBand['kind'], string> = {
+  pin: 'Pinned',
+  exclude: 'Left out',
+  hold: 'Held',
 };
 
 const REASON_LABEL: Record<ScheduleTargetReason, string> = {
@@ -70,6 +82,14 @@ interface Props {
   /** The site's clear-sky threshold, when it takes a forecast: hours above
    *  it are drawn as cloudy. */
   cloudThreshold?: number;
+  /** The site's time zone; the browser's without one. */
+  zone?: string;
+  /** The stretches the night's saved or planned overrides cover. */
+  bands?: OverrideBand[];
+  /** While the night's overrides are edited: what they are, and what each
+   *  change on the timeline does. Blocks then move by drag or the arrow
+   *  keys and open a menu, and the overrides become bands to drag. */
+  edit?: TimelineEdit;
 }
 
 /**
@@ -78,8 +98,18 @@ interface Props {
  * gaps with the reason nothing is shot. Choose a block to see why the
  * planner chose its target.
  */
-export default function NightTimeline({ night, scheduled, colours, now, cloudThreshold }: Props) {
-  const [chosen, setChosen] = useState<number | null>(null);
+export default function NightTimeline({ night, scheduled, colours, now, cloudThreshold, zone, bands = [], edit }: Props) {
+  const onMoveBlock = edit?.onMoveBlock;
+  const [menu, setMenu] = useState<string | null>(null);
+  // Blocks keep their key while a re-plan moves them, so a chosen or
+  // dragged block, and the focus on it, stay with it.
+  const keys = blockKeys(scheduled.blocks);
+  const [chosen, setChosen] = useState<string | null>(null);
+  const [drag, setDrag] = useState<{ key: string; x: number; dx: number } | null>(null);
+  const track = useRef<HTMLDivElement>(null);
+  // Set when a drag moved a block, so the click that ends it chooses nothing.
+  const moved = useRef(false);
+  const formatClock = (ms: number) => formatBrowserClock(ms, zone);
   const start = (night.dusk_ms ?? scheduled.start_ms) - HOUR_MS;
   const end = (night.dawn_ms ?? scheduled.end_ms) + HOUR_MS;
   const span = Math.max(1, end - start);
@@ -90,12 +120,49 @@ export default function NightTimeline({ night, scheduled, colours, now, cloudThr
   };
   const ticks: number[] = [];
   for (let t = Math.ceil(start / HOUR_MS) * HOUR_MS; t < end; t += HOUR_MS) ticks.push(t);
-  const block = chosen !== null ? scheduled.blocks[chosen] : null;
+  const chosenIndex = chosen === null ? -1 : keys.indexOf(chosen);
+  const block = chosenIndex >= 0 ? scheduled.blocks[chosenIndex] : null;
+  const width = () => track.current?.getBoundingClientRect().width ?? 0;
+  const toMs = (dx: number) => width() > 0 ? Math.round((dx / width()) * span / SNAP_MS) * SNAP_MS : 0;
+  const scale: TimelineScale = { start, end, place, toMs };
+  const press = (key: string, event: PointerEvent<HTMLButtonElement>) => {
+    if (!onMoveBlock) return;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    setDrag({ key, x: event.clientX, dx: 0 });
+  };
+  const slide = (event: PointerEvent<HTMLButtonElement>) => {
+    if (drag) setDrag({ ...drag, dx: event.clientX - drag.x });
+  };
+  /** A drag of a snap or more moves the block; anything less is a click. */
+  const release = () => {
+    if (!drag || !onMoveBlock) return;
+    const delta = toMs(drag.dx);
+    const index = keys.indexOf(drag.key);
+    setDrag(null);
+    moved.current = delta !== 0;
+    // A block the schedule no longer has is not moved.
+    if (delta !== 0 && index >= 0) onMoveBlock(scheduled.blocks[index], delta);
+  };
+  const nudge = (index: number, event: KeyboardEvent<HTMLButtonElement>) => {
+    if (!onMoveBlock || (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft')) return;
+    event.preventDefault();
+    onMoveBlock(scheduled.blocks[index], event.key === 'ArrowRight' ? STEP_MS : -STEP_MS);
+  };
   const summaryId = `nights-clouds-${night.date}`;
   const reasons = [...new Set(scheduled.gaps.filter(gap => gap.end_ms > start && gap.start_ms < end).map(gap => gap.reason))];
   return <div className="nights-timeline-box">
     <div className="nights-timeline" role="group" aria-label="Schedule">
-      <div className="nights-timeline-track">
+      {edit && <EditableBands edit={edit} scale={scale} />}
+      {!edit && bands.length > 0 && <div className="nights-overrides" role="group" aria-label="Overrides">
+        {bands.map(band => {
+          const style = place(band.start_ms, band.end_ms);
+          if (!style) return null;
+          return <span key={`${band.kind}-${band.start_ms}-${band.label}`} className="nights-override" data-kind={band.kind} style={style} title={band.label}>
+            {BAND_LABEL[band.kind]}
+          </span>;
+        })}
+      </div>}
+      <div className="nights-timeline-track" ref={track}>
         {scheduled.gaps.map(gap => {
           const style = place(gap.start_ms, gap.end_ms);
           if (!style) return null;
@@ -106,11 +173,24 @@ export default function NightTimeline({ night, scheduled, colours, now, cloudThr
           const style = place(item.start_ms, item.end_ms);
           if (!style) return null;
           const frames = item.runs.reduce((sum, run) => sum + run.frames, 0);
-          return <button key={`block-${item.start_ms}`} type="button" className="nights-block" style={style}
-            data-colour={colours.get(item.target.project_name) ?? 0} aria-pressed={chosen === index}
-            aria-label={`${item.target.project_name}, ${item.target.target_name}: ${formatClock(item.start_ms)} – ${formatClock(item.end_ms)}, ${frames} frames`}
+          const key = keys[index];
+          const dragged = drag?.key === key ? { transform: `translateX(${drag.dx}px)` } : {};
+          return <button key={key} type="button" className="nights-block" style={{ ...style, ...dragged }}
+            data-colour={colours.get(item.target.project_name) ?? 0} aria-pressed={chosen === key}
+            data-movable={onMoveBlock ? 'true' : undefined}
+            aria-label={`${item.target.project_name}, ${item.target.target_name}: ${formatClock(item.start_ms)} – ${formatClock(item.end_ms)}, ${frames} frames${onMoveBlock ? '. Choose it for what to do with it; drag it, or press the left and right arrow keys, to move it 15 minutes at a time.' : ''}`}
+            aria-haspopup={edit ? 'menu' : undefined} aria-expanded={edit ? menu === key : undefined}
             title={`${item.target.target_name} · ${formatClock(item.start_ms)} – ${formatClock(item.end_ms)} · ${runSummary(item)}`}
-            onClick={() => setChosen(chosen === index ? null : index)}>
+            onPointerDown={event => press(key, event)}
+            onPointerMove={slide}
+            onPointerUp={release}
+            onPointerCancel={() => setDrag(null)}
+            onKeyDown={event => nudge(index, event)}
+            onClick={() => {
+              if (moved.current) moved.current = false;
+              else if (edit) setMenu(menu === key ? null : key);
+              else setChosen(chosen === key ? null : key);
+            }}>
             {item.runs.map(run => {
               const inner = place(run.start_ms, run.end_ms);
               const share = (run.end_ms - run.start_ms) / Math.max(1, item.end_ms - item.start_ms);
@@ -118,6 +198,7 @@ export default function NightTimeline({ night, scheduled, colours, now, cloudThr
             })}
           </button>;
         })}
+        {edit && <HoldHandle edit={edit} scale={scale} width={width} />}
         {now !== undefined && now > start && now < end && <span className="nights-now" style={{ left: `${((now - start) / span) * 100}%` }} title={`Now, ${formatClock(now)}`} />}
       </div>
       {night.clouds.length > 0 && <div className="nights-clouds" role="group" aria-label="Cloud cover" aria-describedby={summaryId}>
@@ -130,6 +211,13 @@ export default function NightTimeline({ night, scheduled, colours, now, cloudThr
             title={`${formatClock(hour.start_ms)} – ${formatClock(hour.end_ms)}: ${cloudWords(hour)}`} />;
         })}
       </div>}
+      {edit && menu !== null && (() => {
+        const index = keys.indexOf(menu);
+        if (index < 0) return null;
+        const item = scheduled.blocks[index];
+        return <BlockMenu block={item} edit={edit} left={place(item.start_ms, item.end_ms)?.left ?? '0'}
+          onReasons={() => setChosen(menu)} onClose={() => setMenu(null)} />;
+      })()}
       <div className="nights-timeline-axis" aria-hidden="true">
         {ticks.map(t => <span key={t} style={{ left: `${((t - start) / span) * 100}%` }}>{formatClock(t)}</span>)}
       </div>
@@ -137,18 +225,31 @@ export default function NightTimeline({ night, scheduled, colours, now, cloudThr
     {(reasons.length > 0 || night.clouds.length > 0) && <ul className="nights-gap-legend" aria-label="Legend">
       {reasons.map(reason => <li key={reason}><span className="nights-gap-key" data-reason={reason} aria-hidden="true" />{GAP_LABEL[reason]}: {GAP_HELP[reason]}</li>)}
       {night.clouds.length > 0 && <li id={summaryId}><span className="nights-cloud-key" aria-hidden="true" />
-        Cloud cover: the lighter an hour, the more cloud.{cloudThreshold !== undefined && ` ${cloudySummary(night.clouds, cloudThreshold, start, end)}`}
+        Cloud cover: the lighter an hour, the more cloud.{cloudThreshold !== undefined && ` ${cloudySummary(night.clouds, cloudThreshold, start, end, zone)}`}
       </li>}
     </ul>}
     {scheduled.note && <p className="director-muted" role="note">{scheduled.note}</p>}
     {scheduled.blocks.length === 0 && <p className="director-muted">Nothing is scheduled this night.</p>}
-    {block && <BlockReasons block={block} />}
+    {block && <BlockReasons block={block} zone={zone} />}
   </div>;
+}
+
+/** A key per block that a re-plan keeps: its target, and how many blocks
+ *  on that target come before it. */
+function blockKeys(blocks: ScheduleBlock[]): string[] {
+  const seen = new Map<string, number>();
+  return blocks.map(block => {
+    const target = `${block.target.project_id}:${block.target.target_id}`;
+    const count = seen.get(target) ?? 0;
+    seen.set(target, count + 1);
+    return `block-${target}-${count}`;
+  });
 }
 
 /** The hours above the threshold in the drawn span, in words, for those
  *  who cannot see the strip's red edges. */
-function cloudySummary(hours: ForecastHour[], threshold: number, from: number, to: number): string {
+function cloudySummary(hours: ForecastHour[], threshold: number, from: number, to: number, zone?: string): string {
+  const formatClock = (ms: number) => formatBrowserClock(ms, zone);
   const spans: Array<{ start: number; end: number }> = [];
   for (const hour of hours) {
     if (hour.cloud_total <= threshold || hour.end_ms <= from || hour.start_ms >= to) continue;
@@ -178,8 +279,9 @@ function runSummary(block: ScheduleBlock): string {
 
 /** Why the planner chose a block's target: the candidates it looked at,
  *  and the rule scores of those it scored. */
-function BlockReasons({ block }: { block: ScheduleBlock }) {
+function BlockReasons({ block, zone }: { block: ScheduleBlock; zone?: string }) {
   const { decision } = block;
+  const formatClock = (ms: number) => formatBrowserClock(ms, zone);
   const scored = decision.candidates.filter(candidate => candidate.score);
   const rules = [...new Set(scored.flatMap(candidate => candidate.score!.rules.map(rule => rule.rule)))];
   const exposure = block.runs.reduce((sum, run) => sum + run.frames * run.exposure_seconds, 0) / 3600;

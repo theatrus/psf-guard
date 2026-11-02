@@ -42,6 +42,7 @@ function fixture(conflictOnce = false) {
       site: { value: site, source: { kind: 'frame_headers', file_name: 'newest.fits' }, reported_at_ms: 2 },
       field_of_view: null,
     },
+    mode: { set: profile.mode ?? null, runtime: profile.mode ?? 'target_scheduler', paired: false, equipment: false },
   });
   server.use(
     http.get('/api/peers', () => HttpResponse.json(ok([{ id: 'obs', name: 'Observatory', base_url: 'https://obs.example', catalog_id: null, token_configured: true }]))),
@@ -54,7 +55,8 @@ function fixture(conflictOnce = false) {
         optics: edit.optics ? { ...edit.optics, reported_at_ms: 3 } : null,
         site: edit.site ? { ...edit.site, reported_at_ms: 3 } : null,
         sky_quality: edit.sky_quality ? { ...edit.sky_quality, reported_at_ms: 3 } : null,
-        limits: { ...edit.limits, reported_at_ms: 3 }, peer_id: edit.peer_id };
+        limits: { ...edit.limits, reported_at_ms: 3 }, peer_id: edit.peer_id,
+        ...(edit.mode !== undefined ? { mode: edit.mode } : {}) };
       return HttpResponse.json(ok({ ...view(), profile, field_of_view: { width_degrees: 5.38, height_degrees: 3.6, pixel_scale_arcsec: 3.1, focal_ratio: 4.9 } }));
     }),
   );
@@ -484,5 +486,27 @@ describe('Rig profile card', () => {
     expect(alert).toHaveTextContent('This rig changed since you loaded it');
     fireEvent.click(within(alert).getByRole('button', { name: 'Reload' }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Save rig profile' })).toBeEnabled());
+  });
+
+  it('sets the rig\'s mode, showing the guess until one is chosen and what Director needs', async () => {
+    const { saves } = fixture();
+    mount();
+    const modes = await screen.findByRole('radiogroup', { name: 'Who runs this rig' });
+    // Not set: the guess is said, and neither mode is chosen, so either,
+    // the guess too, sets it in one click.
+    expect(within(modes).getByLabelText('Target Scheduler')).not.toBeChecked();
+    expect(within(modes).getByLabelText('Director')).not.toBeChecked();
+    expect(screen.getByText(/Not set yet, so PSF Guard plans this rig as Target Scheduler, its guess/)).toBeInTheDocument();
+    expect(screen.queryByRole('list', { name: 'What Director needs' })).toBeNull();
+    fireEvent.click(within(modes).getByLabelText('Target Scheduler'));
+    expect(within(modes).getByLabelText('Target Scheduler')).toBeChecked();
+    expect(screen.queryByText(/Not set yet/)).toBeNull();
+    fireEvent.click(within(modes).getByLabelText('Director'));
+    const needs = screen.getByRole('list', { name: 'What Director needs' });
+    expect(needs).toHaveTextContent('Pair the N.I.N.A. Director plugin with this rig. Pairing sets this mode by itself.');
+    expect(screen.queryByText(/Not set yet/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Save rig profile' }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0].mode).toBe('director');
   });
 });

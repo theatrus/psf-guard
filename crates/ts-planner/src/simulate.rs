@@ -98,6 +98,12 @@ pub enum GapReason {
     Complete,
     /// Targets are owed, but none can be imaged before the night ends.
     NothingEligible,
+    /// A Director rig's overrides hold it for the rest of the night. Target
+    /// Scheduler's emulation never gives this.
+    Held,
+    /// A Director rig's overrides exclude every goal still owed. Target
+    /// Scheduler's emulation never gives this.
+    Excluded,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]

@@ -138,6 +138,7 @@ fn run(
         available,
         overheads: Overheads::default(),
         acceptance: &BTreeMap::new(),
+        narrowings: &[],
     })
     .unwrap()
 }
@@ -283,4 +284,226 @@ fn work_stays_inside_the_available_windows() {
         .gaps
         .iter()
         .any(|g| g.reason == GapReason::Unavailable));
+}
+
+fn narrowed(
+    program: &Program,
+    constraints: &Constraints,
+    count: u32,
+    narrowings: &[Option<overrides::Narrowing>],
+) -> schedule::Schedule {
+    let range = nights(count);
+    simulate(&ScheduleRequest {
+        program,
+        constraints,
+        nights: &range,
+        start_ms: START,
+        available: None,
+        overheads: Overheads::default(),
+        acceptance: &BTreeMap::new(),
+        narrowings,
+    })
+    .unwrap()
+}
+
+const HOUR: u64 = 3_600_000;
+
+#[test]
+fn an_excluded_goal_gets_no_frames_that_night_only() {
+    let (program, constraints) = program([400, 400]);
+    let range = nights(2);
+    let narrowing = overrides::Narrowing {
+        lost: BTreeMap::from([("heart".to_string(), vec![range[0].span])]),
+        ..overrides::Narrowing::none(range[0].span)
+    };
+    let schedule = narrowed(&program, &constraints, 2, &[Some(narrowing)]);
+    assert!(!schedule.nights[0].exposures.is_empty());
+    assert!(schedule.nights[0]
+        .exposures
+        .iter()
+        .all(|e| e.goal_id == "soul"));
+    // The next night is the program's own, where the Heart outranks the Soul.
+    assert_eq!(schedule.nights[1].exposures[0].goal_id, "heart");
+}
+
+#[test]
+fn a_stretch_that_excludes_every_owed_goal_says_so() {
+    let (program, constraints) = program([400, 400]);
+    let range = nights(1);
+    let dark = range[0].dark.unwrap();
+    let out = Interval {
+        start_ms: dark.start_ms + 2 * HOUR,
+        end_ms: dark.start_ms + 3 * HOUR,
+    };
+    let narrowing = overrides::Narrowing {
+        lost: BTreeMap::from([
+            ("heart".to_string(), vec![out]),
+            ("soul".to_string(), vec![out]),
+        ]),
+        ..overrides::Narrowing::none(range[0].span)
+    };
+    let night = &narrowed(&program, &constraints, 1, &[Some(narrowing)]).nights[0];
+    assert!(
+        night
+            .exposures
+            .iter()
+            .all(|e| e.end_ms <= out.start_ms || e.start_ms >= out.end_ms),
+        "{:?} {:?}",
+        out,
+        night
+            .exposures
+            .iter()
+            .filter(|e| e.end_ms > out.start_ms && e.start_ms < out.end_ms)
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        night
+            .gaps
+            .iter()
+            .any(|g| g.reason == GapReason::Excluded && g.end_ms == out.end_ms),
+        "{:?}",
+        night.gaps
+    );
+}
+
+/// Pinning the Soul to a window takes the window from every other goal.
+/// The schedule runs only the Soul there, and a program narrowed the same
+/// way, as the rig pulls it, chooses the same goal at each of its frames.
+#[test]
+fn a_pinned_window_runs_only_its_goal_as_the_pulled_program_does() {
+    let (program, constraints) = program([400, 400]);
+    let range = nights(1);
+    let span = range[0].span;
+    let dark = range[0].dark.unwrap();
+    let pin = Interval {
+        start_ms: dark.start_ms + 2 * HOUR,
+        end_ms: dark.start_ms + 4 * HOUR,
+    };
+    let narrowing = overrides::Narrowing {
+        lost: BTreeMap::from([("heart".to_string(), vec![pin])]),
+        ..overrides::Narrowing::none(span)
+    };
+    let schedule = narrowed(&program, &constraints, 1, &[Some(narrowing.clone())]);
+    let night = &schedule.nights[0];
+    let inside: Vec<_> = night
+        .exposures
+        .iter()
+        .filter(|e| e.start_ms >= pin.start_ms && e.start_ms < pin.end_ms)
+        .collect();
+    assert!(!inside.is_empty());
+    assert!(inside.iter().all(|e| e.goal_id == "soul"), "{inside:?}");
+    // Outside the window the Heart outranks the Soul again, and none of its
+    // frames runs into the window.
+    let heart: Vec<_> = night
+        .exposures
+        .iter()
+        .filter(|e| e.goal_id == "heart")
+        .collect();
+    assert_eq!(night.exposures[0].goal_id, "heart");
+    assert!(heart
+        .iter()
+        .all(|e| e.end_ms <= pin.start_ms || e.start_ms >= pin.end_ms));
+    assert!(heart.iter().any(|e| e.start_ms >= pin.end_ms));
+
+    let mut pulled = program.clone();
+    pulled.assignment.valid_from_ms = span.start_ms;
+    pulled.assignment.expires_at_ms = span.end_ms;
+    for goal in &mut pulled.assignment.goals {
+        goal.eligible_windows = vec![span];
+    }
+    narrowing.apply(&mut pulled.assignment.goals);
+    let state = |now_ms: u64| State {
+        rig_id: "rig-1".into(),
+        configuration_id: "config-1".into(),
+        now_ms,
+        conditions_valid_until_ms: span.end_ms,
+        completion_deadline_ms: Some(dark.end_ms),
+        safety: Safety::Safe,
+        at_boundary: true,
+        operator_stop: false,
+        meridian_exclusion: constraints.rig.meridian_exclusion,
+    };
+    let geometry = BoundGeometry::new(
+        BoundProgram::new(pulled.clone(), &state(span.start_ms)).unwrap(),
+        constraints.clone(),
+        &state(span.start_ms),
+    )
+    .unwrap();
+    let mut goals = pulled.assignment.goals.clone();
+    for exposure in &night.exposures {
+        let decision = geometry
+            .evaluate(
+                &Request {
+                    contract_version: CONTRACT_VERSION,
+                    assignment: geometry.assignment_with_progress(&goals),
+                    state: state(exposure.start_ms),
+                },
+                &constraints,
+            )
+            .unwrap();
+        assert_eq!(
+            decision,
+            Decision::Acquire {
+                goal_id: exposure.goal_id.clone(),
+                reason: exposure.reason.clone()
+            },
+            "at {}",
+            exposure.start_ms
+        );
+        let goal = goals.iter_mut().find(|g| g.id == exposure.goal_id).unwrap();
+        goal.accepted += 1;
+        goal.attempts_remaining -= 1;
+    }
+}
+
+#[test]
+fn a_hold_ends_the_night_at_its_start() {
+    let (program, constraints) = program([400, 400]);
+    let range = nights(1);
+    let dark = range[0].dark.unwrap();
+    let from = dark.start_ms + 3 * HOUR;
+    let narrowing = overrides::Narrowing {
+        hold_from_ms: Some(from),
+        ..overrides::Narrowing::none(range[0].span)
+    };
+    let night = &narrowed(&program, &constraints, 1, &[Some(narrowing)]).nights[0];
+    assert!(!night.exposures.is_empty());
+    assert!(night.exposures.iter().all(|e| e.end_ms <= from));
+    let held = night
+        .gaps
+        .iter()
+        .find(|g| g.reason == GapReason::Held)
+        .expect("a held gap");
+    assert!(
+        held.start_ms <= from && held.end_ms == dark.end_ms,
+        "{held:?}"
+    );
+}
+
+#[test]
+fn a_nights_own_order_lasts_that_night() {
+    let (program, constraints) = program([400, 400]);
+    let range = nights(2);
+    let narrowing = overrides::Narrowing {
+        priorities: Some(BTreeMap::from([
+            ("soul".to_string(), 2),
+            ("heart".to_string(), 1),
+        ])),
+        ..overrides::Narrowing::none(range[0].span)
+    };
+    let schedule = narrowed(&program, &constraints, 2, &[Some(narrowing)]);
+    // The Heart rises first. Once the Soul is up it takes every frame that
+    // night, and the next night the Heart outranks it again.
+    let first = &schedule.nights[0].exposures;
+    let soul = first.iter().position(|e| e.goal_id == "soul").unwrap();
+    assert!(first[soul..].iter().all(|e| e.goal_id == "soul"));
+    let second = &schedule.nights[1].exposures;
+    let heart = second.iter().filter(|e| e.goal_id == "heart").count();
+    assert!(heart > second.len() / 2, "{heart} of {}", second.len());
+    let unordered = narrowed(&program, &constraints, 1, &[]);
+    assert!(unordered.nights[0]
+        .exposures
+        .iter()
+        .take(first.len() / 2)
+        .all(|e| e.goal_id == "heart"));
 }

@@ -159,3 +159,33 @@ describe('night plan helpers', () => {
     expect(completesOn([entry(null, true)])).toBe(-1);
   });
 });
+
+describe('clocks in a site time zone', () => {
+  it('reads and shows times on the site clock, across a change to standard time', async () => {
+    const { clockOnNight, clockValue } = await import('../nightsModel');
+    // 1 November 2026: Los Angeles leaves daylight time at 02:00, so the
+    // evening and the small hours after it are both eight hours behind UTC.
+    expect(clockOnNight('2026-11-01', '21:00', 'America/Los_Angeles')).toBe(Date.UTC(2026, 10, 2, 5, 0));
+    expect(clockOnNight('2026-11-01', '01:30', 'America/Los_Angeles')).toBe(Date.UTC(2026, 10, 2, 9, 30));
+    // The evening before the change is still seven hours behind.
+    expect(clockOnNight('2026-10-31', '21:00', 'America/Los_Angeles')).toBe(Date.UTC(2026, 10, 1, 4, 0));
+    expect(clockOnNight('2026-07-01', '22:15', 'Europe/Berlin')).toBe(Date.UTC(2026, 6, 1, 20, 15));
+    // An hour after the change: a guess read at the old offset is an hour
+    // early, which the second pass corrects.
+    expect(clockOnNight('2026-10-31', '03:00', 'America/Los_Angeles')).toBe(Date.UTC(2026, 10, 1, 11, 0));
+    expect(clockValue(Date.UTC(2026, 10, 2, 9, 30), 'America/Los_Angeles')).toBe('01:30');
+    expect(clockValue(Date.UTC(2026, 6, 1, 20, 15), 'Europe/Berlin')).toBe('22:15');
+  });
+});
+
+describe('a zone this browser does not know', () => {
+  it('falls back to the browser\'s clock instead of failing', async () => {
+    const { clockValue, formatClock, usableZone } = await import('../nightsModel');
+    expect(usableZone('Mars/Olympus_Mons')).toBeUndefined();
+    expect(usableZone('Europe/Berlin')).toBe('Europe/Berlin');
+    expect(usableZone(null)).toBeUndefined();
+    const at = Date.UTC(2026, 10, 3, 4, 0);
+    expect(formatClock(at, 'Mars/Olympus_Mons')).toBe(formatClock(at));
+    expect(clockValue(at, 'Mars/Olympus_Mons')).toBe(clockValue(at));
+  });
+});

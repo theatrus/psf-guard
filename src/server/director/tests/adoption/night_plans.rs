@@ -654,3 +654,353 @@ async fn a_plans_projection_follows_its_rigs_schedule_and_a_plan_ranked_ahead_de
         );
     }
 }
+
+/// A Target Scheduler rig's night is planned with unsaved changes to its
+/// projects and targets, as Target Scheduler would read them, and the
+/// preview writes nothing. The controls read the rows as saved.
+#[tokio::test]
+async fn a_target_scheduler_draft_plans_the_rig_as_changed_and_writes_nothing() {
+    let a = activated().await;
+    place(&a).await;
+    let heart = project(&a, "Heart", 25.0, 400, 0);
+    let soul = project(&a, "Soul", 25.0, 400, 0);
+    let path = a.f._dir.path().join("rig.sqlite");
+    let before = std::fs::read(&path).unwrap();
+    let body = |draft: Option<Value>| {
+        let mut body = json!({"nights": 1, "start_ms": START_MS, "schedule_nights": 1, "plan_from_ms": START_MS});
+        if let Some(changes) = draft {
+            body["ts_draft"] = json!({"rig": a.rig, "changes": changes});
+        }
+        body
+    };
+    let shot = |planned: &Value| -> Vec<String> {
+        planned["data"]["rigs"][0]["schedule"]["nights"][0]["blocks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|b| b["target"]["project_name"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    let (status, planned) = call(&a.f.app, "POST", "/night-plans", body(None), None).await;
+    assert_eq!(status, StatusCode::OK, "{planned}");
+    let rig = &planned["data"]["rigs"][0];
+    assert_eq!(rig["ts_save"]["files"], json!([path.to_string_lossy()]));
+    assert!(rig["ts_save"]["refused"].is_null());
+    let projects = rig["ts_projects"].as_array().unwrap();
+    assert!(projects
+        .iter()
+        .any(|p| p["name"] == "Heart" && p["state"] == "active" && p["priority"] == "normal"));
+    assert!(shot(&planned).iter().any(|name| name == "Heart"), "{rig}");
+
+    // With Heart set inactive, Target Scheduler would shoot only Soul.
+    let (status, drafted) = call(
+        &a.f.app,
+        "POST",
+        "/night-plans",
+        body(Some(
+            json!({"projects": [{"project_id": heart, "state": "inactive"}]}),
+        )),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{drafted}");
+    let names = shot(&drafted);
+    assert!(
+        !names.is_empty() && names.iter().all(|name| name == "Soul"),
+        "{names:?}"
+    );
+    // The controls still read Heart as saved: active.
+    assert!(drafted["data"]["rigs"][0]["ts_projects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|p| p["project_id"] == heart && p["state"] == "active"));
+    // A change to a row the database lacks is named, not planned, and
+    // the changes after it are still planned.
+    let (_, missing) = call(
+        &a.f.app,
+        "POST",
+        "/night-plans",
+        body(Some(json!({
+            "projects": [{"project_id": 999, "state": "inactive"}, {"project_id": heart, "state": "inactive"}],
+            "targets": [{"target_id": 999, "active": false}],
+        }))),
+        None,
+    )
+    .await;
+    let warnings = missing["data"]["rigs"][0]["warnings"].as_array().unwrap();
+    for named in ["Project 999 is no longer", "Target 999 is no longer"] {
+        assert!(
+            warnings.iter().any(|w| w.as_str().unwrap().contains(named)),
+            "{missing}"
+        );
+    }
+    let names = shot(&missing);
+    assert!(
+        !names.is_empty() && names.iter().all(|name| name == "Soul"),
+        "{names:?}"
+    );
+    let _ = soul;
+    drop((planned, drafted, missing));
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+}
+
+/// Saving writes the changed columns of each row only while the row holds
+/// what the person read, in the rig's database and, for a catalog kept in
+/// step with Target Scheduler, in Target Scheduler's file, all or nothing.
+#[tokio::test]
+async fn saving_target_scheduler_changes_writes_rows_that_still_hold_what_was_read() {
+    let a = activated().await;
+    place(&a).await;
+    let heart = project(&a, "Heart", 25.0, 400, 0);
+    a.db.execute(
+        "UPDATE target SET guid = lower(hex(randomblob(16))) WHERE guid IS NULL",
+        [],
+    )
+    .unwrap();
+    let target: i64 =
+        a.db.query_row(
+            "SELECT Id FROM target WHERE projectid = ?1",
+            [heart],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let path = format!("/rigs/{}/target-scheduler", a.rig);
+    // Heart's project and target, their ids moved on by `offset`.
+    let row_at = |db: &Connection, offset: i64| -> (i64, i64, bool) {
+        let (priority, state): (i64, i64) = db
+            .query_row(
+                "SELECT priority, state FROM project WHERE Id = ?1",
+                [heart + offset],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        let active: bool = db
+            .query_row(
+                "SELECT active FROM target WHERE Id = ?1",
+                [target + offset],
+                |r| r.get(0),
+            )
+            .unwrap();
+        (priority, state, active)
+    };
+    let row = |db: &Connection| row_at(db, 0);
+    let change = json!({
+        "projects": [{"project_id": heart, "priority": "high", "was": {"priority": "normal", "state": "active"}}],
+        "targets": [{"target_id": target, "active": false, "was_active": true}],
+    });
+    let (status, saved) = call(&a.f.app, "PUT", &path, change.clone(), None).await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(
+        (
+            saved["data"]["projects"].as_u64(),
+            saved["data"]["targets"].as_u64()
+        ),
+        (Some(1), Some(1))
+    );
+    assert_eq!(row(&a.db), (2, 1, false));
+    // The same change again: the rows no longer hold what it read.
+    let (status, stale) = call(&a.f.app, "PUT", &path, change, None).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{stale}");
+    assert!(stale["error"]
+        .as_str()
+        .unwrap()
+        .contains("changed in the rig's database"));
+    let (status, _) = call(
+        &a.f.app,
+        "PUT",
+        &path,
+        json!({"projects": [{"project_id": heart, "priority": "low"}]}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+
+    // Kept in step with Target Scheduler: its file is written too, where
+    // Target Scheduler numbers the same rows, found by GUID, its own way.
+    let rig_db = a.f._dir.path().join("rig.sqlite");
+    let source = keep_in_step(&a);
+    let ts = Connection::open(&source).unwrap();
+    ts.execute_batch(
+        "PRAGMA foreign_keys = OFF;
+         UPDATE project SET Id = Id + 1000;
+         UPDATE target SET Id = Id + 1000, projectid = projectid + 1000;
+         UPDATE exposureplan SET targetid = targetid + 1000;",
+    )
+    .unwrap();
+    let back = json!({"projects": [{"project_id": heart, "priority": "normal", "was": {"priority": "high", "state": "active"}}]});
+    let (status, saved) = call(&a.f.app, "PUT", &path, back, None).await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(
+        saved["data"]["files"],
+        json!([rig_db.to_string_lossy(), source.to_string_lossy()])
+    );
+    assert_eq!(row(&a.db).0, 1);
+    assert_eq!(row_at(&ts, 1000), (1, 1, false));
+    // N.I.N.A. changes the row in Target Scheduler's file: nothing is
+    // written, in either file.
+    ts.execute(
+        "UPDATE project SET priority = 0 WHERE Id = ?1",
+        [heart + 1000],
+    )
+    .unwrap();
+    let again = json!({"projects": [{"project_id": heart, "priority": "high", "was": {"priority": "normal", "state": "active"}}]});
+    let (status, refused) = call(&a.f.app, "PUT", &path, again, None).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert!(refused["error"]
+        .as_str()
+        .unwrap()
+        .contains("Target Scheduler's database"));
+    assert_eq!(row(&a.db).0, 1, "the rig's database is left as it was");
+    assert_eq!(row_at(&ts, 1000).0, 0);
+}
+
+/// Keep the rig's database in step with a copy of it as Target
+/// Scheduler's own file, and return that file.
+fn keep_in_step(a: &Activated) -> std::path::PathBuf {
+    let rig_db = a.f._dir.path().join("rig.sqlite");
+    let source = a.f._dir.path().join("TargetScheduler.sqlite");
+    std::fs::copy(&rig_db, &source).unwrap();
+    let mut context = crate::server::database_context::DatabaseContext::new(
+        "rig".into(),
+        "RedCat rig".into(),
+        rig_db.to_string_lossy().into(),
+        vec![a.f._dir.path().to_string_lossy().into()],
+        None,
+        None,
+        None,
+        a.f._dir.path().join("cache"),
+    )
+    .unwrap();
+    context.ts_sync = Some(crate::ts_sync::Settings {
+        source_path: source.to_string_lossy().into(),
+        writeback: false,
+        on_open: false,
+        on_change: false,
+        interval_minutes: 0,
+    });
+    a.f.state
+        .databases
+        .write()
+        .unwrap()
+        .insert("rig".into(), Arc::new(context));
+    source
+}
+
+/// Saving writes only rows of the rig's N.I.N.A. profile, finds a row in
+/// Target Scheduler's file only by a GUID it has, and needs a server that
+/// may write into rig databases.
+#[tokio::test]
+async fn target_scheduler_changes_reach_only_the_rigs_profile_and_rows_with_guids() {
+    let a = activated().await;
+    place(&a).await;
+    let heart = project(&a, "Heart", 25.0, 400, 0);
+    let soul = project(&a, "Soul", 25.0, 400, 0);
+    let other = project(&a, "Other", 25.0, 400, 0);
+    a.db.execute(
+        "UPDATE project SET profileId = 'profile-b' WHERE Id = ?1",
+        [other],
+    )
+    .unwrap();
+    let path = format!("/rigs/{}/target-scheduler", a.rig);
+    let raise = |project: i64| json!({"projects": [{"project_id": project, "priority": "high", "was": {"priority": "normal", "state": "active"}}]});
+    let priority = |db: &Connection, project: i64| -> i64 {
+        db.query_row(
+            "SELECT priority FROM project WHERE Id = ?1",
+            [project],
+            |r| r.get(0),
+        )
+        .unwrap()
+    };
+    // Another profile's project is not the rig's.
+    let (status, refused) = call(&a.f.app, "PUT", &path, raise(other), None).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert!(refused["error"]
+        .as_str()
+        .unwrap()
+        .contains("no longer in the rig's database"));
+    assert_eq!(priority(&a.db, other), 1);
+
+    // Rows from before Target Scheduler's GUIDs hold an empty one, which
+    // would match every such row in its file, the other profile's too.
+    let source = keep_in_step(&a);
+    let ts = Connection::open(&source).unwrap();
+    for db in [&a.db, &ts] {
+        db.execute(
+            "UPDATE project SET guid = '' WHERE Id IN (?1, ?2)",
+            [heart, other],
+        )
+        .unwrap();
+    }
+    let (status, refused) = call(&a.f.app, "PUT", &path, raise(heart), None).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    assert!(refused["error"].as_str().unwrap().contains("has no GUID"));
+    for db in [&a.db, &ts] {
+        assert_eq!((priority(db, heart), priority(db, other)), (1, 1));
+    }
+
+    // A server that may not write into rig databases says so, and refuses.
+    a.f.state.set_allow_database_management(false);
+    let (_, planned) = call(
+        &a.f.app,
+        "POST",
+        "/night-plans",
+        json!({"nights": 1, "start_ms": START_MS}),
+        None,
+    )
+    .await;
+    assert!(planned["data"]["rigs"][0]["ts_save"]["refused"]
+        .as_str()
+        .unwrap()
+        .contains("does not write into rig databases"));
+    let (status, _) = call(&a.f.app, "PUT", &path, raise(soul), None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(priority(&a.db, soul), 1);
+}
+
+/// A rig Director drives, or one that runs on another PSF Guard, refuses
+/// Target Scheduler changes.
+#[tokio::test]
+async fn target_scheduler_changes_are_refused_where_they_would_not_decide_or_reach_the_rig() {
+    let a = activated().await;
+    place(&a).await;
+    let heart = project(&a, "Heart", 25.0, 400, 0);
+    let path = format!("/rigs/{}/target-scheduler", a.rig);
+    let change = json!({"projects": [{"project_id": heart, "priority": "high", "was": {"priority": "normal", "state": "active"}}]});
+    // A rig whose database lives on a Sync peer.
+    let set_peer = |peer: Option<&str>| {
+        let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        let mut profile = store.rig_profile(a.rig).unwrap().unwrap();
+        let revision = profile.revision;
+        profile.peer_id = peer.map(str::to_owned);
+        store.save_rig_profile(&profile, revision).unwrap();
+    };
+    set_peer(Some("observatory"));
+    let (status, refused) = call(&a.f.app, "PUT", &path, change.clone(), None).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert!(refused["error"]
+        .as_str()
+        .unwrap()
+        .contains("another PSF Guard (observatory)"));
+    let (_, planned) = call(
+        &a.f.app,
+        "POST",
+        "/night-plans",
+        json!({"nights": 1, "start_ms": START_MS}),
+        None,
+    )
+    .await;
+    assert!(planned["data"]["rigs"][0]["ts_save"]["refused"]
+        .as_str()
+        .unwrap()
+        .contains("observatory"));
+    set_peer(None);
+
+    super::night_overrides::drive_with_director(&a).await;
+    let (status, refused) = call(&a.f.app, "PUT", &path, change, None).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert!(refused["error"]
+        .as_str()
+        .unwrap()
+        .contains("Director drives this rig"));
+}

@@ -20,6 +20,11 @@ pub struct SiteProfile {
     /// sends nothing about the site anywhere.
     #[serde(default)]
     pub forecast: Option<crate::site_forecast::ForecastSettings>,
+    /// The site's IANA time zone, such as `America/Los_Angeles`, in which
+    /// marks and overrides are entered and shown. `None` uses the browser's.
+    /// Nights stay keyed by local mean time at the site's longitude.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_zone: Option<String>,
     pub updated_at_ms: u64,
 }
 
@@ -31,6 +36,7 @@ impl SiteProfile {
             location: None,
             horizon: None,
             forecast: None,
+            time_zone: None,
             updated_at_ms: now_ms,
         }
     }
@@ -60,6 +66,19 @@ pub struct RigSite {
 
 const MAX_TIME_MS: u64 = 4_102_444_800_000; // 2100-01-01
 
+/// Whether `zone` is shaped like an IANA zone name (`Europe/Berlin`,
+/// `Etc/GMT+5`, `UTC`). Only the browser converts with it, and refuses a
+/// name it does not know.
+pub fn time_zone_name(zone: &str) -> bool {
+    (1..=64).contains(&zone.len())
+        && zone.split('/').all(|part| {
+            !part.is_empty()
+                && part
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'+'))
+        })
+}
+
 fn validate(profile: &SiteProfile) -> Result<(), Error> {
     valid_id(profile.site_id)?;
     if profile.updated_at_ms > MAX_TIME_MS {
@@ -73,6 +92,13 @@ fn validate(profile: &SiteProfile) -> Result<(), Error> {
     }
     if let Some(forecast) = &profile.forecast {
         forecast.validate()?;
+    }
+    if profile
+        .time_zone
+        .as_deref()
+        .is_some_and(|zone| !time_zone_name(zone))
+    {
+        return Err(Error::InvalidInput);
     }
     if let Some(horizon) = &profile.horizon {
         if horizon.reported_at_ms > MAX_TIME_MS {

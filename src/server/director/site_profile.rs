@@ -38,6 +38,10 @@ struct Edit {
     /// are off for the site, and PSF Guard sends nothing about it.
     #[serde(default)]
     forecast: Option<ForecastSettings>,
+    /// The site's IANA time zone, for entering and showing marks and
+    /// overrides. Left out, the browser's zone is used.
+    #[serde(default)]
+    time_zone: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -89,6 +93,18 @@ async fn put_profile(
     {
         return Err(Error::Invalid);
     }
+    let time_zone = edit
+        .time_zone
+        .map(|zone| zone.trim().to_owned())
+        .filter(|zone| !zone.is_empty());
+    if time_zone
+        .as_deref()
+        .is_some_and(|zone| !psf_guard_director_meta::site_profile::time_zone_name(zone))
+    {
+        return Err(Error::Refused(
+            "Choose the site's time zone from the list, such as America/Los_Angeles.".into(),
+        ));
+    }
     if edit.forecast.is_some() && edit.location.is_none() {
         return Err(Error::Refused(
             "A forecast needs the site's location. Enter its latitude and longitude.".into(),
@@ -112,6 +128,7 @@ async fn put_profile(
             );
             next.horizon = stamp(edit.horizon, previous.and_then(|p| p.horizon.as_ref()), now);
             next.forecast = edit.forecast;
+            next.time_zone = time_zone;
             next.updated_at_ms = now;
             let profile = store.save_site_profile(&next, edit.expected_revision)?;
             // A forecast is for one provider and one place, to two

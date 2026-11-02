@@ -10,6 +10,7 @@ mod file_delivery;
 mod forecasts;
 mod framing;
 mod mosaic;
+mod night_overrides;
 mod night_plans;
 mod plan;
 mod plan_progress;

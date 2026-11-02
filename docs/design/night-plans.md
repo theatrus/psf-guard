@@ -1,12 +1,12 @@
 # Night plans
 
-Status: **In progress**. Phases 1 to 5 and 7 are built: summaries, manual
+Status: **In progress**. Phases 1 to 7 are built: summaries, manual
 availability, the Target Scheduler emulation, the Director emulation,
 projection (each plan's completion night by its rig's own schedule, and an
-availability-aware `nights_to_complete`), and cloud forecasts. Phase 6
-(overrides) is not. §5 says what each phase built and what is left. The
-answers in §7 marked *provisional* are what the code does now; confirm them
-or change them. Last updated: 2026-11-01. Tracks
+availability-aware `nights_to_complete`), Director overrides, and cloud
+forecasts. §5 says what each phase built and what is left. The answers in
+§7 marked *provisional* are what the code does now; confirm them or change
+them. Last updated: 2026-11-02. Tracks
 [#1037](https://github.com/theatrus/psf-guard/issues/1037).
 
 This record plans per-rig nightly plan summaries, a shooting schedule preview
@@ -689,8 +689,13 @@ refused.
   - Schema 33 (Phase 2) adds `night_availability`, keyed by scope, scope
     id, night date and source, with state, note, revision and update
     time, and its windows in a child table.
-  - The next schema (Phase 6) adds `night_override`, keyed by rig and
-    night date, with its ordered entries and revision.
+  - Schema 35 (Phase 6) adds a rig profile's optional `mode`, and
+    `night_override`, keyed by rig and night
+    date, with its ordered entries as JSON and the revision that wrote
+    them, and `night_override_rig`, one write counter per rig, so a night
+    cleared and written again never reuses a revision. A write is checked
+    against the night's own revision. The site profile gains an optional
+    `time_zone`.
 
 ### 4.8 Interface
 
@@ -718,12 +723,18 @@ refused.
     per target and filter, drawn over the altitude chart
     `VisibilityPanel` already draws, with the gaps labelled by reason.
   - On a Target Scheduler rig:
-    - the timeline is read-only;
-    - a block's tooltip gives the candidates' rule scores;
-    - a note says Target Scheduler decides on the rig, and that changing
-      the plan's priority, limits or rule weights changes the
-      prediction;
-    - **Compare with Director** shows what Director would do.
+    - the timeline shows the prediction, and a block gives the
+      candidates' rule scores;
+    - **Target Scheduler settings** lists the profile's projects and
+      targets, and changes a project's priority and whether it is active,
+      and whether a target is. The schedule plans the change first; saving
+      writes it to the rig's database and, for a catalog kept in step, to
+      Target Scheduler's file. The panel says these last until changed
+      back, unlike a Director override;
+    - the page plans only the rig's own runtime, counted as a live run.
+      *Changed with Phase 6: **Compare with Director** and the Target
+      Scheduler preview counting left the page as confusing; the API keeps
+      `runtime` and `fidelity`.*
   - On a Director rig:
     - blocks expand into their steps;
     - **Edit night** allows pinning a block by dragging it, excluding a
@@ -819,16 +830,67 @@ apart needs the geometry to say why, and is left for later.
   on the rig, the same project does not. A rig with every frame is done on
   both, and a project set inactive by hand is reported, not projected.
 
-**Phase 6: Director overrides and fixed steps.** *Not built.*
-- `night_override` in the next meta schema, the overrides API,
-  compilation into the pull, and editing on the Director timeline.
-- *Gate:*
-  - Every override narrows the program: no goal's windows or priority
-    range widen, and a fuzz test over random override lists holds this.
-  - The pulled program and the preview agree on what runs in a pinned
-    window.
-  - A Target Scheduler rig refuses overrides.
-  - A night's overrides lapse after it.
+**Phase 6: Director overrides and fixed steps.** *Built*, with pins, plans
+left out, a hold and the night's plan order. Fixed steps are pins made by
+moving blocks; steps the program cannot carry wait (question 12).
+- The core's `overrides::Narrowing` holds what a night takes from a
+  program's goals: windows each goal loses, an optional hold, and the
+  goals' priorities under the night's plan order. `apply` only subtracts
+  windows. The pull applies it to the issued program, and
+  `schedule::simulate` to each night it plans, so both use the same
+  narrowing, which `program::narrow` builds from a night's entries and the
+  goals' links. A pin or exclusion naming nothing the program holds takes
+  nothing. The schedule labels a hold `held` and a stretch that excludes
+  every owed goal `excluded`.
+- The pull's fingerprint includes the revisions of the nights that have not
+  ended and start within the program's validity, and only when there are
+  some, so a rig without overrides keeps its program. A night's plan order
+  ends the issued program with the night under way. The pull's envelope is
+  unchanged.
+- `GET`/`PUT`/`DELETE /rigs/{rig}/night-overrides/{date}`, and a range
+  read. Night plans take `override_draft`, return each night's applied
+  `overrides`, a Director schedule's `goals` with the GUIDs overrides name,
+  each night's `override_count` and the site's `time_zone`.
+- The night's panel lists the overrides and edits them: **Pin**, **Leave
+  out**, **Hold** and **Plan order**, a block moved by drag or the arrow
+  keys, **Hold from now** and **Next hour to** tonight, and a hold offered
+  on a night marked not available. Each edit previews as a draft. A pin
+  whose subject has no frames in its window is named as idle. An edit
+  saves against the revision it started from, and a block moved again is
+  measured from where it first stood, replacing only what its last move
+  made.
+- The pull applies overrides only on a rig that counts as Director's, and
+  any rig's nights can be cleared. A save refuses a list with which the
+  rig's program would no longer bind, as many pins on a large mosaic can:
+  check-in reports a program that cannot be built as unchanged, so the
+  rig would keep its old one without word.
+- An optional IANA `time_zone` per site (question 9), which marks,
+  overrides and the night's panel use; the server checks its shape and the
+  browser converts.
+- The night is edited on its timeline: a block's menu pins it, leaves it
+  out from its start or all night, or moves it; pins and windowed
+  exclusions are bands to drag and resize; the hold is a line dragged in
+  from the right; whole-night exclusions and the plan order are chips. All
+  of them take the keyboard. The page's save bar lists the changes and
+  saves them, and the title says who decides the rig's night.
+- A Target Scheduler rig's night has **Target Scheduler settings**: each
+  project's priority and state and each target's active flag, previewed in
+  the Target Scheduler emulation through a `ts_draft` and saved by
+  `PUT /rigs/{rig}/target-scheduler` (see §6). A rig Director drives, or
+  one on another PSF Guard, refuses them.
+- *Gate, met:*
+  - `program::tests::random_overrides_only_narrow_the_program` applies
+    2,000 random override lists, with overlapping pins and subjects the
+    program does not hold, and finds no goal's windows widened, priorities
+    unchanged without an order, and an order that reorders plans but never
+    a plan's own objectives.
+  - The core's `a_pinned_window_runs_only_its_goal_as_the_pulled_program_does`
+    replays each planned frame against a program narrowed as the pull
+    narrows it, and `adoption::night_overrides` checks the pulled windows
+    and a preview, from a draft and from stored overrides.
+  - A Target Scheduler rig refuses overrides and drafts with `409`.
+  - A night that has ended leaves the pull's revision as it was, and
+    clearing a night gives back the program the rig had.
 
 **Phase 7: forecast sources.** *Built.*
 - A provider per site (Open-Meteo or MET Norway, off by default), the
@@ -863,7 +925,11 @@ simulation and for the per-rig night preview through the shared engine.
 - A night plan writes nothing. Availability and overrides write only their
   own tables.
 - A Target Scheduler rig's database is never written by a preview, a mark
-  or an override.
+  or an override. Its night's **Target Scheduler settings** write it when
+  saved, and only the columns they change (a project's priority and state,
+  a target's active flag), each row only while it holds what was read.
+  *Changed with Phase 6, at the user's choice: Target Scheduler rigs get
+  settings to change, where the record had them read-only.*
 - Each runtime is emulated from what it reads on the rig. The Target
   Scheduler emulation never reads Director's settings, and the Director
   preview's selection is `BoundGeometry::evaluate`, so there is no second
@@ -883,8 +949,10 @@ simulation and for the per-rig night preview through the shared engine.
 1. **Runtime before the rig mode exists.** Proposal: Director for a rig
    with reported equipment and an enabled workload policy, and Target
    Scheduler otherwise. Once the rig mode is built, it decides.
-   *Settled: built as proposed, until rig modes exist; overrides follow
-   the same rule, and a Target Scheduler rig refuses them.*
+   *Settled with Phase 6: Rig setup sets a hard mode, Target Scheduler or
+   Director, stored on the rig profile, and pairing a Director plugin sets
+   it to Director. The proposed rule is the guess until a mode is set.
+   Overrides and Target Scheduler settings follow the mode.*
 2. **N.I.N.A. profiles.** One database can hold projects for several
    profiles, and Target Scheduler plans per profile. Proposal: plan the
    profile the rig profile records. A database with several profiles and
@@ -911,7 +979,8 @@ simulation and for the per-rig night preview through the shared engine.
    as from and to times; an empty end means dusk or dawn.*
 7. **Should an unavailable rig mark do more?** Proposal: no. Marks stay
    planning only. On a Director rig, the night's editor offers to add a
-   `hold` override as a separate, explicit step.
+   `hold` override as a separate, explicit step. *Settled: built as
+   proposed.*
 8. **Beyond the forecast:** completion estimates for nights past any
    forecast assume clear skies. Proposal: an optional clear-night fraction
    per site and month, used only to stretch completion projections, never
@@ -920,10 +989,9 @@ simulation and for the per-rig night preview through the shared engine.
    longitude, and sites have no time zone yet (Director lists it as still
    required). Proposal: add an optional IANA time zone to the site profile,
    used to enter and show marks and overrides, falling back to the
-   browser's zone. *Settled: as proposed, for Phase 6. Until it lands,
-   marks are entered and shown in the browser's clock; the Target Scheduler
-   emulation plans its days by the site's local mean time, which a request
-   can override.*
+   browser's zone. *Settled: built as proposed with Phase 6. The Target
+   Scheduler emulation still plans its days by the site's local mean time,
+   which a request can override.*
 10. **Darkness in summaries:** feasibility counts dark below −12°, while
     Target Scheduler uses each template's twilight level. Proposal: keep
     −12° for summaries, and let each runtime's schedule use its own rule.
@@ -943,7 +1011,8 @@ simulation and for the per-rig night preview through the shared engine.
 
 - The plugin's wire contract. Overrides reach a Director rig only through
   the goal windows and priorities programs already carry.
-- What activation writes, and any write to a Target Scheduler rig's database.
+- What activation writes, and any write to a Target Scheduler rig's
+  database beyond the night's Target Scheduler settings.
 - Coordinated multi-rig allocation (Director, Phase 5). Each rig's schedule
   uses that rig's own work. A plan shot by two rigs adds up their
   projections and does not share one deficit between them.

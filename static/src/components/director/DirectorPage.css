@@ -259,3 +259,10 @@ a.workspace-pill:hover { color: var(--color-text-primary); }
 .director-rig-calibration { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
 .director-page .director-link-button { min-height: 0; padding: 0; border: 0; background: none; color: var(--color-primary); font: inherit; text-align: left; text-decoration: underline; text-decoration-color: var(--color-primary-alpha-50); text-underline-offset: 3px; }
 .director-page .director-link-button:hover:not(:disabled) { background: none; text-decoration-color: currentColor; }
+
+/* Who runs a rig, and what Director needs there. */
+.rig-profile-mode { display: flex; flex-wrap: wrap; gap: 6px 16px; }
+.rig-profile-mode label { display: inline-flex; align-items: center; gap: 6px; }
+.rig-profile-needs { margin: 4px 0 0; padding-left: 18px; font-size: 13px; }
+.rig-profile-needs li[data-done='true']::marker { content: '✓ '; color: var(--state-on-border); }
+.rig-profile-needs li[data-done='false']::marker { content: '○ '; }
