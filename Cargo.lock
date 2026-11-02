@@ -5443,9 +5443,9 @@ dependencies = [
 
 [[package]]
 name = "seiza"
-version = "0.48.1"
+version = "0.48.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "47927871f9d960e5c7553ca6fb9d24e66f5032a06f39fd79383295bd63f156ea"
+checksum = "acbf4f71fc0db0ac8eb84a63d465a6a48c800da79ad392fc51c9b37fe3abcc68"
 dependencies = [
  "directories",
  "image",
@@ -5480,9 +5480,9 @@ dependencies = [
 
 [[package]]
 name = "seiza-calibration"
-version = "0.12.0"
+version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7951baf7a4af4cfdf05a5e531f0fcc0bb9299d02a4820a1dece52521ba8c82ec"
+checksum = "6491df9650d20e501b61b9e86bf3c3b2b8d7a4d30d8084f30724b8ae7d0846aa"
 dependencies = [
  "chrono",
  "nalgebra",
@@ -5534,23 +5534,24 @@ dependencies = [
 
 [[package]]
 name = "seiza-fits"
-version = "0.7.0"
+version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e847f31fbe7dc948985980c0049f8e18b9b135cd390cfafe0af315ce72698955"
+checksum = "c03ce86e439c5f51230c5950ce68bbb9b107e43e167dd6d1340b38a135816493"
 dependencies = [
  "flate2",
  "memmap2",
  "multiversion",
  "rayon",
+ "rustix",
  "seiza-stretch",
  "tempfile",
 ]
 
 [[package]]
 name = "seiza-image-io"
-version = "0.12.0"
+version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "88f4e03ea9f7b87483d133beb6dde5feb2c3f3b1a4cb0f88d6295ca95741d99c"
+checksum = "e118d95f783c97c7824f4159d31aa938218631d1b93cc3178bb3f60177a74234"
 dependencies = [
  "chrono",
  "image",
@@ -5592,9 +5593,9 @@ dependencies = [
 
 [[package]]
 name = "seiza-stacking"
-version = "0.56.0"
+version = "0.56.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e5e312f6e97ec102425ec2f49844b438f425d697b74a527a0fe2ae6dd66c72b0"
+checksum = "32c061f91f2ee4b2d40de14b4eacb29f332d46bf6edeba72ba485b87e49f9a2e"
 dependencies = [
  "bytemuck",
  "fs2",
@@ -5658,9 +5659,9 @@ dependencies = [
 
 [[package]]
 name = "seiza-xisf"
-version = "0.8.0"
+version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b592baad38df8f44451207312acce4e880b9300842582e9f30cafc0262f98651"
+checksum = "c4150ed00be4d61a7c317e7c4bfe3181cdd9cd0e6e8b3f0c4bdb6c14751318c1"
 dependencies = [
  "flate2",
  "lz4_flex",
