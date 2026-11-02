@@ -17,8 +17,10 @@ import {
   formatClock,
   formatNightDate,
   isTonight,
-  plansOnNight,
+  planRows,
+  TONIGHT_REASON,
   windowFor,
+  type PlanRow,
 } from './nightsModel';
 
 interface Props {
@@ -142,42 +144,45 @@ function describeLoad(night: RigNight): string {
   return owed;
 }
 
+/**
+ * The plans the night applies to: what its schedule shoots, then what is
+ * up and clear but waits for other work. Targets the night does not apply
+ * to fold into a list, each with the reason.
+ */
 function PlanHours({ rig, night, colours }: { rig: RigNights; night: RigNight; colours: Map<string, number> }) {
-  const working = new Set(plansOnNight(rig, night).map(plan => plan.project_id));
-  const index = rig.nights.findIndex(n => n.date === night.date);
+  if (rig.plans.length === 0) return <p className="director-muted">This rig owes no frames.</p>;
+  const { tonight, other } = planRows(rig, night);
   const progress = rig.schedule?.progress ?? [];
-  const planned = (projectId: number, targetId: number) => progress
-    .filter(p => p.project_id === projectId && p.target_id === targetId)
-    .reduce((sum, p) => sum + (p.planned[index] ?? 0), 0);
   const completes = (projectId: number, targetId: number) => {
     const plans = progress.filter(p => p.project_id === projectId && p.target_id === targetId && !p.complete_before);
     if (plans.length === 0 || plans.some(p => p.completes_on === null)) return null;
     return Math.max(...plans.map(p => p.completes_on!));
   };
-  if (rig.plans.length === 0) return <p className="director-muted">This rig owes no frames.</p>;
-  const hours = new Map(night.targets.map(target => [`${target.project_id}:${target.target_id}`, target]));
-  return <div className="director-table-scroll"><table className="nights-plan-table">
-    <thead><tr><th>Plan</th><th>Target</th><th>Owed</th><th>Up</th><th>Clear</th><th>Moon blocks</th><th>Peak</th>{rig.schedule && <><th>Planned</th><th>Done by</th></>}</tr></thead>
-    <tbody>{rig.plans.flatMap(plan => plan.targets.map(target => {
-      const tonight = hours.get(`${plan.project_id}:${target.target_id}`);
-      return <tr key={`${plan.project_id}:${target.target_id}`} className={working.has(plan.project_id) ? undefined : 'is-idle-plan'}>
-        <td><span className="nights-plan-dot" data-colour={colours.get(plan.name) ?? 0} aria-hidden="true" />{plan.name}{plan.priority !== 'normal' && <span className="director-muted"> · {plan.priority} priority</span>}</td>
-        <td>{target.name}<span className="director-muted"> · {target.filters.join(', ')}</span></td>
-        <td>{formatHours(target.hours_owed)}<span className="director-muted"> · {target.frames_owed} frames</span></td>
-        <td>{formatHours(tonight?.hours_up ?? 0)}</td>
-        <td>{formatHours(tonight?.hours_up_available ?? 0)}</td>
-        <td>{tonight && tonight.hours_moon_blocked > 0 ? formatHours(tonight.hours_moon_blocked) : '—'}</td>
-        <td>{tonight && tonight.max_altitude_degrees > -90 ? `${Math.round(tonight.max_altitude_degrees)}°${tonight.transit_ms ? ` at ${formatClock(tonight.transit_ms)}` : ''}` : '—'}</td>
-        {rig.schedule && <>
-          <td>{planned(plan.project_id, target.target_id) || '—'}</td>
-          <td>{(() => {
-            const done = completes(plan.project_id, target.target_id);
-            return done === null ? <span className="director-muted">not in {rig.schedule.nights.length} nights</span> : formatNightDate(rig.schedule.nights[done]?.date ?? night.date);
-          })()}</td>
-        </>}
-      </tr>;
-    }))}</tbody>
-  </table></div>;
+  const planName = (row: PlanRow) => <><span className="nights-plan-dot" data-colour={colours.get(row.plan.name) ?? 0} aria-hidden="true" />{row.plan.name}</>;
+  return <section className="nights-plans" aria-label="Plans this night">
+    <h4>{tonight.length === 0 ? 'No owed target is up and clear this night' : `This night: ${tonight.filter(r => r.status === 'planned').length} planned, ${tonight.filter(r => r.status === 'up').length} up but waiting`}</h4>
+    {tonight.length > 0 && <div className="director-table-scroll"><table className="nights-plan-table">
+      <thead><tr><th>Plan</th><th>Target</th>{rig.schedule && <th>Planned</th>}<th>Usable</th><th>Peak</th><th>Owed</th>{rig.schedule && <th>Done by</th>}</tr></thead>
+      <tbody>{tonight.map(row => <tr key={`${row.plan.project_id}:${row.target.target_id}`} className={row.status === 'up' ? 'is-idle-plan' : undefined}>
+        <td>{planName(row)}{row.plan.priority !== 'normal' && <span className="director-muted"> · {row.plan.priority} priority</span>}</td>
+        <td>{row.target.name}<span className="director-muted"> · {row.target.filters.join(', ')}</span></td>
+        {rig.schedule && <td>{row.planned > 0 ? `${row.planned} frames` : <span className="director-muted">waits</span>}</td>}
+        <td title={row.hours && row.hours.hours_moon_blocked > 0 ? `${formatHours(row.hours.hours_moon_blocked)} of its clear hours blocked by the Moon` : undefined}>{formatHours(row.usable)}</td>
+        <td>{row.hours && row.hours.max_altitude_degrees > -90 ? `${Math.round(row.hours.max_altitude_degrees)}°${row.hours.transit_ms ? ` at ${formatClock(row.hours.transit_ms)}` : ''}` : '—'}</td>
+        <td>{formatHours(row.target.hours_owed)}<span className="director-muted"> · {row.target.frames_owed} frames</span></td>
+        {rig.schedule && <td>{(() => {
+          const done = completes(row.plan.project_id, row.target.target_id);
+          return done === null ? <span className="director-muted">not in {rig.schedule.nights.length} nights</span> : formatNightDate(rig.schedule.nights[done]?.date ?? night.date);
+        })()}</td>}
+      </tr>)}</tbody>
+    </table></div>}
+    {other.length > 0 && <details className="nights-other-plans">
+      <summary>Not this night: {other.length} target{other.length === 1 ? '' : 's'}</summary>
+      <ul>{other.map(row => <li key={`${row.plan.project_id}:${row.target.target_id}`}>
+        {planName(row)} · {row.target.name}: <span className="director-muted">{TONIGHT_REASON[row.status as keyof typeof TONIGHT_REASON]}</span>
+      </li>)}</ul>
+    </details>}
+  </section>;
 }
 
 function failure(error: unknown): string {

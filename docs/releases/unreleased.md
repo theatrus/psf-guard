@@ -20,7 +20,9 @@
   across the coming nights: the clear dark hours, the Moon, and the plans
   each rig would shoot. Choose a night to see its schedule, a prediction of
   what Target Scheduler will shoot there and why it picks each target, or
-  what Director would do; tonight is planned from now. Mark a night
+  what Director would do; tonight is planned from now. The night lists
+  only the targets it applies to, and folds the rest with the reason each
+  is out. Mark a night
   available, not available, or clear only for some hours, for one rig or
   for every rig at a site; the schedules work around the marks. The Live
   table's new **Tonight** column links each rig to tonight's schedule. See

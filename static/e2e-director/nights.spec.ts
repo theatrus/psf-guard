@@ -71,6 +71,8 @@ test('Nights shows every rig across the coming nights, a night\'s schedule, and 
       { name: 'Heart Nebula', priority: 2, target: 'IC 1805', ra_hours: 2.5467, dec: 61.45, filters: [['Ha', 120], ['OIII', 120]], switchEvery: 3 },
       { name: 'Andromeda', priority: 1, target: 'M 31', ra_hours: 0.7123, dec: 41.27, filters: [['L', 200]], moon: true },
       { name: 'Soul Nebula', priority: 0, target: 'IC 1848', ra_hours: 2.8533, dec: 60.4, filters: [['Ha', 80]] },
+      // Never above 25° from 34° north, so no night applies to it.
+      { name: 'Carina Nebula', priority: 0, target: 'NGC 3372', ra_hours: 10.7514, dec: -59.87, filters: [['Ha', 120]] },
     ]), { latitude_degrees: 34.2, longitude_degrees: -118.3 });
     await addRig(request, 'South rig', slugs[1], rigDatabase([
       { name: 'Orion', priority: 1, target: 'M 42', ra_hours: 5.588, dec: -5.39, filters: [['Ha', 150], ['SII', 150]], switchEvery: 2 },
@@ -104,6 +106,15 @@ test('Nights shows every rig across the coming nights, a night\'s schedule, and 
     await expect(reasons).toBeVisible();
     await expect(reasons.getByText('Chosen')).toBeVisible();
     await shot(page, 'nights-schedule', name => testInfo.outputPath(name));
+
+    // The plan table lists what the night applies to and folds the rest.
+    const plans = detail.getByRole('region', { name: 'Plans this night' });
+    await expect(plans.getByRole('heading', { name: /^This night: \d+ planned/ })).toBeVisible();
+    await expect(plans.getByRole('row').filter({ hasText: 'Heart Nebula' })).toContainText('frames');
+    await plans.getByText('Not this night: 1 target').click();
+    await expect(plans.getByRole('listitem').filter({ hasText: 'Carina Nebula · NGC 3372' })).toContainText('not above its limits in the dark');
+    await expect(plans.getByRole('row').filter({ hasText: 'Carina Nebula' })).toHaveCount(0);
+    await shot(plans, 'nights-plans', name => testInfo.outputPath(name), false);
 
     // Mark the night clear only from 22:00 to 02:00 for this rig.
     await detail.getByLabel('Limited').check();

@@ -214,3 +214,8 @@
 .nights-reasons p { margin: 4px 0; font-size: 13px; }
 .nights-now { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--state-on-border); pointer-events: none; }
 .nights-live { margin: 4px 0 8px; font-size: 13px; }
+.nights-plans { margin: 12px 0; }
+.nights-plans h4 { margin: 0 0 4px; font-size: 14px; }
+.nights-other-plans { margin: 6px 0; font-size: 13px; }
+.nights-other-plans summary { cursor: pointer; color: var(--color-text-secondary); }
+.nights-other-plans ul { margin: 4px 0; padding-left: 18px; }

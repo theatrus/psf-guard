@@ -1910,12 +1910,18 @@ Choose a cell to open the night below the grid:
   a target and its filter runs inside. Gaps are shaded by their reason:
   twilight, not available, Moon, meridian, below limits, all done, or
   nothing fits. Choose a block to see why that target was chosen.
-- **The plan table**: each plan's targets, the hours and frames they still
-  owe, their hours up and clear that night, the hours the Moon blocks, the
-  peak altitude, the frames planned that night, and the night the plan is
-  done within the range.
+- **The plans this night**: only the targets the night applies to. First
+  come those the schedule shoots, with the frames planned, then those that
+  are up and clear but wait for other work. Each row gives the usable hours
+  (up, clear and allowed by the Moon), the peak altitude, what the target
+  still owes, and the night its plan is done within the range. The targets
+  the night does not apply to fold into **Not this night**, each with its
+  reason: the Moon rules of its filters, up only while the night is marked
+  not clear, or not above its limits in the dark.
 
 ![A night's Target Scheduler schedule, with the scores behind the chosen block](images/nights-schedule.png)
+
+![The plans this night, with the targets the night does not apply to folded below](images/nights-plans.png)
 
 A rig whose database Target Scheduler runs gets a prediction of Target
 Scheduler 5's own choices: its stickiness to a target for the project's

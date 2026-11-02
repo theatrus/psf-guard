@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { availableShares, clockOnNight, datesBetween, isDate, loadWords, markGlyph, planColours, plansOnNight, windowFor } from '../nightsModel';
+import { availableShares, clockOnNight, datesBetween, isDate, loadWords, markGlyph, planColours, planRows, plansOnNight, windowFor } from '../nightsModel';
 import { night, rig } from './fixtures';
 
 const HOUR = 3_600_000;
@@ -52,5 +52,42 @@ describe('night plan helpers', () => {
     expect(plansOnNight(owner, owner.nights[1])).toEqual([]);
     expect(planColours([owner, rig({ plans: [{ ...owner.plans[0], name: 'Andromeda' }] })])).toEqual(new Map([['Andromeda', 0], ['Heart Nebula', 1]]));
     expect(datesBetween(owner, owner.nights[2].date, owner.nights[0].date)).toEqual(owner.nights.map(n => n.date));
+  });
+
+  it('lists the targets a night applies to, planned first, and folds the rest with a reason', () => {
+    const base = rig();
+    const second = { ...base.plans[0], project_id: 8, name: 'Andromeda', targets: [{ ...base.plans[0].targets[0], target_id: 80, name: 'M 31' }] };
+    const third = { ...base.plans[0], project_id: 9, name: 'Orion', targets: [{ ...base.plans[0].targets[0], target_id: 90, name: 'M 42' }] };
+    const owner = rig({
+      plans: [base.plans[0], second, third],
+      schedule: {
+        runtime: 'target_scheduler',
+        nights: [],
+        progress: [{ project_id: 8, target_id: 80, exposure_plan_id: 1, filter: 'L', desired: 10, accepted_before: 0, acquired_before: 0, planned: [12, 0, 0], completes_on: null, complete_before: false }],
+        assumptions: { target_scheduler_version: '5', fidelity: 'estimate', overheads: null, acceptance: 'plan_rate', utc_offset_minutes: 0 },
+      },
+    });
+    const first = night(0, {
+      targets: [
+        // The Heart: up and clear, but nothing planned for it.
+        { project_id: 7, target_id: 70, hours_up: 6, hours_up_available: 6, hours_moon_blocked: 1, max_altitude_degrees: 70, transit_ms: null },
+        // Andromeda: planned.
+        { project_id: 8, target_id: 80, hours_up: 5, hours_up_available: 5, hours_moon_blocked: 0, max_altitude_degrees: 80, transit_ms: null },
+        // Orion: never above its limits in the dark.
+        { project_id: 9, target_id: 90, hours_up: 0, hours_up_available: 0, hours_moon_blocked: 0, max_altitude_degrees: 10, transit_ms: null },
+      ],
+    });
+    const { tonight, other } = planRows(owner, first);
+    expect(tonight.map(row => [row.plan.name, row.status, row.planned, row.usable])).toEqual([
+      ['Andromeda', 'planned', 12, 5],
+      ['Heart Nebula', 'up', 0, 5],
+    ]);
+    expect(other.map(row => [row.plan.name, row.status])).toEqual([['Orion', 'below_limits']]);
+    // A night marked out leaves everything that would be up as not clear;
+    // one the Moon blocks entirely says so.
+    const marked = night(1, { targets: [{ project_id: 7, target_id: 70, hours_up: 6, hours_up_available: 0, hours_moon_blocked: 0, max_altitude_degrees: 70, transit_ms: null }] });
+    expect(planRows(rig(), marked).other.map(row => row.status)).toEqual(['not_clear']);
+    const moonlit = night(0, { targets: [{ project_id: 7, target_id: 70, hours_up: 6, hours_up_available: 6, hours_moon_blocked: 6, max_altitude_degrees: 70, transit_ms: null }] });
+    expect(planRows(rig(), moonlit).other.map(row => row.status)).toEqual(['moon']);
   });
 });

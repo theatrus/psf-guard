@@ -1,4 +1,4 @@
-import type { NightAvailabilityState, NightInterval, NightRuntime, RigNight, RigNights } from '../../api/nightPlanTypes';
+import type { NightAvailabilityState, NightInterval, NightPlanProject, NightPlanTarget, NightRuntime, NightTargetHours, RigNight, RigNights } from '../../api/nightPlanTypes';
 import { withoutPlanningParams } from '../../hooks/useUrlState';
 
 const DAY_MS = 86_400_000;
@@ -163,6 +163,68 @@ export function plansOnNight(rig: RigNights, night: RigNight): Array<{ project_i
     .filter(plan => hours.has(plan.project_id))
     .map(plan => ({ project_id: plan.project_id, name: plan.name, hours: hours.get(plan.project_id)! }))
     .sort((a, b) => b.hours - a.hours || a.name.localeCompare(b.name));
+}
+
+/** Where a target stands on one night. */
+export type TargetTonight =
+  /** The night's schedule shoots it. */
+  | 'planned'
+  /** Up, clear and allowed by the Moon, but other work comes first. */
+  | 'up'
+  /** Up while the night is clear, but its filters' Moon rules turn it down. */
+  | 'moon'
+  /** Up only while the night is marked not clear. */
+  | 'not_clear'
+  /** Not above its limits in the dark. */
+  | 'below_limits';
+
+export const TONIGHT_REASON: Record<Exclude<TargetTonight, 'planned' | 'up'>, string> = {
+  moon: 'the Moon rules of its filters turn it down',
+  not_clear: 'up only while the night is marked not clear',
+  below_limits: 'not above its limits in the dark',
+};
+
+export interface PlanRow {
+  plan: NightPlanProject;
+  target: NightPlanTarget;
+  hours: NightTargetHours | undefined;
+  /** Frames the night's schedule plans for the target. */
+  planned: number;
+  /** Hours it is up, clear and allowed by the Moon. */
+  usable: number;
+  status: TargetTonight;
+}
+
+/**
+ * A rig's owed targets for one night, split into those the night applies
+ * to (planned first, then the most usable) and the rest, each with why it
+ * is out.
+ */
+export function planRows(rig: RigNights, night: RigNight): { tonight: PlanRow[]; other: PlanRow[] } {
+  const index = rig.nights.findIndex(n => n.date === night.date);
+  const progress = rig.schedule?.progress ?? [];
+  const hours = new Map(night.targets.map(target => [`${target.project_id}:${target.target_id}`, target]));
+  const rows: PlanRow[] = rig.plans.flatMap(plan => plan.targets.map(target => {
+    const tonight = hours.get(`${plan.project_id}:${target.target_id}`);
+    const planned = progress
+      .filter(p => p.project_id === plan.project_id && p.target_id === target.target_id)
+      .reduce((sum, p) => sum + (p.planned[index] ?? 0), 0);
+    const clear = tonight?.hours_up_available ?? 0;
+    const usable = Math.max(0, clear - (tonight?.hours_moon_blocked ?? 0));
+    const status: TargetTonight = planned > 0 ? 'planned'
+      : usable > 0.01 ? 'up'
+      : clear > 0.01 ? 'moon'
+      : (tonight?.hours_up ?? 0) > 0.01 ? 'not_clear'
+      : 'below_limits';
+    return { plan, target, hours: tonight, planned, usable, status };
+  }));
+  const tonight = rows
+    .filter(row => row.status === 'planned' || row.status === 'up')
+    .sort((a, b) => b.planned - a.planned || b.usable - a.usable || a.plan.name.localeCompare(b.plan.name));
+  const other = rows
+    .filter(row => row.status !== 'planned' && row.status !== 'up')
+    .sort((a, b) => a.plan.name.localeCompare(b.plan.name) || a.target.name.localeCompare(b.target.name));
+  return { tonight, other };
 }
 
 /** A colour slot for each plan, stable across the page: by name, so one
