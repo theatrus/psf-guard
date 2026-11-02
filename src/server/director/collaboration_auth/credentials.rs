@@ -100,7 +100,7 @@ pub(super) fn available(path: &Path) -> std::io::Result<()> {
     load(path)?;
     // Probe the actual volume without changing an existing token file.
     let probe = Temp::new(parent(path)?)?;
-    probe.file.sync_all()
+    seiza_fits::sync_file(&probe.file)
 }
 pub(super) fn read(path: &Path, binding: &ConnectionBinding) -> std::io::Result<Option<String>> {
     parent(path)?;
@@ -143,10 +143,10 @@ pub(super) fn write(
     }
     let mut temp = Temp::new(parent(path)?)?;
     temp.file.write_all(&bytes)?;
-    temp.file.sync_all()?;
+    seiza_fits::sync_file(&temp.file)?;
     fs::rename(&temp.path, path)?;
     #[cfg(unix)]
-    File::open(parent(path)?)?.sync_all()?;
+    seiza_fits::sync_file(&File::open(parent(path)?)?)?;
     if let Some(token) = token
         && read(path, binding)?.as_deref() != Some(token)
     {

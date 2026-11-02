@@ -162,7 +162,7 @@ pub(super) fn write_private(path: &Path, body: &[u8]) -> Result<()> {
             .set_permissions(std::fs::Permissions::from_mode(0o600))?;
     }
     temporary.write_all(body)?;
-    temporary.as_file().sync_all()?;
+    seiza_fits::sync_file(temporary.as_file())?;
     temporary
         .persist(path)
         .with_context(|| format!("saving {}", path.display()))?;

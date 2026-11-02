@@ -6,6 +6,12 @@
 
 ## Changes
 
+- On a Mac, PSF Guard saves to a network share (SMB), such as a NAS:
+  calibration masters, stacks, remote uploads into an image folder, WBPP
+  work files, backups, and settings kept on a share. Before, those saves
+  failed with "Operation not supported (os error 45)", because the share
+  refuses the full sync macOS asks for. PSF Guard now falls back to a plain
+  sync there, through Seiza 0.48.2.
 - **Rigs** (early beta), a new view beside **Sky**, holds every rig in one
   place. Its **Live** tab is the Live table, which used to sit under the
   Sky's map. **Rigs** in the header opens it and shows the fleet's status,

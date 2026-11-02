@@ -187,9 +187,7 @@ impl ProcessingSetupsRegistry {
         temporary
             .write_all(b"\n")
             .context("finishing temporary processing setups")?;
-        temporary
-            .as_file()
-            .sync_all()
+        seiza_fits::sync_file(temporary.as_file())
             .context("syncing temporary processing setups")?;
         temporary
             .persist(path)

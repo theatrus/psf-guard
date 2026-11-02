@@ -342,10 +342,7 @@ impl AuthRegistry {
             .write_all(b"\n")
             .context("finishing temporary auth registry")?;
         set_private_permissions(temporary.as_file(), temporary.path())?;
-        temporary
-            .as_file()
-            .sync_all()
-            .context("syncing temporary auth registry")?;
+        seiza_fits::sync_file(temporary.as_file()).context("syncing temporary auth registry")?;
         temporary
             .persist(path)
             .map_err(|error| error.error)

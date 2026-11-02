@@ -135,7 +135,7 @@ fn write_json(path: &Path, value: &impl Serialize) -> anyhow::Result<()> {
     let mut file = tempfile::NamedTempFile::new_in(parent)?;
     serde_json::to_writer(file.as_file_mut(), value)?;
     file.as_file_mut().flush()?;
-    file.as_file().sync_all()?;
+    seiza_fits::sync_file(file.as_file())?;
     file.persist(path)?;
     Ok(())
 }
