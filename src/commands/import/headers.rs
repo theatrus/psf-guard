@@ -94,12 +94,16 @@ impl FrameMeta {
     }
 
     /// True when the frame should be imported as an acquired light frame.
-    /// Calibration frames (dark/flat/bias) have no place in a scheduler DB.
-    /// A missing IMAGETYP is treated as a light: plenty of processed archives
-    /// strip it, and lights are what people point the importer at.
+    /// Calibration frames (dark/flat/bias) have no place in a scheduler DB,
+    /// and neither does a master or a stack, whatever its IMAGETYP says.
+    /// A missing IMAGETYP is otherwise treated as a light: plenty of
+    /// processed archives strip it, and lights are what people point the
+    /// importer at.
     pub fn is_light(&self) -> bool {
         // "TWILIGHT FLAT" contains "LIGHT", but is still a calibration frame.
-        if crate::calibration::kind_from_meta(self).is_some() {
+        if crate::calibration::kind_from_meta(self).is_some()
+            || self.class.kind == crate::image_io::FrameKind::Integration
+        {
             return false;
         }
         match &self.image_type {
@@ -185,7 +189,11 @@ pub fn read_frame_meta_named(path: &Path, declared: &Path) -> FrameMeta {
         })
     };
 
-    meta.image_type = text(&["IMAGETYP", "FRAME"]).map(|t| t.to_uppercase());
+    // A master written by `seiza master` before Seiza 0.48.2 records its
+    // kind only in SEIZAMST (BIAS, DARK or FLAT), with no IMAGETYP.
+    meta.image_type = text(&["IMAGETYP", "FRAME"])
+        .or_else(|| text(&["SEIZAMST"]).map(|kind| format!("MASTER {kind}")))
+        .map(|t| t.to_uppercase());
     meta.object = text(&["OBJECT"]);
     meta.filter = text(&["FILTER", "FILTERNAME"]);
     meta.date_obs = text(&["DATE-OBS", "DATE-LOC"]);
@@ -267,7 +275,7 @@ fn mjd_to_unix(mjd: f64) -> Option<i64> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
 
     #[test]
@@ -294,7 +302,7 @@ mod tests {
     }
 
     /// A minimal 4×4 FITS file with the given header cards after the axes.
-    fn write_fits(path: &Path, cards: &[&str]) {
+    pub(crate) fn write_fits(path: &Path, cards: &[&str]) {
         let mut header = Vec::new();
         for card in [
             "SIMPLE  =                    T",
@@ -329,6 +337,65 @@ mod tests {
             Some(crate::calibration::CalibrationKind::Flat)
         );
         assert!(!meta.is_light());
+    }
+
+    /// Seiza masters written before Seiza 0.48.2 record their kind only in
+    /// SEIZAMST. They were imported as lights with no target (theatrus/seiza
+    /// issue 394); they are calibration masters.
+    #[test]
+    fn a_seiza_master_without_imagetyp_is_calibration_not_a_light() {
+        use crate::calibration::{kind_from_meta, CalibrationKind};
+        let temp = tempfile::tempdir().unwrap();
+        for (kind, expected) in [
+            ("BIAS", CalibrationKind::Bias),
+            ("DARK", CalibrationKind::Dark),
+            ("FLAT", CalibrationKind::Flat),
+        ] {
+            let path = temp.path().join(format!("master-{kind}.fits"));
+            write_fits(
+                &path,
+                &[
+                    &format!("SEIZAMST= '{kind}'"),
+                    "NCOMBINE=                   20",
+                    "DARKSUB =                    T",
+                ],
+            );
+            let meta = read_frame_meta(&path);
+            assert!(meta.readable);
+            assert_eq!(
+                meta.image_type.as_deref(),
+                Some(format!("MASTER {kind}").as_str())
+            );
+            assert_eq!(kind_from_meta(&meta), Some(expected), "{kind}");
+            assert!(!meta.is_light(), "{kind}");
+            assert!(meta.processed, "{kind} is recorded as a master");
+        }
+    }
+
+    /// A master or a stack is never a light, even one that calls itself one.
+    #[test]
+    fn an_integration_is_never_a_light() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("masterLight.fits");
+        write_fits(
+            &path,
+            &["IMAGETYP= 'Master Light'", "NCOMBINE=                   40"],
+        );
+        let meta = read_frame_meta(&path);
+        assert_eq!(meta.class.kind, crate::image_io::FrameKind::Integration);
+        assert!(!meta.is_light());
+
+        // A raw light with no IMAGETYP is still a light, and so is one that
+        // counts itself as one combined frame.
+        for cards in [
+            &["OBJECT  = 'M31'"][..],
+            &["OBJECT  = 'M31'", "NCOMBINE=                    1"][..],
+        ] {
+            let raw = temp.path().join("raw.fits");
+            write_fits(&raw, cards);
+            let meta = read_frame_meta(&raw);
+            assert!(meta.is_light(), "{cards:?}");
+        }
     }
 
     #[test]

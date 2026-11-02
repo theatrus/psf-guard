@@ -36,8 +36,8 @@ export default function ScanRulesFields({ value, onChange, showLegend = true }: 
         className="file-path-input scan-rules-patterns"
         rows={2}
         spellCheck={false}
-        placeholder="LIGHT"
-        title="One pattern per line. Import only matching files and files within matching folders."
+        placeholder="All files"
+        title="One pattern per line. Import only matching files and files within matching folders. Leave empty to read every file the Exclude patterns do not skip."
         value={value.include.join('\n')}
         onChange={(event) => set({ include: lines(event.target.value) })}
       />

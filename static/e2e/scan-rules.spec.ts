@@ -9,10 +9,19 @@ let root: string;
 
 /** A small FITS frame with the headers import reads; any of OBJECT and the
  *  coordinates can be left out, as Hocus Focus leaves them out of its
- *  autofocus frames. */
+ *  autofocus frames. `imageType: null` leaves IMAGETYP out, and `cards` adds
+ *  more header cards. */
 function writeFrame(
   file: string,
-  frame: { object?: string; ra?: number; dec?: number; dateObs: string; exposure: number }
+  frame: {
+    object?: string;
+    ra?: number;
+    dec?: number;
+    dateObs: string;
+    exposure: number;
+    imageType?: string | null;
+    cards?: string[];
+  }
 ) {
   const card = (text: string) => text.padEnd(80, ' ').slice(0, 80);
   const value = (key: string, text: string) => card(`${key.padEnd(8)}= ${text}`);
@@ -23,7 +32,8 @@ function writeFrame(
     number('NAXIS', 2),
     number('NAXIS1', 10),
     number('NAXIS2', 10),
-    value('IMAGETYP', "'LIGHT   '"),
+    ...(frame.imageType === null ? [] : [value('IMAGETYP', `'${(frame.imageType ?? 'LIGHT').padEnd(8)}'`)]),
+    ...(frame.cards ?? []).map(card),
     ...(frame.object ? [value('OBJECT', `'${frame.object}'`)] : []),
     value('FILTER', "'L       '"),
     value('DATE-OBS', `'${frame.dateObs}'`),
@@ -154,6 +164,62 @@ test('auto-import keeps autofocus frames out and holds a new target for Review',
   await expect
     .poll(() => targetNames(databasePath), { timeout: 30_000 })
     .toEqual(['M31', 'NGC 7000']);
+});
+
+test('an import files a Seiza master as calibration and leaves a stack out', async ({ page, request }, testInfo) => {
+  const name = `Masters ${counter}`;
+  fs.mkdirSync(root, { recursive: true });
+  const created = await request.post('/api/databases/create', {
+    data: { name, image_dirs: [root], slug: `masters-${counter}` },
+  });
+  expect(created.ok(), await created.text()).toBeTruthy();
+  const database = (await created.json()).data.database;
+  const databasePath: string = database.database_path;
+  const progress = async () => (await (await request.get(`/api/db/${database.id}/import`)).json()).data.progress;
+  await expect.poll(async () => (await progress()).stage, { timeout: 60_000 }).toBe('complete');
+
+  // A light, a master flat from `seiza master`, which records its kind only
+  // in SEIZAMST, and a stack of the light's night.
+  const m31 = { object: 'M31', ra: 10.6847, dec: 41.2687, exposure: 300 };
+  writeFrame(path.join(root, 'M31/LIGHT/m31_001.fits'), { ...m31, dateObs: '2026-01-10T01:00:00.000' });
+  writeFrame(path.join(root, 'masters/master-flat-L.fits'), {
+    dateObs: '2026-01-10T00:30:00.000',
+    exposure: 2,
+    imageType: null,
+    cards: ["SEIZAMST= 'FLAT    '", 'NCOMBINE=                   20'],
+  });
+  writeFrame(path.join(root, 'M31/stack/M31_L_stacked.fits'), {
+    ...m31,
+    dateObs: '2026-01-10T01:00:00.000',
+    cards: ['NCOMBINE=                   40'],
+  });
+
+  await page.goto('/');
+  await openSettings(page);
+  await selectSettingsSection(page, 'database-import', name);
+  const row = page.getByRole('region', { name: `${name} import`, exact: true });
+  // An empty Include only reads every file.
+  await row.getByText(/^Scan rules · /).click();
+  await expect(row.getByLabel('Include only:', { exact: true })).toHaveAttribute('placeholder', 'All files');
+  await row.getByRole('group', { name: 'Scan rules', exact: true }).screenshot({
+    path: testInfo.outputPath('include-only-placeholder.png'),
+    animations: 'disabled',
+  });
+
+  await row.getByRole('button', { name: 'Preview import', exact: true }).click();
+  const panel = page.locator('.import-progress-panel');
+  await expect(panel).toContainText('1 stack(s) left out.', { timeout: 30_000 });
+  await panel.screenshot({ path: testInfo.outputPath('import-preview-stack.png'), animations: 'disabled' });
+  await panel.getByRole('button', { name: 'Import 2 frame(s)' }).click();
+  await expect.poll(() => targetNames(databasePath), { timeout: 30_000 }).toEqual(['M31']);
+  const reader = new Database(databasePath, { readonly: true });
+  try {
+    const count = (sql: string) => (reader.prepare(sql).get() as { n: number }).n;
+    expect(count('SELECT COUNT(*) AS n FROM acquiredimage')).toBe(1);
+    expect(count("SELECT COUNT(*) AS n FROM psf_guard_calibration_frame WHERE is_master = 1 AND kind = 'flat'")).toBe(1);
+  } finally {
+    reader.close();
+  }
 });
 
 test('new image databases apply scan rules immediately and keep them editable on Import', async ({ page, request }, testInfo) => {

@@ -366,17 +366,18 @@ fn has_integration_card(headers: &[(String, HeaderValue)]) -> bool {
             .iter()
             .any(|(name, _)| name.eq_ignore_ascii_case(wanted))
     };
-    has_card("NCOMBINE")
-        || has_card("SEIZAMST")
+    has_card("SEIZAMST")
         || header_text(headers, "IMAGETYP")
             .is_some_and(|text| text.to_ascii_uppercase().contains("MASTER"))
 }
 
-/// Frame counts the stacking tools write: Siril `STACKCNT`, APP `NUMFRAME`
-/// (beside `INTEGRAT`), ASTAP's per-filter counts, MaxIm's `SNAPSHOT`. A
-/// count of one is a single frame passed through.
+/// Frame counts the stacking tools write: `NCOMBINE` (PixInsight,
+/// DeepSkyStacker), Siril `STACKCNT`, APP `NUMFRAME` (beside `INTEGRAT`),
+/// ASTAP's per-filter counts, MaxIm's `SNAPSHOT`. A count of one is a single
+/// frame passed through.
 const STACK_COUNT_CARDS: &[&str] = &[
-    "STACKCNT", "NUMFRAME", "LIGH_CNT", "LUM_CNT", "RED_CNT", "GREN_CNT", "BLUE_CNT", "SNAPSHOT",
+    "NCOMBINE", "STACKCNT", "NUMFRAME", "LIGH_CNT", "LUM_CNT", "RED_CNT", "GREN_CNT", "BLUE_CNT",
+    "SNAPSHOT",
 ];
 
 fn has_stack_count(headers: &[(String, HeaderValue)]) -> bool {
@@ -1280,13 +1281,14 @@ mod tests {
             assert_eq!(classify_path(&stack).kind, FrameKind::Integration, "{name}");
         }
         // One frame "stacked" is a frame passed through.
-        let single = write_fits(
-            directory.path(),
-            "single.fits",
-            16,
-            &["STACKCNT=                    1"],
-        );
-        assert_eq!(classify_path(&single), FrameClass::RAW);
+        for card in [
+            "STACKCNT=                    1",
+            "NCOMBINE=                    1",
+            "NCOMBINE=                    0",
+        ] {
+            let single = write_fits(directory.path(), "single.fits", 16, &[card]);
+            assert_eq!(classify_path(&single), FrameClass::RAW, "{card}");
+        }
 
         let astap = write_fits(
             directory.path(),

@@ -360,10 +360,11 @@ that identity starts a new source and does not apply old-source decisions.
 
 ## External masters
 
-A master dark, bias, or flat integrated by PixInsight's WBPP, Siril, or
+A master dark, bias, or flat integrated by PixInsight's WBPP, Siril, Seiza, or
 another tool imports like any calibration frame; its `IMAGETYP` (`Master
 Dark`) or `NCOMBINE` card marks it as a master, and the library shows a
-**Master** badge. Such a file is used as a master as-is, never integrated
+**Master** badge. A master from `seiza master` in Seiza 0.48.1 or earlier
+has no `IMAGETYP`; PSF Guard reads its kind from `SEIZAMST`. Such a file is used as a master as-is, never integrated
 again. Two things differ from raw frames:
 
 - **Matching is lenient.** WBPP keeps `IMAGETYP`, `EXPTIME`, `INSTRUME`,
