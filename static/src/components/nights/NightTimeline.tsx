@@ -21,15 +21,15 @@ const GAP_LABEL: Record<ScheduleGapReason, string> = {
 };
 
 const GAP_HELP: Record<ScheduleGapReason, string> = {
-  twilight: 'Too light for any template owed tonight.',
-  unavailable: "Outside the night's clear hours, set by a mark or the site's forecast.",
-  moon: 'The targets are up, but their Moon avoidance rules turn them down.',
-  meridian: 'Waiting out the meridian flip, or outside a meridian window.',
-  below_limits: 'Nothing owed is above its horizon and limits for its minimum time.',
-  complete: 'Every plan has its frames.',
-  nothing_eligible: 'Plans are owed, but none can start before the night or the clear hours end.',
-  held: "The night's overrides hold the rig.",
-  excluded: "The night's overrides leave out every plan still owed.",
+  twilight: 'Too light to shoot.',
+  unavailable: 'Outside the clear hours.',
+  moon: 'Moon avoidance rules out every target that is up.',
+  meridian: 'Waiting for the meridian flip, or outside a meridian window.',
+  below_limits: 'No target is above its limits for long enough.',
+  complete: 'Every target has its frames.',
+  nothing_eligible: 'No target can start before the clear hours end.',
+  held: 'An override stops the rig from starting work.',
+  excluded: 'Overrides leave out every target with frames left.',
 };
 
 const BAND_LABEL: Record<OverrideBand['kind'], string> = {

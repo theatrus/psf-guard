@@ -496,15 +496,15 @@ describe('Rig profile card', () => {
     // the guess too, sets it in one click.
     expect(within(modes).getByLabelText('Target Scheduler')).not.toBeChecked();
     expect(within(modes).getByLabelText('Director')).not.toBeChecked();
-    expect(screen.getByText(/Not set yet, so PSF Guard plans this rig as Target Scheduler, its guess/)).toBeInTheDocument();
+    expect(screen.getByText('Not set. PSF Guard plans this rig as Target Scheduler, from what the rig has reported.')).toBeInTheDocument();
     expect(screen.queryByRole('list', { name: 'What Director needs' })).toBeNull();
     fireEvent.click(within(modes).getByLabelText('Target Scheduler'));
     expect(within(modes).getByLabelText('Target Scheduler')).toBeChecked();
-    expect(screen.queryByText(/Not set yet/)).toBeNull();
+    expect(screen.queryByText(/^Not set\./)).toBeNull();
     fireEvent.click(within(modes).getByLabelText('Director'));
     const needs = screen.getByRole('list', { name: 'What Director needs' });
     expect(needs).toHaveTextContent('Pair the N.I.N.A. Director plugin with this rig. Pairing sets this mode by itself.');
-    expect(screen.queryByText(/Not set yet/)).toBeNull();
+    expect(screen.queryByText(/^Not set\./)).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Save rig profile' }));
     await waitFor(() => expect(saves).toHaveLength(1));
     expect(saves[0].mode).toBe('director');

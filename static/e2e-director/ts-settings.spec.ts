@@ -35,7 +35,7 @@ test('a Target Scheduler rig\'s night plans its changed settings before they are
     await expect(settings).toContainText('2 of 2 projects active');
     await expect(settings.getByLabel('Heart Nebula active')).toHaveCount(0);
     await settings.getByRole('button', { name: 'Target Scheduler settings' }).click();
-    await expect(settings).toContainText('they last until changed back, for every night');
+    await expect(settings).toContainText('Changes apply to every night, not just this one.');
     await settings.getByRole('button', { name: 'Change settings' }).click();
     await settings.getByLabel('Heart Nebula active').uncheck();
     await settings.getByLabel('Soul Nebula priority').selectOption('high');

@@ -88,7 +88,7 @@ test('a Director rig\'s night takes overrides, planned before they are saved', a
     const mode = settingsPage.getByRole('group', { name: 'Mode' });
     await expect(mode.getByRole('radio', { name: 'Director' })).toBeChecked();
     await expect(mode.getByRole('list', { name: 'What Director needs' })).toContainText('The N.I.N.A. Director plugin is paired with this rig.');
-    await expect(mode).not.toContainText('Not set yet');
+    await expect(mode).not.toContainText('Not set.');
     await shot(mode, 'rig-mode', name => testInfo.outputPath(name), false);
     await settingsPage.getByRole('button', { name: 'Close settings' }).click();
 
@@ -109,7 +109,7 @@ test('a Director rig\'s night takes overrides, planned before they are saved', a
     await expect(blocks.first()).toBeVisible({ timeout: 30_000 });
 
     const overrides = detail.getByRole('region', { name: 'Overrides' });
-    await expect(overrides.getByText('None: the rig follows its own program this night.')).toBeVisible();
+    await expect(overrides.getByText('None.', { exact: true })).toBeVisible();
     await detail.getByRole('button', { name: 'Edit night' }).click();
 
     // Drag the first block an hour later: its target is pinned there.
@@ -140,7 +140,7 @@ test('a Director rig\'s night takes overrides, planned before they are saved', a
     const bands = timeline.getByRole('group', { name: 'Overrides' });
     await expect(bands.getByRole('button', { name: /^Only Heart Nebula/ })).toBeVisible();
     await expect(detail.getByText('Planning the edit...')).toHaveCount(0);
-    await expect(detail.getByRole('list', { name: 'Legend' })).toContainText("Held: The night's overrides hold the rig.");
+    await expect(detail.getByRole('list', { name: 'Legend' })).toContainText('Held: An override stops the rig from starting work.');
     const bar = detail.getByRole('region', { name: 'Unsaved changes' });
     await expect(bar).toContainText("This night's overrides:");
     // Tall enough that the panel fits without scrolling under the header.

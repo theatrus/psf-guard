@@ -43,8 +43,8 @@ function Field({ id, label, value, onChange, disabled, unit, step = 'any' }: {
 const MODE_LABEL = { target_scheduler: 'Target Scheduler', director: 'Director' } as const;
 
 const MODE_HELP = {
-  target_scheduler: "Target Scheduler picks this rig's work from its database: run its instruction in the rig's N.I.N.A. sequence. Night plans predict its choices, and a night changes its settings.",
-  director: "Director's N.I.N.A. plugin picks this rig's work from the plans activated on it: run the Director instruction in the rig's sequence. Night plans show Director's selection, and a night takes overrides.",
+  target_scheduler: "Target Scheduler picks the rig's targets. Use its instruction in the rig's N.I.N.A. sequence.",
+  director: "The Director plugin picks the rig's targets from the plans activated on it. Use the Director instruction in the rig's N.I.N.A. sequence.",
 } as const;
 export default function RigProfileCard({ slug }: { slug: string }) {
   const id = useId();
@@ -191,11 +191,11 @@ export default function RigProfileCard({ slug }: { slug: string }) {
           </label>)}
         </div>
         <p className="director-muted">{form.mode === ''
-          ? `Not set yet, so PSF Guard plans this rig as ${MODE_LABEL[data.mode.runtime]}, its guess from what the rig has reported. ${MODE_HELP[data.mode.runtime]} Choose one to set it.`
+          ? `Not set. PSF Guard plans this rig as ${MODE_LABEL[data.mode.runtime]}, from what the rig has reported.`
           : MODE_HELP[form.mode]}</p>
         {(form.mode || data.mode.runtime) === 'director' && <ul className="rig-profile-needs" aria-label="What Director needs">
           <li data-done={data.mode.paired}>{data.mode.paired ? 'The N.I.N.A. Director plugin is paired with this rig.' : 'Pair the N.I.N.A. Director plugin with this rig. Pairing sets this mode by itself.'}</li>
-          <li data-done={data.mode.equipment}>{data.mode.equipment ? 'The plugin has reported the rig\'s equipment.' : 'The plugin reports the rig\'s equipment once paired; until then, Director\'s schedule uses the settings its templates name.'}</li>
+          <li data-done={data.mode.equipment}>{data.mode.equipment ? 'The plugin has reported the rig\'s equipment.' : 'The plugin reports the rig\'s equipment once paired.'}</li>
         </ul>}
       </fieldset>
       <fieldset disabled={disabled}>

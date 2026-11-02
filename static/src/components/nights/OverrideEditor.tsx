@@ -22,10 +22,10 @@ const KIND_LABEL: Record<Kind, string> = {
 };
 
 const KIND_HELP: Record<Kind, string> = {
-  pin: 'Between From and To, only this plan, target or exposure plan may run.',
-  exclude: 'This plan, target or exposure plan gets no time between From and To, or all night when both are empty.',
-  hold: 'The rig takes no more work from this time, or all night when From is empty.',
-  order: "The night's plans in this order, in place of the rig's own.",
+  pin: 'Only this runs between From and To.',
+  exclude: 'This gets no time between From and To, or all night when both are empty.',
+  hold: 'The rig starts no more work from this time, or all night when From is empty.',
+  order: "The night's plans run in this order.",
 };
 
 interface Props {
@@ -113,7 +113,7 @@ export default function OverrideEditor({ rig, night, saved, scheduled, goals, to
     {refused && draft === null && <p className="director-error" role="alert">{refused}</p>}
     {saved.isError && <p className="director-error" role="alert">{saved.error instanceof Error ? saved.error.message : "The night's overrides could not be loaded"}</p>}
     {entries.length === 0
-      ? <p className="director-muted">{draft === null ? 'None: the rig follows its own program this night.' : 'None in this edit: saving returns the night to the rig\'s own program.'}</p>
+      ? <p className="director-muted">{draft === null ? 'None.' : 'None. Saving removes this night\'s overrides.'}</p>
       : <ul className="nights-override-list">
         {entries.map((entry, index) => <li key={`${entry.kind}-${index}`}>
           <span>{describeOverride(entry, goals, zone)}</span>
@@ -121,11 +121,11 @@ export default function OverrideEditor({ rig, night, saved, scheduled, goals, to
         </li>)}
       </ul>}
     {idle.map(window => <p key={window.start_ms} className="director-muted" role="note">
-      Nothing pinned runs from {formatClock(window.start_ms, zone)} to {formatClock(window.end_ms, zone)}: the sky or the Moon rules it out there, so the rig stays idle in that window.
+      Nothing pinned can run from {formatClock(window.start_ms, zone)} to {formatClock(window.end_ms, zone)}, so the rig stays idle then.
     </p>)}
     {draft !== null && <>
       {night.availability.state === 'unavailable' && !entries.some(entry => entry.kind === 'hold') && <p className="nights-mark-row">
-        <span className="director-muted">This night is marked not available, which changes the plans only. A hold keeps the rig from taking work.</span>
+        <span className="director-muted">Marked not available, but the rig still runs unless held.</span>
         <button type="button" onClick={() => add({ kind: 'hold' })}>Hold the rig all night</button>
       </p>}
       {tonight && <LiveShifts key={goals.map(goal => goal.goal_id).join()} night={night} goals={goals} now={now} zone={zone} onAdd={add} />}
@@ -133,9 +133,7 @@ export default function OverrideEditor({ rig, night, saved, scheduled, goals, to
         <summary>Add one by typing its times</summary>
         <AddOverride key={goals.map(goal => goal.goal_id).join()} night={night} goals={goals} zone={zone} onAdd={add} />
       </details>
-      <p className="director-muted">{tonight
-        ? 'A session already running takes saved overrides at its next check-in: it finishes the exposure under way, then follows the new program.'
-        : 'Saved overrides apply to the program the rig pulls for this night.'}</p>
+      {tonight && <p className="director-muted">A running session uses saved overrides from its next check-in.</p>}
       {!unsaved && <div className="nights-mark-row"><button type="button" onClick={() => onDraft(null)}>Stop editing</button></div>}
     </>}
   </section>;
@@ -233,7 +231,7 @@ function AddOverride({ night, goals, zone, onAdd }: { night: RigNight; goals: Di
         <label>From <input type="time" value={from} onChange={event => setFrom(event.target.value)} aria-describedby="nights-override-times" /></label>
         {kind !== 'hold' && <label>To <input type="time" value={to} onChange={event => setTo(event.target.value)} aria-describedby="nights-override-times" /></label>}
         <span id="nights-override-times" className="director-muted">
-          Times are in {zone ? `the site's time zone (${zone})` : `this browser's time zone (${BROWSER_ZONE})`}. Leave From empty to start at {kind === 'hold' ? 'the start of the night' : 'dusk'}{kind !== 'hold' && ', or To empty to end at dawn'}. Times after midnight fall the next morning.
+          Times in {zone ?? `this browser's time zone, ${BROWSER_ZONE}`}. {kind === 'hold' ? 'Leave From empty to hold all night.' : 'Leave From or To empty for dusk or dawn.'}
         </span>
       </div>}
       {kind === 'order' && <ol className="nights-order">

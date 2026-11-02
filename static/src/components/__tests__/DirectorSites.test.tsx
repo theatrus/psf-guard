@@ -133,9 +133,9 @@ describe('Director sites', () => {
     fireEvent.change(await screen.findByLabelText('New site name'), { target: { value: 'Backyard' } });
     fireEvent.click(screen.getByRole('button', { name: 'Add site' }));
     const card = await screen.findByRole('region', { name: 'Site Backyard' });
-    expect(await within(card).findByText(/Off: PSF Guard sends nothing about this site/)).toBeInTheDocument();
+    expect(await within(card).findByText('Off. PSF Guard sends nothing about this site.')).toBeInTheDocument();
     fireEvent.change(within(card).getByLabelText('Forecast'), { target: { value: 'met_norway' } });
-    expect(within(card).getByText(/sends this site's latitude and longitude, rounded to about 1 km, to MET Norway when you save, every three hours, when you click Fetch now, and when it retries after a failed request/)).toBeInTheDocument();
+    expect(within(card).getByText(/sends MET Norway this site's latitude and longitude, rounded to about 1 km, and nothing else: when you save, when you click Fetch now, every three hours, and again after a failed request/)).toBeInTheDocument();
     // Turned back off after a threshold edit, nothing is left to save.
     fireEvent.change(within(card).getByLabelText('Clear at or under'), { target: { value: '50' } });
     fireEvent.change(within(card).getByLabelText('Forecast'), { target: { value: 'off' } });
