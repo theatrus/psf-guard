@@ -32,6 +32,9 @@ const ORDER: Record<TsProject['state'], number> = { active: 0, inactive: 1, draf
 export default function TargetSchedulerControls({ rig, saved, canEdit, edit, onEdit }: Props) {
   const client = useQueryClient();
   const [refused, setRefused] = useState<string | null>(null);
+  // Folded until asked for. An open edit stays in the save bar if the
+  // table is folded again.
+  const [open, setOpen] = useState(false);
   const changes = tsChanges(saved, edit ?? { projects: {}, targets: {} });
   const where = rig.ts_save.files.length > 1
     ? `the rig's database and Target Scheduler's own file (${rig.ts_save.files[1]})`
@@ -70,15 +73,19 @@ export default function TargetSchedulerControls({ rig, saved, canEdit, edit, onE
     onEdit({ ...edit, projects: { ...edit.projects, [project.project_id]: { ...current, ...(change.priority ? { priority: change.priority } : {}), ...(state ? { state } : {}) } } });
   };
   const setTarget = (target: number, active: boolean) => edit && onEdit({ ...edit, targets: { ...edit.targets, [target]: active } });
+  const active = saved.filter(project => project.state === 'active').length;
   return <section className="nights-ts-controls" aria-label="Target Scheduler settings">
     <div className="nights-mark-row">
-      <h4>Target Scheduler settings</h4>
-      {canEdit && !edit && !rig.ts_save.refused && saved.length > 0 && <button type="button" onClick={() => { setRefused(null); onEdit({ projects: {}, targets: {} }); }}>Change settings</button>}
+      <h4><button type="button" className="nights-disclosure" aria-expanded={open} aria-controls={`ts-settings-${rig.rig.id}`}
+        onClick={() => setOpen(!open)}>Target Scheduler settings</button></h4>
+      {!open && <span className="director-muted">{active} of {saved.length} {saved.length === 1 ? 'project' : 'projects'} active</span>}
+      {open && canEdit && !edit && !rig.ts_save.refused && saved.length > 0 && <button type="button" onClick={() => { setRefused(null); onEdit({ projects: {}, targets: {} }); }}>Change settings</button>}
     </div>
+    {refused && !edit && <p className="director-error" role="alert">{refused}</p>}
+    {open && <div id={`ts-settings-${rig.rig.id}`}>
     <p className="director-muted">Target Scheduler picks this rig's targets from its database. {rig.ts_save.refused
       ? rig.ts_save.refused
       : `Changes here are saved to ${where}. They are Target Scheduler's own settings, so they last until changed back, for every night.`}</p>
-    {refused && !edit && <p className="director-error" role="alert">{refused}</p>}
     {saved.length === 0 && <p className="director-muted">The rig's database has no projects for its N.I.N.A. profile.</p>}
     {saved.length > 0 && <div className="director-table-scroll"><table className="nights-plan-table">
       <thead><tr><th>Project or target</th><th>Active</th><th>Priority</th></tr></thead>
@@ -106,5 +113,6 @@ export default function TargetSchedulerControls({ rig, saved, canEdit, edit, onE
       })}</tbody>
     </table></div>}
     {edit && <p className="director-muted">The schedule above shows these changes before they are saved.{isEmpty(changes) && ' '}{isEmpty(changes) && <button type="button" onClick={() => onEdit(null)}>Stop changing</button>}</p>}
+    </div>}
   </section>;
 }

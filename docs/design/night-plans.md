@@ -730,7 +730,10 @@ refused.
       writes it to the rig's database and, for a catalog kept in step, to
       Target Scheduler's file. The panel says these last until changed
       back, unlike a Director override;
-    - **Compare with Director** shows what Director would do.
+    - the page plans only the rig's own runtime, counted as a live run.
+      *Changed with Phase 6: **Compare with Director** and the Target
+      Scheduler preview counting left the page as confusing; the API keeps
+      `runtime` and `fidelity`.*
   - On a Director rig:
     - blocks expand into their steps;
     - **Edit night** allows pinning a block by dragging it, excluding a

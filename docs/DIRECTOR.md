@@ -1976,20 +1976,16 @@ window and the meridian flip zone, and its scoring rules with each
 project's weights. A chosen block lists every target the planner looked at,
 where each stood (chosen, lower score, not up yet, Moon avoidance and so
 on) and each rule's part in its score. Target Scheduler still decides on
-the rig: change a plan's priority, limits or rule weights in Target
-Scheduler to change the prediction.
+the rig: change a project's priority or whether it is active under
+**Target Scheduler settings** (below), or its limits and rule weights in
+Target Scheduler, to change the prediction.
 
-- By default the schedule adds time for slews, filter changes, dithers and
-  downloads (90 s per target change, 10 s per filter change, 15 s per dither
-  and 15 s per exposure), and counts planned frames at each plan's
-  acceptance rate so far. Tick **As Target Scheduler's preview** to count
-  exposure time only and every frame as accepted when the project grades,
-  as Target Scheduler's own Scheduler Preview does.
-- **Compare with Director** shows what Director's selection would do with
-  the plans activated on the rig: the same choice the plugin makes,
-  stepped through the night's dark hours. A rig that has not reported its
-  equipment is previewed with the filters, binning and camera settings its
-  templates name; that configuration never reaches the rig.
+The schedule is the rig's own runtime's, counted as a live run: it adds
+time for slews, filter changes, dithers and downloads (90 s per target
+change, 10 s per filter change, 15 s per dither and 15 s per exposure), and
+counts planned frames at each plan's acceptance rate so far. The night
+plans API can also schedule a rig with the other runtime, or count as
+Target Scheduler's own Scheduler Preview does; the page does not.
 
 Frames planned on one night count on the next, so the schedule shows when
 each plan finishes. Nothing is planned in the past: the night under way is
@@ -2098,8 +2094,9 @@ browser does not know falls back to the browser's own.
 ### Change a Target Scheduler rig's settings
 
 On a rig Target Scheduler runs, **Target Scheduler settings** under the
-schedule lists the projects of the rig's N.I.N.A. profile, in any state,
-with their targets. With editor access, **Change settings** lets each
+schedule is folded to a count of the active projects. Open it to list the
+projects of the rig's N.I.N.A. profile, in any state, with their targets.
+With editor access, **Change settings** lets each
 project be set active or not and given a **Priority** (Low, Normal or
 High), and each target be set active or not. The schedule above plans the
 changes before they are saved, as Target Scheduler would read them, and

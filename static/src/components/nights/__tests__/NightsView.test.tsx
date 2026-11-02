@@ -353,7 +353,15 @@ describe('Target Scheduler settings', () => {
     fireEvent.click(within(grid).getAllByRole('button')[0]);
     const detail = screen.getByRole('region', { name: 'Night details' });
     expect(within(detail).getByText('Target Scheduler decides')).toBeInTheDocument();
+    // Folded until asked for, with how many projects are active.
     const settings = within(detail).getByRole('region', { name: 'Target Scheduler settings' });
+    expect(settings).toHaveTextContent('1 of 2 projects active');
+    expect(within(settings).queryByLabelText('Heart Nebula active')).toBeNull();
+    // Only the rig's own runtime plans the night.
+    expect(within(detail).queryByRole('button', { name: /^Compare with/ })).toBeNull();
+    expect(within(detail).queryByLabelText("As Target Scheduler's preview")).toBeNull();
+    fireEvent.click(within(settings).getByRole('button', { name: 'Target Scheduler settings' }));
+    expect(within(settings).getByRole('button', { name: 'Target Scheduler settings' })).toHaveAttribute('aria-expanded', 'true');
     expect(settings).toHaveTextContent("They are Target Scheduler's own settings, so they last until changed back, for every night.");
     expect(within(settings).getByLabelText('Heart Nebula active')).toBeDisabled();
     fireEvent.click(within(settings).getByRole('button', { name: 'Change settings' }));
@@ -385,6 +393,7 @@ describe('Target Scheduler settings', () => {
     fireEvent.click(within(grid).getAllByRole('button')[0]);
     const detail = screen.getByRole('region', { name: 'Night details' });
     const settings = within(detail).getByRole('region', { name: 'Target Scheduler settings' });
+    fireEvent.click(within(settings).getByRole('button', { name: 'Target Scheduler settings' }));
     fireEvent.click(within(settings).getByRole('button', { name: 'Change settings' }));
     fireEvent.change(within(settings).getByLabelText('Heart Nebula priority'), { target: { value: 'high' } });
     fireEvent.click(within(within(detail).getByRole('region', { name: 'Unsaved changes' })).getByRole('button', { name: 'Save changes' }));
@@ -397,6 +406,7 @@ describe('Target Scheduler settings', () => {
     const grid = await screen.findByTestId('nights-grid');
     fireEvent.click(within(grid).getAllByRole('button')[0]);
     const settings = within(screen.getByRole('region', { name: 'Night details' })).getByRole('region', { name: 'Target Scheduler settings' });
+    fireEvent.click(within(settings).getByRole('button', { name: 'Target Scheduler settings' }));
     expect(settings).toHaveTextContent('runs on another PSF Guard (observatory)');
     expect(within(settings).queryByRole('button', { name: 'Change settings' })).toBeNull();
   });

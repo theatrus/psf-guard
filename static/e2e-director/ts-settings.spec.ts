@@ -31,6 +31,10 @@ test('a Target Scheduler rig\'s night plans its changed settings before they are
     await expect(blocks.first()).toHaveAccessibleName(/^Heart Nebula, IC 1805/);
 
     const settings = detail.getByRole('region', { name: 'Target Scheduler settings' });
+    // Folded until asked for.
+    await expect(settings).toContainText('2 of 2 projects active');
+    await expect(settings.getByLabel('Heart Nebula active')).toHaveCount(0);
+    await settings.getByRole('button', { name: 'Target Scheduler settings' }).click();
     await expect(settings).toContainText('they last until changed back, for every night');
     await settings.getByRole('button', { name: 'Change settings' }).click();
     await settings.getByLabel('Heart Nebula active').uncheck();

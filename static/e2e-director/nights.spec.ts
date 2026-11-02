@@ -71,10 +71,9 @@ test('Nights shows every rig across the coming nights, a night\'s schedule, and 
     await expect(gap.first()).toBeAttached({ timeout: 30_000 });
     await shot(page, 'nights-marked', name => testInfo.outputPath(name));
 
-    // Director's view of the same rig: nothing is activated on it.
-    await detail.getByRole('button', { name: 'Compare with Director' }).click();
-    await expect(detail.getByRole('heading', { name: 'Director schedule' })).toBeVisible();
-    await expect(detail.getByText(/No Director schedule/)).toBeVisible({ timeout: 30_000 });
+    // The night is planned by the rig's own runtime only.
+    await expect(detail.getByText('Target Scheduler decides', { exact: true })).toBeVisible();
+    await expect(detail.getByRole('button', { name: /^Compare with/ })).toHaveCount(0);
 
     // On a phone the grid scrolls in its own box; the page does not.
     await page.setViewportSize({ width: 390, height: 900 });

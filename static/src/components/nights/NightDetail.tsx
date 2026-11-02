@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { X } from 'lucide-react';
 import { apiClient } from '../../api/client';
-import type { NightAvailabilityState, NightInterval, NightMarkEdit, NightMarkScope, NightOverride, NightRuntime, RigNight, RigNights, ScheduleBlock, ScheduleFidelity, ScheduleRuntimeChoice, TsChanges } from '../../api/nightPlanTypes';
+import type { NightAvailabilityState, NightInterval, NightMarkEdit, NightMarkScope, NightOverride, RigNight, RigNights, ScheduleBlock, TsChanges } from '../../api/nightPlanTypes';
 import { formatHours } from '../director/visibilityFormat';
 import { httpStatus } from '../../utils/httpStatus';
 import { retryWhenBusy } from '../director/retry';
@@ -171,11 +171,9 @@ export default function NightDetail({ rig, nights, colours, canMark, range, onCl
  *  or the other one to compare, counted as a live run or as Target
  *  Scheduler's preview. The timeline and the plan table both read it. */
 function useNightSchedule(rig: RigNights, night: RigNight, range: Props['range'], enabled: boolean, draft: NightOverride[] | null, tsDraft: TsChanges | null) {
-  const [runtime, setRuntime] = useState<ScheduleRuntimeChoice>('auto');
-  const [fidelity, setFidelity] = useState<ScheduleFidelity>('estimate');
   const index = rig.nights.findIndex(n => n.date === night.date);
-  const shown = runtime === 'auto' ? rig.runtime : runtime;
-  const other: NightRuntime = rig.runtime === 'target_scheduler' ? 'director' : 'target_scheduler';
+  // The rig's own runtime, counted as a live run.
+  const shown = rig.runtime;
   const now = useDirectorClock();
   const tonight = isTonight(night, now);
   // Only Director's own schedule of a Director rig takes overrides.
@@ -183,16 +181,13 @@ function useNightSchedule(rig: RigNights, night: RigNight, range: Props['range']
   // Only Target Scheduler's own schedule of its rig takes its changes.
   const tsPreviewed = rig.runtime === 'target_scheduler' && shown === 'target_scheduler' ? tsDraft : null;
   const query = useQuery({
-    queryKey: ['nightPlanDetail', rig.rig.id, range.first, range.count, night.date, runtime, shown === 'target_scheduler' ? fidelity : 'estimate', previewed, tsPreviewed],
+    queryKey: ['nightPlanDetail', rig.rig.id, range.first, range.count, night.date, previewed, tsPreviewed],
     queryFn: () => apiClient.getNightPlans({
       rigs: [rig.rig.id],
       ...(range.first ? { first_night: range.first } : {}),
       nights: range.count,
       schedule_nights: index + 1,
       explain: night.date,
-      runtime,
-      // The preview's counting is Target Scheduler's alone.
-      ...(shown === 'target_scheduler' ? { fidelity } : {}),
       ...(previewed ? { override_draft: { rig: rig.rig.id, date: night.date, entries: previewed } } : {}),
       ...(tsPreviewed ? { ts_draft: { rig: rig.rig.id, changes: tsPreviewed } } : {}),
     }),
@@ -209,8 +204,8 @@ function useNightSchedule(rig: RigNights, night: RigNight, range: Props['range']
   const detail = query.data?.rigs.find(entry => entry.rig.id === rig.rig.id);
   // The grid's schedule is the rig's own runtime, counted as a live run,
   // with the night's saved overrides: an unsaved edit is not the grid's.
-  const asGrid = previewed === null && tsPreviewed === null && runtime === 'auto' && (shown !== 'target_scheduler' || fidelity === 'estimate');
-  return { runtime, setRuntime, fidelity, setFidelity, shown, other, now, tonight, query, detail, asGrid };
+  const asGrid = previewed === null && tsPreviewed === null;
+  return { shown, now, tonight, query, detail, asGrid };
 }
 
 type ScheduleView = ReturnType<typeof useNightSchedule>;
@@ -228,7 +223,7 @@ function NightSchedule({ rig, night, colours, view, edit, moveProblem, saved, on
   /** Start editing the night's overrides, when the person may. */
   onEdit?: () => void;
 }) {
-  const { runtime, setRuntime, fidelity, setFidelity, shown, other, now, tonight, query, detail } = view;
+  const { shown, now, tonight, query, detail } = view;
   const scheduled = detail?.schedule?.nights.find(n => n.date === night.date);
   const goals = detail?.schedule?.goals ?? [];
   const zone = usableZone(rig.time_zone);
@@ -240,15 +235,9 @@ function NightSchedule({ rig, night, colours, view, edit, moveProblem, saved, on
     <div className="nights-mark-row">
       <h4>{RUNTIME_LABEL[shown]} schedule</h4>
       {onEdit && <button type="button" className="is-primary" onClick={onEdit}>Edit night</button>}
-      <button type="button" aria-pressed={runtime !== 'auto'} disabled={!!edit} onClick={() => setRuntime(runtime === 'auto' ? other : 'auto')}>
-        Compare with {RUNTIME_LABEL[other]}
-      </button>
-      {shown === 'target_scheduler' && <label title="Exposure time only, and every frame accepted when the project grades, as Target Scheduler's own Scheduler Preview counts them">
-        <input type="checkbox" checked={fidelity === 'target_scheduler_preview'} onChange={event => setFidelity(event.target.checked ? 'target_scheduler_preview' : 'estimate')} /> As Target Scheduler's preview
-      </label>}
     </div>
     <p className="director-muted">{shown === 'target_scheduler'
-      ? `A prediction of Target Scheduler ${detail?.schedule?.assumptions.target_scheduler_version ?? '5'}'s choices from the rig's database. Target Scheduler decides on the rig. ${rig.runtime === 'target_scheduler' ? "Change a project's priority or whether it is active below, or its limits and rule weights in Target Scheduler" : "Change a plan's priority, limits or rule weights in Target Scheduler"}, to change this prediction.`
+      ? `A prediction of Target Scheduler ${detail?.schedule?.assumptions.target_scheduler_version ?? '5'}'s choices from the rig's database. Target Scheduler decides on the rig. Change a project's priority or whether it is active under Target Scheduler settings, or its limits and rule weights in Target Scheduler, to change this prediction.`
       : "Director's own selection, stepped through the night's dark hours. The rig still decides on the night."}
       {detail?.schedule?.assumptions.overheads && ` Times include ${detail.schedule.assumptions.overheads.target_change_seconds} s per target change, ${detail.schedule.assumptions.overheads.filter_change_seconds} s per filter change and ${detail.schedule.assumptions.overheads.per_exposure_seconds} s per exposure.`}
     </p>
