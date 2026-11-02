@@ -1,4 +1,4 @@
-import type { DirectorIdentity, DirectorSite, DirectorSkyPosition } from './directorTypes';
+import type { DirectorIdentity, DirectorSite, DirectorSkyPosition, ForecastHour, ForecastProvider } from './directorTypes';
 
 /** Which runtime picks a rig's work on the night. */
 export type NightRuntime = 'target_scheduler' | 'director';
@@ -40,11 +40,18 @@ export interface NightPlanProject {
   targets: NightPlanTarget[];
 }
 
+/** Where a mark came from: by hand, or the site's forecast where no mark
+ *  says otherwise. */
+export type NightMarkSource =
+  | { kind: 'manual' }
+  | { kind: 'forecast'; provider: ForecastProvider; fetched_at_ms: number };
+
 export interface NightAppliedMark {
   scope: NightMarkScope;
   state: NightAvailabilityState;
   windows: NightInterval[];
   note: string;
+  source: NightMarkSource;
 }
 
 export interface NightAvailabilityView {
@@ -84,6 +91,8 @@ export interface RigNight {
   moon_hours_up_in_dark: number;
   targets: NightTargetHours[];
   load: NightLoad;
+  /** The forecast's cloud cover through the night; empty without one. */
+  clouds: ForecastHour[];
 }
 
 export type ScheduleGapReason = 'twilight' | 'unavailable' | 'moon' | 'meridian' | 'below_limits' | 'complete' | 'nothing_eligible';
@@ -186,7 +195,19 @@ export interface RigNights {
   /** What the rig would shoot, when schedules were asked for. */
   schedule: NightSchedule | null;
   mark_revisions: { rig: number; site: number | null };
+  /** The cloud forecast the rig's planning site takes. */
+  forecast: RigForecast | null;
   warnings: string[];
+}
+
+export interface RigForecast {
+  provider: ForecastProvider;
+  /** The credit the provider's licence asks for. */
+  attribution: string;
+  cloud_threshold_percent: number;
+  /** The forecast planning uses; null when none is kept or it expired. */
+  fetched_at_ms: number | null;
+  expires_at_ms: number | null;
 }
 
 export interface NightPlans {

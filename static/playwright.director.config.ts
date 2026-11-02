@@ -1,6 +1,6 @@
 import { defineConfig, devices } from '@playwright/test';
 import releaseHighlights from './src/updates/highlights.json' with { type: 'json' };
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -21,6 +21,10 @@ if (!process.env.PSF_GUARD_DIRECTOR_E2E_TMP && process.platform === 'win32') {
 }
 process.env.PSF_GUARD_DIRECTOR_E2E_TMP = root;
 const port = Number(process.env.PSF_GUARD_DIRECTOR_E2E_PORT ?? 13742);
+// A stand-in forecast provider, which the server's config file points at.
+const forecastPort = Number(process.env.PSF_GUARD_DIRECTOR_FORECAST_PORT ?? port + 1);
+const serverConfig = path.join(root, 'server.toml');
+writeFileSync(serverConfig, `[server]\n\n[server.forecasts]\nopen_meteo_url = "http://127.0.0.1:${forecastPort}"\n\n[cache]\n`);
 const binary = process.env.PSF_GUARD_E2E_BINARY;
 const command = binary ? `"${binary}"` : 'cargo run --manifest-path ../Cargo.toml --bin psf-guard --';
 
@@ -49,12 +53,17 @@ export default defineConfig({
     },
   },
   projects: [{ name: 'chromium', use: devices['Desktop Chrome'] }],
-  webServer: {
-    command: `${command} server --host 127.0.0.1 --port ${port} --registry "${path.join(root, 'registry.json')}" --cache-dir "${path.join(root, 'cache')}" --director-meta "${path.join(root, 'meta.sqlite')}" --allow-database-management --static-dir "${path.resolve('dist')}"`,
+  webServer: [{
+    command: `node e2e-director/forecast-provider.mjs ${forecastPort}`,
+    url: `http://127.0.0.1:${forecastPort}/health`,
+    reuseExistingServer: false,
+    timeout: 15_000,
+  }, {
+    command: `${command} server --host 127.0.0.1 --port ${port} --config "${serverConfig}" --registry "${path.join(root, 'registry.json')}" --cache-dir "${path.join(root, 'cache')}" --director-meta "${path.join(root, 'meta.sqlite')}" --allow-database-management --static-dir "${path.resolve('dist')}"`,
     url: `http://127.0.0.1:${port}/api/info`,
     reuseExistingServer: false,
     timeout: 180_000,
     // No update banner when a newer release is out; see playwright.config.ts.
     env: { PSF_GUARD_UPDATE_NOTICE: 'off' },
-  },
+  }],
 });

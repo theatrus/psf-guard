@@ -42,6 +42,7 @@ Environment:
   PSF_GUARD_E2E_BINARY          server binary (default target/release/psf-guard)
   PSF_GUARD_E2E_PORT            first of three main-suite ports
   PSF_GUARD_DIRECTOR_E2E_PORT   Director suite port
+  PSF_GUARD_DIRECTOR_FORECAST_PORT   the Director suite's stand-in forecast provider
   PSF_GUARD_E2E_MAX_TIME, PSF_GUARD_E2E_IDLE   defaults for the limits
 
 Exit status: Playwright's own, ${EXIT.stopped} after a time limit or the
@@ -317,11 +318,13 @@ export async function acquireLock(lockDir, owner, { wait, log, pollMs = 2_000 })
 
 // -------------------------------------------------------------------- ports
 
-/** Stable per-worktree ports in 20000–23999, clear of the ephemeral range. */
+/** Stable per-worktree ports in 20000–24999, clear of the ephemeral range:
+ *  three for the main suite, then the Director suite's server and its
+ *  stand-in forecast provider. */
 export function defaultPorts(worktree) {
   const slot = createHash('sha256').update(worktree).digest().readUInt32BE(0) % 1000;
-  const base = 20_000 + slot * 4;
-  return { main: base, director: base + 3 };
+  const base = 20_000 + slot * 5;
+  return { main: base, director: base + 3, forecast: base + 4 };
 }
 
 function portFree(port) {
@@ -547,7 +550,8 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   const ports = defaultPorts(worktree);
   const mainPort = Number(env.PSF_GUARD_E2E_PORT ?? ports.main);
   const directorPort = Number(env.PSF_GUARD_DIRECTOR_E2E_PORT ?? ports.director);
-  const runPorts = options.director ? [directorPort] : [mainPort, mainPort + 1, mainPort + 2];
+  const forecastPort = Number(env.PSF_GUARD_DIRECTOR_FORECAST_PORT ?? ports.forecast);
+  const runPorts = options.director ? [directorPort, forecastPort] : [mainPort, mainPort + 1, mainPort + 2];
 
   if (reportStuck(log)) return EXIT.refused;
 
@@ -594,6 +598,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
       PSF_GUARD_E2E_BINARY: binary,
       PSF_GUARD_E2E_PORT: String(mainPort),
       PSF_GUARD_DIRECTOR_E2E_PORT: String(directorPort),
+      PSF_GUARD_DIRECTOR_FORECAST_PORT: String(forecastPort),
       PSF_GUARD_E2E_GLOBAL_TIMEOUT_MS: String(globalTimeout),
       // A server already on the port belongs to someone else; never reuse it.
       PSF_GUARD_E2E_NO_REUSE: '1',

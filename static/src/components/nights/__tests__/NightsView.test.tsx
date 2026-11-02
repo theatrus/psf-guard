@@ -66,7 +66,7 @@ describe('Nights', () => {
     // with its reason.
     const plansTonight = within(detail).getByRole('region', { name: 'No owed target can be imaged this night' });
     expect(within(plansTonight).getByText('Not this night: 1 target')).toBeInTheDocument();
-    expect(within(plansTonight).getByRole('listitem')).toHaveTextContent('Heart Nebula · IC 1805: above its limits only while the night is marked not clear');
+    expect(within(plansTonight).getByRole('listitem')).toHaveTextContent('Heart Nebula · IC 1805: above its limits only in hours that are not clear');
     expect(cells[1]).toHaveAttribute('aria-pressed', 'true');
     // A clear night lists it, usable for its hours less the Moon's. With
     // no schedule to say what is planned, nothing is called waiting.
@@ -75,6 +75,41 @@ describe('Nights', () => {
     const row = within(clearNight).getByRole('row', { name: /IC 1805/ });
     expect(row).toHaveTextContent('5.0 h · 1.0 h excluded by the Moon');
     expect(row).not.toHaveClass('is-idle-plan');
+  });
+
+  it('shows a night the site\'s forecast marked, credits it, and leaves the mark form to marks by hand', async () => {
+    const fetched = night(0).noon_ms + 2 * 3_600_000;
+    const forecastNight = night(0, {
+      available_dark_hours: 4,
+      availability: { state: 'limited', windows: [{ start_ms: night(0).noon_ms + 9 * 3_600_000, end_ms: night(0).noon_ms + 13 * 3_600_000 }],
+        marks: [{ scope: 'site', state: 'limited', windows: [{ start_ms: night(0).noon_ms + 9 * 3_600_000, end_ms: night(0).noon_ms + 13 * 3_600_000 }], note: '', source: { kind: 'forecast', provider: 'open_meteo', fetched_at_ms: fetched } }] },
+      clouds: [{ start_ms: night(0).noon_ms + 8 * 3_600_000, end_ms: night(0).noon_ms + 9 * 3_600_000, cloud_total: 80, cloud_low: 70, cloud_mid: null, cloud_high: 10 }],
+    });
+    mount(plans([rig({
+      nights: [forecastNight, night(1), night(2)],
+      forecast: { provider: 'open_meteo', attribution: 'Weather data by Open-Meteo.com (CC BY 4.0)', cloud_threshold_percent: 30, fetched_at_ms: fetched, expires_at_ms: fetched + 12 * 3_600_000 },
+    })]));
+    const grid = await screen.findByTestId('nights-grid');
+    const cells = within(grid).getAllByRole('button');
+    expect(cells[0]).toHaveAccessibleName(/limited by the forecast/);
+    expect(cells[1]).not.toHaveAccessibleName(/forecast/);
+    fireEvent.click(cells[0]);
+    const detail = screen.getByRole('region', { name: 'Night details' });
+    expect(within(detail).getByText(/^Forecast \(Open-Meteo, fetched .+\): Limited/)).toBeInTheDocument();
+    expect(within(detail).getByText(/Hours at or under 30% cloud count as clear/)).toBeInTheDocument();
+    expect(within(detail).getByRole('link', { name: 'Weather data by Open-Meteo.com (CC BY 4.0)' })).toHaveAttribute('href', 'https://open-meteo.com/');
+    // The forecast's mark is not one to edit or clear.
+    fireEvent.change(within(detail).getByLabelText('For'), { target: { value: 'site' } });
+    expect(within(detail).getByLabelText('Not available')).toBeChecked();
+    expect(within(detail).queryByRole('button', { name: 'Clear mark' })).toBeNull();
+  });
+
+  it('says when the site\'s forecast does not reach a night', async () => {
+    mount(plans([rig({ forecast: { provider: 'met_norway', attribution: 'Weather data from MET Norway (CC BY 4.0)', cloud_threshold_percent: 30, fetched_at_ms: null, expires_at_ms: null } })]));
+    const grid = await screen.findByTestId('nights-grid');
+    fireEvent.click(within(grid).getAllByRole('button')[2]);
+    const detail = screen.getByRole('region', { name: 'Night details' });
+    expect(within(detail).getByText(/forecast from MET Norway has not arrived or has expired, so nights count as clear/)).toBeInTheDocument();
   });
 
   it('marks a run of nights limited for every rig at the site', async () => {

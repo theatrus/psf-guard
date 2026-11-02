@@ -73,8 +73,11 @@ Arguments it does not know go to `playwright test`. The script:
   launches hang behind them. Reboot; do not retry or `pkill`.
 - uses `PSF_GUARD_E2E_BINARY`, or else this worktree's
   `target/release/psf-guard`, and ports derived from the worktree path
-  unless `PSF_GUARD_E2E_PORT` or `PSF_GUARD_DIRECTOR_E2E_PORT` is set. It
-  refuses a port that is already in use rather than reuse that server.
+  unless `PSF_GUARD_E2E_PORT`, `PSF_GUARD_DIRECTOR_E2E_PORT` or
+  `PSF_GUARD_DIRECTOR_FORECAST_PORT` is set. The Director suite also runs
+  `e2e-director/forecast-provider.mjs`, a stand-in for Open-Meteo that its
+  server's config file points at. It refuses a port that is already in use
+  rather than reuse that server.
 - stops the run after `--max-time` (30 minutes), after `--idle` without
   output (5 minutes), or on Ctrl-C. It sends SIGTERM to the process groups
   the run created, browsers and servers included, then SIGKILL after

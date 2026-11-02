@@ -26,6 +26,15 @@
   one rig or for every rig at a site; the schedules work around the marks.
   The Live table's new **Tonight** column links each rig to tonight's
   schedule. See [Nights](../DIRECTOR.md#nights).
+- A site can mark its nights from a cloud forecast. Under **Settings ›
+  Sites**, choose **Open-Meteo** or **MET Norway** in **Forecast**, and the
+  cloud cover at or under which an hour counts as clear. Night plans then
+  treat cloudy hours as not available for every rig at the site, unless a
+  mark you set for the site overrides the forecast. The **Nights** grid
+  shows a cloud on each night the forecast marks, and a night's timeline
+  shows each hour's cloud cover. Forecasts are off by default: PSF Guard
+  sends a site's location, rounded to about 1 km, only after an editor
+  turns its forecast on. See [Cloud forecasts](../DIRECTOR.md#cloud-forecasts).
 - PSF Guard imports a calibration master built by `seiza master` as a
   calibration master. Seiza 0.48.1 and earlier write a master's kind only in
   `SEIZAMST`, and earlier PSF Guard versions imported such a master as a

@@ -110,8 +110,8 @@ test('parses options and passes everything else to Playwright', () => {
 
 test('derives the same ports for a worktree every time', () => {
   assert.deepEqual(defaultPorts('/a/worktree'), defaultPorts('/a/worktree'));
-  const { main, director } = defaultPorts('/a/worktree');
-  assert.ok(main >= 20_000 && director < 24_000 && director === main + 3);
+  const { main, director, forecast } = defaultPorts('/a/worktree');
+  assert.ok(main >= 20_000 && forecast < 25_000 && director === main + 3 && forecast === director + 1);
 });
 
 test('the lock admits one owner and breaks only a dead one', posixOnly, () => {

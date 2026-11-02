@@ -237,6 +237,8 @@ export interface DirectorSiteProfile {
   revision: number;
   location: DirectorReported<DirectorSite> | null;
   horizon: DirectorReported<DirectorHorizon> | null;
+  /** Where the site takes a cloud forecast from; null takes none. */
+  forecast: ForecastSettings | null;
   updated_at_ms: number;
 }
 export interface DirectorSiteProfileView { site: DirectorIdentity; profile: DirectorSiteProfile }
@@ -244,6 +246,51 @@ export interface DirectorSiteProfileEdit {
   expected_revision: number;
   location: DirectorEdited<DirectorSite> | null;
   horizon: DirectorEdited<DirectorHorizon> | null;
+  /** Left out or null, the site takes no forecast. */
+  forecast?: ForecastSettings | null;
+}
+
+export type ForecastProvider = 'open_meteo' | 'met_norway';
+export interface ForecastSettings {
+  provider: ForecastProvider;
+  /** An hour at or under this much total cloud cover counts as clear. */
+  cloud_threshold_percent: number;
+}
+/** Cloud cover in percent from start to end: an hour, or six further out. */
+export interface ForecastHour {
+  start_ms: number;
+  end_ms: number;
+  cloud_total: number;
+  cloud_low: number | null;
+  cloud_mid: number | null;
+  cloud_high: number | null;
+}
+export interface SiteForecast {
+  site_id: string;
+  provider: ForecastProvider;
+  fetched_at_ms: number;
+  /** After this the forecast counts as no information. */
+  expires_at_ms: number;
+  refresh_after_ms: number | null;
+  hours: ForecastHour[];
+}
+export interface ForecastStatus {
+  site_id: string;
+  last_attempt_ms: number;
+  /** Null when the last ask succeeded. */
+  last_error: string | null;
+  failures: number;
+}
+export interface SiteForecastView {
+  site: DirectorIdentity;
+  settings: ForecastSettings | null;
+  /** The credit the provider's licence asks for. */
+  attribution: string | null;
+  forecast: SiteForecast | null;
+  /** Whether planning uses the kept forecast now. */
+  fresh: boolean;
+  status: ForecastStatus | null;
+  next_refresh_ms: number | null;
 }
 export interface DirectorCutoutRequest {
   survey: string;

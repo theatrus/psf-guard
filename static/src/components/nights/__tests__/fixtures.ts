@@ -20,6 +20,7 @@ export function night(index: number, overrides: Partial<RigNight> = {}): RigNigh
     moon_hours_up_in_dark: 3,
     targets: [{ project_id: 7, target_id: 70, hours_up: 6, hours_up_available: 6, hours_moon_blocked: 1, max_altitude_degrees: 71.2, transit_ms: noon + 12 * HOUR }],
     load: { demand_hours: 5, available_hours: 10, idle_hours: 5, overbooked_hours: 0 },
+    clouds: [],
     ...overrides,
   };
 }
@@ -38,9 +39,10 @@ export function rig(overrides: Partial<RigNights> = {}): RigNights {
       limits: { minimum_altitude_degrees: 25, maximum_altitude_degrees: 90, horizon_offset_degrees: 0, custom_horizon: false, meridian_window_minutes: 0 },
       targets: [{ target_id: 70, name: 'IC 1805', position: { ra_degrees: 38.2, dec_degrees: 61.45 }, frames_owed: 60, hours_owed: 5.25, filters: ['Ha', 'OIII'] }],
     }],
-    nights: [night(0), night(1, { availability: { state: 'unavailable', windows: [], marks: [{ scope: 'rig', state: 'unavailable', windows: [], note: 'dome motor' }] }, available_dark_hours: 0, targets: [{ project_id: 7, target_id: 70, hours_up: 6, hours_up_available: 0, hours_moon_blocked: 0, max_altitude_degrees: 71.2, transit_ms: null }], load: { demand_hours: 0, available_hours: 0, idle_hours: 0, overbooked_hours: 0 } }), night(2)],
+    nights: [night(0), night(1, { availability: { state: 'unavailable', windows: [], marks: [{ scope: 'rig', state: 'unavailable', windows: [], note: 'dome motor', source: { kind: 'manual' } }] }, available_dark_hours: 0, targets: [{ project_id: 7, target_id: 70, hours_up: 6, hours_up_available: 0, hours_moon_blocked: 0, max_altitude_degrees: 71.2, transit_ms: null }], load: { demand_hours: 0, available_hours: 0, idle_hours: 0, overbooked_hours: 0 } }), night(2)],
     schedule: null,
     mark_revisions: { rig: 4, site: 0 },
+    forecast: null,
     warnings: [],
     ...overrides,
   };

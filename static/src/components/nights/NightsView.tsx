@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { RefreshCw } from 'lucide-react';
+import { Cloud, RefreshCw } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import type { RigNight, RigNights } from '../../api/nightPlanTypes';
 import { useAccess } from '../../auth/access';
@@ -22,7 +22,9 @@ import {
   isTonight,
   loadWords,
   localDate,
+  forecastMark,
   markGlyph,
+  markOrigin,
   planColours,
   plansOnNight,
   plansScheduled,
@@ -148,13 +150,15 @@ export default function NightsView() {
               const working = scheduled ?? plansOnNight(rig, night).map(plan => ({ name: plan.name, hours: plan.hours }));
               const plannedHours = scheduled?.reduce((sum, plan) => sum + plan.hours, 0) ?? null;
               const glyph = markGlyph(night);
+              const forecast = forecastMark(night);
               return <td key={date}>
                 <button type="button" className={`nights-cell is-${night.availability.state}`} aria-pressed={chosen}
-                  aria-label={`${rig.catalog_name}, ${formatNightDate(night.date)}: ${formatHours(night.available_dark_hours)} clear of ${formatHours(night.dark_hours)} dark, ${STATE_LABEL[night.availability.state].toLowerCase()}, Moon ${Math.round(night.moon_illumination * 100)}%`}
+                  aria-label={`${rig.catalog_name}, ${formatNightDate(night.date)}: ${formatHours(night.available_dark_hours)} clear of ${formatHours(night.dark_hours)} dark, ${STATE_LABEL[night.availability.state].toLowerCase()}${forecast ? ' by the forecast' : ''}, Moon ${Math.round(night.moon_illumination * 100)}%`}
                   onClick={event => choose(rig, night, event.shiftKey)}>
                   <span className="nights-cell-top">
                     <span className="nights-cell-hours">{formatHours(night.available_dark_hours)}</span>
                     {glyph && <span className="nights-cell-mark" aria-hidden="true">{glyph}</span>}
+                    {forecast && <span className="nights-cell-forecast" aria-hidden="true" title={`${markOrigin(forecast)}: ${STATE_LABEL[forecast.state].toLowerCase()}`}><Cloud size={12} /></span>}
                     <span className="nights-cell-moon" title={`Moon ${Math.round(night.moon_illumination * 100)}% lit, up ${formatHours(night.moon_hours_up_in_dark)} of the dark`}>☾ {Math.round(night.moon_illumination * 100)}%</span>
                   </span>
                   <span className="nights-cell-bar" aria-hidden="true">

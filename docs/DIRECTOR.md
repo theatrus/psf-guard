@@ -1011,8 +1011,8 @@ azimuth; the error says which line.
 
 | Method | Route | Body or query |
 | --- | --- | --- |
-| GET | `/sites/{site}/profile` | The site and its profile: `location` and `horizon`, each `{value, source, reported_at_ms}` or `null`, and `revision` (0 when nothing is saved). `404` for an unknown site. |
-| PUT | `/sites/{site}/profile` | `expected_revision` plus `location` and `horizon`, each `{value, source}` or `null`. Sources may be `manual` or `frame_headers`; `409` when the revision moved. |
+| GET | `/sites/{site}/profile` | The site and its profile: `location` and `horizon`, each `{value, source, reported_at_ms}` or `null`, `forecast` (`{provider, cloud_threshold_percent}` or `null`), and `revision` (0 when nothing is saved). `404` for an unknown site. |
+| PUT | `/sites/{site}/profile` | `expected_revision` plus `location` and `horizon`, each `{value, source}` or `null`, and `forecast`: `{provider, cloud_threshold_percent}`, or `null` or left out to turn forecasts off. Sources may be `manual` or `frame_headers`; `409` when the revision moved. A new provider or location discards the stored forecast and requests a new one; turning forecasts off discards it. |
 | POST | `/horizons/parse` | `{text}` holding a `.hrz` file; returns the canonical `Horizon` or `400` with the line it could not read. Stores nothing. |
 
 `GET /rigs/profiles` carries each rig's resolved `site`: the planning `site`
@@ -1923,7 +1923,7 @@ Choose a cell to open the night below the grid:
   The other targets fold into **Not this night**, each with its reason:
   - its plan is done on an earlier night;
   - its filters' Moon avoidance excludes every clear hour;
-  - it is above its limits only while the night is marked not clear;
+  - it is above its limits only in hours that are not clear;
   - it is not above its limits inside its meridian window during darkness;
   - it is not above its horizon and altitude limits during darkness;
   - the sky does not get dark that night.
@@ -1991,6 +1991,52 @@ Marks change night plans only. They never start, stop or block a rig, and
 never reach a program, the plugin, Target Scheduler or N.I.N.A.: the rig's
 safety monitor and N.I.N.A. still decide on the night.
 
+### Cloud forecasts
+
+A site can use a cloud forecast to mark its nights. Forecasts are off until
+an editor turns them on for a site:
+
+1. Open **Settings › Sites** and click **Edit** for the site.
+2. Enter the site's latitude and longitude if they are empty.
+3. Under **Cloud forecast**, choose a provider in **Forecast**:
+   - **Open-Meteo**: hourly, 16 days ahead; free for non-commercial use.
+   - **MET Norway**: hourly, then every 6 hours, about 9 days ahead; free
+     for any use.
+4. In **Clear at or under**, enter the cloud cover, in percent, at or under
+   which an hour counts as clear. The default is 30%.
+5. Click **Save site**. PSF Guard requests the first forecast at once.
+
+![A site's cloud forecast, with when it arrived and how long night plans use it](images/site-forecast.png)
+
+PSF Guard sends the site's latitude and longitude, rounded to about 1 km,
+to the provider every three hours, and nothing else. It sends nothing
+about a site whose forecast is off. **Fetch now** requests a new forecast
+at once. After a failed request, the panel shows the error, and PSF Guard
+tries again after 15 minutes, then waits longer after each further failure,
+up to 6 hours.
+
+In night plans, a forecast works like a mark for every rig at the site:
+
+- Hours at or under the threshold count as clear. A night clear through
+  all its dark hours is available, a night with no clear dark hours is not
+  available, and any other night is limited to its clear hours.
+- A mark set for the site overrides the forecast for that night. A rig's
+  own mark still applies with the forecast.
+- A forecast is used for 12 hours after it arrives. Nights after the
+  forecast's last hour, and every night once the forecast expires, count as
+  clear.
+- The **Nights** grid shows a cloud in each cell the forecast marks. A
+  night's panel shows the forecast's mark, the time the forecast arrived
+  and the provider's credit, and the timeline adds a strip of each hour's
+  cloud cover. Hours above the threshold have a red edge.
+
+![A night the forecast marks clear from 10 PM to 2 AM, with its hourly cloud under the schedule](images/nights-forecast.png)
+
+Like marks, forecasts change night plans only: they never start, stop or
+block a rig. To use a paid Open-Meteo plan, your own Open-Meteo instance,
+or to add contact details to each request, set `[server.forecasts]` in the
+server's configuration file; see the [README](../README.md).
+
 ### Tonight on the Live tab
 
 The table on **Rigs › Live** has a **Tonight** column: each rig's clear
@@ -2003,6 +2049,8 @@ schedule on the **Nights** tab.
 | GET | `/night-availability` | `scope` (`site` or `rig`), `id`, `from` and `to` (`YYYY-MM-DD`). The scope's marks and the `revision` to send back with a change. |
 | PUT | `/night-availability/{scope}/{id}` | `expected_revision` and `marks`: up to 62 nights, each a `date`, a `state` (`available`, `unavailable` or `limited`), `windows` (for `limited`: UTC instants inside that night's noon-to-noon span) and an optional `note`. Replaces those nights' marks in one transaction. `409` on a stale revision; `422` for hours outside the night or a scope with no location. |
 | DELETE | `/night-availability/{scope}/{id}` | `expected_revision` and `dates`: returns those nights to the default. |
+| GET | `/sites/{site}/forecast` | The site's forecast `settings` (`provider`: `open_meteo` or `met_norway`, and `cloud_threshold_percent`), the provider's `attribution`, the stored `forecast` (each hour's total, low, mid and high cloud cover), whether night plans use it now (`fresh`), the last request's `status` (time, error and failures in a row) and `next_refresh_ms`. |
+| POST | `/sites/{site}/forecast/refresh` | Requests the site's forecast now and returns the same view; a failed request returns the view with the error in `status`. `422` when forecasts are off or the site has no location, or within 2 minutes of the last forecast or before the provider's `Expires` time. Editors only. |
 
 ## Framing drafts
 

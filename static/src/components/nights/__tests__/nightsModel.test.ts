@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { availableShares, clockOnNight, completesOn, datesBetween, isDate, loadWords, markGlyph, planColours, planRows, plansOnNight, windowFor } from '../nightsModel';
-import { night, rig } from './fixtures';
+import { availableShares, clockOnNight, completesOn, datesBetween, forecastMark, formatClock, isDate, loadWords, markGlyph, markOrigin, planColours, planRows, plansOnNight, windowFor } from '../nightsModel';
+import { NOON, night, rig } from './fixtures';
 
 const HOUR = 3_600_000;
 
@@ -34,12 +34,21 @@ describe('night plan helpers', () => {
 
   it('draws the clear part of a night between dusk and dawn', () => {
     expect(availableShares(night(0))).toEqual([{ from: 0, to: 1 }]);
-    const limited = night(0, { availability: { state: 'limited', windows: [{ start_ms: night(0).dusk_ms! + 5 * HOUR, end_ms: night(0).dawn_ms! + HOUR }], marks: [] } });
+    const hours = [{ start_ms: night(0).dusk_ms! + 5 * HOUR, end_ms: night(0).dawn_ms! + HOUR }];
+    const limited = night(0, { availability: { state: 'limited', windows: hours, marks: [{ scope: 'rig', state: 'limited', windows: hours, note: '', source: { kind: 'manual' } }] } });
     expect(availableShares(limited)).toEqual([{ from: 0.5, to: 1 }]);
     expect(availableShares(night(0, { availability: { state: 'unavailable', windows: [], marks: [] } }))).toEqual([]);
     expect(markGlyph(limited)).toBe('◐');
     expect(markGlyph(night(0))).toBe('');
-    expect(markGlyph(night(0, { availability: { state: 'available', windows: [], marks: [{ scope: 'site', state: 'available', windows: [], note: '' }] } }))).toBe('✓');
+    expect(markGlyph(night(0, { availability: { state: 'available', windows: [], marks: [{ scope: 'site', state: 'available', windows: [], note: '', source: { kind: 'manual' } }] } }))).toBe('✓');
+    const fromForecast = night(0, { availability: { state: 'available', windows: [], marks: [{ scope: 'site', state: 'available', windows: [], note: '', source: { kind: 'forecast', provider: 'met_norway', fetched_at_ms: NOON } }] } });
+    expect(forecastMark(fromForecast)?.state).toBe('available');
+    // The cell shows a cloud for the forecast, not a mark's glyph.
+    expect(markGlyph(fromForecast)).toBe('');
+    expect(forecastMark(night(0))).toBeUndefined();
+    expect(markOrigin(forecastMark(fromForecast)!)).toBe(`Forecast (MET Norway, fetched ${formatClock(NOON)})`);
+    expect(markOrigin(fromForecast.availability.marks[0])).toMatch(/^Forecast/);
+    expect(markOrigin({ scope: 'rig', state: 'unavailable', windows: [], note: '', source: { kind: 'manual' } })).toBe('Rig');
   });
 
   it('says how loaded a night is and which plans can use it', () => {

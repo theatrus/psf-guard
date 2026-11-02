@@ -18,11 +18,13 @@ import {
   formatNightDate,
   isTonight,
   completesOn,
+  markOrigin,
   OUT_REASON,
   planRows,
   windowFor,
   type PlanRow,
 } from './nightsModel';
+import { PROVIDER_LABEL, PROVIDER_URL } from '../director/forecastLabels';
 
 interface Props {
   rig: RigNights;
@@ -47,7 +49,7 @@ export default function NightDetail({ rig, nights, colours, canMark, range, onCl
       <h3>{rig.catalog_name} · {describeDates(nights.map(night => night.date))}</h3>
       <button type="button" aria-label="Close night details" title="Close" onClick={onClose}><X size={16} /></button>
     </div>
-    {single ? <NightFacts night={first} /> : <p className="director-muted">
+    {single ? <NightFacts rig={rig} night={first} /> : <p className="director-muted">
       {formatHours(nights.reduce((sum, night) => sum + night.available_dark_hours, 0))} clear of {formatHours(nights.reduce((sum, night) => sum + night.dark_hours, 0))} dark over these nights.
     </p>}
     {single && <NightSchedule rig={rig} night={first} colours={colours} view={schedule} />}
@@ -126,11 +128,12 @@ function NightSchedule({ rig, night, colours, view }: { rig: RigNights; night: R
     {query.isPending && <p role="status">Planning {formatNightDate(night.date)}...</p>}
     {query.isError && <p className="director-error" role="alert">{query.error instanceof Error ? query.error.message : 'The schedule could not be computed'}</p>}
     {detail?.warnings.map(warning => <p key={warning} className="director-muted" role="note">{warning}</p>)}
-    {scheduled && <NightTimeline night={night} scheduled={scheduled} colours={colours} now={tonight ? now : undefined} />}
+    {scheduled && <NightTimeline night={night} scheduled={scheduled} colours={colours} now={tonight ? now : undefined}
+      cloudThreshold={rig.forecast?.cloud_threshold_percent} />}
   </section>;
 }
 
-function NightFacts({ night }: { night: RigNight }) {
+function NightFacts({ rig, night }: { rig: RigNights; night: RigNight }) {
   const { availability } = night;
   return <>
     <dl className="nights-facts">
@@ -142,11 +145,27 @@ function NightFacts({ night }: { night: RigNight }) {
       <div><dt>Load</dt><dd>{describeLoad(night)}</dd></div>
     </dl>
     {availability.marks.length > 0 && <ul className="nights-marks">{availability.marks.map(mark => <li key={mark.scope}>
-      {mark.scope === 'site' ? 'Site' : 'Rig'}: {STATE_LABEL[mark.state]}
+      {markOrigin(mark)}: {STATE_LABEL[mark.state]}
       {mark.state === 'limited' && ` (${mark.windows.map(w => `${formatClock(w.start_ms)} – ${formatClock(w.end_ms)}`).join(', ')})`}
       {mark.note && <span className="director-muted"> · {mark.note}</span>}
     </li>)}</ul>}
+    {rig.forecast && <ForecastNote rig={rig} night={night} />}
   </>;
+}
+
+/** What the site's forecast shows for the night, or why it shows nothing,
+ *  with the credit its provider's licence requires. */
+function ForecastNote({ rig, night }: { rig: RigNights; night: RigNight }) {
+  const forecast = rig.forecast!;
+  const provider = PROVIDER_LABEL[forecast.provider];
+  const said = forecast.fetched_at_ms === null
+    ? `${rig.planning_site?.name ?? 'The site'}'s forecast from ${provider} has not arrived or has expired, so nights count as clear.`
+    : night.clouds.length === 0
+      ? `${provider}'s forecast does not cover this night, so the night counts as clear.`
+      : `Hours at or under ${forecast.cloud_threshold_percent}% cloud count as clear, from ${provider}'s forecast fetched ${formatClock(forecast.fetched_at_ms)}. A mark set for the site overrides the forecast.`;
+  return <p className="director-muted nights-forecast-note">
+    {said} <a href={PROVIDER_URL[forecast.provider]} target="_blank" rel="noreferrer">{forecast.attribution}</a>
+  </p>;
 }
 
 function describeLoad(night: RigNight): string {
@@ -235,7 +254,8 @@ const MARKED_QUERIES = [['nightPlans'], ['nightPlanDetail'], ['nightPlansTonight
 function MarkForm({ rig, nights, scope, onScope }: { rig: RigNights; nights: RigNight[]; scope: NightMarkScope; onScope: (scope: NightMarkScope) => void }) {
   const client = useQueryClient();
   const first = nights[0];
-  const current = first.availability.marks.find(mark => mark.scope === scope);
+  // The form edits marks made by hand; the forecast's are not marks to clear.
+  const current = first.availability.marks.find(mark => mark.scope === scope && mark.source.kind === 'manual');
   const [state, setState] = useState<NightAvailabilityState>(current?.state ?? 'unavailable');
   const limited = current?.state === 'limited' ? current.windows[0] : undefined;
   const extra = current?.state === 'limited' ? current.windows.slice(1) : [];
@@ -245,7 +265,7 @@ function MarkForm({ rig, nights, scope, onScope }: { rig: RigNights; nights: Rig
   const [problem, setProblem] = useState<string | null>(null);
   const scopeId = scope === 'site' ? rig.planning_site?.id ?? null : rig.rig.id;
   const revision = scope === 'site' ? rig.mark_revisions.site ?? 0 : rig.mark_revisions.rig;
-  const marked = nights.some(night => night.availability.marks.some(mark => mark.scope === scope));
+  const marked = nights.some(night => night.availability.marks.some(mark => mark.scope === scope && mark.source.kind === 'manual'));
   const refresh = () => { for (const queryKey of MARKED_QUERIES) void client.invalidateQueries({ queryKey: [...queryKey] }); };
   const done = () => { setProblem(null); refresh(); };
   const fail = (error: unknown) => {

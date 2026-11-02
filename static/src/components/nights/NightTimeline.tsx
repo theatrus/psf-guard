@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import type { ForecastHour } from '../../api/directorTypes';
 import type { RigNight, ScheduleBlock, ScheduleGapReason, ScheduleRule, ScheduleTargetReason, ScheduledNight } from '../../api/nightPlanTypes';
 import { formatHours } from '../director/visibilityFormat';
 import { formatClock } from './nightsModel';
@@ -17,7 +18,7 @@ const GAP_LABEL: Record<ScheduleGapReason, string> = {
 
 const GAP_HELP: Record<ScheduleGapReason, string> = {
   twilight: 'Too light for any template owed tonight.',
-  unavailable: 'Outside the hours the night is marked clear.',
+  unavailable: "Outside the night's clear hours, set by a mark or the site's forecast.",
   moon: 'The targets are up, but their Moon avoidance rules turn them down.',
   meridian: 'Waiting out the meridian flip, or outside a meridian window.',
   below_limits: 'Nothing owed is above its horizon and limits for its minimum time.',
@@ -66,6 +67,9 @@ interface Props {
   colours: Map<string, number>;
   /** Draw a line at this instant: the night under way. */
   now?: number;
+  /** The site's clear-sky threshold, when it takes a forecast: hours above
+   *  it are drawn as cloudy. */
+  cloudThreshold?: number;
 }
 
 /**
@@ -74,7 +78,7 @@ interface Props {
  * gaps with the reason nothing is shot. Choose a block to see why the
  * planner chose its target.
  */
-export default function NightTimeline({ night, scheduled, colours, now }: Props) {
+export default function NightTimeline({ night, scheduled, colours, now, cloudThreshold }: Props) {
   const [chosen, setChosen] = useState<number | null>(null);
   const start = (night.dusk_ms ?? scheduled.start_ms) - HOUR_MS;
   const end = (night.dawn_ms ?? scheduled.end_ms) + HOUR_MS;
@@ -115,17 +119,38 @@ export default function NightTimeline({ night, scheduled, colours, now }: Props)
         })}
         {now !== undefined && now > start && now < end && <span className="nights-now" style={{ left: `${((now - start) / span) * 100}%` }} title={`Now, ${formatClock(now)}`} />}
       </div>
+      {night.clouds.length > 0 && <div className="nights-clouds" role="group" aria-label="Cloud cover">
+        {night.clouds.map(hour => {
+          const style = place(hour.start_ms, hour.end_ms);
+          if (!style) return null;
+          const cloudy = cloudThreshold !== undefined && hour.cloud_total > cloudThreshold;
+          return <span key={hour.start_ms} className={`nights-cloud${cloudy ? ' is-cloudy' : ''}`}
+            style={{ ...style, opacity: 0.12 + 0.88 * hour.cloud_total / 100 }}
+            title={`${formatClock(hour.start_ms)} – ${formatClock(hour.end_ms)}: ${cloudWords(hour)}`} />;
+        })}
+      </div>}
       <div className="nights-timeline-axis" aria-hidden="true">
         {ticks.map(t => <span key={t} style={{ left: `${((t - start) / span) * 100}%` }}>{formatClock(t)}</span>)}
       </div>
     </div>
-    {reasons.length > 0 && <ul className="nights-gap-legend" aria-label="Gaps">
+    {(reasons.length > 0 || night.clouds.length > 0) && <ul className="nights-gap-legend" aria-label="Legend">
       {reasons.map(reason => <li key={reason}><span className="nights-gap-key" data-reason={reason} aria-hidden="true" />{GAP_LABEL[reason]}: {GAP_HELP[reason]}</li>)}
+      {night.clouds.length > 0 && <li><span className="nights-cloud-key" aria-hidden="true" />
+        Cloud cover: the lighter an hour, the more cloud.{cloudThreshold !== undefined && ` Hours above the site's ${cloudThreshold}% threshold have a red edge.`}
+      </li>}
     </ul>}
     {scheduled.note && <p className="director-muted" role="note">{scheduled.note}</p>}
     {scheduled.blocks.length === 0 && <p className="director-muted">Nothing is scheduled this night.</p>}
     {block && <BlockReasons block={block} />}
   </div>;
+}
+
+/** An hour's cloud in words: the total, then each layer the provider gives. */
+function cloudWords(hour: ForecastHour): string {
+  const layers = ([['low', hour.cloud_low], ['mid', hour.cloud_mid], ['high', hour.cloud_high]] as const)
+    .filter(([, value]) => value !== null)
+    .map(([name, value]) => `${name} ${Math.round(value!)}%`);
+  return `${Math.round(hour.cloud_total)}% cloud${layers.length ? ` (${layers.join(', ')})` : ''}`;
 }
 
 function runSummary(block: ScheduleBlock): string {

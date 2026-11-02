@@ -285,6 +285,72 @@ pub struct ServerConfig {
     /// how you find out what a client actually sent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keep_failed_uploads: Option<bool>,
+    /// Where cloud forecasts come from. Sites opt in one by one under
+    /// Setup; this only moves the providers, for a paid plan or an instance
+    /// of one's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forecasts: Option<ForecastsConfig>,
+}
+
+/// The cloud forecast providers' addresses. See [`ServerConfig::forecasts`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ForecastsConfig {
+    /// Open-Meteo's address (default `https://api.open-meteo.com`). A paid
+    /// plan's is `https://customer-api.open-meteo.com`, with `open_meteo_api_key`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_meteo_url: Option<String>,
+    /// The key a paid Open-Meteo plan gives, sent as `apikey`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_meteo_api_key: Option<String>,
+    /// MET Norway's address (default `https://api.met.no`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub met_norway_url: Option<String>,
+    /// An email address or web page added to the requests' User-Agent, so a
+    /// provider can contact whoever runs this server. MET Norway requires
+    /// contact details.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contact: Option<String>,
+}
+
+impl ForecastsConfig {
+    fn normalized(&self) -> Result<Self> {
+        let text = |value: &Option<String>| {
+            value
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        };
+        let config = Self {
+            open_meteo_url: text(&self.open_meteo_url),
+            open_meteo_api_key: text(&self.open_meteo_api_key),
+            met_norway_url: text(&self.met_norway_url),
+            contact: text(&self.contact),
+        };
+        for (name, url) in [
+            ("open_meteo_url", &config.open_meteo_url),
+            ("met_norway_url", &config.met_norway_url),
+        ] {
+            if let Some(url) = url
+                && (url.chars().count() > 2048
+                    || reqwest::Url::parse(url)
+                        .map_or(true, |url| !matches!(url.scheme(), "http" | "https")))
+            {
+                return Err(anyhow::anyhow!(
+                    "server.forecasts.{name} must be an http:// or https:// address"
+                ));
+            }
+        }
+        if config.contact.as_ref().is_some_and(|contact| {
+            contact.chars().count() > 200 || contact.chars().any(char::is_control)
+        }) {
+            return Err(anyhow::anyhow!(
+                "server.forecasts.contact must be one line of 200 characters or fewer"
+            ));
+        }
+        Ok(config)
+    }
 }
 
 /// Browser session policy. Users and password hashes live in auth.json.
@@ -474,6 +540,7 @@ impl Default for ServerConfig {
             preview_jpeg_quality: None,
             preview_color: None,
             keep_failed_uploads: None,
+            forecasts: None,
         }
     }
 }
@@ -596,6 +663,14 @@ impl Config {
     }
 
     /// Validated, whitespace-normalized site banner for the server API.
+    /// The forecast providers' addresses, checked.
+    pub fn get_forecasts(&self) -> Result<ForecastsConfig> {
+        self.server.forecasts.as_ref().map_or_else(
+            || Ok(ForecastsConfig::default()),
+            ForecastsConfig::normalized,
+        )
+    }
+
     pub fn get_site_banner(&self) -> Result<Option<SiteBannerConfig>> {
         self.server
             .banner
@@ -1059,6 +1134,30 @@ directory = "./cache"
         assert_eq!(banner.message, "Sample data; changes may be reset.");
         assert_eq!(banner.link_text.as_deref(), Some("Learn more"));
         assert_eq!(banner.link_url.as_deref(), Some("https://psf-guard.com/"));
+    }
+
+    #[test]
+    fn forecast_providers_can_move_and_bad_addresses_are_refused() {
+        let read = |section: &str| {
+            let toml =
+                format!("[server]\nport = 3000\n\n{section}\n\n[cache]\ndirectory = \"./cache\"\n");
+            toml_edit::de::from_str::<Config>(&toml)
+                .unwrap()
+                .get_forecasts()
+        };
+        assert_eq!(read("").unwrap(), ForecastsConfig::default());
+        let moved = read(
+            "[server.forecasts]\nopen_meteo_url = \" https://customer-api.open-meteo.com \"\nopen_meteo_api_key = \"k\"\ncontact = \"ops@example.org\"",
+        )
+        .unwrap();
+        assert_eq!(
+            moved.open_meteo_url.as_deref(),
+            Some("https://customer-api.open-meteo.com")
+        );
+        assert_eq!(moved.met_norway_url, None);
+        assert_eq!(moved.contact.as_deref(), Some("ops@example.org"));
+        assert!(read("[server.forecasts]\nmet_norway_url = \"ftp://example.org\"").is_err());
+        assert!(read("[server.forecasts]\nopen_meteo_url = \"not a url\"").is_err());
     }
 
     #[test]

@@ -73,6 +73,8 @@ pub struct AppState {
     pub anonymous_access_trusted: RwLock<bool>,
     /// Process-global 24-hour cache for the public release notice feeds.
     pub update_notices: crate::server::update_notice::UpdateNoticeManager,
+    /// Asks the cloud forecast providers, for the sites that take a forecast.
+    forecast_client: RwLock<crate::server::forecast::ForecastClient>,
     /// Tuning policy for the parallel scans and background pre-generation (see
     /// `concurrency::WorkerPolicy`). Process-global; sourced from the TOML
     /// `[server]` ratios, otherwise the compiled-in defaults.
@@ -559,6 +561,7 @@ impl AppState {
             server_auth: RwLock::new(None),
             anonymous_access_trusted: RwLock::new(true),
             update_notices: crate::server::update_notice::UpdateNoticeManager::default(),
+            forecast_client: RwLock::new(crate::server::forecast::ForecastClient::default()),
             worker_policy: RwLock::new(crate::concurrency::WorkerPolicy::default()),
             configured_worker_policy: RwLock::new(crate::concurrency::WorkerPolicy::default()),
             preview_encoding: RwLock::new(crate::preview_format::PreviewEncoding::default()),
@@ -626,6 +629,14 @@ impl AppState {
 
     pub fn database_management_allowed(&self) -> bool {
         *self.allow_database_management.read().unwrap()
+    }
+
+    pub fn set_forecast_client(&self, client: crate::server::forecast::ForecastClient) {
+        *self.forecast_client.write().unwrap() = client;
+    }
+
+    pub fn forecast_client(&self) -> crate::server::forecast::ForecastClient {
+        self.forecast_client.read().unwrap().clone()
     }
 
     pub fn set_site_banner(&self, banner: Option<crate::config::SiteBannerConfig>) {
@@ -897,6 +908,7 @@ impl AppState {
             server_auth: RwLock::new(None),
             anonymous_access_trusted: RwLock::new(true),
             update_notices: crate::server::update_notice::UpdateNoticeManager::default(),
+            forecast_client: RwLock::new(crate::server::forecast::ForecastClient::default()),
             worker_policy: RwLock::new(crate::concurrency::WorkerPolicy::default()),
             configured_worker_policy: RwLock::new(crate::concurrency::WorkerPolicy::default()),
             preview_encoding: RwLock::new(crate::preview_format::PreviewEncoding::default()),

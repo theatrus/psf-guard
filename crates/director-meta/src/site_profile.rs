@@ -16,6 +16,10 @@ pub struct SiteProfile {
     pub location: Option<Reported<Site>>,
     /// `None` means each rig's flat minimum altitude.
     pub horizon: Option<Reported<Horizon>>,
+    /// Where the site takes a cloud forecast from; `None` takes none, and
+    /// sends nothing about the site anywhere.
+    #[serde(default)]
+    pub forecast: Option<crate::site_forecast::ForecastSettings>,
     pub updated_at_ms: u64,
 }
 
@@ -26,6 +30,7 @@ impl SiteProfile {
             revision: 0,
             location: None,
             horizon: None,
+            forecast: None,
             updated_at_ms: now_ms,
         }
     }
@@ -65,6 +70,9 @@ fn validate(profile: &SiteProfile) -> Result<(), Error> {
             return Err(Error::InvalidInput);
         }
         location.value.validate().map_err(|_| Error::InvalidInput)?;
+    }
+    if let Some(forecast) = &profile.forecast {
+        forecast.validate()?;
     }
     if let Some(horizon) = &profile.horizon {
         if horizon.reported_at_ms > MAX_TIME_MS {

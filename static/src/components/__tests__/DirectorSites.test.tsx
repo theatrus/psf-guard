@@ -24,7 +24,7 @@ function fixture() {
       const body = await request.json() as { id: string; name: string };
       const site = { ...body, revision: 1 };
       sites.push(site);
-      views.set(site.id, { site, profile: { site_id: site.id, revision: 0, location: null, horizon: null, updated_at_ms: 1 } });
+      views.set(site.id, { site, profile: { site_id: site.id, revision: 0, location: null, horizon: null, forecast: null, updated_at_ms: 1 } });
       return HttpResponse.json(ok(site));
     }),
     http.get('/api/director/v1/sites/:id/profile', ({ params }) => HttpResponse.json(ok(views.get(params.id as string)))),
@@ -33,7 +33,7 @@ function fixture() {
       saves.push(edit);
       const view = views.get(params.id as string)!;
       const next: DirectorSiteProfileView = { site: view.site, profile: { ...view.profile, revision: view.profile.revision + 1,
-        location: edit.location ? { ...edit.location, reported_at_ms: 5 } : null, horizon: edit.horizon ? { ...edit.horizon, reported_at_ms: 5 } : null } };
+        location: edit.location ? { ...edit.location, reported_at_ms: 5 } : null, horizon: edit.horizon ? { ...edit.horizon, reported_at_ms: 5 } : null, forecast: edit.forecast ?? null } };
       views.set(view.site.id, next);
       return HttpResponse.json(ok(next));
     }),
@@ -101,6 +101,7 @@ describe('Director sites', () => {
       expected_revision: 0,
       location: { value: { latitude_degrees: 34.2, longitude_degrees: -118.3, elevation_meters: 400 }, source: { kind: 'manual' } },
       horizon: { value: curve, source: { kind: 'manual' } },
+      forecast: null,
     });
     expect(await within(card).findByText('Saved Backyard.')).toBeInTheDocument();
 
@@ -108,6 +109,52 @@ describe('Director sites', () => {
     vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: vi.fn((blob: Blob) => { blobs.push(blob); return 'blob:hrz'; }), revokeObjectURL: vi.fn() }));
     fireEvent.click(within(card).getByRole('button', { name: /Download .hrz/ }));
     expect(await blobs[0].text()).toBe('# Azimuth Altitude, degrees\n0 12\n180 30\n360 12\n');
+  });
+
+  it('turns a forecast on with its threshold, says what is sent, and fetches it now', async () => {
+    const { saves } = fixture();
+    const asks: string[] = [];
+    const forecastView = (fetched: boolean) => ({
+      site: { id: 'x', name: 'Backyard', revision: 1 },
+      settings: { provider: 'met_norway', cloud_threshold_percent: 25 },
+      attribution: 'Weather data from MET Norway (CC BY 4.0)',
+      forecast: fetched ? { site_id: 'x', provider: 'met_norway', fetched_at_ms: Date.UTC(2026, 10, 3, 14), expires_at_ms: Date.UTC(2026, 10, 4, 2), refresh_after_ms: null,
+        hours: [{ start_ms: Date.UTC(2026, 10, 3, 14), end_ms: Date.UTC(2026, 10, 12, 0), cloud_total: 10, cloud_low: null, cloud_mid: null, cloud_high: null }] } : null,
+      fresh: fetched,
+      status: { site_id: 'x', last_attempt_ms: Date.UTC(2026, 10, 3, 14), last_error: fetched ? null : 'PSF Guard could not reach MET Norway: timed out', failures: fetched ? 0 : 1 },
+      next_refresh_ms: Date.UTC(2026, 10, 3, 17),
+    });
+    server.use(
+      http.get('/api/director/v1/sites/:id/forecast', () => HttpResponse.json(ok(forecastView(false)))),
+      http.post('/api/director/v1/sites/:id/forecast/refresh', ({ params }) => { asks.push(params.id as string); return HttpResponse.json(ok(forecastView(true))); }),
+    );
+    mount();
+    fireEvent.change(await screen.findByLabelText('New site name'), { target: { value: 'Backyard' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add site' }));
+    const card = await screen.findByRole('region', { name: 'Site Backyard' });
+    expect(await within(card).findByText(/Off: PSF Guard sends nothing about this site/)).toBeInTheDocument();
+    fireEvent.change(within(card).getByLabelText('Forecast'), { target: { value: 'met_norway' } });
+    expect(within(card).getByText(/sends this site's latitude and longitude, rounded to about 1 km, to MET Norway/)).toBeInTheDocument();
+    // A forecast is for a place: none without a location.
+    fireEvent.click(within(card).getByRole('button', { name: 'Save site' }));
+    expect(await within(card).findByRole('alert')).toHaveTextContent("A forecast needs the site's location");
+    fireEvent.change(within(card).getByLabelText('Latitude'), { target: { value: '59.91' } });
+    fireEvent.change(within(card).getByLabelText('Longitude (east +)'), { target: { value: '10.75' } });
+    fireEvent.change(within(card).getByLabelText('Clear at or under'), { target: { value: '' } });
+    fireEvent.click(within(card).getByRole('button', { name: 'Save site' }));
+    await waitFor(() => expect(within(card).getByRole('alert')).toHaveTextContent('as a whole percent from 0 to 100'));
+    fireEvent.change(within(card).getByLabelText('Clear at or under'), { target: { value: '25' } });
+    fireEvent.click(within(card).getByRole('button', { name: 'Save site' }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0].forecast).toEqual({ provider: 'met_norway', cloud_threshold_percent: 25 });
+
+    const status = await within(card).findByLabelText('Forecast status');
+    expect(within(status).getByRole('alert')).toHaveTextContent('failed: PSF Guard could not reach MET Norway: timed out');
+    expect(within(status).getByRole('link', { name: 'Weather data from MET Norway (CC BY 4.0)' })).toHaveAttribute('href', 'https://api.met.no/');
+    fireEvent.click(within(status).getByRole('button', { name: 'Fetch now' }));
+    expect(await within(status).findByText(/Night plans use it until/)).toBeInTheDocument();
+    expect(within(status).queryByRole('alert')).toBeNull();
+    expect(asks).toHaveLength(1);
   });
 
   it('refuses half a location before sending', async () => {
