@@ -732,6 +732,10 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
             axum::routing::post(feasibility::evaluate),
         )
         .route("/night-plans", axum::routing::post(night_plans::plan))
+        .route(
+            "/projects/{id}/projection",
+            axum::routing::post(night_plans::projection),
+        )
         .route("/projects/{id}/activation", get(activation::last))
         .route("/projects/{id}/mosaic", get(mosaic::get))
         .route(

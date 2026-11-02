@@ -667,13 +667,19 @@ export interface DirectorSkyMarks {
 /** `catalogs` names the catalog prefixes to keep, comma-separated, and `hide` those to leave out; with neither the server hides PGC and HD. */
 export interface DirectorSkyMarksQuery { ra: number; dec: number; fov: number; aspect: number; at: number; limit?: number; hide?: string; catalogs?: string }
 
-export interface DirectorNightTarget { id: string; hours_up: number; hours_up_moon_down: number; hours_lost_to_meridian: number; transit_ms: number | null; max_altitude_degrees: number; min_moon_separation_degrees: number }
+export interface DirectorNightTarget {
+  id: string; hours_up: number; hours_up_moon_down: number; hours_lost_to_meridian: number; transit_ms: number | null; max_altitude_degrees: number; min_moon_separation_degrees: number;
+  /** Hours up inside the night's availability: marks and forecast counted. */
+  hours_up_available: number;
+}
 export interface DirectorNight {
   date: string;
   noon_ms: number;
   dusk_ms: number | null;
   dawn_ms: number | null;
   dark_hours: number;
+  /** Dark hours inside the night's availability. */
+  available_dark_hours: number;
   moon_illumination: number;
   moon_hours_up_in_dark: number;
   targets: DirectorNightTarget[];
@@ -694,10 +700,36 @@ export interface DirectorRigFeasibility {
   /** Where this rig was timed: its own framing's center, else the shared one. */
   center?: DirectorSkyPosition;
   nights: DirectorNight[];
+  /** Each night's marks and forecast, one for one with `nights`. */
+  availability: import('./nightPlanTypes').NightAvailabilityView[];
   curve: { night: DirectorNight; samples: DirectorNightSample[] };
   hours_needed: number | null;
+  /** Nights until done at the target's clear hours, marks and forecast
+   *  counted; the rig's other plans are not. */
   nights_to_complete: number | null;
   in_plan: boolean;
+}
+
+/** When each rig a plan is activated on finishes it, by the rig's own
+ *  schedule. */
+export interface DirectorProjection {
+  nights: number;
+  rigs: DirectorRigProjection[];
+  warnings: string[];
+}
+export interface DirectorRigProjection {
+  rig: DirectorIdentity;
+  catalog_name: string;
+  runtime: import('./nightPlanTypes').NightRuntime;
+  /** The scheduled nights, in order. */
+  dates: string[];
+  /** Frames planned for the plan each night. */
+  planned: number[];
+  /** The night by which every frame is planned; null when not within the nights. */
+  completes_on: string | null;
+  done_before: boolean;
+  /** Other plans scheduled before it completes, the most hours first. */
+  others: Array<{ name: string; hours: number }>;
 }
 export interface DirectorFeasibility {
   center: DirectorSkyPosition;

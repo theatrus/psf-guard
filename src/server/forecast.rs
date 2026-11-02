@@ -2,6 +2,7 @@
 //! on. This module requests and reads forecasts. Director's site forecasts
 //! decide which sites to refresh, when, and what to store.
 
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use chrono::DateTime;
@@ -59,10 +60,13 @@ impl From<&str> for FetchError {
     }
 }
 
-/// Requests forecasts from the providers. Cheap to clone.
+/// Requests forecasts from the providers. Cheap to clone. The HTTP client
+/// is built on the first request, so a server whose sites take no forecast
+/// never builds one.
 #[derive(Clone)]
 pub struct ForecastClient {
-    http: reqwest::Client,
+    http: Arc<OnceLock<reqwest::Client>>,
+    agent: String,
     open_meteo_url: String,
     open_meteo_api_key: Option<String>,
     met_norway_url: String,
@@ -88,11 +92,6 @@ impl ForecastClient {
                 env!("CARGO_PKG_VERSION")
             ),
         };
-        let http = reqwest::Client::builder()
-            .timeout(Duration::from_secs(20))
-            .user_agent(agent)
-            .build()
-            .expect("forecast HTTP client should build");
         let base = |url: &Option<String>, default: &str| {
             url.as_deref()
                 .unwrap_or(default)
@@ -100,11 +99,22 @@ impl ForecastClient {
                 .to_owned()
         };
         Self {
-            http,
+            http: Arc::default(),
+            agent,
             open_meteo_url: base(&config.open_meteo_url, OPEN_METEO_URL),
             open_meteo_api_key: config.open_meteo_api_key.clone(),
             met_norway_url: base(&config.met_norway_url, MET_NORWAY_URL),
         }
+    }
+
+    fn http(&self) -> &reqwest::Client {
+        self.http.get_or_init(|| {
+            reqwest::Client::builder()
+                .timeout(Duration::from_secs(20))
+                .user_agent(self.agent.clone())
+                .build()
+                .expect("forecast HTTP client should build")
+        })
     }
 
     /// The forecast at a site. Coordinates go rounded to two decimals, about
@@ -136,7 +146,7 @@ impl ForecastClient {
                     query.push(("apikey", key.clone()));
                 }
                 let request = self
-                    .http
+                    .http()
                     .get(format!("{}/v1/forecast", self.open_meteo_url))
                     .query(&query);
                 let (_, body) = send(request, "Open-Meteo").await?;
@@ -151,7 +161,7 @@ impl ForecastClient {
             }
             ForecastProvider::MetNorway => {
                 let mut request = self
-                    .http
+                    .http()
                     .get(format!(
                         "{}/weatherapi/locationforecast/2.0/complete",
                         self.met_norway_url

@@ -815,6 +815,14 @@ export const apiClient = {
     return data.data;
   },
 
+  /** When each rig the plan is activated on finishes it, by its own schedule. */
+  getDirectorProjection: async (projectId: string, request: { nights?: number; start_ms?: number } = {}): Promise<import('./directorTypes').DirectorProjection> => {
+    const api = await getApi();
+    const { data } = await api.post<ApiResponse<import('./directorTypes').DirectorProjection>>(`/director/v1/projects/${encodeURIComponent(projectId)}/projection`, request);
+    if (!data.data) throw new Error(data.error || 'Failed to project the plan');
+    return data.data;
+  },
+
   getDirectorFeasibility: async (projectId: string, request: { nights?: number; center?: { ra_degrees: number; dec_degrees: number }; rig_centers?: Record<string, { ra_degrees: number; dec_degrees: number }>; start_ms?: number }): Promise<DirectorFeasibility> => {
     const api = await getApi();
     const { data } = await api.post<ApiResponse<DirectorFeasibility>>(`/director/v1/projects/${encodeURIComponent(projectId)}/feasibility`, request);

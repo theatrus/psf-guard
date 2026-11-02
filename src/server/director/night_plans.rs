@@ -167,6 +167,16 @@ struct RigNights {
     /// The cloud forecast the rig's planning site takes, if it takes one.
     forecast: Option<RigForecast>,
     warnings: Vec<String>,
+    /// Every project of the planned profile, owed or not, for projections.
+    #[serde(skip)]
+    projects: Vec<KnownProject>,
+}
+
+/// A project in the rig's database, as a projection looks it up.
+struct KnownProject {
+    id: i64,
+    guid: Option<Uuid>,
+    active: bool,
 }
 
 #[derive(Serialize)]
@@ -344,7 +354,12 @@ pub(super) async fn plan(
     State(state): State<Arc<AppState>>,
     Json(request): Json<Request>,
 ) -> Result<Json<ApiResponse<View>>, NightPlanError> {
-    let service = enabled(&state)?;
+    Ok(Json(ApiResponse::success(compute(&state, request).await?)))
+}
+
+/// The night plans a request asks for; projections use it too.
+async fn compute(state: &Arc<AppState>, request: Request) -> Result<View, NightPlanError> {
+    let service = enabled(state)?;
     let nights = request.nights.unwrap_or(DEFAULT_NIGHTS);
     if nights == 0 || nights > MAX_NIGHTS {
         return Err(NightPlanError::Rejected(format!(
@@ -521,7 +536,7 @@ pub(super) async fn plan(
         }
     })
     .await?;
-    Ok(Json(ApiResponse::success(view)))
+    Ok(view)
 }
 
 /// The program the rig would pull, and each goal's limits.
@@ -573,6 +588,20 @@ fn rig_nights(input: RigInput, nights: u32) -> Result<RigNights, String> {
         available,
         forecast,
     } = conditions.nights(&dates, location, now_ms());
+    let projects = snapshot
+        .as_ref()
+        .map(|s| s.projects.as_slice())
+        .unwrap_or_default()
+        .iter()
+        .map(|project| KnownProject {
+            id: project.id,
+            guid: project
+                .guid
+                .as_deref()
+                .and_then(|guid| Uuid::parse_str(guid).ok()),
+            active: project.state == ProjectState::Active,
+        })
+        .collect();
     let mut plans = Vec::new();
     let mut chunks = Vec::new();
     for project in snapshot
@@ -853,6 +882,7 @@ fn rig_nights(input: RigInput, nights: u32) -> Result<RigNights, String> {
         },
         forecast,
         warnings,
+        projects,
     })
 }
 
@@ -1316,6 +1346,189 @@ fn project_limits(rig: &Limits, project: &Project) -> Result<(AltitudeLimits, Pl
         meridian_window_minutes: project.meridian_window_minutes,
     };
     Ok((altitude, applied))
+}
+
+/// Nights a projection schedules by default.
+const PROJECTION_NIGHTS: u32 = 14;
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ProjectionRequest {
+    /// Nights to schedule from the night under way; 14 by default.
+    #[serde(default)]
+    nights: Option<u32>,
+    /// Plan from this instant instead of now.
+    #[serde(default)]
+    start_ms: Option<u64>,
+}
+
+/// When each rig the plan is activated on finishes it, by the rig's own
+/// schedule: its runtime ranks the plan against the rig's other work, on
+/// nights its marks and forecast allow.
+#[derive(Serialize)]
+pub(super) struct Projection {
+    nights: u32,
+    rigs: Vec<RigProjection>,
+    warnings: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct RigProjection {
+    rig: NamedIdentity,
+    catalog_name: String,
+    /// The runtime whose schedule this is.
+    runtime: Runtime,
+    /// The scheduled nights, in order.
+    dates: Vec<NightDate>,
+    /// Frames the schedule plans for the plan each night.
+    planned: Vec<u32>,
+    /// The night by which every frame the plan asks of the rig is planned;
+    /// `None` when not within these nights.
+    completes_on: Option<NightDate>,
+    /// The rig had every frame before the first night.
+    done_before: bool,
+    /// The rig's other plans the schedule shoots before the plan completes,
+    /// or over all the nights when it does not: the most hours first.
+    others: Vec<OtherPlan>,
+}
+
+#[derive(Serialize)]
+struct OtherPlan {
+    name: String,
+    hours: f64,
+}
+
+pub(super) async fn projection(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+    Json(request): Json<ProjectionRequest>,
+) -> Result<Json<ApiResponse<Projection>>, NightPlanError> {
+    let service = enabled(&state)?;
+    let nights = request.nights.unwrap_or(PROJECTION_NIGHTS);
+    if nights == 0 || nights > MAX_NIGHTS {
+        return Err(NightPlanError::Rejected(format!(
+            "nights must be from 1 to {MAX_NIGHTS}."
+        )));
+    }
+    let activation = service
+        .query(move |store| {
+            store.project(id)?.ok_or(StoreError::NotFound)?;
+            store.activation(id)
+        })
+        .await?;
+    let activated: BTreeMap<Uuid, Uuid> = activation
+        .map(|activation| {
+            activation
+                .rigs
+                .iter()
+                .map(|rig| (rig.rig_id, rig.project_guid))
+                .collect()
+        })
+        .unwrap_or_default();
+    if activated.is_empty() {
+        return Ok(Json(ApiResponse::success(Projection {
+            nights,
+            rigs: vec![],
+            warnings: vec![
+                "The plan is not activated on any rig yet, so no rig's schedule includes it."
+                    .into(),
+            ],
+        })));
+    }
+    let view = compute(
+        &state,
+        Request {
+            rigs: Some(activated.keys().copied().collect()),
+            nights: Some(nights),
+            schedule_nights: Some(nights),
+            start_ms: request.start_ms,
+            plan_from_ms: request.start_ms,
+            ..Default::default()
+        },
+    )
+    .await?;
+    let mut warnings = view.warnings;
+    let mut rigs = Vec::new();
+    for rig in view.rigs {
+        let name = &rig.catalog_name;
+        let Some(guid) = activated.get(&rig.rig.id) else {
+            continue;
+        };
+        let Some(project) = rig.projects.iter().find(|p| p.guid == Some(*guid)) else {
+            warnings.push(format!(
+                "{name}: the rig's database has no project for the plan, so its schedule has none of the plan's work."
+            ));
+            continue;
+        };
+        if !project.active {
+            warnings.push(format!(
+                "{name}: the plan's project is not active in the rig's database, so its schedule has none of the plan's work."
+            ));
+            continue;
+        }
+        let Some(schedule) = &rig.schedule else {
+            warnings.push(format!("{name}: no schedule could be computed."));
+            warnings.extend(rig.warnings.iter().map(|w| format!("{name}: {w}")));
+            continue;
+        };
+        let progress: Vec<_> = schedule
+            .progress
+            .iter()
+            .filter(|p| p.project_id == project.id)
+            .collect();
+        let dates: Vec<NightDate> = schedule.nights.iter().map(|n| n.date).collect();
+        let planned: Vec<u32> = (0..dates.len())
+            .map(|night| {
+                progress
+                    .iter()
+                    .map(|p| p.planned.get(night).copied().unwrap_or(0))
+                    .sum()
+            })
+            .collect();
+        let owed: Vec<_> = progress.iter().filter(|p| !p.complete_before).collect();
+        // A project with nothing owed is left out of the rig's plans.
+        let done_before = owed.is_empty();
+        let completes = (!done_before && owed.iter().all(|p| p.completes_on.is_some()))
+            .then(|| owed.iter().filter_map(|p| p.completes_on).max())
+            .flatten();
+        let until = completes.map_or(dates.len(), |night| night + 1);
+        let mut hours: BTreeMap<String, f64> = BTreeMap::new();
+        for night in schedule.nights.iter().take(until) {
+            for block in night
+                .schedule
+                .blocks
+                .iter()
+                .filter(|b| b.target.project_id != project.id)
+            {
+                *hours.entry(block.target.project_name.clone()).or_default() +=
+                    block.end_ms.saturating_sub(block.start_ms) as f64 / 3_600_000.0;
+            }
+        }
+        let mut others: Vec<OtherPlan> = hours
+            .into_iter()
+            .map(|(name, hours)| OtherPlan { name, hours })
+            .collect();
+        others.sort_by(|a, b| {
+            b.hours
+                .total_cmp(&a.hours)
+                .then_with(|| a.name.cmp(&b.name))
+        });
+        rigs.push(RigProjection {
+            completes_on: completes.and_then(|night| dates.get(night).copied()),
+            rig: rig.rig,
+            catalog_name: rig.catalog_name,
+            runtime: schedule.runtime,
+            dates,
+            planned,
+            done_before,
+            others,
+        });
+    }
+    Ok(Json(ApiResponse::success(Projection {
+        nights,
+        rigs,
+        warnings,
+    })))
 }
 
 #[cfg(test)]

@@ -1,10 +1,10 @@
 # Night plans
 
-Status: **In progress**. Phases 1 to 4 and 7 are built: summaries, manual
-availability, the Target Scheduler emulation, the Director emulation, with
-each plan's completion night inside a scheduled range, and cloud forecasts.
-Phase 5's availability-aware `nights_to_complete` and Phase 6 (overrides)
-are not. §5 says what each phase built and what is left. The
+Status: **In progress**. Phases 1 to 5 and 7 are built: summaries, manual
+availability, the Target Scheduler emulation, the Director emulation,
+projection (each plan's completion night by its rig's own schedule, and an
+availability-aware `nights_to_complete`), and cloud forecasts. Phase 6
+(overrides) is not. §5 says what each phase built and what is left. The
 answers in §7 marked *provisional* are what the code does now; confirm them
 or change them. Last updated: 2026-11-01. Tracks
 [#1037](https://github.com/theatrus/psf-guard/issues/1037).
@@ -799,16 +799,22 @@ apart needs the geometry to say why, and is left for later.
   - The pull's program fingerprints are unchanged.
   - Every gap carries a reason from the table in §4.5.
 
-**Phase 5: projection.** *Partly built:* frames carry across the scheduled
-nights, both runtimes count them at the acceptance rules, and each plan
-gets its completion night within the range. Feasibility's
-`nights_to_complete` does not use availability or contention yet.
+**Phase 5: projection.** *Built.*
 - Carry-over across nights, the acceptance rules and completion nights for
   both runtimes.
-- Availability- and contention-aware `nights_to_complete`.
-- *Gate:* a plan with one goal on a rig completes on the night the frame
-  arithmetic says. A second plan ranked ahead of it pushes that night
-  later, by each runtime's own ranking.
+- Feasibility counts availability: its nights take the rig's marks and its
+  site's forecast (`rig_availability`, shared with night plans), each night
+  carries its marks for the Visibility table, and `nights_to_complete`
+  counts each night's hours up and available, nights past the range as
+  clear.
+- Contention: `POST /projects/{id}/projection` reads, for each rig the plan
+  is activated on, the night its own runtime's schedule plans the plan's
+  last frame, and the other plans that take the rig first. The Visibility
+  panel shows it. Feasibility's arithmetic estimate stays contention-free
+  and says so.
+- *Gate, met:* `adoption::night_plans` projects a plan alone on a rig to the
+  night its planned frames reach what it owes, then ranks a high-priority
+  plan ahead of it and sees that night move later.
 
 **Phase 6: Director overrides and fixed steps.** *Not built.*
 - `night_override` in the next meta schema, the overrides API,
@@ -874,7 +880,8 @@ simulation and for the per-rig night preview through the shared engine.
 1. **Runtime before the rig mode exists.** Proposal: Director for a rig
    with reported equipment and an enabled workload policy, and Target
    Scheduler otherwise. Once the rig mode is built, it decides.
-   *Provisional: built as proposed.*
+   *Settled: built as proposed, until rig modes exist; overrides follow
+   the same rule, and a Target Scheduler rig refuses them.*
 2. **N.I.N.A. profiles.** One database can hold projects for several
    profiles, and Target Scheduler plans per profile. Proposal: plan the
    profile the rig profile records. A database with several profiles and
@@ -910,9 +917,10 @@ simulation and for the per-rig night preview through the shared engine.
    longitude, and sites have no time zone yet (Director lists it as still
    required). Proposal: add an optional IANA time zone to the site profile,
    used to enter and show marks and overrides, falling back to the
-   browser's zone. *Provisional: marks are entered and shown in the
-   browser's clock; the Target Scheduler emulation plans its days by the
-   site's local mean time, which a request can override.*
+   browser's zone. *Settled: as proposed, for Phase 6. Until it lands,
+   marks are entered and shown in the browser's clock; the Target Scheduler
+   emulation plans its days by the site's local mean time, which a request
+   can override.*
 10. **Darkness in summaries:** feasibility counts dark below −12°, while
     Target Scheduler uses each template's twilight level. Proposal: keep
     −12° for summaries, and let each runtime's schedule use its own rule.
@@ -926,7 +934,7 @@ simulation and for the per-rig night preview through the shared engine.
 13. **An override saved mid-night:** should it reach a running session at
     its next check-in through the priority handoff, or only the next
     session? Proposal: the next check-in, with the editor saying when it
-    takes effect.
+    takes effect. *Settled: as proposed.*
 
 ## 8. Out of scope
 

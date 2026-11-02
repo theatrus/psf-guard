@@ -1859,14 +1859,31 @@ the horizon curve at the target's azimuth (or the flat minimum), the Moon's
 track dashed, a marker at the target's meridian transit with the rig's
 meridian pause drawn as a broken red stretch and left out of the visible
 hours, and shaded bands for darkness and astronomical night. A table
-gives the same numbers for the coming week, and a rig in the plan gets the
-hours it still owes, its goal less the frames Target Scheduler already
-accepted there, and the nights that takes at this week's rate. Pick another
-rig from the list to compare sites.
+gives the same numbers for the coming week, with each night's clear hours
+and the marks or forecast that set them (see [Nights](#nights)). Pick
+another rig from the list to compare sites.
+
+A rig in the plan gets two estimates:
+
+- **The hours it still owes**, its goal less the frames Target Scheduler
+  already accepted there, and the nights that takes at the target's clear
+  hours this week. Tonight counts from now; nights marked out or forecast
+  cloudy count for less; nights past the week count as clear. This
+  estimate leaves out the rig's other plans.
+- **The rig's own schedule**, once the plan is activated there: the night
+  the rig's runtime, Target Scheduler or Director, plans the last of the
+  plan's frames over the next 14 nights. It ranks the plan against the
+  rig's other work, as the rig itself will, and names the other plans that
+  take the rig's time first. A plan ranked behind others completes later
+  than the hours alone suggest. It is the same schedule as on the
+  [Nights](#nights) tab.
+
+![Visibility for a plan activated on a rig: the estimate with a night marked out, and the night the rig's own schedule finishes the plan](images/visibility-projection.png)
 
 | Method | Route | Body or query |
 | --- | --- | --- |
-| POST | `/projects/{id}/feasibility` | Optional `nights` (1 to 14, default 7), `center` (defaults to the saved framing's center; a rig framed on its own center is timed there), `rig_centers` (rig id to center: where the framing view has a separately framed rig now, saved or not; up to 64) and `start_ms` (default now; the first night is the one under way then). For every rig with a site: the `center` it was timed at, the applied `limits`, `nights` summaries, tonight's `curve` (five-minute samples of Sun, Moon and target altitude with the horizon at each azimuth), `hours_needed` (the plan's goal less accepted frames) and `nights_to_complete`; `warnings` lists rigs without a site. `400` for a `start_ms` outside 1970-01-02 to 2099-01-01; `422` until there is a center to time. |
+| POST | `/projects/{id}/feasibility` | Optional `nights` (1 to 14, default 7), `center` (defaults to the saved framing's center; a rig framed on its own center is timed there), `rig_centers` (rig id to center: where the framing view has a separately framed rig now, saved or not; up to 64) and `start_ms` (default now; the first night is the one under way then). For every rig with a site: the `center` it was timed at, the applied `limits`, `nights` summaries, tonight's `curve` (five-minute samples of Sun, Moon and target altitude with the horizon at each azimuth), `availability` (each night's state, clear windows and marks, as on the night plans), `hours_needed` (the plan's goal less accepted frames) and `nights_to_complete` (at the target's hours up and available, marks and forecast counted, tonight's from `start_ms` on; nights past these count as clear; the rig's other plans are not counted); `warnings` lists rigs without a site. `400` for a `start_ms` outside 1970-01-02 to 2099-01-01; `422` until there is a center to time. |
+| POST | `/projects/{id}/projection` | Optional `nights` (1 to 31, default 14) and `start_ms` (plan from this instant; default now). For each rig the plan is activated on, its own runtime's schedule over those nights: `runtime`, `dates`, `planned` (the plan's frames each night), `completes_on` (the night its last frame is planned; `null` when not within the nights), `done_before` and `others` (the rig's other plans scheduled before it completes, with their hours). `warnings` names rigs whose database has no active project for the plan. Writes nothing; a read-only account that may run calculations can call it. |
 
 Times come from the shared core's planning-grade Sun and Moon positions and
 the same horizon and limit rules the rig's geometry applies; they are

@@ -35,6 +35,11 @@
   shows each hour's cloud cover. Forecasts are off by default: PSF Guard
   sends a site's location, rounded to about 1 km, only after an editor
   turns its forecast on. See [Cloud forecasts](../DIRECTOR.md#cloud-forecasts).
+- **Visibility** in a plan's workspace estimates the nights a rig needs
+  with the marks and the forecast counted, and shows each night's clear
+  hours and marks. Once the plan is activated on a rig, it also shows the
+  night the rig's own schedule finishes the plan, and the other plans that
+  take the rig's time first. See [Visibility](../DIRECTOR.md#visibility).
 - PSF Guard imports a calibration master built by `seiza master` as a
   calibration master. Seiza 0.48.1 and earlier write a master's kind only in
   `SEIZAMST`, and earlier PSF Guard versions imported such a master as a

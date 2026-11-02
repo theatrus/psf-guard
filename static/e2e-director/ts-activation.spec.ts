@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import path from 'node:path';
 import { applyRealSchema } from '../e2e/fixtures/sync';
+import { shot } from './nightsFixtures';
 
 test('activation previews the saved TS connection, refuses stale planning, and retries a failed delivery', async ({ page, request }, testInfo) => {
   test.setTimeout(90_000);
@@ -84,6 +85,28 @@ test('activation previews the saved TS connection, refuses stale planning, and r
     await dialog.screenshot({ path: testInfo.outputPath('ts-activation-delivered.png') });
     await page.setViewportSize({ width: 390, height: 844 });
     expect(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth)).toBeTruthy();
+
+    // Activated on a rig with a site, the plan's Visibility shows the night
+    // the rig's own schedule finishes it, and a night marked out.
+    await page.setViewportSize({ width: 1440, height: 1200 });
+    const placed = (await (await request.get(`/api/director/v1/catalogs/${slug}/rig/profile`)).json()).data;
+    expect((await request.put(`/api/director/v1/catalogs/${slug}/rig/profile`, { data: {
+      expected_revision: placed.profile.revision, optics: { value: placed.profile.optics.value, source: { kind: 'manual' } }, horizon: null, sky_quality: null, peer_id: null,
+      site: { value: { latitude_degrees: 34.2, longitude_degrees: -118.3, elevation_meters: 400 }, source: { kind: 'manual' } },
+      limits: { value: placed.profile.limits.value, source: { kind: 'manual' } },
+    } })).ok()).toBeTruthy();
+    const nights = (await (await request.post('/api/director/v1/night-plans', { data: { rigs: [placed.rig.id], nights: 2 } })).json()).data;
+    const second = nights.rigs[0].nights[1].date;
+    expect((await request.put(`/api/director/v1/night-availability/rig/${placed.rig.id}`, { data: {
+      expected_revision: nights.rigs[0].mark_revisions.rig, marks: [{ date: second, state: 'unavailable', note: 'dome motor' }],
+    } })).ok()).toBeTruthy();
+    await page.reload();
+    const visibility = page.getByRole('region', { name: 'Visibility' });
+    await expect(visibility.getByTestId('visibility-projection')).toContainText("By this rig's own Target Scheduler schedule, the plan is", { timeout: 30_000 });
+    await expect(visibility.getByTestId('visibility-estimate')).toContainText('with marks and the forecast counted');
+    await visibility.getByText(/^Legend and the next \d+ nights$/).click();
+    await expect(visibility.getByRole('row').filter({ hasText: 'Rig: Not available' })).toBeVisible();
+    await shot(visibility, 'visibility-projection', name => testInfo.outputPath(name), false);
   } finally {
     ts.close();
     await request.delete(`/api/databases/${slug}`);

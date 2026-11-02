@@ -484,3 +484,111 @@ async fn a_director_schedule_runs_the_rigs_own_selection_over_the_pulled_program
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
 }
+
+#[tokio::test]
+async fn a_plans_projection_follows_its_rigs_schedule_and_a_plan_ranked_ahead_delays_it() {
+    let a = activated().await;
+    let path = format!("/projects/{}/projection", a.project);
+    let body = json!({"nights": 14, "start_ms": START_MS});
+    // Before activation no rig's schedule has the plan.
+    let (status, none) = call(&a.f.app, "POST", &path, body.clone(), None).await;
+    assert_eq!(status, StatusCode::OK, "{none}");
+    assert_eq!(none["data"]["rigs"], json!([]));
+    assert!(none["data"]["warnings"][0]
+        .as_str()
+        .unwrap()
+        .contains("not activated"));
+    let (status, preview) = call(
+        &a.f.app,
+        "POST",
+        &format!("/projects/{}/activation/preview", a.project),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    let (status, applied) = call(
+        &a.f.app,
+        "POST",
+        &format!("/projects/{}/activation/apply", a.project),
+        json!({"preview_digest": preview["data"]["preview_digest"]}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    place(&a).await;
+    // The first night is clear for four hours only, so the plan needs most
+    // of the second.
+    let (_, open) = call(
+        &a.f.app,
+        "POST",
+        "/night-plans",
+        json!({"nights": 1, "start_ms": START_MS}),
+        None,
+    )
+    .await;
+    let dusk = open["data"]["rigs"][0]["nights"][0]["dusk_ms"]
+        .as_u64()
+        .unwrap();
+    let window = json!({"start_ms": dusk + 3_600_000, "end_ms": dusk + 5 * 3_600_000});
+    let (status, marked) = call(&a.f.app, "PUT", &format!("/night-availability/rig/{}", a.rig),
+        json!({"expected_revision": 0, "marks": [{"date": "2026-09-24", "state": "limited", "windows": [window]}]}), None).await;
+    assert_eq!(status, StatusCode::OK, "{marked}");
+
+    // Alone on the rig, the plan completes on the night its planned frames
+    // reach what it owes.
+    let (status, alone) = call(&a.f.app, "POST", &path, body.clone(), None).await;
+    assert_eq!(status, StatusCode::OK, "{alone}");
+    let rig = &alone["data"]["rigs"][0];
+    assert_eq!(rig["runtime"], "target_scheduler", "{alone}");
+    assert_eq!(rig["done_before"], false);
+    assert_eq!(rig["others"], json!([]));
+    let planned: Vec<u64> = rig["planned"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n.as_u64().unwrap())
+        .collect();
+    let owed = planned.iter().sum::<u64>();
+    // Six hours of H-alpha at 300 s on each of two panels.
+    assert_eq!(owed, 144, "{planned:?}");
+    let last = planned.iter().rposition(|&n| n > 0).unwrap();
+    let alone_on = rig["completes_on"].as_str().unwrap().to_owned();
+    assert_eq!(alone_on, rig["dates"][last].as_str().unwrap());
+
+    // Lowered to low priority, with a high-priority plan on the same sky
+    // owing 25 hours, the plan gets the rig later, and completes later.
+    a.db.execute(
+        "UPDATE project SET priority = 0 WHERE name = 'Heart Nebula'",
+        [],
+    )
+    .unwrap();
+    a.db.execute(
+        "INSERT INTO project (profileId, name, state, priority, minimumtime, minimumaltitude, usecustomhorizon,
+            horizonoffset, meridianwindow, filterswitchfrequency, ditherevery, enablegrader, guid)
+         VALUES ('profile-a', 'Soul first', 1, 2, 30, 25, 0, 0, 0, 0, 0, 1, lower(hex(randomblob(16))))",
+        [],
+    )
+    .unwrap();
+    let soul = a.db.last_insert_rowid();
+    a.db.execute(
+        "INSERT INTO target (name, active, ra, dec, epochcode, rotation, roi, projectid) VALUES ('IC 1848', 1, ?1, 61.0, 2, 0, 100, ?2)",
+        rusqlite::params![38.2 / 15.0, soul],
+    )
+    .unwrap();
+    let target = a.db.last_insert_rowid();
+    a.db.execute(
+        "INSERT INTO exposureplan (profileId, exposure, desired, acquired, accepted, targetid, exposureTemplateId)
+         VALUES ('profile-a', 300, 300, 0, 0, ?1, 1)",
+        [target],
+    )
+    .unwrap();
+    let (status, shared) = call(&a.f.app, "POST", &path, body, None).await;
+    assert_eq!(status, StatusCode::OK, "{shared}");
+    let rig = &shared["data"]["rigs"][0];
+    assert_eq!(rig["others"][0]["name"], "Soul first", "{rig}");
+    assert!(rig["others"][0]["hours"].as_f64().unwrap() > 1.0, "{rig}");
+    let later = rig["completes_on"].as_str().unwrap();
+    assert!(later > alone_on.as_str(), "{later} after {alone_on}");
+    assert_eq!(rig["planned"][0], 0, "{rig}");
+}
