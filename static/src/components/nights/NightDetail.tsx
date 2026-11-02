@@ -15,7 +15,7 @@ import { isEmpty, tsChanges, type TsEdit } from './tsControlsModel';
 import { OverrideChips, type TimelineEdit } from './TimelineEditing';
 import { DraftProvider, SaveBar } from '../director/pageDrafts';
 import type { Drafts } from '../director/pageDraftsState';
-import { blockSubject, moveBlock, overrideBands, pinsOverlap, replacedInPlace, subjectKey } from './overridesModel';
+import { blockSubject, moveBlock, overrideBands, pinsOverlap, replacedInPlace, sameOverrides, subjectKey } from './overridesModel';
 import {
   BROWSER_ZONE,
   RUNTIME_LABEL,
@@ -100,8 +100,7 @@ export default function NightDetail({ rig, nights, colours, canMark, range, draf
   // rather than written over.
   const tsBase = tsStored?.base ?? rig.ts_projects ?? [];
   const tsDraft = tsEdit ? tsChanges(tsBase, tsEdit) : null;
-  const schedule = useNightSchedule(rig, first, range, single, draft, tsDraft && !isEmpty(tsDraft) ? tsDraft : null);
-  const director = rig.runtime === 'director' && schedule.shown === 'director';
+  const director = rig.runtime === 'director';
   const saved = useQuery({
     queryKey: ['nightOverrides', rig.rig.id, first.date],
     queryFn: () => apiClient.getNightOverrides(rig.rig.id, first.date),
@@ -109,6 +108,10 @@ export default function NightDetail({ rig, nights, colours, canMark, range, draf
     retry: retryWhenBusy,
     retryDelay: 1200,
   });
+  // An edit is planned once it differs from the saved overrides. Until
+  // then the night's own schedule shows it, and a block can move at once.
+  const planned = draft !== null && !(saved.data && sameOverrides(draft, saved.data.entries)) ? draft : null;
+  const schedule = useNightSchedule(rig, first, range, single, planned, tsDraft && !isEmpty(tsDraft) ? tsDraft : null);
   const scheduled = schedule.detail?.schedule?.nights.find(n => n.date === first.date);
   const goals = schedule.detail?.schedule?.goals ?? [];
   const [moveProblem, setMoveProblem] = useState<string | null>(null);
