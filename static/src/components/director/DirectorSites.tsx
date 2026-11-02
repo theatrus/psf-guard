@@ -160,8 +160,10 @@ function SiteProfileCard({ site }: { site: DirectorIdentity }) {
   };
   const update = (patch: Partial<SiteForm>) => setForm(current => current ? { ...current, ...patch } : current);
   const data = loaded.data;
-  // Edits Save has not sent; Settings asks before closing over them.
-  const unsaved = !!data && !!form && canWrite && JSON.stringify(form) !== JSON.stringify(formFrom(data));
+  // Edits Save has not sent; Settings asks before discarding them. With
+  // forecasts off, the threshold is not saved, so it is not an edit.
+  const comparable = (value: SiteForm) => value.forecast === 'off' ? { ...value, threshold: '' } : value;
+  const unsaved = !!data && !!form && canWrite && JSON.stringify(comparable(form)) !== JSON.stringify(comparable(formFrom(data)));
   useUnsavedChanges(`site ${data?.site.name ?? site.name}`, unsaved);
   const disabled = !canWrite || save.isPending || stale;
   const field = (key: 'latitude' | 'longitude' | 'elevation', label: string, unit: string) => <label className="rig-profile-field" htmlFor={`${site.id}-${key}`}><span>{label}</span>
@@ -206,7 +208,7 @@ function SiteProfileCard({ site }: { site: DirectorIdentity }) {
         </div>
         <p className="director-muted">{form.forecast === 'off'
           ? 'Off: PSF Guard sends nothing about this site. Turn on a forecast to mark cloudy nights in the night plans of every rig at this site.'
-          : `${PROVIDER_LABEL[form.forecast]}: ${PROVIDER_HELP[form.forecast]}. PSF Guard sends this site's latitude and longitude, rounded to about 1 km, to ${PROVIDER_LABEL[form.forecast]} every three hours, and nothing else. In night plans, hours at or under the threshold count as clear, and a mark you set for the site overrides the forecast. A forecast never starts, stops or blocks a rig.`}</p>
+          : `${PROVIDER_LABEL[form.forecast]}: ${PROVIDER_HELP[form.forecast]}. PSF Guard sends this site's latitude and longitude, rounded to about 1 km, to ${PROVIDER_LABEL[form.forecast]} when you save, every three hours, when you click Fetch now, and when it retries after a failed request. It sends nothing else. In night plans, hours at or under the threshold count as clear, and a mark you set for the site overrides the forecast. A forecast never starts, stops or blocks a rig.`}</p>
         {data.profile.forecast && <SiteForecastStatus site={site} />}
       </fieldset>
       {(problem || (save.isError && !stale)) && <p className="director-error" role="alert">{problem || message(save.error)}</p>}
@@ -230,12 +232,21 @@ function SiteForecastStatus({ site }: { site: DirectorIdentity }) {
     retry: retryWhenBusy,
     retryDelay: 1200,
     refetchOnWindowFocus: false,
-    // The server requests the first forecast after Save: poll until it arrives.
+    // The server requests the first forecast after Save: poll until it
+    // arrives, for a minute at most.
     refetchInterval: query => {
       const data = query.state.data;
-      return data?.settings && !data.forecast && !data.status ? 2000 : 60_000;
+      return data?.settings && !data.forecast && !data.status && query.state.dataUpdateCount < 30 ? 2000 : 60_000;
     },
   });
+  // A forecast that arrives or changes changes the night plans too.
+  const arrived = view.data?.forecast ? `${view.data.forecast.fetched_at_ms}:${view.data.forecast.checked_at_ms ?? ''}` : '';
+  const seen = useRef(arrived);
+  useEffect(() => {
+    if (arrived === seen.current) return;
+    seen.current = arrived;
+    for (const key of FORECAST_QUERIES) void client.invalidateQueries({ queryKey: [...key] });
+  }, [arrived, client]);
   const fetchNow = useMutation({
     mutationFn: () => apiClient.refreshSiteForecast(site.id),
     onSuccess: data => {
@@ -248,9 +259,9 @@ function SiteForecastStatus({ site }: { site: DirectorIdentity }) {
   if (view.isError || !data) return <p className="director-error" role="alert">{message(view.error)}</p>;
   const { forecast, status } = data;
   const last = forecast?.hours.at(-1);
-  return <div className="site-forecast-status" aria-label="Forecast status">
+  return <div className="site-forecast-status" role="group" aria-label="Forecast status">
     {forecast
-      ? <p>Fetched {when(forecast.fetched_at_ms)}{last ? `; covers hours until ${when(last.end_ms)}` : ''}. {data.fresh ? `Night plans use it until ${when(forecast.expires_at_ms)}.` : 'This forecast has expired, so nights count as clear until a new forecast arrives.'}</p>
+      ? <p>Fetched {when(forecast.fetched_at_ms)}{last ? `; covers hours until ${when(last.end_ms)}` : ''}.{forecast.checked_at_ms !== null ? ` ${PROVIDER_LABEL[forecast.provider]} confirmed it unchanged at ${when(forecast.checked_at_ms)}.` : ''} {data.fresh ? `Night plans use it until ${when(forecast.expires_at_ms)}.` : 'This forecast has expired, so nights count as clear until a new forecast arrives.'}</p>
       : <p>{status ? 'No forecast has arrived yet.' : 'Requesting the first forecast...'}</p>}
     {status?.last_error && <p className="director-error" role="alert">The request at {when(status.last_attempt_ms)} failed: {status.last_error}{forecast && data.fresh ? ' Night plans keep using the stored forecast until it expires.' : ''}</p>}
     {data.next_refresh_ms !== null && <p className="director-muted">Next refresh: {when(data.next_refresh_ms)}.</p>}

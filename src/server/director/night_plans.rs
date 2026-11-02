@@ -9,6 +9,7 @@
 //! as Target Scheduler applies them. Director plans reach a rig through the
 //! same rows, so a rig's summary does not depend on which runtime drives it.
 
+use super::rig_availability::{NightAvailability, RigConditions, RigForecast};
 use super::ts_snapshot;
 use super::*;
 use psf_guard_director_core::{
@@ -21,12 +22,9 @@ use psf_guard_director_core::{
     windows::Interval,
 };
 use psf_guard_director_meta::{
-    night_availability::{Availability, MarkScope, NightMark},
     preferences::SchedulingValues,
     profile::{Limits, RigProfile},
-    site_forecast::{
-        ForecastHour, ForecastNight, ForecastProvider, ForecastSettings, SiteForecast,
-    },
+    site_forecast::ForecastHour,
     site_profile::RigSite,
 };
 use psf_guard_ts_planner::snapshot::{Project, ProjectPriority, ProjectState, Snapshot};
@@ -172,17 +170,6 @@ struct RigNights {
 }
 
 #[derive(Serialize)]
-struct RigForecast {
-    provider: ForecastProvider,
-    /// The credit the provider's licence asks for.
-    attribution: &'static str,
-    cloud_threshold_percent: u8,
-    /// The forecast planning uses, when one is kept and has not expired.
-    fetched_at_ms: Option<u64>,
-    expires_at_ms: Option<u64>,
-}
-
-#[derive(Serialize)]
 struct ScheduleView {
     /// The runtime the schedule follows.
     runtime: Runtime,
@@ -271,45 +258,6 @@ struct RigNight {
     clouds: Vec<ForecastHour>,
 }
 
-/// A night's effective availability and the marks that set it.
-#[derive(Serialize)]
-struct NightAvailability {
-    state: Availability,
-    /// The clear hours of a limited night: the site's and the rig's windows
-    /// met. Empty otherwise.
-    windows: Vec<Interval>,
-    marks: Vec<AppliedMark>,
-}
-
-#[derive(Serialize)]
-struct AppliedMark {
-    scope: MarkScope,
-    state: Availability,
-    windows: Vec<Interval>,
-    note: String,
-    source: MarkSource,
-}
-
-/// Where a mark came from.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-enum MarkSource {
-    /// Marked by hand.
-    Manual,
-    /// The site's cloud forecast, where no mark says otherwise.
-    Forecast {
-        provider: ForecastProvider,
-        fetched_at_ms: u64,
-    },
-}
-
-/// A site's forecast choice and the forecast kept for it.
-struct SiteClouds {
-    settings: ForecastSettings,
-    /// From the provider the site has now.
-    forecast: Option<SiteForecast>,
-}
-
 #[derive(Serialize)]
 struct TargetHours {
     project_id: i64,
@@ -387,10 +335,8 @@ struct RigInput {
     runtime: Runtime,
     snapshot: Option<Snapshot>,
     dates: Vec<NightDate>,
-    rig_marks: Vec<NightMark>,
-    site_marks: Vec<NightMark>,
-    clouds: Option<SiteClouds>,
-    mark_revisions: MarkRevisions,
+    /// The marks and forecast the nights are planned against.
+    conditions: RigConditions,
     warnings: Vec<String>,
 }
 
@@ -496,21 +442,7 @@ pub(super) async fn plan(
                     dates.push(next);
                 }
                 let last = *dates.last().unwrap_or(&first);
-                let rig_marks = store.night_marks(MarkScope::Rig, rig.id, first, last)?;
-                let site_marks = placed
-                    .site
-                    .as_ref()
-                    .map(|site| store.night_marks(MarkScope::Site, site.id, first, last))
-                    .transpose()?;
-                let mut clouds = None;
-                if let Some(site) = &placed.site
-                    && let Some(settings) = store.site_profile(site.id)?.and_then(|p| p.forecast)
-                {
-                    let forecast = store
-                        .site_forecast(site.id)?
-                        .filter(|f| f.provider == settings.provider);
-                    clouds = Some(SiteClouds { settings, forecast });
-                }
+                let conditions = RigConditions::read(store, rig.id, &placed, first, last)?;
                 inputs.push(RigInput {
                     schedule: options,
                     director,
@@ -524,13 +456,7 @@ pub(super) async fn plan(
                     runtime,
                     snapshot: None,
                     dates,
-                    mark_revisions: MarkRevisions {
-                        rig: rig_marks.revision,
-                        site: site_marks.as_ref().map(|marks| marks.revision),
-                    },
-                    rig_marks: rig_marks.marks,
-                    site_marks: site_marks.map(|marks| marks.marks).unwrap_or_default(),
-                    clouds,
+                    conditions,
                     warnings: rig_warnings,
                     rig,
                 });
@@ -635,66 +561,18 @@ fn rig_nights(input: RigInput, nights: u32) -> Result<RigNights, String> {
         runtime,
         snapshot,
         dates,
-        rig_marks,
-        site_marks,
-        clouds,
-        mark_revisions,
+        conditions,
         mut warnings,
     } = input;
     let location = placed
         .location
         .ok_or_else(|| format!("{catalog_name}: no site location."))?;
-    // An expired forecast says nothing, so it is judged against now, not
-    // against when planning starts.
-    let now = now_ms();
-    let forecast = clouds.as_ref().and_then(|clouds| {
-        let kept = clouds.forecast.as_ref().filter(|f| f.fresh(now))?;
-        Some((clouds.settings, kept))
-    });
-    let forecast_nights: Vec<Option<ForecastNight>> = dates
-        .iter()
-        .map(|date| {
-            let (settings, kept) = forecast?;
-            kept.night(
-                date.span(location.longitude_degrees),
-                settings.cloud_threshold_percent,
-                now,
-            )
-        })
-        .collect();
-    let source = forecast.map(|(_, kept)| MarkSource::Forecast {
-        provider: kept.provider,
-        fetched_at_ms: kept.fetched_at_ms,
-    });
-    let availability: Vec<(Option<Vec<Interval>>, NightAvailability)> = dates
-        .iter()
-        .zip(&forecast_nights)
-        .map(|(date, night)| {
-            let forecast = night.as_ref().zip(source);
-            effective(
-                *date,
-                location.longitude_degrees,
-                &site_marks,
-                &rig_marks,
-                forecast,
-            )
-        })
-        .collect();
-    let available = if availability.iter().all(|(windows, _)| windows.is_none()) {
-        None
-    } else {
-        Some(
-            availability
-                .iter()
-                .zip(&dates)
-                .flat_map(|((windows, _), date)| {
-                    windows
-                        .clone()
-                        .unwrap_or_else(|| vec![date.span(location.longitude_degrees)])
-                })
-                .collect::<Vec<_>>(),
-        )
-    };
+    let super::rig_availability::Nights {
+        nights: availability,
+        clouds: cloud_hours,
+        available,
+        forecast,
+    } = conditions.nights(&dates, location, now_ms());
     let mut plans = Vec::new();
     let mut chunks = Vec::new();
     for project in snapshot
@@ -854,11 +732,11 @@ fn rig_nights(input: RigInput, nights: u32) -> Result<RigNights, String> {
         by_night[index % nights as usize].push(night);
     }
     let mut out = Vec::with_capacity(nights as usize);
-    for (((summaries, (_, mut availability)), date), clouds) in by_night
+    for (((summaries, (_, availability)), date), clouds) in by_night
         .into_iter()
         .zip(availability)
         .zip(&dates)
-        .zip(forecast_nights)
+        .zip(cloud_hours)
     {
         let Some(first) = summaries.first() else {
             return Err(format!("{catalog_name}: the nights could not be computed."));
@@ -884,7 +762,6 @@ fn rig_nights(input: RigInput, nights: u32) -> Result<RigNights, String> {
             }
         }
         let available_hours = first.available_dark_hours;
-        judge_by_darkness(&mut availability, first.dusk_ms, first.dawn_ms);
         out.push(RigNight {
             date: *date,
             noon_ms: first.noon_ms,
@@ -902,7 +779,7 @@ fn rig_nights(input: RigInput, nights: u32) -> Result<RigNights, String> {
                 idle_hours: (available_hours - demand_hours).max(0.0),
                 overbooked_hours: (demand_hours - available_hours).max(0.0),
             },
-            clouds: clouds.map(|night| night.hours).unwrap_or_default(),
+            clouds,
         });
     }
     let schedule = if options.nights == 0 {
@@ -970,14 +847,11 @@ fn rig_nights(input: RigInput, nights: u32) -> Result<RigNights, String> {
         plans,
         nights: out,
         schedule,
-        mark_revisions,
-        forecast: clouds.as_ref().map(|clouds| RigForecast {
-            provider: clouds.settings.provider,
-            attribution: clouds.settings.provider.attribution(),
-            cloud_threshold_percent: clouds.settings.cloud_threshold_percent,
-            fetched_at_ms: forecast.map(|(_, kept)| kept.fetched_at_ms),
-            expires_at_ms: forecast.map(|(_, kept)| kept.expires_at_ms),
-        }),
+        mark_revisions: MarkRevisions {
+            rig: conditions.rig_revision,
+            site: conditions.site_revision,
+        },
+        forecast,
         warnings,
     })
 }
@@ -1444,261 +1318,8 @@ fn project_limits(rig: &Limits, project: &Project) -> Result<(AltitudeLimits, Pl
     Ok((altitude, applied))
 }
 
-/// A night's availability from the site's and the rig's marks, and where
-/// the site has no mark, from its forecast: `None` for the whole night,
-/// else the clear windows, empty when none.
-fn effective(
-    date: NightDate,
-    longitude_degrees: f64,
-    site: &[NightMark],
-    rig: &[NightMark],
-    forecast: Option<(&ForecastNight, MarkSource)>,
-) -> (Option<Vec<Interval>>, NightAvailability) {
-    let span = date.span(longitude_degrees);
-    let mut marks = Vec::new();
-    let mut windows: Option<Vec<Interval>> = None;
-    for (scope, list) in [(MarkScope::Site, site), (MarkScope::Rig, rig)] {
-        let mark = match (list.iter().find(|mark| mark.date == date), scope, forecast) {
-            (Some(mark), _, _) => AppliedMark {
-                scope,
-                state: mark.state,
-                windows: mark.windows.clone(),
-                note: mark.note.clone(),
-                source: MarkSource::Manual,
-            },
-            (None, MarkScope::Site, Some((night, source))) => {
-                let clear = forecast_windows(span, night);
-                let state = if clear == [span] {
-                    Availability::Available
-                } else if clear.is_empty() {
-                    Availability::Unavailable
-                } else {
-                    Availability::Limited
-                };
-                AppliedMark {
-                    scope,
-                    state,
-                    windows: if state == Availability::Limited {
-                        clear
-                    } else {
-                        vec![]
-                    },
-                    note: String::new(),
-                    source,
-                }
-            }
-            _ => continue,
-        };
-        let clear = match mark.state {
-            Availability::Available => {
-                marks.push(mark);
-                continue;
-            }
-            Availability::Unavailable => vec![],
-            Availability::Limited => mark
-                .windows
-                .iter()
-                .filter_map(|w| {
-                    let start_ms = w.start_ms.max(span.start_ms);
-                    let end_ms = w.end_ms.min(span.end_ms);
-                    (start_ms < end_ms).then_some(Interval { start_ms, end_ms })
-                })
-                .collect(),
-        };
-        marks.push(mark);
-        windows = Some(match windows {
-            None => clear,
-            Some(previous) => intersect(&previous, &clear),
-        });
-    }
-    let state = match &windows {
-        None => Availability::Available,
-        Some(clear) if clear.is_empty() => Availability::Unavailable,
-        Some(_) => Availability::Limited,
-    };
-    let shown = match (&windows, state) {
-        (Some(clear), Availability::Limited) => clear.clone(),
-        _ => vec![],
-    };
-    (
-        windows,
-        NightAvailability {
-            state,
-            windows: shown,
-            marks,
-        },
-    )
-}
-
-/// A forecast's clear hours in a night, with the hours it does not cover:
-/// no information is no reason to plan less.
-fn forecast_windows(span: Interval, night: &ForecastNight) -> Vec<Interval> {
-    let mut windows = night.clear.clone();
-    let mut from = span.start_ms;
-    for covered in &night.covered {
-        if covered.start_ms > from {
-            windows.push(Interval {
-                start_ms: from,
-                end_ms: covered.start_ms,
-            });
-        }
-        from = from.max(covered.end_ms);
-    }
-    if from < span.end_ms {
-        windows.push(Interval {
-            start_ms: from,
-            end_ms: span.end_ms,
-        });
-    }
-    windows.sort_by_key(|w| w.start_ms);
-    let mut merged: Vec<Interval> = Vec::with_capacity(windows.len());
-    for window in windows {
-        match merged.last_mut() {
-            Some(last) if last.end_ms >= window.start_ms => {
-                last.end_ms = last.end_ms.max(window.end_ms)
-            }
-            _ => merged.push(window),
-        }
-    }
-    merged
-}
-
-/// A forecast's windows run noon to noon, but a night is its dark hours: a
-/// forecast night clear through all of them is available, and one clear in
-/// none of them is not. A night set by hand is shown as it was marked.
-fn judge_by_darkness(
-    availability: &mut NightAvailability,
-    dusk_ms: Option<u64>,
-    dawn_ms: Option<u64>,
-) {
-    const MINUTE_HOURS: f64 = 1.0 / 60.0;
-    let (Some(dusk), Some(dawn)) = (dusk_ms, dawn_ms) else {
-        return;
-    };
-    let dark_hours = |windows: &[Interval]| {
-        windows
-            .iter()
-            .map(|w| w.end_ms.min(dawn).saturating_sub(w.start_ms.max(dusk)) as f64 / 3_600_000.0)
-            .sum::<f64>()
-    };
-    let all = dawn.saturating_sub(dusk) as f64 / 3_600_000.0;
-    let mut judged = false;
-    for mark in &mut availability.marks {
-        if matches!(mark.source, MarkSource::Forecast { .. }) && mark.state == Availability::Limited
-        {
-            judged = true;
-            let clear = dark_hours(&mark.windows);
-            if clear + MINUTE_HOURS >= all {
-                mark.state = Availability::Available;
-                mark.windows.clear();
-            } else if clear < MINUTE_HOURS {
-                mark.state = Availability::Unavailable;
-                mark.windows.clear();
-            }
-        }
-    }
-    if judged && availability.state == Availability::Limited {
-        let clear = dark_hours(&availability.windows);
-        if clear + MINUTE_HOURS >= all {
-            availability.state = Availability::Available;
-            availability.windows.clear();
-        } else if clear < MINUTE_HOURS {
-            availability.state = Availability::Unavailable;
-            availability.windows.clear();
-        }
-    }
-}
-
-/// The instants in both sorted lists of apart windows.
-fn intersect(a: &[Interval], b: &[Interval]) -> Vec<Interval> {
-    let mut result = Vec::new();
-    for x in a {
-        for y in b {
-            let start_ms = x.start_ms.max(y.start_ms);
-            let end_ms = x.end_ms.min(y.end_ms);
-            if start_ms < end_ms {
-                result.push(Interval { start_ms, end_ms });
-            }
-        }
-    }
-    result.sort_by_key(|w| w.start_ms);
-    result
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    fn mark(date: NightDate, state: Availability, windows: Vec<Interval>) -> NightMark {
-        NightMark {
-            date,
-            state,
-            windows,
-            note: String::new(),
-            revision: 1,
-            updated_at_ms: 0,
-        }
-    }
-
-    #[test]
-    fn site_and_rig_marks_meet_and_a_mark_elsewhere_changes_nothing() {
-        let date: NightDate = "2026-11-03".parse().unwrap();
-        let span = date.span(-118.3);
-        let hour = 3_600_000;
-        let at = |from: u64, to: u64| Interval {
-            start_ms: span.start_ms + from * hour,
-            end_ms: span.start_ms + to * hour,
-        };
-        let (none, shown) = effective(date, -118.3, &[], &[], None);
-        assert_eq!((none, shown.state), (None, Availability::Available));
-        // Clear sky, rig down: out.
-        let (out, shown) = effective(
-            date,
-            -118.3,
-            &[mark(date, Availability::Available, vec![])],
-            &[mark(date, Availability::Unavailable, vec![])],
-            None,
-        );
-        assert_eq!(out, Some(vec![]));
-        assert_eq!(shown.state, Availability::Unavailable);
-        assert_eq!(shown.marks.len(), 2);
-        // The sky clears from 8 to 12 hours after noon and the rig can run
-        // from 10 to 14: two hours.
-        let (both, shown) = effective(
-            date,
-            -118.3,
-            &[mark(date, Availability::Limited, vec![at(8, 12)])],
-            &[mark(date, Availability::Limited, vec![at(10, 14)])],
-            None,
-        );
-        assert_eq!(both, Some(vec![at(10, 12)]));
-        assert_eq!(
-            (shown.state, shown.windows),
-            (Availability::Limited, vec![at(10, 12)])
-        );
-        // Windows that do not meet leave nothing.
-        let (apart, shown) = effective(
-            date,
-            -118.3,
-            &[mark(date, Availability::Limited, vec![at(8, 9)])],
-            &[mark(date, Availability::Limited, vec![at(10, 14)])],
-            None,
-        );
-        assert_eq!(
-            (apart, shown.state),
-            (Some(vec![]), Availability::Unavailable)
-        );
-        let other = date.next().unwrap();
-        let (elsewhere, _) = effective(
-            date,
-            -118.3,
-            &[],
-            &[mark(other, Availability::Unavailable, vec![])],
-            None,
-        );
-        assert_eq!(elsewhere, None);
-    }
-
     #[test]
     fn frames_owed_follow_the_grader_and_the_exposure_throttle() {
         let plan = |desired, acquired, accepted| psf_guard_ts_planner::snapshot::ExposurePlan {
@@ -1718,66 +1339,5 @@ mod tests {
         assert_eq!(plan(10, 4, 1).remaining(false, 125.0), 8);
         assert_eq!(plan(10, 12, 0).remaining(false, 125.0), 0);
         assert_eq!(plan(3, 2, 0).remaining(false, 125.0), 1);
-    }
-
-    #[test]
-    fn a_forecast_counts_uncovered_hours_clear_and_is_judged_by_the_dark() {
-        let date: NightDate = "2026-11-03".parse().unwrap();
-        let span = date.span(-118.3);
-        let hour = 3_600_000;
-        let at = |from: u64, to: u64| Interval {
-            start_ms: span.start_ms + from * hour,
-            end_ms: span.start_ms + to * hour,
-        };
-        // Covered from 2 h to 20 h, clear from 4 to 6 and 10 to 20.
-        let night = ForecastNight {
-            covered: vec![at(2, 20)],
-            clear: vec![at(4, 6), at(10, 20)],
-            hours: vec![],
-        };
-        assert_eq!(
-            forecast_windows(span, &night),
-            vec![at(0, 2), at(4, 6), at(10, 24)]
-        );
-        let source = MarkSource::Forecast {
-            provider: ForecastProvider::OpenMeteo,
-            fetched_at_ms: 0,
-        };
-        let (windows, mut shown) = effective(date, -118.3, &[], &[], Some((&night, source)));
-        assert_eq!(windows, Some(vec![at(0, 2), at(4, 6), at(10, 24)]));
-        assert_eq!(shown.state, Availability::Limited);
-        // Dark from 10 h to 21 h: clear all through it, so available.
-        judge_by_darkness(
-            &mut shown,
-            Some(at(10, 10).start_ms),
-            Some(at(21, 21).start_ms),
-        );
-        assert_eq!(
-            (shown.state, shown.marks[0].state),
-            (Availability::Available, Availability::Available)
-        );
-        // Dark from 6 h to 10 h: clear in none of it.
-        let (_, mut shown) = effective(date, -118.3, &[], &[], Some((&night, source)));
-        judge_by_darkness(
-            &mut shown,
-            Some(at(6, 6).start_ms),
-            Some(at(10, 10).start_ms),
-        );
-        assert_eq!(shown.state, Availability::Unavailable);
-        // A mark by hand stays as it was marked.
-        let (_, mut marked) = effective(
-            date,
-            -118.3,
-            &[mark(date, Availability::Limited, vec![at(8, 22)])],
-            &[],
-            Some((&night, source)),
-        );
-        judge_by_darkness(
-            &mut marked,
-            Some(at(9, 9).start_ms),
-            Some(at(21, 21).start_ms),
-        );
-        assert_eq!(marked.state, Availability::Limited);
-        assert_eq!(marked.marks[0].source, MarkSource::Manual);
     }
 }

@@ -307,8 +307,8 @@ pub struct ForecastsConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub met_norway_url: Option<String>,
     /// An email address or web page added to the requests' User-Agent, so a
-    /// provider can contact whoever runs this server. MET Norway requires
-    /// contact details.
+    /// provider can contact whoever runs this server. Without it, the
+    /// User-Agent names PSF Guard and its project page only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub contact: Option<String>,
 }
@@ -662,7 +662,6 @@ impl Config {
         Ok(self.server.auth.as_ref())
     }
 
-    /// Validated, whitespace-normalized site banner for the server API.
     /// The forecast providers' addresses, checked.
     pub fn get_forecasts(&self) -> Result<ForecastsConfig> {
         self.server.forecasts.as_ref().map_or_else(
@@ -671,6 +670,7 @@ impl Config {
         )
     }
 
+    /// Validated, whitespace-normalized site banner for the server API.
     pub fn get_site_banner(&self) -> Result<Option<SiteBannerConfig>> {
         self.server
             .banner

@@ -268,18 +268,26 @@ export interface ForecastHour {
 export interface SiteForecast {
   site_id: string;
   provider: ForecastProvider;
+  /** When these hours arrived. */
   fetched_at_ms: number;
+  /** When the provider last confirmed them unchanged. */
+  checked_at_ms: number | null;
   /** After this the forecast counts as no information. */
   expires_at_ms: number;
+  /** No new request before this: the provider's Expires. */
   refresh_after_ms: number | null;
+  last_modified: string | null;
   hours: ForecastHour[];
 }
 export interface ForecastStatus {
   site_id: string;
   last_attempt_ms: number;
-  /** Null when the last ask succeeded. */
+  /** Null when the last request succeeded. */
   last_error: string | null;
+  /** The timer's failures in a row. */
   failures: number;
+  /** No new request before this: the provider's Retry-After. */
+  retry_after_ms: number | null;
 }
 export interface SiteForecastView {
   site: DirectorIdentity;

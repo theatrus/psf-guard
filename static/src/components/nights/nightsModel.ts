@@ -149,10 +149,27 @@ export function markOrigin(mark: NightAppliedMark): string {
  *  marked clear. Nothing when no one marked the night: a night the site's
  *  forecast marks shows a cloud instead. */
 export function markGlyph(night: RigNight): string {
-  if (!night.availability.marks.some(mark => mark.source.kind === 'manual')) return '';
-  if (night.availability.state === 'unavailable') return '✕';
-  if (night.availability.state === 'limited') return '◐';
-  return night.availability.marks.length > 0 ? '✓' : '';
+  const byHand = night.availability.marks.filter(mark => mark.source.kind === 'manual');
+  if (byHand.some(mark => mark.state === 'unavailable')) return '✕';
+  if (byHand.some(mark => mark.state === 'limited')) return '◐';
+  return byHand.length > 0 ? '✓' : '';
+}
+
+/** What set a night's state, for words such as "limited by the forecast":
+ *  marks set by hand, the site's forecast, both, or nothing. */
+export function decidedBy(night: RigNight): 'none' | 'manual' | 'forecast' | 'both' {
+  const marks = night.availability.marks;
+  const forecast = marks.find(mark => mark.source.kind === 'forecast');
+  const byHand = marks.filter(mark => mark.source.kind === 'manual');
+  if (night.availability.state === 'available') {
+    if (byHand.length > 0) return 'manual';
+    return forecast ? 'forecast' : 'none';
+  }
+  const handLimits = byHand.some(mark => mark.state !== 'available');
+  const forecastLimits = !!forecast && forecast.state !== 'available';
+  if (handLimits && forecastLimits) return 'both';
+  if (forecastLimits) return 'forecast';
+  return handLimits ? 'manual' : 'none';
 }
 
 /** A night's load in a few words: idle hours, or the hours overbooked. */

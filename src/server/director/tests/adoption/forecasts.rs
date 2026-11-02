@@ -2,6 +2,7 @@ use super::activation::{activated, Activated};
 use super::*;
 use crate::{config::ForecastsConfig, server::forecast::ForecastClient};
 use psf_guard_director_core::priority::Scope;
+use psf_guard_director_meta::site_forecast::ForecastFailure;
 use std::sync::Mutex;
 
 /// 2026-09-25 00:00 UTC, 17:00 the day before in Los Angeles.
@@ -179,17 +180,23 @@ async fn a_sites_forecast_marks_its_nights_until_a_mark_or_its_expiry_says_other
         .iter()
         .all(|n| n["availability"]["marks"].as_array().unwrap().is_empty()));
 
-    // Three nights of forecast: clear, overcast, then clear for two hours
-    // from an hour after dusk. The fourth is past its range.
+    // Three nights of forecast: cloudy in the afternoon but clear from an
+    // hour before dusk, overcast, then clear for two hours from an hour
+    // after dusk. The fourth is past its range.
     let first = rig["nights"].as_array().unwrap().clone();
     let span = |i: usize| first[i]["noon_ms"].as_u64().unwrap();
     let dusk = first[2]["dusk_ms"].as_u64().unwrap();
     let clear_from = (dusk / HOUR_MS + 1) * HOUR_MS;
+    let evening = first[0]["dusk_ms"].as_u64().unwrap() - HOUR_MS;
     let hours: Vec<(u64, f64)> = (span(0) / HOUR_MS * HOUR_MS..span(3) / HOUR_MS * HOUR_MS)
         .step_by(HOUR_MS as usize)
         .map(|start| {
             let cover = if start < span(1) {
-                0.0
+                if start < evening {
+                    90.0
+                } else {
+                    0.0
+                }
             } else if start < span(2) {
                 100.0
             } else if (clear_from..clear_from + 2 * HOUR_MS).contains(&start) {
@@ -202,14 +209,35 @@ async fn a_sites_forecast_marks_its_nights_until_a_mark_or_its_expiry_says_other
         .collect();
     let url = open_meteo(Arc::new(Mutex::new(hours))).await;
     point_at(&a, &url);
-    let (status, fetched) = call(
-        &a.f.app,
-        "POST",
-        &format!("/sites/{site}/forecast/refresh"),
-        Value::Null,
-        None,
-    )
-    .await;
+    // Fetch now waits a minute after a failure, and a failure it makes
+    // does not lengthen the timer's backoff.
+    let refresh = format!("/sites/{site}/forecast/refresh");
+    let (status, soon) = call(&a.f.app, "POST", &refresh, Value::Null, None).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{soon}");
+    assert!(
+        soon["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("The last request failed less than a minute ago."),
+        "{soon}"
+    );
+    {
+        let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        let failure = ForecastFailure {
+            at_ms: now() - 2 * 60_000,
+            error: "earlier".into(),
+            retry_after_ms: None,
+            from_timer: false,
+        };
+        assert_eq!(
+            store
+                .record_forecast_failure(site, &failure)
+                .unwrap()
+                .failures,
+            1
+        );
+    }
+    let (status, fetched) = call(&a.f.app, "POST", &refresh, Value::Null, None).await;
     assert_eq!(status, StatusCode::OK, "{fetched}");
     assert_eq!(
         (
@@ -268,10 +296,15 @@ async fn a_sites_forecast_marks_its_nights_until_a_mark_or_its_expiry_says_other
         "{}",
         nights_now[2]
     );
-    // A clear night still says the forecast is why.
+    // A night cloudy only in the afternoon is clear through its dark
+    // hours, so it is available, and the forecast says why.
     assert_eq!(
         nights_now[0]["availability"]["marks"][0]["state"],
         "available"
+    );
+    assert_eq!(
+        nights_now[0]["available_dark_hours"],
+        nights_now[0]["dark_hours"]
     );
     assert!(!nights_now[2]["clouds"].as_array().unwrap().is_empty());
     assert!(nights_now[3]["clouds"].as_array().unwrap().is_empty());
@@ -305,7 +338,7 @@ async fn a_sites_forecast_marks_its_nights_until_a_mark_or_its_expiry_says_other
         marked[2]
     );
 
-    // A looser threshold applies at once, with no new ask.
+    // A looser threshold applies at once, with no new request.
     set_forecast(
         &a,
         site,
@@ -321,6 +354,58 @@ async fn a_sites_forecast_marks_its_nights_until_a_mark_or_its_expiry_says_other
         rig["nights"][2]["availability"]["marks"][0]["state"],
         "available"
     );
+
+    // A new elevation keeps the forecast; a move of a kilometre or more
+    // discards it and requests the new place's.
+    let kept_at = forecast(&a, site).await["forecast"]["fetched_at_ms"].clone();
+    edit_site(
+        &a,
+        site,
+        34.2,
+        70.0,
+        json!({"provider": "open_meteo", "cloud_threshold_percent": 90}),
+    )
+    .await;
+    assert_eq!(
+        forecast(&a, site).await["forecast"]["fetched_at_ms"],
+        kept_at
+    );
+    edit_site(
+        &a,
+        site,
+        34.3,
+        70.0,
+        json!({"provider": "open_meteo", "cloud_threshold_percent": 90}),
+    )
+    .await;
+    let mut moved = forecast(&a, site).await;
+    for _ in 0..500 {
+        if moved["forecast"]["fetched_at_ms"].is_u64()
+            && moved["forecast"]["fetched_at_ms"] != kept_at
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        moved = forecast(&a, site).await;
+    }
+    assert_ne!(moved["forecast"]["fetched_at_ms"], kept_at, "{moved}");
+    // The timer refreshes a forecast three hours old.
+    {
+        let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        let mut kept = store.site_forecast(site).unwrap().unwrap();
+        store.clear_site_forecast(site).unwrap();
+        kept.fetched_at_ms -= 4 * HOUR_MS;
+        kept.expires_at_ms -= 4 * HOUR_MS;
+        store.save_site_forecast(&kept).unwrap();
+    }
+    let old = forecast(&a, site).await["forecast"]["fetched_at_ms"]
+        .as_u64()
+        .unwrap();
+    crate::server::director::site_forecast::refresh_due(&a.f.state).await;
+    let renewed = forecast(&a, site).await["forecast"]["fetched_at_ms"]
+        .as_u64()
+        .unwrap();
+    assert!(renewed > old + 3 * HOUR_MS, "{renewed} after {old}");
 
     // An expired forecast says nothing.
     {
@@ -363,6 +448,28 @@ async fn a_sites_forecast_marks_its_nights_until_a_mark_or_its_expiry_says_other
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
 }
 
+fn now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+}
+
+/// Save the site's location and forecast, keeping its horizon.
+async fn edit_site(a: &Activated, site: Uuid, latitude: f64, elevation: f64, forecast: Value) {
+    let path = format!("/sites/{site}/profile");
+    let (_, read) = call(&a.f.app, "GET", &path, Value::Null, None).await;
+    let location = json!({"latitude_degrees": latitude, "longitude_degrees": -118.3, "elevation_meters": elevation});
+    let edit = json!({
+        "expected_revision": read["data"]["profile"]["revision"],
+        "location": {"value": location, "source": {"kind": "manual"}},
+        "horizon": null,
+        "forecast": forecast,
+    });
+    let (status, saved) = call(&a.f.app, "PUT", &path, edit, None).await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+}
+
 /// Give the rig a Los Angeles location of its own and a 25° minimum.
 async fn place_rig(a: &Activated) {
     let (_, view) = call(
@@ -383,4 +490,99 @@ async fn place_rig(a: &Activated) {
     });
     let (status, saved) = call(&a.f.app, "PUT", "/catalogs/rig/rig/profile", edit, None).await;
     assert_eq!(status, StatusCode::OK, "{saved}");
+}
+
+#[tokio::test]
+async fn met_norway_s_not_modified_keeps_the_hours_and_when_they_arrived() {
+    let a = activated().await;
+    place_rig(&a).await;
+    let site = site(&a).await;
+    // A MET Norway stand-in: a forecast with its Last-Modified, and "not
+    // modified" when that Last-Modified comes back verbatim.
+    let since: Arc<Mutex<Vec<Option<String>>>> = Arc::default();
+    let seen = Arc::clone(&since);
+    let app = axum::Router::new().route(
+        "/weatherapi/locationforecast/2.0/complete",
+        get(move |headers: axum::http::HeaderMap| {
+            let seen = Arc::clone(&seen);
+            async move {
+                let asked = headers
+                    .get("if-modified-since")
+                    .map(|v| v.to_str().unwrap().to_owned());
+                seen.lock().unwrap().push(asked.clone());
+                let mut answer = axum::http::HeaderMap::new();
+                answer.insert("last-modified", "Sun, 01 Nov 2026 11:00:00 GMT".parse().unwrap());
+                answer.insert("expires", "Sun, 01 Nov 2026 11:30:00 GMT".parse().unwrap());
+                if asked.as_deref() == Some("Sun, 01 Nov 2026 11:00:00 GMT") {
+                    return (StatusCode::NOT_MODIFIED, answer).into_response();
+                }
+                let body = json!({"type": "Feature", "properties": {"timeseries": [
+                    {"time": "2026-11-01T12:00:00Z", "data": {"instant": {"details": {"cloud_area_fraction": 10.0}}}},
+                    {"time": "2026-11-01T13:00:00Z", "data": {"instant": {"details": {"cloud_area_fraction": 90.0}}}},
+                ]}});
+                (answer, Json(body)).into_response()
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    a.f.state
+        .set_forecast_client(ForecastClient::new(&ForecastsConfig {
+            met_norway_url: Some(format!("http://{address}")),
+            ..Default::default()
+        }));
+
+    set_forecast(
+        &a,
+        site,
+        json!({"provider": "met_norway", "cloud_threshold_percent": 30}),
+    )
+    .await;
+    let mut view = forecast(&a, site).await;
+    for _ in 0..500 {
+        if !view["forecast"].is_null() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        view = forecast(&a, site).await;
+    }
+    assert_eq!(
+        view["forecast"]["last_modified"], "Sun, 01 Nov 2026 11:00:00 GMT",
+        "{view}"
+    );
+    assert_eq!(view["forecast"]["checked_at_ms"], Value::Null);
+    // Ten minutes on, Fetch now checks again.
+    {
+        let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        let mut kept = store.site_forecast(site).unwrap().unwrap();
+        store.clear_site_forecast(site).unwrap();
+        kept.fetched_at_ms -= 10 * 60_000;
+        kept.expires_at_ms -= 10 * 60_000;
+        store.save_site_forecast(&kept).unwrap();
+    }
+    let before = forecast(&a, site).await["forecast"].clone();
+    let (status, checked) = call(
+        &a.f.app,
+        "POST",
+        &format!("/sites/{site}/forecast/refresh"),
+        Value::Null,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{checked}");
+    let after = &checked["data"]["forecast"];
+    assert_eq!(after["hours"], before["hours"]);
+    assert_eq!(after["fetched_at_ms"], before["fetched_at_ms"]);
+    let checked_at = after["checked_at_ms"].as_u64().unwrap();
+    assert!(checked_at >= before["fetched_at_ms"].as_u64().unwrap() + 10 * 60_000);
+    assert_eq!(
+        after["expires_at_ms"].as_u64().unwrap(),
+        checked_at + 12 * HOUR_MS
+    );
+    assert_eq!(checked["data"]["fresh"], true);
+    assert_eq!(
+        *since.lock().unwrap(),
+        vec![None, Some("Sun, 01 Nov 2026 11:00:00 GMT".to_owned())]
+    );
 }

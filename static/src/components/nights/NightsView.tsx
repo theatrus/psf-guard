@@ -9,6 +9,7 @@ import { useDirectorClock } from '../../hooks/useDirectorClock';
 import { retryWhenBusy } from '../director/retry';
 import { formatHours } from '../director/visibilityFormat';
 import EarlyBeta from '../director/EarlyBeta';
+import { PROVIDER_URL } from '../director/forecastLabels';
 import NightDetail from './NightDetail';
 import {
   NIGHT_COUNTS,
@@ -22,6 +23,7 @@ import {
   isTonight,
   loadWords,
   localDate,
+  decidedBy,
   forecastMark,
   markGlyph,
   markOrigin,
@@ -76,6 +78,10 @@ export default function NightsView() {
   });
   const rigs = useMemo(() => query.data?.rigs ?? [], [query.data]);
   const shown = rigs.filter(rig => !hidden.has(rig.rig.id));
+  // Each forecast provider whose data the grid shows, credited once.
+  const credits = [...new Map(shown.filter(rig => rig.forecast?.fetched_at_ms).map(rig => [rig.forecast!.provider, {
+    text: rig.forecast!.attribution, url: PROVIDER_URL[rig.forecast!.provider],
+  }])).values()];
   const colours = useMemo(() => planColours(rigs), [rigs]);
   // Columns by date across the rigs shown: rigs far apart can be on
   // different nights at the same instant.
@@ -151,14 +157,16 @@ export default function NightsView() {
               const plannedHours = scheduled?.reduce((sum, plan) => sum + plan.hours, 0) ?? null;
               const glyph = markGlyph(night);
               const forecast = forecastMark(night);
+              const decided = decidedBy(night);
+              const cause = decided === 'forecast' ? ' by the forecast' : decided === 'both' ? ' by a mark and the forecast' : '';
               return <td key={date}>
                 <button type="button" className={`nights-cell is-${night.availability.state}`} aria-pressed={chosen}
-                  aria-label={`${rig.catalog_name}, ${formatNightDate(night.date)}: ${formatHours(night.available_dark_hours)} clear of ${formatHours(night.dark_hours)} dark, ${STATE_LABEL[night.availability.state].toLowerCase()}${forecast ? ' by the forecast' : ''}, Moon ${Math.round(night.moon_illumination * 100)}%`}
+                  aria-label={`${rig.catalog_name}, ${formatNightDate(night.date)}: ${formatHours(night.available_dark_hours)} clear of ${formatHours(night.dark_hours)} dark, ${STATE_LABEL[night.availability.state].toLowerCase()}${cause}, Moon ${Math.round(night.moon_illumination * 100)}%`}
                   onClick={event => choose(rig, night, event.shiftKey)}>
                   <span className="nights-cell-top">
                     <span className="nights-cell-hours">{formatHours(night.available_dark_hours)}</span>
                     {glyph && <span className="nights-cell-mark" aria-hidden="true">{glyph}</span>}
-                    {forecast && <span className="nights-cell-forecast" aria-hidden="true" title={`${markOrigin(forecast)}: ${STATE_LABEL[forecast.state].toLowerCase()}`}><Cloud size={12} /></span>}
+                    {forecast && <span className="nights-cell-forecast" aria-hidden="true" title={`${markOrigin(forecast)}: ${STATE_LABEL[forecast.state].toLowerCase()}. ${rig.forecast?.attribution ?? ''}`}><Cloud size={12} /></span>}
                     <span className="nights-cell-moon" title={`Moon ${Math.round(night.moon_illumination * 100)}% lit, up ${formatHours(night.moon_hours_up_in_dark)} of the dark`}>☾ {Math.round(night.moon_illumination * 100)}%</span>
                   </span>
                   <span className="nights-cell-bar" aria-hidden="true">
@@ -175,6 +183,7 @@ export default function NightsView() {
           </tr>)}</tbody>
         </table>
       </div>}
+      {credits.length > 0 && <p className="director-muted nights-credits">Cloud forecasts: {credits.map((credit, index) => <span key={credit.url}>{index > 0 && ', '}<a href={credit.url} target="_blank" rel="noreferrer">{credit.text}</a></span>)}.</p>}
       {selectedRig && selectedNights.length > 0 && <NightDetail
         key={`${selectedRig.rig.id}:${selectedNights.map(n => n.date).join(',')}`}
         rig={selectedRig}

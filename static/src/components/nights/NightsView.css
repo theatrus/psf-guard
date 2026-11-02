@@ -218,9 +218,12 @@
 .nights-reasons { margin-top: 8px; padding: 8px 10px; border: 1px solid var(--color-border-secondary); border-radius: 6px; }
 .nights-reasons p { margin: 4px 0; font-size: 13px; }
 .nights-clouds { position: relative; height: 12px; margin-top: 4px; border-radius: 3px; background: var(--nights-track); overflow: hidden; }
-.nights-cloud { position: absolute; top: 0; bottom: 0; background: var(--nights-cloud); }
+/* The hour's cover sets the fill's alpha, not the element's opacity, so the
+   red edge of a cloudy hour stays at full strength. */
+.nights-cloud { position: absolute; top: 0; bottom: 0; background: color-mix(in srgb, var(--nights-cloud) calc(var(--cloud-alpha, 1) * 100%), transparent); }
 .nights-cloud.is-cloudy { box-shadow: inset 0 -3px 0 var(--nights-cloud-over); }
 .nights-cloud-key { display: inline-block; width: 14px; height: 10px; margin-right: 6px; border-radius: 2px; vertical-align: middle; background: var(--nights-cloud); box-shadow: inset 0 -3px 0 var(--nights-cloud-over); }
+.nights-credits { margin: 4px 0 8px; font-size: 12px; }
 .nights-forecast-note { margin: 4px 0 8px; font-size: 12px; }
 .nights-now { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--state-on-border); pointer-events: none; }
 .nights-live { margin: 4px 0 8px; font-size: 13px; }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { availableShares, clockOnNight, completesOn, datesBetween, forecastMark, formatClock, isDate, loadWords, markGlyph, markOrigin, planColours, planRows, plansOnNight, windowFor } from '../nightsModel';
+import { availableShares, clockOnNight, completesOn, datesBetween, decidedBy, forecastMark, formatClock, isDate, loadWords, markGlyph, markOrigin, planColours, planRows, plansOnNight, windowFor } from '../nightsModel';
 import { NOON, night, rig } from './fixtures';
 
 const HOUR = 3_600_000;
@@ -45,6 +45,20 @@ describe('night plan helpers', () => {
     expect(forecastMark(fromForecast)?.state).toBe('available');
     // The cell shows a cloud for the forecast, not a mark's glyph.
     expect(markGlyph(fromForecast)).toBe('');
+    expect(decidedBy(fromForecast)).toBe('forecast');
+    // A rig marked available by hand under a cloudy forecast: the forecast
+    // decides, and the hand mark's glyph is its own.
+    const cloudy = night(0, { availability: { state: 'unavailable', windows: [], marks: [
+      { scope: 'site', state: 'unavailable', windows: [], note: '', source: { kind: 'forecast', provider: 'open_meteo', fetched_at_ms: NOON } },
+      { scope: 'rig', state: 'available', windows: [], note: '', source: { kind: 'manual' } },
+    ] } });
+    expect([markGlyph(cloudy), decidedBy(cloudy)]).toEqual(['✓', 'forecast']);
+    const both = night(0, { availability: { state: 'unavailable', windows: [], marks: [
+      { scope: 'site', state: 'limited', windows: [], note: '', source: { kind: 'forecast', provider: 'open_meteo', fetched_at_ms: NOON } },
+      { scope: 'rig', state: 'unavailable', windows: [], note: 'dome', source: { kind: 'manual' } },
+    ] } });
+    expect([markGlyph(both), decidedBy(both)]).toEqual(['✕', 'both']);
+    expect(decidedBy(night(0))).toBe('none');
     expect(forecastMark(night(0))).toBeUndefined();
     expect(markOrigin(forecastMark(fromForecast)!)).toBe(`Forecast (MET Norway, fetched ${formatClock(NOON)})`);
     expect(markOrigin(fromForecast.availability.marks[0])).toMatch(/^Forecast/);

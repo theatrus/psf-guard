@@ -21,6 +21,8 @@ describe('NightTimeline', () => {
     expect(hours[1]).toHaveClass('is-cloudy');
     expect(hours[1].getAttribute('title')).toMatch(/: 75% cloud \(low 60%, high 15%\)$/);
     expect(within(screen.getByRole('group', { name: 'Schedule' })).queryByRole('group', { name: 'Cloud cover' })).toBe(strip);
+    // The red edges in words, for those who cannot see them.
+    expect(strip).toHaveAccessibleDescription(/^Cloud cover: the lighter an hour, the more cloud\. Above the site's 30% threshold, with a red edge: .+ – .+\.$/);
   });
 
   it('draws no strip without a forecast', () => {

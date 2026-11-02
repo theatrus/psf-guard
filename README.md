@@ -1188,7 +1188,7 @@ link_url = "https://psf-guard.com/"
 
 # Optional: where cloud forecasts come from, for sites with forecasts on.
 [server.forecasts]
-contact = "you@example.org"   # added to each request; MET Norway requires it
+contact = "you@example.org"   # added to each request's User-Agent
 # open_meteo_url = "https://customer-api.open-meteo.com"   # a paid plan
 # open_meteo_api_key = "..."
 # met_norway_url = "https://api.met.no"
@@ -1212,10 +1212,12 @@ text. Set both link fields or omit both; links must use `http://` or
 
 Omit `[server.forecasts]` to use the public Open-Meteo and MET Norway
 services. Forecasts stay off until an editor turns them on for a site; see
-[Cloud forecasts](docs/DIRECTOR.md#cloud-forecasts). Set `contact` to an
-email address or web page so a provider can contact whoever runs the
-server. Set `open_meteo_url` and `open_meteo_api_key` to use a paid
-Open-Meteo plan or your own Open-Meteo instance.
+[Cloud forecasts](docs/DIRECTOR.md#cloud-forecasts). MET Norway's terms ask
+each request to identify the application and a way to contact it. PSF
+Guard sends its project page; set `contact` to an email address or web
+page of yours so the provider can reach whoever runs the server. Set
+`open_meteo_url` and `open_meteo_api_key` to use a paid Open-Meteo plan or
+your own Open-Meteo instance.
 
 Add users without putting passwords in the TOML:
 

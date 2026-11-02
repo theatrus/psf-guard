@@ -20,6 +20,11 @@ pub const DEFAULT_CLOUD_THRESHOLD_PERCENT: u8 = 30;
 
 const MAX_TIME_MS: u64 = 4_102_444_800_000; // 2100-01-01
 const MAX_ERROR_CHARS: usize = 300;
+const MAX_LAST_MODIFIED_CHARS: usize = 64;
+/// A stored forecast newer than a replacement by less than this came from a
+/// refresh that raced it, and stays. One newer by more came from a clock
+/// that ran ahead, and is replaced.
+const RACE_MS: i64 = 3_600_000;
 
 /// Where a site's forecast comes from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -37,6 +42,14 @@ impl ForecastProvider {
         match self {
             Self::OpenMeteo => "open_meteo",
             Self::MetNorway => "met_norway",
+        }
+    }
+
+    /// The provider's name, as people know it.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::OpenMeteo => "Open-Meteo",
+            Self::MetNorway => "MET Norway",
         }
     }
 
@@ -109,13 +122,20 @@ pub struct ForecastHour {
 pub struct SiteForecast {
     pub site_id: Uuid,
     pub provider: ForecastProvider,
+    /// When these hours arrived.
     pub fetched_at_ms: u64,
+    /// When the provider last confirmed them, by answering "not modified";
+    /// `None` until it has.
+    #[serde(default)]
+    pub checked_at_ms: Option<u64>,
     /// After this the forecast counts as no information.
     pub expires_at_ms: u64,
-    /// The provider asks not to be asked again before this (MET Norway's
-    /// `Expires`).
+    /// No new request before this: the provider's `Expires`.
     #[serde(default)]
     pub refresh_after_ms: Option<u64>,
+    /// The provider's `Last-Modified`, sent back as `If-Modified-Since`.
+    #[serde(default)]
+    pub last_modified: Option<String>,
     /// In time order, apart.
     pub hours: Vec<ForecastHour>,
 }
@@ -128,8 +148,25 @@ pub struct ForecastStatus {
     pub last_attempt_ms: u64,
     /// `None` when the last attempt succeeded.
     pub last_error: Option<String>,
-    /// Failures in a row, for backoff.
+    /// The timer's failures in a row, for its backoff. A failed Fetch now
+    /// is not counted.
     pub failures: u32,
+    /// No new request before this: the provider's `Retry-After` on the last
+    /// failure.
+    #[serde(default)]
+    pub retry_after_ms: Option<u64>,
+}
+
+/// A failed request, to record.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ForecastFailure {
+    pub at_ms: u64,
+    pub error: String,
+    /// The provider's `Retry-After`, as an instant.
+    pub retry_after_ms: Option<u64>,
+    /// Whether the timer made the request, so the failure counts toward its
+    /// backoff.
+    pub from_timer: bool,
 }
 
 /// What a forecast says about one night.
@@ -151,6 +188,12 @@ impl SiteForecast {
             || self.expires_at_ms > MAX_TIME_MS
             || self.expires_at_ms < self.fetched_at_ms
             || self.refresh_after_ms.is_some_and(|at| at > MAX_TIME_MS)
+            || self
+                .checked_at_ms
+                .is_some_and(|at| at > MAX_TIME_MS || at < self.fetched_at_ms)
+            || self.last_modified.as_ref().is_some_and(|text| {
+                text.chars().count() > MAX_LAST_MODIFIED_CHARS || text.chars().any(char::is_control)
+            })
             || self.hours.len() > MAX_FORECAST_HOURS
         {
             return Err(Error::InvalidInput);
@@ -269,7 +312,9 @@ impl MetaStore {
 
     /// Replace a site's forecast with a newer one, and note the success.
     /// An older forecast than the one stored is refused with `Conflict`, so
-    /// two refreshes racing cannot put an old one back.
+    /// two refreshes racing cannot put an old one back. A stored forecast
+    /// more than an hour newer came from a clock that ran ahead, and is
+    /// replaced.
     pub fn save_site_forecast(&mut self, forecast: &SiteForecast) -> Result<(), Error> {
         forecast.validate()?;
         let tx = self
@@ -285,7 +330,8 @@ impl MetaStore {
                 |row| row.get(0),
             )
             .optional()?;
-        if stored.is_some_and(|at| at > i64::try_from(forecast.fetched_at_ms).unwrap_or(i64::MAX)) {
+        let fetched = i64::try_from(forecast.fetched_at_ms).unwrap_or(i64::MAX);
+        if stored.is_some_and(|at| at > fetched && at - fetched < RACE_MS) {
             return Err(Error::Conflict);
         }
         let payload = super::configuration::encode(forecast)?;
@@ -305,9 +351,10 @@ impl MetaStore {
             &tx,
             &ForecastStatus {
                 site_id: forecast.site_id,
-                last_attempt_ms: forecast.fetched_at_ms,
+                last_attempt_ms: forecast.checked_at_ms.unwrap_or(forecast.fetched_at_ms),
                 last_error: None,
                 failures: 0,
+                retry_after_ms: None,
             },
         )?;
         tx.commit()?;
@@ -318,8 +365,7 @@ impl MetaStore {
     pub fn record_forecast_failure(
         &mut self,
         site: Uuid,
-        at_ms: u64,
-        error: &str,
+        failure: &ForecastFailure,
     ) -> Result<ForecastStatus, Error> {
         valid_id(site)?;
         let tx = self
@@ -329,16 +375,22 @@ impl MetaStore {
             return Err(Error::NotFound);
         }
         let failures = read_status(&tx, site)?.map_or(0, |status| status.failures);
-        let message: String = error
+        let message: String = failure
+            .error
             .chars()
             .filter(|c| !c.is_control())
             .take(MAX_ERROR_CHARS)
             .collect();
         let status = ForecastStatus {
             site_id: site,
-            last_attempt_ms: at_ms.min(MAX_TIME_MS),
+            last_attempt_ms: failure.at_ms.min(MAX_TIME_MS),
             last_error: Some(message),
-            failures: failures.saturating_add(1),
+            failures: if failure.from_timer {
+                failures.saturating_add(1)
+            } else {
+                failures
+            },
+            retry_after_ms: failure.retry_after_ms.map(|at| at.min(MAX_TIME_MS)),
         };
         write_status(&tx, &status)?;
         tx.commit()?;
@@ -450,8 +502,10 @@ mod tests {
             site_id: Uuid::new_v4(),
             provider: ForecastProvider::OpenMeteo,
             fetched_at_ms: 90 * HOUR,
+            checked_at_ms: None,
             expires_at_ms: 102 * HOUR,
             refresh_after_ms: None,
+            last_modified: None,
             // From two hours before the night to eight hours into it.
             hours: hours(
                 98 * HOUR,
@@ -507,15 +561,23 @@ mod tests {
             site_id: site,
             provider: ForecastProvider::MetNorway,
             fetched_at_ms: 10 * HOUR,
+            checked_at_ms: None,
             expires_at_ms: 22 * HOUR,
             refresh_after_ms: Some(11 * HOUR),
+            last_modified: Some("Sun, 01 Nov 2026 10:00:00 GMT".into()),
             hours: hours(10 * HOUR, &[5.0, 50.0]),
         };
         store.save_site_forecast(&first).unwrap();
         assert_eq!(store.site_forecast(site).unwrap(), Some(first.clone()));
         assert_eq!(store.forecast_status(site).unwrap().unwrap().failures, 0);
+        let failure = |at_ms: u64, error: &str, from_timer: bool| ForecastFailure {
+            at_ms,
+            error: error.into(),
+            retry_after_ms: None,
+            from_timer,
+        };
         let failed = store
-            .record_forecast_failure(site, 13 * HOUR, "timed out\nafter 12 s")
+            .record_forecast_failure(site, &failure(13 * HOUR, "timed out\nafter 12 s", true))
             .unwrap();
         assert_eq!(
             (failed.failures, failed.last_error.as_deref()),
@@ -523,22 +585,38 @@ mod tests {
         );
         assert_eq!(
             store
-                .record_forecast_failure(site, 14 * HOUR, "again")
+                .record_forecast_failure(site, &failure(14 * HOUR, "again", true))
                 .unwrap()
                 .failures,
             2
         );
+        // A failed Fetch now is noted, but does not lengthen the backoff.
+        let manual = ForecastFailure {
+            retry_after_ms: Some(15 * HOUR),
+            ..failure(14 * HOUR, "429", false)
+        };
+        let noted = store.record_forecast_failure(site, &manual).unwrap();
+        assert_eq!((noted.failures, noted.retry_after_ms), (2, Some(15 * HOUR)));
         // The failure left the forecast as it was.
         assert_eq!(store.site_forecast(site).unwrap(), Some(first.clone()));
         // An older forecast cannot replace a newer one.
         let older = SiteForecast {
-            fetched_at_ms: 9 * HOUR,
+            fetched_at_ms: 9 * HOUR + HOUR / 2,
             ..first.clone()
         };
         assert!(matches!(
             store.save_site_forecast(&older),
             Err(Error::Conflict)
         ));
+        // One stored from a clock that ran hours ahead is replaced.
+        let ahead = SiteForecast {
+            fetched_at_ms: 40 * HOUR,
+            expires_at_ms: 52 * HOUR,
+            ..first.clone()
+        };
+        store.save_site_forecast(&ahead).unwrap();
+        store.save_site_forecast(&first).unwrap();
+        assert_eq!(store.site_forecast(site).unwrap(), Some(first.clone()));
         let newer = SiteForecast {
             fetched_at_ms: 15 * HOUR,
             expires_at_ms: 27 * HOUR,

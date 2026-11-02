@@ -89,6 +89,11 @@ async fn put_profile(
     {
         return Err(Error::Invalid);
     }
+    if edit.forecast.is_some() && edit.location.is_none() {
+        return Err(Error::Refused(
+            "A forecast needs the site's location. Enter its latitude and longitude.".into(),
+        ));
+    }
     let service = enabled(&state)?;
     let (view, refresh) = service
         .clone()
@@ -109,13 +114,11 @@ async fn put_profile(
             next.forecast = edit.forecast;
             next.updated_at_ms = now;
             let profile = store.save_site_profile(&next, edit.expected_revision)?;
-            // A forecast is for one provider and one place: a change to
-            // either, or no forecast at all, forgets the kept one.
-            let requested = |p: Option<&SiteProfile>| {
-                p.and_then(|p| Some((p.forecast?.provider, p.location.as_ref()?.value)))
-            };
-            let before = requested(previous);
-            let after = requested(Some(&profile));
+            // A forecast is for one provider and one place, to two
+            // decimals: a change to either, or no forecast at all, discards
+            // the stored one. A new elevation or threshold keeps it.
+            let before = previous.and_then(super::site_forecast::request_key);
+            let after = super::site_forecast::request_key(&profile);
             if before != after {
                 store.clear_site_forecast(site)?;
             }

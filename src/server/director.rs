@@ -58,6 +58,7 @@ mod plan_progress;
 mod plans;
 mod program;
 mod remote_push;
+mod rig_availability;
 pub(crate) use remote_push::{peer_reached, resends_under_way};
 mod rig_profile;
 mod rig_scheduling;

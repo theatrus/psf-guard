@@ -87,7 +87,9 @@ function TonightCell({ rig, pending, failed }: { rig: RigNights | undefined; pen
   const plans = plansScheduled(rig, night.date);
   const href = nightHref(rig.rig.id, night.date, search);
   const clear = night.availability.state === 'unavailable' ? 'not available' : `${formatHours(night.available_dark_hours)} clear`;
-  return <Link to={href} title="Open tonight's schedule on the Nights tab">
+  const forecast = night.availability.marks.some(mark => mark.source.kind === 'forecast') ? rig.forecast : null;
+  const credit = forecast ? ' Clear hours use the site\'s cloud forecast. ' + forecast.attribution : '';
+  return <Link to={href} title={'Open tonight\'s schedule on the Nights tab.' + credit}>
     {clear}{plans.length > 0 ? `: ${plans.slice(0, 2).map(plan => plan.name).join(', ')}${plans.length > 2 ? ` +${plans.length - 2}` : ''}` : night.available_dark_hours > 0 ? ', nothing planned' : ''}
   </Link>;
 }

@@ -55,8 +55,10 @@ cors = true
 
 # Where cloud forecasts come from, for the sites that turn them on under
 # Settings > Sites. Omit this section to use the public Open-Meteo and
-# MET Norway services. Set contact to an email address or web page so a
-# provider can contact whoever runs this server; MET Norway requires it.
+# MET Norway services. MET Norway's terms ask each request to identify the
+# application and a way to contact it: PSF Guard sends its project page,
+# and contact adds an email address or web page of yours, so the provider
+# can reach whoever runs this server.
 #
 # [server.forecasts]
 # contact = "you@example.org"

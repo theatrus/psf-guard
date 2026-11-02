@@ -1128,6 +1128,17 @@ mod tests {
             "/director/v1/night-availability/rig/x",
             true
         ));
+        // Fetch now sends a site's location to a provider: an editor's.
+        assert!(requires_write(
+            &Method::POST,
+            "/director/v1/sites/x/forecast/refresh",
+            true
+        ));
+        assert!(!requires_write(
+            &Method::GET,
+            "/director/v1/sites/x/forecast",
+            false
+        ));
         // A backup holds every catalog: listing and downloading are an
         // editor's, as is starting one.
         assert!(requires_write(&Method::GET, "/backups", false));

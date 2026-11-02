@@ -118,10 +118,10 @@ describe('Director sites', () => {
       site: { id: 'x', name: 'Backyard', revision: 1 },
       settings: { provider: 'met_norway', cloud_threshold_percent: 25 },
       attribution: 'Weather data from MET Norway (CC BY 4.0)',
-      forecast: fetched ? { site_id: 'x', provider: 'met_norway', fetched_at_ms: Date.UTC(2026, 10, 3, 14), expires_at_ms: Date.UTC(2026, 10, 4, 2), refresh_after_ms: null,
+      forecast: fetched ? { site_id: 'x', provider: 'met_norway', fetched_at_ms: Date.UTC(2026, 10, 3, 14), checked_at_ms: Date.UTC(2026, 10, 3, 15), expires_at_ms: Date.UTC(2026, 10, 4, 3), refresh_after_ms: null, last_modified: 'Tue, 03 Nov 2026 13:50:00 GMT',
         hours: [{ start_ms: Date.UTC(2026, 10, 3, 14), end_ms: Date.UTC(2026, 10, 12, 0), cloud_total: 10, cloud_low: null, cloud_mid: null, cloud_high: null }] } : null,
       fresh: fetched,
-      status: { site_id: 'x', last_attempt_ms: Date.UTC(2026, 10, 3, 14), last_error: fetched ? null : 'PSF Guard could not reach MET Norway: timed out', failures: fetched ? 0 : 1 },
+      status: { site_id: 'x', last_attempt_ms: Date.UTC(2026, 10, 3, 14), last_error: fetched ? null : 'PSF Guard could not reach MET Norway: timed out', failures: fetched ? 0 : 1, retry_after_ms: null },
       next_refresh_ms: Date.UTC(2026, 10, 3, 17),
     });
     server.use(
@@ -134,7 +134,13 @@ describe('Director sites', () => {
     const card = await screen.findByRole('region', { name: 'Site Backyard' });
     expect(await within(card).findByText(/Off: PSF Guard sends nothing about this site/)).toBeInTheDocument();
     fireEvent.change(within(card).getByLabelText('Forecast'), { target: { value: 'met_norway' } });
-    expect(within(card).getByText(/sends this site's latitude and longitude, rounded to about 1 km, to MET Norway/)).toBeInTheDocument();
+    expect(within(card).getByText(/sends this site's latitude and longitude, rounded to about 1 km, to MET Norway when you save, every three hours, when you click Fetch now, and when it retries after a failed request/)).toBeInTheDocument();
+    // Turned back off after a threshold edit, nothing is left to save.
+    fireEvent.change(within(card).getByLabelText('Clear at or under'), { target: { value: '50' } });
+    fireEvent.change(within(card).getByLabelText('Forecast'), { target: { value: 'off' } });
+    expect(within(card).queryByText('Unsaved changes')).toBeNull();
+    fireEvent.change(within(card).getByLabelText('Forecast'), { target: { value: 'met_norway' } });
+    fireEvent.change(within(card).getByLabelText('Clear at or under'), { target: { value: '30' } });
     // A forecast is for a place: none without a location.
     fireEvent.click(within(card).getByRole('button', { name: 'Save site' }));
     expect(await within(card).findByRole('alert')).toHaveTextContent("A forecast needs the site's location");
@@ -152,7 +158,7 @@ describe('Director sites', () => {
     expect(within(status).getByRole('alert')).toHaveTextContent('failed: PSF Guard could not reach MET Norway: timed out');
     expect(within(status).getByRole('link', { name: 'Weather data from MET Norway (CC BY 4.0)' })).toHaveAttribute('href', 'https://api.met.no/');
     fireEvent.click(within(status).getByRole('button', { name: 'Fetch now' }));
-    expect(await within(status).findByText(/Night plans use it until/)).toBeInTheDocument();
+    expect(await within(status).findByText(/MET Norway confirmed it unchanged at .*\. Night plans use it until/)).toBeInTheDocument();
     expect(within(status).queryByRole('alert')).toBeNull();
     expect(asks).toHaveLength(1);
   });

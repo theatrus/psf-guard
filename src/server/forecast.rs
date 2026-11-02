@@ -2,9 +2,9 @@
 //! on. This module requests and reads forecasts. Director's site forecasts
 //! decide which sites to refresh, when, and what to store.
 
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::DateTime;
 use psf_guard_director_meta::site_forecast::{ForecastHour, ForecastProvider, MAX_FORECAST_HOURS};
 use reqwest::{header, StatusCode};
 use serde::Deserialize;
@@ -17,6 +17,9 @@ const HOUR_MS: u64 = 3_600_000;
 /// The largest response read: MET Norway's full forecast is a few hundred KB.
 const MAX_BODY_BYTES: usize = 4 << 20;
 const MAX_REASON_CHARS: usize = 200;
+const MAX_LAST_MODIFIED_CHARS: usize = 64;
+/// The longest `Retry-After` honoured.
+const MAX_RETRY_AFTER_MS: u64 = 6 * HOUR_MS;
 
 /// A forecast as the provider sent it.
 #[derive(Debug, PartialEq)]
@@ -25,9 +28,35 @@ pub enum Fetched {
         hours: Vec<ForecastHour>,
         /// The provider's `Expires` time: no new request before it.
         refresh_after_ms: Option<u64>,
+        /// The provider's `Last-Modified`, to send back as
+        /// `If-Modified-Since`.
+        last_modified: Option<String>,
     },
-    /// Nothing newer than the forecast already kept.
+    /// Nothing newer than the stored forecast.
     NotModified { refresh_after_ms: Option<u64> },
+}
+
+/// A failed request.
+#[derive(Debug, PartialEq)]
+pub struct FetchError {
+    pub message: String,
+    /// The provider's `Retry-After`, as an instant, at most six hours on.
+    pub retry_after_ms: Option<u64>,
+}
+
+impl From<String> for FetchError {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            retry_after_ms: None,
+        }
+    }
+}
+
+impl From<&str> for FetchError {
+    fn from(message: &str) -> Self {
+        message.to_owned().into()
+    }
 }
 
 /// Requests forecasts from the providers. Cheap to clone.
@@ -47,7 +76,8 @@ impl Default for ForecastClient {
 
 impl ForecastClient {
     pub fn new(config: &ForecastsConfig) -> Self {
-        // MET Norway refuses a request that does not say who sends it.
+        // MET Norway blocks requests whose User-Agent does not identify the
+        // application and a way to contact it.
         let agent = match &config.contact {
             Some(contact) => format!(
                 "psf-guard/{} (+https://github.com/theatrus/psf-guard; {contact})",
@@ -78,15 +108,15 @@ impl ForecastClient {
     }
 
     /// The forecast at a site. Coordinates go rounded to two decimals, about
-    /// a kilometre. `since_ms`, when the kept forecast was fetched, lets a
-    /// provider answer that it has nothing newer.
+    /// a kilometre. `last_modified`, the stored forecast's `Last-Modified`,
+    /// lets a provider reply that it has nothing newer.
     pub async fn fetch(
         &self,
         provider: ForecastProvider,
         latitude_degrees: f64,
         longitude_degrees: f64,
-        since_ms: Option<u64>,
-    ) -> Result<Fetched, String> {
+        last_modified: Option<&str>,
+    ) -> Result<Fetched, FetchError> {
         let latitude = format!("{:.2}", latitude_degrees);
         let longitude = format!("{:.2}", longitude_degrees);
         match provider {
@@ -116,6 +146,7 @@ impl ForecastClient {
                 Ok(Fetched::New {
                     hours: read_open_meteo(&body)?,
                     refresh_after_ms: None,
+                    last_modified: None,
                 })
             }
             ForecastProvider::MetNorway => {
@@ -126,8 +157,10 @@ impl ForecastClient {
                         self.met_norway_url
                     ))
                     .query(&[("lat", latitude), ("lon", longitude)]);
-                if let Some(date) = since_ms.and_then(http_date) {
-                    request = request.header(header::IF_MODIFIED_SINCE, date);
+                // MET Norway's own `Last-Modified`, as it sent it: never a
+                // time from this server's clock.
+                if let Some(since) = last_modified {
+                    request = request.header(header::IF_MODIFIED_SINCE, since);
                 }
                 let (headers, body) = send(request, "MET Norway").await?;
                 let refresh_after_ms = headers
@@ -139,6 +172,12 @@ impl ForecastClient {
                     Some(body) => Fetched::New {
                         hours: read_met_norway(&body)?,
                         refresh_after_ms,
+                        last_modified: headers
+                            .get(header::LAST_MODIFIED)
+                            .and_then(|value| value.to_str().ok())
+                            .filter(|value| value.chars().count() <= MAX_LAST_MODIFIED_CHARS)
+                            .filter(|value| !value.chars().any(char::is_control))
+                            .map(str::to_owned),
                     },
                     None => Fetched::NotModified { refresh_after_ms },
                 })
@@ -151,7 +190,7 @@ impl ForecastClient {
 async fn send(
     request: reqwest::RequestBuilder,
     provider: &str,
-) -> Result<(header::HeaderMap, Option<Vec<u8>>), String> {
+) -> Result<(header::HeaderMap, Option<Vec<u8>>), FetchError> {
     let mut response = request.send().await.map_err(|error| {
         format!(
             "PSF Guard could not reach {provider}: {}",
@@ -167,9 +206,9 @@ async fn send(
         .content_length()
         .is_some_and(|length| length > MAX_BODY_BYTES as u64)
     {
-        return Err(format!(
-            "{provider} sent a response larger than {MAX_BODY_BYTES} bytes."
-        ));
+        return Err(
+            format!("{provider} sent a response larger than {MAX_BODY_BYTES} bytes.").into(),
+        );
     }
     let mut body = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(|error| {
@@ -179,9 +218,9 @@ async fn send(
         )
     })? {
         if body.len() + chunk.len() > MAX_BODY_BYTES {
-            return Err(format!(
-                "{provider} sent a response larger than {MAX_BODY_BYTES} bytes."
-            ));
+            return Err(
+                format!("{provider} sent a response larger than {MAX_BODY_BYTES} bytes.").into(),
+            );
         }
         body.extend_from_slice(&chunk);
     }
@@ -191,23 +230,57 @@ async fn send(
         struct Refusal {
             reason: String,
         }
+        // Provider text reaches the log and the page: printable only.
         let reason = serde_json::from_slice::<Refusal>(&body)
             .map(|refusal| {
                 refusal
                     .reason
                     .chars()
+                    .filter(|c| !c.is_control())
                     .take(MAX_REASON_CHARS)
                     .collect::<String>()
             })
             .unwrap_or_else(|_| status.to_string());
-        return Err(format!("{provider} returned an error: {reason}"));
+        return Err(FetchError {
+            message: format!("{provider} returned an error: {reason}"),
+            retry_after_ms: headers
+                .get(header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| retry_after(value, now_ms())),
+        });
     }
     Ok((headers, Some(body)))
 }
 
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// A `Retry-After` value, seconds or an HTTP date, as an instant no more
+/// than six hours after `now_ms`.
+fn retry_after(value: &str, now_ms: u64) -> Option<u64> {
+    let at = match value.trim().parse::<u64>() {
+        Ok(seconds) => now_ms.saturating_add(seconds.saturating_mul(1000)),
+        Err(_) => u64::try_from(
+            DateTime::parse_from_rfc2822(value.trim())
+                .ok()?
+                .timestamp_millis(),
+        )
+        .ok()?,
+    };
+    Some(at.min(now_ms.saturating_add(MAX_RETRY_AFTER_MS)))
+}
+
 /// `Sun, 06 Nov 1994 08:49:37 GMT`.
+#[cfg(test)]
 fn http_date(ms: u64) -> Option<String> {
-    let at = Utc.timestamp_millis_opt(i64::try_from(ms).ok()?).single()?;
+    use chrono::TimeZone;
+    let at = chrono::Utc
+        .timestamp_millis_opt(i64::try_from(ms).ok()?)
+        .single()?;
     Some(at.format("%a, %d %b %Y %H:%M:%S GMT").to_string())
 }
 
@@ -223,7 +296,9 @@ fn steps(starts: &[u64]) -> Result<Vec<(u64, u64)>, String> {
     for (i, &start) in starts.iter().enumerate() {
         let end = match starts.get(i + 1) {
             Some(&next) => next,
-            None => start + i.checked_sub(1).map_or(HOUR_MS, |p| start - starts[p]),
+            None => start
+                .checked_add(i.checked_sub(1).map_or(HOUR_MS, |p| start - starts[p]))
+                .ok_or("The forecast's hours run past any date it can hold.")?,
         };
         if end <= start {
             return Err("The forecast's hours are out of order.".into());
@@ -413,15 +488,21 @@ mod tests {
     }
 
     #[test]
-    fn http_dates_read_back() {
-        let date = http_date(1_793_534_400_000).unwrap();
-        assert_eq!(date, "Sun, 01 Nov 2026 12:00:00 GMT");
+    fn retry_after_is_read_as_seconds_or_a_date_and_bounded() {
+        let now = 1_793_534_400_000;
+        assert_eq!(retry_after("120", now), Some(now + 120_000));
+        let date = http_date(now + 30 * 60_000).unwrap();
+        assert_eq!(date, "Sun, 01 Nov 2026 12:30:00 GMT");
+        assert_eq!(retry_after(&date, now), Some(now + 30 * 60_000));
+        // A provider cannot hold the site off for more than six hours.
+        assert_eq!(retry_after("31536000", now), Some(now + 6 * HOUR_MS));
         assert_eq!(
-            DateTime::parse_from_rfc2822(&date)
-                .unwrap()
-                .timestamp_millis(),
-            1_793_534_400_000
+            retry_after("Fri, 01 Jan 2100 00:00:00 GMT", now),
+            Some(now + 6 * HOUR_MS)
         );
+        assert_eq!(retry_after("soon", now), None);
+        // Hours too far out to hold are refused, not wrapped.
+        assert!(steps(&[u64::MAX - 10]).is_err());
     }
 
     #[derive(Default)]
@@ -439,10 +520,15 @@ mod tests {
                 get(|State(seen): State<Arc<Mutex<Seen>>>, Query(query): Query<HashMap<String, String>>, headers: HeaderMap| async move {
                     let mut seen = seen.lock().unwrap();
                     seen.agents.push(headers[header::USER_AGENT].to_str().unwrap().to_owned());
-                    let refused = query.get("latitude").is_some_and(|l| l == "91.00");
+                    let latitude = query.get("latitude").cloned().unwrap_or_default();
                     seen.queries.push(query);
-                    if refused {
-                        return (StatusCode::BAD_REQUEST, r#"{"error":true,"reason":"Latitude must be in range of -90 to 90°. Given: 91.0."}"#).into_response();
+                    if latitude == "91.00" {
+                        return (StatusCode::BAD_REQUEST, r#"{"error":true,"reason":"Latitude must be in range of -90 to 90°. Given: 91.0.\u001b[31m"}"#).into_response();
+                    }
+                    if latitude == "1.00" {
+                        let mut answer = HeaderMap::new();
+                        answer.insert(header::RETRY_AFTER, "120".parse().unwrap());
+                        return (StatusCode::TOO_MANY_REQUESTS, answer, "busy").into_response();
                     }
                     OPEN_METEO.into_response()
                 }),
@@ -456,7 +542,9 @@ mod tests {
                     seen.queries.push(query);
                     let mut answer = HeaderMap::new();
                     answer.insert(header::EXPIRES, "Sun, 01 Nov 2026 12:30:00 GMT".parse().unwrap());
-                    if since.is_some() {
+                    answer.insert(header::LAST_MODIFIED, "Sun, 01 Nov 2026 11:00:00 GMT".parse().unwrap());
+                    // Only its own Last-Modified, as sent, earns "not modified".
+                    if since.as_deref() == Some("Sun, 01 Nov 2026 11:00:00 GMT") {
                         return (StatusCode::NOT_MODIFIED, answer).into_response();
                     }
                     (answer, MET_NORWAY).into_response()
@@ -483,31 +571,52 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            matches!(&fetched, Fetched::New { hours, refresh_after_ms: None } if hours.len() == 3)
+            matches!(&fetched, Fetched::New { hours, refresh_after_ms: None, last_modified: None } if hours.len() == 3)
         );
+        // The provider's reason, printable only.
         let refused = client
             .fetch(ForecastProvider::OpenMeteo, 91.0, 0.0, None)
             .await
             .unwrap_err();
         assert_eq!(
-            refused,
-            "Open-Meteo returned an error: Latitude must be in range of -90 to 90°. Given: 91.0."
+            refused.message,
+            "Open-Meteo returned an error: Latitude must be in range of -90 to 90°. Given: 91.0.[31m"
         );
+        let busy = client
+            .fetch(ForecastProvider::OpenMeteo, 1.0, 0.0, None)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            busy.message,
+            "Open-Meteo returned an error: 429 Too Many Requests"
+        );
+        let wait = busy.retry_after_ms.unwrap() - now_ms();
+        assert!((100_000..=120_000).contains(&wait), "{wait}");
 
         let expires = 1_793_536_200_000;
         let fetched = client
             .fetch(ForecastProvider::MetNorway, 59.91, 10.75, None)
             .await
             .unwrap();
-        assert!(
-            matches!(&fetched, Fetched::New { hours, refresh_after_ms: Some(at) } if hours.len() == 3 && *at == expires)
+        let Fetched::New {
+            hours,
+            refresh_after_ms,
+            last_modified,
+        } = &fetched
+        else {
+            panic!("{fetched:?}");
+        };
+        assert_eq!((hours.len(), *refresh_after_ms), (3, Some(expires)));
+        assert_eq!(
+            last_modified.as_deref(),
+            Some("Sun, 01 Nov 2026 11:00:00 GMT")
         );
         let again = client
             .fetch(
                 ForecastProvider::MetNorway,
                 59.91,
                 10.75,
-                Some(1_793_534_400_000),
+                last_modified.as_deref(),
             )
             .await
             .unwrap();
@@ -528,8 +637,8 @@ mod tests {
         );
         assert_eq!(
             (
-                seen.queries[2]["lat"].as_str(),
-                seen.queries[2]["lon"].as_str()
+                seen.queries[3]["lat"].as_str(),
+                seen.queries[3]["lon"].as_str()
             ),
             ("59.91", "10.75")
         );
@@ -539,7 +648,7 @@ mod tests {
         );
         assert_eq!(
             seen.since,
-            vec![None, Some("Sun, 01 Nov 2026 12:00:00 GMT".to_owned())]
+            vec![None, Some("Sun, 01 Nov 2026 11:00:00 GMT".to_owned())]
         );
     }
 
@@ -554,8 +663,10 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            error.starts_with("PSF Guard could not reach Open-Meteo"),
-            "{error}"
+            error
+                .message
+                .starts_with("PSF Guard could not reach Open-Meteo"),
+            "{error:?}"
         );
     }
 }
