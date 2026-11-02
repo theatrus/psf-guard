@@ -39,6 +39,13 @@ function Field({ id, label, value, onChange, disabled, unit, step = 'any' }: {
 }
 
 /** Optics, site and limits for the rig behind one database. */
+
+const MODE_LABEL = { target_scheduler: 'Target Scheduler', director: 'Director' } as const;
+
+const MODE_HELP = {
+  target_scheduler: "Target Scheduler picks this rig's work from its database: run its instruction in the rig's N.I.N.A. sequence. Night plans predict its choices, and a night changes its settings.",
+  director: "Director's N.I.N.A. plugin picks this rig's work from the plans activated on it: run the Director instruction in the rig's sequence. Night plans show Director's selection, and a night takes overrides.",
+} as const;
 export default function RigProfileCard({ slug }: { slug: string }) {
   const id = useId();
   const [tab, setTab] = useState<Tab>('optics');
@@ -175,6 +182,20 @@ export default function RigProfileCard({ slug }: { slug: string }) {
     <div className="rig-setup-content">
     <form onSubmit={submit} className="rig-profile-form" hidden={tab === 'collaboration'}>
       <div {...workspacePanel(id, 'optics', tab)}>
+      <fieldset disabled={disabled}>
+        <legend>Mode</legend>
+        <div className="rig-profile-mode" role="radiogroup" aria-label="Who runs this rig">
+          {(['target_scheduler', 'director'] as const).map(mode => <label key={mode}>
+            <input type="radio" name={`${slug}-mode`} value={mode} checked={(form.mode || data.mode.runtime) === mode} onChange={() => update({ mode })} />
+            {MODE_LABEL[mode]}
+          </label>)}
+        </div>
+        <p className="director-muted">{MODE_HELP[form.mode || data.mode.runtime]}{form.mode === '' && ` Not set yet: this is PSF Guard's guess from what the rig has reported. Choose one to set it.`}</p>
+        {(form.mode || data.mode.runtime) === 'director' && <ul className="rig-profile-needs" aria-label="What Director needs">
+          <li data-done={data.mode.paired}>{data.mode.paired ? 'The N.I.N.A. Director plugin is paired with this rig.' : 'Pair the N.I.N.A. Director plugin with this rig. Pairing sets this mode by itself.'}</li>
+          <li data-done={data.mode.equipment}>{data.mode.equipment ? 'The plugin has reported the rig\'s equipment.' : 'The plugin reports the rig\'s equipment once paired; until then, Director\'s schedule uses the settings its templates name.'}</li>
+        </ul>}
+      </fieldset>
       <fieldset disabled={disabled}>
         <legend>Optics</legend>
         <p className="director-muted rig-profile-source">{describeSource(form.opticsSource ?? data.profile.optics?.source, data.profile.optics?.reported_at_ms)}

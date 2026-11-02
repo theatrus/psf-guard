@@ -91,8 +91,11 @@ export interface DirectorRigProfile {
   configuration: DirectorReported<unknown> | null;
   /** The Sync peer holding this rig's real database; null when it is on this server. */
   peer_id: string | null;
+  /** Who picks the rig's work, once set in Rig setup or by pairing a plugin. */
+  mode?: DirectorRigMode | null;
   updated_at_ms: number;
 }
+export type DirectorRigMode = 'target_scheduler' | 'director';
 export interface DirectorRigProfileView {
   rig: DirectorIdentity;
   profile: DirectorRigProfile;
@@ -101,6 +104,15 @@ export interface DirectorRigProfileView {
     optics: DirectorReported<DirectorOptics> | null;
     site: DirectorReported<DirectorSite> | null;
     field_of_view: DirectorFieldOfView | null;
+  };
+  /** Who picks the rig's work, and what Director needs to run it. */
+  mode: {
+    /** The mode set; null while PSF Guard guesses. */
+    set: DirectorRigMode | null;
+    /** The mode night plans use: the set one, or the guess. */
+    runtime: DirectorRigMode;
+    paired: boolean;
+    equipment: boolean;
   };
 }
 export interface DirectorEdited<T> { value: T; source: DirectorSource }
@@ -112,6 +124,8 @@ export interface DirectorRigProfileEdit {
   sky_quality: DirectorEdited<DirectorSkyQuality> | null;
   limits: DirectorEdited<DirectorLimits>;
   peer_id: string | null;
+  /** Left out keeps the mode, null returns the rig to the guess. */
+  mode?: DirectorRigMode | null;
 }
 
 export interface DirectorSurvey {

@@ -60,8 +60,11 @@
     with it. These last until changed back, for every night. See
     [Change a Target Scheduler rig's settings](../DIRECTOR.md#change-a-target-scheduler-rigs-settings).
 
-  A site's new **Time zone** under **Settings › Presets › Sites** sets the
-  clock marks and overrides are entered and shown in.
+  **Mode** in the rig's setup sets who runs it, Target Scheduler or
+  Director; until it is set, PSF Guard guesses from what the rig has
+  reported, and pairing a Director plugin sets it to Director. A site's new
+  **Time zone** under **Settings › Presets › Sites** sets the clock marks
+  and overrides are entered and shown in.
 - **Visibility** in a plan's workspace estimates the nights a rig needs
   with the marks and the forecast counted, and shows each night's clear
   hours and marks. Once the plan is activated on a rig, it also shows the

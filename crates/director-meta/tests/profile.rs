@@ -146,3 +146,41 @@ fn invalid_parts_are_refused_before_anything_is_written() {
         "H-alpha"
     );
 }
+
+#[test]
+fn a_rigs_mode_is_set_whatever_its_profile_holds_and_reads_back() {
+    use psf_guard_director_meta::profile::RigMode;
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("meta.sqlite");
+    let mut store = MetaStore::create(&path).unwrap();
+    let rig = store.create_rig(Uuid::new_v4(), "RedCat").unwrap();
+    // A rig without a profile gets one, with the mode set.
+    let saved = store
+        .set_rig_mode(rig.id, RigMode::Director, 1_000)
+        .unwrap();
+    assert_eq!((saved.mode, saved.revision), (Some(RigMode::Director), 1));
+    // Setting the same mode again changes nothing.
+    assert_eq!(
+        store
+            .set_rig_mode(rig.id, RigMode::Director, 2_000)
+            .unwrap()
+            .revision,
+        1
+    );
+    let mut edited = saved.clone();
+    edited.mode = Some(RigMode::TargetScheduler);
+    let edited = store.save_rig_profile(&edited, 1).unwrap();
+    assert_eq!(edited.revision, 2);
+    drop(store);
+    let store = MetaStore::open(&path).unwrap();
+    assert_eq!(
+        store.rig_profile(rig.id).unwrap().unwrap().mode,
+        Some(RigMode::TargetScheduler)
+    );
+    // A profile written before modes reads with none set.
+    let unset = RigProfile::empty(rig.id, 1);
+    assert_eq!(unset.mode, None);
+    assert!(!serde_json::to_string(&unset).unwrap().contains("mode"));
+    assert_eq!("director".parse::<RigMode>().unwrap(), RigMode::Director);
+    assert_eq!(RigMode::TargetScheduler.to_string(), "target_scheduler");
+}

@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import path from 'node:path';
 import { applyRealSchema } from '../e2e/fixtures/sync';
+import { openSettings } from '../e2e/helpers';
 import { shot } from './nightsFixtures';
 
 const json = async (response: Awaited<ReturnType<APIRequestContext['post']>>) => {
@@ -60,12 +61,11 @@ test('a Director rig\'s night takes overrides, planned before they are saved', a
     await expect(dialog.getByText(/^Activated/).first()).toBeVisible();
     await page.keyboard.press('Escape');
 
-    // Director drives the rig: a paired plugin reports the equipment, and
-    // the rig runs an enabled workload policy.
+    // Director drives the rig: a paired plugin reports the equipment.
     const instance = (await json(await request.get('/api/director/v1/status'))).instance_id as string;
     const profileId = randomUUID();
     const token = await json(await request.post(`/api/director/v1/rigs/${rig}/pairing-token`, { data: { coordinator_instance_id: instance, catalog_id: catalog } }));
-    const client = await json(await request.post('/api/director/v1/pair', { data: { protocol_version: 1, pairing_token: token.pairing_token, profile_id: profileId, client_name: 'NINA' } }));
+    await json(await request.post('/api/director/v1/pair', { data: { protocol_version: 1, pairing_token: token.pairing_token, profile_id: profileId, client_name: 'NINA' } }));
     const configuration = {
       rig_id: rig, id: 'config-1', camera_id: 'camera-1', filter_wheel_id: 'wheel-1', filters: [{ id: 'filter-2', position: 2 }],
       binning_modes: [{ x: 1, y: 1 }], readout_modes: [0], gain: { support: 'range', minimum: 0, maximum: 200 },
@@ -76,13 +76,21 @@ test('a Director rig\'s night takes overrides, planned before they are saved', a
       optics: { sensor_width_px: 6248, sensor_height_px: 4176, pixel_size_um: 3.76, focal_length_mm: 749, aperture_mm: 107, rotation: { mode: 'rotator' } },
       site, horizon: null, limits: null, reported_at_ms: Date.now(),
     } }));
+    // Pairing a Director plugin set the rig's mode.
     const reported = await json(await request.get(`/api/director/v1/catalogs/${slug}/rig/profile`));
-    const project = (await json(await request.get(`/api/director/v1/catalogs/${slug}/mappings`))).items[0].project_id;
-    await json(await request.put(`/api/director/v1/rigs/${rig}/workload-policy`, { data: {
-      coordinator_instance_id: instance, expected_revision: 0,
-      policy: { rig_id: rig, catalog_id: catalog, client_id: client.client_id, profile_id: profileId, profile_revision: reported.profile.revision,
-        configuration_id: 'config-1', project_ids: [project], enabled: true, revision: 1 },
-    } }));
+    expect(reported.mode).toEqual({ set: 'director', runtime: 'director', paired: true, equipment: true });
+    // Rig setup shows the mode and what Director needs there.
+    await openSettings(page);
+    const settingsPage = page.locator('.tauri-settings');
+    await settingsPage.getByRole('tab', { name: 'Overview', exact: true }).click();
+    await settingsPage.getByRole('button', { name: 'Open Director rig' }).click();
+    await settingsPage.getByRole('tab', { name: 'Rig setup', exact: true }).click();
+    const mode = settingsPage.getByRole('group', { name: 'Mode' });
+    await expect(mode.getByRole('radio', { name: 'Director' })).toBeChecked();
+    await expect(mode.getByRole('list', { name: 'What Director needs' })).toContainText('The N.I.N.A. Director plugin is paired with this rig.');
+    await expect(mode).not.toContainText('Not set yet');
+    await shot(mode, 'rig-mode', name => testInfo.outputPath(name), false);
+    await settingsPage.getByRole('button', { name: 'Close settings' }).click();
 
     // Ten days on, so the night is always ahead.
     const ahead = new Date(Date.now() + 10 * 86_400_000);

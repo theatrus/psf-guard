@@ -440,15 +440,23 @@ struct RigInput {
     warnings: Vec<String>,
 }
 
-/// Open question 1 of the design, until rig modes exist: a rig that
-/// reported its equipment and runs an enabled workload policy is
-/// Director's; every other rig is Target Scheduler's. Overrides follow the
-/// same rule.
+/// Who picks the rig's work: the mode set in Rig setup, or by pairing a
+/// Director plugin. Until one is set, a guess (open question 1 of the
+/// design): a rig that reported its equipment and runs an enabled workload
+/// policy is Director's, and every other rig Target Scheduler's. Overrides
+/// and Target Scheduler settings follow it.
 pub(super) fn runtime_of(
     store: &MetaStore,
     rig: Uuid,
     profile: Option<&RigProfile>,
 ) -> Result<Runtime, StoreError> {
+    match profile.and_then(|profile| profile.mode) {
+        Some(psf_guard_director_meta::profile::RigMode::Director) => return Ok(Runtime::Director),
+        Some(psf_guard_director_meta::profile::RigMode::TargetScheduler) => {
+            return Ok(Runtime::TargetScheduler)
+        }
+        None => {}
+    }
     Ok(match (profile, store.workload_policy(rig)?) {
         (Some(profile), Some(policy)) if profile.configuration.is_some() && policy.enabled => {
             Runtime::Director

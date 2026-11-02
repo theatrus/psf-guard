@@ -60,20 +60,102 @@ pub(super) async fn drive_with_director(a: &Activated) {
         "horizon": null, "limits": null, "reported_at_ms": 1_700_000_000_000u64,
     }), None).await;
     assert_eq!(status, StatusCode::OK, "{reported}");
-    // The runtime rule reads only whether the policy is on; commissioning
-    // one through the API needs a paired plugin, which this fixture lacks.
-    let policy = json!({
-        "rig_id": a.rig, "catalog_id": a.rig, "client_id": Uuid::new_v4(), "profile_id": Uuid::new_v4(),
-        "profile_revision": 1, "configuration_id": configuration["id"], "project_ids": [a.project],
-        "enabled": true, "revision": 1,
+    set_mode(a, Some("director")).await;
+}
+
+/// Set the rig's mode, as Rig setup or pairing does.
+pub(super) async fn set_mode(a: &Activated, mode: Option<&str>) {
+    let mode = mode.map(|m| {
+        m.parse::<psf_guard_director_meta::profile::RigMode>()
+            .unwrap()
     });
-    Connection::open(a.f._dir.path().join("meta.sqlite"))
-        .unwrap()
-        .execute(
-            "INSERT INTO workload_policy VALUES(?1,?2)",
-            rusqlite::params![a.rig.to_string(), policy.to_string()],
+    let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+    let mut profile = store.rig_profile(a.rig).unwrap().unwrap();
+    let revision = profile.revision;
+    profile.mode = mode;
+    store.save_rig_profile(&profile, revision).unwrap();
+}
+
+/// Rig setup's mode: left out of an edit it stays, `null` returns the rig
+/// to PSF Guard's guess, and a mode sets it. The view says which applies
+/// and what Director needs.
+#[tokio::test]
+async fn rig_setup_sets_the_mode_keeps_it_unless_told_and_says_what_director_needs() {
+    let a = activated().await;
+    let get = || async {
+        let (_, view) = call(
+            &a.f.app,
+            "GET",
+            "/catalogs/rig/rig/profile",
+            Value::Null,
+            None,
         )
-        .unwrap();
+        .await;
+        view["data"].clone()
+    };
+    let edit = |view: &Value, mode: Option<Option<&str>>| {
+        let profile = &view["profile"];
+        let mut body = json!({
+            "expected_revision": profile["revision"],
+            "optics": null, "site": null, "horizon": null, "sky_quality": null,
+            "limits": {"value": profile["limits"]["value"], "source": {"kind": "manual"}},
+        });
+        if let Some(mode) = mode {
+            body["mode"] = mode.map_or(Value::Null, |m| json!(m));
+        }
+        body
+    };
+    let first = get().await;
+    assert!(first["profile"]["mode"].is_null());
+    assert_eq!(
+        first["mode"],
+        json!({"set": null, "runtime": "target_scheduler", "paired": false, "equipment": false})
+    );
+    let (status, set) = call(
+        &a.f.app,
+        "PUT",
+        "/catalogs/rig/rig/profile",
+        edit(&first, Some(Some("director"))),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{set}");
+    assert_eq!(set["data"]["mode"]["set"], "director");
+    assert_eq!(set["data"]["mode"]["runtime"], "director");
+    // An edit that leaves the mode out keeps it.
+    let (_, kept) = call(
+        &a.f.app,
+        "PUT",
+        "/catalogs/rig/rig/profile",
+        edit(&set["data"], None),
+        None,
+    )
+    .await;
+    assert_eq!(kept["data"]["mode"]["set"], "director");
+    // `null` returns the rig to the guess.
+    let (_, guessed) = call(
+        &a.f.app,
+        "PUT",
+        "/catalogs/rig/rig/profile",
+        edit(&kept["data"], Some(None)),
+        None,
+    )
+    .await;
+    assert!(guessed["data"]["mode"]["set"].is_null(), "{guessed}");
+    assert_eq!(guessed["data"]["mode"]["runtime"], "target_scheduler");
+    let (status, _) = call(
+        &a.f.app,
+        "PUT",
+        "/catalogs/rig/rig/profile",
+        {
+            let mut body = edit(&guessed["data"], None);
+            body["mode"] = json!("autopilot");
+            body
+        },
+        None,
+    )
+    .await;
+    assert!(status.is_client_error());
 }
 
 fn pull_path(a: &Activated) -> String {
@@ -541,13 +623,8 @@ async fn a_rig_no_longer_directors_drops_its_overrides_and_may_clear_them() {
         );
     }
 
-    Connection::open(a.f._dir.path().join("meta.sqlite"))
-        .unwrap()
-        .execute(
-            "UPDATE workload_policy SET payload=json_set(payload,'$.enabled',json('false')) WHERE rig_id=?1",
-            [a.rig.to_string()],
-        )
-        .unwrap();
+    // Rig setup sets the rig back to Target Scheduler.
+    set_mode(&a, Some("target_scheduler")).await;
     let plain = pull(&a).await;
     let assignment = &plain["program"]["assignment"];
     let whole = (

@@ -40,7 +40,8 @@ async fn native_evidence_is_staged_and_only_operator_review_changes_profile() {
         "configuration":program.configuration,"filter_names":{"ha":"H-alpha"}});
     let path = format!("/rigs/{rig}/equipment-reports");
     let accept = format!("{path}/{client}/accept");
-    let review = json!({"coordinator_instance_id":instance,"catalog_id":catalog,"report_id":report,"expected_revision":0});
+    // Pairing made the rig's profile, to set its mode to Director.
+    let review = json!({"coordinator_instance_id":instance,"catalog_id":catalog,"report_id":report,"expected_revision":1});
     assert_ne!(
         call(&app, "POST", &path, input.clone(), None).await.0,
         StatusCode::OK
@@ -59,11 +60,20 @@ async fn native_evidence_is_staged_and_only_operator_review_changes_profile() {
     assert_eq!(ack["data"]["report_id"], report.to_string());
     assert!(ack["data"]["accepted_revision"].is_null());
     let service = state.director.clone().unwrap();
-    assert!(service
+    // Staged, not applied: the profile pairing made holds no equipment.
+    let paired = service
         .query(move |s| s.rig_profile(rig))
         .await
         .unwrap()
-        .is_none());
+        .unwrap();
+    assert_eq!(
+        (paired.revision, paired.configuration.is_none(), paired.mode),
+        (
+            1,
+            true,
+            Some(psf_guard_director_meta::profile::RigMode::Director)
+        )
+    );
     assert_eq!(
         client_call(&app, "GET", &path, Value::Null, token, Some(profile))
             .await
@@ -91,13 +101,13 @@ async fn native_evidence_is_staged_and_only_operator_review_changes_profile() {
     assert_eq!(listed["data"].as_array().unwrap().len(), 1);
     let (code, accepted) = call(&app, "POST", &accept, review.clone(), None).await;
     assert_eq!(code, StatusCode::OK, "{accepted}");
-    assert_eq!(accepted["data"]["revision"], 1);
+    assert_eq!(accepted["data"]["revision"], 2);
     assert_eq!(
         call(&app, "POST", &accept, review, None).await.0,
         StatusCode::OK
     );
     let (_, retry) = client_call(&app, "POST", &path, input, token, Some(profile)).await;
-    assert_eq!(retry["data"]["accepted_revision"], 1);
+    assert_eq!(retry["data"]["accepted_revision"], 2);
     assert_eq!(
         call(
             &app,

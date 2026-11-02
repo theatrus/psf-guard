@@ -969,10 +969,25 @@ card shows the file so a stale header is never mistaken for a measurement.
 Every section shows where its values came from: frame headers, set by hand, or
 reported by the plugin. The field of view and pixel scale update as you type.
 
+**Mode** at the top of the card says who picks the rig's work: **Target
+Scheduler**, from the rig's database, or **Director**, through its N.I.N.A.
+plugin. Night plans schedule the rig by its mode, and it decides whether a
+night takes Director overrides or Target Scheduler settings (see [Who
+decides a rig's night](#who-decides-a-rigs-night)). Until a mode is set, the
+card shows PSF Guard's guess and says it is one: a rig that has reported its
+equipment and runs an enabled workload policy is Director's, and every
+other rig Target Scheduler's. Pairing a Director plugin with the rig sets
+its mode to Director. With Director chosen, the card lists what Director
+needs there: the plugin paired, and the rig's equipment reported. The mode
+grants the plugin nothing, and N.I.N.A. still runs whichever instruction
+the rig's sequence holds: Target Scheduler's or Director's.
+
+![Rig setup's Mode set to Director, with the plugin paired and the rig's equipment reported](images/rig-mode.png)
+
 | Method | Route | Body or query |
 | --- | --- | --- |
 | GET | `/catalogs/{slug}/rig/profile` | The rig, its profile (revision 0 when nothing is saved), the computed `field_of_view`, and header-derived `defaults`. `404` until planning is enabled on the database. |
-| PUT | `/catalogs/{slug}/rig/profile` | `expected_revision` plus `optics`, `site`, `horizon`, `sky_quality` (each `{value, source}` or `null`), `limits`, and `peer_id` (a registered Sync peer or `null`). Sources may be `manual` or `frame_headers`; `409` when the revision moved, `400` for a peer this server does not know. The plugin's configuration is kept as stored. |
+| PUT | `/catalogs/{slug}/rig/profile` | `expected_revision` plus `optics`, `site`, `horizon`, `sky_quality` (each `{value, source}` or `null`), `limits`, `peer_id` (a registered Sync peer or `null`), and an optional `mode` (`target_scheduler` or `director`; `null` returns the rig to the guess, and left out keeps the mode). Sources may be `manual` or `frame_headers`; `409` when the revision moved, `400` for a peer this server does not know. The plugin's configuration is kept as stored. Both routes return `mode`: the mode `set` (`null` while guessed), the `runtime` night plans use, and whether the plugin is `paired` and its `equipment` reported. |
 | PUT | `/rigs/{rig}/equipment` | Plugin report: `coordinator_instance_id`, `catalog_id`, core `configuration`, `optics`, optional `site`, `horizon` and `limits`, and `reported_at_ms`. All three identities must match this server's binding or the call returns `403`. An identical report does not bump the revision. |
 
 **Remote site** picks the Sync peer that holds the rig's real database when
@@ -2025,10 +2040,10 @@ safety monitor and N.I.N.A. still decide on the night.
 ### Who decides a rig's night
 
 The night's title says who picks the rig's work: **Director decides** or
-**Target Scheduler decides**. Until rig modes exist, a rig counts as
-Director's once it has reported its equipment and runs an enabled workload
-policy; every other rig is Target Scheduler's. What the night offers to
-change follows from it: a Director rig takes overrides for one night, and a
+**Target Scheduler decides**, from the rig's **Mode** in [Rig
+setup](#rig-profile), or PSF Guard's guess until one is set. Pairing a
+Director plugin sets the mode to Director. What the night offers to change
+follows from it: a Director rig takes overrides for one night, and a
 Target Scheduler rig has its Target Scheduler settings.
 
 ### Override a Director rig's night

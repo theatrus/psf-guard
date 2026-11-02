@@ -10,6 +10,44 @@ use psf_guard_director_core::{
     windows::MeridianExclusion,
 };
 
+/// Who picks a rig's work: Target Scheduler from the rig's database, or
+/// Director through its N.I.N.A. plugin. Night plans schedule the rig with
+/// it, and it decides whether the rig takes night overrides or Target
+/// Scheduler settings. It grants the plugin nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RigMode {
+    TargetScheduler,
+    Director,
+}
+
+impl RigMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::TargetScheduler => "target_scheduler",
+            Self::Director => "director",
+        }
+    }
+}
+
+impl fmt::Display for RigMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for RigMode {
+    type Err = Error;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        match text {
+            "target_scheduler" => Ok(Self::TargetScheduler),
+            "director" => Ok(Self::Director),
+            _ => Err(Error::InvalidInput),
+        }
+    }
+}
+
 /// Where a value came from, so the UI can say "from FITS headers" or
 /// "reported by N.I.N.A." instead of presenting a guess as a fact.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -81,6 +119,11 @@ pub struct RigProfile {
     /// means the database on this server is the one the rig executes from.
     #[serde(default)]
     pub peer_id: Option<String>,
+    /// Who picks the rig's work, as set in Rig setup or by pairing a
+    /// Director plugin. `None` until set: PSF Guard then guesses from what
+    /// the rig has reported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<RigMode>,
     pub updated_at_ms: u64,
 }
 
@@ -101,6 +144,7 @@ impl RigProfile {
             configuration: None,
             filter_names: Default::default(),
             peer_id: None,
+            mode: None,
             updated_at_ms: now_ms,
         }
     }
@@ -233,6 +277,31 @@ impl MetaStore {
         let next = save_profile(&tx, profile, expected_revision)?;
         tx.commit()?;
         Ok(next)
+    }
+
+    /// Set who picks the rig's work, whatever else the profile holds, as
+    /// pairing a Director plugin does. A rig without a profile gets one.
+    pub fn set_rig_mode(
+        &mut self,
+        rig: Uuid,
+        mode: RigMode,
+        now_ms: u64,
+    ) -> Result<RigProfile, Error> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let stored = read_profile(&tx, rig)?;
+        let revision = stored.as_ref().map_or(0, |profile| profile.revision);
+        let mut next = stored.unwrap_or_else(|| RigProfile::empty(rig, now_ms));
+        if next.mode == Some(mode) {
+            tx.commit()?;
+            return Ok(next);
+        }
+        next.mode = Some(mode);
+        next.updated_at_ms = now_ms;
+        let saved = save_profile(&tx, &next, revision)?;
+        tx.commit()?;
+        Ok(saved)
     }
 }
 

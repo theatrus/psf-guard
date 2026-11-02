@@ -8,7 +8,7 @@ use psf_guard_director_core::{
     program::Configuration,
     visibility::{Horizon, Site},
 };
-use psf_guard_director_meta::profile::{Limits, Reported, RigProfile, SkyQuality, Source};
+use psf_guard_director_meta::profile::{Limits, Reported, RigMode, RigProfile, SkyQuality, Source};
 use rusqlite::{Connection, OpenFlags};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -22,6 +22,8 @@ pub(super) struct ProfileView {
     field_of_view: Option<FieldOfView>,
     /// Header-derived suggestions for the form. Shown, never applied silently.
     defaults: Defaults,
+    /// Who picks the rig's work, and what Director needs to run it.
+    mode: ModeView,
 }
 
 #[derive(Default, Serialize)]
@@ -45,6 +47,17 @@ pub(super) struct Edit {
     /// the rig executes from the database on this server.
     #[serde(default)]
     peer_id: Option<String>,
+    /// Who picks the rig's work. Left out keeps the stored mode, `null`
+    /// returns the rig to PSF Guard's guess, and a mode sets it.
+    #[serde(default, deserialize_with = "present")]
+    mode: Option<Option<RigMode>>,
+}
+
+/// A field that is present, `null` included, as opposed to left out.
+fn present<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(
+    deserializer: D,
+) -> Result<Option<Option<T>>, D::Error> {
+    Option::<T>::deserialize(deserializer).map(Some)
 }
 
 #[derive(Deserialize)]
@@ -78,17 +91,43 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-fn view(rig: NamedIdentity, profile: RigProfile, defaults: Defaults) -> ProfileView {
+/// Who picks the rig's work, and what Director needs to run it.
+#[derive(Serialize)]
+pub(super) struct ModeView {
+    /// The mode set in Rig setup or by pairing; `None` while PSF Guard
+    /// guesses.
+    set: Option<RigMode>,
+    /// The mode night plans use: the set one, or the guess.
+    runtime: night_plans::Runtime,
+    /// A Director plugin has paired with the rig.
+    paired: bool,
+    /// The plugin has reported the rig's equipment.
+    equipment: bool,
+}
+
+fn view(
+    store: &MetaStore,
+    rig: NamedIdentity,
+    profile: RigProfile,
+    defaults: Defaults,
+) -> Result<ProfileView, StoreError> {
     let field_of_view = profile
         .optics
         .as_ref()
         .and_then(|optics| optics.value.field_of_view().ok());
-    ProfileView {
+    let mode = ModeView {
+        set: profile.mode,
+        runtime: night_plans::runtime_of(store, rig.id, Some(&profile))?,
+        paired: !store.clients(rig.id)?.is_empty(),
+        equipment: profile.configuration.is_some(),
+    };
+    Ok(ProfileView {
         rig,
         profile,
         field_of_view,
         defaults,
-    }
+        mode,
+    })
 }
 
 pub(super) async fn get(
@@ -98,20 +137,20 @@ pub(super) async fn get(
     let service = enabled(&state)?;
     let catalog = state.get_database(&slug).ok_or(Error::Missing)?;
     let (identity, connection) = file_identity(&service, catalog.clone()).await?;
-    let (rig, profile) = service
+    let mut shown = service
         .clone()
         .with_reader(move |store| {
             let binding = store.catalog_rig(identity.id)?.ok_or(Error::Missing)?;
             let profile = store
                 .rig_profile(binding.rig.id)?
                 .unwrap_or_else(|| RigProfile::empty(binding.rig.id, now_ms()));
-            Ok::<_, Error>((binding.rig, profile))
+            Ok::<_, Error>(view(store, binding.rig, profile, Defaults::default())?)
         })
         .await?;
     // The first header search of a database scans its image folders; no
     // store gate is held while it runs.
-    let defaults = blocking(move || header_defaults(&catalog, &connection)).await?;
-    Ok(Json(ApiResponse::success(view(rig, profile, defaults))))
+    shown.defaults = blocking(move || header_defaults(&catalog, &connection)).await?;
+    Ok(Json(ApiResponse::success(shown)))
 }
 
 pub(super) async fn put(
@@ -174,9 +213,12 @@ pub(super) async fn put(
             next.limits = stamp(Some(edit.limits), previous.map(|p| &p.limits), now)
                 .expect("limits are always present");
             next.peer_id = edit.peer_id;
+            if let Some(mode) = edit.mode {
+                next.mode = mode;
+            }
             next.updated_at_ms = now;
             let saved = store.save_rig_profile(&next, edit.expected_revision)?;
-            Ok(view(rig, saved, Defaults::default()))
+            view(store, rig, saved, Defaults::default())
         })
         .await
         .map(|value| Json(ApiResponse::success(value)))
@@ -238,7 +280,7 @@ pub(super) async fn report_equipment(
             }
             next.updated_at_ms = now_ms();
             let saved = store.save_rig_profile(&next, revision)?;
-            Ok(view(binding.rig, saved, Defaults::default()))
+            view(store, binding.rig, saved, Defaults::default())
         })
         .await
         .map_err(|error| match error {

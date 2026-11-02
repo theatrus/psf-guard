@@ -689,7 +689,8 @@ refused.
   - Schema 33 (Phase 2) adds `night_availability`, keyed by scope, scope
     id, night date and source, with state, note, revision and update
     time, and its windows in a child table.
-  - Schema 35 (Phase 6) adds `night_override`, keyed by rig and night
+  - Schema 35 (Phase 6) adds a rig profile's optional `mode`, and
+    `night_override`, keyed by rig and night
     date, with its ordered entries as JSON and the revision that wrote
     them, and `night_override_rig`, one write counter per rig, so a night
     cleared and written again never reuses a revision. A write is checked
@@ -948,8 +949,10 @@ simulation and for the per-rig night preview through the shared engine.
 1. **Runtime before the rig mode exists.** Proposal: Director for a rig
    with reported equipment and an enabled workload policy, and Target
    Scheduler otherwise. Once the rig mode is built, it decides.
-   *Settled: built as proposed, until rig modes exist; overrides follow
-   the same rule, and a Target Scheduler rig refuses them.*
+   *Settled with Phase 6: Rig setup sets a hard mode, Target Scheduler or
+   Director, stored on the rig profile, and pairing a Director plugin sets
+   it to Director. The proposed rule is the guess until a mode is set.
+   Overrides and Target Scheduler settings follow the mode.*
 2. **N.I.N.A. profiles.** One database can hold projects for several
    profiles, and Target Scheduler plans per profile. Proposal: plan the
    profile the rig profile records. A database with several profiles and

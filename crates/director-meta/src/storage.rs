@@ -176,8 +176,9 @@ impl MetaStore {
             if version < 34 {
                 super::site_forecast::create_tables(&tx)?;
             }
-            // Schema 35 adds a Director rig's night overrides, and a site's
-            // time zone, an optional field older payloads read without.
+            // Schema 35 adds a Director rig's night overrides, and two
+            // optional fields older payloads read without: a site's time
+            // zone and a rig's mode.
             if version < 35 {
                 super::night_override::create_tables(&tx)?;
             }
