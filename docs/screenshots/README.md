@@ -8,12 +8,14 @@ state-dependent shots. Capture against the running build and record actual
 state before replacing an image. Existing 0.12 captures below remain historical
 records; their version labels do not verify a 0.13 build.
 
-The November 1 capture pass added 20 Chrome screenshots to the site, including
-four of the six priority feature illustrations. The remaining priority shots
-need an active stack build and a connected remote worker. The
-[capture record](https://github.com/theatrus/psf-guard-docs/blob/main/assets/screenshot-captures.md#013-chrome-captures--november-1-2026)
-records the actual build, state, dimensions and hashes. No live settings,
-grades or processing jobs were changed.
+The November 1 capture passes added 22 screenshots to the site, including
+five of the six priority feature illustrations. The connected remote worker
+and native Mac worker controls are now captured; the remaining priority shot
+needs an active stack build. The
+[capture record](https://github.com/theatrus/psf-guard-docs/blob/main/assets/screenshot-captures.md#013-worker-setup--november-1-2026)
+records the actual build, state, dimensions and hashes. The worker follow-up
+registered and started this Mac with the user's approval; server dispatch
+policies were unchanged, and no processing job was started for the captures.
 
 ## 0.12 screenshot sources
 
