@@ -163,10 +163,17 @@ pub async fn upload_image(
             })?;
         }
         output
-            .sync_all()
+            .flush()
             .await
-            .map_err(|error| AppError::InternalError(format!("syncing uploaded image: {error}")))?;
-        drop(output);
+            .map_err(|error| AppError::InternalError(format!("writing uploaded image: {error}")))?;
+        let output = output.into_std().await;
+        let syncing = |error: &dyn std::fmt::Display| {
+            AppError::InternalError(format!("syncing uploaded image: {error}"))
+        };
+        tokio::task::spawn_blocking(move || seiza_fits::sync_file(&output))
+            .await
+            .map_err(|error| syncing(&error))?
+            .map_err(|error| syncing(&error))?;
 
         if bytes == 0 {
             return Err(AppError::BadRequest("uploaded image is empty".into()));
@@ -684,7 +691,7 @@ fn persist_uploaded_file(
                     destination.display()
                 ))
             })?;
-            sibling.as_file().sync_all().map_err(|copy_error| {
+            seiza_fits::sync_file(sibling.as_file()).map_err(|copy_error| {
                 AppError::InternalError(format!(
                     "syncing the received upload beside {}: {copy_error}",
                     destination.display()

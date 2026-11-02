@@ -709,13 +709,13 @@ pub fn write(
     zip.start_file(MANIFEST, options)?;
     zip.write_all(serde_json::to_string_pretty(&manifest)?.as_bytes())?;
     zip.finish()?;
-    archive_file.as_file().sync_all()?;
+    seiza_fits::sync_file(archive_file.as_file())?;
     let bytes = archive_file.as_file().metadata()?.len();
 
     let name = archive_name(created, plan.scope, trigger);
     let (path, file_name) = persist(archive_file, destination, &name)?;
     if let Ok(directory) = std::fs::File::open(destination) {
-        let _ = directory.sync_all();
+        let _ = seiza_fits::sync_file(&directory);
     }
     drop(staging);
     Ok(Written {

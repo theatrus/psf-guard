@@ -49,7 +49,7 @@ impl Settings {
         let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
         serde_json::to_writer_pretty(&mut temporary, self)?;
         temporary.write_all(b"\n")?;
-        temporary.as_file().sync_all()?;
+        seiza_fits::sync_file(temporary.as_file())?;
         temporary
             .persist(path)
             .with_context(|| format!("saving {}", path.display()))?;

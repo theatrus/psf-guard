@@ -125,7 +125,7 @@ fn download(url: &str, to: &Path) -> Result<()> {
                 }
             }
         }
-        file.sync_all()?;
+        seiza_fits::sync_file(&file)?;
         eprintln!(
             "  {:.0} MB in {:.0} s",
             received as f64 / 1_048_576.0,

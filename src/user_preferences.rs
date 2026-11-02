@@ -359,10 +359,7 @@ impl UserPreferencesRegistry {
             .write_all(b"\n")
             .context("finishing temporary user preferences")?;
         set_private_permissions(temporary.as_file(), temporary.path())?;
-        temporary
-            .as_file()
-            .sync_all()
-            .context("syncing temporary user preferences")?;
+        seiza_fits::sync_file(temporary.as_file()).context("syncing temporary user preferences")?;
         temporary
             .persist(path)
             .map_err(|error| error.error)
