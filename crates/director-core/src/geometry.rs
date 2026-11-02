@@ -254,6 +254,34 @@ impl BoundGeometry {
         })
     }
 
+    /// The bound target and recipe of a goal.
+    pub fn resolve(
+        &self,
+        goal_id: &str,
+    ) -> Result<crate::program::ResolvedGoal<'_>, crate::program::Error> {
+        self.source.resolve(goal_id)
+    }
+
+    /// The priority the geometry ranks a goal at: the objective's, with
+    /// Moon-sensitive work first among equals.
+    pub fn priority(&self, goal_id: &str) -> Option<u32> {
+        self.priorities.get(goal_id).copied()
+    }
+
+    /// The bound assignment with these goals' progress counters, the only
+    /// fields a request may change: accepted, pending and attempts left.
+    pub fn assignment_with_progress(&self, goals: &[crate::Goal]) -> crate::Assignment {
+        let mut assignment = self.source.snapshot().assignment.clone();
+        for goal in &mut assignment.goals {
+            if let Some(current) = goals.iter().find(|g| g.id == goal.id) {
+                goal.accepted = current.accepted;
+                goal.pending = current.pending;
+                goal.attempts_remaining = current.attempts_remaining;
+            }
+        }
+        assignment
+    }
+
     /// Diagnostic evidence only, not an acquisition permit or a replacement
     /// assignment. Source intent and its bounds remain owned by this object.
     pub fn windows(&self, goal_id: &str) -> Option<&[Interval]> {

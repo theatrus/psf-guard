@@ -43,6 +43,7 @@ work. Historical checklists record delivery; they do not track current work.
 - [Calibrated subs](design/calibrated-subs.md)
 - [Color previews and channel processing](design/color-channel-processing.md)
 - [Flat grouping](design/flat-grouping.md)
+- [Night plans: per-rig summaries, schedule previews and availability (proposed)](design/night-plans.md)
 - [Multi-rig views (proposed)](design/multi-rig-views.md)
 
 ## Component-specific guides

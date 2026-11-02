@@ -1,13 +1,16 @@
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { RefreshCw } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import type { DirectorRigStatusView } from '../../api/directorTypes';
+import type { RigNights } from '../../api/nightPlanTypes';
 import { describeNow, errorsOf, formatAge } from './dashboardModel';
 import { retryWhenBusy } from './retry';
 import EarlyBeta from './EarlyBeta';
 import { planHref } from './planAddress';
 import { useDirectorClock } from '../../hooks/useDirectorClock';
+import { formatHours } from './visibilityFormat';
+import { nightHref, plansScheduled } from '../nights/nightsModel';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Director request failed';
 
@@ -21,6 +24,16 @@ export default function DirectorDashboard() {
   const [params] = useSearchParams();
   const statuses = useQuery({ queryKey: ['directorRigStatuses'], queryFn: apiClient.getDirectorRigStatuses, retry: retryWhenBusy, retryDelay: 1200, refetchInterval: 15_000, refetchOnWindowFocus: true });
   const now = useDirectorClock();
+  // Tonight for each rig: its clear dark hours and what it plans to shoot.
+  const tonight = useQuery({
+    queryKey: ['nightPlansTonight'],
+    queryFn: () => apiClient.getNightPlans({ nights: 1, schedule_nights: 1 }),
+    retry: retryWhenBusy,
+    retryDelay: 1200,
+    staleTime: 5 * 60_000,
+    refetchInterval: 10 * 60_000,
+    refetchOnWindowFocus: false,
+  });
   const workspaceHref = (projectId: string) => planHref(projectId, params);
   const rows = statuses.data ?? [];
   const age = (at: number | null | undefined) => at ? formatAge(now - at) : 'never';
@@ -33,7 +46,7 @@ export default function DirectorDashboard() {
     {statuses.isError && <p className="director-error" role="alert">{message(statuses.error)}</p>}
     {statuses.isSuccess && rows.length === 0 && <p className="director-muted">No rig yet. Every registered database becomes a rig once the Library lists its plans.</p>}
     {rows.length > 0 && <div className="director-table-scroll"><table className="director-dashboard-table" data-testid="director-dashboard">
-      <thead><tr><th>Rig</th><th>Link</th><th>Now</th><th>Program pull</th><th>Check-in</th><th>Status report</th><th>Assigned</th></tr></thead>
+      <thead><tr><th>Rig</th><th>Link</th><th>Now</th><th>Program pull</th><th>Check-in</th><th>Status report</th><th>Assigned</th><th>Tonight</th></tr></thead>
       <tbody>{rows.map(view => {
         const errors = errorsOf(view);
         return <tr key={view.rig.id} className={`is-${view.connectivity.state}`}>
@@ -56,8 +69,25 @@ export default function DirectorDashboard() {
           <td><span className="director-cell-label">Status report</span>{age(view.contacts.status?.at_ms)}</td>
           <td><span className="director-cell-label">Assigned</span>{view.assignments.length === 0 ? <span className="director-muted">nothing activated</span>
             : view.assignments.map((assignment, index) => <span key={assignment.project.id}>{index > 0 && ', '}<Link to={workspaceHref(assignment.project.id)}>{assignment.project.name}</Link></span>)}</td>
+          <td><span className="director-cell-label">Tonight</span><TonightCell rig={tonight.data?.rigs.find(entry => entry.rig.id === view.rig.id)} pending={tonight.isPending} failed={tonight.isError ? message(tonight.error) : null} /></td>
         </tr>;
       })}</tbody>
     </table></div>}
   </section>;
+}
+
+/** A rig's night under way: its clear dark hours and the plans its
+ *  runtime would shoot, linked to the night on the Nights page. */
+function TonightCell({ rig, pending, failed }: { rig: RigNights | undefined; pending: boolean; failed: string | null }) {
+  const { search } = useLocation();
+  if (failed) return <span className="director-muted" title={failed}>Not planned</span>;
+  if (!rig) return <span className="director-muted">{pending ? 'Planning...' : 'No site'}</span>;
+  const night = rig.nights[0];
+  if (!night) return null;
+  const plans = plansScheduled(rig, night.date);
+  const href = nightHref(rig.rig.id, night.date, search);
+  const clear = night.availability.state === 'unavailable' ? 'not available' : `${formatHours(night.available_dark_hours)} clear`;
+  return <Link to={href} title="Open tonight's schedule on the Nights tab">
+    {clear}{plans.length > 0 ? `: ${plans.slice(0, 2).map(plan => plan.name).join(', ')}${plans.length > 2 ? ` +${plans.length - 2}` : ''}` : night.available_dark_hours > 0 ? ', nothing planned' : ''}
+  </Link>;
 }

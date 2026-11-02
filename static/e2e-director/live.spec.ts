@@ -5,7 +5,7 @@ import { mkdtempSync } from 'node:fs';
 import path from 'node:path';
 import { applyRealSchema } from '../e2e/fixtures/sync';
 
-test('the Live chip opens the Sky with each reporting rig drawn where it points', async ({ page, request }, testInfo) => {
+test('the Rigs tab carries the fleet, opens Live, and shows each rig on the sky where it points', async ({ page, request }, testInfo) => {
   test.setTimeout(60_000);
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
@@ -44,9 +44,23 @@ test('the Live chip opens the Sky with each reporting rig drawn where it points'
 
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.goto('/#/?db=parked-catalog');
-    const chip = page.getByRole('button', { name: 'Live rigs: 2 rigs · 1 exposing' });
+    const chip = page.getByRole('button', { name: 'Rigs: 2 rigs · 1 exposing' });
     await expect(chip).toBeVisible();
+    // Away from Rigs the tab folds to its icon and status dot, like the
+    // other views; the count slides out under the pointer.
+    await page.mouse.move(0, 500);
+    await expect.poll(async () => (await chip.boundingBox())!.width).toBeLessThan(60);
+    const folded = (await chip.boundingBox())!.width;
+    await chip.hover();
+    await expect.poll(async () => (await chip.boundingBox())!.width).toBeGreaterThan(folded + 60);
     await chip.click();
+    await expect(page).toHaveURL(/#\/rigs\?db=parked-catalog$/);
+    await expect(chip).toHaveAttribute('aria-current', 'page');
+    // Live lists every rig, and links to them on the sky.
+    const table = page.getByTestId('director-dashboard');
+    await expect(table.getByText('Live north', { exact: true })).toBeVisible();
+    await page.getByRole('link', { name: 'Show the rigs on the sky' }).click();
+    // The parked scope travels with the link.
     await expect(page).toHaveURL(/#\/sky\?db=parked-catalog&live=1$/);
     const panel = page.getByRole('complementary', { name: 'Live rigs on the sky' });
     await expect(panel.getByText('Live north', { exact: true })).toBeVisible();
@@ -63,14 +77,13 @@ test('the Live chip opens the Sky with each reporting rig drawn where it points'
     await panel.getByRole('button', { name: 'Show Live north on the map' }).click();
     await expect(page.locator('.sky-map')).toHaveAttribute('data-zoom', '4.00');
     await expect(page.locator('.sky-map')).toHaveAttribute('data-center', /^10\.7,41\.3$/);
-    // The full Live table sits under the map; the Live chip in the controls closes it all.
-    await expect(page.getByRole('region', { name: 'Live table' }).getByTestId('director-dashboard')).toBeVisible();
-    // Leaving the Sky leaves Live behind; the Live chip in the controls closes it.
+    // The table is on the Rigs page, not under the map; the list links to it.
+    await expect(page.getByTestId('director-dashboard')).toHaveCount(0);
+    await expect(panel.getByRole('link', { name: "Open the Live table and tonight's plans" })).toHaveAttribute('href', '#/rigs?db=parked-catalog');
+    // The Live chip in the controls takes the rigs off the map.
     await page.locator('.sky-controls').getByRole('button', { name: 'Live', exact: true }).click();
     await expect(page.locator('[data-rig]')).toHaveCount(0);
     await expect(panel).toHaveCount(0);
-    await page.getByRole('button', { name: /^Live rigs/ }).click();
-    await expect(panel).toBeVisible();
     await page.getByRole('button', { name: 'Library', exact: true }).click();
     expect(page.url()).not.toContain('live=1');
     expect(errors).toEqual([]);

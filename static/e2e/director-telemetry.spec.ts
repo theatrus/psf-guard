@@ -18,7 +18,7 @@ for (const width of [1440, 390]) {
         } } } }],
       }],
     } }));
-    await page.goto('/#/sky?live=1');
+    await page.goto('/#/rigs');
     const live = page.getByRole('region', { name: 'Live rigs' });
     await expect(live).toContainText('completed, Autofocus for 2 min, safety Safe (stale');
     // An empty disposable server opens first-run settings over the page.

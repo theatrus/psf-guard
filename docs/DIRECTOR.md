@@ -447,16 +447,21 @@ over the database and target, set apart from the buttons since there is
 nothing to choose. Used on
 a workspace, the picker opens the chosen project's workspace; it also lists
 plans no database takes yet, which open straight into theirs. Every view
-button shows the page you are on the same way, filled. Beside the jobs slot a
-**Live** chip counts the fleet, `2 rigs · 1 exposing`, turns red when a rig
-that used to talk has gone quiet, and opens **Live on the Sky** from any
-view: each reporting rig drawn on the coverage map where it points now, a
-list of the rigs beside the map (choosing one turns the map to it), and the
-full Live table under the map. Rig setup and the exposure template library
-are under **Rig setup** for a database under **Settings → Databases & rigs → Overview**
-and **Settings → Presets → Exposure templates**; a
-read-only viewer cannot open Settings, so Live on the Sky shows them both
-under the table, read only. Choosing a
+button shows the page you are on the same way, filled. **Rigs**, beside
+**Sky**, carries the fleet's status: a dot, red when a rig that used to
+talk has gone quiet, with each rig's state in its tooltip. Like the other
+views it folds to its icon, here with the dot, when it is not the current
+view; the count, such as `2 rigs · 1 exposing`, slides out under the
+pointer and stays while Rigs is open. It opens the **Rigs** page on its
+**Live** tab from any view. The page holds every rig in one place: **Live**, the table of what each rig is doing and plans tonight, and
+**[Nights](#nights)**, what each would shoot over the coming nights. **Show
+the rigs on the sky** turns on the Sky's **Live** view: each reporting rig
+drawn on the coverage map where it points now, with a list of the rigs
+beside the map (choosing one turns the map to it). Rig setup and the
+exposure template library are under **Rig setup** for a database under
+**Settings → Databases & rigs → Overview** and **Settings → Presets →
+Exposure templates**; a read-only viewer cannot open Settings, so **Rigs ›
+Live** shows them both under the table, read only. Choosing a
 project in the Review picker from the Library, Sky or a workspace opens
 Images for it, and the workspace's own URL parameter (`plan`) stays behind, so a
 plan you had open does not follow you into review.
@@ -1784,7 +1789,7 @@ program that does not bind is a `422` with the reason, never a partial pull.
 
 ## Check-in and live status
 
-Early beta. The **Live** table on the Sky reads these reports.
+Early beta. The **Live** table on the Rigs page reads these reports.
 
 | Method | Route | Body or query |
 | --- | --- | --- |
@@ -1866,6 +1871,120 @@ rig from the list to compare sites.
 Times come from the shared core's planning-grade Sun and Moon positions and
 the same horizon and limit rules the rig's geometry applies; they are
 estimates for choosing targets and nights, not the rig's dispatch decision.
+
+## Nights
+
+**Rigs › Nights** shows every rig with a site across the coming nights:
+rigs are rows and nights are columns. Choose the first
+night with **From** and how many with **Nights** (7, 14 or 31); **Tonight**
+returns to the night under way. A chosen date is the same night at every
+rig. Without one, each rig starts with the night under way at its own
+site, and the columns line up by date, so a rig far to the east can be a
+night ahead of one in the west. The chips above the grid hide or show rigs.
+On a phone the grid scrolls inside its own box.
+
+Each cell is one rig's night, from dusk to dawn:
+
+- the clear dark hours, and a bar from dusk to dawn with the clear part
+  filled in;
+- the night's mark: ✕ not available, ◐ limited, ✓ marked clear;
+- the Moon, lit percentage;
+- a dot for each plan the rig would shoot that night, in that plan's colour;
+- the hours it would shoot, or **all done** once every plan has its frames.
+
+![Nights: two rigs across a week, each night's clear hours, Moon and planned plans](images/nights-grid.png)
+
+A rig's work is what Target Scheduler would plan there: the active projects
+of its database's N.I.N.A. profile (the one that owns most projects), with
+each project's limits. Director plans reach a rig through the same rows.
+Darkness in the cells is the Sun below −12°, as in [Visibility](#visibility).
+
+### A night's plans and schedule
+
+Choose a cell to open the night below the grid:
+
+- **Dark**, **Clear**, **Moon** and **Load**: dusk and dawn, the clear
+  hours, the Moon, and how much of what the rig owes fits the clear hours.
+- **The schedule** from the runtime that drives the rig: a timeline from an
+  hour before dusk to an hour after dawn, with a block for each stretch on
+  a target and its filter runs inside. Gaps are shaded by their reason:
+  twilight, not available, Moon, meridian, below limits, all done, or
+  nothing fits. Choose a block to see why that target was chosen.
+- **The plan table**: each plan's targets, the hours and frames they still
+  owe, their hours up and clear that night, the hours the Moon blocks, the
+  peak altitude, the frames planned that night, and the night the plan is
+  done within the range.
+
+![A night's Target Scheduler schedule, with the scores behind the chosen block](images/nights-schedule.png)
+
+A rig whose database Target Scheduler runs gets a prediction of Target
+Scheduler 5's own choices: its stickiness to a target for the project's
+minimum time, twilight per exposure template, Moon avoidance, the meridian
+window and the meridian flip zone, and its scoring rules with each
+project's weights. A chosen block lists every target the planner looked at,
+where each stood (chosen, lower score, not up yet, Moon avoidance and so
+on) and each rule's part in its score. Target Scheduler still decides on
+the rig: change a plan's priority, limits or rule weights in Target
+Scheduler to change the prediction.
+
+- By default the schedule adds time for slews, filter changes, dithers and
+  downloads (90 s per target change, 10 s per filter change, 15 s per dither
+  and 15 s per exposure), and counts planned frames at each plan's
+  acceptance rate so far. Tick **As Target Scheduler's preview** to count
+  exposure time only and every frame as accepted when the project grades,
+  as Target Scheduler's own Scheduler Preview does.
+- **Compare with Director** shows what Director's selection would do with
+  the plans activated on the rig: the same choice the plugin makes,
+  stepped through the night's dark hours. A rig that has not reported its
+  equipment is previewed with the filters, binning and camera settings its
+  templates name; that configuration never reaches the rig.
+
+Frames planned on one night count on the next, so the schedule shows when
+each plan finishes. Nothing is planned in the past: the night under way is
+planned from now, with the frames the rig has taken so far, so each time
+the page refreshes it re-plans the rest of tonight. Tonight's panel puts
+what the rig says it is doing beside its schedule, and a line marks now on
+the timeline. The schedule plans by the site's local mean time, from
+its longitude. It is an estimate of the order of work and roughly when it
+happens, not a promise of clock times.
+
+### Mark a night
+
+With editor access, the night's panel ends with **Mark this night**:
+
+1. Choose **Available**, **Not available**, or **Limited** with the hours
+   that are clear. Leave **From** empty to start at dusk or **To** empty to
+   end at dawn; times after midnight fall the next morning. The times are
+   in your browser's time zone, which the form names: for a rig in another
+   zone, enter its hours as your clock shows them.
+2. Under **For**, choose **This rig only** for the rig (maintenance, a camera
+   away) or **Every rig at** the rig's planning site for the sky (clouds).
+3. Add a note if you like, such as "dome motor" or "high cirrus", and click
+   **Save mark**.
+
+Shift-click another night of the same rig to mark a run of nights at once.
+**Clear mark** returns the chosen nights to the default, which is available.
+A night's clear hours are where the site's mark and the rig's mark agree: a
+rig marked down on a clear night is out, and a cloudy site keeps every rig
+there out. Summaries and both schedules use the marks; a schedule waits out
+time that is not clear.
+
+Marks change night plans only. They never start, stop or block a rig, and
+never reach a program, the plugin, Target Scheduler or N.I.N.A.: the rig's
+safety monitor and N.I.N.A. still decide on the night.
+
+### Tonight on the Live tab
+
+The table on **Rigs › Live** has a **Tonight** column: each rig's clear
+hours tonight and the plans it would shoot. The link opens tonight's
+schedule on the **Nights** tab.
+
+| Method | Route | Body or query |
+| --- | --- | --- |
+| POST | `/night-plans` | Optional `rigs` (ids; none is every rig with a site), `first_night` (`YYYY-MM-DD`: the same first night at every rig), `start_ms` (without `first_night`, each rig's first night is the one under way there at this instant; default now), `nights` (1 to 31, default 7), `schedule_nights` (how many nights from the first to schedule, default 0), `explain` (a scheduled night, `YYYY-MM-DD`, whose blocks list every candidate and its scores), `runtime` (`auto`, `target_scheduler` or `director`; `auto` is the rig's own), `fidelity` (`estimate` or `target_scheduler_preview`), `utc_offset_minutes` (the clock the Target Scheduler emulation plans by; default local mean time) and `plan_from_ms` (schedules plan nothing before it; default now). Per rig: the runtime, the plans it owes with their limits, `nights` (darkness, clear hours, marks, Moon, each target's hours and the load), `schedule` (blocks, gaps, frames per plan and the night each completes, and the assumptions), `mark_revisions` and `warnings`. Writes nothing. A read-only account that may run calculations can call it. |
+| GET | `/night-availability` | `scope` (`site` or `rig`), `id`, `from` and `to` (`YYYY-MM-DD`). The scope's marks and the `revision` to send back with a change. |
+| PUT | `/night-availability/{scope}/{id}` | `expected_revision` and `marks`: up to 62 nights, each a `date`, a `state` (`available`, `unavailable` or `limited`), `windows` (for `limited`: UTC instants inside that night's noon-to-noon span) and an optional `note`. Replaces those nights' marks in one transaction. `409` on a stale revision; `422` for hours outside the night or a scope with no location. |
+| DELETE | `/night-availability/{scope}/{id}` | `expected_revision` and `dates`: returns those nights to the default. |
 
 ## Framing drafts
 

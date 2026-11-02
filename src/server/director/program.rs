@@ -222,16 +222,99 @@ pub(super) async fn pull(
 
 use crate::server::database_context::DatabaseContext;
 
-/// Build the rig's current program under the caller's store lock. Shared by
-/// the pull and by check-in, which only needs the revision to say whether the
-/// plugin should pull again.
-pub(super) fn assemble(
-    store: &mut MetaStore,
+/// What a rig's program is built from: everything the pull reads, and
+/// nothing it writes. The pull and the night plans' Director preview share
+/// it, so the preview's work is the pull's.
+pub(super) struct Gathered {
+    pub(super) profile: Option<RigProfile>,
+    pub(super) placed: psf_guard_director_meta::site_profile::RigSite,
+    pub(super) configuration: Configuration,
+    /// Whether `configuration` was made up for a preview because the rig
+    /// has not reported its equipment.
+    pub(super) preview_configuration: bool,
+    built: Built,
+    assignment_revision: u64,
+    preference_settings: psf_guard_director_meta::preferences::Effective,
+    pub(super) observing_preferences: Option<psf_guard_director_core::priority::ProgramPreferences>,
+}
+
+impl Gathered {
+    pub(super) fn goals(&self) -> &[Goal] {
+        &self.built.goals
+    }
+
+    pub(super) fn omitted(&self) -> &[String] {
+        &self.built.omitted
+    }
+
+    /// Each goal's plan, target row and project, by the goal's id.
+    pub(super) fn goal_links(&self) -> impl Iterator<Item = GoalLink<'_>> {
+        self.built.links.iter().map(|link| GoalLink {
+            goal_id: &link.goal_id,
+            project_id: link.project_id,
+            project_name: &link.project_name,
+            source_project_guid: link.source_project_guid,
+            target_guid: link.target_guid,
+            exposureplan_guid: link.exposureplan_guid,
+        })
+    }
+
+    /// The program the pull issues, under assignment `id` and valid over
+    /// `span`, with each goal allowed the whole span; the rig's geometry adds
+    /// the real windows. The pull and the night plans' Director preview both
+    /// build it here.
+    pub(super) fn program(&self, rig: Uuid, span: Interval, id: String) -> Program {
+        Program {
+            observing_preferences: self.observing_preferences.clone(),
+            schema_version: PROGRAM_VERSION,
+            assignment: Assignment {
+                id,
+                revision: self.assignment_revision,
+                rig_id: rig.to_string(),
+                configuration_id: self.configuration.id.clone(),
+                valid_from_ms: span.start_ms,
+                expires_at_ms: span.end_ms,
+                goals: self
+                    .built
+                    .goals
+                    .iter()
+                    .cloned()
+                    .map(|goal| Goal {
+                        eligible_windows: vec![span],
+                        ..goal
+                    })
+                    .collect(),
+            },
+            configuration: self.configuration.clone(),
+            targets: self.built.targets.clone(),
+            recipes: self.built.recipes.clone(),
+            bindings: self.built.bindings.clone(),
+        }
+    }
+}
+
+/// A goal's links back to the plan and the rig's rows.
+pub(super) struct GoalLink<'a> {
+    pub(super) goal_id: &'a str,
+    pub(super) project_id: Uuid,
+    pub(super) project_name: &'a str,
+    pub(super) source_project_guid: Uuid,
+    pub(super) target_guid: Uuid,
+    pub(super) exposureplan_guid: Uuid,
+}
+
+/// Read what the rig's program is built from, writing nothing. With
+/// `preview`, a rig that has not reported its equipment is given a
+/// configuration made from what its recipes use, so a preview can bind;
+/// the pull never takes that path.
+pub(super) fn gather(
+    store: &MetaStore,
     catalogs: &[Arc<DatabaseContext>],
     instance: Uuid,
     rig: Uuid,
     catalog_id: Uuid,
-) -> Result<Envelope, PullError> {
+    preview: bool,
+) -> Result<Gathered, PullError> {
     let binding = store
         .catalog_rig(catalog_id)?
         .filter(|binding| binding.rig.id == rig)
@@ -239,18 +322,15 @@ pub(super) fn assemble(
     let profile = store.rig_profile(rig)?;
     // The rig's own location and horizon, else its planning site's.
     let placed = store.rig_site(rig, profile.as_ref())?;
-    let configuration = profile
+    let reported = profile
         .as_ref()
         .and_then(|p| p.configuration.as_ref())
-        .map(|c| c.value.clone())
-        .ok_or_else(|| {
-            PullError::NotReady(
-                "This rig has not reported its equipment yet; call PUT /rigs/{rig}/equipment first."
-                    .into(),
-            )
-        })?;
-    if configuration.rig_id != rig.to_string() {
-        return Err(Error::Internal.into());
+        .map(|c| c.value.clone());
+    if reported.is_none() && !preview {
+        return Err(PullError::NotReady(
+            "This rig has not reported its equipment yet; call PUT /rigs/{rig}/equipment first."
+                .into(),
+        ));
     }
     let activations = store.activations_for_rig(rig)?;
     let context = identified_catalogs(catalogs, instance)
@@ -264,6 +344,16 @@ pub(super) fn assemble(
     .map_err(StoreError::from)?;
     connection.busy_timeout(Duration::from_secs(2))?;
     let snapshot = connection.transaction()?;
+    let (configuration, preview_configuration) = match reported {
+        Some(configuration) => (configuration, false),
+        None => (
+            made_up_configuration(&snapshot, rig, binding.catalog, &activations)?,
+            true,
+        ),
+    };
+    if configuration.rig_id != rig.to_string() {
+        return Err(Error::Internal.into());
+    }
     let mut projects = BTreeMap::new();
     for activation in &activations {
         projects.insert(
@@ -296,15 +386,6 @@ pub(super) fn assemble(
         &saved,
     )?;
     snapshot.commit()?;
-    let now = now_ms();
-    if built.goals.is_empty() {
-        return Err(PullError::NotReady(format!(
-            "No executable activated plan for this rig. {}",
-            built.omitted.join("; ")
-        )));
-    }
-    // Persist the validity interval. A retry must return identical content,
-    // while changed inputs or expiry must mint a different assignment identity.
     let assignment_revision = activations.iter().map(|a| a.revision).max().unwrap_or(1);
     let preference_settings = store.effective_observing_preferences(rig, None)?;
     if let Some(order) = &preference_settings.project_order {
@@ -352,10 +433,141 @@ pub(super) fn assemble(
         } else {
             None
         };
+    Ok(Gathered {
+        profile,
+        placed,
+        configuration,
+        preview_configuration,
+        built,
+        assignment_revision,
+        preference_settings,
+        observing_preferences,
+    })
+}
+
+/// A configuration for a preview of a rig that has not reported its
+/// equipment: the filters, binning, readout modes, gains and offsets its
+/// activated templates use, so its recipes bind. It never leaves the server
+/// and is never issued.
+fn made_up_configuration(
+    connection: &Connection,
+    rig: Uuid,
+    catalog: CatalogIdentity,
+    activations: &[Activation],
+) -> Result<Configuration, PullError> {
+    let mut filters = std::collections::BTreeSet::new();
+    let mut gains = std::collections::BTreeSet::new();
+    let mut offsets = std::collections::BTreeSet::new();
+    let mut bins = std::collections::BTreeSet::new();
+    let mut readouts = std::collections::BTreeSet::new();
+    let (mut some_gain, mut some_offset) = (false, false);
+    for activation in activations {
+        let Some(entry) = activation
+            .rigs
+            .iter()
+            .find(|r| r.rig_id == rig && r.catalog_id == catalog.id)
+        else {
+            continue;
+        };
+        for activated in &entry.plans {
+            let Ok(Some(row)) = read_plan_row(
+                connection,
+                &activated.exposureplan_guid.to_string(),
+                &activated.target_guid.to_string(),
+                &entry.project_guid.to_string(),
+            ) else {
+                continue;
+            };
+            filters.insert(row.template_filter.clone());
+            if let Some(gain) = row.template_gain {
+                gains.insert(gain);
+                some_gain = true;
+            }
+            if let Some(offset) = row.template_offset {
+                offsets.insert(offset);
+                some_offset = true;
+            }
+            bins.insert(
+                i16::try_from(row.template_bin.unwrap_or(1))
+                    .unwrap_or(1)
+                    .max(1),
+            );
+            readouts.insert(
+                row.template_readout
+                    .and_then(|m| i16::try_from(m).ok())
+                    .unwrap_or(0)
+                    .max(0),
+            );
+        }
+    }
+    let usable = |name: &String| {
+        !name.is_empty() && name.len() <= 128 && name.bytes().all(|c| c.is_ascii_graphic())
+    };
+    let filters: Vec<String> = filters.into_iter().filter(usable).collect();
+    if filters.is_empty() {
+        return Err(PullError::NotReady(
+            "No activated plan on this rig names a filter, so there is nothing to preview.".into(),
+        ));
+    }
+    let control = |some: bool, values: std::collections::BTreeSet<i32>| {
+        if some {
+            Control::Values {
+                values: values.into_iter().collect(),
+            }
+        } else {
+            Control::Unsupported {}
+        }
+    };
+    Ok(Configuration {
+        rig_id: rig.to_string(),
+        id: "preview".into(),
+        camera_id: "preview".into(),
+        filter_wheel_id: (filters.len() > 1).then(|| "preview".into()),
+        filters: filters
+            .iter()
+            .enumerate()
+            .map(|(position, id)| psf_guard_director_core::program::Filter {
+                id: id.clone(),
+                position: (filters.len() > 1).then_some(position as i16),
+            })
+            .collect(),
+        binning_modes: bins
+            .into_iter()
+            .map(|b| psf_guard_director_core::program::Binning { x: b, y: b })
+            .collect(),
+        readout_modes: readouts.into_iter().collect(),
+        gain: control(some_gain, gains),
+        offset: control(some_offset, offsets),
+        exposure_min_ms: 1,
+        exposure_max_ms: 86_400_000,
+        enable_slew_center: true,
+        dither_every: 0,
+    })
+}
+
+/// Build the rig's current program under the caller's store lock. Shared by
+/// the pull and by check-in, which only needs the revision to say whether the
+/// plugin should pull again.
+pub(super) fn assemble(
+    store: &mut MetaStore,
+    catalogs: &[Arc<DatabaseContext>],
+    instance: Uuid,
+    rig: Uuid,
+    catalog_id: Uuid,
+) -> Result<Envelope, PullError> {
+    let gathered = gather(store, catalogs, instance, rig, catalog_id, false)?;
+    let now = now_ms();
+    if gathered.built.goals.is_empty() {
+        return Err(PullError::NotReady(format!(
+            "No executable activated plan for this rig. {}",
+            gathered.built.omitted.join("; ")
+        )));
+    }
+    let built = &gathered.built;
     let fingerprint = catalog_discovery::digest(
         &serde_json::to_vec(&(
             "program-v2",
-            assignment_revision,
+            gathered.assignment_revision,
             VALIDITY.as_millis(),
             &built.goals,
             &built.targets,
@@ -363,13 +575,13 @@ pub(super) fn assemble(
             &built.links,
             &built.bindings,
             &built.omitted,
-            &observing_preferences,
+            &gathered.observing_preferences,
             (
-                &preference_settings.project_order,
-                &preference_settings.order_source,
+                &gathered.preference_settings.project_order,
+                &gathered.preference_settings.order_source,
             ),
-            &configuration,
-            profile.as_ref().map(|p| p.revision),
+            &gathered.configuration,
+            gathered.profile.as_ref().map(|p| p.revision),
         ))
         .map_err(|_| Error::Internal)?,
     );
@@ -393,31 +605,14 @@ pub(super) fn assemble(
         start_ms: issue.issued_at_ms,
         end_ms: issue.expires_at_ms,
     };
-    let goals: Vec<Goal> = built
-        .goals
-        .into_iter()
-        .map(|goal| Goal {
-            eligible_windows: vec![span],
-            ..goal
-        })
-        .collect();
-    let program = Program {
-        observing_preferences,
-        schema_version: PROGRAM_VERSION,
-        assignment: Assignment {
-            id: format!("assignment-{}", issue.id),
-            revision: assignment_revision,
-            rig_id: rig.to_string(),
-            configuration_id: configuration.id.clone(),
-            valid_from_ms: span.start_ms,
-            expires_at_ms: span.end_ms,
-            goals,
-        },
-        configuration: configuration.clone(),
-        targets: built.targets,
-        recipes: built.recipes,
-        bindings: built.bindings,
-    };
+    let program = gathered.program(rig, span, format!("assignment-{}", issue.id));
+    let Gathered {
+        profile,
+        placed,
+        configuration,
+        built,
+        ..
+    } = gathered;
     // Prove the program binds before handing it out. The synthetic state
     // only supplies the identity and time the validator needs.
     let limits = profile.as_ref().map(|p| p.limits.value).unwrap_or_default();

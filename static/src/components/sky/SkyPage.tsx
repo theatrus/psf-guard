@@ -24,14 +24,8 @@ import { recallSkyView, rememberSkyView } from './skyViewMemory';
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '../../api/client';
 import { useUrlParams } from '../../hooks/useUrlState';
-import { useAccess } from '../../auth/access';
-import { openSettings } from '../../utils/settingsIntent';
 import { usePlans } from '../header/useCurrentPlan';
 import { retryWhenBusy } from '../director/retry';
-import DirectorDashboard from '../director/DirectorDashboard';
-import DirectorRigs from '../director/DirectorRigs';
-import TemplateLibrary from '../director/TemplateLibrary';
-import '../director/DirectorPage.css';
 import { placeRigs, type PlacedRig } from './liveRigs';
 import SkyLive from './SkyLive';
 import './SkyPage.css';
@@ -42,28 +36,16 @@ const REPLAY_STEP_MS = 90;
 export default function SkyPage() {
   const navigate = useNavigate();
   const { data: rows, isLoading, isError } = useMergedSkyCoverage();
-  // Live: the rigs as they are now, over the coverage of what they took.
-  // URL state (`live=1`) so the header's Live chip can open it.
+  // Live: the rigs as they are now, drawn over the coverage of what they
+  // took. URL state (`live=1`), so the Rigs page can link to it.
   const { getParam, updateParams } = useUrlParams();
   const plans = usePlans();
   const live = plans.enabled && getParam('live') === '1';
-  const { canWrite } = useAccess();
   const statuses = useQuery({ queryKey: ['directorRigStatuses'], queryFn: apiClient.getDirectorRigStatuses, enabled: plans.enabled, retry: retryWhenBusy, retryDelay: 1200, refetchInterval: 15_000, refetchOnWindowFocus: true });
   const now = useDirectorClock();
   const placed = useMemo(() => placeRigs(statuses.data ?? [], plans.rows, now), [statuses.data, plans.rows, now]);
   const [focus, setFocus] = useState<{ ra: number; dec: number; nonce: number } | null>(null);
   const focusOn = (rig: PlacedRig) => { if (rig.ra !== null && rig.dec !== null) setFocus({ ra: rig.ra, dec: rig.dec, nonce: Date.now() }); };
-  const liveTable = live && (
-    <section className="sky-live-table director-page director-embedded" aria-label="Live table">
-      <DirectorDashboard />
-      {canWrite ? <p className="director-muted">
-        Rig setup and the exposure template library are under Settings:{' '}
-        <button type="button" className="director-link-button" onClick={() => openSettings('rigs')}>Rig setup</button>
-        {' and '}
-        <button type="button" className="director-link-button" onClick={() => openSettings('templates')}>Exposure templates</button>.
-      </p> : <><DirectorRigs /><TemplateLibrary /></>}
-    </section>
-  );
   const merged = useMemo(() => mergeCoverage(rows), [rows]);
 
   // Start where the last visit left off, for this browser session.
@@ -222,7 +204,6 @@ export default function SkyPage() {
     <div className="sky-page">
       <div className="sky-loading">{note}</div>
       {live && <SkyLive rigs={placed} />}
-      {liveTable}
     </div>
   );
   if (isLoading && rows.length === 0) return noMap('Reading the catalogs…');
@@ -426,7 +407,6 @@ export default function SkyPage() {
         playing={playing}
         onTogglePlay={() => setPlaying((current) => !current)}
       />
-      {liveTable}
     </div>
   );
 }

@@ -369,11 +369,12 @@ export const CALIBRATION_PARAMS = [
 export const CALIBRATION_FOCUS_PARAM = 'calibFocus';
 
 /** Query params that belong to one view and never travel to another: the
- *  Planning workspace's plan (`plan`, and the older names), the Sky's Live
- *  panel (`live`), the image detail's calibration focus and the
- *  calibration page's. */
+ *  Planning workspace's plan (`plan`, and the older names), the Sky's rig
+ *  markers (`live`), the Rigs page's tab and Nights grid, the image
+ *  detail's calibration focus and the calibration page's. */
 export const PLANNING_PARAMS = [
   'plan', 'planTab', 'directorProject', 'directorSource', 'directorView', 'directorCatalog', 'live',
+  'rigsTab', 'nightsFrom', 'nightsCount', 'nightsHide', 'nightRig', 'night',
   CALIBRATION_FOCUS_PARAM,
   ...CALIBRATION_PARAMS,
 ] as const;
@@ -400,9 +401,14 @@ export function isSkyPath(pathname: string): boolean {
   return pathname === '/sky';
 }
 
+/** Every rig: its live status and its coming nights. */
+export function isRigsPath(pathname: string): boolean {
+  return pathname === '/rigs';
+}
+
 /** Routes that show every database, where a parked `db` slug means nothing. */
 export function isMergedPath(pathname: string): boolean {
-  return isOverviewPath(pathname) || isSkyPath(pathname) || isPlanningPath(pathname);
+  return isOverviewPath(pathname) || isSkyPath(pathname) || isRigsPath(pathname) || isPlanningPath(pathname);
 }
 
 /**

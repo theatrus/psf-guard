@@ -932,7 +932,8 @@ fn requires_write(method: &Method, path: &str, can_compute: bool) -> bool {
         || path.ends_with("/satellites")
         || path.ends_with("/calibrations/flat-measure/watch")
         || path.contains("/stack-previews")
-        || path == "/astrometry/catalogs/validate")
+        || path == "/astrometry/catalogs/validate"
+        || path == "/director/v1/night-plans")
 }
 
 fn api_path(path: &str) -> &str {
@@ -1110,6 +1111,23 @@ mod tests {
 
     #[test]
     fn read_only_rules_allow_derived_views_but_block_catalog_changes() {
+        // Night plans compute a preview and write nothing; marking a night
+        // is an editor's.
+        assert!(!requires_write(
+            &Method::POST,
+            "/director/v1/night-plans",
+            true
+        ));
+        assert!(requires_write(
+            &Method::POST,
+            "/director/v1/night-plans",
+            false
+        ));
+        assert!(requires_write(
+            &Method::PUT,
+            "/director/v1/night-availability/rig/x",
+            true
+        ));
         // A backup holds every catalog: listing and downloading are an
         // editor's, as is starting one.
         assert!(requires_write(&Method::GET, "/backups", false));

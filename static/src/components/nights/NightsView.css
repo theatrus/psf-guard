@@ -1,0 +1,216 @@
+/* The grid's own colours: the clear part of a night, and one colour per
+   plan, shared by the cells' dots and the night's plan table. */
+.nights-page {
+  --nights-dark: rgb(30 50 100 / 55%);
+  --nights-clear: rgb(90 180 255 / 85%);
+  --nights-out: rgb(255 107 107 / 22%);
+  --nights-plan-0: #5ab4ff;
+  --nights-plan-1: #ffb454;
+  --nights-plan-2: #8bd17c;
+  --nights-plan-3: #e58cff;
+  --nights-plan-4: #ffe066;
+  --nights-plan-5: #66e0d0;
+  --nights-plan-6: #ff8a8a;
+  --nights-plan-7: #b0a4ff;
+  /* Gaps in a schedule, by reason. */
+  --nights-gap-twilight: rgb(60 90 140 / 35%);
+  --nights-gap-unavailable: rgb(255 107 107 / 30%);
+  --nights-gap-moon: rgb(232 226 176 / 30%);
+  --nights-gap-meridian: rgb(255 138 91 / 30%);
+  --nights-gap-below: rgb(169 180 196 / 22%);
+  --nights-gap-complete: rgb(139 209 124 / 25%);
+  --nights-gap-nothing: rgb(169 180 196 / 12%);
+  --nights-track: rgb(255 255 255 / 4%);
+  padding: 16px;
+  min-width: 0;
+}
+
+.nights-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.nights-controls label { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+
+.nights-rig-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.nights-page .nights-chip {
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border-primary);
+  background: var(--color-bg-secondary);
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: 0.85em;
+  cursor: pointer;
+}
+.nights-page .nights-chip:hover:not(:disabled) { border-color: var(--state-on-border); background: var(--color-bg-secondary); }
+.nights-page .nights-chip[aria-pressed='true'],
+.nights-page .nights-chip[aria-pressed='true']:hover:not(:disabled) {
+  background: var(--state-on-bg);
+  border-color: var(--state-on-border);
+  color: var(--color-text-primary);
+}
+.nights-page .nights-chip:focus-visible { outline: 2px solid var(--state-focus-border); }
+
+/* On a narrow screen the grid scrolls inside its own box; the page never
+   scrolls sideways. */
+.nights-grid-scroll { overflow-x: auto; max-width: 100%; margin: 12px 0; }
+.nights-grid { border-collapse: separate; border-spacing: 4px; font-size: 12px; }
+.nights-grid th { font-weight: 500; color: var(--color-text-secondary); text-align: left; white-space: nowrap; padding: 2px 4px; }
+.nights-grid thead th.is-tonight { color: var(--color-text-primary); }
+.nights-grid td { padding: 0; vertical-align: top; }
+.nights-rig {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--color-bg-primary);
+  min-width: 140px;
+  max-width: 200px;
+}
+.nights-rig strong, .nights-rig span { display: block; white-space: normal; }
+
+.nights-page .nights-cell {
+  display: flex;
+  justify-content: flex-start;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  width: 112px;
+  min-height: 74px;
+  padding: 6px;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 6px;
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.nights-page .nights-cell:hover:not(:disabled) { border-color: var(--state-on-border); background: var(--color-bg-tertiary); }
+.nights-page .nights-cell:focus-visible { outline: 2px solid var(--state-focus-border); }
+.nights-page .nights-cell[aria-pressed='true'],
+.nights-page .nights-cell[aria-pressed='true']:hover:not(:disabled) { background: var(--state-on-bg); border-color: var(--state-on-border); }
+.nights-page .nights-cell.is-unavailable { background: var(--nights-out); }
+.nights-cell-top { display: flex; align-items: baseline; gap: 4px; }
+.nights-cell-hours { font-weight: 600; }
+.nights-cell-mark { color: var(--color-text-secondary); }
+.nights-cell-moon { margin-left: auto; color: var(--color-text-muted); font-size: 11px; }
+/* Dusk to dawn: the dark night, with the clear part filled in. */
+.nights-cell-bar {
+  position: relative;
+  width: 100%;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--nights-dark);
+  overflow: hidden;
+}
+.nights-cell-clear { position: absolute; top: 0; bottom: 0; background: var(--nights-clear); }
+.nights-cell-plans { display: flex; gap: 3px; min-height: 8px; align-items: center; }
+.nights-plan-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 4px;
+  background: var(--nights-plan-0);
+}
+.nights-cell-plans .nights-plan-dot { margin-right: 0; }
+.nights-plan-dot[data-colour='1'] { background: var(--nights-plan-1); }
+.nights-plan-dot[data-colour='2'] { background: var(--nights-plan-2); }
+.nights-plan-dot[data-colour='3'] { background: var(--nights-plan-3); }
+.nights-plan-dot[data-colour='4'] { background: var(--nights-plan-4); }
+.nights-plan-dot[data-colour='5'] { background: var(--nights-plan-5); }
+.nights-plan-dot[data-colour='6'] { background: var(--nights-plan-6); }
+.nights-plan-dot[data-colour='7'] { background: var(--nights-plan-7); }
+.nights-plan-more { color: var(--color-text-muted); font-size: 10px; }
+.nights-cell-load { color: var(--color-text-muted); font-size: 11px; }
+.nights-cell-load.is-over { color: var(--color-warning-light); }
+
+.nights-detail { margin-top: 12px; padding: 12px; border: 1px solid var(--color-border-secondary); border-radius: 8px; background: var(--color-bg-surface); }
+.nights-detail h3 { margin: 0; font-size: 15px; }
+.nights-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 6px 16px; margin: 8px 0; font-size: 13px; }
+.nights-facts dt { color: var(--color-text-secondary); font-size: 12px; }
+.nights-facts dd { margin: 0; }
+.nights-marks { margin: 4px 0 8px; padding-left: 18px; font-size: 13px; }
+.nights-plan-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.nights-plan-table th { text-align: left; font-weight: 500; color: var(--color-text-secondary); padding: 4px 6px; white-space: nowrap; }
+.nights-plan-table td { padding: 4px 6px; border-top: 1px solid var(--color-border-secondary); }
+.nights-plan-table tr.is-idle-plan td { color: var(--color-text-muted); }
+
+.nights-mark fieldset { border: 1px solid var(--color-border-secondary); border-radius: 6px; padding: 8px 12px; margin: 12px 0 0; }
+.nights-mark legend { font-size: 13px; color: var(--color-text-secondary); }
+.nights-mark-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin: 6px 0; font-size: 13px; }
+.nights-mark-row label { display: inline-flex; align-items: center; gap: 6px; }
+.nights-mark-note { flex: 1 1 220px; }
+.nights-mark-note input { flex: 1; min-width: 0; }
+
+@media (max-width: 600px) {
+  .nights-page { padding: 12px 16px; }
+  .nights-rig { min-width: 104px; }
+  .nights-cell { width: 96px; }
+}
+
+.nights-schedule { margin: 12px 0; }
+.nights-schedule h4, .nights-reasons h4 { margin: 0; font-size: 14px; }
+.nights-page .nights-schedule .nights-mark-row button[aria-pressed='true'] { background: var(--state-on-bg); border-color: var(--state-on-border); }
+.nights-timeline-box { margin: 8px 0; }
+.nights-timeline { position: relative; padding-bottom: 18px; min-width: 0; }
+.nights-timeline-track {
+  position: relative;
+  height: 38px;
+  border-radius: 6px;
+  background: var(--nights-track);
+  overflow: hidden;
+}
+.nights-gap { position: absolute; top: 0; bottom: 0; }
+.nights-gap[data-reason='twilight'], .nights-gap-key[data-reason='twilight'] { background: var(--nights-gap-twilight); }
+.nights-gap[data-reason='unavailable'], .nights-gap-key[data-reason='unavailable'] {
+  background: repeating-linear-gradient(135deg, var(--nights-gap-unavailable) 0 6px, transparent 6px 12px);
+}
+.nights-gap[data-reason='moon'], .nights-gap-key[data-reason='moon'] { background: var(--nights-gap-moon); }
+.nights-gap[data-reason='meridian'], .nights-gap-key[data-reason='meridian'] { background: var(--nights-gap-meridian); }
+.nights-gap[data-reason='below_limits'], .nights-gap-key[data-reason='below_limits'] { background: var(--nights-gap-below); }
+.nights-gap[data-reason='complete'], .nights-gap-key[data-reason='complete'] { background: var(--nights-gap-complete); }
+.nights-gap[data-reason='nothing_eligible'], .nights-gap-key[data-reason='nothing_eligible'] { background: var(--nights-gap-nothing); }
+.nights-page .nights-block {
+  --block-colour: var(--nights-plan-0);
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  display: flex;
+  justify-content: flex-start;
+  gap: 0;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0;
+  border: 1px solid var(--color-border-primary);
+  border-radius: 4px;
+  background: var(--block-colour);
+  color: var(--color-text-dark);
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+.nights-page .nights-block[data-colour='1'] { --block-colour: var(--nights-plan-1); }
+.nights-page .nights-block[data-colour='2'] { --block-colour: var(--nights-plan-2); }
+.nights-page .nights-block[data-colour='3'] { --block-colour: var(--nights-plan-3); }
+.nights-page .nights-block[data-colour='4'] { --block-colour: var(--nights-plan-4); }
+.nights-page .nights-block[data-colour='5'] { --block-colour: var(--nights-plan-5); }
+.nights-page .nights-block[data-colour='6'] { --block-colour: var(--nights-plan-6); }
+.nights-page .nights-block[data-colour='7'] { --block-colour: var(--nights-plan-7); }
+.nights-page .nights-timeline .nights-block:hover:not(:disabled) { background: var(--block-colour); border-color: var(--state-on-border); }
+.nights-page .nights-block[aria-pressed='true'] { outline: 2px solid var(--state-on-border); outline-offset: 1px; }
+.nights-page .nights-block:focus-visible { outline: 2px solid var(--state-focus-border); }
+.nights-run {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-right: 1px solid var(--color-scrim);
+  overflow: hidden;
+  white-space: nowrap;
+}
+.nights-run:last-child { border-right: 0; }
+.nights-timeline-axis { position: absolute; left: 0; right: 0; bottom: 0; height: 16px; font-size: 10px; color: var(--color-text-muted); }
+.nights-timeline-axis span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+.nights-gap-legend { list-style: none; margin: 6px 0; padding: 0; display: grid; gap: 2px; font-size: 12px; color: var(--color-text-secondary); }
+.nights-gap-key { display: inline-block; width: 14px; height: 10px; margin-right: 6px; border-radius: 2px; vertical-align: middle; }
+.nights-reasons { margin-top: 8px; padding: 8px 10px; border: 1px solid var(--color-border-secondary); border-radius: 6px; }
+.nights-reasons p { margin: 4px 0; font-size: 13px; }
+.nights-now { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--state-on-border); pointer-events: none; }
+.nights-live { margin: 4px 0 8px; font-size: 13px; }

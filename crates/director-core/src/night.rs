@@ -4,6 +4,7 @@
 //! from sampled positions; the rig still decides at dispatch time.
 
 use crate::ephemeris::{moon_illumination, moon_position, separation_degrees, sun_position};
+use crate::moon::{MoonPolicy, MoonTrack};
 use crate::visibility::{
     altitude_allowed, meridian_windows, AltitudeLimits, EarthOrientation, Horizon, IcrsPosition,
     Observer, Site, VisibilityError,
@@ -14,6 +15,10 @@ use serde::{Deserialize, Serialize};
 pub const MAX_NIGHTS: u32 = 31;
 pub const MAX_TARGETS: usize = 16;
 pub const MIN_STEP_MS: u64 = 60_000;
+/// Most availability windows one request may carry: a few a night.
+pub const MAX_AVAILABLE_WINDOWS: usize = 256;
+/// Most Moon rules one target may carry: one per filter.
+pub const MAX_MOON_POLICIES: usize = 16;
 const DAY_MS: u64 = 86_400_000;
 /// The span `start_ms` may fall in: a day after the Unix epoch, so the noon
 /// before it is never earlier, to 2099-01-01, so the last night still ends
@@ -25,11 +30,106 @@ const MAX_MERIDIAN_WINDOW_MS: u64 = DAY_MS / 2;
 /// How far the hour angle turns in an hour of clock time, in degrees.
 const SIDEREAL_DEGREES_PER_HOUR: f64 = 15.041_068_64;
 
+/// A night's key: the local date of its evening, `YYYY-MM-DD`, as
+/// [`Night::date`] gives it. Availability marks and overrides use it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct NightDate(chrono::NaiveDate);
+
+/// Text that is not a date from 1970-01-02 to 2098-12-31 as `YYYY-MM-DD`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InvalidNightDate;
+
+impl std::fmt::Display for InvalidNightDate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("a night is a date from 1970-01-02 to 2098-12-31, written YYYY-MM-DD")
+    }
+}
+
+impl std::error::Error for InvalidNightDate {}
+
+impl std::str::FromStr for NightDate {
+    type Err = InvalidNightDate;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        let date =
+            chrono::NaiveDate::parse_from_str(text, "%Y-%m-%d").map_err(|_| InvalidNightDate)?;
+        let earliest = chrono::NaiveDate::from_ymd_opt(1970, 1, 2).ok_or(InvalidNightDate)?;
+        let latest = chrono::NaiveDate::from_ymd_opt(2098, 12, 31).ok_or(InvalidNightDate)?;
+        // Only the canonical spelling: `2026-1-5` would key a second mark.
+        if !(earliest..=latest).contains(&date) || date.format("%Y-%m-%d").to_string() != text {
+            return Err(InvalidNightDate);
+        }
+        Ok(Self(date))
+    }
+}
+
+impl std::fmt::Display for NightDate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0.format("%Y-%m-%d"))
+    }
+}
+
+impl TryFrom<String> for NightDate {
+    type Error = InvalidNightDate;
+
+    fn try_from(text: String) -> Result<Self, Self::Error> {
+        text.parse()
+    }
+}
+
+impl From<NightDate> for String {
+    fn from(date: NightDate) -> Self {
+        date.to_string()
+    }
+}
+
+impl NightDate {
+    /// The night under way at an instant at this longitude, as
+    /// [`NightRequest::start_ms`] picks the first night.
+    pub fn at(instant_ms: u64, longitude_degrees: f64) -> Option<Self> {
+        let noon = night_noon(instant_ms, longitude_degrees)?;
+        local_date(noon, longitude_degrees).parse().ok()
+    }
+
+    /// The night's span at this longitude, local mean noon to the next: the
+    /// span [`night_preview`] reports for it.
+    pub fn span(self, longitude_degrees: f64) -> Interval {
+        let offset_ms = (longitude_degrees / 15.0 * 3_600_000.0).round() as i64;
+        let midnight = self
+            .0
+            .and_hms_opt(0, 0, 0)
+            .map_or(0, |t| t.and_utc().timestamp_millis());
+        let noon = (midnight + DAY_MS as i64 / 2 - offset_ms).max(0) as u64;
+        Interval {
+            start_ms: noon,
+            end_ms: noon + DAY_MS,
+        }
+    }
+
+    /// Nights from this one to `other`: 0 for the same night, negative when
+    /// `other` comes first.
+    pub fn days_until(self, other: Self) -> i64 {
+        (other.0 - self.0).num_days()
+    }
+
+    /// The night after this one, if it is still a night this type holds.
+    pub fn next(self) -> Option<Self> {
+        let next = self.0.succ_opt()?;
+        next.format("%Y-%m-%d").to_string().parse().ok()
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct NightTarget {
     pub id: String,
     pub position: IcrsPosition,
+    /// The Moon rules of the filters still owed on this target. When there
+    /// are any, the night counts the hours at least one of them allows
+    /// (`hours_up_moon_allowed`).
+    #[serde(default)]
+    pub moon: Vec<MoonPolicy>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -55,6 +155,12 @@ pub struct NightRequest {
     /// image only this long either side of the upper transit. Zero is off.
     #[serde(default)]
     pub meridian_window_ms: u64,
+    /// When the rig may plan to image, if not all the time: the night
+    /// availability marks (or a forecast) as instants. `None` is always,
+    /// so a caller that knows nothing of availability changes nothing.
+    /// Planning input only; it never allows or blocks acquisition.
+    #[serde(default)]
+    pub available: Option<Vec<Interval>>,
 }
 
 fn no_exclusion() -> MeridianExclusion {
@@ -73,6 +179,13 @@ pub struct TargetNight {
     pub hours_up: f64,
     /// The same, while the Moon is below the horizon.
     pub hours_up_moon_down: f64,
+    /// `hours_up` inside the request's available windows.
+    #[serde(default)]
+    pub hours_up_available: f64,
+    /// `hours_up_available` while at least one of the target's Moon rules
+    /// allows imaging; the same as `hours_up_available` without rules.
+    #[serde(default)]
+    pub hours_up_moon_allowed: f64,
     /// Dark hours the target was up but the meridian pause forbade.
     pub hours_lost_to_meridian: f64,
     /// The upper transit within this noon-to-noon night, when it happens.
@@ -91,6 +204,9 @@ pub struct Night {
     pub dusk_ms: Option<u64>,
     pub dawn_ms: Option<u64>,
     pub dark_hours: f64,
+    /// `dark_hours` inside the request's available windows.
+    #[serde(default)]
+    pub available_dark_hours: f64,
     pub moon_illumination: f64,
     pub moon_hours_up_in_dark: f64,
     pub targets: Vec<TargetNight>,
@@ -145,7 +261,7 @@ impl From<VisibilityError> for NightError {
 /// Planning-grade Earth orientation: zero corrections, valid for the search.
 /// Good to about an arcsecond of pointing, which twilight and Moon timing do
 /// not feel; the rig's own geometry uses real orientation data.
-fn planning_orientation(start_ms: u64, end_ms: u64) -> EarthOrientation {
+pub fn planning_orientation(start_ms: u64, end_ms: u64) -> EarthOrientation {
     EarthOrientation {
         ut1_minus_utc_seconds: 0.0,
         polar_motion_x_radians: 0.0,
@@ -184,12 +300,76 @@ fn validate(request: &NightRequest) -> Result<(), NightError> {
         || request.step_ms < MIN_STEP_MS
         || request.step_ms > DAY_MS / 24
         || request.targets.len() > MAX_TARGETS
+        || request.targets.iter().any(|target| {
+            target.moon.len() > MAX_MOON_POLICIES
+                || target.moon.iter().any(|policy| policy.validate().is_err())
+        })
         || !request.dark_below_degrees.is_finite()
         || !(-30.0..=0.0).contains(&request.dark_below_degrees)
+        || request.available.as_ref().is_some_and(|windows| {
+            windows.len() > MAX_AVAILABLE_WINDOWS || windows.iter().any(|w| w.start_ms >= w.end_ms)
+        })
     {
         return Err(NightError::InvalidRequest);
     }
     Ok(())
+}
+
+/// The share of `[start, start + step)` inside the windows, 0 to 1; 1 with
+/// no windows. Windows may overlap, so they are merged first.
+fn available_share(windows: Option<&[Interval]>, start_ms: u64, step_ms: u64) -> f64 {
+    let Some(windows) = windows else {
+        return 1.0;
+    };
+    let end_ms = start_ms + step_ms;
+    let mut covered = 0;
+    let mut reached = start_ms;
+    for window in windows {
+        let from = window.start_ms.max(reached);
+        let to = window.end_ms.min(end_ms);
+        if to > from {
+            covered += to - from;
+            reached = to;
+        }
+    }
+    covered as f64 / step_ms as f64
+}
+
+/// The instants in both sorted, merged lists.
+fn intersection(a: &[Interval], b: &[Interval]) -> Vec<Interval> {
+    let mut result = Vec::new();
+    let (mut i, mut j) = (0, 0);
+    while i < a.len() && j < b.len() {
+        let start = a[i].start_ms.max(b[j].start_ms);
+        let end = a[i].end_ms.min(b[j].end_ms);
+        if start < end {
+            result.push(Interval {
+                start_ms: start,
+                end_ms: end,
+            });
+        }
+        if a[i].end_ms <= b[j].end_ms {
+            i += 1;
+        } else {
+            j += 1;
+        }
+    }
+    result
+}
+
+fn merged(windows: &[Interval]) -> Vec<Interval> {
+    let mut sorted = windows.to_vec();
+    sorted.sort_by_key(|w| (w.start_ms, w.end_ms));
+    let mut result: Vec<Interval> = Vec::with_capacity(sorted.len());
+    for window in sorted {
+        match result.last_mut() {
+            Some(previous) if window.start_ms <= previous.end_ms => {
+                previous.end_ms = previous.end_ms.max(window.end_ms);
+            }
+            _ => result.push(window),
+        }
+    }
+    result
 }
 
 pub fn night_preview(request: &NightRequest) -> Result<Vec<Night>, NightError> {
@@ -234,7 +414,9 @@ fn one_night(
     let mut dusk = None;
     let mut dawn = None;
     let mut dark_hours = 0.0;
+    let mut available_dark_hours = 0.0;
     let mut moon_hours = 0.0;
+    let available: Option<Vec<Interval>> = request.available.as_deref().map(merged);
     let mut samples = Vec::new();
     let mut per_target: Vec<TargetNight> = request
         .targets
@@ -243,6 +425,8 @@ fn one_night(
             id: target.id.clone(),
             hours_up: 0.0,
             hours_up_moon_down: 0.0,
+            hours_up_available: 0.0,
+            hours_up_moon_allowed: 0.0,
             hours_lost_to_meridian: 0.0,
             transit_ms: None,
             max_altitude_degrees: -90.0,
@@ -287,6 +471,32 @@ fn one_night(
             .map(|found| Some(found.windows))
         })
         .collect::<Result<_, VisibilityError>>()?;
+    // Where each target's Moon rules allow imaging, met with availability:
+    // one Moon track for the night, shared by every target and rule.
+    let night_span = Interval {
+        start_ms: noon,
+        end_ms: next_noon,
+    };
+    let track = if request.targets.iter().any(|target| !target.moon.is_empty()) {
+        Some(MoonTrack::new(request.site, orientation, night_span)?)
+    } else {
+        None
+    };
+    let open = available.clone().unwrap_or_else(|| vec![night_span]);
+    let moon_allowed: Vec<Option<Vec<Interval>>> = request
+        .targets
+        .iter()
+        .map(|target| {
+            let Some(track) = track.as_ref().filter(|_| !target.moon.is_empty()) else {
+                return Ok(None);
+            };
+            let mut allowed = Vec::new();
+            for policy in &target.moon {
+                allowed.extend(track.windows(policy, target.position)?);
+            }
+            Ok(Some(intersection(&merged(&allowed), &open)))
+        })
+        .collect::<Result<_, VisibilityError>>()?;
     let mut last_hour_angle: Vec<Option<f64>> = vec![None; request.targets.len()];
     let mut t = noon;
     while t < next_noon {
@@ -305,12 +515,18 @@ fn one_night(
             0.0
         };
         let moon_up = moon_altitude > 0.0;
+        let share = if dark {
+            available_share(available.as_deref(), t, request.step_ms)
+        } else {
+            0.0
+        };
         if dark {
             if dusk.is_none() {
                 dusk = Some(t);
             }
             dawn = Some(t + request.step_ms);
             dark_hours += step_hours;
+            available_dark_hours += step_hours * share;
             if moon_up {
                 moon_hours += step_hours;
             }
@@ -358,6 +574,12 @@ fn one_night(
                     entry.hours_lost_to_meridian += step_hours;
                 } else if allowed {
                     entry.hours_up += step_hours;
+                    entry.hours_up_available += step_hours * share;
+                    entry.hours_up_moon_allowed += step_hours
+                        * match &moon_allowed[index] {
+                            Some(windows) => available_share(Some(windows), t, request.step_ms),
+                            None => share,
+                        };
                     if !moon_up {
                         entry.hours_up_moon_down += step_hours;
                     }
@@ -394,6 +616,7 @@ fn one_night(
             dusk_ms: dusk,
             dawn_ms: dawn,
             dark_hours,
+            available_dark_hours,
             moon_illumination: moon_illumination(midnight).unwrap_or(0.0),
             moon_hours_up_in_dark: moon_hours,
             targets: per_target,
@@ -428,6 +651,7 @@ mod tests {
                         ra_degrees: 38.2,
                         dec_degrees: 61.45,
                     },
+                    moon: vec![],
                 },
                 NightTarget {
                     id: "south".into(),
@@ -435,6 +659,7 @@ mod tests {
                         ra_degrees: 38.2,
                         dec_degrees: -75.0,
                     },
+                    moon: vec![],
                 },
             ],
             // 2026-09-25 00:00 UTC, 17:00 the day before in Los Angeles.
@@ -447,6 +672,7 @@ mod tests {
                 after_ms: 0,
             },
             meridian_window_ms: 0,
+            available: None,
         }
     }
 
@@ -467,6 +693,149 @@ mod tests {
         // From local mean noon, 12:53 PDT, the next night is tonight.
         asked.start_ms = 1_791_316_800_000; // 13:00 PDT on the 6th
         assert_eq!(night_preview(&asked).unwrap()[0].date, "2026-10-06");
+    }
+
+    #[test]
+    fn a_night_date_spans_the_night_the_preview_reports() {
+        let nights = night_preview(&request()).unwrap();
+        for night in &nights {
+            let date: NightDate = night.date.parse().unwrap();
+            assert_eq!(date.to_string(), night.date);
+            let span = date.span(request().site.longitude_degrees);
+            assert_eq!(span.start_ms, night.noon_ms);
+            assert_eq!(span.end_ms, night.noon_ms + DAY_MS);
+            assert_eq!(NightDate::at(night.noon_ms + 3_600_000, -118.3), Some(date));
+            assert_eq!(
+                NightDate::at(night.noon_ms - 1, -118.3).and_then(NightDate::next),
+                Some(date)
+            );
+        }
+        for bad in [
+            "2026-1-05",
+            "2026-02-30",
+            "1970-01-01",
+            "2099-01-01",
+            "tonight",
+            "",
+        ] {
+            assert_eq!(bad.parse::<NightDate>(), Err(InvalidNightDate), "{bad}");
+        }
+        let json = serde_json::to_string(&"2026-11-03".parse::<NightDate>().unwrap()).unwrap();
+        assert_eq!(json, "\"2026-11-03\"");
+        assert!(serde_json::from_str::<NightDate>("\"2026-13-01\"").is_err());
+    }
+
+    #[test]
+    fn moon_rules_count_the_hours_at_least_one_filter_may_shoot() {
+        let open = night_preview(&request()).unwrap();
+        let heart = &open[0].targets[0];
+        assert_eq!(heart.hours_up_moon_allowed, heart.hours_up_available);
+        // Late September 2026 has a full Moon: a strict broadband rule loses
+        // the hours the Moon is up, a narrowband one keeps more of them.
+        let strict = MoonPolicy {
+            enabled: true,
+            separation_degrees: 120.0,
+            width_days: 14.0,
+            ..MoonPolicy::default()
+        };
+        let lenient = MoonPolicy {
+            enabled: true,
+            separation_degrees: 20.0,
+            width_days: 2.0,
+            ..MoonPolicy::default()
+        };
+        let mut ruled = request();
+        ruled.targets[0].moon = vec![strict.clone()];
+        let blocked = night_preview(&ruled).unwrap()[0].targets[0].hours_up_moon_allowed;
+        assert!(
+            blocked < heart.hours_up - 1.0,
+            "{blocked} of {}",
+            heart.hours_up
+        );
+        ruled.targets[0].moon = vec![strict, lenient];
+        let either = night_preview(&ruled).unwrap()[0].targets[0].hours_up_moon_allowed;
+        assert!(
+            either > blocked && either <= heart.hours_up + 1e-9,
+            "{either}"
+        );
+        // Availability still clips what the Moon allows.
+        ruled.available = Some(vec![]);
+        assert_eq!(
+            night_preview(&ruled).unwrap()[0].targets[0].hours_up_moon_allowed,
+            0.0
+        );
+        let mut bad = request();
+        bad.targets[0].moon = vec![MoonPolicy {
+            width_days: 0.5,
+            ..MoonPolicy::default()
+        }];
+        assert_eq!(night_preview(&bad), Err(NightError::InvalidRequest));
+    }
+
+    #[test]
+    fn availability_clips_dark_hours_and_target_hours_to_its_windows() {
+        let open = night_preview(&request()).unwrap();
+        let first = &open[0];
+        assert_eq!(first.available_dark_hours, first.dark_hours);
+        assert_eq!(
+            first.targets[0].hours_up_available,
+            first.targets[0].hours_up
+        );
+        let dusk = first.dusk_ms.unwrap();
+        let dawn = first.dawn_ms.unwrap();
+        // Limited to an hour and a half from 07 minutes past a sample, so the
+        // edges fall inside steps and count to the minute.
+        let mut limited = request();
+        limited.available = Some(vec![Interval {
+            start_ms: dusk + 3_600_000 + 7 * 60_000,
+            end_ms: dusk + 3_600_000 + 97 * 60_000,
+        }]);
+        let nights = night_preview(&limited).unwrap();
+        assert!(
+            (nights[0].available_dark_hours - 1.5).abs() < 1e-9,
+            "{:?}",
+            nights[0]
+        );
+        assert_eq!(nights[0].dark_hours, first.dark_hours);
+        assert!(nights[0].targets[0].hours_up_available <= 1.5 + 1e-9);
+        assert_eq!(nights[0].targets[0].hours_up, first.targets[0].hours_up);
+        // The second night has no window at all: nothing is available.
+        assert_eq!(nights[1].available_dark_hours, 0.0);
+        assert_eq!(nights[1].targets[0].hours_up_available, 0.0);
+        // A window across local midnight, overlapping a second one, counts once.
+        let midnight = first.noon_ms + DAY_MS / 2;
+        let mut across = request();
+        across.nights = 1;
+        across.available = Some(vec![
+            Interval {
+                start_ms: midnight - 3_600_000,
+                end_ms: midnight + 3_600_000,
+            },
+            Interval {
+                start_ms: midnight,
+                end_ms: midnight + 1_800_000,
+            },
+        ]);
+        let night = &night_preview(&across).unwrap()[0];
+        assert!((night.available_dark_hours - 2.0).abs() < 1e-9, "{night:?}");
+        assert!(
+            (night.targets[0].hours_up_available - 2.0).abs() < 1e-9,
+            "{night:?}"
+        );
+        // An unavailable night is an empty list, which is not the same as none.
+        let mut closed = request();
+        closed.available = Some(vec![]);
+        let nights = night_preview(&closed).unwrap();
+        assert!(nights
+            .iter()
+            .all(|n| n.available_dark_hours == 0.0 && n.dark_hours > 9.0));
+        assert!(dawn > dusk);
+        let mut bad = request();
+        bad.available = Some(vec![Interval {
+            start_ms: dusk,
+            end_ms: dusk,
+        }]);
+        assert_eq!(night_preview(&bad), Err(NightError::InvalidRequest));
     }
 
     #[test]

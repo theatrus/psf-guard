@@ -1,0 +1,18 @@
+[package]
+name = "psf-guard-ts-planner"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+# Follows Target Scheduler's planner closely, so it keeps Target Scheduler's
+# licence, file by file. See README.md.
+license = "MPL-2.0"
+publish = false
+description = "An emulation of N.I.N.A. Target Scheduler's planner, to preview what a rig will shoot"
+
+[dependencies]
+psf-guard-director-core = { path = "../director-core" }
+serde = { version = "1", features = ["derive"] }
+sofars = "=0.6.2"
+
+[dev-dependencies]
+serde_json = { version = "1", features = ["float_roundtrip"] }

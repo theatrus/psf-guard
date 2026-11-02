@@ -288,6 +288,7 @@ pub(super) async fn evaluate(
                 targets: vec![NightTarget {
                     id: "center".into(),
                     position: center,
+                    moon: vec![],
                 }],
                 start_ms,
                 nights,
@@ -295,6 +296,7 @@ pub(super) async fn evaluate(
                 dark_below_degrees: DARK_BELOW_DEGREES,
                 meridian_exclusion: applied.meridian_exclusion,
                 meridian_window_ms: u64::from(applied.meridian_window_minutes) * 60_000,
+                available: None,
             };
             let computed: Vec<Result<(Night, Option<NightCurve>), _>> = (0..nights)
                 .into_par_iter()
@@ -408,20 +410,12 @@ fn applied_limits(
     rig: &Limits,
     plan: &SchedulingValues,
 ) -> Result<(AltitudeLimits, AppliedLimits), String> {
-    let plan_maximum = if plan.maximum_altitude_degrees > 0.0 {
-        plan.maximum_altitude_degrees
-    } else {
-        90.0
-    };
-    let altitude = AltitudeLimits {
-        rig_minimum_degrees: rig.minimum_altitude_degrees,
-        rig_maximum_degrees: rig.maximum_altitude_degrees,
-        project_minimum_degrees: plan.minimum_altitude_degrees,
-        project_maximum_degrees: plan_maximum,
-        // The core never lowers the custom horizon, so a negative offset
-        // counts as none and can only undercount the hours.
-        horizon_offset_degrees: plan.horizon_offset_degrees.max(0.0),
-    };
+    let altitude = combined_limits(
+        rig,
+        plan.minimum_altitude_degrees,
+        plan.maximum_altitude_degrees,
+        plan.horizon_offset_degrees,
+    )?;
     let applied = AppliedLimits {
         minimum_altitude_degrees: altitude
             .rig_minimum_degrees
@@ -433,13 +427,45 @@ fn applied_limits(
         horizon_offset_degrees: altitude.horizon_offset_degrees,
         meridian_window_minutes: plan.meridian_window_minutes,
     };
+    Ok((altitude, applied))
+}
+
+/// A rig profile's limits with one plan's, as Target Scheduler applies a
+/// project's: the higher minimum, the lower maximum (a plan maximum of 0 is
+/// none) and the offset on the custom horizon. Feasibility and night plans
+/// count a plan's hours with it. Err names the limits when they are not a
+/// range.
+pub(super) fn combined_limits(
+    rig: &Limits,
+    minimum_degrees: f64,
+    maximum_degrees: f64,
+    horizon_offset_degrees: f64,
+) -> Result<AltitudeLimits, String> {
+    let altitude = AltitudeLimits {
+        rig_minimum_degrees: rig.minimum_altitude_degrees,
+        rig_maximum_degrees: rig.maximum_altitude_degrees,
+        project_minimum_degrees: minimum_degrees,
+        project_maximum_degrees: if maximum_degrees > 0.0 {
+            maximum_degrees
+        } else {
+            90.0
+        },
+        // The core never lowers the custom horizon, so a negative offset
+        // counts as none and can only undercount the hours.
+        horizon_offset_degrees: horizon_offset_degrees.max(0.0),
+    };
     altitude.validate().map_err(|_| {
         format!(
             "minimum {}°, maximum {}°",
-            applied.minimum_altitude_degrees, applied.maximum_altitude_degrees
+            altitude
+                .rig_minimum_degrees
+                .max(altitude.project_minimum_degrees),
+            altitude
+                .rig_maximum_degrees
+                .min(altitude.project_maximum_degrees)
         )
     })?;
-    Ok((altitude, applied))
+    Ok(altitude)
 }
 
 /// Frames already accepted at one rig, by contribution and panel: the

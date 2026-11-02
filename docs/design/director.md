@@ -4746,6 +4746,10 @@ should say so instead of hiding it:
   sits in the existing jobs slot on every view and opens Sky's live panel.
   The Library's family rows and the Workspace's rig list were to show their
   slice of the same status inline; that is not built yet.
+  *Superseded, November 2026:* the table moved to a **Rigs** page with
+  **Live** and **Nights** tabs ([night plans](night-plans.md)). Its header
+  tab carries the chip's fleet status, and the chip is gone. The Sky keeps
+  the rigs on its map.
 - **Rig setup** and **Exposure templates** move under Settings. They are
   configuration, not daily work.
 
@@ -4796,7 +4800,8 @@ should now take into account:
   also resolves any rig's GUID, the plan id, or `<slug>:<project row>`, and
   rewrites the address to the plan's own key. If a detach has left two
   plans holding the GUID, the page lists both and asks which. The Library
-  is `/#/`, and Live on the Sky is `/#/sky?live=1`.
+  is `/#/`, the Live table is `/#/rigs`, and the rigs on the Sky's map are
+  `/#/sky?live=1`.
 - **Rig identity.** Unchanged: a rig is one registered database with its
   `psf_guard_catalog_identity`; the status and check-in tuple still carries
   `coordinator_instance_id` and `catalog_id`, and a mismatch is refused.

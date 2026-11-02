@@ -6,7 +6,7 @@ import ProjectTargetSelector from './components/ProjectTargetSelector';
 import RigTargetSelect from './components/header/RigTargetSelect';
 import { useCurrentPlan } from './components/header/useCurrentPlan';
 import ActivityChip from './components/header/ActivityChip';
-import LiveChip from './components/header/LiveChip';
+import RigsTab from './components/header/RigsTab';
 import { useDesktopZoom, type DesktopZoom } from './hooks/useDesktopZoom';
 import { useDesktopFullscreen } from './hooks/useDesktopFullscreen';
 import HeaderMenu from './components/header/HeaderMenu';
@@ -22,7 +22,7 @@ import WhatsNew from './components/WhatsNew';
 import BuildRefresh from './components/BuildRefresh';
 import TauriSettings from './components/TauriSettings';
 import { DesktopServerGate } from './components/DesktopServerSettings';
-import { isOverviewPath, isPlanningPath, isSkyPath, useDbProjectTarget } from './hooks/useUrlState';
+import { isOverviewPath, isPlanningPath, isRigsPath, isSkyPath, useDbProjectTarget } from './hooks/useUrlState';
 import { scopeForView } from './utils/viewScope';
 import { isTauriApp, tauriConfig } from './utils/tauri';
 import {
@@ -174,6 +174,7 @@ function AppContent({ zoom }: { zoom?: DesktopZoom }) {
   const isOnStacks = location.pathname === '/stacks';
   const isOnCalibration = location.pathname === '/calibration';
   const isOnSky = isSkyPath(location.pathname);
+  const isOnRigs = isRigsPath(location.pathname);
 
   return (
     <div className="app">
@@ -206,6 +207,9 @@ function AppContent({ zoom }: { zoom?: DesktopZoom }) {
             current={isOnSky}
             onClick={() => navigate(toScoped('/sky'))}
           />
+          {/* Every rig, live and over the coming nights, with the fleet's
+              status on the tab; like the Sky, it follows no scope. */}
+          <RigsTab current={isOnRigs} onClick={() => navigate(toScoped('/rigs'))} />
           <ViewTab
             label="Library"
             icon={LibraryBig}
@@ -271,7 +275,6 @@ function AppContent({ zoom }: { zoom?: DesktopZoom }) {
           {/* Background work on every database, kept to one small chip;
               hover or click opens the queue. */}
           <ActivityChip />
-          <LiveChip />
           <HeaderMenu
             zoom={zoom}
             onSettings={access.canWrite ? () => setShowSettings(true) : undefined}
