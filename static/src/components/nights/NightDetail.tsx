@@ -173,15 +173,16 @@ function PlanHours({ rig, night, colours, view }: { rig: RigNights; night: RigNi
   const { applies, out } = planRows(rig, night, schedule);
   const planned = applies.filter(row => row.status === 'planned').length;
   const notPlanned = applies.length - planned;
-  const heading = applies.length === 0 ? 'Nothing owed can be shot this night'
-    : scheduled ? `This night: ${[planned && `${planned} planned`, notPlanned && `${notPlanned} not planned`].filter(Boolean).join(', ')}`
-    : `This night: ${applies.length} up and clear`;
+  const targets = (count: number) => `${count} target${count === 1 ? '' : 's'}`;
+  const heading = applies.length === 0 ? 'No owed target can be imaged this night'
+    : scheduled ? `This night: ${[planned && `${targets(planned)} planned`, notPlanned && `${planned ? notPlanned : targets(notPlanned)} not planned`].filter(Boolean).join(', ')}`
+    : `This night: ${targets(applies.length)} up and clear`;
   const planName = (row: PlanRow) => <><span className="nights-plan-dot" data-colour={colours.get(row.plan.name) ?? 0} aria-hidden="true" />{row.plan.name}</>;
   const frames = (count: number) => `${count} frame${count === 1 ? '' : 's'}`;
   const headingId = `nights-plans-${rig.rig.id}-${night.date}`;
   return <section className="nights-plans" aria-labelledby={headingId}>
     <h4 id={headingId}>{heading}</h4>
-    {view.tonight && applies.length > 0 && <p className="director-muted">Usable hours are the whole night's; tonight is planned from now.</p>}
+    {view.tonight && applies.length > 0 && <p className="director-muted">Usable hours count the whole night. Tonight's schedule plans only from now.</p>}
     {applies.length > 0 && <div className="director-table-scroll"><table className="nights-plan-table">
       <thead><tr><th>Plan</th><th>Target</th>{scheduled && <th>Planned</th>}<th>Usable</th><th>Peak</th><th>Owed</th>{doneBy && <th>Done by</th>}</tr></thead>
       <tbody>{applies.map(row => {
@@ -191,20 +192,20 @@ function PlanHours({ rig, night, colours, view }: { rig: RigNights; night: RigNi
           <td>{planName(row)}{row.plan.priority !== 'normal' && <span className="director-muted"> · {row.plan.priority} priority</span>}</td>
           <td>{row.target.name}<span className="director-muted"> · {row.target.filters.join(', ')}</span></td>
           {scheduled && <td>{row.planned > 0 ? frames(row.planned) : <span className="director-muted">not planned</span>}</td>}
-          <td>{formatHours(row.usable)}{blocked > 0 && <span className="director-muted"> · Moon blocks {formatHours(blocked)}</span>}</td>
+          <td>{formatHours(row.usable)}{blocked > 0 && <span className="director-muted"> · {formatHours(blocked)} excluded by the Moon</span>}</td>
           <td>{row.hours && row.hours.max_altitude_degrees > -90 ? `${Math.round(row.hours.max_altitude_degrees)}°${row.hours.transit_ms ? ` at ${formatClock(row.hours.transit_ms)}` : ''}` : '—'}</td>
           <td>{formatHours(row.target.hours_owed)}<span className="director-muted"> · {frames(row.target.frames_owed)}</span></td>
           {doneBy && <td>{done === null || done < 0
-            ? <span className="director-muted">not in {doneBy.nights.length} nights</span>
+            ? <span className="director-muted">not within these {doneBy.nights.length} nights</span>
             : formatNightDate(doneBy.nights[done]?.date ?? night.date)}</td>}
         </tr>;
       })}</tbody>
     </table></div>}
     {out.length > 0 && <details className="nights-other-plans" open={applies.length === 0}>
-      <summary>Not this night: {out.length} target{out.length === 1 ? '' : 's'}</summary>
+      <summary>Not this night: {targets(out.length)}</summary>
       <ul>{out.map(row => <li key={`${row.plan.project_id}:${row.target.target_id}`}>
         {planName(row)} · {row.target.name}: <span className="director-muted">{row.status === 'done'
-          ? `done ${row.done_on ? `by ${formatNightDate(row.done_on)}` : 'before these nights'}`
+          ? `plan done ${row.done_on ? `by ${formatNightDate(row.done_on)}` : 'before these nights'}`
           : OUT_REASON[row.status as keyof typeof OUT_REASON]}</span>
       </li>)}</ul>
     </details>}

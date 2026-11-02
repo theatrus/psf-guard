@@ -192,11 +192,11 @@ export type NightTargetStatus =
 /** Why a target the night does not apply to is out, but for `done`, whose
  *  reason names the night. */
 export const OUT_REASON: Record<Exclude<NightTargetStatus, 'planned' | 'usable' | 'done'>, string> = {
-  moon: 'the Moon rules of its filters turn it down',
-  not_clear: 'up only while the night is marked not clear',
-  outside_window: 'not up in its meridian window in the dark',
-  below_limits: 'not above its horizon and limits in the dark',
-  no_darkness: 'no darkness this night',
+  moon: "its filters' Moon avoidance excludes every clear hour",
+  not_clear: 'above its limits only while the night is marked not clear',
+  outside_window: 'not above its limits inside its meridian window during darkness',
+  below_limits: 'not above its horizon and altitude limits during darkness',
+  no_darkness: 'the sky does not get dark this night',
 };
 
 export interface PlanRow {

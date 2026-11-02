@@ -64,16 +64,16 @@ describe('Nights', () => {
     expect(within(detail).getByText('· dome motor')).toBeInTheDocument();
     // Marked out, the night applies to nothing; the target folds away
     // with its reason.
-    const plansTonight = within(detail).getByRole('region', { name: 'Nothing owed can be shot this night' });
+    const plansTonight = within(detail).getByRole('region', { name: 'No owed target can be imaged this night' });
     expect(within(plansTonight).getByText('Not this night: 1 target')).toBeInTheDocument();
-    expect(within(plansTonight).getByRole('listitem')).toHaveTextContent('Heart Nebula · IC 1805: up only while the night is marked not clear');
+    expect(within(plansTonight).getByRole('listitem')).toHaveTextContent('Heart Nebula · IC 1805: above its limits only while the night is marked not clear');
     expect(cells[1]).toHaveAttribute('aria-pressed', 'true');
     // A clear night lists it, usable for its hours less the Moon's. With
     // no schedule to say what is planned, nothing is called waiting.
     fireEvent.click(cells[0]);
-    const clearNight = within(screen.getByRole('region', { name: 'Night details' })).getByRole('region', { name: 'This night: 1 up and clear' });
+    const clearNight = within(screen.getByRole('region', { name: 'Night details' })).getByRole('region', { name: 'This night: 1 target up and clear' });
     const row = within(clearNight).getByRole('row', { name: /IC 1805/ });
-    expect(row).toHaveTextContent('5.0 h · Moon blocks 1.0 h');
+    expect(row).toHaveTextContent('5.0 h · 1.0 h excluded by the Moon');
     expect(row).not.toHaveClass('is-idle-plan');
   });
 
