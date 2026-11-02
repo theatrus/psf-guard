@@ -105,8 +105,20 @@ install -Dpm0600 packaging/rpm/systemd/psf-guard-worker.conf \
 %config(noreplace) %attr(0600,root,root) %{_sysconfdir}/%{name}/worker.conf
 
 %changelog
-* Thu Oct 29 2026 Yann Ramin <github@theatr.us> - 0.13.0-1
-- Interim development version on main; released builds come from release/* branches
+* Sun Nov 01 2026 Yann Ramin <github@theatr.us> - 0.13.0-1
+- Add GPU stacking, integrated mosaics, live previews and remote workers
+- Add color-processing steps, stack inspection tools and grouped Settings
+
+* Thu Oct 29 2026 Yann Ramin <github@theatr.us> - 0.12.5-1
+- Keep renamed lights renamed in catalogs a sync writes, and merge their twins
+- Name a missing image folder in the renamed-lights check
+
+* Wed Oct 28 2026 Yann Ramin <github@theatr.us> - 0.12.4-1
+- Start the server when an image folder is missing
+- Keep a renamed file's frame, and merge frames imported twice after a rename
+- Judge flat coverage by the nearest contributing flat
+- Fix a stale processing result after a reload, and a second scrollbar over Stacks
+- Update zstd for four memory-safety advisories
 
 * Fri Oct 23 2026 Yann Ramin <github@theatr.us> - 0.12.3-1
 - Add project and plan removal, collaboration exit, and color-channel processing

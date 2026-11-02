@@ -1,5 +1,15 @@
 # README screenshot sources
 
+## 0.13 screenshot handoff
+
+The [documentation-site screenshot plan](https://github.com/theatrus/psf-guard-docs/blob/main/SCREENSHOT-PLAN.md#013-capture-priorities)
+tracks the six priority feature captures, focused-guide reshoots and older
+state-dependent shots. Capture against the running build and record actual
+state before replacing an image. Existing 0.12 captures below remain historical
+records; their version labels do not verify a 0.13 build.
+
+## 0.12 screenshot sources
+
 The main README reuses documentation-site captures from October 17–18, 2026.
 All files are exact copies, with no resizing or edits. Keep the files and
 recorded states together when reshooting. This record preserves the original

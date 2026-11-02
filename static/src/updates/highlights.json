@@ -1,5 +1,96 @@
 [
   {
+    "version": "0.13.0",
+    "deprecations": [
+      {
+        "title": "Direct Target Scheduler access remains deprecated",
+        "body": "Existing direct connections still work in 0.13. For a new connection, open Settings › Databases & rigs › New / import and import Target Scheduler into a PSF Guard catalog, or pair the PSF Guard Sync plugin. This release does not automatically convert existing direct connections."
+      }
+    ],
+    "upgradeNotes": [
+      {
+        "title": "Allow time for stack rebuilds",
+        "body": "Each stack rebuilds once when next opened or refreshed. Older mosaic color previews without a solve of the integrated canvas are marked out of date; Build current set refreshes them from cached stacks."
+      },
+      {
+        "title": "Scoring defaults are shared on the server",
+        "body": "The first editor to open PSF Guard after updating saves their scoring defaults on the server, including built-in values. Everyone then uses those defaults; only editors can change them. Viewer defaults are not copied. Review them in Settings › Review › Grading & display."
+      },
+      {
+        "title": "Keep existing processing and database choices",
+        "body": "Existing color previews keep their settings. Existing quality-analysis and calibrated-copy choices become database overrides; new databases inherit shared defaults. New color previews use the default Color setup, and new automatic narrowband recipes stretch RGB stars independently."
+      },
+      {
+        "title": "Update workers with the server",
+        "body": "Install the same release on each worker. Stack builds stay on the server until you choose Workers first or Workers only. WBPP runs stay on the server."
+      }
+    ],
+    "highlights": [
+      {
+        "title": "Stack on the GPU and watch the image form",
+        "body": "Supported GPUs accelerate debayering, star detection, resampling, live stacking and the final pass. A Live stack preview updates about every five seconds while a channel builds. Choose GPU passes in Settings › Performance › GPU."
+      },
+      {
+        "title": "Integrate mosaic panels into one image",
+        "body": "Build one mosaic FITS per channel, with each frame’s calibration preserved, then compose RGB, LRGB or narrowband color. Color calibration solves the integrated canvas. Mosaic SNR plots report canvas coverage and mean pixel depth."
+      },
+      {
+        "title": "Run stacks and RC-Astro on another computer",
+        "body": "Workers can build channel and mosaic stacks or run BlurXTerminator, NoiseXTerminator and StarXTerminator. Choose where each kind of work runs. Desktop workers run from the menu bar or tray; Windows and Linux services can start before login."
+      },
+      {
+        "title": "Process color in numbered steps",
+        "body": "Follow separate color and RGB-star branches, fit and subtract continuum for emission combinations, and control RGB-star sharpening, stretching and reduction. Automatic SHO/HOO recipes can restore RGB stars with an explained fallback."
+      },
+      {
+        "title": "Inspect stacks with the image viewer’s tools",
+        "body": "Open stacks and calibration masters beside a narrower details sidebar. Stacks offer pixel-derived Sky context, HFR star labels and a PSF view. Value and RA/Dec readouts follow the pointer; press M or R to toggle them."
+      },
+      {
+        "title": "Find settings by task and database",
+        "body": "Settings groups processing, performance, storage, exports and review in a sidebar or phone selector. Each database has Rig setup, Database & files, Import and Sync pages. Shared defaults and explicit overrides keep their scope visible."
+      },
+      {
+        "title": "Manage memory, storage and external flats",
+        "body": "Set the processing memory budget and choose WBPP retention and volume limits. Save storage options together. External flat masters at another gain is off by default; enable it for externally built flats whose own flat darks were subtracted."
+      }
+    ]
+  },
+  {
+    "version": "0.12.5",
+    "deprecations": [],
+    "upgradeNotes": [],
+    "highlights": [
+      {
+        "title": "Renamed files in synced catalogs",
+        "body": "A catalog that syncs from Target Scheduler, or that rigs sync their lights into, now keeps a renamed file’s frame. A sync that sends the old name leaves the new one in place. To merge frames imported twice, open the database in Settings and click Merge renamed lights."
+      }
+    ]
+  },
+  {
+    "version": "0.12.4",
+    "deprecations": [],
+    "upgradeNotes": [],
+    "highlights": [
+      {
+        "title": "Start with a missing image folder",
+        "body": "PSF Guard starts when an image folder was moved or its drive is not mounted. Frames there show as not found until the folder is back, and imports skip it. Change a database’s folders in Settings."
+      },
+      {
+        "title": "Renamed files keep their frames",
+        "body": "An automatic import matches a file renamed after it was imported to its frame, which keeps its grade and history. To merge frames imported twice by earlier versions, open the database in Settings and click Merge renamed lights."
+      },
+      {
+        "title": "Flat coverage from the nearest flat",
+        "body": "A fresh flat in a light’s master now counts toward coverage even when older flats in the same master move its median capture time past the Flat age limit. Age checks and the calibration report use the nearest contributing flat."
+      },
+      {
+        "title": "zstd security update",
+        "body": "PSF Guard’s zstd library is updated for four memory-safety advisories in the code that reads and writes compressed XISF files and stacking contexts."
+      }
+    ]
+  },
+  {
     "version": "0.12.3",
     "deprecations": [],
     "upgradeNotes": [
@@ -86,7 +177,7 @@
     "deprecations": [
       {
         "title": "PSF Guard is moving to its own catalogs",
-        "body": "For new Target Scheduler databases, choose Settings → Databases & rigs → Overview → Import from Target Scheduler to import the database and set up sync.\n\nYour current Target Scheduler setup will keep working in 0.12. A later update will create a PSF Guard catalog for you and keep captures, plans and grades in sync with Target Scheduler.\n\nSeparate catalogs let us add features to PSF Guard and support new Target Scheduler versions. We plan to remove direct database access in 0.13 or later."
+        "body": "For new Target Scheduler databases, choose Settings → Databases → Import from Target Scheduler to import the database and set up sync.\n\nYour current Target Scheduler setup will keep working in 0.12. A later update will create a PSF Guard catalog for you and keep captures, plans and grades in sync with Target Scheduler.\n\nSeparate catalogs let us add features to PSF Guard and support new Target Scheduler versions. We plan to remove direct database access in 0.13 or later."
       }
     ],
     "upgradeNotes": [
