@@ -927,6 +927,63 @@ pub(super) fn integrate_channel(
         if cancel.requested() {
             return Ok(ChannelOutcome::Cancelled);
         }
+        let exposures = accepted_exposures(&ledger);
+        let progressive = snr::ProgressiveSnr::for_group(order, points, &exposures, group.mosaic);
+        publish(
+            job_id,
+            group.index,
+            Integrated {
+                image: integrated,
+                clipped,
+                reference_headers,
+                accepted_frames,
+                rejected_frames,
+                progressive,
+                orientation_vote,
+            },
+            orientation,
+            gpu,
+            &outputs,
+            events,
+        )
+    })
+}
+
+/// A channel's finished stack, before it is oriented and written.
+pub(super) struct Integrated {
+    pub image: seiza_stacking::LinearImage,
+    pub clipped: Option<seiza_stacking::LinearImage>,
+    /// The reference frame's cards, whose WCS the stack carries.
+    pub reference_headers: Vec<(String, seiza_fits::HeaderValue)>,
+    pub accepted_frames: u32,
+    pub rejected_frames: u32,
+    pub progressive: snr::ProgressiveSnr,
+    /// How the integrated frames sat against the reference, for the half
+    /// turn a reference-oriented stack may take.
+    pub orientation_vote: OrientationVote,
+}
+
+/// Orient a finished stack as `orientation` says, and write it and its
+/// clipped map to `outputs`, with the cards that say how it was made.
+pub(super) fn publish(
+    job_id: &str,
+    group_index: usize,
+    integrated: Integrated,
+    orientation: Orientation,
+    gpu: StackGpu,
+    outputs: &ChannelOutputs,
+    events: &mut (dyn ChannelEvents + Send),
+) -> Result<ChannelOutcome, String> {
+    let Integrated {
+        image: integrated,
+        clipped,
+        reference_headers,
+        accepted_frames,
+        rejected_frames,
+        progressive,
+        orientation_vote,
+    } = integrated;
+    {
         // Registration already absorbs a meridian flip, so a stack is published
         // in the reference frame's own rotation unless the caller asks for the
         // shared north-up grid that a mosaic needs. The one correction it still
@@ -974,7 +1031,7 @@ pub(super) fn integrate_channel(
                 tracing::info!(
                     "Stack preview {} group {}: publishing {}, decided by {decided_by}",
                     job_id,
-                    group.index,
+                    group_index,
                     if turn {
                         "half a turn out of the reference frame"
                     } else {
@@ -1023,12 +1080,10 @@ pub(super) fn integrate_channel(
             )
             .with_comment("rejected input frames"),
         );
-        let exposures = accepted_exposures(&ledger);
-        let progressive = snr::ProgressiveSnr::for_group(order, points, &exposures, group.mosaic);
         output_cards.push(
             seiza_fits::WriteHeaderCard::new(
                 "SNRORDER",
-                seiza_fits::HeaderValue::String(order.as_str().into()),
+                seiza_fits::HeaderValue::String(progressive.order.as_str().into()),
             )
             .with_comment("frame order the SNR curve was measured in"),
         );
@@ -1080,5 +1135,5 @@ pub(super) fn integrate_channel(
             clipped,
             progressive,
         })))
-    })
+    }
 }

@@ -93,6 +93,15 @@ describe('StackMethodSettings', () => {
     expect(saved[0].bayer_drizzle).toBe(true);
   });
 
+  it('turns stacking each night apart on', async () => {
+    const saved = mockServer(recommended);
+    renderSettings();
+    await userEvent.click(await screen.findByRole('checkbox', { name: /Stack each night apart/ }));
+    await waitFor(() => expect(saved).toHaveLength(1));
+    expect(saved[0]).toEqual({ ...recommended, partial_stacks: true });
+    expect(await screen.findByText('Now: Custom')).toBeInTheDocument();
+  });
+
   it('saves the orientation group margin when the field loses focus, and refuses one past the limit', async () => {
     const saved = mockServer(recommended);
     renderSettings();

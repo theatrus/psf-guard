@@ -993,6 +993,52 @@ pub(crate) mod testing {
         stacked(recorder, &outputs)
     }
 
+    /// Stack `group` as partial stacks kept in `store`, its frames dealt to
+    /// `sessions` calibration sessions in turn, as a build with partial
+    /// stacks does.
+    pub(crate) fn stack_in_sessions(
+        Channel(group): &Channel,
+        directory: &FsPath,
+        store: &FsPath,
+        sessions: usize,
+    ) -> Stacked {
+        let mut plan = crate::calibration::CalibrationPlan::without_calibration(group.frames.len());
+        let more = (1..sessions)
+            .map(|_| crate::calibration::CalibrationSession {
+                masters: Default::default(),
+                recipe: crate::calibration::MasterRecipe::None,
+                applied: plan.sessions[0].applied.clone(),
+                match_tolerances: plan.sessions[0].match_tolerances,
+            })
+            .collect::<Vec<_>>();
+        plan.sessions.extend(more);
+        plan.assignments = (0..group.frames.len())
+            .map(|index| index % sessions)
+            .collect();
+        let outputs = outputs(directory);
+        let pool = crate::concurrency::ComputePool::take("stack-test", 4).unwrap();
+        let mut recorder = Recorder::default();
+        let built = super::super::partial_stacks::integrate_by_sessions(
+            super::super::partial_stacks::SessionWork {
+                job_id: "test",
+                group,
+                plan: &plan,
+                method: method(group),
+                gpu: StackGpu::default(),
+                order: snr::StackFrameOrder::Capture,
+                orientation: orientation(group),
+                outputs: outputs.clone(),
+                store: store.to_path_buf(),
+                pool: &pool,
+                cancel: &Stop::new(),
+            },
+            &mut recorder,
+        )
+        .unwrap();
+        assert!(matches!(built, integrate::ChannelOutcome::Built(_)));
+        stacked(recorder, &outputs)
+    }
+
     /// Stack `group` on a worker connected to `state`'s board.
     pub(crate) fn stack_on_worker(
         state: &Arc<AppState>,

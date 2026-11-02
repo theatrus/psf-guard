@@ -746,7 +746,46 @@ pub(super) fn run_group(
     if group.mosaic {
         mosaic::panel_references(&group, method.bayer_drizzle)?;
     }
-    let (integrated, lease, pool) = if remote_channel::wanted(state) {
+    // Partial stacks, one per calibration session, take a single reference
+    // grid: a mosaic's canvas and a Bayer drizzle keep the one accumulator.
+    let partial_stacks = method.partial_stacks && !group.mosaic && !method.bayer_drizzle;
+    if method.partial_stacks && !partial_stacks {
+        add_note_to(
+            state,
+            job_id,
+            group.index,
+            "Stacked in one pass: partial stacks do not take mosaics or Bayer drizzle yet",
+        );
+    }
+    let (integrated, lease, pool) = if partial_stacks {
+        let mut events = CardEvents {
+            state,
+            job_id,
+            index: group.index,
+            live: None,
+            stack_root,
+            database_id,
+            identity: identity.clone(),
+            listed_before: Some(listed_before.clone()),
+        };
+        let integrated = partial_stacks::integrate_by_sessions(
+            partial_stacks::SessionWork {
+                job_id,
+                group: &group,
+                plan: &plan,
+                method,
+                gpu,
+                order,
+                orientation: orientation.clone(),
+                outputs: outputs.clone(),
+                store: partial_stacks::store_root(stack_root),
+                pool: &pool,
+                cancel,
+            },
+            &mut events,
+        )?;
+        (integrated, lease, pool)
+    } else if remote_channel::wanted(state) {
         drop(pool);
         drop(lease);
         let mut events = CardEvents {
