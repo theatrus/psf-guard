@@ -4451,6 +4451,7 @@ dependencies = [
  "psf-guard-director-core",
  "psf-guard-director-interop",
  "psf-guard-director-meta",
+ "psf-guard-ts-planner",
  "rand 0.10.3",
  "rayon",
  "reflink-copy",
@@ -4570,6 +4571,16 @@ dependencies = [
  "tempfile",
  "tokio",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "psf-guard-ts-planner"
+version = "0.1.0"
+dependencies = [
+ "psf-guard-director-core",
+ "serde",
+ "serde_json",
+ "sofars",
 ]
 
 [[package]]

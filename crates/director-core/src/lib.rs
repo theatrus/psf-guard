@@ -19,6 +19,7 @@ pub mod program;
 pub mod project;
 pub mod quality;
 pub mod recovery;
+pub mod schedule;
 pub mod visibility;
 pub mod windows;
 use windows::{observing_windows, Interval, MeridianExclusion, TransitCoverage, WindowError};

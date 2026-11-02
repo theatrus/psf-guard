@@ -288,6 +288,7 @@ pub(super) async fn evaluate(
                 targets: vec![NightTarget {
                     id: "center".into(),
                     position: center,
+                    moon: vec![],
                 }],
                 start_ms,
                 nights,
@@ -295,6 +296,7 @@ pub(super) async fn evaluate(
                 dark_below_degrees: DARK_BELOW_DEGREES,
                 meridian_exclusion: applied.meridian_exclusion,
                 meridian_window_ms: u64::from(applied.meridian_window_minutes) * 60_000,
+                available: None,
             };
             let computed: Vec<Result<(Night, Option<NightCurve>), _>> = (0..nights)
                 .into_par_iter()

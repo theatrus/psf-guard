@@ -150,6 +150,7 @@ impl Night {
                 after_ms: 0,
             },
             meridian_window_ms: 0,
+            available: None,
         })
         .map_err(|_| Error::InvalidNight)?
         .pop()
