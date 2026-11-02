@@ -24,6 +24,7 @@
 .visibility-chart .target { fill: none; stroke: var(--visibility-target); stroke-width: 2.5; }
 .visibility-chart .horizon { fill: none; stroke: var(--visibility-horizon); stroke-width: 2; }
 .visibility-chart .moon { fill: none; stroke: var(--visibility-moon); stroke-width: 1.5; stroke-dasharray: 6 5; }
+.visibility-projection p { margin: 4px 0; }
 .visibility-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; font-size: 12px; margin: 6px 0; }
 .visibility-legend .key { display: inline-block; width: 14px; height: 3px; margin-right: 4px; vertical-align: middle; }
 .visibility-legend .key.target { background: var(--visibility-target); }

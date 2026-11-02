@@ -82,6 +82,28 @@ async fn feasibility_times_each_rig_with_a_site_and_names_the_rest() {
         (2..=3).contains(&nights_to_complete),
         "{nights_to_complete}"
     );
+    // At 09:00 the night has ended: the count starts with the coming night,
+    // as it does at 17:00 that day.
+    let (_, morning) = call(
+        &a.f.app,
+        "POST",
+        &path,
+        json!({"nights": 3, "start_ms": 1_790_294_400_000u64 + 16 * 3_600_000}),
+        None,
+    )
+    .await;
+    let (_, evening) = call(
+        &a.f.app,
+        "POST",
+        &path,
+        json!({"nights": 3, "start_ms": 1_790_294_400_000u64 + 24 * 3_600_000}),
+        None,
+    )
+    .await;
+    assert_eq!(
+        morning["data"]["rigs"][0]["nights_to_complete"],
+        evening["data"]["rigs"][0]["nights_to_complete"]
+    );
     // At 04:00 the same night, its hours already past are gone.
     let (_, late) = call(
         &a.f.app,

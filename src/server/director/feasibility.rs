@@ -398,7 +398,13 @@ pub(super) async fn evaluate(
                     / 3_600_000.0;
                 *tonight = tonight.min(left);
             }
-            let nights_to_complete = hours_needed.and_then(|needed| nights_until(needed, &usable, &nights_out));
+            // Between dawn and noon the night under way has ended: the count
+            // starts with the coming night.
+            let ended = nights_out
+                .first()
+                .is_some_and(|night| night.dawn_ms.is_some_and(|dawn| dawn <= start_ms)) as usize;
+            let nights_to_complete = hours_needed
+                .and_then(|needed| nights_until(needed, &usable[ended..], &nights_out[ended..]));
             Ok(RigFeasibility {
                 rig,
                 catalog_name,

@@ -717,19 +717,27 @@ export interface DirectorProjection {
   rigs: DirectorRigProjection[];
   warnings: string[];
 }
+/** What a rig's schedule says of the plan. */
+export type DirectorProjectionOutcome =
+  /** Planned: the night the last frame is planned, null when not within
+   *  the nights; `unscheduled` exposure plans owe frames but are left out. */
+  | { kind: 'scheduled'; completes_on: string | null; unscheduled: number }
+  /** The rig has every frame the plan needs from it. */
+  | { kind: 'done' }
+  | { kind: 'skipped'; reason: string };
 export interface DirectorRigProjection {
-  rig: DirectorIdentity;
-  catalog_name: string;
-  runtime: import('./nightPlanTypes').NightRuntime;
+  rig_id: string;
+  catalog_name: string | null;
+  runtime: import('./nightPlanTypes').NightRuntime | null;
+  outcome: DirectorProjectionOutcome;
   /** The scheduled nights, in order. */
   dates: string[];
   /** Frames planned for the plan each night. */
   planned: number[];
-  /** The night by which every frame is planned; null when not within the nights. */
-  completes_on: string | null;
-  done_before: boolean;
-  /** Other plans scheduled before it completes, the most hours first. */
+  /** Other plans scheduled while the plan still owes frames, the most hours first. */
   others: Array<{ name: string; hours: number }>;
+  /** What the rig's night plans noted, such as goals left out of its program. */
+  notes: string[];
 }
 export interface DirectorFeasibility {
   center: DirectorSkyPosition;

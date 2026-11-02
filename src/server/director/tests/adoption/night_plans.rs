@@ -541,7 +541,8 @@ async fn a_plans_projection_follows_its_rigs_schedule_and_a_plan_ranked_ahead_de
     assert_eq!(status, StatusCode::OK, "{alone}");
     let rig = &alone["data"]["rigs"][0];
     assert_eq!(rig["runtime"], "target_scheduler", "{alone}");
-    assert_eq!(rig["done_before"], false);
+    assert_eq!(rig["outcome"]["kind"], "scheduled", "{rig}");
+    assert_eq!(rig["outcome"]["unscheduled"], 0);
     assert_eq!(rig["others"], json!([]));
     let planned: Vec<u64> = rig["planned"]
         .as_array()
@@ -553,7 +554,7 @@ async fn a_plans_projection_follows_its_rigs_schedule_and_a_plan_ranked_ahead_de
     // Six hours of H-alpha at 300 s on each of two panels.
     assert_eq!(owed, 144, "{planned:?}");
     let last = planned.iter().rposition(|&n| n > 0).unwrap();
-    let alone_on = rig["completes_on"].as_str().unwrap().to_owned();
+    let alone_on = rig["outcome"]["completes_on"].as_str().unwrap().to_owned();
     assert_eq!(alone_on, rig["dates"][last].as_str().unwrap());
 
     // Lowered to low priority, with a high-priority plan on the same sky
@@ -583,12 +584,73 @@ async fn a_plans_projection_follows_its_rigs_schedule_and_a_plan_ranked_ahead_de
         [target],
     )
     .unwrap();
-    let (status, shared) = call(&a.f.app, "POST", &path, body, None).await;
+    let (status, shared) = call(&a.f.app, "POST", &path, body.clone(), None).await;
     assert_eq!(status, StatusCode::OK, "{shared}");
     let rig = &shared["data"]["rigs"][0];
     assert_eq!(rig["others"][0]["name"], "Soul first", "{rig}");
     assert!(rig["others"][0]["hours"].as_f64().unwrap() > 1.0, "{rig}");
-    let later = rig["completes_on"].as_str().unwrap();
+    let later = rig["outcome"]["completes_on"].as_str().unwrap();
     assert!(later > alone_on.as_str(), "{later} after {alone_on}");
     assert_eq!(rig["planned"][0], 0, "{rig}");
+
+    // Director ranks only the plans activated on the rig, so the
+    // Target Scheduler project does not hold this plan up there.
+    let mut director = body.clone();
+    director["runtime"] = json!("director");
+    let (status, ranked) = call(&a.f.app, "POST", &path, director, None).await;
+    assert_eq!(status, StatusCode::OK, "{ranked}");
+    let rig = &ranked["data"]["rigs"][0];
+    assert_eq!(rig["runtime"], "director", "{rig}");
+    assert_eq!(rig["outcome"]["kind"], "scheduled", "{rig}");
+    assert_eq!(rig["outcome"]["completes_on"], json!(alone_on), "{rig}");
+    assert_eq!(rig["others"], json!([]));
+    // The schedule's notes come along: here, the equipment it assumed.
+    assert!(
+        rig["notes"].as_array().unwrap().iter().any(|n| n
+            .as_str()
+            .unwrap()
+            .contains("has not reported its equipment")),
+        "{rig}"
+    );
+
+    // A project set inactive by hand is not scheduled; activating again
+    // would not change that, and the reason says what would.
+    a.db.execute(
+        "UPDATE project SET state = 2 WHERE name = 'Heart Nebula'",
+        [],
+    )
+    .unwrap();
+    let (_, inactive) = call(&a.f.app, "POST", &path, body.clone(), None).await;
+    let rig = &inactive["data"]["rigs"][0];
+    assert_eq!(rig["outcome"]["kind"], "skipped", "{rig}");
+    assert!(
+        rig["outcome"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("Set it active in Target Scheduler"),
+        "{rig}"
+    );
+
+    // Every frame taken: done, on either runtime.
+    a.db.execute(
+        "UPDATE project SET state = 1 WHERE name = 'Heart Nebula'",
+        [],
+    )
+    .unwrap();
+    a.db.execute(
+        "UPDATE exposureplan SET accepted = desired, acquired = 2 * desired
+         WHERE targetid IN (SELECT t.Id FROM target t JOIN project p ON p.Id = t.projectid WHERE p.name = 'Heart Nebula')",
+        [],
+    )
+    .unwrap();
+    for runtime in ["target_scheduler", "director"] {
+        let mut done = body.clone();
+        done["runtime"] = json!(runtime);
+        let (_, finished) = call(&a.f.app, "POST", &path, done, None).await;
+        assert_eq!(
+            finished["data"]["rigs"][0]["outcome"],
+            json!({"kind": "done"}),
+            "{runtime}: {finished}"
+        );
+    }
 }

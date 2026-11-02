@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '../../api/client';
 import type { DirectorFeasibility, DirectorRigFeasibility, DirectorRigProjection, DirectorSkyPosition } from '../../api/directorTypes';
-import { RUNTIME_LABEL, STATE_LABEL, formatNightDate, markOrigin } from '../nights/nightsModel';
+import { RUNTIME_LABEL, STATE_LABEL, formatClock, formatNightDate, markOrigin } from '../nights/nightsModel';
 import { formatHours } from './visibilityFormat';
 import { roundRa } from './framingModel';
 import { retryWhenBusy } from './retry';
@@ -150,13 +150,19 @@ export default function VisibilityPanel({ projectId, center, rigCenters, enabled
     {data.rigs.map(r => <option key={r.rig.id} value={r.rig.id}>{r.catalog_name}{r.in_plan ? '' : ' (not in plan)'}</option>)}
   </select>;
   const owes = rig && rig.hours_needed !== null && rig.hours_needed > 0 ? `This rig owes the plan ${formatHours(rig.hours_needed)}.` : null;
+  const marked = !!rig?.availability?.some(night => night.marks.length > 0);
   const pace = rig && rig.nights_to_complete !== null
-    ? ` At the target's clear hours this week, with marks and the forecast counted, that is about ${rig.nights_to_complete} night${rig.nights_to_complete === 1 ? '' : 's'}.`
-    : ' The target is not up and clear this week.';
+    ? ` At the target's clear hours this week${marked ? ', counting the nights marked or forecast cloudy' : ''}, that is about ${rig.nights_to_complete} night${rig.nights_to_complete === 1 ? '' : 's'}.`
+    : ' The target is not up this week.';
   const estimate = rig && rig.hours_needed !== null && <p className="director-muted" data-testid="visibility-estimate">{owes ? owes + pace : 'This rig has nothing left to shoot for the plan.'}</p>;
-  const projected = rig && rig.in_plan && projection.data && <p className="director-muted" data-testid="visibility-projection">
-    {projectionWords(projection.data.rigs.find(p => p.rig.id === rig.rig.id), projection.data.nights)}
-  </p>;
+  const ownProjection = projection.data?.rigs.find(p => p.rig_id === rig?.rig.id);
+  const projected = rig && rig.in_plan && <div className="director-muted visibility-projection" data-testid="visibility-projection" role="status">
+    {projection.isPending && projection.fetchStatus !== 'idle' && <p>Planning the rig's nights...</p>}
+    {projection.isError && <p className="director-error">The rig's schedule could not be computed: {message(projection.error)}</p>}
+    {projection.data && <p>{projectionWords(ownProjection, projection.data.nights)}</p>}
+    {ownProjection?.notes.map(note => <p key={note}>{note}</p>)}
+    {projection.data && !ownProjection && projection.data.warnings.map(warning => <p key={warning}>{warning}</p>)}
+  </div>;
   const notes = <>
     {query.isPending && <p role="status">Timing the target...</p>}
     {query.isError && <p className="director-error" role="alert">{message(query.error)}</p>}
@@ -194,28 +200,36 @@ export default function VisibilityPanel({ projectId, center, rigCenters, enabled
 }
 
 /** What the rig's own schedule says of the plan: the night it is done, and
- *  the other plans that take the rig's time before then. */
+ *  the other plans the rig shoots before then. */
 function projectionWords(projection: DirectorRigProjection | undefined, nights: number): string {
-  if (!projection) return 'The rig\'s own schedule does not include the plan yet: activate it on the rig first.';
-  if (projection.done_before) return 'This rig already has every frame the plan asks of it.';
-  const schedule = `By this rig's own ${RUNTIME_LABEL[projection.runtime]} schedule`;
+  if (!projection) return 'Activate the plan on this rig to see when its own schedule finishes the plan.';
+  const { outcome } = projection;
+  if (outcome.kind === 'done') return 'This rig has every frame the plan needs from it.';
+  if (outcome.kind === 'skipped') return `No projection for this rig: ${outcome.reason}`;
+  const schedule = `By this rig's own ${projection.runtime ? RUNTIME_LABEL[projection.runtime] : ''} schedule`;
   const others = projection.others.slice(0, 3).map(other => other.name + ' (' + formatHours(other.hours) + ')').join(', ');
-  const first = others ? ` Other plans take its time first: ${others}.` : '';
-  if (projection.completes_on) return `${schedule}, the plan is done by ${formatNightDate(projection.completes_on)}.${first}`;
+  const first = others ? ` Before then, the rig also shoots ${others}.` : '';
+  const left = outcome.unscheduled > 0
+    ? ` ${outcome.unscheduled} of the plan's exposure plans cannot be scheduled on this rig; the notes below say why.`
+    : '';
+  if (outcome.completes_on) return `${schedule}, the plan is done by ${formatNightDate(outcome.completes_on)}.${first}${left}`;
   const planned = projection.planned.reduce((sum, frames) => sum + frames, 0);
-  return `${schedule}, the plan is not done within the next ${nights} nights: ${planned} frames are planned.${first}`;
+  return `${schedule}, the plan is not done within the next ${nights} nights: ${planned} frames are planned.${first}${left}`;
 }
 
 function nights(rig: DirectorRigFeasibility) {
-  return <div className="director-table-scroll"><table className="visibility-nights"><thead><tr><th>Night</th><th>Dark</th><th>Target up</th><th>Clear</th><th>Moon down too</th><th>Moon</th><th>Marks</th></tr></thead><tbody>
+  return <div className="director-table-scroll"><table className="visibility-nights"><thead><tr><th>Night</th><th>Dark</th><th>Target up</th><th>Moon down too</th><th>Up and clear</th><th>Moon</th><th>Marks</th></tr></thead><tbody>
         {rig.nights.map((night, index) => {
           const marks = rig.availability?.[index]?.marks ?? [];
+          const hours = (mark: (typeof marks)[number]) => mark.state === 'limited' && mark.windows.length > 0
+            ? ' (' + mark.windows.map(w => formatClock(w.start_ms) + ' – ' + formatClock(w.end_ms)).join(', ') + ')'
+            : '';
           return <tr key={night.date}>
             <td>{night.date}</td><td>{formatHours(night.dark_hours)}</td><td>{formatHours(night.targets[0]?.hours_up ?? 0)}</td>
-            <td>{formatHours(night.targets[0]?.hours_up_available ?? night.targets[0]?.hours_up ?? 0)}</td>
             <td>{formatHours(night.targets[0]?.hours_up_moon_down ?? 0)}</td>
+            <td>{formatHours(night.targets[0]?.hours_up_available ?? night.targets[0]?.hours_up ?? 0)}</td>
             <td>{Math.round(night.moon_illumination * 100)}%{night.targets[0] && night.targets[0].hours_up > 0 ? `, ${night.targets[0].min_moon_separation_degrees.toFixed(0)}° away` : ''}</td>
-            <td>{marks.length === 0 ? '—' : marks.map(mark => markOrigin(mark) + ': ' + STATE_LABEL[mark.state]).join('; ')}</td>
+            <td>{marks.length === 0 ? 'None' : marks.map(mark => markOrigin(mark) + ': ' + STATE_LABEL[mark.state] + hours(mark)).join('; ')}</td>
           </tr>;
         })}
       </tbody></table></div>;

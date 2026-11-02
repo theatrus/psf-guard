@@ -78,7 +78,7 @@ const PROVIDER_HELP: Record<ForecastProvider, string> = {
 };
 
 /** The queries a site's forecast changes. */
-const FORECAST_QUERIES = [['nightPlans'], ['nightPlanDetail'], ['nightPlansTonight']] as const;
+const FORECAST_QUERIES = [['nightPlans'], ['nightPlanDetail'], ['nightPlansTonight'], ['directorProjection'], ['directorFeasibility']] as const;
 
 const text = (value: number | undefined) => value === undefined ? '' : String(value);
 const num = (value: string) => value.trim() === '' ? null : Number(value);

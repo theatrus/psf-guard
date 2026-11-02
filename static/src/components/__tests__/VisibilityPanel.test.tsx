@@ -28,15 +28,15 @@ function rig(name: string, id: string, hoursUp: number, custom: boolean, inPlan:
     nights: [night, cloudy], availability: [{ state: 'available', windows: [], marks: [] }, { state: 'limited', windows: [], marks: [forecastMark] }],
     curve: { night, samples }, hours_needed: inPlan ? 12 : null, nights_to_complete: inPlan && hoursUp > 0 ? 3 : null, in_plan: inPlan };
 }
-function mount(view: DirectorFeasibility, compact = false, rigCenters?: Record<string, { ra_degrees: number; dec_degrees: number }>) {
+const scheduled = {
+  rig_id: 'a', catalog_name: 'RedCat 61', runtime: 'target_scheduler', outcome: { kind: 'scheduled', completes_on: '2026-09-27', unscheduled: 0 },
+  dates: ['2026-09-25', '2026-09-26', '2026-09-27'], planned: [0, 72, 72], others: [{ name: 'Soul Nebula', hours: 9.6 }], notes: [],
+};
+function mount(view: DirectorFeasibility, compact = false, rigCenters?: Record<string, { ra_degrees: number; dec_degrees: number }>, projected: unknown = scheduled) {
   const bodies: unknown[] = [];
   server.use(
     http.post('/api/director/v1/projects/project/feasibility', async ({ request }) => { bodies.push(await request.json()); return ok(view); }),
-    http.post('/api/director/v1/projects/project/projection', () => ok({ nights: 14, warnings: [], rigs: [{
-      rig: { id: 'a', name: 'RedCat 61', revision: 1 }, catalog_name: 'RedCat 61', runtime: 'target_scheduler',
-      dates: ['2026-09-25', '2026-09-26', '2026-09-27'], planned: [0, 72, 72], completes_on: '2026-09-27', done_before: false,
-      others: [{ name: 'Soul Nebula', hours: 9.6 }],
-    }] })),
+    http.post('/api/director/v1/projects/project/projection', () => ok({ nights: 14, warnings: [], rigs: [projected] })),
   );
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   render(<QueryClientProvider client={client}><VisibilityPanel projectId="project" center={{ ra_degrees: 38.2, dec_degrees: 61.45 }} rigCenters={rigCenters} compact={compact} /></QueryClientProvider>);
@@ -56,9 +56,9 @@ describe('visibility panel', () => {
     expect(document.querySelector('.visibility-chart .horizon')?.getAttribute('d')).toMatch(/^M/);
     expect(document.querySelectorAll('.visibility-chart .band-dark, .visibility-chart .band-deep').length).toBeGreaterThan(0);
     expect(screen.getByText(/custom horizon and limit/)).toBeInTheDocument();
-    expect(screen.getByTestId('visibility-estimate')).toHaveTextContent("This rig owes the plan 12.0 h. At the target's clear hours this week, with marks and the forecast counted, that is about 3 nights.");
+    expect(screen.getByTestId('visibility-estimate')).toHaveTextContent("This rig owes the plan 12.0 h. At the target's clear hours this week, counting the nights marked or forecast cloudy, that is about 3 nights.");
     // The rig's own schedule ranks the plan against its other work.
-    expect(await screen.findByTestId('visibility-projection')).toHaveTextContent(/^By this rig's own Target Scheduler schedule, the plan is done by .+\. Other plans take its time first: Soul Nebula \(9\.6 h\)\.$/);
+    expect(await screen.findByText(/^By this rig's own Target Scheduler schedule, the plan is done by .+\. Before then, the rig also shoots Soul Nebula \(9\.6 h\)\.$/)).toBeInTheDocument();
     expect(screen.getAllByRole('row')).toHaveLength(3);
     // The nights show the clear hours and what set them.
     expect(screen.getAllByRole('row')[2]).toHaveTextContent(/2\.0 h.*Forecast \(Open-Meteo, fetched .+\): Limited/);
@@ -95,5 +95,18 @@ describe('visibility panel', () => {
       false, { a: { ra_degrees: 40.12345, dec_degrees: 60.5 } });
     expect(await screen.findByText(/custom horizon \+2° and limit · within 60 min of the meridian/)).toBeInTheDocument();
     expect(bodies[0]).toEqual({ center: { ra_degrees: 38.2, dec_degrees: 61.45 }, rig_centers: { a: { ra_degrees: 40.123, dec_degrees: 60.5 } } });
+  });
+
+  it('says why a rig has no projection, and when it is done', async () => {
+    const view = { center: { ra_degrees: 38.2, dec_degrees: 61.45 }, target_name: 'IC 1805', nights: 7, warnings: [], rigs: [rig('RedCat 61', 'a', 6.2, true, true)] };
+    mount(view, false, undefined, { ...scheduled, runtime: null, outcome: { kind: 'skipped', reason: 'The plan\'s project is not active in the rig\'s database. Set it active in Target Scheduler to schedule it.' }, notes: ['The rig\'s database could not be read.'] });
+    expect(await screen.findByText(/^No projection for this rig: The plan's project is not active/)).toBeInTheDocument();
+    expect(screen.getByTestId('visibility-projection')).toHaveTextContent("The rig's database could not be read.");
+  });
+
+  it('says when the rig already has every frame', async () => {
+    const view = { center: { ra_degrees: 38.2, dec_degrees: 61.45 }, target_name: 'IC 1805', nights: 7, warnings: [], rigs: [rig('RedCat 61', 'a', 6.2, true, true)] };
+    mount(view, false, undefined, { ...scheduled, outcome: { kind: 'done' } });
+    expect(await screen.findByText('This rig has every frame the plan needs from it.')).toBeInTheDocument();
   });
 });

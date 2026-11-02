@@ -243,7 +243,7 @@ export default function ActivationPanel({ projectId, onReport, shownElsewhere, o
   const apply = useMutation({
     retry: false,
     mutationFn: (digest: string) => apiClient.applyDirectorActivation(projectId, digest, visits),
-    onSuccess: () => invalidate([['directorActivation', projectId], ['directorActivationCheck', projectId], ['collaborationActivation', projectId], ['directorPlanProgress', projectId], ['db'], ['directorCatalog'], ['directorPlans']]),
+    onSuccess: () => invalidate([['directorActivation', projectId], ['directorActivationCheck', projectId], ['collaborationActivation', projectId], ['directorPlanProgress', projectId], ['directorProjection', projectId], ['directorFeasibility', projectId], ['nightPlans'], ['db'], ['directorCatalog'], ['directorPlans']]),
     // A refusal may be a plan or framing saved elsewhere: read them again
     // before the dialog previews again.
     onError: async error => { if (httpStatus(error) === 409) await invalidate([['directorPlan', projectId], ['directorFraming', projectId], ['directorActivationCheck', projectId]]); },

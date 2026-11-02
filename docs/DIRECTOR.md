@@ -1873,17 +1873,27 @@ A rig in the plan gets two estimates:
 - **The rig's own schedule**, once the plan is activated there: the night
   the rig's runtime, Target Scheduler or Director, plans the last of the
   plan's frames over the next 14 nights. It ranks the plan against the
-  rig's other work, as the rig itself will, and names the other plans that
-  take the rig's time first. A plan ranked behind others completes later
-  than the hours alone suggest. It is the same schedule as on the
+  rig's other work, as the rig itself will, and lists the other plans the
+  rig shoots before then. A plan ranked behind others completes later than
+  the hours alone suggest. It is the same schedule as on the
   [Nights](#nights) tab.
+  - It counts only the plan's own exposure plans, as activated, not plans
+    added to the Target Scheduler project by hand.
+  - When the rig has every frame the plan needs, the panel says so.
+  - When there is no projection, the panel explains why, for example:
+    - the project is not active in the rig's database;
+    - the database could not be read;
+    - the rig has no site location;
+    - the plan's project is in another N.I.N.A. profile.
+  - When the rig's program leaves some of the plan's exposure plans out,
+    the panel counts them and shows the rig's notes on why.
 
 ![Visibility for a plan activated on a rig: the estimate with a night marked out, and the night the rig's own schedule finishes the plan](images/visibility-projection.png)
 
 | Method | Route | Body or query |
 | --- | --- | --- |
 | POST | `/projects/{id}/feasibility` | Optional `nights` (1 to 14, default 7), `center` (defaults to the saved framing's center; a rig framed on its own center is timed there), `rig_centers` (rig id to center: where the framing view has a separately framed rig now, saved or not; up to 64) and `start_ms` (default now; the first night is the one under way then). For every rig with a site: the `center` it was timed at, the applied `limits`, `nights` summaries, tonight's `curve` (five-minute samples of Sun, Moon and target altitude with the horizon at each azimuth), `availability` (each night's state, clear windows and marks, as on the night plans), `hours_needed` (the plan's goal less accepted frames) and `nights_to_complete` (at the target's hours up and available, marks and forecast counted, tonight's from `start_ms` on; nights past these count as clear; the rig's other plans are not counted); `warnings` lists rigs without a site. `400` for a `start_ms` outside 1970-01-02 to 2099-01-01; `422` until there is a center to time. |
-| POST | `/projects/{id}/projection` | Optional `nights` (1 to 31, default 14) and `start_ms` (plan from this instant; default now). For each rig the plan is activated on, its own runtime's schedule over those nights: `runtime`, `dates`, `planned` (the plan's frames each night), `completes_on` (the night its last frame is planned; `null` when not within the nights), `done_before` and `others` (the rig's other plans scheduled before it completes, with their hours). `warnings` names rigs whose database has no active project for the plan. Writes nothing; a read-only account that may run calculations can call it. |
+| POST | `/projects/{id}/projection` | Optional `nights` (1 to 31, default 14), `start_ms` (plan from this instant; default now) and `runtime` (`auto`, the default, is each rig's own; or `target_scheduler` or `director`). One entry per rig the plan is activated on: `rig_id`, `catalog_name`, `runtime` and `outcome`. The `outcome` is `scheduled` (`completes_on`, the night the plan's last frame is planned or `null` when not within the nights, and `unscheduled`, its exposure plans that owe frames but the schedule leaves out), `done`, or `skipped` with a `reason`. For a scheduled rig, `dates`, `planned` (the plan's frames each night) and `others` (the rig's other plans scheduled while the plan owes frames, with their hours). Each entry's `notes` are the rig's night-plan warnings, and a push not yet applied. `warnings` lists rigs left out of the night plans. Writes nothing; a read-only account that may run calculations can call it. |
 
 Times come from the shared core's planning-grade Sun and Moon positions and
 the same horizon and limit rules the rig's geometry applies; they are

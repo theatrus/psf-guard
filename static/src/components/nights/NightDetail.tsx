@@ -249,7 +249,7 @@ const BROWSER_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 /** All the queries a mark changes: the grid, the open night and Live's
  *  Tonight column. */
-const MARKED_QUERIES = [['nightPlans'], ['nightPlanDetail'], ['nightPlansTonight']] as const;
+const MARKED_QUERIES = [['nightPlans'], ['nightPlanDetail'], ['nightPlansTonight'], ['directorProjection'], ['directorFeasibility']] as const;
 
 function MarkForm({ rig, nights, scope, onScope }: { rig: RigNights; nights: RigNight[]; scope: NightMarkScope; onScope: (scope: NightMarkScope) => void }) {
   const client = useQueryClient();

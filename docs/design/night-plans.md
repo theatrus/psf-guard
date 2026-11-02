@@ -736,8 +736,8 @@ refused.
   - A marked night shows the mark and its note everywhere it is drawn.
 - **Plans:**
   - The plan workspace shows the projected completion night per rig.
-  - Feasibility's `nights_to_complete` takes availability and the rig's
-    other plans into account once Phase 5 lands.
+  - Feasibility's `nights_to_complete` takes availability into account;
+    the projection takes the rig's other plans into account (Phase 5).
   - The Visibility strip's nights table shows the marks.
 
 ## 5. Phased plan
@@ -812,9 +812,12 @@ apart needs the geometry to say why, and is left for later.
   last frame, and the other plans that take the rig first. The Visibility
   panel shows it. Feasibility's arithmetic estimate stays contention-free
   and says so.
-- *Gate, met:* `adoption::night_plans` projects a plan alone on a rig to the
-  night its planned frames reach what it owes, then ranks a high-priority
-  plan ahead of it and sees that night move later.
+- *Gate, met, by each runtime's own ranking:* `adoption::night_plans`
+  projects a plan alone on a rig to the night its planned frames reach what
+  it owes. On Target Scheduler, a high-priority project ranked ahead of it
+  moves that night later. On Director, which ranks only the plans activated
+  on the rig, the same project does not. A rig with every frame is done on
+  both, and a project set inactive by hand is reported, not projected.
 
 **Phase 6: Director overrides and fixed steps.** *Not built.*
 - `night_override` in the next meta schema, the overrides API,
