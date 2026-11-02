@@ -94,6 +94,7 @@ test('a Director rig\'s night takes overrides, planned before they are saved', a
     await expect(row).toContainText('Director');
     await row.getByRole('button').first().click();
     const detail = page.getByRole('region', { name: 'Night details' });
+    await expect(detail.getByText('Director decides', { exact: true })).toBeVisible();
     await expect(detail.getByRole('heading', { name: 'Director schedule' })).toBeVisible();
     const timeline = detail.getByRole('group', { name: 'Schedule' });
     const blocks = timeline.locator('.nights-block');
@@ -101,7 +102,7 @@ test('a Director rig\'s night takes overrides, planned before they are saved', a
 
     const overrides = detail.getByRole('region', { name: 'Overrides' });
     await expect(overrides.getByText('None: the rig follows its own program this night.')).toBeVisible();
-    await overrides.getByRole('button', { name: 'Edit night' }).click();
+    await detail.getByRole('button', { name: 'Edit night' }).click();
 
     // Drag the first block an hour later: its target is pinned there.
     const track = await timeline.locator('.nights-timeline-track').boundingBox();
@@ -118,26 +119,29 @@ test('a Director rig\'s night takes overrides, planned before they are saved', a
     const list = overrides.getByRole('list');
     await expect(list.getByRole('listitem').filter({ hasText: /^Only Heart Nebula/ })).toHaveCount(1);
     await expect(list.getByRole('listitem').filter({ hasText: /^Leave out Heart Nebula/ })).toHaveCount(1);
-
-    // A hold three hours before dawn, from the form.
-    await overrides.getByLabel('Hold', { exact: true }).check();
-    await overrides.getByRole('textbox', { name: 'From', exact: true }).fill('03:00');
-    await overrides.getByRole('button', { name: 'Add' }).click();
-    await expect(list.getByRole('listitem').filter({ hasText: /^Hold the rig from/ })).toHaveCount(1);
-    // The schedule shows the edit: the overrides above the timeline, and
-    // the night held to dawn.
-    const bands = timeline.getByRole('group', { name: 'Overrides' });
-    await expect(bands.getByText('Pinned')).toBeVisible();
-    await expect(bands.getByText('Held')).toBeVisible();
-    await expect(detail.getByRole('list', { name: 'Legend' })).toContainText("Held: The night's overrides hold the rig.");
     await expect(detail.getByText('Planning the edit...')).toHaveCount(0);
+
+    // Hold the rig two hours before dawn, by the hold line.
+    const hold = detail.getByRole('slider', { name: 'Hold the rig from' });
+    await expect(hold).toHaveAttribute('aria-valuetext', 'No hold');
+    await hold.focus();
+    for (let step = 0; step < 8; step += 1) await hold.press('ArrowLeft');
+    await expect(list.getByRole('listitem').filter({ hasText: /^Hold the rig from/ })).toHaveCount(1);
+    // The schedule shows the edit: the pin on the timeline, and the night
+    // held to dawn.
+    const bands = timeline.getByRole('group', { name: 'Overrides' });
+    await expect(bands.getByRole('button', { name: /^Only Heart Nebula/ })).toBeVisible();
+    await expect(detail.getByText('Planning the edit...')).toHaveCount(0);
+    await expect(detail.getByRole('list', { name: 'Legend' })).toContainText("Held: The night's overrides hold the rig.");
+    const bar = detail.getByRole('region', { name: 'Unsaved changes' });
+    await expect(bar).toContainText("This night's overrides:");
     // Tall enough that the panel fits without scrolling under the header.
     await page.setViewportSize({ width: 1440, height: 2600 });
     await shot(detail, 'nights-overrides', name => testInfo.outputPath(name), false);
     await page.setViewportSize({ width: 1440, height: 1100 });
 
-    await overrides.getByRole('button', { name: 'Save overrides' }).click();
-    await expect(overrides.getByRole('button', { name: 'Edit night' })).toBeVisible();
+    await bar.getByRole('button', { name: 'Save changes' }).click();
+    await expect(detail.getByRole('button', { name: 'Edit night' })).toBeVisible();
     const saved = await json(await request.get(`/api/director/v1/rigs/${rig}/night-overrides/${from}`));
     expect(saved.entries.map((entry: { kind: string }) => entry.kind).sort()).toEqual(['exclude', 'hold', 'pin']);
     await expect(row.getByRole('button').first()).toHaveAccessibleName(/, 3 overrides$/);

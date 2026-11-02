@@ -249,7 +249,30 @@ export interface RigNights {
   forecast: RigForecast | null;
   /** The planning site's IANA time zone; null uses the browser's. */
   time_zone: string | null;
+  /** Every project of the planned profile, in any state, as the rig's
+   *  database holds it; absent without a database to read. */
+  ts_projects?: TsProject[];
+  /** Where saving Target Scheduler changes writes, or why it cannot. */
+  ts_save: { files: string[]; refused: string | null };
   warnings: string[];
+}
+
+export type TsProjectState = 'draft' | 'active' | 'inactive' | 'closed';
+
+/** A Target Scheduler project, as the night's controls show it. */
+export interface TsProject {
+  project_id: number;
+  name: string;
+  state: TsProjectState;
+  priority: NightPlanPriority;
+  targets: Array<{ target_id: number; name: string; active: boolean }>;
+}
+
+/** Changes to a rig's Target Scheduler rows: with `was` and `was_active`
+ *  to save, without them to preview. */
+export interface TsChanges {
+  projects: Array<{ project_id: number; priority?: NightPlanPriority; state?: TsProjectState; was?: { priority: NightPlanPriority; state: TsProjectState } }>;
+  targets: Array<{ target_id: number; active: boolean; was_active?: boolean }>;
 }
 
 export interface RigForecast {
@@ -288,6 +311,8 @@ export interface NightPlansRequest {
   plan_from_ms?: number;
   /** An unsaved edit of one Director rig's overrides for one night. */
   override_draft?: { rig: string; date: string; entries: NightOverride[] };
+  /** Unsaved changes to one Target Scheduler rig's projects and targets. */
+  ts_draft?: { rig: string; changes: TsChanges };
 }
 
 /** One night to mark, as a person enters it. */

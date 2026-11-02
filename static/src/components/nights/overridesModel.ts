@@ -163,3 +163,60 @@ export function moveBlock(block: ScheduleBlock, deltaMs: number, goals: Director
     ],
   };
 }
+
+/** A block's target pinned to the block's own stretch. */
+export function pinBlock(block: ScheduleBlock, goals: DirectorScheduleGoal[]): NightOverride | null {
+  const subject = blockSubject(block, goals);
+  return subject ? { kind: 'pin', subject, window: { start_ms: block.start_ms, end_ms: block.end_ms } } : null;
+}
+
+/** A block's target left out from the block's start to the night's end,
+ *  or all night. */
+export function leaveOut(block: ScheduleBlock, goals: DirectorScheduleGoal[], night: NightInterval, from: 'block' | 'night'): NightOverride | null {
+  const subject = blockSubject(block, goals);
+  if (!subject) return null;
+  return from === 'night'
+    ? { kind: 'exclude', subject }
+    : { kind: 'exclude', subject, window: { start_ms: block.start_ms, end_ms: night.end_ms } };
+}
+
+/** The entries with the night's hold set from `from`, or removed. */
+export function withHold(entries: NightOverride[], from: number | null): NightOverride[] {
+  const kept = entries.filter(entry => entry.kind !== 'hold');
+  return from === null ? kept : [...kept, { kind: 'hold', from_ms: from }];
+}
+
+/** The entries with one pin or windowed exclusion given a new window. */
+export function withWindow(entries: NightOverride[], index: number, window: NightInterval): NightOverride[] {
+  return entries.map((entry, at) => at === index && (entry.kind === 'pin' || entry.kind === 'exclude') ? { ...entry, window } : entry);
+}
+
+/** A value as JSON with every object's keys sorted, so equal overrides
+ *  read the same whatever order their fields arrived in. */
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  if (value !== null && typeof value === 'object') {
+    const fields = value as Record<string, unknown>;
+    return `{${Object.keys(fields).filter(key => fields[key] !== undefined).sort().map(key => `${JSON.stringify(key)}:${canonical(fields[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/** Two override lists hold the same overrides, in any order. */
+export function sameOverrides(a: NightOverride[], b: NightOverride[]): boolean {
+  if (a.length !== b.length) return false;
+  const left = a.map(canonical).sort();
+  const right = b.map(canonical).sort();
+  return left.every((value, index) => value === right[index]);
+}
+
+/** What an edit changes against the saved list, in words: each override
+ *  added, then each removed. */
+export function describeChanges(saved: NightOverride[], edited: NightOverride[], goals: DirectorScheduleGoal[], zone?: string): string[] {
+  const before = new Set(saved.map(canonical));
+  const after = new Set(edited.map(canonical));
+  return [
+    ...edited.filter(entry => !before.has(canonical(entry))).map(entry => describeOverride(entry, goals, zone)),
+    ...saved.filter(entry => !after.has(canonical(entry))).map(entry => `No more: ${describeOverride(entry, goals, zone)}`),
+  ];
+}

@@ -10,7 +10,7 @@ import type {
   BackupsOverview,
 } from './backupTypes';
 import { getServerUrl } from '../utils/tauri';
-import type { NightMarkEdit, NightMarks, NightMarkScope, NightOverride, NightOverridesNight, NightPlans, NightPlansRequest } from './nightPlanTypes';
+import type { NightMarkEdit, NightMarks, NightMarkScope, NightOverride, NightOverridesNight, NightPlans, NightPlansRequest, TsChanges } from './nightPlanTypes';
 import type { OverlaySolution } from '@seiza/astro-overlay';
 import type { PixelRect, PixelWindow } from '../utils/pixelWindow';
 import { BUILD_HEADER, noteServerBuild } from '../updates/pageBuild';
@@ -876,6 +876,13 @@ export const apiClient = {
     const api = await getApi();
     const { data } = await api.delete<ApiResponse<NightOverridesNight>>(`/director/v1/rigs/${encodeURIComponent(rig)}/night-overrides/${encodeURIComponent(date)}`, { data: { expected_revision } });
     if (!data.data) throw new Error(data.error || 'The overrides could not be cleared');
+    return data.data;
+  },
+
+  saveTargetSchedulerChanges: async (rig: string, changes: TsChanges): Promise<{ files: string[]; projects: number; targets: number }> => {
+    const api = await getApi();
+    const { data } = await api.put<ApiResponse<{ files: string[]; projects: number; targets: number }>>(`/director/v1/rigs/${encodeURIComponent(rig)}/target-scheduler`, changes);
+    if (!data.data) throw new Error(data.error || "Target Scheduler's settings could not be saved");
     return data.data;
   },
 

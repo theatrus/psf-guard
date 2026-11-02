@@ -60,6 +60,7 @@ mod plans;
 mod program;
 mod remote_push;
 mod rig_availability;
+mod ts_levers;
 pub(crate) use remote_push::{peer_reached, resends_under_way};
 mod rig_profile;
 mod rig_scheduling;
@@ -399,6 +400,8 @@ enum Error {
     Denied(&'static str),
     /// The rig's mode does not take this request, and why.
     Mode(String),
+    /// A row changed since the person read it, and which.
+    Changed(String),
 }
 
 /// Why a Target Scheduler rig refuses overrides.
@@ -445,7 +448,7 @@ impl IntoResponse for Error {
     fn into_response(self) -> Response {
         let (status, message) = match self {
             Self::Refused(reason) => (StatusCode::UNPROCESSABLE_ENTITY, reason),
-            Self::Mode(reason) => (StatusCode::CONFLICT, reason),
+            Self::Mode(reason) | Self::Changed(reason) => (StatusCode::CONFLICT, reason),
             Self::Denied(reason) => (StatusCode::FORBIDDEN, reason.to_owned()),
             other => {
                 let (status, message) = match other {
@@ -468,7 +471,11 @@ impl IntoResponse for Error {
                         StatusCode::SERVICE_UNAVAILABLE,
                         "Director metadata is busy; retry shortly",
                     ),
-                    Self::Internal | Self::Refused(_) | Self::Denied(_) | Self::Mode(_) => (
+                    Self::Internal
+                    | Self::Refused(_)
+                    | Self::Denied(_)
+                    | Self::Mode(_)
+                    | Self::Changed(_) => (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         "Director metadata operation failed; see server logs",
                     ),
@@ -796,6 +803,7 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
         .merge(site_forecast::routes())
         .merge(night_availability::routes())
         .merge(night_overrides::routes())
+        .merge(ts_levers::routes())
         .merge(preferences::routes())
         .merge(rig_scheduling::routes())
         .merge(templates::routes())

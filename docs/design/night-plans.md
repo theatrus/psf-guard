@@ -722,11 +722,14 @@ refused.
     per target and filter, drawn over the altitude chart
     `VisibilityPanel` already draws, with the gaps labelled by reason.
   - On a Target Scheduler rig:
-    - the timeline is read-only;
-    - a block's tooltip gives the candidates' rule scores;
-    - a note says Target Scheduler decides on the rig, and that changing
-      the plan's priority, limits or rule weights changes the
-      prediction;
+    - the timeline shows the prediction, and a block gives the
+      candidates' rule scores;
+    - **Target Scheduler settings** lists the profile's projects and
+      targets, and changes a project's priority and whether it is active,
+      and whether a target is. The schedule plans the change first; saving
+      writes it to the rig's database and, for a catalog kept in step, to
+      Target Scheduler's file. The panel says these last until changed
+      back, unlike a Director override;
     - **Compare with Director** shows what Director would do.
   - On a Director rig:
     - blocks expand into their steps;
@@ -860,6 +863,17 @@ moving blocks; steps the program cannot carry wait (question 12).
 - An optional IANA `time_zone` per site (question 9), which marks,
   overrides and the night's panel use; the server checks its shape and the
   browser converts.
+- The night is edited on its timeline: a block's menu pins it, leaves it
+  out from its start or all night, or moves it; pins and windowed
+  exclusions are bands to drag and resize; the hold is a line dragged in
+  from the right; whole-night exclusions and the plan order are chips. All
+  of them take the keyboard. The page's save bar lists the changes and
+  saves them, and the title says who decides the rig's night.
+- A Target Scheduler rig's night has **Target Scheduler settings**: each
+  project's priority and state and each target's active flag, previewed in
+  the Target Scheduler emulation through a `ts_draft` and saved by
+  `PUT /rigs/{rig}/target-scheduler` (see §6). A rig Director drives, or
+  one on another PSF Guard, refuses them.
 - *Gate, met:*
   - `program::tests::random_overrides_only_narrow_the_program` applies
     2,000 random override lists, with overlapping pins and subjects the
@@ -907,7 +921,11 @@ simulation and for the per-rig night preview through the shared engine.
 - A night plan writes nothing. Availability and overrides write only their
   own tables.
 - A Target Scheduler rig's database is never written by a preview, a mark
-  or an override.
+  or an override. Its night's **Target Scheduler settings** write it when
+  saved, and only the columns they change (a project's priority and state,
+  a target's active flag), each row only while it holds what was read.
+  *Changed with Phase 6, at the user's choice: Target Scheduler rigs get
+  settings to change, where the record had them read-only.*
 - Each runtime is emulated from what it reads on the rig. The Target
   Scheduler emulation never reads Director's settings, and the Director
   preview's selection is `BoundGeometry::evaluate`, so there is no second
@@ -987,7 +1005,8 @@ simulation and for the per-rig night preview through the shared engine.
 
 - The plugin's wire contract. Overrides reach a Director rig only through
   the goal windows and priorities programs already carry.
-- What activation writes, and any write to a Target Scheduler rig's database.
+- What activation writes, and any write to a Target Scheduler rig's
+  database beyond the night's Target Scheduler settings.
 - Coordinated multi-rig allocation (Director, Phase 5). Each rig's schedule
   uses that rig's own work. A plan shot by two rigs adds up their
   projections and does not share one deficit between them.

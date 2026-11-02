@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { X } from 'lucide-react';
 import { apiClient } from '../../api/client';
-import type { NightAvailabilityState, NightInterval, NightMarkEdit, NightMarkScope, NightOverride, NightRuntime, RigNight, RigNights, ScheduleBlock, ScheduleFidelity, ScheduleRuntimeChoice } from '../../api/nightPlanTypes';
+import type { NightAvailabilityState, NightInterval, NightMarkEdit, NightMarkScope, NightOverride, NightRuntime, RigNight, RigNights, ScheduleBlock, ScheduleFidelity, ScheduleRuntimeChoice, TsChanges } from '../../api/nightPlanTypes';
 import { formatHours } from '../director/visibilityFormat';
 import { httpStatus } from '../../utils/httpStatus';
 import { retryWhenBusy } from '../director/retry';
@@ -10,6 +10,11 @@ import { describeNow } from '../director/dashboardModel';
 import { useDirectorClock } from '../../hooks/useDirectorClock';
 import NightTimeline from './NightTimeline';
 import OverrideEditor from './OverrideEditor';
+import TargetSchedulerControls from './TargetSchedulerControls';
+import { isEmpty, tsChanges, type TsEdit } from './tsControlsModel';
+import { OverrideChips, type TimelineEdit } from './TimelineEditing';
+import { DraftProvider, SaveBar } from '../director/pageDrafts';
+import { usePageDrafts } from '../director/pageDraftsState';
 import { blockSubject, moveBlock, overrideBands, subjectKey } from './overridesModel';
 import {
   BROWSER_ZONE,
@@ -70,8 +75,20 @@ export default function NightDetail({ rig, nights, colours, canMark, range, onCl
   const draft = edit?.entries ?? null;
   const setDraft = (entries: NightOverride[] | null) => setEdit(entries === null || !edit ? null : { ...edit, entries });
   const startEdit = (entries: NightOverride[], base: number) => setEdit({ key: editKey, base, entries, moves: {} });
-  const schedule = useNightSchedule(rig, first, range, single, draft);
+  // An open edit of the rig's Target Scheduler settings belongs to the rig.
+  const [tsStored, setTsEdit] = useState<{ rig: string; edit: TsEdit } | null>(null);
+  const tsEdit = tsStored?.rig === rig.rig.id ? tsStored.edit : null;
+  const tsDraft = tsEdit ? tsChanges(rig.ts_projects ?? [], tsEdit) : null;
+  const schedule = useNightSchedule(rig, first, range, single, draft, tsDraft && !isEmpty(tsDraft) ? tsDraft : null);
   const director = rig.runtime === 'director' && schedule.shown === 'director';
+  const drafts = usePageDrafts();
+  const saved = useQuery({
+    queryKey: ['nightOverrides', rig.rig.id, first.date],
+    queryFn: () => apiClient.getNightOverrides(rig.rig.id, first.date),
+    enabled: single && director,
+    retry: retryWhenBusy,
+    retryDelay: 1200,
+  });
   const scheduled = schedule.detail?.schedule?.nights.find(n => n.date === first.date);
   const goals = schedule.detail?.schedule?.goals ?? [];
   const [moveProblem, setMoveProblem] = useState<string | null>(null);
@@ -111,29 +128,49 @@ export default function NightDetail({ rig, nights, colours, canMark, range, onCl
       moves: { ...edit.moves, [key]: { origin: before?.origin ?? { start_ms: block.start_ms, end_ms: block.end_ms }, entries: moved.entries } },
     });
   };
-  return <section className="nights-detail director-records" aria-label="Night details">
+  const zone = usableZone(rig.time_zone);
+  const timelineEdit: TimelineEdit | undefined = director && edit && scheduled ? {
+    goals,
+    entries: edit.entries,
+    night: { start_ms: scheduled.start_ms, end_ms: scheduled.end_ms },
+    dawn: first.dawn_ms ?? scheduled.end_ms,
+    zone,
+    onChange: entries => { setMoveProblem(null); setDraft(entries); },
+    onMoveBlock: move,
+  } : undefined;
+  const nightEnded = schedule.now >= first.noon_ms + 86_400_000;
+  const canEdit = single && director && canMark && !nightEnded && !!saved.data && goals.length > 0;
+  return <DraftProvider drafts={drafts}><section className="nights-detail director-records" aria-label="Night details">
+    <SaveBar drafts={drafts} canWrite={canMark} />
     <div className="director-toolbar">
       <h3>{rig.catalog_name} · {describeDates(nights.map(night => night.date))}</h3>
+      <span className="nights-mode" data-runtime={rig.runtime} title={rig.runtime === 'director'
+        ? "Director picks this rig's work, and takes overrides for a night."
+        : "Target Scheduler picks this rig's work from its database."}>{RUNTIME_LABEL[rig.runtime]} decides</span>
       <button type="button" aria-label="Close night details" title="Close" onClick={onClose}><X size={16} /></button>
     </div>
     {single ? <NightFacts rig={rig} night={first} /> : <p className="director-muted">
       {formatHours(nights.reduce((sum, night) => sum + night.available_dark_hours, 0))} clear of {formatHours(nights.reduce((sum, night) => sum + night.dark_hours, 0))} dark over these nights.
     </p>}
     {single && <NightSchedule rig={rig} night={first} colours={colours} view={schedule}
-      onMoveBlock={director && edit ? move : undefined} moveProblem={edit ? moveProblem : null} />}
-    {single && director && <OverrideEditor rig={rig} night={first}
+      edit={timelineEdit} moveProblem={edit ? moveProblem : null}
+      saved={director ? saved.data?.entries ?? [] : []}
+      onEdit={canEdit && !edit && saved.data ? () => { setMoveProblem(null); startEdit([...saved.data.entries], saved.data.revision); } : undefined} />}
+    {single && rig.runtime === 'target_scheduler' && schedule.shown === 'target_scheduler' && <TargetSchedulerControls rig={rig}
+      saved={rig.ts_projects ?? []} canEdit={canMark} edit={tsEdit} onEdit={edit => setTsEdit(edit ? { rig: rig.rig.id, edit } : null)} />}
+    {single && director && <OverrideEditor rig={rig} night={first} saved={saved}
       scheduled={scheduled} goals={goals} tonight={schedule.tonight} now={schedule.now}
-      canEdit={canMark} draft={draft} base={edit?.base ?? null} onStart={(entries, base) => { setMoveProblem(null); startEdit(entries, base); }} onDraft={setDraft} />}
+      draft={draft} base={edit?.base ?? null} onDraft={setDraft} />}
     {single && <PlanHours rig={rig} night={first} colours={colours} view={schedule} />}
     {rig.warnings.map(warning => <p key={warning} className="director-muted" role="note">{warning}</p>)}
     {canMark && <MarkEditor rig={rig} nights={nights} />}
-  </section>;
+  </section></DraftProvider>;
 }
 
 /** The schedule shown for a night: from the runtime that drives the rig,
  *  or the other one to compare, counted as a live run or as Target
  *  Scheduler's preview. The timeline and the plan table both read it. */
-function useNightSchedule(rig: RigNights, night: RigNight, range: Props['range'], enabled: boolean, draft: NightOverride[] | null) {
+function useNightSchedule(rig: RigNights, night: RigNight, range: Props['range'], enabled: boolean, draft: NightOverride[] | null, tsDraft: TsChanges | null) {
   const [runtime, setRuntime] = useState<ScheduleRuntimeChoice>('auto');
   const [fidelity, setFidelity] = useState<ScheduleFidelity>('estimate');
   const index = rig.nights.findIndex(n => n.date === night.date);
@@ -143,8 +180,10 @@ function useNightSchedule(rig: RigNights, night: RigNight, range: Props['range']
   const tonight = isTonight(night, now);
   // Only Director's own schedule of a Director rig takes overrides.
   const previewed = rig.runtime === 'director' && shown === 'director' ? draft : null;
+  // Only Target Scheduler's own schedule of its rig takes its changes.
+  const tsPreviewed = rig.runtime === 'target_scheduler' && shown === 'target_scheduler' ? tsDraft : null;
   const query = useQuery({
-    queryKey: ['nightPlanDetail', rig.rig.id, range.first, range.count, night.date, runtime, shown === 'target_scheduler' ? fidelity : 'estimate', previewed],
+    queryKey: ['nightPlanDetail', rig.rig.id, range.first, range.count, night.date, runtime, shown === 'target_scheduler' ? fidelity : 'estimate', previewed, tsPreviewed],
     queryFn: () => apiClient.getNightPlans({
       rigs: [rig.rig.id],
       ...(range.first ? { first_night: range.first } : {}),
@@ -155,6 +194,7 @@ function useNightSchedule(rig: RigNights, night: RigNight, range: Props['range']
       // The preview's counting is Target Scheduler's alone.
       ...(shown === 'target_scheduler' ? { fidelity } : {}),
       ...(previewed ? { override_draft: { rig: rig.rig.id, date: night.date, entries: previewed } } : {}),
+      ...(tsPreviewed ? { ts_draft: { rig: rig.rig.id, changes: tsPreviewed } } : {}),
     }),
     enabled: enabled && index >= 0,
     retry: retryWhenBusy,
@@ -169,7 +209,7 @@ function useNightSchedule(rig: RigNights, night: RigNight, range: Props['range']
   const detail = query.data?.rigs.find(entry => entry.rig.id === rig.rig.id);
   // The grid's schedule is the rig's own runtime, counted as a live run,
   // with the night's saved overrides: an unsaved edit is not the grid's.
-  const asGrid = previewed === null && runtime === 'auto' && (shown !== 'target_scheduler' || fidelity === 'estimate');
+  const asGrid = previewed === null && tsPreviewed === null && runtime === 'auto' && (shown !== 'target_scheduler' || fidelity === 'estimate');
   return { runtime, setRuntime, fidelity, setFidelity, shown, other, now, tonight, query, detail, asGrid };
 }
 
@@ -177,12 +217,16 @@ type ScheduleView = ReturnType<typeof useNightSchedule>;
 
 /** The night's schedule from the runtime that drives the rig, or the other
  *  one to compare, with the planner's reasons for each block. */
-function NightSchedule({ rig, night, colours, view, onMoveBlock, moveProblem }: {
+function NightSchedule({ rig, night, colours, view, edit, moveProblem, saved, onEdit }: {
   rig: RigNights; night: RigNight; colours: Map<string, number>; view: ScheduleView;
-  /** While the night's overrides are edited: move a block. */
-  onMoveBlock?: (block: ScheduleBlock, deltaMs: number) => void;
+  /** While the night's overrides are edited: what the timeline edits. */
+  edit?: TimelineEdit;
   /** Why the last move was refused. */
   moveProblem: string | null;
+  /** The night's saved overrides, for the chips above the timeline. */
+  saved: NightOverride[];
+  /** Start editing the night's overrides, when the person may. */
+  onEdit?: () => void;
 }) {
   const { runtime, setRuntime, fidelity, setFidelity, shown, other, now, tonight, query, detail } = view;
   const scheduled = detail?.schedule?.nights.find(n => n.date === night.date);
@@ -195,7 +239,8 @@ function NightSchedule({ rig, night, colours, view, onMoveBlock, moveProblem }: 
   return <section className="nights-schedule" aria-label="Schedule">
     <div className="nights-mark-row">
       <h4>{RUNTIME_LABEL[shown]} schedule</h4>
-      <button type="button" aria-pressed={runtime !== 'auto'} onClick={() => setRuntime(runtime === 'auto' ? other : 'auto')}>
+      {onEdit && <button type="button" className="is-primary" onClick={onEdit}>Edit night</button>}
+      <button type="button" aria-pressed={runtime !== 'auto'} disabled={!!edit} onClick={() => setRuntime(runtime === 'auto' ? other : 'auto')}>
         Compare with {RUNTIME_LABEL[other]}
       </button>
       {shown === 'target_scheduler' && <label title="Exposure time only, and every frame accepted when the project grades, as Target Scheduler's own Scheduler Preview counts them">
@@ -203,7 +248,7 @@ function NightSchedule({ rig, night, colours, view, onMoveBlock, moveProblem }: 
       </label>}
     </div>
     <p className="director-muted">{shown === 'target_scheduler'
-      ? `A prediction of Target Scheduler ${detail?.schedule?.assumptions.target_scheduler_version ?? '5'}'s choices from the rig's database. Target Scheduler decides on the rig; change a plan's priority, limits or rule weights in Target Scheduler to change this prediction.`
+      ? `A prediction of Target Scheduler ${detail?.schedule?.assumptions.target_scheduler_version ?? '5'}'s choices from the rig's database. Target Scheduler decides on the rig. ${rig.runtime === 'target_scheduler' ? "Change a project's priority or whether it is active below, or its limits and rule weights in Target Scheduler" : "Change a plan's priority, limits or rule weights in Target Scheduler"}, to change this prediction.`
       : "Director's own selection, stepped through the night's dark hours. The rig still decides on the night."}
       {detail?.schedule?.assumptions.overheads && ` Times include ${detail.schedule.assumptions.overheads.target_change_seconds} s per target change, ${detail.schedule.assumptions.overheads.filter_change_seconds} s per filter change and ${detail.schedule.assumptions.overheads.per_exposure_seconds} s per exposure.`}
     </p>
@@ -214,11 +259,13 @@ function NightSchedule({ rig, night, colours, view, onMoveBlock, moveProblem }: 
     {query.isPending && <p role="status">Planning {formatNightDate(night.date)}...</p>}
     {query.isError && <p className="director-error" role="alert">{query.error instanceof Error ? query.error.message : 'The schedule could not be computed'}</p>}
     {detail?.warnings.map(warning => <p key={warning} className="director-muted" role="note">{warning}</p>)}
-    {onMoveBlock && query.isFetching && <p className="director-muted" role="status">Planning the edit...</p>}
+    {edit && <p className="director-muted">Choose a block for what to do with it, or drag it. Drag a pin or its edges, and drag the hold line in from the right. Nothing changes on the rig until the overrides are saved.</p>}
+    {edit && query.isFetching && <p className="director-muted" role="status">Planning the edit...</p>}
     {moveProblem && <p className="director-error" role="alert">{moveProblem}</p>}
+    {shown === 'director' && rig.runtime === 'director' && <OverrideChips entries={edit ? edit.entries : saved} goals={goals} zone={zone}
+      editing={!!edit} onChange={entries => edit?.onChange(entries)} />}
     {scheduled && <NightTimeline night={night} scheduled={scheduled} colours={colours} now={tonight ? now : undefined}
-      cloudThreshold={rig.forecast?.cloud_threshold_percent} zone={zone} bands={bands}
-      onMoveBlock={onMoveBlock} />}
+      cloudThreshold={rig.forecast?.cloud_threshold_percent} zone={zone} bands={bands} edit={edit} />}
   </section>;
 }
 
@@ -271,12 +318,16 @@ function describeLoad(night: RigNight): string {
  * what is up and clear but not planned. Targets the night does not apply
  * to fold into a list, each with the reason.
  */
-function PlanHours({ rig, night, colours, view }: { rig: RigNights; night: RigNight; colours: Map<string, number>; view: ScheduleView }) {
+function PlanHours({ rig: grid, night: gridNight, colours, view }: { rig: RigNights; night: RigNight; colours: Map<string, number>; view: ScheduleView }) {
+  // The night's own plan when it is read, which unsaved Target Scheduler
+  // changes are planned into; the grid's until then.
+  const rig = view.detail ?? grid;
+  const night = rig.nights.find(n => n.date === gridNight.date) ?? gridNight;
   // The shown schedule, or while it is computed, the grid's when it is the same.
-  const schedule = view.detail ? view.detail.schedule : view.asGrid ? rig.schedule : null;
+  const schedule = view.detail ? view.detail.schedule : view.asGrid ? grid.schedule : null;
   const scheduled = !!schedule?.nights.some(n => n.date === night.date);
   // The grid's schedule runs the whole range, so it can say when a plan is done.
-  const doneBy = view.asGrid ? rig.schedule : null;
+  const doneBy = view.asGrid ? grid.schedule : null;
   if (rig.plans.length === 0) return <p className="director-muted">This rig owes no frames.</p>;
   const { applies, out } = planRows(rig, night, schedule);
   const planned = applies.filter(row => row.status === 'planned').length;

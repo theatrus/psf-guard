@@ -4,6 +4,7 @@ import type { RigNight, ScheduleBlock, ScheduleGapReason, ScheduleRule, Schedule
 import { formatHours } from '../director/visibilityFormat';
 import { formatClock as formatBrowserClock } from './nightsModel';
 import type { OverrideBand } from './overridesModel';
+import { BlockMenu, EditableBands, HoldHandle, SNAP_MS, STEP_MS, type TimelineEdit, type TimelineScale } from './TimelineEditing';
 
 const HOUR_MS = 3_600_000;
 
@@ -36,11 +37,6 @@ const BAND_LABEL: Record<OverrideBand['kind'], string> = {
   exclude: 'Left out',
   hold: 'Held',
 };
-
-/** How far one arrow key press moves a block while the night is edited. */
-const STEP_MS = 15 * 60_000;
-/** Moves round to this, so a dragged block lands on a clock time. */
-const SNAP_MS = 5 * 60_000;
 
 const REASON_LABEL: Record<ScheduleTargetReason, string> = {
   complete: 'Complete',
@@ -88,11 +84,12 @@ interface Props {
   cloudThreshold?: number;
   /** The site's time zone; the browser's without one. */
   zone?: string;
-  /** The stretches the night's overrides cover. */
+  /** The stretches the night's saved or planned overrides cover. */
   bands?: OverrideBand[];
-  /** While the night is edited: move a block later or earlier by this many
-   *  milliseconds, by dragging it or with the arrow keys. */
-  onMoveBlock?: (block: ScheduleBlock, deltaMs: number) => void;
+  /** While the night's overrides are edited: what they are, and what each
+   *  change on the timeline does. Blocks then move by drag or the arrow
+   *  keys and open a menu, and the overrides become bands to drag. */
+  edit?: TimelineEdit;
 }
 
 /**
@@ -101,7 +98,9 @@ interface Props {
  * gaps with the reason nothing is shot. Choose a block to see why the
  * planner chose its target.
  */
-export default function NightTimeline({ night, scheduled, colours, now, cloudThreshold, zone, bands = [], onMoveBlock }: Props) {
+export default function NightTimeline({ night, scheduled, colours, now, cloudThreshold, zone, bands = [], edit }: Props) {
+  const onMoveBlock = edit?.onMoveBlock;
+  const [menu, setMenu] = useState<string | null>(null);
   // Blocks keep their key while a re-plan moves them, so a chosen or
   // dragged block, and the focus on it, stay with it.
   const keys = blockKeys(scheduled.blocks);
@@ -123,10 +122,9 @@ export default function NightTimeline({ night, scheduled, colours, now, cloudThr
   for (let t = Math.ceil(start / HOUR_MS) * HOUR_MS; t < end; t += HOUR_MS) ticks.push(t);
   const chosenIndex = chosen === null ? -1 : keys.indexOf(chosen);
   const block = chosenIndex >= 0 ? scheduled.blocks[chosenIndex] : null;
-  const toMs = (dx: number) => {
-    const width = track.current?.getBoundingClientRect().width ?? 0;
-    return width > 0 ? Math.round((dx / width) * span / SNAP_MS) * SNAP_MS : 0;
-  };
+  const width = () => track.current?.getBoundingClientRect().width ?? 0;
+  const toMs = (dx: number) => width() > 0 ? Math.round((dx / width()) * span / SNAP_MS) * SNAP_MS : 0;
+  const scale: TimelineScale = { start, end, place, toMs };
   const press = (key: string, event: PointerEvent<HTMLButtonElement>) => {
     if (!onMoveBlock) return;
     event.currentTarget.setPointerCapture?.(event.pointerId);
@@ -154,7 +152,8 @@ export default function NightTimeline({ night, scheduled, colours, now, cloudThr
   const reasons = [...new Set(scheduled.gaps.filter(gap => gap.end_ms > start && gap.start_ms < end).map(gap => gap.reason))];
   return <div className="nights-timeline-box">
     <div className="nights-timeline" role="group" aria-label="Schedule">
-      {bands.length > 0 && <div className="nights-overrides" role="group" aria-label="Overrides">
+      {edit && <EditableBands edit={edit} scale={scale} />}
+      {!edit && bands.length > 0 && <div className="nights-overrides" role="group" aria-label="Overrides">
         {bands.map(band => {
           const style = place(band.start_ms, band.end_ms);
           if (!style) return null;
@@ -179,7 +178,8 @@ export default function NightTimeline({ night, scheduled, colours, now, cloudThr
           return <button key={key} type="button" className="nights-block" style={{ ...style, ...dragged }}
             data-colour={colours.get(item.target.project_name) ?? 0} aria-pressed={chosen === key}
             data-movable={onMoveBlock ? 'true' : undefined}
-            aria-label={`${item.target.project_name}, ${item.target.target_name}: ${formatClock(item.start_ms)} – ${formatClock(item.end_ms)}, ${frames} frames${onMoveBlock ? '. Drag, or press the left and right arrow keys, to move it 15 minutes at a time.' : ''}`}
+            aria-label={`${item.target.project_name}, ${item.target.target_name}: ${formatClock(item.start_ms)} – ${formatClock(item.end_ms)}, ${frames} frames${onMoveBlock ? '. Choose it for what to do with it; drag it, or press the left and right arrow keys, to move it 15 minutes at a time.' : ''}`}
+            aria-haspopup={edit ? 'menu' : undefined} aria-expanded={edit ? menu === key : undefined}
             title={`${item.target.target_name} · ${formatClock(item.start_ms)} – ${formatClock(item.end_ms)} · ${runSummary(item)}`}
             onPointerDown={event => press(key, event)}
             onPointerMove={slide}
@@ -188,6 +188,7 @@ export default function NightTimeline({ night, scheduled, colours, now, cloudThr
             onKeyDown={event => nudge(index, event)}
             onClick={() => {
               if (moved.current) moved.current = false;
+              else if (edit) setMenu(menu === key ? null : key);
               else setChosen(chosen === key ? null : key);
             }}>
             {item.runs.map(run => {
@@ -197,6 +198,7 @@ export default function NightTimeline({ night, scheduled, colours, now, cloudThr
             })}
           </button>;
         })}
+        {edit && <HoldHandle edit={edit} scale={scale} width={width} />}
         {now !== undefined && now > start && now < end && <span className="nights-now" style={{ left: `${((now - start) / span) * 100}%` }} title={`Now, ${formatClock(now)}`} />}
       </div>
       {night.clouds.length > 0 && <div className="nights-clouds" role="group" aria-label="Cloud cover" aria-describedby={summaryId}>
@@ -209,6 +211,13 @@ export default function NightTimeline({ night, scheduled, colours, now, cloudThr
             title={`${formatClock(hour.start_ms)} – ${formatClock(hour.end_ms)}: ${cloudWords(hour)}`} />;
         })}
       </div>}
+      {edit && menu !== null && (() => {
+        const index = keys.indexOf(menu);
+        if (index < 0) return null;
+        const item = scheduled.blocks[index];
+        return <BlockMenu block={item} edit={edit} left={place(item.start_ms, item.end_ms)?.left ?? '0'}
+          onReasons={() => setChosen(menu)} onClose={() => setMenu(null)} />;
+      })()}
       <div className="nights-timeline-axis" aria-hidden="true">
         {ticks.map(t => <span key={t} style={{ left: `${((t - start) / span) * 100}%` }}>{formatClock(t)}</span>)}
       </div>

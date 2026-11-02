@@ -87,6 +87,17 @@ pub(super) struct Request {
     /// planned in place of the night's stored list. Nothing is stored.
     #[serde(default)]
     override_draft: Option<OverrideDraft>,
+    /// Unsaved changes to one Target Scheduler rig's projects and targets,
+    /// planned in place of what its database holds. Nothing is written.
+    #[serde(default)]
+    ts_draft: Option<TsDraft>,
+}
+
+#[derive(Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub(super) struct TsDraft {
+    rig: Uuid,
+    changes: super::ts_levers::TsChanges,
 }
 
 #[derive(Deserialize, Clone)]
@@ -212,6 +223,12 @@ struct RigNights {
     /// The planning site's IANA time zone, in which marks and overrides are
     /// entered and shown; `None` uses the browser's.
     time_zone: Option<String>,
+    /// Every project of the planned profile, in any state, as the rig's
+    /// database holds it, for the night's Target Scheduler controls.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    ts_projects: Vec<super::ts_levers::TsProjectView>,
+    /// Where saving those controls writes, or why it cannot.
+    ts_save: super::ts_levers::TsSaveView,
     warnings: Vec<String>,
     /// Every project of the planned profile, owed or not, for projections.
     #[serde(skip)]
@@ -416,6 +433,10 @@ struct RigInput {
     /// night's stored list.
     overrides: BTreeMap<NightDate, AppliedOverrides>,
     time_zone: Option<String>,
+    /// The request's unsaved Target Scheduler changes for this rig.
+    ts_changes: Option<super::ts_levers::TsChanges>,
+    ts_projects: Vec<super::ts_levers::TsProjectView>,
+    ts_save: super::ts_levers::TsSaveView,
     warnings: Vec<String>,
 }
 
@@ -479,6 +500,7 @@ async fn compute(state: &Arc<AppState>, request: Request) -> Result<View, NightP
     }
     let first_night = request.first_night;
     let draft = request.override_draft;
+    let ts_draft = request.ts_draft;
     let chosen: Option<std::collections::BTreeSet<Uuid>> = request
         .rigs
         .filter(|rigs| !rigs.is_empty())
@@ -523,6 +545,14 @@ async fn compute(state: &Arc<AppState>, request: Request) -> Result<View, NightP
                     ));
                     continue;
                 };
+                let ts_save = super::ts_levers::TsSaveView::of(
+                    catalog,
+                    stored.as_ref().and_then(|p| p.peer_id.as_deref()),
+                );
+                let ts_changes = ts_draft
+                    .as_ref()
+                    .filter(|draft| draft.rig == rig.id)
+                    .map(|draft| draft.changes.clone());
                 let profile = stored.unwrap_or_else(|| RigProfile::empty(rig.id, 0));
                 let rig_warnings = Vec::new();
                 let wanted = options.nights > 0
@@ -585,6 +615,9 @@ async fn compute(state: &Arc<AppState>, request: Request) -> Result<View, NightP
                     conditions,
                     overrides,
                     time_zone,
+                    ts_changes,
+                    ts_projects: Vec::new(),
+                    ts_save,
                     warnings: rig_warnings,
                     rig,
                 });
@@ -614,7 +647,16 @@ async fn compute(state: &Arc<AppState>, request: Request) -> Result<View, NightP
                 match ts_snapshot::read(&input.database_path) {
                     Ok(Some(read)) => {
                         input.warnings.extend(read.warnings);
-                        input.snapshot = Some(read.snapshot);
+                        let mut snapshot = read.snapshot;
+                        // The controls show the rows as saved; the plans,
+                        // with any unsaved changes.
+                        input.ts_projects = super::ts_levers::views(&snapshot);
+                        if let Some(changes) = &input.ts_changes
+                            && let Err(problem) = changes.apply(&mut snapshot)
+                        {
+                            input.warnings.push(problem);
+                        }
+                        input.snapshot = Some(snapshot);
                     }
                     Ok(None) => input.warnings.push(
                         "The database has no N.I.N.A. profile yet, so there is nothing to plan.".into(),
@@ -697,6 +739,9 @@ fn rig_nights(input: RigInput, nights: u32) -> Result<RigNights, String> {
         conditions,
         overrides,
         time_zone,
+        ts_changes: _,
+        ts_projects,
+        ts_save,
         mut warnings,
     } = input;
     let location = placed
@@ -1022,6 +1067,8 @@ fn rig_nights(input: RigInput, nights: u32) -> Result<RigNights, String> {
         },
         forecast,
         time_zone,
+        ts_projects,
+        ts_save,
         warnings,
         projects,
     })

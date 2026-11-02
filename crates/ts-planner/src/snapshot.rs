@@ -72,6 +72,16 @@ impl ProjectState {
             _ => Self::Draft,
         }
     }
+
+    /// The value Target Scheduler stores in the column.
+    pub fn to_column(self) -> i64 {
+        match self {
+            Self::Draft => 0,
+            Self::Active => 1,
+            Self::Inactive => 2,
+            Self::Closed => 3,
+        }
+    }
 }
 
 /// `project.priority`.
@@ -89,6 +99,15 @@ impl ProjectPriority {
             0 => Self::Low,
             2 => Self::High,
             _ => Self::Normal,
+        }
+    }
+
+    /// The value Target Scheduler stores in the column.
+    pub fn to_column(self) -> i64 {
+        match self {
+            Self::Low => 0,
+            Self::Normal => 1,
+            Self::High => 2,
         }
     }
 }

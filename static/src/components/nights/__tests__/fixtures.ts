@@ -45,6 +45,7 @@ export function rig(overrides: Partial<RigNights> = {}): RigNights {
     mark_revisions: { rig: 4, site: 0 },
     forecast: null,
     time_zone: null,
+    ts_save: { files: ['/data/redcat.sqlite'], refused: null },
     warnings: [],
     ...overrides,
   };

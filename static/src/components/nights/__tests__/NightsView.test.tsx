@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { server } from '../../../test/msw-server';
 import RigsPage from '../../rigs/RigsPage';
 import { night, plans, rig } from './fixtures';
-import { formatNightDate } from '../nightsModel';
+import { clockOnNight, formatNightDate } from '../nightsModel';
 
 const ok = (data: unknown) => ({ success: true, data, error: null });
 const enabled = { protocol_version: 1, enabled: true, instance_id: '11111111-1111-4111-8111-111111111111', database_management: true };
@@ -213,9 +213,12 @@ describe('Night overrides', () => {
     });
   }
 
-  it('edits a Director night, previews the draft and saves it', async () => {
-    const director = directorRig();
+  /** Mount a Director rig's night 0 with its overrides at `revision`, and
+   *  record the night-plan requests and the saves. */
+  async function openDirectorNight(options: { revision?: number; zone?: string; save?: (body: { expected_revision: number; entries: unknown[] }) => Response | undefined } = {}) {
+    const director = { ...directorRig(), time_zone: options.zone ?? 'UTC' };
     mount(plans([director]));
+    const state = { revision: options.revision ?? 3, reads: 0 };
     const requests: Array<{ override_draft?: { entries: Array<{ kind: string; subject?: unknown }> } }> = [];
     const saves: Array<{ expected_revision: number; entries: unknown[] }> = [];
     server.use(
@@ -223,26 +226,33 @@ describe('Night overrides', () => {
         requests.push(await request.json() as (typeof requests)[number]);
         return HttpResponse.json(ok(plans([director])));
       }),
-      http.get('/api/director/v1/rigs/:rig/night-overrides/:date', ({ params }) =>
-        HttpResponse.json(ok({ date: params.date, revision: 3, entries: [], runtime: 'director' }))),
+      http.get('/api/director/v1/rigs/:rig/night-overrides/:date', ({ params }) => {
+        state.reads += 1;
+        return HttpResponse.json(ok({ date: params.date, revision: state.revision, entries: [], runtime: 'director' }));
+      }),
       http.put('/api/director/v1/rigs/:rig/night-overrides/:date', async ({ request, params }) => {
         const body = await request.json() as (typeof saves)[number];
         saves.push(body);
-        return HttpResponse.json(ok({ date: params.date, revision: 4, entries: body.entries, runtime: 'director' }));
+        return options.save?.(body) ?? HttpResponse.json(ok({ date: params.date, revision: state.revision + 1, entries: body.entries, runtime: 'director' }));
       }),
     );
     const grid = await screen.findByTestId('nights-grid');
     fireEvent.click(within(grid).getAllByRole('button')[0]);
     const detail = screen.getByRole('region', { name: 'Night details' });
+    expect(within(detail).getByText('Director decides')).toBeInTheDocument();
+    // Editing waits for the night's saved overrides and its goals.
+    const edit = await within(detail).findByRole('button', { name: 'Edit night' });
+    return { detail, edit, state, requests, saves };
+  }
+
+  it('edits a Director night on its timeline, plans the draft and saves it from the bar', async () => {
+    const { detail, edit, requests, saves } = await openDirectorNight();
     const overrides = within(detail).getByRole('region', { name: 'Overrides' });
-    expect(await within(overrides).findByText('None: the rig follows its own program this night.')).toBeInTheDocument();
-    // Editing waits for the night's goals, which name what an override covers.
-    await waitFor(() => expect(within(overrides).getByRole('button', { name: 'Edit night' })).toBeEnabled());
-    fireEvent.click(within(overrides).getByRole('button', { name: 'Edit night' }));
-    expect(within(overrides).getByText(/Times are in the site's time zone \(UTC\)/)).toBeInTheDocument();
-    fireEvent.change(within(overrides).getByLabelText('From'), { target: { value: '21:00' } });
-    fireEvent.change(within(overrides).getByLabelText('To'), { target: { value: '23:00' } });
-    fireEvent.click(within(overrides).getByRole('button', { name: 'Add' }));
+    expect(within(overrides).getByText('None: the rig follows its own program this night.')).toBeInTheDocument();
+    fireEvent.click(edit);
+    // A block's menu pins its target to the block.
+    fireEvent.click(within(detail).getByRole('button', { name: /^Heart Nebula, IC 1805:/ }));
+    fireEvent.click(within(detail).getByRole('menuitem', { name: 'Pin it here' }));
     expect(within(overrides).getByRole('listitem')).toHaveTextContent(/^Only IC 1805 from /);
     // The schedule is planned again with the edit, unsaved, and the grid's
     // saved schedule no longer says when a plan is done.
@@ -250,11 +260,52 @@ describe('Night overrides', () => {
     expect(within(detail).queryByRole('columnheader', { name: 'Done by' })).toBeNull();
     const drafted = requests.find(r => r.override_draft?.entries[0]?.kind === 'pin')!.override_draft!;
     expect(drafted.entries[0].subject).toEqual({ kind: 'target', target_guid: 't1' });
-    fireEvent.click(within(overrides).getByRole('button', { name: 'Save overrides' }));
+    const bar = within(detail).getByRole('region', { name: 'Unsaved changes' });
+    expect(bar).toHaveTextContent(/This night's overrides: Only IC 1805 from /);
+    fireEvent.click(within(bar).getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(saves).toHaveLength(1));
     expect(saves[0].expected_revision).toBe(3);
     expect(saves[0].entries).toEqual(drafted.entries);
-    expect(await within(overrides).findByRole('button', { name: 'Edit night' })).toBeInTheDocument();
+    expect(await within(detail).findByRole('button', { name: 'Edit night' })).toBeInTheDocument();
+  });
+
+  it('saves against the revision the edit started from, and drops the edit when that is gone', async () => {
+    const { detail, edit, state, saves } = await openDirectorNight({
+      save: () => HttpResponse.json({ success: false, data: null, error: 'Director record conflicts with stored content; reload before retrying' }, { status: 409 }),
+    });
+    fireEvent.click(edit);
+    // Someone else saves while this edit is open, and the night is read again.
+    state.revision = 7;
+    fireEvent.keyDown(within(detail).getByRole('slider', { name: 'Hold the rig from' }), { key: 'Home' });
+    const bar = within(detail).getByRole('region', { name: 'Unsaved changes' });
+    fireEvent.click(within(bar).getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0].expected_revision).toBe(3);
+    expect(await within(detail).findByText(/changed since the edit started/)).toBeInTheDocument();
+    expect(within(detail).getByRole('button', { name: 'Edit night' })).toBeInTheDocument();
+    expect(within(detail).queryByRole('slider', { name: 'Hold the rig from' })).toBeNull();
+    await waitFor(() => expect(state.reads).toBeGreaterThan(1));
+  });
+
+  it('refuses a typed hold that falls outside the night', async () => {
+    // A site fourteen hours east of UTC: some of its clock times fall
+    // outside a night that runs from noon to noon in the test's clock.
+    const zone = 'Pacific/Kiritimati';
+    const { detail, edit } = await openDirectorNight({ zone });
+    fireEvent.click(edit);
+    const overrides = within(detail).getByRole('region', { name: 'Overrides' });
+    fireEvent.click(within(overrides).getByLabelText('Hold', { exact: true }));
+    const tonight = night(0);
+    const clocks = Array.from({ length: 48 }, (_, half) => `${String(Math.floor(half / 2)).padStart(2, '0')}:${half % 2 ? '30' : '00'}`);
+    const value = clocks.find(clock => {
+      const at = clockOnNight(tonight.date, clock, zone)!;
+      return at < tonight.noon_ms || at >= tonight.noon_ms + 86_400_000;
+    })!;
+    expect(value).toBeDefined();
+    fireEvent.change(within(overrides).getByLabelText('From'), { target: { value } });
+    fireEvent.click(within(overrides).getByRole('button', { name: 'Add' }));
+    expect(within(overrides).getByRole('alert')).toHaveTextContent('falls outside this night');
+    expect(within(overrides).queryByRole('listitem')).toBeNull();
   });
 
   it('says in the grid which nights have overrides', async () => {
@@ -272,5 +323,81 @@ describe('Night overrides', () => {
     fireEvent.click(within(grid).getAllByRole('button')[0]);
     const detail = screen.getByRole('region', { name: 'Night details' });
     expect(within(detail).queryByRole('region', { name: 'Overrides' })).toBeNull();
+  });
+});
+
+describe('Target Scheduler settings', () => {
+  const tsRig = () => rig({
+    ts_projects: [
+      { project_id: 7, name: 'Heart Nebula', state: 'active', priority: 'normal', targets: [{ target_id: 70, name: 'IC 1805', active: true }] },
+      { project_id: 8, name: 'Soul Nebula', state: 'inactive', priority: 'low', targets: [{ target_id: 80, name: 'IC 1848', active: true }] },
+    ],
+  });
+
+  it('plans a Target Scheduler rig with changed settings, and saves them with what they were', async () => {
+    const ts = tsRig();
+    mount(plans([ts]));
+    const requests: Array<{ ts_draft?: { changes: { projects: unknown[]; targets: unknown[] } } }> = [];
+    const saves: unknown[] = [];
+    server.use(
+      http.post('/api/director/v1/night-plans', async ({ request }) => {
+        requests.push(await request.json() as (typeof requests)[number]);
+        return HttpResponse.json(ok(plans([ts])));
+      }),
+      http.put('/api/director/v1/rigs/:rig/target-scheduler', async ({ request }) => {
+        saves.push(await request.json());
+        return HttpResponse.json(ok({ files: ['/data/redcat.sqlite'], projects: 1, targets: 1 }));
+      }),
+    );
+    const grid = await screen.findByTestId('nights-grid');
+    fireEvent.click(within(grid).getAllByRole('button')[0]);
+    const detail = screen.getByRole('region', { name: 'Night details' });
+    expect(within(detail).getByText('Target Scheduler decides')).toBeInTheDocument();
+    const settings = within(detail).getByRole('region', { name: 'Target Scheduler settings' });
+    expect(settings).toHaveTextContent("They are Target Scheduler's own settings, so they last until changed back, for every night.");
+    expect(within(settings).getByLabelText('Heart Nebula active')).toBeDisabled();
+    fireEvent.click(within(settings).getByRole('button', { name: 'Change settings' }));
+    fireEvent.click(within(settings).getByLabelText('Heart Nebula active'));
+    fireEvent.change(within(settings).getByLabelText('Soul Nebula priority'), { target: { value: 'high' } });
+    fireEvent.click(within(settings).getByLabelText('Soul Nebula active'));
+    fireEvent.click(within(settings).getByLabelText('Heart Nebula · IC 1805 active'));
+    await waitFor(() => expect(requests.some(r => r.ts_draft?.changes.projects.length === 2)).toBe(true));
+    const bar = within(detail).getByRole('region', { name: 'Unsaved changes' });
+    expect(bar).toHaveTextContent('Target Scheduler settings: Heart Nebula: inactive; Soul Nebula: active, priority High; Heart Nebula · IC 1805: not active');
+    fireEvent.click(within(bar).getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0]).toEqual({
+      projects: [
+        { project_id: 7, state: 'inactive', was: { priority: 'normal', state: 'active' } },
+        { project_id: 8, priority: 'high', state: 'active', was: { priority: 'low', state: 'inactive' } },
+      ],
+      targets: [{ target_id: 70, active: false, was_active: true }],
+    });
+    expect(await within(settings).findByRole('button', { name: 'Change settings' })).toBeInTheDocument();
+  });
+
+  it('drops the edit when a row changed since it was read', async () => {
+    const ts = tsRig();
+    mount(plans([ts]));
+    server.use(http.put('/api/director/v1/rigs/:rig/target-scheduler', () =>
+      HttpResponse.json({ success: false, data: null, error: 'Heart Nebula changed in the rig\'s database since the night was read, so nothing was saved. Read the night again.' }, { status: 409 })));
+    const grid = await screen.findByTestId('nights-grid');
+    fireEvent.click(within(grid).getAllByRole('button')[0]);
+    const detail = screen.getByRole('region', { name: 'Night details' });
+    const settings = within(detail).getByRole('region', { name: 'Target Scheduler settings' });
+    fireEvent.click(within(settings).getByRole('button', { name: 'Change settings' }));
+    fireEvent.change(within(settings).getByLabelText('Heart Nebula priority'), { target: { value: 'high' } });
+    fireEvent.click(within(within(detail).getByRole('region', { name: 'Unsaved changes' })).getByRole('button', { name: 'Save changes' }));
+    expect(await within(settings).findByRole('alert')).toHaveTextContent('Heart Nebula changed in the rig\'s database');
+    expect(within(settings).getByRole('button', { name: 'Change settings' })).toBeInTheDocument();
+  });
+
+  it('says why a rig on another PSF Guard cannot be changed here', async () => {
+    mount(plans([{ ...tsRig(), ts_save: { files: [], refused: 'This rig runs on another PSF Guard (observatory): change its Target Scheduler settings there.' } }]));
+    const grid = await screen.findByTestId('nights-grid');
+    fireEvent.click(within(grid).getAllByRole('button')[0]);
+    const settings = within(screen.getByRole('region', { name: 'Night details' })).getByRole('region', { name: 'Target Scheduler settings' });
+    expect(settings).toHaveTextContent('runs on another PSF Guard (observatory)');
+    expect(within(settings).queryByRole('button', { name: 'Change settings' })).toBeNull();
   });
 });

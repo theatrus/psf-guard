@@ -42,7 +42,7 @@ async fn activate(a: &Activated) {
 
 /// Report the rig's equipment from Los Angeles and enable a workload
 /// policy, which makes it a rig Director drives.
-async fn drive_with_director(a: &Activated) {
+pub(super) async fn drive_with_director(a: &Activated) {
     let instance = a.f.state.director.as_ref().unwrap().instance_id;
     let program: Value = serde_json::from_str(include_str!(
         "../../../../../crates/director-core/tests/fixtures/execution-program.json"
@@ -308,12 +308,15 @@ async fn overrides_reach_the_pulled_program_and_lapse_after_their_night() {
             .unwrap(),
         tonight.span(LONGITUDE).end_ms
     );
-    // The night's order stands in place of the rig's observing preferences.
-    assert!(
-        capped["program"]["observing_preferences"].is_null(),
-        "{}",
-        capped["program"]
-    );
+    // The night's order stands in place of the rig's observing
+    // preferences, from that night on: an order for the next night leaves
+    // the night under way to the preferences.
+    let preferences = &capped["program"]["observing_preferences"];
+    if date == tonight {
+        assert!(preferences.is_null(), "{}", capped["program"]);
+    } else {
+        assert!(!preferences.is_null(), "{}", capped["program"]);
+    }
 
     let (status, cleared) = call(
         &a.f.app,
