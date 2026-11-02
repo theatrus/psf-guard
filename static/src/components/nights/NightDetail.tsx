@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { X } from 'lucide-react';
 import { apiClient } from '../../api/client';
-import type { NightAvailabilityState, NightMarkEdit, NightMarkScope, RigNight, RigNights, ScheduleFidelity, ScheduleRuntimeChoice } from '../../api/nightPlanTypes';
+import type { NightAvailabilityState, NightMarkEdit, NightMarkScope, NightRuntime, RigNight, RigNights, ScheduleFidelity, ScheduleRuntimeChoice } from '../../api/nightPlanTypes';
 import { formatHours } from '../director/visibilityFormat';
 import { httpStatus } from '../../utils/httpStatus';
 import { retryWhenBusy } from '../director/retry';
@@ -17,8 +17,9 @@ import {
   formatClock,
   formatNightDate,
   isTonight,
+  completesOn,
+  OUT_REASON,
   planRows,
-  TONIGHT_REASON,
   windowFor,
   type PlanRow,
 } from './nightsModel';
@@ -40,6 +41,7 @@ interface Props {
 export default function NightDetail({ rig, nights, colours, canMark, range, onClose }: Props) {
   const first = nights[0];
   const single = nights.length === 1;
+  const schedule = useNightSchedule(rig, first, range, single);
   return <section className="nights-detail director-records" aria-label="Night details">
     <div className="director-toolbar">
       <h3>{rig.catalog_name} · {describeDates(nights.map(night => night.date))}</h3>
@@ -48,21 +50,22 @@ export default function NightDetail({ rig, nights, colours, canMark, range, onCl
     {single ? <NightFacts night={first} /> : <p className="director-muted">
       {formatHours(nights.reduce((sum, night) => sum + night.available_dark_hours, 0))} clear of {formatHours(nights.reduce((sum, night) => sum + night.dark_hours, 0))} dark over these nights.
     </p>}
-    {single && <NightSchedule rig={rig} night={first} colours={colours} range={range} />}
-    {single && <PlanHours rig={rig} night={first} colours={colours} />}
+    {single && <NightSchedule rig={rig} night={first} colours={colours} view={schedule} />}
+    {single && <PlanHours rig={rig} night={first} colours={colours} view={schedule} />}
     {rig.warnings.map(warning => <p key={warning} className="director-muted" role="note">{warning}</p>)}
     {canMark && <MarkEditor rig={rig} nights={nights} />}
   </section>;
 }
 
-/** The night's schedule from the runtime that drives the rig, or the other
- *  one to compare, with the planner's reasons for each block. */
-function NightSchedule({ rig, night, colours, range }: { rig: RigNights; night: RigNight; colours: Map<string, number>; range: Props['range'] }) {
+/** The schedule shown for a night: from the runtime that drives the rig,
+ *  or the other one to compare, counted as a live run or as Target
+ *  Scheduler's preview. The timeline and the plan table both read it. */
+function useNightSchedule(rig: RigNights, night: RigNight, range: Props['range'], enabled: boolean) {
   const [runtime, setRuntime] = useState<ScheduleRuntimeChoice>('auto');
   const [fidelity, setFidelity] = useState<ScheduleFidelity>('estimate');
   const index = rig.nights.findIndex(n => n.date === night.date);
   const shown = runtime === 'auto' ? rig.runtime : runtime;
-  const other = rig.runtime === 'target_scheduler' ? 'director' : 'target_scheduler';
+  const other: NightRuntime = rig.runtime === 'target_scheduler' ? 'director' : 'target_scheduler';
   const now = useDirectorClock();
   const tonight = isTonight(night, now);
   const query = useQuery({
@@ -77,7 +80,7 @@ function NightSchedule({ rig, night, colours, range }: { rig: RigNights; night: 
       // The preview's counting is Target Scheduler's alone.
       ...(shown === 'target_scheduler' ? { fidelity } : {}),
     }),
-    enabled: index >= 0,
+    enabled: enabled && index >= 0,
     retry: retryWhenBusy,
     retryDelay: 1200,
     // Tonight re-plans from now every two minutes; other nights stand
@@ -86,10 +89,21 @@ function NightSchedule({ rig, night, colours, range }: { rig: RigNights; night: 
     refetchOnWindowFocus: false,
   });
   const detail = query.data?.rigs.find(entry => entry.rig.id === rig.rig.id);
+  // The grid's schedule is the rig's own runtime, counted as a live run.
+  const asGrid = runtime === 'auto' && (shown !== 'target_scheduler' || fidelity === 'estimate');
+  return { runtime, setRuntime, fidelity, setFidelity, shown, other, now, tonight, query, detail, asGrid };
+}
+
+type ScheduleView = ReturnType<typeof useNightSchedule>;
+
+/** The night's schedule from the runtime that drives the rig, or the other
+ *  one to compare, with the planner's reasons for each block. */
+function NightSchedule({ rig, night, colours, view }: { rig: RigNights; night: RigNight; colours: Map<string, number>; view: ScheduleView }) {
+  const { runtime, setRuntime, fidelity, setFidelity, shown, other, now, tonight, query, detail } = view;
   const scheduled = detail?.schedule?.nights.find(n => n.date === night.date);
   // Tonight: what the rig says it is doing, beside what it is planned to do.
   const statuses = useQuery({ queryKey: ['directorRigStatuses'], queryFn: apiClient.getDirectorRigStatuses, enabled: tonight, retry: retryWhenBusy, retryDelay: 1200, refetchInterval: 15_000 });
-  const live = statuses.data?.find(view => view.rig.id === rig.rig.id);
+  const live = statuses.data?.find(status => status.rig.id === rig.rig.id);
   return <section className="nights-schedule" aria-label="Schedule">
     <div className="nights-mark-row">
       <h4>{RUNTIME_LABEL[shown]} schedule</h4>
@@ -145,41 +159,53 @@ function describeLoad(night: RigNight): string {
 }
 
 /**
- * The plans the night applies to: what its schedule shoots, then what is
- * up and clear but waits for other work. Targets the night does not apply
+ * The plans the night applies to: what the shown schedule shoots, then
+ * what is up and clear but not planned. Targets the night does not apply
  * to fold into a list, each with the reason.
  */
-function PlanHours({ rig, night, colours }: { rig: RigNights; night: RigNight; colours: Map<string, number> }) {
+function PlanHours({ rig, night, colours, view }: { rig: RigNights; night: RigNight; colours: Map<string, number>; view: ScheduleView }) {
+  // The shown schedule, or while it is computed, the grid's when it is the same.
+  const schedule = view.detail ? view.detail.schedule : view.asGrid ? rig.schedule : null;
+  const scheduled = !!schedule?.nights.some(n => n.date === night.date);
+  // The grid's schedule runs the whole range, so it can say when a plan is done.
+  const doneBy = view.asGrid ? rig.schedule : null;
   if (rig.plans.length === 0) return <p className="director-muted">This rig owes no frames.</p>;
-  const { tonight, other } = planRows(rig, night);
-  const progress = rig.schedule?.progress ?? [];
-  const completes = (projectId: number, targetId: number) => {
-    const plans = progress.filter(p => p.project_id === projectId && p.target_id === targetId && !p.complete_before);
-    if (plans.length === 0 || plans.some(p => p.completes_on === null)) return null;
-    return Math.max(...plans.map(p => p.completes_on!));
-  };
+  const { applies, out } = planRows(rig, night, schedule);
+  const planned = applies.filter(row => row.status === 'planned').length;
+  const notPlanned = applies.length - planned;
+  const heading = applies.length === 0 ? 'Nothing owed can be shot this night'
+    : scheduled ? `This night: ${[planned && `${planned} planned`, notPlanned && `${notPlanned} not planned`].filter(Boolean).join(', ')}`
+    : `This night: ${applies.length} up and clear`;
   const planName = (row: PlanRow) => <><span className="nights-plan-dot" data-colour={colours.get(row.plan.name) ?? 0} aria-hidden="true" />{row.plan.name}</>;
-  return <section className="nights-plans" aria-label="Plans this night">
-    <h4>{tonight.length === 0 ? 'No owed target is up and clear this night' : `This night: ${tonight.filter(r => r.status === 'planned').length} planned, ${tonight.filter(r => r.status === 'up').length} up but waiting`}</h4>
-    {tonight.length > 0 && <div className="director-table-scroll"><table className="nights-plan-table">
-      <thead><tr><th>Plan</th><th>Target</th>{rig.schedule && <th>Planned</th>}<th>Usable</th><th>Peak</th><th>Owed</th>{rig.schedule && <th>Done by</th>}</tr></thead>
-      <tbody>{tonight.map(row => <tr key={`${row.plan.project_id}:${row.target.target_id}`} className={row.status === 'up' ? 'is-idle-plan' : undefined}>
-        <td>{planName(row)}{row.plan.priority !== 'normal' && <span className="director-muted"> · {row.plan.priority} priority</span>}</td>
-        <td>{row.target.name}<span className="director-muted"> · {row.target.filters.join(', ')}</span></td>
-        {rig.schedule && <td>{row.planned > 0 ? `${row.planned} frames` : <span className="director-muted">waits</span>}</td>}
-        <td title={row.hours && row.hours.hours_moon_blocked > 0 ? `${formatHours(row.hours.hours_moon_blocked)} of its clear hours blocked by the Moon` : undefined}>{formatHours(row.usable)}</td>
-        <td>{row.hours && row.hours.max_altitude_degrees > -90 ? `${Math.round(row.hours.max_altitude_degrees)}°${row.hours.transit_ms ? ` at ${formatClock(row.hours.transit_ms)}` : ''}` : '—'}</td>
-        <td>{formatHours(row.target.hours_owed)}<span className="director-muted"> · {row.target.frames_owed} frames</span></td>
-        {rig.schedule && <td>{(() => {
-          const done = completes(row.plan.project_id, row.target.target_id);
-          return done === null ? <span className="director-muted">not in {rig.schedule.nights.length} nights</span> : formatNightDate(rig.schedule.nights[done]?.date ?? night.date);
-        })()}</td>}
-      </tr>)}</tbody>
+  const frames = (count: number) => `${count} frame${count === 1 ? '' : 's'}`;
+  const headingId = `nights-plans-${rig.rig.id}-${night.date}`;
+  return <section className="nights-plans" aria-labelledby={headingId}>
+    <h4 id={headingId}>{heading}</h4>
+    {view.tonight && applies.length > 0 && <p className="director-muted">Usable hours are the whole night's; tonight is planned from now.</p>}
+    {applies.length > 0 && <div className="director-table-scroll"><table className="nights-plan-table">
+      <thead><tr><th>Plan</th><th>Target</th>{scheduled && <th>Planned</th>}<th>Usable</th><th>Peak</th><th>Owed</th>{doneBy && <th>Done by</th>}</tr></thead>
+      <tbody>{applies.map(row => {
+        const done = doneBy ? completesOn(doneBy.progress.filter(p => p.project_id === row.plan.project_id && p.target_id === row.target.target_id)) : null;
+        const blocked = row.hours?.hours_moon_blocked ?? 0;
+        return <tr key={`${row.plan.project_id}:${row.target.target_id}`} className={scheduled && row.status !== 'planned' ? 'is-idle-plan' : undefined}>
+          <td>{planName(row)}{row.plan.priority !== 'normal' && <span className="director-muted"> · {row.plan.priority} priority</span>}</td>
+          <td>{row.target.name}<span className="director-muted"> · {row.target.filters.join(', ')}</span></td>
+          {scheduled && <td>{row.planned > 0 ? frames(row.planned) : <span className="director-muted">not planned</span>}</td>}
+          <td>{formatHours(row.usable)}{blocked > 0 && <span className="director-muted"> · Moon blocks {formatHours(blocked)}</span>}</td>
+          <td>{row.hours && row.hours.max_altitude_degrees > -90 ? `${Math.round(row.hours.max_altitude_degrees)}°${row.hours.transit_ms ? ` at ${formatClock(row.hours.transit_ms)}` : ''}` : '—'}</td>
+          <td>{formatHours(row.target.hours_owed)}<span className="director-muted"> · {frames(row.target.frames_owed)}</span></td>
+          {doneBy && <td>{done === null || done < 0
+            ? <span className="director-muted">not in {doneBy.nights.length} nights</span>
+            : formatNightDate(doneBy.nights[done]?.date ?? night.date)}</td>}
+        </tr>;
+      })}</tbody>
     </table></div>}
-    {other.length > 0 && <details className="nights-other-plans">
-      <summary>Not this night: {other.length} target{other.length === 1 ? '' : 's'}</summary>
-      <ul>{other.map(row => <li key={`${row.plan.project_id}:${row.target.target_id}`}>
-        {planName(row)} · {row.target.name}: <span className="director-muted">{TONIGHT_REASON[row.status as keyof typeof TONIGHT_REASON]}</span>
+    {out.length > 0 && <details className="nights-other-plans" open={applies.length === 0}>
+      <summary>Not this night: {out.length} target{out.length === 1 ? '' : 's'}</summary>
+      <ul>{out.map(row => <li key={`${row.plan.project_id}:${row.target.target_id}`}>
+        {planName(row)} · {row.target.name}: <span className="director-muted">{row.status === 'done'
+          ? `done ${row.done_on ? `by ${formatNightDate(row.done_on)}` : 'before these nights'}`
+          : OUT_REASON[row.status as keyof typeof OUT_REASON]}</span>
       </li>)}</ul>
     </details>}
   </section>;

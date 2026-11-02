@@ -1911,13 +1911,17 @@ Choose a cell to open the night below the grid:
   twilight, not available, Moon, meridian, below limits, all done, or
   nothing fits. Choose a block to see why that target was chosen.
 - **The plans this night**: only the targets the night applies to. First
-  come those the schedule shoots, with the frames planned, then those that
-  are up and clear but wait for other work. Each row gives the usable hours
-  (up, clear and allowed by the Moon), the peak altitude, what the target
-  still owes, and the night its plan is done within the range. The targets
-  the night does not apply to fold into **Not this night**, each with its
-  reason: the Moon rules of its filters, up only while the night is marked
-  not clear, or not above its limits in the dark.
+  come those the schedule above shoots, in its order, with the frames
+  planned; then those that are up and clear but not planned. Each row gives
+  the usable hours (up, clear and allowed by the Moon, and the hours the
+  Moon blocks), the peak altitude, what the target still owes, and, for the
+  rig's own schedule, the night its plan is done within the range. The
+  targets the night does not apply to fold into **Not this night**, each
+  with its reason: done on an earlier night, the Moon rules of its filters,
+  up only while the night is marked not clear, not up in its meridian
+  window, not above its horizon and limits in the dark, or no darkness.
+  Tonight's usable hours are the whole night's, while its schedule plans
+  from now.
 
 ![A night's Target Scheduler schedule, with the scores behind the chosen block](images/nights-schedule.png)
 

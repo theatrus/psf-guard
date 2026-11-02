@@ -108,11 +108,12 @@ test('Nights shows every rig across the coming nights, a night\'s schedule, and 
     await shot(page, 'nights-schedule', name => testInfo.outputPath(name));
 
     // The plan table lists what the night applies to and folds the rest.
-    const plans = detail.getByRole('region', { name: 'Plans this night' });
-    await expect(plans.getByRole('heading', { name: /^This night: \d+ planned/ })).toBeVisible();
-    await expect(plans.getByRole('row').filter({ hasText: 'Heart Nebula' })).toContainText('frames');
-    await plans.getByText('Not this night: 1 target').click();
-    await expect(plans.getByRole('listitem').filter({ hasText: 'Carina Nebula · NGC 3372' })).toContainText('not above its limits in the dark');
+    const plans = detail.getByRole('region', { name: /^This night: [1-9]\d* planned/ });
+    await expect(plans).toBeVisible();
+    await expect(plans.getByRole('row').filter({ hasText: 'Heart Nebula' }).getByRole('cell', { name: /^\d+ frames?$/ })).toBeVisible();
+    // Andromeda may fold too, on nights the Moon turns it down.
+    await plans.getByText(/^Not this night: \d+ targets?$/).click();
+    await expect(plans.getByRole('listitem').filter({ hasText: 'Carina Nebula · NGC 3372' })).toContainText('not above its horizon and limits in the dark');
     await expect(plans.getByRole('row').filter({ hasText: 'Carina Nebula' })).toHaveCount(0);
     await shot(plans, 'nights-plans', name => testInfo.outputPath(name), false);
 
