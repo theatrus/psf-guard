@@ -1145,9 +1145,7 @@ limit once nothing more may go is reported in red. The sizes in Settings are
 measured at most hourly, and after a cull. On a file system that keeps snapshots,
 deleted previews free no space until the snapshot goes, so each pass culls
 further until none are left. 100%
-turns culling off. Changing the limit needs database management. On Windows,
-background preview generation and WBPP cleanup can check volume usage, but
-the general preview/master cleanup pass is not available.
+turns culling off. Changing the limit needs database management.
 
 To give stacks more room, put the stack folder on a larger volume, such as a
 network share, and keep the cache on a fast local disk.

@@ -6,6 +6,14 @@
 
 ## Changes
 
+- On Windows, PSF Guard keeps each storage volume under its **Volume usage
+  limit**, as it does on macOS and Linux. When a volume passes the limit,
+  PSF Guard deletes image previews least recently viewed first, then stack
+  resume checkpoints a day old or more, then calibration masters unused for
+  a week that it can build again. Before, this cleanup never ran on
+  Windows, and **Disk use** in **Settings › Storage & backups › Folders &
+  limits** showed "The first check runs a minute after the server starts."
+  in place of each volume.
 - On a Mac, PSF Guard saves to a network share (SMB), such as a NAS:
   calibration masters, stacks, remote uploads into an image folder, WBPP
   work files, backups, and settings kept on a share. Before, those saves

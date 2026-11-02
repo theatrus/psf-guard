@@ -184,7 +184,7 @@ pub struct VolumeReport {
 /// Mark a cached preview as just used, so it is culled last, off the async
 /// runtime: on NFS a metadata call can wait on the network.
 pub fn note_served_soon(path: &Path) {
-    if !cfg!(unix) {
+    if !cfg!(any(unix, windows)) {
         // Nothing is culled where volumes cannot be read.
         return;
     }
@@ -757,7 +757,33 @@ pub(crate) fn device_of(path: &Path) -> Option<u64> {
     std::fs::metadata(path).ok().map(|metadata| metadata.dev())
 }
 
-#[cfg(not(unix))]
+/// The serial number of the volume holding `path`, which Windows gives in
+/// place of a device number.
+#[cfg(windows)]
+pub(crate) fn device_of(path: &Path) -> Option<u64> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS,
+    };
+    // Opened as `fs::metadata` opens it: no access asked, and a folder may
+    // be opened only with backup semantics.
+    let file = std::fs::OpenOptions::new()
+        .access_mode(0)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)
+        .ok()?;
+    // SAFETY: BY_HANDLE_FILE_INFORMATION is plain data, valid when zeroed.
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    // SAFETY: a handle that stays open until the call returns, and a struct
+    // for the call to fill.
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
+        return None;
+    }
+    Some(u64::from(info.dwVolumeSerialNumber))
+}
+
+#[cfg(not(any(unix, windows)))]
 pub(crate) fn device_of(_path: &Path) -> Option<u64> {
     None
 }
@@ -826,7 +852,6 @@ mod tests {
         assert_eq!(sizes.stacks, 5000);
     }
 
-    #[cfg(unix)]
     fn aged(path: &Path, bytes: usize, age: Duration) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, vec![0u8; bytes]).unwrap();
@@ -844,8 +869,6 @@ mod tests {
     }
 
     #[test]
-    // Volumes are read on Unix only.
-    #[cfg(unix)]
     fn a_volume_culls_only_what_lives_on_it() {
         let temp = tempfile::tempdir().unwrap();
         let cache = temp.path().join("cache/db");
@@ -891,6 +914,24 @@ mod tests {
                 StorageKind::Calibration
             ]
         );
+    }
+
+    /// The pass groups folders by volume, and takes a master only from the
+    /// volume it frees, so a folder and a file must both give the volume.
+    #[test]
+    fn folders_and_files_on_one_volume_give_the_same_device() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache = temp.path().join("cache");
+        let master = temp.path().join("masters/dark.xisf");
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::create_dir_all(master.parent().unwrap()).unwrap();
+        std::fs::write(&master, b"master").unwrap();
+
+        let device = device_of(&cache);
+        assert!(device.is_some());
+        assert_eq!(device_of(&master), device);
+        assert_eq!(device_of(temp.path()), device);
+        assert_eq!(device_of(&temp.path().join("missing")), None);
     }
 
     #[test]
