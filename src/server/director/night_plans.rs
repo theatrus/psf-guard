@@ -44,7 +44,13 @@ pub(super) struct Request {
     /// Rigs to plan; none or empty is every rig with a site.
     #[serde(default)]
     rigs: Option<Vec<Uuid>>,
-    /// The first night is the one under way at this instant; now by default.
+    /// The first night, the same for every rig: the evening's date at each
+    /// rig's site. Without it, each rig starts with the night under way
+    /// there at `start_ms`.
+    #[serde(default)]
+    first_night: Option<NightDate>,
+    /// Without `first_night`, the first night is the one under way at this
+    /// instant at each rig; now by default.
     #[serde(default)]
     start_ms: Option<u64>,
     #[serde(default)]
@@ -329,6 +335,10 @@ fn now_ms() -> u64 {
 struct RigInput {
     rig: NamedIdentity,
     schedule: ScheduleOptions,
+    /// The rig's Target Scheduler database, read once the store is let go.
+    database_path: String,
+    /// An instant inside the rig's first night.
+    start_ms: u64,
     /// What a Director schedule runs from, when one is wanted.
     director: Option<Result<DirectorInput, String>>,
     catalog_slug: String,
@@ -373,11 +383,14 @@ pub(super) async fn plan(
             "schedule_nights must be at most nights, and utc_offset_minutes within 14 hours of UTC.".into(),
         ));
     }
-    if !(EARLIEST_START_MS..=LATEST_START_MS).contains(&start_ms) {
+    if !(EARLIEST_START_MS..=LATEST_START_MS).contains(&start_ms)
+        || !(EARLIEST_START_MS..=LATEST_START_MS).contains(&options.plan_from_ms)
+    {
         return Err(NightPlanError::Rejected(
-            "start_ms must fall between 1970-01-02 and 2099-01-01.".into(),
+            "start_ms and plan_from_ms must fall between 1970-01-02 and 2099-01-01.".into(),
         ));
     }
+    let first_night = request.first_night;
     let chosen: Option<std::collections::BTreeSet<Uuid>> = request
         .rigs
         .filter(|rigs| !rigs.is_empty())
@@ -392,7 +405,7 @@ pub(super) async fn plan(
         .values()
         .cloned()
         .collect();
-    let view = service
+    let gathered = service
         .clone()
         .with_reader(move |store| {
             let mut warnings = Vec::new();
@@ -425,22 +438,7 @@ pub(super) async fn plan(
                     _ => Runtime::TargetScheduler,
                 };
                 let profile = stored.unwrap_or_else(|| RigProfile::empty(rig.id, 0));
-                let mut rig_warnings = Vec::new();
-                let snapshot = match ts_snapshot::read(&catalog.database_path) {
-                    Ok(Some(read)) => {
-                        rig_warnings.extend(read.warnings);
-                        Some(read.snapshot)
-                    }
-                    Ok(None) => {
-                        rig_warnings.push("The database has no N.I.N.A. profile yet, so there is nothing to plan.".into());
-                        None
-                    }
-                    Err(error) => {
-                        tracing::warn!(%error, catalog = %catalog.id, "night plans could not read a rig database");
-                        rig_warnings.push("The rig's database could not be read, so its plans are left out.".into());
-                        None
-                    }
-                };
+                let rig_warnings = Vec::new();
                 let wanted = options.nights > 0
                     && match options.runtime {
                         RuntimeChoice::Auto => runtime == Runtime::Director,
@@ -448,8 +446,10 @@ pub(super) async fn plan(
                         RuntimeChoice::TargetScheduler => false,
                     };
                 let director = wanted.then(|| director_input(store, &catalogs, service.instance_id, rig.id, identity.id));
-                let first = NightDate::at(start_ms, location.longitude_degrees)
-                    .ok_or(Error::Invalid)?;
+                let first = match first_night {
+                    Some(date) => date,
+                    None => NightDate::at(start_ms, location.longitude_degrees).ok_or(Error::Invalid)?,
+                };
                 let mut dates = vec![first];
                 while dates.len() < nights as usize {
                     let next = dates.last().and_then(|date| date.next()).ok_or(Error::Invalid)?;
@@ -465,12 +465,15 @@ pub(super) async fn plan(
                 inputs.push(RigInput {
                     schedule: options,
                     director,
+                    database_path: catalog.database_path.clone(),
+                    // An hour after the night's noon: inside it at any longitude.
+                    start_ms: first.span(location.longitude_degrees).start_ms + 3_600_000,
                     catalog_slug: catalog.id.clone(),
                     catalog_name: catalog.name.clone(),
                     profile,
                     placed,
                     runtime,
-                    snapshot,
+                    snapshot: None,
                     dates,
                     mark_revisions: MarkRevisions {
                         rig: rig_marks.revision,
@@ -487,38 +490,61 @@ pub(super) async fn plan(
                     warnings.push(format!("Rig {missing} is not a registered rig, so it is left out."));
                 }
             }
-            // Everything below is arithmetic on what was read: each rig, and
-            // each of its requests and nights, on the shared pool.
-            use rayon::prelude::*;
-            let outcomes: Vec<Result<RigNights, String>> = inputs
-                .into_par_iter()
-                .map(|input| rig_nights(input, start_ms, nights))
-                .collect();
-            let mut rigs = Vec::new();
-            for outcome in outcomes {
-                match outcome {
-                    Ok(rig) => rigs.push(rig),
-                    Err(warning) => warnings.push(warning),
-                }
-            }
-            rigs.sort_by(|a, b| a.catalog_name.cmp(&b.catalog_name));
-            if rigs.is_empty() && warnings.is_empty() {
-                warnings.push("No rig has a site yet, so there are no nights to plan.".into());
-            }
-            Ok::<_, NightPlanError>(View {
-                start_ms,
-                plan_from_ms: options.plan_from_ms,
-                nights,
-                rigs,
-                warnings,
-                assumptions: Assumptions {
-                    dark_below_degrees: DARK_BELOW_DEGREES,
-                    overhead_seconds_per_exposure: OVERHEAD_SECONDS,
-                    sample_minutes: STEP_MS / 60_000,
-                },
-            })
+            Ok::<_, NightPlanError>((inputs, warnings))
         })
         .await?;
+    // The rest reads each rig's database and computes, with the store's
+    // read slot let go: each rig, and each of its requests and nights, on
+    // the shared pool.
+    let (inputs, mut warnings) = gathered;
+    let view = blocking(move || {
+        use rayon::prelude::*;
+        let outcomes: Vec<Result<RigNights, String>> = inputs
+            .into_par_iter()
+            .map(|mut input| {
+                match ts_snapshot::read(&input.database_path) {
+                    Ok(Some(read)) => {
+                        input.warnings.extend(read.warnings);
+                        input.snapshot = Some(read.snapshot);
+                    }
+                    Ok(None) => input.warnings.push(
+                        "The database has no N.I.N.A. profile yet, so there is nothing to plan.".into(),
+                    ),
+                    Err(error) => {
+                        tracing::warn!(%error, catalog = %input.catalog_slug, "night plans could not read a rig database");
+                        input
+                            .warnings
+                            .push("The rig's database could not be read, so its plans are left out.".into());
+                    }
+                }
+                rig_nights(input, nights)
+            })
+            .collect();
+        let mut rigs = Vec::new();
+        for outcome in outcomes {
+            match outcome {
+                Ok(rig) => rigs.push(rig),
+                Err(warning) => warnings.push(warning),
+            }
+        }
+        rigs.sort_by(|a, b| a.catalog_name.cmp(&b.catalog_name));
+        if rigs.is_empty() && warnings.is_empty() {
+            warnings.push("No rig has a site yet, so there are no nights to plan.".into());
+        }
+        View {
+            start_ms,
+            plan_from_ms: options.plan_from_ms,
+            nights,
+            rigs,
+            warnings,
+            assumptions: Assumptions {
+                dark_below_degrees: DARK_BELOW_DEGREES,
+                overhead_seconds_per_exposure: OVERHEAD_SECONDS,
+                sample_minutes: STEP_MS / 60_000,
+            },
+        }
+    })
+    .await?;
     Ok(Json(ApiResponse::success(view)))
 }
 
@@ -545,11 +571,13 @@ struct Chunk {
     owed: Vec<Owed>,
 }
 
-fn rig_nights(input: RigInput, start_ms: u64, nights: u32) -> Result<RigNights, String> {
+fn rig_nights(input: RigInput, nights: u32) -> Result<RigNights, String> {
     let RigInput {
         rig,
         schedule: options,
         director,
+        database_path: _,
+        start_ms,
         catalog_slug,
         catalog_name,
         profile,
@@ -1052,7 +1080,7 @@ fn director_schedule(
             })
             .collect(),
     };
-    let program = gathered.program(rig.id, first.span);
+    let program = gathered.program(rig.id, first.span, "night-plan-preview".into());
     // Rows by GUID, for names and ids that match the summaries.
     let rows = snapshot.map(|snapshot| {
         let mut projects = BTreeMap::new();
@@ -1096,9 +1124,10 @@ fn director_schedule(
         let plan = rows
             .as_ref()
             .and_then(|(_, _, p)| p.get(&link.exposureplan_guid.to_string()));
+        // Director has no preview mode: frames always count at each plan's
+        // own rate.
         if let Some((id, _, _)) = plan
             && let Some(rate) = rates.get(id)
-            && options.fidelity == Fidelity::Estimate
         {
             acceptance.insert(link.goal_id.to_owned(), *rate);
         }
@@ -1296,25 +1325,15 @@ fn bare_project() -> Project {
     }
 }
 
-/// The rig profile's limits and the project's together, as feasibility
-/// applies a plan's: the higher minimum, the lower maximum (a project
-/// maximum of 0 is none), and the offset on the custom horizon. Err gives
-/// the limits when they are not a range.
+/// The rig profile's limits and the project's together, by the rule
+/// feasibility applies a plan's.
 fn project_limits(rig: &Limits, project: &Project) -> Result<(AltitudeLimits, PlanLimits), String> {
-    let project_maximum = if project.maximum_altitude_degrees > 0.0 {
-        project.maximum_altitude_degrees
-    } else {
-        90.0
-    };
-    let altitude = AltitudeLimits {
-        rig_minimum_degrees: rig.minimum_altitude_degrees,
-        rig_maximum_degrees: rig.maximum_altitude_degrees,
-        project_minimum_degrees: project.minimum_altitude_degrees,
-        project_maximum_degrees: project_maximum,
-        // The core never lowers the custom horizon, so a negative offset
-        // counts as none and can only undercount the hours.
-        horizon_offset_degrees: project.horizon_offset_degrees.max(0.0),
-    };
+    let altitude = super::feasibility::combined_limits(
+        rig,
+        project.minimum_altitude_degrees,
+        project.maximum_altitude_degrees,
+        project.horizon_offset_degrees,
+    )?;
     let applied = PlanLimits {
         minimum_altitude_degrees: altitude
             .rig_minimum_degrees
@@ -1326,12 +1345,6 @@ fn project_limits(rig: &Limits, project: &Project) -> Result<(AltitudeLimits, Pl
         custom_horizon: project.use_custom_horizon,
         meridian_window_minutes: project.meridian_window_minutes,
     };
-    altitude.validate().map_err(|_| {
-        format!(
-            "minimum {}°, maximum {}°",
-            applied.minimum_altitude_degrees, applied.maximum_altitude_degrees
-        )
-    })?;
     Ok((altitude, applied))
 }
 

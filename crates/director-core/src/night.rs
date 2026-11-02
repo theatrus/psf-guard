@@ -107,6 +107,12 @@ impl NightDate {
         }
     }
 
+    /// Nights from this one to `other`: 0 for the same night, negative when
+    /// `other` comes first.
+    pub fn days_until(self, other: Self) -> i64 {
+        (other.0 - self.0).num_days()
+    }
+
     /// The night after this one, if it is still a night this type holds.
     pub fn next(self) -> Option<Self> {
         let next = self.0.succ_opt()?;

@@ -17,7 +17,6 @@ import {
   STATE_LABEL,
   availableShares,
   datesBetween,
-  eveningOf,
   formatNightDate,
   isDate,
   isTonight,
@@ -52,7 +51,10 @@ export default function NightsView() {
   const { canWrite } = useAccess();
   const now = useDirectorClock();
   const today = localDate(new Date(now));
-  const from = isDate(getParam(NIGHTS_PARAMS.from)) ? getParam(NIGHTS_PARAMS.from)! : today;
+  // A chosen first night is the same date at every rig. Without one, each
+  // rig starts with the night under way at its own site.
+  const chosenFrom = isDate(getParam(NIGHTS_PARAMS.from)) ? getParam(NIGHTS_PARAMS.from)! : null;
+  const from = chosenFrom ?? today;
   const countParam = Number(getParam(NIGHTS_PARAMS.count));
   const count = (NIGHT_COUNTS as readonly number[]).includes(countParam) ? countParam : NIGHT_COUNTS[0];
   const hidden = useMemo(() => new Set((getParam(NIGHTS_PARAMS.hide) ?? '').split(',').filter(Boolean)), [getParam]);
@@ -63,8 +65,8 @@ export default function NightsView() {
     return rig && isDate(night) ? { rigId: rig, anchor: night, dates: [night] } : null;
   });
   const query = useQuery({
-    queryKey: ['nightPlans', from, count],
-    queryFn: () => apiClient.getNightPlans({ start_ms: eveningOf(from), nights: count, schedule_nights: count }),
+    queryKey: ['nightPlans', chosenFrom, count],
+    queryFn: () => apiClient.getNightPlans({ ...(chosenFrom ? { first_night: chosenFrom } : {}), nights: count, schedule_nights: count }),
     retry: retryWhenBusy,
     retryDelay: 1200,
     refetchInterval: 5 * 60_000,
@@ -73,7 +75,9 @@ export default function NightsView() {
   const rigs = useMemo(() => query.data?.rigs ?? [], [query.data]);
   const shown = rigs.filter(rig => !hidden.has(rig.rig.id));
   const colours = useMemo(() => planColours(rigs), [rigs]);
-  const dates = rigs[0]?.nights.map(night => night.date) ?? [];
+  // Columns by date across the rigs shown: rigs far apart can be on
+  // different nights at the same instant.
+  const dates = [...new Set(shown.flatMap(rig => rig.nights.map(night => night.date)))].sort();
   const selectedRig = selection ? rigs.find(rig => rig.rig.id === selection.rigId) ?? null : null;
   const selectedNights = selectedRig && selection
     ? selectedRig.nights.filter(night => selection.dates.includes(night.date))
@@ -104,7 +108,7 @@ export default function NightsView() {
           <label>Nights <select value={count} onChange={event => { setSelection(null); updateParams({ [NIGHTS_PARAMS.count]: Number(event.target.value) === NIGHT_COUNTS[0] ? null : event.target.value }); }}>
             {NIGHT_COUNTS.map(option => <option key={option} value={option}>{option}</option>)}
           </select></label>
-          {from !== today && <button type="button" onClick={() => { setSelection(null); updateParams({ [NIGHTS_PARAMS.from]: null }); }}>Tonight</button>}
+          {chosenFrom && <button type="button" onClick={() => { setSelection(null); updateParams({ [NIGHTS_PARAMS.from]: null }); }}>Tonight</button>}
           <button type="button" title="Compute again" aria-label="Compute again" disabled={query.isFetching} onClick={() => void query.refetch()}><RefreshCw size={16} /></button>
         </div>
       </div>
@@ -125,7 +129,7 @@ export default function NightsView() {
         <table className="nights-grid" data-testid="nights-grid">
           <thead><tr>
             <th scope="col" className="nights-rig-head">Rig</th>
-            {dates.map(date => <th key={date} scope="col" className={rigs[0]?.nights.find(n => n.date === date && isTonight(n, now)) ? 'is-tonight' : undefined}>
+            {dates.map(date => <th key={date} scope="col" className={shown.some(rig => rig.nights.some(n => n.date === date && isTonight(n, now))) ? 'is-tonight' : undefined}>
               <span className="nights-date">{formatNightDate(date)}</span>
             </th>)}
           </tr></thead>
@@ -135,14 +139,16 @@ export default function NightsView() {
               <span className="director-muted">{RUNTIME_LABEL[rig.runtime]}{rig.planning_site ? ` · ${rig.planning_site.name}` : ''}</span>
               <span className="director-muted">{rig.plans.length === 0 ? 'Nothing owed' : `${rig.plans.length} plan${rig.plans.length === 1 ? '' : 's'} owed`}</span>
             </th>
-            {rig.nights.map(night => {
+            {dates.map(date => {
+              const night = rig.nights.find(n => n.date === date);
+              if (!night) return <td key={date} />;
               const chosen = selection?.rigId === rig.rig.id && selection.dates.includes(night.date);
               // What the rig's runtime plans to shoot, else what could fit.
               const scheduled = rig.schedule ? plansScheduled(rig, night.date) : null;
               const working = scheduled ?? plansOnNight(rig, night).map(plan => ({ name: plan.name, hours: plan.hours }));
               const plannedHours = scheduled?.reduce((sum, plan) => sum + plan.hours, 0) ?? null;
               const glyph = markGlyph(night);
-              return <td key={night.date}>
+              return <td key={date}>
                 <button type="button" className={`nights-cell is-${night.availability.state}`} aria-pressed={chosen}
                   aria-label={`${rig.catalog_name}, ${formatNightDate(night.date)}: ${formatHours(night.available_dark_hours)} clear of ${formatHours(night.dark_hours)} dark, ${STATE_LABEL[night.availability.state].toLowerCase()}, Moon ${Math.round(night.moon_illumination * 100)}%`}
                   onClick={event => choose(rig, night, event.shiftKey)}>
@@ -171,7 +177,7 @@ export default function NightsView() {
         nights={selectedNights}
         colours={colours}
         canMark={canWrite}
-        range={{ from, count }}
+        range={{ first: chosenFrom, count }}
         onClose={() => setSelection(null)}
       />}
     </section>

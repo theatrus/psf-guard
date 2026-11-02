@@ -1877,7 +1877,10 @@ estimates for choosing targets and nights, not the rig's dispatch decision.
 **Rigs › Nights** shows every rig with a site across the coming nights:
 rigs are rows and nights are columns. Choose the first
 night with **From** and how many with **Nights** (7, 14 or 31); **Tonight**
-returns to the night under way. The chips above the grid hide or show rigs.
+returns to the night under way. A chosen date is the same night at every
+rig. Without one, each rig starts with the night under way at its own
+site, and the columns line up by date, so a rig far to the east can be a
+night ahead of one in the west. The chips above the grid hide or show rigs.
 On a phone the grid scrolls inside its own box.
 
 Each cell is one rig's night, from dusk to dawn:
@@ -1951,7 +1954,9 @@ With editor access, the night's panel ends with **Mark this night**:
 
 1. Choose **Available**, **Not available**, or **Limited** with the hours
    that are clear. Leave **From** empty to start at dusk or **To** empty to
-   end at dawn; times after midnight fall the next morning.
+   end at dawn; times after midnight fall the next morning. The times are
+   in your browser's time zone, which the form names: for a rig in another
+   zone, enter its hours as your clock shows them.
 2. Under **For**, choose **This rig only** for the rig (maintenance, a camera
    away) or **Every rig at** the rig's planning site for the sky (clouds).
 3. Add a note if you like, such as "dome motor" or "high cirrus", and click
@@ -1976,7 +1981,7 @@ schedule on the **Nights** tab.
 
 | Method | Route | Body or query |
 | --- | --- | --- |
-| POST | `/night-plans` | Optional `rigs` (ids; none is every rig with a site), `start_ms` (default now; the first night is the one under way then), `nights` (1 to 31, default 7), `schedule_nights` (how many nights from the first to schedule, default 0), `explain` (a scheduled night, `YYYY-MM-DD`, whose blocks list every candidate and its scores), `runtime` (`auto`, `target_scheduler` or `director`; `auto` is the rig's own), `fidelity` (`estimate` or `target_scheduler_preview`), `utc_offset_minutes` (the clock the Target Scheduler emulation plans by; default local mean time) and `plan_from_ms` (schedules plan nothing before it; default now). Per rig: the runtime, the plans it owes with their limits, `nights` (darkness, clear hours, marks, Moon, each target's hours and the load), `schedule` (blocks, gaps, frames per plan and the night each completes, and the assumptions), `mark_revisions` and `warnings`. Writes nothing. A read-only account that may run calculations can call it. |
+| POST | `/night-plans` | Optional `rigs` (ids; none is every rig with a site), `first_night` (`YYYY-MM-DD`: the same first night at every rig), `start_ms` (without `first_night`, each rig's first night is the one under way there at this instant; default now), `nights` (1 to 31, default 7), `schedule_nights` (how many nights from the first to schedule, default 0), `explain` (a scheduled night, `YYYY-MM-DD`, whose blocks list every candidate and its scores), `runtime` (`auto`, `target_scheduler` or `director`; `auto` is the rig's own), `fidelity` (`estimate` or `target_scheduler_preview`), `utc_offset_minutes` (the clock the Target Scheduler emulation plans by; default local mean time) and `plan_from_ms` (schedules plan nothing before it; default now). Per rig: the runtime, the plans it owes with their limits, `nights` (darkness, clear hours, marks, Moon, each target's hours and the load), `schedule` (blocks, gaps, frames per plan and the night each completes, and the assumptions), `mark_revisions` and `warnings`. Writes nothing. A read-only account that may run calculations can call it. |
 | GET | `/night-availability` | `scope` (`site` or `rig`), `id`, `from` and `to` (`YYYY-MM-DD`). The scope's marks and the `revision` to send back with a change. |
 | PUT | `/night-availability/{scope}/{id}` | `expected_revision` and `marks`: up to 62 nights, each a `date`, a `state` (`available`, `unavailable` or `limited`), `windows` (for `limited`: UTC instants inside that night's noon-to-noon span) and an optional `note`. Replaces those nights' marks in one transaction. `409` on a stale revision; `422` for hours outside the night or a scope with no location. |
 | DELETE | `/night-availability/{scope}/{id}` | `expected_revision` and `dates`: returns those nights to the default. |

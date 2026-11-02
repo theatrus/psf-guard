@@ -1,5 +1,5 @@
 import { useId } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { Map as MapIcon } from 'lucide-react';
 import { useAccess } from '../../auth/access';
 import { useUrlParams } from '../../hooks/useUrlState';
@@ -10,7 +10,7 @@ import DirectorRigs from '../director/DirectorRigs';
 import TemplateLibrary from '../director/TemplateLibrary';
 import WorkspaceTabs from '../director/WorkspaceTabs';
 import NightsView from '../nights/NightsView';
-import { NIGHTS_PARAMS, RIGS_TAB_PARAM } from '../nights/nightsModel';
+import { NIGHTS_PARAMS, RIGS_TAB_PARAM, scopedHref } from '../nights/nightsModel';
 import '../director/DirectorPage.css';
 import './RigsPage.css';
 
@@ -31,6 +31,7 @@ export default function RigsPage() {
   const { getParam, updateParams } = useUrlParams();
   const { canWrite } = useAccess();
   const plans = usePlans();
+  const { search } = useLocation();
   const tab: RigsTab = getParam(RIGS_TAB_PARAM) === 'nights' ? 'nights' : 'live';
   if (!plans.enabled) {
     return <main className="director-page rigs-page"><p className="director-muted">Rigs need Director, which is off on this server.</p></main>;
@@ -50,7 +51,7 @@ export default function RigsPage() {
       {tab === 'live' ? <>
         <DirectorDashboard />
         <p className="director-muted">
-          <Link to="/sky?live=1"><MapIcon size={14} aria-hidden="true" /> Show the rigs on the sky</Link>
+          <Link to={scopedHref('/sky', search, { live: '1' })}><MapIcon size={14} aria-hidden="true" /> Show the rigs on the sky</Link>
           {canWrite && <>
             {' · '}Rig setup and the exposure template library are under Settings:{' '}
             <button type="button" className="director-link-button" onClick={() => openSettings('rigs')}>Rig setup</button>

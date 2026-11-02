@@ -14,7 +14,6 @@ import {
   STATE_LABEL,
   clockValue,
   describeDates,
-  eveningOf,
   formatClock,
   formatNightDate,
   isTonight,
@@ -28,8 +27,9 @@ interface Props {
   nights: RigNight[];
   colours: Map<string, number>;
   canMark: boolean;
-  /** The grid's range, which the night's schedule carries over from. */
-  range: { from: string; count: number };
+  /** The grid's range, which the night's schedule carries over from: its
+   *  chosen first night, or none for the night under way. */
+  range: { first: string | null; count: number };
   onClose: () => void;
 }
 
@@ -55,33 +55,37 @@ export default function NightDetail({ rig, nights, colours, canMark, range, onCl
 
 /** The night's schedule from the runtime that drives the rig, or the other
  *  one to compare, with the planner's reasons for each block. */
-function NightSchedule({ rig, night, colours, range }: { rig: RigNights; night: RigNight; colours: Map<string, number>; range: { from: string; count: number } }) {
+function NightSchedule({ rig, night, colours, range }: { rig: RigNights; night: RigNight; colours: Map<string, number>; range: Props['range'] }) {
   const [runtime, setRuntime] = useState<ScheduleRuntimeChoice>('auto');
   const [fidelity, setFidelity] = useState<ScheduleFidelity>('estimate');
   const index = rig.nights.findIndex(n => n.date === night.date);
   const shown = runtime === 'auto' ? rig.runtime : runtime;
   const other = rig.runtime === 'target_scheduler' ? 'director' : 'target_scheduler';
+  const now = useDirectorClock();
+  const tonight = isTonight(night, now);
   const query = useQuery({
-    queryKey: ['nightPlanDetail', rig.rig.id, range.from, range.count, night.date, runtime, fidelity],
+    queryKey: ['nightPlanDetail', rig.rig.id, range.first, range.count, night.date, runtime, shown === 'target_scheduler' ? fidelity : 'estimate'],
     queryFn: () => apiClient.getNightPlans({
       rigs: [rig.rig.id],
-      start_ms: eveningOf(range.from),
+      ...(range.first ? { first_night: range.first } : {}),
       nights: range.count,
       schedule_nights: index + 1,
       explain: night.date,
       runtime,
-      fidelity,
+      // The preview's counting is Target Scheduler's alone.
+      ...(shown === 'target_scheduler' ? { fidelity } : {}),
     }),
     enabled: index >= 0,
     retry: retryWhenBusy,
     retryDelay: 1200,
+    // Tonight re-plans from now every two minutes; other nights stand
+    // until the page asks again or a mark changes them.
+    refetchInterval: tonight ? 2 * 60_000 : false,
     refetchOnWindowFocus: false,
   });
   const detail = query.data?.rigs.find(entry => entry.rig.id === rig.rig.id);
   const scheduled = detail?.schedule?.nights.find(n => n.date === night.date);
   // Tonight: what the rig says it is doing, beside what it is planned to do.
-  const now = useDirectorClock();
-  const tonight = isTonight(night, now);
   const statuses = useQuery({ queryKey: ['directorRigStatuses'], queryFn: apiClient.getDirectorRigStatuses, enabled: tonight, retry: retryWhenBusy, retryDelay: 1200, refetchInterval: 15_000 });
   const live = statuses.data?.find(view => view.rig.id === rig.rig.id);
   return <section className="nights-schedule" aria-label="Schedule">
@@ -184,12 +188,25 @@ function failure(error: unknown): string {
 /** Mark the chosen nights available, out, or clear for some hours, for the
  *  rig alone or for every rig at its site. */
 function MarkEditor({ rig, nights }: { rig: RigNights; nights: RigNight[] }) {
+  const [scope, setScope] = useState<NightMarkScope>('rig');
+  // A form per scope, so each starts from that scope's own mark.
+  return <MarkForm key={scope} rig={rig} nights={nights} scope={scope} onScope={setScope} />;
+}
+
+/** The browser's time zone, which the From and To times are read in. */
+const BROWSER_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+/** All the queries a mark changes: the grid, the open night and Live's
+ *  Tonight column. */
+const MARKED_QUERIES = [['nightPlans'], ['nightPlanDetail'], ['nightPlansTonight']] as const;
+
+function MarkForm({ rig, nights, scope, onScope }: { rig: RigNights; nights: RigNight[]; scope: NightMarkScope; onScope: (scope: NightMarkScope) => void }) {
   const client = useQueryClient();
   const first = nights[0];
-  const [scope, setScope] = useState<NightMarkScope>('rig');
   const current = first.availability.marks.find(mark => mark.scope === scope);
   const [state, setState] = useState<NightAvailabilityState>(current?.state ?? 'unavailable');
   const limited = current?.state === 'limited' ? current.windows[0] : undefined;
+  const extra = current?.state === 'limited' ? current.windows.slice(1) : [];
   const [from, setFrom] = useState(limited ? clockValue(limited.start_ms) : '');
   const [to, setTo] = useState(limited ? clockValue(limited.end_ms) : '');
   const [note, setNote] = useState(current?.note ?? '');
@@ -197,10 +214,11 @@ function MarkEditor({ rig, nights }: { rig: RigNights; nights: RigNight[] }) {
   const scopeId = scope === 'site' ? rig.planning_site?.id ?? null : rig.rig.id;
   const revision = scope === 'site' ? rig.mark_revisions.site ?? 0 : rig.mark_revisions.rig;
   const marked = nights.some(night => night.availability.marks.some(mark => mark.scope === scope));
-  const done = () => { setProblem(null); void client.invalidateQueries({ queryKey: ['nightPlans'] }); };
+  const refresh = () => { for (const queryKey of MARKED_QUERIES) void client.invalidateQueries({ queryKey: [...queryKey] }); };
+  const done = () => { setProblem(null); refresh(); };
   const fail = (error: unknown) => {
     setProblem(failure(error));
-    if (httpStatus(error) === 409) void client.invalidateQueries({ queryKey: ['nightPlans'] });
+    if (httpStatus(error) === 409) refresh();
   };
   const save = useMutation({
     mutationFn: (marks: NightMarkEdit[]) => apiClient.saveNightMarks(scope, scopeId!, revision, marks),
@@ -240,10 +258,13 @@ function MarkEditor({ rig, nights }: { rig: RigNights; nights: RigNight[] }) {
       {state === 'limited' && <div className="nights-mark-row">
         <label>From <input type="time" value={from} onChange={event => setFrom(event.target.value)} aria-describedby="nights-limited-help" /></label>
         <label>To <input type="time" value={to} onChange={event => setTo(event.target.value)} aria-describedby="nights-limited-help" /></label>
-        <span id="nights-limited-help" className="director-muted">Leave From empty to start at dusk, or To empty to end at dawn. Times after midnight fall the next morning.</span>
+        <span id="nights-limited-help" className="director-muted">Times are in this browser's time zone ({BROWSER_ZONE}). Leave From empty to start at dusk, or To empty to end at dawn. Times after midnight fall the next morning.</span>
       </div>}
+      {state === 'limited' && extra.length > 0 && <p className="director-muted" role="note">
+        This mark also has {extra.map(w => `${formatClock(w.start_ms)} – ${formatClock(w.end_ms)}`).join(', ')}. Saving keeps only the hours entered here.
+      </p>}
       <div className="nights-mark-row">
-        <label>For <select value={scope} onChange={event => setScope(event.target.value as NightMarkScope)}>
+        <label>For <select value={scope} onChange={event => onScope(event.target.value as NightMarkScope)}>
           <option value="rig">This rig only</option>
           {rig.planning_site && <option value="site">Every rig at {rig.planning_site.name}</option>}
         </select></label>

@@ -6,7 +6,8 @@ import { http, HttpResponse } from 'msw';
 import { describe, expect, it, vi } from 'vitest';
 import { server } from '../../../test/msw-server';
 import RigsPage from '../../rigs/RigsPage';
-import { plans, rig } from './fixtures';
+import { night, plans, rig } from './fixtures';
+import { formatNightDate } from '../nightsModel';
 
 const ok = (data: unknown) => ({ success: true, data, error: null });
 const enabled = { protocol_version: 1, enabled: true, instance_id: '11111111-1111-4111-8111-111111111111', database_management: true };
@@ -73,9 +74,10 @@ describe('Nights', () => {
     fireEvent.click(cells[2], { shiftKey: true });
     const detail = screen.getByRole('region', { name: 'Night details' });
     expect(within(detail).getByText('Mark these 3 nights')).toBeInTheDocument();
+    // The scope first: each scope's form starts from that scope's mark.
+    fireEvent.change(within(detail).getByLabelText('For'), { target: { value: 'site' } });
     fireEvent.click(within(detail).getByLabelText('Limited'));
     fireEvent.change(within(detail).getByLabelText('From'), { target: { value: '22:30' } });
-    fireEvent.change(within(detail).getByLabelText('For'), { target: { value: 'site' } });
     fireEvent.change(within(detail).getByLabelText('Note'), { target: { value: 'high cirrus' } });
     fireEvent.click(within(detail).getByRole('button', { name: 'Save mark' }));
     await waitFor(() => expect(saved).toHaveBeenCalled());
@@ -89,6 +91,37 @@ describe('Nights', () => {
       expect(mark.windows).toHaveLength(1);
       expect(new Date(mark.windows[0].start_ms).getHours()).toBe(22);
     }
+  });
+
+  it('starts each scope\'s form from that scope\'s own mark', async () => {
+    mount();
+    const grid = await screen.findByTestId('nights-grid');
+    fireEvent.click(within(grid).getAllByRole('button')[1]);
+    const detail = screen.getByRole('region', { name: 'Night details' });
+    // The rig's own mark: not available, with its note.
+    expect(within(detail).getByLabelText('Not available')).toBeChecked();
+    expect(within(detail).getByLabelText('Note')).toHaveValue('dome motor');
+    // The site has no mark that night: its form starts empty.
+    fireEvent.change(within(detail).getByLabelText('For'), { target: { value: 'site' } });
+    expect(within(detail).getByLabelText('Note')).toHaveValue('');
+  });
+
+  it('lines rigs up by date when one is a night ahead of another', async () => {
+    const near = rig();
+    const far = rig({
+      rig: { id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', name: 'Siding Spring', revision: 1 },
+      catalog_name: 'Far rig',
+      nights: [night(1), night(2), night(3)],
+    });
+    mount(plans([near, far]));
+    const grid = await screen.findByTestId('nights-grid');
+    // Four dates: the near rig's three and one more.
+    expect(within(grid).getAllByRole('columnheader')).toHaveLength(5);
+    const farRow = within(grid).getByRole('row', { name: /Far rig/ });
+    const cells = within(farRow).getAllByRole('cell');
+    expect(cells).toHaveLength(4);
+    expect(within(cells[0]).queryByRole('button')).toBeNull();
+    expect(within(cells[1]).getByRole('button')).toHaveAccessibleName(new RegExp(`^Far rig, ${formatNightDate(night(1).date)}`));
   });
 
   it('lets a reader see the nights but not mark them', async () => {

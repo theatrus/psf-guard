@@ -622,6 +622,11 @@ refused.
     not built: the POST with one rig in `rigs` does it.
   - Rigs run on the rayon pool. Within a rig, nights run in order,
     because of carry-over.
+  - The handler reads the meta store under a read slot, then lets it go
+    before reading the rigs' databases and computing, as feasibility
+    computes in its request. A month of 30 targets takes about 1.4 s. If
+    real catalogs take much longer, the schedules move to a tracked job
+    that the page polls.
   - Read access is the same as feasibility's. Nothing is written.
 - **Availability:**
   - `GET /api/director/v1/night-availability` takes `scope`, `id`, `from`

@@ -259,15 +259,17 @@ impl Gathered {
         })
     }
 
-    /// The program the pull would issue, valid over `span`, with each goal
-    /// allowed the whole span.
-    pub(super) fn program(&self, rig: Uuid, span: Interval) -> Program {
+    /// The program the pull issues, under assignment `id` and valid over
+    /// `span`, with each goal allowed the whole span; the rig's geometry adds
+    /// the real windows. The pull and the night plans' Director preview both
+    /// build it here.
+    pub(super) fn program(&self, rig: Uuid, span: Interval, id: String) -> Program {
         Program {
             observing_preferences: self.observing_preferences.clone(),
             schema_version: PROGRAM_VERSION,
             assignment: Assignment {
-                id: "night-plan-preview".into(),
-                revision: self.assignment_revision.max(1),
+                id,
+                revision: self.assignment_revision,
                 rig_id: rig.to_string(),
                 configuration_id: self.configuration.id.clone(),
                 valid_from_ms: span.start_ms,
@@ -553,27 +555,19 @@ pub(super) fn assemble(
     rig: Uuid,
     catalog_id: Uuid,
 ) -> Result<Envelope, PullError> {
-    let Gathered {
-        profile,
-        placed,
-        configuration,
-        built,
-        assignment_revision,
-        preference_settings,
-        observing_preferences,
-        ..
-    } = gather(store, catalogs, instance, rig, catalog_id, false)?;
+    let gathered = gather(store, catalogs, instance, rig, catalog_id, false)?;
     let now = now_ms();
-    if built.goals.is_empty() {
+    if gathered.built.goals.is_empty() {
         return Err(PullError::NotReady(format!(
             "No executable activated plan for this rig. {}",
-            built.omitted.join("; ")
+            gathered.built.omitted.join("; ")
         )));
     }
+    let built = &gathered.built;
     let fingerprint = catalog_discovery::digest(
         &serde_json::to_vec(&(
             "program-v2",
-            assignment_revision,
+            gathered.assignment_revision,
             VALIDITY.as_millis(),
             &built.goals,
             &built.targets,
@@ -581,13 +575,13 @@ pub(super) fn assemble(
             &built.links,
             &built.bindings,
             &built.omitted,
-            &observing_preferences,
+            &gathered.observing_preferences,
             (
-                &preference_settings.project_order,
-                &preference_settings.order_source,
+                &gathered.preference_settings.project_order,
+                &gathered.preference_settings.order_source,
             ),
-            &configuration,
-            profile.as_ref().map(|p| p.revision),
+            &gathered.configuration,
+            gathered.profile.as_ref().map(|p| p.revision),
         ))
         .map_err(|_| Error::Internal)?,
     );
@@ -611,31 +605,14 @@ pub(super) fn assemble(
         start_ms: issue.issued_at_ms,
         end_ms: issue.expires_at_ms,
     };
-    let goals: Vec<Goal> = built
-        .goals
-        .into_iter()
-        .map(|goal| Goal {
-            eligible_windows: vec![span],
-            ..goal
-        })
-        .collect();
-    let program = Program {
-        observing_preferences,
-        schema_version: PROGRAM_VERSION,
-        assignment: Assignment {
-            id: format!("assignment-{}", issue.id),
-            revision: assignment_revision,
-            rig_id: rig.to_string(),
-            configuration_id: configuration.id.clone(),
-            valid_from_ms: span.start_ms,
-            expires_at_ms: span.end_ms,
-            goals,
-        },
-        configuration: configuration.clone(),
-        targets: built.targets,
-        recipes: built.recipes,
-        bindings: built.bindings,
-    };
+    let program = gathered.program(rig, span, format!("assignment-{}", issue.id));
+    let Gathered {
+        profile,
+        placed,
+        configuration,
+        built,
+        ..
+    } = gathered;
     // Prove the program binds before handing it out. The synthetic state
     // only supplies the identity and time the validator needs.
     let limits = profile.as_ref().map(|p| p.limits.value).unwrap_or_default();

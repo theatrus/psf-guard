@@ -26,15 +26,20 @@ pub(super) struct ReadSnapshot {
 /// owns most projects, as activation chooses it. `None` when the database
 /// has no profile at all.
 pub(super) fn read(path: &str) -> rusqlite::Result<Option<ReadSnapshot>> {
-    let connection = crate::server::database_context::open_scheduler_connection_with_flags(
+    let mut connection = crate::server::database_context::open_scheduler_connection_with_flags(
         Path::new(path),
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
     connection.busy_timeout(std::time::Duration::from_secs(2))?;
-    let Some(profile_id) = super::activation::resolve_profile(&connection)? else {
+    // One read transaction, so Target Scheduler writing counts or a project
+    // between the queries cannot leave the snapshot half old, half new.
+    let snapshot = connection.transaction()?;
+    let Some(profile_id) = super::activation::resolve_profile(&snapshot)? else {
         return Ok(None);
     };
-    read_profile(&connection, &profile_id).map(Some)
+    let read = read_profile(&snapshot, &profile_id)?;
+    snapshot.commit()?;
+    Ok(Some(read))
 }
 
 struct Columns(HashSet<String>);

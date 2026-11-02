@@ -137,7 +137,47 @@ async fn a_rigs_summary_counts_each_plans_hours_as_feasibility_does() {
         .as_str()
         .unwrap()
         .contains(&stranger.to_string()));
+    // A first night by date is the same night for every rig, whatever the
+    // instant; without one, each rig starts with the night under way there.
+    let (status, dated) = call(
+        &a.f.app,
+        "POST",
+        "/night-plans",
+        json!({"nights": 2, "first_night": "2026-09-26", "start_ms": START_MS}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{dated}");
+    let nights = dated["data"]["rigs"][0]["nights"].as_array().unwrap();
+    assert_eq!(
+        (nights[0]["date"].as_str(), nights[1]["date"].as_str()),
+        (Some("2026-09-26"), Some("2026-09-27"))
+    );
+    // A date not written YYYY-MM-DD is refused as the body is read.
+    let (status, _) = call(
+        &a.f.app,
+        "POST",
+        "/night-plans",
+        json!({"first_night": "2026-9-1"}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    // 03:00 at the rig on the 25th is still the night of the 24th.
+    let (_, small_hours) = call(
+        &a.f.app,
+        "POST",
+        "/night-plans",
+        json!({"nights": 1, "start_ms": START_MS + 10 * 3_600_000}),
+        None,
+    )
+    .await;
+    assert_eq!(
+        small_hours["data"]["rigs"][0]["nights"][0]["date"],
+        "2026-09-24"
+    );
     for body in [
+        json!({"plan_from_ms": u64::MAX}),
         json!({"nights": 0}),
         json!({"nights": 32}),
         json!({"start_ms": 0}),

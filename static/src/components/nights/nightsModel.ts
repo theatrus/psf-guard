@@ -1,4 +1,5 @@
 import type { NightAvailabilityState, NightInterval, NightRuntime, RigNight, RigNights } from '../../api/nightPlanTypes';
+import { withoutPlanningParams } from '../../hooks/useUrlState';
 
 const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
@@ -14,9 +15,18 @@ export const NIGHTS_PARAMS = {
   night: 'night',
 } as const;
 
-/** The Rigs page's address for one rig's night. */
-export function nightHref(rigId: string, date: string): string {
-  return `/rigs?${new URLSearchParams({ [RIGS_TAB_PARAM]: 'nights', [NIGHTS_PARAMS.rig]: rigId, [NIGHTS_PARAMS.night]: date })}`;
+/** An address that keeps the page's database and project scope, less the
+ *  keys that belong to one view, with `extra` added. */
+export function scopedHref(path: string, search: string, extra: Record<string, string> = {}): string {
+  const params = withoutPlanningParams(search);
+  for (const [key, value] of Object.entries(extra)) params.set(key, value);
+  const query = params.toString();
+  return query ? `${path}?${query}` : path;
+}
+
+/** The Rigs page's address for one rig's night, keeping the scope. */
+export function nightHref(rigId: string, date: string, search = ''): string {
+  return scopedHref('/rigs', search, { [RIGS_TAB_PARAM]: 'nights', [NIGHTS_PARAMS.rig]: rigId, [NIGHTS_PARAMS.night]: date });
 }
 
 /** Night counts the page offers. */

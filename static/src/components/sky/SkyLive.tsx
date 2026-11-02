@@ -1,5 +1,6 @@
 import { Crosshair } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
+import { scopedHref } from '../nights/nightsModel';
 import type { PlacedRig } from './liveRigs';
 import EarlyBeta from '../director/EarlyBeta';
 
@@ -8,9 +9,10 @@ const STATE_LABEL: Record<PlacedRig['connectivity'], string> = { online: 'Online
 /** The fleet beside the map: each rig, whether it is talking, what it says
  *  it is doing, and where the map puts it. Choosing one turns the map to it. */
 export default function SkyLive({ rigs, onFocus }: { rigs: PlacedRig[]; onFocus?: (rig: PlacedRig) => void }) {
+  const { search } = useLocation();
   return <aside className="sky-live" aria-label="Live rigs on the sky">
     <div className="early-beta-heading"><h2>Live</h2><EarlyBeta /></div>
-    <Link className="sky-live-table-link" to="/rigs">Open the Live table and tonight's plans</Link>
+    <Link className="sky-live-table-link" to={scopedHref('/rigs', search)}>Open the Live table and tonight's plans</Link>
     {rigs.length === 0 && <p className="sky-live-empty">No rig has reported yet.</p>}
     <ul>
       {rigs.map(rig => (

@@ -60,7 +60,8 @@ test('the Rigs tab carries the fleet, opens Live, and shows each rig on the sky 
     const table = page.getByTestId('director-dashboard');
     await expect(table.getByText('Live north', { exact: true })).toBeVisible();
     await page.getByRole('link', { name: 'Show the rigs on the sky' }).click();
-    await expect(page).toHaveURL(/#\/sky\?live=1$/);
+    // The parked scope travels with the link.
+    await expect(page).toHaveURL(/#\/sky\?db=parked-catalog&live=1$/);
     const panel = page.getByRole('complementary', { name: 'Live rigs on the sky' });
     await expect(panel.getByText('Live north', { exact: true })).toBeVisible();
     await expect(panel.getByText('exposing, Live north target')).toBeVisible();
@@ -78,7 +79,7 @@ test('the Rigs tab carries the fleet, opens Live, and shows each rig on the sky 
     await expect(page.locator('.sky-map')).toHaveAttribute('data-center', /^10\.7,41\.3$/);
     // The table is on the Rigs page, not under the map; the list links to it.
     await expect(page.getByTestId('director-dashboard')).toHaveCount(0);
-    await expect(panel.getByRole('link', { name: "Open the Live table and tonight's plans" })).toHaveAttribute('href', '#/rigs');
+    await expect(panel.getByRole('link', { name: "Open the Live table and tonight's plans" })).toHaveAttribute('href', '#/rigs?db=parked-catalog');
     // The Live chip in the controls takes the rigs off the map.
     await page.locator('.sky-controls').getByRole('button', { name: 'Live', exact: true }).click();
     await expect(page.locator('[data-rig]')).toHaveCount(0);

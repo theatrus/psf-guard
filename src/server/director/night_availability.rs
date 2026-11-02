@@ -66,14 +66,14 @@ async fn list(
     if query.from > query.to {
         return Err(Error::Invalid);
     }
+    if query.from.days_until(query.to) >= MAX_NIGHTS_PER_READ as i64 {
+        return Err(Error::Refused(format!(
+            "Ask for fewer nights: one read covers at most {MAX_NIGHTS_PER_READ}."
+        )));
+    }
     let marks = enabled(&state)?
         .query(move |store| store.night_marks(query.scope, query.id, query.from, query.to))
         .await?;
-    if marks.marks.len() >= MAX_NIGHTS_PER_READ {
-        return Err(Error::Refused(format!(
-            "Ask for fewer nights: one read returns at most {MAX_NIGHTS_PER_READ}."
-        )));
-    }
     Ok(Json(ApiResponse::success(marks)))
 }
 

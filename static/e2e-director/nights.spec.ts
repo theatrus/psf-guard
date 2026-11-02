@@ -77,7 +77,10 @@ test('Nights shows every rig across the coming nights, a night\'s schedule, and 
     ]), { latitude_degrees: -31.3, longitude_degrees: 149.1 });
 
     await page.setViewportSize({ width: 1440, height: 1100 });
-    await page.goto('/#/rigs?rigsTab=nights&nightsFrom=2026-11-12');
+    // Ten days on, so the nights are always ahead and fully planned.
+    const ahead = new Date(Date.now() + 10 * 86_400_000);
+    const from = `${ahead.getFullYear()}-${String(ahead.getMonth() + 1).padStart(2, '0')}-${String(ahead.getDate()).padStart(2, '0')}`;
+    await page.goto(`/#/rigs?rigsTab=nights&nightsFrom=${from}`);
     const grid = page.getByTestId('nights-grid');
     await expect(grid).toBeVisible({ timeout: 30_000 });
     await expect(grid.getByText('North rig', { exact: true })).toBeVisible();
