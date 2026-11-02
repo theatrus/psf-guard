@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { availableShares, clockOnNight, datesBetween, isDate, loadWords, markGlyph, planColours, plansOnNight, windowFor } from '../nightsModel';
+import { availableShares, clockOnNight, completesOn, datesBetween, isDate, loadWords, markGlyph, planColours, planRows, plansOnNight, windowFor } from '../nightsModel';
 import { night, rig } from './fixtures';
 
 const HOUR = 3_600_000;
@@ -52,5 +52,87 @@ describe('night plan helpers', () => {
     expect(plansOnNight(owner, owner.nights[1])).toEqual([]);
     expect(planColours([owner, rig({ plans: [{ ...owner.plans[0], name: 'Andromeda' }] })])).toEqual(new Map([['Andromeda', 0], ['Heart Nebula', 1]]));
     expect(datesBetween(owner, owner.nights[2].date, owner.nights[0].date)).toEqual(owner.nights.map(n => n.date));
+  });
+
+  it('lists the targets a night applies to, planned first in the schedule\'s order, and folds the rest with a reason', () => {
+    const base = rig();
+    const plan = (project_id: number, name: string, target_id: number, target: string, meridian_window_minutes = 0) => ({
+      ...base.plans[0], project_id, name, limits: { ...base.plans[0].limits, meridian_window_minutes },
+      targets: [{ ...base.plans[0].targets[0], target_id, name: target }],
+    });
+    const progress = (project_id: number, target_id: number, planned: number[], completes_on: number | null) => ({
+      project_id, target_id, exposure_plan_id: project_id, filter: 'L', desired: 10, accepted_before: 0, acquired_before: 0, planned, completes_on, complete_before: false,
+    });
+    const nights = [night(0), night(1), night(2)];
+    const block = (project_id: number, project_name: string, target_id: number, start_ms: number) => ({
+      target: { project_id, project_name, target_id, target_name: '' }, start_ms, end_ms: start_ms + 3_600_000, slew: true, runs: [],
+      decision: { kind: 'only' as const, candidates: [] },
+    });
+    const noon = nights[1].noon_ms;
+    const schedule = {
+      runtime: 'target_scheduler' as const,
+      nights: nights.map((n, i) => ({ date: n.date, start_ms: n.dusk_ms!, end_ms: n.dawn_ms!, frames: 0, exposure_hours: 0, note: null, gaps: [],
+        blocks: i === 1 ? [block(8, 'Andromeda', 80, noon + 9 * HOUR), block(11, 'Pleiades', 110, noon + 8 * HOUR)] : [] })),
+      progress: [
+        progress(7, 70, [0, 0, 0], null),
+        progress(8, 80, [0, 12, 4], 2),
+        progress(10, 100, [6, 0, 0], 0),
+        progress(11, 110, [0, 3, 0], 1),
+      ],
+      assumptions: { target_scheduler_version: '5', fidelity: 'estimate' as const, overheads: null, acceptance: 'plan_rate' as const, utc_offset_minutes: 0 },
+    };
+    const owner = rig({
+      plans: [base.plans[0], plan(8, 'Andromeda', 80, 'M 31'), plan(9, 'Orion', 90, 'M 42', 60), plan(10, 'Soul Nebula', 100, 'IC 1848'), plan(11, 'Pleiades', 110, 'M 45')],
+      schedule,
+    });
+    const hours = (project_id: number, target_id: number, up: number, clear: number, blocked: number) =>
+      ({ project_id, target_id, hours_up: up, hours_up_available: clear, hours_moon_blocked: blocked, max_altitude_degrees: 70, transit_ms: null });
+    const second = night(1, {
+      targets: [
+        // The Heart: up and clear, but not planned.
+        hours(7, 70, 6, 6, 1),
+        // Andromeda: planned on this, the second night.
+        hours(8, 80, 5, 5, 0),
+        // Orion: not up in its meridian window in the dark.
+        hours(9, 90, 0, 0, 0),
+        // The Soul: up, but done on the first night.
+        hours(10, 100, 6, 6, 0),
+        // The Pleiades: planned in twilight, with no usable dark hours.
+        hours(11, 110, 0, 0, 0),
+      ],
+    });
+    const { applies, out } = planRows(owner, second, schedule);
+    expect(applies.map(row => [row.plan.name, row.status, row.planned, row.usable])).toEqual([
+      ['Pleiades', 'planned', 3, 0],
+      ['Andromeda', 'planned', 12, 5],
+      ['Heart Nebula', 'usable', 0, 5],
+    ]);
+    expect(out.map(row => [row.plan.name, row.status, row.done_on])).toEqual([
+      ['Orion', 'outside_window', null],
+      ['Soul Nebula', 'done', nights[0].date],
+    ]);
+    // Without a schedule, nothing is planned or done: what is usable applies.
+    const unscheduled = planRows({ ...owner, schedule: null }, second, null);
+    expect(unscheduled.applies.map(row => [row.plan.name, row.status])).toEqual([
+      ['Soul Nebula', 'usable'], ['Andromeda', 'usable'], ['Heart Nebula', 'usable'],
+    ]);
+    // A night marked out leaves everything that would be up as not clear;
+    // one the Moon blocks entirely says so; one with no darkness says that.
+    const marked = night(1, { targets: [hours(7, 70, 6, 0, 0)] });
+    expect(planRows(rig(), marked, null).out.map(row => row.status)).toEqual(['not_clear']);
+    const moonlit = night(0, { targets: [hours(7, 70, 6, 6, 6)] });
+    expect(planRows(rig(), moonlit, null).out.map(row => row.status)).toEqual(['moon']);
+    const bright = night(0, { dark_hours: 0, dusk_ms: null, dawn_ms: null, targets: [hours(7, 70, 0, 0, 0)] });
+    expect(planRows(rig(), bright, null).out.map(row => row.status)).toEqual(['no_darkness']);
+  });
+
+  it('says on which scheduled night a target\'s plans are all done', () => {
+    const entry = (completes_on: number | null, complete_before = false) => ({
+      project_id: 7, target_id: 70, exposure_plan_id: 1, filter: 'L', desired: 1, accepted_before: 0, acquired_before: 0, planned: [], completes_on, complete_before,
+    });
+    expect(completesOn([])).toBeNull();
+    expect(completesOn([entry(1), entry(3)])).toBe(3);
+    expect(completesOn([entry(1), entry(null)])).toBeNull();
+    expect(completesOn([entry(null, true)])).toBe(-1);
   });
 });
