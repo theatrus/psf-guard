@@ -1711,10 +1711,10 @@ export default function TauriSettings({
               />
               <span>
                 <small>
-                  Skip processed files. Skip integration masters. When pairing
+                  Skip processed files. Skip calibration masters. When pairing
                   is off, also skip calibrated and registered copies. Use this
                   when the folder contains processing results as well as raw
-                  images.
+                  images. Stacks are always left out.
                 </small>
               </span>
             </label>
@@ -1753,6 +1753,12 @@ export default function TauriSettings({
             {(importProgress.outcome.skipped_processed ?? 0) > 0 && (
               <div className="muted">
                 {importProgress.outcome.skipped_processed} processed file(s) skipped.
+              </div>
+            )}
+            {(importProgress.outcome.skipped_stacks ?? 0) > 0 && (
+              <div className="muted">
+                {importProgress.outcome.skipped_stacks} stack(s) left out. PSF Guard
+                imports single exposures and calibration masters, not stacks.
               </div>
             )}
             {(importProgress.outcome.skipped_out_of_scope ?? 0) > 0 && (

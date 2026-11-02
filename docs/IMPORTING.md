@@ -226,8 +226,20 @@ detected rig. The raw files remain in place.
 
 Calibration types take precedence over light-frame matching. In particular,
 `IMAGETYP=TWILIGHT FLAT` is a flat, not a light despite the word "twilight".
-Missing image-type headers still default to lights; check those headers before
-importing a mixed archive.
+
+A master or a stack is never imported as a light. PSF Guard recognizes one
+by its headers, for example an `NCOMBINE` or `STACKCNT` count above 1, a
+`MASTER` image type, `SEIZAMST`, or PixInsight's integration history. A
+floating-point file whose name ends in `stacked` counts too. The full list is
+in [calibrated subs](design/calibrated-subs.md#2-classifying-a-frame).
+
+- A calibration master is imported with the calibration frames. A master
+  built by `seiza master` in Seiza 0.48.1 or earlier records its kind only in
+  `SEIZAMST`, and PSF Guard reads the kind from there.
+- A stack is left out. The import result lists how many stacks it left out.
+
+Other frames without an image-type header still default to lights; check
+those headers before importing a mixed archive.
 
 The grouping rules stay conservative:
 
@@ -326,9 +338,9 @@ The preview also carries the run's scope controls:
   over, keeping its grade. A registered copy with no light is left out.
   The database's **Pair calibrated and registered copies** setting turns
   this off; the CLI takes `--no-pairing`.
-- **Skip processed files** (opt-in): skip integration masters. When pairing
+- **Skip processed files** (opt-in): skip calibration masters. When pairing
   is off, also skip calibrated and registered copies. Leave this off to
-  catalog masters as well as raw images.
+  catalog masters as well as raw images. Stacks are left out either way.
 - **Include frames from other rigs** (opt-in): import lights from a telescope
   the catalog has not seen before. By default, PSF Guard learns telescope
   and camera names from the calibration frames and lights already in the
@@ -377,7 +389,8 @@ a database from image folders, before the first import:
   read. `**/Hocus Focus/**` keeps Hocus Focus's autofocus frames out;
   `**/PierCam/**` and `**/Automation/**` work the same way.
 - **Include only**: when set, only files matching one of these patterns, or
-  inside a folder matching one, are read. `LIGHT` keeps every file in
+  inside a folder matching one, are read. Empty, the default, reads every
+  file that is not excluded. `LIGHT` keeps every file in
   N.I.N.A.'s `LIGHT` folders; `*.xisf` keeps XISF files wherever they are.
   The walk still enters every folder that is not excluded.
 - **Require LIGHT in the image-type header**: exclude frames without

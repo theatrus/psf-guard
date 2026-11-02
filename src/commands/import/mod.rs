@@ -85,10 +85,11 @@ pub struct ImportOptions {
     pub match_by_position: bool,
     /// Which frame kinds this run imports.
     pub scope: ImportScope,
-    /// Leave processing output out of the catalog: integrations, and
+    /// Leave processing output out of the catalog: calibration masters, and
     /// calibrated or registered copies that pairing does not take. Off by
-    /// default — masters are worth cataloging for a finished project's
-    /// display — but a sweep over a processing tree can opt in.
+    /// default, so external masters reach the calibration library, but a
+    /// sweep over a processing tree can opt in. Stacks are left out either
+    /// way; see [`ImportOutcome::skipped_stacks`].
     pub skip_processed: bool,
     /// Pair calibrated and registered copies with the light they were made
     /// from instead of cataloguing them as lights of their own (see
@@ -266,6 +267,10 @@ pub struct ImportOutcome {
     /// left out of the catalog.
     #[serde(default)]
     pub skipped_processed: usize,
+    /// Stacks left out: an integration that is not a calibration master is
+    /// never a light.
+    #[serde(default)]
+    pub skipped_stacks: usize,
     /// Calibrated and registered copies paired with their lights.
     #[serde(default)]
     pub derivatives: crate::frame_derivatives::PairingReport,
@@ -608,6 +613,10 @@ pub fn import_frames(
             derivatives.push(frame);
         } else if frame.processed && options.skip_processed {
             outcome.skipped_processed += 1;
+        } else if frame.class.kind == crate::image_io::FrameKind::Integration
+            && crate::calibration::kind_from_meta(&frame).is_none()
+        {
+            outcome.skipped_stacks += 1;
         } else if !frame.is_light() {
             if options.scope == ImportScope::Lights {
                 outcome.skipped_out_of_scope += 1;
@@ -1956,6 +1965,12 @@ pub fn print_outcome(outcome: &ImportOutcome) {
             outcome.skipped_processed
         );
     }
+    if outcome.skipped_stacks > 0 {
+        println!(
+            "  Stacks left out:  {} (PSF Guard imports single exposures)",
+            outcome.skipped_stacks
+        );
+    }
     if outcome.skipped_out_of_scope > 0 {
         println!("  Out of scope:     {}", outcome.skipped_out_of_scope);
     }
@@ -2279,8 +2294,8 @@ mod tests {
     fn skipping_processing_artifacts_is_opt_in() {
         // A WBPP-calibrated light keeps IMAGETYP=LIGHT and its original
         // DATE-OBS under a new basename. By default it imports like any
-        // frame — masters are worth cataloging for a finished project —
-        // and a sweep over a processing tree can opt in to skip them.
+        // frame, and a sweep over a processing tree can opt in to skip
+        // processing output.
         let mut conn = fresh_conn();
         let artifact = FrameMeta {
             processed: true,
@@ -2866,6 +2881,70 @@ mod tests {
                 .unwrap();
             assert_eq!(count, 0, "{table} not rolled back");
         }
+    }
+
+    /// theatrus/seiza#394: masters from `seiza master` recorded their kind
+    /// only in SEIZAMST and were imported as lights with no target. A master
+    /// is a calibration frame, and a stack is left out.
+    #[test]
+    fn masters_and_stacks_never_become_lights() {
+        let temp = tempfile::tempdir().unwrap();
+        let frame = |name: &str, cards: &[&str]| {
+            let path = temp.path().join(name);
+            headers::tests::write_fits(&path, cards);
+            headers::read_frame_meta(&path)
+        };
+        let frames = vec![
+            frame(
+                "master-flat.fits",
+                &[
+                    "SEIZAMST= 'FLAT'",
+                    "NCOMBINE=                   20",
+                    "FILTER  = 'Ha'",
+                ],
+            ),
+            frame(
+                "master-dark.fits",
+                &[
+                    "SEIZAMST= 'DARK'",
+                    "NCOMBINE=                   20",
+                    "EXPTIME =                300.0",
+                ],
+            ),
+            frame(
+                "M31_stacked.fits",
+                &["OBJECT  = 'M31'", "NCOMBINE=                   40"],
+            ),
+        ];
+        let mut conn = fresh_conn();
+        let outcome = import_frames(&mut conn, frames.clone(), &ImportOptions::default()).unwrap();
+        assert_eq!(outcome.imported, 0);
+        assert_eq!(outcome.projects_created, 0);
+        assert_eq!(outcome.non_light, 2);
+        assert_eq!(outcome.skipped_stacks, 1, "the stack is reported");
+        assert_eq!(outcome.calibration.flat, 1);
+        assert_eq!(outcome.calibration.dark, 1);
+        let count = |sql: &str| -> i64 { conn.query_row(sql, [], |row| row.get(0)).unwrap() };
+        assert_eq!(count("SELECT COUNT(*) FROM acquiredimage"), 0);
+        assert_eq!(
+            count("SELECT COUNT(*) FROM psf_guard_calibration_frame WHERE is_master = 1"),
+            2
+        );
+
+        // A lights-only run reports the stack as a stack, not as a frame of
+        // another type.
+        let outcome = import_frames(
+            &mut fresh_conn(),
+            frames,
+            &ImportOptions {
+                scope: ImportScope::Lights,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(outcome.imported, 0);
+        assert_eq!(outcome.skipped_stacks, 1);
+        assert_eq!(outcome.skipped_out_of_scope, 2);
     }
 
     #[test]

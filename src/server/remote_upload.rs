@@ -198,6 +198,12 @@ pub async fn upload_image(
         ));
     }
     let calibration_kind = calibration::kind_from_meta(&frame);
+    if frame.class.kind == crate::image_io::FrameKind::Integration && calibration_kind.is_none() {
+        return Err(AppError::BadRequest(
+            "uploaded image is a stack, not a single exposure; upload light frames or calibration frames"
+                .into(),
+        ));
+    }
     if !frame.is_light() && calibration_kind.is_none() {
         return Err(AppError::BadRequest(
             "uploaded image must be a light, bias, dark, dark-flat, or flat frame".into(),

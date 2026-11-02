@@ -351,6 +351,44 @@ fn insert_synced_light(path: &std::path::Path, filename: &str) {
         .unwrap();
 }
 
+/// Replace the END card of `fits` with `text` and end the header after it.
+fn add_card(fits: &mut [u8], text: &str) {
+    let end = fits
+        .chunks(80)
+        .position(|card| card.starts_with(b"END "))
+        .unwrap()
+        * 80;
+    let mut card = text.as_bytes().to_vec();
+    card.resize(80, b' ');
+    fits[end..end + 80].copy_from_slice(&card);
+    let mut end_card = b"END".to_vec();
+    end_card.resize(80, b' ');
+    fits[end + 80..end + 160].copy_from_slice(&end_card);
+}
+
+/// A stack is never a light, even one whose IMAGETYP says LIGHT. The upload
+/// is refused with a message that says why.
+#[tokio::test]
+async fn a_stack_upload_is_refused_as_a_stack() {
+    let fixture = Fixture::new();
+    let mut image = fits_bytes("M 31", "2026-07-24T05:00:00");
+    add_card(&mut image, "NCOMBINE=                   40");
+    let (status, body) = upload(
+        fixture.state.clone(),
+        "catalog-a",
+        "catalog-a",
+        TOKEN_A,
+        "m31-stack.fits",
+        &image,
+        &sha256(&image),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body.to_string().contains("is a stack"), "{body}");
+    assert_eq!(image_count(&fixture.database_a), 0);
+    assert_eq!(calibration_count(&fixture.database_a), 0);
+}
+
 #[tokio::test]
 async fn upload_is_scoped_to_the_selected_database_and_attaches_followup_frames() {
     let fixture = Fixture::new();

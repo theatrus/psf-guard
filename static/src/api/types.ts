@@ -2811,6 +2811,8 @@ export interface ImportOutcome {
   non_light: number;
   /** Masters and calibrated/registered intermediates left out. */
   skipped_processed?: number;
+  /** Stacks left out: a stack is never a light. */
+  skipped_stacks?: number;
   /** Frames outside the run's scope. */
   skipped_out_of_scope?: number;
   calibration: CalibrationImportOutcome;
