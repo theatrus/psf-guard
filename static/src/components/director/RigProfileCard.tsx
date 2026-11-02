@@ -186,11 +186,13 @@ export default function RigProfileCard({ slug }: { slug: string }) {
         <legend>Mode</legend>
         <div className="rig-profile-mode" role="radiogroup" aria-label="Who runs this rig">
           {(['target_scheduler', 'director'] as const).map(mode => <label key={mode}>
-            <input type="radio" name={`${slug}-mode`} value={mode} checked={(form.mode || data.mode.runtime) === mode} onChange={() => update({ mode })} />
+            <input type="radio" name={`${slug}-mode`} value={mode} checked={form.mode === mode} onChange={() => update({ mode })} />
             {MODE_LABEL[mode]}
           </label>)}
         </div>
-        <p className="director-muted">{MODE_HELP[form.mode || data.mode.runtime]}{form.mode === '' && ` Not set yet: this is PSF Guard's guess from what the rig has reported. Choose one to set it.`}</p>
+        <p className="director-muted">{form.mode === ''
+          ? `Not set yet, so PSF Guard plans this rig as ${MODE_LABEL[data.mode.runtime]}, its guess from what the rig has reported. ${MODE_HELP[data.mode.runtime]} Choose one to set it.`
+          : MODE_HELP[form.mode]}</p>
         {(form.mode || data.mode.runtime) === 'director' && <ul className="rig-profile-needs" aria-label="What Director needs">
           <li data-done={data.mode.paired}>{data.mode.paired ? 'The N.I.N.A. Director plugin is paired with this rig.' : 'Pair the N.I.N.A. Director plugin with this rig. Pairing sets this mode by itself.'}</li>
           <li data-done={data.mode.equipment}>{data.mode.equipment ? 'The plugin has reported the rig\'s equipment.' : 'The plugin reports the rig\'s equipment once paired; until then, Director\'s schedule uses the settings its templates name.'}</li>

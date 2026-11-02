@@ -1,10 +1,11 @@
 //! Changes to what Target Scheduler reads for a rig it drives: a project's
 //! priority and state, and whether a target is active. Night plans preview
 //! them in the Target Scheduler emulation. Saving writes the changed
-//! columns, and only those, to the rig's database and, for a catalog kept
-//! in step with Target Scheduler, to Target Scheduler's own file as well.
-//! Each row is written only while it still holds what the person saw.
-//! Unlike a Director override, a change lasts until it is changed back.
+//! columns, and only those, of the rig's N.I.N.A. profile, to the rig's
+//! database and, for a catalog kept in step with Target Scheduler, to
+//! Target Scheduler's own file as well. Each row is written only while it
+//! still holds what the person saw. Unlike a Director override, a change
+//! lasts until it is changed back.
 
 use super::*;
 use psf_guard_ts_planner::snapshot::{ProjectPriority, ProjectState, Snapshot};
@@ -68,19 +69,22 @@ impl TsChanges {
     }
 
     /// The snapshot as Target Scheduler would read it with these changes.
-    /// A change to a row the snapshot lacks is refused, with why.
-    pub(super) fn apply(&self, snapshot: &mut Snapshot) -> Result<(), String> {
+    /// A change to a row the snapshot lacks is left out; each such row is
+    /// named in what this returns.
+    pub(super) fn apply(&self, snapshot: &mut Snapshot) -> Vec<String> {
+        let mut missing = Vec::new();
         for change in &self.projects {
-            let project = snapshot
+            let Some(project) = snapshot
                 .projects
                 .iter_mut()
                 .find(|project| project.id == change.project_id)
-                .ok_or_else(|| {
-                    format!(
-                        "Project {} is no longer in the rig's database.",
-                        change.project_id
-                    )
-                })?;
+            else {
+                missing.push(format!(
+                    "Project {} is no longer in the rig's database.",
+                    change.project_id
+                ));
+                continue;
+            };
             if let Some(priority) = change.priority {
                 project.priority = priority;
             }
@@ -89,20 +93,21 @@ impl TsChanges {
             }
         }
         for change in &self.targets {
-            let target = snapshot
+            let Some(target) = snapshot
                 .projects
                 .iter_mut()
                 .flat_map(|project| project.targets.iter_mut())
                 .find(|target| target.id == change.target_id)
-                .ok_or_else(|| {
-                    format!(
-                        "Target {} is no longer in the rig's database.",
-                        change.target_id
-                    )
-                })?;
+            else {
+                missing.push(format!(
+                    "Target {} is no longer in the rig's database.",
+                    change.target_id
+                ));
+                continue;
+            };
             target.active = change.active;
         }
-        Ok(())
+        missing
     }
 }
 
@@ -157,11 +162,20 @@ pub(super) struct TsSaveView {
 }
 
 impl TsSaveView {
-    pub(super) fn of(context: &DatabaseContext, peer: Option<&str>) -> Self {
-        if let Some(peer) = peer {
+    pub(super) fn of(
+        context: &DatabaseContext,
+        peer: Option<&str>,
+        database_management: bool,
+    ) -> Self {
+        let refused = match peer {
+            Some(peer) => Some(not_here(peer)),
+            None if !database_management => Some(NO_DATABASE_MANAGEMENT.into()),
+            None => None,
+        };
+        if let Some(refused) = refused {
             return Self {
                 files: Vec::new(),
-                refused: Some(not_here(peer)),
+                refused: Some(refused),
             };
         }
         let mut files = vec![context.database_path.clone()];
@@ -174,6 +188,9 @@ impl TsSaveView {
         }
     }
 }
+
+/// Why a server that may not write into rig databases offers no changes.
+const NO_DATABASE_MANAGEMENT: &str = "This server does not write into rig databases, so Target Scheduler's settings are not changed here. Allow database management to change them.";
 
 fn not_here(peer: &str) -> String {
     format!(
@@ -208,7 +225,7 @@ async fn save(
             "Each change needs what the row held when it was read.".into(),
         ));
     }
-    let service = enabled(&state)?;
+    let service = writable(&state)?;
     let catalogs: Vec<Arc<DatabaseContext>> = state
         .databases
         .read()
@@ -218,6 +235,7 @@ async fn save(
         .collect();
     let instance = service.instance_id;
     let context = service
+        .clone()
         .with_reader(move |store| {
             store.rig(rig)?.ok_or(Error::Missing)?;
             let profile = store.rig_profile(rig)?;
@@ -243,6 +261,9 @@ async fn save(
             Err(Error::Missing)
         })
         .await?;
+    // The rig-database gate, as activation and Apply take it, so no two of
+    // them write one database at once.
+    let _permit = admit(&service.discovery_admission).await?;
     let saved = blocking(move || write(&context, &changes)).await??;
     Ok(Json(ApiResponse::success(saved)))
 }
@@ -274,13 +295,37 @@ fn store_error(error: rusqlite::Error) -> Error {
     StoreError::Sqlite(error).into()
 }
 
+/// A failure in Target Scheduler's file, which N.I.N.A. may hold open.
+fn source_error(error: rusqlite::Error) -> Error {
+    if let rusqlite::Error::SqliteFailure(code, _) = &error
+        && matches!(
+            code.code,
+            rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+        )
+    {
+        return Error::Unavailable(
+            "Target Scheduler's database is busy, perhaps with N.I.N.A. writing it, so nothing was saved. Try again in a moment.".into(),
+        );
+    }
+    Error::Refused(format!(
+        "Target Scheduler's database could not be written, so nothing was saved: {error}"
+    ))
+}
+
+/// A GUID that names a row. Rows from before Target Scheduler's GUIDs hold
+/// an empty one, which would match every such row.
+fn named(guid: Option<String>, name: &str) -> Result<String, Error> {
+    guid.filter(|guid| !guid.trim().is_empty())
+        .ok_or_else(|| missing_guid(name))
+}
+
 /// Write the changes to the rig's database and, when it is kept in step
 /// with Target Scheduler, to Target Scheduler's file, all or nothing in
-/// each. Target Scheduler's file commits first: the rig's database is the
-/// copy.
+/// each, and only rows of the rig's N.I.N.A. profile. The rig's database
+/// commits first: it is where PSF Guard keeps planning, and Send planning
+/// carries it to Target Scheduler, so a failure between the two commits
+/// leaves the change where the next send finds it.
 fn write(context: &DatabaseContext, changes: &TsChanges) -> Result<Saved, Error> {
-    let connection = context.db();
-    let mut catalog = connection.lock().map_err(|_| Error::Internal)?;
     let mut source = match &context.ts_sync {
         Some(sync) => Some(
             super::super::database_context::open_scheduler_connection_with_flags(
@@ -296,20 +341,30 @@ fn write(context: &DatabaseContext, changes: &TsChanges) -> Result<Saved, Error>
         None => None,
     };
     // Immediate: each reads before it writes, and such a transaction cannot
-    // wait for another connection's write lock.
-    let catalog_tx = catalog
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(store_error)?;
+    // wait for another connection's write lock. Target Scheduler's first,
+    // so a wait for N.I.N.A. does not hold the catalog's connection.
     let source_tx = source
         .as_mut()
         .map(|connection| connection.transaction_with_behavior(TransactionBehavior::Immediate))
         .transpose()
+        .map_err(source_error)?;
+    let connection = context.db();
+    let mut catalog = connection.lock().map_err(|_| Error::Internal)?;
+    let catalog_tx = catalog
+        .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(store_error)?;
+    let profile = super::activation::resolve_profile(&catalog_tx)
+        .map_err(store_error)?
+        .ok_or_else(|| {
+            Error::Changed(
+                "The rig's database has no N.I.N.A. profile, so nothing was saved. Read the night again.".into(),
+            )
+        })?;
     for change in &changes.projects {
         let (guid, name): (Option<String>, String) = catalog_tx
             .query_row(
-                "SELECT guid, name FROM project WHERE Id = ?1",
-                [change.project_id],
+                "SELECT guid, name FROM project WHERE Id = ?1 AND profileId = ?2",
+                params![change.project_id, profile],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()
@@ -320,17 +375,29 @@ fn write(context: &DatabaseContext, changes: &TsChanges) -> Result<Saved, Error>
                     change.project_id
                 ))
             })?;
-        update_project(&catalog_tx, Row::Id(change.project_id), change, &name)?;
+        let was = change.was.ok_or(Error::Invalid)?;
+        update_project(
+            &catalog_tx,
+            Row::Id(change.project_id),
+            &profile,
+            change,
+            was,
+        )
+        .map_err(store_error)?
+        .ok_or_else(|| changed(&name, Where::Catalog))?;
         if let Some(tx) = &source_tx {
-            let guid = guid.ok_or_else(|| missing_guid(&name))?;
-            update_project(tx, Row::Guid(&guid), change, &name)?;
+            let guid = named(guid, &name)?;
+            update_project(tx, Row::Guid(&guid), &profile, change, was)
+                .map_err(source_error)?
+                .ok_or_else(|| changed(&name, Where::Source))?;
         }
     }
     for change in &changes.targets {
         let (guid, name): (Option<String>, String) = catalog_tx
             .query_row(
-                "SELECT guid, name FROM target WHERE Id = ?1",
-                [change.target_id],
+                "SELECT t.guid, t.name FROM target t JOIN project p ON p.Id = t.projectid
+                 WHERE t.Id = ?1 AND p.profileId = ?2",
+                params![change.target_id, profile],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()
@@ -341,19 +408,35 @@ fn write(context: &DatabaseContext, changes: &TsChanges) -> Result<Saved, Error>
                     change.target_id
                 ))
             })?;
-        update_target(&catalog_tx, Row::Id(change.target_id), change, &name)?;
+        let was = change.was_active.ok_or(Error::Invalid)?;
+        update_target(
+            &catalog_tx,
+            Row::Id(change.target_id),
+            &profile,
+            change.active,
+            was,
+        )
+        .map_err(store_error)?
+        .ok_or_else(|| changed(&name, Where::Catalog))?;
         if let Some(tx) = &source_tx {
-            let guid = guid.ok_or_else(|| missing_guid(&name))?;
-            update_target(tx, Row::Guid(&guid), change, &name)?;
+            let guid = named(guid, &name)?;
+            update_target(tx, Row::Guid(&guid), &profile, change.active, was)
+                .map_err(source_error)?
+                .ok_or_else(|| changed(&name, Where::Source))?;
         }
     }
-    let mut files = Vec::new();
+    catalog_tx.commit().map_err(store_error)?;
+    drop(catalog);
+    let mut files = vec![context.database_path.clone()];
     if let (Some(tx), Some(sync)) = (source_tx, &context.ts_sync) {
-        tx.commit().map_err(store_error)?;
+        tx.commit().map_err(|error| {
+            tracing::warn!(%error, source = %sync.source_path, "Target Scheduler's database refused a commit the rig's database took");
+            Error::Unavailable(format!(
+                "The rig's database took the changes, but Target Scheduler's database did not ({error}). Send planning from the rig's database to bring Target Scheduler into step."
+            ))
+        })?;
         files.push(sync.source_path.clone());
     }
-    catalog_tx.commit().map_err(store_error)?;
-    files.insert(0, context.database_path.clone());
     Ok(Saved {
         files,
         projects: changes.projects.len(),
@@ -367,65 +450,68 @@ fn missing_guid(name: &str) -> Error {
     ))
 }
 
+/// Set a project's priority and state where the row still holds what was
+/// read. `None` when no row of the profile does.
 fn update_project(
     tx: &Transaction<'_>,
     row: Row<'_>,
+    profile: &str,
     change: &ProjectChange,
-    name: &str,
-) -> Result<(), Error> {
-    let was = change.was.ok_or(Error::Invalid)?;
+    was: ProjectWas,
+) -> rusqlite::Result<Option<()>> {
     let priority = change.priority.unwrap_or(was.priority);
     let state = change.state.unwrap_or(was.state);
-    let written = tx
-        .execute(
-            &format!(
-                "UPDATE project SET priority = ?1, state = ?2 WHERE {} = ?3 AND priority = ?4 AND state = ?5",
-                row.clause()
-            ),
-            params![
-                priority.to_column(),
-                state.to_column(),
-                row.value(),
-                was.priority.to_column(),
-                was.state.to_column()
-            ],
-        )
-        .map_err(store_error)?;
-    if written != 1 {
-        return Err(changed(name, &row));
-    }
-    Ok(())
+    let written = tx.execute(
+        &format!(
+            "UPDATE project SET priority = ?1, state = ?2
+             WHERE {} = ?3 AND profileId = ?4 AND priority = ?5 AND state = ?6",
+            row.clause()
+        ),
+        params![
+            priority.to_column(),
+            state.to_column(),
+            row.value(),
+            profile,
+            was.priority.to_column(),
+            was.state.to_column()
+        ],
+    )?;
+    Ok((written == 1).then_some(()))
 }
 
+/// Set whether a target is active where the row still holds what was read.
+/// `None` when no row of the profile does.
 fn update_target(
     tx: &Transaction<'_>,
     row: Row<'_>,
-    change: &TargetChange,
-    name: &str,
-) -> Result<(), Error> {
-    let was = change.was_active.ok_or(Error::Invalid)?;
-    let written = tx
-        .execute(
-            &format!(
-                "UPDATE target SET active = ?1 WHERE {} = ?2 AND active = ?3",
-                row.clause()
-            ),
-            params![change.active, row.value(), was],
-        )
-        .map_err(store_error)?;
-    if written != 1 {
-        return Err(changed(name, &row));
-    }
-    Ok(())
+    profile: &str,
+    active: bool,
+    was: bool,
+) -> rusqlite::Result<Option<()>> {
+    let written = tx.execute(
+        &format!(
+            "UPDATE target SET active = ?1
+             WHERE {} = ?2 AND active = ?3 AND projectid IN (SELECT Id FROM project WHERE profileId = ?4)",
+            row.clause()
+        ),
+        params![active, row.value(), was, profile],
+    )?;
+    Ok((written == 1).then_some(()))
 }
 
-fn changed(name: &str, row: &Row<'_>) -> Error {
-    Error::Changed(match row {
-        Row::Id(_) => format!(
+/// Which file a refused row is in.
+enum Where {
+    Catalog,
+    Source,
+}
+
+fn changed(name: &str, place: Where) -> Error {
+    Error::Changed(match place {
+        Where::Catalog => format!(
             "{name} changed in the rig's database since the night was read, so nothing was saved. Read the night again."
         ),
-        Row::Guid(_) => format!(
-            "{name} is set differently in Target Scheduler's database than in the rig's, or is missing there, so nothing was saved. Run the catalog's Target Scheduler sync, then read the night again."
+        Where::Source => format!(
+            "{name} is set differently in Target Scheduler's database than in the rig's, or is missing there, so nothing was saved. Bring the two into step under the rig database's Sync settings, in Data Transfer: Merge databases takes Target Scheduler's settings, and Send planning sends the rig database's. Then read the night again."
         ),
     })
 }

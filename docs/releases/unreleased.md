@@ -57,7 +57,10 @@
     project active or not with its priority, and each target active or
     not. The schedule plans the change first; saving writes it to the rig's
     database, and to Target Scheduler's own file for a catalog kept in step
-    with it. These last until changed back, for every night. See
+    with it, on a server that may write into rig databases. Each row is
+    saved only while it still holds what was read, and only rows of the
+    rig's N.I.N.A. profile. These last until changed back, for every night.
+    See
     [Change a Target Scheduler rig's settings](../DIRECTOR.md#change-a-target-scheduler-rigs-settings).
 
   **Mode** in the rig's setup sets who runs it, Target Scheduler or

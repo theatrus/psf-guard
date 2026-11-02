@@ -1,8 +1,8 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { X } from 'lucide-react';
 import { apiClient } from '../../api/client';
-import type { NightAvailabilityState, NightInterval, NightMarkEdit, NightMarkScope, NightOverride, RigNight, RigNights, ScheduleBlock, TsChanges } from '../../api/nightPlanTypes';
+import type { NightAvailabilityState, NightInterval, NightMarkEdit, NightMarkScope, NightOverride, RigNight, RigNights, ScheduleBlock, TsChanges, TsProject } from '../../api/nightPlanTypes';
 import { formatHours } from '../director/visibilityFormat';
 import { httpStatus } from '../../utils/httpStatus';
 import { retryWhenBusy } from '../director/retry';
@@ -14,8 +14,8 @@ import TargetSchedulerControls from './TargetSchedulerControls';
 import { isEmpty, tsChanges, type TsEdit } from './tsControlsModel';
 import { OverrideChips, type TimelineEdit } from './TimelineEditing';
 import { DraftProvider, SaveBar } from '../director/pageDrafts';
-import { usePageDrafts } from '../director/pageDraftsState';
-import { blockSubject, moveBlock, overrideBands, subjectKey } from './overridesModel';
+import type { Drafts } from '../director/pageDraftsState';
+import { blockSubject, moveBlock, overrideBands, pinsOverlap, replacedInPlace, subjectKey } from './overridesModel';
 import {
   BROWSER_ZONE,
   RUNTIME_LABEL,
@@ -51,6 +51,22 @@ interface OverrideEdit {
   moves: Record<string, { origin: NightInterval; entries: NightOverride[] }>;
 }
 
+/** The edit with its entries changed: a move's pin or exclusion given new
+ *  times stays that move's, so moving the block again replaces it. */
+function withEntries(edit: OverrideEdit, entries: NightOverride[]): OverrideEdit {
+  const replaced = replacedInPlace(edit.entries, entries);
+  const moves = replaced.size === 0 ? edit.moves : Object.fromEntries(Object.entries(edit.moves)
+    .map(([key, move]) => [key, { ...move, entries: move.entries.map(entry => replaced.get(entry) ?? entry) }]));
+  return { ...edit, entries, moves };
+}
+
+/** An open edit of a rig's Target Scheduler settings, and the rows as they
+ *  were when it started, which Save sends as what it read. */
+interface TsEditOf {
+  base: TsProject[];
+  edit: TsEdit;
+}
+
 interface Props {
   rig: RigNights;
   /** One night, or a run of nights to mark together. */
@@ -60,12 +76,15 @@ interface Props {
   /** The grid's range, which the night's schedule carries over from: its
    *  chosen first night, or none for the night under way. */
   range: { first: string | null; count: number };
+  /** The page's unsaved edits, which the page asks about before closing
+   *  the night. */
+  drafts: Drafts;
   onClose: () => void;
 }
 
 /** The chosen night of one rig: its darkness, Moon, marks and the hours
  *  each plan could use, and the form that marks it. */
-export default function NightDetail({ rig, nights, colours, canMark, range, onClose }: Props) {
+export default function NightDetail({ rig, nights, colours, canMark, range, drafts, onClose }: Props) {
   const first = nights[0];
   const single = nights.length === 1;
   // An open edit of the night's overrides belongs to its rig and night.
@@ -73,15 +92,16 @@ export default function NightDetail({ rig, nights, colours, canMark, range, onCl
   const editKey = `${rig.rig.id}:${first.date}`;
   const edit = stored?.key === editKey ? stored : null;
   const draft = edit?.entries ?? null;
-  const setDraft = (entries: NightOverride[] | null) => setEdit(entries === null || !edit ? null : { ...edit, entries });
+  const setDraft = (entries: NightOverride[] | null) => setEdit(entries === null || !edit ? null : withEntries(edit, entries));
   const startEdit = (entries: NightOverride[], base: number) => setEdit({ key: editKey, base, entries, moves: {} });
-  // An open edit of the rig's Target Scheduler settings belongs to the rig.
-  const [tsStored, setTsEdit] = useState<{ rig: string; edit: TsEdit } | null>(null);
-  const tsEdit = tsStored?.rig === rig.rig.id ? tsStored.edit : null;
-  const tsDraft = tsEdit ? tsChanges(rig.ts_projects ?? [], tsEdit) : null;
+  const [tsStored, setTsEdit] = useState<TsEditOf | null>(null);
+  const tsEdit = tsStored?.edit ?? null;
+  // The rows the edit started from: a row changed since is refused on save
+  // rather than written over.
+  const tsBase = tsStored?.base ?? rig.ts_projects ?? [];
+  const tsDraft = tsEdit ? tsChanges(tsBase, tsEdit) : null;
   const schedule = useNightSchedule(rig, first, range, single, draft, tsDraft && !isEmpty(tsDraft) ? tsDraft : null);
   const director = rig.runtime === 'director' && schedule.shown === 'director';
-  const drafts = usePageDrafts();
   const saved = useQuery({
     queryKey: ['nightOverrides', rig.rig.id, first.date],
     queryFn: () => apiClient.getNightOverrides(rig.rig.id, first.date),
@@ -135,13 +155,21 @@ export default function NightDetail({ rig, nights, colours, canMark, range, onCl
     night: { start_ms: scheduled.start_ms, end_ms: scheduled.end_ms },
     dawn: first.dawn_ms ?? scheduled.end_ms,
     zone,
-    onChange: entries => { setMoveProblem(null); setDraft(entries); },
+    onChange: entries => {
+      // The server would refuse to plan them, and the timeline would go.
+      if (pinsOverlap(entries)) {
+        setMoveProblem('Two pins would share time. Move or shorten one first, or remove it.');
+        return;
+      }
+      setMoveProblem(null);
+      setDraft(entries);
+    },
     onMoveBlock: move,
   } : undefined;
   const nightEnded = schedule.now >= first.noon_ms + 86_400_000;
   const canEdit = single && director && canMark && !nightEnded && !!saved.data && goals.length > 0;
   return <DraftProvider drafts={drafts}><section className="nights-detail director-records" aria-label="Night details">
-    <SaveBar drafts={drafts} canWrite={canMark} />
+    <SaveBar drafts={drafts} canWrite={canMark} pageKeys={RIGS_PAGE_KEYS} />
     <div className="director-toolbar">
       <h3>{rig.catalog_name} · {describeDates(nights.map(night => night.date))}</h3>
       <span className="nights-mode" data-runtime={rig.runtime} title={rig.runtime === 'director'
@@ -157,7 +185,7 @@ export default function NightDetail({ rig, nights, colours, canMark, range, onCl
       saved={director ? saved.data?.entries ?? [] : []}
       onEdit={canEdit && !edit && saved.data ? () => { setMoveProblem(null); startEdit([...saved.data.entries], saved.data.revision); } : undefined} />}
     {single && rig.runtime === 'target_scheduler' && schedule.shown === 'target_scheduler' && <TargetSchedulerControls rig={rig}
-      saved={rig.ts_projects ?? []} canEdit={canMark} edit={tsEdit} onEdit={edit => setTsEdit(edit ? { rig: rig.rig.id, edit } : null)} />}
+      saved={tsBase} canEdit={canMark} edit={tsEdit} onEdit={edit => setTsEdit(edit ? { base: tsBase, edit } : null)} />}
     {single && director && <OverrideEditor rig={rig} night={first} saved={saved}
       scheduled={scheduled} goals={goals} tonight={schedule.tonight} now={schedule.now}
       draft={draft} base={edit?.base ?? null} onDraft={setDraft} />}
@@ -166,6 +194,9 @@ export default function NightDetail({ rig, nights, colours, canMark, range, onCl
     {canMark && <MarkEditor rig={rig} nights={nights} />}
   </section></DraftProvider>;
 }
+
+/** The Rigs page's tab: going to another asks before unsaved edits go. */
+const RIGS_PAGE_KEYS = ['rigsTab'] as const;
 
 /** The schedule shown for a night: from the runtime that drives the rig,
  *  or the other one to compare, counted as a live run or as Target
@@ -201,7 +232,12 @@ function useNightSchedule(rig: RigNights, night: RigNight, range: Props['range']
     // An edit keeps its last schedule on screen while the next is planned.
     placeholderData: previous => previous,
   });
-  const detail = query.data?.rigs.find(entry => entry.rig.id === rig.rig.id);
+  // An edit the server refuses to plan keeps the last schedule on screen,
+  // with why, so the edit can be undone there.
+  const last = useRef<RigNights | undefined>(undefined);
+  const fresh = query.data?.rigs.find(entry => entry.rig.id === rig.rig.id);
+  if (fresh) last.current = fresh;
+  const detail = fresh ?? (query.isError && (previewed !== null || tsPreviewed !== null) ? last.current : undefined);
   // The grid's schedule is the rig's own runtime, counted as a live run,
   // with the night's saved overrides: an unsaved edit is not the grid's.
   const asGrid = previewed === null && tsPreviewed === null;

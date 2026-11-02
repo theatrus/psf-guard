@@ -11,6 +11,7 @@ import { formatHours } from '../director/visibilityFormat';
 import EarlyBeta from '../director/EarlyBeta';
 import { PROVIDER_URL } from '../director/forecastLabels';
 import NightDetail from './NightDetail';
+import { confirmDiscard, usePageDrafts } from '../director/pageDraftsState';
 import {
   NIGHT_COUNTS,
   NIGHTS_PARAMS,
@@ -91,7 +92,12 @@ export default function NightsView() {
     ? selectedRig.nights.filter(night => selection.dates.includes(night.date))
     : [];
 
+  // The open night's unsaved edits, kept here so choosing another night,
+  // closing it or changing the range asks before dropping them.
+  const drafts = usePageDrafts();
+  const leaving = (then: () => void) => () => { if (confirmDiscard(drafts)) then(); };
   const choose = (rig: RigNights, night: RigNight, extend: boolean) => {
+    if (!confirmDiscard(drafts)) return;
     if (extend && selection && selection.rigId === rig.rig.id) {
       setSelection({ ...selection, dates: datesBetween(rig, selection.anchor, night.date) });
     } else if (selection && selection.rigId === rig.rig.id && selection.dates.length === 1 && selection.dates[0] === night.date) {
@@ -112,11 +118,11 @@ export default function NightsView() {
       <div className="director-toolbar">
         <div className="early-beta-heading"><h2>Nights</h2><EarlyBeta /></div>
         <div className="nights-controls">
-          <label>From <input type="date" value={from} onChange={event => { setSelection(null); updateParams({ [NIGHTS_PARAMS.from]: isDate(event.target.value) && event.target.value !== today ? event.target.value : null }); }} /></label>
-          <label>Nights <select value={count} onChange={event => { setSelection(null); updateParams({ [NIGHTS_PARAMS.count]: Number(event.target.value) === NIGHT_COUNTS[0] ? null : event.target.value }); }}>
+          <label>From <input type="date" value={from} onChange={event => { if (!confirmDiscard(drafts)) return; setSelection(null); updateParams({ [NIGHTS_PARAMS.from]: isDate(event.target.value) && event.target.value !== today ? event.target.value : null }); }} /></label>
+          <label>Nights <select value={count} onChange={event => { if (!confirmDiscard(drafts)) return; setSelection(null); updateParams({ [NIGHTS_PARAMS.count]: Number(event.target.value) === NIGHT_COUNTS[0] ? null : event.target.value }); }}>
             {NIGHT_COUNTS.map(option => <option key={option} value={option}>{option}</option>)}
           </select></label>
-          {chosenFrom && <button type="button" onClick={() => { setSelection(null); updateParams({ [NIGHTS_PARAMS.from]: null }); }}>Tonight</button>}
+          {chosenFrom && <button type="button" onClick={leaving(() => { setSelection(null); updateParams({ [NIGHTS_PARAMS.from]: null }); })}>Tonight</button>}
           <button type="button" title="Compute again" aria-label="Compute again" disabled={query.isFetching} onClick={() => void query.refetch()}><RefreshCw size={16} /></button>
         </div>
       </div>
@@ -192,7 +198,8 @@ export default function NightsView() {
         colours={colours}
         canMark={canWrite}
         range={{ first: chosenFrom, count }}
-        onClose={() => setSelection(null)}
+        drafts={drafts}
+        onClose={leaving(() => setSelection(null))}
       />}
     </section>
   );

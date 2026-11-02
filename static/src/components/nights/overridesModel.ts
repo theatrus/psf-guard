@@ -186,6 +186,26 @@ export function withHold(entries: NightOverride[], from: number | null): NightOv
   return from === null ? kept : [...kept, { kind: 'hold', from_ms: from }];
 }
 
+/** Whether two of the entries' pins share time, which the server refuses. */
+export function pinsOverlap(entries: NightOverride[]): boolean {
+  const pins = entries.flatMap(entry => entry.kind === 'pin' ? [entry.window] : []).sort((a, b) => a.start_ms - b.start_ms);
+  return pins.some((pin, index) => index > 0 && pin.start_ms < pins[index - 1].end_ms);
+}
+
+/** The entries `after` put in place of `before`'s, one for one: a pin or
+ *  exclusion given new times keeps its place, kind and subject. */
+export function replacedInPlace(before: NightOverride[], after: NightOverride[]): Map<NightOverride, NightOverride> {
+  const replaced = new Map<NightOverride, NightOverride>();
+  if (before.length !== after.length) return replaced;
+  before.forEach((entry, index) => {
+    const next = after[index];
+    if (entry !== next && (entry.kind === 'pin' || entry.kind === 'exclude') && next.kind === entry.kind && subjectKey(next.subject) === subjectKey(entry.subject)) {
+      replaced.set(entry, next);
+    }
+  });
+  return replaced;
+}
+
 /** The entries with one pin or windowed exclusion given a new window. */
 export function withWindow(entries: NightOverride[], index: number, window: NightInterval): NightOverride[] {
   return entries.map((entry, at) => at === index && (entry.kind === 'pin' || entry.kind === 'exclude') ? { ...entry, window } : entry);

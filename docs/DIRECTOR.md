@@ -973,10 +973,11 @@ reported by the plugin. The field of view and pixel scale update as you type.
 Scheduler**, from the rig's database, or **Director**, through its N.I.N.A.
 plugin. Night plans schedule the rig by its mode, and it decides whether a
 night takes Director overrides or Target Scheduler settings (see [Who
-decides a rig's night](#who-decides-a-rigs-night)). Until a mode is set, the
-card shows PSF Guard's guess and says it is one: a rig that has reported its
-equipment and runs an enabled workload policy is Director's, and every
-other rig Target Scheduler's. Pairing a Director plugin with the rig sets
+decides a rig's night](#who-decides-a-rigs-night)). Until a mode is set,
+neither is chosen, and the card says which one PSF Guard guesses: a rig
+that has reported its equipment and runs an enabled workload policy is
+Director's, and every other rig Target Scheduler's. Choosing either, the
+guess included, sets it. Pairing a Director plugin with the rig sets
 its mode to Director. With Director chosen, the card lists what Director
 needs there: the plugin paired, and the rig's equipment reported. The mode
 grants the plugin nothing, and N.I.N.A. still runs whichever instruction
@@ -2119,17 +2120,28 @@ the bar at the top of the night lists them.
 
 ![A Target Scheduler rig's night with a project set inactive and another raised to high priority, planned before saving](images/nights-ts-settings.png)
 
-**Save changes** writes the changed columns, and only those, to the rig's
-database. For a catalog kept in step with Target Scheduler, they go to
-Target Scheduler's own file as well, and the panel names it. These are
-Target Scheduler's own settings, so unlike a Director override they last
-until changed back, for every night. Each row is written only while it
-still holds what the panel read: if N.I.N.A. or another editor changed it,
+**Save changes** writes the changed columns, and only those, of the rig's
+N.I.N.A. profile to the rig's database. For a catalog kept in step with
+Target Scheduler, they go to Target Scheduler's own file as well, and the
+panel names it. These are Target Scheduler's own settings, so unlike a
+Director override they last until changed back, for every night. Each row
+is written only while it still holds what the panel read when **Change
+settings** was clicked: if N.I.N.A. or another editor changed it since,
 nothing is saved, the panel says which row, and the night is read again.
-For a catalog kept in step, a row set differently in Target Scheduler's
-file than in the rig's database is refused the same way; run the
-catalog's Target Scheduler sync first. A rig that runs on another PSF
-Guard is changed there, and a rig Director drives takes overrides instead.
+
+For a catalog kept in step, Target Scheduler's file finds each row by its
+GUID, so a row without one is refused; fill the catalog's missing GUIDs
+first. A row set differently in Target Scheduler's file than in the rig's
+database is refused too. The automatic sync leaves planning settings as
+they are, so bring the two into step in the database's **Sync** settings
+under **Data Transfer**: **Merge databases** takes Target Scheduler's
+settings, and **Send planning** sends the rig database's. The rig's
+database is written first. If Target Scheduler's file then refuses the
+write, the panel says so, and **Send planning** carries the change over.
+
+Changing these settings needs a server that may write into rig databases
+(database management). A rig that runs on another PSF Guard is changed
+there, and a rig Director drives takes overrides instead.
 
 ### Cloud forecasts
 

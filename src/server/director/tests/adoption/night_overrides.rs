@@ -40,9 +40,15 @@ async fn activate(a: &Activated) {
     assert_eq!(status, StatusCode::OK, "{applied}");
 }
 
-/// Report the rig's equipment from Los Angeles and enable a workload
-/// policy, which makes it a rig Director drives.
+/// Report the rig's equipment from Los Angeles and set its mode to
+/// Director, as pairing does.
 pub(super) async fn drive_with_director(a: &Activated) {
+    report_equipment(a).await;
+    set_mode(a, Some("director")).await;
+}
+
+/// Report the rig's equipment from Los Angeles, as the paired plugin does.
+async fn report_equipment(a: &Activated) {
     let instance = a.f.state.director.as_ref().unwrap().instance_id;
     let program: Value = serde_json::from_str(include_str!(
         "../../../../../crates/director-core/tests/fixtures/execution-program.json"
@@ -60,7 +66,50 @@ pub(super) async fn drive_with_director(a: &Activated) {
         "horizon": null, "limits": null, "reported_at_ms": 1_700_000_000_000u64,
     }), None).await;
     assert_eq!(status, StatusCode::OK, "{reported}");
-    set_mode(a, Some("director")).await;
+}
+
+/// Store an enabled workload policy for the rig. The guess reads only
+/// whether one is on; commissioning one through the API needs a paired
+/// plugin, which this fixture lacks.
+fn enable_policy(a: &Activated) {
+    let policy = json!({
+        "rig_id": a.rig, "catalog_id": a.rig, "client_id": Uuid::new_v4(), "profile_id": Uuid::new_v4(),
+        "profile_revision": 1, "configuration_id": "configuration", "project_ids": [a.project],
+        "enabled": true, "revision": 1,
+    });
+    Connection::open(a.f._dir.path().join("meta.sqlite"))
+        .unwrap()
+        .execute(
+            "INSERT INTO workload_policy VALUES(?1,?2)",
+            rusqlite::params![a.rig.to_string(), policy.to_string()],
+        )
+        .unwrap();
+}
+
+/// A rig whose mode is not set is guessed: Director once its equipment is
+/// reported and a workload policy is on, Target Scheduler until then. A
+/// mode set in Rig setup wins over the guess.
+#[tokio::test]
+async fn a_rig_without_a_mode_is_guessed_from_its_equipment_and_policy() {
+    let a = activated().await;
+    report_equipment(&a).await;
+    let runtime = || async {
+        let (status, planned) = call(
+            &a.f.app,
+            "POST",
+            "/night-plans",
+            json!({"nights": 1, "start_ms": START_MS}),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{planned}");
+        planned["data"]["rigs"][0]["runtime"].clone()
+    };
+    assert_eq!(runtime().await, json!("target_scheduler"));
+    enable_policy(&a);
+    assert_eq!(runtime().await, json!("director"));
+    set_mode(&a, Some("target_scheduler")).await;
+    assert_eq!(runtime().await, json!("target_scheduler"));
 }
 
 /// Set the rig's mode, as Rig setup or pairing does.

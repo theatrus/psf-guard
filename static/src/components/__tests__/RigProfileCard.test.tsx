@@ -492,10 +492,15 @@ describe('Rig profile card', () => {
     const { saves } = fixture();
     mount();
     const modes = await screen.findByRole('radiogroup', { name: 'Who runs this rig' });
-    // Not set: the guess is shown, and said to be one.
-    expect(within(modes).getByLabelText('Target Scheduler')).toBeChecked();
-    expect(screen.getByText(/Not set yet: this is PSF Guard's guess/)).toBeInTheDocument();
+    // Not set: the guess is said, and neither mode is chosen, so either,
+    // the guess too, sets it in one click.
+    expect(within(modes).getByLabelText('Target Scheduler')).not.toBeChecked();
+    expect(within(modes).getByLabelText('Director')).not.toBeChecked();
+    expect(screen.getByText(/Not set yet, so PSF Guard plans this rig as Target Scheduler, its guess/)).toBeInTheDocument();
     expect(screen.queryByRole('list', { name: 'What Director needs' })).toBeNull();
+    fireEvent.click(within(modes).getByLabelText('Target Scheduler'));
+    expect(within(modes).getByLabelText('Target Scheduler')).toBeChecked();
+    expect(screen.queryByText(/Not set yet/)).toBeNull();
     fireEvent.click(within(modes).getByLabelText('Director'));
     const needs = screen.getByRole('list', { name: 'What Director needs' });
     expect(needs).toHaveTextContent('Pair the N.I.N.A. Director plugin with this rig. Pairing sets this mode by itself.');

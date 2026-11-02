@@ -41,14 +41,18 @@ const snap = (ms: number) => Math.round(ms / SNAP_MS) * SNAP_MS;
  *  it; the arrow keys move between its items. */
 export function TimelineMenu({ label, left, onClose, children }: { label: string; left: string; onClose: () => void; children: ReactNode }) {
   const root = useRef<HTMLDivElement>(null);
+  // The latest close, so the page's re-renders, each with a new one, leave
+  // focus where the keyboard put it.
+  const close = useRef(onClose);
+  close.current = onClose;
   useEffect(() => {
     root.current?.querySelector<HTMLElement>('[role="menuitem"]:not([disabled])')?.focus();
     const onPointer = (event: globalThis.PointerEvent) => {
-      if (!root.current?.contains(event.target as Node)) onClose();
+      if (!root.current?.contains(event.target as Node)) close.current();
     };
     document.addEventListener('pointerdown', onPointer);
     return () => document.removeEventListener('pointerdown', onPointer);
-  }, [onClose]);
+  }, []);
   const keys = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key === 'Escape') {
       event.preventDefault();
@@ -164,7 +168,11 @@ export function EditableBands({ edit, scale }: { edit: TimelineEdit; scale: Time
  */
 export function HoldHandle({ edit, scale, width }: { edit: TimelineEdit; scale: TimelineScale; width: () => number }) {
   const hold = edit.entries.find(entry => entry.kind === 'hold');
-  const from = hold?.kind === 'hold' ? hold.from_ms ?? edit.night.start_ms : null;
+  const held = hold?.kind === 'hold' ? hold.from_ms ?? edit.night.start_ms : null;
+  // A hold from before the drawn span, the whole night's among them, stands
+  // at its start.
+  const whole = held !== null && held <= scale.start;
+  const from = held === null ? null : Math.max(held, scale.start);
   // Where the drag began, and where the line is now.
   const [drag, setDrag] = useState<{ x: number; from: number; at: number } | null>(null);
   const clock = (ms: number) => formatClock(ms, edit.zone);
@@ -175,8 +183,8 @@ export function HoldHandle({ edit, scale, width }: { edit: TimelineEdit; scale: 
   const left = `${Math.min(1, Math.max(0, (shown - scale.start) / (scale.end - scale.start))) * 100}%`;
   return <span className={`nights-hold${from !== null || drag ? ' is-set' : ''}`} style={{ left }} role="slider" tabIndex={0}
     aria-label="Hold the rig from" aria-valuemin={scale.start} aria-valuemax={edit.dawn} aria-valuenow={shown}
-    aria-valuetext={from === null && !drag ? 'No hold' : `Hold from ${clock(shown)}`}
-    title={from === null ? 'Drag left to hold the rig from a time' : `Holds the rig from ${clock(from)}. Drag right to the end of the dark to lift it.`}
+    aria-valuetext={from === null && !drag ? 'No hold' : whole && !drag ? 'Hold all night' : `Hold from ${clock(shown)}`}
+    title={from === null ? 'Drag left to hold the rig from a time' : `${whole ? 'Holds the rig all night' : `Holds the rig from ${clock(from)}`}. Drag right to the end of the dark to lift it.`}
     onPointerDown={event => {
       event.currentTarget.setPointerCapture?.(event.pointerId);
       setDrag({ x: event.clientX, from: shown, at: shown });
@@ -185,20 +193,23 @@ export function HoldHandle({ edit, scale, width }: { edit: TimelineEdit; scale: 
       if (!drag || width() <= 0) return;
       setDrag({ ...drag, at: clamp(snap(drag.from + ((event.clientX - drag.x) / width()) * (scale.end - scale.start))) });
     }}
-    onPointerUp={() => { if (drag) { set(drag.at); setDrag(null); } }}
+    // A press that does not move the line leaves the hold as it is.
+    onPointerUp={() => { if (drag) { if (drag.at !== drag.from) set(drag.at); setDrag(null); } }}
     onPointerCancel={() => setDrag(null)}
     onKeyDown={event => {
-      const keys: Record<string, number | null> = {
-        ArrowLeft: clamp((from ?? edit.dawn) - STEP_MS),
-        ArrowRight: from === null ? null : from + STEP_MS,
+      // `undefined`: the key changes nothing from here.
+      const keys: Record<string, number | null | undefined> = {
+        ArrowLeft: whole ? undefined : clamp((from ?? edit.dawn) - STEP_MS),
+        ArrowRight: from === null ? undefined : from + STEP_MS,
         Home: edit.night.start_ms,
         End: null,
       };
       if (!(event.key in keys)) return;
       event.preventDefault();
-      set(keys[event.key]);
+      const at = keys[event.key];
+      if (at !== undefined) set(at);
     }}>
-    <span className="nights-hold-label" aria-hidden="true">{from === null && !drag ? 'Hold' : `Held from ${clock(shown)}`}</span>
+    <span className="nights-hold-label" aria-hidden="true">{from === null && !drag ? 'Hold' : whole && !drag ? 'Held all night' : `Held from ${clock(shown)}`}</span>
   </span>;
 }
 

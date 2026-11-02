@@ -509,6 +509,7 @@ async fn compute(state: &Arc<AppState>, request: Request) -> Result<View, NightP
     let first_night = request.first_night;
     let draft = request.override_draft;
     let ts_draft = request.ts_draft;
+    let database_management = state.database_management_allowed();
     let chosen: Option<std::collections::BTreeSet<Uuid>> = request
         .rigs
         .filter(|rigs| !rigs.is_empty())
@@ -556,6 +557,7 @@ async fn compute(state: &Arc<AppState>, request: Request) -> Result<View, NightP
                 let ts_save = super::ts_levers::TsSaveView::of(
                     catalog,
                     stored.as_ref().and_then(|p| p.peer_id.as_deref()),
+                    database_management,
                 );
                 let ts_changes = ts_draft
                     .as_ref()
@@ -659,10 +661,8 @@ async fn compute(state: &Arc<AppState>, request: Request) -> Result<View, NightP
                         // The controls show the rows as saved; the plans,
                         // with any unsaved changes.
                         input.ts_projects = super::ts_levers::views(&snapshot);
-                        if let Some(changes) = &input.ts_changes
-                            && let Err(problem) = changes.apply(&mut snapshot)
-                        {
-                            input.warnings.push(problem);
+                        if let Some(changes) = &input.ts_changes {
+                            input.warnings.extend(changes.apply(&mut snapshot));
                         }
                         input.snapshot = Some(snapshot);
                     }

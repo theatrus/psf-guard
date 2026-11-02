@@ -146,6 +146,36 @@ describe('NightTimeline', () => {
     fireEvent.keyDown(screen.getByRole('slider', { name: 'Hold the rig from' }), { key: 'Home' });
     expect(held.onChange).toHaveBeenLastCalledWith([{ kind: 'hold', from_ms: base.noon_ms }]);
   });
+
+  it('stands a whole night\'s hold at the start of the drawn span, where a press changes nothing', () => {
+    const base = night(0);
+    const edit = editing(base, [{ kind: 'hold' }]);
+    render(<NightTimeline night={base} scheduled={scheduledFor(base)} colours={new Map()} edit={edit} />);
+    const line = screen.getByRole('slider', { name: 'Hold the rig from' });
+    expect(line).toHaveAttribute('aria-valuetext', 'Hold all night');
+    expect(line).toHaveStyle({ left: '0%' });
+    fireEvent.pointerDown(line, { clientX: 0, pointerId: 1 });
+    fireEvent.pointerUp(line, { clientX: 0, pointerId: 1 });
+    // Already as early as it goes.
+    fireEvent.keyDown(line, { key: 'ArrowLeft' });
+    expect(edit.onChange).not.toHaveBeenCalled();
+    // One step later than the drawn span's start, an hour before dusk.
+    fireEvent.keyDown(line, { key: 'ArrowRight' });
+    expect(edit.onChange).toHaveBeenLastCalledWith([{ kind: 'hold', from_ms: base.dusk_ms! - HOUR + 15 * 60_000 }]);
+  });
+
+  it('keeps a menu\'s focus where the keyboard moved it while the page draws again', () => {
+    const base = night(0);
+    const { rerender } = render(<NightTimeline night={base} scheduled={scheduledFor(base)} colours={new Map()} edit={editing(base)} />);
+    fireEvent.click(screen.getByRole('button', { name: /IC 1805/ }));
+    const menu = screen.getByRole('menu');
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    const chosen = within(menu).getByRole('menuitem', { name: /^Leave it out from/ });
+    expect(chosen).toHaveFocus();
+    // The page's clock draws it again, with a new edit and new callbacks.
+    rerender(<NightTimeline night={base} scheduled={scheduledFor(base)} colours={new Map()} edit={editing(base)} />);
+    expect(chosen).toHaveFocus();
+  });
 });
 
 describe('OverrideChips', () => {

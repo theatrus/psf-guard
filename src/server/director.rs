@@ -402,6 +402,9 @@ enum Error {
     Mode(String),
     /// A row changed since the person read it, and which.
     Changed(String),
+    /// A file outside PSF Guard is busy or did not take a write, and what
+    /// that left.
+    Unavailable(String),
 }
 
 /// Why a Target Scheduler rig refuses overrides.
@@ -449,6 +452,7 @@ impl IntoResponse for Error {
         let (status, message) = match self {
             Self::Refused(reason) => (StatusCode::UNPROCESSABLE_ENTITY, reason),
             Self::Mode(reason) | Self::Changed(reason) => (StatusCode::CONFLICT, reason),
+            Self::Unavailable(reason) => (StatusCode::SERVICE_UNAVAILABLE, reason),
             Self::Denied(reason) => (StatusCode::FORBIDDEN, reason.to_owned()),
             other => {
                 let (status, message) = match other {
@@ -475,7 +479,8 @@ impl IntoResponse for Error {
                     | Self::Refused(_)
                     | Self::Denied(_)
                     | Self::Mode(_)
-                    | Self::Changed(_) => (
+                    | Self::Changed(_)
+                    | Self::Unavailable(_) => (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         "Director metadata operation failed; see server logs",
                     ),
