@@ -52,7 +52,7 @@
       },
       {
         "title": "Manage memory, storage and external flats",
-        "body": "Set the processing memory budget and choose WBPP retention and volume limits. Save storage options together. External flat masters at another gain is off by default; enable it for externally built flats whose own flat darks were subtracted."
+        "body": "Set the processing memory budget and choose WBPP retention and volume limits. Save storage options together. External flat masters at another gain is off by default; enable it only for externally built flats whose own flat darks were subtracted and whose normalized response does not change with gain."
       }
     ]
   },

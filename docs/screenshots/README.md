@@ -8,6 +8,13 @@ state-dependent shots. Capture against the running build and record actual
 state before replacing an image. Existing 0.12 captures below remain historical
 records; their version labels do not verify a 0.13 build.
 
+The November 1 capture pass added 20 Chrome screenshots to the site, including
+four of the six priority feature illustrations. The remaining priority shots
+need an active stack build and a connected remote worker. The
+[capture record](https://github.com/theatrus/psf-guard-docs/blob/main/assets/screenshot-captures.md#013-chrome-captures--november-1-2026)
+records the actual build, state, dimensions and hashes. No live settings,
+grades or processing jobs were changed.
+
 ## 0.12 screenshot sources
 
 The main README reuses documentation-site captures from October 17–18, 2026.
