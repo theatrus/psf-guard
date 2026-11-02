@@ -4747,8 +4747,9 @@ should say so instead of hiding it:
   The Library's family rows and the Workspace's rig list were to show their
   slice of the same status inline; that is not built yet.
   *Superseded, November 2026:* the table moved to a **Rigs** page with
-  **Live** and **Nights** tabs ([night plans](night-plans.md)), which the
-  chip opens. The Sky keeps the rigs on its map.
+  **Live** and **Nights** tabs ([night plans](night-plans.md)). Its header
+  tab carries the chip's fleet status, and the chip is gone. The Sky keeps
+  the rigs on its map.
 - **Rig setup** and **Exposure templates** move under Settings. They are
   configuration, not daily work.
 

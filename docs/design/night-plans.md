@@ -647,7 +647,8 @@ refused.
 
 - **Nights:**
   - A tab of the **Rigs** page, beside **Live**. Both are tables of rigs, so
-    they share one page, which the header's rigs chip opens on Live; the
+    they share one page, which the header's Rigs tab opens on Live. That
+    tab carries the fleet's status the separate rigs chip used to show; the
     Sky keeps the rigs on its map. Live's **Tonight** column opens tonight
     on Nights.
   - Rigs are rows and nights are columns, for all rigs or a chosen set,

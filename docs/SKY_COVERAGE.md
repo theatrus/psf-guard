@@ -109,7 +109,7 @@ rigs out. A list beside the map shows each rig, whether it is
 online, and what it says it is doing; choosing one turns the map to it and
 comes in close. The full Live table, and each rig's plans for tonight and
 the coming nights, are on the Rigs page, which the list links to and the
-header's rigs chip opens. A rig is
+header's **Rigs** opens. A rig is
 placed from the mount position its plugin reports, or failing that at its
 target; see the status payload in [DIRECTOR.md](DIRECTOR.md).
 The choice lives in the URL (`live=1`).

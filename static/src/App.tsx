@@ -6,12 +6,12 @@ import ProjectTargetSelector from './components/ProjectTargetSelector';
 import RigTargetSelect from './components/header/RigTargetSelect';
 import { useCurrentPlan } from './components/header/useCurrentPlan';
 import ActivityChip from './components/header/ActivityChip';
-import LiveChip from './components/header/LiveChip';
+import RigsTab from './components/header/RigsTab';
 import { useDesktopZoom, type DesktopZoom } from './hooks/useDesktopZoom';
 import { useDesktopFullscreen } from './hooks/useDesktopFullscreen';
 import HeaderMenu from './components/header/HeaderMenu';
 import ViewTab from './components/header/ViewTab';
-import { ChartColumn, Crosshair, Images, LibraryBig, RadioTower, SquareStack, Telescope, TestTubeDiagonal } from 'lucide-react';
+import { ChartColumn, Crosshair, Images, LibraryBig, SquareStack, Telescope, TestTubeDiagonal } from 'lucide-react';
 import { useHeaderFit } from './components/header/useHeaderFit';
 import { useTuckAway } from './components/header/useTuckAway';
 import KeyboardShortcutHelp from './components/KeyboardShortcutHelp';
@@ -207,16 +207,9 @@ function AppContent({ zoom }: { zoom?: DesktopZoom }) {
             current={isOnSky}
             onClick={() => navigate(toScoped('/sky'))}
           />
-          {/* Every rig, live and over the coming nights; like the Sky, it
-              follows no scope. */}
-          {plan.enabled && (
-            <ViewTab
-              label="Rigs"
-              icon={RadioTower}
-              current={isOnRigs}
-              onClick={() => navigate(toScoped('/rigs'))}
-            />
-          )}
+          {/* Every rig, live and over the coming nights, with the fleet's
+              status on the tab; like the Sky, it follows no scope. */}
+          <RigsTab current={isOnRigs} onClick={() => navigate(toScoped('/rigs'))} />
           <ViewTab
             label="Library"
             icon={LibraryBig}
@@ -282,7 +275,6 @@ function AppContent({ zoom }: { zoom?: DesktopZoom }) {
           {/* Background work on every database, kept to one small chip;
               hover or click opens the queue. */}
           <ActivityChip />
-          <LiveChip />
           <HeaderMenu
             zoom={zoom}
             onSettings={access.canWrite ? () => setShowSettings(true) : undefined}

@@ -5,7 +5,7 @@ import { mkdtempSync } from 'node:fs';
 import path from 'node:path';
 import { applyRealSchema } from '../e2e/fixtures/sync';
 
-test('the Live chip opens the Rigs page, which shows each rig on the sky where it points', async ({ page, request }, testInfo) => {
+test('the Rigs tab carries the fleet, opens Live, and shows each rig on the sky where it points', async ({ page, request }, testInfo) => {
   test.setTimeout(60_000);
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
@@ -44,7 +44,7 @@ test('the Live chip opens the Rigs page, which shows each rig on the sky where i
 
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.goto('/#/?db=parked-catalog');
-    const chip = page.getByRole('button', { name: 'Live rigs: 2 rigs · 1 exposing' });
+    const chip = page.getByRole('button', { name: 'Rigs: 2 rigs · 1 exposing' });
     await expect(chip).toBeVisible();
     await chip.click();
     await expect(page).toHaveURL(/#\/rigs\?db=parked-catalog$/);

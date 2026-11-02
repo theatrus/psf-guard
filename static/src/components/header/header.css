@@ -86,13 +86,14 @@
   cursor: not-allowed;
 }
 
-.live-chip {
-  display: inline-flex;
-  align-items: center;
+/* The Rigs view carries the fleet's status: a dot, green while the rigs
+   talk and red once one has gone quiet, and the count beside it. */
+.rigs-tab {
   gap: 0.4rem;
 }
 
-.live-chip-dot {
+.rigs-tab-dot {
+  flex: none;
   width: 8px;
   height: 8px;
   border-radius: 50%;
@@ -100,19 +101,18 @@
   box-shadow: 0 0 0 2px var(--color-success-alpha-20);
 }
 
-.live-chip.is-alert {
+.rigs-tab-status {
+  white-space: nowrap;
+}
+
+.rigs-tab.is-alert {
   border-color: var(--color-error);
   color: var(--color-error);
 }
 
-.live-chip.is-alert .live-chip-dot {
+.rigs-tab.is-alert .rigs-tab-dot {
   background: var(--color-error);
   box-shadow: 0 0 0 2px var(--color-error-alpha-20);
-}
-
-.live-chip[aria-current='page'] {
-  border-color: var(--state-on-border);
-  background: var(--state-on-bg);
 }
 
 /* Background work: a small chip with the overall progress and the job
@@ -596,7 +596,8 @@ div.activity-error {
     max-width: none;
   }
 
-  .app-header .view-tab[data-view='sky'] {
+  .app-header .view-tab[data-view='sky'],
+  .app-header .view-tab[data-view='rigs'] {
     order: 2;
   }
 
@@ -637,8 +638,9 @@ div.activity-error {
     height: 32px;
   }
 
-  /* The percent says how running work goes; only how many wait shows. */
-  .live-chip .utility-label,
+  /* The percent says how running work goes; only how many wait shows.
+     The Rigs tab keeps its dot; its count is in the tooltip. */
+  .rigs-tab .rigs-tab-status,
   .activity-chip .activity-count[data-job-state='running'] {
     display: none;
   }
@@ -664,9 +666,6 @@ div.activity-error {
     width: auto;
   }
 
-  .live-chip {
-    padding: 0.38rem 0.5rem;
-  }
 }
 
 /* Settings, shortcuts, server information and sign out, behind one button
