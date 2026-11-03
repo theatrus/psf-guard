@@ -47,6 +47,7 @@ struct Running {
     stop: Stop,
     label: String,
     started_at: i64,
+    attended: bool,
 }
 
 /// A run the jobs route lists.
@@ -57,6 +58,9 @@ pub struct RunningPreview<K> {
     pub label: String,
     /// When it started, in Unix seconds.
     pub started_at: i64,
+    /// Whether a person waits for it: false for a run started with
+    /// [`LatestRequests::start_unattended`].
+    pub attended: bool,
 }
 
 impl<K: Clone + Eq + Hash> LatestRequests<K> {
@@ -96,6 +100,7 @@ impl<K: Clone + Eq + Hash> LatestRequests<K> {
                 stop: stop.clone(),
                 label: label.clone(),
                 started_at: chrono::Utc::now().timestamp(),
+                attended: person.is_some(),
             },
         );
         if let Some(previous) = previous {
@@ -133,6 +138,7 @@ impl<K: Clone + Eq + Hash> LatestRequests<K> {
                         key: key.clone(),
                         label: running.label.clone(),
                         started_at: running.started_at,
+                        attended: running.attended,
                     },
                 )
             })

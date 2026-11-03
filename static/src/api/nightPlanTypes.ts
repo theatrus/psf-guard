@@ -291,6 +291,11 @@ export interface NightPlans {
   rigs: RigNights[];
   warnings: string[];
   assumptions: { dark_below_degrees: number; overhead_seconds_per_exposure: number; sample_minutes: number };
+  /** When the server computed these plans; it keeps them, and computes them
+   *  again when what they come from changes. */
+  computed_at_ms: number;
+  /** Newer plans are being computed; read again shortly. */
+  refreshing: boolean;
 }
 
 export interface NightPlansRequest {
@@ -313,6 +318,8 @@ export interface NightPlansRequest {
   override_draft?: { rig: string; date: string; entries: NightOverride[] };
   /** Unsaved changes to one Target Scheduler rig's projects and targets. */
   ts_draft?: { rig: string; changes: TsChanges };
+  /** Compute the plans again, whatever the server keeps. */
+  refresh?: boolean;
 }
 
 /** One night to mark, as a person enters it. */

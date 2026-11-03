@@ -27,14 +27,17 @@ pub enum PreviewKind {
     PeerSync,
     /// A sync another server pushed here, which waits for its Apply.
     Incoming,
+    /// Night plans for the Nights page, a plan's projection or an agent.
+    NightPlans,
 }
 
-const KINDS: [PreviewKind; 5] = [
+const KINDS: [PreviewKind; 6] = [
     PreviewKind::Sync,
     PreviewKind::Import,
     PreviewKind::Export,
     PreviewKind::PeerSync,
     PreviewKind::Incoming,
+    PreviewKind::NightPlans,
 ];
 
 /// The previews under way, by kind. Each is keyed by the database whose
@@ -51,6 +54,9 @@ pub struct Previews {
     pub peer_sync: LatestRequests<String>,
     /// Syncs pushed here, by the catalog and the catalog that sent them.
     pub incoming: LatestRequests<String>,
+    /// Night plans being computed, by what they plan. They span every
+    /// database, so their runs work on none.
+    pub night_plans: LatestRequests<String>,
 }
 
 /// The key of an incoming sync: a newer push from the same source replaces
@@ -70,6 +76,9 @@ pub struct PreviewRun {
     pub db_id: String,
     pub label: String,
     pub started_at: i64,
+    /// Whether a person waits for it: false for a sync another server
+    /// pushed, or night plans the server computes again on its own.
+    pub attended: bool,
 }
 
 impl Previews {
@@ -80,6 +89,7 @@ impl Previews {
             PreviewKind::Export => &self.export,
             PreviewKind::PeerSync => &self.peer_sync,
             PreviewKind::Incoming => &self.incoming,
+            PreviewKind::NightPlans => &self.night_plans,
         }
     }
 
@@ -93,12 +103,14 @@ impl Previews {
                               key,
                               label,
                               started_at,
+                              attended,
                           }| {
                         let db_id = match kind {
                             PreviewKind::Incoming => key
                                 .split_once(':')
                                 .map_or(key.as_str(), |(catalog, _)| catalog)
                                 .to_string(),
+                            PreviewKind::NightPlans => String::new(),
                             _ => key.clone(),
                         };
                         PreviewRun {
@@ -107,6 +119,7 @@ impl Previews {
                             db_id,
                             label,
                             started_at,
+                            attended,
                         }
                     },
                 )

@@ -66,7 +66,13 @@
   Mark a night available, not available, or clear only for some hours, for
   one rig or for every rig at a site; the schedules work around the marks.
   The Live table's new **Tonight** column links each rig to tonight's
-  schedule. See [Nights](../DIRECTOR.md#nights).
+  schedule. A night with no clear dark hours is red, including one a
+  forecast leaves clear only in daylight. The server keeps the night plans
+  and computes them again when a mark, a forecast, a rig's setup or its
+  database changes, as a person's work the header lists, so the page
+  rarely waits; **Updated** shows when they were computed. An AI agent
+  reads the same plans with the MCP tool `get_night_plans`. See
+  [Nights](../DIRECTOR.md#nights).
 - A site can mark its nights from a cloud forecast. Under **Settings ›
   Presets › Sites**, choose **Open-Meteo** or **MET Norway** in **Forecast**, and the
   cloud cover at or under which an hour counts as clear. Night plans then
