@@ -250,7 +250,12 @@ describe('Night overrides', () => {
     const { detail, edit, requests, saves } = await openDirectorNight();
     const overrides = within(detail).getByRole('region', { name: 'Overrides' });
     expect(within(overrides).getByText('None.')).toBeInTheDocument();
+    const before = requests.length;
     fireEvent.click(edit);
+    // An edit that changes nothing yet is not planned again, so a block
+    // can be moved at once.
+    expect(within(detail).queryByText('Planning the edit...')).toBeNull();
+    expect(requests).toHaveLength(before);
     // A block's menu pins its target to the block.
     fireEvent.click(within(detail).getByRole('button', { name: /^Heart Nebula, IC 1805:/ }));
     fireEvent.click(within(detail).getByRole('menuitem', { name: 'Pin it here' }));

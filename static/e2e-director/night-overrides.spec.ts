@@ -111,6 +111,8 @@ test('a Director rig\'s night takes overrides, planned before they are saved', a
     const overrides = detail.getByRole('region', { name: 'Overrides' });
     await expect(overrides.getByText('None.', { exact: true })).toBeVisible();
     await detail.getByRole('button', { name: 'Edit night' }).click();
+    // A block moves only once the schedule shows the last change.
+    await expect(detail.getByText('Planning the edit...')).toHaveCount(0);
 
     // Drag the first block an hour later: its target is pinned there.
     const track = await timeline.locator('.nights-timeline-track').boundingBox();
