@@ -115,11 +115,35 @@ pub struct ProjectLink {
 pub struct MetaStore {
     connection: Connection,
     instance_id: Uuid,
+    /// Rows [`MetaStore::record_status`] and [`MetaStore::record_contact`]
+    /// wrote on this connection.
+    liveness_rows: u64,
 }
 
 impl MetaStore {
     pub fn instance_id(&self) -> Uuid {
         self.instance_id
+    }
+
+    /// How many rows this connection has written since it opened, leaving
+    /// out a rig's status and contact records, which change each time a
+    /// plugin calls in and which nothing planned from the store reads. A
+    /// caller compares two readings to tell whether anything it plans from
+    /// may have changed.
+    pub fn planning_rows_written(&self) -> u64 {
+        self.connection.total_changes() - self.liveness_rows
+    }
+
+    /// Run a write of a rig's liveness: what [`Self::planning_rows_written`]
+    /// leaves out.
+    fn writing_liveness<T>(
+        &mut self,
+        write: impl FnOnce(&mut Self) -> Result<T, Error>,
+    ) -> Result<T, Error> {
+        let before = self.connection.total_changes();
+        let result = write(self);
+        self.liveness_rows += self.connection.total_changes() - before;
+        result
     }
 
     /// Caller-minted stable IDs make retries explicit. Same ID and different

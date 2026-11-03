@@ -10,7 +10,7 @@ import EarlyBeta from './EarlyBeta';
 import { planHref } from './planAddress';
 import { useDirectorClock } from '../../hooks/useDirectorClock';
 import { formatHours } from './visibilityFormat';
-import { nightHref, plansScheduled } from '../nights/nightsModel';
+import { nightHref, plansScheduled, refetchKept } from '../nights/nightsModel';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Director request failed';
 
@@ -31,7 +31,7 @@ export default function DirectorDashboard() {
     retry: retryWhenBusy,
     retryDelay: 1200,
     staleTime: 5 * 60_000,
-    refetchInterval: 10 * 60_000,
+    refetchInterval: current => refetchKept(current.state.data, 10 * 60_000),
     refetchOnWindowFocus: false,
   });
   const workspaceHref = (projectId: string) => planHref(projectId, params);

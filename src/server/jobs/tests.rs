@@ -1112,6 +1112,7 @@ fn a_preview_is_a_persons_work_that_stop_ends() {
             db_id: "db-1".into(),
             label: "Previewing a pull from Rig".into(),
             started_at: 1800,
+            attended: true,
         }],
         ..Snapshot::default()
     })
@@ -1125,6 +1126,41 @@ fn a_preview_is_a_persons_work_that_stop_ends() {
     assert_eq!(
         serde_json::to_value(row.control.unwrap()).unwrap(),
         serde_json::json!({"kind": "preview", "preview": "sync", "key": "db-1"})
+    );
+}
+
+#[test]
+fn night_plans_being_computed_are_work_across_the_rigs_a_persons_or_automatic() {
+    let run = |label: &str, attended: bool| crate::server::previews::PreviewRun {
+        kind: crate::server::previews::PreviewKind::NightPlans,
+        key: "edit:rig".into(),
+        db_id: String::new(),
+        label: label.into(),
+        started_at: 1800,
+        attended,
+    };
+    let rows = row_list(&Snapshot {
+        databases: vec![db("db-1", "Home")],
+        previews: vec![
+            run("Planning nights", true),
+            run("Refreshing night plans", false),
+        ],
+        ..Snapshot::default()
+    });
+    let automatic = rows
+        .iter()
+        .find(|row| row.title == "Refreshing night plans")
+        .unwrap();
+    assert!(automatic.automatic && automatic.background && automatic.stoppable);
+    let row = rows
+        .into_iter()
+        .find(|row| row.title == "Planning nights")
+        .unwrap();
+    assert_eq!(row.scope, "Rigs");
+    assert!(!row.background && !row.automatic && row.stoppable);
+    assert_eq!(
+        serde_json::to_value(row.control.unwrap()).unwrap(),
+        serde_json::json!({"kind": "preview", "preview": "night_plans", "key": "edit:rig"})
     );
 }
 

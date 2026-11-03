@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Cloud, Pin, RefreshCw } from 'lucide-react';
 import { apiClient } from '../../api/client';
@@ -13,6 +13,9 @@ import { PROVIDER_URL } from '../director/forecastLabels';
 import NightDetail from './NightDetail';
 import { confirmDiscard, usePageDrafts } from '../director/pageDraftsState';
 import {
+  darkState,
+  formatClock,
+  refetchKept,
   NIGHT_COUNTS,
   NIGHTS_PARAMS,
   RUNTIME_LABEL,
@@ -75,12 +78,21 @@ export default function NightsView() {
     const night = getParam(NIGHTS_PARAMS.night);
     return rig && isDate(night) ? { rigId: rig, anchor: night, dates: [night] } : null;
   });
+  // Compute again asks the server to compute the plans afresh; any other
+  // read gets the plans it keeps current.
+  const recompute = useRef(false);
   const query = useQuery({
     queryKey: ['nightPlans', chosenFrom, count],
-    queryFn: () => apiClient.getNightPlans({ ...(chosenFrom ? { first_night: chosenFrom } : {}), nights: count, schedule_nights: count }),
+    // A retry after a failure still asks afresh.
+    queryFn: async () => {
+      const refresh = recompute.current;
+      const planned = await apiClient.getNightPlans({ ...(chosenFrom ? { first_night: chosenFrom } : {}), nights: count, schedule_nights: count, ...(refresh ? { refresh } : {}) });
+      if (refresh) recompute.current = false;
+      return planned;
+    },
     retry: retryWhenBusy,
     retryDelay: 1200,
-    refetchInterval: 5 * 60_000,
+    refetchInterval: current => refetchKept(current.state.data, 60_000),
     refetchOnWindowFocus: false,
   });
   const rigs = useMemo(() => query.data?.rigs ?? [], [query.data]);
@@ -129,7 +141,8 @@ export default function NightsView() {
             {NIGHT_COUNTS.map(option => <option key={option} value={option}>{option}</option>)}
           </select></label>
           {chosenFrom && <button type="button" onClick={leaving(() => { setSelection(null); updateParams({ [NIGHTS_PARAMS.from]: null }); })}>Tonight</button>}
-          <button type="button" title="Compute again" aria-label="Compute again" disabled={query.isFetching} onClick={() => void query.refetch()}><RefreshCw size={16} /></button>
+          {query.data && <span className="director-muted nights-updated" role="status">{query.data.refreshing || query.isFetching ? 'Updating…' : `Updated ${formatClock(query.data.computed_at_ms)}`}</span>}
+          <button type="button" title="Compute again" aria-label="Compute again" disabled={query.isFetching} onClick={() => { recompute.current = true; void query.refetch(); }}><RefreshCw size={16} /></button>
         </div>
       </div>
       {rigs.length > 1 && <div className="nights-rig-chips" role="group" aria-label="Rigs shown">
@@ -166,8 +179,8 @@ export default function NightsView() {
               const decided = decidedBy(night);
               const cause = decided === 'forecast' ? ' by the forecast' : decided === 'both' ? ' by a mark and the forecast' : '';
               return <td key={date}>
-                <button type="button" className={`nights-cell is-${night.availability.state}`} aria-pressed={chosen}
-                  aria-label={`${rig.catalog_name}, ${formatNightDate(night.date)}: ${formatHours(night.available_dark_hours)} clear of ${formatHours(night.dark_hours)} dark, ${STATE_LABEL[night.availability.state].toLowerCase()}${cause}, Moon ${Math.round(night.moon_illumination * 100)}%${night.override_count > 0 ? `, ${night.override_count} ${night.override_count === 1 ? 'override' : 'overrides'}` : ''}`}
+                <button type="button" className={`nights-cell is-${darkState(night)}`} aria-pressed={chosen}
+                  aria-label={`${rig.catalog_name}, ${formatNightDate(night.date)}: ${formatHours(night.available_dark_hours)} clear of ${formatHours(night.dark_hours)} dark, ${STATE_LABEL[darkState(night)].toLowerCase()}${cause}, Moon ${Math.round(night.moon_illumination * 100)}%${night.override_count > 0 ? `, ${night.override_count} ${night.override_count === 1 ? 'override' : 'overrides'}` : ''}`}
                   onClick={event => choose(rig, night, event.shiftKey)}>
                   <span className="nights-cell-top">
                     <span className="nights-cell-hours">{formatHours(night.available_dark_hours)}</span>

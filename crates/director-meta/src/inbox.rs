@@ -304,6 +304,10 @@ impl MetaStore {
     /// Keep the newest status per rig. An older report for the same session,
     /// or any report from an older session, is refused rather than applied.
     pub fn record_status(&mut self, status: &RigStatus) -> Result<bool, Error> {
+        self.writing_liveness(|store| store.write_status(status))
+    }
+
+    fn write_status(&mut self, status: &RigStatus) -> Result<bool, Error> {
         valid_id(status.rig_id)?;
         if !valid_text(&status.session_id, 128)
             || status.reported_at_ms > MAX_TIME_MS
@@ -353,6 +357,16 @@ impl MetaStore {
     /// Note that a rig's plugin just called. Later calls overwrite; an
     /// earlier receipt time never replaces a later one.
     pub fn record_contact(
+        &mut self,
+        rig: Uuid,
+        kind: ContactKind,
+        at_ms: u64,
+        detail: Option<&str>,
+    ) -> Result<(), Error> {
+        self.writing_liveness(|store| store.write_contact(rig, kind, at_ms, detail))
+    }
+
+    fn write_contact(
         &mut self,
         rig: Uuid,
         kind: ContactKind,

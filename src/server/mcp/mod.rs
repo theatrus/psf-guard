@@ -382,6 +382,24 @@ pub struct FeasibilityArgs {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct NightPlansArgs {
+    /// Rig ids (`rig.id` from `list_rigs`) to plan; none for every rig with
+    /// a site.
+    #[serde(default)]
+    pub rigs: Vec<String>,
+    /// The first night, as the evening's date at each rig's site
+    /// (`YYYY-MM-DD`); the night under way by default.
+    pub first_night: Option<String>,
+    /// How many nights (7 by default).
+    pub nights: Option<u32>,
+    /// Also schedule each night: the blocks each rig's runtime, Target
+    /// Scheduler or Director, would shoot, in order. Off by default, which
+    /// gives each night's hours only.
+    #[serde(default)]
+    pub schedule: bool,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ActivationArgs {
     /// The plan's id from `list_plans`.
     pub plan_id: String,
@@ -1598,6 +1616,29 @@ impl PsfGuardMcp {
             Some(json!({ "nights": args.nights })),
         )
         .await
+    }
+
+    #[tool(
+        description = "Night plans for each rig and night: dusk, dawn and dark hours, the dark hours clear by the site's and rig's marks and cloud forecast (`available_dark_hours`; `availability` lists the marks), the Moon, how much of the work left fits, and with schedule set, what each rig's runtime (Target Scheduler or Director) would shoot when. A Director rig's nights list their overrides. The server keeps these views current: `computed_at_ms` says when this one was computed, and `refreshing` that a newer one is being computed. Changes nothing."
+    )]
+    async fn get_night_plans(
+        &self,
+        Parameters(args): Parameters<NightPlansArgs>,
+        ctx: RequestContext<RoleServer>,
+    ) -> ToolResult {
+        let nights = args.nights.unwrap_or(7);
+        let mut body = json!({
+            "nights": nights,
+            "schedule_nights": if args.schedule { nights } else { 0 },
+        });
+        if !args.rigs.is_empty() {
+            body["rigs"] = json!(args.rigs);
+        }
+        if let Some(first_night) = args.first_night {
+            body["first_night"] = json!(first_night);
+        }
+        self.answer(&ctx, Method::POST, "/director/v1/night-plans", Some(body))
+            .await
     }
 
     #[tool(
