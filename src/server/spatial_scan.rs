@@ -21,7 +21,7 @@ use crate::image_analysis::FitsImage;
 use crate::nina_star_detection::detect_stars_with_original;
 use crate::photometry::{CatalogStar, FrameCatalog};
 use crate::spatial_analysis::{compute_spatial_metrics, PixelCalibration, SpatialAnalysisConfig};
-use crate::star_detection::{DetectionSettings, FrameFacts};
+use crate::star_detection::{DetectionSettings, FrameFacts, FwhmEvidence};
 
 /// Persisted per-image spatial metrics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -245,29 +245,65 @@ pub struct ScanWorkItem {
     pub fits_path: PathBuf,
     pub source_generation: u64,
     pub source_revision: Option<String>,
-    /// How to detect the frame's stars, resolved from its rig's settings.
-    pub detection: DetectionSettings,
-    /// The header facts `detection` was resolved from.
-    pub frame: FrameFacts,
-    /// Arcseconds per pixel from FOCALLEN and XPIXSZ, for N.I.N.A.'s High
-    /// sensitivity and Hocus Focus's rig class.
-    pub image_scale_arcsec: Option<f64>,
+    /// The catalog's own light, whose header gives the rig and N.I.N.A.
+    /// release the star detection is resolved from: `fits_path` itself,
+    /// unless that is a calibrated copy. `None` when the light has no
+    /// original on disk; a copy's software and rig keys are never read.
+    pub light_path: Option<PathBuf>,
+    /// The catalog row's N.I.N.A. profile and capture time.
+    pub profile_id: Option<String>,
+    pub captured_at: Option<i64>,
+    /// What the catalog row's FWHM says.
+    pub fwhm: FwhmEvidence,
 }
 
-/// How to measure the frame at `path`: its header's rig and capture
-/// software, its catalog row's profile, capture time and FWHM, and the
-/// settings in force.
-pub fn detection_for_frame(
-    path: &Path,
-    image: &crate::models::AcquiredImage,
-) -> (DetectionSettings, FrameFacts, Option<f64>) {
-    let meta = crate::commands::import::headers::read_frame_meta(path);
-    let facts = FrameFacts::of_frame(&meta, image.profile_id.as_deref(), image.acquired_date);
-    let detection = crate::star_detection::current().resolve(
-        &facts,
-        crate::star_detection::FwhmEvidence::of_metadata(&image.metadata),
-    );
-    (detection, facts, meta.image_scale_arcsec())
+impl ScanWorkItem {
+    /// An item for `image`'s pixels at `fits_path`, with the light whose
+    /// header resolves its star detection.
+    pub fn new(
+        image: &crate::models::AcquiredImage,
+        filename: String,
+        fits_path: PathBuf,
+        light_path: Option<PathBuf>,
+        source_generation: u64,
+        source_revision: Option<String>,
+    ) -> Self {
+        Self {
+            image_id: image.id,
+            filename,
+            fits_path,
+            source_generation,
+            source_revision,
+            light_path,
+            profile_id: image.profile_id.clone(),
+            captured_at: image.acquired_date,
+            fwhm: FwhmEvidence::of_metadata(&image.metadata),
+        }
+    }
+
+    /// How to measure the item's stars with the settings in force, the
+    /// facts it was resolved from, the image scale, and the exposure. One
+    /// header read: the light's, or the copy's for the scale and exposure
+    /// alone when there is no light.
+    fn detection(&self) -> (DetectionSettings, FrameFacts, Option<f64>, Option<f64>) {
+        use crate::commands::import::headers::read_frame_meta;
+        let light = self.light_path.as_deref().map(read_frame_meta);
+        let facts = FrameFacts::of_frame(
+            light.as_ref().unwrap_or(&Default::default()),
+            self.profile_id.as_deref(),
+            self.captured_at,
+        );
+        let measured = match (&light, self.light_path.as_deref()) {
+            (Some(meta), Some(path)) if path == self.fits_path => meta.clone(),
+            _ => read_frame_meta(&self.fits_path),
+        };
+        let detection = crate::star_detection::current().resolve(&facts, self.fwhm);
+        let scale = light
+            .as_ref()
+            .and_then(|meta| meta.image_scale_arcsec)
+            .or(measured.image_scale_arcsec);
+        (detection, facts, scale, measured.exposure_s)
+    }
 }
 
 const PERSIST_FILENAME: &str = "spatial_metrics.json";
@@ -855,7 +891,6 @@ pub fn measure_frame_stars(
     stats: &crate::image_analysis::ImageStatistics,
     detection: &DetectionSettings,
     image_scale_arcsec: Option<f64>,
-    fits_path: &Path,
 ) -> FrameStars {
     // Stars from Hocus Focus, as the rig's primary detector or as the
     // stand-in where N.I.N.A.'s found none, under the detector name given.
@@ -917,7 +952,14 @@ pub fn measure_frame_stars(
         // missed them, and the frame is poor rather than starless. Its count
         // and HFR are recorded under its own name, on its own scale.
         let fallback = if result.star_list.is_empty() {
-            let (second, _) = crate::hocus_focus_star_detection::params_for_frame_path(fits_path);
+            // Hocus Focus 3's preset for the rig class the image scale gives,
+            // as before; no second header read.
+            let second = DetectionSettings::HocusFocus {
+                version: crate::star_detection::HocusFocusVersion::V3,
+                knobs: None,
+            }
+            .hocus_focus_params(image_scale_arcsec)
+            .expect("Hocus Focus settings give Hocus Focus parameters");
             let found = crate::hocus_focus_star_detection::detect_stars_hocus_focus(
                 &fits.data,
                 fits.width,
@@ -931,7 +973,6 @@ pub fn measure_frame_stars(
         match &fallback {
             Some(found) => {
                 tracing::info!(
-                    file = %fits_path.display(),
                     stars = found.stars.len(),
                     "N.I.N.A. Fast found no stars; recording HocusFocus's measurement instead"
                 );
@@ -982,7 +1023,7 @@ fn compute_one(
     item: &ScanWorkItem,
     config: &SpatialAnalysisConfig,
 ) -> anyhow::Result<StoredSpatialMetrics> {
-    let headers = crate::commands::screen_fits::extract_headers(&item.fits_path);
+    let (detection, frame, image_scale_arcsec, exposure_s) = item.detection();
     let fits = FitsImage::from_file(&item.fits_path)?;
     let modified = std::fs::metadata(&item.fits_path)
         .and_then(|metadata| metadata.modified())
@@ -998,13 +1039,7 @@ fn compute_one(
         avg_hfr,
         positions,
         mut stars,
-    } = measure_frame_stars(
-        &fits,
-        &stats,
-        &item.detection,
-        item.image_scale_arcsec,
-        &item.fits_path,
-    );
+    } = measure_frame_stars(&fits, &stats, &detection, image_scale_arcsec);
     // Keep the brightest for cross-frame matching, and every measured star:
     // in a deep frame the brightest are saturated, so the measured ones sit
     // further down the list.
@@ -1035,8 +1070,8 @@ fn compute_one(
         source_revision: item.source_revision.clone(),
         detector: detector.to_string(),
         detector_version: QUALITY_DETECTOR_VERSION,
-        detection: Some(item.detection),
-        frame: item.frame.clone(),
+        detection: Some(detection),
+        frame,
         star_count,
         avg_hfr,
         dead_cell_fraction: spatial.star_dead_cell_fraction,
@@ -1056,7 +1091,7 @@ fn compute_one(
         grid_rows: config.grid_rows,
         width: fits.width,
         height: fits.height,
-        exposure_s: headers.exposure_s,
+        exposure_s,
         bg_glow_max: spatial.bg_glow_max,
         bg_glow_cells: spatial.bg_glow_cells,
     })
@@ -1209,16 +1244,16 @@ pub fn valid_entry_for_source(
 /// Look up an entry that contains every field produced by the current quality
 /// scan. Older cache files deserialize successfully, but their defaulted grid
 /// dimensions and cell arrays cannot support photometric screening.
-/// `metadata_json` is the frame's catalog row, whose FWHM decides Auto's
+/// `fwhm` is what the frame's catalog row records, which decides Auto's
 /// detector (see [`detection_is_current`]).
 pub fn valid_quality_entry(
     store: &RwLock<SpatialMetricsStore>,
     image_id: i32,
     filename: &str,
-    metadata_json: &str,
+    fwhm: FwhmEvidence,
 ) -> Option<StoredSpatialMetrics> {
     valid_entry(store, image_id, filename)
-        .filter(|entry| quality_entry_is_current(entry, filename, metadata_json))
+        .filter(|entry| quality_entry_is_current(entry, filename, fwhm))
 }
 
 pub fn valid_quality_entry_for_source(
@@ -1226,10 +1261,10 @@ pub fn valid_quality_entry_for_source(
     image_id: i32,
     filename: &str,
     mapped_source_revision: Option<&str>,
-    metadata_json: &str,
+    fwhm: FwhmEvidence,
 ) -> Option<StoredSpatialMetrics> {
     valid_entry_for_source(store, image_id, filename, mapped_source_revision)
-        .filter(|entry| quality_entry_is_current(entry, filename, metadata_json))
+        .filter(|entry| quality_entry_is_current(entry, filename, fwhm))
 }
 
 /// Whether a scan entry's stars came from the quality scan: N.I.N.A. Fast,
@@ -1243,35 +1278,31 @@ pub fn is_quality_detector(detector: &str) -> bool {
 /// Whether an entry's stars were measured by the current quality scan with
 /// the star detection its rig's settings give now. A changed setting, or
 /// catalog metadata that now shows Hocus Focus, makes it outdated.
-pub fn detection_is_current(entry: &StoredSpatialMetrics, metadata_json: &str) -> bool {
-    detection_current_under(entry, metadata_json, &crate::star_detection::current())
+pub fn detection_is_current(entry: &StoredSpatialMetrics, fwhm: FwhmEvidence) -> bool {
+    detection_current_under(entry, fwhm, &crate::star_detection::current())
 }
 
 fn detection_current_under(
     entry: &StoredSpatialMetrics,
-    metadata_json: &str,
+    fwhm: FwhmEvidence,
     settings: &crate::star_detection::StarDetectionSettings,
 ) -> bool {
     is_quality_detector(&entry.detector)
         && entry.detector_version == QUALITY_DETECTOR_VERSION
-        && entry.detection.is_some_and(|stored| {
-            stored
-                == settings.resolve(
-                    &entry.frame,
-                    crate::star_detection::FwhmEvidence::of_metadata(metadata_json),
-                )
-        })
+        && entry
+            .detection
+            .is_some_and(|stored| stored == settings.resolve(&entry.frame, fwhm))
 }
 
 /// Whether a cached entry matches the source and current quality model.
 pub fn quality_entry_is_current(
     entry: &StoredSpatialMetrics,
     filename: &str,
-    metadata_json: &str,
+    fwhm: FwhmEvidence,
 ) -> bool {
     let cells = entry.grid_cols.saturating_mul(entry.grid_rows);
     entry.filename == filename
-        && detection_is_current(entry, metadata_json)
+        && detection_is_current(entry, fwhm)
         && entry.width > 0
         && entry.height > 0
         && cells > 0
@@ -1293,6 +1324,153 @@ mod tests {
 
     /// A mono 16-bit FITS of a noisy sky with Gaussian stars, as a camera
     /// writes it (BZERO 32768). Returns the path and where the data starts.
+    /// An 8×8 16-bit FITS with the given header cards.
+    fn fits_with_cards(dir: &Path, name: &str, cards: &[&str]) -> PathBuf {
+        let mut header = Vec::new();
+        let fixed = [
+            "SIMPLE  =                    T",
+            "BITPIX  =                   16",
+            "NAXIS   =                    2",
+            "NAXIS1  =                    8",
+            "NAXIS2  =                    8",
+            "IMAGETYP= 'LIGHT'",
+        ];
+        for card in fixed.iter().chain(cards).chain(["END"].iter()) {
+            let mut bytes = card.as_bytes().to_vec();
+            bytes.resize(80, b' ');
+            header.extend_from_slice(&bytes);
+        }
+        header.resize(header.len().div_ceil(2880) * 2880, b' ');
+        header.extend(std::iter::repeat_n(0u8, 2880));
+        let path = dir.join(name);
+        std::fs::write(&path, header).unwrap();
+        path
+    }
+
+    #[test]
+    fn star_detection_comes_from_the_light_never_a_calibrated_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let light = fits_with_cards(
+            dir.path(),
+            "light.fits",
+            &[
+                "SWCREATE= 'N.I.N.A. 3.1.2.9001 (x64)'",
+                "TELESCOP= 'Askar107PHQ'",
+                "INSTRUME= 'ZWO ASI2600MM Pro'",
+                "FOCALLEN=                  749",
+                "XPIXSZ  =                 3.76",
+                "XBINNING=                    1",
+                "EXPTIME =                300.0",
+            ],
+        );
+        // PixInsight's calibrated copy: its own software, no SWCREATE, and
+        // other rig keys.
+        let copy = fits_with_cards(
+            dir.path(),
+            "light_c.fits",
+            &[
+                "TELESCOP= 'calibrated'",
+                "FOCALLEN=                  749",
+                "XPIXSZ  =                 3.76",
+                "EXPTIME =                300.0",
+            ],
+        );
+        let image = crate::models::AcquiredImage {
+            id: 1,
+            project_id: 1,
+            target_id: 1,
+            acquired_date: Some(1_790_000_000),
+            filter_name: "L".into(),
+            grading_status: 0,
+            metadata: r#"{"FileName":"light.fits","FWHM":"NaN"}"#.into(),
+            reject_reason: None,
+            profile_id: Some("DAACEA0C-6D1D-4163-B582-78B2BB178FD6".into()),
+            guid: None,
+        };
+        let light_meta = crate::commands::import::headers::read_frame_meta(&light);
+        let item = ScanWorkItem::new(
+            &image,
+            "light.fits".into(),
+            copy.clone(),
+            Some(light.clone()),
+            0,
+            Some(format!("{CALIBRATED_SOURCE_PREFIX}token")),
+        );
+        let (detection, facts, scale, exposure) = item.detection();
+        assert_eq!(facts.software.as_deref(), Some("N.I.N.A. 3.1.2.9001 (x64)"));
+        assert_eq!(
+            facts.rig_uuid,
+            Some(crate::calibration::rules::light_rig_uuid(&light_meta))
+        );
+        assert_eq!(
+            facts.profile_id.as_deref(),
+            Some("daacea0c-6d1d-4163-b582-78b2bb178fd6")
+        );
+        assert!(matches!(
+            detection,
+            DetectionSettings::Nina {
+                measurement: crate::star_detection::NinaMeasurement::Nina31,
+                ..
+            }
+        ));
+        assert!((scale.unwrap() - 206.265 * 3.76 / 749.0).abs() < 1e-9);
+        assert_eq!(exposure, Some(300.0));
+
+        // With no light on disk the copy's header gives no rig or release:
+        // the frame measures as an unknown release, 3.2.
+        let copy_only = ScanWorkItem::new(&image, "light.fits".into(), copy, None, 0, None);
+        let (detection, facts, scale, _) = copy_only.detection();
+        assert_eq!(facts.software, None);
+        assert_eq!(facts.rig_uuid, None);
+        assert!(matches!(
+            detection,
+            DetectionSettings::Nina {
+                measurement: crate::star_detection::NinaMeasurement::Nina32,
+                ..
+            }
+        ));
+        assert!(scale.is_some(), "the copy still gives the image scale");
+    }
+
+    #[test]
+    fn the_image_scale_counts_binning_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let scale = |name: &str, cards: &[&str]| {
+            crate::commands::import::headers::read_frame_meta(&fits_with_cards(
+                dir.path(),
+                name,
+                cards,
+            ))
+            .image_scale_arcsec
+        };
+        // XPIXSZ is already binned, as N.I.N.A. writes it.
+        let binned = scale(
+            "binned.fits",
+            &[
+                "FOCALLEN=                  518",
+                "XPIXSZ  =                 7.52",
+                "XBINNING=                    2",
+            ],
+        )
+        .unwrap();
+        assert!((binned - 206.265 * 7.52 / 518.0).abs() < 1e-9);
+        // A physical pixel size takes the binning.
+        let physical = scale(
+            "physical.fits",
+            &[
+                "FOCALLEN=                  518",
+                "PIXSIZE =                 3.76",
+                "XBINNING=                    2",
+            ],
+        )
+        .unwrap();
+        assert!((physical - 206.265 * 3.76 * 2.0 / 518.0).abs() < 1e-9);
+        assert_eq!(
+            scale("none.fits", &["FOCALLEN=                  518"]),
+            None
+        );
+    }
+
     fn star_field(dir: &Path, name: &str) -> (PathBuf, usize) {
         let (width, height) = (640usize, 480usize);
         let mut seed = 12345u64;
@@ -1355,9 +1533,10 @@ mod tests {
             fits_path: path.to_path_buf(),
             source_generation: 0,
             source_revision: None,
-            detection: DetectionSettings::default(),
-            frame: FrameFacts::default(),
-            image_scale_arcsec: None,
+            light_path: None,
+            profile_id: None,
+            captured_at: None,
+            fwhm: FwhmEvidence::Absent,
         }
     }
 
@@ -1520,7 +1699,6 @@ mod tests {
                     knobs: None,
                 },
                 None,
-                Path::new("synthetic.fits"),
             );
             assert_eq!(measured.detector, PRIMARY_HOCUS_FOCUS_DETECTOR);
             assert!(
@@ -1543,13 +1721,7 @@ mod tests {
                 "{version:?}: Hocus Focus stars are measured for the zero point"
             );
         }
-        let nina = measure_frame_stars(
-            &fits,
-            &stats,
-            &DetectionSettings::default(),
-            None,
-            Path::new("synthetic.fits"),
-        );
+        let nina = measure_frame_stars(&fits, &stats, &DetectionSettings::default(), None);
         assert!(
             nina.detector == QUALITY_DETECTOR || nina.detector == FALLBACK_DETECTOR,
             "{}",
@@ -1644,9 +1816,17 @@ mod tests {
         let cells = complete.grid_cols * complete.grid_rows;
         complete.star_cell_counts = vec![Default::default(); cells];
         complete.bg_cell_medians = vec![Default::default(); cells];
-        assert!(quality_entry_is_current(&complete, "light.fits", "{}"));
+        assert!(quality_entry_is_current(
+            &complete,
+            "light.fits",
+            FwhmEvidence::Absent
+        ));
         complete.detector = "other".into();
-        assert!(!quality_entry_is_current(&complete, "light.fits", "{}"));
+        assert!(!quality_entry_is_current(
+            &complete,
+            "light.fits",
+            FwhmEvidence::Absent
+        ));
         let store = std::sync::Arc::new(store_with(vec![frame]));
         let metadata = r#"{"FileName":"light.fits","DetectedStars":416,"HFR":1.68}"#;
         let mut metrics =
@@ -1703,7 +1883,11 @@ mod tests {
         let frame = measured_on_rig("light.fits");
         let metadata = r#"{"FileName":"light.fits","FWHM":"NaN"}"#;
         let defaults = StarDetectionSettings::default();
-        assert!(detection_current_under(&frame, metadata, &defaults));
+        assert!(detection_current_under(
+            &frame,
+            FwhmEvidence::of_metadata(metadata),
+            &defaults
+        ));
 
         let mut normal = StarDetectionSettings::default();
         normal.rigs.insert(
@@ -1716,22 +1900,42 @@ mod tests {
                 },
             },
         );
-        assert!(!detection_current_under(&frame, metadata, &normal));
+        assert!(!detection_current_under(
+            &frame,
+            FwhmEvidence::of_metadata(metadata),
+            &normal
+        ));
         // Another rig's row leaves this rig's frames alone.
         let mut other_rig = normal.clone();
         let row = other_rig.rigs.remove("rig").unwrap();
         other_rig.rigs.insert("other".into(), row);
-        assert!(detection_current_under(&frame, metadata, &other_rig));
+        assert!(detection_current_under(
+            &frame,
+            FwhmEvidence::of_metadata(metadata),
+            &other_rig
+        ));
 
         // A catalog row that now shows Hocus Focus's FWHM turns Auto to it.
         let with_fwhm = r#"{"FileName":"light.fits","FWHM":2.9}"#;
-        assert!(!detection_current_under(&frame, with_fwhm, &defaults));
+        assert!(!detection_current_under(
+            &frame,
+            FwhmEvidence::of_metadata(with_fwhm),
+            &defaults
+        ));
 
         // The settings in force decide what the scan reads as current.
         crate::star_detection::set_test_settings(Some(normal));
-        assert!(!quality_entry_is_current(&frame, "light.fits", metadata));
+        assert!(!quality_entry_is_current(
+            &frame,
+            "light.fits",
+            FwhmEvidence::of_metadata(metadata)
+        ));
         crate::star_detection::set_test_settings(None);
-        assert!(quality_entry_is_current(&frame, "light.fits", metadata));
+        assert!(quality_entry_is_current(
+            &frame,
+            "light.fits",
+            FwhmEvidence::of_metadata(metadata)
+        ));
     }
 
     #[test]
@@ -1745,7 +1949,11 @@ mod tests {
         assert_eq!(loaded.detection, None);
         assert_eq!(loaded.frame, FrameFacts::default());
         assert_eq!(loaded.star_count, 4000);
-        assert!(!quality_entry_is_current(&loaded, "old.fits", "{}"));
+        assert!(!quality_entry_is_current(
+            &loaded,
+            "old.fits",
+            FwhmEvidence::Absent
+        ));
         // Settings a later release wrote load as none, and the rest of the
         // entry with them.
         let mut later = serde_json::to_value(measured_on_rig("later.fits")).unwrap();
@@ -1757,7 +1965,11 @@ mod tests {
         // is measured again.
         old["detector_version"] = QUALITY_DETECTOR_VERSION.into();
         let unversioned: StoredSpatialMetrics = serde_json::from_value(old).unwrap();
-        assert!(!quality_entry_is_current(&unversioned, "old.fits", "{}"));
+        assert!(!quality_entry_is_current(
+            &unversioned,
+            "old.fits",
+            FwhmEvidence::Absent
+        ));
     }
 
     #[test]
@@ -1973,9 +2185,11 @@ mod tests {
         dimensions_only.height = 4176;
         let store = store_with(vec![legacy, current, dimensions_only]);
 
-        assert!(valid_quality_entry(&store, 1, "legacy.fits", "{}").is_none());
-        assert!(valid_quality_entry(&store, 2, "current.fits", "{}").is_some());
-        assert!(valid_quality_entry(&store, 3, "dimensions-only.fits", "{}").is_none());
+        assert!(valid_quality_entry(&store, 1, "legacy.fits", FwhmEvidence::Absent).is_none());
+        assert!(valid_quality_entry(&store, 2, "current.fits", FwhmEvidence::Absent).is_some());
+        assert!(
+            valid_quality_entry(&store, 3, "dimensions-only.fits", FwhmEvidence::Absent).is_none()
+        );
     }
 
     #[test]
@@ -1989,7 +2203,7 @@ mod tests {
         old.bg_cell_medians = vec![1000.0; 48];
 
         let store = store_with(vec![old]);
-        assert!(valid_quality_entry(&store, 1, "old.fits", "{}").is_none());
+        assert!(valid_quality_entry(&store, 1, "old.fits", FwhmEvidence::Absent).is_none());
     }
 
     #[test]
@@ -2129,9 +2343,10 @@ mod tests {
             fits_path: directory.path().join("old.fits"),
             source_generation: source_generation(&store, 7),
             source_revision: Some("mapping-old".into()),
-            detection: DetectionSettings::default(),
-            frame: FrameFacts::default(),
-            image_scale_arcsec: None,
+            light_path: None,
+            profile_id: None,
+            captured_at: None,
+            fwhm: FwhmEvidence::Absent,
         };
 
         assert!(invalidate_image_source(&store, directory.path(), 7));
@@ -2150,7 +2365,7 @@ mod tests {
             7,
             "old.fits",
             Some("mapping-new"),
-            "{}"
+            FwhmEvidence::Absent
         )
         .is_none());
 

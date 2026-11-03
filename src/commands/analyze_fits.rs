@@ -747,8 +747,7 @@ pub fn analyze_as_scan(
                 &fits,
                 &stats,
                 &detection,
-                meta.image_scale_arcsec(),
-                &frame,
+                meta.image_scale_arcsec,
             )
         });
         let line = match measured {
@@ -756,7 +755,7 @@ pub fn analyze_as_scan(
                 "file": frame.display().to_string(),
                 "software": facts.software,
                 "rig_uuid": facts.rig_uuid,
-                "image_scale_arcsec": meta.image_scale_arcsec(),
+                "image_scale_arcsec": meta.image_scale_arcsec,
                 "detection": detection,
                 "detector": stars.detector,
                 "stars": stars.star_count,

@@ -101,9 +101,10 @@ async fn budgeted_jobs_keep_seiza_inside_their_pools() {
             fits_path: scanned,
             source_generation: 0,
             source_revision: None,
-            detection: Default::default(),
-            frame: Default::default(),
-            image_scale_arcsec: None,
+            light_path: None,
+            profile_id: None,
+            captured_at: None,
+            fwhm: psf_guard::star_detection::FwhmEvidence::Absent,
         };
         psf_guard::server::spatial_scan::run_scan(&store, &cache, &[item], 2, &|| true);
         let store = store.into_inner().unwrap();

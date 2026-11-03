@@ -180,12 +180,12 @@ fn unmeasured_frames(ctx: &DatabaseContext) -> Option<Vec<(i32, i32)>> {
     Some(
         rows.into_iter()
             .filter_map(|(image_id, target_id, metadata)| {
-                let filename = crate::server::handlers::filename_from_metadata(&metadata)?;
+                let (filename, fwhm) = crate::server::handlers::row_facts(&metadata)?;
                 crate::server::spatial_scan::valid_quality_entry(
                     &ctx.spatial_metrics,
                     image_id,
                     &filename,
-                    &metadata,
+                    fwhm,
                 )
                 .is_none()
                 .then_some((image_id, target_id))

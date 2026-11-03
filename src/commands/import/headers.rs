@@ -66,9 +66,9 @@ pub struct FrameMeta {
     pub focal_ratio: Option<f64>,
     /// APTDIA: the aperture in millimetres, when the header records it.
     pub aperture_mm: Option<f64>,
-    /// XPIXSZ: the pixel size in micrometres, binning included, as N.I.N.A.
-    /// writes it.
-    pub pixel_size_um: Option<f64>,
+    /// Arcseconds per pixel from the camera geometry (FOCALLEN, XPIXSZ and
+    /// binning), as [`crate::astrometry_headers`] works it out.
+    pub image_scale_arcsec: Option<f64>,
     /// SWCREATE: the capture software and its version, such as
     /// `N.I.N.A. 3.2.0.9001 (x64)`.
     pub software: Option<String>,
@@ -89,14 +89,6 @@ pub struct FrameMeta {
 }
 
 impl FrameMeta {
-    /// Arcseconds per pixel from FOCALLEN and XPIXSZ, when both are known.
-    pub fn image_scale_arcsec(&self) -> Option<f64> {
-        crate::hocus_focus_star_detection::pixel_scale_arcsec(
-            self.focal_length_mm?,
-            self.pixel_size_um?,
-        )
-    }
-
     /// The f-number: the header's focal ratio, else focal length over
     /// aperture when both are known.
     pub fn f_number(&self) -> Option<f64> {
@@ -245,7 +237,8 @@ pub fn read_frame_meta_named(path: &Path, declared: &Path) -> FrameMeta {
     meta.focal_length_mm = f64_of(&["FOCALLEN", "FOCAL"]).filter(|v| *v > 0.0);
     meta.focal_ratio = f64_of(&["FOCRATIO", "FRATIO"]).filter(|v| *v > 0.0);
     meta.aperture_mm = f64_of(&["APTDIA", "APERTURE"]).filter(|v| *v > 0.0);
-    meta.pixel_size_um = f64_of(&["XPIXSZ", "PIXSIZE1"]).filter(|v| *v > 0.0);
+    meta.image_scale_arcsec =
+        crate::astrometry_headers::FitsAstrometryHeaders::camera_geometry_scale_arcsec(&headers);
     meta.software = text(&["SWCREATE"]);
     meta.camera_temp = f64_of(&["CCD-TEMP", "CCDTEMP"]);
     meta.camera_target_temp = f64_of(&["SET-TEMP", "SETTEMP"]);

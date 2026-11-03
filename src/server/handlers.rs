@@ -52,7 +52,8 @@ pub use overview::{get_overall_stats, get_projects_overview, get_targets_overvie
 use quality_scan_routes::quality_scan_source;
 pub(crate) use quality_scan_routes::{
     filename_from_metadata, merge_astrometry_metrics, merge_photometric_signals,
-    merge_spatial_metrics, rotator_position_from_metadata, scan_target, stored_entry_for,
+    merge_spatial_metrics, rotator_position_from_metadata, row_facts, scan_target,
+    stored_entry_for,
 };
 pub use quality_scan_routes::{get_spatial_scan_progress, start_spatial_scan};
 pub use sequence::{analyze_sequence, get_image_quality};

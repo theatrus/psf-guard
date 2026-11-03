@@ -387,7 +387,13 @@ pub enum FwhmEvidence {
 
 impl FwhmEvidence {
     pub fn of_metadata(metadata_json: &str) -> Self {
-        let Ok(serde_json::Value::Object(map)) = serde_json::from_str(metadata_json) else {
+        serde_json::from_str::<serde_json::Value>(metadata_json)
+            .map_or(Self::Absent, |value| Self::of_value(&value))
+    }
+
+    /// [`Self::of_metadata`] for a row already parsed.
+    pub fn of_value(metadata: &serde_json::Value) -> Self {
+        let Some(map) = metadata.as_object() else {
             return Self::Absent;
         };
         let fwhm = map
