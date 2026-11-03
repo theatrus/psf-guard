@@ -633,6 +633,34 @@ fn raw_peak(fits: &FitsImage, x: f64, y: f64, radius: usize) -> u16 {
     peak
 }
 
+/// A detected star as photometry needs it: where it is, its HFR, and its
+/// detector's flux in stored units, which ranks the stars.
+struct StarPoint {
+    position: (f64, f64),
+    hfr: f64,
+    flux: f64,
+}
+
+impl From<&crate::nina_star_detection::DetectedStar> for StarPoint {
+    fn from(star: &crate::nina_star_detection::DetectedStar) -> Self {
+        Self {
+            position: star.position,
+            hfr: star.hfr,
+            flux: star.flux,
+        }
+    }
+}
+
+impl From<&crate::hocus_focus_star_detection::HocusFocusStar> for StarPoint {
+    fn from(star: &crate::hocus_focus_star_detection::HocusFocusStar) -> Self {
+        Self {
+            position: star.position,
+            hfr: star.hfr,
+            flux: star.flux,
+        }
+    }
+}
+
 /// Measure the brightest unsaturated detected stars in a wide aperture with a
 /// local sky annulus. Returns flux in ADU by index into `stars`.
 ///
@@ -641,7 +669,7 @@ fn raw_peak(fits: &FitsImage, x: f64, y: f64, radius: usize) -> u16 {
 /// off the frame are skipped.
 fn measure_unsaturated_stars(
     fits: &FitsImage,
-    stars: &[crate::nina_star_detection::DetectedStar],
+    stars: &[StarPoint],
     frame_max: f64,
     frame_hfr: f64,
 ) -> HashMap<usize, f64> {
@@ -827,30 +855,40 @@ pub fn measure_frame_stars(
 ) -> FrameStars {
     // Stars from Hocus Focus, as the rig's primary detector or as the
     // stand-in where N.I.N.A.'s found none, under the detector name given.
-    let hocus_focus_stars = |found: &crate::hocus_focus_star_detection::HocusFocusDetectionResult,
-                             detector: &'static str| {
-        let positions: Vec<(f64, f64)> = found.stars.iter().map(|s| s.position).collect();
-        // HocusFocus fluxes are background-subtracted sums in stored
-        // units; there is no aperture photometry for this frame.
-        let stars: Vec<CatalogStar> = found
-            .stars
-            .iter()
-            .filter(|s| s.flux > 0.0)
-            .map(|s| CatalogStar {
-                x: s.position.0,
-                y: s.position.1,
-                flux: s.flux / fits.raw_scale,
-                aperture_flux: None,
-            })
-            .collect();
-        (
-            detector,
-            found.stars.len(),
-            found.average_hfr,
-            positions,
-            stars,
-        )
-    };
+    // As the rig's detector, its stars are measured in an aperture for the
+    // zero point, as N.I.N.A.'s are. As the stand-in, they are not.
+    let hocus_focus_stars =
+        |found: &crate::hocus_focus_star_detection::HocusFocusDetectionResult,
+         detector: &'static str| {
+            let positions: Vec<(f64, f64)> = found.stars.iter().map(|s| s.position).collect();
+            let aperture_fluxes = if detector == PRIMARY_HOCUS_FOCUS_DETECTOR {
+                let points: Vec<StarPoint> = found.stars.iter().map(StarPoint::from).collect();
+                measure_unsaturated_stars(fits, &points, stats.max, found.average_hfr)
+            } else {
+                HashMap::new()
+            };
+            // HocusFocus fluxes are background-subtracted sums in stored
+            // units.
+            let stars: Vec<CatalogStar> = found
+                .stars
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| s.flux > 0.0)
+                .map(|(index, s)| CatalogStar {
+                    x: s.position.0,
+                    y: s.position.1,
+                    flux: s.flux / fits.raw_scale,
+                    aperture_flux: aperture_fluxes.get(&index).copied(),
+                })
+                .collect();
+            (
+                detector,
+                found.stars.len(),
+                found.average_hfr,
+                positions,
+                stars,
+            )
+        };
     let (detector, star_count, avg_hfr, positions, stars) = if let Some(params) =
         detection.hocus_focus_params(image_scale_arcsec)
     {
@@ -875,8 +913,7 @@ pub fn measure_frame_stars(
         // missed them, and the frame is poor rather than starless. Its count
         // and HFR are recorded under its own name, on its own scale.
         let fallback = if result.star_list.is_empty() {
-            let (second, _) =
-                crate::hocus_focus_star_detection::params_for_frame_path(fits_path);
+            let (second, _) = crate::hocus_focus_star_detection::params_for_frame_path(fits_path);
             let found = crate::hocus_focus_star_detection::detect_stars_hocus_focus(
                 &fits.data,
                 fits.width,
@@ -903,12 +940,9 @@ pub fn measure_frame_stars(
                 // original. Convert its background-subtracted aperture flux
                 // from stored units to physical ADU for cross-frame
                 // photometry.
-                let aperture_fluxes = measure_unsaturated_stars(
-                    &fits,
-                    &result.star_list,
-                    stats.max,
-                    result.average_hfr,
-                );
+                let points: Vec<StarPoint> = result.star_list.iter().map(StarPoint::from).collect();
+                let aperture_fluxes =
+                    measure_unsaturated_stars(fits, &points, stats.max, result.average_hfr);
                 let stars: Vec<CatalogStar> = result
                     .star_list
                     .iter()
@@ -1416,6 +1450,106 @@ mod tests {
         assert!(aperture_flux(&fits, 5.0, 100.0, 10.0, 12.0, 16.0).is_none());
     }
 
+    /// A 400×400 frame of sky 1,000 ADU with noise and a grid of
+    /// Gaussian stars of sigma 1.6 px.
+    fn star_field_frame() -> FitsImage {
+        let (width, height) = (400, 400);
+        let mut seed: u64 = 0x9e37_79b9_7f4a_7c15;
+        let mut noise = || {
+            // Two uniform draws make a rough normal, sigma about 12 ADU.
+            let mut draw = || {
+                seed = seed
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                (seed >> 33) as f64 / (1u64 << 31) as f64
+            };
+            (draw() + draw() - 1.0) * 30.0
+        };
+        let stars: Vec<(f64, f64, f64)> = (0..36)
+            .map(|index| {
+                let (column, row) = (index % 6, index / 6);
+                (
+                    40.0 + column as f64 * 64.0,
+                    40.0 + row as f64 * 64.0,
+                    20_000.0 + 4_000.0 * index as f64,
+                )
+            })
+            .collect();
+        let sigma: f64 = 1.6;
+        let mut data = vec![0_u16; width * height];
+        for y in 0..height {
+            for x in 0..width {
+                let mut value = 1_000.0 + noise();
+                for &(sx, sy, total) in &stars {
+                    let r2 = (x as f64 - sx).powi(2) + (y as f64 - sy).powi(2);
+                    if r2 < 100.0 {
+                        value += total / (2.0 * std::f64::consts::PI * sigma * sigma)
+                            * (-r2 / (2.0 * sigma * sigma)).exp();
+                    }
+                }
+                data[y * width + x] = value.round().clamp(0.0, 65_535.0) as u16;
+            }
+        }
+        FitsImage {
+            width,
+            height,
+            data,
+            raw_min: 0.0,
+            raw_scale: 1.0,
+            bzero: 0.0,
+        }
+    }
+
+    #[test]
+    fn the_rigs_hocus_focus_measures_stars_and_their_photometry() {
+        let fits = star_field_frame();
+        let stats = fits.calculate_basic_statistics();
+        for version in [
+            crate::star_detection::HocusFocusVersion::V3,
+            crate::star_detection::HocusFocusVersion::V4,
+        ] {
+            let measured = measure_frame_stars(
+                &fits,
+                &stats,
+                &DetectionSettings::HocusFocus { version },
+                None,
+                Path::new("synthetic.fits"),
+            );
+            assert_eq!(measured.detector, PRIMARY_HOCUS_FOCUS_DETECTOR);
+            assert!(
+                measured.star_count >= 12,
+                "{version:?}: {}",
+                measured.star_count
+            );
+            assert!(
+                measured.avg_hfr > 1.0 && measured.avg_hfr < 4.0,
+                "{}",
+                measured.avg_hfr
+            );
+            assert!(
+                measured
+                    .stars
+                    .iter()
+                    .filter(|star| star.aperture_flux.is_some())
+                    .count()
+                    >= 10,
+                "{version:?}: Hocus Focus stars are measured for the zero point"
+            );
+        }
+        let nina = measure_frame_stars(
+            &fits,
+            &stats,
+            &DetectionSettings::default(),
+            None,
+            Path::new("synthetic.fits"),
+        );
+        assert!(
+            nina.detector == QUALITY_DETECTOR || nina.detector == FALLBACK_DETECTOR,
+            "{}",
+            nina.detector
+        );
+    }
+
     #[test]
     fn saturated_stars_are_not_measured() {
         let fits = frame_with_star(2.0, 50_000.0);
@@ -1430,7 +1564,8 @@ mod tests {
             eccentricity: None,
         };
         let stars = [star(40.0, 40.0, 900_000.0), star(100.0, 100.0, 50_000.0)];
-        let measured = measure_unsaturated_stars(&fits, &stars, 65_535.0, 2.4);
+        let points: Vec<StarPoint> = stars.iter().map(StarPoint::from).collect();
+        let measured = measure_unsaturated_stars(&fits, &points, 65_535.0, 2.4);
         assert!(!measured.contains_key(&0), "the clipped star is left out");
         assert!(
             (measured[&1] - 50_000.0).abs() < 500.0,
@@ -1993,10 +2128,14 @@ mod tests {
         persist(&store_with(vec![old_entry]), directory.path());
         let restarted = RwLock::new(SpatialMetricsStore::default());
         ensure_loaded(&restarted, directory.path());
-        assert!(
-            valid_quality_entry_for_source(&restarted, 7, "old.fits", Some("mapping-new"), "{}")
-                .is_none()
-        );
+        assert!(valid_quality_entry_for_source(
+            &restarted,
+            7,
+            "old.fits",
+            Some("mapping-new"),
+            "{}"
+        )
+        .is_none());
 
         let mut current_entry = entry(7, "old.fits");
         current_entry.source_revision = Some("mapping-new".into());
