@@ -1090,6 +1090,29 @@ mod tests {
     }
 
     #[test]
+    fn a_profile_using_brightest_stars_without_hocus_focus_says_its_hfr_can_differ() {
+        let record = |detector| {
+            plugin_record(
+                "2026-09-09T03:00:00Z",
+                ProfileSettings {
+                    star_detector: detector,
+                    autofocus_brightest_stars: 30,
+                    ..Default::default()
+                },
+            )
+        };
+        let nina = RecordView::of(&record(crate::star_detection::StarDetectorSelection::Nina));
+        assert!(nina
+            .notes
+            .iter()
+            .any(|note| note.contains("30 brightest stars")));
+        let hocus_focus = RecordView::of(&record(
+            crate::star_detection::StarDetectorSelection::HocusFocus,
+        ));
+        assert!(hocus_focus.notes.is_empty());
+    }
+
+    #[test]
     fn profiles_merge_catalog_counts_with_their_records() {
         let mut settings = StarDetectionSettings::default();
         add_record(
