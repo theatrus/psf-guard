@@ -20,9 +20,7 @@ use std::sync::{Arc, LazyLock, PoisonError, RwLock};
 
 use serde::{Deserialize, Serialize};
 
-use crate::hocus_focus_star_detection::{
-    classify_pixel_scale, HocusFocusParams, TelescopeClass,
-};
+use crate::hocus_focus_star_detection::{classify_pixel_scale, HocusFocusParams, TelescopeClass};
 use crate::nina_star_detection::{MeasurementVersion, StarDetectionParams};
 
 /// Which detector measures a rig's frames.
@@ -134,11 +132,7 @@ pub enum DetectionSettings {
 
 impl Default for DetectionSettings {
     fn default() -> Self {
-        resolve(
-            &RigStarDetection::default(),
-            &FrameFacts::default(),
-            false,
-        )
+        resolve(&RigStarDetection::default(), &FrameFacts::default(), false)
     }
 }
 
@@ -187,7 +181,8 @@ impl DetectionSettings {
                 NoiseReduction::Highest => nina::NoiseReduction::Highest,
                 NoiseReduction::Median => nina::NoiseReduction::Median,
             },
-            image_scale_arcsec: image_scale_arcsec.filter(|scale| scale.is_finite() && *scale > 0.0),
+            image_scale_arcsec: image_scale_arcsec
+                .filter(|scale| scale.is_finite() && *scale > 0.0),
             measurement: measurement.seiza(),
             ..StarDetectionParams::default()
         })
@@ -293,9 +288,7 @@ pub fn resolve(
         }
     } else {
         DetectionSettings::Nina {
-            measurement: release
-                .map(NinaMeasurement::of_release)
-                .unwrap_or_default(),
+            measurement: release.map(NinaMeasurement::of_release).unwrap_or_default(),
             sensitivity: rig.sensitivity,
             noise_reduction: rig.noise_reduction,
         }
@@ -334,7 +327,11 @@ impl StarDetectionSettings {
 
     /// [`resolve`] with the frame's rig's choices.
     pub fn resolve(&self, facts: &FrameFacts, metadata_fwhm: bool) -> DetectionSettings {
-        resolve(self.for_rig(facts.rig_uuid.as_deref()), facts, metadata_fwhm)
+        resolve(
+            self.for_rig(facts.rig_uuid.as_deref()),
+            facts,
+            metadata_fwhm,
+        )
     }
 }
 
@@ -384,8 +381,14 @@ mod tests {
 
     #[test]
     fn swcreate_gives_the_nina_release() {
-        assert_eq!(nina_release(Some("N.I.N.A. 3.2.0.9001 (x64)")), Some((3, 2)));
-        assert_eq!(nina_release(Some("N.I.N.A. 3.3.0.1022-nightly")), Some((3, 3)));
+        assert_eq!(
+            nina_release(Some("N.I.N.A. 3.2.0.9001 (x64)")),
+            Some((3, 2))
+        );
+        assert_eq!(
+            nina_release(Some("N.I.N.A. 3.3.0.1022-nightly")),
+            Some((3, 3))
+        );
         assert_eq!(nina_release(Some("N.I.N.A. 2.3.0.2084")), Some((2, 3)));
         assert_eq!(nina_release(Some("PixInsight 1.9.3")), None);
         assert_eq!(nina_release(Some("N.I.N.A.")), None);

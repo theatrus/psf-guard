@@ -145,11 +145,12 @@ Fast found no stars; HocusFocus found 68, used instead".
 ### Stars and HFR: N.I.N.A.'s or PSF Guard's
 
 A frame can carry two star counts and HFRs: the ones N.I.N.A. recorded
-during capture, and the ones PSF Guard's quality scan measured. They come
-from different detectors and differ, sometimes several-fold: a rig on
-Hocus Focus can record four times the stars and half the HFR the scan
-finds. Image Information shows both values, and cards show the one scoring
-used. A small superscript letter marks the source of each value: **N** for
+during capture, and the ones PSF Guard's quality scan measured. The scan
+measures the way each rig's N.I.N.A. did (see
+[How the scan detects stars](#how-the-scan-detects-stars)), but the two can
+still differ, several-fold in star count on some rigs, because the scan
+cannot read Hocus Focus's own options. Image Information shows both values,
+and cards show the one scoring used. A small superscript letter marks the source of each value: **N** for
 N.I.N.A. and **P** for PSF Guard.
 
 **Stars and HFR** in the Scoring control, and **Measured by** under
@@ -222,6 +223,61 @@ a temperature reading is exempt. Target Scheduler records the temperature
 and set point per exposure; PSF Guard imports carry the sensor temperature
 from the FITS header. API callers can change the margin with
 `sensor_temp_tolerance_c`.
+
+### How the scan detects stars
+
+The quality scan measures each frame's stars the way its rig's N.I.N.A.
+did, so its star count and HFR compare with the ones N.I.N.A. recorded.
+Choose how in **Settings › Review › Grading & display › Star detection**.
+The **Default** row applies to every rig without settings of its own. Each
+rig an open database records has a row below it, labelled as in
+Settings › Processing › Calibration › Rigs. A rig's row uses the default
+until you clear **Use the default** on it.
+
+Each row has four choices:
+
+- **Detector**: **Auto** (the default), **N.I.N.A.** or **Hocus Focus**.
+  Auto uses Hocus Focus for a frame when N.I.N.A. recorded an FWHM for it
+  and the frame's header shows N.I.N.A. 3.2 or earlier. N.I.N.A.'s own
+  detector records no FWHM before 3.3, so a number there means Hocus Focus
+  measured the frame. Auto uses N.I.N.A.'s detector for every other frame.
+- **Sensitivity**: **Normal**, **High** (the default) or **Highest**, as set
+  in N.I.N.A.'s imaging options. N.I.N.A. has used High by default since
+  October 2023.
+- **Noise reduction**: **None** (the default), **Normal**, **High**,
+  **Highest** or **Median**, as in N.I.N.A. Sensitivity and noise reduction
+  apply to N.I.N.A.'s detector only, so they are disabled when the detector
+  is Hocus Focus.
+- **Hocus Focus version**: **3** or **4** (the default). Hocus Focus 4 was
+  released on 2 July 2026. The version is disabled when the detector is
+  N.I.N.A.
+
+N.I.N.A.'s detector measures stars as the N.I.N.A. release that wrote the
+frame does, read from the header's `SWCREATE`: 3.1, 3.2, or 3.3 for 3.3 and
+later. A release before 3.1 measures as 3.1. A frame from other software,
+or without `SWCREATE`, measures as 3.2. High sensitivity also takes the
+image scale from `FOCALLEN` and `XPIXSZ`, as N.I.N.A. takes it from the
+profile. Hocus Focus picks its preset for the rig from the same scale.
+
+Click **Save star detection**. PSF Guard uses the new settings at once:
+each frame whose detection changes counts as outdated, and the next quality
+scan or quality backfill measures it again. Until then, scoring does not use
+that frame's earlier scan values. **Reset the default to N.I.N.A.'s** puts
+N.I.N.A.'s own defaults back in the Default row; click Save to keep them.
+
+When N.I.N.A.'s detector finds no stars in a frame, the scan asks Hocus
+Focus, as before. If Hocus Focus finds stars, the frame scores on Hocus
+Focus's star count but not its HFR, which is on another scale. A frame
+measured with Hocus Focus because its rig's setting chose it scores on both.
+
+To check the settings on frames without a server, run
+`psf-guard --database schedulerdb.sqlite analyze-fits <folder> --scan`. It
+measures each frame the same way and prints a JSON line with the scan's
+values beside the N.I.N.A. values in the frame's database row, matched by
+file name. It opens the database read-only. `--scan-detector`,
+`--scan-sensitivity`, `--scan-noise-reduction` and `--hocus-focus-version`
+take the stored values (`auto`, `nina`, `hocus_focus`; `normal`, `high`,
+`highest`; `none`, `normal`, `high`, `highest`, `median`; `v3`, `v4`).
 
 ### Scoring defaults
 
@@ -652,12 +708,18 @@ Safety properties worth knowing:
 
 ## Limitations
 
-- The server scan uses PSF Guard's port of N.I.N.A.'s built-in detector for
-  star count and HFR. It still reads HFR about 25% higher than N.I.N.A. 3.2
-  on the same frames. A rig on Hocus Focus, or on the N.I.N.A. 3.3 detector,
-  counts on another scale, which is why a target is scored from one source
-  at a time. Its full-resolution measurement aperture also supplies flux for
-  photometry. `screen-fits` supports flux photometry with either detector.
+- The server scan follows each rig's star detection settings, but it cannot
+  read the rig's Hocus Focus options or which Hocus Focus release took each
+  frame. On four test rigs, N.I.N.A.'s detector at High sensitivity matched
+  a N.I.N.A. 3.1 rig's star counts within 3% and read HFR about 12% lower.
+  Hocus Focus 4 matched one rig's frames from mid-September 2026 exactly.
+  That rig's frames from before July 2026 matched Hocus Focus 3 instead, and
+  rigs with other Hocus Focus options still differ by up to several times
+  in star count. That is why a target is scored from one source at a time.
+  The scan also measures the brightest unsaturated stars in a
+  full-resolution aperture, whichever detector found them, to supply flux
+  for photometry. `screen-fits` supports flux photometry with either
+  detector.
 - The photometric reference requires stars present in ≥50% of a session's
   frames, so it is blind to regions occluded for *most* of a sequence — by
   design; that case belongs to the dead-cell metric.

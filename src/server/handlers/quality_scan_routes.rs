@@ -1064,7 +1064,8 @@ pub async fn get_spatial_scan_progress(
             };
             total_frames += 1;
             match store.metrics.get(&image.id) {
-                Some(entry) if scan::quality_entry_is_current(entry, &filename, &image.metadata) => {}
+                Some(entry)
+                    if scan::quality_entry_is_current(entry, &filename, &image.metadata) => {}
                 Some(entry) if entry.filename == filename => outdated_frames += 1,
                 _ => new_frames += 1,
             }

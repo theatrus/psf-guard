@@ -37,7 +37,7 @@ pub struct StarDetectionSettingsResponse {
     pub rigs: Vec<StarDetectionRigView>,
 }
 
-/// One rig, labelled as Settings › Calibration › Rigs labels it.
+/// One rig, labelled as Settings › Processing › Calibration › Rigs labels it.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct StarDetectionRigView {
     pub rig_uuid: String,
@@ -324,13 +324,15 @@ mod tests {
                 "{bad} is refused"
             );
         }
-        assert!(serde_json::from_value::<UpdateRigStarDetectionRequest>(json!({
-            "settings": {
-                "detector": "nina", "sensitivity": "normal",
-                "noise_reduction": "none", "hocus_focus_version": "v4"},
-            "rules": {}
-        }))
-        .is_err());
+        assert!(
+            serde_json::from_value::<UpdateRigStarDetectionRequest>(json!({
+                "settings": {
+                    "detector": "nina", "sensitivity": "normal",
+                    "noise_reduction": "none", "hocus_focus_version": "v4"},
+                "rules": {}
+            }))
+            .is_err()
+        );
     }
 
     #[test]
@@ -367,7 +369,10 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(settings.rigs["rig-0"].settings.sensitivity, Sensitivity::Normal);
+        assert_eq!(
+            settings.rigs["rig-0"].settings.sensitivity,
+            Sensitivity::Normal
+        );
     }
 
     #[test]

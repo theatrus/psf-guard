@@ -703,11 +703,7 @@ pub fn analyze_as_scan(
         let name = serde_json::from_str::<serde_json::Value>(&metadata)
             .ok()
             .and_then(|value| value["FileName"].as_str().map(str::to_string))
-            .and_then(|name| {
-                name.split(['\\', '/'])
-                    .next_back()
-                    .map(str::to_string)
-            });
+            .and_then(|name| name.split(['\\', '/']).next_back().map(str::to_string));
         if let Some(name) = name {
             by_name.insert(name, metadata);
         }

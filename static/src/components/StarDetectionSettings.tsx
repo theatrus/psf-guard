@@ -89,12 +89,12 @@ function rigMeta(rig: StarDetectionRig): string {
 }
 
 /**
- * Settings › Review › Star detection: how the quality scan detects stars on
- * each rig's frames, so its star counts and HFR compare with what the rig's
- * N.I.N.A. recorded. A default row, and one row per rig the open catalogs
- * record, labelled as Settings › Calibration › Rigs labels them. A rig row
- * uses the default until it is given settings of its own. Only an editor
- * may change them.
+ * Settings › Review › Grading & display › Star detection: how the quality
+ * scan detects stars on each rig's frames, so its star counts and HFR
+ * compare with what the rig's N.I.N.A. recorded. A default row, and one row
+ * per rig the open catalogs record, labelled as Settings › Processing ›
+ * Calibration › Rigs labels them. A rig row uses the default until it is
+ * given settings of its own. Only an editor may change them.
  */
 export default function StarDetectionSettings() {
   const headingId = useId();
@@ -220,7 +220,7 @@ export default function StarDetectionSettings() {
             return (
               <fieldset
                 key={rig.rig_uuid}
-                className="scoring-defaults-group"
+                className="scoring-defaults-group star-detection-rig"
                 disabled={busy}
                 aria-label={`${rig.name} star detection`}
               >

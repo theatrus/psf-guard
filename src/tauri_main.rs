@@ -817,6 +817,7 @@ mod tests {
             active_db_id: None,
             astrometry: None,
             calibration: None,
+            star_detection: None,
             export: None,
             stacking: None,
             workers: None,

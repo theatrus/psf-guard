@@ -6,6 +6,18 @@
 
 ## Changes
 
+- The quality scan now measures stars the way each rig's N.I.N.A. did, so
+  its star counts and HFR compare with the values N.I.N.A. recorded.
+  Choose how in the new **Star detection** section of **Settings › Review ›
+  Grading & display**: a **Default** row, and one row per rig with
+  **Detector**, **Sensitivity**, **Noise reduction** and **Hocus Focus
+  version**. The defaults match N.I.N.A.'s own: **Auto**, which uses Hocus
+  Focus for frames where N.I.N.A. recorded a Hocus Focus FWHM, **High**
+  sensitivity, no noise reduction, and Hocus Focus 4. N.I.N.A.'s detector
+  measures each frame as the N.I.N.A. release that wrote it does. After
+  updating, and after you change a rig's settings, the next quality scan
+  measures the affected frames again; until then, scoring does not use
+  their earlier scan values.
 - Max HFR and Min stars now judge the values you choose. A frame can carry
   two star counts and HFRs: the ones N.I.N.A. recorded during capture and
   the ones PSF Guard's quality scan measured. They come from different

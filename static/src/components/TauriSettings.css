@@ -2733,6 +2733,12 @@
   background: none;
 }
 
+/* A rig's name reads as Settings › Calibration › Rigs shows it. */
+.tauri-settings .settings-setups .scoring-defaults-group.star-detection-rig > legend {
+  letter-spacing: normal;
+  text-transform: none;
+}
+
 /* Rows: label and help, then the control right beside them, with a
    hairline between rows. */
 .tauri-settings .settings-setups .review-preference {
