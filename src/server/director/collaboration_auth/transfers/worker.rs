@@ -119,7 +119,7 @@ async fn run(state: &Arc<AppState>, service: Arc<Service>, job: &mut Job) -> Res
         .await??;
         let review_required = admission.review_required(&package.manifest);
         if !admission.automatic && !admission.upload_pending {
-            package.warnings.push("Review these files before uploading. This transfer was prepared for review or follows an earlier upload exception.".into());
+            package.warnings.push("Review these files before uploading. This transfer was prepared for review, or an earlier upload failed.".into());
         }
         if admission.output.is_none() {
             let versions = package.manifest["lights"]
@@ -622,7 +622,7 @@ async fn upload(
             .map_err(|_| {
                 Failure(
                     StatusCode::BAD_GATEWAY,
-                    "Upload interrupted; the same content-addressed file will be retried",
+                    "Upload interrupted; PSF Guard will retry the same file",
                 )
             })?;
         if !response.status().is_success() {

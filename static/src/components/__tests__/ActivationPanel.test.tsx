@@ -49,7 +49,7 @@ function fixture(conflict = false, activated = false, pushes: DirectorActivation
     http.post('/api/director/v1/projects/project/activation/preview', () => { previews++; return HttpResponse.json(ok(report(false))); }),
     http.post('/api/director/v1/projects/project/activation/apply', async ({ request }) => {
       applies.push(await request.json() as { preview_digest: string });
-      if (conflict) return HttpResponse.json({ success: false, data: null, error: 'Director record conflicts with stored content; reload before retrying' }, { status: 409 });
+      if (conflict) return HttpResponse.json({ success: false, data: null, error: 'This record changed since it was loaded. Reload, then try again.' }, { status: 409 });
       return HttpResponse.json(ok(report(true)));
     }),
   );
@@ -139,7 +139,7 @@ describe('Activation panel', () => {
     fixture(); mount();
     const takeover: DirectorActivationReport = { ...report(false), rigs: [{ rig, catalog_slug: 'redcat', catalog_name: 'RedCat 61', profile_id: 'p', applied: false, warnings: [], push: null, changes: [
       { kind: 'project', action: 'update', name: 'Heart', detail: 'linked Target Scheduler project' },
-      { kind: 'target', action: 'adopt', name: 'IC 1805 r1c1', detail: 'takes over the existing target at 02h 32m +61° 27′' },
+      { kind: 'target', action: 'adopt', name: 'IC 1805 r1c1', detail: 'uses the existing target at 02h 32m +61° 27′' },
       { kind: 'template', action: 'create', name: '#4 OIII 300', detail: 'OIII: no template in this database has these settings' },
       { kind: 'plan', action: 'adopt', name: 'IC 1805 r1c1 · Ha 300 · 300 s', detail: 'takes over plan #11 (12 of 40 frames taken); desired 40 → 72' },
       { kind: 'plan', action: 'create', name: 'IC 1805 r1c1 · OIII 300 · 300 s', detail: '72 frames, template #4 OIII 300' },
@@ -241,7 +241,7 @@ describe('Activation panel', () => {
     server.use(http.post('/api/director/v1/projects/project/activation/apply', async ({ request }) => {
       applies.push((await request.json() as { preview_digest: string }).preview_digest);
       return applies.length === 1
-        ? HttpResponse.json({ success: false, data: null, error: 'Director record conflicts with stored content; reload before retrying' }, { status: 409 })
+        ? HttpResponse.json({ success: false, data: null, error: 'This record changed since it was loaded. Reload, then try again.' }, { status: 409 })
         : HttpResponse.json(ok(report(true)));
     }), http.post('/api/director/v1/projects/project/activation/preview', () => {
       previews++;
@@ -252,7 +252,7 @@ describe('Activation panel', () => {
     await send();
     const note = await screen.findByText(/^Changed since the preview: the saved plan \(revision 3 → 4\) and RedCat 61's rows\. Nothing was written\./);
     expect(note).toHaveAttribute('role', 'alert');
-    expect(note).toHaveTextContent('This preview is new; check it, then activate.');
+    expect(note).toHaveTextContent('Check the new preview, then activate.');
     expect(screen.getByLabelText('RedCat 61 activation')).toHaveTextContent('Exposure plans: 3 new');
     expect(previews).toBe(2);
     // Activating again uses the new preview.
@@ -361,7 +361,7 @@ describe('Activation panel', () => {
     const savePlan = vi.fn(async () => true);
     const view = mount(true, { unsavedPlan: true, savePlan });
     const note = await screen.findByRole('note', { name: 'Unsaved changes' });
-    expect(note).toHaveTextContent('Unsaved changes in Plan. Save your changes before activating. PSF Guard then updates the preview.');
+    expect(note).toHaveTextContent('Unsaved changes in Plan. Save them before activating.');
     // No preview of a plan about to change, and nothing to activate.
     await new Promise(resolve => setTimeout(resolve, 400));
     expect(previewCount()).toBe(0);
@@ -449,7 +449,7 @@ describe('Activation panel', () => {
     expect(screen.getByRole('button', { name: 'Activate' })).toBeDisabled();
     expect(screen.getByRole('region', { name: 'Preview' })).toHaveAttribute('aria-busy', 'true');
     release();
-    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('This preview is new; check it, then activate.'));
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Check the new preview, then activate.'));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Activate' })).toBeEnabled());
     await new Promise(resolve => setTimeout(resolve, 500));
     expect(previews).toBe(2);

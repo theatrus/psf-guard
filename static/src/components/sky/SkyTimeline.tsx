@@ -119,7 +119,7 @@ export default function SkyTimeline({ lanes, nightKeys, fromNight, asOfNight, on
             min={0}
             max={Math.max(0, last)}
             value={fromIndex}
-            aria-label="Start the replay from this night"
+            aria-label="First night shown"
             onChange={(event) => setFrom(Number(event.target.value))}
           />
           <input
@@ -128,7 +128,7 @@ export default function SkyTimeline({ lanes, nightKeys, fromNight, asOfNight, on
             min={0}
             max={Math.max(0, last)}
             value={toIndex}
-            aria-label="Show the sky as it was covered by this night"
+            aria-label="Last night shown"
             onChange={(event) => setTo(Number(event.target.value))}
           />
         </div>

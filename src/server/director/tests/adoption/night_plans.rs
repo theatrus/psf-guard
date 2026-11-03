@@ -952,7 +952,7 @@ async fn target_scheduler_changes_reach_only_the_rigs_profile_and_rows_with_guid
     assert!(planned["data"]["rigs"][0]["ts_save"]["refused"]
         .as_str()
         .unwrap()
-        .contains("does not write into rig databases"));
+        .contains("needs database management"));
     let (status, _) = call(&a.f.app, "PUT", &path, raise(soul), None).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(priority(&a.db, soul), 1);
@@ -1002,5 +1002,5 @@ async fn target_scheduler_changes_are_refused_where_they_would_not_decide_or_rea
     assert!(refused["error"]
         .as_str()
         .unwrap()
-        .contains("Director drives this rig"));
+        .contains("Director picks this rig's targets"));
 }

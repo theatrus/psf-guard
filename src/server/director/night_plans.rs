@@ -537,7 +537,9 @@ async fn compute(state: &Arc<AppState>, request: Request) -> Result<View, NightP
                     continue;
                 };
                 let rig = binding.rig;
-                if chosen.as_ref().is_some_and(|rigs| !rigs.contains(&rig.id)) || !seen.insert(rig.id) {
+                if chosen.as_ref().is_some_and(|rigs| !rigs.contains(&rig.id))
+                    || !seen.insert(rig.id)
+                {
                     continue;
                 }
                 let stored = store.rig_profile(rig.id)?;
@@ -549,7 +551,7 @@ async fn compute(state: &Arc<AppState>, request: Request) -> Result<View, NightP
                 let placed = store.rig_site(rig.id, stored.as_ref())?;
                 let Some(location) = placed.location else {
                     warnings.push(format!(
-                        "{}: no site location; pick a site with one under Setup, type the rig's own, or let the plugin report it.",
+                        "{} has no location. Choose a site in Rig setup.",
                         catalog.name
                     ));
                     continue;
@@ -571,43 +573,60 @@ async fn compute(state: &Arc<AppState>, request: Request) -> Result<View, NightP
                         RuntimeChoice::Director => true,
                         RuntimeChoice::TargetScheduler => false,
                     };
-                let director = wanted.then(|| director_input(store, &catalogs, service.instance_id, rig.id, identity.id));
+                let director = wanted.then(|| {
+                    director_input(store, &catalogs, service.instance_id, rig.id, identity.id)
+                });
                 let first = match first_night {
                     Some(date) => date,
-                    None => NightDate::at(start_ms, location.longitude_degrees).ok_or(Error::Invalid)?,
+                    None => {
+                        NightDate::at(start_ms, location.longitude_degrees).ok_or(Error::Invalid)?
+                    }
                 };
                 let mut dates = vec![first];
                 while dates.len() < nights as usize {
-                    let next = dates.last().and_then(|date| date.next()).ok_or(Error::Invalid)?;
+                    let next = dates
+                        .last()
+                        .and_then(|date| date.next())
+                        .ok_or(Error::Invalid)?;
                     dates.push(next);
                 }
                 let last = *dates.last().unwrap_or(&first);
                 let conditions = RigConditions::read(store, rig.id, &placed, first, last)?;
                 let time_zone = match &placed.site {
-                    Some(site) => store.site_profile(site.id)?.and_then(|profile| profile.time_zone),
+                    Some(site) => store
+                        .site_profile(site.id)?
+                        .and_then(|profile| profile.time_zone),
                     None => None,
                 };
                 let mut overrides = BTreeMap::new();
                 if runtime == Runtime::Director {
                     for night in store.night_overrides(rig.id, first, last)? {
-                        overrides.insert(night.date, AppliedOverrides {
-                            revision: Some(night.revision),
-                            entries: night.entries,
-                            draft: false,
-                        });
+                        overrides.insert(
+                            night.date,
+                            AppliedOverrides {
+                                revision: Some(night.revision),
+                                entries: night.entries,
+                                draft: false,
+                            },
+                        );
                     }
                 }
                 if let Some(draft) = draft {
                     if !dates.contains(&draft.date) {
-                        return Err(NightPlanError::Rejected("override_draft must be for one of the nights planned.".into()));
+                        return Err(NightPlanError::Rejected(
+                            "override_draft must be for one of the nights planned.".into(),
+                        ));
                     }
                     check(&draft.entries, draft.date.span(location.longitude_degrees))
                         .map_err(|refusal| Error::Refused(refusal.to_string()))?;
-                    overrides.insert(draft.date, AppliedOverrides {
-                        revision: None,
-                        entries: draft.entries.clone(),
-                        draft: true,
-                    });
+                    overrides.insert(
+                        draft.date,
+                        AppliedOverrides {
+                            revision: None,
+                            entries: draft.entries.clone(),
+                            draft: true,
+                        },
+                    );
                 }
                 inputs.push(RigInput {
                     schedule: options,
@@ -632,14 +651,21 @@ async fn compute(state: &Arc<AppState>, request: Request) -> Result<View, NightP
                     rig,
                 });
             }
-            if draft.as_ref().is_some_and(|draft| !inputs.iter().any(|input: &RigInput| input.rig.id == draft.rig)) {
+            if draft.as_ref().is_some_and(|draft| {
+                !inputs
+                    .iter()
+                    .any(|input: &RigInput| input.rig.id == draft.rig)
+            }) {
                 return Err(NightPlanError::Rejected(
-                    "override_draft must be for a rig the request plans, with a site location.".into(),
+                    "override_draft must be for a rig the request plans, with a site location."
+                        .into(),
                 ));
             }
             if let Some(chosen) = &chosen {
                 for missing in chosen.iter().filter(|rig| !seen.contains(rig)) {
-                    warnings.push(format!("Rig {missing} is not a registered rig, so it is left out."));
+                    warnings.push(format!(
+                        "Rig {missing} is not a registered rig, so it is left out."
+                    ));
                 }
             }
             Ok::<_, NightPlanError>((inputs, warnings))
@@ -688,7 +714,7 @@ async fn compute(state: &Arc<AppState>, request: Request) -> Result<View, NightP
         }
         rigs.sort_by(|a, b| a.catalog_name.cmp(&b.catalog_name));
         if rigs.is_empty() && warnings.is_empty() {
-            warnings.push("No rig has a site yet, so there are no nights to plan.".into());
+            warnings.push("No rig has a location yet. Choose a site in Rig setup.".into());
         }
         View {
             start_ms,
@@ -754,7 +780,7 @@ fn rig_nights(input: RigInput, nights: u32) -> Result<RigNights, String> {
     } = input;
     let location = placed
         .location
-        .ok_or_else(|| format!("{catalog_name}: no site location."))?;
+        .ok_or_else(|| format!("{catalog_name} has no location. Choose a site in Rig setup."))?;
     let super::rig_availability::Nights {
         nights: availability,
         clouds: cloud_hours,
@@ -1040,7 +1066,7 @@ fn rig_nights(input: RigInput, nights: u32) -> Result<RigNights, String> {
                 ) {
                     Ok(view) => {
                         if input.gathered.preview_configuration {
-                            warnings.push("The rig has not reported its equipment, so the Director schedule uses the filters, binning and camera settings its templates name.".into());
+                            warnings.push("The rig has not reported its equipment, so the schedule uses the filter and camera settings in its exposure templates.".into());
                         }
                         warnings.extend(input.gathered.omitted().iter().cloned());
                         Some(view)
@@ -1383,7 +1409,7 @@ fn director_schedule(
         narrowings: &narrowings,
     })
     .map_err(|error| {
-        format!("No Director schedule: the program did not bind for these nights ({error:?}).")
+        format!("No Director schedule: the rig's program could not be scheduled for these nights ({error:?}).")
     })?;
     let reference = |goal: &str| references.get(goal).cloned();
     let mut scheduled = Vec::with_capacity(schedule.nights.len());
@@ -1673,10 +1699,7 @@ pub(super) async fn projection(
         return Ok(Json(ApiResponse::success(Projection {
             nights,
             rigs: vec![],
-            warnings: vec![
-                "The plan is not activated on any rig yet, so no rig's schedule includes it."
-                    .into(),
-            ],
+            warnings: vec!["The plan is not activated on any rig yet.".into()],
         })));
     };
     let view = compute(
@@ -1733,7 +1756,7 @@ fn project_rig(
     let Some(rig) = planned else {
         return skipped(
             None,
-            "No nights could be planned for this rig: it has no site location, or its database is not registered on this server.".into(),
+            "The rig has no location, or its database is not registered on this server.".into(),
         );
     };
     if rig.projects.is_empty() {
@@ -1746,7 +1769,7 @@ fn project_rig(
         return skipped(
             Some(rig),
             format!(
-                "The plan's project is in the N.I.N.A. profile {}, but night plans read the profile with the most projects, {}.",
+                "The plan's project is in N.I.N.A. profile {}. Night plans use profile {}, which has the most projects.",
                 activated.profile_id,
                 rig.profile_id.as_deref().unwrap_or("none")
             ),
@@ -1787,7 +1810,7 @@ fn project_rig(
     let mut notes = rig.warnings.clone();
     if let Some(push) = pushed {
         notes.push(format!(
-            "The plan's rows have not reached {} yet, so the rig may not run this schedule.",
+            "The plan has not reached {} yet, so the rig may not run this schedule.",
             push.peer_name
         ));
     }
@@ -1806,7 +1829,7 @@ fn project_rig(
     let Some(schedule) = &rig.schedule else {
         return skipped(
             Some(rig),
-            "No schedule could be computed for this rig; its notes say why.".into(),
+            "No schedule could be computed. The notes explain why.".into(),
         );
     };
     let progress: Vec<_> = schedule

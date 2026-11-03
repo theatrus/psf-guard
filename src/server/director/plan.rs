@@ -50,7 +50,7 @@ pub(super) struct Unusable {
 impl Unusable {
     pub(super) fn warning(&self) -> String {
         format!(
-            "Template {}: its Moon avoidance settings are outside what Director plans with, so it is left out. Fix them in Target Scheduler.",
+            "Template {}: its Moon avoidance settings are outside what Director supports, so it is left out. Fix them in Target Scheduler.",
             self.name
         )
     }

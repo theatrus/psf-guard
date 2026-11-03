@@ -142,19 +142,18 @@ export default function VisibilityPanel({ projectId, center, rigCenters, enabled
     const up = tonight?.targets[0]?.hours_up ?? 0;
     const text = !tonight || tonight.dark_hours === 0 ? `No darkness tonight at ${rig.catalog_name}.`
       : up <= 0 ? `Not visible tonight from ${rig.catalog_name}: never above ${rig.limits.minimum_altitude_degrees}°${rig.custom_horizon ? ' and its horizon' : ''} while dark.`
-      : `Visible ${formatHours(up)} tonight from ${rig.catalog_name} (${formatHours(tonight.dark_hours)} dark, peak ${tonight.targets[0].max_altitude_degrees.toFixed(0)}°${tonight.targets[0].hours_lost_to_meridian > 0 ? `, ${formatHours(tonight.targets[0].hours_lost_to_meridian)} lost to the meridian pause` : ''}). Moon ${Math.round(tonight.moon_illumination * 100)}% lit, ${tonight.targets[0].min_moon_separation_degrees.toFixed(0)}° away, up ${formatHours(tonight.moon_hours_up_in_dark)} of the dark.`;
+      : `Visible ${formatHours(up)} tonight from ${rig.catalog_name} (${formatHours(tonight.dark_hours)} dark, peak ${tonight.targets[0].max_altitude_degrees.toFixed(0)}°${tonight.targets[0].hours_lost_to_meridian > 0 ? `, ${formatHours(tonight.targets[0].hours_lost_to_meridian)} lost to the meridian pause` : ''}). Moon ${Math.round(tonight.moon_illumination * 100)}% lit, ${tonight.targets[0].min_moon_separation_degrees.toFixed(0)}° away, up ${formatHours(tonight.moon_hours_up_in_dark)}.`;
     return <p className={up > 0 ? 'visibility-verdict' : 'visibility-verdict is-down'} data-testid="visibility-verdict">{text}</p>;
   })();
   const legend = rig && <p className="director-muted visibility-legend"><span className="key target" />target <span className="key horizon" />{rig.custom_horizon ? `custom horizon${rig.limits.horizon_offset_degrees ? ` +${rig.limits.horizon_offset_degrees}°` : ''} and limit` : `minimum altitude ${rig.limits.minimum_altitude_degrees}°`}{rig.limits.meridian_window_minutes ? ` · within ${rig.limits.meridian_window_minutes} min of the meridian` : ''} <span className="key moon" />Moon <span className="key paused" />meridian pause <span className="key dark" />dark (Sun below −12°) <span className="key deep" />astronomical night</p>;
   const rigSelect = data && data.rigs.length > 1 && <select aria-label="Visibility rig" value={rig?.rig.id ?? ''} onChange={event => setChosen(event.target.value)}>
     {data.rigs.map(r => <option key={r.rig.id} value={r.rig.id}>{r.catalog_name}{r.in_plan ? '' : ' (not in plan)'}</option>)}
   </select>;
-  const owes = rig && rig.hours_needed !== null && rig.hours_needed > 0 ? `This rig owes the plan ${formatHours(rig.hours_needed)}.` : null;
-  const marked = !!rig?.availability?.some(night => night.marks.length > 0);
+  const left = rig && rig.hours_needed !== null && rig.hours_needed > 0 ? `${formatHours(rig.hours_needed)} left on this rig` : null;
   const pace = rig && rig.nights_to_complete !== null
-    ? ` At the target's clear hours this week${marked ? ', counting the nights marked or forecast cloudy' : ''}, that is about ${rig.nights_to_complete} night${rig.nights_to_complete === 1 ? '' : 's'}.`
-    : ' The target is not up this week.';
-  const estimate = rig && rig.hours_needed !== null && <p className="director-muted" data-testid="visibility-estimate">{owes ? owes + pace : 'This rig has nothing left to shoot for the plan.'}</p>;
+    ? `: about ${rig.nights_to_complete} night${rig.nights_to_complete === 1 ? '' : 's'} at the target's clear hours this week.`
+    : '. The target is not up this week.';
+  const estimate = rig && rig.hours_needed !== null && <p className="director-muted" data-testid="visibility-estimate">{left ? left + pace : 'Nothing left to shoot on this rig.'}</p>;
   const ownProjection = projection.data?.rigs.find(p => p.rig_id === rig?.rig.id);
   const projected = rig && rig.in_plan && <div className="director-muted visibility-projection" data-testid="visibility-projection" role="status">
     {projection.isPending && projection.fetchStatus !== 'idle' && <p>Planning the rig's nights...</p>}
@@ -202,19 +201,19 @@ export default function VisibilityPanel({ projectId, center, rigCenters, enabled
 /** What the rig's own schedule says of the plan: the night it is done, and
  *  the other plans the rig shoots before then. */
 function projectionWords(projection: DirectorRigProjection | undefined, nights: number): string {
-  if (!projection) return 'Activate the plan on this rig to see when its own schedule finishes the plan.';
+  if (!projection) return 'Activate the plan on this rig for a finish date.';
   const { outcome } = projection;
-  if (outcome.kind === 'done') return 'This rig has every frame the plan needs from it.';
+  if (outcome.kind === 'done') return 'This rig has taken every frame.';
   if (outcome.kind === 'skipped') return `No projection for this rig: ${outcome.reason}`;
-  const schedule = `By this rig's own ${projection.runtime ? RUNTIME_LABEL[projection.runtime] : ''} schedule`;
+  const schedule = `this rig's ${projection.runtime ? `${RUNTIME_LABEL[projection.runtime]} ` : ''}schedule`;
   const others = projection.others.slice(0, 3).map(other => other.name + ' (' + formatHours(other.hours) + ')').join(', ');
   const first = others ? ` Before then, the rig also shoots ${others}.` : '';
   const left = outcome.unscheduled > 0
-    ? ` ${outcome.unscheduled} of the plan's exposure plans cannot be scheduled on this rig; the notes below say why.`
+    ? ` ${outcome.unscheduled} of the plan's exposure plans cannot be scheduled on this rig.`
     : '';
-  if (outcome.completes_on) return `${schedule}, the plan is done by ${formatNightDate(outcome.completes_on)}.${first}${left}`;
+  if (outcome.completes_on) return `Done by ${formatNightDate(outcome.completes_on)} on ${schedule}.${first}${left}`;
   const planned = projection.planned.reduce((sum, frames) => sum + frames, 0);
-  return `${schedule}, the plan is not done within the next ${nights} nights: ${planned} frames are planned.${first}${left}`;
+  return `Not done within ${nights} nights on ${schedule}: ${planned} frames planned.${first}${left}`;
 }
 
 function nights(rig: DirectorRigFeasibility) {

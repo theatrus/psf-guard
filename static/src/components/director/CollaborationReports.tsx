@@ -61,7 +61,7 @@ export default function CollaborationReports({ connection, canWrite, embedded = 
       </tr>)}</tbody></table></div>
       <button type="button" disabled={!selectedImages.length || !catalog || !importId || !observingNight || panel === '' || candidates.isFetching || candidates.isError} onClick={() => operation.mutate({ operation: 'preview_report', selection })}><Upload size={16} />Review {selectedImages.length} images</button>
       </fieldset>
-      {(inputs.isFetching || candidates.isFetching || operation.isPending) && <p role="status">Loading contribution evidence...</p>}
+      {(inputs.isFetching || candidates.isFetching || operation.isPending) && <p role="status">Loading...</p>}
       {[inputs.error, candidates.error, operation.error].filter(Boolean).map((error, i) => <p key={i} role="alert">{error!.message}</p>)}
       {notice && <p role="status">{notice}</p>}
       <CollaborationTransfers connection={connection} selection={selection} canWrite={canWrite} active={active && show} selectionReady={!!selectedImages.length && !!catalog && !!importId && !!observingNight && panel !== '' && !candidates.isFetching && !candidates.isError} />

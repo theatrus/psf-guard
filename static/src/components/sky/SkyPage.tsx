@@ -208,7 +208,7 @@ export default function SkyPage() {
   );
   if (isLoading && rows.length === 0) return noMap('Reading the catalogs…');
   if (isError && rows.length === 0) return noMap('The sky coverage could not be loaded.');
-  if (merged.targets.length === 0) return noMap('No targets yet. Add a database or import image folders, and this page fills in.');
+  if (merged.targets.length === 0) return noMap('No targets yet. Add a database or import image folders.');
 
   return (
     <div className="sky-page">
@@ -218,7 +218,7 @@ export default function SkyPage() {
           <p>
             Everything {merged.rigs.length === 1 ? 'this rig' : `${merged.rigs.length} rigs`} pointed at
             {stats.firstNight ? ` since ${formatNight(stats.firstNight)}` : ''}
-            {asOfNight ? `, as it stood on ${formatNight(asOfNight)}` : ''}.
+            {asOfNight ? `, as of ${formatNight(asOfNight)}` : ''}.
           </p>
         </div>
         <dl className="sky-stats">
@@ -243,7 +243,7 @@ export default function SkyPage() {
             <dd data-stat="area">
               {stats.areaDeg2 > 0 ? `${formatDeg2(stats.areaDeg2)} deg²` : '—'}
               {stats.fieldsDeg2 > stats.areaDeg2 * 1.005 && (
-                <small title="The fields added together, overlaps counted every time">
+                <small title="Field areas added up, overlaps included">
                   {formatDeg2(stats.fieldsDeg2)} deg² of fields
                 </small>
               )}
@@ -251,7 +251,7 @@ export default function SkyPage() {
           </div>
           <div className="sky-stat">
             <dt>Pixels on sky</dt>
-            <dd data-stat="pixels" title="Each covered patch counted at the finest plate scale that reached it">
+            <dd data-stat="pixels" title="Each patch counted once, at the finest plate scale that covered it">
               {formatPixels(stats.pixels)}
             </dd>
           </div>
@@ -433,7 +433,7 @@ function paintPosterText(
   context.fillText('Sky coverage', px(40), px(58));
   context.fillStyle = '#9aa4c4';
   context.font = `${px(15)}px system-ui, sans-serif`;
-  const when = asOfNight ? `as it stood on ${formatNight(asOfNight)}` : `${formatNight(stats.firstNight)} to ${formatNight(stats.lastNight)}`;
+  const when = asOfNight ? `as of ${formatNight(asOfNight)}` : `${formatNight(stats.firstNight)} to ${formatNight(stats.lastNight)}`;
   context.fillText(`Everything ${rigs === 1 ? 'one rig' : `${rigs} rigs`} pointed at, ${when}`, px(40), px(84));
   const numbers: Array<[string, string]> = [
     [formatHours(stats.hours), 'integration'],

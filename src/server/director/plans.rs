@@ -392,7 +392,7 @@ fn read_contents(instance: Uuid, catalog: &DatabaseContext, notes: &mut Vec<Stri
         Err(DiscoveryError::TooManyProjects) => {
             return Read::Unusable {
                 saved,
-                cause: "holds more than 4096 projects, more than planning reads, so none of them are taken in or counted",
+                cause: "has more than 4096 projects, too many to plan, so none of them are listed or counted",
             }
         }
         Err(DiscoveryError::Api(Error::Busy)) => return failed(Some(identity), "is busy"),
@@ -484,7 +484,7 @@ fn read_sources(
                     .filter(|(seen, _)| identity.is_none_or(|identity| identity == *seen));
                 warnings.push(match &last {
                     Some(_) => format!(
-                        "{}: {cause}, so the list shows what it held at the last listing",
+                        "{}: {cause}, so the list shows it as last read",
                         catalog.name
                     ),
                     None => format!(
@@ -751,9 +751,13 @@ async fn bind(
             .map(|i| sources[*i].catalog.name.as_str())
             .collect();
         format!(
-            "{}: busy, so planning takes {} in on a later listing",
+            "{}: busy, so {} added to planning on a later listing",
             names.join(", "),
-            if names.len() == 1 { "it" } else { "them" }
+            if names.len() == 1 {
+                "it is"
+            } else {
+                "they are"
+            }
         )
     };
     let permit = match admit(&service.discovery_admission).await {
@@ -926,7 +930,7 @@ fn prepare(service: &Service, sources: &[Source], work: Work) -> Prepared {
         });
         let Ok(connection) = connection else {
             prepared.warnings.push(format!(
-                "{}: could not be opened, so its new plans get their drafts on a later listing",
+                "{}: could not be opened, so its new plans are drafted on a later listing",
                 catalog.name
             ));
             imports.retain(|import| import.source != index);
@@ -973,7 +977,7 @@ fn prepare(service: &Service, sources: &[Source], work: Work) -> Prepared {
             Some(Err(error)) => {
                 tracing::warn!(?error, catalog = %catalog.name, "Plan list could not read templates");
                 prepared.warnings.push(format!(
-                    "{}: its exposure templates could not be read, so its new plans get their plan drafts on a later listing",
+                    "{}: its exposure templates could not be read, so its new plans are drafted on a later listing",
                     catalog.name
                 ));
                 None
@@ -1061,7 +1065,7 @@ fn record(
                     }
                 }
                 Err(error) => warnings.push(format!(
-                    "{}: could not take in its projects ({error})",
+                    "{}: its projects could not be added to planning ({error})",
                     source.catalog.name
                 )),
             }
@@ -1072,7 +1076,7 @@ fn record(
         if let Some(follow) = import.follow.take() {
             if let Err(error) = import_drafts::refresh_drafts(store, follow, drafts) {
                 warnings.push(format!(
-                    "{name}: {} could not take in its Target Scheduler changes ({error})",
+                    "{name}: {} could not be updated from Target Scheduler ({error})",
                     import.label
                 ));
             }
@@ -1091,7 +1095,7 @@ fn record(
             .then_some((sources[import.source].identity.id, import.guid));
         match import_drafts::save_drafts(store, project, drafts, source) {
             Ok(imported) if imported.separate_targets > 1 => warnings.push(format!(
-                "{name}: {} has {} separate targets; its plan frames the first. Target Scheduler keeps running the others.",
+                "{name}: {} has {} separate targets. Its plan covers only the first; Target Scheduler still runs the others.",
                 import.label, imported.separate_targets
             )),
             Ok(_) => {}
@@ -1184,7 +1188,7 @@ fn assemble(
             for mapping in &page.items {
                 if total == MAX_LINKS {
                     warnings.push(format!(
-                        "Only the first {MAX_LINKS} database links are listed; plans in {name} and the databases after it may show without them."
+                        "Only the first {MAX_LINKS} database links are listed, so plans in {name} and later databases may be missing links."
                     ));
                     break 'sources;
                 }
@@ -1248,7 +1252,7 @@ fn assemble(
     for project in projects {
         let unreadable = |record: &str, error: StoreError| {
             format!(
-                "{}: its {record} could not be read, so the list leaves it out ({error})",
+                "{}: its {record} could not be read, so it is left out ({error})",
                 project.name
             )
         };
@@ -1416,8 +1420,7 @@ pub(super) async fn list(
                     }
                 }
                 Err(Error::Busy) => warnings.push(
-                    "Director metadata is busy, so new projects are taken in on a later listing."
-                        .to_owned(),
+                    "Director is busy, so new projects are added on a later listing.".to_owned(),
                 ),
                 Err(error) => return Err(error),
             }

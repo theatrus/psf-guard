@@ -34,7 +34,7 @@ export default function RigSchedulingApply({ rigId, unsaved }: { rigId: string; 
     },
     onError: error => {
       // Something changed since the list was read: show the new one.
-      if (httpStatus(error) === 409) { setNotice('A project or the limits changed since; review the list again.'); void compared.refetch(); }
+      if (httpStatus(error) === 409) { setNotice('A project or the limits changed. Review the new list.'); void compared.refetch(); }
     },
   });
   const data = compared.data;

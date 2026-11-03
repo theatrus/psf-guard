@@ -221,7 +221,7 @@ export default function RigProfileCard({ slug }: { slug: string }) {
             </span>
           </label>
         </div>
-        <p className="director-muted" data-testid="rig-profile-fov">{preview ? `Field ${formatFieldOfView(preview)}` : 'Field of view appears once the sensor, pixel size and focal length are set.'}</p>
+        <p className="director-muted" data-testid="rig-profile-fov">{preview ? `Field ${formatFieldOfView(preview)}` : 'Enter the sensor size, pixel size and focal length to see the field of view.'}</p>
       </fieldset>
       </div>
       <div {...workspacePanel(id, 'site', tab)}>
@@ -236,7 +236,7 @@ export default function RigProfileCard({ slug }: { slug: string }) {
           </span>
         </label>
         <p className="director-muted" data-testid="rig-site-origin">{describePlacement(placed)}</p>
-        <p className="director-muted">This rig uses its site's location and horizon by default. Enter a location or horizon here to override the site settings. Leave these fields blank to use the site settings.</p>
+        <p className="director-muted">Blank fields use the site's location and horizon.</p>
         <p className="director-muted rig-profile-source">{describeSource(form.siteSource ?? data.profile.site?.source, data.profile.site?.reported_at_ms)}
           {canWrite && data.defaults.site && <button type="button" className="link-button" onClick={() => { update(applyDefaults(form, { ...data.defaults, optics: null })); setNotice(''); }}><Download size={14} />Use frame headers</button>}
         </p>
@@ -268,14 +268,14 @@ export default function RigProfileCard({ slug }: { slug: string }) {
       </fieldset>
       <fieldset disabled={disabled} className="scheduling-defaults">
         <legend>Target Scheduler limits</legend>
-        <p className="director-muted">Click Apply to update projects in this rig's database. Plan-specific limits override these values. Blank fields use the site's defaults, then the global defaults.</p>
+        <p className="director-muted">A plan's own limits override these.</p>
         <SchedulingFields label="Rig Target Scheduler limits" overrides={scheduling} onChange={next => editSettings({ scheduling: compactOverrides(next) })}
           inherited={parentLimits.values} inheritedFrom={limit => parentLimits.from[limit]} disabled={disabled || !rigSettings.data} />
       </fieldset>
       {rigId && <RigSchedulingApply rigId={rigId} unsaved={schedulingChanged} />}
       <fieldset disabled={disabled}>
         <legend>Remote site</legend>
-        <p className="director-muted">If this rig's database runs on another PSF Guard server, choose that peer. Activation updates the local copy, then sends the changes to the remote server through Sync.</p>
+        <p className="director-muted">Activation updates the local copy, then sends the changes to the chosen server through Sync.</p>
         <label className="rig-profile-field" htmlFor={`${slug}-peer`}><span>Send plans to</span>
           <span className="rig-profile-input">
             <select id={`${slug}-peer`} aria-label="Send plans to" value={form.peerId} onChange={event => update({ peerId: event.target.value })}>
@@ -285,7 +285,7 @@ export default function RigProfileCard({ slug }: { slug: string }) {
             </select>
           </span>
         </label>
-        {peers.isError && <p className="director-muted">Peers could not be loaded; they are kept under Settings, Remote PSF Guard.</p>}
+        {peers.isError && <p className="director-muted">Peers could not be loaded. Check Settings, Remote PSF Guard.</p>}
         {peers.data?.length === 0 && <p className="director-muted">No peer registered yet; add one under Settings, Remote PSF Guard.</p>}
       </fieldset>
       <p className="director-muted">Camera modes and filters: {data.profile.configuration ? describeSource(data.profile.configuration.source, data.profile.configuration.reported_at_ms) : 'not reported; only the N.I.N.A. Director plugin reports them.'} <EarlyBeta /></p>

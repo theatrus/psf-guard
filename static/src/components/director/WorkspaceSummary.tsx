@@ -57,7 +57,7 @@ export default function WorkspaceSummary({ projectId, projectName, back, rigs, o
   // are read first, rather than say one thing and then another. A remote
   // site that lacks the last activation still needs it, whatever the rows
   // here hold. Not "Synced" either: that is the catalog Sync.
-  const synced = { tone: 'ok', text: 'Activated', title: 'The rigs hold the saved plan' } as const;
+  const synced = { tone: 'ok', text: 'Activated', title: 'The rig databases match the saved plan' } as const;
   // A plan the server cannot activate yet says what to do instead of
   // offering an activation it would refuse.
   const activation: { tone?: 'ok' | 'behind'; text: string; title?: string } | null = checking ? { text: 'Checking the rigs…' }

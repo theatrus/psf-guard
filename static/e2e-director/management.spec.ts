@@ -29,7 +29,7 @@ test('plans without a database survive reload, conflicts, and narrow viewports i
   expect(changed.ok()).toBeTruthy();
   await page.getByLabel('Plan name').fill('Local draft');
   await page.getByRole('button', { name: 'Save', exact: true }).click();
-  await expect(plans.getByRole('alert')).toContainText('conflicts');
+  await expect(plans.getByRole('alert')).toContainText('changed since it was loaded');
   await expect(page.getByLabel('Plan name')).toHaveValue('Local draft');
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   await plans.getByRole('button', { name: 'Refresh plans' }).click();

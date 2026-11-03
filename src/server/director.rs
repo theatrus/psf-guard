@@ -408,7 +408,7 @@ enum Error {
 }
 
 /// Why a Target Scheduler rig refuses overrides.
-const NOT_DIRECTOR: &str = "Overrides are for rigs Director drives. This rig runs Target Scheduler: change its plans' priority, limits or rule weights in Target Scheduler.";
+const NOT_DIRECTOR: &str = "Overrides are only for Director rigs. For this rig, change its projects under Target Scheduler settings.";
 
 impl From<StoreError> for Error {
     fn from(error: StoreError) -> Self {
@@ -465,7 +465,7 @@ impl IntoResponse for Error {
                     Self::Missing => (StatusCode::NOT_FOUND, "Director record not found"),
                     Self::Conflict => (
                         StatusCode::CONFLICT,
-                        "Director record conflicts with stored content; reload before retrying",
+                        "This record changed since it was loaded. Reload, then try again.",
                     ),
                     Self::WrongRig => (
                         StatusCode::FORBIDDEN,
@@ -473,7 +473,7 @@ impl IntoResponse for Error {
                     ),
                     Self::Busy => (
                         StatusCode::SERVICE_UNAVAILABLE,
-                        "Director metadata is busy; retry shortly",
+                        "Director is busy. Try again in a moment.",
                     ),
                     Self::Internal
                     | Self::Refused(_)
@@ -614,7 +614,7 @@ pub(super) fn identified_catalogs(
 /// file's identity.
 pub(super) fn copy_warning(copy: &str, original: &str) -> String {
     format!(
-        "{copy}: carries the same catalog identity as {original}, so it is a copy of that file; it is left out of planning. Remove it from the registry, or drop its psf_guard_catalog_identity table to make it a database of its own."
+        "{copy}: carries the same catalog identity as {original}, so it is left out of planning as a copy. Remove it from the registry, or drop its psf_guard_catalog_identity table to plan it separately."
     )
 }
 
@@ -1037,9 +1037,8 @@ async fn detach_project(
         Err((rig, parts)) => (
             StatusCode::CONFLICT,
             Json(ApiResponse::<()>::error(format!(
-                "This plan has {parts} exposure goal{} for {rig}; detaching takes {} out of this plan.",
-                if parts == 1 { "" } else { "s" },
-                if parts == 1 { "it" } else { "them" }
+                "Detaching removes {parts} exposure goal{} for {rig} from this plan.",
+                if parts == 1 { "" } else { "s" }
             ))),
         )
             .into_response(),

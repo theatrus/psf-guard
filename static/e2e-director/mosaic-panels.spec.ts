@@ -105,7 +105,7 @@ test('a shot target stays put while panels are added round it, and activates as 
     await dialog.getByRole('button', { name: 'Activate', exact: true }).click();
     const refused = dialog.getByRole('alert').filter({ hasText: 'Changed since the preview' });
     await expect(refused).toContainText("Askar data's rows. Nothing was written.");
-    await expect(refused).toContainText('This preview is new; check it, then activate.');
+    await expect(refused).toContainText('Check the new preview, then activate.');
     await expect(dialog.getByLabel('Askar data activation')).toContainText('desired 7 →');
     await dialog.getByRole('button', { name: 'Activate', exact: true }).click();
     await expect(dialog.getByText(/^Activated/).first()).toBeVisible();

@@ -53,10 +53,10 @@ export default function RigsPage() {
         <p className="director-muted">
           <Link to={scopedHref('/sky', search, { live: '1' })}><MapIcon size={14} aria-hidden="true" /> Show the rigs on the sky</Link>
           {canWrite && <>
-            {' · '}Rig setup and the exposure template library are under Settings:{' '}
+            {' · '}Settings:{' '}
             <button type="button" className="director-link-button" onClick={() => openSettings('rigs')}>Rig setup</button>
-            {' and '}
-            <button type="button" className="director-link-button" onClick={() => openSettings('templates')}>Exposure templates</button>.
+            {', '}
+            <button type="button" className="director-link-button" onClick={() => openSettings('templates')}>Exposure templates</button>
           </>}
         </p>
         {!canWrite && <><DirectorRigs /><TemplateLibrary /></>}

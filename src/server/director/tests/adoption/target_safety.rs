@@ -138,8 +138,8 @@ async fn a_target_found_by_name_is_left_alone_when_far_with_frames() {
     let targets = changes(&data);
     assert!(
         targets.iter().any(|c| c.starts_with("create IC 1805 r1c1")
-            && c.contains("the existing target IC 1805 r1c1 sits")
-            && c.contains("with its 40 frames, so it is left as it is")),
+            && c.contains("the existing target IC 1805 r1c1, ")
+            && c.contains("away with 40 frames, is left as it is")),
         "{targets:#?}"
     );
     let (ra, dec): (f64, f64) =
@@ -161,7 +161,7 @@ async fn an_unrelated_far_target_is_not_claimed() {
     assert!(
         targets
             .iter()
-            .all(|c| c.starts_with("create") && !c.contains("takes over")),
+            .all(|c| c.starts_with("create") && !c.contains("uses the existing target")),
         "{targets:#?}"
     );
 }

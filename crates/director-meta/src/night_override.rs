@@ -73,13 +73,13 @@ pub enum Refusal {
 impl fmt::Display for Refusal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::TooMany => "A night takes at most 32 overrides.",
+            Self::TooMany => "A night can have at most 32 overrides.",
             Self::OutsideNight => {
                 "Each window and hold must fall inside the night, from noon to noon, and end after it starts."
             }
-            Self::PinsOverlap => "Two pins share time; move one so they do not overlap.",
-            Self::Repeated => "A night takes one plan order and one hold at most.",
-            Self::BadOrder => "A plan order lists each plan once, and at most 256 of them.",
+            Self::PinsOverlap => "Two pins overlap. Move one.",
+            Self::Repeated => "A night can have at most one plan order and one hold.",
+            Self::BadOrder => "A plan order must list each plan once, and at most 256 plans.",
         })
     }
 }

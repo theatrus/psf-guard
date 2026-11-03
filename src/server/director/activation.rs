@@ -662,7 +662,7 @@ async fn execute_guarded(
                     profile_id: None,
                     changes: vec![], shoots: vec![],
                     warnings: vec![
-                        "Rig has no registered database on this server; pull its database from its peer, then name the peer under Rigs, Setup."
+                        "The rig's database is not registered on this server. Pull it from the rig's peer, then choose that peer in Rig setup."
                             .into(),
                     ],
                     applied: false,
@@ -686,7 +686,7 @@ async fn execute_guarded(
                     profile_id: None,
                     changes: vec![], shoots: vec![],
                     warnings: vec![
-                        "No panel size for this rig: give its framing a size in Framing, or set its optics under Rigs, Setup.".into(),
+                        "This rig has no panel size. Set one in Framing, or set the rig's optics in Rig setup.".into(),
                     ],
                     applied: false,
                     push: None,
@@ -696,7 +696,7 @@ async fn execute_guarded(
             };
             let assignment = admitted.get(rig_id);
             let rig_panels = if let Some(assignment) = assignment {
-                warnings.push("Uses the assignment's exact panels, exposures and frame goals, not the editable framing grid. Target Scheduler runs normally, including later nights and grading retries; there is no nightly deadline. Reports retain the task and use the actual observing night. Remote quality and Moon requirements determine contribution credit, not TS scheduling.".into());
+                warnings.push("Uses the assignment's panels, exposures and frame goals, not the framing grid, with no nightly deadline. Only frames that meet the collaboration's quality and Moon requirements count.".into());
                 assignment.panels.clone()
             } else if layout.own {
                 // A separate framing sized from the rig's own field is only
@@ -730,7 +730,7 @@ async fn execute_guarded(
                     && !same_size(own, layout.panel)
                 {
                     warnings.push(format!(
-                        "Its field is {:.2}° × {:.2}°, the shared panels {:.2}° × {:.2}°: frame it separately, or size the shared mosaic by it.",
+                        "Its field is {:.2}° × {:.2}°, but the shared panels are {:.2}° × {:.2}°. Give it its own framing, or size the shared mosaic to fit it.",
                         own.width_degrees, own.height_degrees, layout.panel.width_degrees, layout.panel.height_degrees
                     ));
                 }
@@ -744,7 +744,7 @@ async fn execute_guarded(
                 });
             }
             if profile.as_ref().is_none_or(|p| p.configuration.is_none()) {
-                warnings.push("The N.I.N.A. plugin has not reported this rig's camera yet; the Target Scheduler plugin can still run these rows.".into());
+                warnings.push("The N.I.N.A. plugin has not reported this rig's camera yet. Target Scheduler can still run this plan.".into());
             }
             // A rig on another PSF Guard: its rows land here first, then go
             // to the peer by Sync once Apply has committed them.
@@ -1019,7 +1019,7 @@ async fn execute_guarded(
         let mut warnings = cover_warnings(&framing, &shooting);
         warnings.extend(coverage_warnings);
         if pending.iter().all(|(_, _, record, _)| record.is_none()) {
-            warnings.push("No rig database can take this plan yet.".into());
+            warnings.push("No rig can be activated yet.".into());
         }
         // The digest covers what Apply will write, not the frame counts the
         // preview quotes (a frame saved between the two would refuse Apply
@@ -1483,7 +1483,7 @@ pub(super) fn planned_push(
         Some(peer) => Some(Push::planned(peer)),
         None => {
             warnings.push(format!(
-                "Its peer '{peer_id}' is no longer registered; the plan stays on this server until Setup picks another."
+                "Its peer '{peer_id}' is no longer registered, so the plan stays on this server. Choose another peer in Rig setup."
             ));
             None
         }
@@ -1667,7 +1667,7 @@ pub(super) async fn push(
                 applied: false,
                 summary: BTreeMap::new(),
                 error: Some(
-                    "This peer is no longer registered; name another under Rigs, Setup.".into(),
+                    "This peer is no longer registered. Choose another in Rig setup.".into(),
                 ),
                 ts_file: None,
                 ts_sync: None,
@@ -1688,7 +1688,7 @@ pub(super) async fn push(
     }
     if rigs.is_empty() && warnings.is_empty() {
         warnings.push(
-            "No rig in this activation has a TS file connection or remote site. Configure sync before sending planning."
+            "No rig in this activation has a Target Scheduler file or a remote site to send to. Set one up under Sync or Rig setup."
                 .into(),
         );
     }
@@ -1890,76 +1890,78 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                 guid
             }
         }
-        None => match inputs
-            .existing_link
-            .map(|guid| guid.to_string())
-            .filter(|guid| project_row(tx, guid).ok().flatten().is_some())
-        {
-            Some(guid) => {
-                // Director plans one target or one mosaic per project. A
-                // project with more targets than this rig's panels would have
-                // some left unplanned while its exposure plans are taken over,
-                // so this rig is left to Target Scheduler until they agree.
-                if let Some((row_id, name)) = project_row(tx, &guid)? {
-                    let targets: i64 = tx.query_row(
-                        "SELECT COUNT(*) FROM target WHERE projectid=?1",
-                        [row_id],
-                        |row| row.get(0),
-                    )?;
-                    if targets > inputs.panels.len() as i64 {
-                        return Err(RigError::Skip(format!(
-                            "{name} has {targets} targets in Target Scheduler and this plan frames {} here. Director plans one target or one mosaic per project for now, so this rig is left to Target Scheduler.",
+        None => {
+            match inputs
+                .existing_link
+                .map(|guid| guid.to_string())
+                .filter(|guid| project_row(tx, guid).ok().flatten().is_some())
+            {
+                Some(guid) => {
+                    // Director plans one target or one mosaic per project. A
+                    // project with more targets than this rig's panels would have
+                    // some left unplanned while its exposure plans are taken over,
+                    // so this rig is left to Target Scheduler until they agree.
+                    if let Some((row_id, name)) = project_row(tx, &guid)? {
+                        let targets: i64 = tx.query_row(
+                            "SELECT COUNT(*) FROM target WHERE projectid=?1",
+                            [row_id],
+                            |row| row.get(0),
+                        )?;
+                        if targets > inputs.panels.len() as i64 {
+                            return Err(RigError::Skip(format!(
+                            "{name} has {targets} targets in Target Scheduler, more than this plan's panels for this rig ({}). Director plans one target or mosaic per project, so this rig is skipped.",
                             inputs.panels.len()
                         )));
+                        }
                     }
-                }
-                // Director takes over its planning rows either way; the row
-                // itself changes only for a Draft or a new mosaic, so one
-                // that already matches is reported unchanged.
-                let (state, was_mosaic): (i64, i64) = tx.query_row(
-                    "SELECT IFNULL(state, 0), IFNULL(isMosaic, 0) FROM project WHERE guid=?1",
-                    [&guid],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )?;
-                let mut notes = Vec::new();
-                if state == 0 {
-                    notes.push("Draft → Active");
-                }
-                if mosaic && was_mosaic == 0 {
-                    notes.push("now a mosaic");
-                }
-                tx.execute(
+                    // Director takes over its planning rows either way; the row
+                    // itself changes only for a Draft or a new mosaic, so one
+                    // that already matches is reported unchanged.
+                    let (state, was_mosaic): (i64, i64) = tx.query_row(
+                        "SELECT IFNULL(state, 0), IFNULL(isMosaic, 0) FROM project WHERE guid=?1",
+                        [&guid],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )?;
+                    let mut notes = Vec::new();
+                    if state == 0 {
+                        notes.push("Draft → Active");
+                    }
+                    if mosaic && was_mosaic == 0 {
+                        notes.push("now a mosaic");
+                    }
+                    tx.execute(
                     "UPDATE project SET isMosaic=CASE WHEN ?2=1 THEN 1 ELSE isMosaic END, state=CASE WHEN state=0 THEN 1 ELSE state END WHERE guid=?1",
                     params![guid, i32::from(mosaic)],
                 )?;
-                changes.push(Change {
+                    changes.push(Change {
                     kind: "project",
                     action: if notes.is_empty() { "unchanged" } else { "update" },
                     name: project_row(tx, &guid)?.map(|(_, name)| name).unwrap_or_default(),
                     detail: if notes.is_empty() {
-                        "already in Target Scheduler, linked to this plan; Director takes over its planning rows".into()
+                        "already in Target Scheduler, linked to this plan; Director now plans it".into()
                     } else {
                         format!(
-                            "linked to this plan; Director takes over its planning rows; {}",
+                            "linked to this plan; Director now plans it; {}",
                             notes.join("; ")
                         )
                     },
                 });
-                guid
+                    guid
+                }
+                None => {
+                    created_project = true;
+                    fresh_row = true;
+                    let guid = insert_project(tx, &profile_id, &project_name, mosaic, None)?;
+                    changes.push(Change {
+                        kind: "project",
+                        action: "create",
+                        name: project_name.clone(),
+                        detail: "new Target Scheduler project, Active".into(),
+                    });
+                    guid
+                }
             }
-            None => {
-                created_project = true;
-                fresh_row = true;
-                let guid = insert_project(tx, &profile_id, &project_name, mosaic, None)?;
-                changes.push(Change {
-                    kind: "project",
-                    action: "create",
-                    name: project_name.clone(),
-                    detail: "new Target Scheduler project, Active".into(),
-                });
-                guid
-            }
-        },
+        }
     };
     let mut scheduling = inputs.scheduling.clone();
     if let Some(minimum) = inputs
@@ -2016,8 +2018,21 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
             params![project_guid, minimum],
             )? > 0;
         }
-        changes.push(Change { kind:"project",action:if new_assignment || limits_changed {"update"} else {"unchanged"},name:project_name.clone(),detail:format!("Collaboration {} assigned {}, revision {}; ordinary TS scheduling, no nightly deadline",
-            assignment.import.plan.share().task_id,assignment.import.plan.night(),assignment.import.plan.share().version) });
+        changes.push(Change {
+            kind: "project",
+            action: if new_assignment || limits_changed {
+                "update"
+            } else {
+                "unchanged"
+            },
+            name: project_name.clone(),
+            detail: format!(
+                "Collaboration {} assigned {}, revision {}; no nightly deadline",
+                assignment.import.plan.share().task_id,
+                assignment.import.plan.night(),
+                assignment.import.plan.share().version
+            ),
+        });
     }
     // Rows added to an existing project go under that project's N.I.N.A.
     // profile, not the file's most common one.
@@ -2201,12 +2216,12 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                                 name: name.clone(),
                                 detail: if far {
                                     format!(
-                                        "{detail}; the panel moved {} from its old target, which keeps its {frames} frames and stops being taken",
+                                        "{detail}; the panel moved {} from its old target, which keeps its {frames} frames and is no longer shot",
                                         format_distance(moved)
                                     )
                                 } else {
                                     format!(
-                                        "{detail}; the panel turned {turn:.1}° from its old target, which keeps its {frames} frames and stops being taken"
+                                        "{detail}; the panel turned {turn:.1}° from its old target, which keeps its {frames} frames and is no longer shot"
                                     )
                                 },
                             });
@@ -2358,11 +2373,9 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                             detail: if same {
                                 format!("already in Target Scheduler at {detail}")
                             } else if placed {
-                                format!("takes over the existing target at {detail}{notes}")
+                                format!("uses the existing target at {detail}{notes}")
                             } else {
-                                format!(
-                                    "takes over the existing target, moving it to {detail}{notes}"
-                                )
+                                format!("uses the existing target, moving it to {detail}{notes}")
                             },
                         });
                         shown = found.name;
@@ -2377,11 +2390,11 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                         name: name.clone(),
                         detail: match &left_alone {
                             Some((other, frames, moved, true, _)) => format!(
-                                "{detail}; the existing target {other} sits {} away with its {frames} frames, so it is left as it is",
+                                "{detail}; the existing target {other}, {} away with {frames} frames, is left as it is",
                                 format_distance(*moved)
                             ),
                             Some((other, frames, _, false, turn)) => format!(
-                                "{detail}; the existing target {other} is turned {turn:.1}° from this panel with its {frames} frames, so it is left as it is"
+                                "{detail}; the existing target {other}, turned {turn:.1}° from this panel with {frames} frames, is left as it is"
                             ),
                             None => detail,
                         },
@@ -2706,7 +2719,7 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                             )
                         } else {
                             format!(
-                                "takes over plan #{} ({} of {} frames taken){}",
+                                "uses plan #{} ({} of {} frames taken){}",
                                 found.row_id,
                                 found.acquired,
                                 found.desired,
@@ -2736,7 +2749,7 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                         action: "create",
                         name: name.clone(),
                         detail: format!(
-                            "{detail}; no plan on this target takes {exposure_seconds} s with these settings"
+                            "{detail}; no plan on this target uses {exposure_seconds} s with these settings"
                         ),
                     });
                     guid
@@ -3309,7 +3322,7 @@ fn bad_guid(value: &str) -> RigError {
 /// GUIDs instead, which also keeps Director from making a twin of the row.
 fn missing_guid(what: &str) -> RigError {
     RigError::Skip(format!(
-        "{what} has no GUID yet. Fill in GUIDs for this database under Settings, Databases, then activate the plan again."
+        "{what} has no GUID yet. Fill in GUIDs in the database's Database & files settings, then activate the plan again."
     ))
 }
 

@@ -40,7 +40,7 @@ export default function PlanRow({ row, href, canWrite, editing, onRename, reopen
         </span>)}
     <span className="library-pill">No frames yet</span>
     {canWrite && onReopen && reopenOn.length > 0 && <button type="button" className="library-row-button" disabled={editing || reopenDisabled}
-      title={`Set ${name} to Inactive on ${reopenOn.join(' and ')}, where it is Closed. Target Scheduler does not select it until it is set to Active.`}
+      title={`Set ${name} to Inactive on ${reopenOn.join(' and ')}, where it is Closed. Set it to Active to schedule it.`}
       aria-label={`Reopen ${name}`} onClick={onReopen}>{reopening ? 'Reopening...' : 'Reopen'}</button>}
     {canWrite && <button type="button" className="library-planning" disabled={editing} title={`Rename ${name}`} aria-label={`Rename ${name}`} onClick={onRename}><Pencil size={14} /></button>}
     {canWrite && onDelete && <button type="button" className="library-planning library-planning-delete" disabled={editing} title={`Delete ${name} and its projects`} aria-label={`Delete ${name}`} onClick={onDelete}><Trash2 size={14} /></button>}

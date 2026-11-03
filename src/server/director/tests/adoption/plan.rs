@@ -172,17 +172,20 @@ async fn a_template_with_unusable_moon_rules_is_named_and_left_out_alone() {
     assert_eq!(off["width_days"], 7.0);
     assert_eq!(
         listed["data"]["warnings"],
-        json!(["Template SII wide: its Moon avoidance settings are outside what Director plans with, so it is left out. Fix them in Target Scheduler."])
+        json!(["Template SII wide: its Moon avoidance settings are outside what Director supports, so it is left out. Fix them in Target Scheduler."])
     );
 
     // The project still gets its plan, from the templates Director can use.
     let (status, plans) = call(&f.app, "GET", "/plans", Value::Null, None).await;
     assert_eq!(status, StatusCode::OK, "{plans}");
     assert!(
-        plans["data"]["warnings"].as_array().unwrap().iter().any(|w| w
-            .as_str()
+        plans["data"]["warnings"]
+            .as_array()
             .unwrap()
-            .contains("Moon rig: Pelican: its exposure plans with template SII wide were left out of its plan")),
+            .iter()
+            .any(|w| w.as_str().unwrap().contains(
+                "Moon rig: Pelican: exposure plans with template SII wide were left out"
+            )),
         "{plans}"
     );
     let row = plans["data"]["rows"]

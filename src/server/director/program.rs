@@ -742,7 +742,7 @@ fn made_up_configuration(
     let filters: Vec<String> = filters.into_iter().filter(usable).collect();
     if filters.is_empty() {
         return Err(PullError::NotReady(
-            "No activated plan on this rig names a filter, so there is nothing to preview.".into(),
+            "No activated plan on this rig has a filter, so there is nothing to preview.".into(),
         ));
     }
     let control = |some: bool, values: std::collections::BTreeSet<i32>| {
@@ -1044,7 +1044,7 @@ fn build(
             };
             let Some(row) = row else {
                 built.omitted.push(format!(
-                    "{}: exposure plan {} is missing, inactive, or no longer belongs to its activated target and project",
+                    "{}: exposure plan {} is missing, inactive, or moved to another target or project",
                     project.name, activated.exposureplan_guid
                 ));
                 continue;
@@ -1107,7 +1107,7 @@ fn build(
             };
             let [filter] = candidates.as_slice() else {
                 built.omitted.push(format!(
-                    "{}: template filter '{}' ({}) needs one unambiguous reported filter",
+                    "{}: the rig reports no single filter that matches template filter '{}' ({})",
                     project.name, row.template_filter, wanted
                 ));
                 continue;
@@ -1116,7 +1116,7 @@ fn build(
             let offset = pick_control(&configuration.offset, row.template_offset);
             let (Ok(gain), Ok(offset)) = (gain, offset) else {
                 built.omitted.push(format!(
-                    "{}: template '{}' requests unsupported or unspecified gain/offset; review its camera settings",
+                    "{}: template '{}' has no gain or offset this camera supports; check its camera settings",
                     project.name, row.template_filter
                 ));
                 continue;
@@ -1179,7 +1179,7 @@ fn build(
                     // Same contribution with two exposure lengths cannot happen
                     // through activation; treat it as a broken row.
                     built.omitted.push(format!(
-                        "{}: exposure plan {} disagrees with its sibling panels",
+                        "{}: exposure plan {} does not match the plan's other panels",
                         project.name, activated.exposureplan_guid
                     ));
                     continue;
@@ -1301,7 +1301,7 @@ fn build(
         built.links.retain(|l| ids.contains(&l.goal_id));
         prune_unbound(&mut built);
         built.omitted.push(format!(
-            "{dropped} lower-priority goal{} left out: a rig's program holds at most {MAX_PROGRAM_GOALS}",
+            "{dropped} lower-priority goal{} left out: a rig's program can have at most {MAX_PROGRAM_GOALS}",
             if dropped == 1 { "" } else { "s" }
         ));
     }

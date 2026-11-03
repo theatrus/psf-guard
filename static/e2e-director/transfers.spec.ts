@@ -96,7 +96,7 @@ test('pending uploads offer stacks and remain visible and controllable in backgr
   }
   // Inject an exceptional server reply to verify that only this path needs approval.
   jobs[0].state = 'review'; jobs[0].sent_bytes = 0; jobs[0].current_file = '';
-  jobs[0].warnings = ['Review these files before uploading. This transfer was prepared for review or follows an earlier upload exception.'];
+  jobs[0].warnings = ['Review these files before uploading. This transfer was prepared for review, or an earlier upload failed.'];
   await expect(files).toContainText('Review required');
   await page.setViewportSize({ width: 1440, height: 1100 });
   await files.evaluate(el => el.scrollIntoView({ block: 'start' }));

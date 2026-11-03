@@ -46,7 +46,7 @@ export default function DirectorSites() {
   };
   return <section aria-label="Sites" className="director-records director-sites">
     <div className="director-toolbar"><h2>Sites</h2></div>
-    <p className="director-muted">A site defines a location and horizon. Choose a rig's planning site under Rig setup → Site. The rig uses that site's settings unless you override them.</p>
+    <p className="director-muted">Choose a rig's planning site under Rig setup → Site.</p>
     {sites.isPending && <p role="status">Loading sites...</p>}
     {sites.isError && <div role="alert"><p>{message(sites.error)}</p><button type="button" onClick={() => void sites.refetch()}>Retry</button></div>}
     {sites.data?.items.length === 0 && <p className="director-muted">No sites yet.</p>}
@@ -200,7 +200,7 @@ function SiteProfileCard({ site }: { site: DirectorIdentity }) {
             </select></span>
           </label>
         </div>
-        <p id={`${site.id}-zone-help`} className="director-muted">Night marks and overrides for rigs at this site are entered and shown in this time zone. Nights still run from noon to noon at the site's longitude.</p>
+        <p id={`${site.id}-zone-help`} className="director-muted">Night marks and overrides for rigs at this site use this time zone.</p>
         {data.profile.location && <p className="director-muted">{describeSource(data.profile.location.source, data.profile.location.reported_at_ms)}</p>}
       </fieldset>
       <fieldset disabled={disabled}>
@@ -277,9 +277,9 @@ function SiteForecastStatus({ site }: { site: DirectorIdentity }) {
   const last = forecast?.hours.at(-1);
   return <div className="site-forecast-status" role="group" aria-label="Forecast status">
     {forecast
-      ? <p>Fetched {when(forecast.fetched_at_ms)}{last ? `; covers hours until ${when(last.end_ms)}` : ''}.{forecast.checked_at_ms !== null ? ` ${PROVIDER_LABEL[forecast.provider]} confirmed it unchanged at ${when(forecast.checked_at_ms)}.` : ''} {data.fresh ? `Night plans use it until ${when(forecast.expires_at_ms)}.` : 'This forecast has expired, so nights count as clear until a new forecast arrives.'}</p>
-      : <p>{status ? 'No forecast has arrived yet.' : 'Requesting the first forecast...'}</p>}
-    {status?.last_error && <p className="director-error" role="alert">The request at {when(status.last_attempt_ms)} failed: {status.last_error}{forecast && data.fresh ? ' Night plans keep using the stored forecast until it expires.' : ''}</p>}
+      ? <p>Fetched {when(forecast.fetched_at_ms)}{last ? `; covers hours until ${when(last.end_ms)}` : ''}.{forecast.checked_at_ms !== null ? ` ${PROVIDER_LABEL[forecast.provider]} confirmed it unchanged at ${when(forecast.checked_at_ms)}.` : ''} {data.fresh ? `Night plans use it until ${when(forecast.expires_at_ms)}.` : 'This forecast has expired, so nights count as clear.'}</p>
+      : <p>{status ? 'No forecast yet.' : 'Requesting the first forecast...'}</p>}
+    {status?.last_error && <p className="director-error" role="alert">The request at {when(status.last_attempt_ms)} failed: {status.last_error}{forecast && data.fresh ? ' Night plans still use the stored forecast.' : ''}</p>}
     {data.next_refresh_ms !== null && <p className="director-muted">Next refresh: {when(data.next_refresh_ms)}.</p>}
     {canWrite && <div className="director-actions">
       <button type="button" disabled={fetchNow.isPending} onClick={() => fetchNow.mutate()}><CloudDownload size={16} />{fetchNow.isPending ? 'Fetching...' : 'Fetch now'}</button>

@@ -44,7 +44,7 @@ export default function DirectorDashboard() {
     </div>
     {statuses.isPending && <p role="status">Loading live status...</p>}
     {statuses.isError && <p className="director-error" role="alert">{message(statuses.error)}</p>}
-    {statuses.isSuccess && rows.length === 0 && <p className="director-muted">No rig yet. Every registered database becomes a rig once the Library lists its plans.</p>}
+    {statuses.isSuccess && rows.length === 0 && <p className="director-muted">No rigs yet. Add a database under Settings → Databases &amp; rigs.</p>}
     {rows.length > 0 && <div className="director-table-scroll"><table className="director-dashboard-table" data-testid="director-dashboard">
       <thead><tr><th>Rig</th><th>Link</th><th>Now</th><th>Program pull</th><th>Check-in</th><th>Status report</th><th>Assigned</th><th>Tonight</th></tr></thead>
       <tbody>{rows.map(view => {
@@ -88,8 +88,9 @@ function TonightCell({ rig, pending, failed }: { rig: RigNights | undefined; pen
   const href = nightHref(rig.rig.id, night.date, search);
   const clear = night.availability.state === 'unavailable' ? 'not available' : `${formatHours(night.available_dark_hours)} clear`;
   const forecast = night.availability.marks.some(mark => mark.source.kind === 'forecast') ? rig.forecast : null;
-  const credit = forecast ? ' Clear hours use the site\'s cloud forecast. ' + forecast.attribution : '';
-  return <Link to={href} title={'Open tonight\'s schedule on the Nights tab.' + credit}>
+  // The credit the forecast provider's licence requires.
+  const credit = forecast ? `Clear hours from the site's cloud forecast. ${forecast.attribution}` : undefined;
+  return <Link to={href} title={credit}>
     {clear}{plans.length > 0 ? `: ${plans.slice(0, 2).map(plan => plan.name).join(', ')}${plans.length > 2 ? ` +${plans.length - 2}` : ''}` : night.available_dark_hours > 0 ? ', nothing planned' : ''}
   </Link>;
 }

@@ -97,7 +97,7 @@ describe('project priority controls', () => {
 
     // A rig's limits are set in its setup, where Apply writes them.
     fireEvent.change(screen.getByLabelText('Priority scope'), { target: { value: 'rig' } });
-    expect(await screen.findByText("This rig's Target Scheduler limits are in its Setup, under Limits and delivery.")).toBeInTheDocument();
+    expect(await screen.findByText("This rig's limits are in Rig setup, under Limits and delivery.")).toBeInTheDocument();
     expect(screen.queryByRole('group', { name: 'rig scheduling defaults' })).not.toBeInTheDocument();
   });
 });

@@ -73,7 +73,6 @@ export default function PlanScheduling({ projectId, rigs }: { projectId: string;
   });
   const first = inherited[0]?.data?.scheduling;
   return <section className="plan-scheduling" aria-label="Scheduling limits">
-    <p className="director-muted">Empty fields inherit</p>
     {stored.isError && <p className="director-error" role="alert">{message(stored.error)}</p>}
     {stored.data && <SchedulingFields label="This plan's limits" overrides={draft} onChange={change} disabled={!canWrite}
       inherited={first?.values ?? TS_DEFAULTS} inheritedFrom={limit => rigs.length > 1 ? 'per rig, below' : describeSource(first?.sources[limit])} />}

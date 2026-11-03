@@ -528,7 +528,7 @@ plan left at the template's default runs at that default), else the one
 with its template, else the one with its filter's band.
 `GET /projects/{id}/plan/progress` returns the counts.
 **Rigs** lists each rig with its database's project and whether it is
-**activated** (its rows hold the saved plan) or **behind**, and why: not
+**activated** (its rows match the saved plan) or **behind**, and why: not
 activated yet, or its rows differ from the plan. **Add a rig** offers every
 rig with a new project, which activation creates in its database, and every
 project another plan holds in a database this plan has none in. A rig joins with a template for each

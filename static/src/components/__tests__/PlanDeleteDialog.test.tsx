@@ -97,8 +97,8 @@ describe('Deleting a plan', () => {
       { ...preview().databases[0], source_project_guid: 'g-b', catalog_slug: 'b', catalog_name: 'Askar', project: { ...preview().databases[0].project!, state: 1 } },
     ] }))));
     mount();
-    expect(await screen.findByText(/C925 copies from/)).toHaveTextContent('The project stays in that database, N.I.N.A. still schedules it there while it is Active, and the next sync adds it back here.');
-    expect(screen.getByText('On Askar the project is Active. When N.I.N.A. uses that database, it stops scheduling the project.')).toBeInTheDocument();
+    expect(await screen.findByText(/C925 copies from/)).toHaveTextContent('The project stays there, still scheduled while Active, and the next sync adds it back here.');
+    expect(screen.getByText('On Askar the project is Active: deleting it stops N.I.N.A. scheduling it.')).toBeInTheDocument();
   });
 
   it('says a plan from a collaboration leaves it, and whether the coordinator is told', async () => {

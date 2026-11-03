@@ -108,7 +108,7 @@ impl Kept {
                 ));
             }
             if let Some(after) = forecast.refresh_after_ms {
-                waits.push((after, format!("{provider}'s terms ask for no new request until its current forecast expires.")));
+                waits.push((after, format!("{provider}'s terms allow no new request until the current forecast expires.")));
             }
         }
         if let Some(status) = &self.status
