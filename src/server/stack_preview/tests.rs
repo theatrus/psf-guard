@@ -1506,6 +1506,7 @@ fn scoring_snapshot_normalizes_request_overrides() {
         penalty_star_loss: Some(0.4),
         hfr_reject_above: Some(0.0),
         star_count_reject_below: Some(35.0),
+        star_source: Some(crate::sequence_analysis::StarSource::Capture),
     };
 
     let normalized = StackScoringSettings::from_overrides(&overrides);
@@ -1519,6 +1520,7 @@ fn scoring_snapshot_normalizes_request_overrides() {
             penalty_star_loss: 0.4,
             hfr_reject_above: None,
             star_count_reject_below: Some(35.0),
+            star_source: crate::sequence_analysis::StarSource::Capture,
         }
     );
     assert_eq!(normalized.penalty_pointing.to_bits(), 0.0_f64.to_bits());

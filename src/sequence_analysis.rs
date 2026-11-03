@@ -615,6 +615,10 @@ pub struct ImageQualityResult {
     /// UI may draw these cells over the image; global findings leave it empty.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spatial_overlay: Option<QualityRegionOverlay>,
+    /// The frame's star count and HFR from each source, and which one
+    /// scoring used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stars: Option<FrameStars>,
     pub details: Option<String>,
 }
 
@@ -797,12 +801,16 @@ pub struct ImageMetrics {
     /// the other. A count of `None` is a scan that failed.
     #[serde(default)]
     pub scan_stars: Option<StarMeasure>,
-    /// The frame's own best measurement, for absolute limits and the
-    /// zero-star cap, which judge each frame alone: the scan's when it
-    /// counted stars, else the capture software's. Set by
+    /// The frame's own measurement, for absolute limits and the zero-star
+    /// cap, which judge each frame alone: each value from the preferred
+    /// source when it has one, else from the other. Set by
     /// [`choose_star_source`].
     #[serde(default)]
     pub own_stars: Option<StarMeasure>,
+    /// Both sources' values and which one each check used, for display.
+    /// Set by [`choose_star_source`].
+    #[serde(default)]
+    pub stars: Option<FrameStars>,
     /// HocusFocus's count and HFR, when the scan's N.I.N.A. Fast found no
     /// stars and HocusFocus found some. The count scores in `scan_stars`;
     /// the HFR is on HocusFocus's scale, so it is shown, not scored.
@@ -1343,6 +1351,10 @@ pub struct SequenceAnalyzerConfig {
     /// `None` (the default) disables the check; unmeasured frames are exempt.
     #[serde(default)]
     pub star_count_reject_below: Option<f64>,
+    /// Which measurement of stars and HFR scoring prefers, for the limits
+    /// above and for comparing frames. See [`choose_star_source`].
+    #[serde(default)]
+    pub star_source: StarSource,
     /// How much warmer than its session a frame's sensor may run before the
     /// frame is condemned, in Celsius. A frame also fails at twice this
     /// above its recorded set point: a healthy cooler in summer holds a few
@@ -1431,6 +1443,7 @@ impl Default for SequenceAnalyzerConfig {
             bg_glow_threshold: default_bg_glow_threshold(),
             hfr_reject_above: None,
             star_count_reject_below: None,
+            star_source: StarSource::default(),
             sensor_temp_tolerance_c: default_sensor_temp_tolerance_c(),
             rotation_skew_tolerance_deg: default_rotation_skew_tolerance_deg(),
         }
@@ -1488,7 +1501,7 @@ impl SequenceAnalyzer {
         target_name: &str,
         filter_name: &str,
     ) -> Vec<ScoredSequence> {
-        let images = choose_star_source(&settle_instruments(images));
+        let images = choose_star_source(&settle_instruments(images), self.config.star_source);
         let context = TargetContext::from_images(&images, self.config.rotation_skew_tolerance_deg);
         self.analyze_in_context(&images, &context, target_id, target_name, filter_name)
     }
@@ -1527,7 +1540,7 @@ impl SequenceAnalyzer {
     ) -> (Vec<ScoredSequence>, Option<TargetFilterRollup>) {
         // Once for the whole target and filter, so the sessions and the
         // rollup compare the same kind of count.
-        let images = &choose_star_source(&settle_instruments(images));
+        let images = &choose_star_source(&settle_instruments(images), self.config.star_source);
         let context = TargetContext::from_images(images, self.config.rotation_skew_tolerance_deg);
         let sequences =
             self.analyze_in_context(images, &context, target_id, target_name, filter_name);
@@ -1819,6 +1832,7 @@ impl SequenceAnalyzer {
                     satellite: img.satellite.clone(),
                     regrade_reason: None,
                     spatial_overlay: None,
+                    stars: img.stars,
                     details: None,
                 })
                 .collect();
@@ -1973,6 +1987,7 @@ impl SequenceAnalyzer {
                 satellite: images[i].satellite.clone(),
                 regrade_reason: None,
                 spatial_overlay: None,
+                stars: images[i].stars,
                 details: None,
             });
         }
@@ -2144,33 +2159,39 @@ impl SequenceAnalyzer {
             violations.push((IssueCategory::SensorTemperature, detail, reason));
         }
         let own = own_stars(image);
+        let sources = image.stars.unwrap_or_default();
+        let from = |source: Option<StarSource>| {
+            source
+                .map(|source| format!(" ({})", source.label()))
+                .unwrap_or_default()
+        };
         if let (Some(limit), Some(hfr)) = (self.config.hfr_reject_above, own.hfr)
             && hfr > limit
         {
-            // Use the shortest round-trippable representation for both
-            // operands so the displayed comparison preserves the one made
-            // above, even when the values differ beyond a fixed precision.
+            let hfr = past_limit_text(hfr, limit);
+            let from = from(sources.hfr_source);
             violations.push((
                 IssueCategory::HfrAboveLimit,
                 format!(
-                    "HFR {hfr} px is over the Max HFR limit of {limit}. \
+                    "HFR {hfr} px{from} is over the Max HFR limit of {limit}. \
                      Limits judge each frame on its own, whatever the rest of \
                      the sequence looks like."
                 ),
-                format!("[Auto] Max HFR - {hfr} px over limit {limit}"),
+                format!("[Auto] Max HFR - {hfr} px{from} over limit {limit}"),
             ));
         }
         if let (Some(limit), Some(stars)) = (self.config.star_count_reject_below, own.star_count)
             && stars < limit
         {
+            let from = from(sources.star_count_source);
             violations.push((
                 IssueCategory::StarCountBelowLimit,
                 format!(
-                    "{stars:.0} stars is under the Min stars limit of {limit}. \
+                    "{stars:.0} stars{from} is under the Min stars limit of {limit}. \
                      Limits judge each frame on its own, whatever the rest of \
                      the sequence looks like."
                 ),
-                format!("[Auto] Min stars - {stars:.0} under limit {limit}"),
+                format!("[Auto] Min stars - {stars:.0}{from} under limit {limit}"),
             ));
         }
         violations
@@ -3624,22 +3645,61 @@ pub struct StarMeasure {
     pub hfr: Option<f64>,
 }
 
-/// Pick one source of star counts and HFR for a set of frames that will be
-/// compared. The quality scan and the capture software count on different
-/// scales (HocusFocus and N.I.N.A.'s own detector differ several-fold, and a
-/// rig's settings can change between nights), so a reference drawn from a
-/// mix scores every frame of the other kind as lost stars.
-///
-/// The scan's values are used when at least as many frames have a scan
-/// count as were measured only by the capture software; a frame not scanned
-/// yet, or whose scan failed, is then left unmeasured, which the scoring
-/// renormalizes around, so a new arrival waiting for its scan does not flip
-/// the whole set's scale. A failed scan counts on neither side, so a rig
-/// whose every scan fails is scored on the capture software's counts. The
-/// cost: a frame that can never be scanned (its file offline) loses its star
-/// dimension once most of its target is scanned. Otherwise the capture
-/// software's values are used for every frame. Each frame also keeps its own
-/// best measurement in `own_stars`. Idempotent.
+/// Which measurement of a frame's stars and HFR scoring prefers: what the
+/// capture software (N.I.N.A.) recorded, or what PSF Guard's quality scan
+/// measured. The two use different detectors, so their values differ.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StarSource {
+    /// PSF Guard's quality scan.
+    #[default]
+    Scan,
+    /// The capture software's recorded values.
+    Capture,
+}
+
+impl StarSource {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    fn other(self) -> Self {
+        match self {
+            Self::Scan => Self::Capture,
+            Self::Capture => Self::Scan,
+        }
+    }
+
+    /// How the source reads in a reject reason.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Scan => "PSF Guard",
+            Self::Capture => "N.I.N.A.",
+        }
+    }
+}
+
+/// A frame's star count and HFR from each source that measured them, and
+/// which source each check used, for the UI to show both values and mark
+/// the one in use.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct FrameStars {
+    /// What the capture software recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture: Option<StarMeasure>,
+    /// What PSF Guard's quality scan measured. A failed scan has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scan: Option<StarMeasure>,
+    /// The source the Min stars limit and the zero-star cap read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub star_count_source: Option<StarSource>,
+    /// The source the Max HFR limit reads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hfr_source: Option<StarSource>,
+    /// The source every frame of the set is compared on.
+    pub compared_on: StarSource,
+}
+
 /// The frames of each pixel domain, raw first. A set with one domain comes
 /// back whole.
 fn split_by_pixel_domain(images: &[ImageMetrics]) -> Vec<Vec<ImageMetrics>> {
@@ -3668,49 +3728,100 @@ fn split_by_instrument(images: &[ImageMetrics]) -> Vec<Vec<ImageMetrics>> {
     sets.into_iter().map(|(_, set)| set).collect()
 }
 
-pub fn choose_star_source(images: &[ImageMetrics]) -> Vec<ImageMetrics> {
+/// Pick one source of star counts and HFR for a set of frames that will be
+/// compared. The quality scan and the capture software count on different
+/// scales (HocusFocus and N.I.N.A.'s own detector differ several-fold, and a
+/// rig's settings can change between nights), so a reference drawn from a
+/// mix scores every frame of the other kind as lost stars.
+///
+/// The preferred source is used when at least as many frames have its
+/// values as have only the other's; a frame without them, such as one
+/// waiting for its scan, is then left unmeasured, which the scoring
+/// renormalizes around, so a new arrival does not flip the whole set's
+/// scale. A failed scan counts on neither side, so a rig whose every scan
+/// fails is scored on the capture software's values. The cost: a frame that
+/// can never be scanned (its file offline) loses its star dimension once
+/// most of its target is scanned. Otherwise the other source is used for
+/// every frame.
+///
+/// Each frame also keeps its own measurement in `own_stars`, for the checks
+/// that judge a frame alone: each value from the preferred source when it
+/// has one, else from the other. `stars` records both sources and which one
+/// each value came from. Idempotent.
+pub fn choose_star_source(images: &[ImageMetrics], prefer: StarSource) -> Vec<ImageMetrics> {
     if images.iter().all(|image| image.own_stars.is_some()) {
         return images.to_vec();
     }
-    let scanned = images
-        .iter()
-        .filter(|image| {
-            image
-                .scan_stars
-                .is_some_and(|scan| scan.star_count.is_some())
-        })
-        .count();
-    let recorded_only = images
-        .iter()
-        .filter(|image| {
-            image.scan_stars.is_none() && (image.star_count.is_some() || image.hfr.is_some())
-        })
-        .count();
-    let use_scan = scanned > 0 && scanned >= recorded_only;
+    let has_scan = |image: &ImageMetrics| {
+        image
+            .scan_stars
+            .is_some_and(|scan| scan.star_count.is_some())
+    };
+    let has_capture = |image: &ImageMetrics| image.star_count.is_some() || image.hfr.is_some();
+    let scan_only = |image: &ImageMetrics| has_scan(image) && !has_capture(image);
+    // A failed scan is still a scan: such a frame is not one the capture
+    // software alone measured.
+    let capture_only = |image: &ImageMetrics| image.scan_stars.is_none() && has_capture(image);
+    let tally = |test: &dyn Fn(&ImageMetrics) -> bool| images.iter().filter(|i| test(i)).count();
+    let (preferred, other_only, other) = match prefer {
+        StarSource::Scan => (tally(&has_scan), tally(&capture_only), tally(&has_capture)),
+        StarSource::Capture => (tally(&has_capture), tally(&scan_only), tally(&has_scan)),
+    };
+    let compared_on = if preferred == 0 && other > 0 || preferred < other_only {
+        prefer.other()
+    } else {
+        prefer
+    };
     images
         .iter()
         .cloned()
         .map(|mut image| {
-            let recorded = StarMeasure {
+            let capture = StarMeasure {
                 star_count: image.star_count,
                 hfr: image.hfr,
             };
-            let scan = image.scan_stars.take();
-            let own = match scan {
-                Some(scan) if scan.star_count.is_some() => scan,
-                _ => recorded,
+            let scan = image
+                .scan_stars
+                .take()
+                .filter(|scan| scan.star_count.is_some() || scan.hfr.is_some());
+            let measure = |source: StarSource| match source {
+                StarSource::Scan => scan.unwrap_or_default(),
+                StarSource::Capture => capture,
             };
-            let scored = if use_scan {
-                scan.unwrap_or_default()
-            } else {
-                recorded
+            let pick = |value: fn(&StarMeasure) -> Option<f64>| {
+                [prefer, prefer.other()]
+                    .into_iter()
+                    .find_map(|source| value(&measure(source)).map(|v| (source, v)))
             };
+            let star_count = pick(|m| m.star_count);
+            let hfr = pick(|m| m.hfr);
+            let scored = measure(compared_on);
             image.star_count = scored.star_count;
             image.hfr = scored.hfr;
-            image.own_stars = Some(own);
+            image.own_stars = Some(StarMeasure {
+                star_count: star_count.map(|(_, v)| v),
+                hfr: hfr.map(|(_, v)| v),
+            });
+            image.stars = Some(FrameStars {
+                capture: (capture.star_count.is_some() || capture.hfr.is_some()).then_some(capture),
+                scan,
+                star_count_source: star_count.map(|(source, _)| source),
+                hfr_source: hfr.map(|(source, _)| source),
+                compared_on,
+            });
             image
         })
         .collect()
+}
+
+/// A measurement past a limit, to two decimal places, or as many more as it
+/// takes not to read the same as the limit: 2.55041 over 2.5504 must not
+/// read "2.55 over 2.55".
+fn past_limit_text(value: f64, limit: f64) -> String {
+    (2..=6)
+        .find(|&places| format!("{value:.places$}") != format!("{limit:.places$}"))
+        .map(|places| format!("{value:.places$}"))
+        .unwrap_or_else(|| value.to_string())
 }
 
 /// A frame's own star count and HFR, whichever source the set scores on.
@@ -4314,6 +4425,7 @@ pub fn extract_metrics_from_metadata(
         spatial_evidence: None,
         scan_stars,
         own_stars: None,
+        stars: None,
         fallback_stars: None,
     }
 }
@@ -4350,6 +4462,7 @@ mod tests {
             spatial_evidence: None,
             scan_stars: None,
             own_stars: None,
+            stars: None,
             fallback_stars: None,
         }
     }
@@ -4470,6 +4583,7 @@ mod tests {
             spatial_evidence: None,
             scan_stars: None,
             own_stars: None,
+            stars: None,
             fallback_stars: None,
         }
     }
@@ -4591,6 +4705,7 @@ mod tests {
             spatial_evidence: None,
             scan_stars: None,
             own_stars: None,
+            stars: None,
             fallback_stars: None,
         }
     }
@@ -4934,7 +5049,7 @@ mod tests {
         // ... and one frame arrived and has not been scanned yet.
         images[7].scan_stars = None;
 
-        let chosen = choose_star_source(&images);
+        let chosen = choose_star_source(&images, StarSource::Scan);
 
         assert_eq!(chosen[0].star_count, Some(600.0));
         assert_eq!(chosen[1].star_count, None);
@@ -4983,7 +5098,7 @@ mod tests {
             image.scan_stars = Some(StarMeasure::default());
         }
 
-        let chosen = choose_star_source(&images);
+        let chosen = choose_star_source(&images, StarSource::Scan);
 
         assert_eq!(chosen[0].star_count, Some(260.0));
         assert_eq!(chosen[9].star_count, Some(1100.0));
@@ -5014,13 +5129,13 @@ mod tests {
             .collect();
         images[0] = scanned(images[0].clone(), Some(600.0), Some(3.2));
 
-        let chosen = choose_star_source(&images);
+        let chosen = choose_star_source(&images, StarSource::Scan);
 
         assert!(chosen.iter().all(|image| image.star_count == Some(1100.0)));
         assert_eq!(chosen[0].own_stars.unwrap().star_count, Some(600.0));
         assert!(chosen.iter().all(|image| image.scan_stars.is_none()));
         // Choosing again changes nothing.
-        let again = choose_star_source(&chosen);
+        let again = choose_star_source(&chosen, StarSource::Scan);
         assert_eq!(
             again
                 .iter()
@@ -5058,6 +5173,105 @@ mod tests {
         assert!(before.iter().all(|flagged| *flagged));
         assert_eq!(&after[..2], &[true, true]);
         assert!(after[2..].iter().all(|flagged| !flagged));
+    }
+
+    /// Six frames as issue #1052 reported them: N.I.N.A. (Hocus Focus)
+    /// recorded about 4500 stars at HFR 1.43; the scan counted about 930 at
+    /// HFR 3.46.
+    fn two_detector_frames() -> Vec<ImageMetrics> {
+        (0..6)
+            .map(|i| {
+                let image = make_image(i, i as i64 * 300, 4516.0, 1.43);
+                scanned(image, Some(934.0), Some(3.457553288787262))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_preferred_source_scores_the_set_and_both_stay_visible() {
+        for (prefer, stars, hfr) in [
+            (StarSource::Scan, 934.0, 3.457553288787262),
+            (StarSource::Capture, 4516.0, 1.43),
+        ] {
+            let chosen = choose_star_source(&two_detector_frames(), prefer);
+            for image in &chosen {
+                assert_eq!(image.star_count, Some(stars));
+                assert_eq!(image.hfr, Some(hfr));
+                let sources = image.stars.unwrap();
+                assert_eq!(sources.compared_on, prefer);
+                assert_eq!(sources.star_count_source, Some(prefer));
+                assert_eq!(sources.hfr_source, Some(prefer));
+                assert_eq!(sources.capture.unwrap().hfr, Some(1.43));
+                assert_eq!(sources.scan.unwrap().star_count, Some(934.0));
+            }
+        }
+    }
+
+    #[test]
+    fn a_frame_missing_the_preferred_value_is_judged_on_the_other() {
+        let mut images = two_detector_frames();
+        // An import's own HFR was never recorded.
+        images[0].hfr = None;
+        let chosen = choose_star_source(&images, StarSource::Capture);
+        let sources = chosen[0].stars.unwrap();
+        assert_eq!(sources.star_count_source, Some(StarSource::Capture));
+        assert_eq!(sources.hfr_source, Some(StarSource::Scan));
+        assert_eq!(chosen[0].own_stars.unwrap().hfr, Some(3.457553288787262));
+        // The set still compares HFR on one source: the frame without it is
+        // left unmeasured.
+        assert_eq!(chosen[0].hfr, None);
+    }
+
+    #[test]
+    fn a_set_mostly_measured_by_the_other_source_is_compared_on_that_one() {
+        let mut images = two_detector_frames();
+        for image in images.iter_mut().skip(1) {
+            image.star_count = None;
+            image.hfr = None;
+        }
+        let chosen = choose_star_source(&images, StarSource::Capture);
+        assert!(chosen
+            .iter()
+            .all(|image| image.stars.unwrap().compared_on == StarSource::Scan));
+        assert!(chosen.iter().all(|image| image.star_count == Some(934.0)));
+        // The frame N.I.N.A. measured is still judged on N.I.N.A.'s values.
+        assert_eq!(chosen[0].own_stars.unwrap().star_count, Some(4516.0));
+    }
+
+    #[test]
+    fn limits_judge_the_preferred_source_and_say_which_it_was() {
+        let reasons = |prefer: StarSource| -> Vec<Option<String>> {
+            let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig {
+                hfr_reject_above: Some(2.0),
+                star_count_reject_below: Some(1000.0),
+                star_source: prefer,
+                ..Default::default()
+            });
+            analyzer.analyze(&two_detector_frames(), 1, "target", "O")[0]
+                .images
+                .iter()
+                .map(|result| result.regrade_reason.clone())
+                .collect()
+        };
+        for reason in reasons(StarSource::Scan) {
+            let reason = reason.unwrap();
+            assert!(
+                reason.contains("[Auto] Max HFR - 3.46 px (PSF Guard) over limit 2"),
+                "{reason}"
+            );
+            assert!(
+                reason.contains("[Auto] Min stars - 934 (PSF Guard) under limit 1000"),
+                "{reason}"
+            );
+        }
+        assert!(reasons(StarSource::Capture).iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn a_value_past_a_limit_never_reads_the_same_as_the_limit() {
+        assert_eq!(past_limit_text(3.457553288787262, 2.0), "3.46");
+        assert_eq!(past_limit_text(2.55041, 2.5504), "2.55041");
+        assert_eq!(past_limit_text(2.556, 2.55), "2.56");
     }
 
     #[test]
@@ -7413,6 +7627,7 @@ mod tests {
                 satellite: None,
                 regrade_reason: None,
                 spatial_overlay: None,
+                stars: None,
                 details: None,
             },
             ImageQualityResult {
@@ -7435,6 +7650,7 @@ mod tests {
                 satellite: None,
                 regrade_reason: None,
                 spatial_overlay: None,
+                stars: None,
                 details: None,
             },
             ImageQualityResult {
@@ -7457,6 +7673,7 @@ mod tests {
                 satellite: None,
                 regrade_reason: None,
                 spatial_overlay: None,
+                stars: None,
                 details: Some("Cloud".to_string()),
             },
         ];

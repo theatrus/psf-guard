@@ -1239,6 +1239,11 @@ pub(super) fn prepare_whole(
             hasher.update(scoring.penalty_hfr_rise.to_le_bytes());
             hasher.update(scoring.penalty_star_loss.to_le_bytes());
         }
+        // So did the star source; the default keeps earlier ids.
+        if !scoring.star_source.is_default() {
+            hasher.update(b"star-source");
+            hasher.update(serde_json::to_vec(&scoring.star_source).unwrap_or_default());
+        }
     }
     // The Seiza version above already changed every id when the method
     // became a choice, so the whole method enters every id.
@@ -1729,6 +1734,7 @@ pub(super) fn fallback_quality(image_id: i32) -> ImageQualityResult {
         },
         regrade_reason: None,
         spatial_overlay: None,
+        stars: None,
         pointing: None,
         satellite: None,
         details: None,

@@ -22,7 +22,7 @@ use crate::photometry::{
 };
 use crate::sequence_analysis::{
     AstrometryFrameMetrics, ImageMetrics, IssueCategory, QualityRegionEvidence, SequenceAnalyzer,
-    SequenceAnalyzerConfig,
+    SequenceAnalyzerConfig, StarMeasure,
 };
 use crate::spatial_analysis::{compute_spatial_metrics, PixelCalibration, SpatialAnalysisConfig};
 use anyhow::Result;
@@ -932,8 +932,10 @@ fn score_records(
                     session_id: None,
                     capture_profile: r.exposure_s.map(|e| format!("exposure={e:.3}")),
                     instrument: None,
-                    star_count: Some(r.star_count as f64),
-                    hfr: (r.avg_hfr > 0.0).then_some(r.avg_hfr),
+                    // PSF Guard measured these from the pixels; no capture
+                    // software's values are read.
+                    star_count: None,
+                    hfr: None,
                     eccentricity: None,
                     snr: None,
                     background: Some(r.median_adu),
@@ -950,8 +952,12 @@ fn score_records(
                     astrometry: r.astrometry.clone(),
                     satellite: r.satellite.clone(),
                     spatial_evidence,
-                    scan_stars: None,
+                    scan_stars: Some(StarMeasure {
+                        star_count: Some(r.star_count as f64),
+                        hfr: (r.avg_hfr > 0.0).then_some(r.avg_hfr),
+                    }),
                     own_stars: None,
+                    stars: None,
                     fallback_stars: None,
                 }
             })

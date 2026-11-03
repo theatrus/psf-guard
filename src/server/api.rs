@@ -1235,6 +1235,9 @@ pub struct SequenceAnalysisQuery {
     /// default) or non-positive disables the check.
     pub hfr_reject_above: Option<f64>,
     pub star_count_reject_below: Option<f64>,
+    /// Which measurement of stars and HFR to prefer: `scan` (PSF Guard's
+    /// quality scan, the default) or `capture` (N.I.N.A.'s recorded values).
+    pub star_source: Option<crate::sequence_analysis::StarSource>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1278,6 +1281,7 @@ pub struct ScoringOverrideQuery {
     pub penalty_star_loss: Option<f64>,
     pub hfr_reject_above: Option<f64>,
     pub star_count_reject_below: Option<f64>,
+    pub star_source: Option<crate::sequence_analysis::StarSource>,
 }
 
 impl ScoringOverrideQuery {
@@ -1305,6 +1309,9 @@ impl ScoringOverrideQuery {
         if self.star_count_reject_below.is_some() {
             config.star_count_reject_below = self.star_count_reject_below;
         }
+        if let Some(source) = self.star_source {
+            config.star_source = source;
+        }
     }
 }
 
@@ -1320,6 +1327,7 @@ impl SequenceAnalysisQuery {
             penalty_star_loss: self.penalty_star_loss,
             hfr_reject_above: self.hfr_reject_above,
             star_count_reject_below: self.star_count_reject_below,
+            star_source: self.star_source,
         }
     }
 }

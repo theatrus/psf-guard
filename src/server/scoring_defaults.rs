@@ -106,6 +106,7 @@ fn checked(scoring: StackScoringSettings) -> Result<StackScoringSettings, String
         penalty_star_loss: penalty("star loss", scoring.penalty_star_loss)?,
         hfr_reject_above,
         star_count_reject_below,
+        star_source: scoring.star_source,
     })
 }
 

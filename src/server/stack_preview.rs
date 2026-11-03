@@ -94,7 +94,7 @@ use crate::acquisition_context::FramingResolver;
 use crate::db::Database;
 use crate::models::AcquiredImage;
 use crate::sequence_analysis::{
-    extract_light_metrics, ImageQualityResult, SequenceAnalyzer, SequenceAnalyzerConfig,
+    extract_light_metrics, ImageQualityResult, SequenceAnalyzer, SequenceAnalyzerConfig, StarSource,
 };
 use crate::server::api::ApiResponse;
 use crate::server::database_context::DatabaseContext;
@@ -605,6 +605,10 @@ pub struct StackScoringSettings {
     pub penalty_star_loss: f64,
     pub hfr_reject_above: Option<f64>,
     pub star_count_reject_below: Option<f64>,
+    /// Left out at its default, so settings recorded before it existed read
+    /// and compare the same.
+    #[serde(skip_serializing_if = "StarSource::is_default")]
+    pub star_source: StarSource,
 }
 
 impl Default for StackScoringSettings {
@@ -618,6 +622,7 @@ impl Default for StackScoringSettings {
             penalty_star_loss: config.penalty_scales.star_loss,
             hfr_reject_above: config.hfr_reject_above,
             star_count_reject_below: config.star_count_reject_below,
+            star_source: config.star_source,
         }
     }
 }
@@ -637,6 +642,7 @@ impl StackScoringSettings {
             penalty_star_loss: config.penalty_scales.star_loss,
             hfr_reject_above: config.hfr_reject_above,
             star_count_reject_below: config.star_count_reject_below,
+            star_source: config.star_source,
         }
     }
 
@@ -648,6 +654,7 @@ impl StackScoringSettings {
         config.penalty_scales.star_loss = self.penalty_star_loss;
         config.hfr_reject_above = self.hfr_reject_above;
         config.star_count_reject_below = self.star_count_reject_below;
+        config.star_source = self.star_source;
     }
 }
 
