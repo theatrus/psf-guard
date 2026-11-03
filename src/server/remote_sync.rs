@@ -500,6 +500,9 @@ pub async fn capabilities(
         "async_preview_jobs",
         "exports",
         "flat_history_v1",
+        // POST /sync/v1/star-detection/profile takes the plugin's snapshot of
+        // its N.I.N.A. profile's star detection settings.
+        "star_detection_profile_v1",
         FRAME_DERIVATIVES_CAPABILITY,
         PROJECT_TOMBSTONES_CAPABILITY,
     ];

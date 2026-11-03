@@ -76,9 +76,15 @@ export function recordSpan(record: ProfileRecordView): string {
   return record.effective_from ? `From ${day(record.effective_from)}` : 'All frames';
 }
 
+const ORIGIN: Record<ProfileRecordView['source'], string> = {
+  'plugin:sync': 'Sent by the Sync plugin',
+  'plugin:director': 'Sent by the Director plugin',
+  import: 'Imported',
+};
+
 /** Where a record came from and when: "Imported 2 Nov 2026". */
 export function recordOrigin(record: ProfileRecordView): string {
-  return `${record.source === 'plugin' ? 'Sent by the plugin' : 'Imported'} ${day(record.received_at)}`;
+  return `${ORIGIN[record.source] ?? 'Recorded'} ${day(record.received_at)}`;
 }
 
 /** The start of a local calendar day, as the server takes it. */

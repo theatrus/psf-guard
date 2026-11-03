@@ -664,17 +664,20 @@ pub async fn import_profile(
 /// The largest plugin snapshot accepted.
 pub const MAX_PLUGIN_BODY_BYTES: usize = 64 * 1024;
 
-/// What the PSF Guard plugin sends as it captures with a profile.
+/// What a PSF Guard N.I.N.A. plugin sends as it captures with a profile.
+/// The Sync plugin names its catalog; the Director plugin's comes from its
+/// rig's pairing, so it sends none.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PluginProfileRequest {
     pub protocol_version: u32,
-    /// The registry id of the catalog the plugin is paired with.
-    pub catalog_id: String,
+    /// The registry id of the catalog the Sync plugin is paired with.
+    #[serde(default)]
+    pub catalog_id: Option<String>,
     pub profile_id: String,
     #[serde(default)]
     pub profile_name: Option<String>,
-    /// When the frame these settings took was captured.
+    /// When the plugin read these settings.
     pub captured_at: chrono::DateTime<chrono::Utc>,
     #[serde(default)]
     pub nina_version: Option<String>,
@@ -688,7 +691,8 @@ pub struct PluginProfileRequest {
 #[derive(Debug, Serialize)]
 pub struct PluginProfileResponse {
     pub profile_id: String,
-    /// False when the profile already had these settings in effect.
+    /// False when the profile already had these settings in effect, from
+    /// either plugin or an import.
     pub stored: bool,
 }
 
@@ -708,9 +712,66 @@ fn reported_hocus_focus_version(version: Option<&str>) -> Result<HocusFocusVersi
     }
 }
 
-/// POST /api/sync/v1/star-detection/profile: the plugin's snapshot of the
-/// profile it captures with. Stored from `captured_at` on, unless the
-/// record in effect then already holds the same settings.
+/// Check a plugin's snapshot and store it from `captured_at` on, unless
+/// the record in effect then already holds the same settings, whichever
+/// source recorded them. Returns the profile key and whether it stored.
+pub(crate) async fn store_plugin_snapshot(
+    state: &Arc<AppState>,
+    source: RecordSource,
+    catalog_id: String,
+    request: PluginProfileRequest,
+) -> Result<PluginProfileResponse, AppError> {
+    if request.protocol_version != 1 {
+        return Err(AppError::BadRequest(
+            "unsupported star detection protocol version".into(),
+        ));
+    }
+    let key = profile_id_key(&request.profile_id)?;
+    let name = rig_name(request.profile_name.as_deref())?;
+    for text in [&request.nina_version, &request.hocus_focus_version]
+        .into_iter()
+        .flatten()
+    {
+        if text.chars().count() > 64 {
+            return Err(AppError::BadRequest(
+                "a version is at most 64 characters".into(),
+            ));
+        }
+    }
+    request.settings.validate().map_err(AppError::BadRequest)?;
+    let record = ProfileRecord {
+        id: uuid::Uuid::new_v4().to_string(),
+        effective_from: Some(request.captured_at),
+        source,
+        received_at: chrono::Utc::now(),
+        catalog_id: Some(catalog_id),
+        nina_version: request.nina_version,
+        hocus_focus_version: reported_hocus_focus_version(request.hocus_focus_version.as_deref())?,
+        settings: request.settings,
+    };
+    // Most captures repeat the settings in force: answer those without
+    // writing the registry.
+    let mut probe = (*crate::star_detection::current()).clone();
+    if !add_record(&mut probe, &key, None, record.clone())? {
+        return Ok(PluginProfileResponse {
+            profile_id: key,
+            stored: false,
+        });
+    }
+    let mut stored = false;
+    save_and_apply(state, |settings| {
+        stored = add_record(settings, &key, name, record)?;
+        Ok(())
+    })
+    .await?;
+    Ok(PluginProfileResponse {
+        profile_id: key,
+        stored,
+    })
+}
+
+/// POST /api/sync/v1/star-detection/profile: the Sync plugin's snapshot,
+/// authenticated by its catalog's paired client token.
 pub async fn plugin_profile(
     State(state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
@@ -724,55 +785,23 @@ pub async fn plugin_profile(
     )?;
     let catalog_id = ctx.id.clone();
     let result = async {
-        crate::server::remote_sync::require_catalog(&ctx, &request.catalog_id)?;
-        if request.protocol_version != 1 {
-            return Err(AppError::BadRequest(
-                "unsupported star detection protocol version".into(),
-            ));
-        }
-        let key = profile_id_key(&request.profile_id)?;
-        let name = rig_name(request.profile_name.as_deref())?;
-        for text in [&request.nina_version, &request.hocus_focus_version]
-            .into_iter()
-            .flatten()
-        {
-            if text.chars().count() > 64 {
-                return Err(AppError::BadRequest(
-                    "a version is at most 64 characters".into(),
-                ));
-            }
-        }
-        request.settings.validate().map_err(AppError::BadRequest)?;
-        let record = ProfileRecord {
-            id: uuid::Uuid::new_v4().to_string(),
-            effective_from: Some(request.captured_at),
-            source: RecordSource::Plugin,
-            received_at: chrono::Utc::now(),
-            catalog_id: Some(catalog_id.clone()),
-            nina_version: request.nina_version.clone(),
-            hocus_focus_version: reported_hocus_focus_version(
-                request.hocus_focus_version.as_deref(),
-            )?,
-            settings: request.settings.clone(),
-        };
-        // Most captures repeat the settings in force: answer those without
-        // writing the registry.
-        let mut probe = (*crate::star_detection::current()).clone();
-        if !add_record(&mut probe, &key, None, record.clone())? {
-            return Ok(false);
-        }
-        let mut stored = false;
-        save_and_apply(&state, |settings| {
-            stored = add_record(settings, &key, name, record)?;
-            Ok(())
-        })
-        .await?;
-        Ok(stored)
+        let requested = request
+            .catalog_id
+            .as_deref()
+            .ok_or_else(|| AppError::BadRequest("catalog_id names the paired catalog".into()))?;
+        crate::server::remote_sync::require_catalog(&ctx, requested)?;
+        store_plugin_snapshot(
+            &state,
+            RecordSource::SyncPlugin,
+            catalog_id.clone(),
+            request,
+        )
+        .await
     }
     .await;
     let (outcome, detail) = match &result {
-        Ok(true) => (AuditOutcome::Ok, "stored"),
-        Ok(false) => (AuditOutcome::Ok, "unchanged"),
+        Ok(response) if response.stored => (AuditOutcome::Ok, "stored"),
+        Ok(_) => (AuditOutcome::Ok, "unchanged"),
         Err(AppError::BadRequest(_) | AppError::Forbidden(_)) => (AuditOutcome::Refused, "refused"),
         Err(_) => (AuditOutcome::Failed, "failed"),
     };
@@ -786,11 +815,7 @@ pub async fn plugin_profile(
             ..Default::default()
         },
     );
-    let stored = result?;
-    Ok(Json(ApiResponse::success(PluginProfileResponse {
-        profile_id: profile_id_key(&request.profile_id)?,
-        stored,
-    })))
+    Ok(Json(ApiResponse::success(result?)))
 }
 
 #[cfg(test)]
@@ -900,7 +925,7 @@ mod tests {
         ProfileRecord {
             id: uuid::Uuid::new_v4().to_string(),
             effective_from: Some(captured.parse().unwrap()),
-            source: RecordSource::Plugin,
+            source: RecordSource::SyncPlugin,
             received_at: chrono::Utc::now(),
             catalog_id: Some("db-1".into()),
             nina_version: Some("3.2.0.9001".into()),
@@ -933,8 +958,10 @@ mod tests {
         assert!(!add(&mut settings, "2026-09-08T03:00:00Z", 0.5));
         assert!(add(&mut settings, "2026-09-09T03:00:00Z", 0.7));
         assert!(!add(&mut settings, "2026-09-10T03:00:00Z", 0.7));
-        // A capture before the first record has none in effect: stored.
-        assert!(add(&mut settings, "2026-08-20T03:00:00Z", 0.5));
+        // A capture before the first record falls under the earliest one:
+        // the same settings store nothing, other settings a record.
+        assert!(!add(&mut settings, "2026-08-20T03:00:00Z", 0.5));
+        assert!(add(&mut settings, "2026-08-20T03:00:00Z", 0.6));
         let profile = &settings.profiles[PROFILE];
         assert_eq!(profile.records.len(), 3);
         assert_eq!(profile.name.as_deref(), Some("redcat"));

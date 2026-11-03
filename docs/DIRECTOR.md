@@ -815,11 +815,15 @@ exact methods/routes are allowed, for the paired rig:
 - `POST /api/director/v1/rigs/{rig_id}/checkin`
 - `POST /api/director/v1/rigs/{rig_id}/status`
 - `POST /api/director/v1/rigs/{rig_id}/equipment-reports`
+- `POST /api/director/v1/rigs/{rig_id}/star-detection-settings`
 - `POST /api/director/v1/rigs/{rig_id}/workloads/request`
 - `POST /api/director/v1/rigs/{rig_id}/workloads/release`
 
 Their existing coordinator/catalog query or body fields are still required and
-validated. A ledger already reported by one rig cannot accept any sequence from
+validated. `star-detection-settings` is the exception: it takes the Sync
+plugin's star detection snapshot (see the data-transfer design record) without
+`catalog_id`, takes the catalog from the pairing, and refuses a `profile_id`
+other than the paired profile. A ledger already reported by one rig cannot accept any sequence from
 another rig, even if that rig has its own valid credential. Equipment registration,
 planning edits and operator-wide status remain
 operator-managed. A profile header asserts the profile context; possession of the

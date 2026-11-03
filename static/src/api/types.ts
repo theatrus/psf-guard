@@ -1115,7 +1115,8 @@ export interface ProfileRecordView {
   id: string;
   /** From when it applies; absent for every frame. */
   effective_from?: string;
-  source: 'plugin' | 'import';
+  /** The Sync plugin, the Director plugin, or a profile import. */
+  source: 'plugin:sync' | 'plugin:director' | 'import';
   received_at: string;
   catalog_id?: string;
   nina_version?: string;

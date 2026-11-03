@@ -483,11 +483,15 @@ pub fn resolve_record(
 
 /// Where a recorded profile snapshot came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum RecordSource {
-    /// The PSF Guard N.I.N.A. plugin sent it as it captured.
-    Plugin,
+    /// The PSF Guard Sync plugin sent it as it captured.
+    #[serde(rename = "plugin:sync", alias = "plugin")]
+    SyncPlugin,
+    /// The PSF Guard Director plugin sent it as it captured.
+    #[serde(rename = "plugin:director")]
+    DirectorPlugin,
     /// Someone imported a `.profile` file.
+    #[serde(rename = "import")]
     Import,
 }
 
@@ -525,8 +529,11 @@ pub struct ProfileStarDetection {
 
 impl ProfileStarDetection {
     /// The record in effect at `captured_at` (epoch seconds): the newest
-    /// whose start is not after it, the latest received among equals. With
-    /// no capture time, the newest record.
+    /// whose start is not after it, the latest received among equals. A
+    /// frame taken before every record takes the earliest: a plugin sends
+    /// its first snapshot after the frames already in the catalog, which
+    /// were most likely taken with the same settings. With no capture time,
+    /// the newest record.
     pub fn record_at(&self, captured_at: Option<i64>) -> Option<&ProfileRecord> {
         let captured = captured_at.and_then(|seconds| DateTime::from_timestamp(seconds, 0));
         self.records
@@ -536,6 +543,16 @@ impl ProfileStarDetection {
                 (Some(from), Some(captured)) => from <= captured,
             })
             .max_by_key(|record| (record.effective_from, record.received_at))
+            .or_else(|| self.earliest())
+    }
+
+    /// The record that starts first, the latest received among equals.
+    pub fn earliest(&self) -> Option<&ProfileRecord> {
+        self.records.iter().min_by(|left, right| {
+            left.effective_from
+                .cmp(&right.effective_from)
+                .then_with(|| right.received_at.cmp(&left.received_at))
+        })
     }
 
     /// The newest record by start date, as the panel shows it.
@@ -910,6 +927,66 @@ mod tests {
         assert_eq!(
             crop(later.resolve(&redcat_frame("2026-10-01T00:00:00Z"), measured)),
             0.8
+        );
+    }
+
+    #[test]
+    fn a_frame_before_every_record_takes_the_earliest() {
+        let mut settings = redcat_history();
+        let profile = settings.profiles.get_mut(REDCAT).unwrap();
+        profile
+            .records
+            .retain(|record| record.effective_from.is_some());
+        let measured = FwhmEvidence::Measured;
+        // A frame taken before the first record, as every frame already in
+        // the catalog is when a plugin sends its first snapshot.
+        assert_eq!(
+            crop(settings.resolve(&redcat_frame("2026-08-24T02:49:05Z"), measured)),
+            0.5
+        );
+        assert_eq!(
+            crop(settings.resolve(&redcat_frame("2026-09-10T00:00:00Z"), measured)),
+            0.7
+        );
+        // A single plugin record dated today covers the whole history.
+        let mut today = StarDetectionSettings::default();
+        today.profiles.insert(
+            REDCAT.into(),
+            ProfileStarDetection {
+                records: vec![ProfileRecord {
+                    source: RecordSource::SyncPlugin,
+                    ..record(
+                        "today",
+                        Some("2026-11-02T00:00:00Z"),
+                        StarDetectorSelection::HocusFocus,
+                        0.7,
+                    )
+                }],
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            crop(today.resolve(&redcat_frame("2026-08-24T02:49:05Z"), measured)),
+            0.7
+        );
+    }
+
+    #[test]
+    fn record_sources_name_the_plugin_that_sent_them() {
+        for (source, name) in [
+            (RecordSource::SyncPlugin, "plugin:sync"),
+            (RecordSource::DirectorPlugin, "plugin:director"),
+            (RecordSource::Import, "import"),
+        ] {
+            assert_eq!(serde_json::to_value(source).unwrap(), name);
+            assert_eq!(
+                serde_json::from_value::<RecordSource>(name.into()).unwrap(),
+                source
+            );
+        }
+        assert_eq!(
+            serde_json::from_value::<RecordSource>("plugin".into()).unwrap(),
+            RecordSource::SyncPlugin
         );
     }
 

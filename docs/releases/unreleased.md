@@ -22,7 +22,8 @@
   star detection settings: the autofocus crop and brightest-star count,
   the autostretch, and Hocus Focus's own options. Import a profile file
   under **Import N.I.N.A. profile** in the same section, for all frames
-  or from a date; the PSF Guard plugin will send them as it captures. With
+  or from a date. The PSF Guard Sync and Director plugins send them as
+  they capture, and a frame taken before the first record uses it. With
   their profiles imported, three Hocus Focus rigs matched the star counts
   and HFR N.I.N.A. recorded to within 0.2%.
 - Max HFR and Min stars now judge the values you choose. A frame can carry

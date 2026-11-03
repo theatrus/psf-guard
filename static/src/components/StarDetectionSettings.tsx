@@ -248,8 +248,9 @@ export default function StarDetectionSettings() {
         </fieldset>
         <h4 className="star-detection-subheading">N.I.N.A. profiles</h4>
         <p className="scoring-defaults-intro">
-          A frame uses its profile&apos;s settings from when it was taken, as the plugin sent them or
-          a profile import recorded them. Settings set by hand here, or for its rig below, come first.
+          A frame uses its profile&apos;s settings from when it was taken, as a plugin sent them or a
+          profile import recorded them. A frame taken before the first record uses the first.
+          Settings set by hand here, or for its rig below, come first.
         </p>
         {(data.profiles ?? []).length === 0 ? (
           <p className="scoring-defaults-intro">No profiles yet.</p>

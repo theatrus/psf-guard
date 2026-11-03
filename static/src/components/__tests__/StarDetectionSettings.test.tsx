@@ -263,6 +263,19 @@ describe('Settings › Review › Star detection › N.I.N.A. profiles', () => {
     await waitFor(() => expect(within(redcat).queryByText('History (2)')).toBeNull());
   });
 
+  it('says which plugin sent a record', async () => {
+    const user = userEvent.setup();
+    const sent = settings();
+    sent.profiles[0].records[0] = { ...sent.profiles[0].records[0], source: 'plugin:director' };
+    sent.profiles[0].records[1] = { ...sent.profiles[0].records[1], source: 'plugin:sync' };
+    serve(sent);
+    render(<StarDetectionSettings />, { wrapper: wrapper() });
+    const redcat = await screen.findByRole('group', { name: 'starfront-mini-redcat61 star detection' });
+    await user.click(within(redcat).getByText('History (2)'));
+    expect(within(redcat).getAllByText(/Sent by the Director plugin/).length).toBeGreaterThan(0);
+    expect(within(redcat).getByText(/Sent by the Sync plugin/)).toBeInTheDocument();
+  });
+
   it('saves a profile set by hand', async () => {
     const user = userEvent.setup();
     const writes = serve(settings());

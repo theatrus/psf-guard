@@ -277,9 +277,10 @@ The catalog records each frame's profile.
 
 PSF Guard records a profile's settings in two ways:
 
-- The PSF Guard N.I.N.A. plugin sends them as it captures. PSF Guard stores
-  them only when they differ from the settings already recorded for that
-  date.
+- The PSF Guard Sync plugin or Director plugin sends them as it captures.
+  PSF Guard stores them only when they differ from the settings already
+  recorded for that date, whichever plugin or import recorded those. A rig
+  that runs both plugins records each change once.
 - You import a profile file. Under **Import N.I.N.A. profile**, choose the
   **Profile file** from N.I.N.A.'s profile folder, the **Hocus Focus
   version** it ran, and whether it **Applies to** **All frames** or
@@ -297,8 +298,13 @@ A frame takes the first of these that applies:
 
 1. its profile's settings set by hand;
 2. its rig's own row;
-3. its profile's newest record in effect when it was taken;
+3. its profile's newest record in effect when it was taken, or, for a frame
+   taken before every record, the earliest record;
 4. the **Default** row.
+
+A plugin sends its first snapshot after the frames already in the catalog
+were taken, so those frames use it too. When the settings were different
+back then, import the profile as it was, from the dates it applied.
 
 A profile's record selects Hocus Focus or N.I.N.A.'s detector, but on
 frames from N.I.N.A. 3.2 and earlier the catalog decides: an FWHM means

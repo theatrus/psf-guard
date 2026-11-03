@@ -20,6 +20,7 @@ mod pairing;
 mod preferences;
 mod site_profile;
 mod sky_image;
+mod star_detection;
 mod workload;
 
 fn state(dir: &TempDir, enable: bool) -> AppState {

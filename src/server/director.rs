@@ -69,6 +69,7 @@ mod site_profile;
 mod sky_image;
 mod sky_objects;
 mod sky_search;
+mod star_detection;
 mod take_values;
 mod templates;
 mod ts_snapshot;
@@ -672,6 +673,12 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
                 .layer(DefaultBodyLimit::max(
                     psf_guard_director_core::MAX_REQUEST_BYTES,
                 )),
+        )
+        .route(
+            "/rigs/{rig}/star-detection-settings",
+            axum::routing::post(star_detection::submit).layer(DefaultBodyLimit::max(
+                crate::server::star_detection_settings::MAX_PLUGIN_BODY_BYTES,
+            )),
         )
         .route(
             "/rigs/{rig}/equipment-reports/{client}/accept",
