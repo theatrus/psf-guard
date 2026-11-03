@@ -3696,8 +3696,17 @@ pub struct FrameStars {
     /// The source the Max HFR limit reads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hfr_source: Option<StarSource>,
-    /// The source every frame of the set is compared on.
-    pub compared_on: StarSource,
+    /// The source every frame of the set is compared on, for each value.
+    pub compared_on: ComparedOn,
+}
+
+/// The source a set's frames are compared on, chosen for star counts and
+/// HFR apart: a source with only one of the two must not cost the set the
+/// other.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ComparedOn {
+    pub star_count: StarSource,
+    pub hfr: StarSource,
 }
 
 /// The frames of each pixel domain, raw first. A set with one domain comes
@@ -3728,62 +3737,77 @@ fn split_by_instrument(images: &[ImageMetrics]) -> Vec<Vec<ImageMetrics>> {
     sets.into_iter().map(|(_, set)| set).collect()
 }
 
-/// Pick one source of star counts and HFR for a set of frames that will be
-/// compared. The quality scan and the capture software count on different
-/// scales (HocusFocus and N.I.N.A.'s own detector differ several-fold, and a
-/// rig's settings can change between nights), so a reference drawn from a
-/// mix scores every frame of the other kind as lost stars.
+/// Pick one source of star counts, and one of HFR, for a set of frames that
+/// will be compared. The quality scan and the capture software count on
+/// different scales (HocusFocus and N.I.N.A.'s own detector differ
+/// several-fold, and a rig's settings can change between nights), so a
+/// reference drawn from a mix scores every frame of the other kind as lost
+/// stars.
 ///
-/// The preferred source is used when at least as many frames have its
-/// values as have only the other's; a frame without them, such as one
-/// waiting for its scan, is then left unmeasured, which the scoring
-/// renormalizes around, so a new arrival does not flip the whole set's
-/// scale. A failed scan counts on neither side, so a rig whose every scan
-/// fails is scored on the capture software's values. The cost: a frame that
-/// can never be scanned (its file offline) loses its star dimension once
-/// most of its target is scanned. Otherwise the other source is used for
-/// every frame.
+/// For each value, the preferred source is used when at least as many
+/// frames have it from that source as have it only from the other; a frame
+/// without it, such as one waiting for its scan, is then left unmeasured,
+/// which the scoring renormalizes around, so a new arrival does not flip
+/// the whole set's scale. A failed scan counts on neither side, so a rig
+/// whose every scan fails is scored on the capture software's values. The
+/// cost: a frame that can never be scanned (its file offline) loses its star
+/// dimension once most of its target is scanned. Otherwise the other source
+/// is used for every frame.
 ///
 /// Each frame also keeps its own measurement in `own_stars`, for the checks
 /// that judge a frame alone: each value from the preferred source when it
 /// has one, else from the other. `stars` records both sources and which one
-/// each value came from. Idempotent.
+/// each value came from. An HFR of zero or less is no measurement.
+/// Idempotent.
 pub fn choose_star_source(images: &[ImageMetrics], prefer: StarSource) -> Vec<ImageMetrics> {
     if images.iter().all(|image| image.own_stars.is_some()) {
         return images.to_vec();
     }
-    let has_scan = |image: &ImageMetrics| {
-        image
-            .scan_stars
-            .is_some_and(|scan| scan.star_count.is_some())
+    let measured = |hfr: Option<f64>| hfr.filter(|hfr| hfr.is_finite() && *hfr > 0.0);
+    let capture_of = |image: &ImageMetrics| StarMeasure {
+        star_count: image.star_count,
+        hfr: measured(image.hfr),
     };
-    let has_capture = |image: &ImageMetrics| image.star_count.is_some() || image.hfr.is_some();
-    let scan_only = |image: &ImageMetrics| has_scan(image) && !has_capture(image);
-    // A failed scan is still a scan: such a frame is not one the capture
-    // software alone measured.
-    let capture_only = |image: &ImageMetrics| image.scan_stars.is_none() && has_capture(image);
-    let tally = |test: &dyn Fn(&ImageMetrics) -> bool| images.iter().filter(|i| test(i)).count();
-    let (preferred, other_only, other) = match prefer {
-        StarSource::Scan => (tally(&has_scan), tally(&capture_only), tally(&has_capture)),
-        StarSource::Capture => (tally(&has_capture), tally(&scan_only), tally(&has_scan)),
+    let scan_of = |image: &ImageMetrics| {
+        image.scan_stars.map(|scan| StarMeasure {
+            star_count: scan.star_count,
+            hfr: measured(scan.hfr),
+        })
     };
-    let compared_on = if preferred == 0 && other > 0 || preferred < other_only {
-        prefer.other()
-    } else {
-        prefer
+    let compare_on = |value: fn(&StarMeasure) -> Option<f64>| {
+        let has = |source: StarSource, image: &ImageMetrics| match source {
+            StarSource::Scan => scan_of(image).is_some_and(|scan| value(&scan).is_some()),
+            StarSource::Capture => value(&capture_of(image)).is_some(),
+        };
+        let only = |source: StarSource, image: &ImageMetrics| match source {
+            StarSource::Scan => has(StarSource::Scan, image) && !has(StarSource::Capture, image),
+            // A failed scan is still a scan: such a frame is not one the
+            // capture software alone measured.
+            StarSource::Capture => image.scan_stars.is_none() && has(StarSource::Capture, image),
+        };
+        let tally =
+            |test: &dyn Fn(&ImageMetrics) -> bool| images.iter().filter(|i| test(i)).count();
+        let preferred = tally(&|image| has(prefer, image));
+        let other = tally(&|image| has(prefer.other(), image));
+        let other_only = tally(&|image| only(prefer.other(), image));
+        if preferred == 0 && other > 0 || preferred < other_only {
+            prefer.other()
+        } else {
+            prefer
+        }
+    };
+    let compared_on = ComparedOn {
+        star_count: compare_on(|m| m.star_count),
+        hfr: compare_on(|m| m.hfr),
     };
     images
         .iter()
         .cloned()
         .map(|mut image| {
-            let capture = StarMeasure {
-                star_count: image.star_count,
-                hfr: image.hfr,
-            };
-            let scan = image
-                .scan_stars
-                .take()
-                .filter(|scan| scan.star_count.is_some() || scan.hfr.is_some());
+            let capture = capture_of(&image);
+            let scan =
+                scan_of(&image).filter(|scan| scan.star_count.is_some() || scan.hfr.is_some());
+            image.scan_stars = None;
             let measure = |source: StarSource| match source {
                 StarSource::Scan => scan.unwrap_or_default(),
                 StarSource::Capture => capture,
@@ -3795,9 +3819,8 @@ pub fn choose_star_source(images: &[ImageMetrics], prefer: StarSource) -> Vec<Im
             };
             let star_count = pick(|m| m.star_count);
             let hfr = pick(|m| m.hfr);
-            let scored = measure(compared_on);
-            image.star_count = scored.star_count;
-            image.hfr = scored.hfr;
+            image.star_count = measure(compared_on.star_count).star_count;
+            image.hfr = measure(compared_on.hfr).hfr;
             image.own_stars = Some(StarMeasure {
                 star_count: star_count.map(|(_, v)| v),
                 hfr: hfr.map(|(_, v)| v),
@@ -5198,7 +5221,13 @@ mod tests {
                 assert_eq!(image.star_count, Some(stars));
                 assert_eq!(image.hfr, Some(hfr));
                 let sources = image.stars.unwrap();
-                assert_eq!(sources.compared_on, prefer);
+                assert_eq!(
+                    sources.compared_on,
+                    ComparedOn {
+                        star_count: prefer,
+                        hfr: prefer
+                    }
+                );
                 assert_eq!(sources.star_count_source, Some(prefer));
                 assert_eq!(sources.hfr_source, Some(prefer));
                 assert_eq!(sources.capture.unwrap().hfr, Some(1.43));
@@ -5232,10 +5261,46 @@ mod tests {
         let chosen = choose_star_source(&images, StarSource::Capture);
         assert!(chosen
             .iter()
-            .all(|image| image.stars.unwrap().compared_on == StarSource::Scan));
+            .all(|image| image.stars.unwrap().compared_on.star_count == StarSource::Scan));
         assert!(chosen.iter().all(|image| image.star_count == Some(934.0)));
         // The frame N.I.N.A. measured is still judged on N.I.N.A.'s values.
         assert_eq!(chosen[0].own_stars.unwrap().star_count, Some(4516.0));
+    }
+
+    #[test]
+    fn count_and_hfr_each_pick_the_source_that_has_them() {
+        // An import: the header gave N.I.N.A.'s HFR, the scan wrote back a
+        // count and no HFR.
+        let images: Vec<_> = two_detector_frames()
+            .into_iter()
+            .map(|mut image| {
+                image.star_count = None;
+                image.scan_stars = Some(StarMeasure {
+                    star_count: Some(934.0),
+                    hfr: None,
+                });
+                image
+            })
+            .collect();
+        let chosen = choose_star_source(&images, StarSource::Capture);
+        for image in &chosen {
+            let compared = image.stars.unwrap().compared_on;
+            assert_eq!(compared.star_count, StarSource::Scan);
+            assert_eq!(compared.hfr, StarSource::Capture);
+            assert_eq!(image.star_count, Some(934.0));
+            assert_eq!(image.hfr, Some(1.43));
+        }
+    }
+
+    #[test]
+    fn a_recorded_hfr_of_zero_is_no_measurement() {
+        let mut images = two_detector_frames();
+        images[0].hfr = Some(0.0);
+        let chosen = choose_star_source(&images, StarSource::Capture);
+        let sources = chosen[0].stars.unwrap();
+        assert_eq!(sources.capture.unwrap().hfr, None);
+        assert_eq!(sources.hfr_source, Some(StarSource::Scan));
+        assert_eq!(chosen[0].own_stars.unwrap().hfr, Some(3.457553288787262));
     }
 
     #[test]

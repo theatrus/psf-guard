@@ -1242,7 +1242,10 @@ pub(super) fn prepare_whole(
         // So did the star source; the default keeps earlier ids.
         if !scoring.star_source.is_default() {
             hasher.update(b"star-source");
-            hasher.update(serde_json::to_vec(&scoring.star_source).unwrap_or_default());
+            hasher.update(match scoring.star_source {
+                crate::sequence_analysis::StarSource::Scan => b"scan".as_slice(),
+                crate::sequence_analysis::StarSource::Capture => b"capture",
+            });
         }
     }
     // The Seiza version above already changed every id when the method

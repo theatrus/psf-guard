@@ -8,6 +8,7 @@ import { useAsyncImage } from '../hooks/useAsyncImage';
 import { ensurePreviewReady } from '../hooks/previewPoll';
 import { useColorPreview } from '../hooks/useColorPreview';
 import { StarReadingRows } from './StarSourceMark';
+import { useScopedQuality } from '../hooks/useSequenceAnalysis';
 
 interface ImageComparisonViewProps {
   dbId: string;
@@ -83,6 +84,15 @@ export default function ImageComparisonView({
     enabled: !!rightImageId,
     placeholderData: (previousData) => previousData, // Keep showing previous image while loading new one
   });
+
+  // Each frame's scoring, for the HFR and stars it was judged on. Two
+  // frames of one target share the query.
+  const leftQuality = useScopedQuality(
+    dbId, leftImage?.project_id, leftImage?.target_id, undefined, !!leftImage,
+  ).qualityByImage.get(leftImageId);
+  const rightQuality = useScopedQuality(
+    dbId, rightImage?.project_id, rightImage?.target_id, undefined, !!rightImage,
+  ).qualityByImage.get(rightImageId ?? -1);
 
   // Keyboard shortcuts
   useHotkeys('escape', onClose, [onClose]);
@@ -647,7 +657,7 @@ export default function ImageComparisonView({
               <div className="info-row">
                 <strong>Date:</strong> {formatDate(leftImage.acquired_date)}
               </div>
-              <StarReadingRows image={leftImage} />
+              <StarReadingRows image={leftImage} quality={leftQuality} />
             </div>
 
             <div className="panel-actions">
@@ -814,7 +824,7 @@ export default function ImageComparisonView({
                   <div className="info-row">
                     <strong>Date:</strong> {formatDate(rightImage.acquired_date)}
                   </div>
-                  <StarReadingRows image={rightImage} />
+                  <StarReadingRows image={rightImage} quality={rightQuality} />
                 </div>
 
                 <div className="panel-actions">

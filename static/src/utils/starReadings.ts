@@ -10,9 +10,16 @@ export interface StarReadings {
   capture: number | null;
   scan: number | null;
   used: StarSource | null;
+  /** The source the frame's whole set is compared on, which the Sequence
+   *  cutoff reads so no frame is ranked against another source's values. */
+  compared: StarSource | null;
 }
 
 export type StarMetric = 'stars' | 'hfr';
+
+/** Each source's mark as a superscript letter, for plain text such as a
+ *  summary line: N for N.I.N.A., P for PSF Guard. */
+export const SOURCE_SUPERSCRIPTS: Record<StarSource, string> = { capture: 'ᴺ', scan: 'ᴾ' };
 
 const finite = (value: unknown): number | null =>
   typeof value === 'number' && Number.isFinite(value) ? value : null;
@@ -25,7 +32,8 @@ const reading = (metric: StarMetric, value: unknown): number | null => {
 
 /** Which metadata fields PSF Guard's scan wrote into an imported frame's
  *  metadata. A source recorded without its field list owns both, as in
- *  early write-backs. */
+ *  early write-backs. The same rule as `extract_metrics_from_metadata` in
+ *  src/sequence_analysis.rs. */
 function writtenBack(metadata: Record<string, unknown> | undefined): string[] {
   const fields = metadata?.PsfGuardQualityFields;
   if (Array.isArray(fields)) return fields.filter((field): field is string => typeof field === 'string');
@@ -46,21 +54,31 @@ export function starReadings(
       capture: reading(metric, stars.capture?.[key]),
       scan: reading(metric, stars.scan?.[key]),
       used: (metric === 'stars' ? stars.star_count_source : stars.hfr_source) ?? null,
+      compared: stars.compared_on[key],
     };
   }
+  const none: StarReadings = { capture: null, scan: null, used: null, compared: null };
   const metadata = image?.metadata as Record<string, unknown> | undefined;
   const field = metric === 'stars' ? 'DetectedStars' : 'HFR';
   const value = reading(metric, metadata?.[field]);
-  if (value === null) return { capture: null, scan: null, used: null };
-  return writtenBack(metadata).includes(field)
-    ? { capture: null, scan: value, used: 'scan' }
-    : { capture: value, scan: null, used: 'capture' };
+  if (value === null) return none;
+  const scanWrote = writtenBack(metadata);
+  if (!scanWrote.includes(field)) return { ...none, capture: value, used: 'capture', compared: 'capture' };
+  // The scan's HFR beside N.I.N.A.'s count would mix scales in one frame;
+  // the server leaves such an HFR out, and so does this.
+  if (metric === 'hfr' && !scanWrote.includes('DetectedStars')) return none;
+  return { ...none, scan: value, used: 'scan', compared: 'scan' };
 }
 
-/** The reading scoring used, or null when the frame has none. */
+/** The reading scoring judged the frame on alone, or null when it has none. */
 export function usedReading(readings: StarReadings): number | null {
-  if (readings.used === null) return null;
-  return readings[readings.used];
+  return readings.used === null ? null : readings[readings.used];
+}
+
+/** The reading the frame's set is compared on, or null when the frame has
+ *  none from that source. */
+export function comparedReading(readings: StarReadings): number | null {
+  return readings.compared === null ? null : readings[readings.compared];
 }
 
 /** A reading as the views show it: HFR to two places, stars whole. */

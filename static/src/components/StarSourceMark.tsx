@@ -1,10 +1,12 @@
-import type { Image, StarSource } from '../api/types';
+import type { Image, ImageQualityResult, StarSource } from '../api/types';
+import { STAR_SOURCE_LABELS } from '../utils/scoring';
 import { formatReading, starReadings, type StarMetric, type StarReadings } from '../utils/starReadings';
 
-const MARKS: Record<StarSource, { letter: string; name: string; title: string }> = {
-  capture: { letter: 'N', name: 'N.I.N.A.', title: 'Recorded by N.I.N.A. during capture' },
-  scan: { letter: 'P', name: 'PSF Guard', title: "Measured by PSF Guard's quality scan" },
+const MARKS: Record<StarSource, { letter: string; title: string }> = {
+  capture: { letter: 'N', title: 'Recorded by N.I.N.A. during capture' },
+  scan: { letter: 'P', title: "Measured by PSF Guard's quality scan" },
 };
+
 
 /** The superscript letter that says where a star count or HFR came from:
  *  N for N.I.N.A., P for PSF Guard. Screen readers hear the source's name. */
@@ -13,7 +15,7 @@ export function StarSourceMark({ source }: { source: StarSource }) {
   return (
     <>
       <sup className="star-source-mark" title={mark.title} aria-hidden="true">{mark.letter}</sup>
-      <span className="visually-hidden"> ({mark.name})</span>
+      <span className="visually-hidden"> ({STAR_SOURCE_LABELS[source]})</span>
     </>
   );
 }
@@ -38,13 +40,13 @@ export function StarReadingList({ metric, readings }: { metric: StarMetric; read
   );
 }
 
-/** HFR and star rows for a view without scoring results: the catalog's
- *  value, marked with the source that wrote it. */
-export function StarReadingRows({ image }: { image: Image }) {
+/** HFR and star rows: every source's reading, marked, the one scoring used
+ *  standing out. Before scoring arrives, the catalog's value. */
+export function StarReadingRows({ image, quality }: { image: Image; quality?: ImageQualityResult | null }) {
   return (
     <>
       {(['hfr', 'stars'] as const).map((metric) => {
-        const readings = starReadings(metric, undefined, image);
+        const readings = starReadings(metric, quality, image);
         if (readings.used === null) return null;
         return (
           <div key={metric} className="info-row">

@@ -19,7 +19,7 @@ import TiltInspector from './TiltInspector';
 import { useScopedQuality } from '../hooks/useSequenceAnalysis';
 import QualityAnalysisSummary from './QualityAnalysisSummary';
 import { StarReadingList } from './StarSourceMark';
-import { starReadings } from '../utils/starReadings';
+import { formatReading, SOURCE_SUPERSCRIPTS, starReadings, usedReading } from '../utils/starReadings';
 import ScoringChangedNote from './ScoringChangedNote';
 import QualityRegionOverlay from './QualityRegionOverlay';
 import CalibrationPanel from './CalibrationPanel';
@@ -255,6 +255,8 @@ export default function ImageDetailView({
   // N.I.N.A.'s and PSF Guard's values, each marked with its source.
   const hfrReadings = starReadings('hfr', quality, image);
   const starCountReadings = starReadings('stars', quality, image);
+  const usedHfr = usedReading(hfrReadings);
+  const usedStars = usedReading(starCountReadings);
   const qualityStatus = qualityScope.isLoading
       ? 'Loading the sequence quality score and reason…'
       : qualityScope.error
@@ -575,8 +577,12 @@ export default function ImageDetailView({
         })
       : null,
     exposure !== undefined && exposure !== null ? `${exposure}s` : null,
-    typeof metadata.HFR === 'number' ? `HFR ${metadata.HFR.toFixed(2)}` : null,
-    typeof metadata.DetectedStars === 'number' ? `${metadata.DetectedStars} stars` : null,
+    usedHfr !== null && hfrReadings.used
+      ? `HFR ${formatReading('hfr', usedHfr)}${SOURCE_SUPERSCRIPTS[hfrReadings.used]}`
+      : null,
+    usedStars !== null && starCountReadings.used
+      ? `${formatReading('stars', usedStars)}${SOURCE_SUPERSCRIPTS[starCountReadings.used]} stars`
+      : null,
     typeof metadata.Mean === 'number' ? `mean ${metadata.Mean.toFixed(0)}` : null,
   ].filter(Boolean).join(' · ');
 

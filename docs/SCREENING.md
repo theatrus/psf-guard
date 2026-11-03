@@ -157,7 +157,6 @@ Settings › Review › Sequence scoring, choose the source. PSF Guard is the
 default. The choice decides:
 
 - which value Max HFR and Min stars judge, and the zero-star cap;
-- which value the Sequence view's Stars and HFR cutoff uses;
 - which values frames are compared on for HFR rise, star loss and soft
   stars.
 
@@ -168,8 +167,10 @@ Guard's.
 
 Frames of one target and filter are compared on one source, so a frame
 measured one way is never ranked against frames measured the other. The
-chosen source is used when at least as many frames have its values as have
-only the other's; otherwise the other source is used for every frame. A
+source is chosen for star counts and for HFR separately. For each, the
+chosen source is used when at least as many frames have its value as have
+only the other's; otherwise the other source is used for every frame. The
+Sequence view's Stars and HFR cutoff reads the same source. A
 frame without the source in use, such as one whose scan has not run yet,
 is left unmeasured, which the score renormalizes around, so a new frame
 waiting for its scan does not change how the rest are scored. A failed scan

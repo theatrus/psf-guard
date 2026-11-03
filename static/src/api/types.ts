@@ -4372,8 +4372,8 @@ export interface FrameStars {
   star_count_source?: StarSource;
   /** The source the Max HFR limit read; absent when neither measured. */
   hfr_source?: StarSource;
-  /** The source the target's frames are compared on. */
-  compared_on: StarSource;
+  /** The source the target's frames are compared on, for each value. */
+  compared_on: { star_count: StarSource; hfr: StarSource };
 }
 
 export interface ImageQualityResult {
