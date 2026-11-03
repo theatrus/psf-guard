@@ -5567,8 +5567,7 @@ dependencies = [
 [[package]]
 name = "seiza-imgproc"
 version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43903045bca0b629b5bda14bfda11b26758bbb3fd51d24dedb253c0155020f1d"
+source = "git+https://github.com/theatrus/seiza?rev=c5c0c742cccce0387adfc6d4595b758e7a3699f2#c5c0c742cccce0387adfc6d4595b758e7a3699f2"
 dependencies = [
  "rayon",
 ]
@@ -5628,8 +5627,7 @@ dependencies = [
 [[package]]
 name = "seiza-stars"
 version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8d8f7ea3db9ae4e4ca1ad90f802ecb7167e918867ab749ef51c9065837a7e3c7"
+source = "git+https://github.com/theatrus/seiza?rev=c5c0c742cccce0387adfc6d4595b758e7a3699f2#c5c0c742cccce0387adfc6d4595b758e7a3699f2"
 dependencies = [
  "nalgebra",
  "rayon",

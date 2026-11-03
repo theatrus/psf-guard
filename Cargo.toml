@@ -172,3 +172,11 @@ panic = "unwind"
 [build-dependencies]
 tauri-build = { version = "2.7.4", features = [] }
 toml_edit = "0.25"
+
+# N.I.N.A. detector parity (Accord filters, 3.1/3.2/3.3 measurement, HocusFocus
+# v3 and v4), pinned to theatrus/seiza#426 until it is released. seiza-stars
+# reaches seiza-imgproc by path inside the repository, so both come from the
+# same commit to keep one copy of seiza-imgproc in the tree.
+[patch.crates-io]
+seiza-imgproc = { git = "https://github.com/theatrus/seiza", rev = "c5c0c742cccce0387adfc6d4595b758e7a3699f2" }
+seiza-stars = { git = "https://github.com/theatrus/seiza", rev = "c5c0c742cccce0387adfc6d4595b758e7a3699f2" }
