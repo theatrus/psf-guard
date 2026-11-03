@@ -201,7 +201,10 @@ impl HocusFocusKnobs {
     fn derive_preset(&mut self, options: &Options<'_>) {
         let noise_level = options.text("Simple_NoiseLevel").unwrap_or("Typical");
         self.hotpixel_filtering = noise_level != "None";
-        (self.measurement_noise_reduction, self.noise_reduction_radius) = match noise_level {
+        (
+            self.measurement_noise_reduction,
+            self.noise_reduction_radius,
+        ) = match noise_level {
             "None" => (false, 0),
             "High" => (true, 5),
             _ => (false, 3),
@@ -363,11 +366,23 @@ mod tests {
             assert_eq!(ours.min_star_size, seiza.min_star_size, "{scale}");
             assert_eq!(ours.pixel_sample_size, seiza.pixel_sample_size, "{scale}");
             assert_eq!(ours.sensitivity, seiza.sensitivity, "{scale}");
-            assert_eq!(ours.noise_reduction_radius, seiza.noise_reduction_radius, "{scale}");
+            assert_eq!(
+                ours.noise_reduction_radius, seiza.noise_reduction_radius,
+                "{scale}"
+            );
             assert_eq!(ours.min_hfr, seiza.min_hfr, "{scale}");
-            assert_eq!(ours.keep_saturated_stars, seiza.keep_saturated_stars, "{scale}");
-            assert_eq!(ours.saturation_threshold, seiza.saturation_threshold, "{scale}");
-            assert_eq!(ours.contamination_sensitivity, seiza.contamination_sensitivity);
+            assert_eq!(
+                ours.keep_saturated_stars, seiza.keep_saturated_stars,
+                "{scale}"
+            );
+            assert_eq!(
+                ours.saturation_threshold, seiza.saturation_threshold,
+                "{scale}"
+            );
+            assert_eq!(
+                ours.contamination_sensitivity,
+                seiza.contamination_sensitivity
+            );
         }
     }
 

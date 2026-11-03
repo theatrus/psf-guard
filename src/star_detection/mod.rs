@@ -204,7 +204,8 @@ impl DetectionSettings {
                 sensitivity,
                 noise_reduction,
                 profile,
-            } => format!(
+            } => {
+                format!(
                 "N.I.N.A. {} measurement, {sensitivity:?} sensitivity, {noise_reduction:?} noise \
                  reduction{}",
                 serde_json::to_value(measurement)
@@ -212,10 +213,15 @@ impl DetectionSettings {
                     .and_then(|value| value.as_str().map(str::to_string))
                     .unwrap_or_default(),
                 if profile.is_some() { ", profile options" } else { "" }
-            ),
+            )
+            }
             Self::HocusFocus { version, knobs } => format!(
                 "Hocus Focus {version:?}{}",
-                if knobs.is_some() { ", profile options" } else { "" }
+                if knobs.is_some() {
+                    ", profile options"
+                } else {
+                    ""
+                }
             ),
         }
     }
@@ -675,7 +681,11 @@ mod tests {
     fn auto_follows_the_frames_metadata_and_release() {
         let auto = RigStarDetection::default();
         assert_eq!(
-            resolve(&auto, &facts("N.I.N.A. 3.2.0.9001 (x64)"), FwhmEvidence::Measured),
+            resolve(
+                &auto,
+                &facts("N.I.N.A. 3.2.0.9001 (x64)"),
+                FwhmEvidence::Measured
+            ),
             DetectionSettings::HocusFocus {
                 version: HocusFocusVersion::V4,
                 knobs: None,
@@ -695,7 +705,11 @@ mod tests {
             }
         );
         assert_eq!(
-            resolve(&auto, &facts("N.I.N.A. 3.2.0.9001 (x64)"), FwhmEvidence::Absent),
+            resolve(
+                &auto,
+                &facts("N.I.N.A. 3.2.0.9001 (x64)"),
+                FwhmEvidence::Absent
+            ),
             nina(NinaMeasurement::Nina32)
         );
         assert_eq!(
@@ -731,7 +745,11 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            resolve(&forced_nina, &facts("N.I.N.A. 3.2.0.9001 (x64)"), FwhmEvidence::Measured),
+            resolve(
+                &forced_nina,
+                &facts("N.I.N.A. 3.2.0.9001 (x64)"),
+                FwhmEvidence::Measured
+            ),
             DetectionSettings::Nina {
                 measurement: NinaMeasurement::Nina32,
                 sensitivity: Sensitivity::Highest,
@@ -745,7 +763,11 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            resolve(&forced_hocus_focus, &facts("N.I.N.A. 3.3.0.1022"), FwhmEvidence::Absent),
+            resolve(
+                &forced_hocus_focus,
+                &facts("N.I.N.A. 3.3.0.1022"),
+                FwhmEvidence::Absent
+            ),
             DetectionSettings::HocusFocus {
                 version: HocusFocusVersion::V3,
                 knobs: None,
@@ -808,9 +830,12 @@ mod tests {
             settings: ProfileSettings {
                 star_detector: detector,
                 autofocus_inner_crop_ratio: inner_crop,
-                hocus_focus: [("Simple_PixelScale".to_string(), serde_json::json!("WideField"))]
-                    .into_iter()
-                    .collect(),
+                hocus_focus: [(
+                    "Simple_PixelScale".to_string(),
+                    serde_json::json!("WideField"),
+                )]
+                .into_iter()
+                .collect(),
                 ..Default::default()
             },
         }
@@ -823,12 +848,7 @@ mod tests {
             rig_uuid: Some("rig".into()),
             software: Some("N.I.N.A. 3.2.0.9001 (x64)".into()),
             profile_id: profile_key(&REDCAT.to_uppercase()),
-            captured_at: Some(
-                captured
-                    .parse::<DateTime<Utc>>()
-                    .unwrap()
-                    .timestamp(),
-            ),
+            captured_at: Some(captured.parse::<DateTime<Utc>>().unwrap().timestamp()),
         }
     }
 
@@ -993,7 +1013,12 @@ mod tests {
         assert_eq!(params.inner_crop_ratio, 0.5);
         assert_eq!(params.outer_crop_ratio, 1.0);
         assert_eq!(detection.stretch_params().target_median, 0.15);
-        assert!(!DetectionSettings::default().nina_params(None).unwrap().use_roi);
+        assert!(
+            !DetectionSettings::default()
+                .nina_params(None)
+                .unwrap()
+                .use_roi
+        );
         let json = serde_json::to_value(detection).unwrap();
         assert_eq!(
             serde_json::from_value::<DetectionSettings>(json).unwrap(),

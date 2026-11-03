@@ -183,8 +183,14 @@ impl ProfileSettings {
     /// value.
     pub fn validate(&self) -> Result<(), String> {
         for (name, ratio) in [
-            ("autofocus_inner_crop_ratio", self.autofocus_inner_crop_ratio),
-            ("autofocus_outer_crop_ratio", self.autofocus_outer_crop_ratio),
+            (
+                "autofocus_inner_crop_ratio",
+                self.autofocus_inner_crop_ratio,
+            ),
+            (
+                "autofocus_outer_crop_ratio",
+                self.autofocus_outer_crop_ratio,
+            ),
         ] {
             if !(ratio.is_finite() && ratio > 0.0 && ratio <= 1.0) {
                 return Err(format!("{name} must be above 0 and at most 1"));
@@ -196,7 +202,10 @@ impl ProfileSettings {
         if self.autofocus_brightest_stars > 100_000 {
             return Err("autofocus_brightest_stars is at most 100000".into());
         }
-        for value in [self.focal_length_mm, self.pixel_size_um].into_iter().flatten() {
+        for value in [self.focal_length_mm, self.pixel_size_um]
+            .into_iter()
+            .flatten()
+        {
             if !(value.is_finite() && value > 0.0) {
                 return Err("focal length and pixel size must be positive".into());
             }
@@ -208,7 +217,9 @@ impl ProfileSettings {
         }
         for (key, value) in &self.hocus_focus {
             if !HOCUS_FOCUS_KEYS.contains(&key.as_str()) {
-                return Err(format!("`{key}` is not a Hocus Focus option PSF Guard reads"));
+                return Err(format!(
+                    "`{key}` is not a Hocus Focus option PSF Guard reads"
+                ));
             }
             let fits = match value {
                 serde_json::Value::Bool(_) => true,
@@ -217,7 +228,9 @@ impl ProfileSettings {
                 _ => false,
             };
             if !fits {
-                return Err(format!("Hocus Focus option `{key}` has an unreadable value"));
+                return Err(format!(
+                    "Hocus Focus option `{key}` has an unreadable value"
+                ));
             }
         }
         Ok(())
@@ -336,11 +349,9 @@ fn read_tree(xml: &[u8]) -> Result<Element, String> {
             }
             Event::GeneralRef(reference) => {
                 let resolved = if reference.is_char_ref() {
-                    reference
-                        .resolve_char_ref()
-                        .ok()
-                        .flatten()
-                        .ok_or_else(|| "the file holds an invalid character reference".to_string())?
+                    reference.resolve_char_ref().ok().flatten().ok_or_else(|| {
+                        "the file holds an invalid character reference".to_string()
+                    })?
                 } else {
                     match &*reference {
                         "amp" => '&',
@@ -536,9 +547,15 @@ mod tests {
         assert_eq!(settings.pixel_size_um, Some(3.76));
         assert_eq!(settings.hocus_focus["UseAdvanced"], json!(true));
         assert_eq!(settings.hocus_focus["StructureLayers"], json!(6));
-        assert_eq!(settings.hocus_focus["BrightnessSensitivity"], json!(1.2000000000000002));
+        assert_eq!(
+            settings.hocus_focus["BrightnessSensitivity"],
+            json!(1.2000000000000002)
+        );
         assert_eq!(settings.hocus_focus["MinStarBoundingBoxSize"], json!(6));
-        assert_eq!(settings.hocus_focus["Simple_PixelScale"], json!("LongFocalLength"));
+        assert_eq!(
+            settings.hocus_focus["Simple_PixelScale"],
+            json!("LongFocalLength")
+        );
         // Autofocus timing is not a detection setting.
         assert!(!settings.hocus_focus.contains_key("AutoFocusTimeoutSeconds"));
         assert!(c925.warnings.is_empty());
@@ -548,25 +565,27 @@ mod tests {
         assert_eq!(redcat.settings.autofocus_inner_crop_ratio, 0.7);
         assert_eq!(redcat.settings.autofocus_outer_crop_ratio, 1.0);
         assert!(!redcat.settings.hocus_focus.contains_key("UseAdvanced"));
-        assert_eq!(redcat.settings.hocus_focus["Simple_PixelScale"], json!("WideField"));
+        assert_eq!(
+            redcat.settings.hocus_focus["Simple_PixelScale"],
+            json!("WideField")
+        );
 
         let ultracat = parse_profile(&fixture("ultracat.profile")).unwrap();
         assert_eq!(ultracat.profile_id, "713cd923-3ca5-4273-b454-bb063788045a");
         assert_eq!(ultracat.settings.hocus_focus["PixelSampleSize"], json!(0.5));
         assert_eq!(ultracat.settings.hocus_focus["UseAdvanced"], json!(true));
 
-        for name in [
-            "askar.profile",
-            "astropc1.profile",
-            "starfront-std.profile",
-        ] {
+        for name in ["askar.profile", "astropc1.profile", "starfront-std.profile"] {
             let parsed = parse_profile(&fixture(name)).unwrap();
             assert_eq!(
                 parsed.settings.star_detector,
                 StarDetectorSelection::HocusFocus,
                 "{name}"
             );
-            assert_eq!(parsed.settings.hocus_focus["NoiseReductionRadius"], json!(4));
+            assert_eq!(
+                parsed.settings.hocus_focus["NoiseReductionRadius"],
+                json!(4)
+            );
         }
     }
 
@@ -576,7 +595,9 @@ mod tests {
         assert!(parse_profile(doctype).unwrap_err().contains("DTD"));
         let entity = br#"<Profile><Id>&x;</Id></Profile>"#;
         assert!(parse_profile(entity).unwrap_err().contains("entity"));
-        assert!(parse_profile(b"<Other/>").unwrap_err().contains("not a N.I.N.A. profile"));
+        assert!(parse_profile(b"<Other/>")
+            .unwrap_err()
+            .contains("not a N.I.N.A. profile"));
         assert!(parse_profile(b"<Profile><Id>nope</Id></Profile>")
             .unwrap_err()
             .contains("Id"));
@@ -589,7 +610,9 @@ mod tests {
             "<a>".repeat(MAX_DEPTH + 1),
             "</a>".repeat(MAX_DEPTH + 1)
         );
-        assert!(parse_profile(deep.as_bytes()).unwrap_err().contains("nested"));
+        assert!(parse_profile(deep.as_bytes())
+            .unwrap_err()
+            .contains("nested"));
         assert!(parse_profile(&[0xff, 0xfe, 0x00]).is_err());
     }
 

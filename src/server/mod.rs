@@ -830,6 +830,21 @@ pub fn api_router(state: Arc<AppState>) -> Router {
                 .delete(star_detection_settings::delete_rig_star_detection_settings),
         )
         .route(
+            "/settings/star-detection/profiles/import",
+            post(star_detection_settings::import_profile).layer(DefaultBodyLimit::max(
+                crate::star_detection::nina_profile::MAX_PROFILE_BYTES + 1024,
+            )),
+        )
+        .route(
+            "/settings/star-detection/profiles/{profile_id}/manual",
+            put(star_detection_settings::update_profile_manual)
+                .delete(star_detection_settings::delete_profile_manual),
+        )
+        .route(
+            "/settings/star-detection/profiles/{profile_id}/records/{record_id}",
+            delete(star_detection_settings::delete_profile_record),
+        )
+        .route(
             "/settings/scoring",
             get(scoring_defaults::get_scoring_defaults)
                 .put(scoring_defaults::update_scoring_defaults),
@@ -956,6 +971,12 @@ pub fn api_router(state: Arc<AppState>) -> Router {
                 .layer(DefaultBodyLimit::max(flat_history::MAX_BODY_BYTES)),
         )
         .route("/sync/v1/pair", post(pairing::pair_route))
+        .route(
+            "/sync/v1/star-detection/profile",
+            post(star_detection_settings::plugin_profile).layer(DefaultBodyLimit::max(
+                star_detection_settings::MAX_PLUGIN_BODY_BYTES,
+            )),
+        )
         .route(
             "/sync/v1/previews",
             post(remote_sync::create_preview)
