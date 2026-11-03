@@ -696,6 +696,16 @@ pub struct PluginProfileResponse {
     pub stored: bool,
 }
 
+/// A plugin body that does not parse, answered 400 like a snapshot that
+/// fails validation, so both plugins hold it until it changes rather than
+/// retrying axum's 422.
+pub(crate) fn plugin_body(
+    body: Result<Json<PluginProfileRequest>, axum::extract::rejection::JsonRejection>,
+) -> Result<PluginProfileRequest, AppError> {
+    body.map(|Json(request)| request)
+        .map_err(|rejection| AppError::BadRequest(rejection.body_text()))
+}
+
 /// The Hocus Focus version a plugin reports, by its major number.
 fn reported_hocus_focus_version(version: Option<&str>) -> Result<HocusFocusVersion, AppError> {
     let Some(version) = version.map(str::trim).filter(|v| !v.is_empty()) else {
@@ -775,7 +785,7 @@ pub(crate) async fn store_plugin_snapshot(
 pub async fn plugin_profile(
     State(state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
-    Json(request): Json<PluginProfileRequest>,
+    body: Result<Json<PluginProfileRequest>, axum::extract::rejection::JsonRejection>,
 ) -> Result<Json<ApiResponse<PluginProfileResponse>>, AppError> {
     use crate::server::remote_audit::{AuditAction, AuditOutcome, AuditRecord};
     let ctx = crate::server::remote_sync::authenticated_catalog(
@@ -785,6 +795,7 @@ pub async fn plugin_profile(
     )?;
     let catalog_id = ctx.id.clone();
     let result = async {
+        let request = plugin_body(body)?;
         let requested = request
             .catalog_id
             .as_deref()

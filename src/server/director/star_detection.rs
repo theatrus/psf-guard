@@ -6,7 +6,7 @@
 use super::*;
 use crate::server::handlers::AppError;
 use crate::server::star_detection_settings::{
-    store_plugin_snapshot, PluginProfileRequest, PluginProfileResponse,
+    plugin_body, store_plugin_snapshot, PluginProfileRequest, PluginProfileResponse,
 };
 use crate::star_detection::RecordSource;
 use axum::http::{header::AUTHORIZATION, HeaderMap};
@@ -16,7 +16,7 @@ pub(super) async fn submit(
     State(state): State<Arc<AppState>>,
     Path(rig): Path<Uuid>,
     headers: HeaderMap,
-    Json(request): Json<PluginProfileRequest>,
+    body: Result<Json<PluginProfileRequest>, axum::extract::rejection::JsonRejection>,
 ) -> Result<Response, AppError> {
     let denied = || AppError::Forbidden("this rig's pairing does not cover the request".into());
     let service = enabled(&state).map_err(|_| AppError::NotFound)?;
@@ -39,6 +39,7 @@ pub(super) async fn submit(
     if client.rig_id != rig {
         return Err(denied());
     }
+    let request = plugin_body(body)?;
     if request.catalog_id.is_some() {
         return Err(AppError::BadRequest(
             "a Director rig's catalog comes from its pairing; leave catalog_id out".into(),

@@ -87,6 +87,15 @@ async fn a_paired_rig_records_its_profiles_star_detection_once() {
     with_catalog["catalog_id"] = json!("db-1");
     let (status, _) = client_call(&app, "POST", &path, with_catalog, token, Some(profile)).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+    // A body that does not parse is a 400 too, not axum's 422.
+    let mut unknown = snapshot(profile, 0.5);
+    unknown["colour"] = json!("red");
+    let (status, refused) = client_call(&app, "POST", &path, unknown, token, Some(profile)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    let mut bad_enum = snapshot(profile, 0.5);
+    bad_enum["settings"]["star_sensitivity"] = json!("extreme");
+    let (status, _) = client_call(&app, "POST", &path, bad_enum, token, Some(profile)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
     // Another rig's path is refused before the handler.
     let (status, _) = client_call(
         &app,
