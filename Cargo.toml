@@ -178,5 +178,5 @@ toml_edit = "0.25"
 # reaches seiza-imgproc by path inside the repository, so both come from the
 # same commit to keep one copy of seiza-imgproc in the tree.
 [patch.crates-io]
-seiza-imgproc = { git = "https://github.com/theatrus/seiza", rev = "c5c0c742cccce0387adfc6d4595b758e7a3699f2" }
-seiza-stars = { git = "https://github.com/theatrus/seiza", rev = "c5c0c742cccce0387adfc6d4595b758e7a3699f2" }
+seiza-imgproc = { git = "https://github.com/theatrus/seiza", rev = "04733bb95f1378dc0b6edd0b9902c9bd9b55f6b7" }
+seiza-stars = { git = "https://github.com/theatrus/seiza", rev = "04733bb95f1378dc0b6edd0b9902c9bd9b55f6b7" }
