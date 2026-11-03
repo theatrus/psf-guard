@@ -198,7 +198,7 @@ describe('Settings › Review › Star detection', () => {
     expect(within(askar).getByRole('combobox', { name: 'Sensitivity' })).toHaveValue('high');
     expect(within(askar).getByRole('combobox', { name: 'Sensitivity' })).toBeDisabled();
     expect(within(askar).getByRole('combobox', { name: 'Detector' })).toHaveAccessibleDescription(
-      /^Detector: Auto uses Hocus Focus where N\.I\.N\.A\. recorded an FWHM/,
+      /^Auto: Hocus Focus where N\.I\.N\.A\. recorded an FWHM/,
     );
     expect(screen.getByRole('button', { name: 'Save star detection' })).toHaveAttribute('aria-disabled', 'true');
   });
@@ -249,7 +249,7 @@ describe('Settings › Review › Star detection › N.I.N.A. profiles', () => {
     const redcat = await screen.findByRole('group', { name: 'starfront-mini-redcat61 star detection' });
     expect(within(redcat).getByText('1,927 frames · Redcat')).toBeInTheDocument();
     expect(within(redcat).getByText(
-      'Hocus Focus 4 · Simple · crop 0.7 · layers 3 · sensitivity 10 · min box 4 · noise radius 4 · sample 0.5',
+      'Hocus Focus 4 · Simple · crop 0.7 · layers 3 · sensitivity 10 · min star box 4 · noise radius 4 · pixel sample 0.5',
     )).toBeInTheDocument();
     expect(within(redcat).getByRole('checkbox', { name: 'Set by hand' })).not.toBeChecked();
     expect(within(redcat).queryByRole('combobox', { name: 'Detector' })).toBeNull();
@@ -285,7 +285,7 @@ describe('Settings › Review › Star detection › N.I.N.A. profiles', () => {
     await user.upload(screen.getByLabelText('Profile file'), file);
     await user.click(screen.getByRole('button', { name: 'Read file' }));
     const read = await screen.findByRole('status');
-    const still = within(read).getAllByText(/^The imported record from .* still applies to frames from that date\.$/);
+    const still = within(read).getAllByText(/^Imported record still applies from .+$/);
     expect(still).toHaveLength(2);
   });
 
@@ -329,6 +329,6 @@ describe('Settings › Review › Star detection › N.I.N.A. profiles', () => {
     await user.click(screen.getByRole('button', { name: 'Import profile' }));
     await waitFor(() => expect(writes).toHaveLength(2));
     expect(new URL(writes[1].url).searchParams.get('preview')).toBe('false');
-    expect(await screen.findByText(/^Imported starfront-mini-redcat61\./)).toBeInTheDocument();
+    expect(await screen.findByText(/^Imported starfront-mini-redcat61 · /)).toBeInTheDocument();
   });
 });

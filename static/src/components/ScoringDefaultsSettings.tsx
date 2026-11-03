@@ -200,10 +200,8 @@ export default function ScoringDefaultsSettings() {
             <div className="scoring-default-text">
               <span className="scoring-default-label" id={`${fieldId}-source`}>Measured by</span>
               <small id={`${fieldId}-source-hint`}>
-                Which star count and HFR the reject limits judge and frames are compared on.
-                PSF Guard&apos;s quality scan measures every frame the same way; N.I.N.A.&apos;s
-                values are the ones it showed during capture. A frame without that value uses
-                the other. Built in: {STAR_SOURCE_LABELS[SCORING_DEFAULTS.starSource]}.
+                The star count and HFR the reject limits and comparisons use. A frame without
+                them uses the other source. Built in: {STAR_SOURCE_LABELS[SCORING_DEFAULTS.starSource]}.
               </small>
             </div>
             <span

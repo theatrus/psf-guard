@@ -483,8 +483,7 @@ pub fn parse_profile(xml: &[u8]) -> Result<ParsedProfile, String> {
         .unwrap_or_default();
     if let StarDetectorSelection::Other(name) = &star_detector {
         warnings.push(format!(
-            "The profile selects the star detector {name}, which PSF Guard cannot reproduce; \
-             it measures with N.I.N.A.'s detector instead."
+            "Not supported: star detector {name}; N.I.N.A.'s detector is used"
         ));
     }
 
@@ -515,9 +514,7 @@ pub fn parse_profile(xml: &[u8]) -> Result<ParsedProfile, String> {
     }
     if hocus_focus.get("UsePerFilterSettings") == Some(&serde_json::Value::Bool(true)) {
         warnings.push(
-            "Hocus Focus uses per-filter settings, which PSF Guard does not read; it measures \
-             every filter with the shared settings."
-                .into(),
+            "Not reproduced: Hocus Focus per-filter settings; the shared settings are used".into(),
         );
     }
 

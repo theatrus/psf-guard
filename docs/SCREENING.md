@@ -265,7 +265,7 @@ the calibration, not the capture.
 Click **Save star detection**. PSF Guard uses the new settings at once:
 each frame whose detection changes counts as outdated, and the next quality
 scan or quality backfill measures it again. Until then, scoring does not use
-that frame's earlier scan values. **Reset the default to N.I.N.A.'s** puts
+that frame's earlier scan values. **Reset default to N.I.N.A.'s** puts
 N.I.N.A.'s own defaults back in the Default row; click Save to keep them.
 
 #### N.I.N.A. profiles
@@ -300,8 +300,8 @@ hand** gives the profile the four choices above instead of its records.
 A dated record always applies from its date on, whatever was imported
 later. An import for **All frames** therefore applies only to frames from
 before the profile's first dated record. **Read file** lists each record that
-will still apply, such as "The Sync plugin's record from Sep 1, 2026 still
-applies to frames from that date." To change those frames as well, delete
+will still apply, such as "Sync plugin record still applies from Sep 1,
+2026". To change those frames as well, delete
 the later records or import from their dates.
 
 A frame takes the first of these that applies:

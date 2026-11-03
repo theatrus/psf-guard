@@ -169,8 +169,7 @@ impl HocusFocusKnobs {
                 match serde_json::from_str::<serde_json::Map<String, Value>>(snapshot) {
                     Ok(snapshot) => knobs.apply_optimized(&snapshot),
                     Err(_) => notes.push(
-                        "Hocus Focus's optimized settings could not be read; PSF Guard uses its \
-                         Simple preset."
+                        "Hocus Focus's optimized settings are unreadable; the Simple preset is used"
                             .into(),
                     ),
                 }
@@ -183,16 +182,11 @@ impl HocusFocusKnobs {
         let dilation = options.u32("StructureDilationCount", 0);
         if dilation != 0 {
             notes.push(format!(
-                "Hocus Focus dilates structures {dilation} times, which PSF Guard does not \
-                 reproduce."
+                "Not reproduced: Hocus Focus structure dilation ({dilation}×)"
             ));
         }
         if options.bool("DefocusAwareDonutDetection", false) {
-            notes.push(
-                "Hocus Focus's defocus-aware donut detection is on, which PSF Guard does not \
-                 reproduce."
-                    .into(),
-            );
+            notes.push("Not reproduced: Hocus Focus donut detection".into());
         }
         (knobs, notes)
     }

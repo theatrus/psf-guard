@@ -34,17 +34,17 @@ interface FieldSpec<T extends string> {
 
 const DETECTOR: FieldSpec<StarDetector> = {
   label: 'Detector',
-  hint: 'Auto uses Hocus Focus where N.I.N.A. recorded an FWHM for the frame, and N.I.N.A.\'s detector elsewhere.',
+  hint: 'Auto: Hocus Focus where N.I.N.A. recorded an FWHM, N.I.N.A.\'s detector elsewhere.',
   options: [['auto', 'Auto'], ['nina', 'N.I.N.A.'], ['hocus_focus', 'Hocus Focus']],
 };
 const SENSITIVITY: FieldSpec<StarSensitivity> = {
   label: 'Sensitivity',
-  hint: 'As set in N.I.N.A.\'s imaging options. N.I.N.A. uses High unless changed.',
+  hint: 'From N.I.N.A.\'s imaging options. N.I.N.A. default: High.',
   options: [['normal', 'Normal'], ['high', 'High'], ['highest', 'Highest']],
 };
 const NOISE_REDUCTION: FieldSpec<StarNoiseReduction> = {
   label: 'Noise reduction',
-  hint: 'As set in N.I.N.A.\'s imaging options. N.I.N.A. uses None unless changed.',
+  hint: 'From N.I.N.A.\'s imaging options. N.I.N.A. default: None.',
   options: [['none', 'None'], ['normal', 'Normal'], ['high', 'High'], ['highest', 'Highest'], ['median', 'Median']],
 };
 const HOCUS_FOCUS_VERSION: FieldSpec<HocusFocusVersion> = {
@@ -208,7 +208,7 @@ export default function StarDetectionSettings() {
       {FIELDS.map(({ key, spec }) => {
         const id = `${idPrefix}-${key}`;
         return (
-          <label key={key} className="star-detection-field" htmlFor={id}>
+          <label key={key} className="star-detection-field" htmlFor={id} title={spec.hint}>
             <span className="scoring-default-label">{spec.label}</span>
             <select
               id={id}
@@ -231,33 +231,21 @@ export default function StarDetectionSettings() {
     <section className="scoring-defaults star-detection" aria-labelledby={headingId}>
       <UnsavedMark label="star detection" dirty={dirty} />
       <h3 id={headingId}>Star detection</h3>
-      <p className="scoring-defaults-intro">
-        The quality scan detects stars as each rig&apos;s N.I.N.A. did, so its star counts and HFR
-        compare with N.I.N.A.&apos;s. After you save, the next quality scan measures the affected
-        frames again.
-      </p>
       {!canWrite && (
         <p className="scoring-defaults-intro">Only an editor can change these settings.</p>
       )}
-      <ul className="star-detection-hints">
+      {/* Each field's hint, as its description and its label's tooltip. */}
+      <div className="visually-hidden">
         {FIELDS.map(({ key, spec }) => (
-          <li key={key} id={`${fieldId}-${key}-hint`}>
-            <strong>{spec.label}:</strong> {spec.hint}
-          </li>
+          <span key={key} id={`${fieldId}-${key}-hint`}>{spec.hint}</span>
         ))}
-      </ul>
+      </div>
       <form className="scoring-defaults-form" onSubmit={submit} noValidate>
         <fieldset className="scoring-defaults-group" disabled={busy}>
           <legend>Default</legend>
-          <p className="star-detection-meta">Rigs without settings of their own</p>
           {fields(current.default, `${fieldId}-default`, setDefault)}
         </fieldset>
         <h4 className="star-detection-subheading">N.I.N.A. profiles</h4>
-        <p className="scoring-defaults-intro">
-          A frame uses its profile&apos;s settings from when it was taken, as a plugin sent them or a
-          profile import recorded them. A frame taken before the first record uses the first.
-          Settings set by hand here, or for its rig below, come first.
-        </p>
         {(data.profiles ?? []).length === 0 ? (
           <p className="scoring-defaults-intro">No profiles yet.</p>
         ) : (
@@ -277,9 +265,7 @@ export default function StarDetectionSettings() {
         )}
         <h4 className="star-detection-subheading">Rigs</h4>
         {data.rigs.length === 0 ? (
-          <p className="scoring-defaults-intro">
-            No rigs yet. Import lights, and their rigs appear here.
-          </p>
+          <p className="scoring-defaults-intro">No rigs yet.</p>
         ) : (
           data.rigs.map((rig) => {
             const own = current.rigs[rig.rig_uuid] ?? null;
@@ -315,19 +301,25 @@ export default function StarDetectionSettings() {
         {/* aria-disabled, not disabled: a button that disables itself as it
             is pressed would drop keyboard focus out of the form. */}
         <div className="scoring-defaults-actions">
-          <button type="submit" className="save-button" aria-disabled={!dirty || busy}>
+          <button
+            type="submit"
+            className="save-button"
+            aria-disabled={!dirty || busy}
+            title="The next quality scan measures the affected frames again"
+          >
             {save.isPending ? 'Saving…' : 'Save star detection'}
           </button>
           <button
             type="button"
             className="cancel-button"
             aria-disabled={atBuiltIn || busy}
+            title="Auto · High · None · Hocus Focus 4"
             onClick={() => {
               if (atBuiltIn || busy) return;
               setDraft({ ...current, default: { ...data.builtin } });
             }}
           >
-            Reset the default to N.I.N.A.&apos;s
+            Reset default to N.I.N.A.&apos;s
           </button>
         </div>
         {save.isError && (
@@ -379,7 +371,7 @@ function ProfileRow({ profile, manual, fallback, busy, onManual, onDeleted, rend
           <small>{spans.get(latest.id)} · {recordOrigin(latest)}</small>
         </p>
       ) : (
-        <p className="star-detection-meta">No recorded settings. Its rig&apos;s or the default settings apply.</p>
+        <p className="star-detection-meta">No settings recorded</p>
       )}
       {profile.records.length > 1 && (
         <details className="star-detection-history">
@@ -410,7 +402,7 @@ function ProfileRow({ profile, manual, fallback, busy, onManual, onDeleted, rend
           className="link-button star-detection-delete"
           onClick={() => remove.mutate(latest.id)}
         >
-          Delete the record
+          Delete record
         </button>
       )}
       {latest?.notes.map((note) => (
@@ -468,12 +460,12 @@ function ImportProfile({ onImported }: { onImported: (latest: Settings) => void 
   return (
     <section className="star-detection-import" aria-labelledby={`${id}-heading`}>
       <h4 id={`${id}-heading`} className="star-detection-subheading">Import N.I.N.A. profile</h4>
-      <p className="scoring-defaults-intro">
-        Read a profile file from N.I.N.A.&apos;s profile folder. PSF Guard stores its star detection
-        settings for that profile&apos;s frames.
-      </p>
       <div className="star-detection-fields">
-        <label className="star-detection-field" htmlFor={`${id}-file`}>
+        <label
+          className="star-detection-field"
+          htmlFor={`${id}-file`}
+          title="A .profile file from N.I.N.A.'s profiles folder"
+        >
           <span className="scoring-default-label">Profile file</span>
           <input
             id={`${id}-file`}
@@ -580,8 +572,8 @@ function ImportProfile({ onImported }: { onImported: (latest: Settings) => void 
       {stored && (
         <p className="star-detection-read" role="status">
           {stored.stored
-            ? `Imported ${stored.name ?? stored.profile_id}. The next quality scan measures its frames again.`
-            : `${stored.name ?? stored.profile_id} already has these settings for those frames. Nothing changed.`}
+            ? `Imported ${stored.name ?? stored.profile_id} · its frames are measured again on the next quality scan`
+            : `No change: ${stored.name ?? stored.profile_id} already has these settings`}
         </p>
       )}
       {run.isError && (

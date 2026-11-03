@@ -143,9 +143,8 @@ export default function ScoringPenaltyControl() {
   const sourceChoice = (
     <div
       className={`penalty-source${shown.starSource !== defaults.starSource ? ' is-set' : ''}`}
-      title={'Which star count and HFR the reject limits judge and frames are compared on: '
-        + 'PSF Guard\'s quality scan, or what N.I.N.A. recorded during capture. A frame without '
-        + `that value uses the other. Default: ${STAR_SOURCE_LABELS[defaults.starSource]}.`}
+      title={'The star count and HFR the reject limits and comparisons use. A frame without them '
+        + `uses the other source. Default: ${STAR_SOURCE_LABELS[defaults.starSource]}.`}
     >
       <span className="penalty-label" id={`${errorId}-source`}>Stars and HFR</span>
       <div className="tool-segmented" role="radiogroup" aria-labelledby={`${errorId}-source`}>

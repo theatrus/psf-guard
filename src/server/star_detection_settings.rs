@@ -91,9 +91,8 @@ impl RecordView {
                 != crate::star_detection::StarDetectorSelection::HocusFocus
         {
             notes.push(format!(
-                "N.I.N.A. takes each frame's HFR from its {brightest} brightest stars. PSF Guard \
-                 cannot yet do that with N.I.N.A.'s own detector, so its HFR can differ from \
-                 N.I.N.A.'s on this profile."
+                "Not reproduced: HFR from the {brightest} brightest stars with N.I.N.A.'s \
+                 detector; HFR can differ from N.I.N.A.'s"
             ));
         }
         let flag =

@@ -47,7 +47,7 @@ describe('recordSpans', () => {
       record('new', '2026-09-01T12:00:00Z', 'import', '2026-11-01T00:00:00Z'),
     ]);
     expect(spans.get('new')).toBe('All frames');
-    expect(spans.get('old')).toBe('Replaced by a later record from the same date');
+    expect(spans.get('old')).toBe('Replaced by a newer record');
   });
 });
 
@@ -60,8 +60,8 @@ describe('recordsThatStillApply', () => {
 
   it('lists every dated record after an all-frames import, by its source', () => {
     expect(recordsThatStillApply(records)).toEqual([
-      `The Sync plugin's record from ${day('2026-09-01T12:00:00Z')} still applies to frames from that date.`,
-      `The Director plugin's record from ${day('2026-09-09T12:00:00Z')} still applies to frames from that date.`,
+      `Sync plugin record still applies from ${day('2026-09-01T12:00:00Z')}`,
+      `Director plugin record still applies from ${day('2026-09-09T12:00:00Z')}`,
     ]);
   });
 

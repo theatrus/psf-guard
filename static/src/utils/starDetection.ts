@@ -1,17 +1,17 @@
 import type { ProfileRecordView, StarNoiseReduction, StarSensitivity } from '../api/types';
 
 const SENSITIVITY: Record<StarSensitivity, string> = {
-  normal: 'Normal sensitivity',
-  high: 'High sensitivity',
-  highest: 'Highest sensitivity',
+  normal: 'sensitivity Normal',
+  high: 'sensitivity High',
+  highest: 'sensitivity Highest',
 };
 
 const NOISE_REDUCTION: Record<StarNoiseReduction, string> = {
-  none: 'no noise reduction',
-  normal: 'Normal noise reduction',
-  high: 'High noise reduction',
-  highest: 'Highest noise reduction',
-  median: 'Median noise reduction',
+  none: 'noise reduction None',
+  normal: 'noise reduction Normal',
+  high: 'noise reduction High',
+  highest: 'noise reduction Highest',
+  median: 'noise reduction Median',
 };
 
 const MODE: Record<ProfileRecordView['hocus_focus_mode'], string> = {
@@ -54,9 +54,9 @@ export function recordSummary(record: ProfileRecordView): string {
     parts.push(
       `layers ${knobs.structure_layers}`,
       `sensitivity ${plain(knobs.brightness_sensitivity)}`,
-      `min box ${knobs.min_star_bounding_box}`,
+      `min star box ${knobs.min_star_bounding_box}`,
       `noise radius ${knobs.noise_reduction_radius}`,
-      `sample ${plain(knobs.pixel_sample_size)}`,
+      `pixel sample ${plain(knobs.pixel_sample_size)}`,
     );
   } else {
     parts.push(SENSITIVITY[settings.star_sensitivity], NOISE_REDUCTION[settings.noise_reduction]);
@@ -108,21 +108,21 @@ export function recordSpans(records: ProfileRecordView[]): Map<string, string> {
       span = until ? `Frames from ${from} until ${until}` : `Frames from ${from}`;
     }
     spans.set(group[0].id, span);
-    for (const older of group.slice(1)) spans.set(older.id, 'Replaced by a later record from the same date');
+    for (const older of group.slice(1)) spans.set(older.id, 'Replaced by a newer record');
   });
   return spans;
 }
 
 const SOURCE_NAME: Record<ProfileRecordView['source'], string> = {
-  'plugin:sync': "The Sync plugin's record",
-  'plugin:director': "The Director plugin's record",
-  import: 'The imported record',
+  'plugin:sync': 'Sync plugin record',
+  'plugin:director': 'Director plugin record',
+  import: 'Imported record',
 };
 
 /**
  * What still applies after a new record starting at `effectiveFrom` (every
  * frame when absent) is stored: each existing record that starts later keeps
- * the frames from its own date on. One sentence per record.
+ * the frames from its own date on. One line per record.
  */
 export function recordsThatStillApply(records: ProfileRecordView[], effectiveFrom?: string): string[] {
   const from = effectiveFrom ? Date.parse(effectiveFrom) : Number.NEGATIVE_INFINITY;
@@ -130,7 +130,7 @@ export function recordsThatStillApply(records: ProfileRecordView[], effectiveFro
     .filter((record) => record.effective_from && Date.parse(record.effective_from) > from)
     .sort((left, right) => start(left) - start(right))
     .map((record) =>
-      `${SOURCE_NAME[record.source] ?? 'A record'} from ${day(record.effective_from!)} still applies to frames from that date.`);
+      `${SOURCE_NAME[record.source] ?? 'Record'} still applies from ${day(record.effective_from!)}`);
 }
 
 const ORIGIN: Record<ProfileRecordView['source'], string> = {
@@ -139,9 +139,9 @@ const ORIGIN: Record<ProfileRecordView['source'], string> = {
   import: 'Imported',
 };
 
-/** Where a record came from and when: "Imported 2 Nov 2026". */
+/** Where a record came from and when: "Imported on 2 Nov 2026". */
 export function recordOrigin(record: ProfileRecordView): string {
-  return `${ORIGIN[record.source] ?? 'Recorded'} ${day(record.received_at)}`;
+  return `${ORIGIN[record.source] ?? 'Recorded'} on ${day(record.received_at)}`;
 }
 
 /** The start of a local calendar day, as the server takes it. */
