@@ -136,6 +136,8 @@ import type { GuidFillReport, GuidReport, RenamedLightsMerged, RenamedLightsRepo
   ScoringDefaultsSettings,
   RigStarDetection,
   StarDetectionSettings,
+  ImportProfileResult,
+  HocusFocusVersion,
   StackGpu,
   StackGpuSettings,
   WorkersSettings,
@@ -1199,6 +1201,60 @@ export const apiClient = {
       `/settings/star-detection/rigs/${encodeURIComponent(rigUuid)}`,
     );
     if (!data.data) throw new Error(data.error || "Failed to reset the rig's star detection");
+    return data.data;
+  },
+
+  /** Read a N.I.N.A. `.profile` file; unless `preview`, store its settings
+   *  as a record from `effectiveFrom` (every frame when absent). */
+  importStarDetectionProfile: async (
+    file: Blob,
+    options: { effectiveFrom?: string; hocusFocusVersion: HocusFocusVersion; preview: boolean },
+  ): Promise<ImportProfileResult> => {
+    const apiInstance = await getApi();
+    const params: Record<string, string> = {
+      hocus_focus_version: options.hocusFocusVersion,
+      preview: String(options.preview),
+    };
+    if (options.effectiveFrom) params.effective_from = options.effectiveFrom;
+    const { data } = await apiInstance.post<ApiResponse<ImportProfileResult>>(
+      '/settings/star-detection/profiles/import',
+      file,
+      { params, headers: { 'Content-Type': 'application/xml' } },
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to read the profile');
+    return data.data;
+  },
+
+  /** Settings for a N.I.N.A. profile that beat its records. */
+  updateProfileStarDetection: async (
+    profileId: string,
+    update: { name?: string; settings: RigStarDetection },
+  ): Promise<StarDetectionSettings> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.put<ApiResponse<StarDetectionSettings>>(
+      `/settings/star-detection/profiles/${encodeURIComponent(profileId)}/manual`,
+      update,
+    );
+    if (!data.data) throw new Error(data.error || "Failed to save the profile's star detection");
+    return data.data;
+  },
+
+  /** The profile's records apply again. */
+  deleteProfileStarDetection: async (profileId: string): Promise<StarDetectionSettings> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.delete<ApiResponse<StarDetectionSettings>>(
+      `/settings/star-detection/profiles/${encodeURIComponent(profileId)}/manual`,
+    );
+    if (!data.data) throw new Error(data.error || "Failed to reset the profile's star detection");
+    return data.data;
+  },
+
+  deleteProfileRecord: async (profileId: string, recordId: string): Promise<StarDetectionSettings> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.delete<ApiResponse<StarDetectionSettings>>(
+      `/settings/star-detection/profiles/${encodeURIComponent(profileId)}/records/${encodeURIComponent(recordId)}`,
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to delete the record');
     return data.data;
   },
 

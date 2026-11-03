@@ -1870,6 +1870,86 @@
   gap: 0.4rem;
 }
 
+.star-detection-subheading {
+  margin: 0.8rem 0 0;
+  font-size: 0.9rem;
+}
+
+/* A profile's recorded values, then when and where they came from. */
+.star-detection-record {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  margin: 0;
+  font-size: 0.88rem;
+}
+
+.star-detection-record small,
+.star-detection-history small {
+  color: var(--color-text-muted);
+}
+
+.star-detection-history {
+  font-size: 0.85rem;
+}
+
+.star-detection-history ul {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin: 0.4rem 0 0;
+  padding-left: 1.1rem;
+}
+
+.star-detection-history li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.25rem 0.75rem;
+}
+
+.star-detection-delete {
+  align-self: flex-start;
+  font-size: 0.85rem;
+}
+
+.star-detection-import {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+}
+
+.star-detection-span {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.9rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.star-detection-span label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.star-detection-read {
+  margin: 0;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--color-group-border);
+  border-radius: 6px;
+  background: var(--color-group-bg);
+  font-size: 0.88rem;
+}
+
+.star-detection-read p {
+  margin: 0.15rem 0;
+}
+
 /* The four choices side by side, wrapping on a narrow page. */
 .star-detection-fields {
   display: grid;

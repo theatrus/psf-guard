@@ -265,6 +265,53 @@ scan or quality backfill measures it again. Until then, scoring does not use
 that frame's earlier scan values. **Reset the default to N.I.N.A.'s** puts
 N.I.N.A.'s own defaults back in the Default row; click Save to keep them.
 
+#### N.I.N.A. profiles
+
+N.I.N.A. and Hocus Focus have more settings than the four above, and they
+change what N.I.N.A. records: the autofocus crop and **Use brightest n
+stars** in N.I.N.A.'s autofocus options (N.I.N.A. applies both to every
+frame, not only to autofocus), the autostretch, and Hocus Focus's own
+options. PSF Guard can record them for each N.I.N.A. profile, from a date
+on, and measure each frame with the settings in effect when it was taken.
+The catalog records each frame's profile.
+
+PSF Guard records a profile's settings in two ways:
+
+- The PSF Guard N.I.N.A. plugin sends them as it captures. PSF Guard stores
+  them only when they differ from the settings already recorded for that
+  date.
+- You import a profile file. Under **Import N.I.N.A. profile**, choose the
+  **Profile file** from N.I.N.A.'s profile folder, the **Hocus Focus
+  version** it ran, and whether it **Applies to** **All frames** or
+  **Frames from** a date. Click **Read file** to see what PSF Guard read,
+  then **Import** to store it. To record a change, such as a new autofocus
+  crop, import a copy of the profile with the new value from the day it
+  changed.
+
+Each profile under **N.I.N.A. profiles** shows its recorded values, which
+frames they apply to, and where they came from. **History** lists every
+record, and **Delete** removes one. **Set by hand** gives the profile the
+four choices above instead of its records.
+
+A frame takes the first of these that applies:
+
+1. its profile's settings set by hand;
+2. its rig's own row;
+3. its profile's newest record in effect when it was taken;
+4. the **Default** row.
+
+A profile's record selects Hocus Focus or N.I.N.A.'s detector, but on
+frames from N.I.N.A. 3.2 and earlier the catalog decides: an FWHM means
+Hocus Focus measured the frame, and `NaN` means it did not. Hocus Focus's
+options follow Hocus Focus 4's own rules: Simple mode derives them from its
+preset, and Advanced mode uses the stored values, with Hocus Focus's
+defaults for the rest. PSF Guard does not reproduce Hocus Focus's per-filter
+settings, structure dilation or donut detection; an import that finds them
+says so. N.I.N.A.'s detector does not apply **Use brightest n stars**.
+
+A new or deleted record counts as a change of settings: the next quality
+scan measures the frames it affects again.
+
 When N.I.N.A.'s detector finds no stars in a frame, the scan asks Hocus
 Focus, as before. If Hocus Focus finds stars, the frame scores on Hocus
 Focus's star count but not its HFR, which is on another scale. A frame
@@ -708,14 +755,15 @@ Safety properties worth knowing:
 
 ## Limitations
 
-- The server scan follows each rig's star detection settings, but it cannot
-  read the rig's Hocus Focus options or which Hocus Focus release took each
-  frame. On four test rigs, N.I.N.A.'s detector at High sensitivity matched
-  a N.I.N.A. 3.1 rig's star counts within 3% and read HFR about 12% lower.
-  Hocus Focus 4 matched one rig's frames from mid-September 2026 exactly.
-  That rig's frames from before July 2026 matched Hocus Focus 3 instead, and
-  rigs with other Hocus Focus options still differ by up to several times
-  in star count. That is why a target is scored from one source at a time.
+- The server scan follows each rig's star detection settings, but without a
+  recorded profile it cannot know the rig's Hocus Focus options or which
+  release took each frame. On four test rigs, N.I.N.A.'s detector at High
+  sensitivity matched a N.I.N.A. 3.1 rig's star counts within 3% and read
+  HFR about 12% lower. With each Hocus Focus rig's profile imported, Hocus
+  Focus 4 matched N.I.N.A.'s star counts and HFR to within 0.2% on frames
+  taken after its settings last changed. Frames from before a change
+  differ until a dated record gives the settings in effect then. That is
+  why a target is scored from one source at a time.
   The scan also measures the brightest unsaturated stars in a
   full-resolution aperture, whichever detector found them, to supply flux
   for photometry. `screen-fits` supports flux photometry with either

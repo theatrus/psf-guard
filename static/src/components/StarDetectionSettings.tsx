@@ -1,9 +1,11 @@
-import { useId, useState, type FormEvent } from 'react';
+import { useId, useState, type FormEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
 import type {
   HocusFocusVersion,
+  ImportProfileResult,
   RigStarDetection,
+  StarDetectionProfile,
   StarDetectionRig,
   StarDetectionSettings as Settings,
   StarDetector,
@@ -11,6 +13,7 @@ import type {
   StarSensitivity,
 } from '../api/types';
 import { useAccess } from '../auth/access';
+import { recordOrigin, recordSpan, recordSummary, startOfLocalDay } from '../utils/starDetection';
 import UnsavedMark from './UnsavedMark';
 
 const STAR_DETECTION_QUERY_KEY = ['settings', 'star-detection'] as const;
@@ -64,24 +67,46 @@ function sameRow(left: RigStarDetection | null | undefined, right: RigStarDetect
   return FIELDS.every(({ key }) => left[key] === right[key]);
 }
 
-/** What the form edits: the default row, and each rig's own row (`null`
- *  when it uses the default). */
+/** What the form edits: the default row, each rig's own row (`null` when
+ *  it uses the default), and each profile's manual row (`null` when its
+ *  records apply). */
 interface Draft {
   default: RigStarDetection;
   rigs: Record<string, RigStarDetection | null>;
+  profiles: Record<string, RigStarDetection | null>;
 }
 
 function draftOf(settings: Settings): Draft {
   return {
     default: { ...settings.default },
     rigs: Object.fromEntries(settings.rigs.map((rig) => [rig.rig_uuid, rig.settings ? { ...rig.settings } : null])),
+    profiles: Object.fromEntries((settings.profiles ?? []).map((profile) => [
+      profile.profile_id,
+      profile.manual ? { ...profile.manual } : null,
+    ])),
   };
 }
 
+function sameRows(left: Record<string, RigStarDetection | null>, right: Record<string, RigStarDetection | null>): boolean {
+  const keys = new Set([...Object.keys(left), ...Object.keys(right)]);
+  return [...keys].every((key) => sameRow(left[key] ?? null, right[key] ?? null));
+}
+
 function sameDraft(left: Draft, right: Draft): boolean {
-  if (!sameRow(left.default, right.default)) return false;
-  const keys = new Set([...Object.keys(left.rigs), ...Object.keys(right.rigs)]);
-  return [...keys].every((key) => sameRow(left.rigs[key] ?? null, right.rigs[key] ?? null));
+  return sameRow(left.default, right.default)
+    && sameRows(left.rigs, right.rigs)
+    && sameRows(left.profiles, right.profiles);
+}
+
+function profileName(profile: StarDetectionProfile): string {
+  return profile.name ?? `Profile ${profile.profile_id.slice(0, 8)}`;
+}
+
+function profileMeta(profile: StarDetectionProfile): string {
+  return [
+    profile.frames > 0 ? `${profile.frames.toLocaleString()} frames` : null,
+    profile.databases.length > 0 ? profile.databases.join(', ') : null,
+  ].filter(Boolean).join(' · ');
 }
 
 function rigMeta(rig: StarDetectionRig): string {
@@ -123,6 +148,14 @@ export default function StarDetectionSettings() {
           ? await apiClient.updateRigStarDetection(rig.rig_uuid, { name: rig.name, settings: after })
           : await apiClient.deleteRigStarDetection(rig.rig_uuid);
       }
+      for (const profile of saved.profiles ?? []) {
+        const before = profile.manual ?? null;
+        const after = next.profiles[profile.profile_id] ?? null;
+        if (sameRow(before, after)) continue;
+        latest = after
+          ? await apiClient.updateProfileStarDetection(profile.profile_id, { name: profile.name, settings: after })
+          : await apiClient.deleteProfileStarDetection(profile.profile_id);
+      }
       return latest;
     },
     onSuccess: (latest) => queryClient.setQueryData(STAR_DETECTION_QUERY_KEY, latest),
@@ -147,6 +180,11 @@ export default function StarDetectionSettings() {
     setDraft({ ...current, default: { ...current.default, [field]: value } });
   const setRig = (uuid: string, row: RigStarDetection | null) =>
     setDraft({ ...current, rigs: { ...current.rigs, [uuid]: row } });
+  const setProfile = (id: string, row: RigStarDetection | null) =>
+    setDraft({ ...current, profiles: { ...current.profiles, [id]: row } });
+  const adopt = (latest: Settings) => {
+    queryClient.setQueryData(STAR_DETECTION_QUERY_KEY, latest);
+  };
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -208,6 +246,29 @@ export default function StarDetectionSettings() {
           <p className="star-detection-meta">Rigs without settings of their own</p>
           {fields(current.default, `${fieldId}-default`, setDefault)}
         </fieldset>
+        <h4 className="star-detection-subheading">N.I.N.A. profiles</h4>
+        <p className="scoring-defaults-intro">
+          A frame uses its profile&apos;s settings from when it was taken, as the plugin sent them or
+          a profile import recorded them. Settings set by hand here, or for its rig below, come first.
+        </p>
+        {(data.profiles ?? []).length === 0 ? (
+          <p className="scoring-defaults-intro">No profiles yet.</p>
+        ) : (
+          (data.profiles ?? []).map((profile) => (
+            <ProfileRow
+              key={profile.profile_id}
+              profile={profile}
+              manual={current.profiles[profile.profile_id] ?? null}
+              fallback={current.default}
+              busy={busy}
+              onManual={(row) => setProfile(profile.profile_id, row)}
+              onDeleted={adopt}
+              renderFields={(row, onChange) =>
+                fields(row, `${fieldId}-profile-${profile.profile_id}`, onChange)}
+            />
+          ))
+        )}
+        <h4 className="star-detection-subheading">Rigs</h4>
         {data.rigs.length === 0 ? (
           <p className="scoring-defaults-intro">
             No rigs yet. Import lights, and their rigs appear here.
@@ -268,6 +329,252 @@ export default function StarDetectionSettings() {
           </p>
         )}
       </form>
+      {canWrite && <ImportProfile onImported={adopt} />}
+    </section>
+  );
+}
+
+interface ProfileRowProps {
+  profile: StarDetectionProfile;
+  manual: RigStarDetection | null;
+  fallback: RigStarDetection;
+  busy: boolean;
+  onManual: (row: RigStarDetection | null) => void;
+  onDeleted: (latest: Settings) => void;
+  renderFields: (
+    row: RigStarDetection,
+    onChange: ((field: Field, value: string) => void) | null,
+  ) => ReactNode;
+}
+
+/** One N.I.N.A. profile: its recorded settings, their history, and a
+ *  manual row that beats them. */
+function ProfileRow({ profile, manual, fallback, busy, onManual, onDeleted, renderFields }: ProfileRowProps) {
+  const name = profileName(profile);
+  const meta = profileMeta(profile);
+  const remove = useMutation({
+    mutationFn: (recordId: string) => apiClient.deleteProfileRecord(profile.profile_id, recordId),
+    onSuccess: onDeleted,
+  });
+  const latest = profile.records[0];
+  return (
+    <fieldset
+      className="scoring-defaults-group star-detection-rig"
+      disabled={busy}
+      aria-label={`${name} star detection`}
+    >
+      <legend>{name}</legend>
+      {meta && <p className="star-detection-meta">{meta}</p>}
+      {latest ? (
+        <p className="star-detection-record">
+          <span className="star-detection-record-values">{recordSummary(latest)}</span>
+          <small>{recordSpan(latest)} · {recordOrigin(latest)}</small>
+        </p>
+      ) : (
+        <p className="star-detection-meta">No recorded settings. Its rig&apos;s or the default settings apply.</p>
+      )}
+      {profile.records.length > 1 && (
+        <details className="star-detection-history">
+          <summary>History ({profile.records.length})</summary>
+          <ul>
+            {profile.records.map((record) => (
+              <li key={record.id}>
+                <span>
+                  {recordSpan(record)}: {recordSummary(record)}
+                  <small> {recordOrigin(record)}</small>
+                </span>
+                <button
+                  type="button"
+                  className="link-button"
+                  aria-label={`Delete the record ${recordSpan(record).toLowerCase()}`}
+                  onClick={() => remove.mutate(record.id)}
+                >
+                  Delete
+                </button>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+      {profile.records.length === 1 && (
+        <button
+          type="button"
+          className="link-button star-detection-delete"
+          onClick={() => remove.mutate(latest.id)}
+        >
+          Delete the record
+        </button>
+      )}
+      {latest?.notes.map((note) => (
+        <p key={note} className="star-detection-meta">{note}</p>
+      ))}
+      {remove.isError && (
+        <p className="scoring-default-error" role="alert">
+          Could not delete the record: {(remove.error as Error).message}
+        </p>
+      )}
+      <label className="review-preference star-detection-inherit">
+        <input
+          type="checkbox"
+          checked={manual !== null}
+          onChange={(event) => onManual(event.target.checked ? { ...fallback } : null)}
+        />
+        <span>Set by hand</span>
+      </label>
+      {manual && renderFields(manual, (field, value) => onManual({ ...manual, [field]: value }))}
+    </fieldset>
+  );
+}
+
+/** Settings › Review › Star detection › Import N.I.N.A. profile: read a
+ *  `.profile` file, show what it holds, then store it as a record. */
+function ImportProfile({ onImported }: { onImported: (latest: Settings) => void }) {
+  const id = useId();
+  const [file, setFile] = useState<File | null>(null);
+  const [allFrames, setAllFrames] = useState(true);
+  const [from, setFrom] = useState('');
+  const [version, setVersion] = useState<HocusFocusVersion>('v4');
+  const [read, setRead] = useState<ImportProfileResult | null>(null);
+  const [stored, setStored] = useState<ImportProfileResult | null>(null);
+  const effectiveFrom = allFrames ? undefined : startOfLocalDay(from);
+  const datedWithoutDate = !allFrames && !effectiveFrom;
+  const run = useMutation({
+    mutationFn: ({ preview }: { preview: boolean }) =>
+      apiClient.importStarDetectionProfile(file!, { effectiveFrom, hocusFocusVersion: version, preview }),
+    onSuccess: (result, { preview }) => {
+      if (preview) {
+        setRead(result);
+        setStored(null);
+      } else {
+        setRead(null);
+        setStored(result);
+        onImported(result.settings);
+      }
+    },
+  });
+  const changed = () => {
+    setRead(null);
+    setStored(null);
+  };
+  const unavailable = !file || datedWithoutDate || run.isPending;
+  return (
+    <section className="star-detection-import" aria-labelledby={`${id}-heading`}>
+      <h4 id={`${id}-heading`} className="star-detection-subheading">Import N.I.N.A. profile</h4>
+      <p className="scoring-defaults-intro">
+        Read a profile file from N.I.N.A.&apos;s profile folder. PSF Guard stores its star detection
+        settings for that profile&apos;s frames.
+      </p>
+      <div className="star-detection-fields">
+        <label className="star-detection-field" htmlFor={`${id}-file`}>
+          <span className="scoring-default-label">Profile file</span>
+          <input
+            id={`${id}-file`}
+            type="file"
+            accept=".profile,.xml"
+            onChange={(event) => {
+              setFile(event.target.files?.[0] ?? null);
+              changed();
+            }}
+          />
+        </label>
+        <label className="star-detection-field" htmlFor={`${id}-version`}>
+          <span className="scoring-default-label">Hocus Focus version</span>
+          <select
+            id={`${id}-version`}
+            value={version}
+            onChange={(event) => {
+              setVersion(event.target.value as HocusFocusVersion);
+              changed();
+            }}
+          >
+            <option value="v3">3</option>
+            <option value="v4">4</option>
+          </select>
+        </label>
+      </div>
+      <fieldset className="star-detection-span">
+        <legend className="scoring-default-label">Applies to</legend>
+        <label>
+          <input
+            type="radio"
+            name={`${id}-span`}
+            checked={allFrames}
+            onChange={() => {
+              setAllFrames(true);
+              changed();
+            }}
+          />
+          All frames
+        </label>
+        <label>
+          <input
+            type="radio"
+            name={`${id}-span`}
+            checked={!allFrames}
+            onChange={() => {
+              setAllFrames(false);
+              changed();
+            }}
+          />
+          Frames from
+        </label>
+        <input
+          type="date"
+          aria-label="First day"
+          value={from}
+          disabled={allFrames}
+          onChange={(event) => {
+            setFrom(event.target.value);
+            changed();
+          }}
+        />
+      </fieldset>
+      <div className="scoring-defaults-actions">
+        <button
+          type="button"
+          className="cancel-button"
+          aria-disabled={unavailable}
+          onClick={() => {
+            if (!unavailable) run.mutate({ preview: true });
+          }}
+        >
+          Read file
+        </button>
+        <button
+          type="button"
+          className="save-button"
+          aria-disabled={unavailable || !read}
+          onClick={() => {
+            if (!unavailable && read) run.mutate({ preview: false });
+          }}
+        >
+          {run.isPending ? 'Importing…' : 'Import'}
+        </button>
+      </div>
+      {read && (
+        <div className="star-detection-read" role="status">
+          <p>
+            <strong>{read.name ?? 'Unnamed profile'}</strong>{' '}
+            <small>{read.profile_id}</small>
+          </p>
+          <p>{recordSummary(read.record)}</p>
+          {[...read.warnings, ...read.record.notes].map((warning) => (
+            <p key={warning} className="star-detection-meta">{warning}</p>
+          ))}
+        </div>
+      )}
+      {stored && (
+        <p className="star-detection-read" role="status">
+          {stored.stored
+            ? `Imported ${stored.name ?? stored.profile_id}. The next quality scan measures its frames again.`
+            : `${stored.name ?? stored.profile_id} already has these settings for those frames. Nothing changed.`}
+        </p>
+      )}
+      {run.isError && (
+        <p className="scoring-default-error" role="alert">
+          Could not read the profile: {(run.error as Error).message}
+        </p>
+      )}
     </section>
   );
 }

@@ -18,6 +18,13 @@
   updating, and after you change a rig's settings, the next quality scan
   measures the affected frames again; until then, scoring does not use
   their earlier scan values.
+- PSF Guard can also measure each frame with its N.I.N.A. profile's full
+  star detection settings: the autofocus crop and brightest-star count,
+  the autostretch, and Hocus Focus's own options. Import a profile file
+  under **Import N.I.N.A. profile** in the same section, for all frames
+  or from a date; the PSF Guard plugin will send them as it captures. With
+  their profiles imported, three Hocus Focus rigs matched the star counts
+  and HFR N.I.N.A. recorded to within 0.2%.
 - Max HFR and Min stars now judge the values you choose. A frame can carry
   two star counts and HFRs: the ones N.I.N.A. recorded during capture and
   the ones PSF Guard's quality scan measured. They come from different

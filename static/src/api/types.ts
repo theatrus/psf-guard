@@ -1063,12 +1063,98 @@ export interface StarDetectionRig {
   settings?: RigStarDetection;
 }
 
+/** The N.I.N.A. profile settings that decide a frame's star count and HFR. */
+export interface ProfileSettingsSnapshot {
+  /** `nina`, `hocus_focus`, or another detector's type name. */
+  star_detector: string;
+  star_sensitivity: StarSensitivity;
+  noise_reduction: StarNoiseReduction;
+  auto_stretch_factor: number;
+  black_clipping: number;
+  autofocus_inner_crop_ratio: number;
+  autofocus_outer_crop_ratio: number;
+  autofocus_brightest_stars: number;
+  focal_length_mm?: number;
+  pixel_size_um?: number;
+  /** Hocus Focus's stored options, by its own names. */
+  hocus_focus?: Record<string, boolean | number | string>;
+}
+
+/** The Hocus Focus values a recorded profile gives. */
+export interface HocusFocusKnobs {
+  hotpixel_filtering: boolean;
+  hotpixel_thresholding: boolean;
+  hotpixel_threshold: number;
+  noise_reduction_radius: number;
+  measurement_noise_reduction: boolean;
+  noise_clipping_multiplier: number;
+  star_clipping_multiplier: number;
+  structure_layers: number;
+  brightness_sensitivity: number;
+  star_peak_response: number;
+  max_distortion: number;
+  star_center_tolerance: number;
+  background_box_expansion: number;
+  min_star_bounding_box: number;
+  min_hfr: number;
+  pixel_sample_size: number;
+  saturation_threshold: number;
+  exclude_saturated_from_hfr: boolean;
+  measurement_average: 'median' | 'mean_outliers';
+  adaptive_binarization: boolean;
+  adaptive_block_size: number;
+  contamination_sensitivity: number;
+  detection_binning: number;
+  autofocus_inner_crop_ratio: number;
+  autofocus_outer_crop_ratio: number;
+  autofocus_brightest_stars: number;
+}
+
+/** One recorded snapshot of a profile's settings. */
+export interface ProfileRecordView {
+  id: string;
+  /** From when it applies; absent for every frame. */
+  effective_from?: string;
+  source: 'plugin' | 'import';
+  received_at: string;
+  catalog_id?: string;
+  nina_version?: string;
+  hocus_focus_version: HocusFocusVersion;
+  settings: ProfileSettingsSnapshot;
+  hocus_focus_mode: 'simple' | 'optimized' | 'advanced';
+  hocus_focus: HocusFocusKnobs;
+  /** Stored options PSF Guard cannot reproduce. */
+  notes: string[];
+}
+
+/** A N.I.N.A. profile: its manual row and recorded settings. */
+export interface StarDetectionProfile {
+  profile_id: string;
+  name?: string;
+  databases: string[];
+  frames: number;
+  manual?: RigStarDetection;
+  /** Newest start first. */
+  records: ProfileRecordView[];
+}
+
 /** Settings › Review › Star detection. */
 export interface StarDetectionSettings {
   default: RigStarDetection;
   /** N.I.N.A.'s own defaults. */
   builtin: RigStarDetection;
   rigs: StarDetectionRig[];
+  profiles: StarDetectionProfile[];
+}
+
+/** What importing a N.I.N.A. profile read, and whether it was stored. */
+export interface ImportProfileResult {
+  profile_id: string;
+  name?: string;
+  record: ProfileRecordView;
+  warnings: string[];
+  stored: boolean;
+  settings: StarDetectionSettings;
 }
 
 /** Where a stack WBPP made came from. */

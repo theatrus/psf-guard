@@ -4,7 +4,11 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
-import type { RigStarDetection, StarDetectionSettings as Settings } from '../../api/types';
+import type {
+  ProfileRecordView,
+  RigStarDetection,
+  StarDetectionSettings as Settings,
+} from '../../api/types';
 import { server } from '../../test/msw-server';
 import StarDetectionSettings from '../StarDetectionSettings';
 
@@ -46,6 +50,44 @@ function serve(initial: Settings) {
       };
       return reply();
     }),
+    http.put('/api/settings/star-detection/profiles/:id/manual', async ({ request, params }) => {
+      const body = (await request.json()) as { settings: RigStarDetection };
+      writes.push({ method: 'PUT', url: request.url, body });
+      current = {
+        ...current,
+        profiles: current.profiles.map((profile) =>
+          profile.profile_id === params.id ? { ...profile, manual: body.settings } : profile),
+      };
+      return reply();
+    }),
+    http.delete('/api/settings/star-detection/profiles/:id/records/:record', ({ request, params }) => {
+      writes.push({ method: 'DELETE', url: request.url, body: null });
+      current = {
+        ...current,
+        profiles: current.profiles.map((profile) => profile.profile_id === params.id
+          ? { ...profile, records: profile.records.filter((record) => record.id !== params.record) }
+          : profile),
+      };
+      return reply();
+    }),
+    http.post('/api/settings/star-detection/profiles/import', async ({ request }) => {
+      const url = new URL(request.url);
+      const body = await request.text();
+      writes.push({ method: 'POST', url: request.url, body });
+      const preview = url.searchParams.get('preview') === 'true';
+      return HttpResponse.json({
+        success: true,
+        error: null,
+        data: {
+          profile_id: REDCAT_PROFILE,
+          name: 'starfront-mini-redcat61',
+          record: redcatRecord('imported', url.searchParams.get('effective_from') ?? undefined),
+          warnings: [],
+          stored: !preview,
+          settings: current,
+        },
+      });
+    }),
     http.delete('/api/settings/star-detection/rigs/:uuid', ({ request, params }) => {
       writes.push({ method: 'DELETE', url: request.url, body: null });
       current = {
@@ -56,6 +98,59 @@ function serve(initial: Settings) {
     }),
   );
   return writes;
+}
+
+const REDCAT_PROFILE = '46d7a6e3-3ae8-48a9-8d29-598e3647f131';
+
+function redcatRecord(id: string, effectiveFrom?: string, crop = 0.7): ProfileRecordView {
+  return {
+    id,
+    effective_from: effectiveFrom,
+    source: 'import',
+    received_at: '2026-11-02T12:00:00Z',
+    hocus_focus_version: 'v4',
+    settings: {
+      star_detector: 'hocus_focus',
+      star_sensitivity: 'high',
+      noise_reduction: 'none',
+      auto_stretch_factor: 0.2,
+      black_clipping: -2.8,
+      autofocus_inner_crop_ratio: crop,
+      autofocus_outer_crop_ratio: 1,
+      autofocus_brightest_stars: 0,
+      hocus_focus: { Simple_PixelScale: 'WideField' },
+    },
+    hocus_focus_mode: 'simple',
+    hocus_focus: {
+      hotpixel_filtering: true,
+      hotpixel_thresholding: true,
+      hotpixel_threshold: 0.001,
+      noise_reduction_radius: 4,
+      measurement_noise_reduction: false,
+      noise_clipping_multiplier: 4,
+      star_clipping_multiplier: 2,
+      structure_layers: 3,
+      brightness_sensitivity: 10,
+      star_peak_response: 0.75,
+      max_distortion: 0.5,
+      star_center_tolerance: 0.3,
+      background_box_expansion: 3,
+      min_star_bounding_box: 4,
+      min_hfr: 1.2,
+      pixel_sample_size: 0.5,
+      saturation_threshold: 0.99,
+      exclude_saturated_from_hfr: true,
+      measurement_average: 'median',
+      adaptive_binarization: true,
+      adaptive_block_size: 128,
+      contamination_sensitivity: 5,
+      detection_binning: 1,
+      autofocus_inner_crop_ratio: crop,
+      autofocus_outer_crop_ratio: 1,
+      autofocus_brightest_stars: 0,
+    },
+    notes: [],
+  };
 }
 
 const settings = (): Settings => ({
@@ -70,6 +165,18 @@ const settings = (): Settings => ({
       settings: { ...NINA_DEFAULTS, detector: 'hocus_focus', hocus_focus_version: 'v3' },
     },
     { rig_uuid: ASKAR, name: 'Askar 107 · ASI2600MM', detail: '6248×4176 · bin 1×1', databases: ['Askar', 'Remote'] },
+  ],
+  profiles: [
+    {
+      profile_id: REDCAT_PROFILE,
+      name: 'starfront-mini-redcat61',
+      databases: ['Redcat'],
+      frames: 1927,
+      records: [
+        redcatRecord('sep9', '2026-09-09T00:00:00Z', 0.7),
+        redcatRecord('sep1', '2026-09-01T00:00:00Z', 0.5),
+      ],
+    },
   ],
 });
 
@@ -131,5 +238,71 @@ describe('Settings › Review › Star detection', () => {
     await waitFor(() => expect(writes).toHaveLength(1));
     expect(writes[0]).toMatchObject({ method: 'PUT', body: { default: { ...NINA_DEFAULTS, detector: 'nina' } } });
     expect(writes[0].url).toMatch(/\/settings\/star-detection$/);
+  });
+});
+
+describe('Settings › Review › Star detection › N.I.N.A. profiles', () => {
+  it('shows a profile\'s recorded values, their history, and deletes a record', async () => {
+    const user = userEvent.setup();
+    const writes = serve(settings());
+    render(<StarDetectionSettings />, { wrapper: wrapper() });
+    const redcat = await screen.findByRole('group', { name: 'starfront-mini-redcat61 star detection' });
+    expect(within(redcat).getByText('1,927 frames · Redcat')).toBeInTheDocument();
+    expect(within(redcat).getByText(
+      'Hocus Focus 4 · Simple · crop 0.7 · layers 3 · sensitivity 10 · min box 4 · noise radius 4 · sample 0.5',
+    )).toBeInTheDocument();
+    expect(within(redcat).getByRole('checkbox', { name: 'Set by hand' })).not.toBeChecked();
+    expect(within(redcat).queryByRole('combobox', { name: 'Detector' })).toBeNull();
+
+    await user.click(within(redcat).getByText('History (2)'));
+    const remove = within(redcat).getAllByRole('button', { name: /^Delete the record from / });
+    expect(remove).toHaveLength(2);
+    await user.click(remove[1]);
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect(writes[0].url).toContain(`/profiles/${REDCAT_PROFILE}/records/sep1`);
+    await waitFor(() => expect(within(redcat).queryByText('History (2)')).toBeNull());
+  });
+
+  it('saves a profile set by hand', async () => {
+    const user = userEvent.setup();
+    const writes = serve(settings());
+    render(<StarDetectionSettings />, { wrapper: wrapper() });
+    const redcat = await screen.findByRole('group', { name: 'starfront-mini-redcat61 star detection' });
+    await user.click(within(redcat).getByRole('checkbox', { name: 'Set by hand' }));
+    await user.selectOptions(within(redcat).getByRole('combobox', { name: 'Detector' }), 'nina');
+    await user.click(screen.getByRole('button', { name: 'Save star detection' }));
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect(writes[0]).toMatchObject({
+      method: 'PUT',
+      body: { name: 'starfront-mini-redcat61', settings: { ...NINA_DEFAULTS, detector: 'nina' } },
+    });
+    expect(writes[0].url).toContain(`/profiles/${REDCAT_PROFILE}/manual`);
+  });
+
+  it('reads a profile file, shows it, then imports it from a date', async () => {
+    const user = userEvent.setup();
+    const writes = serve(settings());
+    render(<StarDetectionSettings />, { wrapper: wrapper() });
+    await screen.findByRole('heading', { name: 'Import N.I.N.A. profile' });
+    const read = screen.getByRole('button', { name: 'Read file' });
+    expect(read).toHaveAttribute('aria-disabled', 'true');
+    const file = new File(['<Profile/>'], 'redcat.profile', { type: 'application/xml' });
+    await user.upload(screen.getByLabelText('Profile file'), file);
+    await user.click(screen.getByRole('radio', { name: 'Frames from' }));
+    expect(read).toHaveAttribute('aria-disabled', 'true');
+    await user.type(screen.getByLabelText('First day'), '2026-09-09');
+    await user.click(read);
+    await waitFor(() => expect(writes).toHaveLength(1));
+    const preview = new URL(writes[0].url);
+    expect(preview.searchParams.get('preview')).toBe('true');
+    expect(preview.searchParams.get('hocus_focus_version')).toBe('v4');
+    expect(preview.searchParams.get('effective_from')).toBe(new Date('2026-09-09T00:00:00').toISOString());
+    expect(writes[0].body).toBe('<Profile/>');
+    expect(await screen.findByRole('status')).toHaveTextContent(/^starfront-mini-redcat61 46d7a6e3/);
+
+    await user.click(screen.getByRole('button', { name: 'Import' }));
+    await waitFor(() => expect(writes).toHaveLength(2));
+    expect(new URL(writes[1].url).searchParams.get('preview')).toBe('false');
+    expect(await screen.findByText(/^Imported starfront-mini-redcat61\./)).toBeInTheDocument();
   });
 });

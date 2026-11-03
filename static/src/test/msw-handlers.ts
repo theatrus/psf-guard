@@ -190,6 +190,7 @@ export const handlers = [
     default: { detector: 'auto', sensitivity: 'high', noise_reduction: 'none', hocus_focus_version: 'v4' },
     builtin: { detector: 'auto', sensitivity: 'high', noise_reduction: 'none', hocus_focus_version: 'v4' },
     rigs: [],
+    profiles: [],
   } })),
   // The calibration settings: every value at its default, so lights' nights
   // split at their rig's local noon (useNightSplit).
