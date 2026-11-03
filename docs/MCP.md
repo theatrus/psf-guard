@@ -137,6 +137,7 @@ read, below `/api`, as you.
 | `save_plan`, `save_framing` | Save the whole plan or framing object, changed, at the revision you read | yes |
 | `take_plan_from_target_scheduler` | Take a plan's values from what a rig's Target Scheduler database holds | yes |
 | `check_feasibility` | When the target is observable from each rig's site over the coming nights | yes |
+| `get_night_plans` | Each rig's nights: dark and clear hours by marks and forecast, the Moon, the work that fits, and with `schedule`, what each rig's runtime would shoot when. Kept current by the server | |
 | `preview_activation` | Exactly what activating a plan would write to each rig, with a `preview_digest` | yes |
 | `apply_activation` | Write that preview to the rigs; refuses if anything changed since | yes, plus management |
 | `push_activation` | Send an activated plan to remote rigs | yes, plus management |

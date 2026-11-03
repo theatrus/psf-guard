@@ -372,3 +372,6 @@
 .nights-page .nights-disclosure { padding: 0; border: 0; background: transparent; color: inherit; font: inherit; font-weight: 600; cursor: pointer; }
 .nights-page .nights-disclosure::before { content: '▸ '; }
 .nights-page .nights-disclosure[aria-expanded='true']::before { content: '▾ '; }
+
+/* When the plans shown were computed, beside the range controls. */
+.nights-page .nights-updated { font-size: 13px; }

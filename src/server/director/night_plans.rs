@@ -12,6 +12,7 @@
 use super::rig_availability::{NightAvailability, RigConditions, RigForecast};
 use super::ts_snapshot;
 use super::*;
+use crate::concurrency::Stop;
 use psf_guard_director_core::{
     moon::MoonPolicy,
     night::{
@@ -32,6 +33,9 @@ use psf_guard_ts_planner::snapshot::{Project, ProjectPriority, ProjectState, Sna
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod cache;
+pub(super) use cache::{Cache, REFRESH_EVERY};
+
 const DEFAULT_NIGHTS: u32 = 7;
 const STEP_MS: u64 = 300_000;
 /// Summaries count darkness as feasibility does: the Sun below −12°. Each
@@ -41,7 +45,7 @@ const DARK_BELOW_DEGREES: f64 = -12.0;
 const OVERHEAD_SECONDS: f64 = 15.0;
 const MAX_RIGS: usize = 64;
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, Clone)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Request {
     /// Rigs to plan; none or empty is every rig with a site.
@@ -91,6 +95,9 @@ pub(super) struct Request {
     /// planned in place of what its database holds. Nothing is written.
     #[serde(default)]
     ts_draft: Option<TsDraft>,
+    /// Compute the plans again, whatever is kept.
+    #[serde(default)]
+    refresh: bool,
 }
 
 #[derive(Deserialize, Clone)]
@@ -189,6 +196,10 @@ pub(super) struct View {
     /// Rigs left out, and why.
     warnings: Vec<String>,
     assumptions: Assumptions,
+    /// The rig databases the plans read, by registry id: a change to one
+    /// of them changes the plans.
+    #[serde(skip)]
+    catalogs: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -376,9 +387,13 @@ struct Load {
     overbooked_hours: f64,
 }
 
+#[derive(Clone, Debug)]
 pub(super) enum NightPlanError {
     Api(Error),
     Rejected(String),
+    /// Stopped from the header, or replaced by a newer request for the
+    /// same edited night.
+    Stopped,
 }
 impl From<Error> for NightPlanError {
     fn from(error: Error) -> Self {
@@ -397,6 +412,13 @@ impl IntoResponse for NightPlanError {
             Self::Rejected(message) => (
                 StatusCode::BAD_REQUEST,
                 Json(ApiResponse::<()>::error(message)),
+            )
+                .into_response(),
+            Self::Stopped => (
+                StatusCode::CONFLICT,
+                Json(ApiResponse::<()>::error(
+                    "The night plans were stopped, or replaced by a newer request.".into(),
+                )),
             )
                 .into_response(),
         }
@@ -465,15 +487,63 @@ pub(super) fn runtime_of(
     })
 }
 
+/// The night plans, when they were computed, and whether they are being
+/// computed again.
+#[derive(Serialize)]
+pub(super) struct Planned {
+    #[serde(flatten)]
+    view: SharedView,
+    computed_at_ms: u64,
+    refreshing: bool,
+}
+
+/// A kept view, written as the view itself.
+struct SharedView(Arc<View>);
+
+impl Serialize for SharedView {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.0.serialize(serializer)
+    }
+}
+
 pub(super) async fn plan(
     State(state): State<Arc<AppState>>,
     Json(request): Json<Request>,
-) -> Result<Json<ApiResponse<View>>, NightPlanError> {
-    Ok(Json(ApiResponse::success(compute(&state, request).await?)))
+) -> Result<Json<ApiResponse<Planned>>, NightPlanError> {
+    let kept = planned(&state, request).await?;
+    Ok(Json(ApiResponse::success(Planned {
+        view: SharedView(kept.view),
+        computed_at_ms: kept.computed_at_ms,
+        refreshing: kept.refreshing,
+    })))
 }
 
-/// The night plans a request asks for; projections use it too.
-async fn compute(state: &Arc<AppState>, request: Request) -> Result<View, NightPlanError> {
+/// The night plans a request asks for, kept or computed now as a person's
+/// work; projections use it too.
+async fn planned(state: &Arc<AppState>, request: Request) -> Result<cache::Kept, NightPlanError> {
+    let service = enabled(state)?;
+    let refresh = request.refresh;
+    service
+        .night_plans
+        .plan(state, &service, request, refresh)
+        .await
+}
+
+/// Compute again the kept views someone read lately, when what they were
+/// computed from changed or they aged.
+pub(super) async fn refresh_kept(state: Arc<AppState>) {
+    if let Ok(service) = enabled(&state) {
+        service.night_plans.refresh(&state, &service).await;
+    }
+}
+
+/// Compute the night plans a request asks for. `stop`, set from the
+/// header or by a newer request, ends the work early.
+async fn compute(
+    state: &Arc<AppState>,
+    request: Request,
+    stop: &Stop,
+) -> Result<View, NightPlanError> {
     let service = enabled(state)?;
     let nights = request.nights.unwrap_or(DEFAULT_NIGHTS);
     if nights == 0 || nights > MAX_NIGHTS {
@@ -675,11 +745,19 @@ async fn compute(state: &Arc<AppState>, request: Request) -> Result<View, NightP
     // read slot let go: each rig, and each of its requests and nights, on
     // the shared pool.
     let (inputs, mut warnings) = gathered;
+    let catalogs: Vec<String> = inputs
+        .iter()
+        .map(|input| input.catalog_slug.clone())
+        .collect();
+    let stopped = stop.clone();
     let view = blocking(move || {
         use rayon::prelude::*;
         let outcomes: Vec<Result<RigNights, String>> = inputs
             .into_par_iter()
             .map(|mut input| {
+                if stopped.requested() {
+                    return Err(String::new());
+                }
                 match ts_snapshot::read(&input.database_path) {
                     Ok(Some(read)) => {
                         input.warnings.extend(read.warnings);
@@ -727,9 +805,13 @@ async fn compute(state: &Arc<AppState>, request: Request) -> Result<View, NightP
                 overhead_seconds_per_exposure: OVERHEAD_SECONDS,
                 sample_minutes: STEP_MS / 60_000,
             },
+            catalogs,
         }
     })
     .await?;
+    if stop.requested() {
+        return Err(NightPlanError::Stopped);
+    }
     Ok(view)
 }
 
@@ -1702,7 +1784,7 @@ pub(super) async fn projection(
             warnings: vec!["The plan is not activated on any rig yet.".into()],
         })));
     };
-    let view = compute(
+    let view = planned(
         &state,
         Request {
             rigs: Some(activation.rigs.iter().map(|rig| rig.rig_id).collect()),
@@ -1714,7 +1796,8 @@ pub(super) async fn projection(
             ..Default::default()
         },
     )
-    .await?;
+    .await?
+    .view;
     let rigs = activation
         .rigs
         .iter()
@@ -1733,7 +1816,7 @@ pub(super) async fn projection(
     Ok(Json(ApiResponse::success(Projection {
         nights,
         rigs,
-        warnings: view.warnings,
+        warnings: view.warnings.clone(),
     })))
 }
 

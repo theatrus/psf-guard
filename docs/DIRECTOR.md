@@ -1935,6 +1935,8 @@ Each cell is one rig's night, from dusk to dawn:
 
 - the clear dark hours, and a bar from dusk to dawn with the clear part
   filled in;
+- red for a night with no clear dark hours: marked not available, or
+  clear only in daylight or twilight, as a cloud forecast can leave it;
 - the night's mark: ✕ not available, ◐ limited, ✓ marked clear;
 - a pin on a Director rig's night that has overrides;
 - the Moon, lit percentage;
@@ -1942,6 +1944,19 @@ Each cell is one rig's night, from dusk to dawn:
 - the hours it would shoot, or **all done** once every plan has its frames.
 
 ![Nights: two rigs across a week, each night's clear hours, Moon and planned plans](images/nights-grid.png)
+
+The server computes the night plans as a person's work, which the
+header's job list shows as **Planning nights** with Stop, and background
+work waits while it runs. The server keeps the plans it computed and
+computes them again when a mark, an override, a forecast, a rig's setup or
+a rig's database changes, and every two minutes for tonight, which is
+planned from now. A rig reporting its status does not count as a change.
+The plans read in the last ten minutes are kept current this way, as
+automatic work (**Refreshing night plans**) that other work does not wait
+for, so the page rarely waits. **Updated** beside **Nights** shows when the
+plans shown were computed, and **Updating…** while newer ones are computed.
+**Compute again** computes them afresh. An AI agent reads the same plans
+with the MCP tool `get_night_plans` (see [MCP](MCP.md)).
 
 A rig's work is what Target Scheduler would plan there: the active projects
 of its database's N.I.N.A. profile (the one that owns most projects), with
@@ -2213,7 +2228,7 @@ schedule on the **Nights** tab.
 
 | Method | Route | Body or query |
 | --- | --- | --- |
-| POST | `/night-plans` | Optional `rigs` (ids; none is every rig with a site), `first_night` (`YYYY-MM-DD`: the same first night at every rig), `start_ms` (without `first_night`, each rig's first night is the one under way there at this instant; default now), `nights` (1 to 31, default 7), `schedule_nights` (how many nights from the first to schedule, default 0), `explain` (a scheduled night, `YYYY-MM-DD`, whose blocks list every candidate and its scores), `runtime` (`auto`, `target_scheduler` or `director`; `auto` is the rig's own), `fidelity` (`estimate` or `target_scheduler_preview`), `utc_offset_minutes` (the clock the Target Scheduler emulation plans by; default local mean time), `plan_from_ms` (schedules plan nothing before it; default now) and `override_draft` (`rig`, `date` and `entries`: an unsaved list of one Director rig's overrides for one planned night, planned in place of the stored list; `409` for a Target Scheduler rig, `422` for entries the night refuses) and `ts_draft` (`rig` and `changes`, as `PUT /rigs/{rig}/target-scheduler` takes them without `was`: planned in place of what the rig's database holds). Per rig: the runtime, the plans it owes with their limits, `nights` (darkness, clear hours, marks, Moon, each target's hours, the load and `override_count`), `schedule` (blocks, gaps, frames per plan and the night each completes, the assumptions, each night's `overrides` and, for Director, `goals` with the GUIDs overrides name), `time_zone` (the planning site's), `ts_projects` (every project of the planned profile with its targets, as saved), `ts_save` (the files saving Target Scheduler changes writes, or why it cannot), `mark_revisions` and `warnings`. Writes nothing. A read-only account that may run calculations can call it. |
+| POST | `/night-plans` | Optional `rigs` (ids; none is every rig with a site), `first_night` (`YYYY-MM-DD`: the same first night at every rig), `start_ms` (without `first_night`, each rig's first night is the one under way there at this instant; default now), `nights` (1 to 31, default 7), `schedule_nights` (how many nights from the first to schedule, default 0), `explain` (a scheduled night, `YYYY-MM-DD`, whose blocks list every candidate and its scores), `runtime` (`auto`, `target_scheduler` or `director`; `auto` is the rig's own), `fidelity` (`estimate` or `target_scheduler_preview`), `utc_offset_minutes` (the clock the Target Scheduler emulation plans by; default local mean time), `plan_from_ms` (schedules plan nothing before it; default now) and `override_draft` (`rig`, `date` and `entries`: an unsaved list of one Director rig's overrides for one planned night, planned in place of the stored list; `409` for a Target Scheduler rig, `422` for entries the night refuses) and `ts_draft` (`rig` and `changes`, as `PUT /rigs/{rig}/target-scheduler` takes them without `was`: planned in place of what the rig's database holds). Per rig: the runtime, the plans it owes with their limits, `nights` (darkness, clear hours, marks, Moon, each target's hours, the load and `override_count`), `schedule` (blocks, gaps, frames per plan and the night each completes, the assumptions, each night's `overrides` and, for Director, `goals` with the GUIDs overrides name), `time_zone` (the planning site's), `ts_projects` (every project of the planned profile with its targets, as saved), `ts_save` (the files saving Target Scheduler changes writes, or why it cannot), `mark_revisions` and `warnings`. Also `computed_at_ms` and `refreshing`: the server keeps the plans of a request without `start_ms`, `plan_from_ms` or a draft, answers it from them while what they were computed from is unchanged, and computes them again when it changed. A kept view of the night under way ages after two minutes, and so does a view when its first night begins or a forecast it used expires; an aged one is answered at once with `refreshing` set while a newer one is computed, unless it is more than ten minutes old or its first night has ended, when the request waits. `refresh: true` computes them afresh. The jobs route lists each computation, a person's work or the server's own refresh, and `POST /api/previews/night_plans/{key}/stop` stops it: everyone waiting for a kept view then gets the view kept, and a request with an edit gets `409`. Writes nothing. A read-only account that may run calculations can call it. |
 | GET | `/night-availability` | `scope` (`site` or `rig`), `id`, `from` and `to` (`YYYY-MM-DD`). The scope's marks and the `revision` to send back with a change. |
 | PUT | `/night-availability/{scope}/{id}` | `expected_revision` and `marks`: up to 62 nights, each a `date`, a `state` (`available`, `unavailable` or `limited`), `windows` (for `limited`: UTC instants inside that night's noon-to-noon span) and an optional `note`. Replaces those nights' marks in one transaction. `409` on a stale revision; `422` for hours outside the night or a scope with no location. |
 | DELETE | `/night-availability/{scope}/{id}` | `expected_revision` and `dates`: returns those nights to the default. |

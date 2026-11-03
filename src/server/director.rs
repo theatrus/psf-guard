@@ -185,11 +185,26 @@ pub struct Service {
     resending: Mutex<std::collections::BTreeSet<String>>,
     /// Held while a site's forecast is asked for, so asks go one at a time.
     forecast_turn: tokio::sync::Mutex<()>,
+    /// The night plans kept, and those being computed.
+    night_plans: night_plans::Cache,
+    /// The writer's [`MetaStore::planning_rows_written`] after its last
+    /// write: night plans kept from an older count may be out of date.
+    planning_rows: std::sync::atomic::AtomicU64,
 }
 
 /// Ask for each site's cloud forecast when it is due.
 pub(crate) fn spawn_site_forecasts(state: &Arc<AppState>) {
     site_forecast::spawn(state);
+}
+
+/// Keep the night plans someone read lately current.
+pub(crate) fn spawn_night_plan_refresh(state: &Arc<AppState>) {
+    crate::server::schedule::every(
+        state,
+        "night plan refresh",
+        crate::server::schedule::Every::period(night_plans::REFRESH_EVERY),
+        night_plans::refresh_kept,
+    );
 }
 
 pub(crate) fn spawn_collaboration(state: Arc<AppState>) {
@@ -224,9 +239,11 @@ impl Service {
         } else {
             MetaStore::create(path)?
         };
+        let planning_rows = std::sync::atomic::AtomicU64::new(store.planning_rows_written());
         Ok(Some(Arc::new(Self {
             path: path.to_path_buf(),
             instance_id: store.instance_id(),
+            planning_rows,
             writer: Mutex::new(store),
             readers: Mutex::new(Vec::new()),
             read_slots: Arc::new(Semaphore::new(reader_slots())),
@@ -236,6 +253,7 @@ impl Service {
             collaboration: collaboration_auth::SessionState::default(),
             resending: Mutex::new(std::collections::BTreeSet::new()),
             forecast_turn: tokio::sync::Mutex::new(()),
+            night_plans: night_plans::Cache::default(),
         })))
     }
 
@@ -343,7 +361,12 @@ impl Service {
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
             let mut store = self.writer.lock().map_err(|_| Error::Internal)?;
-            operation(&mut store)
+            let result = operation(&mut store);
+            self.planning_rows.store(
+                store.planning_rows_written(),
+                std::sync::atomic::Ordering::Release,
+            );
+            result
         })
         .await
         .map_err(|error| {
@@ -383,7 +406,7 @@ impl Service {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 enum Error {
     Disabled,
     Forbidden,

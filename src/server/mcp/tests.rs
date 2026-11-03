@@ -123,6 +123,37 @@ async fn an_agent_creates_and_renames_a_plan_and_keeps_the_template_library() {
 }
 
 #[tokio::test]
+async fn an_agent_reads_the_night_plans_the_server_keeps() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = planning_state(&dir, false);
+    let app = app(&state);
+    let planned = tool(
+        &app,
+        "get_night_plans",
+        json!({ "nights": 3, "schedule": true }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(planned["nights"], 3);
+    assert!(planned["rigs"].as_array().unwrap().is_empty());
+    assert!(planned["warnings"][0]
+        .as_str()
+        .unwrap()
+        .contains("No rig has a location yet"));
+    let computed_at = planned["computed_at_ms"].as_u64().unwrap();
+    // The same question again is answered from the kept view.
+    let again = tool(
+        &app,
+        "get_night_plans",
+        json!({ "nights": 3, "schedule": true }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(again["computed_at_ms"].as_u64(), Some(computed_at));
+    assert_eq!(again["refreshing"], false);
+}
+
+#[tokio::test]
 async fn without_database_management_activation_is_refused_as_in_the_app() {
     let dir = tempfile::tempdir().unwrap();
     let state = planning_state(&dir, false);

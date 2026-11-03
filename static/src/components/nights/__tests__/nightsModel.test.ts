@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { availableShares, clockOnNight, completesOn, datesBetween, decidedBy, forecastMark, formatClock, isDate, loadWords, markGlyph, markOrigin, planColours, planRows, plansOnNight, windowFor } from '../nightsModel';
+import { availableShares, clockOnNight, darkState, darkWindows, completesOn, datesBetween, decidedBy, forecastMark, formatClock, isDate, loadWords, markGlyph, markOrigin, planColours, planRows, plansOnNight, windowFor } from '../nightsModel';
 import { NOON, night, rig } from './fixtures';
 
 const HOUR = 3_600_000;
@@ -157,6 +157,34 @@ describe('night plan helpers', () => {
     expect(completesOn([entry(1), entry(3)])).toBe(3);
     expect(completesOn([entry(1), entry(null)])).toBeNull();
     expect(completesOn([entry(null, true)])).toBe(-1);
+  });
+});
+
+describe('a night clear only in daylight', () => {
+  const HOUR = 3_600_000;
+  // A forecast clear in the afternoon and the next morning, cloudy all
+  // through the dark: limited, with no clear dark hours.
+  const daylight = night(0, {
+    available_dark_hours: 0,
+    availability: { state: 'limited', marks: [], windows: [
+      { start_ms: NOON + 2 * HOUR, end_ms: NOON + 4 * HOUR },
+      { start_ms: NOON + 22 * HOUR, end_ms: NOON + 24 * HOUR },
+    ] },
+  });
+
+  it('stands out, as a night marked out does', () => {
+    expect(darkState(daylight)).toBe('unavailable');
+    expect(darkWindows(daylight)).toEqual([]);
+  });
+
+  it('keeps a night with a clear dark hour limited, its windows clipped to the dark', () => {
+    const evening = night(0, {
+      available_dark_hours: 2,
+      availability: { state: 'limited', marks: [], windows: [{ start_ms: NOON + 5 * HOUR, end_ms: NOON + 9 * HOUR }] },
+    });
+    expect(darkState(evening)).toBe('limited');
+    expect(darkWindows(evening)).toEqual([{ start_ms: evening.dusk_ms, end_ms: NOON + 9 * HOUR }]);
+    expect(darkState(night(1))).toBe('available');
   });
 });
 

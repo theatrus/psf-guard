@@ -17,12 +17,14 @@ import { DraftProvider, SaveBar } from '../director/pageDrafts';
 import type { Drafts } from '../director/pageDraftsState';
 import { blockSubject, moveBlock, overrideBands, pinsOverlap, replacedInPlace, sameOverrides, subjectKey } from './overridesModel';
 import {
+  darkWindows,
   BROWSER_ZONE,
   RUNTIME_LABEL,
   STATE_LABEL,
   clockValue,
   describeDates,
   formatClock,
+  refetchKept,
   usableZone,
   formatNightDate,
   isTonight,
@@ -226,9 +228,9 @@ function useNightSchedule(rig: RigNights, night: RigNight, range: Props['range']
     enabled: enabled && index >= 0,
     retry: retryWhenBusy,
     retryDelay: 1200,
-    // Tonight re-plans from now every two minutes; other nights stand
-    // until the page asks again or a mark changes them.
-    refetchInterval: tonight ? 2 * 60_000 : false,
+    // The server keeps the plans without an edit current; tonight's is read
+    // again each minute, and others when a change asks for them.
+    refetchInterval: current => previewed !== null || tsPreviewed !== null ? false : refetchKept(current.state.data, tonight ? 60_000 : false),
     refetchOnWindowFocus: false,
     // An edit keeps its last schedule on screen while the next is planned.
     placeholderData: previous => previous,
@@ -295,7 +297,9 @@ function NightFacts({ rig, night }: { rig: RigNights; night: RigNight }) {
     <dl className="nights-facts">
       <div><dt>Dark</dt><dd>{night.dusk_ms !== null && night.dawn_ms !== null ? `${siteClock(rig, night.dusk_ms)} – ${siteClock(rig, night.dawn_ms)}, ${formatHours(night.dark_hours)}` : 'No darkness'}</dd></div>
       <div><dt>Clear</dt><dd>{availability.state === 'limited'
-        ? availability.windows.map(w => `${siteClock(rig, w.start_ms)} – ${siteClock(rig, w.end_ms)}`).join(', ') + `, ${formatHours(night.available_dark_hours)} dark`
+        ? darkWindows(night).length > 0
+          ? darkWindows(night).map(w => `${siteClock(rig, w.start_ms)} – ${siteClock(rig, w.end_ms)}`).join(', ') + `, ${formatHours(night.available_dark_hours)} dark`
+          : 'None after dark'
         : availability.state === 'unavailable' ? 'Not available' : `All night, ${formatHours(night.available_dark_hours)} dark`}</dd></div>
       <div><dt>Moon</dt><dd>{Math.round(night.moon_illumination * 100)}% lit, up {formatHours(night.moon_hours_up_in_dark)}</dd></div>
       <div><dt>Load</dt><dd>{describeLoad(night)}</dd></div>

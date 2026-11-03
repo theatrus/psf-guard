@@ -2268,7 +2268,7 @@ export interface JobPause {
 
 /** What a preview previews. Mirrors `PreviewKind` in
  *  `src/server/previews.rs`. */
-export type PreviewKind = 'sync' | 'import' | 'export' | 'peer_sync' | 'incoming';
+export type PreviewKind = 'sync' | 'import' | 'export' | 'peer_sync' | 'incoming' | 'night_plans';
 
 /** The view that shows what a job works on: `/{view}?db=…&project=…&target=…`,
  *  then `params` in order. */

@@ -1,4 +1,4 @@
-import type { NightAppliedMark, NightAvailabilityState, NightInterval, NightPlanProject, NightPlanTarget, NightRuntime, NightTargetHours, NightSchedule, RigNight, RigNights, SchedulePlanProgress } from '../../api/nightPlanTypes';
+import type { NightAppliedMark, NightAvailabilityState, NightInterval, NightPlanProject, NightPlans, NightPlanTarget, NightRuntime, NightTargetHours, NightSchedule, RigNight, RigNights, SchedulePlanProgress } from '../../api/nightPlanTypes';
 import { PROVIDER_LABEL } from '../director/forecastLabels';
 import { withoutPlanningParams } from '../../hooks/useUrlState';
 
@@ -162,6 +162,30 @@ export function windowFor(night: Pick<RigNight, 'date' | 'noon_ms' | 'dusk_ms' |
   const clippedStart = Math.max(start, night.noon_ms);
   const clippedEnd = Math.min(end, night.noon_ms + DAY_MS);
   return clippedEnd > clippedStart ? { start_ms: clippedStart, end_ms: clippedEnd } : null;
+}
+
+/** How soon to read kept night plans again: shortly while the server
+ *  computes newer ones, else `otherwise`. */
+export function refetchKept(data: NightPlans | undefined, otherwise: number | false): number | false {
+  return data?.refreshing ? 3000 : otherwise;
+}
+
+/** How a night stands for shooting. A night whose clear hours all fall
+ *  in daylight or twilight, as a cloud forecast can leave it, is out, the
+ *  same as a night marked out. */
+export function darkState(night: RigNight): NightAvailabilityState {
+  if (night.availability.state === 'limited' && night.dark_hours > 0 && night.available_dark_hours <= 0) return 'unavailable';
+  return night.availability.state;
+}
+
+/** A limited night's clear windows within the dark, clipped to it. */
+export function darkWindows(night: RigNight): NightInterval[] {
+  if (night.availability.state !== 'limited' || night.dusk_ms === null || night.dawn_ms === null) return [];
+  return night.availability.windows.flatMap(window => {
+    const start = Math.max(window.start_ms, night.dusk_ms!);
+    const end = Math.min(window.end_ms, night.dawn_ms!);
+    return end > start ? [{ start_ms: start, end_ms: end }] : [];
+  });
 }
 
 /** Where the dark part of a night sits in a strip from dusk to dawn: the
