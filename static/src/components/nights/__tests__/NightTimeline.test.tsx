@@ -58,7 +58,7 @@ describe('NightTimeline', () => {
     const row = screen.getByRole('group', { name: 'Overrides' });
     expect(within(row).getByTitle('Only IC 1805 from 20:00 to 22:00')).toHaveTextContent('Pinned');
     expect(within(row).getByTitle('Hold the rig from 00:00')).toHaveTextContent('Held');
-    expect(screen.getByRole('list', { name: 'Legend' })).toHaveTextContent("Held: The night's overrides hold the rig.");
+    expect(screen.getByRole('list', { name: 'Legend' })).toHaveTextContent('Held: An override stops the rig from starting work.');
     const shown = screen.getByRole('button', { name: /IC 1805/ });
     expect(shown).not.toHaveAccessibleName(/arrow keys/);
     expect(screen.queryByRole('slider', { name: 'Hold the rig from' })).toBeNull();

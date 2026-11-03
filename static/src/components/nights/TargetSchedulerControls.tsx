@@ -36,9 +36,6 @@ export default function TargetSchedulerControls({ rig, saved, canEdit, edit, onE
   // table is folded again.
   const [open, setOpen] = useState(false);
   const changes = tsChanges(saved, edit ?? { projects: {}, targets: {} });
-  const where = rig.ts_save.files.length > 1
-    ? `the rig's database and Target Scheduler's own file (${rig.ts_save.files[1]})`
-    : "the rig's database, the file Target Scheduler reads";
   useDraftSection('target-scheduler', {
     label: 'Target Scheduler settings',
     order: 2,
@@ -80,13 +77,13 @@ export default function TargetSchedulerControls({ rig, saved, canEdit, edit, onE
         onClick={() => setOpen(!open)}>Target Scheduler settings</button></h4>
       {!open && <span className="director-muted">{active} of {saved.length} {saved.length === 1 ? 'project' : 'projects'} active</span>}
       {open && canEdit && !edit && !rig.ts_save.refused && saved.length > 0 && <button type="button" onClick={() => { setRefused(null); onEdit({ projects: {}, targets: {} }); }}>Change settings</button>}
+      {open && edit && isEmpty(changes) && <button type="button" onClick={() => onEdit(null)}>Stop changing</button>}
     </div>
     {refused && !edit && <p className="director-error" role="alert">{refused}</p>}
     {open && <div id={`ts-settings-${rig.rig.id}`}>
-    <p className="director-muted">Target Scheduler picks this rig's targets from its database. {rig.ts_save.refused
-      ? rig.ts_save.refused
-      : `Changes here are saved to ${where}. They are Target Scheduler's own settings, so they last until changed back, for every night.`}</p>
-    {saved.length === 0 && <p className="director-muted">The rig's database has no projects for its N.I.N.A. profile.</p>}
+    <p className="director-muted">{rig.ts_save.refused
+      ?? `Changes apply to every night, not just this one.${rig.ts_save.files.length > 1 ? " Saving also writes Target Scheduler's own database." : ''}`}</p>
+    {saved.length === 0 && <p className="director-muted">The rig's database has no projects.</p>}
     {saved.length > 0 && <div className="director-table-scroll"><table className="nights-plan-table">
       <thead><tr><th>Project or target</th><th>Active</th><th>Priority</th></tr></thead>
       <tbody>{projects.flatMap(project => {
@@ -112,7 +109,6 @@ export default function TargetSchedulerControls({ rig, saved, canEdit, edit, onE
         ];
       })}</tbody>
     </table></div>}
-    {edit && <p className="director-muted">The schedule above shows these changes before they are saved.{isEmpty(changes) && ' '}{isEmpty(changes) && <button type="button" onClick={() => onEdit(null)}>Stop changing</button>}</p>}
     </div>}
   </section>;
 }

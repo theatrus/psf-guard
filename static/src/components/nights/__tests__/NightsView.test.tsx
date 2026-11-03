@@ -64,7 +64,7 @@ describe('Nights', () => {
     expect(within(detail).getByText('· dome motor')).toBeInTheDocument();
     // Marked out, the night applies to nothing; the target folds away
     // with its reason.
-    const plansTonight = within(detail).getByRole('region', { name: 'No owed target can be imaged this night' });
+    const plansTonight = within(detail).getByRole('region', { name: 'No target can be imaged this night' });
     expect(within(plansTonight).getByText('Not this night: 1 target')).toBeInTheDocument();
     expect(within(plansTonight).getByRole('listitem')).toHaveTextContent('Heart Nebula · IC 1805: above its limits only in hours that are not clear');
     expect(cells[1]).toHaveAttribute('aria-pressed', 'true');
@@ -96,8 +96,9 @@ describe('Nights', () => {
     fireEvent.click(cells[0]);
     const detail = screen.getByRole('region', { name: 'Night details' });
     expect(within(detail).getByText(/^Forecast \(Open-Meteo, fetched .+\): Limited/)).toBeInTheDocument();
-    expect(within(detail).getByText(/Hours at or under 30% cloud count as clear/)).toBeInTheDocument();
-    expect(within(detail).getByRole('link', { name: 'Weather data by Open-Meteo.com (CC BY 4.0)' })).toHaveAttribute('href', 'https://open-meteo.com/');
+    expect(within(detail).getByText('Clear means 30% cloud or less.')).toBeInTheDocument();
+    // The provider's credit is under the grid, once for the page.
+    expect(screen.getByRole('link', { name: 'Weather data by Open-Meteo.com (CC BY 4.0)' })).toHaveAttribute('href', 'https://open-meteo.com/');
     // The forecast's mark is not one to edit or clear.
     fireEvent.change(within(detail).getByLabelText('For'), { target: { value: 'site' } });
     expect(within(detail).getByLabelText('Not available')).toBeChecked();
@@ -109,7 +110,7 @@ describe('Nights', () => {
     const grid = await screen.findByTestId('nights-grid');
     fireEvent.click(within(grid).getAllByRole('button')[2]);
     const detail = screen.getByRole('region', { name: 'Night details' });
-    expect(within(detail).getByText(/forecast from MET Norway has not arrived or has expired, so nights count as clear/)).toBeInTheDocument();
+    expect(within(detail).getByText(/^No current forecast from MET Norway, so the night counts as clear\./)).toBeInTheDocument();
   });
 
   it('marks a run of nights limited for every rig at the site', async () => {
@@ -248,7 +249,7 @@ describe('Night overrides', () => {
   it('edits a Director night on its timeline, plans the draft and saves it from the bar', async () => {
     const { detail, edit, requests, saves } = await openDirectorNight();
     const overrides = within(detail).getByRole('region', { name: 'Overrides' });
-    expect(within(overrides).getByText('None: the rig follows its own program this night.')).toBeInTheDocument();
+    expect(within(overrides).getByText('None.')).toBeInTheDocument();
     fireEvent.click(edit);
     // A block's menu pins its target to the block.
     fireEvent.click(within(detail).getByRole('button', { name: /^Heart Nebula, IC 1805:/ }));
@@ -410,7 +411,7 @@ describe('Target Scheduler settings', () => {
     expect(within(detail).queryByLabelText("As Target Scheduler's preview")).toBeNull();
     fireEvent.click(within(settings).getByRole('button', { name: 'Target Scheduler settings' }));
     expect(within(settings).getByRole('button', { name: 'Target Scheduler settings' })).toHaveAttribute('aria-expanded', 'true');
-    expect(settings).toHaveTextContent("They are Target Scheduler's own settings, so they last until changed back, for every night.");
+    expect(settings).toHaveTextContent('Changes apply to every night, not just this one.');
     expect(within(settings).getByLabelText('Heart Nebula active')).toBeDisabled();
     fireEvent.click(within(settings).getByRole('button', { name: 'Change settings' }));
     fireEvent.click(within(settings).getByLabelText('Heart Nebula active'));

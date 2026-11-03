@@ -91,8 +91,8 @@ test('Nights shows every rig across the coming nights, a night\'s schedule, and 
     await expect(page.getByRole('tab', { name: 'Nights' })).toHaveAttribute('aria-selected', 'true');
     const tonightDetail = page.getByRole('region', { name: 'Night details' });
     await expect(tonightDetail).toBeVisible();
-    // Tonight is planned from now, beside what the rig says it is doing.
-    await expect(tonightDetail.getByText(/Tonight is planned from now/)).toBeVisible();
+    // Tonight shows what the rig says it is doing.
+    await expect(tonightDetail.getByRole('status').filter({ hasText: /^Now:/ })).toBeVisible();
     expect(errors).toEqual([]);
   } finally {
     for (const slug of slugs) await request.delete(`/api/databases/${slug}`);

@@ -33,7 +33,7 @@ import {
   windowFor,
   type PlanRow,
 } from './nightsModel';
-import { PROVIDER_LABEL, PROVIDER_URL } from '../director/forecastLabels';
+import { PROVIDER_LABEL } from '../director/forecastLabels';
 
 /** A time on the rig's site clock, or the browser's when the site names no
  *  time zone. */
@@ -172,9 +172,7 @@ export default function NightDetail({ rig, nights, colours, canMark, range, draf
     <SaveBar drafts={drafts} canWrite={canMark} pageKeys={RIGS_PAGE_KEYS} />
     <div className="director-toolbar">
       <h3>{rig.catalog_name} · {describeDates(nights.map(night => night.date))}</h3>
-      <span className="nights-mode" data-runtime={rig.runtime} title={rig.runtime === 'director'
-        ? "Director picks this rig's work, and takes overrides for a night."
-        : "Target Scheduler picks this rig's work from its database."}>{RUNTIME_LABEL[rig.runtime]} decides</span>
+      <span className="nights-mode" data-runtime={rig.runtime}>{RUNTIME_LABEL[rig.runtime]} decides</span>
       <button type="button" aria-label="Close night details" title="Close" onClick={onClose}><X size={16} /></button>
     </div>
     {single ? <NightFacts rig={rig} night={first} /> : <p className="director-muted">
@@ -272,19 +270,13 @@ function NightSchedule({ rig, night, colours, view, edit, moveProblem, saved, on
       <h4>{RUNTIME_LABEL[shown]} schedule</h4>
       {onEdit && <button type="button" className="is-primary" onClick={onEdit}>Edit night</button>}
     </div>
-    <p className="director-muted">{shown === 'target_scheduler'
-      ? `A prediction of Target Scheduler ${detail?.schedule?.assumptions.target_scheduler_version ?? '5'}'s choices from the rig's database. Target Scheduler decides on the rig. Change a project's priority or whether it is active under Target Scheduler settings, or its limits and rule weights in Target Scheduler, to change this prediction.`
-      : "Director's own selection, stepped through the night's dark hours. The rig still decides on the night."}
-      {detail?.schedule?.assumptions.overheads && ` Times include ${detail.schedule.assumptions.overheads.target_change_seconds} s per target change, ${detail.schedule.assumptions.overheads.filter_change_seconds} s per filter change and ${detail.schedule.assumptions.overheads.per_exposure_seconds} s per exposure.`}
-    </p>
     {tonight && <p className="nights-live" role="status">
-      <strong>Now:</strong> {live ? describeNow(live, now) : 'no report from the rig'}.
-      {' '}Tonight is planned from now, with the frames the rig has taken so far.
+      <strong>Now:</strong> {live ? describeNow(live, now) : 'No report yet'}
     </p>}
     {query.isPending && <p role="status">Planning {formatNightDate(night.date)}...</p>}
     {query.isError && <p className="director-error" role="alert">{query.error instanceof Error ? query.error.message : 'The schedule could not be computed'}</p>}
     {detail?.warnings.map(warning => <p key={warning} className="director-muted" role="note">{warning}</p>)}
-    {edit && <p className="director-muted">Choose a block for what to do with it, or drag it. Drag a pin or its edges, and drag the hold line in from the right. Nothing changes on the rig until the overrides are saved.</p>}
+    {edit && <p className="director-muted">Drag a block, a pin or the hold line, or click a block for more.</p>}
     {edit && query.isFetching && <p className="director-muted" role="status">Planning the edit...</p>}
     {moveProblem && <p className="director-error" role="alert">{moveProblem}</p>}
     {shown === 'director' && rig.runtime === 'director' && <OverrideChips entries={edit ? edit.entries : saved} goals={goals} zone={zone}
@@ -302,7 +294,7 @@ function NightFacts({ rig, night }: { rig: RigNights; night: RigNight }) {
       <div><dt>Clear</dt><dd>{availability.state === 'limited'
         ? availability.windows.map(w => `${siteClock(rig, w.start_ms)} – ${siteClock(rig, w.end_ms)}`).join(', ') + `, ${formatHours(night.available_dark_hours)} dark`
         : availability.state === 'unavailable' ? 'Not available' : `All night, ${formatHours(night.available_dark_hours)} dark`}</dd></div>
-      <div><dt>Moon</dt><dd>{Math.round(night.moon_illumination * 100)}% lit, up {formatHours(night.moon_hours_up_in_dark)} of the dark</dd></div>
+      <div><dt>Moon</dt><dd>{Math.round(night.moon_illumination * 100)}% lit, up {formatHours(night.moon_hours_up_in_dark)}</dd></div>
       <div><dt>Load</dt><dd>{describeLoad(night)}</dd></div>
     </dl>
     {availability.marks.length > 0 && <ul className="nights-marks">{availability.marks.map(mark => <li key={mark.scope}>
@@ -314,28 +306,25 @@ function NightFacts({ rig, night }: { rig: RigNights; night: RigNight }) {
   </>;
 }
 
-/** What the site's forecast shows for the night, or why it shows nothing,
- *  with the credit its provider's licence requires. */
+/** What clear means under the site's forecast, or why the forecast does
+ *  not count. The credit its provider's licence requires is under the grid. */
 function ForecastNote({ rig, night }: { rig: RigNights; night: RigNight }) {
   const forecast = rig.forecast!;
-  const provider = PROVIDER_LABEL[forecast.provider];
   const said = forecast.fetched_at_ms === null
-    ? `${rig.planning_site?.name ?? 'The site'}'s forecast from ${provider} has not arrived or has expired, so nights count as clear.`
+    ? `No current forecast from ${PROVIDER_LABEL[forecast.provider]}, so the night counts as clear.`
     : night.clouds.length === 0
-      ? `${provider}'s forecast does not cover this night, so the night counts as clear.`
-      : `Hours at or under ${forecast.cloud_threshold_percent}% cloud count as clear, from ${provider}'s forecast fetched ${siteClock(rig, forecast.fetched_at_ms)}. A mark set for the site overrides the forecast.`;
-  return <p className="director-muted nights-forecast-note">
-    {said} <a href={PROVIDER_URL[forecast.provider]} target="_blank" rel="noreferrer">{forecast.attribution}</a>
-  </p>;
+      ? 'The forecast does not reach this night, so it counts as clear.'
+      : `Clear means ${forecast.cloud_threshold_percent}% cloud or less.`;
+  return <p className="director-muted nights-forecast-note">{said}</p>;
 }
 
 function describeLoad(night: RigNight): string {
   const { demand_hours, available_hours, idle_hours, overbooked_hours } = night.load;
-  if (demand_hours <= 0) return available_hours > 0 ? `Nothing owed fits; ${formatHours(available_hours)} idle` : 'Nothing owed fits';
-  const owed = `${formatHours(demand_hours)} of owed work fits, against ${formatHours(available_hours)} clear`;
-  if (overbooked_hours >= 0.05) return `${owed}: overbooked by ${formatHours(overbooked_hours)}`;
-  if (idle_hours >= 0.05) return `${owed}: ${formatHours(idle_hours)} idle`;
-  return owed;
+  if (demand_hours <= 0) return available_hours > 0 ? `Nothing fits; ${formatHours(available_hours)} idle` : 'Nothing fits';
+  const load = `${formatHours(demand_hours)} of work, ${formatHours(available_hours)} clear`;
+  if (overbooked_hours >= 0.05) return `${load}: ${formatHours(overbooked_hours)} over`;
+  if (idle_hours >= 0.05) return `${load}: ${formatHours(idle_hours)} idle`;
+  return load;
 }
 
 /**
@@ -353,12 +342,12 @@ function PlanHours({ rig: grid, night: gridNight, colours, view }: { rig: RigNig
   const scheduled = !!schedule?.nights.some(n => n.date === night.date);
   // The grid's schedule runs the whole range, so it can say when a plan is done.
   const doneBy = view.asGrid ? grid.schedule : null;
-  if (rig.plans.length === 0) return <p className="director-muted">This rig owes no frames.</p>;
+  if (rig.plans.length === 0) return <p className="director-muted">No frames left to take.</p>;
   const { applies, out } = planRows(rig, night, schedule);
   const planned = applies.filter(row => row.status === 'planned').length;
   const notPlanned = applies.length - planned;
   const targets = (count: number) => `${count} target${count === 1 ? '' : 's'}`;
-  const heading = applies.length === 0 ? 'No owed target can be imaged this night'
+  const heading = applies.length === 0 ? 'No target can be imaged this night'
     : scheduled ? `This night: ${[planned && `${targets(planned)} planned`, notPlanned && `${planned ? notPlanned : targets(notPlanned)} not planned`].filter(Boolean).join(', ')}`
     : `This night: ${targets(applies.length)} up and clear`;
   const planName = (row: PlanRow) => <><span className="nights-plan-dot" data-colour={colours.get(row.plan.name) ?? 0} aria-hidden="true" />{row.plan.name}</>;
@@ -366,9 +355,8 @@ function PlanHours({ rig: grid, night: gridNight, colours, view }: { rig: RigNig
   const headingId = `nights-plans-${rig.rig.id}-${night.date}`;
   return <section className="nights-plans" aria-labelledby={headingId}>
     <h4 id={headingId}>{heading}</h4>
-    {view.tonight && applies.length > 0 && <p className="director-muted">Usable hours count the whole night. Tonight's schedule plans only from now.</p>}
     {applies.length > 0 && <div className="director-table-scroll"><table className="nights-plan-table">
-      <thead><tr><th>Plan</th><th>Target</th>{scheduled && <th>Planned</th>}<th>Usable</th><th>Peak</th><th>Owed</th>{doneBy && <th>Done by</th>}</tr></thead>
+      <thead><tr><th>Project</th><th>Target</th>{scheduled && <th>Planned</th>}<th>Usable</th><th>Peak</th><th>Left</th>{doneBy && <th>Done by</th>}</tr></thead>
       <tbody>{applies.map(row => {
         const done = doneBy ? completesOn(doneBy.progress.filter(p => p.project_id === row.plan.project_id && p.target_id === row.target.target_id)) : null;
         const blocked = row.hours?.hours_moon_blocked ?? 0;
@@ -473,10 +461,10 @@ function MarkForm({ rig, nights, scope, onScope }: { rig: RigNights; nights: Rig
       {state === 'limited' && <div className="nights-mark-row">
         <label>From <input type="time" value={from} onChange={event => setFrom(event.target.value)} aria-describedby="nights-limited-help" /></label>
         <label>To <input type="time" value={to} onChange={event => setTo(event.target.value)} aria-describedby="nights-limited-help" /></label>
-        <span id="nights-limited-help" className="director-muted">Times are in {zone ? `the site's time zone (${zone})` : `this browser's time zone (${BROWSER_ZONE})`}. Leave From empty to start at dusk, or To empty to end at dawn. Times after midnight fall the next morning.</span>
+        <span id="nights-limited-help" className="director-muted">Times in {zone ?? `this browser's time zone, ${BROWSER_ZONE}`}. Leave From or To empty for dusk or dawn.</span>
       </div>}
       {state === 'limited' && extra.length > 0 && <p className="director-muted" role="note">
-        This mark also has {extra.map(w => `${siteClock(rig, w.start_ms)} – ${siteClock(rig, w.end_ms)}`).join(', ')}. Saving keeps only the hours entered here.
+        Saving removes this mark's other hours: {extra.map(w => `${siteClock(rig, w.start_ms)} – ${siteClock(rig, w.end_ms)}`).join(', ')}.
       </p>}
       <div className="nights-mark-row">
         <label>For <select value={scope} onChange={event => onScope(event.target.value as NightMarkScope)}>
@@ -485,7 +473,6 @@ function MarkForm({ rig, nights, scope, onScope }: { rig: RigNights; nights: Rig
         </select></label>
         <label className="nights-mark-note">Note <input type="text" value={note} maxLength={200} placeholder="Dome motor, high cirrus..." onChange={event => setNote(event.target.value)} /></label>
       </div>
-      <p className="director-muted">Marks change night plans only. They never start, stop or block a rig: its safety monitor and N.I.N.A. still decide on the night.</p>
       {problem && <p className="director-error" role="alert">{problem}</p>}
       <div className="nights-mark-row">
         <button type="submit" disabled={busy || !scopeId}>Save mark</button>

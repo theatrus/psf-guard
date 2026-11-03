@@ -41,9 +41,9 @@ test('a site with a forecast and a horizon file shapes its rigs\' nights', async
     await card.getByLabel('Elevation').fill('70');
     await card.getByLabel('Upload Site horizon file').setInputFiles({ name: 'patio.hrz', mimeType: 'text/plain', buffer: Buffer.from(PATIO_HRZ) });
     await expect(card.getByTestId('horizon-summary')).toContainText('not saved yet');
-    await expect(card.getByText(/Off: PSF Guard sends nothing about this site/)).toBeVisible();
+    await expect(card.getByText('Off. PSF Guard sends nothing about this site.')).toBeVisible();
     await card.getByLabel('Forecast', { exact: true }).selectOption('open_meteo');
-    await expect(card.getByText(/sends this site's latitude and longitude, rounded to about 1 km, to Open-Meteo/)).toBeVisible();
+    await expect(card.getByText(/sends Open-Meteo this site's latitude and longitude, rounded to about 1 km, and nothing else/)).toBeVisible();
     await card.getByRole('button', { name: 'Save site' }).click();
     await expect(card.getByText(`Saved ${siteName}.`)).toBeVisible();
     const status = card.getByLabel('Forecast status');
@@ -84,8 +84,8 @@ test('a site with a forecast and a horizon file shapes its rigs\' nights', async
     await limited.click();
     const detail = page.getByRole('region', { name: 'Night details' });
     await expect(detail.getByText(/^Forecast \(Open-Meteo, fetched .+\): Limited/)).toBeVisible();
-    await expect(detail.getByText(/Hours at or under 30% cloud count as clear/)).toBeVisible();
-    await expect(detail.getByRole('link', { name: 'Weather data by Open-Meteo.com (CC BY 4.0)' })).toBeVisible();
+    await expect(detail.getByText('Clear means 30% cloud or less.')).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Weather data by Open-Meteo.com (CC BY 4.0)' })).toBeVisible();
     const clouds = detail.getByRole('group', { name: 'Cloud cover' });
     await expect(clouds).toBeVisible({ timeout: 30_000 });
     await expect(clouds.locator('.nights-cloud.is-cloudy').first()).toBeAttached();

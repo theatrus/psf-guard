@@ -1953,7 +1953,8 @@ Darkness in the cells is the Sun below −12°, as in [Visibility](#visibility).
 Choose a cell to open the night below the grid:
 
 - **Dark**, **Clear**, **Moon** and **Load**: dusk and dawn, the clear
-  hours, the Moon, and how much of what the rig owes fits the clear hours.
+  hours, the Moon's phase and hours up in the dark, and the hours of work
+  that fit against the clear hours.
 - **The schedule** from the runtime that drives the rig: a timeline from an
   hour before dusk to an hour after dawn, with a block for each stretch on
   a target and its filter runs inside. Gaps are shaded by their reason:
@@ -1967,7 +1968,7 @@ Choose a cell to open the night below the grid:
   - the usable hours: up, clear and allowed by Moon avoidance, with the
     hours Moon avoidance excludes;
   - the peak altitude;
-  - what the target still owes;
+  - the hours and frames left (**Left**);
   - for the rig's own schedule, the night its plan is done within the range.
 
   The other targets fold into **Not this night**, each with its reason:

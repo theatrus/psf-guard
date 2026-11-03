@@ -51,6 +51,12 @@ interface Selection {
  * Choose a night to see its schedule and plans, and to mark it available,
  * out, or clear for some hours.
  */
+/** How many targets the rig has frames left for. */
+function describeTargets(rig: RigNights): string {
+  const targets = rig.plans.reduce((sum, project) => sum + project.targets.length, 0);
+  return targets === 0 ? 'No targets left' : `${targets} target${targets === 1 ? '' : 's'}`;
+}
+
 export default function NightsView() {
   const { getParam, updateParams } = useUrlParams();
   const { canWrite } = useAccess();
@@ -126,19 +132,13 @@ export default function NightsView() {
           <button type="button" title="Compute again" aria-label="Compute again" disabled={query.isFetching} onClick={() => void query.refetch()}><RefreshCw size={16} /></button>
         </div>
       </div>
-      <p className="director-muted">
-        Each row is a rig and each column a night, from dusk to dawn. A bar shows the dark hours the night is clear for,
-        and the line under it how much of what the rig owes fits. Choose a night to see its plans{canWrite ? ' and to mark it' : ''};
-        Shift-click another night of the same rig to choose a run of nights.
-        These are planning estimates: the rig still decides on the night.
-      </p>
       {rigs.length > 1 && <div className="nights-rig-chips" role="group" aria-label="Rigs shown">
         {rigs.map(rig => <button key={rig.rig.id} type="button" className="nights-chip" aria-pressed={!hidden.has(rig.rig.id)} onClick={() => toggleRig(rig.rig.id)}>{rig.catalog_name}</button>)}
       </div>}
       {query.isPending && <p role="status">Computing the nights...</p>}
       {query.isError && <div role="alert"><p>{message(query.error)}</p><button type="button" onClick={() => void query.refetch()}>Retry</button></div>}
       {query.data?.warnings.map(warning => <p key={warning} className="director-muted" role="note">{warning}</p>)}
-      {query.isSuccess && rigs.length === 0 && <p className="director-muted">No rig to plan yet. Give a rig a site in its setup and its nights show here.</p>}
+      {query.isSuccess && rigs.length === 0 && <p className="director-muted">No rigs to show. Give a rig a site in Rig setup.</p>}
       {shown.length > 0 && <div className="nights-grid-scroll">
         <table className="nights-grid" data-testid="nights-grid">
           <thead><tr>
@@ -151,7 +151,7 @@ export default function NightsView() {
             <th scope="row" className="nights-rig">
               <strong>{rig.catalog_name}</strong>
               <span className="director-muted">{RUNTIME_LABEL[rig.runtime]}{rig.planning_site ? ` · ${rig.planning_site.name}` : ''}</span>
-              <span className="director-muted">{rig.plans.length === 0 ? 'Nothing owed' : `${rig.plans.length} plan${rig.plans.length === 1 ? '' : 's'} owed`}</span>
+              <span className="director-muted">{describeTargets(rig)}</span>
             </th>
             {dates.map(date => {
               const night = rig.nights.find(n => n.date === date);
@@ -174,7 +174,7 @@ export default function NightsView() {
                     {glyph && <span className="nights-cell-mark" aria-hidden="true">{glyph}</span>}
                     {night.override_count > 0 && <span className="nights-cell-override" aria-hidden="true" title={`${night.override_count} ${night.override_count === 1 ? 'override' : 'overrides'} for this night`}><Pin size={12} /></span>}
                     {forecast && <span className="nights-cell-forecast" aria-hidden="true" title={`${markOrigin(forecast)}: ${STATE_LABEL[forecast.state].toLowerCase()}. ${rig.forecast?.attribution ?? ''}`}><Cloud size={12} /></span>}
-                    <span className="nights-cell-moon" title={`Moon ${Math.round(night.moon_illumination * 100)}% lit, up ${formatHours(night.moon_hours_up_in_dark)} of the dark`}>☾ {Math.round(night.moon_illumination * 100)}%</span>
+                    <span className="nights-cell-moon" title={`Moon ${Math.round(night.moon_illumination * 100)}% lit, up ${formatHours(night.moon_hours_up_in_dark)}`}>☾ {Math.round(night.moon_illumination * 100)}%</span>
                   </span>
                   <span className="nights-cell-bar" aria-hidden="true">
                     {availableShares(night).map(part => <span key={part.from} className="nights-cell-clear" style={{ left: `${part.from * 100}%`, width: `${(part.to - part.from) * 100}%` }} />)}

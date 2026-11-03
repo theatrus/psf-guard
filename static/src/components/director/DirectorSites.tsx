@@ -223,8 +223,8 @@ function SiteProfileCard({ site }: { site: DirectorIdentity }) {
           </label>}
         </div>
         <p className="director-muted">{form.forecast === 'off'
-          ? 'Off: PSF Guard sends nothing about this site. Turn on a forecast to mark cloudy nights in the night plans of every rig at this site.'
-          : `${PROVIDER_LABEL[form.forecast]}: ${PROVIDER_HELP[form.forecast]}. PSF Guard sends this site's latitude and longitude, rounded to about 1 km, to ${PROVIDER_LABEL[form.forecast]} when you save, every three hours, when you click Fetch now, and when it retries after a failed request. It sends nothing else. In night plans, hours at or under the threshold count as clear, and a mark you set for the site overrides the forecast. A forecast never starts, stops or blocks a rig.`}</p>
+          ? 'Off. PSF Guard sends nothing about this site.'
+          : `${PROVIDER_LABEL[form.forecast]}: ${PROVIDER_HELP[form.forecast]}. PSF Guard sends ${PROVIDER_LABEL[form.forecast]} this site's latitude and longitude, rounded to about 1 km, and nothing else: when you save, when you click Fetch now, every three hours, and again after a failed request.`}</p>
         {data.profile.forecast && <SiteForecastStatus site={site} />}
       </fieldset>
       {(problem || (save.isError && !stale)) && <p className="director-error" role="alert">{problem || message(save.error)}</p>}

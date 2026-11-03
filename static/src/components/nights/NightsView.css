@@ -263,6 +263,10 @@
 .nights-other-plans ul { margin: 4px 0; padding-left: 18px; }
 
 .nights-override-editor { margin: 12px 0; }
+.nights-override-editor h4 { margin: 0 0 4px; font-size: 14px; }
+.nights-override-list button { padding: 2px 4px; }
+/* The night panel's help lines, at the size of its other secondary text. */
+.nights-detail p.director-muted { margin: 4px 0; font-size: 13px; }
 .nights-override-list { list-style: none; margin: 4px 0; padding: 0; display: grid; gap: 4px; }
 .nights-override-list li, .nights-order li { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .nights-order { margin: 4px 0; padding-left: 20px; display: grid; gap: 4px; }
@@ -355,11 +359,14 @@
   font-size: 12px;
 }
 .nights-chip-order { position: relative; }
+.nights-chip-order > button { padding: 2px 8px; font-size: 13px; }
 .nights-override-times { margin: 8px 0; }
 .nights-override-times summary { cursor: pointer; font-size: 13px; }
 
 /* A Target Scheduler rig's settings, which its night is planned from. */
 .nights-ts-controls { margin: 12px 0; }
+.nights-ts-controls h4 { margin: 0; font-size: 14px; }
+.nights-ts-controls p { margin: 4px 0; font-size: 13px; }
 .nights-ts-project th { text-align: left; font-weight: 600; }
 .nights-ts-target td:first-child { padding-left: 20px; color: var(--color-text-secondary); }
 .nights-page .nights-disclosure { padding: 0; border: 0; background: transparent; color: inherit; font: inherit; font-weight: 600; cursor: pointer; }
