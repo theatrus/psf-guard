@@ -134,6 +134,8 @@ import type { GuidFillReport, GuidReport, RenamedLightsMerged, RenamedLightsRepo
   WbppStackImport,
   StackMethodSettings,
   ScoringDefaultsSettings,
+  RigStarDetection,
+  StarDetectionSettings,
   StackGpu,
   StackGpuSettings,
   WorkersSettings,
@@ -1155,6 +1157,48 @@ export const apiClient = {
     const apiInstance = await getApi();
     const { data } = await apiInstance.get<ApiResponse<ScoringDefaultsSettings>>('/settings/scoring');
     if (!data.data) throw new Error(data.error || 'Failed to load the scoring defaults');
+    return data.data;
+  },
+
+  getStarDetectionSettings: async (): Promise<StarDetectionSettings> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<StarDetectionSettings>>('/settings/star-detection');
+    if (!data.data) throw new Error(data.error || 'Failed to load the star detection settings');
+    return data.data;
+  },
+
+  /** Replace the row every rig without its own uses. */
+  updateStarDetectionDefault: async (row: RigStarDetection): Promise<StarDetectionSettings> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.put<ApiResponse<StarDetectionSettings>>(
+      '/settings/star-detection',
+      { default: row },
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to save the star detection settings');
+    return data.data;
+  },
+
+  /** Give a rig its own row, replacing any it had. */
+  updateRigStarDetection: async (
+    rigUuid: string,
+    update: { name?: string; settings: RigStarDetection },
+  ): Promise<StarDetectionSettings> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.put<ApiResponse<StarDetectionSettings>>(
+      `/settings/star-detection/rigs/${encodeURIComponent(rigUuid)}`,
+      update,
+    );
+    if (!data.data) throw new Error(data.error || "Failed to save the rig's star detection");
+    return data.data;
+  },
+
+  /** The rig uses the default row again. */
+  deleteRigStarDetection: async (rigUuid: string): Promise<StarDetectionSettings> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.delete<ApiResponse<StarDetectionSettings>>(
+      `/settings/star-detection/rigs/${encodeURIComponent(rigUuid)}`,
+    );
+    if (!data.data) throw new Error(data.error || "Failed to reset the rig's star detection");
     return data.data;
   },
 

@@ -1035,6 +1035,42 @@ export interface ScoringDefaultsSettings {
   stored: boolean;
 }
 
+/** Which detector measures a rig's frames in the quality scan. */
+export type StarDetector = 'auto' | 'nina' | 'hocus_focus';
+/** N.I.N.A.'s star sensitivity. */
+export type StarSensitivity = 'normal' | 'high' | 'highest';
+/** N.I.N.A.'s noise reduction before star detection. */
+export type StarNoiseReduction = 'none' | 'normal' | 'high' | 'highest' | 'median';
+export type HocusFocusVersion = 'v3' | 'v4';
+
+/** One rig's star detection, or the default row's. */
+export interface RigStarDetection {
+  detector: StarDetector;
+  sensitivity: StarSensitivity;
+  noise_reduction: StarNoiseReduction;
+  hocus_focus_version: HocusFocusVersion;
+}
+
+/** A rig, labelled as Settings › Calibration › Rigs labels it. */
+export interface StarDetectionRig {
+  rig_uuid: string;
+  name: string;
+  /** Frame size and binning. */
+  detail?: string;
+  /** The databases that record it, by name. */
+  databases: string[];
+  /** Its own row; absent when it uses the default row. */
+  settings?: RigStarDetection;
+}
+
+/** Settings › Review › Star detection. */
+export interface StarDetectionSettings {
+  default: RigStarDetection;
+  /** N.I.N.A.'s own defaults. */
+  builtin: RigStarDetection;
+  rigs: StarDetectionRig[];
+}
+
 /** Where a stack WBPP made came from. */
 export interface WbppStackSource {
   master_file: string;

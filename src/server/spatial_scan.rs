@@ -803,20 +803,28 @@ fn still_arriving(
     })
 }
 
-fn compute_one(
-    item: &ScanWorkItem,
-    config: &SpatialAnalysisConfig,
-) -> anyhow::Result<StoredSpatialMetrics> {
-    let headers = crate::commands::screen_fits::extract_headers(&item.fits_path);
-    let fits = FitsImage::from_file(&item.fits_path)?;
-    let modified = std::fs::metadata(&item.fits_path)
-        .and_then(|metadata| metadata.modified())
-        .ok();
-    if let Some(reason) = still_arriving(&fits.data, fits.width, modified) {
-        anyhow::bail!(reason);
-    }
-    let stats = fits.calculate_basic_statistics();
+/// A frame's stars as the quality scan measures them, and the detector
+/// whose name they are recorded under.
+pub struct FrameStars {
+    pub detector: &'static str,
+    pub star_count: usize,
+    pub avg_hfr: f64,
+    pub positions: Vec<(f64, f64)>,
+    /// Stars with a flux, unsorted.
+    pub stars: Vec<CatalogStar>,
+}
 
+/// Detect and measure a frame's stars with `detection`: Hocus Focus as the
+/// rig's detector, or N.I.N.A.'s, with Hocus Focus standing in where
+/// N.I.N.A.'s finds none. The quality scan and `analyze-fits --scan` both
+/// measure through here.
+pub fn measure_frame_stars(
+    fits: &FitsImage,
+    stats: &crate::image_analysis::ImageStatistics,
+    detection: &DetectionSettings,
+    image_scale_arcsec: Option<f64>,
+    fits_path: &Path,
+) -> FrameStars {
     // Stars from Hocus Focus, as the rig's primary detector or as the
     // stand-in where N.I.N.A.'s found none, under the detector name given.
     let hocus_focus_stars = |found: &crate::hocus_focus_star_detection::HocusFocusDetectionResult,
@@ -843,9 +851,8 @@ fn compute_one(
             stars,
         )
     };
-    let (detector, star_count, avg_hfr, positions, mut stars) = if let Some(params) = item
-        .detection
-        .hocus_focus_params(item.image_scale_arcsec)
+    let (detector, star_count, avg_hfr, positions, stars) = if let Some(params) =
+        detection.hocus_focus_params(image_scale_arcsec)
     {
         let found = crate::hocus_focus_star_detection::detect_stars_hocus_focus(
             &fits.data,
@@ -855,9 +862,8 @@ fn compute_one(
         );
         hocus_focus_stars(&found, PRIMARY_HOCUS_FOCUS_DETECTOR)
     } else {
-        let params = item
-            .detection
-            .nina_params(item.image_scale_arcsec)
+        let params = detection
+            .nina_params(image_scale_arcsec)
             .unwrap_or_default();
         let stretch_params = StretchParams::default();
         let stretched =
@@ -870,7 +876,7 @@ fn compute_one(
         // and HFR are recorded under its own name, on its own scale.
         let fallback = if result.star_list.is_empty() {
             let (second, _) =
-                crate::hocus_focus_star_detection::params_for_frame_path(&item.fits_path);
+                crate::hocus_focus_star_detection::params_for_frame_path(fits_path);
             let found = crate::hocus_focus_star_detection::detect_stars_hocus_focus(
                 &fits.data,
                 fits.width,
@@ -884,7 +890,7 @@ fn compute_one(
         match &fallback {
             Some(found) => {
                 tracing::info!(
-                    image_id = item.image_id,
+                    file = %fits_path.display(),
                     stars = found.stars.len(),
                     "N.I.N.A. Fast found no stars; recording HocusFocus's measurement instead"
                 );
@@ -925,6 +931,42 @@ fn compute_one(
             }
         }
     };
+    FrameStars {
+        detector,
+        star_count,
+        avg_hfr,
+        positions,
+        stars,
+    }
+}
+
+fn compute_one(
+    item: &ScanWorkItem,
+    config: &SpatialAnalysisConfig,
+) -> anyhow::Result<StoredSpatialMetrics> {
+    let headers = crate::commands::screen_fits::extract_headers(&item.fits_path);
+    let fits = FitsImage::from_file(&item.fits_path)?;
+    let modified = std::fs::metadata(&item.fits_path)
+        .and_then(|metadata| metadata.modified())
+        .ok();
+    if let Some(reason) = still_arriving(&fits.data, fits.width, modified) {
+        anyhow::bail!(reason);
+    }
+    let stats = fits.calculate_basic_statistics();
+
+    let FrameStars {
+        detector,
+        star_count,
+        avg_hfr,
+        positions,
+        mut stars,
+    } = measure_frame_stars(
+        &fits,
+        &stats,
+        &item.detection,
+        item.image_scale_arcsec,
+        &item.fits_path,
+    );
     // Keep the brightest for cross-frame matching, and every measured star:
     // in a deep frame the brightest are saturated, so the measured ones sit
     // further down the list.

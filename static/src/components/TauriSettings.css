@@ -1846,6 +1846,49 @@
   cursor: pointer;
 }
 
+.star-detection-hints {
+  margin: 0;
+  padding-left: 1.1rem;
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+}
+
+.star-detection-hints strong {
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+
+.star-detection-meta {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+}
+
+.star-detection-inherit {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+/* The four choices side by side, wrapping on a narrow page. */
+.star-detection-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr));
+  gap: 0.5rem 1rem;
+}
+
+.star-detection-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.star-detection-field select {
+  width: 100%;
+  min-width: 0;
+}
+
 @media (max-width: 640px) {
   .scoring-default {
     grid-template-columns: minmax(0, 1fr);
