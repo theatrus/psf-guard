@@ -122,6 +122,21 @@ describe('Nights', () => {
     await waitFor(() => expect(requests).toEqual([expect.objectContaining({ refresh: true })]));
   }, 10_000);
 
+  it('still asks for fresh plans when Compute again is retried after the server was busy', async () => {
+    mount();
+    await screen.findByTestId('nights-grid');
+    const requests: Array<{ refresh?: boolean }> = [];
+    server.use(http.post('/api/director/v1/night-plans', async ({ request }) => {
+      requests.push(await request.json() as { refresh?: boolean });
+      return requests.length === 1
+        ? HttpResponse.json({ success: false, data: null, error: 'Director is busy. Try again in a moment.' }, { status: 503 })
+        : HttpResponse.json(ok(plans()));
+    }));
+    fireEvent.click(screen.getByRole('button', { name: 'Compute again' }));
+    await waitFor(() => expect(requests).toHaveLength(2), { timeout: 5000 });
+    expect(requests.map(request => request.refresh)).toEqual([true, true]);
+  }, 10_000);
+
   it('shows a night clear only in daylight as out, and lists no daytime hours', async () => {
     const HOUR = 3_600_000;
     const base = night(0);

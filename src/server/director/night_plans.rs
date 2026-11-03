@@ -196,6 +196,10 @@ pub(super) struct View {
     /// Rigs left out, and why.
     warnings: Vec<String>,
     assumptions: Assumptions,
+    /// The rig databases the plans read, by registry id: a change to one
+    /// of them changes the plans.
+    #[serde(skip)]
+    catalogs: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -741,6 +745,10 @@ async fn compute(
     // read slot let go: each rig, and each of its requests and nights, on
     // the shared pool.
     let (inputs, mut warnings) = gathered;
+    let catalogs: Vec<String> = inputs
+        .iter()
+        .map(|input| input.catalog_slug.clone())
+        .collect();
     let stopped = stop.clone();
     let view = blocking(move || {
         use rayon::prelude::*;
@@ -797,6 +805,7 @@ async fn compute(
                 overhead_seconds_per_exposure: OVERHEAD_SECONDS,
                 sample_minutes: STEP_MS / 60_000,
             },
+            catalogs,
         }
     })
     .await?;

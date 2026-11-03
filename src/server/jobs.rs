@@ -1566,7 +1566,8 @@ fn artifact_search_row(
     }
 }
 
-/// A preview a person waits for. It runs at once and Stop ends it.
+/// A preview: one a person waits for, or one the server started on its
+/// own. It runs at once and Stop ends it.
 fn preview_row(run: &PreviewRun, names: &HashMap<&str, &str>) -> JobRow {
     JobRow {
         control: Some(RowControl::Preview {
@@ -1575,6 +1576,8 @@ fn preview_row(run: &PreviewRun, names: &HashMap<&str, &str>) -> JobRow {
         }),
         stoppable: true,
         started_at: Some(run.started_at),
+        background: !run.attended,
+        automatic: !run.attended,
         ..JobRow::new(
             format!("preview:{:?}:{}", run.kind, run.key),
             RowKind::Preview,

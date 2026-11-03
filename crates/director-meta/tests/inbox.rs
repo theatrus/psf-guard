@@ -252,3 +252,27 @@ fn contacts_keep_the_latest_call_per_kind_and_never_go_backwards() {
         Err(Error::InvalidInput)
     ));
 }
+
+#[test]
+fn a_rigs_status_and_contact_are_not_counted_as_writes_anything_plans_from() {
+    use psf_guard_director_meta::inbox::ContactKind;
+    let dir = TempDir::new().unwrap();
+    let mut store = MetaStore::create(&dir.path().join("meta.sqlite")).unwrap();
+    let rig = store.create_rig(Uuid::new_v4(), "Rig").unwrap().id;
+    let planned = store.planning_rows_written();
+    assert!(store
+        .record_status(&RigStatus {
+            rig_id: rig,
+            session_id: "s1".into(),
+            reported_at_ms: 100,
+            payload: json!({"state": "exposing"}),
+            received_at_ms: 101,
+        })
+        .unwrap());
+    store
+        .record_contact(rig, ContactKind::CheckIn, 120, Some("ledger"))
+        .unwrap();
+    assert_eq!(store.planning_rows_written(), planned);
+    store.create_rig(Uuid::new_v4(), "Another").unwrap();
+    assert!(store.planning_rows_written() > planned);
+}

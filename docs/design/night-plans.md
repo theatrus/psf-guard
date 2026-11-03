@@ -636,21 +636,33 @@ refused.
 
 ### 4.7 Server
 
-- **Kept views** (`night_plans::cache`): each computation runs as a
-  person's work on the job line, a `night_plans` run of
-  `AppState.previews`, so background work waits for it and the header
-  lists it with Stop. A newer request for the same edited night stops the
-  one before it. A request without a draft or fixed instants is kept by
-  what it asks for, with when the meta store and each rig database last
-  changed on disk; an empty write-ahead log counts as none. The same
-  request answers from it while those are unchanged, and waits for a new
-  computation once one changed. A view of the night under way ages after
-  two minutes, since that night is planned from now; an aged view is
-  answered at once, marked `refreshing`, while a newer one is computed.
-  Requests for one view share one computation, on a task of its own. A
-  timer computes again, one at a time, the views read in the last ten
-  minutes that changed or aged, and lets go of views not read for an
-  hour. Projections read the same views.
+- **Kept views** (`night_plans::cache`): each computation runs on the
+  job line, a `night_plans` run of `AppState.previews` the header lists
+  with Stop. One a person waits for holds the interactive guard; the
+  server's own refresh runs unattended, as automatic work. A newer request
+  for the same edited night stops the one before it.
+  - A request without a draft or fixed instants is kept by what it asks
+    for, with what it was computed from: the rows written to the meta
+    store, leaving out a rig's status and contact records
+    (`MetaStore::planning_rows_written`, which a plugin's calls in do not
+    move), and for each rig database it read, its registry name, its
+    Target Scheduler source and when its file and non-empty write-ahead
+    log last changed.
+  - The same request answers from the kept view while those are
+    unchanged. Once one changed, it waits for a computation that read
+    them after it did, never one already under way from before.
+  - A view ages when it plans the night under way (after two minutes),
+    when its first night begins, and when a forecast it used expires. An
+    aged view is answered at once, marked `refreshing`, while a newer one
+    is computed, unless it is more than ten minutes old or, from the night
+    under way, its first night has ended: then the request waits.
+  - Requests for one view share one computation, on a task of its own.
+    Stop gives everyone waiting the kept view, and automatic work leaves
+    the view alone for two minutes.
+  - A timer computes again, one at a time, the views read in the last ten
+    minutes that changed or aged. At most 32 views are kept, the least
+    recently read let go first, and none unread for an hour. Projections
+    read the same views.
 - **Gather:**
   - Split `program::assemble` into `gather`, read-only (activations,
     Target Scheduler rows, saved captures, project order, and the night's

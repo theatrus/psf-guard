@@ -211,6 +211,24 @@ async fn night_plans_are_kept_until_their_inputs_change_and_computed_again_when_
     let first = plan().await;
     assert_eq!(first["refreshing"], false);
     assert_eq!(computed_at(&plan().await), computed_at(&first));
+    // A plugin calling in writes the store, but nothing planned from it.
+    let service = Arc::clone(a.f.state.director.as_ref().unwrap());
+    let rig = a.rig;
+    service
+        .clone()
+        .with_writer(move |store| {
+            store
+                .record_contact(
+                    rig,
+                    psf_guard_director_meta::inbox::ContactKind::CheckIn,
+                    START_MS,
+                    None,
+                )
+                .map_err(Error::from)
+        })
+        .await
+        .unwrap();
+    assert_eq!(computed_at(&plan().await), computed_at(&first));
 
     let (status, saved) = call(
         &a.f.app,
@@ -248,6 +266,137 @@ async fn night_plans_are_kept_until_their_inputs_change_and_computed_again_when_
     assert_eq!(fresh["refreshing"], false);
     assert!(computed_at(&fresh) >= computed_at(&marked));
     assert!(fresh["rigs"][0]["nights"][1]["availability"]["state"] == "unavailable");
+
+    // An aged view gone stale is computed again before it is answered.
+    service.night_plans.age_for_test();
+    service.night_plans.backdate_for_test(11 * 60_000);
+    let waited = plan().await;
+    assert_eq!(waited["refreshing"], false);
+    assert!(computed_at(&waited) > computed_at(&fresh) - 11 * 60_000);
+}
+
+/// A request that saw a change waits for a computation that read it, not
+/// one that began before; Stop gives everyone waiting the kept view, and
+/// automatic work then leaves it alone.
+#[tokio::test]
+async fn a_change_is_never_answered_by_a_computation_that_began_before_it_nor_stop_by_an_error() {
+    let a = activated().await;
+    place(&a).await;
+    project(&a, "Heart", 25.0, 200, 0);
+    let app = a.f.app.clone();
+    let plan = move || {
+        let app = app.clone();
+        async move {
+            let (status, planned) = call(
+                &app,
+                "POST",
+                "/night-plans",
+                json!({"nights": 3, "first_night": "2026-09-24"}),
+                None,
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{planned}");
+            planned["data"].clone()
+        }
+    };
+    let state = &a.f.state;
+    let service = Arc::clone(state.director.as_ref().unwrap());
+    let state_of =
+        |planned: &Value| planned["rigs"][0]["nights"][1]["availability"]["state"].clone();
+    let first = plan().await;
+    assert_eq!(state_of(&first), "available");
+
+    // An aged view starts a computation, held once it has read the store...
+    let hold = service.night_plans.hold_for_test();
+    service.night_plans.age_for_test();
+    assert_eq!(plan().await["refreshing"], true);
+    for _ in 0..100 {
+        if service.night_plans.computing_for_test() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    // ...then a mark is saved, and the page reads again.
+    let (status, saved) = call(
+        &a.f.app,
+        "PUT",
+        &format!("/night-availability/rig/{}", a.rig),
+        json!({"expected_revision": 0, "marks": [{"date": "2026-09-25", "state": "unavailable", "note": ""}]}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    let waiting = tokio::spawn(plan());
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    hold.add_permits(2);
+    let marked = tokio::time::timeout(std::time::Duration::from_secs(10), waiting)
+        .await
+        .expect("the read waited for a computation that never came")
+        .unwrap();
+    assert_eq!(state_of(&marked), "unavailable", "{marked}");
+
+    // Stop a computation a person waits for: they get the kept view.
+    service.night_plans.backdate_for_test(11 * 60_000);
+    service.night_plans.age_for_test();
+    let waiting = tokio::spawn(plan());
+    let mut stopped = false;
+    for _ in 0..100 {
+        if let Some(run) = state
+            .previews
+            .running()
+            .into_iter()
+            .find(|run| run.kind == crate::server::previews::PreviewKind::NightPlans)
+        {
+            stopped = state.previews.stop(run.kind, &run.key);
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(stopped);
+    hold.add_permits(1);
+    let answered = tokio::time::timeout(std::time::Duration::from_secs(10), waiting)
+        .await
+        .expect("a stopped computation left its waiter waiting")
+        .unwrap();
+    assert_eq!(state_of(&answered), "unavailable");
+    // Automatic work leaves it alone for a while: the timer starts nothing,
+    // which the hold would keep from ending.
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        crate::server::director::night_plans::refresh_kept(Arc::clone(state)),
+    )
+    .await
+    .expect("the timer computed a stopped view again");
+    assert!(!service.night_plans.computing_for_test());
+    hold.add_permits(1000);
+}
+
+/// The server keeps at most 32 views, letting go of the least recently
+/// read.
+#[tokio::test]
+async fn the_kept_night_plans_are_bounded() {
+    let a = activated().await;
+    for day in 0..40u32 {
+        let first_night = format!("2026-08-{:02}", day % 28 + 1);
+        let (status, planned) = call(
+            &a.f.app,
+            "POST",
+            "/night-plans",
+            json!({"nights": 1 + day / 28, "first_night": first_night}),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{planned}");
+    }
+    assert_eq!(
+        a.f.state
+            .director
+            .as_ref()
+            .unwrap()
+            .night_plans
+            .kept_for_test(),
+        32
+    );
 }
 
 #[tokio::test]

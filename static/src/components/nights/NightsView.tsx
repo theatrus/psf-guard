@@ -83,10 +83,12 @@ export default function NightsView() {
   const recompute = useRef(false);
   const query = useQuery({
     queryKey: ['nightPlans', chosenFrom, count],
-    queryFn: () => {
+    // A retry after a failure still asks afresh.
+    queryFn: async () => {
       const refresh = recompute.current;
-      recompute.current = false;
-      return apiClient.getNightPlans({ ...(chosenFrom ? { first_night: chosenFrom } : {}), nights: count, schedule_nights: count, ...(refresh ? { refresh } : {}) });
+      const planned = await apiClient.getNightPlans({ ...(chosenFrom ? { first_night: chosenFrom } : {}), nights: count, schedule_nights: count, ...(refresh ? { refresh } : {}) });
+      if (refresh) recompute.current = false;
+      return planned;
     },
     retry: retryWhenBusy,
     retryDelay: 1200,

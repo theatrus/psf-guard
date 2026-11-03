@@ -76,6 +76,9 @@ pub struct PreviewRun {
     pub db_id: String,
     pub label: String,
     pub started_at: i64,
+    /// Whether a person waits for it: false for a sync another server
+    /// pushed, or night plans the server computes again on its own.
+    pub attended: bool,
 }
 
 impl Previews {
@@ -100,6 +103,7 @@ impl Previews {
                               key,
                               label,
                               started_at,
+                              attended,
                           }| {
                         let db_id = match kind {
                             PreviewKind::Incoming => key
@@ -115,6 +119,7 @@ impl Previews {
                             db_id,
                             label,
                             started_at,
+                            attended,
                         }
                     },
                 )

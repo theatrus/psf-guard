@@ -477,7 +477,7 @@ early, and its result is dropped (`LatestRun::is_latest`). The registry is
 | AstroBin export | the database | it ends once the folder index is read; a stopped or replaced run's result is dropped |
 | Sync with another server | the local database | the request to the peer is dropped; the local merge is interrupted |
 | Sync pushed here | the catalog and the source that sent it | as a sync between databases |
-| Night plans | what the request plans, or the edited night | between rigs; a kept view's computation runs on, since others share it |
+| Night plans | what the request plans, or the edited night | between rigs; the server's own refresh starts without the guard. A stopped kept view's waiters get the view kept |
 
 An import that writes replaces an import preview. A preview never
 replaces an import that writes: it is refused while one runs. An import

@@ -79,6 +79,14 @@ pub(super) struct RigForecast {
     expires_at_ms: Option<u64>,
 }
 
+impl RigForecast {
+    /// When the forecast stops counting, and the nights planned from it
+    /// count as clear.
+    pub(super) fn expires_at_ms(&self) -> Option<u64> {
+        self.expires_at_ms
+    }
+}
+
 /// What a rig's nights are planned against, read from the store.
 pub(super) struct RigConditions {
     rig_marks: Vec<NightMark>,

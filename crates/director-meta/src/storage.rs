@@ -194,6 +194,7 @@ impl MetaStore {
         Ok(Self {
             connection: conn,
             instance_id,
+            liveness_rows: 0,
         })
     }
 
@@ -214,6 +215,7 @@ impl MetaStore {
         Ok(Self {
             connection: conn,
             instance_id,
+            liveness_rows: 0,
         })
     }
 
