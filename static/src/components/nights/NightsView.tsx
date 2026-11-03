@@ -13,6 +13,7 @@ import { PROVIDER_URL } from '../director/forecastLabels';
 import NightDetail from './NightDetail';
 import { confirmDiscard, usePageDrafts } from '../director/pageDraftsState';
 import {
+  darkState,
   NIGHT_COUNTS,
   NIGHTS_PARAMS,
   RUNTIME_LABEL,
@@ -166,8 +167,8 @@ export default function NightsView() {
               const decided = decidedBy(night);
               const cause = decided === 'forecast' ? ' by the forecast' : decided === 'both' ? ' by a mark and the forecast' : '';
               return <td key={date}>
-                <button type="button" className={`nights-cell is-${night.availability.state}`} aria-pressed={chosen}
-                  aria-label={`${rig.catalog_name}, ${formatNightDate(night.date)}: ${formatHours(night.available_dark_hours)} clear of ${formatHours(night.dark_hours)} dark, ${STATE_LABEL[night.availability.state].toLowerCase()}${cause}, Moon ${Math.round(night.moon_illumination * 100)}%${night.override_count > 0 ? `, ${night.override_count} ${night.override_count === 1 ? 'override' : 'overrides'}` : ''}`}
+                <button type="button" className={`nights-cell is-${darkState(night)}`} aria-pressed={chosen}
+                  aria-label={`${rig.catalog_name}, ${formatNightDate(night.date)}: ${formatHours(night.available_dark_hours)} clear of ${formatHours(night.dark_hours)} dark, ${STATE_LABEL[darkState(night)].toLowerCase()}${cause}, Moon ${Math.round(night.moon_illumination * 100)}%${night.override_count > 0 ? `, ${night.override_count} ${night.override_count === 1 ? 'override' : 'overrides'}` : ''}`}
                   onClick={event => choose(rig, night, event.shiftKey)}>
                   <span className="nights-cell-top">
                     <span className="nights-cell-hours">{formatHours(night.available_dark_hours)}</span>

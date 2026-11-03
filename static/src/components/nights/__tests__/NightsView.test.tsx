@@ -105,6 +105,23 @@ describe('Nights', () => {
     expect(within(detail).queryByRole('button', { name: 'Clear mark' })).toBeNull();
   });
 
+  it('shows a night clear only in daylight as out, and lists no daytime hours', async () => {
+    const HOUR = 3_600_000;
+    const base = night(0);
+    const daylight = night(0, {
+      available_dark_hours: 0,
+      availability: { state: 'limited', marks: [], windows: [{ start_ms: base.noon_ms + 2 * HOUR, end_ms: base.noon_ms + 4 * HOUR }] },
+    });
+    mount(plans([rig({ nights: [daylight, night(1), night(2)] })]));
+    const grid = await screen.findByTestId('nights-grid');
+    const cells = within(grid).getAllByRole('button');
+    expect(cells[0]).toHaveClass('is-unavailable');
+    expect(cells[0]).toHaveAccessibleName(/none clear of 10\.0 h dark, not available/);
+    fireEvent.click(cells[0]);
+    const detail = screen.getByRole('region', { name: 'Night details' });
+    expect(within(detail).getByText('None after dark')).toBeInTheDocument();
+  });
+
   it('says when the site\'s forecast does not reach a night', async () => {
     mount(plans([rig({ forecast: { provider: 'met_norway', attribution: 'Weather data from MET Norway (CC BY 4.0)', cloud_threshold_percent: 30, fetched_at_ms: null, expires_at_ms: null } })]));
     const grid = await screen.findByTestId('nights-grid');
