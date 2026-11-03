@@ -13,7 +13,13 @@ import type {
   StarSensitivity,
 } from '../api/types';
 import { useAccess } from '../auth/access';
-import { recordOrigin, recordSpan, recordSummary, startOfLocalDay } from '../utils/starDetection';
+import {
+  recordOrigin,
+  recordSpans,
+  recordsThatStillApply,
+  recordSummary,
+  startOfLocalDay,
+} from '../utils/starDetection';
 import UnsavedMark from './UnsavedMark';
 
 const STAR_DETECTION_QUERY_KEY = ['settings', 'star-detection'] as const;
@@ -358,6 +364,7 @@ function ProfileRow({ profile, manual, fallback, busy, onManual, onDeleted, rend
     onSuccess: onDeleted,
   });
   const latest = profile.records[0];
+  const spans = recordSpans(profile.records);
   return (
     <fieldset
       className="scoring-defaults-group star-detection-rig"
@@ -369,7 +376,7 @@ function ProfileRow({ profile, manual, fallback, busy, onManual, onDeleted, rend
       {latest ? (
         <p className="star-detection-record">
           <span className="star-detection-record-values">{recordSummary(latest)}</span>
-          <small>{recordSpan(latest)} · {recordOrigin(latest)}</small>
+          <small>{spans.get(latest.id)} · {recordOrigin(latest)}</small>
         </p>
       ) : (
         <p className="star-detection-meta">No recorded settings. Its rig&apos;s or the default settings apply.</p>
@@ -381,13 +388,13 @@ function ProfileRow({ profile, manual, fallback, busy, onManual, onDeleted, rend
             {profile.records.map((record) => (
               <li key={record.id}>
                 <span>
-                  {recordSpan(record)}: {recordSummary(record)}
+                  {spans.get(record.id)}: {recordSummary(record)}
                   <small> {recordOrigin(record)}</small>
                 </span>
                 <button
                   type="button"
                   className="link-button"
-                  aria-label={`Delete the record ${recordSpan(record).toLowerCase()}`}
+                  aria-label={`Delete the record for ${spans.get(record.id)?.toLowerCase()}`}
                   onClick={() => remove.mutate(record.id)}
                 >
                   Delete
@@ -559,6 +566,12 @@ function ImportProfile({ onImported }: { onImported: (latest: Settings) => void 
             <small>{read.profile_id}</small>
           </p>
           <p>{recordSummary(read.record)}</p>
+          {recordsThatStillApply(
+            read.settings.profiles.find((profile) => profile.profile_id === read.profile_id)?.records ?? [],
+            effectiveFrom,
+          ).map((line) => (
+            <p key={line} className="star-detection-meta">{line}</p>
+          ))}
           {[...read.warnings, ...read.record.notes].map((warning) => (
             <p key={warning} className="star-detection-meta">{warning}</p>
           ))}

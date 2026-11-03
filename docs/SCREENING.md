@@ -291,8 +291,15 @@ PSF Guard records a profile's settings in two ways:
 
 Each profile under **N.I.N.A. profiles** shows its recorded values, which
 frames they apply to, and where they came from. **History** lists every
-record, and **Delete** removes one. **Set by hand** gives the profile the
-four choices above instead of its records.
+record with the frames it applies to, and **Delete** removes one. **Set by
+hand** gives the profile the four choices above instead of its records.
+
+A dated record always applies from its date on, whatever was imported
+later. An import for **All frames** therefore applies only to frames from
+before the profile's first dated record. **Read file** lists each record that
+will still apply, such as "The Sync plugin's record from Sep 1, 2026 still
+applies to frames from that date." To change those frames as well, delete
+the later records or import from their dates.
 
 A frame takes the first of these that applies:
 

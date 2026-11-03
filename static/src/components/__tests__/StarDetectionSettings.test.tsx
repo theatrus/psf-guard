@@ -255,7 +255,7 @@ describe('Settings › Review › Star detection › N.I.N.A. profiles', () => {
     expect(within(redcat).queryByRole('combobox', { name: 'Detector' })).toBeNull();
 
     await user.click(within(redcat).getByText('History (2)'));
-    const remove = within(redcat).getAllByRole('button', { name: /^Delete the record from / });
+    const remove = within(redcat).getAllByRole('button', { name: /^Delete the record for frames / });
     expect(remove).toHaveLength(2);
     await user.click(remove[1]);
     await waitFor(() => expect(writes).toHaveLength(1));
@@ -274,6 +274,19 @@ describe('Settings › Review › Star detection › N.I.N.A. profiles', () => {
     await user.click(within(redcat).getByText('History (2)'));
     expect(within(redcat).getAllByText(/Sent by the Director plugin/).length).toBeGreaterThan(0);
     expect(within(redcat).getByText(/Sent by the Sync plugin/)).toBeInTheDocument();
+  });
+
+  it('says which existing records still apply after an import for all frames', async () => {
+    const user = userEvent.setup();
+    serve(settings());
+    render(<StarDetectionSettings />, { wrapper: wrapper() });
+    await screen.findByRole('heading', { name: 'Import N.I.N.A. profile' });
+    const file = new File(['<Profile/>'], 'redcat.profile', { type: 'application/xml' });
+    await user.upload(screen.getByLabelText('Profile file'), file);
+    await user.click(screen.getByRole('button', { name: 'Read file' }));
+    const read = await screen.findByRole('status');
+    const still = within(read).getAllByText(/^The imported record from .* still applies to frames from that date\.$/);
+    expect(still).toHaveLength(2);
   });
 
   it('saves a profile set by hand', async () => {

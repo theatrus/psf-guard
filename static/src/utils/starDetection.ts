@@ -71,9 +71,66 @@ function day(iso: string): string {
   return Number.isNaN(date.getTime()) ? iso : date.toLocaleDateString(undefined, { dateStyle: 'medium' });
 }
 
-/** Which frames a record applies to: "All frames" or "From 9 Sep 2026". */
+/** When a record starts, as the import chose it: "All frames" or "From 9 Sep 2026". */
 export function recordSpan(record: ProfileRecordView): string {
   return record.effective_from ? `From ${day(record.effective_from)}` : 'All frames';
+}
+
+function start(record: ProfileRecordView): number {
+  return record.effective_from ? Date.parse(record.effective_from) : Number.NEGATIVE_INFINITY;
+}
+
+/**
+ * The frames each record of one profile applies to, by record id, as the
+ * server resolves them: a frame takes the newest record that started by its
+ * capture time, and a frame from before every record takes the earliest. Of
+ * records with one start, the one received last applies.
+ */
+export function recordSpans(records: ProfileRecordView[]): Map<string, string> {
+  const spans = new Map<string, string>();
+  const byStart = new Map<number, ProfileRecordView[]>();
+  for (const record of records) {
+    const key = start(record);
+    byStart.set(key, [...(byStart.get(key) ?? []), record]);
+  }
+  const starts = [...byStart.keys()].sort((left, right) => left - right);
+  starts.forEach((key, index) => {
+    const group = [...byStart.get(key)!].sort(
+      (left, right) => Date.parse(right.received_at) - Date.parse(left.received_at),
+    );
+    const next = starts[index + 1];
+    const until = next === undefined ? null : day(new Date(next).toISOString());
+    let span: string;
+    if (index === 0) {
+      span = until ? `Frames before ${until}` : 'All frames';
+    } else {
+      const from = day(new Date(key).toISOString());
+      span = until ? `Frames from ${from} until ${until}` : `Frames from ${from}`;
+    }
+    spans.set(group[0].id, span);
+    for (const older of group.slice(1)) spans.set(older.id, 'Replaced by a later record from the same date');
+  });
+  return spans;
+}
+
+const SOURCE_NAME: Record<ProfileRecordView['source'], string> = {
+  'plugin:sync': "The Sync plugin's record",
+  'plugin:director': "The Director plugin's record",
+  import: 'The imported record',
+};
+
+/**
+ * What still applies after a new record starting at `effectiveFrom` (every
+ * frame when absent) is stored: each existing record that starts later keeps
+ * the frames from its own date on. One sentence per record.
+ */
+export function recordsThatStillApply(records: ProfileRecordView[], effectiveFrom?: string): string[] {
+  const from = effectiveFrom ? Date.parse(effectiveFrom) : Number.NEGATIVE_INFINITY;
+  return records
+    .filter((record) => record.effective_from && Date.parse(record.effective_from) > from)
+    .sort((left, right) => start(left) - start(right))
+    .map((record) =>
+      `${SOURCE_NAME[record.source] ?? 'A record'} from ${day(record.effective_from!)} still applies to frames from that date.`);
 }
 
 const ORIGIN: Record<ProfileRecordView['source'], string> = {
