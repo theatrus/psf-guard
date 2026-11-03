@@ -263,7 +263,6 @@ impl DetectionSettings {
             image_scale_arcsec: image_scale_arcsec
                 .filter(|scale| scale.is_finite() && *scale > 0.0),
             measurement: measurement.seiza(),
-            ..StarDetectionParams::default()
         })
     }
 

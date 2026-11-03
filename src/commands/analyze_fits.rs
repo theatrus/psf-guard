@@ -714,7 +714,7 @@ pub fn analyze_as_scan(
     for row in rows {
         let row = row?;
         let metadata = &row.metadata;
-        let name = serde_json::from_str::<serde_json::Value>(&metadata)
+        let name = serde_json::from_str::<serde_json::Value>(metadata)
             .ok()
             .and_then(|value| value["FileName"].as_str().map(str::to_string))
             .and_then(|name| name.split(['\\', '/']).next_back().map(str::to_string));
