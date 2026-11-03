@@ -6,6 +6,19 @@
 
 ## Changes
 
+- Max HFR and Min stars now judge the values you choose. A frame can carry
+  two star counts and HFRs: the ones N.I.N.A. recorded during capture and
+  the ones PSF Guard's quality scan measured. They come from different
+  detectors and can differ several-fold. Before, the limits always judged
+  PSF Guard's values while every view showed N.I.N.A.'s, so a limit set
+  from the numbers on screen rejected the wrong frames. Image Information
+  now shows both values, cards show the one in use, and a small **N** or
+  **P** marks each value's source. Choose the source under **Stars and
+  HFR** in the Scoring control, or **Measured by** in Settings › Review ›
+  Sequence scoring. PSF Guard stays the default. The choice also sets which
+  values frames are compared on and which the Stars and HFR cutoff uses. A
+  reject reason now says which source its value came from and shows HFR to
+  two decimal places.
 - On Windows, PSF Guard keeps each storage volume under its **Volume usage
   limit**, as it does on macOS and Linux. When a volume passes the limit,
   PSF Guard deletes image previews least recently viewed first, then stack

@@ -18,6 +18,8 @@ import ImageFileLocation from './ImageFileLocation';
 import TiltInspector from './TiltInspector';
 import { useScopedQuality } from '../hooks/useSequenceAnalysis';
 import QualityAnalysisSummary from './QualityAnalysisSummary';
+import { StarReadingList } from './StarSourceMark';
+import { starReadings } from '../utils/starReadings';
 import ScoringChangedNote from './ScoringChangedNote';
 import QualityRegionOverlay from './QualityRegionOverlay';
 import CalibrationPanel from './CalibrationPanel';
@@ -250,6 +252,9 @@ export default function ImageDetailView({
 
   const qualityScope = useScopedQuality(dbId, projectId, targetId, qualityFilterName);
   const quality = qualityScope.qualityByImage.get(imageId);
+  // N.I.N.A.'s and PSF Guard's values, each marked with its source.
+  const hfrReadings = starReadings('hfr', quality, image);
+  const starCountReadings = starReadings('stars', quality, image);
   const qualityStatus = qualityScope.isLoading
       ? 'Loading the sequence quality score and reason…'
       : qualityScope.error
@@ -916,17 +921,17 @@ export default function ImageDetailView({
             </>
           )}
           
-          {image.metadata?.HFR !== undefined && (
+          {hfrReadings.used !== null && (
             <>
               <dt>HFR:</dt>
-              <dd>{typeof image.metadata.HFR === 'number' ? image.metadata.HFR.toFixed(2) : image.metadata.HFR}</dd>
+              <dd><StarReadingList metric="hfr" readings={hfrReadings} /></dd>
             </>
           )}
-          
-          {image.metadata?.DetectedStars !== undefined && (
+
+          {starCountReadings.used !== null && (
             <>
               <dt>Det. Stars:</dt>
-              <dd>{image.metadata.DetectedStars}</dd>
+              <dd><StarReadingList metric="stars" readings={starCountReadings} /></dd>
             </>
           )}
           

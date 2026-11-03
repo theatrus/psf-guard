@@ -1482,6 +1482,12 @@ fn the_whole_method_enters_the_job_id() {
         equal.public.method.unwrap().weighting,
         StackWeighting::Equal
     );
+    // The star source decides which frames a limit keeps out, so it makes
+    // another artifact too; at its default the id is the one it always was.
+    let scan = job(serde_json::json!({"scoring": {"star_source": "scan"}}));
+    let capture = job(serde_json::json!({"scoring": {"star_source": "capture"}}));
+    assert_eq!(scan.public.job_id, omitted.public.job_id);
+    assert_ne!(capture.public.job_id, omitted.public.job_id);
 }
 
 #[test]

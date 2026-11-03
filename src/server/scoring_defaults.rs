@@ -221,6 +221,27 @@ mod tests {
     }
 
     #[test]
+    fn the_star_source_is_kept_and_stays_out_of_settings_at_its_default() {
+        use crate::sequence_analysis::StarSource;
+        let builtin = StackScoringSettings::default();
+        let capture = StackScoringSettings {
+            star_source: StarSource::Capture,
+            ..builtin
+        };
+        assert_eq!(checked(capture).unwrap().star_source, StarSource::Capture);
+        // Settings recorded before the source existed read and compare as
+        // they did: the default is not written, and its absence reads as it.
+        let json = serde_json::to_value(builtin).unwrap();
+        assert!(json.get("star_source").is_none());
+        assert_eq!(
+            serde_json::from_value::<StackScoringSettings>(json).unwrap(),
+            builtin
+        );
+        let json = serde_json::to_value(capture).unwrap();
+        assert_eq!(json["star_source"], "capture");
+    }
+
+    #[test]
     fn values_the_scoring_control_cannot_set_are_refused() {
         let builtin = StackScoringSettings::default();
         for refused in [

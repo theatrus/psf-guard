@@ -1,4 +1,4 @@
-import type { StackScoringSettings } from '../api/types';
+import type { StackScoringSettings, StarSource } from '../api/types';
 
 /**
  * How hard each kind of event evidence hits the quality score, and the
@@ -24,9 +24,13 @@ export interface ScoringPreferences {
   /** Absolute star-count floor: recommend rejecting frames with fewer
    * measured stars. `null` turns the check off. */
   starCountRejectBelow: number | null;
+  /** Which measurement of stars and HFR the limits judge and frames are
+   * compared on: PSF Guard's quality scan or N.I.N.A.'s recorded values. */
+  starSource: StarSource;
 }
 
-export type ScoringField = keyof ScoringPreferences;
+/** The numeric values; `starSource` is a choice and is handled apart. */
+export type ScoringField = Exclude<keyof ScoringPreferences, 'starSource'>;
 export type PenaltyKey = 'satellite' | 'pointing' | 'temporal' | 'hfrRise' | 'starLoss';
 export type LimitKey = 'hfrRejectAbove' | 'starCountRejectBelow';
 
@@ -40,7 +44,21 @@ export const SCORING_DEFAULTS: ScoringPreferences = Object.freeze({
   starLoss: 1,
   hfrRejectAbove: null,
   starCountRejectBelow: null,
+  starSource: 'scan',
 });
+
+export const STAR_SOURCES: readonly StarSource[] = ['scan', 'capture'];
+
+/** Each source as the Scoring control and reject reasons call it. */
+export const STAR_SOURCE_LABELS: Record<StarSource, string> = {
+  scan: 'PSF Guard',
+  capture: 'N.I.N.A.',
+};
+
+/** The source `value` stands for, or undefined when it is none. */
+export function starSourceValue(value: unknown): StarSource | undefined {
+  return STAR_SOURCES.find((source) => source === value);
+}
 
 /*
  * What each value may be. One set of rules for the toolbar, the link,
@@ -148,7 +166,7 @@ export function scoringText(field: ScoringField, value: number | null): string {
 /** Every value a field may hold, each read on its own: one it cannot hold
  *  takes `fallback`'s. */
 export function normalizeScoring(
-  parsed: Partial<Record<ScoringField, unknown>>,
+  parsed: Partial<Record<keyof ScoringPreferences, unknown>>,
   fallback: ScoringPreferences = SCORING_DEFAULTS,
 ): ScoringPreferences {
   const scoring = { ...fallback };
@@ -156,12 +174,13 @@ export function normalizeScoring(
     const value = scoringValue(key, parsed[key]);
     if (value !== undefined) (scoring as Record<ScoringField, number | null>)[key] = value;
   }
+  scoring.starSource = starSourceValue(parsed.starSource) ?? fallback.starSource;
   return scoring;
 }
 
 /** The same snapshot as react-query key segments. Every scoring query key
  * spreads this, so a scoring change refetches every surface. */
-export function penaltyKeyOf(preferences: ScoringPreferences): (number | null)[] {
+export function penaltyKeyOf(preferences: ScoringPreferences): (number | string | null)[] {
   return [
     preferences.satellite,
     preferences.pointing,
@@ -170,6 +189,7 @@ export function penaltyKeyOf(preferences: ScoringPreferences): (number | null)[]
     preferences.starLoss,
     preferences.hfrRejectAbove,
     preferences.starCountRejectBelow,
+    preferences.starSource,
   ];
 }
 
@@ -184,11 +204,13 @@ export function stackScoringSettings(preferences: ScoringPreferences): StackScor
     penalty_star_loss: preferences.starLoss,
     hfr_reject_above: preferences.hfrRejectAbove,
     star_count_reject_below: preferences.starCountRejectBelow,
+    star_source: preferences.starSource,
   };
 }
 
 /** The inverse of `stackScoringSettings`. A setting recorded before HFR
- *  rise and star loss existed reads as their calibrated 100%. */
+ *  rise and star loss existed reads as their calibrated 100%, and one
+ *  without a star source as the scan. */
 export function scoringPreferencesOf(settings: StackScoringSettings): ScoringPreferences {
   return {
     satellite: settings.penalty_satellite,
@@ -198,6 +220,7 @@ export function scoringPreferencesOf(settings: StackScoringSettings): ScoringPre
     starLoss: settings.penalty_star_loss ?? 1,
     hfrRejectAbove: settings.hfr_reject_above,
     starCountRejectBelow: settings.star_count_reject_below,
+    starSource: starSourceValue(settings.star_source) ?? 'scan',
   };
 }
 
@@ -230,10 +253,15 @@ export function describeScoringChanges(
   view: ScoringPreferences,
   defaults: ScoringPreferences,
 ): string[] {
-  return SCORING_KEYS
+  const changes = SCORING_KEYS
     .filter((key) => view[key] !== defaults[key])
     .map((key) => `${SCORING_RULES[key].label} ${formatScoringValue(key, view[key])} `
       + `(default ${formatScoringValue(key, defaults[key])})`);
+  if (view.starSource !== defaults.starSource) {
+    changes.push(`Stars and HFR from ${STAR_SOURCE_LABELS[view.starSource]} `
+      + `(default ${STAR_SOURCE_LABELS[defaults.starSource]})`);
+  }
+  return changes;
 }
 
 /*
@@ -314,7 +342,13 @@ export const SCORING_PARAMS = {
   starCountRejectBelow: 'minStars',
 } as const satisfies Record<ScoringField, string>;
 
-export const SCORING_PARAM_NAMES: readonly string[] = Object.values(SCORING_PARAMS);
+/** The link's star source; added after the numeric values. */
+export const STAR_SOURCE_PARAM = 'starSource';
+
+export const SCORING_PARAM_NAMES: readonly string[] = [
+  ...Object.values(SCORING_PARAMS),
+  STAR_SOURCE_PARAM,
+];
 
 /** A link's value for one key, or undefined when it names none it can use. */
 function paramValue(key: ScoringField, text: string | null): number | null | undefined {
@@ -343,12 +377,15 @@ export function scoringFromParams(
     namesAny = true;
     (scoring as Record<ScoringField, number | null>)[key] = value;
   }
+  const starSource = starSourceValue(params.get(STAR_SOURCE_PARAM));
+  if (starSource !== undefined) scoring.starSource = starSource;
   if (namesAny) {
     for (const key of SCORING_ADDED_LATER) {
       if (paramValue(key, params.get(SCORING_PARAMS[key])) === undefined) {
         (scoring as Record<ScoringField, number | null>)[key] = SCORING_DEFAULTS[key];
       }
     }
+    if (starSource === undefined) scoring.starSource = SCORING_DEFAULTS.starSource;
   }
   return scoring;
 }
@@ -366,6 +403,7 @@ export function scoringParamUpdates(
     const value = normalized[key];
     updates[SCORING_PARAMS[key]] = value === null ? 'off' : String(value);
   }
+  updates[STAR_SOURCE_PARAM] = normalized.starSource;
   return updates;
 }
 

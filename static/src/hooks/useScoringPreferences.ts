@@ -46,10 +46,14 @@ export const SCORING_DEFAULTS_QUERY_KEY = ['scoring-defaults'] as const;
 /** One snapshot per distinct set of values, so a caller can key effects
  *  and memos on it. */
 function useStableScoring(scoring: ScoringPreferences): ScoringPreferences {
-  const { satellite, pointing, temporal, hfrRise, starLoss, hfrRejectAbove, starCountRejectBelow } = scoring;
+  const {
+    satellite, pointing, temporal, hfrRise, starLoss, hfrRejectAbove, starCountRejectBelow, starSource,
+  } = scoring;
   return useMemo(
-    () => ({ satellite, pointing, temporal, hfrRise, starLoss, hfrRejectAbove, starCountRejectBelow }),
-    [satellite, pointing, temporal, hfrRise, starLoss, hfrRejectAbove, starCountRejectBelow],
+    () => ({
+      satellite, pointing, temporal, hfrRise, starLoss, hfrRejectAbove, starCountRejectBelow, starSource,
+    }),
+    [satellite, pointing, temporal, hfrRise, starLoss, hfrRejectAbove, starCountRejectBelow, starSource],
   );
 }
 
@@ -147,5 +151,6 @@ export function penaltyParamsOf(preferences: ScoringPreferences): PenaltyScalePa
   if (preferences.starCountRejectBelow != null) {
     params.star_count_reject_below = preferences.starCountRejectBelow;
   }
+  if (preferences.starSource !== 'scan') params.star_source = preferences.starSource;
   return params;
 }

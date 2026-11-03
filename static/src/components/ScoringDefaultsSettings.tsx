@@ -7,6 +7,8 @@ import {
   SCORING_DEFAULTS,
   SCORING_RULES,
   sameScoring,
+  STAR_SOURCE_LABELS,
+  STAR_SOURCES,
   scoringPreferencesOf,
   scoringText,
   type ScoringField,
@@ -70,13 +72,17 @@ export default function ScoringDefaultsSettings() {
   // what the person is typing: they are offered instead.
   const [base, setBase] = useState(defaults);
   const [texts, setTexts] = useState<Texts>(() => textsOf(defaults));
+  const [starSource, setStarSource] = useState(defaults.starSource);
   // Text a number field cannot read, such as "1e", which the browser
   // reports as empty: it must not save as "off".
   const [unreadable, setUnreadable] = useState<Partial<Record<ScoringField, boolean>>>({});
-  const edited = !sameTexts(texts, textsOf(base)) || Object.values(unreadable).some(Boolean);
+  const edited = !sameTexts(texts, textsOf(base))
+    || starSource !== base.starSource
+    || Object.values(unreadable).some(Boolean);
   if (!sameScoring(base, defaults) && !edited) {
     setBase(defaults);
     setTexts(textsOf(defaults));
+    setStarSource(defaults.starSource);
   }
   const newerArrived = !sameScoring(base, defaults) && edited;
 
@@ -85,14 +91,16 @@ export default function ScoringDefaultsSettings() {
     parsed[key] = unreadable[key] ? undefined : parseScoringText(key, texts[key]);
   }
   const valid = FIELDS.every((key) => parsed[key] !== undefined);
-  const values = parsed as ScoringPreferences;
+  const values = { ...parsed, starSource } as ScoringPreferences;
   const dirty = valid && !sameScoring(values, defaults);
   const builtInTexts = textsOf(SCORING_DEFAULTS);
-  const atBuiltIn = sameScoring(defaults, SCORING_DEFAULTS) && sameTexts(texts, builtInTexts) && !edited;
+  const atBuiltIn = sameScoring(defaults, SCORING_DEFAULTS) && sameTexts(texts, builtInTexts)
+    && starSource === SCORING_DEFAULTS.starSource && !edited;
 
   const adopt = (next: ScoringPreferences) => {
     setBase(next);
     setTexts(textsOf(next));
+    setStarSource(next.starSource);
     setUnreadable({});
   };
 
@@ -186,6 +194,39 @@ export default function ScoringDefaultsSettings() {
         </p>
       )}
       <form className="scoring-defaults-form" onSubmit={save} noValidate>
+        <fieldset className="scoring-defaults-group" disabled={!canWrite}>
+          <legend>Stars and HFR</legend>
+          <div className="scoring-default">
+            <div className="scoring-default-text">
+              <span className="scoring-default-label" id={`${fieldId}-source`}>Measured by</span>
+              <small id={`${fieldId}-source-hint`}>
+                Which star count and HFR the reject limits judge and frames are compared on.
+                PSF Guard&apos;s quality scan measures every frame the same way; N.I.N.A.&apos;s
+                values are the ones it showed during capture. A frame without that value uses
+                the other. Built in: {STAR_SOURCE_LABELS[SCORING_DEFAULTS.starSource]}.
+              </small>
+            </div>
+            <span
+              className="scoring-default-choice"
+              role="radiogroup"
+              aria-labelledby={`${fieldId}-source`}
+              aria-describedby={`${fieldId}-source-hint`}
+            >
+              {STAR_SOURCES.map((source) => (
+                <label key={source}>
+                  <input
+                    type="radio"
+                    name={`${fieldId}-source`}
+                    value={source}
+                    checked={starSource === source}
+                    onChange={() => setStarSource(source)}
+                  />
+                  {STAR_SOURCE_LABELS[source]}
+                </label>
+              ))}
+            </span>
+          </div>
+        </fieldset>
         <fieldset className="scoring-defaults-group" disabled={!canWrite}>
           <legend>Penalties</legend>
           {PENALTIES.map(field)}

@@ -1020,6 +1020,8 @@ export interface StackScoringSettings {
   penalty_star_loss?: number;
   hfr_reject_above: number | null;
   star_count_reject_below: number | null;
+  /** Absent at the default, PSF Guard's scan. */
+  star_source?: StarSource;
 }
 
 /** The server's scoring defaults: what every view's Scoring control starts
@@ -4274,6 +4276,8 @@ export interface PenaltyScaleParams {
   penalty_star_loss?: number;
   hfr_reject_above?: number;
   star_count_reject_below?: number;
+  /** Which measurement of stars and HFR scoring prefers. Absent: scan. */
+  star_source?: StarSource;
 }
 
 export interface SequenceAnalysisRequest extends PenaltyScaleParams {
@@ -4350,6 +4354,28 @@ export interface QualityRegionOverlay {
   glow_cells: boolean[];
 }
 
+/** Where a star count or HFR came from: PSF Guard's quality scan, or what
+ *  the capture software (N.I.N.A.) recorded. */
+export type StarSource = 'scan' | 'capture';
+
+export interface StarMeasure {
+  star_count: number | null;
+  hfr: number | null;
+}
+
+/** A frame's star count and HFR from each source that measured them, and
+ *  which source each check used. */
+export interface FrameStars {
+  capture?: StarMeasure;
+  scan?: StarMeasure;
+  /** The source the Min stars limit read; absent when neither counted. */
+  star_count_source?: StarSource;
+  /** The source the Max HFR limit read; absent when neither measured. */
+  hfr_source?: StarSource;
+  /** The source the target's frames are compared on. */
+  compared_on: StarSource;
+}
+
 export interface ImageQualityResult {
   image_id: number;
   quality_score: number;
@@ -4373,6 +4399,8 @@ export interface ImageQualityResult {
     /** Pixel-derived pointing score. Missing until a quality scan runs. */
     pointing?: number | null;
   };
+  /** Both sources' star count and HFR. Absent from older servers. */
+  stars?: FrameStars;
   pointing?: {
     pixel_solved: boolean;
     solve_failed: boolean;

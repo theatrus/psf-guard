@@ -7,6 +7,7 @@ import { useImageZoom } from '../hooks/useImageZoom';
 import { useAsyncImage } from '../hooks/useAsyncImage';
 import { ensurePreviewReady } from '../hooks/previewPoll';
 import { useColorPreview } from '../hooks/useColorPreview';
+import { StarReadingRows } from './StarSourceMark';
 
 interface ImageComparisonViewProps {
   dbId: string;
@@ -646,16 +647,7 @@ export default function ImageComparisonView({
               <div className="info-row">
                 <strong>Date:</strong> {formatDate(leftImage.acquired_date)}
               </div>
-              {leftImage.metadata?.HFR && (
-                <div className="info-row">
-                  <strong>HFR:</strong> {leftImage.metadata.HFR.toFixed(2)}
-                </div>
-              )}
-              {leftImage.metadata?.DetectedStars !== undefined && (
-                <div className="info-row">
-                  <strong>Stars:</strong> {leftImage.metadata.DetectedStars}
-                </div>
-              )}
+              <StarReadingRows image={leftImage} />
             </div>
 
             <div className="panel-actions">
@@ -822,16 +814,7 @@ export default function ImageComparisonView({
                   <div className="info-row">
                     <strong>Date:</strong> {formatDate(rightImage.acquired_date)}
                   </div>
-                  {rightImage.metadata?.HFR && (
-                    <div className="info-row">
-                      <strong>HFR:</strong> {rightImage.metadata.HFR.toFixed(2)}
-                    </div>
-                  )}
-                  {rightImage.metadata?.DetectedStars !== undefined && (
-                    <div className="info-row">
-                      <strong>Stars:</strong> {rightImage.metadata.DetectedStars}
-                    </div>
-                  )}
+                  <StarReadingRows image={rightImage} />
                 </div>
 
                 <div className="panel-actions">

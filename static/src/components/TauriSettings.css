@@ -1779,6 +1779,19 @@
   min-width: 0;
 }
 
+.scoring-default-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.scoring-default-choice label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  white-space: nowrap;
+}
+
 .scoring-default-unit {
   flex: none;
   width: 1.4rem;

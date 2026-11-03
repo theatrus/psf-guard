@@ -142,23 +142,43 @@ frame's HFR is shown in its details but not scored, and neither number is
 written back into the catalog's metadata. The frame's details say "N.I.N.A.
 Fast found no stars; HocusFocus found 68, used instead".
 
-Star counts and HFR come from one source per target and filter. The quality
-scan and the capture software count on different scales (HocusFocus and
-N.I.N.A.'s own detector differ several-fold, and a rig's settings can change
-between nights), so frames are compared on the scan's values when at least
-as many frames have a scan count as were measured only by the capture
-software, and on the capture software's values otherwise. A failed scan
-counts on neither side, so a rig whose every scan fails is scored on the
-capture software's counts. Values the scan wrote back into imported metadata
-count as the scan's. With the scan's values, a frame whose scan failed or
-has not run yet is left unmeasured, which the score renormalizes around, so
-a new frame waiting for its scan does not change how the rest are scored. A
-frame that can never be scanned, because its file is offline, loses its star
-dimension once most of its target is scanned. Absolute limits and the zero-star cap still judge each
-frame on its own measurement: the scan's when it counted stars, else the
-capture software's. A scan measured from a file that has since changed, such
-as a copy still arriving, is measured again the next time the target is
-scanned, and the values it wrote back are replaced.
+### Stars and HFR: N.I.N.A.'s or PSF Guard's
+
+A frame can carry two star counts and HFRs: the ones N.I.N.A. recorded
+during capture, and the ones PSF Guard's quality scan measured. They come
+from different detectors and differ, sometimes several-fold: a rig on
+Hocus Focus can record four times the stars and half the HFR the scan
+finds. Image Information shows both values, and cards show the one scoring
+used. A small superscript letter marks the source of each value: **N** for
+N.I.N.A. and **P** for PSF Guard.
+
+**Stars and HFR** in the Scoring control, and **Measured by** under
+Settings › Review › Sequence scoring, choose the source. PSF Guard is the
+default. The choice decides:
+
+- which value Max HFR and Min stars judge, and the zero-star cap;
+- which value the Sequence view's Stars and HFR cutoff uses;
+- which values frames are compared on for HFR rise, star loss and soft
+  stars.
+
+A frame without the chosen value uses the other, and its reject reason
+says which one it was, such as "Max HFR - 3.46 px (PSF Guard) over limit 2".
+Values the scan wrote into an imported frame's metadata count as PSF
+Guard's.
+
+Frames of one target and filter are compared on one source, so a frame
+measured one way is never ranked against frames measured the other. The
+chosen source is used when at least as many frames have its values as have
+only the other's; otherwise the other source is used for every frame. A
+frame without the source in use, such as one whose scan has not run yet,
+is left unmeasured, which the score renormalizes around, so a new frame
+waiting for its scan does not change how the rest are scored. A failed scan
+counts on neither side, so a rig whose every scan fails is scored on
+N.I.N.A.'s values. A frame that can never be scanned, because its file is
+offline, loses its star dimension once most of its target is scanned. A
+scan measured from a file that has since changed, such as a copy still
+arriving, is measured again the next time the target is scanned, and the
+values it wrote back are replaced.
 
 How hard event evidence hits the score is adjustable. The **Scoring**
 control in the Sequence view scales the score hit from satellite trails,
@@ -182,8 +202,10 @@ relative to the night.
 The same control sets optional **reject limits**, fixed cut-offs like
 N.I.N.A. subframe selection: **Max HFR** rejects any frame whose measured
 HFR is over it, and **Min stars** rejects any frame with fewer detected
-stars. Both are off by default. Limits judge each frame on its own, whatever
-the rest of the sequence looks like: a frame past a limit is capped at a
+stars. Both judge the source chosen under **Stars and HFR**; see
+[Stars and HFR: N.I.N.A.'s or PSF Guard's](#stars-and-hfr-ninas-or-psf-guards).
+Both are off by default. Limits judge each frame on its own, whatever the
+rest of the sequence looks like: a frame past a limit is capped at a
 condemned score and gets an `[Auto]` reject recommendation. A frame missing
 the measurement is exempt. The CLI equivalents are `screen-fits --max-hfr`
 and `--min-stars`.
@@ -629,9 +651,11 @@ Safety properties worth knowing:
 
 ## Limitations
 
-- The server scan uses N.I.N.A. Fast for star count and HFR. These match a
-  rig that runs N.I.N.A.'s built-in detector. A rig on HocusFocus counts on
-  another scale, which is why a target is scored from one source at a time. Its full-resolution measurement aperture also supplies flux for
+- The server scan uses PSF Guard's port of N.I.N.A.'s built-in detector for
+  star count and HFR. It still reads HFR about 25% higher than N.I.N.A. 3.2
+  on the same frames. A rig on Hocus Focus, or on the N.I.N.A. 3.3 detector,
+  counts on another scale, which is why a target is scored from one source
+  at a time. Its full-resolution measurement aperture also supplies flux for
   photometry. `screen-fits` supports flux photometry with either detector.
 - The photometric reference requires stars present in ≥50% of a session's
   frames, so it is blind to regions occluded for *most* of a sequence — by

@@ -89,7 +89,8 @@ describe('scoring values', () => {
     expect(sameScoring(DEFAULTS, { ...DEFAULTS, starLoss: 0.5 })).toBe(false);
     expect(sameScoring({ ...DEFAULTS, hfrRejectAbove: null }, DEFAULTS)).toBe(true);
     expect(penaltyKeyOf({ ...DEFAULTS, satellite: 0.5, hfrRejectAbove: 4 }))
-      .toEqual([0.5, 1, 1, 1, 1, 4, null]);
+      .toEqual([0.5, 1, 1, 1, 1, 4, null, 'scan']);
+    expect(sameScoring({ ...DEFAULTS, starSource: 'capture' }, DEFAULTS)).toBe(false);
   });
 
   it('keeps the built-in values as they were', () => {
@@ -101,6 +102,7 @@ describe('scoring values', () => {
       starLoss: 1,
       hfrRejectAbove: null,
       starCountRejectBelow: null,
+      starSource: 'scan',
     });
   });
 });
@@ -115,6 +117,7 @@ describe('scoring defaults in the preferences document', () => {
       starLoss: 0.5,
       hfrRejectAbove: 2.55,
       starCountRejectBelow: null,
+      starSource: 'scan',
     };
     const fields = fieldsFromScoring(scoring);
     expect(fields).toEqual({
@@ -183,6 +186,7 @@ describe('a view\'s scoring in the link', () => {
       penaltyStarLoss: '1',
       maxHfr: '3',
       minStars: '505',
+      starSource: 'scan',
     });
     expect(scoringParamUpdates({ ...defaults, hfrRejectAbove: null }, defaults)).toMatchObject({
       maxHfr: 'off',
@@ -203,11 +207,27 @@ describe('a view\'s scoring in the link', () => {
   it('reads back what it writes', () => {
     const view: ScoringPreferences = {
       satellite: 0, pointing: 1.2, temporal: 1, hfrRise: 1.5, starLoss: 0, hfrRejectAbove: null,
-      starCountRejectBelow: 40,
+      starCountRejectBelow: 40, starSource: 'capture',
     };
     const updates = scoringParamUpdates(view, defaults);
     const query = new URLSearchParams();
     for (const [key, value] of Object.entries(updates)) if (value !== null) query.set(key, value);
     expect(scoringFromParams(query, defaults)).toEqual(view);
+  });
+
+  it('reads a link made before the star source as scored on the scan', () => {
+    const query = new URLSearchParams({
+      penaltySatellite: '1', penaltyPointing: '1', penaltyTemporal: '1', penaltyHfrRise: '1',
+      penaltyStarLoss: '1', maxHfr: '2', minStars: 'off',
+    });
+    const theirs: ScoringPreferences = { ...defaults, starSource: 'capture' };
+    expect(scoringFromParams(query, theirs).starSource).toBe('scan');
+  });
+
+  it('changes only the star source when that is all that differs', () => {
+    const view: ScoringPreferences = { ...defaults, starSource: 'capture' };
+    expect(scoringParamUpdates(view, defaults).starSource).toBe('capture');
+    expect(describeScoringChanges(view, defaults))
+      .toEqual(['Stars and HFR from N.I.N.A. (default PSF Guard)']);
   });
 });
