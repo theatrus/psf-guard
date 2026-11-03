@@ -3862,11 +3862,19 @@ const ZERO_STAR_SCORE_CAP: f64 = 0.05;
 
 /// Say where a frame's stars came from when N.I.N.A. Fast found none and
 /// HocusFocus's count stood in, so a low score reads as a poor frame, not a
-/// failed measurement.
+/// failed measurement. Only when scoring used the scan's count: with the
+/// capture software's in use, the stand-in decided nothing.
 fn note_fallback_stars(result: &mut ImageQualityResult, image: &ImageMetrics) {
     let Some(stars) = image.fallback_stars.and_then(|stars| stars.star_count) else {
         return;
     };
+    let scan_used = image.stars.is_some_and(|sources| {
+        sources.star_count_source == Some(StarSource::Scan)
+            || sources.compared_on.star_count == StarSource::Scan
+    });
+    if !scan_used {
+        return;
+    }
     let hfr = image
         .fallback_stars
         .and_then(|stars| stars.hfr)
@@ -5112,6 +5120,36 @@ mod tests {
                 result.quality_score
             );
         }
+    }
+
+    #[test]
+    fn the_stand_in_note_needs_the_scan_count_to_have_been_used() {
+        let mut images = two_scale_nights();
+        images[4] = scanned(images[4].clone(), Some(68.0), None);
+        images[4].fallback_stars = Some(StarMeasure {
+            star_count: Some(68.0),
+            hfr: Some(1.4),
+        });
+        // Scoring on N.I.N.A.'s values: HocusFocus's stand-in decided
+        // nothing, so the frame does not say it was used.
+        let analyzer = SequenceAnalyzer::new(SequenceAnalyzerConfig {
+            star_source: StarSource::Capture,
+            ..Default::default()
+        });
+        let sequence = &analyzer.analyze(&images, 1, "target", "Ha")[0];
+        let frame = sequence.images.iter().find(|r| r.image_id == 4).unwrap();
+        assert_eq!(
+            frame.stars.and_then(|stars| stars.star_count_source),
+            Some(StarSource::Capture)
+        );
+        assert!(
+            !frame
+                .details
+                .as_deref()
+                .is_some_and(|details| details.contains("used instead")),
+            "{:?}",
+            frame.details
+        );
     }
 
     #[test]
