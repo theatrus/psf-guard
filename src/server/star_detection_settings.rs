@@ -84,7 +84,18 @@ pub struct RecordView {
 
 impl RecordView {
     fn of(record: &ProfileRecord) -> Self {
-        let (knobs, notes) = HocusFocusKnobs::from_profile(&record.settings);
+        let (knobs, mut notes) = HocusFocusKnobs::from_profile(&record.settings);
+        let brightest = record.settings.autofocus_brightest_stars;
+        if brightest > 0
+            && record.settings.star_detector
+                != crate::star_detection::StarDetectorSelection::HocusFocus
+        {
+            notes.push(format!(
+                "N.I.N.A. takes each frame's HFR from its {brightest} brightest stars. PSF Guard \
+                 cannot yet do that with N.I.N.A.'s own detector, so its HFR can differ from \
+                 N.I.N.A.'s on this profile."
+            ));
+        }
         let flag =
             |key: &str| record.settings.hocus_focus.get(key) == Some(&serde_json::json!(true));
         Self {
@@ -665,7 +676,7 @@ pub async fn import_profile(
 pub const MAX_PLUGIN_BODY_BYTES: usize = 64 * 1024;
 
 /// What a PSF Guard N.I.N.A. plugin sends as it captures with a profile.
-/// The Sync plugin names its catalog; the Director plugin's comes from its
+/// The Sync plugin sends its catalog's id; the Director plugin's comes from its
 /// rig's pairing, so it sends none.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -733,9 +744,7 @@ pub(crate) async fn store_plugin_snapshot(
     request: PluginProfileRequest,
 ) -> Result<PluginProfileResponse, AppError> {
     if request.protocol_version != 1 {
-        return Err(AppError::BadRequest(
-            "unsupported star detection protocol version".into(),
-        ));
+        return Err(AppError::BadRequest("protocol_version must be 1".into()));
     }
     let key = profile_id_key(&request.profile_id)?;
     let name = rig_name(request.profile_name.as_deref())?;
@@ -797,10 +806,9 @@ pub async fn plugin_profile(
     let catalog_id = ctx.id.clone();
     let result = async {
         let request = plugin_body(body)?;
-        let requested = request
-            .catalog_id
-            .as_deref()
-            .ok_or_else(|| AppError::BadRequest("catalog_id names the paired catalog".into()))?;
+        let requested = request.catalog_id.as_deref().ok_or_else(|| {
+            AppError::BadRequest("catalog_id is required: send the paired catalog's id".into())
+        })?;
         crate::server::remote_sync::require_catalog(&ctx, requested)?;
         store_plugin_snapshot(
             &state,

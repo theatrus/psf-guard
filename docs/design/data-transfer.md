@@ -453,12 +453,12 @@ pixel size, and Hocus Focus's stored options by their own names
 and Hocus Focus options PSF Guard does not read are refused with 400.
 
 The server stores the snapshot as the profile's record from `captured_at` on,
-unless the record already in effect then holds the same settings; the
+unless the record already in effect then has the same settings; the
 response's `stored` says which. The Director plugin sends the same body,
 without `catalog_id`, to `POST /api/director/v1/rigs/{rig_id}/star-detection-settings`.
 Both write one store, so a rig running both plugins records each change once.
 Records are process-global in the registry, not per catalog: a profile GUID
-names the same N.I.N.A. profile whichever catalog its frames reach.
+identifies the same N.I.N.A. profile whichever catalog its frames reach.
 
 ### Scheduler flat coverage
 

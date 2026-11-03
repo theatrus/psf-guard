@@ -255,9 +255,12 @@ Each row has four choices:
 N.I.N.A.'s detector measures stars as the N.I.N.A. release that wrote the
 frame does, read from the header's `SWCREATE`: 3.1, 3.2, or 3.3 for 3.3 and
 later. A release before 3.1 measures as 3.1. A frame from other software,
-or without `SWCREATE`, measures as 3.2. High sensitivity also takes the
-image scale from `FOCALLEN` and `XPIXSZ`, as N.I.N.A. takes it from the
+or without `SWCREATE`, measures as 3.2. High sensitivity also reads the
+image scale from `FOCALLEN` and `XPIXSZ`, as N.I.N.A. reads it from the
 profile. Hocus Focus picks its preset for the rig from the same scale.
+PSF Guard reads these headers from the frame's own light, even when the
+scan measures its calibrated copy: a copy's software and rig keys belong to
+the calibration, not the capture.
 
 Click **Save star detection**. PSF Guard uses the new settings at once:
 each frame whose detection changes counts as outdated, and the next quality
@@ -320,7 +323,10 @@ options follow Hocus Focus 4's own rules: Simple mode derives them from its
 preset, and Advanced mode uses the stored values, with Hocus Focus's
 defaults for the rest. PSF Guard does not reproduce Hocus Focus's per-filter
 settings, structure dilation or donut detection; an import that finds them
-says so. N.I.N.A.'s detector does not apply **Use brightest n stars**.
+says so. N.I.N.A. applies **Use brightest n stars** to every frame's HFR
+with either detector, but PSF Guard cannot yet reproduce it for N.I.N.A.'s
+own detector, so on a rig that sets it and does not run Hocus Focus, the
+HFR can differ from what N.I.N.A. recorded.
 
 A new or deleted record counts as a change of settings: the next quality
 scan measures the frames it affects again.
