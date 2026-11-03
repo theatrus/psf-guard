@@ -45,7 +45,11 @@ pub struct StoredSpatialMetrics {
     /// rig's settings. The measurement is current only while the settings
     /// resolved now are the same. Absent on entries from before per-rig
     /// detection, which a scan measures again.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::star_detection::deserialize_stored"
+    )]
     pub detection: Option<DetectionSettings>,
     /// What the measured file's header said about its rig, so `detection`
     /// can be resolved again without reading the file.
@@ -1742,6 +1746,13 @@ mod tests {
         assert_eq!(loaded.frame, FrameFacts::default());
         assert_eq!(loaded.star_count, 4000);
         assert!(!quality_entry_is_current(&loaded, "old.fits", "{}"));
+        // Settings a later release wrote load as none, and the rest of the
+        // entry with them.
+        let mut later = serde_json::to_value(measured_on_rig("later.fits")).unwrap();
+        later["detection"]["measurement"] = "3.4".into();
+        let later: StoredSpatialMetrics = serde_json::from_value(later).unwrap();
+        assert_eq!(later.detection, None);
+        assert_eq!(later.star_count, 4000);
         // Even at the current version, a measurement without its settings
         // is measured again.
         old["detector_version"] = QUALITY_DETECTOR_VERSION.into();

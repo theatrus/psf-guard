@@ -685,6 +685,7 @@ pub struct PluginProfileRequest {
     /// installed.
     #[serde(default)]
     pub hocus_focus_version: Option<String>,
+    #[serde(deserialize_with = "nina_profile::strict_settings")]
     pub settings: ProfileSettings,
 }
 
@@ -1066,6 +1067,18 @@ mod tests {
         bad.hocus_focus
             .insert("ServerUrl".into(), json!("https://example"));
         assert!(bad.validate().is_err());
+        // The registry ignores a settings field it does not know; a
+        // request does not.
+        assert!(serde_json::from_value::<PluginProfileRequest>(json!({
+            "protocol_version": 1, "catalog_id": "x", "profile_id": PROFILE,
+            "captured_at": "2026-09-09T03:11:57Z",
+            "settings": {"star_sensitivity": "high", "autofocus_inner_crop": 0.7},
+        }))
+        .is_err());
+        assert!(serde_json::from_value::<ProfileSettings>(json!({
+            "star_sensitivity": "high", "autofocus_inner_crop": 0.7,
+        }))
+        .is_ok());
     }
 
     #[test]

@@ -121,9 +121,10 @@ fn default_black_clipping() -> f64 {
 }
 
 /// The profile settings that decide a frame's recorded star count and HFR:
-/// one snapshot, as N.I.N.A. held them while it took the frame.
+/// one snapshot, as N.I.N.A. held them while it took the frame. Stored in
+/// the registry, so a field this build does not know is ignored there; a
+/// plugin's request is held to the known fields by [`strict_settings`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ProfileSettings {
     #[serde(default)]
     pub star_detector: StarDetectorSelection,
@@ -157,6 +158,40 @@ pub struct ProfileSettings {
     /// names. A key absent here takes Hocus Focus's default.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub hocus_focus: BTreeMap<String, serde_json::Value>,
+}
+
+/// The fields [`ProfileSettings`] reads.
+const PROFILE_FIELDS: &[&str] = &[
+    "star_detector",
+    "star_sensitivity",
+    "noise_reduction",
+    "auto_stretch_factor",
+    "black_clipping",
+    "autofocus_inner_crop_ratio",
+    "autofocus_outer_crop_ratio",
+    "autofocus_brightest_stars",
+    "focal_length_mm",
+    "pixel_size_um",
+    "hocus_focus",
+];
+
+/// [`ProfileSettings`] as a plugin's request sends them: a field this build
+/// does not read is refused, so a misspelt one cannot pass as a default.
+pub fn strict_settings<'de, D>(deserializer: D) -> Result<ProfileSettings, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error;
+    let value = serde_json::Map::<String, serde_json::Value>::deserialize(deserializer)?;
+    if let Some(unknown) = value
+        .keys()
+        .find(|key| !PROFILE_FIELDS.contains(&key.as_str()))
+    {
+        return Err(D::Error::custom(format!(
+            "unknown settings field `{unknown}`"
+        )));
+    }
+    serde_json::from_value(serde_json::Value::Object(value)).map_err(D::Error::custom)
 }
 
 impl Default for ProfileSettings {

@@ -87,9 +87,10 @@ pub enum HocusFocusVersion {
 }
 
 /// One rig's star detection choices, or the default row's. A field left out
-/// of the registry takes its default.
+/// of the registry takes its default, and one this build does not know is
+/// ignored: the registry must load whatever a later release wrote.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct RigStarDetection {
     pub detector: DetectorChoice,
     pub sensitivity: Sensitivity,
@@ -619,6 +620,39 @@ impl StarDetectionSettings {
         }
         resolve(&self.default, facts, fwhm)
     }
+}
+
+/// Read the registry's `star_detection` block, or none with a warning when
+/// it does not parse, as a later release's value or a hand edit may not.
+/// The rest of the registry, its databases above all, must still load.
+pub fn deserialize_lenient<'de, D>(
+    deserializer: D,
+) -> Result<Option<StarDetectionSettings>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(value.and_then(|value| {
+        serde_json::from_value(value)
+            .inspect_err(|error| {
+                tracing::warn!(
+                    "Ignoring the registry's star_detection settings, which this build cannot \
+                     read ({error}); every rig uses N.I.N.A.'s defaults until they are saved again"
+                )
+            })
+            .ok()
+    }))
+}
+
+/// A stored measurement's detection settings, or none when this build cannot
+/// read them: the measurement is then outdated and measured again, and the
+/// rest of the cache still loads.
+pub fn deserialize_stored<'de, D>(deserializer: D) -> Result<Option<DetectionSettings>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(value.and_then(|value| serde_json::from_value(value).ok()))
 }
 
 static CURRENT: LazyLock<RwLock<Arc<StarDetectionSettings>>> =

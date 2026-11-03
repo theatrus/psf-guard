@@ -541,7 +541,13 @@ pub struct DbRegistry {
     /// Process-global star detection for the quality scan: a default row
     /// and each rig's own, edited in Settings › Review. Additive within
     /// registry v2; absent means N.I.N.A.'s defaults for every rig.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// A block this build cannot read (a later release's, or a bad hand
+    /// edit) is ignored with a warning rather than failing the registry.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::star_detection::deserialize_lenient"
+    )]
     pub star_detection: Option<StarDetectionSettings>,
     /// Process-global export defaults shared by every database, edited from
     /// the settings panel. Additive within registry v2; absent means the
@@ -1886,6 +1892,63 @@ mod tests {
         reg.active_db_id = Some("a".into());
         assert!(reg.remove("a").unwrap());
         assert!(reg.active_db_id.is_none());
+    }
+
+    #[test]
+    fn star_detection_a_later_release_wrote_never_costs_the_databases() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let database = serde_json::json!(
+            {"id": "askar", "name": "Askar", "db_path": "/data/askar.sqlite", "image_dirs": []}
+        );
+        // A field this build does not know: kept out, the rest read.
+        let unknown_field = serde_json::json!({
+            "schema_version": 2,
+            "databases": [database.clone()],
+            "star_detection": {
+                "default": {"detector": "nina", "sensitivity": "normal", "future_knob": 3},
+                "profiles": {
+                    "46d7a6e3-3ae8-48a9-8d29-598e3647f131": {
+                        "records": [{
+                            "id": "r1",
+                            "source": "import",
+                            "received_at": "2026-11-02T00:00:00Z",
+                            "hocus_focus_version": "v4",
+                            "settings": {"star_detector": "hocus_focus", "new_setting": true},
+                        }],
+                    },
+                },
+            },
+        });
+        write(&path, &unknown_field.to_string());
+        let reg = DbRegistry::load_or_init(&path).unwrap();
+        assert_eq!(reg.databases.len(), 1);
+        let star_detection = reg.star_detection.unwrap();
+        assert_eq!(
+            star_detection.default.detector,
+            crate::star_detection::DetectorChoice::Nina
+        );
+        assert_eq!(star_detection.profiles.len(), 1);
+
+        // A value this build cannot read: the block reads as unset, the
+        // databases stay.
+        for star_detection in [
+            serde_json::json!({"default": {"sensitivity": "extreme"}}),
+            serde_json::json!({"default": {"detector": "sextractor"}}),
+            serde_json::json!({"profiles": {"p": {"records": [{"source": "plugin:mobile"}]}}}),
+            serde_json::json!("not an object"),
+        ] {
+            let raw = serde_json::json!({
+                "schema_version": 2,
+                "databases": [database.clone()],
+                "star_detection": star_detection,
+            });
+            write(&path, &raw.to_string());
+            let reg = DbRegistry::load_or_init(&path).unwrap();
+            assert_eq!(reg.databases.len(), 1, "{star_detection}");
+            assert_eq!(reg.databases[0].id, "askar");
+            assert!(reg.star_detection.is_none(), "{star_detection}");
+        }
     }
 
     #[test]
