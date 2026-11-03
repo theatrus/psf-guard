@@ -1234,6 +1234,7 @@ async fn run_server_internal(
     crate::server::backup_job::spawn(Arc::clone(&state));
     crate::server::director::spawn_collaboration(Arc::clone(&state));
     crate::server::director::spawn_site_forecasts(&state);
+    crate::server::director::spawn_night_plan_refresh(&state);
 
     // Each catalog's upkeep (query indexes, then readout modes) on its
     // runner, off the request path and before cache refreshes start

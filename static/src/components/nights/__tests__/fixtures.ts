@@ -58,5 +58,7 @@ export function plans(rigs: RigNights[] = [rig()]): NightPlans {
     rigs,
     warnings: [],
     assumptions: { dark_below_degrees: -12, overhead_seconds_per_exposure: 15, sample_minutes: 5 },
+    computed_at_ms: NOON,
+    refreshing: false,
   };
 }

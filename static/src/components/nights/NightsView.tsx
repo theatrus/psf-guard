@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Cloud, Pin, RefreshCw } from 'lucide-react';
 import { apiClient } from '../../api/client';
@@ -14,6 +14,8 @@ import NightDetail from './NightDetail';
 import { confirmDiscard, usePageDrafts } from '../director/pageDraftsState';
 import {
   darkState,
+  formatClock,
+  refetchKept,
   NIGHT_COUNTS,
   NIGHTS_PARAMS,
   RUNTIME_LABEL,
@@ -76,12 +78,19 @@ export default function NightsView() {
     const night = getParam(NIGHTS_PARAMS.night);
     return rig && isDate(night) ? { rigId: rig, anchor: night, dates: [night] } : null;
   });
+  // Compute again asks the server to compute the plans afresh; any other
+  // read gets the plans it keeps current.
+  const recompute = useRef(false);
   const query = useQuery({
     queryKey: ['nightPlans', chosenFrom, count],
-    queryFn: () => apiClient.getNightPlans({ ...(chosenFrom ? { first_night: chosenFrom } : {}), nights: count, schedule_nights: count }),
+    queryFn: () => {
+      const refresh = recompute.current;
+      recompute.current = false;
+      return apiClient.getNightPlans({ ...(chosenFrom ? { first_night: chosenFrom } : {}), nights: count, schedule_nights: count, ...(refresh ? { refresh } : {}) });
+    },
     retry: retryWhenBusy,
     retryDelay: 1200,
-    refetchInterval: 5 * 60_000,
+    refetchInterval: current => refetchKept(current.state.data, 60_000),
     refetchOnWindowFocus: false,
   });
   const rigs = useMemo(() => query.data?.rigs ?? [], [query.data]);
@@ -130,7 +139,8 @@ export default function NightsView() {
             {NIGHT_COUNTS.map(option => <option key={option} value={option}>{option}</option>)}
           </select></label>
           {chosenFrom && <button type="button" onClick={leaving(() => { setSelection(null); updateParams({ [NIGHTS_PARAMS.from]: null }); })}>Tonight</button>}
-          <button type="button" title="Compute again" aria-label="Compute again" disabled={query.isFetching} onClick={() => void query.refetch()}><RefreshCw size={16} /></button>
+          {query.data && <span className="director-muted nights-updated" role="status">{query.data.refreshing || query.isFetching ? 'Updating…' : `Updated ${formatClock(query.data.computed_at_ms)}`}</span>}
+          <button type="button" title="Compute again" aria-label="Compute again" disabled={query.isFetching} onClick={() => { recompute.current = true; void query.refetch(); }}><RefreshCw size={16} /></button>
         </div>
       </div>
       {rigs.length > 1 && <div className="nights-rig-chips" role="group" aria-label="Rigs shown">

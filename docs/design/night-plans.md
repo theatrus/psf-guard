@@ -149,7 +149,8 @@ Goals:
     `project_order`;
   - rig profiles, each with the equipment configuration once the plugin
     reports it.
-- The rig mode (Target Scheduler or Director) is proposed, not built.
+- The rig mode (Target Scheduler or Director), stored on the rig profile
+  (Phase 6).
 
 ### 2.3 Target Scheduler's planner
 
@@ -635,6 +636,21 @@ refused.
 
 ### 4.7 Server
 
+- **Kept views** (`night_plans::cache`): each computation runs as a
+  person's work on the job line, a `night_plans` run of
+  `AppState.previews`, so background work waits for it and the header
+  lists it with Stop. A newer request for the same edited night stops the
+  one before it. A request without a draft or fixed instants is kept by
+  what it asks for, with when the meta store and each rig database last
+  changed on disk; an empty write-ahead log counts as none. The same
+  request answers from it while those are unchanged, and waits for a new
+  computation once one changed. A view of the night under way ages after
+  two minutes, since that night is planned from now; an aged view is
+  answered at once, marked `refreshing`, while a newer one is computed.
+  Requests for one view share one computation, on a task of its own. A
+  timer computes again, one at a time, the views read in the last ten
+  minutes that changed or aged, and lets go of views not read for an
+  hour. Projections read the same views.
 - **Gather:**
   - Split `program::assemble` into `gather`, read-only (activations,
     Target Scheduler rows, saved captures, project order, and the night's
@@ -915,7 +931,8 @@ moving blocks; steps the program cannot carry wait (question 12).
 - learned durations and uncertainty bands (Director, Phase 3);
 - a saved snapshot of a night's plan, to compare planned and actual;
 - the plugin's **Tonight** showing the preview;
-- a read-only MCP tool for night plans.
+- a read-only MCP tool for night plans. *Built:* `get_night_plans`, over
+  the views the server keeps (§4.7).
 
 When Phases 4 and 5 land, tick Director's Phase 3 items for virtual-clock
 simulation and for the per-rig night preview through the shared engine.

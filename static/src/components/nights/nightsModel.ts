@@ -1,4 +1,4 @@
-import type { NightAppliedMark, NightAvailabilityState, NightInterval, NightPlanProject, NightPlanTarget, NightRuntime, NightTargetHours, NightSchedule, RigNight, RigNights, SchedulePlanProgress } from '../../api/nightPlanTypes';
+import type { NightAppliedMark, NightAvailabilityState, NightInterval, NightPlanProject, NightPlans, NightPlanTarget, NightRuntime, NightTargetHours, NightSchedule, RigNight, RigNights, SchedulePlanProgress } from '../../api/nightPlanTypes';
 import { PROVIDER_LABEL } from '../director/forecastLabels';
 import { withoutPlanningParams } from '../../hooks/useUrlState';
 
@@ -162,6 +162,12 @@ export function windowFor(night: Pick<RigNight, 'date' | 'noon_ms' | 'dusk_ms' |
   const clippedStart = Math.max(start, night.noon_ms);
   const clippedEnd = Math.min(end, night.noon_ms + DAY_MS);
   return clippedEnd > clippedStart ? { start_ms: clippedStart, end_ms: clippedEnd } : null;
+}
+
+/** How soon to read kept night plans again: shortly while the server
+ *  computes newer ones, else `otherwise`. */
+export function refetchKept(data: NightPlans | undefined, otherwise: number | false): number | false {
+  return data?.refreshing ? 3000 : otherwise;
 }
 
 /** How a night stands for shooting. A night whose clear hours all fall

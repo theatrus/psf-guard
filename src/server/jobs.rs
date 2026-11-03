@@ -1579,7 +1579,10 @@ fn preview_row(run: &PreviewRun, names: &HashMap<&str, &str>) -> JobRow {
             format!("preview:{:?}:{}", run.kind, run.key),
             RowKind::Preview,
             run.label.clone(),
-            names.get(run.db_id.as_str()).copied().unwrap_or(&run.db_id),
+            match run.kind {
+                PreviewKind::NightPlans => "Rigs",
+                _ => names.get(run.db_id.as_str()).copied().unwrap_or(&run.db_id),
+            },
         )
     }
 }

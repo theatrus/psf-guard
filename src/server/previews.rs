@@ -27,14 +27,17 @@ pub enum PreviewKind {
     PeerSync,
     /// A sync another server pushed here, which waits for its Apply.
     Incoming,
+    /// Night plans for the Nights page, a plan's projection or an agent.
+    NightPlans,
 }
 
-const KINDS: [PreviewKind; 5] = [
+const KINDS: [PreviewKind; 6] = [
     PreviewKind::Sync,
     PreviewKind::Import,
     PreviewKind::Export,
     PreviewKind::PeerSync,
     PreviewKind::Incoming,
+    PreviewKind::NightPlans,
 ];
 
 /// The previews under way, by kind. Each is keyed by the database whose
@@ -51,6 +54,9 @@ pub struct Previews {
     pub peer_sync: LatestRequests<String>,
     /// Syncs pushed here, by the catalog and the catalog that sent them.
     pub incoming: LatestRequests<String>,
+    /// Night plans being computed, by what they plan. They span every
+    /// database, so their runs work on none.
+    pub night_plans: LatestRequests<String>,
 }
 
 /// The key of an incoming sync: a newer push from the same source replaces
@@ -80,6 +86,7 @@ impl Previews {
             PreviewKind::Export => &self.export,
             PreviewKind::PeerSync => &self.peer_sync,
             PreviewKind::Incoming => &self.incoming,
+            PreviewKind::NightPlans => &self.night_plans,
         }
     }
 
@@ -99,6 +106,7 @@ impl Previews {
                                 .split_once(':')
                                 .map_or(key.as_str(), |(catalog, _)| catalog)
                                 .to_string(),
+                            PreviewKind::NightPlans => String::new(),
                             _ => key.clone(),
                         };
                         PreviewRun {

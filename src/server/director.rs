@@ -185,11 +185,23 @@ pub struct Service {
     resending: Mutex<std::collections::BTreeSet<String>>,
     /// Held while a site's forecast is asked for, so asks go one at a time.
     forecast_turn: tokio::sync::Mutex<()>,
+    /// The night plans kept, and those being computed.
+    night_plans: night_plans::Cache,
 }
 
 /// Ask for each site's cloud forecast when it is due.
 pub(crate) fn spawn_site_forecasts(state: &Arc<AppState>) {
     site_forecast::spawn(state);
+}
+
+/// Keep the night plans someone read lately current.
+pub(crate) fn spawn_night_plan_refresh(state: &Arc<AppState>) {
+    crate::server::schedule::every(
+        state,
+        "night plan refresh",
+        crate::server::schedule::Every::period(night_plans::REFRESH_EVERY),
+        night_plans::refresh_kept,
+    );
 }
 
 pub(crate) fn spawn_collaboration(state: Arc<AppState>) {
@@ -236,6 +248,7 @@ impl Service {
             collaboration: collaboration_auth::SessionState::default(),
             resending: Mutex::new(std::collections::BTreeSet::new()),
             forecast_turn: tokio::sync::Mutex::new(()),
+            night_plans: night_plans::Cache::default(),
         })))
     }
 
@@ -383,7 +396,7 @@ impl Service {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 enum Error {
     Disabled,
     Forbidden,

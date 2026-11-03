@@ -1129,6 +1129,33 @@ fn a_preview_is_a_persons_work_that_stop_ends() {
 }
 
 #[test]
+fn night_plans_being_computed_are_a_persons_work_across_the_rigs() {
+    let row = row_list(&Snapshot {
+        databases: vec![db("db-1", "Home")],
+        previews: vec![crate::server::previews::PreviewRun {
+            kind: crate::server::previews::PreviewKind::NightPlans,
+            key: "edit:rig".into(),
+            db_id: String::new(),
+            label: "Planning nights".into(),
+            started_at: 1800,
+        }],
+        ..Snapshot::default()
+    })
+    .into_iter()
+    .find(|row| row.kind == RowKind::Preview)
+    .unwrap();
+    assert_eq!(
+        (row.title.as_str(), row.scope.as_str()),
+        ("Planning nights", "Rigs")
+    );
+    assert!(!row.background && row.stoppable);
+    assert_eq!(
+        serde_json::to_value(row.control.unwrap()).unwrap(),
+        serde_json::json!({"kind": "preview", "preview": "night_plans", "key": "edit:rig"})
+    );
+}
+
+#[test]
 fn transfers_are_filed_by_who_queued_them_and_review_needs_attention() {
     let row = |job: Value| transfer_row(&job).unwrap();
     assert!(row(transfer("t", "queued", true)).background);

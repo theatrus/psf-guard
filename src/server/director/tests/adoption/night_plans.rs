@@ -187,6 +187,69 @@ async fn a_rigs_summary_counts_each_plans_hours_as_feasibility_does() {
     }
 }
 
+/// A request without unsaved edits is answered from the view kept of it
+/// until what it was computed from changes, so a saved mark is planned at
+/// once; an aged view is answered at once while a new one is computed.
+#[tokio::test]
+async fn night_plans_are_kept_until_their_inputs_change_and_computed_again_when_they_age() {
+    let a = activated().await;
+    place(&a).await;
+    project(&a, "Heart", 25.0, 200, 0);
+    let plan = || async {
+        let (status, planned) = call(
+            &a.f.app,
+            "POST",
+            "/night-plans",
+            json!({"nights": 3, "first_night": "2026-09-24"}),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{planned}");
+        planned["data"].clone()
+    };
+    let computed_at = |planned: &Value| planned["computed_at_ms"].as_u64().unwrap();
+    let first = plan().await;
+    assert_eq!(first["refreshing"], false);
+    assert_eq!(computed_at(&plan().await), computed_at(&first));
+
+    let (status, saved) = call(
+        &a.f.app,
+        "PUT",
+        &format!("/night-availability/rig/{}", a.rig),
+        json!({"expected_revision": 0, "marks": [{"date": "2026-09-25", "state": "unavailable", "note": ""}]}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    let marked = plan().await;
+    assert_eq!(marked["refreshing"], false);
+    assert_eq!(
+        marked["rigs"][0]["nights"][1]["availability"]["state"],
+        "unavailable"
+    );
+
+    a.f.state
+        .director
+        .as_ref()
+        .unwrap()
+        .night_plans
+        .age_for_test();
+    let aged = plan().await;
+    assert_eq!(aged["refreshing"], true);
+    assert_eq!(computed_at(&aged), computed_at(&marked));
+    let mut fresh = aged;
+    for _ in 0..100 {
+        fresh = plan().await;
+        if fresh["refreshing"] == false {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(fresh["refreshing"], false);
+    assert!(computed_at(&fresh) >= computed_at(&marked));
+    assert!(fresh["rigs"][0]["nights"][1]["availability"]["state"] == "unavailable");
+}
+
 #[tokio::test]
 async fn marks_round_trip_and_clip_the_nights_they_cover() {
     let a = activated().await;

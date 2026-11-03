@@ -24,6 +24,7 @@ import {
   clockValue,
   describeDates,
   formatClock,
+  refetchKept,
   usableZone,
   formatNightDate,
   isTonight,
@@ -227,9 +228,9 @@ function useNightSchedule(rig: RigNights, night: RigNight, range: Props['range']
     enabled: enabled && index >= 0,
     retry: retryWhenBusy,
     retryDelay: 1200,
-    // Tonight re-plans from now every two minutes; other nights stand
-    // until the page asks again or a mark changes them.
-    refetchInterval: tonight ? 2 * 60_000 : false,
+    // The server keeps the plans without an edit current; tonight's is read
+    // again each minute, and others when a change asks for them.
+    refetchInterval: current => previewed !== null || tsPreviewed !== null ? false : refetchKept(current.state.data, tonight ? 60_000 : false),
     refetchOnWindowFocus: false,
     // An edit keeps its last schedule on screen while the next is planned.
     placeholderData: previous => previous,

@@ -6,7 +6,7 @@ import { http, HttpResponse } from 'msw';
 import { describe, expect, it, vi } from 'vitest';
 import { server } from '../../../test/msw-server';
 import RigsPage from '../../rigs/RigsPage';
-import { night, plans, rig } from './fixtures';
+import { NOON, night, plans, rig } from './fixtures';
 import { clockOnNight, formatNightDate } from '../nightsModel';
 
 const ok = (data: unknown) => ({ success: true, data, error: null });
@@ -104,6 +104,23 @@ describe('Nights', () => {
     expect(within(detail).getByLabelText('Not available')).toBeChecked();
     expect(within(detail).queryByRole('button', { name: 'Clear mark' })).toBeNull();
   });
+
+  it('shows when the plans were computed, reads again while newer ones are computed, and asks for fresh ones', async () => {
+    const { planned } = mount({ ...plans(), refreshing: true });
+    await screen.findByTestId('nights-grid');
+    expect(screen.getByText('Updating…')).toBeInTheDocument();
+    // The server said newer plans were being computed: the page reads again
+    // shortly, without being asked.
+    planned.mockImplementation(() => HttpResponse.json(ok({ ...plans(), computed_at_ms: NOON + 60_000 })));
+    expect(await screen.findByText(/^Updated /, {}, { timeout: 5000 })).toBeInTheDocument();
+    const requests: Array<{ refresh?: boolean }> = [];
+    server.use(http.post('/api/director/v1/night-plans', async ({ request }) => {
+      requests.push(await request.json() as { refresh?: boolean });
+      return HttpResponse.json(ok(plans()));
+    }));
+    fireEvent.click(screen.getByRole('button', { name: 'Compute again' }));
+    await waitFor(() => expect(requests).toEqual([expect.objectContaining({ refresh: true })]));
+  }, 10_000);
 
   it('shows a night clear only in daylight as out, and lists no daytime hours', async () => {
     const HOUR = 3_600_000;
