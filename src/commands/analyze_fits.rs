@@ -694,35 +694,52 @@ fn frames_under(path: &Path) -> Vec<PathBuf> {
 pub fn analyze_as_scan(
     conn: &Connection,
     path: &str,
-    rig: &crate::star_detection::RigStarDetection,
+    settings: &crate::star_detection::StarDetectionSettings,
 ) -> Result<()> {
-    let mut by_name: std::collections::HashMap<String, String> = Default::default();
-    let mut statement = conn.prepare("SELECT metadata FROM acquiredimage")?;
-    for metadata in statement.query_map([], |row| row.get::<_, String>(0))? {
-        let metadata = metadata?;
+    struct Row {
+        metadata: String,
+        profile_id: Option<String>,
+        captured_at: Option<i64>,
+    }
+    let mut by_name: std::collections::HashMap<String, Row> = Default::default();
+    let mut statement =
+        conn.prepare("SELECT metadata, profileId, acquireddate FROM acquiredimage")?;
+    let rows = statement.query_map([], |row| {
+        Ok(Row {
+            metadata: row.get(0)?,
+            profile_id: row.get(1)?,
+            captured_at: row.get(2)?,
+        })
+    })?;
+    for row in rows {
+        let row = row?;
+        let metadata = &row.metadata;
         let name = serde_json::from_str::<serde_json::Value>(&metadata)
             .ok()
             .and_then(|value| value["FileName"].as_str().map(str::to_string))
             .and_then(|name| name.split(['\\', '/']).next_back().map(str::to_string));
         if let Some(name) = name {
-            by_name.insert(name, metadata);
+            by_name.insert(name, row);
         }
     }
-    let settings = crate::star_detection::StarDetectionSettings {
-        default: *rig,
-        ..Default::default()
-    };
     for frame in frames_under(Path::new(path)) {
         let name = frame
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let metadata = by_name.get(&name).cloned().unwrap_or_else(|| "{}".into());
-        let catalog: serde_json::Value = serde_json::from_str(&metadata).unwrap_or_default();
+        let row = by_name.get(&name);
+        let metadata = row.map_or("{}", |row| row.metadata.as_str());
+        let catalog: serde_json::Value = serde_json::from_str(metadata).unwrap_or_default();
         let meta = crate::commands::import::headers::read_frame_meta(&frame);
-        let facts = crate::star_detection::FrameFacts::of_frame(&meta);
-        let detection =
-            settings.resolve(&facts, crate::star_detection::metadata_has_fwhm(&metadata));
+        let facts = crate::star_detection::FrameFacts::of_frame(
+            &meta,
+            row.and_then(|row| row.profile_id.as_deref()),
+            row.and_then(|row| row.captured_at),
+        );
+        let detection = settings.resolve(
+            &facts,
+            crate::star_detection::FwhmEvidence::of_metadata(metadata),
+        );
         let started = std::time::Instant::now();
         let measured = FitsImage::from_file(&frame).map(|fits| {
             let stats = fits.calculate_basic_statistics();

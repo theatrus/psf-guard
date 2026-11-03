@@ -947,6 +947,12 @@ pub enum Commands {
         #[arg(long, default_value = "v4")]
         hocus_focus_version: String,
 
+        /// With --scan: read the star detection block (profile records,
+        /// rig and profile rows) from this registry file; the options above
+        /// set its default row
+        #[arg(long)]
+        registry: Option<String>,
+
         /// Enable verbose debug output
         #[arg(long, short)]
         verbose: bool,

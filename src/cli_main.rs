@@ -1174,6 +1174,7 @@ pub fn main() -> Result<()> {
             scan_sensitivity,
             scan_noise_reduction,
             hocus_focus_version,
+            registry,
             verbose,
         } => {
             if scan {
@@ -1188,7 +1189,16 @@ pub fn main() -> Result<()> {
                     &scan_noise_reduction,
                     &hocus_focus_version,
                 )?;
-                crate::commands::analyze_fits::analyze_as_scan(&conn, &path, &rig)?;
+                let mut settings = match registry {
+                    Some(registry) => crate::db_registry::DbRegistry::load_or_init(
+                        std::path::Path::new(&registry),
+                    )?
+                    .star_detection
+                    .unwrap_or_default(),
+                    None => Default::default(),
+                };
+                settings.default = rig;
+                crate::commands::analyze_fits::analyze_as_scan(&conn, &path, &settings)?;
                 return Ok(());
             }
             let conn = Connection::open(&cli.database)

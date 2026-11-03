@@ -794,10 +794,7 @@ pub(crate) fn scan_target(
                             // The rig and N.I.N.A. release come from the
                             // header of the file the scan measures.
                             let (detection, frame, image_scale_arcsec) =
-                                crate::server::spatial_scan::detection_for_frame(
-                                    &path,
-                                    &img.metadata,
-                                );
+                                crate::server::spatial_scan::detection_for_frame(&path, img);
                             crate::server::spatial_scan::ScanWorkItem {
                                 image_id: img.id,
                                 filename: file_only.clone(),

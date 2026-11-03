@@ -45,6 +45,8 @@ argon2 = "0.6.0"
 chrono = "0.4"
 uuid = { version = "1", features = ["v4", "v5"] }
 regex = "1.12"
+# N.I.N.A. profile import. Already in the tree; read with DTDs refused.
+quick-xml = "0.42"
 # Scan rules: exclude and include patterns for import walks.
 globset = "0.4"
 semver = "1"
@@ -174,9 +176,10 @@ tauri-build = { version = "2.7.4", features = [] }
 toml_edit = "0.25"
 
 # N.I.N.A. detector parity (Accord filters, 3.1/3.2/3.3 measurement, HocusFocus
-# v3 and v4), pinned to theatrus/seiza#426 until it is released. seiza-stars
-# reaches seiza-imgproc by path inside the repository, so both come from the
-# same commit to keep one copy of seiza-imgproc in the tree.
+# v3 and v4 with N.I.N.A.'s autofocus crop), pinned to theatrus/seiza#426 and
+# #428 until they are released. seiza-stars reaches seiza-imgproc by path
+# inside the repository, so both come from the same commit to keep one copy of
+# seiza-imgproc in the tree.
 [patch.crates-io]
-seiza-imgproc = { git = "https://github.com/theatrus/seiza", rev = "04733bb95f1378dc0b6edd0b9902c9bd9b55f6b7" }
-seiza-stars = { git = "https://github.com/theatrus/seiza", rev = "04733bb95f1378dc0b6edd0b9902c9bd9b55f6b7" }
+seiza-imgproc = { git = "https://github.com/theatrus/seiza", rev = "3364e48a108a21956773518e806c70a6bed2080b" }
+seiza-stars = { git = "https://github.com/theatrus/seiza", rev = "3364e48a108a21956773518e806c70a6bed2080b" }

@@ -4452,6 +4452,7 @@ dependencies = [
  "psf-guard-director-interop",
  "psf-guard-director-meta",
  "psf-guard-ts-planner",
+ "quick-xml",
  "rand 0.10.3",
  "rayon",
  "reflink-copy",
@@ -5567,7 +5568,7 @@ dependencies = [
 [[package]]
 name = "seiza-imgproc"
 version = "0.3.2"
-source = "git+https://github.com/theatrus/seiza?rev=04733bb95f1378dc0b6edd0b9902c9bd9b55f6b7#04733bb95f1378dc0b6edd0b9902c9bd9b55f6b7"
+source = "git+https://github.com/theatrus/seiza?rev=3364e48a108a21956773518e806c70a6bed2080b#3364e48a108a21956773518e806c70a6bed2080b"
 dependencies = [
  "rayon",
 ]
@@ -5627,7 +5628,7 @@ dependencies = [
 [[package]]
 name = "seiza-stars"
 version = "0.4.0"
-source = "git+https://github.com/theatrus/seiza?rev=04733bb95f1378dc0b6edd0b9902c9bd9b55f6b7#04733bb95f1378dc0b6edd0b9902c9bd9b55f6b7"
+source = "git+https://github.com/theatrus/seiza?rev=3364e48a108a21956773518e806c70a6bed2080b#3364e48a108a21956773518e806c70a6bed2080b"
 dependencies = [
  "nalgebra",
  "rayon",

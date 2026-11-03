@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
-use seiza_stretch::{stretch_u16_to_u16, StretchParams};
+use seiza_stretch::stretch_u16_to_u16;
 use serde::{Deserialize, Serialize};
 
 use crate::image_analysis::FitsImage;
@@ -251,17 +251,17 @@ pub struct ScanWorkItem {
 }
 
 /// How to measure the frame at `path`: its header's rig and capture
-/// software, with the settings in force and whether N.I.N.A. recorded an
-/// FWHM in its catalog row (`metadata_json`).
+/// software, its catalog row's profile, capture time and FWHM, and the
+/// settings in force.
 pub fn detection_for_frame(
     path: &Path,
-    metadata_json: &str,
+    image: &crate::models::AcquiredImage,
 ) -> (DetectionSettings, FrameFacts, Option<f64>) {
     let meta = crate::commands::import::headers::read_frame_meta(path);
-    let facts = FrameFacts::of_frame(&meta);
+    let facts = FrameFacts::of_frame(&meta, image.profile_id.as_deref(), image.acquired_date);
     let detection = crate::star_detection::current().resolve(
         &facts,
-        crate::star_detection::metadata_has_fwhm(metadata_json),
+        crate::star_detection::FwhmEvidence::of_metadata(&image.metadata),
     );
     (detection, facts, meta.image_scale_arcsec())
 }
@@ -903,7 +903,7 @@ pub fn measure_frame_stars(
         let params = detection
             .nina_params(image_scale_arcsec)
             .unwrap_or_default();
-        let stretch_params = StretchParams::default();
+        let stretch_params = detection.stretch_params();
         let stretched =
             stretch_u16_to_u16(&fits.data, &stats.to_stretch_statistics(), &stretch_params);
         let result =
@@ -1254,7 +1254,7 @@ fn detection_current_under(
             stored
                 == settings.resolve(
                     &entry.frame,
-                    crate::star_detection::metadata_has_fwhm(metadata_json),
+                    crate::star_detection::FwhmEvidence::of_metadata(metadata_json),
                 )
         })
 }
@@ -1511,7 +1511,10 @@ mod tests {
             let measured = measure_frame_stars(
                 &fits,
                 &stats,
-                &DetectionSettings::HocusFocus { version },
+                &DetectionSettings::HocusFocus {
+                    version,
+                    knobs: None,
+                },
                 None,
                 Path::new("synthetic.fits"),
             );
@@ -1674,9 +1677,11 @@ mod tests {
         frame.frame = FrameFacts {
             rig_uuid: Some("rig".into()),
             software: Some("N.I.N.A. 3.2.0.9001 (x64)".into()),
+            ..Default::default()
         };
         frame.detection = Some(
-            crate::star_detection::StarDetectionSettings::default().resolve(&frame.frame, false),
+            crate::star_detection::StarDetectionSettings::default()
+                .resolve(&frame.frame, crate::star_detection::FwhmEvidence::Absent),
         );
         frame.width = 100;
         frame.height = 100;
@@ -1750,6 +1755,7 @@ mod tests {
         frame.detector = PRIMARY_HOCUS_FOCUS_DETECTOR.into();
         frame.detection = Some(DetectionSettings::HocusFocus {
             version: crate::star_detection::HocusFocusVersion::V4,
+            knobs: None,
         });
         frame.star_count = 380;
         frame.avg_hfr = 2.1;
