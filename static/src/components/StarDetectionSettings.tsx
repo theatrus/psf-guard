@@ -549,7 +549,7 @@ function ImportProfile({ onImported }: { onImported: (latest: Settings) => void 
             if (!unavailable && read) run.mutate({ preview: false });
           }}
         >
-          {run.isPending ? 'Importing…' : 'Import'}
+          {run.isPending ? 'Importing…' : 'Import profile'}
         </button>
       </div>
       {read && (

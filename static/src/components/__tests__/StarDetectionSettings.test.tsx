@@ -313,7 +313,7 @@ describe('Settings › Review › Star detection › N.I.N.A. profiles', () => {
     expect(writes[0].body).toBe('<Profile/>');
     expect(await screen.findByRole('status')).toHaveTextContent(/^starfront-mini-redcat61 46d7a6e3/);
 
-    await user.click(screen.getByRole('button', { name: 'Import' }));
+    await user.click(screen.getByRole('button', { name: 'Import profile' }));
     await waitFor(() => expect(writes).toHaveLength(2));
     expect(new URL(writes[1].url).searchParams.get('preview')).toBe('false');
     expect(await screen.findByText(/^Imported starfront-mini-redcat61\./)).toBeInTheDocument();

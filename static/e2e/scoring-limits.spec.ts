@@ -49,7 +49,7 @@ test('an HFR reject limit flags the soft frame, survives reload, and resets', as
   await capped.getByRole('button', { name: 'Show quality reason' }).click();
   const popover = page.getByRole('dialog', { name: 'Quality reason' });
   await expect(popover).toContainText('[Auto] Max HFR');
-  await expect(popover).toContainText('over limit 2.55');
+  await expect(popover).toContainText('2.60 px (N.I.N.A.) over limit 2.55');
   await popover.getByRole('button', { name: 'Close quality reason' }).click();
 
   // The view's address keeps it: a reload scores the same way.
@@ -83,7 +83,7 @@ test('a star-count floor flags the sparse frame', async ({ page }) => {
   await capped.getByRole('button', { name: 'Show quality reason' }).click();
   const popover = page.getByRole('dialog', { name: 'Quality reason' });
   await expect(popover).toContainText('[Auto] Min stars');
-  await expect(popover).toContainText('500 under limit 505');
+  await expect(popover).toContainText('500 (N.I.N.A.) under limit 505');
 });
 
 test('a sub-1 HFR limit can be typed digit by digit, leading zero first', async ({

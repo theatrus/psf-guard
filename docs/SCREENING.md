@@ -285,7 +285,7 @@ PSF Guard records a profile's settings in two ways:
   **Profile file** from N.I.N.A.'s profile folder, the **Hocus Focus
   version** it ran, and whether it **Applies to** **All frames** or
   **Frames from** a date. Click **Read file** to see what PSF Guard read,
-  then **Import** to store it. To record a change, such as a new autofocus
+  then **Import profile** to store it. To record a change, such as a new autofocus
   crop, import a copy of the profile with the new value from the day it
   changed.
 
