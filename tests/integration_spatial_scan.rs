@@ -147,6 +147,8 @@ fn stored_entry(image_id: i32, filename: &str, dead: f64, bg_spread: f64) -> Sto
         source_revision: None,
         detector: psf_guard::server::spatial_scan::QUALITY_DETECTOR.to_string(),
         detector_version: psf_guard::server::spatial_scan::QUALITY_DETECTOR_VERSION,
+        detection: Some(Default::default()),
+        frame: Default::default(),
         star_count: 4000,
         avg_hfr: 2.5,
         dead_cell_fraction: Some(dead),

@@ -305,6 +305,8 @@ fn remapped_upload_cannot_commit_stale_star_metadata() {
             source_revision: Some(old_revision.clone()),
             detector: crate::server::spatial_scan::QUALITY_DETECTOR.into(),
             detector_version: crate::server::spatial_scan::QUALITY_DETECTOR_VERSION,
+            detection: Some(Default::default()),
+            frame: Default::default(),
             star_count: 123,
             avg_hfr: 2.4,
             dead_cell_fraction: None,

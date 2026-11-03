@@ -63,6 +63,7 @@ pub mod renamed_lights;
 pub mod schedule;
 pub mod scheduler;
 pub mod scoring_defaults;
+pub mod star_detection_settings;
 pub mod shutdown;
 pub mod sky_coverage;
 pub mod slug;
@@ -180,6 +181,7 @@ fn apply_registry_settings(registry: &crate::db_registry::DbRegistry) {
     crate::calibration::configure(registry.calibration.as_ref());
     stack_preview::automatic::configure_from_registry(registry.stacking.as_ref());
     scoring_defaults::configure(registry.scoring.as_ref());
+    crate::star_detection::configure(registry.star_detection.as_ref());
     cache_budget::configure(registry.storage.as_ref());
 }
 
@@ -816,6 +818,16 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route(
             "/settings/storage/folders",
             axum::routing::put(storage_settings::update_storage_folders),
+        )
+        .route(
+            "/settings/star-detection",
+            get(star_detection_settings::get_star_detection_settings)
+                .put(star_detection_settings::update_star_detection_settings),
+        )
+        .route(
+            "/settings/star-detection/rigs/{rig_uuid}",
+            put(star_detection_settings::update_rig_star_detection_settings)
+                .delete(star_detection_settings::delete_rig_star_detection_settings),
         )
         .route(
             "/settings/scoring",

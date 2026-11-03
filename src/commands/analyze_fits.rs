@@ -239,6 +239,7 @@ fn run_detector_config(
                 sensitivity: star_sensitivity,
                 noise_reduction: NoiseReduction::None,
                 use_roi: false,
+                ..StarDetectionParams::default()
             };
 
             // NINA always uses MTF stretch
@@ -440,6 +441,7 @@ fn detect_stars(
                 sensitivity: star_sensitivity,
                 noise_reduction: NoiseReduction::None,
                 use_roi: false,
+                ..StarDetectionParams::default()
             };
 
             // NINA always uses MTF stretch

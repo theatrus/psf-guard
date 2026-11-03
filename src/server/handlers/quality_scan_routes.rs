@@ -28,6 +28,7 @@ pub(crate) fn stored_entry_for(
         image_id,
         &file_only,
         mapped_source_revision,
+        metadata_json,
     )
 }
 
@@ -236,8 +237,12 @@ pub(crate) fn merge_spatial_metrics(
         &file_only,
         mapped_source_revision,
     ) {
-        let current_detector = crate::server::spatial_scan::is_quality_detector(&entry.detector)
-            && entry.detector_version == crate::server::spatial_scan::QUALITY_DETECTOR_VERSION;
+        // Stars measured some other way than the rig's settings give now
+        // are not compared with the rest; the next scan measures them again.
+        let current_detector =
+            crate::server::spatial_scan::detection_is_current(&entry, metadata_json);
+        // Only the stand-in where N.I.N.A.'s detector found nothing; Hocus
+        // Focus as the rig's own detector scores in full.
         let fallback = entry.detector == crate::server::spatial_scan::FALLBACK_DETECTOR;
         // Measured on calibrated pixels: bias and dark removed, flat
         // divided. Such a frame is scored only against others like it.
@@ -653,6 +658,7 @@ pub(crate) fn scan_target(
                 img.id,
                 &file_only,
                 mapped_sources.quality_revision(img.id),
+                &img.metadata,
             )
             .is_some();
         if spatial_cached {
@@ -784,12 +790,24 @@ pub(crate) fn scan_target(
                 );
                 match resolved {
                     Ok((path, source_revision)) => items.push((
-                        crate::server::spatial_scan::ScanWorkItem {
-                            image_id: img.id,
-                            filename: file_only.clone(),
-                            fits_path: path,
-                            source_generation,
-                            source_revision,
+                        {
+                            // The rig and N.I.N.A. release come from the
+                            // header of the file the scan measures.
+                            let (detection, frame, image_scale_arcsec) =
+                                crate::server::spatial_scan::detection_for_frame(
+                                    &path,
+                                    &img.metadata,
+                                );
+                            crate::server::spatial_scan::ScanWorkItem {
+                                image_id: img.id,
+                                filename: file_only.clone(),
+                                fits_path: path,
+                                source_generation,
+                                source_revision,
+                                detection,
+                                frame,
+                                image_scale_arcsec,
+                            }
                         },
                         *expected,
                         *need_spatial,
@@ -1046,7 +1064,7 @@ pub async fn get_spatial_scan_progress(
             };
             total_frames += 1;
             match store.metrics.get(&image.id) {
-                Some(entry) if scan::quality_entry_is_current(entry, &filename) => {}
+                Some(entry) if scan::quality_entry_is_current(entry, &filename, &image.metadata) => {}
                 Some(entry) if entry.filename == filename => outdated_frames += 1,
                 _ => new_frames += 1,
             }

@@ -708,6 +708,7 @@ fn detect_stars(
                 sensitivity: StarSensitivity::Normal,
                 noise_reduction: NoiseReduction::None,
                 use_roi: false,
+                ..StarDetectionParams::default()
             };
             let stretch_params = StretchParams::default();
             let stretched =

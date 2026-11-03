@@ -185,6 +185,7 @@ fn unmeasured_frames(ctx: &DatabaseContext) -> Option<Vec<(i32, i32)>> {
                     &ctx.spatial_metrics,
                     image_id,
                     &filename,
+                    &metadata,
                 )
                 .is_none()
                 .then_some((image_id, target_id))

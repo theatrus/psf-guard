@@ -538,6 +538,11 @@ pub struct DbRegistry {
     /// means the library defaults.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calibration: Option<CalibrationSettings>,
+    /// Process-global star detection for the quality scan: a default row
+    /// and each rig's own, edited in Settings › Review. Additive within
+    /// registry v2; absent means N.I.N.A.'s defaults for every rig.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub star_detection: Option<StarDetectionSettings>,
     /// Process-global export defaults shared by every database, edited from
     /// the settings panel. Additive within registry v2; absent means the
     /// standard layout.
@@ -916,6 +921,9 @@ pub struct CalibrationSettings {
     pub rigs: BTreeMap<String, RigCalibrationSettings>,
 }
 
+/// How the quality scan detects stars, by rig: see [`crate::star_detection`].
+pub use crate::star_detection::{RigStarDetectionEntry, StarDetectionSettings};
+
 /// One rig's own calibration values.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct RigCalibrationSettings {
@@ -1016,6 +1024,7 @@ impl Default for DbRegistry {
             astrometry: None,
             peers: Vec::new(),
             calibration: None,
+            star_detection: None,
             export: None,
             stacking: None,
             workers: None,
