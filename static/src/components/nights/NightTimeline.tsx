@@ -3,7 +3,7 @@ import { useRef, useState, type CSSProperties, type KeyboardEvent, type PointerE
 import type { ForecastHour } from '../../api/directorTypes';
 import type { RigNight, RunMoon, ScheduleBlock, ScheduleGapReason, ScheduleRule, ScheduleTargetReason, ScheduledNight } from '../../api/nightPlanTypes';
 import { formatHours } from '../director/visibilityFormat';
-import { formatClock as formatBrowserClock, moonCourse } from './nightsModel';
+import { formatClock as formatBrowserClock, moonCourse, moonCourseWords, moonGradient } from './nightsModel';
 import type { OverrideBand } from './overridesModel';
 import { BlockMenu, EditableBands, HoldHandle, SNAP_MS, STEP_MS, type TimelineEdit, type TimelineScale } from './TimelineEditing';
 
@@ -177,11 +177,12 @@ export default function NightTimeline({ night, scheduled, colours, now, cloudThr
           const frames = item.runs.reduce((sum, run) => sum + run.frames, 0);
           const key = keys[index];
           const dragged = drag?.key === key ? { transform: `translateX(${drag.dx}px)` } : {};
+          const moonLine = blockMoon(item);
           const title = `${item.target.target_name} · ${formatClock(item.start_ms)} – ${formatClock(item.end_ms)} · ${runSummary(item)}`;
           return <button key={key} type="button" className="nights-block" style={{ ...style, ...dragged }}
             data-colour={colours.get(item.target.project_name) ?? 0} aria-pressed={chosen === key}
             data-movable={onMoveBlock ? 'true' : undefined}
-            aria-label={`${item.target.project_name}, ${item.target.target_name}: ${formatClock(item.start_ms)} – ${formatClock(item.end_ms)}, ${frames} frames${blockMoon(item) ? `. ${blockMoon(item)}` : ''}${onMoveBlock ? '. Choose it for what to do with it; drag it, or press the left and right arrow keys, to move it 15 minutes at a time.' : ''}`}
+            aria-label={`${item.target.project_name}, ${item.target.target_name}: ${formatClock(item.start_ms)} – ${formatClock(item.end_ms)}, ${frames} frames${moonLine ? `. ${moonLine}` : ''}${onMoveBlock ? '. Choose it for what to do with it; drag it, or press the left and right arrow keys, to move it 15 minutes at a time.' : ''}`}
             aria-haspopup={edit ? 'menu' : undefined} aria-expanded={edit ? menu === key : undefined}
             title={title}
             onPointerDown={event => press(key, event)}
@@ -308,18 +309,11 @@ function blockMoon(block: ScheduleBlock): string {
   return [...filters].map(([filter, moon]) => `${filter}: ${moonWords(moon)}`).join(' · ');
 }
 
-/** The night's Moon across the drawn span: a gradient from its rise to
- *  its set, brightest where it stands highest and the fuller it is, and
- *  its phase and times in words. */
+/** The night's Moon across the drawn span: the gradient from its rise to
+ *  its set, and its phase and times in words. */
 function moonView(night: RigNight, from: number, to: number, formatClock: (ms: number) => string) {
   const course = moonCourse(night.moon_altitudes, night.moon_illumination, from, to);
-  const words = [`${Math.round(night.moon_illumination * 100)}% lit`];
-  if (!course.up) words.push('down all night');
-  else if (!course.events.some(event => event.kind !== 'highest')) words.push('up all night');
-  for (const event of course.events) words.push(`${event.kind} ${formatClock(event.ms)}`);
-  const stops = course.stops.map(stop =>
-    `color-mix(in srgb, var(--nights-moon) ${Math.round(stop.strength * 90)}%, transparent) ${(stop.at * 100).toFixed(2)}%`);
-  return { label: words.join(' · '), gradient: stops.length > 1 ? `linear-gradient(to right, ${stops.join(', ')})` : undefined };
+  return { label: moonCourseWords(night.moon_altitudes, night.moon_illumination, course, formatClock), gradient: moonGradient(course) };
 }
 
 function runSummary(block: ScheduleBlock): string {
@@ -334,11 +328,12 @@ function BlockReasons({ block, zone }: { block: ScheduleBlock; zone?: string }) 
   const formatClock = (ms: number) => formatBrowserClock(ms, zone);
   const scored = decision.candidates.filter(candidate => candidate.score);
   const rules = [...new Set(scored.flatMap(candidate => candidate.score!.rules.map(rule => rule.rule)))];
+  const moonLine = blockMoon(block);
   const exposure = block.runs.reduce((sum, run) => sum + run.frames * run.exposure_seconds, 0) / 3600;
   return <section className="nights-reasons" aria-label="Why this target">
     <h4>{block.target.project_name} · {block.target.target_name}</h4>
     <p>{formatClock(block.start_ms)} – {formatClock(block.end_ms)}: {runSummary(block)}, {formatHours(exposure)} of exposure{block.slew ? ', after a slew and centre' : ''}.</p>
-    {blockMoon(block) && <p className="nights-run-moons">{blockMoon(block)}</p>}
+    {moonLine && <p className="nights-run-moons">{moonLine}</p>}
     <p className="director-muted">{DECISION_LABEL[decision.kind]}{decision.note ? ` (${decision.note})` : ''}.</p>
     {decision.candidates.length > 0 && <div className="director-table-scroll"><table className="nights-plan-table">
       <thead><tr><th>Target</th><th>Where it stood</th>{scored.length > 0 && <th>Score</th>}{rules.map(rule => <th key={rule}>{RULE_LABEL[rule]}</th>)}</tr></thead>

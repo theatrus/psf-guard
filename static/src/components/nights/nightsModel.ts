@@ -164,8 +164,6 @@ export function windowFor(night: Pick<RigNight, 'date' | 'noon_ms' | 'dusk_ms' |
   return clippedEnd > clippedStart ? { start_ms: clippedStart, end_ms: clippedEnd } : null;
 }
 
-/** How soon to read kept night plans again: shortly while the server
- *  computes newer ones, else `otherwise`. */
 /** Rigs whose sites stand close enough to share a sky. */
 export interface SiteGroup {
   /** The first rig's id. */
@@ -213,7 +211,7 @@ export interface MoonCourse {
   stops: Array<{ at: number; strength: number }>;
   /** Rises, highest point and sets inside the span, in time order. */
   events: Array<{ kind: 'rises' | 'highest' | 'sets'; ms: number }>;
-  /** Whether the Moon is up at any point of the span. */
+  /** Whether the Moon is above the horizon at any point of the span. */
   up: boolean;
 }
 
@@ -234,17 +232,26 @@ export function moonCourse(moon: MoonAltitudes, illumination: number, from: numb
   };
   const stops: MoonCourse['stops'] = [];
   const events: MoonCourse['events'] = [];
-  const add = (ms: number, degrees: number) => stops.push({ at: (ms - from) / span, strength: strength(degrees) });
+  let up = false;
+  const add = (ms: number, degrees: number) => {
+    up ||= degrees > 0;
+    stops.push({ at: (ms - from) / span, strength: strength(degrees) });
+  };
   for (const edge of [from, to]) {
     const degrees = altitudeAt(edge);
     if (degrees !== null) add(edge, degrees);
   }
-  let peak: { ms: number; degrees: number } | null = null;
   moon.degrees.forEach((degrees, index) => {
     const ms = moon.start_ms + index * moon.step_ms;
     if (ms > from && ms < to) {
       add(ms, degrees);
-      if (degrees > 0 && (!peak || degrees > peak.degrees)) peak = { ms, degrees };
+      // The Moon's culmination: a sample above both neighbours, not the
+      // edge of a span it only rises or only sets across.
+      const before = moon.degrees[index - 1];
+      const after = moon.degrees[index + 1];
+      if (degrees > 0 && before !== undefined && after !== undefined && degrees >= before && degrees > after) {
+        events.push({ kind: 'highest', ms });
+      }
     }
     const next = moon.degrees[index + 1];
     if (next === undefined || (degrees > 0) === (next > 0)) return;
@@ -253,13 +260,35 @@ export function moonCourse(moon: MoonAltitudes, illumination: number, from: numb
     add(crossing, 0);
     events.push({ kind: next > 0 ? 'rises' : 'sets', ms: crossing });
   });
-  const highest = peak as { ms: number; degrees: number } | null;
-  if (highest) events.push({ kind: 'highest', ms: highest.ms });
   stops.sort((left, right) => left.at - right.at);
   events.sort((left, right) => left.ms - right.ms);
-  return { stops, events, up: stops.some(stop => stop.strength > 0) };
+  return { stops, events, up };
 }
 
+/** The Moon across a span in words: the share lit, then when it rises,
+ *  stands highest and sets, or that it stays down or up. Only the share
+ *  lit without its altitudes. */
+export function moonCourseWords(moon: MoonAltitudes, illumination: number, course: MoonCourse, format: (ms: number) => string): string {
+  const words = [`${Math.round(illumination * 100)}% lit`];
+  if (moon.degrees.length > 0) {
+    if (!course.up) words.push('down all night');
+    else if (!course.events.some(event => event.kind !== 'highest')) words.push('up all night');
+  }
+  for (const event of course.events) words.push(`${event.kind} ${format(event.ms)}`);
+  return words.join(' · ');
+}
+
+/** The CSS gradient that shades the Moon across a span; none without at
+ *  least two stops. */
+export function moonGradient(course: MoonCourse): string | undefined {
+  if (course.stops.length < 2) return undefined;
+  const stops = course.stops.map(stop =>
+    `color-mix(in srgb, var(--nights-moon) ${Math.round(stop.strength * 90)}%, transparent) ${(stop.at * 100).toFixed(2)}%`);
+  return `linear-gradient(to right, ${stops.join(', ')})`;
+}
+
+/** How soon to read kept night plans again: shortly while the server
+ *  computes newer ones, else `otherwise`. */
 export function refetchKept(data: NightPlans | undefined, otherwise: number | false): number | false {
   return data?.refreshing ? 3000 : otherwise;
 }

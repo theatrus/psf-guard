@@ -14,7 +14,7 @@ use super::ts_snapshot;
 use super::*;
 use crate::concurrency::Stop;
 use psf_guard_director_core::{
-    ephemeris::{moon_position, separation_degrees},
+    ephemeris::{moon_at_site, separation_degrees},
     moon::MoonPolicy,
     night::{
         night_summary, planning_orientation, NightDate, NightRequest, NightTarget,
@@ -63,6 +63,11 @@ pub(super) struct Request {
     start_ms: Option<u64>,
     #[serde(default)]
     nights: Option<u32>,
+    /// Whether each night carries the Moon's altitude curve for drawing;
+    /// on by default. The response leaves it out when false, so it does
+    /// not change what is kept.
+    #[serde(default)]
+    moon_altitudes: Option<bool>,
     /// Schedule this many of the nights, from the first, with the frames
     /// planned each night counted on the next. 0, the default, schedules
     /// none.
@@ -354,7 +359,7 @@ struct RigNight {
     moon_illumination: f64,
     moon_hours_up_in_dark: f64,
     /// The Moon's altitude from noon to noon, for its rise and set.
-    moon_altitudes: psf_guard_director_core::night::MoonAltitudes,
+    moon_altitudes: MoonAltitudes,
     targets: Vec<TargetHours>,
     load: Load,
     /// The forecast's cloud cover through the night; empty without one.
@@ -512,13 +517,69 @@ impl Serialize for SharedView {
 pub(super) async fn plan(
     State(state): State<Arc<AppState>>,
     Json(request): Json<Request>,
-) -> Result<Json<ApiResponse<Planned>>, NightPlanError> {
+) -> Result<Response, NightPlanError> {
+    let curves = request.moon_altitudes != Some(false);
     let kept = planned(&state, request).await?;
-    Ok(Json(ApiResponse::success(Planned {
+    let planned = Planned {
         view: SharedView(kept.view),
         computed_at_ms: kept.computed_at_ms,
         refreshing: kept.refreshing,
-    })))
+    };
+    if curves {
+        return Ok(Json(ApiResponse::success(planned)).into_response());
+    }
+    let value = serde_json::to_value(&planned).map_err(|_| NightPlanError::Api(Error::Internal))?;
+    Ok(Json(ApiResponse::success(without_moon_altitudes(value))).into_response())
+}
+
+/// The night plans without each night's Moon curve, for a reader that does
+/// not draw it.
+fn without_moon_altitudes(mut value: serde_json::Value) -> serde_json::Value {
+    let rigs = value
+        .get_mut("rigs")
+        .and_then(serde_json::Value::as_array_mut);
+    for rig in rigs.into_iter().flatten() {
+        let nights = rig
+            .get_mut("nights")
+            .and_then(serde_json::Value::as_array_mut);
+        for night in nights.into_iter().flatten() {
+            if let Some(night) = night.as_object_mut() {
+                night.remove("moon_altitudes");
+            }
+        }
+    }
+    value
+}
+
+/// The Moon's altitude at even steps from `start_ms`.
+#[derive(Serialize)]
+struct MoonAltitudes {
+    start_ms: u64,
+    step_ms: u64,
+    /// Degrees, to a tenth.
+    degrees: Vec<f64>,
+}
+
+const MOON_ALTITUDE_STEP_MS: u64 = 15 * 60_000;
+
+/// The Moon's altitude as the site sees it, parallax included, every
+/// quarter hour from one noon to the next, for the night view's Moon
+/// strip. Empty when the ephemeris cannot place it.
+fn moon_altitudes(noon_ms: u64, site: Site) -> MoonAltitudes {
+    let degrees = (0..24 * 3_600_000 / MOON_ALTITUDE_STEP_MS)
+        .map(|step| {
+            let at = noon_ms + step * MOON_ALTITUDE_STEP_MS;
+            let moon = moon_at_site(at, site)?;
+            let seen = observe(moon, site, planning_orientation(at, at), at).ok()?;
+            Some((seen.altitude_degrees * 10.0).round() / 10.0)
+        })
+        .collect::<Option<Vec<f64>>>()
+        .unwrap_or_default();
+    MoonAltitudes {
+        start_ms: noon_ms,
+        step_ms: MOON_ALTITUDE_STEP_MS,
+        degrees,
+    }
 }
 
 /// The night plans a request asks for, kept or computed now as a person's
@@ -1100,7 +1161,7 @@ fn rig_nights(input: RigInput, nights: u32) -> Result<RigNights, String> {
             availability,
             moon_illumination: first.moon_illumination,
             moon_hours_up_in_dark: first.moon_hours_up_in_dark,
-            moon_altitudes: first.moon_altitudes.clone(),
+            moon_altitudes: moon_altitudes(first.noon_ms, location),
             targets,
             load: Load {
                 demand_hours,
@@ -1650,8 +1711,8 @@ fn director_schedule(
     })
 }
 
-/// Fill in each run's Moon on a Director rig with the Moon its Moon
-/// avoidance uses: geocentric, observed from the site. `positions` holds
+/// Fill in each run's Moon on a Director rig: the Moon as the site sees
+/// it, parallax included, like the night's Moon strip. `positions` holds
 /// each run's target position, block by block. Runs that meet share their
 /// samples. A run without a position, or outside the ephemeris's years,
 /// gets no Moon.
@@ -1673,7 +1734,7 @@ fn place_moon(
                 .into_iter()
                 .filter_map(|at| {
                     let (moon, altitude) = (*moons.entry(at).or_insert_with(|| {
-                        let moon = moon_position(at);
+                        let moon = moon_at_site(at, site)?;
                         observe(moon, site, planning_orientation(at, at), at)
                             .ok()
                             .map(|observed| (moon, observed.altitude_degrees))
@@ -2135,12 +2196,17 @@ mod tests {
             elevation_meters: 100.0,
         };
         let altitude = |at: u64| {
-            observe(moon_position(at), site, planning_orientation(at, at), at)
-                .unwrap()
-                .altitude_degrees
+            observe(
+                moon_at_site(at, site).unwrap(),
+                site,
+                planning_orientation(at, at),
+                at,
+            )
+            .unwrap()
+            .altitude_degrees
         };
         // A target where the Moon stands at 01:00, and one opposite it.
-        let moon = moon_position(start + 3_600_000);
+        let moon = moon_at_site(start + 3_600_000, site).unwrap();
         let opposite = IcrsPosition {
             ra_degrees: (moon.ra_degrees + 180.0).rem_euclid(360.0),
             dec_degrees: -moon.dec_degrees,
@@ -2163,6 +2229,42 @@ mod tests {
         assert!(far.min_separation_degrees > 178.0, "{far:?}");
         assert_eq!(far.max_altitude_degrees, near.max_altitude_degrees);
         assert_eq!(blocks[2].runs[0].moon, None);
+    }
+
+    #[test]
+    fn the_moon_curve_rises_and_sets_once_on_a_full_moon_night() {
+        // Noon in Los Angeles on 2026-09-26, the day of the full Moon.
+        let noon = 1_790_449_200_000;
+        let site = Site {
+            latitude_degrees: 34.05,
+            longitude_degrees: -118.25,
+            elevation_meters: 100.0,
+        };
+        let curve = moon_altitudes(noon, site);
+        assert_eq!(curve.start_ms, noon);
+        assert_eq!(curve.step_ms, 15 * 60_000);
+        assert_eq!(curve.degrees.len(), 96);
+        let crossings = curve
+            .degrees
+            .windows(2)
+            .filter(|pair| (pair[0] > 0.0) != (pair[1] > 0.0))
+            .count();
+        assert_eq!(crossings, 2, "{:?}", curve.degrees);
+        // Up around midnight.
+        assert!(curve.degrees[48] > 30.0, "{:?}", curve.degrees);
+    }
+
+    #[test]
+    fn a_reader_can_leave_the_moon_curve_out() {
+        let value = serde_json::json!({
+            "rigs": [{ "nights": [{ "date": "2026-09-26", "moon_altitudes": { "degrees": [1.0] } }] }],
+            "computed_at_ms": 1,
+        });
+        let trimmed = without_moon_altitudes(value);
+        assert_eq!(
+            trimmed,
+            serde_json::json!({ "rigs": [{ "nights": [{ "date": "2026-09-26" }] }], "computed_at_ms": 1 })
+        );
     }
 
     #[test]

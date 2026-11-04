@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react';
 import type { RigNights } from '../../api/nightPlanTypes';
-import { formatClock, moonCourse } from './nightsModel';
+import { formatClock, moonCourse, moonCourseWords, moonGradient } from './nightsModel';
 
 interface Props {
   /** The rigs of one site group; the first whose night has the Moon's
@@ -26,16 +26,13 @@ export default function NightSky({ rigs, date, zone }: Props) {
   const clouds = clouded?.nights.find(n => n.date === date)?.clouds.filter(hour => hour.end_ms > from && hour.start_ms < to) ?? [];
   const threshold = clouded?.forecast?.cloud_threshold_percent;
   const course = moonCourse(night.moon_altitudes, night.moon_illumination, from, to);
-  const moonWords = [`Moon ${Math.round(night.moon_illumination * 100)}% lit`];
-  if (!course.up && night.moon_altitudes.degrees.length > 0) moonWords.push('down');
-  for (const event of course.events) moonWords.push(`${event.kind} ${formatClock(event.ms, zone)}`);
+  const moon = `Moon ${moonCourseWords(night.moon_altitudes, night.moon_illumination, course, ms => formatClock(ms, zone))}`;
   const covers = clouds.map(hour => Math.round(hour.cloud_total));
   const least = Math.min(...covers);
   const most = Math.max(...covers);
   const cloud = covers.length === 0 ? [] : [`cloud ${least === most ? least : `${least}–${most}`}%`];
-  const words = [moonWords.join(' · '), ...cloud].join('; ');
-  const stops = course.stops.map(stop =>
-    `color-mix(in srgb, var(--nights-moon) ${Math.round(stop.strength * 90)}%, transparent) ${(stop.at * 100).toFixed(2)}%`);
+  const words = [moon, ...cloud].join('; ');
+  const gradient = moonGradient(course);
   return <div className="nights-sky" role="img" aria-label={words} title={words}>
     {clouds.length > 0 && <span className="nights-sky-clouds">
       {clouds.map(hour => {
@@ -45,6 +42,6 @@ export default function NightSky({ rigs, date, zone }: Props) {
           style={{ left: `${left * 100}%`, width: `${(right - left) * 100}%`, '--cloud-alpha': (0.12 + 0.88 * hour.cloud_total / 100).toFixed(2) } as CSSProperties} />;
       })}
     </span>}
-    <span className="nights-sky-moon" style={stops.length > 1 ? { backgroundImage: `linear-gradient(to right, ${stops.join(', ')})` } : undefined} />
+    <span className="nights-sky-moon" style={gradient ? { backgroundImage: gradient } : undefined} />
   </div>;
 }

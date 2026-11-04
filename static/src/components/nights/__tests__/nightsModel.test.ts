@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { moonCourse, siteGroups, availableShares, clockOnNight, darkState, darkWindows, completesOn, datesBetween, decidedBy, forecastMark, formatClock, isDate, loadWords, markGlyph, markOrigin, planColours, planRows, plansOnNight, windowFor } from '../nightsModel';
+import { moonCourse, moonCourseWords, moonGradient, siteGroups, availableShares, clockOnNight, darkState, darkWindows, completesOn, datesBetween, decidedBy, forecastMark, formatClock, isDate, loadWords, markGlyph, markOrigin, planColours, planRows, plansOnNight, windowFor } from '../nightsModel';
 import { NOON, moonAltitudes, night, rig } from './fixtures';
 
 const HOUR = 3_600_000;
@@ -207,12 +207,30 @@ describe('the Moon across a night', () => {
     expect(course.stops.every((stop, index) => index === 0 || stop.at >= course.stops[index - 1].at)).toBe(true);
   });
 
-  it('has no events while the Moon stays down or stays up', () => {
-    const down = moonCourse({ ...moonAltitudes(NOON), degrees: Array(96).fill(-10) }, 0.9, from, to);
+  it('has no events while the Moon stays down or stays up, and words for each', () => {
+    const flat = (degrees: number) => ({ ...moonAltitudes(NOON), degrees: Array(96).fill(degrees) });
+    const down = moonCourse(flat(-10), 0.9, from, to);
     expect(down).toMatchObject({ up: false, events: [] });
-    const up = moonCourse({ ...moonAltitudes(NOON), degrees: Array(96).fill(30) }, 0.9, from, to);
-    expect(up.up).toBe(true);
-    expect(up.events.map(event => event.kind)).toEqual(['highest']);
+    expect(moonCourseWords(flat(-10), 0.9, down, String)).toBe('90% lit · down all night');
+    const up = moonCourse(flat(30), 0.9, from, to);
+    expect(up).toMatchObject({ up: true, events: [] });
+    expect(moonCourseWords(flat(30), 0.9, up, String)).toBe('90% lit · up all night');
+    // Without the altitudes, only the share lit.
+    const none = { ...moonAltitudes(NOON), degrees: [] };
+    expect(moonCourseWords(none, 0.9, moonCourse(none, 0.9, from, to), String)).toBe('90% lit');
+    expect(moonGradient(moonCourse(none, 0.9, from, to))).toBeUndefined();
+  });
+
+  it('counts a Moon above the horizon as up even with none of it lit', () => {
+    const course = moonCourse(moonAltitudes(NOON), 0, from, to);
+    expect(course.up).toBe(true);
+    expect(course.events.map(event => event.kind)).toEqual(['rises', 'highest', 'sets']);
+    expect(course.stops.every(stop => stop.strength === 0)).toBe(true);
+  });
+
+  it('gives no highest point at the edge of a span the Moon only sets across', () => {
+    const course = moonCourse(moonAltitudes(NOON), 0.5, NOON + 12 * HOUR, to);
+    expect(course.events).toEqual([{ kind: 'sets', ms: NOON + 15 * HOUR }]);
   });
 });
 
