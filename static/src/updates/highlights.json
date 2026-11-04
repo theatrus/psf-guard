@@ -4,7 +4,7 @@
     "deprecations": [
       {
         "title": "Direct Target Scheduler access remains deprecated",
-        "body": "Existing direct connections still work in 0.13. For a new connection, open Settings › Databases & rigs › New / import and import Target Scheduler into a PSF Guard catalog, or pair the PSF Guard Sync plugin. This release does not automatically convert existing direct connections."
+        "body": "Existing direct connections still work in 0.13. For a new connection, open Settings › Databases & rigs › New / import and choose Import a local TS file or Use the PSF Guard Sync plugin. A later update will create a PSF Guard catalog for existing direct connections and keep captures, plans and grades in sync with Target Scheduler. Separate catalogs let us add features to PSF Guard and support new Target Scheduler versions. This automatic migration is not part of 0.13."
       }
     ],
     "upgradeNotes": [
@@ -13,12 +13,16 @@
         "body": "Each stack rebuilds once when next opened or refreshed. Older mosaic color previews without a solve of the integrated canvas are marked out of date; Build current set refreshes them from cached stacks."
       },
       {
+        "title": "Refresh star measurements",
+        "body": "The next quality scan remeasures affected frames using the new detection settings. Until then, scoring excludes their earlier scan values. Review Star detection in Settings › Review › Grading & display. PSF Guard remains the default measurement source."
+      },
+      {
         "title": "Scoring defaults are shared on the server",
         "body": "The first editor to open PSF Guard after updating saves their scoring defaults on the server, including built-in values. Everyone then uses those defaults; only editors can change them. Viewer defaults are not copied. Review them in Settings › Review › Grading & display."
       },
       {
         "title": "Keep existing processing and database choices",
-        "body": "Existing color previews keep their settings. Existing quality-analysis and calibrated-copy choices become database overrides; new databases inherit shared defaults. New color previews use the default Color setup, and new automatic narrowband recipes stretch RGB stars independently."
+        "body": "Existing color previews keep their settings. Existing databases keep their quality-analysis and calibrated-copy settings; new databases use the shared defaults. New color previews use the default Color setup, and new automatic narrowband recipes stretch RGB stars independently."
       },
       {
         "title": "Update workers with the server",
@@ -26,6 +30,14 @@
       }
     ],
     "highlights": [
+      {
+        "title": "Plan each rig's nights",
+        "body": "Open Rigs › Nights for predicted schedules, clear hours and the Moon. Compare rigs grouped by nearby sites and check each filter run’s minimum Moon separation. Mark availability, enable site forecasts, and compare plan completion dates. Review Director night overrides or persistent Target Scheduler changes before saving. Night planning is in early beta; availability marks and forecasts do not control a rig."
+      },
+      {
+        "title": "Choose the star measurements used for grading",
+        "body": "Match detection to each rig or import its N.I.N.A. profile. Image Information shows N.I.N.A. measurements marked N and PSF Guard measurements marked P. Choose Stars and HFR in Scoring to set the source for limits and comparisons. PSF Guard remains the default."
+      },
       {
         "title": "Stack on the GPU and watch the image form",
         "body": "Supported GPUs accelerate debayering, star detection, resampling, live stacking and the final pass. A Live stack preview updates about every five seconds while a channel builds. Choose GPU passes in Settings › Performance › GPU."
@@ -47,12 +59,8 @@
         "body": "Open stacks and calibration masters beside a narrower details sidebar. Stacks offer pixel-derived Sky context, HFR star labels and a PSF view. Value and RA/Dec readouts follow the pointer; press M or R to toggle them."
       },
       {
-        "title": "Find settings by task and database",
-        "body": "Settings groups processing, performance, storage, exports and review in a sidebar or phone selector. Each database has Rig setup, Database & files, Import and Sync pages. Shared defaults and explicit overrides keep their scope visible."
-      },
-      {
-        "title": "Manage memory, storage and external flats",
-        "body": "Set the processing memory budget and choose WBPP retention and volume limits. Save storage options together. External flat masters at another gain is off by default; enable it only for externally built flats whose own flat darks were subtracted and whose normalized response does not change with gain."
+        "title": "Manage settings, storage and imports",
+        "body": "Find settings by task or database. Volume limits now work on Windows, and macOS saves to SMB shares that refuse full sync. Imports recognize Seiza calibration masters and skip stacks. Existing color processing and database choices are preserved."
       }
     ]
   },

@@ -1,8 +1,9 @@
 # Director management
 
-Planning has no page of its own: plans live in the **Library** beside the
-projects they shoot, each plan has a **workspace** reached from the Library or
-from the header's scope, and the rigs live on the **Sky** and in **Settings**.
+Open a plan from the **Library** or the header's scope selector to work on
+its framing, exposure goals and rig assignments. The Library lists plans
+beside their projects. Open **Rigs** for live status and night schedules,
+**Sky** for pointing positions, and **Settings** for rig setup.
 Director stays the name of the plugin, the protocol and the API. This API
 manages global project, site and rig identities in a separate meta database.
 
@@ -1960,11 +1961,11 @@ the cells' bars:
 Hover the bars for the Moon's rise, highest point and set, and the range
 of cloud cover.
 
-![Nights: two rigs across a week, each night's clear hours, Moon and planned plans](images/nights-grid.png)
+![Nights: five rigs grouped by site, with clear hours, Moon and planned work. Site coordinates are covered for privacy.](images/nights-grid-013.png)
 
-The server computes the night plans as a person's work, which the
-header's job list shows as **Planning nights** with Stop, and background
-work waits while it runs. The server keeps the plans it computed and
+The server lists requested calculations as **Planning nights** in the
+header’s job list, with a **Stop** control. Background jobs wait while the
+calculation runs. The server saves the computed plans and
 computes them again when a mark, an override, a forecast, a rig's setup or
 a rig's database changes, and every two minutes for tonight, which is
 planned from now. A rig reporting its status does not count as a change.
@@ -2188,7 +2189,7 @@ there, and a rig Director drives takes overrides instead.
 A site can use a cloud forecast to mark its nights. Forecasts are off until
 an editor turns them on for a site:
 
-1. Open **Settings › Sites** and click **Edit** for the site.
+1. Open **Settings › Presets › Sites** and click **Edit** for the site.
 2. Enter the site's latitude and longitude if they are empty.
 3. Under **Cloud forecast**, choose a provider in **Forecast**:
    - **Open-Meteo**: hourly, 16 days ahead; free for non-commercial use.

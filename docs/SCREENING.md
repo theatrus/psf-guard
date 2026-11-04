@@ -146,16 +146,17 @@ Fast found no stars; HocusFocus found 68, used instead".
 
 A frame can carry two star counts and HFRs: the ones N.I.N.A. recorded
 during capture, and the ones PSF Guard's quality scan measured. The scan
-measures the way each rig's N.I.N.A. did (see
-[How the scan detects stars](#how-the-scan-detects-stars)), but the two can
-still differ, several-fold in star count on some rigs, because the scan
-cannot read Hocus Focus's own options. Image Information shows both values,
+uses each rig's detector and profile settings (see
+[How the scan detects stars](#how-the-scan-detects-stars)). Its results can
+differ from N.I.N.A.'s when those settings differ from the capture settings.
+Import the N.I.N.A. profile to include its autofocus crop, brightest-star
+count, autostretch and Hocus Focus options. Image Information shows both values,
 and cards show the one scoring used. A small superscript letter marks the source of each value: **N** for
 N.I.N.A. and **P** for PSF Guard.
 
 **Stars and HFR** in the Scoring control, and **Measured by** under
-Settings › Review › Sequence scoring, choose the source. PSF Guard is the
-default. The choice decides:
+Settings › Review › Grading & display › Sequence scoring, choose the source.
+PSF Guard is the default. The choice decides:
 
 - which value Max HFR and Min stars judge, and the zero-star cap;
 - which values frames are compared on for HFR rise, star loss and soft

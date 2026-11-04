@@ -17,6 +17,48 @@ records the actual build, state, dimensions and hashes. The worker follow-up
 registered and started this Mac with the user's approval; server dispatch
 policies were unchanged, and no processing job was started for the captures.
 
+## November 3 documentation and screenshot review
+
+The second 0.13 pass covers night schedules, forecasts, Director overrides,
+Target Scheduler edits, completion projections and rig-specific star measurements.
+The site's screenshot plan now lists the required states beside the affected
+guides. Recapture the Live table under **Rigs**, the scoring controls and
+Visibility; older captures do not show these controls. Add Star detection,
+profile import, both measurement sources and the Nights workflows.
+
+Visual review and the November 1 stack-inspector record confirm the full-window
+sidebar and pixel readout are already illustrated. That image, GPU and worker
+captures remain recorded examples; an active live stack and a genuine continuum
+fit remain pending. This pass plans captures only: no images were recaptured and
+no live catalog settings, grades or processing jobs were changed.
+
+## November 4 captures
+
+The documentation site now includes seventeen new Chrome captures of Rigs Live,
+Nights, Moon details, forecasts, measurements, settings, Visibility and an
+already-running live stack, plus the import form, both color-processing steps
+and two Sequence views. This completes the six priority 0.13 feature
+illustrations. See the [capture record](https://github.com/theatrus/psf-guard-docs/blob/docs/013-round2/assets/screenshot-captures.md#013-chrome-captures--november-4-2026)
+and [manifest](https://github.com/theatrus/psf-guard-docs/blob/docs/013-round2/assets/captures-release-013-2026-11-04.json).
+
+`docs/images/nights-grid-013.png` is an exact copy of the site's
+`assets/rigs-nights-013.png`. Both site-coordinate strings have opaque privacy
+masks. Pixels outside the masks match the native-decoded original. The Sites
+forecast crop excludes location fields. Unredacted sources are not committed.
+
+The server reported 0.13.0 and displayed PR #1057's site groups and per-filter
+Moon details; its deployed commit and frontend asset were not readable. Chrome
+156.0.8078.80 ran on macOS 27.0.1 at 90% zoom, America/Los_Angeles time. Native
+window captures were 3956 × 2570 pixels; CSS viewport and device pixel ratio
+are unknown. No settings, plans, grades or catalog records were saved and no
+processing jobs were started. Remaining captures and their prerequisites stay
+in the site's screenshot plan.
+
+The five follow-up images use Chrome tab captures after controls recovered:
+1931 × 1313 CSS pixels, DPR 1.8, at the same zoom. Their
+[manifest](https://github.com/theatrus/psf-guard-docs/blob/docs/013-round2/assets/captures-release-013-followup-2026-11-04.json)
+records the actual state and reshoot steps. They contain no site coordinates.
+
 ## 0.12 screenshot sources
 
 The main README reuses documentation-site captures from October 17–18, 2026.
