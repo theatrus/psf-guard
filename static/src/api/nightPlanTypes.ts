@@ -111,12 +111,12 @@ export interface ScheduleTargetRef {
   target_name: string;
 }
 
-/** The Moon seen from the site halfway through a run. */
+/** The Moon over a filter run, sampled at its ends and every quarter hour. */
 export interface RunMoon {
-  /** Above the horizon when positive. */
-  altitude_degrees: number;
-  /** The angle between the Moon and the run's target. */
-  separation_degrees: number;
+  /** The Moon's highest altitude; negative while it stays down. */
+  max_altitude_degrees: number;
+  /** The closest the Moon comes to the run's target. */
+  min_separation_degrees: number;
 }
 
 export interface ScheduleRun {
@@ -127,7 +127,7 @@ export interface ScheduleRun {
   dithers: number;
   start_ms: number;
   end_ms: number;
-  /** Absent when the server could not place the target. */
+  /** Absent when the target has no position. */
   moon?: RunMoon;
 }
 

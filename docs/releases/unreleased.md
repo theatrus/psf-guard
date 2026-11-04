@@ -107,9 +107,10 @@
   reported, and pairing a Director plugin sets it to Director. A site's new
   **Time zone** under **Settings › Presets › Sites** sets the clock marks
   and overrides are entered and shown in.
-- The schedule under **Rigs › Nights** shows the Moon's angle from the
-  target on each filter run, dimmed while the Moon is down. Choose a block
-  to see the Moon's angle and altitude for each of its filter runs.
+- The schedule under **Rigs › Nights** shows the closest the Moon comes to
+  the target on each filter run. The angle is dimmed while the Moon stays
+  down. Choose a block to see the Moon's closest angle and highest altitude
+  for each of its filter runs.
 - **Visibility** in a plan's workspace estimates the nights a rig needs
   with the marks and the forecast counted, and shows each night's clear
   hours and marks. Once the plan is activated on a rig, it also shows the

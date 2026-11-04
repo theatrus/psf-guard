@@ -154,11 +154,7 @@ impl BoundGeometry {
             {
                 computed.clone()
             } else {
-                let position = IcrsPosition {
-                    ra_degrees: f64::from(resolved.target.icrs_ra_mas) / f64::from(MAS_PER_DEGREE),
-                    dec_degrees: f64::from(resolved.target.icrs_dec_mas)
-                        / f64::from(MAS_PER_DEGREE),
-                };
+                let position = resolved.target.position();
                 let altitude = altitude_windows(
                     position,
                     constraints.rig.site,
@@ -197,15 +193,7 @@ impl BoundGeometry {
                 };
                 let lunar = moon_track
                     .insert(track)
-                    .windows(
-                        policy,
-                        IcrsPosition {
-                            ra_degrees: f64::from(resolved.target.icrs_ra_mas)
-                                / f64::from(MAS_PER_DEGREE),
-                            dec_degrees: f64::from(resolved.target.icrs_dec_mas)
-                                / f64::from(MAS_PER_DEGREE),
-                        },
-                    )
+                    .windows(policy, resolved.target.position())
                     .map_err(Error::Geometry)?;
                 eligible = intersect(&eligible, &lunar)?;
             }

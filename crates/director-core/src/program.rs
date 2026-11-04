@@ -26,6 +26,16 @@ pub struct Target {
     pub position_angle_mas: Option<u32>,
 }
 
+impl Target {
+    /// The target's ICRS position in degrees.
+    pub fn position(&self) -> crate::visibility::IcrsPosition {
+        crate::visibility::IcrsPosition {
+            ra_degrees: f64::from(self.icrs_ra_mas) / f64::from(MAS_PER_DEGREE),
+            dec_degrees: f64::from(self.icrs_dec_mas) / f64::from(MAS_PER_DEGREE),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(deny_unknown_fields)]
 pub struct Binning {

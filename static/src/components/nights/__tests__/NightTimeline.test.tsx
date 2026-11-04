@@ -67,28 +67,30 @@ describe('NightTimeline', () => {
     expect(shown).toHaveAttribute('aria-pressed', 'true');
   });
 
-  it('shows the Moon\'s angle from the target on each filter run, dimmed while the Moon is down', () => {
+  it('shows the closest the Moon comes to the target on each filter run, dimmed while the Moon stays down', () => {
     const base = night(0);
     const start = base.dusk_ms! + HOUR;
     const item = {
       ...block(base),
       runs: [
-        { exposure_plan_id: 700, filter: 'Ha', exposure_seconds: 300, frames: 12, dithers: 0, start_ms: start, end_ms: start + HOUR, moon: { altitude_degrees: 31.4, separation_degrees: 42.2 } },
-        { exposure_plan_id: 701, filter: 'OIII', exposure_seconds: 300, frames: 12, dithers: 0, start_ms: start + HOUR, end_ms: start + 2 * HOUR, moon: { altitude_degrees: -8, separation_degrees: 95 } },
+        { exposure_plan_id: 700, filter: 'Ha', exposure_seconds: 300, frames: 12, dithers: 0, start_ms: start, end_ms: start + HOUR, moon: { max_altitude_degrees: 31.4, min_separation_degrees: 42.2 } },
+        { exposure_plan_id: 701, filter: 'OIII', exposure_seconds: 300, frames: 12, dithers: 0, start_ms: start + HOUR, end_ms: start + 2 * HOUR, moon: { max_altitude_degrees: -8, min_separation_degrees: 95 } },
       ],
     };
     render(<NightTimeline night={base} scheduled={{ ...scheduledFor(base), blocks: [item] }} colours={new Map()} />);
-    const up = screen.getByTitle('Ha · Moon 42° from the target, 31° up');
+    const up = screen.getByTitle(/ Ha: Moon at least 42° from the target, up to 31° high$/);
+    // The block's own line stays first, since the runs cover the block.
+    expect(up.getAttribute('title')).toMatch(/^IC 1805 · .+ – .+ · Ha ×12, OIII ×12\n/);
     expect(up).toHaveTextContent('Ha42°');
     expect(up.querySelector('.nights-run-moon')).not.toHaveAttribute('data-down');
-    const down = screen.getByTitle('OIII · Moon down, 95° from the target');
+    const down = screen.getByTitle(/ OIII: Moon down, at least 95° from the target$/);
     expect(down.querySelector('.nights-run-moon')).toHaveAttribute('data-down', 'true');
-    expect(screen.getByRole('list', { name: 'Legend' })).toHaveTextContent("The Moon's angle from the target, halfway through each filter. Dimmed while the Moon is down.");
+    expect(screen.getByRole('list', { name: 'Legend' })).toHaveTextContent('Each filter run shows the closest the Moon comes to the target. The angle is dimmed while the Moon stays down.');
     fireEvent.click(screen.getByRole('button', { name: /IC 1805/ }));
     const moons = within(screen.getByRole('region', { name: 'Why this target' })).getByRole('list', { name: 'Moon' });
     expect(within(moons).getAllByRole('listitem').map(row => row.textContent)).toEqual([
-      expect.stringMatching(/^Ha, .+ – .+: Moon 42° from the target, 31° up$/),
-      expect.stringMatching(/^OIII, .+ – .+: Moon down, 95° from the target$/),
+      expect.stringMatching(/^Ha, .+ – .+: Moon at least 42° from the target, up to 31° high$/),
+      expect.stringMatching(/^OIII, .+ – .+: Moon down, at least 95° from the target$/),
     ]);
   });
 

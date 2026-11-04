@@ -177,12 +177,13 @@ export default function NightTimeline({ night, scheduled, colours, now, cloudThr
           const frames = item.runs.reduce((sum, run) => sum + run.frames, 0);
           const key = keys[index];
           const dragged = drag?.key === key ? { transform: `translateX(${drag.dx}px)` } : {};
+          const title = `${item.target.target_name} · ${formatClock(item.start_ms)} – ${formatClock(item.end_ms)} · ${runSummary(item)}`;
           return <button key={key} type="button" className="nights-block" style={{ ...style, ...dragged }}
             data-colour={colours.get(item.target.project_name) ?? 0} aria-pressed={chosen === key}
             data-movable={onMoveBlock ? 'true' : undefined}
             aria-label={`${item.target.project_name}, ${item.target.target_name}: ${formatClock(item.start_ms)} – ${formatClock(item.end_ms)}, ${frames} frames${onMoveBlock ? '. Choose it for what to do with it; drag it, or press the left and right arrow keys, to move it 15 minutes at a time.' : ''}`}
             aria-haspopup={edit ? 'menu' : undefined} aria-expanded={edit ? menu === key : undefined}
-            title={`${item.target.target_name} · ${formatClock(item.start_ms)} – ${formatClock(item.end_ms)} · ${runSummary(item)}`}
+            title={title}
             onPointerDown={event => press(key, event)}
             onPointerMove={slide}
             onPointerUp={release}
@@ -198,10 +199,10 @@ export default function NightTimeline({ night, scheduled, colours, now, cloudThr
               const share = (run.end_ms - run.start_ms) / Math.max(1, item.end_ms - item.start_ms);
               const labelled = share * (item.end_ms - item.start_ms) / span > 0.04;
               return inner && <span key={run.start_ms} className="nights-run" style={{ width: `${share * 100}%` }}
-                title={run.moon ? `${run.filter} · ${moonWords(run.moon)}` : undefined}>
+                title={run.moon ? `${title}\n${run.filter}: ${moonWords(run.moon)}` : undefined}>
                 {labelled && <span>{run.filter}</span>}
-                {labelled && run.moon && <span className="nights-run-moon" data-down={run.moon.altitude_degrees < 0 ? 'true' : undefined}>
-                  <Moon size={10} aria-hidden="true" />{Math.round(run.moon.separation_degrees)}°
+                {labelled && run.moon && <span className="nights-run-moon" data-down={run.moon.max_altitude_degrees < 0 ? 'true' : undefined}>
+                  <Moon size={10} aria-hidden="true" />{Math.round(run.moon.min_separation_degrees)}°
                 </span>}
               </span>;
             })}
@@ -236,7 +237,7 @@ export default function NightTimeline({ night, scheduled, colours, now, cloudThr
       {night.clouds.length > 0 && <li id={summaryId}><span className="nights-cloud-key" aria-hidden="true" />
         Cloud cover: the lighter an hour, the more cloud.{cloudThreshold !== undefined && ` ${cloudySummary(night.clouds, cloudThreshold, start, end, zone)}`}
       </li>}
-      {moonShown && <li><Moon size={12} aria-hidden="true" className="nights-moon-key" />The Moon's angle from the target, halfway through each filter. Dimmed while the Moon is down.</li>}
+      {moonShown && <li><Moon size={12} aria-hidden="true" className="nights-moon-key" />Each filter run shows the closest the Moon comes to the target. The angle is dimmed while the Moon stays down.</li>}
     </ul>}
     {scheduled.note && <p className="director-muted" role="note">{scheduled.note}</p>}
     {scheduled.blocks.length === 0 && <p className="director-muted">Nothing is scheduled this night.</p>}
@@ -282,10 +283,10 @@ function cloudWords(hour: ForecastHour): string {
   return `${Math.round(hour.cloud_total)}% cloud${layers.length ? ` (${layers.join(', ')})` : ''}`;
 }
 
-/** Where the Moon stands for a run, in words. */
+/** The Moon over a run, in words. */
 function moonWords(moon: RunMoon): string {
-  const away = `${Math.round(moon.separation_degrees)}° from the target`;
-  return moon.altitude_degrees < 0 ? `Moon down, ${away}` : `Moon ${away}, ${Math.round(moon.altitude_degrees)}° up`;
+  const away = `at least ${Math.round(moon.min_separation_degrees)}° from the target`;
+  return moon.max_altitude_degrees < 0 ? `Moon down, ${away}` : `Moon ${away}, up to ${Math.round(moon.max_altitude_degrees)}° high`;
 }
 
 function runSummary(block: ScheduleBlock): string {
