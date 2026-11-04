@@ -209,6 +209,10 @@ pub struct Night {
     pub available_dark_hours: f64,
     pub moon_illumination: f64,
     pub moon_hours_up_in_dark: f64,
+    /// The stretches of darkness with the Moon above the horizon, at the
+    /// request's step.
+    #[serde(default)]
+    pub moon_up_in_dark: Vec<Interval>,
     pub targets: Vec<TargetNight>,
 }
 
@@ -416,6 +420,7 @@ fn one_night(
     let mut dark_hours = 0.0;
     let mut available_dark_hours = 0.0;
     let mut moon_hours = 0.0;
+    let mut moon_up_in_dark: Vec<Interval> = Vec::new();
     let available: Option<Vec<Interval>> = request.available.as_deref().map(merged);
     let mut samples = Vec::new();
     let mut per_target: Vec<TargetNight> = request
@@ -529,6 +534,14 @@ fn one_night(
             available_dark_hours += step_hours * share;
             if moon_up {
                 moon_hours += step_hours;
+                let end_ms = t + request.step_ms;
+                match moon_up_in_dark.last_mut() {
+                    Some(last) if last.end_ms == t => last.end_ms = end_ms,
+                    _ => moon_up_in_dark.push(Interval {
+                        start_ms: t,
+                        end_ms,
+                    }),
+                }
             }
         }
         let mut target_samples = Vec::new();
@@ -619,6 +632,7 @@ fn one_night(
             available_dark_hours,
             moon_illumination: moon_illumination(midnight).unwrap_or(0.0),
             moon_hours_up_in_dark: moon_hours,
+            moon_up_in_dark,
             targets: per_target,
         },
         samples,
@@ -943,6 +957,21 @@ mod tests {
             first.moon_illumination
         );
         assert!(first.moon_hours_up_in_dark > 5.0);
+        // The stretches with the Moon up add up to its hours up in the dark.
+        let up_ms: u64 = first
+            .moon_up_in_dark
+            .iter()
+            .map(|span| span.end_ms - span.start_ms)
+            .sum();
+        assert!(
+            (up_ms as f64 / 3_600_000.0 - first.moon_hours_up_in_dark).abs() < 1e-9,
+            "{:?}",
+            first.moon_up_in_dark
+        );
+        assert!(first
+            .moon_up_in_dark
+            .windows(2)
+            .all(|pair| pair[0].end_ms < pair[1].start_ms));
         let heart = &first.targets[0];
         // The Heart Nebula rides high all night from 34 N in September.
         assert!(heart.hours_up > 7.0, "{heart:?}");

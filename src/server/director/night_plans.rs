@@ -353,6 +353,8 @@ struct RigNight {
     availability: NightAvailability,
     moon_illumination: f64,
     moon_hours_up_in_dark: f64,
+    /// The stretches of darkness with the Moon up.
+    moon_up: Vec<Interval>,
     targets: Vec<TargetHours>,
     load: Load,
     /// The forecast's cloud cover through the night; empty without one.
@@ -1098,6 +1100,7 @@ fn rig_nights(input: RigInput, nights: u32) -> Result<RigNights, String> {
             availability,
             moon_illumination: first.moon_illumination,
             moon_hours_up_in_dark: first.moon_hours_up_in_dark,
+            moon_up: first.moon_up_in_dark.clone(),
             targets,
             load: Load {
                 demand_hours,

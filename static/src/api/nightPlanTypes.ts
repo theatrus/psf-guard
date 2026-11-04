@@ -89,6 +89,8 @@ export interface RigNight {
   availability: NightAvailabilityView;
   moon_illumination: number;
   moon_hours_up_in_dark: number;
+  /** The stretches of darkness with the Moon up. */
+  moon_up: NightInterval[];
   targets: NightTargetHours[];
   load: NightLoad;
   /** The forecast's cloud cover through the night; empty without one. */
