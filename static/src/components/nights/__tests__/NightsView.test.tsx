@@ -6,7 +6,7 @@ import { http, HttpResponse } from 'msw';
 import { describe, expect, it, vi } from 'vitest';
 import { server } from '../../../test/msw-server';
 import RigsPage from '../../rigs/RigsPage';
-import { NOON, night, plans, rig } from './fixtures';
+import { NOON, moonAltitudes, night, plans, rig } from './fixtures';
 import { clockOnNight, formatNightDate } from '../nightsModel';
 
 const ok = (data: unknown) => ({ success: true, data, error: null });
@@ -48,6 +48,34 @@ describe('Rigs', () => {
 });
 
 describe('Nights', () => {
+  it('groups rigs by nearby site, with the Moon and cloud each night under each group', async () => {
+    const HOUR = 3_600_000;
+    const sky = (index: number) => night(index, {
+      moon_altitudes: moonAltitudes(NOON + index * 24 * HOUR),
+      clouds: [{ start_ms: NOON + index * 24 * HOUR + 8 * HOUR, end_ms: NOON + index * 24 * HOUR + 9 * HOUR, cloud_total: 70, cloud_low: null, cloud_mid: null, cloud_high: null }],
+    });
+    const near = rig({ rig: { id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', name: 'Askar', revision: 1 }, catalog_name: 'Askar 107',
+      planning_site: { id: 'site-remote', name: 'Remote', revision: 1 }, location: { latitude_degrees: 34.6, longitude_degrees: -117.9, elevation_meters: 900 },
+      nights: [sky(0), sky(1), sky(2)], forecast: { provider: 'open_meteo', attribution: 'Open-Meteo', cloud_threshold_percent: 40, fetched_at_ms: NOON, expires_at_ms: NOON + 6 * HOUR } });
+    const far = rig({ rig: { id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', name: 'C925', revision: 1 }, catalog_name: 'C925',
+      planning_site: { id: 'site-chile', name: 'Chile', revision: 1 }, location: { latitude_degrees: -30.2, longitude_degrees: -70.8, elevation_meters: 1500 } });
+    mount(plans([rig(), near, far]));
+    const grid = await screen.findByTestId('nights-grid');
+    const groups = within(grid).getAllByRole('rowgroup').filter(group => group.tagName === 'TBODY');
+    expect(groups.map(group => group.getAttribute('aria-label'))).toEqual(['Backyard · Remote', 'Chile']);
+    expect(within(groups[0]).getByText('RedCat 61')).toBeInTheDocument();
+    expect(within(groups[0]).getByText('Askar 107')).toBeInTheDocument();
+    expect(within(groups[1]).getByText('C925')).toBeInTheDocument();
+    // One shared sky per night under the group: the Moon from its rise to
+    // its set, and the forecast's cloud from the rig that has one.
+    const skies = within(groups[0]).getAllByRole('img');
+    expect(skies).toHaveLength(3);
+    expect(skies[0]).toHaveAccessibleName(/^Moon 42% lit · rises .+ · highest .+ · sets .+; cloud 70%$/);
+    expect(skies[0].querySelector('.nights-cloud.is-cloudy')).not.toBeNull();
+    // Without the Moon's course, the row gives only its phase.
+    expect(within(groups[1]).getAllByRole('img')[0]).toHaveAccessibleName('Moon 42% lit');
+  });
+
   it('shows each rig across its nights and the chosen night in detail', async () => {
     const { planned } = mount();
     const grid = await screen.findByTestId('nights-grid');

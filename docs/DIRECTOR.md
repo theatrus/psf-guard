@@ -1947,6 +1947,19 @@ Each cell is one rig's night, from dusk to dawn:
 - a dot for each plan the rig would shoot that night, in that plan's colour;
 - the hours it would shoot, or **all done** once every plan has its frames.
 
+The grid groups rigs whose sites lie within a degree of each other in
+latitude and longitude, under the sites' names. Under each group, a
+**Cloud · Moon** row shows two bars for each night, from dusk to dawn like
+the cells' bars:
+
+- the forecast's cloud, lighter the more cloud, with a red edge on hours
+  over the site's threshold; a group without a forecast has no cloud bar;
+- the Moon from its rise to its set, brightest where it stands highest
+  and brighter the fuller it is.
+
+Hover the bars for the Moon's rise, highest point and set, and the range
+of cloud cover.
+
 ![Nights: two rigs across a week, each night's clear hours, Moon and planned plans](images/nights-grid.png)
 
 The server computes the night plans as a person's work, which the

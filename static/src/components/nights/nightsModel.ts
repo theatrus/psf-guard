@@ -166,6 +166,46 @@ export function windowFor(night: Pick<RigNight, 'date' | 'noon_ms' | 'dusk_ms' |
 
 /** How soon to read kept night plans again: shortly while the server
  *  computes newer ones, else `otherwise`. */
+/** Rigs whose sites stand close enough to share a sky. */
+export interface SiteGroup {
+  /** The first rig's id. */
+  key: string;
+  /** The sites' names, or the first rig's coordinates without one. */
+  name: string;
+  /** The first rig's latitude and longitude, to a tenth of a degree. */
+  coordinates: string;
+  rigs: RigNights[];
+}
+
+/**
+ * The rigs in groups of sites within `degrees` of the group's first rig in
+ * both latitude and longitude, in the order the rigs come. Rigs a degree
+ * apart see the same Moon and nearly the same cloud.
+ */
+export function siteGroups(rigs: RigNights[], degrees = 1): SiteGroup[] {
+  const groups: SiteGroup[] = [];
+  const near = (a: RigNights, b: RigNights) => {
+    const longitude = Math.abs(a.location.longitude_degrees - b.location.longitude_degrees) % 360;
+    return Math.abs(a.location.latitude_degrees - b.location.latitude_degrees) <= degrees
+      && Math.min(longitude, 360 - longitude) <= degrees;
+  };
+  for (const rig of rigs) {
+    const group = groups.find(candidate => near(candidate.rigs[0], rig));
+    if (group) group.rigs.push(rig);
+    else groups.push({ key: rig.rig.id, name: '', coordinates: coordinates(rig), rigs: [rig] });
+  }
+  for (const group of groups) {
+    const names = [...new Set(group.rigs.flatMap(rig => rig.planning_site ? [rig.planning_site.name] : []))];
+    group.name = names.length > 0 ? names.join(' · ') : group.coordinates;
+  }
+  return groups;
+}
+
+function coordinates(rig: RigNights): string {
+  const { latitude_degrees: latitude, longitude_degrees: longitude } = rig.location;
+  return `${Math.abs(latitude).toFixed(1)}° ${latitude < 0 ? 'S' : 'N'}, ${Math.abs(longitude).toFixed(1)}° ${longitude < 0 ? 'W' : 'E'}`;
+}
+
 /** The Moon across a drawn span, for a gradation from its rise to its set. */
 export interface MoonCourse {
   /** Gradient stops: `at` from 0 to 1 across the span, `strength` from 0

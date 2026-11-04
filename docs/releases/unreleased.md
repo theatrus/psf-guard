@@ -113,6 +113,9 @@
   set, brightest where it stands highest and brighter the fuller it is.
   Choose a block to see the Moon's closest angle and highest altitude for
   each of its filters.
+- The **Rigs › Nights** grid groups rigs whose sites lie within a degree
+  of each other. Under each group, a **Cloud · Moon** row shows each
+  night's forecast cloud and the Moon from its rise to its set.
 - **Visibility** in a plan's workspace estimates the nights a rig needs
   with the marks and the forecast counted, and shows each night's clear
   hours and marks. Once the plan is activated on a rig, it also shows the

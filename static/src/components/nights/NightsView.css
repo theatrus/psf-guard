@@ -115,6 +115,13 @@
   overflow: hidden;
 }
 .nights-cell-clear { position: absolute; top: 0; bottom: 0; background: var(--nights-clear); }
+/* A site group: its name above its rigs, and the shared sky under them. */
+.nights-grid .nights-group-head th { padding-top: 10px; color: var(--color-text-primary); font-weight: 600; }
+.nights-grid tbody:first-of-type .nights-group-head th { padding-top: 2px; }
+.nights-sky-row .nights-rig { vertical-align: middle; }
+.nights-sky { display: grid; gap: 2px; width: 112px; padding: 0 7px; box-sizing: border-box; }
+.nights-sky-clouds, .nights-sky-moon { position: relative; display: block; height: 6px; border-radius: 3px; background-color: var(--nights-track); overflow: hidden; }
+.nights-sky-clouds .nights-cloud.is-cloudy { box-shadow: inset 0 -2px 0 var(--nights-cloud-over); }
 .nights-cell-plans { display: flex; gap: 3px; min-height: 8px; align-items: center; }
 .nights-plan-dot {
   display: inline-block;

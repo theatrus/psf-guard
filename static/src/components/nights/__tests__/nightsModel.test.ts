@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { moonCourse, availableShares, clockOnNight, darkState, darkWindows, completesOn, datesBetween, decidedBy, forecastMark, formatClock, isDate, loadWords, markGlyph, markOrigin, planColours, planRows, plansOnNight, windowFor } from '../nightsModel';
+import { moonCourse, siteGroups, availableShares, clockOnNight, darkState, darkWindows, completesOn, datesBetween, decidedBy, forecastMark, formatClock, isDate, loadWords, markGlyph, markOrigin, planColours, planRows, plansOnNight, windowFor } from '../nightsModel';
 import { NOON, moonAltitudes, night, rig } from './fixtures';
 
 const HOUR = 3_600_000;
@@ -157,6 +157,33 @@ describe('night plan helpers', () => {
     expect(completesOn([entry(1), entry(3)])).toBe(3);
     expect(completesOn([entry(1), entry(null)])).toBeNull();
     expect(completesOn([entry(null, true)])).toBe(-1);
+  });
+});
+
+describe('site groups', () => {
+  const at = (id: string, latitude: number, longitude: number, site: string | null) => rig({
+    rig: { id, name: id, revision: 1 },
+    catalog_name: id,
+    location: { latitude_degrees: latitude, longitude_degrees: longitude, elevation_meters: 0 },
+    planning_site: site ? { id: `site-${site}`, name: site, revision: 1 } : null,
+  });
+
+  it('groups rigs within a degree of the group\'s first rig, in their order', () => {
+    const groups = siteGroups([
+      at('a', 34.2, -118.3, 'Backyard'),
+      at('b', 35.6, -118.3, 'Mountain'),
+      at('c', 34.9, -117.5, 'Remote'),
+      at('d', 34.2, -118.3, 'Backyard'),
+    ]);
+    expect(groups.map(group => group.rigs.map(r => r.rig.id))).toEqual([['a', 'c', 'd'], ['b']]);
+    expect(groups.map(group => group.name)).toEqual(['Backyard · Remote', 'Mountain']);
+    expect(groups[0].coordinates).toBe('34.2° N, 118.3° W');
+  });
+
+  it('groups across the date line, and names a group without a site by its coordinates', () => {
+    const groups = siteGroups([at('a', -10, 179.6, null), at('b', -10.5, -179.8, null)]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].name).toBe('10.0° S, 179.6° E');
   });
 });
 

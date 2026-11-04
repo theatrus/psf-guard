@@ -35,7 +35,10 @@ import {
   plansOnNight,
   plansScheduled,
   scheduleDone,
+  siteGroups,
+  usableZone,
 } from './nightsModel';
+import NightSky from './NightSky';
 import './NightsView.css';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Night plans could not be computed';
@@ -102,6 +105,7 @@ export default function NightsView() {
     text: rig.forecast!.attribution, url: PROVIDER_URL[rig.forecast!.provider],
   }])).values()];
   const colours = useMemo(() => planColours(rigs), [rigs]);
+  const groups = siteGroups(shown);
   // Columns by date across the rigs shown: rigs far apart can be on
   // different nights at the same instant.
   const dates = [...new Set(shown.flatMap(rig => rig.nights.map(night => night.date)))].sort();
@@ -160,7 +164,11 @@ export default function NightsView() {
               <span className="nights-date">{formatNightDate(date)}</span>
             </th>)}
           </tr></thead>
-          <tbody>{shown.map(rig => <tr key={rig.rig.id}>
+          {groups.map(group => <tbody key={group.key} aria-label={group.name}>
+            <tr className="nights-group-head"><th scope="rowgroup" colSpan={dates.length + 1}>
+              {group.name}{group.name !== group.coordinates && <span className="director-muted"> · {group.coordinates}</span>}
+            </th></tr>
+            {group.rigs.map(rig => <tr key={rig.rig.id}>
             <th scope="row" className="nights-rig">
               <strong>{rig.catalog_name}</strong>
               <span className="director-muted">{RUNTIME_LABEL[rig.runtime]}{rig.planning_site ? ` · ${rig.planning_site.name}` : ''}</span>
@@ -200,7 +208,12 @@ export default function NightsView() {
                 </button>
               </td>;
             })}
-          </tr>)}</tbody>
+          </tr>)}
+            <tr className="nights-sky-row">
+              <th scope="row" className="nights-rig"><span className="director-muted">Cloud · Moon</span></th>
+              {dates.map(date => <td key={date}><NightSky rigs={group.rigs} date={date} zone={usableZone(group.rigs[0].time_zone)} /></td>)}
+            </tr>
+          </tbody>)}
         </table>
       </div>}
       {credits.length > 0 && <p className="director-muted nights-credits">Cloud forecasts: {credits.map((credit, index) => <span key={credit.url}>{index > 0 && ', '}<a href={credit.url} target="_blank" rel="noreferrer">{credit.text}</a></span>)}.</p>}
