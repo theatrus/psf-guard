@@ -148,8 +148,9 @@ A frame can carry two star counts and HFRs: the ones N.I.N.A. recorded
 during capture, and the ones PSF Guard's quality scan measured. The scan
 measures the way each rig's N.I.N.A. did (see
 [How the scan detects stars](#how-the-scan-detects-stars)), but the two can
-still differ, several-fold in star count on some rigs, because the scan
-cannot read Hocus Focus's own options. Image Information shows both values,
+still differ when the recorded settings do not match those used at capture.
+Import the N.I.N.A. profile to include its autofocus crop, brightest-star
+count, autostretch and Hocus Focus options. Image Information shows both values,
 and cards show the one scoring used. A small superscript letter marks the source of each value: **N** for
 N.I.N.A. and **P** for PSF Guard.
 

@@ -17,6 +17,21 @@ records the actual build, state, dimensions and hashes. The worker follow-up
 registered and started this Mac with the user's approval; server dispatch
 policies were unchanged, and no processing job was started for the captures.
 
+## November 3 documentation and screenshot review
+
+The second 0.13 pass covers night schedules, forecasts, Director overrides,
+Target Scheduler edits, completion projections and rig-specific star measurements.
+The site's screenshot plan now lists the required states beside the affected
+guides. Recapture the Live table under **Rigs**, the scoring controls and
+Visibility; older captures do not show these controls. Add Star detection,
+profile import, both measurement sources and the Nights workflows.
+
+Visual review and the November 1 stack-inspector record confirm the full-window
+sidebar and pixel readout are already illustrated. That image, GPU and worker
+captures remain recorded examples; an active live stack and a genuine continuum
+fit remain pending. This pass plans captures only: no images were recaptured and
+no live catalog settings, grades or processing jobs were changed.
+
 ## 0.12 screenshot sources
 
 The main README reuses documentation-site captures from October 17–18, 2026.
