@@ -34,9 +34,10 @@ no live catalog settings, grades or processing jobs were changed.
 
 ## November 4 captures
 
-The documentation site now includes twelve new Chrome captures of Rigs Live,
+The documentation site now includes seventeen new Chrome captures of Rigs Live,
 Nights, Moon details, forecasts, measurements, settings, Visibility and an
-already-running live stack. This completes the six priority 0.13 feature
+already-running live stack, plus the import form, both color-processing steps
+and two Sequence views. This completes the six priority 0.13 feature
 illustrations. See the [capture record](https://github.com/theatrus/psf-guard-docs/blob/docs/013-round2/assets/screenshot-captures.md#013-chrome-captures--november-4-2026)
 and [manifest](https://github.com/theatrus/psf-guard-docs/blob/docs/013-round2/assets/captures-release-013-2026-11-04.json).
 
@@ -52,6 +53,11 @@ window captures were 3956 × 2570 pixels; CSS viewport and device pixel ratio
 are unknown. No settings, plans, grades or catalog records were saved and no
 processing jobs were started. Remaining captures and their prerequisites stay
 in the site's screenshot plan.
+
+The five follow-up images use Chrome tab captures after controls recovered:
+1931 × 1313 CSS pixels, DPR 1.8, at the same zoom. Their
+[manifest](https://github.com/theatrus/psf-guard-docs/blob/docs/013-round2/assets/captures-release-013-followup-2026-11-04.json)
+records the actual state and reshoot steps. They contain no site coordinates.
 
 ## 0.12 screenshot sources
 
