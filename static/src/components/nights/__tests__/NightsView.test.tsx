@@ -9,6 +9,9 @@ import RigsPage from '../../rigs/RigsPage';
 import { NOON, moonAltitudes, night, plans, rig } from './fixtures';
 import { clockOnNight, formatNightDate } from '../nightsModel';
 
+// Keep the fixture's first night editable regardless of the date CI runs.
+vi.mock('../../../hooks/useDirectorClock', () => ({ useDirectorClock: () => NOON }));
+
 const ok = (data: unknown) => ({ success: true, data, error: null });
 const enabled = { protocol_version: 1, enabled: true, instance_id: '11111111-1111-4111-8111-111111111111', database_management: true };
 
