@@ -4,7 +4,7 @@
     "deprecations": [
       {
         "title": "Direct Target Scheduler access remains deprecated",
-        "body": "Existing direct connections still work in 0.13. For a new connection, open Settings › Databases & rigs › New / import and import Target Scheduler into a PSF Guard catalog, or pair the PSF Guard Sync plugin. This release does not automatically convert existing direct connections."
+        "body": "Existing direct connections still work in 0.13. For a new connection, open Settings › Databases & rigs › New / import and choose Import a local TS file or Use the PSF Guard Sync plugin. A later update will create a PSF Guard catalog for existing direct connections and keep captures, plans and grades in sync with Target Scheduler. Separate catalogs let us add features to PSF Guard and support new Target Scheduler versions. This automatic migration is not part of 0.13."
       }
     ],
     "upgradeNotes": [
@@ -22,7 +22,7 @@
       },
       {
         "title": "Keep existing processing and database choices",
-        "body": "Existing color previews keep their settings. Existing quality-analysis and calibrated-copy choices become database overrides; new databases inherit shared defaults. New color previews use the default Color setup, and new automatic narrowband recipes stretch RGB stars independently."
+        "body": "Existing color previews keep their settings. Existing databases keep their quality-analysis and calibrated-copy settings; new databases use the shared defaults. New color previews use the default Color setup, and new automatic narrowband recipes stretch RGB stars independently."
       },
       {
         "title": "Update workers with the server",
@@ -32,11 +32,11 @@
     "highlights": [
       {
         "title": "Plan each rig's nights",
-        "body": "Open Rigs › Nights for predicted schedules, clear hours and the Moon. Compare nearby sites together and check the Moon’s closest angle on each filter run. Mark availability, enable site forecasts, and compare plan completion dates. Review Director night overrides or persistent Target Scheduler changes before saving. Night planning is in early beta; availability marks and forecasts do not control a rig."
+        "body": "Open Rigs › Nights for predicted schedules, clear hours and the Moon. Compare rigs grouped by nearby sites and check each filter run’s minimum Moon separation. Mark availability, enable site forecasts, and compare plan completion dates. Review Director night overrides or persistent Target Scheduler changes before saving. Night planning is in early beta; availability marks and forecasts do not control a rig."
       },
       {
         "title": "Choose the star measurements used for grading",
-        "body": "Match detection to each rig or import its N.I.N.A. profile. Image Information shows both measurements, and N or P marks their source. Stars and HFR in Scoring chooses the source for limits and comparisons; PSF Guard remains the default."
+        "body": "Match detection to each rig or import its N.I.N.A. profile. Image Information shows N.I.N.A. measurements marked N and PSF Guard measurements marked P. Choose Stars and HFR in Scoring to set the source for limits and comparisons. PSF Guard remains the default."
       },
       {
         "title": "Stack on the GPU and watch the image form",
