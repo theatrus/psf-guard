@@ -133,6 +133,19 @@ pub struct FilterRun {
     pub dithers: u32,
     pub start_ms: u64,
     pub end_ms: u64,
+    /// Where the Moon stands halfway through the run. The planner leaves it
+    /// out; the server fills it in for the night view.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub moon: Option<RunMoon>,
+}
+
+/// The Moon seen from the site at one instant.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct RunMoon {
+    /// Above the horizon when positive.
+    pub altitude_degrees: f64,
+    /// The angle between the Moon and the run's target.
+    pub separation_degrees: f64,
 }
 
 /// A stretch on one target.
@@ -685,6 +698,7 @@ fn record(
             dithers: u32::from(dither),
             start_ms: ms(start),
             end_ms: ms(finish),
+            moon: None,
         }),
     }
 }

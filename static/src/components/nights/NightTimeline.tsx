@@ -1,6 +1,7 @@
+import { Moon } from 'lucide-react';
 import { useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react';
 import type { ForecastHour } from '../../api/directorTypes';
-import type { RigNight, ScheduleBlock, ScheduleGapReason, ScheduleRule, ScheduleTargetReason, ScheduledNight } from '../../api/nightPlanTypes';
+import type { RigNight, RunMoon, ScheduleBlock, ScheduleGapReason, ScheduleRule, ScheduleTargetReason, ScheduledNight } from '../../api/nightPlanTypes';
 import { formatHours } from '../director/visibilityFormat';
 import { formatClock as formatBrowserClock } from './nightsModel';
 import type { OverrideBand } from './overridesModel';
@@ -150,6 +151,7 @@ export default function NightTimeline({ night, scheduled, colours, now, cloudThr
   };
   const summaryId = `nights-clouds-${night.date}`;
   const reasons = [...new Set(scheduled.gaps.filter(gap => gap.end_ms > start && gap.start_ms < end).map(gap => gap.reason))];
+  const moonShown = scheduled.blocks.some(item => item.runs.some(run => run.moon));
   return <div className="nights-timeline-box">
     <div className="nights-timeline" role="group" aria-label="Schedule">
       {edit && <EditableBands edit={edit} scale={scale} />}
@@ -194,7 +196,14 @@ export default function NightTimeline({ night, scheduled, colours, now, cloudThr
             {item.runs.map(run => {
               const inner = place(run.start_ms, run.end_ms);
               const share = (run.end_ms - run.start_ms) / Math.max(1, item.end_ms - item.start_ms);
-              return inner && <span key={run.start_ms} className="nights-run" style={{ width: `${share * 100}%` }}>{share * (item.end_ms - item.start_ms) / span > 0.04 ? run.filter : ''}</span>;
+              const labelled = share * (item.end_ms - item.start_ms) / span > 0.04;
+              return inner && <span key={run.start_ms} className="nights-run" style={{ width: `${share * 100}%` }}
+                title={run.moon ? `${run.filter} · ${moonWords(run.moon)}` : undefined}>
+                {labelled && <span>{run.filter}</span>}
+                {labelled && run.moon && <span className="nights-run-moon" data-down={run.moon.altitude_degrees < 0 ? 'true' : undefined}>
+                  <Moon size={10} aria-hidden="true" />{Math.round(run.moon.separation_degrees)}°
+                </span>}
+              </span>;
             })}
           </button>;
         })}
@@ -222,11 +231,12 @@ export default function NightTimeline({ night, scheduled, colours, now, cloudThr
         {ticks.map(t => <span key={t} style={{ left: `${((t - start) / span) * 100}%` }}>{formatClock(t)}</span>)}
       </div>
     </div>
-    {(reasons.length > 0 || night.clouds.length > 0) && <ul className="nights-gap-legend" aria-label="Legend">
+    {(reasons.length > 0 || night.clouds.length > 0 || moonShown) && <ul className="nights-gap-legend" aria-label="Legend">
       {reasons.map(reason => <li key={reason}><span className="nights-gap-key" data-reason={reason} aria-hidden="true" />{GAP_LABEL[reason]}: {GAP_HELP[reason]}</li>)}
       {night.clouds.length > 0 && <li id={summaryId}><span className="nights-cloud-key" aria-hidden="true" />
         Cloud cover: the lighter an hour, the more cloud.{cloudThreshold !== undefined && ` ${cloudySummary(night.clouds, cloudThreshold, start, end, zone)}`}
       </li>}
+      {moonShown && <li><Moon size={12} aria-hidden="true" className="nights-moon-key" />The Moon's angle from the target, halfway through each filter. Dimmed while the Moon is down.</li>}
     </ul>}
     {scheduled.note && <p className="director-muted" role="note">{scheduled.note}</p>}
     {scheduled.blocks.length === 0 && <p className="director-muted">Nothing is scheduled this night.</p>}
@@ -272,6 +282,12 @@ function cloudWords(hour: ForecastHour): string {
   return `${Math.round(hour.cloud_total)}% cloud${layers.length ? ` (${layers.join(', ')})` : ''}`;
 }
 
+/** Where the Moon stands for a run, in words. */
+function moonWords(moon: RunMoon): string {
+  const away = `${Math.round(moon.separation_degrees)}° from the target`;
+  return moon.altitude_degrees < 0 ? `Moon down, ${away}` : `Moon ${away}, ${Math.round(moon.altitude_degrees)}° up`;
+}
+
 function runSummary(block: ScheduleBlock): string {
   const parts = block.runs.reduce<Map<string, number>>((map, run) => map.set(run.filter, (map.get(run.filter) ?? 0) + run.frames), new Map());
   return [...parts].map(([filter, frames]) => `${filter} ×${frames}`).join(', ');
@@ -288,6 +304,9 @@ function BlockReasons({ block, zone }: { block: ScheduleBlock; zone?: string }) 
   return <section className="nights-reasons" aria-label="Why this target">
     <h4>{block.target.project_name} · {block.target.target_name}</h4>
     <p>{formatClock(block.start_ms)} – {formatClock(block.end_ms)}: {runSummary(block)}, {formatHours(exposure)} of exposure{block.slew ? ', after a slew and centre' : ''}.</p>
+    {block.runs.some(run => run.moon) && <ul className="nights-run-moons" aria-label="Moon">
+      {block.runs.map(run => run.moon && <li key={run.start_ms}>{run.filter}, {formatClock(run.start_ms)} – {formatClock(run.end_ms)}: {moonWords(run.moon)}</li>)}
+    </ul>}
     <p className="director-muted">{DECISION_LABEL[decision.kind]}{decision.note ? ` (${decision.note})` : ''}.</p>
     {decision.candidates.length > 0 && <div className="director-table-scroll"><table className="nights-plan-table">
       <thead><tr><th>Target</th><th>Where it stood</th>{scored.length > 0 && <th>Score</th>}{rules.map(rule => <th key={rule}>{RULE_LABEL[rule]}</th>)}</tr></thead>

@@ -111,6 +111,14 @@ export interface ScheduleTargetRef {
   target_name: string;
 }
 
+/** The Moon seen from the site halfway through a run. */
+export interface RunMoon {
+  /** Above the horizon when positive. */
+  altitude_degrees: number;
+  /** The angle between the Moon and the run's target. */
+  separation_degrees: number;
+}
+
 export interface ScheduleRun {
   exposure_plan_id: number;
   filter: string;
@@ -119,6 +127,8 @@ export interface ScheduleRun {
   dithers: number;
   start_ms: number;
   end_ms: number;
+  /** Absent when the server could not place the target. */
+  moon?: RunMoon;
 }
 
 export interface ScheduleCandidate {

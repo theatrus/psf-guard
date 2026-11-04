@@ -67,6 +67,31 @@ describe('NightTimeline', () => {
     expect(shown).toHaveAttribute('aria-pressed', 'true');
   });
 
+  it('shows the Moon\'s angle from the target on each filter run, dimmed while the Moon is down', () => {
+    const base = night(0);
+    const start = base.dusk_ms! + HOUR;
+    const item = {
+      ...block(base),
+      runs: [
+        { exposure_plan_id: 700, filter: 'Ha', exposure_seconds: 300, frames: 12, dithers: 0, start_ms: start, end_ms: start + HOUR, moon: { altitude_degrees: 31.4, separation_degrees: 42.2 } },
+        { exposure_plan_id: 701, filter: 'OIII', exposure_seconds: 300, frames: 12, dithers: 0, start_ms: start + HOUR, end_ms: start + 2 * HOUR, moon: { altitude_degrees: -8, separation_degrees: 95 } },
+      ],
+    };
+    render(<NightTimeline night={base} scheduled={{ ...scheduledFor(base), blocks: [item] }} colours={new Map()} />);
+    const up = screen.getByTitle('Ha · Moon 42° from the target, 31° up');
+    expect(up).toHaveTextContent('Ha42°');
+    expect(up.querySelector('.nights-run-moon')).not.toHaveAttribute('data-down');
+    const down = screen.getByTitle('OIII · Moon down, 95° from the target');
+    expect(down.querySelector('.nights-run-moon')).toHaveAttribute('data-down', 'true');
+    expect(screen.getByRole('list', { name: 'Legend' })).toHaveTextContent("The Moon's angle from the target, halfway through each filter. Dimmed while the Moon is down.");
+    fireEvent.click(screen.getByRole('button', { name: /IC 1805/ }));
+    const moons = within(screen.getByRole('region', { name: 'Why this target' })).getByRole('list', { name: 'Moon' });
+    expect(within(moons).getAllByRole('listitem').map(row => row.textContent)).toEqual([
+      expect.stringMatching(/^Ha, .+ – .+: Moon 42° from the target, 31° up$/),
+      expect.stringMatching(/^OIII, .+ – .+: Moon down, 95° from the target$/),
+    ]);
+  });
+
   it('opens a menu on a block while editing, whose actions change the overrides', () => {
     const base = night(0);
     const edit = editing(base);

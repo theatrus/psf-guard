@@ -240,6 +240,11 @@
   white-space: nowrap;
 }
 .nights-run:last-child { border-right: 0; }
+.nights-run:has(.nights-run-moon) { flex-direction: column; line-height: 1.1; }
+.nights-run-moon { display: inline-flex; align-items: center; gap: 2px; font-size: 10px; }
+.nights-moon-key { margin: 0 6px 0 1px; vertical-align: middle; }
+.nights-run-moon[data-down='true'] { opacity: 0.55; }
+.nights-run-moons { margin: 4px 0; padding-left: 18px; font-size: 13px; }
 .nights-timeline-axis { position: absolute; left: 0; right: 0; bottom: 0; height: 16px; font-size: 10px; color: var(--color-text-muted); }
 .nights-timeline-axis span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
 .nights-gap-legend { list-style: none; margin: 6px 0; padding: 0; display: grid; gap: 2px; font-size: 12px; color: var(--color-text-secondary); }

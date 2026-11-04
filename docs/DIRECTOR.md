@@ -1976,10 +1976,13 @@ Choose a cell to open the night below the grid:
   that fit against the clear hours.
 - **The schedule** from the runtime that drives the rig: a timeline from an
   hour before dusk to an hour after dawn, with a block for each stretch on
-  a target and its filter runs inside. Gaps are shaded by their reason:
+  a target and its filter runs inside. Each filter run shows the Moon's
+  angle from the target halfway through the run, dimmed while the Moon is
+  below the horizon. Gaps are shaded by their reason:
   twilight, not available, Moon, meridian, below limits, all done, nothing
   fits, or, on a Director rig, held or left out by the night's overrides.
-  Choose a block to see why that target was chosen.
+  Choose a block to see why that target was chosen, and the Moon's angle
+  and altitude for each of its filter runs.
 - **The plans this night**: only the targets the night applies to. The
   table lists first the targets the schedule above plans, in its order,
   with the frames planned. Then it lists the targets that are up and clear

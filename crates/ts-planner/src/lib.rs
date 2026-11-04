@@ -21,7 +21,7 @@ mod visibility;
 pub use planner::{NinaProfile, Rule, RuleScore, Score, TargetReason};
 pub use simulate::{
     simulate, Block, Candidate, Decision, DecisionKind, Estimate, FilterRun, Gap, GapReason, Mode,
-    NightSchedule, Overheads, PlanProgress, Request, Simulation, TargetRef,
+    NightSchedule, Overheads, PlanProgress, Request, RunMoon, Simulation, TargetRef,
 };
 pub use snapshot::Snapshot;
 pub use twilight::Clock;
