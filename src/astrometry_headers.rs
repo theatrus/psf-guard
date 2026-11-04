@@ -97,6 +97,18 @@ impl FitsAstrometryHeaders {
     }
 
     /// Normalize an already-parsed FITS header.
+    /// The image scale the camera geometry gives (FOCALLEN, XPIXSZ and,
+    /// where the pixel size is not already binned, the binning), ignoring
+    /// any plate solution: what N.I.N.A. works out from its profile.
+    pub fn camera_geometry_scale_arcsec(headers: &[(String, HeaderValue)]) -> Option<f64> {
+        camera_geometry_scale(
+            find_positive_f64(headers, &["FOCALLEN", "FOCAL"]).as_ref(),
+            find_positive_f64(headers, &["XPIXSZ", "PIXSIZE", "PIXELSIZE"]).as_ref(),
+            find_positive_f64(headers, &["XBINNING", "BINNING"]).as_ref(),
+        )
+        .map(|scale| scale.value)
+    }
+
     pub fn from_headers(headers: &[(String, HeaderValue)]) -> Self {
         let object_name = find_text(headers, &["OBJECT"]);
         let capture_time = find_text(headers, &["DATE-BEG", "DATE-OBS", "DATEOBS"]);

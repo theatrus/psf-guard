@@ -99,6 +99,7 @@ pub fn annotate_stars(
                 sensitivity: star_sensitivity,
                 noise_reduction: crate::nina_star_detection::NoiseReduction::None,
                 use_roi: false,
+                ..StarDetectionParams::default()
             };
             let result = detect_stars_with_original(&stretched, &fits.data, width, height, &params);
 

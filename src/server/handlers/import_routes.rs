@@ -651,10 +651,16 @@ pub(super) fn fill_missing_star_metadata(
                 *image_id,
                 filename,
                 mapped_source_revision.as_deref(),
+                crate::star_detection::FwhmEvidence::of_metadata(metadata),
             )
             // HocusFocus's stand-in values stay in the scan cache: written
             // into the catalog they would read as N.I.N.A.'s own scale.
-            .filter(|entry| entry.detector == scan::QUALITY_DETECTOR)?;
+            // Hocus Focus as the rig's own detector is the scale its
+            // N.I.N.A. records, so its values are written.
+            .filter(|entry| {
+                entry.detector == scan::QUALITY_DETECTOR
+                    || entry.detector == scan::PRIMARY_HOCUS_FOCUS_DETECTOR
+            })?;
             scan::star_metrics_metadata_patch(
                 metadata,
                 entry.star_count,

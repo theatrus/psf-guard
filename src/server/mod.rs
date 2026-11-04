@@ -69,6 +69,7 @@ pub mod slug;
 pub mod spatial_scan;
 pub mod stack_preview;
 pub mod stack_settings;
+pub mod star_detection_settings;
 pub mod state;
 pub mod static_file_service;
 pub mod storage;
@@ -180,6 +181,7 @@ fn apply_registry_settings(registry: &crate::db_registry::DbRegistry) {
     crate::calibration::configure(registry.calibration.as_ref());
     stack_preview::automatic::configure_from_registry(registry.stacking.as_ref());
     scoring_defaults::configure(registry.scoring.as_ref());
+    crate::star_detection::configure(registry.star_detection.as_ref());
     cache_budget::configure(registry.storage.as_ref());
 }
 
@@ -818,6 +820,31 @@ pub fn api_router(state: Arc<AppState>) -> Router {
             axum::routing::put(storage_settings::update_storage_folders),
         )
         .route(
+            "/settings/star-detection",
+            get(star_detection_settings::get_star_detection_settings)
+                .put(star_detection_settings::update_star_detection_settings),
+        )
+        .route(
+            "/settings/star-detection/rigs/{rig_uuid}",
+            put(star_detection_settings::update_rig_star_detection_settings)
+                .delete(star_detection_settings::delete_rig_star_detection_settings),
+        )
+        .route(
+            "/settings/star-detection/profiles/import",
+            post(star_detection_settings::import_profile).layer(DefaultBodyLimit::max(
+                crate::star_detection::nina_profile::MAX_PROFILE_BYTES + 1024,
+            )),
+        )
+        .route(
+            "/settings/star-detection/profiles/{profile_id}/manual",
+            put(star_detection_settings::update_profile_manual)
+                .delete(star_detection_settings::delete_profile_manual),
+        )
+        .route(
+            "/settings/star-detection/profiles/{profile_id}/records/{record_id}",
+            delete(star_detection_settings::delete_profile_record),
+        )
+        .route(
             "/settings/scoring",
             get(scoring_defaults::get_scoring_defaults)
                 .put(scoring_defaults::update_scoring_defaults),
@@ -944,6 +971,12 @@ pub fn api_router(state: Arc<AppState>) -> Router {
                 .layer(DefaultBodyLimit::max(flat_history::MAX_BODY_BYTES)),
         )
         .route("/sync/v1/pair", post(pairing::pair_route))
+        .route(
+            "/sync/v1/star-detection/profile",
+            post(star_detection_settings::plugin_profile).layer(DefaultBodyLimit::max(
+                star_detection_settings::MAX_PLUGIN_BODY_BYTES,
+            )),
+        )
         .route(
             "/sync/v1/previews",
             post(remote_sync::create_preview)

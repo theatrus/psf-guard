@@ -1020,6 +1020,8 @@ export interface StackScoringSettings {
   penalty_star_loss?: number;
   hfr_reject_above: number | null;
   star_count_reject_below: number | null;
+  /** Absent at the default, PSF Guard's scan. */
+  star_source?: StarSource;
 }
 
 /** The server's scoring defaults: what every view's Scoring control starts
@@ -1031,6 +1033,129 @@ export interface ScoringDefaultsSettings {
   /** False until the server holds a copy; the page then saves the person's
    *  earlier defaults once (useScoringDefaultsMigration). */
   stored: boolean;
+}
+
+/** Which detector measures a rig's frames in the quality scan. */
+export type StarDetector = 'auto' | 'nina' | 'hocus_focus';
+/** N.I.N.A.'s star sensitivity. */
+export type StarSensitivity = 'normal' | 'high' | 'highest';
+/** N.I.N.A.'s noise reduction before star detection. */
+export type StarNoiseReduction = 'none' | 'normal' | 'high' | 'highest' | 'median';
+export type HocusFocusVersion = 'v3' | 'v4';
+
+/** One rig's star detection, or the default row's. */
+export interface RigStarDetection {
+  detector: StarDetector;
+  sensitivity: StarSensitivity;
+  noise_reduction: StarNoiseReduction;
+  hocus_focus_version: HocusFocusVersion;
+}
+
+/** A rig, labelled as Settings › Calibration › Rigs labels it. */
+export interface StarDetectionRig {
+  rig_uuid: string;
+  name: string;
+  /** Frame size and binning. */
+  detail?: string;
+  /** The databases that record it, by name. */
+  databases: string[];
+  /** Its own row; absent when it uses the default row. */
+  settings?: RigStarDetection;
+}
+
+/** The N.I.N.A. profile settings that decide a frame's star count and HFR. */
+export interface ProfileSettingsSnapshot {
+  /** `nina`, `hocus_focus`, or another detector's type name. */
+  star_detector: string;
+  star_sensitivity: StarSensitivity;
+  noise_reduction: StarNoiseReduction;
+  auto_stretch_factor: number;
+  black_clipping: number;
+  autofocus_inner_crop_ratio: number;
+  autofocus_outer_crop_ratio: number;
+  autofocus_brightest_stars: number;
+  focal_length_mm?: number;
+  pixel_size_um?: number;
+  /** Hocus Focus's stored options, by its own names. */
+  hocus_focus?: Record<string, boolean | number | string>;
+}
+
+/** The Hocus Focus values a recorded profile gives. */
+export interface HocusFocusKnobs {
+  hotpixel_filtering: boolean;
+  hotpixel_thresholding: boolean;
+  hotpixel_threshold: number;
+  noise_reduction_radius: number;
+  measurement_noise_reduction: boolean;
+  noise_clipping_multiplier: number;
+  star_clipping_multiplier: number;
+  structure_layers: number;
+  brightness_sensitivity: number;
+  star_peak_response: number;
+  max_distortion: number;
+  star_center_tolerance: number;
+  background_box_expansion: number;
+  min_star_bounding_box: number;
+  min_hfr: number;
+  pixel_sample_size: number;
+  saturation_threshold: number;
+  exclude_saturated_from_hfr: boolean;
+  measurement_average: 'median' | 'mean_outliers';
+  adaptive_binarization: boolean;
+  adaptive_block_size: number;
+  contamination_sensitivity: number;
+  detection_binning: number;
+  autofocus_inner_crop_ratio: number;
+  autofocus_outer_crop_ratio: number;
+  autofocus_brightest_stars: number;
+}
+
+/** One recorded snapshot of a profile's settings. */
+export interface ProfileRecordView {
+  id: string;
+  /** From when it applies; absent for every frame. */
+  effective_from?: string;
+  /** The Sync plugin, the Director plugin, or a profile import. */
+  source: 'plugin:sync' | 'plugin:director' | 'import';
+  received_at: string;
+  catalog_id?: string;
+  nina_version?: string;
+  hocus_focus_version: HocusFocusVersion;
+  settings: ProfileSettingsSnapshot;
+  hocus_focus_mode: 'simple' | 'optimized' | 'advanced';
+  hocus_focus: HocusFocusKnobs;
+  /** Stored options PSF Guard cannot reproduce. */
+  notes: string[];
+}
+
+/** A N.I.N.A. profile: its manual row and recorded settings. */
+export interface StarDetectionProfile {
+  profile_id: string;
+  name?: string;
+  databases: string[];
+  frames: number;
+  manual?: RigStarDetection;
+  /** Newest start first. */
+  records: ProfileRecordView[];
+}
+
+/** Settings › Review › Star detection. */
+export interface StarDetectionSettings {
+  default: RigStarDetection;
+  /** N.I.N.A.'s own defaults. */
+  builtin: RigStarDetection;
+  rigs: StarDetectionRig[];
+  profiles: StarDetectionProfile[];
+}
+
+/** What importing a N.I.N.A. profile read, and whether it was stored. */
+export interface ImportProfileResult {
+  profile_id: string;
+  name?: string;
+  record: ProfileRecordView;
+  warnings: string[];
+  stored: boolean;
+  settings: StarDetectionSettings;
 }
 
 /** Where a stack WBPP made came from. */
@@ -4274,6 +4399,8 @@ export interface PenaltyScaleParams {
   penalty_star_loss?: number;
   hfr_reject_above?: number;
   star_count_reject_below?: number;
+  /** Which measurement of stars and HFR scoring prefers. Absent: scan. */
+  star_source?: StarSource;
 }
 
 export interface SequenceAnalysisRequest extends PenaltyScaleParams {
@@ -4350,6 +4477,28 @@ export interface QualityRegionOverlay {
   glow_cells: boolean[];
 }
 
+/** Where a star count or HFR came from: PSF Guard's quality scan, or what
+ *  the capture software (N.I.N.A.) recorded. */
+export type StarSource = 'scan' | 'capture';
+
+export interface StarMeasure {
+  star_count: number | null;
+  hfr: number | null;
+}
+
+/** A frame's star count and HFR from each source that measured them, and
+ *  which source each check used. */
+export interface FrameStars {
+  capture?: StarMeasure;
+  scan?: StarMeasure;
+  /** The source the Min stars limit read; absent when neither counted. */
+  star_count_source?: StarSource;
+  /** The source the Max HFR limit read; absent when neither measured. */
+  hfr_source?: StarSource;
+  /** The source the target's frames are compared on, for each value. */
+  compared_on: { star_count: StarSource; hfr: StarSource };
+}
+
 export interface ImageQualityResult {
   image_id: number;
   quality_score: number;
@@ -4373,6 +4522,8 @@ export interface ImageQualityResult {
     /** Pixel-derived pointing score. Missing until a quality scan runs. */
     pointing?: number | null;
   };
+  /** Both sources' star count and HFR. Absent from older servers. */
+  stars?: FrameStars;
   pointing?: {
     pixel_solved: boolean;
     solve_failed: boolean;

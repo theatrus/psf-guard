@@ -82,6 +82,17 @@ describe('the Sequence toolbar\'s Scoring control', () => {
     expect(scoringServer.saves).toEqual([]);
   });
 
+  it('switches the star source for this view at once', async () => {
+    await renderControl();
+    const group = screen.getByRole('radiogroup', { name: 'Stars and HFR' });
+    expect(screen.getByRole('radio', { name: 'PSF Guard' })).toHaveAttribute('aria-checked', 'true');
+    fireEvent.click(screen.getByRole('radio', { name: 'N.I.N.A.' }));
+    expect(link().get('starSource')).toBe('capture');
+    expect(screen.getByRole('radio', { name: 'N.I.N.A.' })).toHaveAttribute('aria-checked', 'true');
+    expect(group.closest('.penalty-source')).toHaveClass('is-set');
+    expect(summary()).toHaveTextContent('Scoring (changed)');
+  });
+
   it('applies a slider on release', async () => {
     await renderControl();
     fireEvent.change(satellite(), { target: { value: '0' } });

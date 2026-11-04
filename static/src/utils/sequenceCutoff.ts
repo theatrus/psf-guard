@@ -1,9 +1,11 @@
 import type { Image, ImageQualityResult } from '../api/types';
+import { comparedReading, starReadings } from './starReadings';
 
 /**
  * What the Sequence view's cutoff measures. Score is the quality score as
- * the chips show it, 0 to 100; Stars and HFR are N.I.N.A.'s detected star
- * count and half-flux radius, as the cards show them. The chart, the slider
+ * the chips show it, 0 to 100; Stars and HFR are the detected star count
+ * and half-flux radius from the one source scoring compares the frames on,
+ * N.I.N.A.'s or PSF Guard's. A frame without that source's value has none. The chart, the slider
  * and the Below the cutoff rule all follow the one chosen.
  */
 export type CutoffMetric = 'score' | 'stars' | 'hfr';
@@ -75,14 +77,9 @@ export function metricValue(
   switch (metric) {
     case 'score':
       return quality.quality_score * 100;
-    case 'stars': {
-      const stars = image?.metadata?.DetectedStars;
-      return typeof stars === 'number' && Number.isFinite(stars) ? stars : null;
-    }
-    case 'hfr': {
-      const hfr = image?.metadata?.HFR;
-      return typeof hfr === 'number' && Number.isFinite(hfr) && hfr > 0 ? hfr : null;
-    }
+    case 'stars':
+    case 'hfr':
+      return comparedReading(starReadings(metric, quality, image));
   }
 }
 

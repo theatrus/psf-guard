@@ -1169,8 +1169,38 @@ pub fn main() -> Result<()> {
             apply_stretch,
             compare_all,
             psf_type,
+            scan,
+            scan_detector,
+            scan_sensitivity,
+            scan_noise_reduction,
+            hocus_focus_version,
+            registry,
             verbose,
         } => {
+            if scan {
+                let conn = Connection::open_with_flags(
+                    &cli.database,
+                    OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
+                )
+                .with_context(|| format!("Failed to open database: {}", cli.database))?;
+                let rig = crate::commands::analyze_fits::scan_settings(
+                    &scan_detector,
+                    &scan_sensitivity,
+                    &scan_noise_reduction,
+                    &hocus_focus_version,
+                )?;
+                let mut settings = match registry {
+                    Some(registry) => crate::db_registry::DbRegistry::load_or_init(
+                        std::path::Path::new(&registry),
+                    )?
+                    .star_detection
+                    .unwrap_or_default(),
+                    None => Default::default(),
+                };
+                settings.default = rig;
+                crate::commands::analyze_fits::analyze_as_scan(&conn, &path, &settings)?;
+                return Ok(());
+            }
             let conn = Connection::open(&cli.database)
                 .with_context(|| format!("Failed to open database: {}", cli.database))?;
             analyze_fits_and_compare(

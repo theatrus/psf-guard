@@ -433,6 +433,33 @@ apply request sends them back as `previewed_deletions`. The apply deletes
 only those; a project the peer deleted after the preview stays, with a
 change line, until the next preview lists it.
 
+### Star detection settings
+
+`star_detection_profile_v1` advertises the plugin's report of the N.I.N.A.
+profile it captures with, which the quality scan uses to measure stars as that
+profile did (see [quality screening](../SCREENING.md#nina-profiles)):
+
+```
+POST /api/sync/v1/star-detection/profile
+```
+
+The body carries `protocol_version: 1`, the paired `catalog_id`, `profile_id`
+(the profile GUID), `profile_name`, `captured_at` (UTC), `nina_version`,
+`hocus_focus_version` (the Hocus Focus assembly version, or null) and
+`settings`: the star detector selection, star sensitivity, noise reduction,
+autostretch, autofocus crop ratios and brightest-star count, focal length,
+pixel size, and Hocus Focus's stored options by their own names
+(`ProfileSettings` in `src/star_detection/nina_profile.rs`). Unknown fields
+and Hocus Focus options PSF Guard does not read are refused with 400.
+
+The server stores the snapshot as the profile's record from `captured_at` on,
+unless the record already in effect then has the same settings; the
+response's `stored` says which. The Director plugin sends the same body,
+without `catalog_id`, to `POST /api/director/v1/rigs/{rig_id}/star-detection-settings`.
+Both write one store, so a rig running both plugins records each change once.
+Records are process-global in the registry, not per catalog: a profile GUID
+identifies the same N.I.N.A. profile whichever catalog its frames reach.
+
 ### Scheduler flat coverage
 
 `flat_history_v1` advertises a separate typed exchange for the NINA plugin.

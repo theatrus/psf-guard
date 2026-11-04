@@ -142,23 +142,45 @@ frame's HFR is shown in its details but not scored, and neither number is
 written back into the catalog's metadata. The frame's details say "N.I.N.A.
 Fast found no stars; HocusFocus found 68, used instead".
 
-Star counts and HFR come from one source per target and filter. The quality
-scan and the capture software count on different scales (HocusFocus and
-N.I.N.A.'s own detector differ several-fold, and a rig's settings can change
-between nights), so frames are compared on the scan's values when at least
-as many frames have a scan count as were measured only by the capture
-software, and on the capture software's values otherwise. A failed scan
-counts on neither side, so a rig whose every scan fails is scored on the
-capture software's counts. Values the scan wrote back into imported metadata
-count as the scan's. With the scan's values, a frame whose scan failed or
-has not run yet is left unmeasured, which the score renormalizes around, so
-a new frame waiting for its scan does not change how the rest are scored. A
-frame that can never be scanned, because its file is offline, loses its star
-dimension once most of its target is scanned. Absolute limits and the zero-star cap still judge each
-frame on its own measurement: the scan's when it counted stars, else the
-capture software's. A scan measured from a file that has since changed, such
-as a copy still arriving, is measured again the next time the target is
-scanned, and the values it wrote back are replaced.
+### Stars and HFR: N.I.N.A.'s or PSF Guard's
+
+A frame can carry two star counts and HFRs: the ones N.I.N.A. recorded
+during capture, and the ones PSF Guard's quality scan measured. The scan
+measures the way each rig's N.I.N.A. did (see
+[How the scan detects stars](#how-the-scan-detects-stars)), but the two can
+still differ, several-fold in star count on some rigs, because the scan
+cannot read Hocus Focus's own options. Image Information shows both values,
+and cards show the one scoring used. A small superscript letter marks the source of each value: **N** for
+N.I.N.A. and **P** for PSF Guard.
+
+**Stars and HFR** in the Scoring control, and **Measured by** under
+Settings › Review › Sequence scoring, choose the source. PSF Guard is the
+default. The choice decides:
+
+- which value Max HFR and Min stars judge, and the zero-star cap;
+- which values frames are compared on for HFR rise, star loss and soft
+  stars.
+
+A frame without the chosen value uses the other, and its reject reason
+says which one it was, such as "Max HFR - 3.46 px (PSF Guard) over limit 2".
+Values the scan wrote into an imported frame's metadata count as PSF
+Guard's.
+
+Frames of one target and filter are compared on one source, so a frame
+measured one way is never ranked against frames measured the other. The
+source is chosen for star counts and for HFR separately. For each, the
+chosen source is used when at least as many frames have its value as have
+only the other's; otherwise the other source is used for every frame. The
+Sequence view's Stars and HFR cutoff reads the same source. A
+frame without the source in use, such as one whose scan has not run yet,
+is left unmeasured, which the score renormalizes around, so a new frame
+waiting for its scan does not change how the rest are scored. A failed scan
+counts on neither side, so a rig whose every scan fails is scored on
+N.I.N.A.'s values. A frame that can never be scanned, because its file is
+offline, loses its star dimension once most of its target is scanned. A
+scan measured from a file that has since changed, such as a copy still
+arriving, is measured again the next time the target is scanned, and the
+values it wrote back are replaced.
 
 How hard event evidence hits the score is adjustable. The **Scoring**
 control in the Sequence view scales the score hit from satellite trails,
@@ -182,8 +204,10 @@ relative to the night.
 The same control sets optional **reject limits**, fixed cut-offs like
 N.I.N.A. subframe selection: **Max HFR** rejects any frame whose measured
 HFR is over it, and **Min stars** rejects any frame with fewer detected
-stars. Both are off by default. Limits judge each frame on its own, whatever
-the rest of the sequence looks like: a frame past a limit is capped at a
+stars. Both judge the source chosen under **Stars and HFR**; see
+[Stars and HFR: N.I.N.A.'s or PSF Guard's](#stars-and-hfr-ninas-or-psf-guards).
+Both are off by default. Limits judge each frame on its own, whatever the
+rest of the sequence looks like: a frame past a limit is capped at a
 condemned score and gets an `[Auto]` reject recommendation. A frame missing
 the measurement is exempt. The CLI equivalents are `screen-fits --max-hfr`
 and `--min-stars`.
@@ -199,6 +223,127 @@ a temperature reading is exempt. Target Scheduler records the temperature
 and set point per exposure; PSF Guard imports carry the sensor temperature
 from the FITS header. API callers can change the margin with
 `sensor_temp_tolerance_c`.
+
+### How the scan detects stars
+
+The quality scan measures each frame's stars the way its rig's N.I.N.A.
+did, so its star count and HFR compare with the ones N.I.N.A. recorded.
+Choose how in **Settings › Review › Grading & display › Star detection**.
+The **Default** row applies to every rig without settings of its own. Each
+rig an open database records has a row below it, labelled as in
+Settings › Processing › Calibration › Rigs. A rig's row uses the default
+until you clear **Use the default** on it.
+
+Each row has four choices:
+
+- **Detector**: **Auto** (the default), **N.I.N.A.** or **Hocus Focus**.
+  Auto uses Hocus Focus for a frame when N.I.N.A. recorded an FWHM for it
+  and the frame's header shows N.I.N.A. 3.2 or earlier. N.I.N.A.'s own
+  detector records no FWHM before 3.3, so a number there means Hocus Focus
+  measured the frame. Auto uses N.I.N.A.'s detector for every other frame.
+- **Sensitivity**: **Normal**, **High** (the default) or **Highest**, as set
+  in N.I.N.A.'s imaging options. N.I.N.A. has used High by default since
+  October 2023.
+- **Noise reduction**: **None** (the default), **Normal**, **High**,
+  **Highest** or **Median**, as in N.I.N.A. Sensitivity and noise reduction
+  apply to N.I.N.A.'s detector only, so they are disabled when the detector
+  is Hocus Focus.
+- **Hocus Focus version**: **3** or **4** (the default). Hocus Focus 4 was
+  released on 2 July 2026. The version is disabled when the detector is
+  N.I.N.A.
+
+N.I.N.A.'s detector measures stars as the N.I.N.A. release that wrote the
+frame does, read from the header's `SWCREATE`: 3.1, 3.2, or 3.3 for 3.3 and
+later. A release before 3.1 measures as 3.1. A frame from other software,
+or without `SWCREATE`, measures as 3.2. High sensitivity also reads the
+image scale from `FOCALLEN` and `XPIXSZ`, as N.I.N.A. reads it from the
+profile. Hocus Focus picks its preset for the rig from the same scale.
+PSF Guard reads these headers from the frame's own light, even when the
+scan measures its calibrated copy: a copy's software and rig keys belong to
+the calibration, not the capture.
+
+Click **Save star detection**. PSF Guard uses the new settings at once:
+each frame whose detection changes counts as outdated, and the next quality
+scan or quality backfill measures it again. Until then, scoring does not use
+that frame's earlier scan values. **Reset default to N.I.N.A.'s** puts
+N.I.N.A.'s own defaults back in the Default row; click Save to keep them.
+
+#### N.I.N.A. profiles
+
+N.I.N.A. and Hocus Focus have more settings than the four above, and they
+change what N.I.N.A. records: the autofocus crop and **Use brightest n
+stars** in N.I.N.A.'s autofocus options (N.I.N.A. applies both to every
+frame, not only to autofocus), the autostretch, and Hocus Focus's own
+options. PSF Guard can record them for each N.I.N.A. profile, from a date
+on, and measure each frame with the settings in effect when it was taken.
+The catalog records each frame's profile.
+
+PSF Guard records a profile's settings in two ways:
+
+- The PSF Guard Sync plugin or Director plugin sends them as it captures.
+  PSF Guard stores them only when they differ from the settings already
+  recorded for that date, whichever plugin or import recorded those. A rig
+  that runs both plugins records each change once.
+- You import a profile file. Under **Import N.I.N.A. profile**, choose the
+  **Profile file** from N.I.N.A.'s profile folder, the **Hocus Focus
+  version** it ran, and whether it **Applies to** **All frames** or
+  **Frames from** a date. Click **Read file** to see what PSF Guard read,
+  then **Import profile** to store it. To record a change, such as a new autofocus
+  crop, import a copy of the profile with the new value from the day it
+  changed.
+
+Each profile under **N.I.N.A. profiles** shows its recorded values, which
+frames they apply to, and where they came from. **History** lists every
+record with the frames it applies to, and **Delete** removes one. **Set by
+hand** gives the profile the four choices above instead of its records.
+
+A dated record always applies from its date on, whatever was imported
+later. An import for **All frames** therefore applies only to frames from
+before the profile's first dated record. **Read file** lists each record that
+will still apply, such as "Sync plugin record still applies from Sep 1,
+2026". To change those frames as well, delete
+the later records or import from their dates.
+
+A frame takes the first of these that applies:
+
+1. its profile's settings set by hand;
+2. its rig's own row;
+3. its profile's newest record in effect when it was taken, or, for a frame
+   taken before every record, the earliest record;
+4. the **Default** row.
+
+A plugin sends its first snapshot after the frames already in the catalog
+were taken, so those frames use it too. When the settings were different
+back then, import the profile as it was, from the dates it applied.
+
+A profile's record selects Hocus Focus or N.I.N.A.'s detector, but on
+frames from N.I.N.A. 3.2 and earlier the catalog decides: an FWHM means
+Hocus Focus measured the frame, and `NaN` means it did not. Hocus Focus's
+options follow Hocus Focus 4's own rules: Simple mode derives them from its
+preset, and Advanced mode uses the stored values, with Hocus Focus's
+defaults for the rest. PSF Guard does not reproduce Hocus Focus's per-filter
+settings, structure dilation or donut detection; an import that finds them
+says so. N.I.N.A. applies **Use brightest n stars** to every frame's HFR
+with either detector, but PSF Guard cannot yet reproduce it for N.I.N.A.'s
+own detector, so on a rig that sets it and does not run Hocus Focus, the
+HFR can differ from what N.I.N.A. recorded.
+
+A new or deleted record counts as a change of settings: the next quality
+scan measures the frames it affects again.
+
+When N.I.N.A.'s detector finds no stars in a frame, the scan asks Hocus
+Focus, as before. If Hocus Focus finds stars, the frame scores on Hocus
+Focus's star count but not its HFR, which is on another scale. A frame
+measured with Hocus Focus because its rig's setting chose it scores on both.
+
+To check the settings on frames without a server, run
+`psf-guard --database schedulerdb.sqlite analyze-fits <folder> --scan`. It
+measures each frame the same way and prints a JSON line with the scan's
+values beside the N.I.N.A. values in the frame's database row, matched by
+file name. It opens the database read-only. `--scan-detector`,
+`--scan-sensitivity`, `--scan-noise-reduction` and `--hocus-focus-version`
+take the stored values (`auto`, `nina`, `hocus_focus`; `normal`, `high`,
+`highest`; `none`, `normal`, `high`, `highest`, `median`; `v3`, `v4`).
 
 ### Scoring defaults
 
@@ -629,10 +774,19 @@ Safety properties worth knowing:
 
 ## Limitations
 
-- The server scan uses N.I.N.A. Fast for star count and HFR. These match a
-  rig that runs N.I.N.A.'s built-in detector. A rig on HocusFocus counts on
-  another scale, which is why a target is scored from one source at a time. Its full-resolution measurement aperture also supplies flux for
-  photometry. `screen-fits` supports flux photometry with either detector.
+- The server scan follows each rig's star detection settings, but without a
+  recorded profile it cannot know the rig's Hocus Focus options or which
+  release took each frame. On four test rigs, N.I.N.A.'s detector at High
+  sensitivity matched a N.I.N.A. 3.1 rig's star counts within 3% and read
+  HFR about 12% lower. With each Hocus Focus rig's profile imported, Hocus
+  Focus 4 matched N.I.N.A.'s star counts and HFR to within 0.2% on frames
+  taken after its settings last changed. Frames from before a change
+  differ until a dated record gives the settings in effect then. That is
+  why a target is scored from one source at a time.
+  The scan also measures the brightest unsaturated stars in a
+  full-resolution aperture, whichever detector found them, to supply flux
+  for photometry. `screen-fits` supports flux photometry with either
+  detector.
 - The photometric reference requires stars present in ≥50% of a session's
   frames, so it is blind to regions occluded for *most* of a sequence — by
   design; that case belongs to the dead-cell metric.

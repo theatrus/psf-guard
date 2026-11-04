@@ -7557,9 +7557,19 @@
   font-size: 0.8rem;
 }
 
+.penalty-source {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.45rem;
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
+
 /* A value off its default names it in its label's colour. */
 .penalty-slider.is-set .penalty-label,
-.penalty-limit.is-set .penalty-label {
+.penalty-limit.is-set .penalty-label,
+.penalty-source.is-set .penalty-label {
   color: var(--state-set-fg);
 }
 
@@ -7864,4 +7874,24 @@
   color: var(--color-text-primary);
   background: var(--color-bg-secondary);
   border-bottom: 1px solid var(--color-border-primary);
+}
+
+/* Where a star count or HFR came from: N for N.I.N.A., P for PSF Guard. */
+.star-source-mark {
+  margin-left: 0.08em;
+  font-size: 0.65em;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  cursor: help;
+}
+
+.star-readings {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0 0.6em;
+}
+
+/* With two readings, the one scoring did not use. */
+.star-reading.is-unused {
+  color: var(--color-text-muted);
 }

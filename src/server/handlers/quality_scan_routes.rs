@@ -8,11 +8,27 @@ use super::*;
 /// Extract the FITS basename from an acquiredimage metadata JSON blob.
 pub(crate) fn filename_from_metadata(metadata_json: &str) -> Option<String> {
     let metadata: serde_json::Value = serde_json::from_str(metadata_json).ok()?;
+    filename_from_value(&metadata)
+}
+
+fn filename_from_value(metadata: &serde_json::Value) -> Option<String> {
     let filename = metadata["FileName"].as_str()?;
     filename
         .split(&['\\', '/'][..])
         .next_back()
         .map(|s| s.to_string())
+}
+
+/// The FITS basename and what the row's FWHM says, from one parse of an
+/// acquiredimage metadata JSON blob.
+pub(crate) fn row_facts(
+    metadata_json: &str,
+) -> Option<(String, crate::star_detection::FwhmEvidence)> {
+    let metadata: serde_json::Value = serde_json::from_str(metadata_json).ok()?;
+    Some((
+        filename_from_value(&metadata)?,
+        crate::star_detection::FwhmEvidence::of_value(&metadata),
+    ))
 }
 
 /// Fetch the filename-validated stored scan entry for an image, if any.
@@ -22,12 +38,13 @@ pub(crate) fn stored_entry_for(
     metadata_json: &str,
     mapped_source_revision: Option<&str>,
 ) -> Option<crate::server::spatial_scan::StoredSpatialMetrics> {
-    let file_only = filename_from_metadata(metadata_json)?;
+    let (file_only, fwhm) = row_facts(metadata_json)?;
     crate::server::spatial_scan::valid_quality_entry_for_source(
         store,
         image_id,
         &file_only,
         mapped_source_revision,
+        fwhm,
     )
 }
 
@@ -227,7 +244,7 @@ pub(crate) fn merge_spatial_metrics(
     metadata_json: &str,
     mapped_source_revision: Option<&str>,
 ) {
-    let Some(file_only) = filename_from_metadata(metadata_json) else {
+    let Some((file_only, fwhm)) = row_facts(metadata_json) else {
         return;
     };
     if let Some(entry) = crate::server::spatial_scan::valid_entry_for_source(
@@ -236,8 +253,11 @@ pub(crate) fn merge_spatial_metrics(
         &file_only,
         mapped_source_revision,
     ) {
-        let current_detector = crate::server::spatial_scan::is_quality_detector(&entry.detector)
-            && entry.detector_version == crate::server::spatial_scan::QUALITY_DETECTOR_VERSION;
+        // Stars measured some other way than the rig's settings give now
+        // are not compared with the rest; the next scan measures them again.
+        let current_detector = crate::server::spatial_scan::detection_is_current(&entry, fwhm);
+        // Only the stand-in where N.I.N.A.'s detector found nothing; Hocus
+        // Focus as the rig's own detector scores in full.
         let fallback = entry.detector == crate::server::spatial_scan::FALLBACK_DETECTOR;
         // Measured on calibrated pixels: bias and dark removed, flat
         // divided. Such a frame is scored only against others like it.
@@ -410,6 +430,30 @@ pub(super) fn quality_scan_source(
     let path = find_fits_file(ctx, image, target_name, file_only)?;
     let revision = source_file_cache_token(&path).map(|revision| format!("file:{revision}"));
     Ok((path, revision))
+}
+
+/// The file whose header gives a light's rig and N.I.N.A. release: the
+/// scan's source itself, unless that is a calibrated copy, then the
+/// catalog's own light. `None` when the light's own file is the copy: its
+/// software and rig keys are the calibration's, not the capture's.
+pub(super) fn light_header_path(
+    ctx: &DatabaseContext,
+    image: &crate::models::AcquiredImage,
+    target_name: &str,
+    file_only: &str,
+    source: &std::path::Path,
+    source_revision: Option<&str>,
+) -> Option<PathBuf> {
+    let calibrated = source_revision.is_some_and(|revision| {
+        revision.starts_with(crate::server::spatial_scan::CALIBRATED_SOURCE_PREFIX)
+    });
+    if !calibrated {
+        return Some(source.to_path_buf());
+    }
+    if own_file_is_calibrated(ctx, image) {
+        return None;
+    }
+    find_fits_file(ctx, image, target_name, file_only).ok()
 }
 
 /// Whether the light's own file is a calibrated copy: the catalog took it
@@ -635,7 +679,7 @@ pub(crate) fn scan_target(
         if stop.requested() {
             break;
         }
-        let Some(file_only) = filename_from_metadata(&img.metadata) else {
+        let Some((file_only, fwhm)) = row_facts(&img.metadata) else {
             continue;
         };
         if fill_metadata && crate::server::spatial_scan::metadata_wants_star_fill(&img.metadata) {
@@ -653,6 +697,7 @@ pub(crate) fn scan_target(
                 img.id,
                 &file_only,
                 mapped_sources.quality_revision(img.id),
+                fwhm,
             )
             .is_some();
         if spatial_cached {
@@ -784,12 +829,30 @@ pub(crate) fn scan_target(
                 );
                 match resolved {
                     Ok((path, source_revision)) => items.push((
-                        crate::server::spatial_scan::ScanWorkItem {
-                            image_id: img.id,
-                            filename: file_only.clone(),
-                            fits_path: path,
-                            source_generation,
-                            source_revision,
+                        {
+                            // The rig and N.I.N.A. release come from the
+                            // catalog's own light, never a calibrated copy;
+                            // the scan reads its header when it measures.
+                            let light_path = if *need_spatial {
+                                light_header_path(
+                                    &ctx_arc,
+                                    img,
+                                    target_name,
+                                    file_only,
+                                    &path,
+                                    source_revision.as_deref(),
+                                )
+                            } else {
+                                None
+                            };
+                            crate::server::spatial_scan::ScanWorkItem::new(
+                                img,
+                                file_only.clone(),
+                                path,
+                                light_path,
+                                source_generation,
+                                source_revision,
+                            )
                         },
                         *expected,
                         *need_spatial,
@@ -1041,12 +1104,12 @@ pub async fn get_spatial_scan_progress(
                 .as_ref()
                 .is_none_or(|filter| crate::utils::filter_names_match(&image.filter_name, filter))
         }) {
-            let Some(filename) = filename_from_metadata(&image.metadata) else {
+            let Some((filename, fwhm)) = row_facts(&image.metadata) else {
                 continue;
             };
             total_frames += 1;
             match store.metrics.get(&image.id) {
-                Some(entry) if scan::quality_entry_is_current(entry, &filename) => {}
+                Some(entry) if scan::quality_entry_is_current(entry, &filename, fwhm) => {}
                 Some(entry) if entry.filename == filename => outdated_frames += 1,
                 _ => new_frames += 1,
             }

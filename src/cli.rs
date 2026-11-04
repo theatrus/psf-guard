@@ -923,6 +923,36 @@ pub enum Commands {
         #[arg(long, default_value = "none")]
         psf_type: String,
 
+        /// Measure stars as the quality scan does, with the star detection
+        /// below, and print one JSON line per frame beside the catalog row
+        /// that has its file name. Reads the database read-only; folders
+        /// are searched recursively.
+        #[arg(long)]
+        scan: bool,
+
+        /// With --scan: auto, nina or hocus_focus
+        #[arg(long, default_value = "auto")]
+        scan_detector: String,
+
+        /// With --scan: N.I.N.A.'s star sensitivity (normal, high, highest)
+        #[arg(long, default_value = "high")]
+        scan_sensitivity: String,
+
+        /// With --scan: N.I.N.A.'s noise reduction (none, normal, high,
+        /// highest, median)
+        #[arg(long, default_value = "none")]
+        scan_noise_reduction: String,
+
+        /// With --scan: the Hocus Focus version (v3, v4)
+        #[arg(long, default_value = "v4")]
+        hocus_focus_version: String,
+
+        /// With --scan: read the star detection block (profile records,
+        /// rig and profile rows) from this registry file; the options above
+        /// set its default row
+        #[arg(long)]
+        registry: Option<String>,
+
         /// Enable verbose debug output
         #[arg(long, short)]
         verbose: bool,

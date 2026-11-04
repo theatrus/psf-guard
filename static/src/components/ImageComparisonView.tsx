@@ -7,6 +7,8 @@ import { useImageZoom } from '../hooks/useImageZoom';
 import { useAsyncImage } from '../hooks/useAsyncImage';
 import { ensurePreviewReady } from '../hooks/previewPoll';
 import { useColorPreview } from '../hooks/useColorPreview';
+import { StarReadingRows } from './StarSourceMark';
+import { useScopedQuality } from '../hooks/useSequenceAnalysis';
 
 interface ImageComparisonViewProps {
   dbId: string;
@@ -82,6 +84,15 @@ export default function ImageComparisonView({
     enabled: !!rightImageId,
     placeholderData: (previousData) => previousData, // Keep showing previous image while loading new one
   });
+
+  // Each frame's scoring, for the HFR and stars it was judged on. Two
+  // frames of one target share the query.
+  const leftQuality = useScopedQuality(
+    dbId, leftImage?.project_id, leftImage?.target_id, undefined, !!leftImage,
+  ).qualityByImage.get(leftImageId);
+  const rightQuality = useScopedQuality(
+    dbId, rightImage?.project_id, rightImage?.target_id, undefined, !!rightImage,
+  ).qualityByImage.get(rightImageId ?? -1);
 
   // Keyboard shortcuts
   useHotkeys('escape', onClose, [onClose]);
@@ -646,16 +657,7 @@ export default function ImageComparisonView({
               <div className="info-row">
                 <strong>Date:</strong> {formatDate(leftImage.acquired_date)}
               </div>
-              {leftImage.metadata?.HFR && (
-                <div className="info-row">
-                  <strong>HFR:</strong> {leftImage.metadata.HFR.toFixed(2)}
-                </div>
-              )}
-              {leftImage.metadata?.DetectedStars !== undefined && (
-                <div className="info-row">
-                  <strong>Stars:</strong> {leftImage.metadata.DetectedStars}
-                </div>
-              )}
+              <StarReadingRows image={leftImage} quality={leftQuality} />
             </div>
 
             <div className="panel-actions">
@@ -822,16 +824,7 @@ export default function ImageComparisonView({
                   <div className="info-row">
                     <strong>Date:</strong> {formatDate(rightImage.acquired_date)}
                   </div>
-                  {rightImage.metadata?.HFR && (
-                    <div className="info-row">
-                      <strong>HFR:</strong> {rightImage.metadata.HFR.toFixed(2)}
-                    </div>
-                  )}
-                  {rightImage.metadata?.DetectedStars !== undefined && (
-                    <div className="info-row">
-                      <strong>Stars:</strong> {rightImage.metadata.DetectedStars}
-                    </div>
-                  )}
+                  <StarReadingRows image={rightImage} quality={rightQuality} />
                 </div>
 
                 <div className="panel-actions">

@@ -1482,6 +1482,12 @@ fn the_whole_method_enters_the_job_id() {
         equal.public.method.unwrap().weighting,
         StackWeighting::Equal
     );
+    // The star source decides which frames a limit keeps out, so it makes
+    // another artifact too; at its default the id is the one it always was.
+    let scan = job(serde_json::json!({"scoring": {"star_source": "scan"}}));
+    let capture = job(serde_json::json!({"scoring": {"star_source": "capture"}}));
+    assert_eq!(scan.public.job_id, omitted.public.job_id);
+    assert_ne!(capture.public.job_id, omitted.public.job_id);
 }
 
 #[test]
@@ -1506,6 +1512,7 @@ fn scoring_snapshot_normalizes_request_overrides() {
         penalty_star_loss: Some(0.4),
         hfr_reject_above: Some(0.0),
         star_count_reject_below: Some(35.0),
+        star_source: Some(crate::sequence_analysis::StarSource::Capture),
     };
 
     let normalized = StackScoringSettings::from_overrides(&overrides);
@@ -1519,6 +1526,7 @@ fn scoring_snapshot_normalizes_request_overrides() {
             penalty_star_loss: 0.4,
             hfr_reject_above: None,
             star_count_reject_below: Some(35.0),
+            star_source: crate::sequence_analysis::StarSource::Capture,
         }
     );
     assert_eq!(normalized.penalty_pointing.to_bits(), 0.0_f64.to_bits());

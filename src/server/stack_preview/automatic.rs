@@ -1360,6 +1360,7 @@ fn scoring_overrides(scoring: &StackScoringSettings) -> ScoringOverrideQuery {
         penalty_star_loss: Some(scoring.penalty_star_loss),
         hfr_reject_above: scoring.hfr_reject_above,
         star_count_reject_below: scoring.star_count_reject_below,
+        star_source: Some(scoring.star_source),
     }
 }
 
@@ -2146,6 +2147,7 @@ mod tests {
                 penalty_star_loss: 0.7,
                 hfr_reject_above: Some(2.55),
                 star_count_reject_below: Some(505.0),
+                star_source: crate::sequence_analysis::StarSource::Capture,
             },
         ] {
             assert_eq!(

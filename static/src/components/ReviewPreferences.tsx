@@ -9,6 +9,7 @@ import {
 } from '../hooks/useDisplayPreferences';
 import { CalibrationIcon, LayersIcon, MoonIcon } from './ScoreChipIcons';
 import ScoringDefaultsSettings from './ScoringDefaultsSettings';
+import StarDetectionSettings from './StarDetectionSettings';
 
 /**
  * Review behavior preferences, shared by the grid, the Sequence view, and
@@ -85,6 +86,7 @@ export default function ReviewPreferences({ analysis }: { analysis?: ReactNode }
       </section>
 
       <ScoringDefaultsSettings />
+      <StarDetectionSettings />
       {analysis}
 
       <section className="review-preferences" aria-label="Display">

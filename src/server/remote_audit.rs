@@ -37,6 +37,7 @@ pub enum AuditAction {
     FlatHistorySnapshot,
     FlatHistoryPending,
     FlatHistoryAcknowledge,
+    StarDetectionProfile,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

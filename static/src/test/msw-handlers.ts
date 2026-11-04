@@ -185,6 +185,13 @@ export const handlers = [
     return HttpResponse.json(notFoundImageQuality, { status: 404 });
   }),
 
+  // Star detection: N.I.N.A.'s defaults, and no rigs.
+  http.get('/api/settings/star-detection', () => HttpResponse.json({ success: true, error: null, data: {
+    default: { detector: 'auto', sensitivity: 'high', noise_reduction: 'none', hocus_focus_version: 'v4' },
+    builtin: { detector: 'auto', sensitivity: 'high', noise_reduction: 'none', hocus_focus_version: 'v4' },
+    rigs: [],
+    profiles: [],
+  } })),
   // The calibration settings: every value at its default, so lights' nights
   // split at their rig's local noon (useNightSplit).
   http.get('/api/settings/calibration', () => HttpResponse.json({ success: true, error: null, data: {

@@ -66,6 +66,12 @@ pub struct FrameMeta {
     pub focal_ratio: Option<f64>,
     /// APTDIA: the aperture in millimetres, when the header records it.
     pub aperture_mm: Option<f64>,
+    /// Arcseconds per pixel from the camera geometry (FOCALLEN, XPIXSZ and
+    /// binning), as [`crate::astrometry_headers`] works it out.
+    pub image_scale_arcsec: Option<f64>,
+    /// SWCREATE: the capture software and its version, such as
+    /// `N.I.N.A. 3.2.0.9001 (x64)`.
+    pub software: Option<String>,
     pub camera_temp: Option<f64>,
     pub camera_target_temp: Option<f64>,
     pub focuser_position: Option<i64>,
@@ -231,6 +237,9 @@ pub fn read_frame_meta_named(path: &Path, declared: &Path) -> FrameMeta {
     meta.focal_length_mm = f64_of(&["FOCALLEN", "FOCAL"]).filter(|v| *v > 0.0);
     meta.focal_ratio = f64_of(&["FOCRATIO", "FRATIO"]).filter(|v| *v > 0.0);
     meta.aperture_mm = f64_of(&["APTDIA", "APERTURE"]).filter(|v| *v > 0.0);
+    meta.image_scale_arcsec =
+        crate::astrometry_headers::FitsAstrometryHeaders::camera_geometry_scale_arcsec(&headers);
+    meta.software = text(&["SWCREATE"]);
     meta.camera_temp = f64_of(&["CCD-TEMP", "CCDTEMP"]);
     meta.camera_target_temp = f64_of(&["SET-TEMP", "SETTEMP"]);
     meta.focuser_position = i64_of(&["FOCPOS", "FOCUSPOS"]);

@@ -239,6 +239,7 @@ fn run_detector_config(
                 sensitivity: star_sensitivity,
                 noise_reduction: NoiseReduction::None,
                 use_roi: false,
+                ..StarDetectionParams::default()
             };
 
             // NINA always uses MTF stretch
@@ -440,6 +441,7 @@ fn detect_stars(
                 sensitivity: star_sensitivity,
                 noise_reduction: NoiseReduction::None,
                 use_roi: false,
+                ..StarDetectionParams::default()
             };
 
             // NINA always uses MTF stretch
@@ -640,4 +642,136 @@ fn output_csv(
         db_stars,
         db_hfr
     );
+}
+
+/// A rig's star detection from `analyze-fits --scan`'s options, by the
+/// names the registry stores.
+pub fn scan_settings(
+    detector: &str,
+    sensitivity: &str,
+    noise_reduction: &str,
+    hocus_focus_version: &str,
+) -> Result<crate::star_detection::RigStarDetection> {
+    fn choice<T: serde::de::DeserializeOwned>(option: &str, value: &str) -> Result<T> {
+        serde_json::from_value(serde_json::Value::String(value.to_ascii_lowercase()))
+            .map_err(|_| anyhow::anyhow!("--{option} does not take {value:?}"))
+    }
+    Ok(crate::star_detection::RigStarDetection {
+        detector: choice("scan-detector", detector)?,
+        sensitivity: choice("scan-sensitivity", sensitivity)?,
+        noise_reduction: choice("scan-noise-reduction", noise_reduction)?,
+        hocus_focus_version: choice("hocus-focus-version", hocus_focus_version)?,
+    })
+}
+
+/// Every frame at `path`: the file itself, or each one below the folder.
+fn frames_under(path: &Path) -> Vec<PathBuf> {
+    if path.is_file() {
+        return vec![path.to_path_buf()];
+    }
+    let mut frames = Vec::new();
+    let mut folders = vec![path.to_path_buf()];
+    while let Some(folder) = folders.pop() {
+        let Ok(entries) = std::fs::read_dir(&folder) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                folders.push(path);
+            } else if crate::image_io::is_image_path(&path) {
+                frames.push(path);
+            }
+        }
+    }
+    frames.sort();
+    frames
+}
+
+/// Measure each frame at `path` as the quality scan does with `rig`'s star
+/// detection, and print a JSON line per frame with the catalog row's star
+/// count, HFR and FWHM beside the measurement. Rows match by file name.
+pub fn analyze_as_scan(
+    conn: &Connection,
+    path: &str,
+    settings: &crate::star_detection::StarDetectionSettings,
+) -> Result<()> {
+    struct Row {
+        metadata: String,
+        profile_id: Option<String>,
+        captured_at: Option<i64>,
+    }
+    let mut by_name: std::collections::HashMap<String, Row> = Default::default();
+    let mut statement =
+        conn.prepare("SELECT metadata, profileId, acquireddate FROM acquiredimage")?;
+    let rows = statement.query_map([], |row| {
+        Ok(Row {
+            metadata: row.get(0)?,
+            profile_id: row.get(1)?,
+            captured_at: row.get(2)?,
+        })
+    })?;
+    for row in rows {
+        let row = row?;
+        let metadata = &row.metadata;
+        let name = serde_json::from_str::<serde_json::Value>(metadata)
+            .ok()
+            .and_then(|value| value["FileName"].as_str().map(str::to_string))
+            .and_then(|name| name.split(['\\', '/']).next_back().map(str::to_string));
+        if let Some(name) = name {
+            by_name.insert(name, row);
+        }
+    }
+    for frame in frames_under(Path::new(path)) {
+        let name = frame
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let row = by_name.get(&name);
+        let metadata = row.map_or("{}", |row| row.metadata.as_str());
+        let catalog: serde_json::Value = serde_json::from_str(metadata).unwrap_or_default();
+        let meta = crate::commands::import::headers::read_frame_meta(&frame);
+        let facts = crate::star_detection::FrameFacts::of_frame(
+            &meta,
+            row.and_then(|row| row.profile_id.as_deref()),
+            row.and_then(|row| row.captured_at),
+        );
+        let detection = settings.resolve(
+            &facts,
+            crate::star_detection::FwhmEvidence::of_metadata(metadata),
+        );
+        let started = std::time::Instant::now();
+        let measured = FitsImage::from_file(&frame).map(|fits| {
+            let stats = fits.calculate_basic_statistics();
+            crate::server::spatial_scan::measure_frame_stars(
+                &fits,
+                &stats,
+                &detection,
+                meta.image_scale_arcsec,
+            )
+        });
+        let line = match measured {
+            Ok(stars) => serde_json::json!({
+                "file": frame.display().to_string(),
+                "software": facts.software,
+                "rig_uuid": facts.rig_uuid,
+                "image_scale_arcsec": meta.image_scale_arcsec,
+                "detection": detection,
+                "detector": stars.detector,
+                "stars": stars.star_count,
+                "hfr": stars.avg_hfr,
+                "catalog_row": by_name.contains_key(&name),
+                "nina_stars": catalog["DetectedStars"],
+                "nina_hfr": catalog["HFR"],
+                "nina_fwhm": catalog["FWHM"],
+                "seconds": started.elapsed().as_secs_f64(),
+            }),
+            Err(error) => serde_json::json!({
+                "file": frame.display().to_string(),
+                "error": error.to_string(),
+            }),
+        };
+        println!("{line}");
+    }
+    Ok(())
 }

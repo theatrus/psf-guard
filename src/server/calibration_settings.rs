@@ -145,7 +145,7 @@ where
 }
 
 /// The longest rig name kept.
-const MAX_RIG_NAME: usize = 200;
+pub(crate) const MAX_RIG_NAME: usize = 200;
 
 /// A stored value as the panel should see it: only what this build can read
 /// and would apply.
@@ -300,12 +300,20 @@ async fn rig_views(
     state: &Arc<AppState>,
     settings: Option<&CalibrationSettings>,
 ) -> Vec<RigSettingsView> {
+    merge_rig_views(catalog_rigs(state).await, settings)
+}
+
+/// The rigs each open catalog records, as (database id, database name,
+/// rigs). A catalog that cannot be read lists none.
+pub(crate) async fn catalog_rigs(
+    state: &Arc<AppState>,
+) -> Vec<(String, String, Vec<crate::calibration::RigListing>)> {
     let catalogs: Vec<(String, String, String)> = state
         .all_databases()
         .iter()
         .map(|ctx| (ctx.id.clone(), ctx.name.clone(), ctx.database_path.clone()))
         .collect();
-    let listed = tokio::task::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         catalogs
             .into_iter()
             .filter_map(|(id, name, path)| {
@@ -325,8 +333,7 @@ async fn rig_views(
             .collect::<Vec<_>>()
     })
     .await
-    .unwrap_or_default();
-    merge_rig_views(listed, settings)
+    .unwrap_or_default()
 }
 
 /// Merges each catalog's rigs by UUID, keeping the catalogs that record a
@@ -385,7 +392,7 @@ fn merge_rig_views(
     views
 }
 
-fn rig_detail(rig: &crate::calibration::RigListing) -> Option<String> {
+pub(crate) fn rig_detail(rig: &crate::calibration::RigListing) -> Option<String> {
     let size = rig
         .width
         .zip(rig.height)
@@ -495,7 +502,7 @@ pub async fn update_calibration_settings(
 }
 
 /// The registry's key for a rig: its UUID, as the library writes it.
-fn rig_key(rig_uuid: &str) -> Result<String, AppError> {
+pub(crate) fn rig_key(rig_uuid: &str) -> Result<String, AppError> {
     uuid::Uuid::parse_str(rig_uuid.trim())
         .map(|uuid| uuid.hyphenated().to_string())
         .map_err(|_| AppError::BadRequest(format!("`{rig_uuid}` is not a rig's UUID")))

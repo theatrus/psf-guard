@@ -45,6 +45,18 @@ describe('Settings › Review › Sequence scoring', () => {
     expect(screen.getByRole('region', { name: 'Sequence scoring' })).toBeInTheDocument();
   });
 
+  it('saves which source the stars and HFR come from', async () => {
+    const user = userEvent.setup();
+    await renderSettings();
+    expect(screen.getByRole('radio', { name: 'PSF Guard' })).toBeChecked();
+    expect(save()).toHaveAttribute('aria-disabled', 'true');
+    await user.click(screen.getByRole('radio', { name: 'N.I.N.A.' }));
+    expect(save()).toHaveAttribute('aria-disabled', 'false');
+    await user.click(save());
+    await savedAs({ ...DEFAULTS, starSource: 'capture' });
+    expect(screen.getByRole('radio', { name: 'N.I.N.A.' })).toBeChecked();
+  });
+
   it('lists each penalty and limit with the server\'s default and the built-in one', async () => {
     scoringServer.set({ ...DEFAULTS, satellite: 0, pointing: 1.5, hfrRejectAbove: 2.55 });
     await renderSettings();

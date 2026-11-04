@@ -10,6 +10,8 @@ import {
   sameScoring,
   SCORING_PENALTY_STEP,
   SCORING_RULES,
+  STAR_SOURCE_LABELS,
+  STAR_SOURCES,
   type LimitKey,
   type PenaltyKey,
   type ScoringPreferences,
@@ -136,6 +138,35 @@ export default function ScoringPenaltyControl() {
     );
   };
 
+  /** Which measurement of stars and HFR the view uses. It applies at once;
+   *  typed limits go with it when they are values the limits may hold. */
+  const sourceChoice = (
+    <div
+      className={`penalty-source${shown.starSource !== defaults.starSource ? ' is-set' : ''}`}
+      title={'The star count and HFR the reject limits and comparisons use. A frame without them '
+        + `uses the other source. Default: ${STAR_SOURCE_LABELS[defaults.starSource]}.`}
+    >
+      <span className="penalty-label" id={`${errorId}-source`}>Stars and HFR</span>
+      <div className="tool-segmented" role="radiogroup" aria-labelledby={`${errorId}-source`}>
+        {STAR_SOURCES.map((source) => (
+          <button
+            key={source}
+            type="button"
+            role="radio"
+            aria-checked={shown.starSource === source}
+            onClick={() => {
+              const from = refused.length === 0 ? effective : scoring;
+              const next = normalizeScoring({ ...from, starSource: source }, scoring);
+              if (!sameScoring(next, scoring)) setScoring(next);
+            }}
+          >
+            {STAR_SOURCE_LABELS[source]}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+
   const limitInput = (key: LimitKey, title: string) => {
     const rule = SCORING_RULES[key];
     const value = typed(key);
@@ -187,6 +218,8 @@ export default function ScoringPenaltyControl() {
         Scoring{differs ? ' (changed)' : ''}
       </summary>
       <div className="scoring-penalty-panel">
+        <span className="penalty-section">Measurements</span>
+        {sourceChoice}
         <span className="penalty-section">Penalties</span>
         {slider(
           'satellite',

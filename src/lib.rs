@@ -39,6 +39,7 @@ pub mod server;
 pub mod sky_maps;
 pub mod spatial_analysis;
 pub mod star_contours;
+pub mod star_detection;
 pub mod sync_client;
 pub mod ts_guids;
 pub mod ts_schema;

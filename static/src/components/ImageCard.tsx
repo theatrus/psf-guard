@@ -1,6 +1,8 @@
 import { useCallback, useEffect, type CSSProperties } from 'react';
 import { useInView } from 'react-intersection-observer';
 import type { CalibrationLightMark, Image, ImageCopy, ImageQualityResult } from '../api/types';
+import { formatReading, starReadings, usedReading } from '../utils/starReadings';
+import { StarSourceMark } from './StarSourceMark';
 
 /** How far a skewed frame turned, against what, and the badge's label. A
  *  rotator slip is measured against the angle the rotator reported, and a
@@ -182,17 +184,11 @@ export default function ImageCard({
   };
   const when = shortDate(image.acquired_date);
 
-  // Extract HFR and star count from metadata
-  const getImageStats = () => {
-    const hfr = image.metadata?.HFR;
-    const starCount = image.metadata?.DetectedStars;
-    return {
-      hfr: typeof hfr === 'number' ? hfr.toFixed(2) : null,
-      starCount: typeof starCount === 'number' ? starCount : null,
-    };
-  };
-
-  const stats = getImageStats();
+  // The HFR and star count scoring used, with where each came from.
+  const hfrReadings = starReadings('hfr', quality, image);
+  const starReadingsOf = starReadings('stars', quality, image);
+  const hfr = usedReading(hfrReadings);
+  const starCount = usedReading(starReadingsOf);
   const shouldLoadPreview = !shouldDeferPreview || inView;
 
   return (
@@ -315,8 +311,14 @@ export default function ImageCard({
               <span className="date-seconds">{when.seconds}</span>
             </> : '—'}
           </span>
-          <span className="stat-hfr" title="Half-flux radius">{stats.hfr && <><span className="fact-label">HFR </span>{stats.hfr}</>}</span>
-          <span className="stat-stars" title="Detected stars">{stats.starCount != null && `★${stats.starCount}`}</span>
+          <span className="stat-hfr" title="Half-flux radius">{hfr !== null && hfrReadings.used && <>
+            <span className="fact-label">HFR </span>{formatReading('hfr', hfr)}
+            <StarSourceMark source={hfrReadings.used} />
+          </>}</span>
+          <span className="stat-stars" title="Detected stars">{starCount !== null && starReadingsOf.used && <>
+            ★{formatReading('stars', starCount)}
+            <StarSourceMark source={starReadingsOf.used} />
+          </>}</span>
         </div>
         {qualityPresentation === 'full' && quality && (
           <span

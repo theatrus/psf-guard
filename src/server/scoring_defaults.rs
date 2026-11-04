@@ -106,6 +106,7 @@ fn checked(scoring: StackScoringSettings) -> Result<StackScoringSettings, String
         penalty_star_loss: penalty("star loss", scoring.penalty_star_loss)?,
         hfr_reject_above,
         star_count_reject_below,
+        star_source: scoring.star_source,
     })
 }
 
@@ -217,6 +218,27 @@ mod tests {
         assert_eq!(off.penalty_pointing.to_bits(), 0.0f64.to_bits());
         assert_eq!(stored.hfr_reject_above, Some(4.5));
         assert_eq!(stored.star_count_reject_below, Some(50.0));
+    }
+
+    #[test]
+    fn the_star_source_is_kept_and_stays_out_of_settings_at_its_default() {
+        use crate::sequence_analysis::StarSource;
+        let builtin = StackScoringSettings::default();
+        let capture = StackScoringSettings {
+            star_source: StarSource::Capture,
+            ..builtin
+        };
+        assert_eq!(checked(capture).unwrap().star_source, StarSource::Capture);
+        // Settings recorded before the source existed read and compare as
+        // they did: the default is not written, and its absence reads as it.
+        let json = serde_json::to_value(builtin).unwrap();
+        assert!(json.get("star_source").is_none());
+        assert_eq!(
+            serde_json::from_value::<StackScoringSettings>(json).unwrap(),
+            builtin
+        );
+        let json = serde_json::to_value(capture).unwrap();
+        assert_eq!(json["star_source"], "capture");
     }
 
     #[test]
