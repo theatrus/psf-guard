@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { availableShares, clockOnNight, darkState, darkWindows, completesOn, datesBetween, decidedBy, forecastMark, formatClock, isDate, loadWords, markGlyph, markOrigin, planColours, planRows, plansOnNight, windowFor } from '../nightsModel';
-import { NOON, night, rig } from './fixtures';
+import { moonCourse, moonCourseWords, moonGradient, siteGroups, availableShares, clockOnNight, darkState, darkWindows, completesOn, datesBetween, decidedBy, forecastMark, formatClock, isDate, loadWords, markGlyph, markOrigin, planColours, planRows, plansOnNight, windowFor } from '../nightsModel';
+import { NOON, moonAltitudes, night, rig } from './fixtures';
 
 const HOUR = 3_600_000;
 
@@ -157,6 +157,80 @@ describe('night plan helpers', () => {
     expect(completesOn([entry(1), entry(3)])).toBe(3);
     expect(completesOn([entry(1), entry(null)])).toBeNull();
     expect(completesOn([entry(null, true)])).toBe(-1);
+  });
+});
+
+describe('site groups', () => {
+  const at = (id: string, latitude: number, longitude: number, site: string | null) => rig({
+    rig: { id, name: id, revision: 1 },
+    catalog_name: id,
+    location: { latitude_degrees: latitude, longitude_degrees: longitude, elevation_meters: 0 },
+    planning_site: site ? { id: `site-${site}`, name: site, revision: 1 } : null,
+  });
+
+  it('groups rigs within a degree of the group\'s first rig, in their order', () => {
+    const groups = siteGroups([
+      at('a', 34.2, -118.3, 'Backyard'),
+      at('b', 35.6, -118.3, 'Mountain'),
+      at('c', 34.9, -117.5, 'Remote'),
+      at('d', 34.2, -118.3, 'Backyard'),
+    ]);
+    expect(groups.map(group => group.rigs.map(r => r.rig.id))).toEqual([['a', 'c', 'd'], ['b']]);
+    expect(groups.map(group => group.name)).toEqual(['Backyard · Remote', 'Mountain']);
+    expect(groups[0].coordinates).toBe('34.2° N, 118.3° W');
+  });
+
+  it('groups across the date line, and names a group without a site by its coordinates', () => {
+    const groups = siteGroups([at('a', -10, 179.6, null), at('b', -10.5, -179.8, null)]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].name).toBe('10.0° S, 179.6° E');
+  });
+});
+
+describe('the Moon across a night', () => {
+  const HOUR = 3_600_000;
+  const from = NOON + 6 * HOUR;
+  const to = NOON + 18 * HOUR;
+
+  it('finds its rise, highest point and set, and grades the strip by altitude and phase', () => {
+    const course = moonCourse(moonAltitudes(NOON), 0.42, from, to);
+    expect(course.events).toEqual([
+      { kind: 'rises', ms: NOON + 9 * HOUR },
+      { kind: 'highest', ms: NOON + 12 * HOUR },
+      { kind: 'sets', ms: NOON + 15 * HOUR },
+    ]);
+    expect(course.up).toBe(true);
+    expect(course.stops[0]).toEqual({ at: 0, strength: 0 });
+    expect(course.stops.at(-1)).toEqual({ at: 1, strength: 0 });
+    const peak = course.stops.find(stop => stop.at === 0.5)!;
+    expect(peak.strength).toBeCloseTo(Math.sqrt(0.42 * Math.sin(50 * Math.PI / 180)), 6);
+    expect(course.stops.every((stop, index) => index === 0 || stop.at >= course.stops[index - 1].at)).toBe(true);
+  });
+
+  it('has no events while the Moon stays down or stays up, and words for each', () => {
+    const flat = (degrees: number) => ({ ...moonAltitudes(NOON), degrees: Array(96).fill(degrees) });
+    const down = moonCourse(flat(-10), 0.9, from, to);
+    expect(down).toMatchObject({ up: false, events: [] });
+    expect(moonCourseWords(flat(-10), 0.9, down, String)).toBe('90% lit · down all night');
+    const up = moonCourse(flat(30), 0.9, from, to);
+    expect(up).toMatchObject({ up: true, events: [] });
+    expect(moonCourseWords(flat(30), 0.9, up, String)).toBe('90% lit · up all night');
+    // Without the altitudes, only the share lit.
+    const none = { ...moonAltitudes(NOON), degrees: [] };
+    expect(moonCourseWords(none, 0.9, moonCourse(none, 0.9, from, to), String)).toBe('90% lit');
+    expect(moonGradient(moonCourse(none, 0.9, from, to))).toBeUndefined();
+  });
+
+  it('counts a Moon above the horizon as up even with none of it lit', () => {
+    const course = moonCourse(moonAltitudes(NOON), 0, from, to);
+    expect(course.up).toBe(true);
+    expect(course.events.map(event => event.kind)).toEqual(['rises', 'highest', 'sets']);
+    expect(course.stops.every(stop => stop.strength === 0)).toBe(true);
+  });
+
+  it('gives no highest point at the edge of a span the Moon only sets across', () => {
+    const course = moonCourse(moonAltitudes(NOON), 0.5, NOON + 12 * HOUR, to);
+    expect(course.events).toEqual([{ kind: 'sets', ms: NOON + 15 * HOUR }]);
   });
 });
 

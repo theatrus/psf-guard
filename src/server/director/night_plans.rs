@@ -14,12 +14,13 @@ use super::ts_snapshot;
 use super::*;
 use crate::concurrency::Stop;
 use psf_guard_director_core::{
+    ephemeris::{moon_at_site, separation_degrees},
     moon::MoonPolicy,
     night::{
-        night_summary, NightDate, NightRequest, NightTarget, EARLIEST_START_MS, LATEST_START_MS,
-        MAX_NIGHTS, MAX_TARGETS,
+        night_summary, planning_orientation, NightDate, NightRequest, NightTarget,
+        EARLIEST_START_MS, LATEST_START_MS, MAX_NIGHTS, MAX_TARGETS,
     },
-    visibility::{AltitudeLimits, Horizon, IcrsPosition, Site},
+    visibility::{observe, AltitudeLimits, Horizon, IcrsPosition, Site},
     windows::Interval,
 };
 use psf_guard_director_meta::night_override::{check, NightOverride};
@@ -62,6 +63,11 @@ pub(super) struct Request {
     start_ms: Option<u64>,
     #[serde(default)]
     nights: Option<u32>,
+    /// Whether each night carries the Moon's altitude curve for drawing;
+    /// on by default. The response leaves it out when false, so it does
+    /// not change what is kept.
+    #[serde(default)]
+    moon_altitudes: Option<bool>,
     /// Schedule this many of the nights, from the first, with the frames
     /// planned each night counted on the next. 0, the default, schedules
     /// none.
@@ -352,6 +358,8 @@ struct RigNight {
     availability: NightAvailability,
     moon_illumination: f64,
     moon_hours_up_in_dark: f64,
+    /// The Moon's altitude from noon to noon, for its rise and set.
+    moon_altitudes: MoonAltitudes,
     targets: Vec<TargetHours>,
     load: Load,
     /// The forecast's cloud cover through the night; empty without one.
@@ -509,13 +517,69 @@ impl Serialize for SharedView {
 pub(super) async fn plan(
     State(state): State<Arc<AppState>>,
     Json(request): Json<Request>,
-) -> Result<Json<ApiResponse<Planned>>, NightPlanError> {
+) -> Result<Response, NightPlanError> {
+    let curves = request.moon_altitudes != Some(false);
     let kept = planned(&state, request).await?;
-    Ok(Json(ApiResponse::success(Planned {
+    let planned = Planned {
         view: SharedView(kept.view),
         computed_at_ms: kept.computed_at_ms,
         refreshing: kept.refreshing,
-    })))
+    };
+    if curves {
+        return Ok(Json(ApiResponse::success(planned)).into_response());
+    }
+    let value = serde_json::to_value(&planned).map_err(|_| NightPlanError::Api(Error::Internal))?;
+    Ok(Json(ApiResponse::success(without_moon_altitudes(value))).into_response())
+}
+
+/// The night plans without each night's Moon curve, for a reader that does
+/// not draw it.
+fn without_moon_altitudes(mut value: serde_json::Value) -> serde_json::Value {
+    let rigs = value
+        .get_mut("rigs")
+        .and_then(serde_json::Value::as_array_mut);
+    for rig in rigs.into_iter().flatten() {
+        let nights = rig
+            .get_mut("nights")
+            .and_then(serde_json::Value::as_array_mut);
+        for night in nights.into_iter().flatten() {
+            if let Some(night) = night.as_object_mut() {
+                night.remove("moon_altitudes");
+            }
+        }
+    }
+    value
+}
+
+/// The Moon's altitude at even steps from `start_ms`.
+#[derive(Serialize)]
+struct MoonAltitudes {
+    start_ms: u64,
+    step_ms: u64,
+    /// Degrees, to a tenth.
+    degrees: Vec<f64>,
+}
+
+const MOON_ALTITUDE_STEP_MS: u64 = 15 * 60_000;
+
+/// The Moon's altitude as the site sees it, parallax included, every
+/// quarter hour from one noon to the next, for the night view's Moon
+/// strip. Empty when the ephemeris cannot place it.
+fn moon_altitudes(noon_ms: u64, site: Site) -> MoonAltitudes {
+    let degrees = (0..24 * 3_600_000 / MOON_ALTITUDE_STEP_MS)
+        .map(|step| {
+            let at = noon_ms + step * MOON_ALTITUDE_STEP_MS;
+            let moon = moon_at_site(at, site)?;
+            let seen = observe(moon, site, planning_orientation(at, at), at).ok()?;
+            Some((seen.altitude_degrees * 10.0).round() / 10.0)
+        })
+        .collect::<Option<Vec<f64>>>()
+        .unwrap_or_default();
+    MoonAltitudes {
+        start_ms: noon_ms,
+        step_ms: MOON_ALTITUDE_STEP_MS,
+        degrees,
+    }
 }
 
 /// The night plans a request asks for, kept or computed now as a person's
@@ -1097,6 +1161,7 @@ fn rig_nights(input: RigInput, nights: u32) -> Result<RigNights, String> {
             availability,
             moon_illumination: first.moon_illumination,
             moon_hours_up_in_dark: first.moon_hours_up_in_dark,
+            moon_altitudes: moon_altitudes(first.noon_ms, location),
             targets,
             load: Load {
                 demand_hours,
@@ -1494,9 +1559,24 @@ fn director_schedule(
         format!("No Director schedule: the rig's program could not be scheduled for these nights ({error:?}).")
     })?;
     let reference = |goal: &str| references.get(goal).cloned();
+    let target_positions: BTreeMap<&str, IcrsPosition> = program
+        .targets
+        .iter()
+        .map(|target| (target.id.as_str(), target.position()))
+        .collect();
+    let goal_positions: BTreeMap<&str, IcrsPosition> = program
+        .bindings
+        .iter()
+        .filter_map(|binding| {
+            let position = target_positions.get(binding.target_id.as_str())?;
+            Some((binding.goal_id.as_str(), *position))
+        })
+        .collect();
     let mut scheduled = Vec::with_capacity(schedule.nights.len());
     for ((date, night), span) in dates.iter().zip(schedule.nights).zip(&nights) {
         let mut blocks: Vec<Block> = Vec::new();
+        // Each run's target position, block by block.
+        let mut positions: Vec<Vec<Option<IcrsPosition>>> = Vec::new();
         let mut frames = 0;
         let mut hours = 0.0;
         for exposure in &night.exposures {
@@ -1527,6 +1607,7 @@ fn director_schedule(
                         )),
                     },
                 });
+                positions.push(Vec::new());
             }
             let Some(block) = blocks.last_mut() else {
                 continue;
@@ -1538,17 +1619,24 @@ fn director_schedule(
                     run.dithers += u32::from(exposure.dither);
                     run.end_ms = exposure.end_ms;
                 }
-                _ => block.runs.push(FilterRun {
-                    exposure_plan_id: plan_id,
-                    filter,
-                    exposure_seconds: exposure.exposure_ms as f64 / 1000.0,
-                    frames: 1,
-                    dithers: u32::from(exposure.dither),
-                    start_ms: exposure.start_ms,
-                    end_ms: exposure.end_ms,
-                }),
+                _ => {
+                    if let Some(runs) = positions.last_mut() {
+                        runs.push(goal_positions.get(exposure.goal_id.as_str()).copied());
+                    }
+                    block.runs.push(FilterRun {
+                        exposure_plan_id: plan_id,
+                        filter,
+                        exposure_seconds: exposure.exposure_ms as f64 / 1000.0,
+                        frames: 1,
+                        dithers: u32::from(exposure.dither),
+                        start_ms: exposure.start_ms,
+                        end_ms: exposure.end_ms,
+                        moon: None,
+                    });
+                }
             }
         }
+        place_moon(&mut blocks, &positions, location);
         let gaps = night
             .gaps
             .iter()
@@ -1621,6 +1709,42 @@ fn director_schedule(
                 .unwrap_or_else(|| (location.longitude_degrees / 15.0 * 60.0).round() as i32),
         },
     })
+}
+
+/// Fill in each run's Moon on a Director rig: the Moon as the site sees
+/// it, parallax included, like the night's Moon strip. `positions` holds
+/// each run's target position, block by block. Runs that meet share their
+/// samples. A run without a position, or outside the ephemeris's years,
+/// gets no Moon.
+fn place_moon(
+    blocks: &mut [psf_guard_ts_planner::Block],
+    positions: &[Vec<Option<IcrsPosition>>],
+    site: Site,
+) {
+    use psf_guard_ts_planner::RunMoon;
+    debug_assert_eq!(blocks.len(), positions.len());
+    let mut moons: BTreeMap<u64, Option<(IcrsPosition, f64)>> = BTreeMap::new();
+    for (block, positions) in blocks.iter_mut().zip(positions) {
+        debug_assert_eq!(block.runs.len(), positions.len());
+        for (run, position) in block.runs.iter_mut().zip(positions) {
+            let Some(target) = *position else {
+                continue;
+            };
+            let samples: Vec<(f64, f64)> = RunMoon::sample_times(run.start_ms, run.end_ms)
+                .into_iter()
+                .filter_map(|at| {
+                    let (moon, altitude) = (*moons.entry(at).or_insert_with(|| {
+                        let moon = moon_at_site(at, site)?;
+                        observe(moon, site, planning_orientation(at, at), at)
+                            .ok()
+                            .map(|observed| (moon, observed.altitude_degrees))
+                    }))?;
+                    Some((altitude, separation_degrees(moon, target)))
+                })
+                .collect();
+            run.moon = RunMoon::over(samples);
+        }
+    }
 }
 
 /// Each graded exposure plan's share of frames accepted so far, once it has
@@ -2035,6 +2159,7 @@ mod tests {
                 dithers: 0,
                 start_ms: start_h * hour,
                 end_ms: end_h * hour,
+                moon: None,
             }],
             decision: Decision {
                 kind: DecisionKind::Scored,
@@ -2058,6 +2183,88 @@ mod tests {
             },
             overrides: None,
         }
+    }
+
+    #[test]
+    fn a_director_run_takes_the_closest_moon_and_its_highest_altitude() {
+        // 00:00 to 02:00 in Los Angeles on the night of the 2026-09-26 full Moon.
+        let hour = 1_790_409_600 / 3600 - 1;
+        let (start, end) = (hour * 3_600_000, (hour + 2) * 3_600_000);
+        let site = Site {
+            latitude_degrees: 34.05,
+            longitude_degrees: -118.25,
+            elevation_meters: 100.0,
+        };
+        let altitude = |at: u64| {
+            observe(
+                moon_at_site(at, site).unwrap(),
+                site,
+                planning_orientation(at, at),
+                at,
+            )
+            .unwrap()
+            .altitude_degrees
+        };
+        // A target where the Moon stands at 01:00, and one opposite it.
+        let moon = moon_at_site(start + 3_600_000, site).unwrap();
+        let opposite = IcrsPosition {
+            ra_degrees: (moon.ra_degrees + 180.0).rem_euclid(360.0),
+            dec_degrees: -moon.dec_degrees,
+        };
+        let mut blocks = vec![
+            block(1, 1, hour, hour + 2),
+            block(2, 2, hour, hour + 2),
+            block(3, 3, hour, hour + 2),
+        ];
+        let positions = [vec![Some(moon)], vec![Some(opposite)], vec![None]];
+        place_moon(&mut blocks, &positions, site);
+        let near = blocks[0].runs[0].moon.unwrap();
+        assert!(near.min_separation_degrees < 0.01, "{near:?}");
+        let highest = altitude(start)
+            .max(altitude(start + 3_600_000))
+            .max(altitude(end));
+        assert!(near.max_altitude_degrees >= highest, "{near:?}");
+        assert!(near.max_altitude_degrees > 30.0, "{near:?}");
+        let far = blocks[1].runs[0].moon.unwrap();
+        assert!(far.min_separation_degrees > 178.0, "{far:?}");
+        assert_eq!(far.max_altitude_degrees, near.max_altitude_degrees);
+        assert_eq!(blocks[2].runs[0].moon, None);
+    }
+
+    #[test]
+    fn the_moon_curve_rises_and_sets_once_on_a_full_moon_night() {
+        // Noon in Los Angeles on 2026-09-26, the day of the full Moon.
+        let noon = 1_790_449_200_000;
+        let site = Site {
+            latitude_degrees: 34.05,
+            longitude_degrees: -118.25,
+            elevation_meters: 100.0,
+        };
+        let curve = moon_altitudes(noon, site);
+        assert_eq!(curve.start_ms, noon);
+        assert_eq!(curve.step_ms, 15 * 60_000);
+        assert_eq!(curve.degrees.len(), 96);
+        let crossings = curve
+            .degrees
+            .windows(2)
+            .filter(|pair| (pair[0] > 0.0) != (pair[1] > 0.0))
+            .count();
+        assert_eq!(crossings, 2, "{:?}", curve.degrees);
+        // Up around midnight.
+        assert!(curve.degrees[48] > 30.0, "{:?}", curve.degrees);
+    }
+
+    #[test]
+    fn a_reader_can_leave_the_moon_curve_out() {
+        let value = serde_json::json!({
+            "rigs": [{ "nights": [{ "date": "2026-09-26", "moon_altitudes": { "degrees": [1.0] } }] }],
+            "computed_at_ms": 1,
+        });
+        let trimmed = without_moon_altitudes(value);
+        assert_eq!(
+            trimmed,
+            serde_json::json!({ "rigs": [{ "nights": [{ "date": "2026-09-26" }] }], "computed_at_ms": 1 })
+        );
     }
 
     #[test]

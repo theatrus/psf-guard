@@ -1,4 +1,4 @@
-import type { NightAppliedMark, NightAvailabilityState, NightInterval, NightPlanProject, NightPlans, NightPlanTarget, NightRuntime, NightTargetHours, NightSchedule, RigNight, RigNights, SchedulePlanProgress } from '../../api/nightPlanTypes';
+import type { MoonAltitudes, NightAppliedMark, NightAvailabilityState, NightInterval, NightPlanProject, NightPlans, NightPlanTarget, NightRuntime, NightTargetHours, NightSchedule, RigNight, RigNights, SchedulePlanProgress } from '../../api/nightPlanTypes';
 import { PROVIDER_LABEL } from '../director/forecastLabels';
 import { withoutPlanningParams } from '../../hooks/useUrlState';
 
@@ -162,6 +162,129 @@ export function windowFor(night: Pick<RigNight, 'date' | 'noon_ms' | 'dusk_ms' |
   const clippedStart = Math.max(start, night.noon_ms);
   const clippedEnd = Math.min(end, night.noon_ms + DAY_MS);
   return clippedEnd > clippedStart ? { start_ms: clippedStart, end_ms: clippedEnd } : null;
+}
+
+/** Rigs whose sites stand close enough to share a sky. */
+export interface SiteGroup {
+  /** The first rig's id. */
+  key: string;
+  /** The sites' names, or the first rig's coordinates without one. */
+  name: string;
+  /** The first rig's latitude and longitude, to a tenth of a degree. */
+  coordinates: string;
+  rigs: RigNights[];
+}
+
+/**
+ * The rigs in groups of sites within `degrees` of the group's first rig in
+ * both latitude and longitude, in the order the rigs come. Rigs a degree
+ * apart see the same Moon and nearly the same cloud.
+ */
+export function siteGroups(rigs: RigNights[], degrees = 1): SiteGroup[] {
+  const groups: SiteGroup[] = [];
+  const near = (a: RigNights, b: RigNights) => {
+    const longitude = Math.abs(a.location.longitude_degrees - b.location.longitude_degrees) % 360;
+    return Math.abs(a.location.latitude_degrees - b.location.latitude_degrees) <= degrees
+      && Math.min(longitude, 360 - longitude) <= degrees;
+  };
+  for (const rig of rigs) {
+    const group = groups.find(candidate => near(candidate.rigs[0], rig));
+    if (group) group.rigs.push(rig);
+    else groups.push({ key: rig.rig.id, name: '', coordinates: coordinates(rig), rigs: [rig] });
+  }
+  for (const group of groups) {
+    const names = [...new Set(group.rigs.flatMap(rig => rig.planning_site ? [rig.planning_site.name] : []))];
+    group.name = names.length > 0 ? names.join(' · ') : group.coordinates;
+  }
+  return groups;
+}
+
+function coordinates(rig: RigNights): string {
+  const { latitude_degrees: latitude, longitude_degrees: longitude } = rig.location;
+  return `${Math.abs(latitude).toFixed(1)}° ${latitude < 0 ? 'S' : 'N'}, ${Math.abs(longitude).toFixed(1)}° ${longitude < 0 ? 'W' : 'E'}`;
+}
+
+/** The Moon across a drawn span, for a gradation from its rise to its set. */
+export interface MoonCourse {
+  /** Gradient stops: `at` from 0 to 1 across the span, `strength` from 0
+   *  (down) to 1 (a full Moon overhead). */
+  stops: Array<{ at: number; strength: number }>;
+  /** Rises, highest point and sets inside the span, in time order. */
+  events: Array<{ kind: 'rises' | 'highest' | 'sets'; ms: number }>;
+  /** Whether the Moon is above the horizon at any point of the span. */
+  up: boolean;
+}
+
+/**
+ * Where the Moon stands across `from`–`to`: its altitude samples, with the
+ * horizon crossings found between samples. A stop's strength grows with
+ * the Moon's phase and with the sine of its altitude; the square root
+ * keeps a thin Moon visible.
+ */
+export function moonCourse(moon: MoonAltitudes, illumination: number, from: number, to: number): MoonCourse {
+  const span = Math.max(1, to - from);
+  const strength = (degrees: number) => degrees > 0 ? Math.sqrt(Math.max(0, illumination) * Math.sin(degrees * Math.PI / 180)) : 0;
+  const altitudeAt = (ms: number): number | null => {
+    const position = (ms - moon.start_ms) / moon.step_ms;
+    const index = Math.floor(position);
+    if (index < 0 || index >= moon.degrees.length - 1) return moon.degrees[Math.round(position)] ?? null;
+    return moon.degrees[index] + (moon.degrees[index + 1] - moon.degrees[index]) * (position - index);
+  };
+  const stops: MoonCourse['stops'] = [];
+  const events: MoonCourse['events'] = [];
+  let up = false;
+  const add = (ms: number, degrees: number) => {
+    up ||= degrees > 0;
+    stops.push({ at: (ms - from) / span, strength: strength(degrees) });
+  };
+  for (const edge of [from, to]) {
+    const degrees = altitudeAt(edge);
+    if (degrees !== null) add(edge, degrees);
+  }
+  moon.degrees.forEach((degrees, index) => {
+    const ms = moon.start_ms + index * moon.step_ms;
+    if (ms > from && ms < to) {
+      add(ms, degrees);
+      // The Moon's culmination: a sample above both neighbours, not the
+      // edge of a span it only rises or only sets across.
+      const before = moon.degrees[index - 1];
+      const after = moon.degrees[index + 1];
+      if (degrees > 0 && before !== undefined && after !== undefined && degrees >= before && degrees > after) {
+        events.push({ kind: 'highest', ms });
+      }
+    }
+    const next = moon.degrees[index + 1];
+    if (next === undefined || (degrees > 0) === (next > 0)) return;
+    const crossing = ms + moon.step_ms * degrees / (degrees - next);
+    if (crossing <= from || crossing >= to) return;
+    add(crossing, 0);
+    events.push({ kind: next > 0 ? 'rises' : 'sets', ms: crossing });
+  });
+  stops.sort((left, right) => left.at - right.at);
+  events.sort((left, right) => left.ms - right.ms);
+  return { stops, events, up };
+}
+
+/** The Moon across a span in words: the share lit, then when it rises,
+ *  stands highest and sets, or that it stays down or up. Only the share
+ *  lit without its altitudes. */
+export function moonCourseWords(moon: MoonAltitudes, illumination: number, course: MoonCourse, format: (ms: number) => string): string {
+  const words = [`${Math.round(illumination * 100)}% lit`];
+  if (moon.degrees.length > 0) {
+    if (!course.up) words.push('down all night');
+    else if (!course.events.some(event => event.kind !== 'highest')) words.push('up all night');
+  }
+  for (const event of course.events) words.push(`${event.kind} ${format(event.ms)}`);
+  return words.join(' · ');
+}
+
+/** The CSS gradient that shades the Moon across a span; none without at
+ *  least two stops. */
+export function moonGradient(course: MoonCourse): string | undefined {
+  if (course.stops.length < 2) return undefined;
+  const stops = course.stops.map(stop =>
+    `color-mix(in srgb, var(--nights-moon) ${Math.round(stop.strength * 90)}%, transparent) ${(stop.at * 100).toFixed(2)}%`);
+  return `linear-gradient(to right, ${stops.join(', ')})`;
 }
 
 /** How soon to read kept night plans again: shortly while the server

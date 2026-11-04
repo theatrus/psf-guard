@@ -10,9 +10,13 @@
 
 use std::collections::BTreeMap;
 
-use psf_guard_director_core::windows::Interval;
+use psf_guard_director_core::{
+    visibility::{IcrsPosition, Site},
+    windows::Interval,
+};
 use serde::Serialize;
 
+use crate::astro::Frame;
 use crate::planner::{
     DoneReason, NinaProfile, NoNight, Plan, Planner, Sampling, Score, TargetReason,
 };
@@ -133,6 +137,92 @@ pub struct FilterRun {
     pub dithers: u32,
     pub start_ms: u64,
     pub end_ms: u64,
+    /// The Moon over the run, as the site sees it. `None` when the target
+    /// has no position.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub moon: Option<RunMoon>,
+}
+
+/// The Moon over one filter run, from samples at the run's ends and every
+/// quarter hour between, so a run that crosses moonrise or passes close to
+/// the Moon shows it.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct RunMoon {
+    /// The Moon's highest altitude; negative while it stays down.
+    pub max_altitude_degrees: f64,
+    /// The closest the Moon comes to the run's target.
+    pub min_separation_degrees: f64,
+}
+
+const MOON_STEP_MS: u64 = 15 * 60_000;
+
+impl RunMoon {
+    /// The instants to sample a run at: its start, each quarter hour inside
+    /// it, and its end.
+    pub fn sample_times(start_ms: u64, end_ms: u64) -> Vec<u64> {
+        let mut times = vec![start_ms];
+        let mut at = (start_ms / MOON_STEP_MS + 1) * MOON_STEP_MS;
+        while at < end_ms {
+            times.push(at);
+            at += MOON_STEP_MS;
+        }
+        if end_ms > start_ms {
+            times.push(end_ms);
+        }
+        times
+    }
+
+    /// The highest altitude and the closest separation of `(altitude,
+    /// separation)` samples; `None` without a finite sample.
+    pub fn over(samples: impl IntoIterator<Item = (f64, f64)>) -> Option<Self> {
+        samples
+            .into_iter()
+            .filter(|(altitude, separation)| altitude.is_finite() && separation.is_finite())
+            .fold(None, |moon: Option<Self>, (altitude, separation)| {
+                Some(match moon {
+                    None => Self {
+                        max_altitude_degrees: altitude,
+                        min_separation_degrees: separation,
+                    },
+                    Some(moon) => Self {
+                        max_altitude_degrees: moon.max_altitude_degrees.max(altitude),
+                        min_separation_degrees: moon.min_separation_degrees.min(separation),
+                    },
+                })
+            })
+    }
+}
+
+/// Fill in each run's Moon with the frame Target Scheduler's Moon avoidance
+/// uses: the topocentric Moon of date against the target's coordinates.
+fn place_moon(
+    night: &mut NightSchedule,
+    positions: &BTreeMap<(i64, i64), IcrsPosition>,
+    site: Site,
+    start_ms: i64,
+) {
+    let frame = Frame::new(site, start_ms);
+    for block in &mut night.blocks {
+        let Some(position) = positions
+            .get(&(block.target.project_id, block.target.target_id))
+            .copied()
+        else {
+            continue;
+        };
+        for run in &mut block.runs {
+            run.moon = RunMoon::over(
+                RunMoon::sample_times(run.start_ms, run.end_ms)
+                    .into_iter()
+                    .map(|at| {
+                        frame.moon_altitude_and_separation(
+                            at as i64,
+                            position.ra_degrees / 15.0,
+                            position.dec_degrees,
+                        )
+                    }),
+            );
+        }
+    }
 }
 
 /// A stretch on one target.
@@ -233,6 +323,17 @@ pub fn simulate(request: &Request) -> Simulation {
         sampling,
     );
     let mut progress = initial_progress(&planner, request.nights.len());
+    let positions: BTreeMap<(i64, i64), IcrsPosition> = request
+        .snapshot
+        .projects
+        .iter()
+        .flat_map(|project| {
+            project
+                .targets
+                .iter()
+                .map(|target| ((project.id, target.id), target.position))
+        })
+        .collect();
     let mut nights = Vec::with_capacity(request.nights.len());
     for (index, span) in request.nights.iter().enumerate() {
         if index > 0 {
@@ -240,7 +341,7 @@ pub fn simulate(request: &Request) -> Simulation {
         }
         let start = (span.start_ms.max(request.start_ms)) as i64;
         let end = span.end_ms as i64;
-        let night = run_night(
+        let mut night = run_night(
             &mut planner,
             request,
             estimate,
@@ -249,6 +350,7 @@ pub fn simulate(request: &Request) -> Simulation {
             &mut progress,
             index,
         );
+        place_moon(&mut night, &positions, request.profile.site, start);
         nights.push(night);
         for entry in &mut progress {
             if entry.completes_on.is_none()
@@ -685,6 +787,7 @@ fn record(
             dithers: u32::from(dither),
             start_ms: ms(start),
             end_ms: ms(finish),
+            moon: None,
         }),
     }
 }

@@ -31,6 +31,8 @@
      threshold are edged. */
   --nights-cloud: rgb(205 214 228);
   --nights-cloud-over: rgb(255 107 107 / 70%);
+  /* The Moon while it is up; brighter the fuller it is. */
+  --nights-moon: rgb(232 226 176);
   padding: 16px;
   min-width: 0;
 }
@@ -113,6 +115,13 @@
   overflow: hidden;
 }
 .nights-cell-clear { position: absolute; top: 0; bottom: 0; background: var(--nights-clear); }
+/* A site group: its name above its rigs, and the shared sky under them. */
+.nights-grid .nights-group-head th { padding-top: 10px; color: var(--color-text-primary); font-weight: 600; }
+.nights-grid tbody:first-of-type .nights-group-head th { padding-top: 2px; }
+.nights-sky-row .nights-rig { vertical-align: middle; }
+.nights-sky { display: grid; gap: 2px; width: 112px; padding: 0 7px; box-sizing: border-box; }
+.nights-sky-clouds, .nights-sky-moon { position: relative; display: block; height: 6px; border-radius: 3px; background-color: var(--nights-track); overflow: hidden; }
+.nights-sky-clouds .nights-cloud.is-cloudy { box-shadow: inset 0 -2px 0 var(--nights-cloud-over); }
 .nights-cell-plans { display: flex; gap: 3px; min-height: 8px; align-items: center; }
 .nights-plan-dot {
   display: inline-block;
@@ -240,6 +249,11 @@
   white-space: nowrap;
 }
 .nights-run:last-child { border-right: 0; }
+.nights-run:has(.nights-run-moon) { flex-direction: column; line-height: 1.1; }
+.nights-run-moon { display: inline-flex; align-items: center; gap: 2px; font-size: 10px; }
+.nights-run-moon[data-down='true'] { opacity: 0.55; }
+.nights-moon-strip { position: relative; height: 12px; margin-top: 4px; border-radius: 3px; background: var(--nights-track); overflow: hidden; }
+.nights-moon-caption { display: flex; align-items: center; gap: 6px; margin: 6px 0 0; font-size: 12px; color: var(--color-text-secondary); }
 .nights-timeline-axis { position: absolute; left: 0; right: 0; bottom: 0; height: 16px; font-size: 10px; color: var(--color-text-muted); }
 .nights-timeline-axis span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
 .nights-gap-legend { list-style: none; margin: 6px 0; padding: 0; display: grid; gap: 2px; font-size: 12px; color: var(--color-text-secondary); }

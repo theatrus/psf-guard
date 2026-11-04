@@ -78,6 +78,14 @@ export interface NightLoad {
   overbooked_hours: number;
 }
 
+/** The Moon's altitude at even steps from `start_ms`. */
+export interface MoonAltitudes {
+  start_ms: number;
+  step_ms: number;
+  /** Degrees, to a tenth. */
+  degrees: number[];
+}
+
 export interface RigNight {
   /** The evening's local date, YYYY-MM-DD. */
   date: string;
@@ -89,6 +97,8 @@ export interface RigNight {
   availability: NightAvailabilityView;
   moon_illumination: number;
   moon_hours_up_in_dark: number;
+  /** The Moon's altitude from noon to noon, for its rise and set. */
+  moon_altitudes: MoonAltitudes;
   targets: NightTargetHours[];
   load: NightLoad;
   /** The forecast's cloud cover through the night; empty without one. */
@@ -111,6 +121,14 @@ export interface ScheduleTargetRef {
   target_name: string;
 }
 
+/** The Moon over a filter run, sampled at its ends and every quarter hour. */
+export interface RunMoon {
+  /** The Moon's highest altitude; negative while it stays down. */
+  max_altitude_degrees: number;
+  /** The closest the Moon comes to the run's target. */
+  min_separation_degrees: number;
+}
+
 export interface ScheduleRun {
   exposure_plan_id: number;
   filter: string;
@@ -119,6 +137,8 @@ export interface ScheduleRun {
   dithers: number;
   start_ms: number;
   end_ms: number;
+  /** Absent when the target has no position. */
+  moon?: RunMoon;
 }
 
 export interface ScheduleCandidate {

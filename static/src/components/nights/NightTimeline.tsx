@@ -1,8 +1,9 @@
+import { Moon } from 'lucide-react';
 import { useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react';
 import type { ForecastHour } from '../../api/directorTypes';
-import type { RigNight, ScheduleBlock, ScheduleGapReason, ScheduleRule, ScheduleTargetReason, ScheduledNight } from '../../api/nightPlanTypes';
+import type { RigNight, RunMoon, ScheduleBlock, ScheduleGapReason, ScheduleRule, ScheduleTargetReason, ScheduledNight } from '../../api/nightPlanTypes';
 import { formatHours } from '../director/visibilityFormat';
-import { formatClock as formatBrowserClock } from './nightsModel';
+import { formatClock as formatBrowserClock, moonCourse, moonCourseWords, moonGradient } from './nightsModel';
 import type { OverrideBand } from './overridesModel';
 import { BlockMenu, EditableBands, HoldHandle, SNAP_MS, STEP_MS, type TimelineEdit, type TimelineScale } from './TimelineEditing';
 
@@ -149,6 +150,7 @@ export default function NightTimeline({ night, scheduled, colours, now, cloudThr
     onMoveBlock(scheduled.blocks[index], event.key === 'ArrowRight' ? STEP_MS : -STEP_MS);
   };
   const summaryId = `nights-clouds-${night.date}`;
+  const moon = night.moon_altitudes.degrees.length > 0 ? moonView(night, start, end, formatClock) : null;
   const reasons = [...new Set(scheduled.gaps.filter(gap => gap.end_ms > start && gap.start_ms < end).map(gap => gap.reason))];
   return <div className="nights-timeline-box">
     <div className="nights-timeline" role="group" aria-label="Schedule">
@@ -175,12 +177,14 @@ export default function NightTimeline({ night, scheduled, colours, now, cloudThr
           const frames = item.runs.reduce((sum, run) => sum + run.frames, 0);
           const key = keys[index];
           const dragged = drag?.key === key ? { transform: `translateX(${drag.dx}px)` } : {};
+          const moonLine = blockMoon(item);
+          const title = `${item.target.target_name} · ${formatClock(item.start_ms)} – ${formatClock(item.end_ms)} · ${runSummary(item)}`;
           return <button key={key} type="button" className="nights-block" style={{ ...style, ...dragged }}
             data-colour={colours.get(item.target.project_name) ?? 0} aria-pressed={chosen === key}
             data-movable={onMoveBlock ? 'true' : undefined}
-            aria-label={`${item.target.project_name}, ${item.target.target_name}: ${formatClock(item.start_ms)} – ${formatClock(item.end_ms)}, ${frames} frames${onMoveBlock ? '. Choose it for what to do with it; drag it, or press the left and right arrow keys, to move it 15 minutes at a time.' : ''}`}
+            aria-label={`${item.target.project_name}, ${item.target.target_name}: ${formatClock(item.start_ms)} – ${formatClock(item.end_ms)}, ${frames} frames${moonLine ? `. ${moonLine}` : ''}${onMoveBlock ? '. Choose it for what to do with it; drag it, or press the left and right arrow keys, to move it 15 minutes at a time.' : ''}`}
             aria-haspopup={edit ? 'menu' : undefined} aria-expanded={edit ? menu === key : undefined}
-            title={`${item.target.target_name} · ${formatClock(item.start_ms)} – ${formatClock(item.end_ms)} · ${runSummary(item)}`}
+            title={title}
             onPointerDown={event => press(key, event)}
             onPointerMove={slide}
             onPointerUp={release}
@@ -194,7 +198,14 @@ export default function NightTimeline({ night, scheduled, colours, now, cloudThr
             {item.runs.map(run => {
               const inner = place(run.start_ms, run.end_ms);
               const share = (run.end_ms - run.start_ms) / Math.max(1, item.end_ms - item.start_ms);
-              return inner && <span key={run.start_ms} className="nights-run" style={{ width: `${share * 100}%` }}>{share * (item.end_ms - item.start_ms) / span > 0.04 ? run.filter : ''}</span>;
+              const labelled = share * (item.end_ms - item.start_ms) / span > 0.04;
+              return inner && <span key={run.start_ms} className="nights-run" style={{ width: `${share * 100}%` }}
+                title={run.moon ? `${title}\n${run.filter}: ${moonWords(run.moon)}` : undefined}>
+                {labelled && <span>{run.filter}</span>}
+                {labelled && run.moon && <span className="nights-run-moon" data-down={run.moon.max_altitude_degrees < 0 ? 'true' : undefined}>
+                  <Moon size={10} aria-hidden="true" />{Math.round(run.moon.min_separation_degrees)}°
+                </span>}
+              </span>;
             })}
           </button>;
         })}
@@ -211,6 +222,8 @@ export default function NightTimeline({ night, scheduled, colours, now, cloudThr
             title={`${formatClock(hour.start_ms)} – ${formatClock(hour.end_ms)}: ${cloudWords(hour)}`} />;
         })}
       </div>}
+      {moon && <div className="nights-moon-strip" role="img" aria-label={`Moon: ${moon.label}`} title={moon.label}
+        style={{ backgroundImage: moon.gradient }} />}
       {edit && menu !== null && (() => {
         const index = keys.indexOf(menu);
         if (index < 0) return null;
@@ -222,6 +235,7 @@ export default function NightTimeline({ night, scheduled, colours, now, cloudThr
         {ticks.map(t => <span key={t} style={{ left: `${((t - start) / span) * 100}%` }}>{formatClock(t)}</span>)}
       </div>
     </div>
+    {moon && <p className="nights-moon-caption" aria-hidden="true"><Moon size={12} />{moon.label}</p>}
     {(reasons.length > 0 || night.clouds.length > 0) && <ul className="nights-gap-legend" aria-label="Legend">
       {reasons.map(reason => <li key={reason}><span className="nights-gap-key" data-reason={reason} aria-hidden="true" />{GAP_LABEL[reason]}: {GAP_HELP[reason]}</li>)}
       {night.clouds.length > 0 && <li id={summaryId}><span className="nights-cloud-key" aria-hidden="true" />
@@ -272,6 +286,36 @@ function cloudWords(hour: ForecastHour): string {
   return `${Math.round(hour.cloud_total)}% cloud${layers.length ? ` (${layers.join(', ')})` : ''}`;
 }
 
+/** The Moon over a run: the closest it comes to the target, and its
+ *  highest altitude. */
+function moonWords(moon: RunMoon): string {
+  const closest = `Moon ${Math.round(moon.min_separation_degrees)}° away`;
+  return moon.max_altitude_degrees < 0 ? `${closest}, down` : `${closest}, ${Math.round(moon.max_altitude_degrees)}° up`;
+}
+
+/** A block's Moon, one entry per filter: the closest the Moon comes to the
+ *  target and its highest altitude over that filter's runs. Empty without
+ *  a Moon. */
+function blockMoon(block: ScheduleBlock): string {
+  const filters = new Map<string, RunMoon>();
+  for (const run of block.runs) {
+    if (!run.moon) continue;
+    const seen = filters.get(run.filter);
+    filters.set(run.filter, seen ? {
+      max_altitude_degrees: Math.max(seen.max_altitude_degrees, run.moon.max_altitude_degrees),
+      min_separation_degrees: Math.min(seen.min_separation_degrees, run.moon.min_separation_degrees),
+    } : run.moon);
+  }
+  return [...filters].map(([filter, moon]) => `${filter}: ${moonWords(moon)}`).join(' · ');
+}
+
+/** The night's Moon across the drawn span: the gradient from its rise to
+ *  its set, and its phase and times in words. */
+function moonView(night: RigNight, from: number, to: number, formatClock: (ms: number) => string) {
+  const course = moonCourse(night.moon_altitudes, night.moon_illumination, from, to);
+  return { label: moonCourseWords(night.moon_altitudes, night.moon_illumination, course, formatClock), gradient: moonGradient(course) };
+}
+
 function runSummary(block: ScheduleBlock): string {
   const parts = block.runs.reduce<Map<string, number>>((map, run) => map.set(run.filter, (map.get(run.filter) ?? 0) + run.frames), new Map());
   return [...parts].map(([filter, frames]) => `${filter} ×${frames}`).join(', ');
@@ -284,10 +328,12 @@ function BlockReasons({ block, zone }: { block: ScheduleBlock; zone?: string }) 
   const formatClock = (ms: number) => formatBrowserClock(ms, zone);
   const scored = decision.candidates.filter(candidate => candidate.score);
   const rules = [...new Set(scored.flatMap(candidate => candidate.score!.rules.map(rule => rule.rule)))];
+  const moonLine = blockMoon(block);
   const exposure = block.runs.reduce((sum, run) => sum + run.frames * run.exposure_seconds, 0) / 3600;
   return <section className="nights-reasons" aria-label="Why this target">
     <h4>{block.target.project_name} · {block.target.target_name}</h4>
     <p>{formatClock(block.start_ms)} – {formatClock(block.end_ms)}: {runSummary(block)}, {formatHours(exposure)} of exposure{block.slew ? ', after a slew and centre' : ''}.</p>
+    {moonLine && <p className="nights-run-moons">{moonLine}</p>}
     <p className="director-muted">{DECISION_LABEL[decision.kind]}{decision.note ? ` (${decision.note})` : ''}.</p>
     {decision.candidates.length > 0 && <div className="director-table-scroll"><table className="nights-plan-table">
       <thead><tr><th>Target</th><th>Where it stood</th>{scored.length > 0 && <th>Score</th>}{rules.map(rule => <th key={rule}>{RULE_LABEL[rule]}</th>)}</tr></thead>

@@ -1947,6 +1947,19 @@ Each cell is one rig's night, from dusk to dawn:
 - a dot for each plan the rig would shoot that night, in that plan's colour;
 - the hours it would shoot, or **all done** once every plan has its frames.
 
+The grid groups rigs whose sites lie within a degree of each other in
+latitude and longitude, under the sites' names. Under each group, a
+**Cloud · Moon** row shows two bars for each night, from dusk to dawn like
+the cells' bars:
+
+- the forecast's cloud, lighter the more cloud, with a red edge on hours
+  over the site's threshold; a group without a forecast has no cloud bar;
+- the Moon from its rise to its set, brightest where it stands highest
+  and brighter the fuller it is.
+
+Hover the bars for the Moon's rise, highest point and set, and the range
+of cloud cover.
+
 ![Nights: two rigs across a week, each night's clear hours, Moon and planned plans](images/nights-grid.png)
 
 The server computes the night plans as a person's work, which the
@@ -1976,10 +1989,17 @@ Choose a cell to open the night below the grid:
   that fit against the clear hours.
 - **The schedule** from the runtime that drives the rig: a timeline from an
   hour before dusk to an hour after dawn, with a block for each stretch on
-  a target and its filter runs inside. Gaps are shaded by their reason:
-  twilight, not available, Moon, meridian, below limits, all done, nothing
-  fits, or, on a Director rig, held or left out by the night's overrides.
-  Choose a block to see why that target was chosen.
+  a target and its filter runs inside. Each filter run shows the closest
+  the Moon comes to the target during the run; the angle is dimmed while
+  the Moon stays below the horizon. Under the cloud band, a strip shades
+  the Moon from its rise to its set, brightest where it stands highest and
+  brighter the fuller it is. Its label gives the share of the Moon lit and
+  the times it rises, stands highest and sets. Gaps are shaded by their
+  reason: twilight, not available, Moon, meridian, below limits, all done,
+  nothing fits, or, on a Director rig, held or left out by the night's
+  overrides.
+  Choose a block to see why that target was chosen, and for each of its
+  filters the Moon's closest angle and highest altitude.
 - **The plans this night**: only the targets the night applies to. The
   table lists first the targets the schedule above plans, in its order,
   with the frames planned. Then it lists the targets that are up and clear

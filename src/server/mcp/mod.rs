@@ -1627,9 +1627,11 @@ impl PsfGuardMcp {
         ctx: RequestContext<RoleServer>,
     ) -> ToolResult {
         let nights = args.nights.unwrap_or(7);
+        // The Moon's altitude curves are for drawing; agents get the rest.
         let mut body = json!({
             "nights": nights,
             "schedule_nights": if args.schedule { nights } else { 0 },
+            "moon_altitudes": false,
         });
         if !args.rigs.is_empty() {
             body["rigs"] = json!(args.rigs);

@@ -387,6 +387,45 @@ fn a_strict_moon_rule_on_a_full_moon_night_waits_for_the_moon() {
     );
 }
 
+#[test]
+fn each_run_carries_the_moon_over_the_run() {
+    let simulation = run(&heart(), 1, None, Mode::Preview);
+    let runs: Vec<_> = simulation.nights[0]
+        .blocks
+        .iter()
+        .flat_map(|block| &block.runs)
+        .collect();
+    assert!(!runs.is_empty());
+    for run in runs {
+        let moon = run.moon.unwrap_or_else(|| panic!("{run:?}"));
+        assert!(
+            (-90.0..=90.0).contains(&moon.max_altitude_degrees),
+            "{moon:?}"
+        );
+        assert!(
+            (0.0..=180.0).contains(&moon.min_separation_degrees),
+            "{moon:?}"
+        );
+    }
+}
+
+#[test]
+fn a_run_s_moon_samples_its_ends_and_each_quarter_hour_between() {
+    let minute = 60_000;
+    assert_eq!(
+        RunMoon::sample_times(7 * minute, 40 * minute),
+        vec![7 * minute, 15 * minute, 30 * minute, 40 * minute]
+    );
+    assert_eq!(
+        RunMoon::sample_times(15 * minute, 30 * minute),
+        vec![15 * minute, 30 * minute]
+    );
+    let moon = RunMoon::over([(-4.0, 50.0), (2.5, 41.0), (f64::NAN, 1.0), (1.0, 44.0)]).unwrap();
+    assert_eq!(moon.max_altitude_degrees, 2.5);
+    assert_eq!(moon.min_separation_degrees, 41.0);
+    assert_eq!(RunMoon::over([]), None);
+}
+
 /// Run with `cargo test --release -p psf-guard-ts-planner --test simulate timing -- --ignored --nocapture`.
 #[test]
 #[ignore]

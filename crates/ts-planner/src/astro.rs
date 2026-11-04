@@ -183,9 +183,28 @@ impl Frame {
     /// coordinates brought to the equinox of date.
     pub(crate) fn moon_separation(&self, utc_ms: i64, ra_hours: f64, dec_degrees: f64) -> f64 {
         let moon = self.moon_from(utc_ms, &self.observer);
+        separation(moon, self.target_of_date(ra_hours, dec_degrees))
+    }
+
+    /// The Moon's altitude and its separation from a target, from one
+    /// position of the Moon.
+    pub(crate) fn moon_altitude_and_separation(
+        &self,
+        utc_ms: i64,
+        ra_hours: f64,
+        dec_degrees: f64,
+    ) -> (f64, f64) {
+        let moon = self.moon_from(utc_ms, &self.observer);
+        let altitude = self.horizontal(moon.ra_hours, moon.dec_degrees, utc_ms).0;
+        (
+            altitude,
+            separation(moon, self.target_of_date(ra_hours, dec_degrees)),
+        )
+    }
+
+    fn target_of_date(&self, ra_hours: f64, dec_degrees: f64) -> OfDate {
         let target = sofars::vm::s2c((ra_hours * 15.0).to_radians(), dec_degrees.to_radians());
-        let target = self.of_date(&target);
-        separation(moon, target)
+        self.of_date(&target)
     }
 }
 
