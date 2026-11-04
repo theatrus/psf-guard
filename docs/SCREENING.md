@@ -155,8 +155,8 @@ and cards show the one scoring used. A small superscript letter marks the source
 N.I.N.A. and **P** for PSF Guard.
 
 **Stars and HFR** in the Scoring control, and **Measured by** under
-Settings › Review › Sequence scoring, choose the source. PSF Guard is the
-default. The choice decides:
+Settings › Review › Grading & display › Sequence scoring, choose the source.
+PSF Guard is the default. The choice decides:
 
 - which value Max HFR and Min stars judge, and the zero-star cap;
 - which values frames are compared on for HFR rise, star loss and soft

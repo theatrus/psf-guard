@@ -32,7 +32,7 @@
     "highlights": [
       {
         "title": "Plan each rig's nights",
-        "body": "Open Rigs › Nights for predicted schedules, clear hours and the Moon. Mark availability, enable site forecasts, and compare plan completion dates. Review Director night overrides or persistent Target Scheduler changes before saving. Night planning is in early beta; availability marks and forecasts do not control a rig."
+        "body": "Open Rigs › Nights for predicted schedules, clear hours and the Moon. Compare nearby sites together and check the Moon’s closest angle on each filter run. Mark availability, enable site forecasts, and compare plan completion dates. Review Director night overrides or persistent Target Scheduler changes before saving. Night planning is in early beta; availability marks and forecasts do not control a rig."
       },
       {
         "title": "Choose the star measurements used for grading",

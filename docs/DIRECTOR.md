@@ -1961,10 +1961,10 @@ the cells' bars:
 Hover the bars for the Moon's rise, highest point and set, and the range
 of cloud cover.
 
-![Nights: two rigs across a week, each night's clear hours, Moon and planned plans](images/nights-grid.png)
+![Nights: five rigs grouped by site, with clear hours, Moon and planned work. Site coordinates are covered for privacy.](images/nights-grid-013.png)
 
-The server computes the night plans as a person's work, which the
-header's job list shows as **Planning nights** with Stop, and background
+The server lists requested calculations as **Planning nights** in the
+header’s job list, with a **Stop** control. Background
 work waits while it runs. The server keeps the plans it computed and
 computes them again when a mark, an override, a forecast, a rig's setup or
 a rig's database changes, and every two minutes for tonight, which is
