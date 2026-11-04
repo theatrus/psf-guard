@@ -78,6 +78,14 @@ export interface NightLoad {
   overbooked_hours: number;
 }
 
+/** The Moon's altitude at even steps from `start_ms`. */
+export interface MoonAltitudes {
+  start_ms: number;
+  step_ms: number;
+  /** Degrees, to a tenth. */
+  degrees: number[];
+}
+
 export interface RigNight {
   /** The evening's local date, YYYY-MM-DD. */
   date: string;
@@ -89,8 +97,8 @@ export interface RigNight {
   availability: NightAvailabilityView;
   moon_illumination: number;
   moon_hours_up_in_dark: number;
-  /** The stretches of darkness with the Moon up. */
-  moon_up: NightInterval[];
+  /** The Moon's altitude from noon to noon, for its rise and set. */
+  moon_altitudes: MoonAltitudes;
   targets: NightTargetHours[];
   load: NightLoad;
   /** The forecast's cloud cover through the night; empty without one. */

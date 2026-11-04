@@ -3,7 +3,9 @@
 //! during that darkness, and what the Moon is doing. A planning estimate
 //! from sampled positions; the rig still decides at dispatch time.
 
-use crate::ephemeris::{moon_illumination, moon_position, separation_degrees, sun_position};
+use crate::ephemeris::{
+    moon_at_site, moon_illumination, moon_position, separation_degrees, sun_position,
+};
 use crate::moon::{MoonPolicy, MoonTrack};
 use crate::visibility::{
     altitude_allowed, meridian_windows, AltitudeLimits, EarthOrientation, Horizon, IcrsPosition,
@@ -209,12 +211,25 @@ pub struct Night {
     pub available_dark_hours: f64,
     pub moon_illumination: f64,
     pub moon_hours_up_in_dark: f64,
-    /// The stretches of darkness with the Moon above the horizon, at the
-    /// request's step.
-    #[serde(default)]
-    pub moon_up_in_dark: Vec<Interval>,
+    /// The Moon's altitude from noon to noon, for drawing its rise and set.
+    /// Only the night plans draw it, so it is left out of the summary's JSON.
+    #[serde(skip)]
+    pub moon_altitudes: MoonAltitudes,
     pub targets: Vec<TargetNight>,
 }
+
+/// The Moon's altitude at even steps from `start_ms`.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct MoonAltitudes {
+    pub start_ms: u64,
+    pub step_ms: u64,
+    /// Degrees, to a tenth.
+    pub degrees: Vec<f64>,
+}
+
+/// About how often the night records the Moon's altitude.
+const MOON_ALTITUDE_STEP_MS: u64 = 15 * 60_000;
 
 /// One instant of one night, for drawing.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -420,7 +435,14 @@ fn one_night(
     let mut dark_hours = 0.0;
     let mut available_dark_hours = 0.0;
     let mut moon_hours = 0.0;
-    let mut moon_up_in_dark: Vec<Interval> = Vec::new();
+    // Every few samples, so the steps stay even whatever the request's step.
+    let moon_every = MOON_ALTITUDE_STEP_MS.div_ceil(request.step_ms).max(1);
+    let mut moon_altitudes = MoonAltitudes {
+        start_ms: noon,
+        step_ms: request.step_ms * moon_every,
+        degrees: Vec::new(),
+    };
+    let mut index = 0u64;
     let available: Option<Vec<Interval>> = request.available.as_deref().map(merged);
     let mut samples = Vec::new();
     let mut per_target: Vec<TargetNight> = request
@@ -511,6 +533,8 @@ fn one_night(
         let sun = sun_position(t).ok_or(VisibilityError::AstronomyUnavailable)?;
         let sun_altitude = observer.observe(sun)?.altitude_degrees;
         let dark = sun_altitude < request.dark_below_degrees;
+        let record_moon = index.is_multiple_of(moon_every);
+        index += 1;
         // Outside darkness only the drawing needs positions.
         let wanted = dark || keep_samples;
         let moon = moon_position(t);
@@ -519,6 +543,14 @@ fn one_night(
         } else {
             0.0
         };
+        if record_moon {
+            // The Moon as the site sees it, parallax included, for its
+            // true rise and set.
+            let seen = observer.observe(moon_at_site(t, request.site).unwrap_or(moon))?;
+            moon_altitudes
+                .degrees
+                .push((seen.altitude_degrees * 10.0).round() / 10.0);
+        }
         let moon_up = moon_altitude > 0.0;
         let share = if dark {
             available_share(available.as_deref(), t, request.step_ms)
@@ -534,14 +566,6 @@ fn one_night(
             available_dark_hours += step_hours * share;
             if moon_up {
                 moon_hours += step_hours;
-                let end_ms = t + request.step_ms;
-                match moon_up_in_dark.last_mut() {
-                    Some(last) if last.end_ms == t => last.end_ms = end_ms,
-                    _ => moon_up_in_dark.push(Interval {
-                        start_ms: t,
-                        end_ms,
-                    }),
-                }
             }
         }
         let mut target_samples = Vec::new();
@@ -632,7 +656,7 @@ fn one_night(
             available_dark_hours,
             moon_illumination: moon_illumination(midnight).unwrap_or(0.0),
             moon_hours_up_in_dark: moon_hours,
-            moon_up_in_dark,
+            moon_altitudes,
             targets: per_target,
         },
         samples,
@@ -957,21 +981,19 @@ mod tests {
             first.moon_illumination
         );
         assert!(first.moon_hours_up_in_dark > 5.0);
-        // The stretches with the Moon up add up to its hours up in the dark.
-        let up_ms: u64 = first
-            .moon_up_in_dark
-            .iter()
-            .map(|span| span.end_ms - span.start_ms)
-            .sum();
-        assert!(
-            (up_ms as f64 / 3_600_000.0 - first.moon_hours_up_in_dark).abs() < 1e-9,
-            "{:?}",
-            first.moon_up_in_dark
-        );
-        assert!(first
-            .moon_up_in_dark
+        // A quarter hour's altitude from noon to noon: near full, the Moon
+        // rises and sets once and rides high around midnight.
+        let moon = &first.moon_altitudes;
+        assert_eq!(moon.start_ms, first.noon_ms);
+        assert_eq!(moon.step_ms, 15 * 60_000);
+        assert_eq!(moon.degrees.len(), 96);
+        let crossings = moon
+            .degrees
             .windows(2)
-            .all(|pair| pair[0].end_ms < pair[1].start_ms));
+            .filter(|pair| (pair[0] > 0.0) != (pair[1] > 0.0))
+            .count();
+        assert_eq!(crossings, 2, "{:?}", moon.degrees);
+        assert!(moon.degrees[48] > 30.0, "{:?}", moon.degrees);
         let heart = &first.targets[0];
         // The Heart Nebula rides high all night from 34 N in September.
         assert!(heart.hours_up > 7.0, "{heart:?}");

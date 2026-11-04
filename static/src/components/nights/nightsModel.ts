@@ -1,4 +1,4 @@
-import type { NightAppliedMark, NightAvailabilityState, NightInterval, NightPlanProject, NightPlans, NightPlanTarget, NightRuntime, NightTargetHours, NightSchedule, RigNight, RigNights, SchedulePlanProgress } from '../../api/nightPlanTypes';
+import type { MoonAltitudes, NightAppliedMark, NightAvailabilityState, NightInterval, NightPlanProject, NightPlans, NightPlanTarget, NightRuntime, NightTargetHours, NightSchedule, RigNight, RigNights, SchedulePlanProgress } from '../../api/nightPlanTypes';
 import { PROVIDER_LABEL } from '../director/forecastLabels';
 import { withoutPlanningParams } from '../../hooks/useUrlState';
 
@@ -166,6 +166,60 @@ export function windowFor(night: Pick<RigNight, 'date' | 'noon_ms' | 'dusk_ms' |
 
 /** How soon to read kept night plans again: shortly while the server
  *  computes newer ones, else `otherwise`. */
+/** The Moon across a drawn span, for a gradation from its rise to its set. */
+export interface MoonCourse {
+  /** Gradient stops: `at` from 0 to 1 across the span, `strength` from 0
+   *  (down) to 1 (a full Moon overhead). */
+  stops: Array<{ at: number; strength: number }>;
+  /** Rises, highest point and sets inside the span, in time order. */
+  events: Array<{ kind: 'rises' | 'highest' | 'sets'; ms: number }>;
+  /** Whether the Moon is up at any point of the span. */
+  up: boolean;
+}
+
+/**
+ * Where the Moon stands across `from`–`to`: its altitude samples, with the
+ * horizon crossings found between samples. A stop's strength grows with
+ * the Moon's phase and with the sine of its altitude; the square root
+ * keeps a thin Moon visible.
+ */
+export function moonCourse(moon: MoonAltitudes, illumination: number, from: number, to: number): MoonCourse {
+  const span = Math.max(1, to - from);
+  const strength = (degrees: number) => degrees > 0 ? Math.sqrt(Math.max(0, illumination) * Math.sin(degrees * Math.PI / 180)) : 0;
+  const altitudeAt = (ms: number): number | null => {
+    const position = (ms - moon.start_ms) / moon.step_ms;
+    const index = Math.floor(position);
+    if (index < 0 || index >= moon.degrees.length - 1) return moon.degrees[Math.round(position)] ?? null;
+    return moon.degrees[index] + (moon.degrees[index + 1] - moon.degrees[index]) * (position - index);
+  };
+  const stops: MoonCourse['stops'] = [];
+  const events: MoonCourse['events'] = [];
+  const add = (ms: number, degrees: number) => stops.push({ at: (ms - from) / span, strength: strength(degrees) });
+  for (const edge of [from, to]) {
+    const degrees = altitudeAt(edge);
+    if (degrees !== null) add(edge, degrees);
+  }
+  let peak: { ms: number; degrees: number } | null = null;
+  moon.degrees.forEach((degrees, index) => {
+    const ms = moon.start_ms + index * moon.step_ms;
+    if (ms > from && ms < to) {
+      add(ms, degrees);
+      if (degrees > 0 && (!peak || degrees > peak.degrees)) peak = { ms, degrees };
+    }
+    const next = moon.degrees[index + 1];
+    if (next === undefined || (degrees > 0) === (next > 0)) return;
+    const crossing = ms + moon.step_ms * degrees / (degrees - next);
+    if (crossing <= from || crossing >= to) return;
+    add(crossing, 0);
+    events.push({ kind: next > 0 ? 'rises' : 'sets', ms: crossing });
+  });
+  const highest = peak as { ms: number; degrees: number } | null;
+  if (highest) events.push({ kind: 'highest', ms: highest.ms });
+  stops.sort((left, right) => left.at - right.at);
+  events.sort((left, right) => left.ms - right.ms);
+  return { stops, events, up: stops.some(stop => stop.strength > 0) };
+}
+
 export function refetchKept(data: NightPlans | undefined, otherwise: number | false): number | false {
   return data?.refreshing ? 3000 : otherwise;
 }

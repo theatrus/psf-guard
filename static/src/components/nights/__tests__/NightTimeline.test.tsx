@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import NightTimeline from '../NightTimeline';
 import { OverrideChips } from '../TimelineEditing';
 import type { NightOverride } from '../../../api/nightPlanTypes';
-import { NOON, night } from './fixtures';
+import { moonAltitudes, night } from './fixtures';
 
 const HOUR = 3_600_000;
 
@@ -75,35 +75,44 @@ describe('NightTimeline', () => {
       runs: [
         { exposure_plan_id: 700, filter: 'Ha', exposure_seconds: 300, frames: 12, dithers: 0, start_ms: start, end_ms: start + HOUR, moon: { max_altitude_degrees: 31.4, min_separation_degrees: 42.2 } },
         { exposure_plan_id: 701, filter: 'OIII', exposure_seconds: 300, frames: 12, dithers: 0, start_ms: start + HOUR, end_ms: start + 2 * HOUR, moon: { max_altitude_degrees: -8, min_separation_degrees: 95 } },
+        { exposure_plan_id: 700, filter: 'Ha', exposure_seconds: 300, frames: 12, dithers: 0, start_ms: start + 2 * HOUR, end_ms: start + 3 * HOUR, moon: { max_altitude_degrees: 20, min_separation_degrees: 38 } },
       ],
+      end_ms: start + 3 * HOUR,
     };
     render(<NightTimeline night={base} scheduled={{ ...scheduledFor(base), blocks: [item] }} colours={new Map()} />);
     const up = screen.getByTitle(/ Ha: Moon 42° away, 31° up$/);
     // The block's own line stays first, since the runs cover the block.
-    expect(up.getAttribute('title')).toMatch(/^IC 1805 · .+ – .+ · Ha ×12, OIII ×12\n/);
+    expect(up.getAttribute('title')).toMatch(/^IC 1805 · .+ – .+ · Ha ×24, OIII ×12\n/);
     expect(up).toHaveTextContent('Ha42°');
     expect(up.querySelector('.nights-run-moon')).not.toHaveAttribute('data-down');
     const down = screen.getByTitle(/ OIII: Moon 95° away, down$/);
     expect(down.querySelector('.nights-run-moon')).toHaveAttribute('data-down', 'true');
     expect(screen.queryByRole('list', { name: 'Legend' })).toBeNull();
+    // Screen readers hear the Moon with the block.
+    expect(screen.getByRole('button', { name: /IC 1805/ })).toHaveAccessibleName(/, 36 frames\. Ha: Moon 38° away, 31° up · OIII: Moon 95° away, down$/);
     fireEvent.click(screen.getByRole('button', { name: /IC 1805/ }));
-    expect(within(screen.getByRole('region', { name: 'Why this target' })).getByText('Ha: Moon 42° away, 31° up · OIII: Moon 95° away, down')).toBeInTheDocument();
+    expect(within(screen.getByRole('region', { name: 'Why this target' })).getByText('Ha: Moon 38° away, 31° up · OIII: Moon 95° away, down')).toBeInTheDocument();
   });
 
-  it('draws the night\'s Moon under the schedule, shaded while it is up', () => {
-    const base = night(0, { moon_illumination: 0.42, moon_up: [{ start_ms: NOON + 9 * HOUR, end_ms: NOON + 15 * HOUR }] });
+  it('draws the night\'s Moon under the cloud band, from its rise to its set', () => {
+    const base = night(0);
+    const clouds = [{ start_ms: base.noon_ms + 8 * HOUR, end_ms: base.noon_ms + 9 * HOUR, cloud_total: 20, cloud_low: null, cloud_mid: null, cloud_high: null }];
+    const lit = { ...base, moon_illumination: 0.42, moon_altitudes: moonAltitudes(base.noon_ms), clouds };
     const scheduled = { date: base.date, start_ms: base.dusk_ms!, end_ms: base.dawn_ms!, blocks: [], gaps: [], frames: 0, exposure_hours: 0, note: null };
-    render(<NightTimeline night={base} scheduled={scheduled} colours={new Map()} />);
-    const strip = screen.getByRole('group', { name: /^Moon: 42% lit · up .+ – .+$/ });
-    expect(strip.querySelectorAll('.nights-moon-up')).toHaveLength(1);
-    expect(strip).toHaveTextContent(/^42% lit · up .+ – .+$/);
+    render(<NightTimeline night={lit} scheduled={scheduled} colours={new Map()} />);
+    const strip = screen.getByRole('img', { name: /^Moon: 42% lit · rises .+ · highest .+ · sets .+$/ });
+    expect(strip.style.backgroundImage).toMatch(/^linear-gradient\(to right, /);
+    // The same words under the axis, so the strip itself stays clear.
+    expect(screen.getByText(/^42% lit · rises .+ · highest .+ · sets .+$/)).toHaveClass('nights-moon-caption');
+    expect(screen.getByRole('group', { name: 'Cloud cover' }).compareDocumentPosition(strip) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('says when the Moon stays down all night', () => {
-    const base = night(0, { moon_illumination: 0.03 });
+    const base = night(0);
+    const down = { ...base, moon_illumination: 0.03, moon_altitudes: { ...moonAltitudes(base.noon_ms), degrees: Array(96).fill(-10) } };
     const scheduled = { date: base.date, start_ms: base.dusk_ms!, end_ms: base.dawn_ms!, blocks: [], gaps: [], frames: 0, exposure_hours: 0, note: null };
-    render(<NightTimeline night={base} scheduled={scheduled} colours={new Map()} />);
-    expect(screen.getByRole('group', { name: 'Moon: 3% lit · down all night' })).toBeInTheDocument();
+    render(<NightTimeline night={down} scheduled={scheduled} colours={new Map()} />);
+    expect(screen.getByRole('img', { name: 'Moon: 3% lit · down all night' })).toBeInTheDocument();
   });
 
   it('opens a menu on a block while editing, whose actions change the overrides', () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { availableShares, clockOnNight, darkState, darkWindows, completesOn, datesBetween, decidedBy, forecastMark, formatClock, isDate, loadWords, markGlyph, markOrigin, planColours, planRows, plansOnNight, windowFor } from '../nightsModel';
-import { NOON, night, rig } from './fixtures';
+import { moonCourse, availableShares, clockOnNight, darkState, darkWindows, completesOn, datesBetween, decidedBy, forecastMark, formatClock, isDate, loadWords, markGlyph, markOrigin, planColours, planRows, plansOnNight, windowFor } from '../nightsModel';
+import { NOON, moonAltitudes, night, rig } from './fixtures';
 
 const HOUR = 3_600_000;
 
@@ -157,6 +157,35 @@ describe('night plan helpers', () => {
     expect(completesOn([entry(1), entry(3)])).toBe(3);
     expect(completesOn([entry(1), entry(null)])).toBeNull();
     expect(completesOn([entry(null, true)])).toBe(-1);
+  });
+});
+
+describe('the Moon across a night', () => {
+  const HOUR = 3_600_000;
+  const from = NOON + 6 * HOUR;
+  const to = NOON + 18 * HOUR;
+
+  it('finds its rise, highest point and set, and grades the strip by altitude and phase', () => {
+    const course = moonCourse(moonAltitudes(NOON), 0.42, from, to);
+    expect(course.events).toEqual([
+      { kind: 'rises', ms: NOON + 9 * HOUR },
+      { kind: 'highest', ms: NOON + 12 * HOUR },
+      { kind: 'sets', ms: NOON + 15 * HOUR },
+    ]);
+    expect(course.up).toBe(true);
+    expect(course.stops[0]).toEqual({ at: 0, strength: 0 });
+    expect(course.stops.at(-1)).toEqual({ at: 1, strength: 0 });
+    const peak = course.stops.find(stop => stop.at === 0.5)!;
+    expect(peak.strength).toBeCloseTo(Math.sqrt(0.42 * Math.sin(50 * Math.PI / 180)), 6);
+    expect(course.stops.every((stop, index) => index === 0 || stop.at >= course.stops[index - 1].at)).toBe(true);
+  });
+
+  it('has no events while the Moon stays down or stays up', () => {
+    const down = moonCourse({ ...moonAltitudes(NOON), degrees: Array(96).fill(-10) }, 0.9, from, to);
+    expect(down).toMatchObject({ up: false, events: [] });
+    const up = moonCourse({ ...moonAltitudes(NOON), degrees: Array(96).fill(30) }, 0.9, from, to);
+    expect(up.up).toBe(true);
+    expect(up.events.map(event => event.kind)).toEqual(['highest']);
   });
 });
 

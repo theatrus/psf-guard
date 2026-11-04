@@ -109,9 +109,10 @@
   and overrides are entered and shown in.
 - The schedule under **Rigs › Nights** shows the closest the Moon comes to
   the target on each filter run. The angle is dimmed while the Moon stays
-  down. A strip under the schedule shows when the Moon is up and how full
-  it is. Choose a block to see the Moon's closest angle and highest
-  altitude for each of its filter runs.
+  down. Under the cloud band, a strip shades the Moon from its rise to its
+  set, brightest where it stands highest and brighter the fuller it is.
+  Choose a block to see the Moon's closest angle and highest altitude for
+  each of its filters.
 - **Visibility** in a plan's workspace estimates the nights a rig needs
   with the marks and the forecast counted, and shows each night's clear
   hours and marks. Once the plan is activated on a rig, it also shows the

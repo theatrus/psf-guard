@@ -3,7 +3,7 @@ import { useRef, useState, type CSSProperties, type KeyboardEvent, type PointerE
 import type { ForecastHour } from '../../api/directorTypes';
 import type { RigNight, RunMoon, ScheduleBlock, ScheduleGapReason, ScheduleRule, ScheduleTargetReason, ScheduledNight } from '../../api/nightPlanTypes';
 import { formatHours } from '../director/visibilityFormat';
-import { formatClock as formatBrowserClock } from './nightsModel';
+import { formatClock as formatBrowserClock, moonCourse } from './nightsModel';
 import type { OverrideBand } from './overridesModel';
 import { BlockMenu, EditableBands, HoldHandle, SNAP_MS, STEP_MS, type TimelineEdit, type TimelineScale } from './TimelineEditing';
 
@@ -150,6 +150,7 @@ export default function NightTimeline({ night, scheduled, colours, now, cloudThr
     onMoveBlock(scheduled.blocks[index], event.key === 'ArrowRight' ? STEP_MS : -STEP_MS);
   };
   const summaryId = `nights-clouds-${night.date}`;
+  const moon = night.moon_altitudes.degrees.length > 0 ? moonView(night, start, end, formatClock) : null;
   const reasons = [...new Set(scheduled.gaps.filter(gap => gap.end_ms > start && gap.start_ms < end).map(gap => gap.reason))];
   return <div className="nights-timeline-box">
     <div className="nights-timeline" role="group" aria-label="Schedule">
@@ -180,7 +181,7 @@ export default function NightTimeline({ night, scheduled, colours, now, cloudThr
           return <button key={key} type="button" className="nights-block" style={{ ...style, ...dragged }}
             data-colour={colours.get(item.target.project_name) ?? 0} aria-pressed={chosen === key}
             data-movable={onMoveBlock ? 'true' : undefined}
-            aria-label={`${item.target.project_name}, ${item.target.target_name}: ${formatClock(item.start_ms)} – ${formatClock(item.end_ms)}, ${frames} frames${onMoveBlock ? '. Choose it for what to do with it; drag it, or press the left and right arrow keys, to move it 15 minutes at a time.' : ''}`}
+            aria-label={`${item.target.project_name}, ${item.target.target_name}: ${formatClock(item.start_ms)} – ${formatClock(item.end_ms)}, ${frames} frames${blockMoon(item) ? `. ${blockMoon(item)}` : ''}${onMoveBlock ? '. Choose it for what to do with it; drag it, or press the left and right arrow keys, to move it 15 minutes at a time.' : ''}`}
             aria-haspopup={edit ? 'menu' : undefined} aria-expanded={edit ? menu === key : undefined}
             title={title}
             onPointerDown={event => press(key, event)}
@@ -210,7 +211,6 @@ export default function NightTimeline({ night, scheduled, colours, now, cloudThr
         {edit && <HoldHandle edit={edit} scale={scale} width={width} />}
         {now !== undefined && now > start && now < end && <span className="nights-now" style={{ left: `${((now - start) / span) * 100}%` }} title={`Now, ${formatClock(now)}`} />}
       </div>
-      {night.dusk_ms !== null && <MoonStrip night={night} place={place} formatClock={formatClock} />}
       {night.clouds.length > 0 && <div className="nights-clouds" role="group" aria-label="Cloud cover" aria-describedby={summaryId}>
         {night.clouds.map(hour => {
           const style = place(hour.start_ms, hour.end_ms);
@@ -221,6 +221,8 @@ export default function NightTimeline({ night, scheduled, colours, now, cloudThr
             title={`${formatClock(hour.start_ms)} – ${formatClock(hour.end_ms)}: ${cloudWords(hour)}`} />;
         })}
       </div>}
+      {moon && <div className="nights-moon-strip" role="img" aria-label={`Moon: ${moon.label}`} title={moon.label}
+        style={{ backgroundImage: moon.gradient }} />}
       {edit && menu !== null && (() => {
         const index = keys.indexOf(menu);
         if (index < 0) return null;
@@ -232,6 +234,7 @@ export default function NightTimeline({ night, scheduled, colours, now, cloudThr
         {ticks.map(t => <span key={t} style={{ left: `${((t - start) / span) * 100}%` }}>{formatClock(t)}</span>)}
       </div>
     </div>
+    {moon && <p className="nights-moon-caption" aria-hidden="true"><Moon size={12} />{moon.label}</p>}
     {(reasons.length > 0 || night.clouds.length > 0) && <ul className="nights-gap-legend" aria-label="Legend">
       {reasons.map(reason => <li key={reason}><span className="nights-gap-key" data-reason={reason} aria-hidden="true" />{GAP_LABEL[reason]}: {GAP_HELP[reason]}</li>)}
       {night.clouds.length > 0 && <li id={summaryId}><span className="nights-cloud-key" aria-hidden="true" />
@@ -289,24 +292,34 @@ function moonWords(moon: RunMoon): string {
   return moon.max_altitude_degrees < 0 ? `${closest}, down` : `${closest}, ${Math.round(moon.max_altitude_degrees)}° up`;
 }
 
-/** The night's Moon under the schedule: shaded while it is up in the dark,
- *  brighter the fuller it is, with its phase and hours up as a label. */
-function MoonStrip({ night, place, formatClock }: {
-  night: RigNight;
-  place: (from: number, to: number) => CSSProperties | null;
-  formatClock: (ms: number) => string;
-}) {
-  const lit = Math.round(night.moon_illumination * 100);
-  const up = night.moon_up.map(span => `${formatClock(span.start_ms)} – ${formatClock(span.end_ms)}`);
-  const label = `${lit}% lit · ${up.length > 0 ? `up ${up.join(', ')}` : 'down all night'}`;
-  return <div className="nights-moon-strip" role="group" aria-label={`Moon: ${label}`}>
-    {night.moon_up.map((span, index) => {
-      const style = place(span.start_ms, span.end_ms);
-      return style && <span key={span.start_ms} className="nights-moon-up" title={`Moon up ${up[index]}, ${lit}% lit`}
-        style={{ ...style, '--moon-alpha': (0.2 + 0.6 * night.moon_illumination).toFixed(2) } as CSSProperties} />;
-    })}
-    <span className="nights-moon-label" aria-hidden="true"><Moon size={10} />{label}</span>
-  </div>;
+/** A block's Moon, one entry per filter: the closest the Moon comes to the
+ *  target and its highest altitude over that filter's runs. Empty without
+ *  a Moon. */
+function blockMoon(block: ScheduleBlock): string {
+  const filters = new Map<string, RunMoon>();
+  for (const run of block.runs) {
+    if (!run.moon) continue;
+    const seen = filters.get(run.filter);
+    filters.set(run.filter, seen ? {
+      max_altitude_degrees: Math.max(seen.max_altitude_degrees, run.moon.max_altitude_degrees),
+      min_separation_degrees: Math.min(seen.min_separation_degrees, run.moon.min_separation_degrees),
+    } : run.moon);
+  }
+  return [...filters].map(([filter, moon]) => `${filter}: ${moonWords(moon)}`).join(' · ');
+}
+
+/** The night's Moon across the drawn span: a gradient from its rise to
+ *  its set, brightest where it stands highest and the fuller it is, and
+ *  its phase and times in words. */
+function moonView(night: RigNight, from: number, to: number, formatClock: (ms: number) => string) {
+  const course = moonCourse(night.moon_altitudes, night.moon_illumination, from, to);
+  const words = [`${Math.round(night.moon_illumination * 100)}% lit`];
+  if (!course.up) words.push('down all night');
+  else if (!course.events.some(event => event.kind !== 'highest')) words.push('up all night');
+  for (const event of course.events) words.push(`${event.kind} ${formatClock(event.ms)}`);
+  const stops = course.stops.map(stop =>
+    `color-mix(in srgb, var(--nights-moon) ${Math.round(stop.strength * 90)}%, transparent) ${(stop.at * 100).toFixed(2)}%`);
+  return { label: words.join(' · '), gradient: stops.length > 1 ? `linear-gradient(to right, ${stops.join(', ')})` : undefined };
 }
 
 function runSummary(block: ScheduleBlock): string {
@@ -325,9 +338,7 @@ function BlockReasons({ block, zone }: { block: ScheduleBlock; zone?: string }) 
   return <section className="nights-reasons" aria-label="Why this target">
     <h4>{block.target.project_name} · {block.target.target_name}</h4>
     <p>{formatClock(block.start_ms)} – {formatClock(block.end_ms)}: {runSummary(block)}, {formatHours(exposure)} of exposure{block.slew ? ', after a slew and centre' : ''}.</p>
-    {block.runs.some(run => run.moon) && <p className="nights-run-moons">
-      {block.runs.filter(run => run.moon).map(run => `${run.filter}: ${moonWords(run.moon!)}`).join(' · ')}
-    </p>}
+    {blockMoon(block) && <p className="nights-run-moons">{blockMoon(block)}</p>}
     <p className="director-muted">{DECISION_LABEL[decision.kind]}{decision.note ? ` (${decision.note})` : ''}.</p>
     {decision.candidates.length > 0 && <div className="director-table-scroll"><table className="nights-plan-table">
       <thead><tr><th>Target</th><th>Where it stood</th>{scored.length > 0 && <th>Score</th>}{rules.map(rule => <th key={rule}>{RULE_LABEL[rule]}</th>)}</tr></thead>

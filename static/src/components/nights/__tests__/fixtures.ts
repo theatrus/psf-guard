@@ -4,6 +4,14 @@ const HOUR = 3_600_000;
 /** Local noon on 3 November 2026 in the test's clock. */
 export const NOON = new Date(2026, 10, 3, 12, 0).getTime();
 
+/** A Moon that rises 9 hours after noon, stands 50° high at midnight
+ *  and sets 15 hours after noon, sampled every quarter hour. */
+export function moonAltitudes(noon: number) {
+  const degrees = Array.from({ length: 96 }, (_, index) =>
+    Math.round(500 * Math.cos(((index / 4 - 12) / 3) * Math.PI / 2)) / 10);
+  return { start_ms: noon, step_ms: 15 * 60_000, degrees };
+}
+
 export function night(index: number, overrides: Partial<RigNight> = {}): RigNight {
   const noon = NOON + index * 24 * HOUR;
   const date = new Date(noon);
@@ -18,7 +26,7 @@ export function night(index: number, overrides: Partial<RigNight> = {}): RigNigh
     availability: { state: 'available', windows: [], marks: [] },
     moon_illumination: 0.42,
     moon_hours_up_in_dark: 3,
-    moon_up: [],
+    moon_altitudes: { start_ms: noon, step_ms: 15 * 60_000, degrees: [] },
     targets: [{ project_id: 7, target_id: 70, hours_up: 6, hours_up_available: 6, hours_moon_blocked: 1, max_altitude_degrees: 71.2, transit_ms: noon + 12 * HOUR }],
     load: { demand_hours: 5, available_hours: 10, idle_hours: 5, overbooked_hours: 0 },
     clouds: [],

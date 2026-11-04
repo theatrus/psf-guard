@@ -1978,13 +1978,15 @@ Choose a cell to open the night below the grid:
   hour before dusk to an hour after dawn, with a block for each stretch on
   a target and its filter runs inside. Each filter run shows the closest
   the Moon comes to the target during the run; the angle is dimmed while
-  the Moon stays below the horizon. A strip under the schedule shades the
-  dark hours with the Moon up, brighter the fuller the Moon, and lists its
-  phase and the hours it is up. Gaps are shaded by their reason:
-  twilight, not available, Moon, meridian, below limits, all done, nothing
-  fits, or, on a Director rig, held or left out by the night's overrides.
+  the Moon stays below the horizon. Under the cloud band, a strip shades
+  the Moon from its rise to its set, brightest where it stands highest and
+  brighter the fuller it is. Its label gives the share of the Moon lit and
+  the times it rises, stands highest and sets. Gaps are shaded by their
+  reason: twilight, not available, Moon, meridian, below limits, all done,
+  nothing fits, or, on a Director rig, held or left out by the night's
+  overrides.
   Choose a block to see why that target was chosen, and for each of its
-  filter runs the Moon's closest angle and highest altitude.
+  filters the Moon's closest angle and highest altitude.
 - **The plans this night**: only the targets the night applies to. The
   table lists first the targets the schedule above plans, in its order,
   with the frames planned. Then it lists the targets that are up and clear

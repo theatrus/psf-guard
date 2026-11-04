@@ -245,9 +245,8 @@
 .nights-run:has(.nights-run-moon) { flex-direction: column; line-height: 1.1; }
 .nights-run-moon { display: inline-flex; align-items: center; gap: 2px; font-size: 10px; }
 .nights-run-moon[data-down='true'] { opacity: 0.55; }
-.nights-moon-strip { position: relative; height: 14px; margin-top: 4px; border-radius: 3px; background: var(--nights-track); overflow: hidden; }
-.nights-moon-up { position: absolute; top: 0; bottom: 0; background: color-mix(in srgb, var(--nights-moon) calc(var(--moon-alpha, 1) * 100%), transparent); }
-.nights-moon-label { position: absolute; left: 4px; top: 1px; bottom: 1px; display: inline-flex; align-items: center; gap: 3px; padding: 0 4px; border-radius: 2px; background: var(--color-bg-primary); font-size: 10px; color: var(--color-text-secondary); }
+.nights-moon-strip { position: relative; height: 12px; margin-top: 4px; border-radius: 3px; background: var(--nights-track); overflow: hidden; }
+.nights-moon-caption { display: flex; align-items: center; gap: 6px; margin: 6px 0 0; font-size: 12px; color: var(--color-text-secondary); }
 .nights-timeline-axis { position: absolute; left: 0; right: 0; bottom: 0; height: 16px; font-size: 10px; color: var(--color-text-muted); }
 .nights-timeline-axis span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
 .nights-gap-legend { list-style: none; margin: 6px 0; padding: 0; display: grid; gap: 2px; font-size: 12px; color: var(--color-text-secondary); }

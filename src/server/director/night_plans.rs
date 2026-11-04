@@ -353,8 +353,8 @@ struct RigNight {
     availability: NightAvailability,
     moon_illumination: f64,
     moon_hours_up_in_dark: f64,
-    /// The stretches of darkness with the Moon up.
-    moon_up: Vec<Interval>,
+    /// The Moon's altitude from noon to noon, for its rise and set.
+    moon_altitudes: psf_guard_director_core::night::MoonAltitudes,
     targets: Vec<TargetHours>,
     load: Load,
     /// The forecast's cloud cover through the night; empty without one.
@@ -1100,7 +1100,7 @@ fn rig_nights(input: RigInput, nights: u32) -> Result<RigNights, String> {
             availability,
             moon_illumination: first.moon_illumination,
             moon_hours_up_in_dark: first.moon_hours_up_in_dark,
-            moon_up: first.moon_up_in_dark.clone(),
+            moon_altitudes: first.moon_altitudes.clone(),
             targets,
             load: Load {
                 demand_hours,
@@ -1661,8 +1661,10 @@ fn place_moon(
     site: Site,
 ) {
     use psf_guard_ts_planner::RunMoon;
+    debug_assert_eq!(blocks.len(), positions.len());
     let mut moons: BTreeMap<u64, Option<(IcrsPosition, f64)>> = BTreeMap::new();
     for (block, positions) in blocks.iter_mut().zip(positions) {
+        debug_assert_eq!(block.runs.len(), positions.len());
         for (run, position) in block.runs.iter_mut().zip(positions) {
             let Some(target) = *position else {
                 continue;
