@@ -9,8 +9,9 @@ use std::sync::Mutex;
 const START_MS: u64 = 1_790_294_400_000;
 const HOUR_MS: u64 = 3_600_000;
 
-/// The forecast the stand-in answers with: each hour's start and cover.
-type Hours = Arc<Mutex<Vec<(u64, f64)>>>;
+/// The forecast the stand-in answers with: each hour's start, cover and
+/// dew point. The air is 10 °C throughout.
+type Hours = Arc<Mutex<Vec<(u64, f64, f64)>>>;
 
 /// An Open-Meteo stand-in that answers with the hours a test gives it.
 async fn open_meteo(hours: Hours) -> String {
@@ -20,8 +21,10 @@ async fn open_meteo(hours: Hours) -> String {
             get(|State(hours): State<Hours>| async move {
                 let hours = hours.lock().unwrap();
                 Json(json!({"hourly": {
-                    "time": hours.iter().map(|(start, _)| start / 1000).collect::<Vec<_>>(),
-                    "cloud_cover": hours.iter().map(|(_, cover)| cover).collect::<Vec<_>>(),
+                    "time": hours.iter().map(|(start, _, _)| start / 1000).collect::<Vec<_>>(),
+                    "cloud_cover": hours.iter().map(|(_, cover, _)| cover).collect::<Vec<_>>(),
+                    "temperature_2m": hours.iter().map(|_| 10.0).collect::<Vec<_>>(),
+                    "dew_point_2m": hours.iter().map(|(_, _, dew)| dew).collect::<Vec<_>>(),
                 }}))
             }),
         )
@@ -182,13 +185,14 @@ async fn a_sites_forecast_marks_its_nights_until_a_mark_or_its_expiry_says_other
 
     // Three nights of forecast: cloudy in the afternoon but clear from an
     // hour before dusk, overcast, then clear for two hours from an hour
-    // after dusk. The fourth is past its range.
+    // after dusk, the first of them a degree above the dew point. The
+    // fourth is past its range.
     let first = rig["nights"].as_array().unwrap().clone();
     let span = |i: usize| first[i]["noon_ms"].as_u64().unwrap();
     let dusk = first[2]["dusk_ms"].as_u64().unwrap();
     let clear_from = (dusk / HOUR_MS + 1) * HOUR_MS;
     let evening = first[0]["dusk_ms"].as_u64().unwrap() - HOUR_MS;
-    let hours: Vec<(u64, f64)> = (span(0) / HOUR_MS * HOUR_MS..span(3) / HOUR_MS * HOUR_MS)
+    let hours: Vec<(u64, f64, f64)> = (span(0) / HOUR_MS * HOUR_MS..span(3) / HOUR_MS * HOUR_MS)
         .step_by(HOUR_MS as usize)
         .map(|start| {
             let cover = if start < span(1) {
@@ -204,7 +208,8 @@ async fn a_sites_forecast_marks_its_nights_until_a_mark_or_its_expiry_says_other
             } else {
                 85.0
             };
-            (start, cover)
+            let dew = if start == clear_from { 9.0 } else { 0.0 };
+            (start, cover, dew)
         })
         .collect();
     let url = open_meteo(Arc::new(Mutex::new(hours))).await;
@@ -354,6 +359,50 @@ async fn a_sites_forecast_marks_its_nights_until_a_mark_or_its_expiry_says_other
         rig["nights"][2]["availability"]["marks"][0]["state"],
         "available"
     );
+    assert_eq!(rig["forecast"]["dew_limit_celsius"], Value::Null);
+
+    // A dew limit takes the hour a degree above the dew point out of the
+    // clear hours, also with no new request.
+    set_forecast(
+        &a,
+        site,
+        json!({"provider": "open_meteo", "cloud_threshold_percent": 90, "dew_limit_celsius": 2}),
+    )
+    .await;
+    let rig = nights(&a, 4).await;
+    assert_eq!(rig["forecast"]["dew_limit_celsius"], 2);
+    let mark = &rig["nights"][2]["availability"]["marks"][0];
+    assert_eq!(mark["state"], "limited", "{mark}");
+    let windows = mark["windows"].as_array().unwrap();
+    assert!(
+        windows.iter().all(|w| {
+            let (start, end) = (
+                w["start_ms"].as_u64().unwrap(),
+                w["end_ms"].as_u64().unwrap(),
+            );
+            end <= clear_from || start >= clear_from + HOUR_MS
+        }),
+        "{mark}"
+    );
+    let dewy = rig["nights"][2]["clouds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|hour| hour["start_ms"] == clear_from)
+        .unwrap();
+    assert_eq!(
+        (
+            dewy["temperature_celsius"].clone(),
+            dewy["dew_point_celsius"].clone()
+        ),
+        (json!(10.0), json!(9.0))
+    );
+    set_forecast(
+        &a,
+        site,
+        json!({"provider": "open_meteo", "cloud_threshold_percent": 90}),
+    )
+    .await;
 
     // A new elevation keeps the forecast; a move of a kilometre or more
     // discards it and requests the new place's.
@@ -517,8 +566,8 @@ async fn met_norway_s_not_modified_keeps_the_hours_and_when_they_arrived() {
                     return (StatusCode::NOT_MODIFIED, answer).into_response();
                 }
                 let body = json!({"type": "Feature", "properties": {"timeseries": [
-                    {"time": "2026-11-01T12:00:00Z", "data": {"instant": {"details": {"cloud_area_fraction": 10.0}}}},
-                    {"time": "2026-11-01T13:00:00Z", "data": {"instant": {"details": {"cloud_area_fraction": 90.0}}}},
+                    {"time": "2026-11-01T12:00:00Z", "data": {"instant": {"details": {"cloud_area_fraction": 10.0, "air_temperature": 8.0, "dew_point_temperature": 2.0}}}},
+                    {"time": "2026-11-01T13:00:00Z", "data": {"instant": {"details": {"cloud_area_fraction": 90.0, "air_temperature": 7.0, "dew_point_temperature": 2.0}}}},
                 ]}});
                 (answer, Json(body)).into_response()
             }

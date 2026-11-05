@@ -273,8 +273,12 @@ export interface ForecastSettings {
   provider: ForecastProvider;
   /** An hour at or under this much total cloud cover counts as clear. */
   cloud_threshold_percent: number;
+  /** An hour this close to the dew point or closer, in °C, is not clear;
+   *  absent leaves dew out. */
+  dew_limit_celsius?: number;
 }
-/** Cloud cover in percent from start to end: an hour, or six further out. */
+/** Cloud cover in percent, and the air at 2 m, from start to end: an hour,
+ *  or six further out. */
 export interface ForecastHour {
   start_ms: number;
   end_ms: number;
@@ -282,6 +286,10 @@ export interface ForecastHour {
   cloud_low: number | null;
   cloud_mid: number | null;
   cloud_high: number | null;
+  /** Absent in a forecast fetched before PSF Guard asked for the air. */
+  temperature_celsius?: number | null;
+  dew_point_celsius?: number | null;
+  humidity_percent?: number | null;
 }
 export interface SiteForecast {
   site_id: string;

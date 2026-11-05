@@ -5,7 +5,7 @@ import { Check, ChevronDown, ChevronRight, CloudDownload, Plus } from 'lucide-re
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import type { DirectorHorizon, DirectorIdentity, DirectorSiteProfileView, ForecastProvider } from '../../api/directorTypes';
-import { DEFAULT_CLOUD_THRESHOLD, PROVIDER_LABEL, PROVIDER_URL } from './forecastLabels';
+import { DEFAULT_CLOUD_THRESHOLD, MAX_DEW_LIMIT, PROVIDER_LABEL, PROVIDER_URL } from './forecastLabels';
 import HorizonEditor from './HorizonEditor';
 import { identityId } from './identityId';
 import { describeSource } from './rigProfileForm';
@@ -69,6 +69,8 @@ interface SiteForm {
   name: string; latitude: string; longitude: string; elevation: string; horizon: DirectorHorizon | null;
   forecast: ForecastProvider | 'off';
   threshold: string;
+  /** °C above the dew point, or empty to leave dew out. */
+  dew: string;
   /** An IANA zone, or empty for the browser's. */
   timeZone: string;
 }
@@ -78,9 +80,9 @@ const ZONES: string[] = typeof Intl.supportedValuesOf === 'function' ? Intl.supp
 const BROWSER_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 /** What each provider offers, for the choice. */
-const PROVIDER_HELP: Record<ForecastProvider, string> = {
-  open_meteo: 'hourly, 16 days ahead; free for non-commercial use',
-  met_norway: 'hourly, then every 6 hours, about 9 days ahead; free for any use',
+const PROVIDER_FACTS: Record<ForecastProvider, { range: string; use: string }> = {
+  open_meteo: { range: 'Hourly, 16 days', use: 'Free for non-commercial use' },
+  met_norway: { range: 'Hourly, then 6-hourly; 9 days', use: 'Free for any use' },
 };
 
 /** The queries a site's forecast changes. */
@@ -96,6 +98,7 @@ function formFrom(view: DirectorSiteProfileView): SiteForm {
     name: view.site.name, latitude: text(location?.latitude_degrees), longitude: text(location?.longitude_degrees), elevation: text(location?.elevation_meters), horizon: view.profile.horizon?.value ?? null,
     forecast: forecast?.provider ?? 'off',
     threshold: String(forecast?.cloud_threshold_percent ?? DEFAULT_CLOUD_THRESHOLD),
+    dew: text(forecast?.dew_limit_celsius),
     timeZone: view.profile.time_zone ?? '',
   };
 }
@@ -129,7 +132,11 @@ function SiteProfileCard({ site }: { site: DirectorIdentity }) {
         expected_revision: stored.revision,
         location: located ? { value: { latitude_degrees: lat, longitude_degrees: lon, elevation_meters: elev ?? 0 }, source: manual } : null,
         horizon: next.horizon ? { value: next.horizon, source: stored.horizon && stored.horizon.value === next.horizon ? stored.horizon.source : manual } : null,
-        forecast: next.forecast === 'off' ? null : { provider: next.forecast, cloud_threshold_percent: Number(next.threshold) },
+        forecast: next.forecast === 'off' ? null : {
+          provider: next.forecast,
+          cloud_threshold_percent: Number(next.threshold),
+          ...(next.dew.trim() === '' ? {} : { dew_limit_celsius: Number(next.dew) }),
+        },
         time_zone: next.timeZone || null,
       });
       return { ...saved, site: identity };
@@ -163,14 +170,16 @@ function SiteProfileCard({ site }: { site: DirectorIdentity }) {
       const threshold = Number(form.threshold);
       if (lat === null) { setProblem("A forecast needs the site's location. Enter its latitude and longitude."); return; }
       if (form.threshold.trim() === '' || !Number.isInteger(threshold) || threshold < 0 || threshold > 100) { setProblem('Enter the clear-sky threshold as a whole percent from 0 to 100.'); return; }
+      const dew = Number(form.dew);
+      if (form.dew.trim() !== '' && (!Number.isInteger(dew) || dew < 0 || dew > MAX_DEW_LIMIT)) { setProblem(`Enter the dew limit as whole degrees from 0 to ${MAX_DEW_LIMIT}, or leave it empty.`); return; }
     }
     save.mutate({ view: loaded.data, next: form });
   };
   const update = (patch: Partial<SiteForm>) => setForm(current => current ? { ...current, ...patch } : current);
   const data = loaded.data;
   // Edits Save has not sent; Settings asks before discarding them. With
-  // forecasts off, the threshold is not saved, so it is not an edit.
-  const comparable = (value: SiteForm) => value.forecast === 'off' ? { ...value, threshold: '' } : value;
+  // forecasts off, the thresholds are not saved, so they are not edits.
+  const comparable = (value: SiteForm) => value.forecast === 'off' ? { ...value, threshold: '', dew: '' } : value;
   const unsaved = !!data && !!form && canWrite && JSON.stringify(comparable(form)) !== JSON.stringify(comparable(formFrom(data)));
   useUnsavedChanges(`site ${data?.site.name ?? site.name}`, unsaved);
   const disabled = !canWrite || save.isPending || stale;
@@ -210,7 +219,7 @@ function SiteProfileCard({ site }: { site: DirectorIdentity }) {
           onChange={horizon => update({ horizon })} />
       </fieldset>
       <fieldset disabled={disabled}>
-        <legend>Cloud forecast</legend>
+        <legend>Weather forecast</legend>
         <div className="rig-profile-grid">
           <label className="rig-profile-field" htmlFor={`${site.id}-forecast`}><span>Forecast</span>
             <span className="rig-profile-input"><select id={`${site.id}-forecast`} aria-label="Forecast" value={form.forecast} onChange={event => update({ forecast: event.target.value as SiteForm['forecast'] })}>
@@ -221,10 +230,18 @@ function SiteProfileCard({ site }: { site: DirectorIdentity }) {
           {form.forecast !== 'off' && <label className="rig-profile-field" htmlFor={`${site.id}-threshold`}><span>Clear at or under</span>
             <span className="rig-profile-input"><input id={`${site.id}-threshold`} aria-label="Clear at or under" type="number" inputMode="numeric" min={0} max={100} step={1} value={form.threshold} onChange={event => update({ threshold: event.target.value })} /><small>% cloud</small></span>
           </label>}
+          {form.forecast !== 'off' && <label className="rig-profile-field" htmlFor={`${site.id}-dew`}><span>No imaging within</span>
+            <span className="rig-profile-input"><input id={`${site.id}-dew`} aria-label="No imaging within" type="number" inputMode="numeric" min={0} max={MAX_DEW_LIMIT} step={1} placeholder="Off" value={form.dew} onChange={event => update({ dew: event.target.value })} /><small>°C of dew point</small></span>
+          </label>}
         </div>
-        <p className="director-muted">{form.forecast === 'off'
-          ? 'Off. PSF Guard sends nothing about this site.'
-          : `${PROVIDER_LABEL[form.forecast]}: ${PROVIDER_HELP[form.forecast]}. PSF Guard sends ${PROVIDER_LABEL[form.forecast]} this site's latitude and longitude, rounded to about 1 km, and nothing else: when you save, when you click Fetch now, every three hours, and again after a failed request.`}</p>
+        <dl className="site-forecast-facts">{form.forecast === 'off'
+          ? <div><dt>Sends</dt><dd>Nothing</dd></div>
+          : <>
+            <div><dt>Range</dt><dd>{PROVIDER_FACTS[form.forecast].range}</dd></div>
+            <div><dt>Use</dt><dd>{PROVIDER_FACTS[form.forecast].use}</dd></div>
+            <div><dt>Sends</dt><dd>Latitude and longitude, to about 1 km</dd></div>
+            <div><dt>When</dt><dd>On save, Fetch now, every 3 hours, after a failure</dd></div>
+          </>}</dl>
         {data.profile.forecast && <SiteForecastStatus site={site} />}
       </fieldset>
       {(problem || (save.isError && !stale)) && <p className="director-error" role="alert">{problem || message(save.error)}</p>}
@@ -277,10 +294,16 @@ function SiteForecastStatus({ site }: { site: DirectorIdentity }) {
   const last = forecast?.hours.at(-1);
   return <div className="site-forecast-status" role="group" aria-label="Forecast status">
     {forecast
-      ? <p>Fetched {when(forecast.fetched_at_ms)}{last ? `; covers hours until ${when(last.end_ms)}` : ''}.{forecast.checked_at_ms !== null ? ` ${PROVIDER_LABEL[forecast.provider]} confirmed it unchanged at ${when(forecast.checked_at_ms)}.` : ''} {data.fresh ? `Night plans use it until ${when(forecast.expires_at_ms)}.` : 'This forecast has expired, so nights count as clear.'}</p>
-      : <p>{status ? 'No forecast yet.' : 'Requesting the first forecast...'}</p>}
-    {status?.last_error && <p className="director-error" role="alert">The request at {when(status.last_attempt_ms)} failed: {status.last_error}{forecast && data.fresh ? ' Night plans still use the stored forecast.' : ''}</p>}
-    {data.next_refresh_ms !== null && <p className="director-muted">Next refresh: {when(data.next_refresh_ms)}.</p>}
+      ? <dl className="site-forecast-facts">
+        <div><dt>Fetched</dt><dd>{when(forecast.fetched_at_ms)}</dd></div>
+        {forecast.checked_at_ms !== null && <div><dt>Unchanged at</dt><dd>{when(forecast.checked_at_ms)}</dd></div>}
+        {last && <div><dt>Covers until</dt><dd>{when(last.end_ms)}</dd></div>}
+        <div><dt>Plans use it</dt><dd>{data.fresh ? `Until ${when(forecast.expires_at_ms)}` : 'Expired: nights count as clear'}</dd></div>
+        {data.next_refresh_ms !== null && <div><dt>Next refresh</dt><dd>{when(data.next_refresh_ms)}</dd></div>}
+      </dl>
+      : <p>{status ? 'No forecast yet' : 'Requesting the first forecast...'}</p>}
+    {status?.last_error && <p className="director-error" role="alert">Request at {when(status.last_attempt_ms)} failed: {status.last_error}{forecast && data.fresh ? ' Plans still use the stored forecast.' : ''}</p>}
+    {!forecast && data.next_refresh_ms !== null && <p className="director-muted">Next refresh: {when(data.next_refresh_ms)}</p>}
     {canWrite && <div className="director-actions">
       <button type="button" disabled={fetchNow.isPending} onClick={() => fetchNow.mutate()}><CloudDownload size={16} />{fetchNow.isPending ? 'Fetching...' : 'Fetch now'}</button>
       {fetchNow.isError && <span className="director-error" role="alert">{message(fetchNow.error)}</span>}

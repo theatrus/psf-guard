@@ -133,9 +133,12 @@ describe('Director sites', () => {
     fireEvent.change(await screen.findByLabelText('New site name'), { target: { value: 'Backyard' } });
     fireEvent.click(screen.getByRole('button', { name: 'Add site' }));
     const card = await screen.findByRole('region', { name: 'Site Backyard' });
-    expect(await within(card).findByText('Off. PSF Guard sends nothing about this site.')).toBeInTheDocument();
+    expect(await within(card).findByText('Sends')).toBeInTheDocument();
+    expect(within(card).getByText('Nothing')).toBeInTheDocument();
     fireEvent.change(within(card).getByLabelText('Forecast'), { target: { value: 'met_norway' } });
-    expect(within(card).getByText(/sends MET Norway this site's latitude and longitude, rounded to about 1 km, and nothing else: when you save, when you click Fetch now, every three hours, and again after a failed request/)).toBeInTheDocument();
+    expect(within(card).getByText('Latitude and longitude, to about 1 km')).toBeInTheDocument();
+    expect(within(card).getByText('On save, Fetch now, every 3 hours, after a failure')).toBeInTheDocument();
+    expect(within(card).getByText('Free for any use')).toBeInTheDocument();
     // Turned back off after a threshold edit, nothing is left to save.
     fireEvent.change(within(card).getByLabelText('Clear at or under'), { target: { value: '50' } });
     fireEvent.change(within(card).getByLabelText('Forecast'), { target: { value: 'off' } });
@@ -151,6 +154,13 @@ describe('Director sites', () => {
     fireEvent.click(within(card).getByRole('button', { name: 'Save site' }));
     await waitFor(() => expect(within(card).getByRole('alert')).toHaveTextContent('as a whole percent from 0 to 100'));
     fireEvent.change(within(card).getByLabelText('Clear at or under'), { target: { value: '25' } });
+    // The dew limit is off while empty, and whole degrees up to 20.
+    expect(within(card).getByLabelText('No imaging within')).toHaveAttribute('placeholder', 'Off');
+    for (const value of ['21', '1.5']) {
+      fireEvent.change(within(card).getByLabelText('No imaging within'), { target: { value } });
+      expect(within(card).getByLabelText('No imaging within')).toBeInvalid();
+    }
+    fireEvent.change(within(card).getByLabelText('No imaging within'), { target: { value: '' } });
     fireEvent.click(within(card).getByRole('button', { name: 'Save site' }));
     await waitFor(() => expect(saves).toHaveLength(1));
     expect(saves[0].forecast).toEqual({ provider: 'met_norway', cloud_threshold_percent: 25 });
@@ -159,9 +169,16 @@ describe('Director sites', () => {
     expect(within(status).getByRole('alert')).toHaveTextContent('failed: PSF Guard could not reach MET Norway: timed out');
     expect(within(status).getByRole('link', { name: 'Weather data from MET Norway (CC BY 4.0)' })).toHaveAttribute('href', 'https://api.met.no/');
     fireEvent.click(within(status).getByRole('button', { name: 'Fetch now' }));
-    expect(await within(status).findByText(/MET Norway confirmed it unchanged at .*\. Night plans use it until/)).toBeInTheDocument();
+    expect(await within(status).findByText('Unchanged at')).toBeInTheDocument();
+    expect(within(status).getByText(/^Until /)).toBeInTheDocument();
     expect(within(status).queryByRole('alert')).toBeNull();
     expect(asks).toHaveLength(1);
+
+    fireEvent.change(within(card).getByLabelText('No imaging within'), { target: { value: '2' } });
+    fireEvent.click(within(card).getByRole('button', { name: 'Save site' }));
+    await waitFor(() => expect(saves).toHaveLength(2));
+    expect(saves[1].forecast).toEqual({ provider: 'met_norway', cloud_threshold_percent: 25, dew_limit_celsius: 2 });
+    expect(await within(card).findByLabelText('No imaging within')).toHaveValue(2);
   });
 
   it('saves the site\'s time zone, or none for the browser\'s', async () => {

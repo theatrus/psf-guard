@@ -1,5 +1,5 @@
 //! A site's cloud forecast: which provider the site takes it from, the
-//! threshold under which an hour counts as clear, and the latest forecast
+//! thresholds under which an hour counts as clear, and the latest forecast
 //! fetched. Planning input only, like a manual mark: a forecast never allows
 //! or blocks acquisition.
 //!
@@ -17,6 +17,14 @@ pub const FORECAST_VALID_MS: u64 = 12 * 3_600_000;
 /// The threshold a site starts with: an hour at or under this much total
 /// cloud cover counts as clear.
 pub const DEFAULT_CLOUD_THRESHOLD_PERCENT: u8 = 30;
+/// The largest dew limit a site may set, in °C above the dew point.
+pub const MAX_DEW_LIMIT_CELSIUS: u8 = 20;
+
+/// Whether a temperature, in °C, is one air at 2 m can have. Forecast
+/// readers drop any other, and a stored forecast holding one is refused.
+pub fn plausible_celsius(value: f64) -> bool {
+    value.is_finite() && (-100.0..=70.0).contains(&value)
+}
 
 const MAX_TIME_MS: u64 = 4_102_444_800_000; // 2100-01-01
 const MAX_ERROR_CHARS: usize = 300;
@@ -80,7 +88,7 @@ impl FromStr for ForecastProvider {
     }
 }
 
-/// A site's forecast provider and clear-sky threshold. Without settings,
+/// A site's forecast provider and clear-sky thresholds. Without settings,
 /// forecasts are off for the site and PSF Guard sends nothing about it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -89,19 +97,39 @@ pub struct ForecastSettings {
     /// An hour at or under this much total cloud cover, in percent, counts
     /// as clear.
     pub cloud_threshold_percent: u8,
+    /// An hour whose air is this close to its dew point or closer, in °C,
+    /// does not count as clear. `None` leaves dew out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dew_limit_celsius: Option<u8>,
 }
 
 impl ForecastSettings {
     pub fn validate(&self) -> Result<(), Error> {
-        if self.cloud_threshold_percent > 100 {
+        if self.cloud_threshold_percent > 100
+            || self
+                .dew_limit_celsius
+                .is_some_and(|limit| limit > MAX_DEW_LIMIT_CELSIUS)
+        {
             return Err(Error::InvalidInput);
         }
         Ok(())
     }
+
+    /// Whether an hour counts as clear: cloud at or under the threshold,
+    /// and, with a dew limit, air more than the limit above its dew point.
+    /// An hour without a dew point is judged by its cloud alone.
+    pub fn clear(&self, hour: &ForecastHour) -> bool {
+        hour.cloud_total <= f64::from(self.cloud_threshold_percent)
+            && !self
+                .dew_limit_celsius
+                .zip(hour.dew_spread_celsius())
+                .is_some_and(|(limit, spread)| spread <= f64::from(limit))
+    }
 }
 
-/// One step of a forecast: cloud cover, in percent, from `start_ms` to
-/// `end_ms` (an hour, or six hours further out for some providers).
+/// One step of a forecast: cloud cover, in percent, and the air at 2 m,
+/// from `start_ms` to `end_ms` (an hour, or six hours further out for some
+/// providers).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ForecastHour {
@@ -114,6 +142,23 @@ pub struct ForecastHour {
     pub cloud_mid: Option<f64>,
     #[serde(default)]
     pub cloud_high: Option<f64>,
+    /// Air temperature, °C.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature_celsius: Option<f64>,
+    /// Dew point, °C.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dew_point_celsius: Option<f64>,
+    /// Relative humidity, percent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub humidity_percent: Option<f64>,
+}
+
+impl ForecastHour {
+    /// How far the air is above its dew point, in °C; never below zero.
+    pub fn dew_spread_celsius(&self) -> Option<f64> {
+        let (air, dew) = self.temperature_celsius.zip(self.dew_point_celsius)?;
+        Some((air - dew).max(0.0))
+    }
 }
 
 /// A site's latest forecast.
@@ -205,10 +250,19 @@ impl SiteForecast {
                 || hour.end_ms > MAX_TIME_MS
                 || hour.start_ms < last_end
                 || !percent(hour.cloud_total)
-                || [hour.cloud_low, hour.cloud_mid, hour.cloud_high]
+                || [
+                    hour.cloud_low,
+                    hour.cloud_mid,
+                    hour.cloud_high,
+                    hour.humidity_percent,
+                ]
+                .into_iter()
+                .flatten()
+                .any(|v| !percent(v))
+                || [hour.temperature_celsius, hour.dew_point_celsius]
                     .into_iter()
                     .flatten()
-                    .any(|v| !percent(v))
+                    .any(|v| !plausible_celsius(v))
             {
                 return Err(Error::InvalidInput);
             }
@@ -217,18 +271,26 @@ impl SiteForecast {
         Ok(())
     }
 
+    /// Whether any hour gives the air's dew point. A forecast fetched
+    /// before PSF Guard asked for the air has none.
+    pub fn has_dew_points(&self) -> bool {
+        self.hours
+            .iter()
+            .any(|hour| hour.dew_point_celsius.is_some())
+    }
+
     /// Whether the forecast still counts at `now_ms`.
     pub fn fresh(&self, now_ms: u64) -> bool {
         now_ms < self.expires_at_ms
     }
 
     /// What the forecast says about the night spanning `span`: the hours it
-    /// covers there, and those at or under `threshold_percent` total cover.
-    /// `None` once it has expired, or when it covers none of the night.
+    /// covers there, and those the site's settings count as clear. `None`
+    /// once it has expired, or when it covers none of the night.
     pub fn night(
         &self,
         span: Interval,
-        threshold_percent: u8,
+        settings: &ForecastSettings,
         now_ms: u64,
     ) -> Option<ForecastNight> {
         if !self.fresh(now_ms) {
@@ -249,7 +311,7 @@ impl SiteForecast {
             }
             hours.push(*hour);
             push(&mut covered, start_ms, end_ms);
-            if hour.cloud_total <= f64::from(threshold_percent) {
+            if settings.clear(hour) {
                 push(&mut clear, start_ms, end_ms);
             }
         }
@@ -488,8 +550,19 @@ mod tests {
                 cloud_low: None,
                 cloud_mid: None,
                 cloud_high: None,
+                temperature_celsius: None,
+                dew_point_celsius: None,
+                humidity_percent: None,
             })
             .collect()
+    }
+
+    fn clouds(threshold: u8) -> ForecastSettings {
+        ForecastSettings {
+            provider: ForecastProvider::OpenMeteo,
+            cloud_threshold_percent: threshold,
+            dew_limit_celsius: None,
+        }
     }
 
     #[test]
@@ -513,7 +586,7 @@ mod tests {
             ),
         };
         forecast.validate().unwrap();
-        let night = forecast.night(span, 30, 95 * HOUR).unwrap();
+        let night = forecast.night(span, &clouds(30), 95 * HOUR).unwrap();
         assert_eq!(
             night.covered,
             vec![Interval {
@@ -540,14 +613,92 @@ mod tests {
         );
         assert_eq!(night.hours.len(), 8);
         // A stricter threshold leaves less; an expired forecast says nothing.
-        assert_eq!(forecast.night(span, 10, 95 * HOUR).unwrap().clear.len(), 2);
-        assert_eq!(forecast.night(span, 30, 102 * HOUR), None);
+        assert_eq!(
+            forecast
+                .night(span, &clouds(10), 95 * HOUR)
+                .unwrap()
+                .clear
+                .len(),
+            2
+        );
+        assert_eq!(forecast.night(span, &clouds(30), 102 * HOUR), None);
         // A night past the forecast's range has no information.
         let later = Interval {
             start_ms: 124 * HOUR,
             end_ms: 148 * HOUR,
         };
-        assert_eq!(forecast.night(later, 30, 95 * HOUR), None);
+        assert_eq!(forecast.night(later, &clouds(30), 95 * HOUR), None);
+    }
+
+    #[test]
+    fn hours_near_the_dew_point_are_not_clear_under_a_dew_limit() {
+        let span = Interval {
+            start_ms: 100 * HOUR,
+            end_ms: 104 * HOUR,
+        };
+        let mut steps = hours(100 * HOUR, &[0.0, 0.0, 0.0, 0.0]);
+        // 10 °C above the dew point, then 3, then exactly 2, then below
+        // it; the last has no dew point at all.
+        for (hour, (air, dew)) in
+            steps
+                .iter_mut()
+                .zip([(12.0, 2.0), (8.0, 5.0), (6.0, 4.0), (3.0, 3.5)])
+        {
+            hour.temperature_celsius = Some(air);
+            hour.dew_point_celsius = Some(dew);
+            hour.humidity_percent = Some(90.0);
+        }
+        steps[3].dew_point_celsius = None;
+        let forecast = SiteForecast {
+            site_id: Uuid::new_v4(),
+            provider: ForecastProvider::OpenMeteo,
+            fetched_at_ms: 90 * HOUR,
+            checked_at_ms: None,
+            expires_at_ms: 110 * HOUR,
+            refresh_after_ms: None,
+            last_modified: None,
+            hours: steps,
+        };
+        forecast.validate().unwrap();
+        assert!(forecast.has_dew_points());
+        assert_eq!(forecast.hours[1].dew_spread_celsius(), Some(3.0));
+        assert_eq!(forecast.hours[3].dew_spread_celsius(), None);
+        let dew = ForecastSettings {
+            dew_limit_celsius: Some(2),
+            ..clouds(30)
+        };
+        let night = forecast.night(span, &dew, 95 * HOUR).unwrap();
+        assert_eq!(
+            night.clear,
+            vec![
+                Interval {
+                    start_ms: 100 * HOUR,
+                    end_ms: 102 * HOUR
+                },
+                Interval {
+                    start_ms: 103 * HOUR,
+                    end_ms: 104 * HOUR
+                },
+            ]
+        );
+        // An hour without the air is stored as before, with no new keys.
+        let bare = hours(0, &[10.0]);
+        assert_eq!(
+            serde_json::to_value(bare[0]).unwrap(),
+            serde_json::json!({"start_ms": 0, "end_ms": HOUR, "cloud_total": 10.0, "cloud_low": null, "cloud_mid": null, "cloud_high": null})
+        );
+        assert!(!SiteForecast {
+            hours: bare,
+            ..forecast.clone()
+        }
+        .has_dew_points());
+        // Without a limit, dew leaves every hour clear.
+        let night = forecast.night(span, &clouds(30), 95 * HOUR).unwrap();
+        assert_eq!(night.clear, vec![span]);
+        // A dew point that is not a number is refused.
+        let mut wild = forecast.clone();
+        wild.hours[0].dew_point_celsius = Some(f64::NAN);
+        assert!(wild.validate().is_err());
     }
 
     #[test]
@@ -664,6 +815,7 @@ mod tests {
         let settings = ForecastSettings {
             provider: ForecastProvider::OpenMeteo,
             cloud_threshold_percent: DEFAULT_CLOUD_THRESHOLD_PERCENT,
+            dew_limit_celsius: None,
         };
         let opted = SiteProfile {
             forecast: Some(settings),
@@ -685,6 +837,17 @@ mod tests {
         };
         assert!(matches!(
             store.save_site_profile(&refused, 1),
+            Err(Error::InvalidInput)
+        ));
+        let dewy = SiteProfile {
+            forecast: Some(ForecastSettings {
+                dew_limit_celsius: Some(MAX_DEW_LIMIT_CELSIUS + 1),
+                ..settings
+            }),
+            ..SiteProfile::empty(home, 2)
+        };
+        assert!(matches!(
+            store.save_site_profile(&dewy, 1),
             Err(Error::InvalidInput)
         ));
     }

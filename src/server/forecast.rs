@@ -1,4 +1,4 @@
-//! Cloud forecasts from Open-Meteo and MET Norway, for sites with forecasts
+//! Cloud and dew forecasts from Open-Meteo and MET Norway, for sites with forecasts
 //! on. This module requests and reads forecasts. Director's site forecasts
 //! decide which sites to refresh, when, and what to store.
 
@@ -6,7 +6,9 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use chrono::DateTime;
-use psf_guard_director_meta::site_forecast::{ForecastHour, ForecastProvider, MAX_FORECAST_HOURS};
+use psf_guard_director_meta::site_forecast::{
+    plausible_celsius, ForecastHour, ForecastProvider, MAX_FORECAST_HOURS,
+};
 use reqwest::{header, StatusCode};
 use serde::Deserialize;
 
@@ -15,6 +17,9 @@ use crate::config::ForecastsConfig;
 const OPEN_METEO_URL: &str = "https://api.open-meteo.com";
 const MET_NORWAY_URL: &str = "https://api.met.no";
 const HOUR_MS: u64 = 3_600_000;
+/// The hourly values asked of Open-Meteo.
+const OPEN_METEO_HOURLY: &str = "cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high,\
+     temperature_2m,dew_point_2m,relative_humidity_2m";
 /// The largest response read: MET Norway's full forecast is a few hundred KB.
 const MAX_BODY_BYTES: usize = 4 << 20;
 const MAX_REASON_CHARS: usize = 200;
@@ -134,10 +139,7 @@ impl ForecastClient {
                 let mut query = vec![
                     ("latitude", latitude),
                     ("longitude", longitude),
-                    (
-                        "hourly",
-                        "cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high".into(),
-                    ),
+                    ("hourly", OPEN_METEO_HOURLY.into()),
                     ("forecast_days", "16".into()),
                     ("timeformat", "unixtime".into()),
                     ("timezone", "GMT".into()),
@@ -299,6 +301,12 @@ fn percent(value: Option<f64>) -> Option<f64> {
     value.filter(|v| v.is_finite()).map(|v| v.clamp(0.0, 100.0))
 }
 
+/// A temperature in °C, or `None` when the provider has none or sends one
+/// no air reaches.
+fn celsius(value: Option<f64>) -> Option<f64> {
+    value.filter(|&v| plausible_celsius(v))
+}
+
 /// Each step lasts until the next one starts; the last as long as the one
 /// before it, or an hour.
 fn steps(starts: &[u64]) -> Result<Vec<(u64, u64)>, String> {
@@ -334,9 +342,16 @@ struct OpenMeteoHourly {
     cloud_cover_mid: Vec<Option<f64>>,
     #[serde(default)]
     cloud_cover_high: Vec<Option<f64>>,
+    #[serde(default)]
+    temperature_2m: Vec<Option<f64>>,
+    #[serde(default)]
+    dew_point_2m: Vec<Option<f64>>,
+    #[serde(default)]
+    relative_humidity_2m: Vec<Option<f64>>,
 }
 
-/// Open-Meteo's hourly cover. Hours a model has no value for are left out.
+/// Open-Meteo's hourly cover and air. Hours a model has no cloud value for
+/// are left out.
 fn read_open_meteo(body: &[u8]) -> Result<Vec<ForecastHour>, String> {
     let read: OpenMeteo = serde_json::from_slice(body)
         .map_err(|error| format!("Open-Meteo's response could not be read: {error}"))?;
@@ -352,7 +367,8 @@ fn read_open_meteo(body: &[u8]) -> Result<Vec<ForecastHour>, String> {
         .map(|&t| u64::try_from(t).ok().and_then(|t| t.checked_mul(1000)))
         .collect::<Option<Vec<_>>>()
         .ok_or("Open-Meteo's response has a time before 1970.")?;
-    let layer = |values: &[Option<f64>], i: usize| percent(values.get(i).copied().flatten());
+    let value = |values: &[Option<f64>], i: usize| values.get(i).copied().flatten();
+    let layer = |values: &[Option<f64>], i: usize| percent(value(values, i));
     Ok(steps(&starts)?
         .into_iter()
         .enumerate()
@@ -364,6 +380,9 @@ fn read_open_meteo(body: &[u8]) -> Result<Vec<ForecastHour>, String> {
                 cloud_low: layer(&hourly.cloud_cover_low, i),
                 cloud_mid: layer(&hourly.cloud_cover_mid, i),
                 cloud_high: layer(&hourly.cloud_cover_high, i),
+                temperature_celsius: celsius(value(&hourly.temperature_2m, i)),
+                dew_point_celsius: celsius(value(&hourly.dew_point_2m, i)),
+                humidity_percent: layer(&hourly.relative_humidity_2m, i),
             })
         })
         .take(MAX_FORECAST_HOURS)
@@ -402,9 +421,12 @@ struct MetDetails {
     cloud_area_fraction_low: Option<f64>,
     cloud_area_fraction_medium: Option<f64>,
     cloud_area_fraction_high: Option<f64>,
+    air_temperature: Option<f64>,
+    dew_point_temperature: Option<f64>,
+    relative_humidity: Option<f64>,
 }
 
-/// MET Norway's cover: hourly, then every six hours further out, each
+/// MET Norway's cover and air: hourly, then every six hours further out, each
 /// value held until the next.
 fn read_met_norway(body: &[u8]) -> Result<Vec<ForecastHour>, String> {
     let read: MetNorway = serde_json::from_slice(body)
@@ -431,6 +453,9 @@ fn read_met_norway(body: &[u8]) -> Result<Vec<ForecastHour>, String> {
                 cloud_low: percent(details.cloud_area_fraction_low),
                 cloud_mid: percent(details.cloud_area_fraction_medium),
                 cloud_high: percent(details.cloud_area_fraction_high),
+                temperature_celsius: celsius(details.air_temperature),
+                dew_point_celsius: celsius(details.dew_point_temperature),
+                humidity_percent: percent(details.relative_humidity),
             })
         })
         .take(MAX_FORECAST_HOURS)
@@ -452,11 +477,12 @@ mod tests {
 
     const OPEN_METEO: &str = r#"{"latitude":34.2,"longitude":-118.3,"hourly_units":{"time":"unixtime","cloud_cover":"%"},
         "hourly":{"time":[1793534400,1793538000,1793541600,1793545200],
-        "cloud_cover":[0,45,null,100],"cloud_cover_low":[0,40,null,100],"cloud_cover_mid":[0,5,null,null],"cloud_cover_high":[0,0,null,20]}}"#;
+        "cloud_cover":[0,45,null,100],"cloud_cover_low":[0,40,null,100],"cloud_cover_mid":[0,5,null,null],"cloud_cover_high":[0,0,null,20],
+        "temperature_2m":[11.5,9.0,8.0,7.2],"dew_point_2m":[3.0,8.1,7.0,null],"relative_humidity_2m":[56,94,93,null]}}"#;
 
     const MET_NORWAY: &str = r#"{"type":"Feature","geometry":{"type":"Point","coordinates":[10.75,59.91,12]},
         "properties":{"meta":{"updated_at":"2026-11-01T11:00:00Z"},"timeseries":[
-        {"time":"2026-11-01T12:00:00Z","data":{"instant":{"details":{"cloud_area_fraction":12.5,"cloud_area_fraction_high":10.2,"cloud_area_fraction_low":0.0,"cloud_area_fraction_medium":3.1,"fog_area_fraction":0.0}}}},
+        {"time":"2026-11-01T12:00:00Z","data":{"instant":{"details":{"air_temperature":6.4,"cloud_area_fraction":12.5,"cloud_area_fraction_high":10.2,"cloud_area_fraction_low":0.0,"cloud_area_fraction_medium":3.1,"dew_point_temperature":5.1,"fog_area_fraction":0.0,"relative_humidity":91.6}}}},
         {"time":"2026-11-01T13:00:00Z","data":{"instant":{"details":{"cloud_area_fraction":100.0,"cloud_area_fraction_low":99.0}}}},
         {"time":"2026-11-01T18:00:00Z","data":{"instant":{"details":{"cloud_area_fraction":30.0}}}}]}}"#;
 
@@ -477,6 +503,22 @@ mod tests {
             (hours[2].cloud_mid, hours[2].cloud_high),
             (None, Some(20.0))
         );
+        assert_eq!(
+            (
+                hours[1].temperature_celsius,
+                hours[1].dew_point_celsius,
+                hours[1].humidity_percent
+            ),
+            (Some(9.0), Some(8.1), Some(94.0))
+        );
+        // An hour without a dew point keeps its temperature.
+        assert_eq!(
+            (hours[2].temperature_celsius, hours[2].dew_point_celsius),
+            (Some(7.2), None)
+        );
+        // A response without the air's values still reads.
+        let bare = read_open_meteo(br#"{"hourly":{"time":[3600],"cloud_cover":[5]}}"#).unwrap();
+        assert_eq!(bare[0].dew_spread_celsius(), None);
         assert!(read_open_meteo(br#"{"hourly":{"time":[1,2],"cloud_cover":[1]}}"#).is_err());
         assert!(read_open_meteo(br#"{"hourly":{"time":[5,5],"cloud_cover":[1,2]}}"#).is_err());
     }
@@ -488,6 +530,15 @@ mod tests {
         let noon = 1_793_534_400_000;
         assert_eq!((hours[0].start_ms, hours[0].end_ms), (noon, noon + HOUR_MS));
         assert_eq!(hours[0].cloud_mid, Some(3.1));
+        assert_eq!(
+            (
+                hours[0].temperature_celsius,
+                hours[0].dew_point_celsius,
+                hours[0].humidity_percent
+            ),
+            (Some(6.4), Some(5.1), Some(91.6))
+        );
+        assert_eq!(hours[1].dew_point_celsius, None);
         // Hourly, then six-hourly: each value lasts until the next.
         assert_eq!(
             (hours[1].start_ms, hours[1].end_ms),
@@ -643,7 +694,8 @@ mod tests {
         assert_eq!(seen.queries[0]["apikey"], "paid");
         assert_eq!(
             seen.queries[0]["hourly"],
-            "cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high"
+            "cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high,\
+             temperature_2m,dew_point_2m,relative_humidity_2m"
         );
         assert_eq!(
             (

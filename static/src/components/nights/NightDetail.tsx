@@ -30,6 +30,8 @@ import {
   isTonight,
   completesOn,
   markOrigin,
+  causeWords,
+  forecastCauses,
   OUT_REASON,
   planRows,
   windowFor,
@@ -287,12 +289,14 @@ function NightSchedule({ rig, night, colours, view, edit, moveProblem, saved, on
     {shown === 'director' && rig.runtime === 'director' && <OverrideChips entries={edit ? edit.entries : saved} goals={goals} zone={zone}
       editing={!!edit} onChange={entries => edit?.onChange(entries)} />}
     {scheduled && <NightTimeline night={night} scheduled={scheduled} colours={colours} now={tonight ? now : undefined}
-      cloudThreshold={rig.forecast?.cloud_threshold_percent} zone={zone} bands={bands} edit={edit} />}
+      cloudThreshold={rig.forecast?.cloud_threshold_percent} dewLimit={rig.forecast?.dew_limit_celsius ?? undefined} zone={zone} bands={bands} edit={edit} />}
   </section>;
 }
 
 function NightFacts({ rig, night }: { rig: RigNights; night: RigNight }) {
   const { availability } = night;
+  // What the forecast took out of the dark hours: cloud, dew or both.
+  const why = causeWords(forecastCauses(rig, night));
   return <>
     <dl className="nights-facts">
       <div><dt>Dark</dt><dd>{night.dusk_ms !== null && night.dawn_ms !== null ? `${siteClock(rig, night.dusk_ms)} – ${siteClock(rig, night.dawn_ms)}, ${formatHours(night.dark_hours)}` : 'No darkness'}</dd></div>
@@ -307,6 +311,7 @@ function NightFacts({ rig, night }: { rig: RigNights; night: RigNight }) {
     {availability.marks.length > 0 && <ul className="nights-marks">{availability.marks.map(mark => <li key={mark.scope}>
       {markOrigin(mark)}: {STATE_LABEL[mark.state]}
       {mark.state === 'limited' && ` (${mark.windows.map(w => `${siteClock(rig, w.start_ms)} – ${siteClock(rig, w.end_ms)}`).join(', ')})`}
+      {mark.source.kind === 'forecast' && mark.state !== 'available' && why && <span className="director-muted"> · {why}</span>}
       {mark.note && <span className="director-muted"> · {mark.note}</span>}
     </li>)}</ul>}
     {rig.forecast && <ForecastNote rig={rig} night={night} />}
@@ -321,7 +326,7 @@ function ForecastNote({ rig, night }: { rig: RigNights; night: RigNight }) {
     ? `No current forecast from ${PROVIDER_LABEL[forecast.provider]}, so the night counts as clear.`
     : night.clouds.length === 0
       ? 'The forecast does not reach this night, so it counts as clear.'
-      : `Clear means ${forecast.cloud_threshold_percent}% cloud or less.`;
+      : `Clear: ${forecast.cloud_threshold_percent}% cloud or less${forecast.dew_limit_celsius != null ? `, over ${forecast.dew_limit_celsius} °C above dew point` : ''}`;
   return <p className="director-muted nights-forecast-note">{said}</p>;
 }
 

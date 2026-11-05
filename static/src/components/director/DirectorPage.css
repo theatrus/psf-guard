@@ -64,6 +64,10 @@
 .rig-profile-form fieldset { border: 1px solid var(--color-border-secondary); border-radius: 6px; padding: 0.5rem 0.75rem 0.75rem; margin: 0 0 0.75rem; min-width: 0; }
 .rig-profile-form legend { padding: 0 0.35rem; font-weight: 600; }
 .site-forecast-status p { margin: 0.35rem 0; font-size: 0.9rem; }
+.site-forecast-facts { display: grid; grid-template-columns: max-content 1fr; gap: 0.2rem 0.75rem; margin: 0.5rem 0; font-size: 0.85rem; }
+.site-forecast-facts div { display: contents; }
+.site-forecast-facts dt { color: var(--color-text-secondary); }
+.site-forecast-facts dd { margin: 0; }
 .rig-profile-source { display: flex; flex-wrap: wrap; gap: 0.25rem 0.75rem; align-items: center; margin: 0 0 0.5rem; }
 .rig-profile-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr)); gap: 0.5rem 1rem; }
 .rig-profile-field { display: flex; flex-direction: column; gap: 0.2rem; min-width: 0; }

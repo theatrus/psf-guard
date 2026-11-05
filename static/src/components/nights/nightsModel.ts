@@ -1,3 +1,4 @@
+import type { ForecastHour } from '../../api/directorTypes';
 import type { MoonAltitudes, NightAppliedMark, NightAvailabilityState, NightInterval, NightPlanProject, NightPlans, NightPlanTarget, NightRuntime, NightTargetHours, NightSchedule, RigNight, RigNights, SchedulePlanProgress } from '../../api/nightPlanTypes';
 import { PROVIDER_LABEL } from '../director/forecastLabels';
 import { withoutPlanningParams } from '../../hooks/useUrlState';
@@ -287,6 +288,50 @@ export function moonGradient(course: MoonCourse): string | undefined {
   return `linear-gradient(to right, ${stops.join(', ')})`;
 }
 
+/** How far an hour's air is above its dew point, in °C; null without a
+ *  temperature and dew point. */
+export function dewSpread(hour: ForecastHour): number | null {
+  if (hour.temperature_celsius == null || hour.dew_point_celsius == null) return null;
+  return Math.max(0, hour.temperature_celsius - hour.dew_point_celsius);
+}
+
+/** Whether a dew limit takes an hour out of the clear hours, as the
+ *  server judges it. */
+export function isDewy(hour: ForecastHour, limit: number | null | undefined): boolean {
+  const spread = dewSpread(hour);
+  return limit != null && spread !== null && spread <= limit;
+}
+
+/** How strongly to draw an hour's dew: full at the dew point, faint 10 °C
+ *  or more above it. */
+export function dewAlpha(spread: number): string {
+  return (0.06 + 0.94 * Math.max(0, 1 - spread / 10)).toFixed(2);
+}
+
+/** An hour's air in words: "8 °C, dew point 6 °C, 87% humidity". */
+export function airWords(hour: ForecastHour): string {
+  const parts: string[] = [];
+  if (hour.temperature_celsius != null) parts.push(`${Math.round(hour.temperature_celsius)} °C`);
+  if (hour.dew_point_celsius != null) parts.push(`dew point ${Math.round(hour.dew_point_celsius)} °C`);
+  if (hour.humidity_percent != null) parts.push(`${Math.round(hour.humidity_percent)}% humidity`);
+  return parts.join(', ');
+}
+
+/** The stretches between `from` and `to` whose hours pass `test`, merged
+ *  where they touch. */
+export function hourSpans(hours: ForecastHour[], test: (hour: ForecastHour) => boolean, from: number, to: number): Array<{ start: number; end: number }> {
+  const spans: Array<{ start: number; end: number }> = [];
+  for (const hour of hours) {
+    if (!test(hour) || hour.end_ms <= from || hour.start_ms >= to) continue;
+    const start = Math.max(hour.start_ms, from);
+    const end = Math.min(hour.end_ms, to);
+    const last = spans.at(-1);
+    if (last && last.end >= start) last.end = Math.max(last.end, end);
+    else spans.push({ start, end });
+  }
+  return spans;
+}
+
 /** How soon to read kept night plans again: shortly while the server
  *  computes newer ones, else `otherwise`. */
 export function refetchKept(data: NightPlans | undefined, otherwise: number | false): number | false {
@@ -335,6 +380,40 @@ export function availableShares(night: RigNight): Array<{ from: number; to: numb
  *  otherwise. */
 export function forecastMark(night: RigNight): NightAppliedMark | undefined {
   return night.availability.marks.find(mark => mark.source.kind === 'forecast');
+}
+
+/** Which bars a group's sky row has: cloud when any of its rigs has a
+ *  forecast night, dew when one of those gives the air; the Moon always. */
+export interface SkyRows { cloud: boolean; dew: boolean }
+
+export function skyRows(rigs: RigNights[]): SkyRows {
+  const hours = rigs.flatMap(rig => rig.nights.flatMap(night => night.clouds));
+  return { cloud: hours.length > 0, dew: hours.some(hour => dewSpread(hour) !== null) };
+}
+
+/** The row's labels, top to bottom like its bars. */
+export function skyLabels(rows: SkyRows): string[] {
+  return [...(rows.cloud ? ['Cloud'] : []), ...(rows.dew ? ['Dew'] : []), 'Moon'];
+}
+
+/** What took dark hours out of a night's clear hours under its site's
+ *  forecast: cloud over the threshold, air within the dew limit, or both.
+ *  Dew counts only for hours the cloud left clear. */
+export function forecastCauses(rig: RigNights, night: RigNight): { cloud: boolean; dew: boolean } {
+  const settings = rig.forecast;
+  const { dusk_ms: dusk, dawn_ms: dawn } = night;
+  if (!settings || dusk === null || dawn === null) return { cloud: false, dew: false };
+  const dark = night.clouds.filter(hour => hour.end_ms > dusk && hour.start_ms < dawn);
+  return {
+    cloud: dark.some(hour => hour.cloud_total > settings.cloud_threshold_percent),
+    dew: dark.some(hour => hour.cloud_total <= settings.cloud_threshold_percent && isDewy(hour, settings.dew_limit_celsius)),
+  };
+}
+
+/** The causes in a word or two: "cloud", "dew", "cloud and dew"; empty for
+ *  none. */
+export function causeWords(causes: { cloud: boolean; dew: boolean }): string {
+  return [causes.cloud && 'cloud', causes.dew && 'dew'].filter(Boolean).join(' and ');
 }
 
 /** Where a mark came from, in a word or two: "Site", "Rig", or the

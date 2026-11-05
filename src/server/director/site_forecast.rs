@@ -28,6 +28,10 @@ const MAX_BACKOFF_MS: u64 = 6 * HOUR_MS;
 const MIN_GAP_MS: u64 = 2 * MINUTE_MS;
 /// How soon after a failed request Fetch now may try again.
 const RETRY_GAP_MS: u64 = MINUTE_MS;
+/// How soon a forecast stored without the air is asked for again while
+/// the site has a dew limit: a forecast from before PSF Guard asked for
+/// the air.
+const AIR_REFRESH_MS: u64 = 30 * MINUTE_MS;
 /// How often the timer looks for sites that are due.
 const CHECK_EVERY: Duration = Duration::from_secs(10 * 60);
 
@@ -137,6 +141,7 @@ impl Kept {
         let next_refresh_ms = self.settings.map(|s| {
             next_due(
                 s.provider,
+                s.dew_limit_celsius.is_some(),
                 self.forecast.as_ref(),
                 self.status.as_ref(),
                 now,
@@ -188,18 +193,24 @@ fn backoff(failures: u32) -> u64 {
 /// provider last sent or confirmed it, after the timer's failures by the
 /// backoff, and never before the provider's `Expires` or `Retry-After`. A
 /// time later than `now` by more than those allow came from a clock that
-/// ran ahead, and is due at once.
+/// ran ahead, and is due at once. With `air`, the site has a dew limit,
+/// and a forecast without dew points is due 30 minutes after it arrived.
 fn next_due(
     provider: ForecastProvider,
+    air: bool,
     forecast: Option<&SiteForecast>,
     status: Option<&ForecastStatus>,
     now: u64,
 ) -> u64 {
     let forecast = forecast.filter(|f| f.provider == provider);
     let mut due = forecast.map_or(0, |f| {
-        f.checked_at_ms
-            .unwrap_or(f.fetched_at_ms)
-            .saturating_add(REFRESH_MS)
+        if air && !f.has_dew_points() {
+            f.fetched_at_ms.saturating_add(AIR_REFRESH_MS)
+        } else {
+            f.checked_at_ms
+                .unwrap_or(f.fetched_at_ms)
+                .saturating_add(REFRESH_MS)
+        }
     });
     if let Some(status) = status.filter(|s| s.failures > 0) {
         due = status
@@ -272,6 +283,7 @@ pub(super) async fn refresh(
     } else if now
         < next_due(
             settings.provider,
+            settings.dew_limit_celsius.is_some(),
             kept.forecast.as_ref(),
             kept.status.as_ref(),
             now,
@@ -279,7 +291,13 @@ pub(super) async fn refresh(
     {
         return Ok(Refresh::NotDue);
     }
-    let last_modified = kept.current().and_then(|f| f.last_modified.clone());
+    // Under a dew limit, a forecast stored without the air is asked for in
+    // full: "not modified" would keep it without dew points for 12 more
+    // hours.
+    let last_modified = kept
+        .current()
+        .filter(|f| settings.dew_limit_celsius.is_none() || f.has_dew_points())
+        .and_then(|f| f.last_modified.clone());
     let fetched = state
         .forecast_client()
         .fetch(
@@ -471,48 +489,78 @@ mod tests {
         use ForecastProvider::*;
         let t = 100 * HOUR_MS;
         let now = t + HOUR_MS;
-        assert_eq!(next_due(OpenMeteo, None, None, now), 0);
+        assert_eq!(next_due(OpenMeteo, false, None, None, now), 0);
         let open = kept(OpenMeteo, t, None);
-        assert_eq!(next_due(OpenMeteo, Some(&open), None, now), t + 3 * HOUR_MS);
+        assert_eq!(
+            next_due(OpenMeteo, false, Some(&open), None, now),
+            t + 3 * HOUR_MS
+        );
         // A "not modified" check counts like a new forecast.
         let checked = SiteForecast {
             checked_at_ms: Some(t + HOUR_MS),
             ..open.clone()
         };
         assert_eq!(
-            next_due(OpenMeteo, Some(&checked), None, now),
+            next_due(OpenMeteo, false, Some(&checked), None, now),
             t + 4 * HOUR_MS
         );
+        // Under a dew limit, a forecast without dew points is due half an
+        // hour after it arrived; one with them waits the three hours.
+        assert_eq!(
+            next_due(OpenMeteo, true, Some(&open), None, now),
+            t + 30 * MINUTE_MS
+        );
+        let aired = SiteForecast {
+            hours: vec![psf_guard_director_meta::site_forecast::ForecastHour {
+                start_ms: t,
+                end_ms: t + HOUR_MS,
+                cloud_total: 0.0,
+                cloud_low: None,
+                cloud_mid: None,
+                cloud_high: None,
+                temperature_celsius: Some(8.0),
+                dew_point_celsius: Some(2.0),
+                humidity_percent: None,
+            }],
+            ..open.clone()
+        };
+        assert_eq!(
+            next_due(OpenMeteo, true, Some(&aired), None, now),
+            t + 3 * HOUR_MS
+        );
         // A forecast from the provider the site left is due at once.
-        assert_eq!(next_due(MetNorway, Some(&open), None, now), 0);
+        assert_eq!(next_due(MetNorway, false, Some(&open), None, now), 0);
         // The timer's failures since: 15 min, then 30, then capped at 6 h.
         let at = t + 3 * HOUR_MS;
         assert_eq!(
-            next_due(OpenMeteo, Some(&open), Some(&failing(at, 1)), at),
+            next_due(OpenMeteo, false, Some(&open), Some(&failing(at, 1)), at),
             at + 15 * MINUTE_MS
         );
         assert_eq!(
-            next_due(OpenMeteo, Some(&open), Some(&failing(at, 2)), at),
+            next_due(OpenMeteo, false, Some(&open), Some(&failing(at, 2)), at),
             at + 30 * MINUTE_MS
         );
         assert_eq!(
-            next_due(OpenMeteo, Some(&open), Some(&failing(at, 40)), at),
+            next_due(OpenMeteo, false, Some(&open), Some(&failing(at, 40)), at),
             at + 6 * HOUR_MS
         );
         // Never before the provider's own Expires or Retry-After.
         let met = kept(MetNorway, t, Some(t + 4 * HOUR_MS));
-        assert_eq!(next_due(MetNorway, Some(&met), None, now), t + 4 * HOUR_MS);
+        assert_eq!(
+            next_due(MetNorway, false, Some(&met), None, now),
+            t + 4 * HOUR_MS
+        );
         let told = ForecastStatus {
             retry_after_ms: Some(t + 5 * HOUR_MS),
             ..failing(at, 1)
         };
         assert_eq!(
-            next_due(OpenMeteo, Some(&open), Some(&told), at),
+            next_due(OpenMeteo, false, Some(&open), Some(&told), at),
             t + 5 * HOUR_MS
         );
         // A forecast stored from a clock that ran a day ahead is due now.
         let ahead = kept(OpenMeteo, t + 24 * HOUR_MS, None);
-        assert_eq!(next_due(OpenMeteo, Some(&ahead), None, now), now);
+        assert_eq!(next_due(OpenMeteo, false, Some(&ahead), None, now), now);
     }
 
     #[test]
@@ -526,6 +574,7 @@ mod tests {
         let settings = ForecastSettings {
             provider: ForecastProvider::MetNorway,
             cloud_threshold_percent: 30,
+            dew_limit_celsius: None,
         };
         let state = |forecast: Option<SiteForecast>, status: Option<ForecastStatus>| Kept {
             site: site.clone(),
@@ -583,6 +632,7 @@ mod tests {
             forecast: Some(ForecastSettings {
                 provider: ForecastProvider::OpenMeteo,
                 cloud_threshold_percent: 30,
+                dew_limit_celsius: None,
             }),
             ..SiteProfile::empty(Uuid::new_v4(), 1)
         };

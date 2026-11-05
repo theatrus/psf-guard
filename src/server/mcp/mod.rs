@@ -1619,7 +1619,7 @@ impl PsfGuardMcp {
     }
 
     #[tool(
-        description = "Night plans for each rig and night: dusk, dawn and dark hours, the dark hours clear by the site's and rig's marks and cloud forecast (`available_dark_hours`; `availability` lists the marks), the Moon, how much of the work left fits, and with schedule set, what each rig's runtime (Target Scheduler or Director) would shoot when. A Director rig's nights list their overrides. The server keeps these views current: `computed_at_ms` says when this one was computed, and `refreshing` that a newer one is being computed. Changes nothing."
+        description = "Night plans for each rig and night: dusk, dawn and dark hours, the dark hours clear by the site's and rig's marks and cloud and dew forecast (`available_dark_hours`; `availability` lists the marks), the Moon, how much of the work left fits, and with schedule set, what each rig's runtime (Target Scheduler or Director) would shoot when. A Director rig's nights list their overrides. The server keeps these views current: `computed_at_ms` says when this one was computed, and `refreshing` that a newer one is being computed. Changes nothing."
     )]
     async fn get_night_plans(
         &self,
