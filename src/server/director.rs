@@ -73,6 +73,7 @@ mod star_detection;
 mod take_values;
 mod templates;
 mod ts_snapshot;
+mod weather;
 mod workload;
 
 /// The default store sits beside the registry, like `auth.json`, so a test
@@ -836,6 +837,7 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
         .merge(configuration_api::routes())
         .merge(site_profile::routes())
         .merge(site_forecast::routes())
+        .merge(weather::routes())
         .merge(night_availability::routes())
         .merge(night_overrides::routes())
         .merge(ts_levers::routes())

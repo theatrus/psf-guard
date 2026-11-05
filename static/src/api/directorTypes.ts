@@ -643,6 +643,7 @@ export interface DirectorOperationReceipt {
 }
 /** One rig as the operator sees it: connectivity from server receipt times, the newest report, and what it is assigned. */
 export interface DirectorRigStatusView {
+  weather?: import('./weatherTypes').RigWeather;
   rig: DirectorIdentity;
   catalog_slug: string | null;
   catalog_name: string | null;

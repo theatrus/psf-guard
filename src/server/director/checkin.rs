@@ -320,6 +320,7 @@ struct AssignmentView {
 
 #[derive(Serialize)]
 pub(super) struct RigStatusView {
+    weather: psf_guard_director_meta::weather::RigWeather,
     rig: NamedIdentity,
     catalog_slug: Option<String>,
     catalog_name: Option<String>,
@@ -436,6 +437,7 @@ pub(super) async fn statuses(
                     .map(|(_, count)| count)
                     .fold(0u32, u32::saturating_add);
                 views.push(RigStatusView {
+                    weather: store.rig_weather(rig_id, None, now)?,
                     rig,
                     catalog_slug,
                     catalog_name,

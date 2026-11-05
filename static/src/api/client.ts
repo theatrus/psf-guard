@@ -1,4 +1,5 @@
 import axios from 'axios';
+import type { RigWeather, WeatherObservation } from './weatherTypes';
 import type { AxiosInstance, AxiosResponse } from 'axios';
 import type { CollaborationAction, CollaborationConnection, CollaborationReply, CollaborationWork, CollaborationWorkInput, CollaborationBackgroundInput, CollaborationBackgroundReply } from './collaborationTypes';
 import { AUTH_REQUIRED_EVENT } from '../auth/events';
@@ -795,6 +796,20 @@ export const apiClient = {
     const api = await getApi();
     const { data } = await api.get<ApiResponse<DirectorRigStatusView[]>>('/director/v1/rigs/status');
     if (!data.data) throw new Error(data.error || 'Failed to load rig status');
+    return data.data;
+  },
+
+  getDirectorWeather: async (rig: string): Promise<RigWeather> => {
+    const api = await getApi();
+    const { data } = await api.get<ApiResponse<RigWeather>>(`/director/v1/rigs/${encodeURIComponent(rig)}/weather`);
+    if (!data.data) throw new Error(data.error || 'Failed to load rig weather');
+    return data.data;
+  },
+
+  getDirectorWeatherHistory: async (rig: string): Promise<WeatherObservation[]> => {
+    const api = await getApi();
+    const { data } = await api.get<ApiResponse<WeatherObservation[]>>(`/director/v1/rigs/${encodeURIComponent(rig)}/weather/history`);
+    if (!data.data) throw new Error(data.error || 'Failed to load weather history');
     return data.data;
   },
 
