@@ -279,7 +279,12 @@ pub(super) async fn refresh(
     {
         return Ok(Refresh::NotDue);
     }
-    let last_modified = kept.current().and_then(|f| f.last_modified.clone());
+    // A forecast stored without the air is asked for in full: "not
+    // modified" would keep it without dew points for 12 more hours.
+    let last_modified = kept
+        .current()
+        .filter(|f| f.has_dew_points())
+        .and_then(|f| f.last_modified.clone());
     let fetched = state
         .forecast_client()
         .fetch(

@@ -426,14 +426,17 @@ wherever no manual mark says otherwise.
   site, which says what is sent and to whom. Coordinates go rounded to two
   decimals, about a kilometre, which is finer than any model's grid.
 - **Clear or not.** An hour is clear when its total cloud cover is at or
-  under the site's threshold (30 % by default). Clear hours inside a night's
+  under the site's threshold (30 % by default) and, when the site sets a
+  dew limit, its air is more than that many °C above its dew point. An
+  hour without a dew point is judged by its cloud alone. Clear hours inside a night's
   noon-to-noon span become that night's `limited` windows; a night with
   none is `unavailable`; a night clear in every dark hour is `available`.
   Weighting cloud layers (thin high cloud blocks less than low cloud) is a
   later site option.
 - **Storage.** The meta store keeps each site's latest forecast: its
-  provider, when it was fetched, when it expires, and the hourly cover
-  (total and by layer). Windows are worked out when they are read, so a
+  provider, when it was fetched, when it expires, the hourly cover (total
+  and by layer), and the hourly air temperature, dew point and humidity
+  when the provider gives them. Windows are worked out when they are read, so a
   changed threshold applies at once.
 - **Freshness.** A forecast is good for 12 hours after it was fetched. An
   expired forecast counts as no information, not as clear, and hours past
@@ -448,8 +451,8 @@ wherever no manual mark says otherwise.
   forecast is a site's: it is about the sky, so rigs take it through their
   planning site, and a rig's own mark still meets it.
 - **Shown.** The Nights grid draws a forecast night like a marked one, with
-  a cloud glyph; the night's panel adds an hourly cloud strip to the
-  timeline, and every place a forecast shows credits its provider.
+  a cloud glyph; the night's panel adds an hourly cloud strip and a dew
+  band to the timeline, and every place a forecast shows credits its provider.
 - **Observed weather** stays separate. It is acquisition evidence and
   belongs to the rig (Director, *Site and rig responsibilities*).
 

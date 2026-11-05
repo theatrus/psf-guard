@@ -20,6 +20,12 @@ pub const DEFAULT_CLOUD_THRESHOLD_PERCENT: u8 = 30;
 /// The largest dew limit a site may set, in °C above the dew point.
 pub const MAX_DEW_LIMIT_CELSIUS: u8 = 20;
 
+/// Whether a temperature, in °C, is one air at 2 m can have. Forecast
+/// readers drop any other, and a stored forecast holding one is refused.
+pub fn plausible_celsius(value: f64) -> bool {
+    value.is_finite() && (-100.0..=70.0).contains(&value)
+}
+
 const MAX_TIME_MS: u64 = 4_102_444_800_000; // 2100-01-01
 const MAX_ERROR_CHARS: usize = 300;
 const MAX_LAST_MODIFIED_CHARS: usize = 64;
@@ -137,13 +143,13 @@ pub struct ForecastHour {
     #[serde(default)]
     pub cloud_high: Option<f64>,
     /// Air temperature, °C.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temperature_celsius: Option<f64>,
     /// Dew point, °C.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dew_point_celsius: Option<f64>,
     /// Relative humidity, percent.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub humidity_percent: Option<f64>,
 }
 
@@ -256,13 +262,21 @@ impl SiteForecast {
                 || [hour.temperature_celsius, hour.dew_point_celsius]
                     .into_iter()
                     .flatten()
-                    .any(|v| !v.is_finite() || !(-100.0..=70.0).contains(&v))
+                    .any(|v| !plausible_celsius(v))
             {
                 return Err(Error::InvalidInput);
             }
             last_end = hour.end_ms;
         }
         Ok(())
+    }
+
+    /// Whether any hour gives the air's dew point. A forecast fetched
+    /// before PSF Guard asked for the air has none.
+    pub fn has_dew_points(&self) -> bool {
+        self.hours
+            .iter()
+            .any(|hour| hour.dew_point_celsius.is_some())
     }
 
     /// Whether the forecast still counts at `now_ms`.
@@ -646,6 +660,7 @@ mod tests {
             hours: steps,
         };
         forecast.validate().unwrap();
+        assert!(forecast.has_dew_points());
         assert_eq!(forecast.hours[1].dew_spread_celsius(), Some(3.0));
         assert_eq!(forecast.hours[3].dew_spread_celsius(), None);
         let dew = ForecastSettings {
@@ -666,6 +681,17 @@ mod tests {
                 },
             ]
         );
+        // An hour without the air is stored as before, with no new keys.
+        let bare = hours(0, &[10.0]);
+        assert_eq!(
+            serde_json::to_value(bare[0]).unwrap(),
+            serde_json::json!({"start_ms": 0, "end_ms": HOUR, "cloud_total": 10.0, "cloud_low": null, "cloud_mid": null, "cloud_high": null})
+        );
+        assert!(!SiteForecast {
+            hours: bare,
+            ..forecast.clone()
+        }
+        .has_dew_points());
         // Without a limit, dew leaves every hour clear.
         let night = forecast.night(span, &clouds(30), 95 * HOUR).unwrap();
         assert_eq!(night.clear, vec![span]);

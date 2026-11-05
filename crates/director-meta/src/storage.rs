@@ -3,7 +3,7 @@ use rusqlite::backup::{Backup, StepResult};
 use tempfile::NamedTempFile;
 
 const APPLICATION_ID: i32 = 0x50474d44;
-const SCHEMA_VERSION: i32 = 35;
+const SCHEMA_VERSION: i32 = 36;
 
 impl MetaStore {
     /// Publish a complete database at a new path. Never adopt an existing empty
@@ -182,6 +182,10 @@ impl MetaStore {
             if version < 35 {
                 super::night_override::create_tables(&tx)?;
             }
+            // Schema 36 adds a site's dew limit and each forecast hour's
+            // air, optional fields older payloads read without: nothing to
+            // rewrite. The bump keeps a build that cannot read them from
+            // opening a store that may hold them.
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         tx.commit()?;

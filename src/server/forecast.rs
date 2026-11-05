@@ -6,7 +6,9 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use chrono::DateTime;
-use psf_guard_director_meta::site_forecast::{ForecastHour, ForecastProvider, MAX_FORECAST_HOURS};
+use psf_guard_director_meta::site_forecast::{
+    plausible_celsius, ForecastHour, ForecastProvider, MAX_FORECAST_HOURS,
+};
 use reqwest::{header, StatusCode};
 use serde::Deserialize;
 
@@ -302,7 +304,7 @@ fn percent(value: Option<f64>) -> Option<f64> {
 /// A temperature in °C, or `None` when the provider has none or sends one
 /// no air reaches.
 fn celsius(value: Option<f64>) -> Option<f64> {
-    value.filter(|v| v.is_finite() && (-100.0..=70.0).contains(v))
+    value.filter(|&v| plausible_celsius(v))
 }
 
 /// Each step lasts until the next one starts; the last as long as the one

@@ -566,8 +566,8 @@ async fn met_norway_s_not_modified_keeps_the_hours_and_when_they_arrived() {
                     return (StatusCode::NOT_MODIFIED, answer).into_response();
                 }
                 let body = json!({"type": "Feature", "properties": {"timeseries": [
-                    {"time": "2026-11-01T12:00:00Z", "data": {"instant": {"details": {"cloud_area_fraction": 10.0}}}},
-                    {"time": "2026-11-01T13:00:00Z", "data": {"instant": {"details": {"cloud_area_fraction": 90.0}}}},
+                    {"time": "2026-11-01T12:00:00Z", "data": {"instant": {"details": {"cloud_area_fraction": 10.0, "air_temperature": 8.0, "dew_point_temperature": 2.0}}}},
+                    {"time": "2026-11-01T13:00:00Z", "data": {"instant": {"details": {"cloud_area_fraction": 90.0, "air_temperature": 7.0, "dew_point_temperature": 2.0}}}},
                 ]}});
                 (answer, Json(body)).into_response()
             }
