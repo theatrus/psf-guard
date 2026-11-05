@@ -62,8 +62,9 @@ pub fn worker_routes() -> Router<Arc<AppState>> {
         )
         .route(
             "/sessions/{session}/tasks/{task}/outputs/{name}",
-            // The body streams to a file as it arrives, so no body limit
-            // applies: an output can be several gigabytes.
+            // The body streams to a file as it arrives, so axum's body
+            // limit does not apply; `receive` refuses more than
+            // MAX_OUTPUT_BYTES (16 GiB) with 400.
             put(upload_output),
         )
         .route("/sessions/{session}/tasks/{task}/complete", post(complete))

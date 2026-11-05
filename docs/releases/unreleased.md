@@ -15,6 +15,6 @@
   rig's safety controls.
 
 - When a reverse proxy refuses a remote worker's upload as too large, the
-  worker and the failed run now say so and point to the proxy's upload
-  limit, such as nginx's `client_max_body_size`. The workers guide shows
-  nginx settings that pass full-size results.
+  worker's log and the failed run show which file the proxy refused and
+  which upload limit to raise, such as nginx's `client_max_body_size`. The
+  workers guide shows nginx settings that pass full-size results.
