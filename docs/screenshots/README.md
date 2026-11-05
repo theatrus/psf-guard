@@ -501,3 +501,20 @@ isolated server, not the live observatory catalogs.
 - **UI and observed state:** Automatic sync and writeback saved off. Merge catalogs: Observatory — Target Scheduler to Observatory. Include thumbnails on. Preview of new project 100 and target 100; Apply not clicked.
 - **Composition and reshoot:** follow the shared environment and capture spec above; CSS crop `{"x": 68, "y": 172, "width": 1024, "height": 559.859375}`. No overlays, image processing or zoom/pan apply to these forms.
 - **Catalog IDs:** Observatory: `db-969a90ea`.
+
+## November 4 cloud and dew follow-up
+
+Three new Chrome captures show the Cloud/Dew/Moon grid bars, the November 9
+RedCat schedule shortened by a 2 °C dew limit, and the site's saved weather
+settings. They illustrate [Cloud and dew forecasts](../DIRECTOR.md#cloud-and-dew-forecasts).
+The server showed 0.13.0 and frontend asset `index-DQ0OvZFj.js`; its deployed
+commit was not exposed. The controls matched PR #1059.
+
+The images in `docs/images/` are byte-for-byte copies of the website assets:
+`rigs-dew-grid-013.jpg`, `night-dew-schedule-013.jpg` and
+`site-weather-forecast-013.jpg`. The
+[capture record](https://github.com/theatrus/psf-guard-docs/blob/main/assets/screenshot-captures.md#013-cloud-and-dew-captures--november-4-2026)
+and [manifest](https://github.com/theatrus/psf-guard-docs/blob/main/assets/captures-weather-013-2026-11-04.json)
+record their hashes, dimensions, source state and reshoot steps. All geographic
+coordinates are outside the final crops; raw captures remain outside both repos.
+No settings, plans or grades changed, and no jobs or forecast requests started.
