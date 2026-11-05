@@ -3894,6 +3894,7 @@ export interface CalibrationNightFilter {
   /** With no flat, the nearest one refused only for its rotator angle. */
   flat_near_miss?: CalibrationFlatNearMiss | null;
   /** Masters from other software for this camera, sensor and filter. */
+  flats_not_used?: CalibrationFlatsNotUsed[];
   external_masters?: CalibrationExternalMaster[];
   /** Why this night's lights cannot be calibrated properly. */
   cannot_calibrate?: string | null;
@@ -3925,6 +3926,12 @@ export interface CalibrationFlatNearMiss {
   tolerance_deg: number;
   session: string | null;
   frames: number;
+}
+
+export interface CalibrationFlatsNotUsed {
+  night: string;
+  frames: number;
+  reason: string;
 }
 
 export interface CalibrationExternalMaster {

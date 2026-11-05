@@ -2417,14 +2417,30 @@ pub(crate) fn calibration_gaps<Flats: AsRef<[CalibrationFrame]>>(
 }
 
 /// The nearest dated flat that would actually contribute to this light's
-/// master. A median can move outside the age limit when older flats join
-/// fresh ones. Matching candidates that cannot join the master provide no
-/// coverage, so judge the coherent subset rather than the candidate list.
+/// flat master. A stack uses an external master as it is, so that master's
+/// date decides. Otherwise a stack builds a master from raw frames: a median
+/// can move outside the age limit when older flats join fresh ones, and
+/// matching candidates that cannot join the master provide no coverage, so
+/// judge the raw frames' coherent subset rather than the candidate list.
 pub(crate) fn nearest_master_flat_at(
     selected: &CalibrationSelection,
     light_at: i64,
 ) -> Option<i64> {
-    coherent_master_subset(CalibrationKind::Flat, &selected.flat, &selected.rules)
+    if let Some(master) = seiza_calibration::library::adopted_master(
+        CalibrationKind::Flat,
+        &selected.flat,
+        &selected.flat_held_back,
+        &selected.rules,
+    ) {
+        return master.captured_at;
+    }
+    let raw: Vec<CalibrationFrame> = selected
+        .flat
+        .iter()
+        .filter(|frame| !frame.is_master)
+        .cloned()
+        .collect();
+    coherent_master_subset(CalibrationKind::Flat, &raw, &selected.rules)
         .iter()
         .filter_map(|frame| frame.captured_at)
         .min_by_key(|at| at.abs_diff(light_at))
@@ -2501,6 +2517,9 @@ pub struct CalibrationNightFilter {
     /// With no flat matching, the flat that would have but for the rotator
     /// angle: the nearest such angle, and how far it is off.
     pub flat_near_miss: Option<FlatNearMiss>,
+    /// Raw flats nearer this night than the ones it would use, nearest first,
+    /// and why a stack leaves them out. Empty with nightly flats.
+    pub flats_not_used: Vec<FlatsNotUsed>,
     /// Masters from other software for this camera and sensor (and, for a
     /// flat, this filter): which this night would use, and why the others
     /// do not match.
@@ -2641,6 +2660,14 @@ pub struct FlatNearMiss {
     pub frames: usize,
 }
 
+/// Raw flats from one night that a light does not use, and the reason.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FlatsNotUsed {
+    pub night: String,
+    pub frames: usize,
+    pub reason: String,
+}
+
 /// Every external master for this light's camera and sensor size, with
 /// whether it matches, whether a stack would use it, and the readings that
 /// rule it out. A flat master for another filter is left out: that is a
@@ -2651,7 +2678,6 @@ fn external_master_notes(
     selected: &CalibrationSelection,
 ) -> Result<Vec<ExternalMasterNote>> {
     let rules = &selected.rules;
-    let policy = rules.external_masters;
     let light_signature = light_signature(light);
     let mut notes = Vec::new();
     for kind in [
@@ -2664,49 +2690,22 @@ fn external_master_notes(
             CalibrationKind::Dark => &selected.dark,
             _ => &selected.flat,
         };
-        // A stack takes the nearest matching master as-is; with the
-        // fallback setting only when the raw frames cannot build one.
-        let raw_enough =
-            chosen.iter().filter(|frame| !frame.is_master).count() >= MIN_MASTER_FRAMES;
-        // Never a master from the far side of a measured change.
-        let standing_in = |frame: &&CalibrationFrame| {
-            frame.is_master
-                && !(kind == CalibrationKind::Flat
-                    && selected.flat_held_back.contains(&frame.frame_uuid))
-        };
-        let used_uuid = match policy {
-            ExternalMasterPolicy::Prefer => chosen.iter().find(standing_in),
-            ExternalMasterPolicy::Fallback if !raw_enough => chosen.iter().find(standing_in),
-            _ => None,
-        }
+        // The same choice a stack makes, so "used" means what the stack does.
+        let used_uuid = seiza_calibration::library::adopted_master(
+            kind,
+            chosen,
+            &selected.flat_held_back,
+            rules,
+        )
         .map(|frame| frame.frame_uuid.clone());
         for candidate in query_kind(conn, kind)? {
             if !candidate.is_master {
                 continue;
             }
             let signature = frame_signature(&candidate);
-            let (light_seiza, master_seiza) = (&light_signature.seiza, &signature.seiza);
-            let differs = |left: Option<i64>, right: Option<i64>| matches!((left, right), (Some(a), Some(b)) if a != b);
-            let other_camera = matches!((light_seiza.camera.as_deref(), master_seiza.camera.as_deref()),
-                (Some(a), Some(b)) if !a.eq_ignore_ascii_case(b));
-            if other_camera
-                || differs(light_seiza.width, master_seiza.width)
-                || differs(light_seiza.height, master_seiza.height)
-            {
-                continue;
-            }
-            // Only the filter: a flat for another filter is another flat.
-            let filter_only = |filter: &Option<String>| {
-                let mut signature = seiza_calibration::FrameSignature::default();
-                signature.filter = filter.clone();
-                signature
-            };
-            if kind == CalibrationKind::Flat
-                && !seiza_calibration::optics_consistent(
-                    &filter_only(&light_seiza.filter),
-                    &filter_only(&master_seiza.filter),
-                    &rules.tolerances(),
-                )
+            if !same_camera(&light_signature, &signature)
+                || (kind == CalibrationKind::Flat
+                    && !same_flat_filter(&light_signature, &signature, rules))
             {
                 continue;
             }
@@ -2878,6 +2877,187 @@ fn temperature_refusal(light: Option<f64>, dark: Option<f64>, rules: &Rules) -> 
         }
         _ => seiza_calibration::describe_value("temperature", light, dark, "C"),
     }
+}
+
+/// How many groups of nearer flats a night lists.
+const FLATS_NOT_USED_LISTED: usize = 3;
+
+/// Raw flats for this camera and filter nearer the light than `used_at`,
+/// the date of the flats it uses, grouped by night and reason, nearest
+/// first. With no date, the nearest flats the library has. Flats nearer
+/// than the nearest used flat are, by that, not used.
+fn nearer_flats_not_used(
+    flats: &[CalibrationFrame],
+    light: &FrameMeta,
+    light_at: i64,
+    selected: &CalibrationSelection,
+    used_at: Option<i64>,
+    nights: &Nights,
+) -> Vec<FlatsNotUsed> {
+    let light_signature = light_signature(light);
+    let reach = used_at.map(|at| at.abs_diff(light_at));
+    let mut nearer: Vec<(u64, i64, &CalibrationFrame)> = flats
+        .iter()
+        .filter(|flat| !flat.is_master)
+        .filter_map(|flat| {
+            let at = flat.captured_at?;
+            let gap = at.abs_diff(light_at);
+            reach
+                .is_none_or(|reach| gap < reach)
+                .then_some((gap, at, flat))
+        })
+        .filter(|(_, _, flat)| {
+            let signature = frame_signature(flat);
+            same_camera(&light_signature, &signature)
+                && same_flat_filter(&light_signature, &signature, &selected.rules)
+        })
+        .collect();
+    nearer.sort_by_key(|(gap, _, _)| *gap);
+
+    // Readings differ from frame to frame, so frames group by what their
+    // reason is about, and a group shows its nearest frame's reason.
+    let mut groups: Vec<(String, FlatsNotUsed)> = Vec::new();
+    for (_, at, flat) in nearer {
+        let night = nights.night_of_frame(&flat.rig_uuid, &flat.frame_uuid, at);
+        let full = groups.len() == FLATS_NOT_USED_LISTED;
+        if full && groups.last().is_some_and(|(_, last)| last.night != night) {
+            break;
+        }
+        let reason = flat_not_used_reason(flat, light, &light_signature, selected);
+        let topic = reason
+            .split([' ', '=', ':'])
+            .next()
+            .unwrap_or_default()
+            .to_string();
+        match groups
+            .iter_mut()
+            .find(|(seen, group)| *seen == topic && group.night == night)
+        {
+            Some((_, group)) => group.frames += 1,
+            None if full => {}
+            None => groups.push((
+                topic,
+                FlatsNotUsed {
+                    night,
+                    frames: 1,
+                    reason,
+                },
+            )),
+        }
+    }
+    groups.into_iter().map(|(_, group)| group).collect()
+}
+
+/// Why a stack leaves out this raw flat, which lies nearer the light than
+/// the flats it uses.
+fn flat_not_used_reason(
+    flat: &CalibrationFrame,
+    light: &FrameMeta,
+    light_signature: &Signature,
+    selected: &CalibrationSelection,
+) -> String {
+    const ACROSS_A_CHANGE: &str = "on the far side of a measured change";
+    let rules = &selected.rules;
+    if selected
+        .flat
+        .iter()
+        .any(|frame| frame.frame_uuid == flat.frame_uuid)
+    {
+        if selected.flat_held_back.contains(&flat.frame_uuid) {
+            return ACROSS_A_CHANGE.to_string();
+        }
+        let adopted = seiza_calibration::library::adopted_master(
+            CalibrationKind::Flat,
+            &selected.flat,
+            &selected.flat_held_back,
+            rules,
+        );
+        return match adopted {
+            Some(_) => "an external master is used instead".to_string(),
+            None => flat_cannot_join(flat, &selected.flat, rules),
+        };
+    }
+    let refused = flat.kept_out.is_some()
+        || !validity_admits(flat, light.timestamp)
+        || !sensor_matches(light, flat, rules)
+        || !seiza_calibration::library::matching::flat_matches(&library_light(light), flat, rules);
+    if refused {
+        // The readings are worded for a master; this is a raw flat.
+        return refusal(light, light_signature, flat, rules)
+            .replace("master=", "flat=")
+            .replace("master did not", "flat did not");
+    }
+    if selected.flat_basis.event().is_some() {
+        ACROSS_A_CHANGE.to_string()
+    } else if selected.flat_family.is_some() {
+        "from another measured flat family".to_string()
+    } else {
+        "left out by measured flat grouping".to_string()
+    }
+}
+
+/// Why a matching raw flat found no other raw flat in `matched` to build a
+/// master with, by the tests a master's frames must pass among themselves.
+fn flat_cannot_join(
+    flat: &CalibrationFrame,
+    matched: &[CalibrationFrame],
+    rules: &Rules,
+) -> String {
+    let tolerances = rules.coherence_tolerances();
+    let hours = (tolerances.flat_session_seconds as f64 / 3600.0).round();
+    let same_session: Vec<&CalibrationFrame> = matched
+        .iter()
+        .filter(|other| !other.is_master && other.frame_uuid != flat.frame_uuid)
+        .filter(|other| match (flat.captured_at, other.captured_at) {
+            (Some(at), Some(other)) => at.abs_diff(other) <= tolerances.flat_session_seconds,
+            _ => true,
+        })
+        .collect();
+    if same_session.is_empty() {
+        return format!("no other flat within {hours} h (a master needs {MIN_MASTER_FRAMES})");
+    }
+    let same_temperature: Vec<&CalibrationFrame> = same_session
+        .into_iter()
+        .filter(|other| match (flat.camera_temp, other.camera_temp) {
+            (Some(at), Some(other)) => (at - other).abs() <= tolerances.master_temperature_c,
+            _ => true,
+        })
+        .collect();
+    if same_temperature.is_empty() {
+        return format!(
+            "no other flat within {hours} h and {} °C",
+            tolerances.master_temperature_c
+        );
+    }
+    let same_angle = same_temperature
+        .iter()
+        .any(|other| match (flat.rotation, other.rotation) {
+            (Some(at), Some(other)) => rotation_gap(at, other) <= tolerances.rotation_deg,
+            _ => true,
+        });
+    if same_angle {
+        "could not join the master".to_string()
+    } else {
+        format!(
+            "no other flat within {hours} h and {}° of rotation",
+            tolerances.rotation_deg
+        )
+    }
+}
+
+/// Whether a flat is for the light's filter: a flat for another filter is
+/// another flat, not a near miss.
+fn same_flat_filter(light: &Signature, frame: &Signature, rules: &Rules) -> bool {
+    let filter_only = |filter: &Option<String>| {
+        let mut signature = seiza_calibration::FrameSignature::default();
+        signature.filter = filter.clone();
+        signature
+    };
+    seiza_calibration::optics_consistent(
+        &filter_only(&light.seiza.filter),
+        &filter_only(&frame.seiza.filter),
+        &rules.tolerances(),
+    )
 }
 
 /// Whether a frame comes from the light's camera and sensor size; frames
@@ -3621,6 +3801,18 @@ pub fn project_calibration_report(
         } else {
             None
         };
+        let flats_not_used = if nightly_flats {
+            Vec::new()
+        } else {
+            nearer_flats_not_used(
+                &flats,
+                &meta,
+                light_at,
+                &selected,
+                flat_session_at,
+                &rig_nights,
+            )
+        };
         let cannot_calibrate =
             calibration_gaps(&meta, &selected, &rig_nights, || Ok(flats.as_slice()))?
                 .into_iter()
@@ -3660,6 +3852,7 @@ pub fn project_calibration_report(
             nightly_flats,
             missing,
             flat_near_miss,
+            flats_not_used,
             external_masters,
             cannot_calibrate,
         };
@@ -7390,7 +7583,17 @@ pub(crate) fn delivery_selection(mut selected: CalibrationSelection) -> Calibrat
     selected.dark = coherent_master_subset(CalibrationKind::Dark, &selected.dark, rules);
     selected.dark_flat =
         coherent_master_subset(CalibrationKind::DarkFlat, &selected.dark_flat, rules);
-    selected.flat = coherent_master_subset(CalibrationKind::Flat, &selected.flat, rules);
+    // A stack uses an external flat master as it is, so a delivery carries
+    // that master, not raw flats that may lie far from the light.
+    selected.flat = match seiza_calibration::library::adopted_master(
+        CalibrationKind::Flat,
+        &selected.flat,
+        &selected.flat_held_back,
+        rules,
+    ) {
+        Some(master) => vec![master.clone()],
+        None => coherent_master_subset(CalibrationKind::Flat, &selected.flat, rules),
+    };
     selected
 }
 
@@ -9990,6 +10193,179 @@ pub(crate) mod tests {
             tolerances().rotation_deg,
             seiza_calibration::MatchTolerances::default().rotation_deg
         );
+    }
+
+    /// What the report lists for a light at 90° with five good flats 18 days
+    /// away and `nearer` flats closer to it.
+    fn nearer_flats_listed(nearer: Vec<CalibrationFrame>) -> Vec<FlatsNotUsed> {
+        let light_at = 1_790_000_000;
+        let mut light = frame("/light.fits", "LIGHT");
+        light.timestamp = Some(light_at);
+        light.rotator_position = Some(90.0);
+        let far = (0..5).map(|index| test_flat(18.0, index, |_| {}));
+        let flats: Vec<CalibrationFrame> = nearer.into_iter().chain(far).collect();
+        let library =
+            seiza_calibration::library::Library::new(flats.clone(), Default::default(), Vec::new());
+        let selected = library.select(&library_light(&light), global_rules());
+        nearer_flats_not_used(
+            &flats,
+            &light,
+            light_at,
+            &selected,
+            nearest_master_flat_at(&selected, light_at),
+            &Nights::fixed(12 * 3600),
+        )
+    }
+
+    /// A raw Ha flat at 90°, `days` after the light in [`nearer_flats_listed`].
+    fn test_flat(
+        days: f64,
+        index: i64,
+        change: impl FnOnce(&mut CalibrationFrame),
+    ) -> CalibrationFrame {
+        let mut flat = CalibrationFrame {
+            id: (days * 100.0) as i64 + index,
+            frame_uuid: format!("flat-{days}-{index}"),
+            rig_uuid: "r".into(),
+            kind: CalibrationKind::Flat,
+            source_path: format!("/flat-{days}-{index}.fits").into(),
+            source_fingerprint: "x".into(),
+            captured_at: Some(1_790_000_000 + (days * 86_400.0) as i64 + index * 60),
+            telescope: Some("Scope".into()),
+            camera: Some("Camera".into()),
+            width: Some(3000),
+            height: Some(2000),
+            channels: Some(1),
+            binning_x: Some(1),
+            binning_y: Some(1),
+            gain: Some(100),
+            offset: Some(20),
+            readout_mode: None,
+            readout_mode_name: None,
+            is_master: false,
+            dark_subtracted: false,
+            bayer_pattern: None,
+            exposure_s: Some(3.0),
+            camera_temp: Some(-10.0),
+            filter: Some("Ha".into()),
+            focal_length_mm: None,
+            rotation: Some(90.0),
+            valid_direction: None,
+            kept_out: None,
+            source_verified: false,
+        };
+        change(&mut flat);
+        flat
+    }
+
+    #[test]
+    fn the_report_shows_why_nearer_flats_are_not_used() {
+        let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let reasons = |nearer| {
+            nearer_flats_listed(nearer)
+                .into_iter()
+                .map(|group| (group.frames, group.reason))
+                .collect::<Vec<_>>()
+        };
+
+        let rotated = reasons(vec![
+            test_flat(1.0, 0, |flat| flat.rotation = Some(120.0)),
+            test_flat(1.0, 1, |flat| flat.rotation = Some(120.1)),
+        ]);
+        assert_eq!(rotated.len(), 1, "one group despite differing readings");
+        assert_eq!(rotated[0].0, 2);
+        assert!(rotated[0].1.starts_with("rotation light=90"), "{rotated:?}");
+        assert!(rotated[0].1.contains("flat=120"), "{rotated:?}");
+        assert!(!rotated[0].1.contains("master"), "{rotated:?}");
+
+        assert_eq!(
+            reasons(vec![test_flat(1.0, 0, |flat| {
+                flat.kept_out = Some("poor".into());
+            })]),
+            [(1, "kept out: poor".to_string())]
+        );
+        assert_eq!(
+            reasons(vec![test_flat(1.0, 0, |flat| {
+                flat.valid_direction = Some(ValidDirection::Forward);
+            })]),
+            [(1, "marked for lights after it".to_string())]
+        );
+        assert!(
+            reasons(vec![test_flat(1.0, 0, |flat| flat.gain = Some(200))])[0]
+                .1
+                .starts_with("gain")
+        );
+        assert_eq!(
+            reasons(vec![test_flat(1.0, 0, |_| {})]),
+            [(
+                1,
+                "no other flat within 24 h (a master needs 2)".to_string()
+            )]
+        );
+        assert_eq!(
+            reasons(vec![
+                test_flat(1.0, 0, |_| {}),
+                test_flat(1.0, 1, |flat| flat.camera_temp = Some(-5.0)),
+            ]),
+            [(2, "no other flat within 24 h and 1 °C".to_string())]
+        );
+        assert_eq!(
+            reasons(vec![
+                test_flat(1.0, 0, |flat| flat.rotation = Some(89.0)),
+                test_flat(1.0, 1, |flat| flat.rotation = Some(91.5)),
+            ]),
+            [(
+                2,
+                "no other flat within 24 h and 2° of rotation".to_string()
+            )]
+        );
+        assert_eq!(
+            reasons(vec![
+                test_flat(1.0, 0, |_| {}),
+                test_flat(9.0, 0, |flat| flat.is_master = true),
+            ]),
+            [(1, "an external master is used instead".to_string())]
+        );
+    }
+
+    #[test]
+    fn the_report_shows_a_nearer_flat_held_back_by_a_measured_change() {
+        let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let mut light = frame("/light.fits", "LIGHT");
+        light.timestamp = Some(1_790_000_000);
+        light.rotator_position = Some(90.0);
+        let flat = test_flat(1.0, 0, |_| {});
+        let library = seiza_calibration::library::Library::new(
+            vec![flat.clone()],
+            Default::default(),
+            Vec::new(),
+        );
+        let mut selected = library.select(&library_light(&light), global_rules());
+        selected.flat_held_back.push(flat.frame_uuid.clone());
+        assert_eq!(
+            flat_not_used_reason(&flat, &light, &light_signature(&light), &selected),
+            "on the far side of a measured change"
+        );
+    }
+
+    #[test]
+    fn the_report_lists_the_nearest_groups_of_nearer_flats_in_full() {
+        let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let kept_out =
+            |days, index| test_flat(days, index, |flat| flat.kept_out = Some("poor".into()));
+        let listed = nearer_flats_listed(vec![
+            kept_out(4.0, 0),
+            kept_out(3.0, 0),
+            kept_out(2.0, 0),
+            kept_out(1.0, 0),
+            kept_out(1.0, 1),
+        ]);
+        assert_eq!(listed.len(), FLATS_NOT_USED_LISTED);
+        assert_eq!(listed[0].frames, 2, "the nearest night, counted in full");
+        assert!(listed.windows(2).all(|pair| pair[0].night < pair[1].night));
+
+        // A flat further away than the flats in use is not listed.
+        assert!(nearer_flats_listed(vec![test_flat(30.0, 0, |_| {})]).is_empty());
     }
 
     #[test]

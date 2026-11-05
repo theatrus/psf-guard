@@ -16,3 +16,10 @@
   including a centrally configured paid forecast source and the site's dew limit.
   A forecast whose location differs from the rig's cannot clear a weather hold;
   the Weather tab explains a location mismatch or missing coordinates.
+- Calibration coverage now judges a light's flats by the master flat a stack
+  uses. A matching master from the light's own night no longer shows *can't be
+  calibrated* because raw flats are older. Stacks keep those lights, and exports
+  carry that master instead of the older raw flats.
+- The calibration coverage report shows why nearer raw flats are not used for a
+  night without same-night flats, such as a different rotator angle or too few
+  flats to build a master.

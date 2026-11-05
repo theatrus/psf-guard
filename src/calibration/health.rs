@@ -47,8 +47,9 @@ use std::time::UNIX_EPOCH;
 /// flat groups: mixed nights only when unmeasured, flats across a change.
 /// 4: grouping by time checks mixed nights as version 2 did. 5: flats by
 /// measured response family. 6: flat age and nightly coverage use the nearest
-/// contributing flat, rather than the median of the master inputs.
-pub const HEALTH_ALGORITHM_VERSION: u32 = 6;
+/// contributing flat, rather than the median of the master inputs. 7: a light
+/// a stack gives an external flat master is judged by that master's date.
+pub const HEALTH_ALGORITHM_VERSION: u32 = 7;
 
 /// Flats further than this from a light are worth a look, though they are
 /// within the age limit that makes a light one that cannot be calibrated,
@@ -2219,6 +2220,114 @@ mod tests {
         assert!(!filter.nightly_flats);
         assert!(filter.flat_age_days.unwrap() > 3.0);
         assert!(filter.cannot_calibrate.is_some());
+        // The report shows why the nearer flat does not count.
+        assert_eq!(filter.flats_not_used.len(), 1);
+        assert_eq!(filter.flats_not_used[0].frames, 1);
+        assert_eq!(
+            filter.flats_not_used[0].reason,
+            "no other flat within 24 h (a master needs 2)"
+        );
+    }
+
+    /// A light with one master flat on its own night and five raw flats
+    /// 18 days away, under a one-day limit. Returns the master's file name.
+    fn light_with_near_master_and_far_raw_flats(fixture: &mut Fixture) -> String {
+        fixture.light(1, 1, LIGHT_AT, "Camera");
+        fixture.frames("BIAS", 10, "2026-09-09T12:00:00", 500.0);
+        fixture.frames("DARK", 10, "2026-09-09T13:00:00", 503.0);
+        fixture.frames("FLAT", 5, "2026-09-28T02:00:00", 30_000.0);
+        fixture
+            .frames("MASTER FLAT", 1, "2026-09-10T02:00:00", 30_000.0)
+            .remove(0)
+    }
+
+    #[test]
+    fn a_master_a_stack_adopts_is_the_flat_the_age_limit_judges() {
+        let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _rules = RulesInForce::global(&[("flat_max_age_days", json!(1))]);
+        let mut fixture = Fixture::new();
+        let master = light_with_near_master_and_far_raw_flats(&mut fixture);
+
+        assert!(codes(&fixture.health(1)).is_empty());
+        let tree = crate::directory_tree::DirectoryTree::build(fixture.temp.path()).unwrap();
+        let report =
+            super::super::project_calibration_report(&fixture.conn, 1, &tree, false, None).unwrap();
+        let filter = &report.nights[0].filters[0];
+        assert!(filter
+            .external_masters
+            .iter()
+            .any(|m| m.file == master && m.used));
+        assert_eq!(filter.cannot_calibrate, None);
+        assert!(filter.nightly_flats);
+        assert!(filter.flat_age_days.unwrap() < 1.0);
+
+        // A delivery carries the same master, not the far raw flats.
+        let light = read_frame_meta(&fixture.path("light-1.fits"));
+        let selected = super::super::select_for_light(&fixture.conn, &light).unwrap();
+        let delivered = super::super::delivery_selection(selected).flat;
+        assert_eq!(delivered.len(), 1);
+        assert_eq!(delivered[0].frame_uuid, fixture.uuid(&master));
+    }
+
+    #[test]
+    fn a_master_a_stack_ignores_does_not_cover_a_light() {
+        let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        for policy in ["ignore", "fallback"] {
+            let _rules = RulesInForce::global(&[
+                ("flat_max_age_days", json!(1)),
+                ("external_masters", json!(policy)),
+            ]);
+            let mut fixture = Fixture::new();
+            let master = light_with_near_master_and_far_raw_flats(&mut fixture);
+
+            assert_eq!(
+                codes(&fixture.health(1)),
+                [(HealthCode::CannotCalibrate, HealthLevel::Poor)],
+                "{policy}"
+            );
+            let tree = crate::directory_tree::DirectoryTree::build(fixture.temp.path()).unwrap();
+            let report =
+                super::super::project_calibration_report(&fixture.conn, 1, &tree, false, None)
+                    .unwrap();
+            let filter = &report.nights[0].filters[0];
+            assert!(
+                !filter
+                    .external_masters
+                    .iter()
+                    .any(|m| m.file == master && m.used),
+                "{policy}"
+            );
+            assert!(filter.flat_age_days.unwrap() > 17.0, "{policy}");
+        }
+    }
+
+    #[test]
+    fn a_fallback_master_covers_a_light_whose_raw_flats_cannot_build_one() {
+        let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _rules = RulesInForce::global(&[
+            ("flat_max_age_days", json!(1)),
+            ("external_masters", json!("fallback")),
+        ]);
+        let mut fixture = Fixture::new();
+        fixture.light(1, 1, LIGHT_AT, "Camera");
+        fixture.frames("BIAS", 10, "2026-09-09T12:00:00", 500.0);
+        fixture.frames("DARK", 10, "2026-09-09T13:00:00", 503.0);
+        // Two lone raw flats on different days: two frames, but no master.
+        fixture.frames("FLAT", 1, "2026-09-28T02:00:00", 30_000.0);
+        fixture.frames("FLAT", 1, "2026-10-20T02:00:00", 30_000.0);
+        let master = fixture
+            .frames("MASTER FLAT", 1, "2026-09-10T02:00:00", 30_000.0)
+            .remove(0);
+
+        let tree = crate::directory_tree::DirectoryTree::build(fixture.temp.path()).unwrap();
+        let report =
+            super::super::project_calibration_report(&fixture.conn, 1, &tree, false, None).unwrap();
+        let filter = &report.nights[0].filters[0];
+        assert!(filter
+            .external_masters
+            .iter()
+            .any(|m| m.file == master && m.used));
+        assert_eq!(filter.cannot_calibrate, None);
     }
 
     #[test]

@@ -85,6 +85,12 @@
   color: var(--color-error);
 }
 
+/* These rows explain why a flat or master is not used, so show all of it. */
+.calibration-report-masters td {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .calibration-report-masters ul {
   margin: 0;
   padding-left: 16px;
