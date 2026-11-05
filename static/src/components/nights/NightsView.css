@@ -107,7 +107,8 @@
 .nights-cell-hours { font-weight: 600; white-space: nowrap; }
 .nights-cell-mark { color: var(--color-text-secondary); }
 .nights-cell-moon { margin-left: auto; color: var(--color-text-muted); font-size: 11px; }
-.nights-cell-forecast { display: inline-flex; color: var(--color-text-secondary); }
+.nights-cell-forecast { display: inline-flex; gap: 1px; color: var(--color-text-secondary); }
+.nights-cell-dew { color: var(--nights-dew); }
 .nights-cell-override { display: inline-flex; color: var(--nights-pin); }
 /* Dusk to dawn: the dark night, with the clear part filled in. */
 .nights-cell-bar {
@@ -123,8 +124,10 @@
 .nights-grid .nights-group-head th { padding-top: 10px; color: var(--color-text-primary); font-weight: 600; }
 .nights-grid tbody:first-of-type .nights-group-head th { padding-top: 2px; }
 .nights-sky-row .nights-rig { vertical-align: middle; }
-.nights-sky { display: grid; gap: 2px; width: 112px; padding: 0 7px; box-sizing: border-box; }
-.nights-sky-clouds, .nights-sky-dew, .nights-sky-moon { position: relative; display: block; height: 6px; border-radius: 3px; background-color: var(--nights-track); overflow: hidden; }
+.nights-sky { display: grid; gap: 4px; width: 112px; padding: 0 7px; box-sizing: border-box; }
+/* One label per bar, on the bars' pitch. */
+.nights-rig .nights-sky-labels { display: grid; gap: 4px; justify-items: end; color: var(--color-text-muted); font-size: 10px; line-height: 8px; }
+.nights-sky-clouds, .nights-sky-dew, .nights-sky-moon { position: relative; display: block; height: 8px; border-radius: 3px; background-color: var(--nights-track); overflow: hidden; }
 .nights-sky-clouds .nights-cloud.is-cloudy { box-shadow: inset 0 -2px 0 var(--nights-cloud-over); }
 .nights-sky-dew .nights-dew-hour.is-dewy { box-shadow: inset 0 -2px 0 var(--nights-dew-over); }
 .nights-cell-plans { display: flex; gap: 3px; min-height: 8px; align-items: center; }

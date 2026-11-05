@@ -24,7 +24,7 @@ describe('NightTimeline', () => {
     expect(hours[1].getAttribute('title')).toMatch(/: 75% cloud \(low 60%, high 15%\)$/);
     expect(within(screen.getByRole('group', { name: 'Schedule' })).queryByRole('group', { name: 'Cloud cover' })).toBe(strip);
     // The red edges in words, for those who cannot see them.
-    expect(strip).toHaveAccessibleDescription(/^Cloud cover: the lighter an hour, the more cloud\. Above the site's 30% threshold, with a red edge: .+ – .+\.$/);
+    expect(strip).toHaveAccessibleDescription(/^Cloud over 30%: .+ – .+$/);
   });
 
   it('draws the forecast\'s dew under the cloud, edging hours inside the dew limit', () => {
@@ -47,7 +47,7 @@ describe('NightTimeline', () => {
     const alpha = (hour: Element) => Number((hour as HTMLElement).style.getPropertyValue('--dew-alpha'));
     expect(alpha(hours[1])).toBeGreaterThan(alpha(hours[0]));
     expect(screen.getByRole('group', { name: 'Cloud cover' }).compareDocumentPosition(band) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(band).toHaveAccessibleDescription(/^Dew: the brighter an hour, the closer the air is to its dew point\. Within the site's 2 °C of the dew point, with a red edge: .+ – .+\.$/);
+    expect(band).toHaveAccessibleDescription(/^Dew within 2 °C: .+ – .+$/);
   });
 
   it('draws no dew band for a forecast without the air', () => {

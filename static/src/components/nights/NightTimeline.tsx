@@ -253,10 +253,10 @@ export default function NightTimeline({ night, scheduled, colours, now, cloudThr
     {(reasons.length > 0 || night.clouds.length > 0) && <ul className="nights-gap-legend" aria-label="Legend">
       {reasons.map(reason => <li key={reason}><span className="nights-gap-key" data-reason={reason} aria-hidden="true" />{GAP_LABEL[reason]}: {GAP_HELP[reason]}</li>)}
       {night.clouds.length > 0 && <li id={summaryId}><span className="nights-cloud-key" aria-hidden="true" />
-        Cloud cover: the lighter an hour, the more cloud.{cloudThreshold !== undefined && ` ${cloudySummary(night.clouds, cloudThreshold, start, end, zone)}`}
+        {cloudThreshold === undefined ? 'Cloud' : cloudySummary(night.clouds, cloudThreshold, start, end, zone)}
       </li>}
       {air.length > 0 && <li id={dewId}><span className="nights-dew-key" aria-hidden="true" />
-        Dew: the brighter an hour, the closer the air is to its dew point.{dewLimit !== undefined && ` ${dewySummary(air, dewLimit, start, end, zone)}`}
+        {dewLimit === undefined ? 'Dew' : dewySummary(air, dewLimit, start, end, zone)}
       </li>}
     </ul>}
     {scheduled.note && <p className="director-muted" role="note">{scheduled.note}</p>}
@@ -277,20 +277,20 @@ function blockKeys(blocks: ScheduleBlock[]): string[] {
   });
 }
 
-/** The hours above the threshold in the drawn span, in words, for those
- *  who cannot see the strip's red edges. */
+/** The hours above the threshold in the drawn span, the strip's red
+ *  edges in words. */
 function cloudySummary(hours: ForecastHour[], threshold: number, from: number, to: number, zone?: string): string {
   const spans = hourSpans(hours, hour => hour.cloud_total > threshold, from, to);
-  if (spans.length === 0) return `Every hour shown is at or under the site's ${threshold}% threshold.`;
-  return `Above the site's ${threshold}% threshold, with a red edge: ${listSpans(spans, zone)}.`;
+  if (spans.length === 0) return `Cloud: none over ${threshold}%`;
+  return `Cloud over ${threshold}%: ${listSpans(spans, zone)}`;
 }
 
-/** The hours inside the dew limit in the drawn span, in words, for those
- *  who cannot see the band's red edges. */
+/** The hours inside the dew limit in the drawn span, the band's red
+ *  edges in words. */
 function dewySummary(hours: ForecastHour[], limit: number, from: number, to: number, zone?: string): string {
   const spans = hourSpans(hours, hour => isDewy(hour, limit), from, to);
-  if (spans.length === 0) return `Every hour shown is more than the site's ${limit} °C above the dew point.`;
-  return `Within the site's ${limit} °C of the dew point, with a red edge: ${listSpans(spans, zone)}.`;
+  if (spans.length === 0) return `Dew: none within ${limit} °C`;
+  return `Dew within ${limit} °C: ${listSpans(spans, zone)}`;
 }
 
 function listSpans(spans: Array<{ start: number; end: number }>, zone?: string): string {

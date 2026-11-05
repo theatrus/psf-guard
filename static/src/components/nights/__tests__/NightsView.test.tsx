@@ -76,6 +76,9 @@ describe('Nights', () => {
     expect(within(groups[1]).getByText('C925')).toBeInTheDocument();
     // One shared sky per night under the group: the Moon from its rise to
     // its set, and the forecast's cloud from the rig that has one.
+    // Each group's row labels its bars, stacked: no cloud or dew without a forecast.
+    expect(within(groups[0]).getByRole('rowheader', { name: 'Cloud, Dew, Moon' })).toBeInTheDocument();
+    expect(within(groups[1]).getByRole('rowheader', { name: 'Moon' })).toBeInTheDocument();
     const skies = within(groups[0]).getAllByRole('img');
     expect(skies).toHaveLength(3);
     expect(skies[0]).toHaveAccessibleName(/^Moon 42% lit · rises .+ · highest .+ · sets .+; cloud 70%; air 1–7 °C above dew point$/);
@@ -115,6 +118,32 @@ describe('Nights', () => {
     expect(row).not.toHaveClass('is-idle-plan');
   });
 
+  it('shows dew as the reason when the dew limit alone marks a night', async () => {
+    const HOUR = 3_600_000;
+    const base = night(0);
+    const dewy = night(0, {
+      available_dark_hours: 0,
+      availability: { state: 'unavailable', windows: [],
+        marks: [{ scope: 'site', state: 'unavailable', windows: [], note: '', source: { kind: 'forecast', provider: 'open_meteo', fetched_at_ms: base.noon_ms } }] },
+      // Clear sky, but the air within a degree of its dew point.
+      clouds: [{ start_ms: base.noon_ms + 8 * HOUR, end_ms: base.noon_ms + 9 * HOUR, cloud_total: 0, cloud_low: null, cloud_mid: null, cloud_high: null,
+        temperature_celsius: 5, dew_point_celsius: 4.5, humidity_percent: 97 }],
+    });
+    mount(plans([rig({
+      nights: [dewy, night(1), night(2)],
+      forecast: { provider: 'open_meteo', attribution: 'Open-Meteo', cloud_threshold_percent: 30, dew_limit_celsius: 2, fetched_at_ms: base.noon_ms, expires_at_ms: base.noon_ms + 12 * HOUR },
+    })]));
+    const grid = await screen.findByTestId('nights-grid');
+    const cell = within(grid).getAllByRole('button')[0];
+    expect(cell).toHaveAccessibleName(/not available by the forecast: dew,/);
+    expect(cell.querySelector('.nights-cell-dew')).not.toBeNull();
+    expect(cell.querySelector('.nights-cell-forecast')?.getAttribute('title')).toMatch(/^Forecast \(Open-Meteo, fetched .+\): not available, dew\./);
+    fireEvent.click(cell);
+    const detail = screen.getByRole('region', { name: 'Night details' });
+    expect(within(detail).getByText('· dew')).toBeInTheDocument();
+    expect(within(detail).getByText('Clear: 30% cloud or less, over 2 °C above dew point')).toBeInTheDocument();
+  });
+
   it('shows a night the site\'s forecast marked, credits it, and leaves the mark form to marks by hand', async () => {
     const fetched = night(0).noon_ms + 2 * 3_600_000;
     const forecastNight = night(0, {
@@ -129,12 +158,14 @@ describe('Nights', () => {
     })]));
     const grid = await screen.findByTestId('nights-grid');
     const cells = within(grid).getAllByRole('button');
-    expect(cells[0]).toHaveAccessibleName(/limited by the forecast/);
+    expect(cells[0]).toHaveAccessibleName(/limited by the forecast: cloud,/);
+    expect(cells[0].querySelector('.nights-cell-dew')).toBeNull();
     expect(cells[1]).not.toHaveAccessibleName(/forecast/);
     fireEvent.click(cells[0]);
     const detail = screen.getByRole('region', { name: 'Night details' });
     expect(within(detail).getByText(/^Forecast \(Open-Meteo, fetched .+\): Limited/)).toBeInTheDocument();
-    expect(within(detail).getByText('Clear means 30% cloud or less.')).toBeInTheDocument();
+    expect(within(detail).getByText('Clear: 30% cloud or less')).toBeInTheDocument();
+    expect(within(detail).getByText('· cloud')).toBeInTheDocument();
     // The provider's credit is under the grid, once for the page.
     expect(screen.getByRole('link', { name: 'Weather data by Open-Meteo.com (CC BY 4.0)' })).toHaveAttribute('href', 'https://open-meteo.com/');
     // The forecast's mark is not one to edit or clear.

@@ -382,6 +382,39 @@ export function forecastMark(night: RigNight): NightAppliedMark | undefined {
   return night.availability.marks.find(mark => mark.source.kind === 'forecast');
 }
 
+/** Which bars a group's sky row has: cloud when any of its rigs has a
+ *  forecast night, dew when one of those gives the air; the Moon always. */
+export interface SkyRows { cloud: boolean; dew: boolean }
+
+export function skyRows(rigs: RigNights[]): SkyRows {
+  const hours = rigs.flatMap(rig => rig.nights.flatMap(night => night.clouds));
+  return { cloud: hours.length > 0, dew: hours.some(hour => dewSpread(hour) !== null) };
+}
+
+/** The row's labels, top to bottom like its bars. */
+export function skyLabels(rows: SkyRows): string[] {
+  return [...(rows.cloud ? ['Cloud'] : []), ...(rows.dew ? ['Dew'] : []), 'Moon'];
+}
+
+/** What took dark hours out of a night's clear hours under its site's
+ *  forecast: cloud over the threshold, air within the dew limit, or both. */
+export function forecastCauses(rig: RigNights, night: RigNight): { cloud: boolean; dew: boolean } {
+  const settings = rig.forecast;
+  const { dusk_ms: dusk, dawn_ms: dawn } = night;
+  if (!settings || dusk === null || dawn === null) return { cloud: false, dew: false };
+  const dark = night.clouds.filter(hour => hour.end_ms > dusk && hour.start_ms < dawn);
+  return {
+    cloud: dark.some(hour => hour.cloud_total > settings.cloud_threshold_percent),
+    dew: dark.some(hour => isDewy(hour, settings.dew_limit_celsius)),
+  };
+}
+
+/** The causes in a word or two: "cloud", "dew", "cloud and dew"; empty for
+ *  none. */
+export function causeWords(causes: { cloud: boolean; dew: boolean }): string {
+  return [causes.cloud && 'cloud', causes.dew && 'dew'].filter(Boolean).join(' and ');
+}
+
 /** Where a mark came from, in a word or two: "Site", "Rig", or the
  *  forecast and when it was fetched. */
 export function markOrigin(mark: NightAppliedMark): string {

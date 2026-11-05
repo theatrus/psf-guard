@@ -1038,7 +1038,7 @@ azimuth; the error says which line.
 | Method | Route | Body or query |
 | --- | --- | --- |
 | GET | `/sites/{site}/profile` | The site and its profile: `location` and `horizon`, each `{value, source, reported_at_ms}` or `null`, `forecast` (`{provider, cloud_threshold_percent, dew_limit_celsius?}` or `null`), and `revision` (0 when nothing is saved). `404` for an unknown site. |
-| PUT | `/sites/{site}/profile` | `expected_revision` plus `location` and `horizon`, each `{value, source}` or `null`, and `forecast`: `{provider, cloud_threshold_percent, dew_limit_celsius?}`, or `null` or left out to turn forecasts off. `dew_limit_celsius`, whole °C from 0 to 20, takes hours that close to the dew point out of the clear hours; left out, dew is ignored. Sources may be `manual` or `frame_headers`; `409` when the revision moved. `422` for a forecast without a location. A new provider, or a location about a kilometre or more away, discards the stored forecast and requests a new one; turning forecasts off discards it. |
+| PUT | `/sites/{site}/profile` | `expected_revision` plus `location` and `horizon`, each `{value, source}` or `null`, and `forecast`: `{provider, cloud_threshold_percent, dew_limit_celsius?}`, or `null` or left out to turn forecasts off. `dew_limit_celsius`: whole °C from 0 to 20; an hour that close to its dew point, or closer, is not clear. Left out, dew is ignored. Sources may be `manual` or `frame_headers`; `409` when the revision moved. `422` for a forecast without a location. A new provider, or a location about a kilometre or more away, discards the stored forecast and requests a new one; turning forecasts off discards it. |
 | POST | `/horizons/parse` | `{text}` holding a `.hrz` file; returns the canonical `Horizon` or `400` with the line it could not read. Stores nothing. |
 
 `GET /rigs/profiles` carries each rig's resolved `site`: the planning `site`
@@ -1949,16 +1949,17 @@ Each cell is one rig's night, from dusk to dawn:
 - the hours it would shoot, or **all done** once every plan has its frames.
 
 The grid groups rigs whose sites lie within a degree of each other in
-latitude and longitude, under the sites' names. Under each group, a
-**Cloud · Dew · Moon** row shows three bars for each night, from dusk to
-dawn like the cells' bars:
+latitude and longitude, under the sites' names. Under each group, a row
+shows bars for each night, from dusk to dawn like the cells' bars, with
+their labels stacked beside them:
 
-- the forecast's cloud, lighter the more cloud, with a red edge on hours
-  over the site's threshold; a group without a forecast has no cloud bar;
-- the forecast's dew, brighter the closer the air is to its dew point,
-  with a red edge on hours inside the site's dew limit; a forecast fetched
-  without dew points has no dew bar;
-- the Moon from its rise to its set, brightest where it stands highest
+- **Cloud**: the forecast's cloud, lighter the more cloud, with a red edge
+  on hours over the site's threshold. A group without a forecast has no
+  cloud bar.
+- **Dew**: brighter the closer the air is to its dew point, with a red
+  edge on hours inside the site's dew limit. A forecast fetched without
+  dew points has no dew bar.
+- **Moon**: from its rise to its set, brightest where it stands highest
   and brighter the fuller it is.
 
 Hover the bars for the Moon's rise, highest point and set, the range of
@@ -2200,7 +2201,7 @@ off until an editor turns them on for a site:
      for any use.
 4. In **Clear at or under**, enter the cloud cover, in percent, at or under
    which an hour counts as clear. The default is 30%.
-5. To keep dewy hours out of the plans, enter a dew limit in **Not clear
+5. To keep dewy hours out of the plans, enter a dew limit in **No imaging
    within**, in whole °C from 0 to 20. An hour whose air is that close to
    its dew point or closer does not count as clear. Leave it empty to
    ignore dew.
@@ -2242,9 +2243,11 @@ In night plans, a forecast works like a mark for every rig at the site:
   forecast's last hour, nights the forecast does not reach, and every night
   once the forecast expires count as clear. Hours before its first hour
   have passed, and count as not clear.
-- The **Nights** grid shows a cloud in each cell the forecast marks, and
-  credits each provider under the grid. A night's panel shows the
-  forecast's mark, the time the forecast arrived and the provider's
+- The **Nights** grid shows a cloud in each cell the forecast marks, and a
+  drop when the dew limit took out some of its dark hours; the cell's
+  label gives the cause. The grid credits each provider under it. A
+  night's panel shows the forecast's mark with its cause (cloud, dew or
+  both), the time the forecast arrived and the provider's
   credit. The timeline adds a strip of each hour's cloud cover; hours
   above the threshold have a red edge, and the legend lists them. Under
   it, a dew band shows each hour brighter the closer the air is to its dew

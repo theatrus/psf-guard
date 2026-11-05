@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Cloud, Pin, RefreshCw } from 'lucide-react';
+import { Cloud, Droplet, Pin, RefreshCw } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import type { RigNight, RigNights } from '../../api/nightPlanTypes';
 import { useAccess } from '../../auth/access';
@@ -27,7 +27,11 @@ import {
   isTonight,
   loadWords,
   localDate,
+  causeWords,
+  skyLabels,
+  skyRows,
   decidedBy,
+  forecastCauses,
   forecastMark,
   markGlyph,
   markOrigin,
@@ -38,7 +42,7 @@ import {
   siteGroups,
   usableZone,
 } from './nightsModel';
-import NightSky from './NightSky';
+import NightSky, { SkyLabels } from './NightSky';
 import './NightsView.css';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Night plans could not be computed';
@@ -185,7 +189,10 @@ export default function NightsView() {
               const glyph = markGlyph(night);
               const forecast = forecastMark(night);
               const decided = decidedBy(night);
-              const cause = decided === 'forecast' ? ' by the forecast' : decided === 'both' ? ' by a mark and the forecast' : '';
+              // Cloud, dew or both: what the forecast took out of the dark hours.
+              const causes = forecast && forecast.state !== 'available' ? forecastCauses(rig, night) : { cloud: false, dew: false };
+              const why = causeWords(causes);
+              const cause = (decided === 'forecast' ? ' by the forecast' : decided === 'both' ? ' by a mark and the forecast' : '') + (decided !== 'none' && decided !== 'manual' && why ? `: ${why}` : '');
               return <td key={date}>
                 <button type="button" className={`nights-cell is-${darkState(night)}`} aria-pressed={chosen}
                   aria-label={`${rig.catalog_name}, ${formatNightDate(night.date)}: ${formatHours(night.available_dark_hours)} clear of ${formatHours(night.dark_hours)} dark, ${STATE_LABEL[darkState(night)].toLowerCase()}${cause}, Moon ${Math.round(night.moon_illumination * 100)}%${night.override_count > 0 ? `, ${night.override_count} ${night.override_count === 1 ? 'override' : 'overrides'}` : ''}`}
@@ -194,7 +201,10 @@ export default function NightsView() {
                     <span className="nights-cell-hours">{formatHours(night.available_dark_hours)}</span>
                     {glyph && <span className="nights-cell-mark" aria-hidden="true">{glyph}</span>}
                     {night.override_count > 0 && <span className="nights-cell-override" aria-hidden="true" title={`${night.override_count} ${night.override_count === 1 ? 'override' : 'overrides'} for this night`}><Pin size={12} /></span>}
-                    {forecast && <span className="nights-cell-forecast" aria-hidden="true" title={`${markOrigin(forecast)}: ${STATE_LABEL[forecast.state].toLowerCase()}. ${rig.forecast?.attribution ?? ''}`}><Cloud size={12} /></span>}
+                    {forecast && <span className="nights-cell-forecast" aria-hidden="true" title={`${markOrigin(forecast)}: ${STATE_LABEL[forecast.state].toLowerCase()}${why ? `, ${why}` : ''}. ${rig.forecast?.attribution ?? ''}`}>
+                      {(causes.cloud || !causes.dew) && <Cloud size={12} />}
+                      {causes.dew && <Droplet size={12} className="nights-cell-dew" />}
+                    </span>}
                     <span className="nights-cell-moon" title={`Moon ${Math.round(night.moon_illumination * 100)}% lit, up ${formatHours(night.moon_hours_up_in_dark)}`}>☾ {Math.round(night.moon_illumination * 100)}%</span>
                   </span>
                   <span className="nights-cell-bar" aria-hidden="true">
@@ -209,10 +219,13 @@ export default function NightsView() {
               </td>;
             })}
           </tr>)}
-            <tr className="nights-sky-row">
-              <th scope="row" className="nights-rig"><span className="director-muted">Cloud · Dew · Moon</span></th>
-              {dates.map(date => <td key={date}><NightSky rigs={group.rigs} date={date} zone={usableZone(group.rigs[0].time_zone)} /></td>)}
-            </tr>
+            {(() => {
+              const rows = skyRows(group.rigs);
+              return <tr className="nights-sky-row">
+                <th scope="row" className="nights-rig" aria-label={skyLabels(rows).join(', ')}><SkyLabels rows={rows} /></th>
+                {dates.map(date => <td key={date}><NightSky rigs={group.rigs} rows={rows} date={date} zone={usableZone(group.rigs[0].time_zone)} /></td>)}
+              </tr>;
+            })()}
           </tbody>)}
         </table>
       </div>}

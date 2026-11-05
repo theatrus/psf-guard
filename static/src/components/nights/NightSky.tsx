@@ -1,11 +1,20 @@
 import type { CSSProperties } from 'react';
 import type { RigNights } from '../../api/nightPlanTypes';
-import { dewAlpha, dewSpread, formatClock, isDewy, moonCourse, moonCourseWords, moonGradient } from './nightsModel';
+import { dewAlpha, dewSpread, formatClock, isDewy, moonCourse, moonCourseWords, moonGradient, skyLabels, type SkyRows } from './nightsModel';
+
+/** The row's labels, stacked beside its bars. */
+export function SkyLabels({ rows }: { rows: SkyRows }) {
+  return <span className="nights-sky-labels" aria-hidden="true">
+    {skyLabels(rows).map(label => <span key={label}>{label}</span>)}
+  </span>;
+}
 
 interface Props {
   /** The rigs of one site group; the first whose night has the Moon's
    *  course supplies the Moon, the first with a forecast the cloud. */
   rigs: RigNights[];
+  /** The bars the group's row has, the same every night. */
+  rows: SkyRows;
   date: string;
   zone?: string;
 }
@@ -15,7 +24,7 @@ interface Props {
  * forecast's cloud and dew, and the Moon from its rise to its set, from dusk to
  * dawn like the cells' bars.
  */
-export default function NightSky({ rigs, date, zone }: Props) {
+export default function NightSky({ rigs, rows, date, zone }: Props) {
   const nights = rigs.flatMap(rig => rig.nights.filter(n => n.date === date));
   const night = nights.find(n => n.moon_altitudes.degrees.length > 0) ?? nights[0];
   if (!night || night.dusk_ms === null || night.dawn_ms === null || night.dawn_ms <= night.dusk_ms) return null;
@@ -43,7 +52,7 @@ export default function NightSky({ rigs, date, zone }: Props) {
   const words = [moon, ...cloud, ...dew].join('; ');
   const gradient = moonGradient(course);
   return <div className="nights-sky" role="img" aria-label={words} title={words}>
-    {clouds.length > 0 && <span className="nights-sky-clouds">
+    {rows.cloud && <span className="nights-sky-clouds">
       {clouds.map(hour => {
         const left = Math.max(0, (hour.start_ms - from) / span);
         const right = Math.min(1, (hour.end_ms - from) / span);
@@ -51,7 +60,7 @@ export default function NightSky({ rigs, date, zone }: Props) {
           style={{ left: `${left * 100}%`, width: `${(right - left) * 100}%`, '--cloud-alpha': (0.12 + 0.88 * hour.cloud_total / 100).toFixed(2) } as CSSProperties} />;
       })}
     </span>}
-    {air.length > 0 && <span className="nights-sky-dew">
+    {rows.dew && <span className="nights-sky-dew">
       {air.map(({ hour, spread }) => {
         const left = Math.max(0, (hour.start_ms - from) / span);
         const right = Math.min(1, (hour.end_ms - from) / span);
