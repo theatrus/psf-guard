@@ -176,11 +176,11 @@ fn now_ms() -> u64 {
 /// elevation, keeps the stored forecast.
 pub(super) fn request_key(profile: &SiteProfile) -> Option<(ForecastProvider, String, String)> {
     let location = profile.location.as_ref()?.value;
-    Some((
-        profile.forecast?.provider,
-        format!("{:.2}", location.latitude_degrees),
-        format!("{:.2}", location.longitude_degrees),
-    ))
+    let (latitude, longitude) = psf_guard_director_meta::site_forecast::forecast_coordinates(
+        location.latitude_degrees,
+        location.longitude_degrees,
+    );
+    Some((profile.forecast?.provider, latitude, longitude))
 }
 
 fn backoff(failures: u32) -> u64 {
@@ -307,11 +307,11 @@ pub(super) async fn refresh(
             last_modified.as_deref(),
         )
         .await;
-    let sent = (
-        settings.provider,
-        format!("{:.2}", location.latitude_degrees),
-        format!("{:.2}", location.longitude_degrees),
+    let (latitude, longitude) = psf_guard_director_meta::site_forecast::forecast_coordinates(
+        location.latitude_degrees,
+        location.longitude_degrees,
     );
+    let sent = (settings.provider, latitude, longitude);
     service
         .clone()
         .run(move |store| {

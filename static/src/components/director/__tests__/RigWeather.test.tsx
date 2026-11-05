@@ -51,4 +51,17 @@ describe('rig weather', () => {
     expect(await screen.findByRole('columnheader', { name: 'Reported' })).toBeInTheDocument();
     expect(histories).toBe(1);
   });
+  it.each([
+    ['forecast_location_mismatch', 'location mismatch', /In the Site tab, select the site where the rig is located/],
+    ['forecast_location_unavailable', 'location unavailable', /Set the planning site's coordinates/],
+  ] as const)('explains %s without changing reported weather', async (reason, label, guidance) => {
+    server.use(http.get('/api/director/v1/rigs/rig/weather', () => HttpResponse.json({ success: true, data: {
+      ...weather, forecast_conditions: { state: 'unknown', reason, valid_for_ms: 0 },
+    } })));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><RigWeatherPanel rig="rig" /></QueryClientProvider>);
+    expect(await screen.findByText(guidance)).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(`Open-Meteo · 10% cloud · ${label}`))).toBeInTheDocument();
+    expect(screen.getByText(/85% cloud/)).toBeInTheDocument();
+  });
 });

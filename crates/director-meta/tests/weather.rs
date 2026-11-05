@@ -176,6 +176,15 @@ fn centralized_site_forecast_and_reported_clouds_use_one_threshold_without_blend
     settings.site_id = Some(site);
     store.save_observing_settings(&settings).unwrap();
     let mut setup = SiteProfile::empty(site, NOW);
+    setup.location = Some(psf_guard_director_meta::profile::Reported {
+        value: psf_guard_director_core::visibility::Site {
+            latitude_degrees: 38.66,
+            longitude_degrees: -121.16,
+            elevation_meters: 10.0,
+        },
+        source: psf_guard_director_meta::profile::Source::Manual {},
+        reported_at_ms: NOW,
+    });
     setup.forecast = Some(ForecastSettings {
         provider: ForecastProvider::OpenMeteo,
         cloud_threshold_percent: 25,
@@ -284,4 +293,177 @@ fn another_paired_profile_cannot_replace_the_current_profiles_weather() {
         CloudState::Clear
     );
     assert_eq!(store.weather_history(rig, NOW, NOW + 1).unwrap().len(), 2);
+}
+
+fn forecast_fixture(
+    provider: psf_guard_director_meta::site_forecast::ForecastProvider,
+) -> (tempfile::TempDir, MetaStore, Uuid, Uuid, Uuid) {
+    use psf_guard_director_core::{priority::Scope, visibility::Site};
+    use psf_guard_director_meta::{
+        preferences::Settings,
+        profile::{Reported, Source},
+        site_forecast::*,
+        site_profile::SiteProfile,
+    };
+    let (dir, mut store, rig, profile) = fixture();
+    let site = Uuid::new_v4();
+    store.create_site(site, "California forecast site").unwrap();
+    let mut settings = Settings::empty(Scope::Rig, rig);
+    settings.site_id = Some(site);
+    store.save_observing_settings(&settings).unwrap();
+    let mut setup = SiteProfile::empty(site, NOW);
+    setup.location = Some(Reported {
+        value: Site {
+            latitude_degrees: 38.66,
+            longitude_degrees: -121.16,
+            elevation_meters: 10.0,
+        },
+        source: Source::Manual {},
+        reported_at_ms: NOW,
+    });
+    setup.forecast = Some(ForecastSettings {
+        provider,
+        cloud_threshold_percent: 25,
+        dew_limit_celsius: None,
+    });
+    store.save_site_profile(&setup, 0).unwrap();
+    store
+        .save_site_forecast(&SiteForecast {
+            site_id: site,
+            provider,
+            fetched_at_ms: NOW,
+            expires_at_ms: NOW + 3600000,
+            checked_at_ms: None,
+            refresh_after_ms: None,
+            last_modified: None,
+            hours: vec![ForecastHour {
+                start_ms: NOW,
+                end_ms: NOW + 3600000,
+                cloud_total: 0.0,
+                cloud_low: None,
+                cloud_mid: None,
+                cloud_high: None,
+                temperature_celsius: None,
+                dew_point_celsius: None,
+                humidity_percent: None,
+            }],
+        })
+        .unwrap();
+    store
+        .record_weather(rig, sample(profile, Some(10.0)), NOW)
+        .unwrap();
+    (dir, store, rig, profile, site)
+}
+
+#[test]
+fn mismatched_forecasts_remain_unknown_for_both_providers() {
+    use psf_guard_director_core::visibility::Site;
+    use psf_guard_director_meta::{
+        profile::{Reported, RigProfile, Source},
+        site_forecast::ForecastProvider,
+    };
+    for provider in [ForecastProvider::OpenMeteo, ForecastProvider::MetNorway] {
+        let (_dir, mut store, rig, profile, site) = forecast_fixture(provider);
+        let mut own = RigProfile::empty(rig, NOW);
+        own.site = Some(Reported {
+            value: Site {
+                latitude_degrees: -33.45,
+                longitude_degrees: -70.66,
+                elevation_meters: 1000.0,
+            },
+            source: Source::Plugin {},
+            reported_at_ms: NOW,
+        });
+        store.save_rig_profile(&own, 0).unwrap();
+        for cloud in [0.0, 100.0] {
+            let mut forecast = store.site_forecast(site).unwrap().unwrap();
+            forecast.fetched_at_ms += 1;
+            forecast.hours[0].cloud_total = cloud;
+            store.save_site_forecast(&forecast).unwrap();
+            let view = store.rig_weather(rig, Some(profile), NOW + 100).unwrap();
+            assert_eq!(view.forecast_conditions.state, CloudState::Unknown);
+            assert_eq!(
+                view.forecast_conditions.reason,
+                "forecast_location_mismatch"
+            );
+            assert_eq!(view.forecast_conditions.valid_for_ms, 0);
+            assert!(view.forecast.unwrap().fresh);
+            assert_eq!(view.reported_cloud.state, CloudState::Clear);
+            assert_eq!(view.cloud_threshold_percent, 25);
+        }
+    }
+}
+
+#[test]
+fn forecast_location_uses_inheritance_and_the_providers_request_precision() {
+    use psf_guard_director_core::visibility::Site;
+    use psf_guard_director_meta::{
+        profile::{Reported, RigProfile, Source},
+        site_forecast::ForecastProvider,
+    };
+    let (_dir, mut store, rig, profile, _site) = forecast_fixture(ForecastProvider::OpenMeteo);
+    assert_eq!(
+        store
+            .rig_weather(rig, Some(profile), NOW)
+            .unwrap()
+            .forecast_conditions
+            .state,
+        CloudState::Clear
+    );
+    let mut own = RigProfile::empty(rig, NOW);
+    own.site = Some(Reported {
+        value: Site {
+            latitude_degrees: 38.6601,
+            longitude_degrees: -121.1601,
+            elevation_meters: 1000.0,
+        },
+        source: Source::Manual {},
+        reported_at_ms: NOW,
+    });
+    let mut own = store.save_rig_profile(&own, 0).unwrap();
+    assert_eq!(
+        store
+            .rig_weather(rig, Some(profile), NOW)
+            .unwrap()
+            .forecast_conditions
+            .state,
+        CloudState::Clear
+    );
+    own.site.as_mut().unwrap().value.latitude_degrees = 38.666;
+    let mut own = store.save_rig_profile(&own, own.revision).unwrap();
+    assert_eq!(
+        store
+            .rig_weather(rig, Some(profile), NOW)
+            .unwrap()
+            .forecast_conditions
+            .reason,
+        "forecast_location_mismatch"
+    );
+    own.site = None;
+    store.save_rig_profile(&own, own.revision).unwrap();
+    assert_eq!(
+        store
+            .rig_weather(rig, Some(profile), NOW)
+            .unwrap()
+            .forecast_conditions
+            .state,
+        CloudState::Clear
+    );
+}
+
+#[test]
+fn a_forecast_without_a_known_location_cannot_clear_the_rig() {
+    use psf_guard_director_meta::site_forecast::ForecastProvider;
+    let (_dir, mut store, rig, profile, site) = forecast_fixture(ForecastProvider::OpenMeteo);
+    let mut setup = store.site_profile(site).unwrap().unwrap();
+    setup.location = None;
+    store.save_site_profile(&setup, setup.revision).unwrap();
+    let view = store.rig_weather(rig, Some(profile), NOW).unwrap();
+    assert_eq!(view.forecast_conditions.state, CloudState::Unknown);
+    assert_eq!(
+        view.forecast_conditions.reason,
+        "forecast_location_unavailable"
+    );
+    assert_eq!(view.forecast_conditions.valid_for_ms, 0);
+    assert_eq!(view.reported_cloud.state, CloudState::Clear);
 }

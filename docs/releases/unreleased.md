@@ -14,3 +14,5 @@
   **Live rigs** and a rig's **Weather** tab. Director Sessions can opt in to
   weather holds between exposures through their existing PSF Guard connection,
   including a centrally configured paid forecast source and the site's dew limit.
+  A forecast whose location differs from the rig's cannot clear a weather hold;
+  the Weather tab explains a location mismatch or missing coordinates.

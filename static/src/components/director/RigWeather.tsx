@@ -7,7 +7,14 @@ import { formatAge } from './dashboardModel';
 import { PROVIDER_LABEL, PROVIDER_URL } from './forecastLabels';
 
 const number = (value: number | null | undefined, suffix: string) => value == null || !Number.isFinite(value) ? '—' : `${value.toFixed(1).replace(/\.0$/, '')}${suffix}`;
-const state = (cloud: CloudAssessment, evaluated: number, now: number) => cloud.state === 'unknown' || now < evaluated || now >= evaluated + cloud.valid_for_ms ? 'unknown or stale' : cloud.state === 'dewy' ? 'near dew point' : cloud.state;
+const state = (cloud: CloudAssessment, evaluated: number, now: number) => {
+  if (cloud.state === 'unknown') {
+    if (cloud.reason === 'forecast_location_mismatch') return 'location mismatch';
+    if (cloud.reason === 'forecast_location_unavailable') return 'location unavailable';
+    return 'unknown or stale';
+  }
+  return now < evaluated || now >= evaluated + cloud.valid_for_ms ? 'unknown or stale' : cloud.state === 'dewy' ? 'near dew point' : cloud.state;
+};
 
 export function RigWeatherSummary({ weather, now }: { weather?: RigWeather; now: number }) {
   if (!weather) return <span className="director-muted">Weather not reported</span>;
@@ -32,6 +39,8 @@ export default function RigWeatherPanel({ rig }: { rig: string }) {
     {current.isError && <p role="alert">Weather could not be loaded. {current.error.message}</p>}
     {weather && <>
       <RigWeatherSummary weather={weather} now={now} />
+      {weather.forecast_conditions.reason === 'forecast_location_mismatch' && <p role="status">The site's forecast does not match this rig's location. In the Site tab, select the site where the rig is located and check the rig's latitude and longitude.</p>}
+      {weather.forecast_conditions.reason === 'forecast_location_unavailable' && <p role="status">The forecast location could not be checked. Set the planning site's coordinates under Settings → Presets → Sites and check the rig's location in its Site tab.</p>}
       <p>Clear at or under {weather.cloud_threshold_percent}% cloud. Configure the provider and threshold in Settings → Presets → Sites.</p>
       {weather.dew_limit_celsius != null && <p>Forecasts also require air more than {weather.dew_limit_celsius} °C above its dew point, using the site's weather rule.</p>}
       {weather.forecast?.hour && <p>Forecast air {number(weather.forecast.hour.temperature_celsius, ' °C')} · dew point {number(weather.forecast.hour.dew_point_celsius, ' °C')} · humidity {number(weather.forecast.hour.humidity_percent, '%')}</p>}

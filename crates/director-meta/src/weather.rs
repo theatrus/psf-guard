@@ -1,7 +1,9 @@
 //! Rig-reported weather and short-lived cloud decisions. Reports never replace
 //! a safety monitor. Forecasts retain their provider and prediction interval.
 use super::*;
-use crate::site_forecast::{ForecastHour, ForecastProvider, DEFAULT_CLOUD_THRESHOLD_PERCENT};
+use crate::site_forecast::{
+    forecast_coordinates, ForecastHour, ForecastProvider, DEFAULT_CLOUD_THRESHOLD_PERCENT,
+};
 
 pub const WEATHER_MAX_AGE_MS: u64 = 90_000;
 pub const CLOUD_DECISION_MS: u64 = 30_000;
@@ -316,11 +318,25 @@ impl MetaStore {
         }
         let location = self.rig_site(rig, self.rig_profile(rig)?.as_ref())?;
         let site_id = location.site.map(|site| site.id);
-        let settings = site_id
+        let site_profile = site_id
             .map(|id| self.site_profile(id))
             .transpose()?
-            .flatten()
-            .and_then(|site| site.forecast);
+            .flatten();
+        let settings = site_profile.as_ref().and_then(|site| site.forecast);
+        let forecast_location = site_profile
+            .as_ref()
+            .and_then(|site| site.location.as_ref())
+            .map(|location| location.value);
+        let location_problem = match (location.location, forecast_location) {
+            (Some(rig), Some(site))
+                if forecast_coordinates(rig.latitude_degrees, rig.longitude_degrees)
+                    == forecast_coordinates(site.latitude_degrees, site.longitude_degrees) =>
+            {
+                None
+            }
+            (Some(_), Some(_)) => Some("forecast_location_mismatch"),
+            _ => Some("forecast_location_unavailable"),
+        };
         let threshold = settings.map_or(DEFAULT_CLOUD_THRESHOLD_PERCENT, |s| {
             s.cloud_threshold_percent
         });
@@ -367,6 +383,9 @@ impl MetaStore {
         let forecast_conditions = forecast.as_ref().map_or_else(
             || CloudAssessment::unknown("no_site_forecast"),
             |f| {
+                if let Some(reason) = location_problem {
+                    return CloudAssessment::unknown(reason);
+                }
                 if !f.fresh {
                     return CloudAssessment::unknown("site_forecast_stale");
                 }

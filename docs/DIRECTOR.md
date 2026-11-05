@@ -2215,6 +2215,14 @@ forecast uses the site's cloud threshold and optional dew limit from **Settings
 keys stay on the server; reading weather never requests a provider refresh.
 N.I.N.A. cloud cover uses the same cloud threshold, independently of forecasts.
 
+The forecast must match the rig's location. PSF Guard compares latitude and
+longitude rounded to two decimals, as sent to the provider; elevation does not
+change the forecast request. A rig without a location override uses its planning
+site's coordinates. A mismatch or missing coordinates prevents the forecast
+from clearing a hold. The Weather tab explains the problem. Select the rig's
+current planning site and check its latitude and
+longitude in the rig's **Site** tab.
+
 Every enabled source must be fresh and clear. Missing cloud values, forecast
 gaps, disconnections and stale reports hold the session. N.I.N.A. reports expire
 after 90 seconds; each server decision expires within 30 seconds, including

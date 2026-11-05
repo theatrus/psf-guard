@@ -21,6 +21,15 @@ pub const DEFAULT_CLOUD_THRESHOLD_PERCENT: u8 = 30;
 /// The largest dew limit a site may set, in °C above the dew point.
 pub const MAX_DEW_LIMIT_CELSIUS: u8 = 20;
 
+/// Coordinates as sent to forecast providers and used to identify cached data.
+/// Elevation does not change the request; latitude and longitude use two decimals.
+pub fn forecast_coordinates(latitude_degrees: f64, longitude_degrees: f64) -> (String, String) {
+    (
+        format!("{latitude_degrees:.2}"),
+        format!("{longitude_degrees:.2}"),
+    )
+}
+
 /// Whether a temperature, in °C, is one air at 2 m can have. Forecast
 /// readers drop any other, and a stored forecast holding one is refused.
 pub fn plausible_celsius(value: f64) -> bool {
