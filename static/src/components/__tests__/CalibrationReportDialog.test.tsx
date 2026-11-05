@@ -25,6 +25,10 @@ describe('CalibrationReportDialog', () => {
       nights: [{ night: '2026-10-03', lights: 25, filters: [{
         ...filter, filter: 'HA', flat_frames: 0, dark_master_frames: 6, dark_master_nights: 1,
         flat_near_miss: { filter: 'HA', flat_rotation_deg: 94.7, light_rotation_deg: 92.6, off_by_deg: 2.1, tolerance_deg: 2, session: '2026-10-01', frames: 10 },
+        flats_not_used: [
+          { night: '2026-10-03', frames: 12, reason: 'rotation light=92.6deg flat=94.7deg' },
+          { night: '2026-10-02', frames: 1, reason: 'no other flat within 24 h (a master needs 2)' },
+        ],
         external_masters: [{ kind: 'flat', file: 'masterFlat_HA.xisf', matches: false, used: false, reason: 'rotation light=92.6deg master=60deg (32.60 deg apart, tolerance 2.00)' }],
       }] }],
     } })));
@@ -32,6 +36,8 @@ describe('CalibrationReportDialog', () => {
     expect(await screen.findByText('none · nearest HA 94.7°, 2.1° off (limit 2°) · 2026-10-01')).toBeInTheDocument();
     expect(screen.getByText('6 · same night')).toHaveAttribute('title', '99 matching darks within reach');
     expect(screen.getByText(/flat master masterFlat_HA\.xisf · not used: rotation light=92\.6deg/)).toBeInTheDocument();
+    expect(screen.getByText('HA: 12 flats from 2026-10-03 · not used: rotation light=92.6deg flat=94.7deg')).toBeInTheDocument();
+    expect(screen.getByText('HA: 1 flat from 2026-10-02 · not used: no other flat within 24 h (a master needs 2)')).toBeInTheDocument();
   });
 
   it('names the nights stacks leave out, then rejects the lights after a check', async () => {

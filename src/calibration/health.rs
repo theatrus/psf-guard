@@ -2220,6 +2220,13 @@ mod tests {
         assert!(!filter.nightly_flats);
         assert!(filter.flat_age_days.unwrap() > 3.0);
         assert!(filter.cannot_calibrate.is_some());
+        // The report shows why the nearer flat does not count.
+        assert_eq!(filter.flats_not_used.len(), 1);
+        assert_eq!(filter.flats_not_used[0].frames, 1);
+        assert_eq!(
+            filter.flats_not_used[0].reason,
+            "no other flat within 24 h (a master needs 2)"
+        );
     }
 
     /// A light with one master flat on its own night and five raw flats

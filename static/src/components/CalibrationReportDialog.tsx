@@ -4,7 +4,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tansta
 import { isAxiosError } from 'axios';
 import { apiClient } from '../api/client';
 import { useAccess } from '../auth/access';
-import type { CalibrationExternalMaster, CalibrationHealthFinding, CalibrationHealthLevel, CalibrationNightFilter, ProjectCalibrationGaps, ProjectCalibrationReport } from '../api/types';
+import type { CalibrationExternalMaster, CalibrationFlatsNotUsed, CalibrationHealthFinding, CalibrationHealthLevel, CalibrationNightFilter, ProjectCalibrationGaps, ProjectCalibrationReport } from '../api/types';
 import Dialog from './Dialog';
 import { calibrationGridHref, calibrationPageHref, nightDates, type NightDates } from './calibration/calibrationLinks';
 import { useNightSplit } from '../hooks/useNightSplit';
@@ -54,6 +54,10 @@ function darkCell(filter: CalibrationNightFilter): string {
 function masterNote(master: CalibrationExternalMaster): string {
   const state = master.used ? 'used' : master.matches ? 'matches, not used' : `not used: ${master.reason ?? 'no match'}`;
   return `${master.kind} master ${master.file} · ${state}`;
+}
+
+function flatsNotUsedNote(flats: CalibrationFlatsNotUsed): string {
+  return `${flats.frames} flat${flats.frames === 1 ? '' : 's'} from ${flats.night} · not used: ${flats.reason}`;
 }
 
 const message = (error: unknown) => isAxiosError(error)
@@ -358,6 +362,13 @@ export default function CalibrationReportDialog({
                           <LightsLink onShow={showLights} calib="cannot_calibrate" filterNames={filter.filter ? [filter.filter] : []} night={nightDates(night.night, report.data.night_boundary_seconds)}>
                             {filter.filter}: can't be calibrated · {filter.cannot_calibrate}
                           </LightsLink>
+                        </td>
+                      </tr>
+                    ))).concat(night.filters.filter((filter) => (filter.flats_not_used ?? []).length > 0).map((filter) => (
+                      <tr key={`${night.night}:${filter.filter}:flats-not-used`} className="calibration-report-masters">
+                        <td />
+                        <td colSpan={5}>
+                          <ul>{(filter.flats_not_used ?? []).map((flats) => <li key={`${flats.night}:${flats.reason}`}>{filter.filter}: {flatsNotUsedNote(flats)}</li>)}</ul>
                         </td>
                       </tr>
                     ))).concat(night.filters.filter((filter) => (filter.external_masters ?? []).length > 0).map((filter) => (
