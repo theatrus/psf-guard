@@ -28,16 +28,16 @@ for (const width of [1440, 390]) {
           },
         }],
       } }));
-      await page.goto('/#/rigs');
-      // The empty scratch registry opens first-run settings after its async read.
+      // First-run settings open only while the registry is empty, so whether
+      // they appear depends on what earlier specs left in the suite's server.
       const settings = page.getByRole('heading', { name: 'PSF Guard Settings' });
-      await expect(settings).toBeVisible();
-      await page.getByRole('button', { name: 'Close settings' }).click();
-      await expect(settings).not.toBeVisible();
+      await page.addLocatorHandler(settings, () => page.getByRole('button', { name: 'Close settings' }).click());
+      await page.goto('/#/rigs');
       const live = page.getByRole('region', { name: 'Live rigs' });
       await expect(live).toContainText('NINA weather sensor · 85% cloud · cloudy');
       await expect(live).toContainText(`Open-Meteo · 10% cloud · ${condition.label}`);
       await expect(live.getByRole('link', { name: /CC BY 4.0/ })).toHaveAttribute('href', 'https://open-meteo.com/');
+      await expect(settings).toBeHidden();
       await live.scrollIntoViewIfNeeded();
       await page.screenshot({ path: testInfo.outputPath(`weather-${width}.png`), fullPage: true });
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);

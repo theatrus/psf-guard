@@ -41,13 +41,16 @@ test('a site with a forecast and a horizon file shapes its rigs\' nights', async
     await card.getByLabel('Elevation').fill('70');
     await card.getByLabel('Upload Site horizon file').setInputFiles({ name: 'patio.hrz', mimeType: 'text/plain', buffer: Buffer.from(PATIO_HRZ) });
     await expect(card.getByTestId('horizon-summary')).toContainText('not saved yet');
-    await expect(card.getByText('Off. PSF Guard sends nothing about this site.')).toBeVisible();
+    const sends = card.locator('.site-forecast-facts > div').filter({ hasText: 'Sends' });
+    await expect(sends.getByRole('definition')).toHaveText('Nothing');
     await card.getByLabel('Forecast', { exact: true }).selectOption('open_meteo');
-    await expect(card.getByText(/sends Open-Meteo this site's latitude and longitude, rounded to about 1 km, and nothing else/)).toBeVisible();
+    await expect(sends.getByRole('definition')).toHaveText('Latitude and longitude, to about 1 km');
     await card.getByRole('button', { name: 'Save site' }).click();
     await expect(card.getByText(`Saved ${siteName}.`)).toBeVisible();
     const status = card.getByLabel('Forecast status');
-    await expect(status.getByText(/^Fetched .+; covers hours until .+\. Night plans use it until/)).toBeVisible({ timeout: 30_000 });
+    await expect(status.getByText('Fetched', { exact: true })).toBeVisible({ timeout: 30_000 });
+    await expect(status.getByText('Covers until', { exact: true })).toBeVisible();
+    await expect(status.getByText(/^Until /)).toBeVisible();
     await expect(status.getByRole('link', { name: 'Weather data by Open-Meteo.com (CC BY 4.0)' })).toBeVisible();
     await shot(card, 'site-forecast', name => testInfo.outputPath(name), false);
     await page.getByRole('button', { name: 'Close settings' }).click();
@@ -84,7 +87,7 @@ test('a site with a forecast and a horizon file shapes its rigs\' nights', async
     await limited.click();
     const detail = page.getByRole('region', { name: 'Night details' });
     await expect(detail.getByText(/^Forecast \(Open-Meteo, fetched .+\): Limited/)).toBeVisible();
-    await expect(detail.getByText('Clear means 30% cloud or less.')).toBeVisible();
+    await expect(detail.getByText('Clear: 30% cloud or less')).toBeVisible();
     await expect(page.getByRole('link', { name: 'Weather data by Open-Meteo.com (CC BY 4.0)' })).toBeVisible();
     const clouds = detail.getByRole('group', { name: 'Cloud cover' });
     await expect(clouds).toBeVisible({ timeout: 30_000 });
