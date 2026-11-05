@@ -304,25 +304,38 @@ impl Client {
         &self,
         request: reqwest::RequestBuilder,
     ) -> Result<reqwest::Response, ClientError> {
-        let response = request.send().await.map_err(|error| {
-            ClientError::Other(format!("The server could not be reached: {error}"))
-        })?;
-        let status = response.status();
-        if status.is_success() {
+        let response = request.send().await.map_err(unreachable)?;
+        if response.status().is_success() {
             return Ok(response);
         }
+        Err(Self::refusal(response).await)
+    }
+
+    /// Where a proxy would limit this worker's uploads, and the nginx
+    /// setting that does: the workers' path on the server as this worker
+    /// reaches it, sub-path included.
+    fn upload_limit(&self) -> String {
+        let path = reqwest::Url::parse(&self.base)
+            .map(|url| url.path().trim_end_matches('/').to_string())
+            .unwrap_or_else(|_| "/api/workers/v1".into());
+        format!("its upload limit for {path}/, such as nginx's client_max_body_size")
+    }
+
+    /// What a refusal means: its error message, by its status.
+    async fn refusal(response: reqwest::Response) -> ClientError {
+        let status = response.status();
         let message = response
             .json::<serde_json::Value>()
             .await
             .ok()
             .and_then(|body| body.get("error")?.as_str().map(str::to_string))
             .unwrap_or_else(|| format!("The server answered {status}"));
-        Err(match status {
+        match status {
             StatusCode::UNAUTHORIZED => ClientError::Denied(message),
             StatusCode::NOT_FOUND => ClientError::UnknownSession,
             StatusCode::CONFLICT => ClientError::NotCurrent,
             _ => ClientError::Other(message),
-        })
+        }
     }
 
     async fn json<T: serde::de::DeserializeOwned>(
@@ -492,7 +505,35 @@ impl Client {
         if let Some(length) = length {
             request = request.header(reqwest::header::CONTENT_LENGTH, length);
         }
-        self.send(request).await.map(drop)
+        let size = length.map_or(String::new(), |bytes| {
+            format!(" ({} MB)", bytes.div_ceil(1_000_000))
+        });
+        let response = match request.send().await {
+            Ok(response) => response,
+            Err(error) if error.is_connect() => return Err(unreachable(error)),
+            // A proxy that refuses an upload stops reading it, after a while
+            // for nginx, and the connection breaks before its answer arrives.
+            Err(error) => {
+                return Err(ClientError::Other(format!(
+                    "The upload of {name}{size} broke off: {error}. If a proxy runs in front \
+                     of the server, check {}.",
+                    self.upload_limit()
+                )))
+            }
+        };
+        // PSF Guard takes outputs up to 16 GiB and refuses a larger one with
+        // 400: a 413 comes from a proxy in front of it.
+        if response.status() == StatusCode::PAYLOAD_TOO_LARGE {
+            return Err(ClientError::Other(format!(
+                "A proxy in front of the server refused {name}{size} as too large \
+                 (413 Payload Too Large). Raise {}.",
+                self.upload_limit()
+            )));
+        }
+        if !response.status().is_success() {
+            return Err(Self::refusal(response).await);
+        }
+        Ok(())
     }
 
     async fn complete(
@@ -756,6 +797,11 @@ async fn run_slot(
         }
         backoff = Duration::from_secs(1);
     }
+}
+
+/// A request that did not reach the server.
+fn unreachable(error: reqwest::Error) -> ClientError {
+    ClientError::Other(format!("The server could not be reached: {error}"))
 }
 
 /// Read the probe through the maps, and write the same bytes to the reply.

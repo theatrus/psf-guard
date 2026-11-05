@@ -1,7 +1,7 @@
 import { useEffect, useId, useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError, type AxiosError } from 'axios';
-import { Camera, Check, Download, Link2, MapPin, RefreshCw, SlidersHorizontal } from 'lucide-react';
+import { Camera, Check, CloudSun, Download, Link2, MapPin, RefreshCw, SlidersHorizontal } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import type { DirectorRigProfileView, DirectorRigSite } from '../../api/directorTypes';
@@ -12,6 +12,7 @@ import RigSchedulingApply from './RigSchedulingApply';
 import SchedulingFields from './SchedulingFields';
 import { compactOverrides, inheritedLimits, sameOverrides } from './schedulingModel';
 import EarlyBeta from './EarlyBeta';
+import RigWeatherPanel from './RigWeather';
 import WorkspaceTabs from './WorkspaceTabs';
 import { workspacePanel } from './workspacePanel';
 import { applyDefaults, describeSource, editFromForm, fieldOfView, formFromProfile, formatFieldOfView, opticsFromForm, type RigProfileForm } from './rigProfileForm';
@@ -26,7 +27,7 @@ class SettingsNotSaved extends Error {}
 const httpErrorOf = (error: unknown): AxiosError | null => isAxiosError(error) ? error
   : error instanceof Error ? httpErrorOf(error.cause) : null;
 
-const TABS = [{ id: 'optics', label: 'Optics', icon: <Camera size={16} /> }, { id: 'site', label: 'Site', icon: <MapPin size={16} /> }, { id: 'limits', label: 'Limits and delivery', icon: <SlidersHorizontal size={16} /> }, { id: 'collaboration', label: 'Collaboration', icon: <Link2 size={16} /> }] as const;
+const TABS = [{ id: 'optics', label: 'Optics', icon: <Camera size={16} /> }, { id: 'site', label: 'Site', icon: <MapPin size={16} /> }, { id: 'limits', label: 'Limits and delivery', icon: <SlidersHorizontal size={16} /> }, { id: 'weather', label: 'Weather', icon: <CloudSun size={16} /> }, { id: 'collaboration', label: 'Collaboration', icon: <Link2 size={16} /> }] as const;
 type Tab = (typeof TABS)[number]['id'];
 
 function Field({ id, label, value, onChange, disabled, unit, step = 'any' }: {
@@ -180,7 +181,7 @@ export default function RigProfileCard({ slug }: { slug: string }) {
     {data && form && <div className="rig-setup-layout">
     <WorkspaceTabs id={id} className="rig-setup-nav" orientation={vertical ? 'vertical' : 'horizontal'} label="Rig setup sections" tabs={TABS} value={tab} onChange={next => { setTab(next); if (next === 'collaboration') setCollaborationVisited(true); }} />
     <div className="rig-setup-content">
-    <form onSubmit={submit} className="rig-profile-form" hidden={tab === 'collaboration'}>
+    <form onSubmit={submit} className="rig-profile-form" hidden={tab === 'collaboration' || tab === 'weather'}>
       <div {...workspacePanel(id, 'optics', tab)}>
       <fieldset disabled={disabled}>
         <legend>Mode</legend>
@@ -294,6 +295,7 @@ export default function RigProfileCard({ slug }: { slug: string }) {
       {canWrite && <div className="director-actions"><button type="submit" disabled={disabled}><Check size={16} />{save.isPending ? 'Saving...' : 'Save rig profile'}</button>{unsaved && !save.isPending && <span className="unsaved-note">Unsaved changes</span>}</div>}
       {!canWrite && <p className="director-muted">Read only</p>}
     </form>
+    <div {...workspacePanel(id, 'weather', tab)}>{tab === 'weather' && <RigWeatherPanel rig={data.rig.id} />}</div>
     <div {...workspacePanel(id, 'collaboration', tab)}>{data && collaborationVisited && <CollaborationConnections rig={data.rig.id} name={data.rig.name} active={tab === 'collaboration'} />}</div>
     </div>
     </div>}

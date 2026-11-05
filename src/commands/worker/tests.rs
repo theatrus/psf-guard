@@ -202,6 +202,19 @@ async fn run_step(
     Result<seiza_stacking::ProcessedStackImage, String>,
     Vec<Option<String>>,
 ) {
+    run_step_on(server, cancel, image()).await
+}
+
+/// Run NoiseXTerminator over `image` on the board.
+#[cfg(unix)]
+async fn run_step_on(
+    server: &Server,
+    cancel: Option<seiza_stacking::CancelSignal>,
+    image: LinearImage,
+) -> (
+    Result<seiza_stacking::ProcessedStackImage, String>,
+    Vec<Option<String>>,
+) {
     let board = Arc::clone(&server.state.workers.board);
     tokio::task::spawn_blocking(move || {
         let mut heard = Vec::new();
@@ -210,7 +223,7 @@ async fn run_step(
             true,
             &noise_x(),
             &request(),
-            &image(),
+            &image,
             &[],
             cancel.as_ref(),
             &mut |_, worker| heard.push(worker.map(str::to_string)),
@@ -255,6 +268,153 @@ async fn a_remote_worker_downloads_the_input_and_uploads_the_result() {
     drop(stop);
     worker.await.unwrap().unwrap();
     eventually("the worker leaves", || connected(&server).is_none()).await;
+}
+
+/// An output larger than axum's default 2 MB body limit reaches the server.
+/// This catches the route switching to an extractor such as `Bytes` under
+/// that default; it cannot tell whether a raised limit reads the body into
+/// memory.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_large_output_streams_to_the_server() {
+    let _tool = crate::server::stack_preview::rc_astro::test_tool::install(false);
+    let server = server().await;
+    let work = tempfile::tempdir().unwrap();
+    let (stop, worker) = start_worker(&server, FileAccess::default(), work.path());
+    eventually("the worker connects", || connected(&server).is_some()).await;
+    // 1200 × 1000 32-bit pixels: 4.8 MB.
+    let large = LinearImage::new(
+        1200,
+        1000,
+        1,
+        (0..1_200_000).map(|i| (i % 997) as f32).collect(),
+    )
+    .unwrap();
+    let (ran, _) = run_step_on(&server, None, large.clone()).await;
+    let processed = ran.unwrap();
+    assert_eq!(
+        (processed.image.width, processed.image.height),
+        (1200, 1000)
+    );
+    assert!(processed
+        .image
+        .data
+        .iter()
+        .zip(&large.data)
+        .all(|(got, sent)| (got - sent).abs() < 1e-2));
+    drop(stop);
+    worker.await.unwrap().unwrap();
+}
+
+/// A stand-in proxy under `/psfguard` that refuses any body over 1 MB from
+/// its length alone, as nginx does. With `drain`, it reads and drops the rest
+/// of the body before it answers, as nginx does for a while; without, it
+/// answers at once and closes the connection.
+async fn refusing_proxy(drain: bool) -> String {
+    use axum::response::IntoResponse;
+    let proxy = axum::Router::new().fallback(move |request: axum::extract::Request| async move {
+        let length = request
+            .headers()
+            .get(axum::http::header::CONTENT_LENGTH)
+            .and_then(|value| value.to_str().ok()?.parse::<u64>().ok())
+            .unwrap_or(0);
+        if drain {
+            let _ = axum::body::to_bytes(request.into_body(), usize::MAX).await;
+        }
+        if length > 1_000_000 {
+            (
+                axum::http::StatusCode::PAYLOAD_TOO_LARGE,
+                axum::response::Html("<html><h1>413 Request Entity Too Large</h1></html>"),
+            )
+                .into_response()
+        } else {
+            axum::http::StatusCode::NO_CONTENT.into_response()
+        }
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = format!("http://{}/psfguard", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        axum::serve(listener, proxy).await.unwrap();
+    });
+    address
+}
+
+fn upload_assignment() -> Assignment {
+    Assignment {
+        task: "task".into(),
+        lease: "lease".into(),
+        kind: crate::remote_work::protocol::TaskKind::RcAstroStep,
+        label: String::new(),
+        spec: serde_json::Value::Null,
+        inputs: vec![],
+        outputs: vec![],
+    }
+}
+
+/// A proxy's 413 on an upload: the worker says what the proxy refused and
+/// which limit to raise, at the path it reaches the server by.
+#[tokio::test]
+async fn a_proxy_s_413_says_what_to_raise() {
+    let client = Client::new(&refusing_proxy(true).await, "token").unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let large = folder.path().join("processed.fits");
+    std::fs::write(&large, vec![0u8; 2_500_000]).unwrap();
+    let error = client
+        .upload(
+            "session",
+            &upload_assignment(),
+            "processed.fits",
+            &large,
+            "00",
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "A proxy in front of the server refused processed.fits (3 MB) as too large \
+         (413 Payload Too Large). Raise its upload limit for /psfguard/api/workers/v1/, \
+         such as nginx's client_max_body_size."
+    );
+    // Under the proxy's limit, the upload goes through.
+    let small = folder.path().join("stars.fits");
+    std::fs::write(&small, vec![0u8; 1000]).unwrap();
+    client
+        .upload("session", &upload_assignment(), "stars.fits", &small, "00")
+        .await
+        .unwrap();
+}
+
+/// A proxy that closes the connection while the upload is still arriving:
+/// whether the worker hears the 413 or only the broken connection, it points
+/// to the proxy's limit.
+#[tokio::test]
+async fn an_upload_a_proxy_cuts_off_points_to_its_limit() {
+    let client = Client::new(&refusing_proxy(false).await, "token").unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let large = folder.path().join("processed.fits");
+    std::fs::write(&large, vec![0u8; 8_000_000]).unwrap();
+    let error = client
+        .upload(
+            "session",
+            &upload_assignment(),
+            "processed.fits",
+            &large,
+            "00",
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.starts_with("The upload of processed.fits (8 MB) broke off: ")
+            || error.starts_with("A proxy in front of the server refused processed.fits (8 MB)"),
+        "{error}"
+    );
+    assert!(
+        error.ends_with(
+            "its upload limit for /psfguard/api/workers/v1/, such as nginx's client_max_body_size."
+        ),
+        "{error}"
+    );
 }
 
 #[cfg(unix)]

@@ -1,7 +1,8 @@
 //! A site's cloud forecast: which provider the site takes it from, the
 //! thresholds under which an hour counts as clear, and the latest forecast
-//! fetched. Planning input only, like a manual mark: a forecast never allows
-//! or blocks acquisition.
+//! fetched. Night plans use it like a manual mark. Director can separately
+//! opt into cloud holds through the weather API; forecasts never authorize
+//! equipment motion or replace a safety monitor.
 //!
 //! Windows are worked out when the forecast is read, from the threshold the
 //! site has then, so a changed threshold applies at once.
@@ -19,6 +20,15 @@ pub const FORECAST_VALID_MS: u64 = 12 * 3_600_000;
 pub const DEFAULT_CLOUD_THRESHOLD_PERCENT: u8 = 30;
 /// The largest dew limit a site may set, in °C above the dew point.
 pub const MAX_DEW_LIMIT_CELSIUS: u8 = 20;
+
+/// Coordinates as sent to forecast providers and used to identify cached data.
+/// Elevation does not change the request; latitude and longitude use two decimals.
+pub fn forecast_coordinates(latitude_degrees: f64, longitude_degrees: f64) -> (String, String) {
+    (
+        format!("{latitude_degrees:.2}"),
+        format!("{longitude_degrees:.2}"),
+    )
+}
 
 /// Whether a temperature, in °C, is one air at 2 m can have. Forecast
 /// readers drop any other, and a stored forecast holding one is refused.

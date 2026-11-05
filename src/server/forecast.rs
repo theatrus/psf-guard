@@ -132,8 +132,10 @@ impl ForecastClient {
         longitude_degrees: f64,
         last_modified: Option<&str>,
     ) -> Result<Fetched, FetchError> {
-        let latitude = format!("{:.2}", latitude_degrees);
-        let longitude = format!("{:.2}", longitude_degrees);
+        let (latitude, longitude) = psf_guard_director_meta::site_forecast::forecast_coordinates(
+            latitude_degrees,
+            longitude_degrees,
+        );
         match provider {
             ForecastProvider::OpenMeteo => {
                 let mut query = vec![

@@ -2191,6 +2191,54 @@ Changing these settings needs a server that may write into rig databases
 (database management). A rig that runs on another PSF Guard is changed
 there, and a rig Director drives takes overrides instead.
 
+### Weather telemetry and Director holds
+
+Open **Live rigs** to compare each rig's **NINA reported** weather with its
+site's **Forecast**. Open the rig's **Weather** tab for temperatures, dew point,
+humidity, wind and other supported values. Expand **Reported weather history
+(24 hours)** to see earlier N.I.N.A. reports. Missing values stay blank; zero
+cloud cover means the source reported zero.
+
+Director uses its existing paired PSF Guard connection. In the plugin settings,
+**Send NINA weather telemetry to PSF Guard** controls reporting. The selected
+N.I.N.A. weather source must supply connected readings. Its source can be a
+sensor or a weather service. The report time records when N.I.N.A. supplied
+the values; N.I.N.A. does not expose the source's measurement time. PSF Guard
+keeps one report per minute per rig/profile for 30 days and returns at most
+1,440 reports per history request. Reports do not change image grades.
+
+To use weather holds, choose **Hold and resume** under **Director Session >
+Session > Weather and roof**, then enable **Use PSF Guard site forecast**,
+**Use NINA reported cloud cover**, or both. Both are off by default. The
+forecast uses the site's cloud threshold and optional dew limit from **Settings
+› Presets › Sites**, including a paid source configured on the server. Provider
+keys stay on the server; reading weather never requests a provider refresh.
+N.I.N.A. cloud cover uses the same cloud threshold, independently of forecasts.
+
+The forecast must match the rig's location. PSF Guard compares latitude and
+longitude rounded to two decimals, as sent to the provider; elevation does not
+change the forecast request. A rig without a location override uses its planning
+site's coordinates. A mismatch or missing coordinates prevents the forecast
+from clearing a hold. The Weather tab explains the problem. Select the rig's
+current planning site and check its latitude and
+longitude in the rig's **Site** tab.
+
+Every enabled source must be fresh and clear. Missing cloud values, forecast
+gaps, disconnections and stale reports hold the session. N.I.N.A. reports expire
+after 90 seconds; each server decision expires within 30 seconds, including
+request time. Cloud and forecast changes hold at the next exposure boundary:
+the current frame can finish saving. Readmission uses the session's stable-safe
+delay, weather budget and original night deadline. A change during final
+dispatch validation can consume a reserved attempt without starting the camera;
+Director never replays that attempt. The physical safety monitor and enclosure
+interlocks still govern immediate interruption and safe shutdown.
+
+The paired rig can `GET` and `POST /rigs/{rig}/weather`; a POST must match its
+paired profile and acknowledges the exact sample ID. Operators can also read
+`GET /rigs/{rig}/weather/history?from_ms=...&to_ms=...` (default: the last day).
+Both reads return cached data only. Weather stays scoped to the rig and profile
+and does not require an active acquisition.
+
 <a id="cloud-forecasts"></a>
 
 ### Cloud and dew forecasts
@@ -2266,8 +2314,9 @@ In night plans, a forecast works like a mark for every rig at the site:
   hours that exceed the cloud threshold or fall at or within the dew limit;
   the legend lists these hours. Hover a dew hour for temperature, dew point
   and humidity.
-- A forecast marks nights for planning only. It does not stop a running
-  rig or close a roof; use the observatory's own safety monitor for that.
+- By default, a forecast changes night plans. A Director Session can also
+  use it for optional [weather holds between exposures](#weather-telemetry-and-director-holds).
+  Forecasts never replace the observatory's safety monitor or close a roof.
 
 ![November 9 night schedule with a dew limit from 4 AM to 7 AM.](images/night-dew-schedule-013.jpg)
 
