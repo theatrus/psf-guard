@@ -1186,7 +1186,7 @@ message = "This public demo uses sample data. Changes may be reset."
 link_text = "Learn about PSF Guard"
 link_url = "https://psf-guard.com/"
 
-# Optional: where cloud forecasts come from, for sites with forecasts on.
+# Optional: where weather forecasts come from, for sites with forecasts on.
 [server.forecasts]
 contact = "you@example.org"   # added to each request's User-Agent
 # open_meteo_url = "https://customer-api.open-meteo.com"   # a paid plan

@@ -1953,19 +1953,22 @@ latitude and longitude, under the sites' names. Under each group, a row
 shows bars for each night, from dusk to dawn like the cells' bars, with
 their labels stacked beside them:
 
-- **Cloud**: the forecast's cloud, lighter the more cloud, with a red edge
-  on hours over the site's threshold. A group without a forecast has no
-  cloud bar.
-- **Dew**: brighter the closer the air is to its dew point, with a red
-  edge on hours inside the site's dew limit. A forecast fetched without
-  dew points has no dew bar.
-- **Moon**: from its rise to its set, brightest where it stands highest
-  and brighter the fuller it is.
+- **Cloud**: lighter shading means more cloud cover. A red edge marks hours
+  over the site's threshold. A group without a forecast has no cloud bar.
+- **Dew**: brighter shading means a smaller gap between air temperature and
+  dew point. A red edge marks hours at or within the site's dew limit.
+  Forecasts without dew point data have no dew bar.
+- **Moon**: shows moonrise to moonset. Brighter shading means a higher or
+  more fully lit Moon.
 
-Hover the bars for the Moon's rise, highest point and set, the range of
-cloud cover, and how far above its dew point the air comes.
+Hover the bars for cloud cover, the temperature–dew point gap, moonrise,
+the Moon's highest point and moonset.
 
-![Nights: five rigs grouped by site, with clear hours, Moon and planned work. Site coordinates are covered for privacy.](images/nights-grid-013.png)
+![Two rigs with Cloud, Dew and Moon bars below their night plans.](images/rigs-dew-grid-013.jpg)
+
+The columns show November 4–10, 2026, from left to right. The drop on
+November 9 marks a night shortened by the dew limit. Site coordinates are
+outside the crop.
 
 The server lists requested calculations as **Planning nights** in the
 header’s job list, with a **Stop** control. Background jobs wait while the
@@ -2188,10 +2191,12 @@ Changing these settings needs a server that may write into rig databases
 (database management). A rig that runs on another PSF Guard is changed
 there, and a rig Director drives takes overrides instead.
 
-### Cloud forecasts
+<a id="cloud-forecasts"></a>
 
-A site can use a cloud and dew forecast to mark its nights. Forecasts are
-off until an editor turns them on for a site:
+### Cloud and dew forecasts
+
+Use a site's cloud and dew forecast to estimate when its rigs can image.
+Forecasts are off until an editor turns them on for a site:
 
 1. Open **Settings › Presets › Sites** and click **Edit** for the site.
 2. Enter the site's latitude and longitude if they are empty.
@@ -2199,25 +2204,30 @@ off until an editor turns them on for a site:
    - **Open-Meteo**: hourly, 16 days ahead; free for non-commercial use.
    - **MET Norway**: hourly, then every 6 hours, about 9 days ahead; free
      for any use.
-4. In **Clear at or under**, enter the cloud cover, in percent, at or under
-   which an hour counts as clear. The default is 30%.
-5. To keep dewy hours out of the plans, enter a dew limit in **No imaging
-   within**, in whole °C from 0 to 20. An hour whose air is that close to
-   its dew point or closer does not count as clear. Leave it empty to
-   ignore dew.
+4. In **Clear at or under**, enter the maximum cloud cover, in percent,
+   that counts as clear. The default is 30%.
+5. To exclude hours close to the dew point, set **No imaging within** to a
+   whole number from 0 to 20 °C. For example, 2 °C excludes hours when air
+   temperature is 2 °C or less above the dew point. Leave the field blank
+   to ignore dew.
 6. Click **Save site**. PSF Guard requests the first forecast at once.
 
-![A site's cloud forecast, with when it arrived and how long night plans use it](images/site-forecast.png)
+![Weather forecast settings with a 30% cloud threshold and a 2 °C dew limit.](images/site-weather-forecast-013.jpg)
+
+Despite the label **No imaging within**, this setting changes planning
+estimates only. It does not stop a rig.
 
 PSF Guard sends the site's latitude and longitude, rounded to about 1 km,
 to the provider when you save the site, every three hours, when you click
 **Fetch now**, and when it retries after a failed request. It sends
-nothing else, and nothing about a site whose forecast is off.
+nothing else, and nothing about a site whose forecast is off. If a site has
+a dew limit but its stored forecast lacks dew points, the server requests
+an update after 30 minutes, subject to the provider’s retry time.
 
 - **Fetch now** requests a new forecast at once. Within 2 minutes after a
   forecast arrives, within a minute after a failed request, or before the
   provider's own `Expires` or `Retry-After` time, it sends nothing, and the
-  panel says when to try again.
+  panel shows when to try again.
 - After a failed request, the panel shows the error. PSF Guard tries again
   after 15 minutes, then waits longer after each further failure, up to 6
   hours. A failed **Fetch now** does not lengthen that wait.
@@ -2230,38 +2240,42 @@ nothing else, and nothing about a site whose forecast is off.
 
 In night plans, a forecast works like a mark for every rig at the site:
 
-- Hours at or under the threshold count as clear. With a dew limit, an
-  hour whose air is within the limit of its dew point does not count as
-  clear, whatever its cloud. An hour the forecast gives no dew point for
-  is judged by its cloud alone. A night clear through
-  all its dark hours is available. A night clear at no time a schedule
-  could image (the Sun below −6°) is not available. Any other night is
-  limited to its clear hours, which may lie in twilight.
+- An hour counts as clear when cloud cover is at or below the threshold.
+  With a dew limit, the air temperature must also be more than that limit
+  above the dew point. If either temperature or dew point is missing, only
+  cloud cover counts. A night with clear conditions throughout its dark
+  hours is available. A night with no clear hours when the Sun is below
+  −6° is not available. Other nights are limited to their clear hours,
+  which may include twilight.
 - A mark set for the site overrides the forecast for that night. A rig's
   own mark still applies with the forecast.
 - A forecast is used for 12 hours after it arrives. Hours after the
   forecast's last hour, nights the forecast does not reach, and every night
   once the forecast expires count as clear. Hours before its first hour
   have passed, and count as not clear.
-- The **Nights** grid marks each cell the forecast marks: a cloud when
-  cloud took out some of its dark hours, a drop when the dew limit took
-  out hours the cloud left clear, both when both did, and a cloud when
-  neither did. The cell's label gives the cause. The grid credits each provider under it. A
-  night's panel shows the forecast's mark with its cause (cloud, dew or
-  both), the time the forecast arrived and the provider's
-  credit. The timeline adds a strip of each hour's cloud cover; hours
-  above the threshold have a red edge, and the legend lists them. Under
-  it, a dew band shows each hour brighter the closer the air is to its dew
-  point; hours inside the dew limit have a red edge, and the legend lists
-  them. Hover an hour for its temperature, dew point and humidity.
+- The **Nights** grid uses a cloud icon when cloud cover removes dark hours
+  from a night plan, and a drop when the dew limit removes hours that pass
+  the cloud threshold. Both icons appear when both limits remove hours.
+  A cloud icon also identifies a forecast that leaves all dark hours clear.
+  The cell's label explains the cause of any excluded hours. The grid
+  credits each provider below the bars.
+- The selected night's panel shows the forecast's provider, receipt time,
+  allowed hours and any cloud or dew limit. Its timeline shows hourly cloud
+  cover and, when available, a dew band. Brighter dew shading means a
+  smaller gap between air temperature and dew point. A red edge marks
+  hours that exceed the cloud threshold or fall at or within the dew limit;
+  the legend lists these hours. Hover a dew hour for temperature, dew point
+  and humidity.
 - A forecast marks nights for planning only. It does not stop a running
   rig or close a roof; use the observatory's own safety monitor for that.
 
-![A night the forecast marks clear from 10 PM to 2 AM, with its hourly cloud under the schedule](images/nights-forecast.png)
+![November 9 night schedule with a dew limit from 4 AM to 7 AM.](images/night-dew-schedule-013.jpg)
 
-Like marks, forecasts change night plans only: they never start, stop or
-block a rig. To use a paid Open-Meteo plan, your own Open-Meteo instance,
-or to add contact details to each request, set `[server.forecasts]` in the
+The 2 °C dew limit ends this night's clear hours at 4 AM. Cloud cover stays
+within the 30% threshold throughout the night.
+
+To use a paid Open-Meteo plan, your own Open-Meteo instance, or to add contact
+details to each request, set `[server.forecasts]` in the
 server's configuration file; see the [README](../README.md).
 
 ### Tonight on the Live tab
