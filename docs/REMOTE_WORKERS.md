@@ -332,6 +332,27 @@ worker downloads each input over the server's API and uploads each result.
 It needs only the server's address. A 6000 × 4000 color image is about
 290 MB each way.
 
+Both sides stream these files: the worker sends each result from disk, and
+the server writes it to a file as it arrives, so neither holds a whole
+image in memory.
+
+A reverse proxy in front of the server must accept uploads that large on
+`/api/workers/v1/`. nginx refuses bodies over `client_max_body_size` (1 MB
+unless set). The worker then logs "A proxy in front of the server refused
+… as too large", and the run fails. Give the workers' routes their own
+limit, and let the proxy stream them:
+
+```nginx
+location /api/workers/v1/ {
+    client_max_body_size 16g;
+    proxy_request_buffering off;
+    proxy_read_timeout 600s;
+    proxy_pass http://127.0.0.1:3000;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+}
+```
+
 Shared storage is optional. If the worker and server can access the same
 storage, such as an NFS or SMB share, the worker can read inputs and write
 results in that shared folder:
