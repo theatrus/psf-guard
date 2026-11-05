@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react';
 import type { RigNights } from '../../api/nightPlanTypes';
-import { formatClock, moonCourse, moonCourseWords, moonGradient } from './nightsModel';
+import { dewAlpha, dewSpread, formatClock, isDewy, moonCourse, moonCourseWords, moonGradient } from './nightsModel';
 
 interface Props {
   /** The rigs of one site group; the first whose night has the Moon's
@@ -12,7 +12,7 @@ interface Props {
 
 /**
  * One night's sky for a group of sites, under its rigs in the grid: the
- * forecast's cloud and the Moon from its rise to its set, from dusk to
+ * forecast's cloud and dew, and the Moon from its rise to its set, from dusk to
  * dawn like the cells' bars.
  */
 export default function NightSky({ rigs, date, zone }: Props) {
@@ -25,13 +25,19 @@ export default function NightSky({ rigs, date, zone }: Props) {
   const clouded = rigs.find(rig => rig.nights.some(n => n.date === date && n.clouds.length > 0));
   const clouds = clouded?.nights.find(n => n.date === date)?.clouds.filter(hour => hour.end_ms > from && hour.start_ms < to) ?? [];
   const threshold = clouded?.forecast?.cloud_threshold_percent;
+  const dewLimit = clouded?.forecast?.dew_limit_celsius;
+  const air = clouds.filter(hour => dewSpread(hour) !== null);
   const course = moonCourse(night.moon_altitudes, night.moon_illumination, from, to);
   const moon = `Moon ${moonCourseWords(night.moon_altitudes, night.moon_illumination, course, ms => formatClock(ms, zone))}`;
   const covers = clouds.map(hour => Math.round(hour.cloud_total));
   const least = Math.min(...covers);
   const most = Math.max(...covers);
   const cloud = covers.length === 0 ? [] : [`cloud ${least === most ? least : `${least}–${most}`}%`];
-  const words = [moon, ...cloud].join('; ');
+  const spreads = air.map(hour => Math.round(dewSpread(hour)!));
+  const nearest = Math.min(...spreads);
+  const farthest = Math.max(...spreads);
+  const dew = air.length === 0 ? [] : [`air ${nearest === farthest ? nearest : `${nearest}–${farthest}`} °C above dew point`];
+  const words = [moon, ...cloud, ...dew].join('; ');
   const gradient = moonGradient(course);
   return <div className="nights-sky" role="img" aria-label={words} title={words}>
     {clouds.length > 0 && <span className="nights-sky-clouds">
@@ -40,6 +46,14 @@ export default function NightSky({ rigs, date, zone }: Props) {
         const right = Math.min(1, (hour.end_ms - from) / span);
         return <span key={hour.start_ms} className={`nights-cloud${threshold !== undefined && hour.cloud_total > threshold ? ' is-cloudy' : ''}`}
           style={{ left: `${left * 100}%`, width: `${(right - left) * 100}%`, '--cloud-alpha': (0.12 + 0.88 * hour.cloud_total / 100).toFixed(2) } as CSSProperties} />;
+      })}
+    </span>}
+    {air.length > 0 && <span className="nights-sky-dew">
+      {air.map(hour => {
+        const left = Math.max(0, (hour.start_ms - from) / span);
+        const right = Math.min(1, (hour.end_ms - from) / span);
+        return <span key={hour.start_ms} className={`nights-dew-hour${isDewy(hour, dewLimit) ? ' is-dewy' : ''}`}
+          style={{ left: `${left * 100}%`, width: `${(right - left) * 100}%`, '--dew-alpha': dewAlpha(dewSpread(hour)!) } as CSSProperties} />;
       })}
     </span>}
     <span className="nights-sky-moon" style={gradient ? { backgroundImage: gradient } : undefined} />

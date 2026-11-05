@@ -151,6 +151,13 @@ describe('Director sites', () => {
     fireEvent.click(within(card).getByRole('button', { name: 'Save site' }));
     await waitFor(() => expect(within(card).getByRole('alert')).toHaveTextContent('as a whole percent from 0 to 100'));
     fireEvent.change(within(card).getByLabelText('Clear at or under'), { target: { value: '25' } });
+    // The dew limit is off while empty, and whole degrees up to 20.
+    expect(within(card).getByLabelText('Not clear within')).toHaveAttribute('placeholder', 'Off');
+    for (const value of ['21', '1.5']) {
+      fireEvent.change(within(card).getByLabelText('Not clear within'), { target: { value } });
+      expect(within(card).getByLabelText('Not clear within')).toBeInvalid();
+    }
+    fireEvent.change(within(card).getByLabelText('Not clear within'), { target: { value: '' } });
     fireEvent.click(within(card).getByRole('button', { name: 'Save site' }));
     await waitFor(() => expect(saves).toHaveLength(1));
     expect(saves[0].forecast).toEqual({ provider: 'met_norway', cloud_threshold_percent: 25 });
@@ -162,6 +169,12 @@ describe('Director sites', () => {
     expect(await within(status).findByText(/MET Norway confirmed it unchanged at .*\. Night plans use it until/)).toBeInTheDocument();
     expect(within(status).queryByRole('alert')).toBeNull();
     expect(asks).toHaveLength(1);
+
+    fireEvent.change(within(card).getByLabelText('Not clear within'), { target: { value: '2' } });
+    fireEvent.click(within(card).getByRole('button', { name: 'Save site' }));
+    await waitFor(() => expect(saves).toHaveLength(2));
+    expect(saves[1].forecast).toEqual({ provider: 'met_norway', cloud_threshold_percent: 25, dew_limit_celsius: 2 });
+    expect(await within(card).findByLabelText('Not clear within')).toHaveValue(2);
   });
 
   it('saves the site\'s time zone, or none for the browser\'s', async () => {

@@ -13,3 +13,6 @@ export const PROVIDER_URL: Record<ForecastProvider, string> = {
 
 /** The threshold a site starts with, as the server's. */
 export const DEFAULT_CLOUD_THRESHOLD = 30;
+
+/** The largest dew limit, in °C, as the server's. */
+export const MAX_DEW_LIMIT = 20;

@@ -74,6 +74,8 @@ pub(super) struct RigForecast {
     /// The credit the provider's licence requires.
     attribution: &'static str,
     cloud_threshold_percent: u8,
+    /// Hours this close to the dew point, in °C, are not clear.
+    dew_limit_celsius: Option<u8>,
     /// The forecast planning uses, when one is kept and has not expired.
     fetched_at_ms: Option<u64>,
     expires_at_ms: Option<u64>,
@@ -164,11 +166,7 @@ impl RigConditions {
             .zip(&dark)
             .map(|(date, dark)| {
                 let (settings, kept) = forecast?;
-                let night = kept.night(
-                    date.span(longitude_degrees),
-                    settings.cloud_threshold_percent,
-                    now_ms,
-                )?;
+                let night = kept.night(date.span(longitude_degrees), &settings, now_ms)?;
                 let covers_dark = dark.is_none_or(|(dusk, dawn)| {
                     night
                         .covered
@@ -220,6 +218,7 @@ impl RigConditions {
                 provider: clouds.settings.provider,
                 attribution: clouds.settings.provider.attribution(),
                 cloud_threshold_percent: clouds.settings.cloud_threshold_percent,
+                dew_limit_celsius: clouds.settings.dew_limit_celsius,
                 fetched_at_ms: forecast.map(|(_, kept)| kept.fetched_at_ms),
                 expires_at_ms: forecast.map(|(_, kept)| kept.expires_at_ms),
             }),

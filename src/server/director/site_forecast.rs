@@ -526,6 +526,7 @@ mod tests {
         let settings = ForecastSettings {
             provider: ForecastProvider::MetNorway,
             cloud_threshold_percent: 30,
+            dew_limit_celsius: None,
         };
         let state = |forecast: Option<SiteForecast>, status: Option<ForecastStatus>| Kept {
             site: site.clone(),
@@ -583,6 +584,7 @@ mod tests {
             forecast: Some(ForecastSettings {
                 provider: ForecastProvider::OpenMeteo,
                 cloud_threshold_percent: 30,
+                dew_limit_celsius: None,
             }),
             ..SiteProfile::empty(Uuid::new_v4(), 1)
         };

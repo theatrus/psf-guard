@@ -1,3 +1,4 @@
+import type { ForecastHour } from '../../api/directorTypes';
 import type { MoonAltitudes, NightAppliedMark, NightAvailabilityState, NightInterval, NightPlanProject, NightPlans, NightPlanTarget, NightRuntime, NightTargetHours, NightSchedule, RigNight, RigNights, SchedulePlanProgress } from '../../api/nightPlanTypes';
 import { PROVIDER_LABEL } from '../director/forecastLabels';
 import { withoutPlanningParams } from '../../hooks/useUrlState';
@@ -285,6 +286,50 @@ export function moonGradient(course: MoonCourse): string | undefined {
   const stops = course.stops.map(stop =>
     `color-mix(in srgb, var(--nights-moon) ${Math.round(stop.strength * 90)}%, transparent) ${(stop.at * 100).toFixed(2)}%`);
   return `linear-gradient(to right, ${stops.join(', ')})`;
+}
+
+/** How far an hour's air is above its dew point, in °C; null without a
+ *  temperature and dew point. */
+export function dewSpread(hour: ForecastHour): number | null {
+  if (hour.temperature_celsius == null || hour.dew_point_celsius == null) return null;
+  return Math.max(0, hour.temperature_celsius - hour.dew_point_celsius);
+}
+
+/** Whether a dew limit takes an hour out of the clear hours, as the
+ *  server judges it. */
+export function isDewy(hour: ForecastHour, limit: number | null | undefined): boolean {
+  const spread = dewSpread(hour);
+  return limit != null && spread !== null && spread <= limit;
+}
+
+/** How strongly to draw an hour's dew: full at the dew point, faint 10 °C
+ *  or more above it. */
+export function dewAlpha(spread: number): string {
+  return (0.06 + 0.94 * Math.max(0, 1 - spread / 10)).toFixed(2);
+}
+
+/** An hour's air in words: "8 °C, dew point 6 °C, 87% humidity". */
+export function airWords(hour: ForecastHour): string {
+  const parts: string[] = [];
+  if (hour.temperature_celsius != null) parts.push(`${Math.round(hour.temperature_celsius)} °C`);
+  if (hour.dew_point_celsius != null) parts.push(`dew point ${Math.round(hour.dew_point_celsius)} °C`);
+  if (hour.humidity_percent != null) parts.push(`${Math.round(hour.humidity_percent)}% humidity`);
+  return parts.join(', ');
+}
+
+/** The stretches between `from` and `to` whose hours pass `test`, merged
+ *  where they touch. */
+export function hourSpans(hours: ForecastHour[], test: (hour: ForecastHour) => boolean, from: number, to: number): Array<{ start: number; end: number }> {
+  const spans: Array<{ start: number; end: number }> = [];
+  for (const hour of hours) {
+    if (!test(hour) || hour.end_ms <= from || hour.start_ms >= to) continue;
+    const start = Math.max(hour.start_ms, from);
+    const end = Math.min(hour.end_ms, to);
+    const last = spans.at(-1);
+    if (last && last.end >= start) last.end = Math.max(last.end, end);
+    else spans.push({ start, end });
+  }
+  return spans;
 }
 
 /** How soon to read kept night plans again: shortly while the server

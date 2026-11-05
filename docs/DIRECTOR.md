@@ -1037,8 +1037,8 @@ azimuth; the error says which line.
 
 | Method | Route | Body or query |
 | --- | --- | --- |
-| GET | `/sites/{site}/profile` | The site and its profile: `location` and `horizon`, each `{value, source, reported_at_ms}` or `null`, `forecast` (`{provider, cloud_threshold_percent}` or `null`), and `revision` (0 when nothing is saved). `404` for an unknown site. |
-| PUT | `/sites/{site}/profile` | `expected_revision` plus `location` and `horizon`, each `{value, source}` or `null`, and `forecast`: `{provider, cloud_threshold_percent}`, or `null` or left out to turn forecasts off. Sources may be `manual` or `frame_headers`; `409` when the revision moved. `422` for a forecast without a location. A new provider, or a location about a kilometre or more away, discards the stored forecast and requests a new one; turning forecasts off discards it. |
+| GET | `/sites/{site}/profile` | The site and its profile: `location` and `horizon`, each `{value, source, reported_at_ms}` or `null`, `forecast` (`{provider, cloud_threshold_percent, dew_limit_celsius?}` or `null`), and `revision` (0 when nothing is saved). `404` for an unknown site. |
+| PUT | `/sites/{site}/profile` | `expected_revision` plus `location` and `horizon`, each `{value, source}` or `null`, and `forecast`: `{provider, cloud_threshold_percent, dew_limit_celsius?}`, or `null` or left out to turn forecasts off. `dew_limit_celsius`, whole °C from 0 to 20, takes hours that close to the dew point out of the clear hours; left out, dew is ignored. Sources may be `manual` or `frame_headers`; `409` when the revision moved. `422` for a forecast without a location. A new provider, or a location about a kilometre or more away, discards the stored forecast and requests a new one; turning forecasts off discards it. |
 | POST | `/horizons/parse` | `{text}` holding a `.hrz` file; returns the canonical `Horizon` or `400` with the line it could not read. Stores nothing. |
 
 `GET /rigs/profiles` carries each rig's resolved `site`: the planning `site`
@@ -1950,16 +1950,19 @@ Each cell is one rig's night, from dusk to dawn:
 
 The grid groups rigs whose sites lie within a degree of each other in
 latitude and longitude, under the sites' names. Under each group, a
-**Cloud · Moon** row shows two bars for each night, from dusk to dawn like
-the cells' bars:
+**Cloud · Dew · Moon** row shows three bars for each night, from dusk to
+dawn like the cells' bars:
 
 - the forecast's cloud, lighter the more cloud, with a red edge on hours
   over the site's threshold; a group without a forecast has no cloud bar;
+- the forecast's dew, brighter the closer the air is to its dew point,
+  with a red edge on hours inside the site's dew limit; a forecast fetched
+  without dew points has no dew bar;
 - the Moon from its rise to its set, brightest where it stands highest
   and brighter the fuller it is.
 
-Hover the bars for the Moon's rise, highest point and set, and the range
-of cloud cover.
+Hover the bars for the Moon's rise, highest point and set, the range of
+cloud cover, and how far above its dew point the air comes.
 
 ![Nights: five rigs grouped by site, with clear hours, Moon and planned work. Site coordinates are covered for privacy.](images/nights-grid-013.png)
 
@@ -2186,18 +2189,22 @@ there, and a rig Director drives takes overrides instead.
 
 ### Cloud forecasts
 
-A site can use a cloud forecast to mark its nights. Forecasts are off until
-an editor turns them on for a site:
+A site can use a cloud and dew forecast to mark its nights. Forecasts are
+off until an editor turns them on for a site:
 
 1. Open **Settings › Presets › Sites** and click **Edit** for the site.
 2. Enter the site's latitude and longitude if they are empty.
-3. Under **Cloud forecast**, choose a provider in **Forecast**:
+3. Under **Weather forecast**, choose a provider in **Forecast**:
    - **Open-Meteo**: hourly, 16 days ahead; free for non-commercial use.
    - **MET Norway**: hourly, then every 6 hours, about 9 days ahead; free
      for any use.
 4. In **Clear at or under**, enter the cloud cover, in percent, at or under
    which an hour counts as clear. The default is 30%.
-5. Click **Save site**. PSF Guard requests the first forecast at once.
+5. To keep dewy hours out of the plans, enter a dew limit in **Not clear
+   within**, in whole °C from 0 to 20. An hour whose air is that close to
+   its dew point or closer does not count as clear. Leave it empty to
+   ignore dew.
+6. Click **Save site**. PSF Guard requests the first forecast at once.
 
 ![A site's cloud forecast, with when it arrived and how long night plans use it](images/site-forecast.png)
 
@@ -2216,13 +2223,16 @@ nothing else, and nothing about a site whose forecast is off.
 - MET Norway can reply that nothing has changed. The panel then shows when
   MET Norway confirmed the forecast unchanged, and night plans use it for
   12 more hours.
-- A new elevation or threshold keeps the forecast. A new provider, or a
+- A new elevation, threshold or dew limit keeps the forecast. A new provider, or a
   move of the site by about a kilometre or more, discards it and requests
   a new one.
 
 In night plans, a forecast works like a mark for every rig at the site:
 
-- Hours at or under the threshold count as clear. A night clear through
+- Hours at or under the threshold count as clear. With a dew limit, an
+  hour whose air is within the limit of its dew point does not count as
+  clear, whatever its cloud. An hour the forecast gives no dew point for
+  is judged by its cloud alone. A night clear through
   all its dark hours is available. A night clear at no time a schedule
   could image (the Sun below −6°) is not available. Any other night is
   limited to its clear hours, which may lie in twilight.
@@ -2236,7 +2246,12 @@ In night plans, a forecast works like a mark for every rig at the site:
   credits each provider under the grid. A night's panel shows the
   forecast's mark, the time the forecast arrived and the provider's
   credit. The timeline adds a strip of each hour's cloud cover; hours
-  above the threshold have a red edge, and the legend lists them.
+  above the threshold have a red edge, and the legend lists them. Under
+  it, a dew band shows each hour brighter the closer the air is to its dew
+  point; hours inside the dew limit have a red edge, and the legend lists
+  them. Hover an hour for its temperature, dew point and humidity.
+- A forecast marks nights for planning only. It does not stop a running
+  rig or close a roof; use the observatory's own safety monitor for that.
 
 ![A night the forecast marks clear from 10 PM to 2 AM, with its hourly cloud under the schedule](images/nights-forecast.png)
 
@@ -2262,7 +2277,7 @@ schedule on the **Nights** tab.
 | PUT | `/rigs/{rig}/night-overrides/{date}` | `expected_revision` and `entries`, up to 32: `{"kind":"pin","subject":…,"window":{…}}`, `{"kind":"exclude","subject":…,"window":{…}}` (no `window` for the whole night), `{"kind":"hold","from_ms":…}` (no `from_ms` for the whole night) and `{"kind":"order","plans":[…]}`. A `subject` is `{"kind":"plan","plan_id":…}`, `{"kind":"target","target_guid":…}` or `{"kind":"exposure_plan","exposureplan_guid":…}`. Replaces the night's list; an empty list clears it. `409` on a stale revision, or for a non-empty list on a rig Target Scheduler runs; `422` for windows outside the night's noon-to-noon span, overlapping pins, a second order or hold, a night that has ended, a rig with no location, or a list that would leave the rig a program that does not validate. Editors only. |
 | DELETE | `/rigs/{rig}/night-overrides/{date}` | `expected_revision`: returns the night to the rig's own program, on any rig. Editors only. |
 | PUT | `/rigs/{rig}/target-scheduler` | `projects` (each `project_id`, an optional `priority` of `low`, `normal` or `high`, an optional `state` of `draft`, `active`, `inactive` or `closed`, and `was`: the `priority` and `state` as read) and `targets` (each `target_id`, `active` and `was_active`). Writes the changed columns to the rig's database and, for a catalog kept in step with Target Scheduler, to Target Scheduler's file, all or nothing. `409` when a row no longer holds what was read, for a rig Director drives, or for a rig on another PSF Guard; `422` for a row without its `was` values. Editors only. |
-| GET | `/sites/{site}/forecast` | The site's forecast `settings` (`provider`: `open_meteo` or `met_norway`, and `cloud_threshold_percent`), the provider's `attribution`, the stored `forecast` (each hour's total, low, mid and high cloud cover), whether night plans use it now (`fresh`), the last request's `status` (time, error and failures in a row) and `next_refresh_ms`. |
+| GET | `/sites/{site}/forecast` | The site's forecast `settings` (`provider`: `open_meteo` or `met_norway`, `cloud_threshold_percent` and `dew_limit_celsius` when set), the provider's `attribution`, the stored `forecast` (each hour's total, low, mid and high cloud cover, and `temperature_celsius`, `dew_point_celsius` and `humidity_percent` at 2 m, each `null` when the provider gives none), whether night plans use it now (`fresh`), the last request's `status` (time, error and failures in a row) and `next_refresh_ms`. |
 | POST | `/sites/{site}/forecast/refresh` | Requests the site's forecast now and returns the same view; a failed request returns the view with the error in `status`. `422` when forecasts are off, the site has no location, another refresh is running, within 2 minutes of the last forecast or a minute of a failed request, or before the provider's `Expires` or `Retry-After` time; the error says how long to wait. Editors only. |
 
 ## Framing drafts

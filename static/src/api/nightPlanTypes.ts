@@ -300,6 +300,9 @@ export interface RigForecast {
   /** The credit the provider's licence asks for. */
   attribution: string;
   cloud_threshold_percent: number;
+  /** Hours this close to the dew point, in °C, are not clear; null leaves
+   *  dew out. */
+  dew_limit_celsius: number | null;
   /** The forecast planning uses; null when none is kept or it expired. */
   fetched_at_ms: number | null;
   expires_at_ms: number | null;

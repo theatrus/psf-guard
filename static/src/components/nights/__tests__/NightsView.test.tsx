@@ -51,15 +51,20 @@ describe('Rigs', () => {
 });
 
 describe('Nights', () => {
-  it('groups rigs by nearby site, with the Moon and cloud each night under each group', async () => {
+  it('groups rigs by nearby site, with the Moon, cloud and dew each night under each group', async () => {
     const HOUR = 3_600_000;
     const sky = (index: number) => night(index, {
       moon_altitudes: moonAltitudes(NOON + index * 24 * HOUR),
-      clouds: [{ start_ms: NOON + index * 24 * HOUR + 8 * HOUR, end_ms: NOON + index * 24 * HOUR + 9 * HOUR, cloud_total: 70, cloud_low: null, cloud_mid: null, cloud_high: null }],
+      clouds: [
+        { start_ms: NOON + index * 24 * HOUR + 8 * HOUR, end_ms: NOON + index * 24 * HOUR + 9 * HOUR, cloud_total: 70, cloud_low: null, cloud_mid: null, cloud_high: null,
+          temperature_celsius: 9, dew_point_celsius: 2, humidity_percent: 60 },
+        { start_ms: NOON + index * 24 * HOUR + 9 * HOUR, end_ms: NOON + index * 24 * HOUR + 10 * HOUR, cloud_total: 70, cloud_low: null, cloud_mid: null, cloud_high: null,
+          temperature_celsius: 6, dew_point_celsius: 5, humidity_percent: 93 },
+      ],
     });
     const near = rig({ rig: { id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', name: 'Askar', revision: 1 }, catalog_name: 'Askar 107',
       planning_site: { id: 'site-remote', name: 'Remote', revision: 1 }, location: { latitude_degrees: 34.6, longitude_degrees: -117.9, elevation_meters: 900 },
-      nights: [sky(0), sky(1), sky(2)], forecast: { provider: 'open_meteo', attribution: 'Open-Meteo', cloud_threshold_percent: 40, fetched_at_ms: NOON, expires_at_ms: NOON + 6 * HOUR } });
+      nights: [sky(0), sky(1), sky(2)], forecast: { provider: 'open_meteo', attribution: 'Open-Meteo', cloud_threshold_percent: 40, dew_limit_celsius: 2, fetched_at_ms: NOON, expires_at_ms: NOON + 6 * HOUR } });
     const far = rig({ rig: { id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', name: 'C925', revision: 1 }, catalog_name: 'C925',
       planning_site: { id: 'site-chile', name: 'Chile', revision: 1 }, location: { latitude_degrees: -30.2, longitude_degrees: -70.8, elevation_meters: 1500 } });
     mount(plans([rig(), near, far]));
@@ -73,8 +78,10 @@ describe('Nights', () => {
     // its set, and the forecast's cloud from the rig that has one.
     const skies = within(groups[0]).getAllByRole('img');
     expect(skies).toHaveLength(3);
-    expect(skies[0]).toHaveAccessibleName(/^Moon 42% lit · rises .+ · highest .+ · sets .+; cloud 70%$/);
+    expect(skies[0]).toHaveAccessibleName(/^Moon 42% lit · rises .+ · highest .+ · sets .+; cloud 70%; air 1–7 °C above dew point$/);
     expect(skies[0].querySelector('.nights-cloud.is-cloudy')).not.toBeNull();
+    expect(skies[0].querySelectorAll('.nights-dew-hour')).toHaveLength(2);
+    expect(skies[0].querySelectorAll('.nights-dew-hour.is-dewy')).toHaveLength(1);
     // Without the Moon's course, the row gives only its phase.
     expect(within(groups[1]).getAllByRole('img')[0]).toHaveAccessibleName('Moon 42% lit');
   });
@@ -118,7 +125,7 @@ describe('Nights', () => {
     });
     mount(plans([rig({
       nights: [forecastNight, night(1), night(2)],
-      forecast: { provider: 'open_meteo', attribution: 'Weather data by Open-Meteo.com (CC BY 4.0)', cloud_threshold_percent: 30, fetched_at_ms: fetched, expires_at_ms: fetched + 12 * 3_600_000 },
+      forecast: { provider: 'open_meteo', attribution: 'Weather data by Open-Meteo.com (CC BY 4.0)', cloud_threshold_percent: 30, dew_limit_celsius: null, fetched_at_ms: fetched, expires_at_ms: fetched + 12 * 3_600_000 },
     })]));
     const grid = await screen.findByTestId('nights-grid');
     const cells = within(grid).getAllByRole('button');
@@ -186,7 +193,7 @@ describe('Nights', () => {
   });
 
   it('says when the site\'s forecast does not reach a night', async () => {
-    mount(plans([rig({ forecast: { provider: 'met_norway', attribution: 'Weather data from MET Norway (CC BY 4.0)', cloud_threshold_percent: 30, fetched_at_ms: null, expires_at_ms: null } })]));
+    mount(plans([rig({ forecast: { provider: 'met_norway', attribution: 'Weather data from MET Norway (CC BY 4.0)', cloud_threshold_percent: 30, dew_limit_celsius: null, fetched_at_ms: null, expires_at_ms: null } })]));
     const grid = await screen.findByTestId('nights-grid');
     fireEvent.click(within(grid).getAllByRole('button')[2]);
     const detail = screen.getByRole('region', { name: 'Night details' });

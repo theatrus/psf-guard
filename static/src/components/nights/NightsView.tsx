@@ -210,13 +210,13 @@ export default function NightsView() {
             })}
           </tr>)}
             <tr className="nights-sky-row">
-              <th scope="row" className="nights-rig"><span className="director-muted">Cloud · Moon</span></th>
+              <th scope="row" className="nights-rig"><span className="director-muted">Cloud · Dew · Moon</span></th>
               {dates.map(date => <td key={date}><NightSky rigs={group.rigs} date={date} zone={usableZone(group.rigs[0].time_zone)} /></td>)}
             </tr>
           </tbody>)}
         </table>
       </div>}
-      {credits.length > 0 && <p className="director-muted nights-credits">Cloud forecasts: {credits.map((credit, index) => <span key={credit.url}>{index > 0 && ', '}<a href={credit.url} target="_blank" rel="noreferrer">{credit.text}</a></span>)}.</p>}
+      {credits.length > 0 && <p className="director-muted nights-credits">Forecasts: {credits.map((credit, index) => <span key={credit.url}>{index > 0 && ', '}<a href={credit.url} target="_blank" rel="noreferrer">{credit.text}</a></span>)}.</p>}
       {selectedRig && selectedNights.length > 0 && <NightDetail
         key={`${selectedRig.rig.id}:${selectedNights.map(n => n.date).join(',')}`}
         rig={selectedRig}

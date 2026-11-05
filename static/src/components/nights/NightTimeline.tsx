@@ -3,7 +3,7 @@ import { useRef, useState, type CSSProperties, type KeyboardEvent, type PointerE
 import type { ForecastHour } from '../../api/directorTypes';
 import type { RigNight, RunMoon, ScheduleBlock, ScheduleGapReason, ScheduleRule, ScheduleTargetReason, ScheduledNight } from '../../api/nightPlanTypes';
 import { formatHours } from '../director/visibilityFormat';
-import { formatClock as formatBrowserClock, moonCourse, moonCourseWords, moonGradient } from './nightsModel';
+import { airWords, dewAlpha, dewSpread, formatClock as formatBrowserClock, hourSpans, isDewy, moonCourse, moonCourseWords, moonGradient } from './nightsModel';
 import type { OverrideBand } from './overridesModel';
 import { BlockMenu, EditableBands, HoldHandle, SNAP_MS, STEP_MS, type TimelineEdit, type TimelineScale } from './TimelineEditing';
 
@@ -83,6 +83,9 @@ interface Props {
   /** The site's clear-sky threshold, when it takes a forecast: hours above
    *  it are drawn as cloudy. */
   cloudThreshold?: number;
+  /** The site's dew limit, in °C: hours this close to the dew point are
+   *  drawn as dewy. */
+  dewLimit?: number;
   /** The site's time zone; the browser's without one. */
   zone?: string;
   /** The stretches the night's saved or planned overrides cover. */
@@ -99,7 +102,7 @@ interface Props {
  * gaps with the reason nothing is shot. Choose a block to see why the
  * planner chose its target.
  */
-export default function NightTimeline({ night, scheduled, colours, now, cloudThreshold, zone, bands = [], edit }: Props) {
+export default function NightTimeline({ night, scheduled, colours, now, cloudThreshold, dewLimit, zone, bands = [], edit }: Props) {
   const onMoveBlock = edit?.onMoveBlock;
   const [menu, setMenu] = useState<string | null>(null);
   // Blocks keep their key while a re-plan moves them, so a chosen or
@@ -150,6 +153,8 @@ export default function NightTimeline({ night, scheduled, colours, now, cloudThr
     onMoveBlock(scheduled.blocks[index], event.key === 'ArrowRight' ? STEP_MS : -STEP_MS);
   };
   const summaryId = `nights-clouds-${night.date}`;
+  const dewId = `nights-dew-${night.date}`;
+  const air = night.clouds.filter(hour => dewSpread(hour) !== null);
   const moon = night.moon_altitudes.degrees.length > 0 ? moonView(night, start, end, formatClock) : null;
   const reasons = [...new Set(scheduled.gaps.filter(gap => gap.end_ms > start && gap.start_ms < end).map(gap => gap.reason))];
   return <div className="nights-timeline-box">
@@ -222,6 +227,15 @@ export default function NightTimeline({ night, scheduled, colours, now, cloudThr
             title={`${formatClock(hour.start_ms)} – ${formatClock(hour.end_ms)}: ${cloudWords(hour)}`} />;
         })}
       </div>}
+      {air.length > 0 && <div className="nights-dew" role="group" aria-label="Dew" aria-describedby={dewId}>
+        {air.map(hour => {
+          const style = place(hour.start_ms, hour.end_ms);
+          if (!style) return null;
+          return <span key={hour.start_ms} className={`nights-dew-hour${isDewy(hour, dewLimit) ? ' is-dewy' : ''}`}
+            style={{ ...style, '--dew-alpha': dewAlpha(dewSpread(hour)!) } as CSSProperties}
+            title={`${formatClock(hour.start_ms)} – ${formatClock(hour.end_ms)}: ${airWords(hour)}`} />;
+        })}
+      </div>}
       {moon && <div className="nights-moon-strip" role="img" aria-label={`Moon: ${moon.label}`} title={moon.label}
         style={{ backgroundImage: moon.gradient }} />}
       {edit && menu !== null && (() => {
@@ -240,6 +254,9 @@ export default function NightTimeline({ night, scheduled, colours, now, cloudThr
       {reasons.map(reason => <li key={reason}><span className="nights-gap-key" data-reason={reason} aria-hidden="true" />{GAP_LABEL[reason]}: {GAP_HELP[reason]}</li>)}
       {night.clouds.length > 0 && <li id={summaryId}><span className="nights-cloud-key" aria-hidden="true" />
         Cloud cover: the lighter an hour, the more cloud.{cloudThreshold !== undefined && ` ${cloudySummary(night.clouds, cloudThreshold, start, end, zone)}`}
+      </li>}
+      {air.length > 0 && <li id={dewId}><span className="nights-dew-key" aria-hidden="true" />
+        Dew: the brighter an hour, the closer the air is to its dew point.{dewLimit !== undefined && ` ${dewySummary(air, dewLimit, start, end, zone)}`}
       </li>}
     </ul>}
     {scheduled.note && <p className="director-muted" role="note">{scheduled.note}</p>}
@@ -263,19 +280,21 @@ function blockKeys(blocks: ScheduleBlock[]): string[] {
 /** The hours above the threshold in the drawn span, in words, for those
  *  who cannot see the strip's red edges. */
 function cloudySummary(hours: ForecastHour[], threshold: number, from: number, to: number, zone?: string): string {
-  const formatClock = (ms: number) => formatBrowserClock(ms, zone);
-  const spans: Array<{ start: number; end: number }> = [];
-  for (const hour of hours) {
-    if (hour.cloud_total <= threshold || hour.end_ms <= from || hour.start_ms >= to) continue;
-    const start = Math.max(hour.start_ms, from);
-    const end = Math.min(hour.end_ms, to);
-    const last = spans.at(-1);
-    if (last && last.end >= start) last.end = Math.max(last.end, end);
-    else spans.push({ start, end });
-  }
+  const spans = hourSpans(hours, hour => hour.cloud_total > threshold, from, to);
   if (spans.length === 0) return `Every hour shown is at or under the site's ${threshold}% threshold.`;
-  const listed = spans.map(span => formatClock(span.start) + ' – ' + formatClock(span.end)).join(', ');
-  return `Above the site's ${threshold}% threshold, with a red edge: ${listed}.`;
+  return `Above the site's ${threshold}% threshold, with a red edge: ${listSpans(spans, zone)}.`;
+}
+
+/** The hours inside the dew limit in the drawn span, in words, for those
+ *  who cannot see the band's red edges. */
+function dewySummary(hours: ForecastHour[], limit: number, from: number, to: number, zone?: string): string {
+  const spans = hourSpans(hours, hour => isDewy(hour, limit), from, to);
+  if (spans.length === 0) return `Every hour shown is more than the site's ${limit} °C above the dew point.`;
+  return `Within the site's ${limit} °C of the dew point, with a red edge: ${listSpans(spans, zone)}.`;
+}
+
+function listSpans(spans: Array<{ start: number; end: number }>, zone?: string): string {
+  return spans.map(span => formatBrowserClock(span.start, zone) + ' – ' + formatBrowserClock(span.end, zone)).join(', ');
 }
 
 /** An hour's cloud in words: the total, then each layer the provider gives. */

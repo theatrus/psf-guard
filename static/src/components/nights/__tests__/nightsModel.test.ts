@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { moonCourse, moonCourseWords, moonGradient, siteGroups, availableShares, clockOnNight, darkState, darkWindows, completesOn, datesBetween, decidedBy, forecastMark, formatClock, isDate, loadWords, markGlyph, markOrigin, planColours, planRows, plansOnNight, windowFor } from '../nightsModel';
+import { airWords, dewSpread, hourSpans, isDewy, moonCourse, moonCourseWords, moonGradient, siteGroups, availableShares, clockOnNight, darkState, darkWindows, completesOn, datesBetween, decidedBy, forecastMark, formatClock, isDate, loadWords, markGlyph, markOrigin, planColours, planRows, plansOnNight, windowFor } from '../nightsModel';
 import { NOON, moonAltitudes, night, rig } from './fixtures';
 
 const HOUR = 3_600_000;
@@ -289,5 +289,30 @@ describe('a zone this browser does not know', () => {
     const at = Date.UTC(2026, 10, 3, 4, 0);
     expect(formatClock(at, 'Mars/Olympus_Mons')).toBe(formatClock(at));
     expect(clockValue(at, 'Mars/Olympus_Mons')).toBe(clockValue(at));
+  });
+});
+
+describe('dew', () => {
+  const hour = (start: number, temperature: number | null, dew: number | null) => ({
+    start_ms: start, end_ms: start + 10, cloud_total: 0, cloud_low: null, cloud_mid: null, cloud_high: null,
+    temperature_celsius: temperature, dew_point_celsius: dew, humidity_percent: null,
+  });
+
+  it('judges an hour by how far the air is above its dew point, as the server does', () => {
+    expect(dewSpread(hour(0, 6, 4))).toBe(2);
+    // Air at or under its dew point is at it.
+    expect(dewSpread(hour(0, 3, 3.5))).toBe(0);
+    expect(dewSpread(hour(0, 6, null))).toBeNull();
+    // Inside the limit at exactly the limit; never without a limit or a dew point.
+    expect(isDewy(hour(0, 6, 4), 2)).toBe(true);
+    expect(isDewy(hour(0, 6, 3.9), 2)).toBe(false);
+    expect(isDewy(hour(0, 6, 4), null)).toBe(false);
+    expect(isDewy(hour(0, 6, null), 2)).toBe(false);
+    expect(airWords(hour(0, 6.4, 4.2))).toBe('6 °C, dew point 4 °C');
+  });
+
+  it('merges touching hours into spans inside the drawn range', () => {
+    const hours = [hour(0, 5, 5), hour(10, 5, 5), hour(20, 9, 0), hour(30, 5, 5)];
+    expect(hourSpans(hours, h => isDewy(h, 1), 5, 35)).toEqual([{ start: 5, end: 20 }, { start: 30, end: 35 }]);
   });
 });

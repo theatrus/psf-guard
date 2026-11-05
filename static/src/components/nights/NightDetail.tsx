@@ -287,7 +287,7 @@ function NightSchedule({ rig, night, colours, view, edit, moveProblem, saved, on
     {shown === 'director' && rig.runtime === 'director' && <OverrideChips entries={edit ? edit.entries : saved} goals={goals} zone={zone}
       editing={!!edit} onChange={entries => edit?.onChange(entries)} />}
     {scheduled && <NightTimeline night={night} scheduled={scheduled} colours={colours} now={tonight ? now : undefined}
-      cloudThreshold={rig.forecast?.cloud_threshold_percent} zone={zone} bands={bands} edit={edit} />}
+      cloudThreshold={rig.forecast?.cloud_threshold_percent} dewLimit={rig.forecast?.dew_limit_celsius ?? undefined} zone={zone} bands={bands} edit={edit} />}
   </section>;
 }
 
@@ -321,7 +321,9 @@ function ForecastNote({ rig, night }: { rig: RigNights; night: RigNight }) {
     ? `No current forecast from ${PROVIDER_LABEL[forecast.provider]}, so the night counts as clear.`
     : night.clouds.length === 0
       ? 'The forecast does not reach this night, so it counts as clear.'
-      : `Clear means ${forecast.cloud_threshold_percent}% cloud or less.`;
+      : forecast.dew_limit_celsius != null
+        ? `Clear means ${forecast.cloud_threshold_percent}% cloud or less, with the air more than ${forecast.dew_limit_celsius} °C above its dew point.`
+        : `Clear means ${forecast.cloud_threshold_percent}% cloud or less.`;
   return <p className="director-muted nights-forecast-note">{said}</p>;
 }
 
