@@ -6,4 +6,4 @@
 
 ## Changes
 
-No changes yet.
+- Calibration coverage now judges a light's flats by the master flat a stack uses. A matching master from the light's own night no longer shows *can't be calibrated* because raw flats are older. Stacks keep those lights, and exports carry that master instead of the older raw flats.

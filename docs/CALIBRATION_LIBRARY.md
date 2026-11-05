@@ -1527,7 +1527,9 @@ off it is and the limit, which is the usual cause when a rotator moved.
 External masters for the lights' camera, sensor size and (for
 flats) filter are listed under the night: used, matching but not used under
 the external-master setting, or not used with the readings that disagree,
-such as `rotation light=92.6deg master=94.7deg`. One representative light
+such as `rotation light=92.6deg master=94.7deg`. When a stack would use an
+external flat master, the night's flat date and age come from that master.
+One representative light
 per night and filter is matched exactly as a stack build would match it, so
 the report describes what WOULD apply, not just what files exist. Warnings
 call out kinds with no matches, nights without same-night flats, and flats

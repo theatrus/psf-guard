@@ -2417,14 +2417,30 @@ pub(crate) fn calibration_gaps<Flats: AsRef<[CalibrationFrame]>>(
 }
 
 /// The nearest dated flat that would actually contribute to this light's
-/// master. A median can move outside the age limit when older flats join
-/// fresh ones. Matching candidates that cannot join the master provide no
-/// coverage, so judge the coherent subset rather than the candidate list.
+/// flat master. A stack uses an external master as it is, so that master's
+/// date decides. Otherwise a stack builds a master from raw frames: a median
+/// can move outside the age limit when older flats join fresh ones, and
+/// matching candidates that cannot join the master provide no coverage, so
+/// judge the raw frames' coherent subset rather than the candidate list.
 pub(crate) fn nearest_master_flat_at(
     selected: &CalibrationSelection,
     light_at: i64,
 ) -> Option<i64> {
-    coherent_master_subset(CalibrationKind::Flat, &selected.flat, &selected.rules)
+    if let Some(master) = seiza_calibration::library::adopted_master(
+        CalibrationKind::Flat,
+        &selected.flat,
+        &selected.flat_held_back,
+        &selected.rules,
+    ) {
+        return master.captured_at;
+    }
+    let raw: Vec<CalibrationFrame> = selected
+        .flat
+        .iter()
+        .filter(|frame| !frame.is_master)
+        .cloned()
+        .collect();
+    coherent_master_subset(CalibrationKind::Flat, &raw, &selected.rules)
         .iter()
         .filter_map(|frame| frame.captured_at)
         .min_by_key(|at| at.abs_diff(light_at))
@@ -2651,7 +2667,6 @@ fn external_master_notes(
     selected: &CalibrationSelection,
 ) -> Result<Vec<ExternalMasterNote>> {
     let rules = &selected.rules;
-    let policy = rules.external_masters;
     let light_signature = light_signature(light);
     let mut notes = Vec::new();
     for kind in [
@@ -2664,21 +2679,13 @@ fn external_master_notes(
             CalibrationKind::Dark => &selected.dark,
             _ => &selected.flat,
         };
-        // A stack takes the nearest matching master as-is; with the
-        // fallback setting only when the raw frames cannot build one.
-        let raw_enough =
-            chosen.iter().filter(|frame| !frame.is_master).count() >= MIN_MASTER_FRAMES;
-        // Never a master from the far side of a measured change.
-        let standing_in = |frame: &&CalibrationFrame| {
-            frame.is_master
-                && !(kind == CalibrationKind::Flat
-                    && selected.flat_held_back.contains(&frame.frame_uuid))
-        };
-        let used_uuid = match policy {
-            ExternalMasterPolicy::Prefer => chosen.iter().find(standing_in),
-            ExternalMasterPolicy::Fallback if !raw_enough => chosen.iter().find(standing_in),
-            _ => None,
-        }
+        // The same choice a stack makes, so "used" means what the stack does.
+        let used_uuid = seiza_calibration::library::adopted_master(
+            kind,
+            chosen,
+            &selected.flat_held_back,
+            rules,
+        )
         .map(|frame| frame.frame_uuid.clone());
         for candidate in query_kind(conn, kind)? {
             if !candidate.is_master {
@@ -7390,7 +7397,17 @@ pub(crate) fn delivery_selection(mut selected: CalibrationSelection) -> Calibrat
     selected.dark = coherent_master_subset(CalibrationKind::Dark, &selected.dark, rules);
     selected.dark_flat =
         coherent_master_subset(CalibrationKind::DarkFlat, &selected.dark_flat, rules);
-    selected.flat = coherent_master_subset(CalibrationKind::Flat, &selected.flat, rules);
+    // A stack uses an external flat master as it is, so a delivery carries
+    // that master, not raw flats that may lie far from the light.
+    selected.flat = match seiza_calibration::library::adopted_master(
+        CalibrationKind::Flat,
+        &selected.flat,
+        &selected.flat_held_back,
+        rules,
+    ) {
+        Some(master) => vec![master.clone()],
+        None => coherent_master_subset(CalibrationKind::Flat, &selected.flat, rules),
+    };
     selected
 }
 
