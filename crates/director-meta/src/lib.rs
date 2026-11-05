@@ -32,8 +32,8 @@ pub mod site_profile;
 mod storage;
 pub mod templates;
 pub mod transfer;
-pub mod workload;
 pub mod weather;
+pub mod workload;
 
 /// The most plans the plan list shows and a project order can rank. Every
 /// Target Scheduler project becomes a plan, so both follow the same bound.

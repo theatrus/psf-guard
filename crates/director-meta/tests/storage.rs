@@ -3,6 +3,51 @@ use rusqlite::Connection;
 use tempfile::TempDir;
 
 #[test]
+fn schema_36_upgrade_adds_weather_after_the_dew_model() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("meta.sqlite");
+    let instance = MetaStore::create(&path).unwrap().instance_id();
+    let conn = Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "DROP TABLE rig_weather; DROP TABLE rig_weather_history; PRAGMA user_version=36;",
+    )
+    .unwrap();
+    assert_eq!(MetaStore::open(&path).unwrap().instance_id(), instance);
+    assert_eq!(
+        conn.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
+            .unwrap(),
+        37
+    );
+    conn.prepare("SELECT rig_id,profile_id,payload FROM rig_weather")
+        .unwrap();
+    conn.prepare("SELECT rig_id,profile_id,minute_ms,payload FROM rig_weather_history")
+        .unwrap();
+    MetaStore::open_reader(&path).unwrap();
+}
+
+#[test]
+fn malformed_weather_upgrade_rolls_back_without_advancing_schema_36() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("meta.sqlite");
+    drop(MetaStore::create(&path).unwrap());
+    let conn = Connection::open(&path).unwrap();
+    conn.execute_batch("DROP TABLE rig_weather; DROP TABLE rig_weather_history; CREATE TABLE rig_weather(wrong TEXT); PRAGMA user_version=36;").unwrap();
+    assert!(MetaStore::open(&path).is_err());
+    assert_eq!(
+        conn.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
+            .unwrap(),
+        36
+    );
+    assert!(!conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='rig_weather_history')",
+            [],
+            |r| r.get::<_, bool>(0)
+        )
+        .unwrap());
+}
+
+#[test]
 fn schema_27_upgrade_adds_pending_deals_and_report_index() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("meta.sqlite");

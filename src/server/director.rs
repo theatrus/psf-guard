@@ -73,8 +73,8 @@ mod star_detection;
 mod take_values;
 mod templates;
 mod ts_snapshot;
-mod workload;
 mod weather;
+mod workload;
 
 /// The default store sits beside the registry, like `auth.json`, so a test
 /// registry gets its own meta store and nothing lands in the real config dir.

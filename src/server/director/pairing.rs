@@ -97,10 +97,17 @@ pub(in crate::server) async fn authorize(
         .ok_or_else(denied)?;
     let segments: Vec<_> = path.split('/').collect();
     let rig = match segments.as_slice() {
-        ["", "director", "v1", "rigs", rig, "program" | "allocation" | "weather"] if method == Method::GET => {
+        ["", "director", "v1", "rigs", rig, "program" | "allocation" | "weather"]
+            if method == Method::GET =>
+        {
             *rig
         }
-        ["", "director", "v1", "rigs", rig, "checkin" | "operations" | "status" | "equipment-reports" | "star-detection-settings" | "weather"]
+        ["", "director", "v1", "rigs", rig, "checkin"
+        | "operations"
+        | "status"
+        | "equipment-reports"
+        | "star-detection-settings"
+        | "weather"]
             if method == Method::POST =>
         {
             *rig

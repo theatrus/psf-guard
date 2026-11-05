@@ -10,3 +10,7 @@
   worker's log and the failed run show which file the proxy refused and
   which upload limit to raise, such as nginx's `client_max_body_size`. The
   workers guide shows nginx settings that pass full-size results.
+- See N.I.N.A. reported weather and the site's forecast separately under
+  **Live rigs** and a rig's **Weather** tab. Director Sessions can opt in to
+  weather holds between exposures through their existing PSF Guard connection,
+  including a centrally configured paid forecast source and the site's dew limit.
