@@ -183,10 +183,9 @@ impl MetaStore {
             if version < 35 {
                 super::night_override::create_tables(&tx)?;
             }
-            // Schema 36 adds a site's dew limit and each forecast hour's
-            // air, optional fields older payloads read without: nothing to
-            // rewrite. The bump keeps a build that cannot read them from
-            // opening a store that may hold them.
+            // Schema 36 adds optional site dew limits and hourly temperature,
+            // dew point and humidity. Existing payloads need no rewrite. The
+            // version prevents older builds from opening newer payloads.
             // Schema 37 stores rig/profile weather reports separately from forecasts.
             if version < 37 {
                 super::weather::create_tables(&tx)?;

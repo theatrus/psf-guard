@@ -25,8 +25,11 @@ for (const width of [1440, 390]) {
       }],
     } }));
     await page.goto('/#/rigs');
-    if (await page.getByRole('heading', { name: 'PSF Guard Settings' }).isVisible())
-      await page.getByRole('button', { name: 'Close settings' }).click();
+    // The empty scratch registry opens first-run settings after its async read.
+    const settings = page.getByRole('heading', { name: 'PSF Guard Settings' });
+    await expect(settings).toBeVisible();
+    await page.getByRole('button', { name: 'Close settings' }).click();
+    await expect(settings).not.toBeVisible();
     const live = page.getByRole('region', { name: 'Live rigs' });
     await expect(live).toContainText('NINA weather sensor · 85% cloud · cloudy');
     await expect(live).toContainText('Open-Meteo · 10% cloud · near dew point');

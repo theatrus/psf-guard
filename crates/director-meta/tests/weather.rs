@@ -211,6 +211,14 @@ fn centralized_site_forecast_and_reported_clouds_use_one_threshold_without_blend
     assert_eq!(view.reported_cloud.state, CloudState::Cloudy);
     assert_eq!(view.forecast_conditions.state, CloudState::Clear);
     assert_eq!(view.forecast.unwrap().provider, ForecastProvider::OpenMeteo);
+    assert_eq!(
+        store
+            .rig_weather(rig, Some(profile), NOW - 1)
+            .unwrap()
+            .forecast_conditions
+            .state,
+        CloudState::Unknown
+    );
     let mut setup = store.site_profile(site).unwrap().unwrap();
     setup.forecast.as_mut().unwrap().dew_limit_celsius = Some(2);
     store.save_site_profile(&setup, setup.revision).unwrap();
@@ -225,6 +233,28 @@ fn centralized_site_forecast_and_reported_clouds_use_one_threshold_without_blend
             .state,
         CloudState::Unknown
     );
+    let mut gap = forecast;
+    gap.fetched_at_ms += 1;
+    gap.hours[0].end_ms = NOW + 1_000;
+    let mut next = gap.hours[0];
+    next.start_ms = NOW + 2_000;
+    next.end_ms = NOW + 3_600_000;
+    gap.hours.push(next);
+    store.save_site_forecast(&gap).unwrap();
+    let uncovered = store.rig_weather(rig, Some(profile), NOW + 1_500).unwrap();
+    assert_eq!(
+        uncovered.forecast_conditions.reason,
+        "forecast_does_not_cover_now"
+    );
+    assert_eq!(uncovered.forecast_conditions.valid_for_ms, 0);
+    let mut setup = store.site_profile(site).unwrap().unwrap();
+    setup.forecast.as_mut().unwrap().provider = ForecastProvider::MetNorway;
+    store.save_site_profile(&setup, setup.revision).unwrap();
+    assert!(store
+        .rig_weather(rig, Some(profile), NOW + 3_000)
+        .unwrap()
+        .forecast
+        .is_none());
 }
 
 #[test]
