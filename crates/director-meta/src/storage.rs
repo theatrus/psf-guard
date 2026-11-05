@@ -3,7 +3,7 @@ use rusqlite::backup::{Backup, StepResult};
 use tempfile::NamedTempFile;
 
 const APPLICATION_ID: i32 = 0x50474d44;
-const SCHEMA_VERSION: i32 = 36;
+const SCHEMA_VERSION: i32 = 37;
 
 impl MetaStore {
     /// Publish a complete database at a new path. Never adopt an existing empty
@@ -59,6 +59,7 @@ impl MetaStore {
         super::night_availability::create_tables(&tx)?;
         super::site_forecast::create_tables(&tx)?;
         super::night_override::create_tables(&tx)?;
+        super::weather::create_tables(&tx)?;
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         tx.commit()?;
         conn.close().map_err(|(_, error)| Error::Sqlite(error))?;
@@ -186,6 +187,10 @@ impl MetaStore {
             // air, optional fields older payloads read without: nothing to
             // rewrite. The bump keeps a build that cannot read them from
             // opening a store that may hold them.
+            // Schema 37 stores rig/profile weather reports separately from forecasts.
+            if version < 37 {
+                super::weather::create_tables(&tx)?;
+            }
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         tx.commit()?;
@@ -409,6 +414,9 @@ fn validate(conn: &Connection) -> Result<Uuid, Error> {
     }
     if version >= 35 {
         super::night_override::validate_tables(conn)?;
+    }
+    if version >= 37 {
+        super::weather::validate_tables(conn)?;
     }
     let id: String = conn.query_row(
         "SELECT instance_id FROM meta WHERE singleton=1",

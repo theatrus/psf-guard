@@ -74,6 +74,7 @@ mod take_values;
 mod templates;
 mod ts_snapshot;
 mod workload;
+mod weather;
 
 /// The default store sits beside the registry, like `auth.json`, so a test
 /// registry gets its own meta store and nothing lands in the real config dir.
@@ -836,6 +837,7 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
         .merge(configuration_api::routes())
         .merge(site_profile::routes())
         .merge(site_forecast::routes())
+        .merge(weather::routes())
         .merge(night_availability::routes())
         .merge(night_overrides::routes())
         .merge(ts_levers::routes())

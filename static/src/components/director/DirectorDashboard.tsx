@@ -7,6 +7,7 @@ import type { RigNights } from '../../api/nightPlanTypes';
 import { describeNow, errorsOf, formatAge } from './dashboardModel';
 import { retryWhenBusy } from './retry';
 import EarlyBeta from './EarlyBeta';
+import { RigWeatherSummary } from './RigWeather';
 import { planHref } from './planAddress';
 import { useDirectorClock } from '../../hooks/useDirectorClock';
 import { formatHours } from './visibilityFormat';
@@ -46,7 +47,7 @@ export default function DirectorDashboard() {
     {statuses.isError && <p className="director-error" role="alert">{message(statuses.error)}</p>}
     {statuses.isSuccess && rows.length === 0 && <p className="director-muted">No rigs yet. Add a database under Settings → Databases &amp; rigs.</p>}
     {rows.length > 0 && <div className="director-table-scroll"><table className="director-dashboard-table" data-testid="director-dashboard">
-      <thead><tr><th>Rig</th><th>Link</th><th>Now</th><th>Program pull</th><th>Check-in</th><th>Status report</th><th>Assigned</th><th>Tonight</th></tr></thead>
+      <thead><tr><th>Rig</th><th>Link</th><th>Now</th><th>Weather</th><th>Program pull</th><th>Check-in</th><th>Status report</th><th>Assigned</th><th>Tonight</th></tr></thead>
       <tbody>{rows.map(view => {
         const errors = errorsOf(view);
         return <tr key={view.rig.id} className={`is-${view.connectivity.state}`}>
@@ -64,6 +65,7 @@ export default function DirectorDashboard() {
               })}</ol>
             </details>}
           </td>
+          <td><span className="director-cell-label">Weather</span><RigWeatherSummary weather={view.weather} now={now} /></td>
           <td><span className="director-cell-label">Program pull</span>{age(view.contacts.program_pull?.at_ms)}{view.contacts.program_pull?.detail && <span className="director-muted"> rev {view.contacts.program_pull.detail.slice(0, 8)}</span>}</td>
           <td><span className="director-cell-label">Check-in</span>{age(view.contacts.check_in?.at_ms)}{view.pending_receipts > 0 && <span className="director-muted"> {view.pending_receipts} saved, ungraded</span>}</td>
           <td><span className="director-cell-label">Status report</span>{age(view.contacts.status?.at_ms)}</td>

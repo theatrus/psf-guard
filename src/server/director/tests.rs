@@ -22,6 +22,7 @@ mod site_profile;
 mod sky_image;
 mod star_detection;
 mod workload;
+mod weather;
 
 fn state(dir: &TempDir, enable: bool) -> AppState {
     let mut state = AppState::from_databases(

@@ -1,7 +1,8 @@
 //! A site's cloud forecast: which provider the site takes it from, the
 //! thresholds under which an hour counts as clear, and the latest forecast
-//! fetched. Planning input only, like a manual mark: a forecast never allows
-//! or blocks acquisition.
+//! fetched. Night plans use it like a manual mark. Director can separately
+//! opt into cloud holds through the weather API; forecasts never authorize
+//! equipment motion or replace a safety monitor.
 //!
 //! Windows are worked out when the forecast is read, from the threshold the
 //! site has then, so a changed threshold applies at once.

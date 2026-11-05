@@ -270,3 +270,12 @@ a.workspace-pill:hover { color: var(--color-text-primary); }
 .rig-profile-needs { margin: 4px 0 0; padding-left: 18px; font-size: 13px; }
 .rig-profile-needs li[data-done='true']::marker { content: '✓ '; color: var(--state-on-border); }
 .rig-profile-needs li[data-done='false']::marker { content: '○ '; }
+.director-weather-values {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 6px 16px;
+}
+
+.director-weather-values dd {
+  margin: 0;
+}
