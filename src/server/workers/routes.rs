@@ -62,6 +62,8 @@ pub fn worker_routes() -> Router<Arc<AppState>> {
         )
         .route(
             "/sessions/{session}/tasks/{task}/outputs/{name}",
+            // The body streams to a file as it arrives, so no body limit
+            // applies: an output can be several gigabytes.
             put(upload_output),
         )
         .route("/sessions/{session}/tasks/{task}/complete", post(complete))

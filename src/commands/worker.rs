@@ -307,22 +307,27 @@ impl Client {
         let response = request.send().await.map_err(|error| {
             ClientError::Other(format!("The server could not be reached: {error}"))
         })?;
-        let status = response.status();
-        if status.is_success() {
+        if response.status().is_success() {
             return Ok(response);
         }
+        Err(Self::refusal(response).await)
+    }
+
+    /// What a refusal means: its error message, by its status.
+    async fn refusal(response: reqwest::Response) -> ClientError {
+        let status = response.status();
         let message = response
             .json::<serde_json::Value>()
             .await
             .ok()
             .and_then(|body| body.get("error")?.as_str().map(str::to_string))
             .unwrap_or_else(|| format!("The server answered {status}"));
-        Err(match status {
+        match status {
             StatusCode::UNAUTHORIZED => ClientError::Denied(message),
             StatusCode::NOT_FOUND => ClientError::UnknownSession,
             StatusCode::CONFLICT => ClientError::NotCurrent,
             _ => ClientError::Other(message),
-        })
+        }
     }
 
     async fn json<T: serde::de::DeserializeOwned>(
@@ -492,7 +497,18 @@ impl Client {
         if let Some(length) = length {
             request = request.header(reqwest::header::CONTENT_LENGTH, length);
         }
-        self.send(request).await.map(drop)
+        let response = request.send().await.map_err(|error| {
+            ClientError::Other(format!("The server could not be reached: {error}"))
+        })?;
+        // PSF Guard takes outputs of any size a worker may write, and refuses
+        // one too large with 400: a 413 comes from a proxy in front of it.
+        if response.status() == StatusCode::PAYLOAD_TOO_LARGE {
+            return Err(ClientError::Other(proxy_too_large(name, length)));
+        }
+        if !response.status().is_success() {
+            return Err(Self::refusal(response).await);
+        }
+        Ok(())
     }
 
     async fn complete(
@@ -756,6 +772,18 @@ async fn run_slot(
         }
         backoff = Duration::from_secs(1);
     }
+}
+
+/// Why a proxy refused an upload, and what to change.
+fn proxy_too_large(name: &str, length: Option<u64>) -> String {
+    let size = length.map_or(String::new(), |bytes| {
+        format!(" ({} MB)", bytes.div_ceil(1_000_000))
+    });
+    format!(
+        "A proxy in front of the server refused {name}{size} as too large \
+         (413 Payload Too Large). Raise its upload limit for /api/workers/v1/, \
+         such as nginx's client_max_body_size."
+    )
 }
 
 /// Read the probe through the maps, and write the same bytes to the reply.
