@@ -2243,9 +2243,10 @@ In night plans, a forecast works like a mark for every rig at the site:
   forecast's last hour, nights the forecast does not reach, and every night
   once the forecast expires count as clear. Hours before its first hour
   have passed, and count as not clear.
-- The **Nights** grid shows a cloud in each cell the forecast marks, and a
-  drop when the dew limit took out some of its dark hours; the cell's
-  label gives the cause. The grid credits each provider under it. A
+- The **Nights** grid marks each cell the forecast marks: a cloud when
+  cloud took out some of its dark hours, a drop when the dew limit took
+  out hours the cloud left clear, both when both did, and a cloud when
+  neither did. The cell's label gives the cause. The grid credits each provider under it. A
   night's panel shows the forecast's mark with its cause (cloud, dew or
   both), the time the forecast arrived and the provider's
   credit. The timeline adds a strip of each hour's cloud cover; hours
@@ -2280,7 +2281,7 @@ schedule on the **Nights** tab.
 | PUT | `/rigs/{rig}/night-overrides/{date}` | `expected_revision` and `entries`, up to 32: `{"kind":"pin","subject":…,"window":{…}}`, `{"kind":"exclude","subject":…,"window":{…}}` (no `window` for the whole night), `{"kind":"hold","from_ms":…}` (no `from_ms` for the whole night) and `{"kind":"order","plans":[…]}`. A `subject` is `{"kind":"plan","plan_id":…}`, `{"kind":"target","target_guid":…}` or `{"kind":"exposure_plan","exposureplan_guid":…}`. Replaces the night's list; an empty list clears it. `409` on a stale revision, or for a non-empty list on a rig Target Scheduler runs; `422` for windows outside the night's noon-to-noon span, overlapping pins, a second order or hold, a night that has ended, a rig with no location, or a list that would leave the rig a program that does not validate. Editors only. |
 | DELETE | `/rigs/{rig}/night-overrides/{date}` | `expected_revision`: returns the night to the rig's own program, on any rig. Editors only. |
 | PUT | `/rigs/{rig}/target-scheduler` | `projects` (each `project_id`, an optional `priority` of `low`, `normal` or `high`, an optional `state` of `draft`, `active`, `inactive` or `closed`, and `was`: the `priority` and `state` as read) and `targets` (each `target_id`, `active` and `was_active`). Writes the changed columns to the rig's database and, for a catalog kept in step with Target Scheduler, to Target Scheduler's file, all or nothing. `409` when a row no longer holds what was read, for a rig Director drives, or for a rig on another PSF Guard; `422` for a row without its `was` values. Editors only. |
-| GET | `/sites/{site}/forecast` | The site's forecast `settings` (`provider`: `open_meteo` or `met_norway`, `cloud_threshold_percent` and `dew_limit_celsius` when set), the provider's `attribution`, the stored `forecast` (each hour's total, low, mid and high cloud cover, and `temperature_celsius`, `dew_point_celsius` and `humidity_percent` at 2 m, each `null` when the provider gives none), whether night plans use it now (`fresh`), the last request's `status` (time, error and failures in a row) and `next_refresh_ms`. |
+| GET | `/sites/{site}/forecast` | The site's forecast `settings` (`provider`: `open_meteo` or `met_norway`, `cloud_threshold_percent` and `dew_limit_celsius` when set), the provider's `attribution`, the stored `forecast` (each hour's total, low, mid and high cloud cover, and `temperature_celsius`, `dew_point_celsius` and `humidity_percent` at 2 m, each left out when the provider gives none), whether night plans use it now (`fresh`), the last request's `status` (time, error and failures in a row) and `next_refresh_ms`. |
 | POST | `/sites/{site}/forecast/refresh` | Requests the site's forecast now and returns the same view; a failed request returns the view with the error in `status`. `422` when forecasts are off, the site has no location, another refresh is running, within 2 minutes of the last forecast or a minute of a failed request, or before the provider's `Expires` or `Retry-After` time; the error says how long to wait. Editors only. |
 
 ## Framing drafts

@@ -154,7 +154,7 @@ export default function NightTimeline({ night, scheduled, colours, now, cloudThr
   };
   const summaryId = `nights-clouds-${night.date}`;
   const dewId = `nights-dew-${night.date}`;
-  const air = night.clouds.filter(hour => dewSpread(hour) !== null);
+  const air = night.clouds.filter(hour => hour.end_ms > start && hour.start_ms < end && dewSpread(hour) !== null);
   const moon = night.moon_altitudes.degrees.length > 0 ? moonView(night, start, end, formatClock) : null;
   const reasons = [...new Set(scheduled.gaps.filter(gap => gap.end_ms > start && gap.start_ms < end).map(gap => gap.reason))];
   return <div className="nights-timeline-box">

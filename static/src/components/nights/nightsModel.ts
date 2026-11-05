@@ -397,7 +397,8 @@ export function skyLabels(rows: SkyRows): string[] {
 }
 
 /** What took dark hours out of a night's clear hours under its site's
- *  forecast: cloud over the threshold, air within the dew limit, or both. */
+ *  forecast: cloud over the threshold, air within the dew limit, or both.
+ *  Dew counts only for hours the cloud left clear. */
 export function forecastCauses(rig: RigNights, night: RigNight): { cloud: boolean; dew: boolean } {
   const settings = rig.forecast;
   const { dusk_ms: dusk, dawn_ms: dawn } = night;
@@ -405,7 +406,7 @@ export function forecastCauses(rig: RigNights, night: RigNight): { cloud: boolea
   const dark = night.clouds.filter(hour => hour.end_ms > dusk && hour.start_ms < dawn);
   return {
     cloud: dark.some(hour => hour.cloud_total > settings.cloud_threshold_percent),
-    dew: dark.some(hour => isDewy(hour, settings.dew_limit_celsius)),
+    dew: dark.some(hour => hour.cloud_total <= settings.cloud_threshold_percent && isDewy(hour, settings.dew_limit_celsius)),
   };
 }
 

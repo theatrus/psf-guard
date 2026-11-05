@@ -81,8 +81,8 @@ const BROWSER_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 /** What each provider offers, for the choice. */
 const PROVIDER_FACTS: Record<ForecastProvider, { range: string; use: string }> = {
-  open_meteo: { range: 'Hourly, 16 days', use: 'Non-commercial only' },
-  met_norway: { range: 'Hourly, then 6-hourly; 9 days', use: 'Any use' },
+  open_meteo: { range: 'Hourly, 16 days', use: 'Free for non-commercial use' },
+  met_norway: { range: 'Hourly, then 6-hourly; 9 days', use: 'Free for any use' },
 };
 
 /** The queries a site's forecast changes. */
@@ -240,7 +240,7 @@ function SiteProfileCard({ site }: { site: DirectorIdentity }) {
             <div><dt>Range</dt><dd>{PROVIDER_FACTS[form.forecast].range}</dd></div>
             <div><dt>Use</dt><dd>{PROVIDER_FACTS[form.forecast].use}</dd></div>
             <div><dt>Sends</dt><dd>Latitude and longitude, to about 1 km</dd></div>
-            <div><dt>When</dt><dd>On save, Fetch now, every 3 hours</dd></div>
+            <div><dt>When</dt><dd>On save, Fetch now, every 3 hours, after a failure</dd></div>
           </>}</dl>
         {data.profile.forecast && <SiteForecastStatus site={site} />}
       </fieldset>

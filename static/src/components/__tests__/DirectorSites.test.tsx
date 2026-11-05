@@ -137,8 +137,8 @@ describe('Director sites', () => {
     expect(within(card).getByText('Nothing')).toBeInTheDocument();
     fireEvent.change(within(card).getByLabelText('Forecast'), { target: { value: 'met_norway' } });
     expect(within(card).getByText('Latitude and longitude, to about 1 km')).toBeInTheDocument();
-    expect(within(card).getByText('On save, Fetch now, every 3 hours')).toBeInTheDocument();
-    expect(within(card).getByText('Any use')).toBeInTheDocument();
+    expect(within(card).getByText('On save, Fetch now, every 3 hours, after a failure')).toBeInTheDocument();
+    expect(within(card).getByText('Free for any use')).toBeInTheDocument();
     // Turned back off after a threshold edit, nothing is left to save.
     fireEvent.change(within(card).getByLabelText('Clear at or under'), { target: { value: '50' } });
     fireEvent.change(within(card).getByLabelText('Forecast'), { target: { value: 'off' } });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { airWords, dewSpread, hourSpans, isDewy, moonCourse, moonCourseWords, moonGradient, siteGroups, availableShares, clockOnNight, darkState, darkWindows, completesOn, datesBetween, decidedBy, forecastMark, formatClock, isDate, loadWords, markGlyph, markOrigin, planColours, planRows, plansOnNight, windowFor } from '../nightsModel';
+import { airWords, causeWords, dewSpread, forecastCauses, hourSpans, isDewy, moonCourse, moonCourseWords, moonGradient, siteGroups, availableShares, clockOnNight, darkState, darkWindows, completesOn, datesBetween, decidedBy, forecastMark, formatClock, isDate, loadWords, markGlyph, markOrigin, planColours, planRows, plansOnNight, windowFor } from '../nightsModel';
 import { NOON, moonAltitudes, night, rig } from './fixtures';
 
 const HOUR = 3_600_000;
@@ -314,5 +314,24 @@ describe('dew', () => {
   it('merges touching hours into spans inside the drawn range', () => {
     const hours = [hour(0, 5, 5), hour(10, 5, 5), hour(20, 9, 0), hour(30, 5, 5)];
     expect(hourSpans(hours, h => isDewy(h, 1), 5, 35)).toEqual([{ start: 5, end: 20 }, { start: 30, end: 35 }]);
+  });
+});
+
+describe('what the forecast took out of a night', () => {
+  const HOUR = 3_600_000;
+  const base = night(0);
+  const hour = (h: number, cover: number, spread: number) => ({
+    start_ms: base.noon_ms + h * HOUR, end_ms: base.noon_ms + (h + 1) * HOUR, cloud_total: cover, cloud_low: null, cloud_mid: null, cloud_high: null,
+    temperature_celsius: 5 + spread, dew_point_celsius: 5, humidity_percent: null,
+  });
+  const forecast = { provider: 'open_meteo' as const, attribution: '', cloud_threshold_percent: 30, dew_limit_celsius: 2, fetched_at_ms: 0, expires_at_ms: 0 };
+  const causes = (clouds: ReturnType<typeof hour>[]) => causeWords(forecastCauses(rig({ forecast }), { ...base, clouds }));
+
+  it('counts dew only for hours the cloud left clear', () => {
+    expect(causes([hour(8, 90, 1)])).toBe('cloud');
+    expect(causes([hour(8, 10, 1)])).toBe('dew');
+    expect(causes([hour(8, 90, 5), hour(9, 10, 1)])).toBe('cloud and dew');
+    // Daylight hours are not the night's.
+    expect(causes([hour(2, 10, 1)])).toBe('');
   });
 });
