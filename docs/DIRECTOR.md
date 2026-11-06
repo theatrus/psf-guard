@@ -2193,7 +2193,12 @@ there, and a rig Director drives takes overrides instead.
 
 ### Weather telemetry and Director holds
 
-Open **Live rigs** to compare each rig's **NINA reported** weather with its
+**Availability:** 0.13 includes the server support described here. Weather
+reporting and holds need a later Director plugin update. The published
+0.1.0.3 Beta 1 does not include these controls. The plugin steps below apply
+once that update is available.
+
+Open **Rigs › Live** to compare each rig's **NINA reported** weather with its
 site's **Forecast**. Open the rig's **Weather** tab for temperatures, dew point,
 humidity, wind and other supported values. Expand **Reported weather history
 (24 hours)** to see earlier N.I.N.A. reports. Missing values stay blank; zero
@@ -2207,10 +2212,14 @@ the values; N.I.N.A. does not expose the source's measurement time. PSF Guard
 keeps one report per minute per rig/profile for 30 days and returns at most
 1,440 reports per history request. Reports do not change image grades.
 
-To use weather holds, choose **Hold and resume** under **Director Session >
-Session > Weather and roof**, then enable **Use PSF Guard site forecast**,
-**Use NINA reported cloud cover**, or both. Both are off by default. The
-forecast uses the site's cloud threshold and optional dew limit from **Settings
+With a compatible plugin update, set up weather holds:
+
+1. Open **Director Session > Session > Weather and roof**.
+2. Choose **Hold and resume**.
+3. Enable **Use PSF Guard site forecast**, **Use NINA reported cloud cover**,
+   or both. Both are off by default.
+
+The forecast uses the site's cloud threshold and optional dew limit from **Settings
 › Presets › Sites**, including a paid source configured on the server. Provider
 keys stay on the server; reading weather never requests a provider refresh.
 N.I.N.A. cloud cover uses the same cloud threshold, independently of forecasts.
@@ -2262,8 +2271,10 @@ Forecasts are off until an editor turns them on for a site:
 
 ![Weather forecast settings with a 30% cloud threshold and a 2 °C dew limit.](images/site-weather-forecast-013.jpg)
 
-Despite the label **No imaging within**, this setting changes planning
-estimates only. It does not stop a rig.
+By default, **No imaging within** changes planning estimates only. With a
+compatible plugin update, a Director Session can also use this limit for
+optional [weather holds](#weather-telemetry-and-director-holds). It does not
+replace the rig's safety monitor or enclosure interlocks.
 
 PSF Guard sends the site's latitude and longitude, rounded to about 1 km,
 to the provider when you save the site, every three hours, when you click
@@ -2314,8 +2325,8 @@ In night plans, a forecast works like a mark for every rig at the site:
   hours that exceed the cloud threshold or fall at or within the dew limit;
   the legend lists these hours. Hover a dew hour for temperature, dew point
   and humidity.
-- By default, a forecast changes night plans. A Director Session can also
-  use it for optional [weather holds between exposures](#weather-telemetry-and-director-holds).
+- By default, a forecast changes night plans. With a compatible plugin update,
+  a Director Session can also use it for optional [weather holds between exposures](#weather-telemetry-and-director-holds).
   Forecasts never replace the observatory's safety monitor or close a roof.
 
 ![November 9 night schedule with a dew limit from 4 AM to 7 AM.](images/night-dew-schedule-013.jpg)
