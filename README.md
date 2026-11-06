@@ -1007,9 +1007,13 @@ Resume, Retry, and Cancel, and retain completed-file receipts across restarts.
 Automatic assignment pulls and file uploads require their own opt-in settings.
 
 The separate N.I.N.A. Director plugin can report live rig status and run
-approved capture programs. The header's **Live** chip opens rig status on the
-Sky. Director pairing and capture automation remain early beta; pairing alone
-does not authorize acquisition. Planning with Target Scheduler and PSF Guard
+approved capture programs. Open **Rigs › Live** to check rig status. The rig's
+**Weather** tab separates N.I.N.A. reports from forecasts. Weather reporting
+and optional weather holds need a later Director plugin update; the published
+0.1.0.3 Beta 1 does not include them.
+
+Director pairing and capture automation remain early beta; pairing alone does
+not authorize acquisition. Planning with Target Scheduler and PSF Guard
 Sync remains available without Director. See
 [Director and collaboration](docs/DIRECTOR.md) for setup and current limits.
 
@@ -1378,8 +1382,9 @@ headers. They do not require a N.I.N.A. folder layout.
   check unavailable; they do not count as an image fault. See
   [satellite prediction](docs/SATELLITES.md#required-fits-metadata).
 - **Beta integrations:** N.I.N.A. Director plugin pairing and collaboration
-  remain early beta. Planning itself is not beta and does not require the
-  Director plugin. Use Target Scheduler with PSF Guard Sync for capture. See
+  remain early beta, as do night schedules. Plan editing and Target Scheduler
+  activation do not require Director. Use Target Scheduler with PSF Guard Sync
+  for capture. See
   [Director and collaboration](docs/DIRECTOR.md).
 
 ## 🛠️ Development

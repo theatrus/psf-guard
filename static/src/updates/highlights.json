@@ -27,12 +27,16 @@
       {
         "title": "Update workers with the server",
         "body": "Install the same release on each worker. Stack builds stay on the server until you choose Workers first or Workers only. WBPP runs stay on the server."
+      },
+      {
+        "title": "Director weather needs a later plugin update",
+        "body": "0.13 adds server support for N.I.N.A. weather reports and optional holds between exposures. The published Director 0.1.0.3 Beta 1 does not include these controls. A later plugin update will add them; both weather-hold options will be off by default."
       }
     ],
     "highlights": [
       {
         "title": "Plan each rig's nights",
-        "body": "Open Rigs › Nights for predicted schedules, clear hours and the Moon. Compare rigs grouped by nearby sites and check each filter run’s minimum Moon separation. Mark availability, use cloud forecasts and an optional dew limit to plan clear hours, and compare plan completion dates. Review Director night overrides or persistent Target Scheduler changes before saving. Night planning is in early beta; availability marks and forecasts do not control a rig."
+        "body": "Open Rigs › Nights for predicted schedules, clear hours and the Moon. Compare rigs grouped by nearby sites and check each filter run’s minimum Moon separation. Mark availability, use cloud forecasts and an optional dew limit to plan clear hours, and compare plan completion dates. Review Director night overrides or persistent Target Scheduler changes before saving. Night planning is in early beta. Availability marks change estimates only; Director weather holds need a separate opt-in and a later plugin update."
       },
       {
         "title": "Choose the star measurements used for grading",
@@ -60,7 +64,7 @@
       },
       {
         "title": "Manage settings, storage and imports",
-        "body": "Find settings by task or database. Volume limits now work on Windows, and macOS saves to SMB shares that refuse full sync. Imports recognize Seiza calibration masters and skip stacks. Existing color processing and database choices are preserved."
+        "body": "Find settings by task or database. Volume limits now work on Windows, and macOS saves to SMB shares that refuse full sync. Imports recognize Seiza calibration masters and skip stacks. Existing color processing and database choices are preserved. Calibration coverage uses the flat master a stack will use and explains why nearer raw flats were not used."
       }
     ]
   },
