@@ -380,7 +380,7 @@ impl MetaStore {
                 params![spent, rig.to_string(), goal.id],
             )?;
         }
-        let mut closed = recorded.unwrap_or_else(|| Workload {
+        let mut closed = recorded.unwrap_or(Workload {
             allocation: grant,
             released: false,
             ledger_id: None,
