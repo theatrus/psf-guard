@@ -764,6 +764,10 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
             axum::routing::post(workload::close),
         )
         .route(
+            "/rigs/{rig}/workloads/{allocation}/reconcile",
+            axum::routing::post(workload::reconcile),
+        )
+        .route(
             "/rigs/{rig}/checkin",
             axum::routing::post(checkin::check_in).layer(DefaultBodyLimit::max(
                 psf_guard_director_core::MAX_REQUEST_BYTES * 4,

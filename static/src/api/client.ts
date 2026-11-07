@@ -491,10 +491,6 @@ export const apiClient = {
     const api = await getApi();
     await api.delete(`/director/v1/rigs/${encodeURIComponent(rig)}/clients/${encodeURIComponent(client)}`);
   },
-  acceptDirectorEquipment: async (rig: string, client: string, review: { coordinator_instance_id: string; catalog_id: string; report_id: string; expected_revision: number }): Promise<void> => {
-    const api = await getApi();
-    await api.post(`/director/v1/rigs/${encodeURIComponent(rig)}/equipment-reports/${encodeURIComponent(client)}/accept`, review);
-  },
   saveDirectorWorkPolicy: async (rig: string, change: { coordinator_instance_id: string; expected_revision: number; policy: import('./directorTypes').DirectorWorkPolicy }): Promise<void> => {
     const api = await getApi();
     await api.put(`/director/v1/rigs/${encodeURIComponent(rig)}/workload-policy`, change);

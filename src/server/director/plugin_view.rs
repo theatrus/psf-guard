@@ -5,10 +5,7 @@ use crate::server::auth::RequestAccess;
 use axum::Extension;
 use psf_guard_director_core::program::Configuration;
 use psf_guard_director_meta::{
-    client::Client,
-    equipment_report::{EquipmentReport, MAX_REPORT_AGE_MS},
-    profile::CameraDefaults,
-    workload::Policy,
+    client::Client, equipment_report::EquipmentReport, profile::CameraDefaults, workload::Policy,
 };
 use std::collections::BTreeMap;
 
@@ -43,17 +40,17 @@ struct PluginClient {
     review: Review,
 }
 
-/// What an operator can do with a client's equipment report.
+/// How a client's equipment report compares with the rig's equipment.
 #[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(rename_all = "snake_case")]
 enum Review {
     /// The plugin has not reported.
     None,
-    Ready,
-    /// Too old to accept: report again from the plugin.
-    Old,
-    /// Open work keeps the rig's equipment as it is.
-    WorkOpen,
+    /// The rig's equipment differs from this report, either because the report
+    /// came from a plugin that is not allowed to take work, or because the
+    /// equipment changed after the rig accepted it.
+    NotApplied,
+    /// The rig uses the equipment in this report.
     Accepted,
 }
 
@@ -97,20 +94,23 @@ struct Grant {
     closed_at_ms: Option<u64>,
 }
 
-fn review(report: Option<&EquipmentReport>, work_open: bool, now: u64) -> Review {
+fn review(
+    report: Option<&EquipmentReport>,
+    configuration: Option<&Configuration>,
+    filter_names: &BTreeMap<String, String>,
+    camera_defaults: Option<CameraDefaults>,
+) -> Review {
     let Some(report) = report else {
         return Review::None;
     };
-    if report.accepted_revision.is_some() {
-        Review::Accepted
-    } else if now.saturating_sub(report.observed_at_ms.min(report.received_at_ms))
-        > MAX_REPORT_AGE_MS
+    if report.accepted_revision.is_some()
+        && configuration == Some(&report.configuration)
+        && *filter_names == report.filter_names
+        && camera_defaults == report.camera_defaults
     {
-        Review::Old
-    } else if work_open {
-        Review::WorkOpen
+        Review::Accepted
     } else {
-        Review::Ready
+        Review::NotApplied
     }
 }
 
@@ -176,13 +176,6 @@ pub(super) async fn get(
             .values()
             .cloned()
             .collect();
-        let now = u64::try_from(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_err(|_| Error::Internal)?
-                .as_millis(),
-        )
-        .map_err(|_| Error::Internal)?;
         service
             .with_reader(move |store| {
                 let binding = store.catalog_rig(identity.id)?.ok_or(Error::Missing)?;
@@ -208,7 +201,6 @@ pub(super) async fn get(
                     }
                     None => None,
                 };
-                let work_open = grant.as_ref().is_some_and(|g| g.open);
                 let (revision, configuration, filter_names, camera_defaults) = profile.map_or_else(
                     || (0, None, BTreeMap::new(), None),
                     |p| {
@@ -256,7 +248,12 @@ pub(super) async fn get(
                             .iter()
                             .find(|r| r.client_id == client.client_id)
                             .cloned();
-                        let review = review(report.as_ref(), work_open, now);
+                        let review = review(
+                            report.as_ref(),
+                            configuration.as_ref(),
+                            &filter_names,
+                            camera_defaults,
+                        );
                         PluginClient {
                             client,
                             report,

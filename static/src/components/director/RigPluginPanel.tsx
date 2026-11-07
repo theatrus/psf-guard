@@ -16,8 +16,8 @@ const WORK_NOTE: Record<DirectorPluginWork, string> = {
   off: 'Off. The plugin gets no work.',
   ready: 'Allowed. The plugin can request work.',
   plugin_removed: 'Stopped. The plugin allowed to take work was removed.',
-  equipment_changed: 'Stopped. The accepted equipment changed.',
-  setup_changed: "Stopped. This rig's setup changed. Check it, then allow work again.",
+  equipment_changed: 'The equipment changed. Run Director Session to report the current setup automatically.',
+  setup_changed: "This rig's setup changed. Run Director Session to update its equipment automatically.",
   plans_changed: 'Stopped. A plan activated on this rig is outside the allowed list.',
   nothing_to_run: 'Allowed, but no plan can run. The Work section explains why.',
 };
@@ -103,15 +103,17 @@ export default function RigPluginPanel({ slug, mode, onRigChanged, onChangeMode 
     onSettled: () => { void client.invalidateQueries({ queryKey }); },
   });
   const clientCount = view?.clients.length;
-  const known = useRef(clientCount);
+  const profileRevision = view?.profile_revision;
+  const known = useRef<{ slug: string; clientCount: number; profileRevision: number } | null>(null);
   useEffect(() => {
-    if (clientCount === undefined) return;
-    if (known.current !== undefined && known.current !== clientCount) {
-      setCode(null);
+    if (clientCount === undefined || profileRevision === undefined) return;
+    const previous = known.current;
+    if (previous?.slug === slug && (previous.clientCount !== clientCount || previous.profileRevision !== profileRevision)) {
+      if (previous.clientCount !== clientCount) setCode(null);
       onRigChanged();
     }
-    known.current = clientCount;
-  }, [clientCount, onRigChanged]);
+    known.current = { slug, clientCount, profileRevision };
+  }, [slug, clientCount, profileRevision, onRigChanged]);
   const databases = useAllDatabases();
   const syncClients = databases.data?.find(db => db.id === slug)?.remote_image_upload?.clients?.length ?? 0;
   if (!canWrite) return <p className="director-muted">Sign in as an editor to manage the Director plugin.</p>;
@@ -136,10 +138,6 @@ export default function RigPluginPanel({ slug, mode, onRigChanged, onChangeMode 
       : `Remove ${entry.client_name}? The plugin must pair again to reach this rig.`;
     if (window.confirm(warning)) act.mutate(() => apiClient.removeDirectorClient(view.rig_id, entry.client_id));
   };
-  const accept = (entry: DirectorPluginClient) => act.mutate(async () => {
-    await apiClient.acceptDirectorEquipment(view.rig_id, entry.client_id, { ...scope, report_id: entry.report!.report_id, expected_revision: view.profile_revision });
-    onRigChanged();
-  });
   return <section className="rig-profile-form rig-plugin" aria-label="Director plugin">
     <div className="director-toolbar">
       <div className="early-beta-heading"><h4>Director plugin</h4><EarlyBeta /></div>
@@ -187,9 +185,9 @@ export default function RigPluginPanel({ slug, mode, onRigChanged, onChangeMode 
       <legend>Equipment</legend>
       {view.configuration
         ? <p>Accepted: {view.configuration.camera_id}. Filters: {filterList(view.configuration, view.filter_names)}.{cameraDefaults(view.camera_defaults)}</p>
-        : <p className="director-muted">No equipment accepted yet.</p>}
+        : <p className="director-muted">Equipment will update automatically when Director starts.</p>}
       {view.clients.length === 0 && <p className="director-muted">Pair the plugin first.</p>}
-      {view.clients.map(entry => <EquipmentReview key={entry.client_id} entry={entry} view={view} busy={act.isPending} onAccept={() => accept(entry)} />)}
+      {view.clients.map(entry => <EquipmentReview key={entry.client_id} entry={entry} view={view} />)}
     </fieldset>
 
     <AllowWork view={view} mode={mode} busy={act.isPending} onSave={change => act.mutate(() => apiClient.saveDirectorWorkPolicy(view.rig_id, change))} />
@@ -207,7 +205,7 @@ export default function RigPluginPanel({ slug, mode, onRigChanged, onChangeMode 
         </p>
         <ul className="rig-plugin-left-out" aria-label="Left out of the work">{view.left_out.map(reason => <li key={reason}>{reason}</li>)}</ul>
       </>}
-      {view.grant && !view.grant.open && view.grant.closed_at_ms && <p className="director-muted">Last work closed by an operator {ago(view.grant.closed_at_ms)}.</p>}
+      {view.grant && !view.grant.open && view.grant.closed_at_ms && <p className="director-muted">Previous work retired {ago(view.grant.closed_at_ms)}. Saved images and history are retained.</p>}
       {view.grant?.open && view.grant.plugin_paired && <p>{view.grant.started ? 'Running' : 'Not started'}. Issued {ago(view.grant.admitted_at_ms)}. The plugin ends this work when its session finishes.</p>}
       {view.grant?.open && !view.grant.plugin_paired && <>
         <p className="director-error" role="alert">The plugin with this work was removed, so this rig cannot take new work.</p>
@@ -225,16 +223,18 @@ export default function RigPluginPanel({ slug, mode, onRigChanged, onChangeMode 
   </section>;
 }
 
-function EquipmentReview({ entry, view, busy, onAccept }: { entry: DirectorPluginClient; view: DirectorPluginView; busy: boolean; onAccept: () => void }) {
+function EquipmentReview({ entry, view }: { entry: DirectorPluginClient; view: DirectorPluginView }) {
   const report = entry.report;
-  if (!report) return <p className="director-muted">{entry.client_name}: connect the equipment in N.I.N.A., then click Report equipment in the Director Session.</p>;
-  if (entry.review === 'accepted') return <p className="director-muted">{entry.client_name}: report accepted.</p>;
+  if (!report) return <p className="director-muted">{entry.client_name}: connect the equipment in N.I.N.A. and run Director Session. Director reports equipment automatically.</p>;
+  if (entry.review === 'accepted') return <p className="director-muted">{entry.client_name}: equipment is up to date.</p>;
+  const allowedId = view.policy?.client_id;
+  const updatesRig = !allowedId || allowedId === entry.client_id || !view.clients.some(client => client.client_id === allowedId);
   return <div className="rig-plugin-report">
     <p>{entry.client_name} reported {report.configuration.camera_id} {ago(report.received_at_ms)}. Filters: {filterList(report.configuration, report.filter_names)}.{cameraDefaults(report.camera_defaults)}</p>
     <p className="director-muted">{reportChanges(report, view)}</p>
-    {entry.review === 'ready' && <div className="director-actions"><button type="button" disabled={busy} onClick={onAccept}><Check size={16} />Accept equipment</button></div>}
-    {entry.review === 'old' && <p className="director-muted">This report is more than 15 minutes old. Click Report equipment in the Director Session again.</p>}
-    {entry.review === 'work_open' && <p className="director-muted">Equipment cannot change while work is open.</p>}
+    <p className="director-muted">{updatesRig
+      ? 'Director updates this equipment automatically on its next report. No approval is needed.'
+      : 'Not applied, because another plugin is allowed to take work. To use this equipment, select this plugin under Allow work.'}</p>
   </div>;
 }
 
@@ -261,7 +261,7 @@ function AllowWork({ view, mode, busy, onSave }: {
       },
     });
   };
-  const blocked = !allowed ? 'Pair the plugin first.' : !view.configuration ? 'Accept the equipment first.' : null;
+  const blocked = !allowed ? 'Pair the plugin first.' : !view.configuration ? 'Connect equipment in N.I.N.A. and run Director Session.' : null;
   return <fieldset>
     <legend>Allow work</legend>
     <p data-testid="rig-plugin-work" data-state={view.work}>{WORK_NOTE[view.work]}</p>

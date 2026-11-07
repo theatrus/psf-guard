@@ -12,7 +12,7 @@ const json = async (response: Awaited<ReturnType<APIRequestContext['post']>>) =>
   return (await response.json()).data;
 };
 
-test('a rig pairs, reviews, allows and recovers the Director plugin beside Target Scheduler', async ({ page, request }, testInfo) => {
+test('a rig applies reported equipment and preserves Director work permission beside Target Scheduler', async ({ page, request }, testInfo) => {
   test.setTimeout(180_000);
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
@@ -96,19 +96,26 @@ test('a rig pairs, reviews, allows and recovers the Director plugin beside Targe
       coordinator_instance_id: instance, catalog_id: catalog, report_id: randomUUID(), observed_at_ms: Date.now(), configuration, filter_names: { 'filter-2': 'Ha' },
     } }));
     const equipment = panel.getByRole('group', { name: 'Equipment', exact: true });
-    await expect(equipment.getByRole('button', { name: 'Accept equipment' })).toBeVisible({ timeout: 20_000 });
-    await expect(equipment).toContainText('reported camera-1');
-    await equipment.getByRole('button', { name: 'Accept equipment' }).click();
-    await expect(equipment).toContainText('Accepted: camera-1');
+    await expect(equipment).toContainText('Accepted: camera-1', { timeout: 20_000 });
+    await expect(equipment).toContainText('equipment is up to date');
+    await expect(equipment.getByRole('button', { name: 'Accept equipment' })).toHaveCount(0);
 
     const allow = panel.getByRole('group', { name: 'Allow work', exact: true });
     const work = allow.getByTestId('rig-plugin-work');
-    await expect(work).toHaveAttribute('data-state', 'not_allowed');
+    await expect(work).toHaveAttribute('data-state', 'ready');
     await expect(allow.getByTestId('rig-plugin-plans')).toContainText('Plugin Heart');
-    await allow.getByRole('button', { name: 'Allow work', exact: true }).click();
+    // An explicit off setting survives an otherwise identical equipment report.
+    await allow.getByRole('button', { name: 'Turn off', exact: true }).click();
+    await expect(work).toHaveAttribute('data-state', 'off');
+    await json(await request.post(`/api/director/v1/rigs/${rig}/equipment-reports`, { headers: plugin, data: {
+      coordinator_instance_id: instance, catalog_id: catalog, report_id: randomUUID(), observed_at_ms: Date.now(), configuration, filter_names: { 'filter-2': 'Ha' },
+    } }));
+    await panel.getByRole('button', { name: 'Reload Director plugin' }).click();
+    await expect(work).toHaveAttribute('data-state', 'off');
+    await allow.getByRole('button', { name: 'Allow work again' }).click();
     await expect(work).toHaveAttribute('data-state', 'ready');
 
-    // Switching paths to compare them keeps the review that was done.
+    // Switching paths to compare them preserves work permission.
     const mode = settings.getByRole('group', { name: 'Mode' });
     for (const next of ['Director', 'Target Scheduler']) {
       await panel.getByRole('button', { name: 'Change mode' }).click();
@@ -120,14 +127,12 @@ test('a rig pairs, reviews, allows and recovers the Director plugin beside Targe
       await expect(work).toHaveAttribute('data-state', 'ready');
     }
 
-    // A real setup change stops work and says so.
+    // A real setup change also preserves work permission.
     await sections.getByRole('tab', { name: 'Optics', exact: true }).click();
     await settings.getByLabel('Focal length').fill('750');
     await settings.getByRole('button', { name: 'Save rig profile' }).click();
     await expect(settings.getByRole('status').filter({ hasText: /Saved rig profile revision/ })).toBeVisible();
     await sections.getByRole('tab', { name: 'Director', exact: true }).click();
-    await expect(work).toHaveAttribute('data-state', 'setup_changed');
-    await allow.getByRole('button', { name: 'Allow work again' }).click();
     await expect(work).toHaveAttribute('data-state', 'ready');
 
     // The plugin gets work under that policy, then is removed while holding it.
@@ -147,7 +152,7 @@ test('a rig pairs, reviews, allows and recovers the Director plugin beside Targe
     await shot(running, 'director-stranded-work', name => testInfo.outputPath(name), false);
     await running.getByRole('button', { name: 'Close work' }).click();
     await expect(running).toContainText('No open work.');
-    await expect(running).toContainText('Last work closed by an operator');
+    await expect(running).toContainText('Previous work retired');
 
     // Sync keeps its own place and says where Director pairs.
     await settings.getByRole('tab', { name: 'Sync', exact: true }).click();

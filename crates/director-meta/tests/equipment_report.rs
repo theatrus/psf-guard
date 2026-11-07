@@ -260,6 +260,60 @@ fn no_op_acceptance_retries_and_stale_reports_fail_closed() {
 }
 
 #[test]
+fn identical_reports_repair_legacy_stale_permission_without_turning_work_on() {
+    for enabled in [true, false] {
+        let (dir, mut store, mut report) = fixture();
+        store.report_equipment(&report).unwrap();
+        let mut profile = store
+            .accept_equipment_report(report.rig_id, report.client_id, report.report_id, 0, 1100)
+            .unwrap();
+        let policy = psf_guard_director_meta::workload::Policy {
+            rig_id: report.rig_id,
+            catalog_id: report.catalog_id,
+            client_id: report.client_id,
+            profile_id: report.profile_id,
+            profile_revision: profile.revision,
+            configuration_id: report.configuration.id.clone(),
+            project_ids: vec![],
+            enabled,
+            revision: 1,
+        };
+        store.save_workload_policy(&policy, 0).unwrap();
+        profile.limits.value.minimum_altitude_degrees = 25.0;
+        profile = store.save_rig_profile(&profile, profile.revision).unwrap();
+        // Reproduce the stale policy persisted by the old server's setup edits.
+        Connection::open(dir.path().join("meta.sqlite"))
+            .unwrap()
+            .execute(
+                "UPDATE workload_policy SET payload=?2 WHERE rig_id=?1",
+                rusqlite::params![
+                    report.rig_id.to_string(),
+                    serde_json::to_string(&policy).unwrap()
+                ],
+            )
+            .unwrap();
+        report.report_id = Uuid::new_v4();
+        report.observed_at_ms = 2000;
+        report.received_at_ms = 2010;
+        store.report_equipment(&report).unwrap();
+        let saved = store
+            .accept_equipment_report(
+                report.rig_id,
+                report.client_id,
+                report.report_id,
+                profile.revision,
+                2100,
+            )
+            .unwrap();
+        assert_eq!(saved.revision, profile.revision);
+        let repaired = store.workload_policy(report.rig_id).unwrap().unwrap();
+        assert_eq!(repaired.profile_revision, saved.revision);
+        assert_eq!(repaired.enabled, enabled);
+        assert_eq!(repaired.revision, policy.revision);
+    }
+}
+
+#[test]
 fn globally_reused_ids_conflict_and_schema_sixteen_upgrades() {
     let (dir, mut store, report) = fixture();
     store.report_equipment(&report).unwrap();
@@ -295,7 +349,7 @@ fn globally_reused_ids_conflict_and_schema_sixteen_upgrades() {
 }
 
 #[test]
-fn outstanding_allocations_block_acceptance_and_reports_survive_backup() {
+fn reports_update_equipment_without_replacing_outstanding_work_and_survive_backup() {
     let (dir, mut store, report) = fixture();
     store.report_equipment(&report).unwrap();
     let id = Uuid::new_v4();
@@ -319,15 +373,20 @@ fn outstanding_allocations_block_acceptance_and_reports_survive_backup() {
         snapshot: serde_json::json!({"coordinator_instance_id":store.instance_id(),"catalog_id":report.catalog_id,"rig_id":report.rig_id,"program":program}),
     };
     store.admit_allocation(&allocation).unwrap();
-    assert!(matches!(
-        store.accept_equipment_report(report.rig_id, report.client_id, report.report_id, 0, 1100),
-        Err(Error::Conflict)
-    ));
-    assert!(store.rig_profile(report.rig_id).unwrap().is_none());
+    let saved = store
+        .accept_equipment_report(report.rig_id, report.client_id, report.report_id, 0, 1100)
+        .unwrap();
+    assert_eq!(saved.configuration.unwrap().value, report.configuration);
     let backup = dir.path().join("backup.sqlite");
     store.backup(&backup).unwrap();
     let copy = MetaStore::open(&backup).unwrap();
-    assert_eq!(copy.equipment_reports(report.rig_id).unwrap(), vec![report]);
+    let mut expected = report.clone();
+    expected.accepted_revision = Some(1);
+    expected.accepted_from_revision = Some(0);
+    assert_eq!(
+        copy.equipment_reports(report.rig_id).unwrap(),
+        vec![expected]
+    );
     assert_eq!(
         copy.allocation(allocation.rig_id).unwrap(),
         Some(allocation)

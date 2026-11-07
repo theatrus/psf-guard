@@ -49,6 +49,75 @@ async fn view(app: &Router) -> Value {
 }
 
 #[tokio::test]
+async fn only_the_allowed_plugin_updates_the_rigs_equipment() {
+    let (dir, state, app, instance, _, _) = fixture().await;
+    let (catalog, rig) = register(&dir, &state);
+    let first_profile = Uuid::new_v4();
+    let second_profile = Uuid::new_v4();
+    let first = credential(&app, instance, catalog, rig, first_profile).await;
+    let second = credential(&app, instance, catalog, rig, second_profile).await;
+    let first_id = first["client_id"].as_str().unwrap();
+    let second_id = second["client_id"].as_str().unwrap();
+    let mut program: psf_guard_director_core::program::Program = serde_json::from_str(
+        include_str!("../../../../crates/director-core/tests/fixtures/execution-program.json"),
+    )
+    .unwrap();
+    program.configuration.rig_id = rig.to_string();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let path = format!("/rigs/{rig}/equipment-reports");
+    let input = json!({"coordinator_instance_id":instance,"catalog_id":catalog,"report_id":Uuid::new_v4(),
+        "observed_at_ms":now,"configuration":program.configuration,"filter_names":{"ha":"H-alpha"}});
+    let token = first["token"].as_str().unwrap();
+    let (status, body) = client_call(&app, "POST", &path, input, token, Some(first_profile)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let allowed = view(&app).await;
+    assert_eq!(allowed["policy"]["client_id"], first_id);
+
+    // A second plugin's report stays staged, so the first keeps its equipment.
+    let report = Uuid::new_v4();
+    let mut other = json!({"coordinator_instance_id":instance,"catalog_id":catalog,"report_id":report,
+        "observed_at_ms":now+1,"configuration":program.configuration,"filter_names":{"ha":"H-alpha"}});
+    other["configuration"]["id"] = json!("second-equipment");
+    let token = second["token"].as_str().unwrap();
+    let (status, body) = client_call(&app, "POST", &path, other, token, Some(second_profile)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["data"]["accepted_revision"], Value::Null);
+    let staged = view(&app).await;
+    assert_eq!(staged["configuration"], allowed["configuration"]);
+    assert_eq!(staged["profile_revision"], allowed["profile_revision"]);
+    assert_eq!(staged["policy"], allowed["policy"]);
+    let review = |view: &Value, id: &str| {
+        view["clients"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|client| client["client_id"] == id)
+            .unwrap()["review"]
+            .clone()
+    };
+    assert_eq!(review(&staged, first_id), "accepted");
+    assert_eq!(review(&staged, second_id), "not_applied");
+
+    // Once the rig's equipment moves on, the first report is no longer current.
+    let (status, body) = call(
+        &app,
+        "POST",
+        &format!("{path}/{second_id}/accept"),
+        json!({"coordinator_instance_id":instance,"catalog_id":catalog,"report_id":report,
+            "expected_revision":staged["profile_revision"]}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let moved = view(&app).await;
+    assert_eq!(review(&moved, first_id), "not_applied");
+    assert_eq!(review(&moved, second_id), "accepted");
+}
+
+#[tokio::test]
 async fn the_view_follows_a_plugin_from_pairing_to_removal() {
     let (dir, state, app, instance, _, _) = fixture().await;
     let (catalog, rig) = register(&dir, &state);
@@ -89,24 +158,14 @@ async fn the_view_follows_a_plugin_from_pairing_to_removal() {
     let (status, body) = client_call(&app, "POST", &path, input, token, Some(profile)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let reported = view(&app).await;
-    assert_eq!(reported["clients"][0]["review"], "ready");
+    assert_eq!(reported["clients"][0]["review"], "accepted");
     assert_eq!(
         reported["clients"][0]["report"]["report_id"],
         report.to_string()
     );
-    assert_eq!(reported["configuration"], Value::Null);
-
-    let (status, body) = call(
-        &app,
-        "POST",
-        &format!("{path}/{client}/accept"),
-        json!({"coordinator_instance_id":instance,"catalog_id":catalog,"report_id":report,
-            "expected_revision":reported["profile_revision"]}),
-        None,
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    let accepted = view(&app).await;
+    assert_eq!(reported["configuration"]["id"], program.configuration.id);
+    assert_eq!(reported["policy"]["enabled"], true);
+    let accepted = reported;
     assert_eq!(accepted["clients"][0]["review"], "accepted");
     assert_eq!(accepted["configuration"]["id"], program.configuration.id);
     assert_eq!(accepted["filter_names"]["ha"], "H-alpha");
@@ -122,7 +181,7 @@ async fn the_view_follows_a_plugin_from_pairing_to_removal() {
     assert_eq!(status, StatusCode::OK);
     let removed = view(&app).await;
     assert_eq!(removed["clients"], json!([]));
-    // The equipment an operator accepted outlives the plugin that reported it.
+    // Reported equipment outlives the plugin that reported it.
     assert_eq!(removed["configuration"]["id"], program.configuration.id);
 }
 

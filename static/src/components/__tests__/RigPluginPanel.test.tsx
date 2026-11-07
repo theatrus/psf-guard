@@ -17,7 +17,7 @@ const plugin: DirectorPluginClient = {
 };
 const reported: DirectorPluginClient = {
   ...plugin,
-  review: 'ready',
+  review: 'not_applied',
   report: { report_id: 'report-1', observed_at_ms: Date.now(), received_at_ms: Date.now(), configuration: equipment, filter_names: { ha: 'H-alpha' }, accepted_revision: null },
 };
 const plans = [{ id: 'plan-1', name: 'Heart Nebula' }, { id: 'plan-2', name: 'M31' }];
@@ -87,25 +87,37 @@ describe('RigPluginPanel', () => {
     expect(onRigChanged).toHaveBeenCalled();
   });
 
-  it('accepts a fresh report against the revision it loaded', async () => {
-    const { calls, onRigChanged } = show({ ...base, clients: [reported] });
+  it('shows automatic equipment updates without a manual approval step', async () => {
+    const { calls } = show({ ...base, clients: [reported] });
     await screen.findByText(/reported ASI2600/);
     expect(screen.getByText(/Filters: H-alpha/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Accept equipment' }));
-    await waitFor(() => expect(calls).toHaveLength(1));
-    expect(calls[0].body).toEqual({ coordinator_instance_id: instance, catalog_id: catalog, report_id: 'report-1', expected_revision: 4 });
-    await waitFor(() => expect(onRigChanged).toHaveBeenCalled());
+    expect(screen.getByText(/No approval is needed/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Accept equipment' })).toBeNull();
+    expect(calls).toHaveLength(0);
   });
 
-  it('offers no way to accept an old report or one that open work blocks', async () => {
-    show({ ...base, clients: [{ ...reported, review: 'old' }] });
-    expect(await screen.findByText(/more than 15 minutes old/)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Accept equipment' })).toBeNull();
+  it('refreshes the rig editor after an automatic equipment revision change', async () => {
+    const { update, onRigChanged } = show({ ...base, clients: [plugin] });
+    await screen.findByTestId('rig-plugin-work');
+    expect(onRigChanged).not.toHaveBeenCalled();
+    update({ ...base, profile_revision: 5, configuration: equipment, clients: [plugin] });
+    fireEvent.click(screen.getByRole('button', { name: 'Reload Director plugin' }));
+    await waitFor(() => expect(onRigChanged).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole('button', { name: 'Reload Director plugin' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Reload Director plugin' })).toBeEnabled());
+    expect(onRigChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it('explains why a report from a plugin that is not allowed to take work is not applied', async () => {
+    const other = { ...reported, client_id: 'client-2', client_name: 'Second PC' };
+    show({ ...base, configuration: equipment, clients: [plugin, other], policy });
+    expect(await screen.findByText(/Not applied, because another plugin is allowed to take work/)).toBeInTheDocument();
+    expect(screen.queryByText(/No approval is needed/)).toBeNull();
   });
 
   it('says what is missing before work can be allowed', async () => {
     show({ ...base, clients: [plugin] });
-    expect(await screen.findByText('Accept the equipment first.')).toBeInTheDocument();
+    expect(await screen.findByText('Connect equipment in N.I.N.A. and run Director Session.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Allow work' })).toBeNull();
   });
 

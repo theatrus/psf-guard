@@ -1,6 +1,86 @@
 use super::pairing::{client_call, credential, fixture};
 use super::*;
 
+#[tokio::test]
+async fn paired_recovery_confirms_absence_and_retires_only_its_own_quiescent_work() {
+    let (_dir, state, app, instance, catalog, rig) = fixture().await;
+    let profile = Uuid::new_v4();
+    let paired = credential(&app, instance, catalog, rig, profile).await;
+    let token = paired["token"].as_str().unwrap();
+    let client = Uuid::parse_str(paired["client_id"].as_str().unwrap()).unwrap();
+    state.set_anonymous_access_trusted(false);
+    let path =
+        format!("/rigs/{rig}/allocation?coordinator_instance_id={instance}&catalog_id={catalog}");
+    let (code, absent) = client_call(&app, "GET", &path, Value::Null, token, Some(profile)).await;
+    assert_eq!(code, StatusCode::NOT_FOUND, "{absent}");
+    assert_eq!(absent["error"], "Director record not found");
+    let id = Uuid::new_v4();
+    let mut program: Value = serde_json::from_str(include_str!(
+        "../../../../crates/director-core/tests/fixtures/execution-program.json"
+    ))
+    .unwrap();
+    program["assignment"]["id"] = json!(format!("allocation-{id}"));
+    program["assignment"]["rig_id"] = json!(rig);
+    program["configuration"]["rig_id"] = json!(rig);
+    let allocation = psf_guard_director_meta::allocation::Allocation {
+        schema_version: 1,
+        allocation_id: id,
+        coordinator_instance_id: instance,
+        catalog_id: catalog,
+        rig_id: rig,
+        client_id: client,
+        profile_id: profile,
+        preview_revision: "a".repeat(64),
+        admitted_at_ms: 1001,
+        snapshot: json!({"coordinator_instance_id":instance,"catalog_id":catalog,"rig_id":rig,"program":program}),
+    };
+    let service = state.director.clone().unwrap();
+    service
+        .clone()
+        .with_writer(move |store| Ok::<_, Error>(store.admit_allocation(&allocation)?))
+        .await
+        .unwrap();
+    let path = format!("/rigs/{rig}/workloads/{id}/reconcile");
+    let input = json!({"coordinator_instance_id":instance,"catalog_id":catalog,"camera_idle":true,"mount_stopped":true,"guider_stopped":true});
+    for key in ["camera_idle", "mount_stopped", "guider_stopped"] {
+        let mut unsafe_input = input.clone();
+        unsafe_input[key] = json!(false);
+        assert_eq!(
+            client_call(&app, "POST", &path, unsafe_input, token, Some(profile))
+                .await
+                .0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    assert_eq!(
+        client_call(
+            &app,
+            "POST",
+            &path,
+            input.clone(),
+            token,
+            Some(Uuid::new_v4())
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+    for _ in 0..2 {
+        let (code, ack) =
+            client_call(&app, "POST", &path, input.clone(), token, Some(profile)).await;
+        assert_eq!(code, StatusCode::OK, "{ack}");
+        assert_eq!(ack["data"], json!({"allocation_id":id,"retired":true}));
+    }
+    let history = service
+        .clone()
+        .query(move |store| store.workload(rig, client, id))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(history.released);
+    assert!(history.terminal_sequence.is_none());
+}
+
 #[test]
 fn native_imaging_requires_explicit_capability_and_centering_for_rotation() {
     use crate::server::director::workload::ExecutionMode;

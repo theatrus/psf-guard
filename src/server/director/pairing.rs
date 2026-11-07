@@ -120,6 +120,11 @@ pub(in crate::server) async fn authorize(
         {
             *rig
         }
+        ["", "director", "v1", "rigs", rig, "workloads", allocation, "reconcile"]
+            if method == Method::POST && Uuid::parse_str(allocation).is_ok() =>
+        {
+            *rig
+        }
         _ => return Err(denied()),
     };
     let rig = Uuid::parse_str(rig)
@@ -145,18 +150,21 @@ pub(in crate::server) async fn authorize(
     if client.rig_id != rig || client.profile_id != profile {
         return Err(denied());
     }
-    // Existing credentials gain no blanket allocation capability. Only the
-    // exact client explicitly selected by an operator may fetch its grant.
+    // A paired client may confirm absence during recovery. An existing grant
+    // remains visible only to its exact client, profile and catalog.
     if path.ends_with("/allocation") || path.ends_with("/allocation/start") {
         let allocation = service
             .query(move |store| store.allocation(rig))
             .await
-            .map_err(|e| no_store(e.into_response()))?
-            .ok_or_else(denied)?;
-        if allocation.client_id != client.client_id
-            || allocation.profile_id != profile
-            || allocation.catalog_id != client.catalog_id
-        {
+            .map_err(|e| no_store(e.into_response()))?;
+        if let Some(allocation) = allocation {
+            if allocation.client_id != client.client_id
+                || allocation.profile_id != profile
+                || allocation.catalog_id != client.catalog_id
+            {
+                return Err(denied());
+            }
+        } else if method != Method::GET {
             return Err(denied());
         }
     }

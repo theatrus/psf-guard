@@ -117,7 +117,7 @@ export interface DirectorRigProfileView {
 }
 export interface DirectorEdited<T> { value: T; source: DirectorSource }
 /** What an operator can do with a plugin's equipment report. */
-export type DirectorEquipmentReview = 'none' | 'ready' | 'old' | 'work_open' | 'accepted';
+export type DirectorEquipmentReview = 'none' | 'not_applied' | 'accepted';
 /** Whether the plugin can get work, and if not, why. */
 export type DirectorPluginWork = 'not_allowed' | 'off' | 'ready' | 'plugin_removed' | 'equipment_changed' | 'setup_changed' | 'plans_changed' | 'nothing_to_run';
 /** What the camera uses for a template that leaves gain or offset to it. */

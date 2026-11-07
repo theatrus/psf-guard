@@ -354,15 +354,12 @@ pub(crate) fn save_profile(
     }
     let mut next = profile.clone();
     next.revision = current;
-    let mut mode_only = false;
     if let Some(stored) = stored {
         let mut same = stored.clone();
         same.updated_at_ms = next.updated_at_ms;
         if same == next {
             return Ok(stored);
         }
-        same.mode = next.mode;
-        mode_only = same == next;
     }
     next.revision = current.checked_add(1).ok_or(Error::Conflict)?;
     let payload = super::configuration::encode(&next)?;
@@ -375,11 +372,14 @@ pub(crate) fn save_profile(
                 payload
             ],
         )?;
-    // The mode says who picks the work, not what the rig is. Switching to
-    // compare Target Scheduler and Director must not undo a reviewed policy.
-    if mode_only {
-        crate::workload::follow_mode_change(conn, next.rig_id, current, next.revision)?;
-    }
+    crate::workload::follow_profile_change(
+        conn,
+        next.rig_id,
+        next.revision,
+        next.configuration
+            .as_ref()
+            .map(|reported| reported.value.id.as_str()),
+    )?;
     Ok(next)
 }
 

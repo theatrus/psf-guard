@@ -197,7 +197,7 @@ export default function RigProfileCard({ slug }: { slug: string }) {
           : MODE_HELP[form.mode]}</p>
         {(form.mode || data.mode.runtime) === 'director' && <ul className="rig-profile-needs" aria-label="What Director needs">
           <li data-done={data.mode.paired}>{data.mode.paired ? 'The N.I.N.A. Director plugin is paired with this rig.' : 'Pair the N.I.N.A. Director plugin with this rig.'}</li>
-          <li data-done={data.mode.equipment}>{data.mode.equipment ? 'The rig\'s equipment is accepted.' : 'Accept the equipment the plugin reports.'}</li>
+          <li data-done={data.mode.equipment}>{data.mode.equipment ? 'The plugin reported the rig\'s equipment.' : 'Connect equipment in N.I.N.A. and run Director Session.'}</li>
         </ul>}
         <p className="director-muted rig-profile-source">Changing the mode keeps the Director and Sync pairings.
           <button type="button" className="link-button" onClick={() => setTab('director')}><Plug size={14} />Set up Director</button>
