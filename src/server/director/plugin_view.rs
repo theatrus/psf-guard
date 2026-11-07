@@ -7,6 +7,7 @@ use psf_guard_director_core::program::Configuration;
 use psf_guard_director_meta::{
     client::Client,
     equipment_report::{EquipmentReport, MAX_REPORT_AGE_MS},
+    profile::CameraDefaults,
     workload::Policy,
 };
 use std::collections::BTreeMap;
@@ -21,11 +22,14 @@ pub(super) struct PluginView {
     /// The equipment an operator accepted.
     configuration: Option<Configuration>,
     filter_names: BTreeMap<String, String>,
+    camera_defaults: Option<CameraDefaults>,
     clients: Vec<PluginClient>,
     /// Plans activated on this rig, which allowed work runs.
     plans: Vec<ActivatedPlan>,
     policy: Option<Policy>,
     work: WorkState,
+    /// What the rig's program leaves out, and why. Empty until work is allowed.
+    left_out: Vec<String>,
     grant: Option<Grant>,
     /// The plugin's last call of any kind.
     last_contact_at_ms: Option<u64>,
@@ -74,6 +78,8 @@ enum WorkState {
     SetupChanged,
     /// A plan is activated on the rig outside the policy's list of plans.
     PlansChanged,
+    /// Allowed, but no activated plan forms a program for this rig.
+    NothingToRun,
 }
 
 #[derive(Serialize)]
@@ -135,6 +141,21 @@ fn work_state(
     }
 }
 
+/// Check an allowed rig against the program the plugin would pull, and list
+/// what that program leaves out.
+fn program_state(
+    gathered: Result<super::program::Gathered, super::program::PullError>,
+) -> (WorkState, Vec<String>) {
+    match gathered {
+        Ok(gathered) if gathered.goals().is_empty() => {
+            (WorkState::NothingToRun, gathered.omitted().to_vec())
+        }
+        Ok(gathered) => (WorkState::Ready, gathered.omitted().to_vec()),
+        Err(super::program::PullError::NotReady(reason)) => (WorkState::NothingToRun, vec![reason]),
+        Err(_) => (WorkState::Ready, Vec::new()),
+    }
+}
+
 pub(super) async fn get(
     State(state): State<Arc<AppState>>,
     Path(slug): Path<String>,
@@ -148,6 +169,13 @@ pub(super) async fn get(
         let catalog = state.get_database(&slug).ok_or(Error::Missing)?;
         let (identity, _) = rig_profile::file_identity(&service, catalog).await?;
         let instance = service.instance_id;
+        let catalogs: Vec<_> = state
+            .databases
+            .read()
+            .map_err(|_| Error::Internal)?
+            .values()
+            .cloned()
+            .collect();
         let now = u64::try_from(
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -181,9 +209,16 @@ pub(super) async fn get(
                     None => None,
                 };
                 let work_open = grant.as_ref().is_some_and(|g| g.open);
-                let (revision, configuration, filter_names) = profile.map_or_else(
-                    || (0, None, BTreeMap::new()),
-                    |p| (p.revision, p.configuration.map(|c| c.value), p.filter_names),
+                let (revision, configuration, filter_names, camera_defaults) = profile.map_or_else(
+                    || (0, None, BTreeMap::new(), None),
+                    |p| {
+                        (
+                            p.revision,
+                            p.configuration.map(|c| c.value),
+                            p.filter_names,
+                            p.camera_defaults,
+                        )
+                    },
                 );
                 let mut plans = Vec::new();
                 for activation in store.activations_for_rig(rig)? {
@@ -202,6 +237,18 @@ pub(super) async fn get(
                     configuration.as_ref(),
                     &plans,
                 );
+                let (work, left_out) = if work == WorkState::Ready && !plans.is_empty() {
+                    program_state(super::program::gather(
+                        store,
+                        &catalogs,
+                        instance,
+                        rig,
+                        identity.id,
+                        false,
+                    ))
+                } else {
+                    (work, Vec::new())
+                };
                 let clients = clients
                     .into_iter()
                     .map(|client| {
@@ -229,10 +276,12 @@ pub(super) async fn get(
                     profile_revision: revision,
                     configuration,
                     filter_names,
+                    camera_defaults,
                     clients,
                     plans,
                     policy,
                     work,
+                    left_out,
                     grant,
                     last_contact_at_ms,
                 })
@@ -249,6 +298,18 @@ pub(super) async fn get(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_program_that_cannot_form_is_not_ready_work() {
+        use super::super::program::PullError;
+        let (state, left_out) = program_state(Err(PullError::NotReady("no plan".into())));
+        assert_eq!(state, WorkState::NothingToRun);
+        assert_eq!(left_out, ["no plan"]);
+        // A failed read says nothing about the plans.
+        let (state, left_out) = program_state(Err(PullError::Api(Error::Internal)));
+        assert_eq!(state, WorkState::Ready);
+        assert!(left_out.is_empty());
+    }
 
     fn policy(client: Uuid) -> Policy {
         Policy {

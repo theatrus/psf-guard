@@ -149,7 +149,6 @@
 .nights-plan-dot[data-colour='7'] { background: var(--nights-plan-7); }
 .nights-plan-more { color: var(--color-text-muted); font-size: 10px; }
 .nights-cell-load { color: var(--color-text-muted); font-size: 11px; }
-.nights-cell-load.is-over { color: var(--color-warning-light); }
 
 .nights-detail { margin-top: 12px; padding: 12px; border: 1px solid var(--color-border-secondary); border-radius: 8px; background: var(--color-bg-surface); }
 .nights-detail h3 { margin: 0; font-size: 15px; }

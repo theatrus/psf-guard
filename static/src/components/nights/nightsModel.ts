@@ -450,12 +450,14 @@ export function decidedBy(night: RigNight): 'none' | 'manual' | 'forecast' | 'bo
   return handLimits ? 'manual' : 'none';
 }
 
-/** A night's load in a few words: idle hours, or the hours overbooked. */
+/**
+ * A night's load in a few words: idle hours, or full. Owed hours past the
+ * night's are not shown: targets overlap, and work carries to later nights.
+ */
 export function loadWords(night: RigNight): string {
-  const { demand_hours, idle_hours, overbooked_hours, available_hours } = night.load;
+  const { demand_hours, idle_hours, available_hours } = night.load;
   if (available_hours <= 0) return demand_hours > 0 ? 'no time' : '';
   if (demand_hours <= 0) return 'idle';
-  if (overbooked_hours >= 0.05) return `+${overbooked_hours.toFixed(1)} h over`;
   if (idle_hours >= 0.05) return `${idle_hours.toFixed(1)} h idle`;
   return 'full';
 }

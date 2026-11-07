@@ -77,6 +77,8 @@ pub(super) struct EquipmentReport {
     configuration: Configuration,
     #[serde(default)]
     filter_names: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    camera_defaults: Option<psf_guard_director_meta::profile::CameraDefaults>,
     optics: Optics,
     site: Option<Site>,
     horizon: Option<Horizon>,
@@ -268,6 +270,7 @@ pub(super) async fn report_equipment(
             let at = report.reported_at_ms;
             next.configuration = Some(from_plugin(report.configuration, at));
             next.filter_names = report.filter_names;
+            next.camera_defaults = report.camera_defaults;
             next.optics = Some(from_plugin(report.optics, at));
             if let Some(site) = report.site {
                 next.site = Some(from_plugin(site, at));

@@ -609,6 +609,78 @@ async fn a_target_scheduler_rig_gets_a_schedule_and_its_database_is_left_alone()
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
+/// Director runs activated plans only, so the rig's other Target Scheduler
+/// projects must not count as its work.
+#[tokio::test]
+async fn a_director_rig_owes_only_the_plans_activated_on_it() {
+    let a = activated().await;
+    place(&a).await;
+    let plans = |planned: &Value| {
+        planned["data"]["rigs"][0]["plans"]
+            .as_array()
+            .unwrap()
+            .len()
+    };
+    let demand = |planned: &Value| {
+        planned["data"]["rigs"][0]["nights"][0]["load"]["demand_hours"]
+            .as_f64()
+            .unwrap()
+    };
+    let ask = |runtime: &str| json!({"nights": 1, "start_ms": START_MS, "runtime": runtime});
+    let (status, preview) = call(
+        &a.f.app,
+        "POST",
+        &format!("/projects/{}/activation/preview", a.project),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    let (status, applied) = call(
+        &a.f.app,
+        "POST",
+        &format!("/projects/{}/activation/apply", a.project),
+        json!({"preview_digest": preview["data"]["preview_digest"]}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+
+    let (status, scheduler) = call(
+        &a.f.app,
+        "POST",
+        "/night-plans",
+        ask("target_scheduler"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{scheduler}");
+    assert_eq!(plans(&scheduler), 1, "{scheduler}");
+    assert!(demand(&scheduler) > 0.0, "{scheduler}");
+    let (status, director) = call(&a.f.app, "POST", "/night-plans", ask("director"), None).await;
+    assert_eq!(status, StatusCode::OK, "{director}");
+    assert_eq!(plans(&director), 1, "{director}");
+    assert_eq!(demand(&director), demand(&scheduler), "{director}");
+
+    // The same project, no longer the one activated: a rig's own project.
+    a.db.execute("UPDATE project SET guid=?1", [Uuid::new_v4().to_string()])
+        .unwrap();
+    let (status, scheduler) = call(
+        &a.f.app,
+        "POST",
+        "/night-plans",
+        ask("target_scheduler"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{scheduler}");
+    assert_eq!(plans(&scheduler), 1, "{scheduler}");
+    let (status, director) = call(&a.f.app, "POST", "/night-plans", ask("director"), None).await;
+    assert_eq!(status, StatusCode::OK, "{director}");
+    assert_eq!(plans(&director), 0, "{director}");
+    assert_eq!(demand(&director), 0.0, "{director}");
+}
+
 #[tokio::test]
 async fn a_director_schedule_runs_the_rigs_own_selection_over_the_pulled_program() {
     let a = activated().await;

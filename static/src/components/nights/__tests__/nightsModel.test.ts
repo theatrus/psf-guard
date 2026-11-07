@@ -67,7 +67,7 @@ describe('night plan helpers', () => {
 
   it('says how loaded a night is and which plans can use it', () => {
     expect(loadWords(night(0))).toBe('5.0 h idle');
-    expect(loadWords(night(0, { load: { demand_hours: 12, available_hours: 10, idle_hours: 0, overbooked_hours: 2 } }))).toBe('+2.0 h over');
+    expect(loadWords(night(0, { load: { demand_hours: 12, available_hours: 10, idle_hours: 0, overbooked_hours: 2 } }))).toBe('full');
     expect(loadWords(night(0, { load: { demand_hours: 0, available_hours: 10, idle_hours: 10, overbooked_hours: 0 } }))).toBe('idle');
     const owner = rig();
     // Up six hours, one of them Moon-blocked: five usable, all owed.

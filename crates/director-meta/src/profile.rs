@@ -96,6 +96,16 @@ impl Default for Limits {
     }
 }
 
+/// The gain and offset N.I.N.A. uses for a frame whose template sets neither.
+/// A recipe must carry explicit values, so these fill in the template's -1.
+/// `None` where the camera has no such control.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CameraDefaults {
+    pub gain: Option<i32>,
+    pub offset: Option<i32>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct RigProfile {
@@ -114,6 +124,10 @@ pub struct RigProfile {
     /// Labels help compile templates; they never replace dispatch identities.
     #[serde(default)]
     pub filter_names: std::collections::BTreeMap<String, String>,
+    /// What the camera uses for a template that leaves gain or offset to it.
+    /// `None` until a plugin that reports them is accepted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera_defaults: Option<CameraDefaults>,
     /// The registered Sync peer that holds this rig's database when the rig
     /// runs on another PSF Guard. Activation pushes the plan there. `None`
     /// means the database on this server is the one the rig executes from.
@@ -143,6 +157,7 @@ impl RigProfile {
             },
             configuration: None,
             filter_names: Default::default(),
+            camera_defaults: None,
             peer_id: None,
             mode: None,
             updated_at_ms: now_ms,
@@ -249,6 +264,22 @@ pub(crate) fn validate_profile(profile: &RigProfile) -> Result<(), Error> {
             || profile.filter_names.values().any(|name| {
                 name.trim().is_empty() || name.len() > 256 || name.chars().any(char::is_control)
             })
+        {
+            return Err(Error::InvalidInput);
+        }
+    }
+    if let Some(defaults) = &profile.camera_defaults {
+        let configuration = &profile
+            .configuration
+            .as_ref()
+            .ok_or(Error::InvalidInput)?
+            .value;
+        if defaults
+            .gain
+            .is_some_and(|v| !configuration.gain.accepts(Some(v)))
+            || defaults
+                .offset
+                .is_some_and(|v| !configuration.offset.accepts(Some(v)))
         {
             return Err(Error::InvalidInput);
         }

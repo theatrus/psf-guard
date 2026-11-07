@@ -1,6 +1,6 @@
 //! Client evidence is staged separately from operator-approved planning setup.
 use super::*;
-use crate::profile::{Reported, RigProfile, Source};
+use crate::profile::{CameraDefaults, Reported, RigProfile, Source};
 use psf_guard_director_core::program::Configuration;
 use std::collections::BTreeMap;
 
@@ -19,6 +19,9 @@ pub struct EquipmentReport {
     pub received_at_ms: u64,
     pub configuration: Configuration,
     pub filter_names: BTreeMap<String, String>,
+    /// Absent from a plugin too old to report them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera_defaults: Option<CameraDefaults>,
     pub accepted_revision: Option<u64>,
     pub accepted_from_revision: Option<u64>,
 }
@@ -56,6 +59,7 @@ fn validate(report: &EquipmentReport) -> Result<(), Error> {
         reported_at_ms: report.observed_at_ms,
     });
     profile.filter_names = report.filter_names.clone();
+    profile.camera_defaults = report.camera_defaults;
     if report.filter_names.is_empty() {
         return Err(Error::InvalidInput);
     }
@@ -192,6 +196,7 @@ impl MetaStore {
             reported_at_ms: report.observed_at_ms,
         });
         profile.filter_names = report.filter_names.clone();
+        profile.camera_defaults = report.camera_defaults;
         profile.updated_at_ms = now;
         let saved = crate::profile::save_profile(&tx, &profile, expected_revision)?;
         report.accepted_revision = Some(saved.revision);

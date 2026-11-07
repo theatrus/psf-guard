@@ -1,7 +1,7 @@
 use psf_guard_director_core::program::Program;
 use psf_guard_director_meta::{
     equipment_report::EquipmentReport,
-    profile::{Reported, RigProfile, Source},
+    profile::{CameraDefaults, Reported, RigProfile, Source},
     CatalogIdentity, Error, MetaStore, Uuid,
 };
 use rusqlite::Connection;
@@ -41,6 +41,7 @@ fn fixture() -> (TempDir, MetaStore, EquipmentReport) {
         received_at_ms: 1010,
         configuration: program.configuration,
         filter_names: [("ha".into(), "H-alpha".into())].into(),
+        camera_defaults: None,
         accepted_revision: None,
         accepted_from_revision: None,
     };
@@ -82,6 +83,46 @@ fn staging_is_bound_non_authorizing_and_retries_do_not_refresh_evidence() {
         store.report_equipment(&report),
         Err(Error::Conflict)
     ));
+}
+
+#[test]
+fn camera_defaults_reach_the_profile_only_on_acceptance_and_must_fit_the_camera() {
+    let (_dir, mut store, mut report) = fixture();
+    let control = |value| match report.configuration.gain {
+        psf_guard_director_core::program::Control::Range { minimum, .. } => Some(minimum + value),
+        psf_guard_director_core::program::Control::Values { ref values } => Some(values[0] + value),
+        psf_guard_director_core::program::Control::Unsupported {} => None,
+    };
+    let usable = control(0);
+    assert!(usable.is_some(), "the fixture's camera sets gain");
+    let mut refused = report.clone();
+    refused.camera_defaults = Some(CameraDefaults {
+        gain: Some(-1),
+        offset: None,
+    });
+    assert!(matches!(
+        store.report_equipment(&refused),
+        Err(Error::InvalidInput)
+    ));
+
+    report.camera_defaults = Some(CameraDefaults {
+        gain: usable,
+        offset: None,
+    });
+    store.report_equipment(&report).unwrap();
+    assert!(store.rig_profile(report.rig_id).unwrap().is_none());
+    let accepted = store
+        .accept_equipment_report(report.rig_id, report.client_id, report.report_id, 0, 1020)
+        .unwrap();
+    assert_eq!(accepted.camera_defaults, report.camera_defaults);
+    assert_eq!(
+        store
+            .rig_profile(report.rig_id)
+            .unwrap()
+            .unwrap()
+            .camera_defaults,
+        report.camera_defaults
+    );
 }
 
 #[test]

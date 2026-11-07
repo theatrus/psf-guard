@@ -65,7 +65,7 @@ impl Control {
         }
     }
 
-    fn accepts(&self, value: Option<i32>) -> bool {
+    pub fn accepts(&self, value: Option<i32>) -> bool {
         match (self, value) {
             (Self::Unsupported {}, None) => true,
             (Self::Range { minimum, maximum }, Some(value)) => {
