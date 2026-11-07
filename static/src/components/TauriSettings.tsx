@@ -1237,7 +1237,7 @@ export default function TauriSettings({
                 onClick={handleIssuePairingCode}
                 className="browse-button"
               >
-                Generate pairing code
+                Generate Sync pairing code
               </button>
               {pairingCode && (
                 <>
@@ -2176,8 +2176,9 @@ export default function TauriSettings({
               {managementAllowed && canEdit && (showAddForm && editingId === selectedDatabase.id
                 ? renderDatabaseForm(selectedDatabase, true)
                 : <section className="settings-section">
-                    <h3>Remote receive and pairing</h3>
+                    <h3>PSF Guard Sync plugin</h3>
                     <p>Connect the PSF Guard Sync plugin in N.I.N.A. or configure incoming images and scheduler sync for {selectedDatabase.name}.</p>
+                    {planningEnabled && <p>The PSF Guard Director plugin uses its own pairing code, under Rig setup › Director. Both plugins can run on this rig.</p>}
                     <button type="button" className="cancel-button" onClick={() => startEdit(selectedDatabase)}>Edit remote receive and pairing</button>
                   </section>)}
               <SchedulerSyncControls key={`scheduler:${selectedDatabase.id}`} databases={databases} localDatabaseId={selectedDatabase.id} disabled={isApplying} />

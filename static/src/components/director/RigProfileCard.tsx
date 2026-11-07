@@ -1,7 +1,7 @@
 import { useEffect, useId, useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError, type AxiosError } from 'axios';
-import { Camera, Check, CloudSun, Download, Link2, MapPin, RefreshCw, SlidersHorizontal } from 'lucide-react';
+import { Camera, Check, CloudSun, Download, Link2, MapPin, Plug, RefreshCw, SlidersHorizontal } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import type { DirectorRigProfileView, DirectorRigSite } from '../../api/directorTypes';
@@ -12,6 +12,7 @@ import RigSchedulingApply from './RigSchedulingApply';
 import SchedulingFields from './SchedulingFields';
 import { compactOverrides, inheritedLimits, sameOverrides } from './schedulingModel';
 import EarlyBeta from './EarlyBeta';
+import RigPluginPanel from './RigPluginPanel';
 import RigWeatherPanel from './RigWeather';
 import WorkspaceTabs from './WorkspaceTabs';
 import { workspacePanel } from './workspacePanel';
@@ -27,7 +28,7 @@ class SettingsNotSaved extends Error {}
 const httpErrorOf = (error: unknown): AxiosError | null => isAxiosError(error) ? error
   : error instanceof Error ? httpErrorOf(error.cause) : null;
 
-const TABS = [{ id: 'optics', label: 'Optics', icon: <Camera size={16} /> }, { id: 'site', label: 'Site', icon: <MapPin size={16} /> }, { id: 'limits', label: 'Limits and delivery', icon: <SlidersHorizontal size={16} /> }, { id: 'weather', label: 'Weather', icon: <CloudSun size={16} /> }, { id: 'collaboration', label: 'Collaboration', icon: <Link2 size={16} /> }] as const;
+const TABS = [{ id: 'optics', label: 'Optics', icon: <Camera size={16} /> }, { id: 'site', label: 'Site', icon: <MapPin size={16} /> }, { id: 'limits', label: 'Limits and delivery', icon: <SlidersHorizontal size={16} /> }, { id: 'weather', label: 'Weather', icon: <CloudSun size={16} /> }, { id: 'director', label: 'Director', icon: <Plug size={16} /> }, { id: 'collaboration', label: 'Collaboration', icon: <Link2 size={16} /> }] as const;
 type Tab = (typeof TABS)[number]['id'];
 
 function Field({ id, label, value, onChange, disabled, unit, step = 'any' }: {
@@ -181,7 +182,7 @@ export default function RigProfileCard({ slug }: { slug: string }) {
     {data && form && <div className="rig-setup-layout">
     <WorkspaceTabs id={id} className="rig-setup-nav" orientation={vertical ? 'vertical' : 'horizontal'} label="Rig setup sections" tabs={TABS} value={tab} onChange={next => { setTab(next); if (next === 'collaboration') setCollaborationVisited(true); }} />
     <div className="rig-setup-content">
-    <form onSubmit={submit} className="rig-profile-form" hidden={tab === 'collaboration' || tab === 'weather'}>
+    <form onSubmit={submit} className="rig-profile-form" hidden={tab === 'collaboration' || tab === 'weather' || tab === 'director'}>
       <div {...workspacePanel(id, 'optics', tab)}>
       <fieldset disabled={disabled}>
         <legend>Mode</legend>
@@ -195,9 +196,12 @@ export default function RigProfileCard({ slug }: { slug: string }) {
           ? `Not set. PSF Guard plans this rig as ${MODE_LABEL[data.mode.runtime]}, from what the rig has reported.`
           : MODE_HELP[form.mode]}</p>
         {(form.mode || data.mode.runtime) === 'director' && <ul className="rig-profile-needs" aria-label="What Director needs">
-          <li data-done={data.mode.paired}>{data.mode.paired ? 'The N.I.N.A. Director plugin is paired with this rig.' : 'Pair the N.I.N.A. Director plugin with this rig. Pairing sets this mode by itself.'}</li>
-          <li data-done={data.mode.equipment}>{data.mode.equipment ? 'The plugin has reported the rig\'s equipment.' : 'The plugin reports the rig\'s equipment once paired.'}</li>
+          <li data-done={data.mode.paired}>{data.mode.paired ? 'The N.I.N.A. Director plugin is paired with this rig.' : 'Pair the N.I.N.A. Director plugin with this rig.'}</li>
+          <li data-done={data.mode.equipment}>{data.mode.equipment ? 'The rig\'s equipment is accepted.' : 'Accept the equipment the plugin reports.'}</li>
         </ul>}
+        <p className="director-muted rig-profile-source">Changing the mode keeps the Director and Sync pairings.
+          <button type="button" className="link-button" onClick={() => setTab('director')}><Plug size={14} />Set up Director</button>
+        </p>
       </fieldset>
       <fieldset disabled={disabled}>
         <legend>Optics</legend>
@@ -296,6 +300,7 @@ export default function RigProfileCard({ slug }: { slug: string }) {
       {!canWrite && <p className="director-muted">Read only</p>}
     </form>
     <div {...workspacePanel(id, 'weather', tab)}>{tab === 'weather' && <RigWeatherPanel rig={data.rig.id} />}</div>
+    <div {...workspacePanel(id, 'director', tab)}>{tab === 'director' && <RigPluginPanel slug={slug} mode={data.mode.runtime} onRigChanged={() => { if (!unsaved) void loaded.refetch(); }} onChangeMode={() => setTab('optics')} />}</div>
     <div {...workspacePanel(id, 'collaboration', tab)}>{data && collaborationVisited && <CollaborationConnections rig={data.rig.id} name={data.rig.name} active={tab === 'collaboration'} />}</div>
     </div>
     </div>}

@@ -301,7 +301,7 @@ fn from_plugin<T>(value: T, reported_at_ms: u64) -> Reported<T> {
 
 /// The identity the database file carries, or the one it would be given,
 /// read with no store gate held, and the read-only connection it was read on.
-async fn file_identity(
+pub(super) async fn file_identity(
     service: &Service,
     catalog: Arc<DatabaseContext>,
 ) -> Result<(CatalogIdentity, Connection), Error> {

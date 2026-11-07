@@ -474,6 +474,36 @@ export const apiClient = {
     if (!data.data) throw new Error(data.error || 'Failed to enable database planning');
     return data.data;
   },
+  getDirectorPlugin: async (slug: string): Promise<import('./directorTypes').DirectorPluginView> => {
+    const api = await getApi();
+    const { data } = await api.get<ApiResponse<import('./directorTypes').DirectorPluginView>>(`/director/v1/catalogs/${encodeURIComponent(slug)}/rig/plugin`);
+    if (!data.data) throw new Error(data.error || 'Failed to load the Director plugin');
+    return data.data;
+  },
+  /** One-time code for the Director plugin; Sync uses its own. */
+  issueDirectorPairingCode: async (rig: string, scope: { coordinator_instance_id: string; catalog_id: string }): Promise<{ pairing_token: string; expires_at_ms: number }> => {
+    const api = await getApi();
+    const { data } = await api.post<ApiResponse<{ pairing_token: string; expires_at_ms: number }>>(`/director/v1/rigs/${encodeURIComponent(rig)}/pairing-token`, scope);
+    if (!data.data) throw new Error(data.error || 'Failed to generate a Director pairing code');
+    return data.data;
+  },
+  removeDirectorClient: async (rig: string, client: string): Promise<void> => {
+    const api = await getApi();
+    await api.delete(`/director/v1/rigs/${encodeURIComponent(rig)}/clients/${encodeURIComponent(client)}`);
+  },
+  acceptDirectorEquipment: async (rig: string, client: string, review: { coordinator_instance_id: string; catalog_id: string; report_id: string; expected_revision: number }): Promise<void> => {
+    const api = await getApi();
+    await api.post(`/director/v1/rigs/${encodeURIComponent(rig)}/equipment-reports/${encodeURIComponent(client)}/accept`, review);
+  },
+  saveDirectorWorkPolicy: async (rig: string, change: { coordinator_instance_id: string; expected_revision: number; policy: import('./directorTypes').DirectorWorkPolicy }): Promise<void> => {
+    const api = await getApi();
+    await api.put(`/director/v1/rigs/${encodeURIComponent(rig)}/workload-policy`, change);
+  },
+  /** Close work whose plugin was removed, so the rig can take work again. */
+  closeDirectorWork: async (rig: string, allocation: string, scope: { coordinator_instance_id: string; catalog_id: string }): Promise<void> => {
+    const api = await getApi();
+    await api.post(`/director/v1/rigs/${encodeURIComponent(rig)}/workloads/${encodeURIComponent(allocation)}/close`, scope);
+  },
   getDirectorRigProfile: async (slug: string): Promise<DirectorRigProfileView> => {
     const api = await getApi();
     const { data } = await api.get<ApiResponse<DirectorRigProfileView>>(`/director/v1/catalogs/${encodeURIComponent(slug)}/rig/profile`);

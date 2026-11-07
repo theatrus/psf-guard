@@ -358,3 +358,47 @@ pub(super) async fn release(
         .await,
     )
 }
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Close {
+    coordinator_instance_id: Uuid,
+    catalog_id: Uuid,
+}
+
+/// Close work whose plugin was removed, so the rig can take work again.
+pub(super) async fn close(
+    State(state): State<Arc<AppState>>,
+    Path((rig, allocation)): Path<(Uuid, Uuid)>,
+    Extension(access): Extension<RequestAccess>,
+    Json(input): Json<Close>,
+) -> Response {
+    if let Err(r) = pairing::operator(&access) {
+        return *r;
+    }
+    response(
+        async {
+            let service = enabled(&state)?;
+            if input.coordinator_instance_id != service.instance_id {
+                return Err(Error::WrongRig.into());
+            }
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .and_then(|d| u64::try_from(d.as_millis()).ok())
+                .ok_or(Error::Internal)?;
+            service
+                .with_writer(move |store| {
+                    let grant = store.allocation(rig)?.ok_or(Error::Missing)?;
+                    if grant.catalog_id != input.catalog_id {
+                        return Err(Error::WrongRig.into());
+                    }
+                    Ok::<_, program::PullError>(
+                        store.close_orphaned_workload(rig, allocation, now)?,
+                    )
+                })
+                .await
+        }
+        .await,
+    )
+}

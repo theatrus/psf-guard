@@ -269,14 +269,12 @@ peer linkage. Stale observations, revoked pairings, changed reports/profiles
 and outstanding allocations fail closed. Reports and acceptance are retry-safe;
 revocation removes reports without erasing accepted setup.
 
-Implemented: staging, transactional acceptance, strict native report transport
-and session command. Not implemented: operator review UI, readiness summary,
-allocation admission UI, successor/recovery reconciliation, automatic optics
-or site commissioning. Frontend integration should extend the existing rig
-Setup editor, not introduce another rig identity or database. Display the
-paired profile and report age, compare current and proposed capabilities, then
-submit explicit acceptance with `expected_revision`. A received or accepted
-report is not an allocation or launch permit. The full wire contract and
+Implemented: staging, transactional acceptance, strict native report transport,
+session command, and the rig setup **Director** tab for pairing, review,
+commissioning and closing work a removed client held. Not implemented: manual
+allocation admission UI, successor reconciliation that hands open work to a new
+client, automatic optics or site commissioning. A received or accepted report is
+not an allocation or launch permit. The full wire contract and
 review restrictions live in [Director management](../DIRECTOR.md#reviewing-native-equipment-evidence).
 
 Local acceptance on 2026-10-01 used NINA 3.3.0.1064, ASCOM OmniSim and
@@ -1557,7 +1555,11 @@ before production coordination data is stored.
 
 ### Two rig modes: Target Scheduler and Director (proposal)
 
-Proposed 2026-10-05; not built. For review before any code changes.
+Proposed 2026-10-05; partly built. The mode exists, and activation still writes
+Target Scheduler rows on every rig. A rig may run both plugins, and people may
+switch between them to compare, so the mode must not remove Sync, a Director
+pairing or a reviewed policy. Revisit "No Target Scheduler copy" below with that
+in mind.
 
 **Why.** A plan that started in Target Scheduler and still matches its rows
 reads "Not activated yet", though Target Scheduler is running it. And a rig's

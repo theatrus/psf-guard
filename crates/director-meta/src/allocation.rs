@@ -178,6 +178,8 @@ impl MetaStore {
 
     /// The operator selects one live paired client. There is intentionally no
     /// delete/replace API: a revoked or expired allocation retains its budget.
+    /// `close_orphaned_workload` marks work a removed client held as finished;
+    /// the record stays and the budget it used stays spent.
     pub fn admit_allocation(&mut self, allocation: &Allocation) -> Result<Allocation, Error> {
         allocation.validate(self.instance_id)?;
         let payload = serde_json::to_string(allocation).map_err(|_| Error::InvalidInput)?;

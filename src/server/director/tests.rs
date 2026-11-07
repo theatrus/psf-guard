@@ -17,6 +17,7 @@ mod collaboration;
 mod configuration;
 mod equipment_report;
 mod pairing;
+mod plugin_view;
 mod preferences;
 mod site_profile;
 mod sky_image;

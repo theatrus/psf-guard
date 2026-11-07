@@ -148,7 +148,7 @@ fn invalid_parts_are_refused_before_anything_is_written() {
 }
 
 #[test]
-fn a_rigs_mode_is_set_whatever_its_profile_holds_and_reads_back() {
+fn a_rig_without_a_mode_gets_one_and_it_reads_back() {
     use psf_guard_director_meta::profile::RigMode;
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("meta.sqlite");
@@ -156,13 +156,13 @@ fn a_rigs_mode_is_set_whatever_its_profile_holds_and_reads_back() {
     let rig = store.create_rig(Uuid::new_v4(), "RedCat").unwrap();
     // A rig without a profile gets one, with the mode set.
     let saved = store
-        .set_rig_mode(rig.id, RigMode::Director, 1_000)
+        .default_rig_mode(rig.id, RigMode::Director, 1_000)
         .unwrap();
     assert_eq!((saved.mode, saved.revision), (Some(RigMode::Director), 1));
     // Setting the same mode again changes nothing.
     assert_eq!(
         store
-            .set_rig_mode(rig.id, RigMode::Director, 2_000)
+            .default_rig_mode(rig.id, RigMode::Director, 2_000)
             .unwrap()
             .revision,
         1
@@ -183,4 +183,20 @@ fn a_rigs_mode_is_set_whatever_its_profile_holds_and_reads_back() {
     assert!(!serde_json::to_string(&unset).unwrap().contains("mode"));
     assert_eq!("director".parse::<RigMode>().unwrap(), RigMode::Director);
     assert_eq!(RigMode::TargetScheduler.to_string(), "target_scheduler");
+}
+
+#[test]
+fn pairing_fills_in_a_mode_but_never_replaces_one() {
+    use psf_guard_director_meta::profile::RigMode;
+    let dir = TempDir::new().unwrap();
+    let mut store = MetaStore::create(&dir.path().join("meta.sqlite")).unwrap();
+    let rig = store.create_rig(Uuid::new_v4(), "Rig").unwrap();
+    let mut chosen = RigProfile::empty(rig.id, 100);
+    chosen.mode = Some(RigMode::TargetScheduler);
+    let saved = store.save_rig_profile(&chosen, 0).unwrap();
+    let after = store
+        .default_rig_mode(rig.id, RigMode::Director, 1_000)
+        .unwrap();
+    assert_eq!(after.mode, Some(RigMode::TargetScheduler));
+    assert_eq!(after.revision, saved.revision);
 }

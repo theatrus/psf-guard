@@ -57,6 +57,7 @@ pub(super) mod pairing;
 mod plan;
 mod plan_progress;
 mod plans;
+mod plugin_view;
 mod program;
 mod remote_push;
 mod rig_availability;
@@ -684,6 +685,7 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
                     psf_guard_director_core::MAX_REQUEST_BYTES,
                 )),
         )
+        .route("/catalogs/{slug}/rig/plugin", get(plugin_view::get))
         .route(
             "/rigs/{rig}/equipment",
             axum::routing::put(rig_profile::report_equipment).layer(DefaultBodyLimit::max(
@@ -756,6 +758,10 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
         .route(
             "/rigs/{rig}/workloads/release",
             axum::routing::post(workload::release),
+        )
+        .route(
+            "/rigs/{rig}/workloads/{allocation}/close",
+            axum::routing::post(workload::close),
         )
         .route(
             "/rigs/{rig}/checkin",

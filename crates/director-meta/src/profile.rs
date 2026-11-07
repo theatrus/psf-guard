@@ -279,9 +279,11 @@ impl MetaStore {
         Ok(next)
     }
 
-    /// Set who picks the rig's work, whatever else the profile holds, as
-    /// pairing a Director plugin does. A rig without a profile gets one.
-    pub fn set_rig_mode(
+    /// Set who picks the rig's work when nobody has chosen, as pairing a
+    /// Director plugin does. A chosen mode stays: a rig can pair the plugin
+    /// to try it while Target Scheduler keeps running the rig. A rig without
+    /// a profile gets one.
+    pub fn default_rig_mode(
         &mut self,
         rig: Uuid,
         mode: RigMode,
@@ -293,7 +295,7 @@ impl MetaStore {
         let stored = read_profile(&tx, rig)?;
         let revision = stored.as_ref().map_or(0, |profile| profile.revision);
         let mut next = stored.unwrap_or_else(|| RigProfile::empty(rig, now_ms));
-        if next.mode == Some(mode) {
+        if next.mode.is_some() {
             tx.commit()?;
             return Ok(next);
         }
@@ -321,12 +323,15 @@ pub(crate) fn save_profile(
     }
     let mut next = profile.clone();
     next.revision = current;
+    let mut mode_only = false;
     if let Some(stored) = stored {
         let mut same = stored.clone();
         same.updated_at_ms = next.updated_at_ms;
         if same == next {
             return Ok(stored);
         }
+        same.mode = next.mode;
+        mode_only = same == next;
     }
     next.revision = current.checked_add(1).ok_or(Error::Conflict)?;
     let payload = super::configuration::encode(&next)?;
@@ -339,6 +344,11 @@ pub(crate) fn save_profile(
                 payload
             ],
         )?;
+    // The mode says who picks the work, not what the rig is. Switching to
+    // compare Target Scheduler and Director must not undo a reviewed policy.
+    if mode_only {
+        crate::workload::follow_mode_change(conn, next.rig_id, current, next.revision)?;
+    }
     Ok(next)
 }
 

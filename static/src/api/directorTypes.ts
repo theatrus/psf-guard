@@ -116,6 +116,70 @@ export interface DirectorRigProfileView {
   };
 }
 export interface DirectorEdited<T> { value: T; source: DirectorSource }
+/** What an operator can do with a plugin's equipment report. */
+export type DirectorEquipmentReview = 'none' | 'ready' | 'old' | 'work_open' | 'accepted';
+/** Whether the plugin can get work, and if not, why. */
+export type DirectorPluginWork = 'not_allowed' | 'off' | 'ready' | 'plugin_removed' | 'equipment_changed' | 'setup_changed';
+export interface DirectorPluginEquipment {
+  id: string;
+  camera_id: string;
+  filter_wheel_id: string | null;
+  filters: { id: string; position: number | null }[];
+}
+export interface DirectorEquipmentReport {
+  report_id: string;
+  observed_at_ms: number;
+  received_at_ms: number;
+  configuration: DirectorPluginEquipment;
+  filter_names: Record<string, string>;
+  accepted_revision: number | null;
+}
+export interface DirectorPluginClient {
+  client_id: string;
+  profile_id: string;
+  client_name: string;
+  created_at_ms: number;
+  report: DirectorEquipmentReport | null;
+  review: DirectorEquipmentReview;
+}
+export interface DirectorWorkPolicy {
+  rig_id: string;
+  catalog_id: string;
+  client_id: string;
+  profile_id: string;
+  profile_revision: number;
+  configuration_id: string;
+  project_ids: string[];
+  enabled: boolean;
+  revision: number;
+}
+export interface DirectorPluginGrant {
+  allocation_id: string;
+  client_id: string;
+  admitted_at_ms: number;
+  expires_at_ms: number | null;
+  started: boolean;
+  /** The rig takes no new work while this is true. */
+  open: boolean;
+  /** False once the plugin holding the work is removed: only then can it be closed. */
+  plugin_paired: boolean;
+  closed_at_ms: number | null;
+}
+/** A rig's Director plugin, from pairing to the work it holds. */
+export interface DirectorPluginView {
+  coordinator_instance_id: string;
+  catalog_id: string;
+  rig_id: string;
+  profile_revision: number;
+  configuration: DirectorPluginEquipment | null;
+  filter_names: Record<string, string>;
+  clients: DirectorPluginClient[];
+  plans: { id: string; name: string }[];
+  policy: DirectorWorkPolicy | null;
+  work: DirectorPluginWork;
+  grant: DirectorPluginGrant | null;
+  last_contact_at_ms: number | null;
+}
 export interface DirectorRigProfileEdit {
   expected_revision: number;
   optics: DirectorEdited<DirectorOptics> | null;
