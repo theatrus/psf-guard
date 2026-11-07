@@ -44,6 +44,11 @@ Equipment reports and setup changes preserve work permission and the selected
 plans. An explicit **Turn off** stays off until you allow work again. Removing
 the allowed plugin still stops that plugin from taking new work.
 
+When a rig has two paired plugins, only the plugin allowed to take work updates
+the rig's equipment. The **Equipment** section shows the other plugin's report as
+not applied. To use that equipment, select that plugin under **Allow work**, then
+run its Director Session.
+
 ### Recover an interrupted session
 
 With the matching Director plugin update, a new Run confirms idle equipment,
@@ -900,14 +905,18 @@ planning edits and operator-wide status remain
 operator-managed. A profile header asserts the profile context; possession of the
 bearer token remains the authentication proof. It is not equipment attestation.
 
-### Reviewing native equipment evidence
+### Native equipment reports
 
-The Director Session's **Report equipment** command submits the connected
-camera, filter mapping and the configuration fingerprint for that session's
-native horizon/meridian policy. Acquisition can remain disabled. The report is
-staged, not applied: it cannot replace equipment setup, activate a plan, create
-an allocation or grant a launch. Existing pairing scopes remain unchanged;
-staging this evidence is limited reporting, not operator authority.
+The Director Session reports the connected camera, filter mapping and the
+configuration fingerprint for that session's native horizon/meridian policy.
+Acquisition can remain disabled.
+
+PSF Guard applies a report from the client the workload policy allows. When the
+rig has no policy, or the policy's client was removed, it applies a report from
+any paired client. A rig's first applied report also creates a policy that allows
+that client and every activated plan. A report from any other client stays staged:
+`accepted_revision` is `null` and the rig's equipment does not change. A report
+cannot activate a plan, create an allocation or grant a launch.
 
 All routes below are relative to `/api/director/v1`:
 
@@ -922,23 +931,23 @@ All routes below are relative to `/api/director/v1`:
   `coordinator_instance_id`, `catalog_id`, `report_id`, `expected_revision`
   (current rig profile revision, or zero). Returns the saved `RigProfile`.
 
-Acceptance preserves optics, site, horizon, limits, sky quality and Sync peer.
-It compares the exact report UUID and profile revision atomically. A report
-older than fifteen minutes, a changed pairing, or an outstanding allocation is
-refused with `409`; no allocation is replaced or refunded. Older observations
+Applying a report preserves optics, site, horizon, limits, sky quality and Sync
+peer. It compares the exact report UUID and profile revision atomically. A report
+older than fifteen minutes or a changed pairing is refused with `409`. An
+outstanding allocation does not block a report: it keeps its own equipment
+snapshot, and the plugin retires it through `reconcile`. Older observations
 cannot replace newer reports. Repeating an identical report preserves its
 original receipt time; retrying an acceptance is safe only while that accepted
 profile revision remains current. Revocation removes pending reports, not the
-operator-approved profile. A receipt is not a readiness or acquisition permit.
+rig's equipment. A receipt is not a readiness or acquisition permit.
 
-Rig setup's **Director** tab shows the report's age, compares it with the
-accepted equipment and requires explicit acceptance. Do not auto-accept on
-refresh, pairing or activation. Keep allocation admission a separate action.
+Rig setup's **Director** tab shows each client's latest report and compares it
+with the rig's equipment. Keep allocation admission a separate action.
 
 `GET /catalogs/{slug}/rig/plugin` returns one rig's plugin state for an
 interactive operator: `coordinator_instance_id`, `catalog_id`, `rig_id`,
 `profile_revision`, the accepted `configuration` and `filter_names`, `clients`
-with each `report` and `review` (`none`, `ready`, `old`, `work_open`, `accepted`),
+with each `report` and `review` (`none`, `not_applied`, `accepted`),
 activated `plans`, `policy`, `grant`, `last_contact_at_ms`, `camera_defaults`,
 `left_out` and `work`. `work` is `not_allowed`, `off`, `ready`,
 `plugin_removed`, `equipment_changed`, `setup_changed`, `plans_changed` or
@@ -948,7 +957,7 @@ pull has no goals. `left_out` lists what that program omits, and why.
 
 A report may carry `camera_defaults`, `{"gain": 100, "offset": 30}`, beside
 `filter_names`: the values N.I.N.A. uses when a sequence leaves gain or offset
-at `-1`. Each is `null` when the camera has no such control. Accepting the
+at `-1`. Each is `null` when the camera has no such control. Applying the
 report stores them in the rig profile. A recipe stays explicit: a template at
 `-1` takes these values, and without them the program omits that template. The
 field sits outside `configuration`, so it does not change a configuration ID.
@@ -957,9 +966,9 @@ A workload policy with an empty `project_ids` allows every plan activated on the
 rig, now or later. A grant carries every activated plan, so a list refuses work
 as soon as a plan is activated outside it (`plans_changed`).
 
-A change to the rig profile's `mode` alone keeps a current policy on the new
-profile revision. Any other profile change leaves the policy on its old
-revision, which stops new work until an operator saves the policy again.
+A rig profile change moves the policy to the new profile revision and keeps
+its `enabled` value and `project_ids`. When the change carries equipment, the
+policy also takes the new `configuration_id`. An explicit **Turn off** stays off.
 
 `POST /rigs/{rig}/workloads/{allocation}/close` closes open work whose client
 was revoked. The body is `coordinator_instance_id` and `catalog_id`, and it needs
@@ -967,6 +976,18 @@ an interactive operator. Every attempt in the work's ledger stays spent. The
 call answers `409` while the client exists or after the client released the work,
 and `404` when the rig's current work is another allocation. Repeating a close
 returns the same record, with `closed_at_ms` set.
+
+Paired `POST /rigs/{rig}/workloads/{allocation}/reconcile` retires an interrupted
+allocation so its client can request fresh work. The strict body fields are
+`coordinator_instance_id`, `catalog_id`, `camera_idle`, `mount_stopped` and
+`guider_stopped`. All three booleans must be `true`, or the call answers `400`.
+Only the client that holds the allocation can retire it. Retiring does not mark
+interrupted operations successful, and late receipts stay valid. The retired
+allocation's attempts are not charged; attempts that earlier work spent stay
+spent. The call returns `{"allocation_id": ..., "retired": true}`. Repeating it,
+or calling it for work that was already released or closed, returns the same
+answer and changes nothing. It answers `404` when the rig's current work is
+another allocation.
 
 An operator lists nonsecret client records with `GET /rigs/{rig_id}/clients` and
 revokes with `DELETE /rigs/{rig_id}/clients/{client_id}` (both relative to the API

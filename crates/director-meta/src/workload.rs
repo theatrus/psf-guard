@@ -89,7 +89,6 @@ fn profile_matches(conn: &Connection, p: &Policy) -> Result<bool, Error> {
 pub(crate) fn follow_profile_change(
     conn: &Connection,
     rig: Uuid,
-    _from: u64,
     to: u64,
     configuration_id: Option<&str>,
 ) -> Result<(), Error> {
@@ -132,6 +131,8 @@ fn carry_budget(conn: &Connection, rig: Uuid, program: &mut Program) -> Result<(
 impl MetaStore {
     /// Retire an executor's previous assignment without claiming its operations
     /// finished. Saved receipts remain valid; fresh work uses current image counts.
+    /// Only a release charges attempts, so the retired assignment costs nothing,
+    /// and attempts earlier work spent stay spent.
     pub fn reconcile_workload(
         &mut self,
         rig: Uuid,
@@ -153,7 +154,9 @@ impl MetaStore {
             if done.allocation.rig_id != rig || done.allocation.client_id != client {
                 return Err(Error::Conflict);
             }
-            if done.closed_at_ms.is_some() {
+            // Work already released or closed has nothing left to retire. A
+            // plugin that lost the acknowledgement still gets its answer.
+            if done.released {
                 return Ok(done.clone());
             }
         }
@@ -181,12 +184,6 @@ impl MetaStore {
         closed.closed_at_ms = Some(now_ms);
         tx.execute("INSERT INTO workload_history VALUES(?1,?2,?3) ON CONFLICT(allocation_id) DO UPDATE SET payload=excluded.payload",
             params![id.to_string(), rig.to_string(), serde_json::to_string(&closed).map_err(|_| Error::InvalidInput)?])?;
-        // Assignment attempts are replaceable. Captures and accepted/pending
-        // counts are retained; the next program gets a new bounded attempt set.
-        tx.execute(
-            "DELETE FROM workload_budget WHERE rig_id=?1",
-            [rig.to_string()],
-        )?;
         tx.commit()?;
         Ok(closed)
     }
@@ -197,7 +194,8 @@ impl MetaStore {
     }
 
     /// Compare-and-set commissioning is interactive; paired clients cannot
-    /// broaden project scope or silently approve new equipment.
+    /// broaden project scope. The allowed client's equipment reports update the
+    /// policy through `follow_profile_change`.
     pub fn save_workload_policy(&mut self, value: &Policy, expected: u64) -> Result<Policy, Error> {
         for id in [
             value.rig_id,

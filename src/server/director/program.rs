@@ -1125,7 +1125,7 @@ fn build(
                     || (wanted_offset.is_none() && configuration.offset != Control::Unsupported {});
                 built.omitted.push(if default_missing {
                     format!(
-                        "{}: template '{}' uses the camera's default gain or offset, and the plugin has not reported them. Update PSF Guard Director, click Report equipment, then accept the report",
+                        "{}: template '{}' uses the camera's default gain or offset, and the plugin has not reported them. Update PSF Guard Director, then run Director Session",
                         project.name, row.template_filter
                     )
                 } else {

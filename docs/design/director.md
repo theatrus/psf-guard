@@ -251,31 +251,34 @@ Setup rather than introducing new catalog or rig identities. The exact routes
 and bodies are documented in [Director management](../DIRECTOR.md#automatic-workload-policy-and-exchange).
 Collaboration stays deferred.
 
-### Native equipment review handoff
+### Native equipment reports
 
 Meta schema 17 stages one bounded equipment report per paired NINA client.
-The plugin's explicit **Report equipment** session command uses the same native
-snapshot as acquisition, including the session's constraint fingerprint, and
-works without enabling acquisition. Reports are bound to the coordinator,
-catalog/rig, client and native profile; credentials stay in the OS vault.
-Reports cannot grant launch authority or silently replace planning inputs.
+The Director Session reports the same native snapshot that acquisition uses,
+including the session's constraint fingerprint, and works without enabling
+acquisition. Reports are bound to the coordinator, catalog/rig, client and native
+profile; credentials stay in the OS vault. Reports cannot grant launch authority.
+The server applies the allowed client's reports automatically and leaves other
+clients' reports staged.
 
-The API stages paired `POST /rigs/{rig}/equipment-reports`, lists reports for an
-operator with `GET` on that path, and accepts a reviewed report with interactive
-operator `POST /rigs/{rig}/equipment-reports/{client}/accept`. Acceptance uses
+Paired `POST /rigs/{rig}/equipment-reports` receives a report, `GET` on that path
+lists reports for an operator, and interactive operator
+`POST /rigs/{rig}/equipment-reports/{client}/accept` applies a staged report.
+Applying a report uses
 the exact report UUID and rig-profile compare-and-set revision in one
 transaction. It preserves manual optics, site, horizon, limits, sky quality and
-peer linkage. Stale observations, revoked pairings, changed reports/profiles
-and outstanding allocations fail closed. Reports and acceptance are retry-safe;
+peer linkage. Stale observations, revoked pairings and changed reports/profiles
+fail closed. An outstanding allocation keeps its own equipment snapshot, and its
+client retires it through `reconcile`. Reports and acceptance are retry-safe;
 revocation removes reports without erasing accepted setup.
 
 Implemented: staging, transactional acceptance, strict native report transport,
-session command, and the rig setup **Director** tab for pairing, review,
-commissioning and closing work a removed client held. Not implemented: manual
+session command, and the rig setup **Director** tab for pairing, commissioning
+and closing work a removed client held. Not implemented: manual
 allocation admission UI, successor reconciliation that hands open work to a new
 client, automatic optics or site commissioning. A received or accepted report is
-not an allocation or launch permit. The full wire contract and
-review restrictions live in [Director management](../DIRECTOR.md#reviewing-native-equipment-evidence).
+not an allocation or launch permit. The full wire contract lives in
+[Director management](../DIRECTOR.md#native-equipment-reports).
 
 Local acceptance on 2026-10-01 used NINA 3.3.0.1064, ASCOM OmniSim and
 runtime 0.7.0 / IPC 8 with a disposable schema-17 server. Reporting with

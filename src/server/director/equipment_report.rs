@@ -1,5 +1,7 @@
-//! Paired native reports update the rig's equipment automatically. Manual
-//! optics, limits, work permission and project selection remain unchanged.
+//! The allowed client's native reports update the rig's equipment
+//! automatically. Other clients' reports stay staged, so two plugins cannot
+//! replace each other's equipment. Manual optics, limits, work permission and
+//! project selection remain unchanged.
 use super::*;
 use axum::{
     http::{
@@ -39,7 +41,7 @@ pub(super) struct Acknowledgement {
     accepted_revision: Option<u64>,
 }
 
-fn now_ms() -> Result<u64, Error> {
+pub(super) fn now_ms() -> Result<u64, Error> {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .ok()
@@ -98,24 +100,31 @@ pub(super) async fn submit(
                 accepted_revision: None,
                 accepted_from_revision: None,
             })?;
-            if report.accepted_revision.is_none() {
+            let policy = store.workload_policy(rig)?;
+            let applies = match &policy {
+                None => true,
+                Some(policy) => {
+                    policy.client_id == client.client_id
+                        || !store
+                            .clients(rig)?
+                            .iter()
+                            .any(|paired| paired.client_id == policy.client_id)
+                }
+            };
+            if applies && report.accepted_revision.is_none() {
                 let revision = store
                     .rig_profile(rig)?
                     .map_or(0, |profile| profile.revision);
-                store.accept_equipment_report(
+                let saved = store.accept_equipment_report(
                     rig,
                     client.client_id,
                     report.report_id,
                     revision,
                     now_ms()?,
                 )?;
-                report = store
-                    .equipment_reports(rig)?
-                    .into_iter()
-                    .find(|value| value.client_id == client.client_id)
-                    .ok_or(Error::Missing)?;
+                report.accepted_revision = Some(saved.revision);
             }
-            if store.workload_policy(rig)?.is_none() {
+            if policy.is_none() {
                 let profile = store.rig_profile(rig)?.ok_or(Error::Missing)?;
                 store.save_workload_policy(
                     &psf_guard_director_meta::workload::Policy {

@@ -375,7 +375,6 @@ pub(crate) fn save_profile(
     crate::workload::follow_profile_change(
         conn,
         next.rig_id,
-        current,
         next.revision,
         next.configuration
             .as_ref()

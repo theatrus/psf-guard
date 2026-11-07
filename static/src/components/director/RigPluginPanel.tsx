@@ -227,10 +227,14 @@ function EquipmentReview({ entry, view }: { entry: DirectorPluginClient; view: D
   const report = entry.report;
   if (!report) return <p className="director-muted">{entry.client_name}: connect the equipment in N.I.N.A. and run Director Session. Director reports equipment automatically.</p>;
   if (entry.review === 'accepted') return <p className="director-muted">{entry.client_name}: equipment is up to date.</p>;
+  const allowedId = view.policy?.client_id;
+  const updatesRig = !allowedId || allowedId === entry.client_id || !view.clients.some(client => client.client_id === allowedId);
   return <div className="rig-plugin-report">
     <p>{entry.client_name} reported {report.configuration.camera_id} {ago(report.received_at_ms)}. Filters: {filterList(report.configuration, report.filter_names)}.{cameraDefaults(report.camera_defaults)}</p>
     <p className="director-muted">{reportChanges(report, view)}</p>
-    <p className="director-muted">Director updates this equipment automatically on its next report. No approval is needed.</p>
+    <p className="director-muted">{updatesRig
+      ? 'Director updates this equipment automatically on its next report. No approval is needed.'
+      : 'Not applied, because another plugin is allowed to take work. To use this equipment, select this plugin under Allow work.'}</p>
   </div>;
 }
 

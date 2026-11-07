@@ -393,11 +393,7 @@ pub(super) async fn reconcile(
                 return Err(Error::Invalid.into());
             }
             let (hash, profile) = credential(&headers)?;
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .ok()
-                .and_then(|value| u64::try_from(value.as_millis()).ok())
-                .ok_or(Error::Internal)?;
+            let now = equipment_report::now_ms()?;
             service
                 .with_writer(move |store| {
                     let client = store.client_for_token(&hash)?.ok_or(Error::Invalid)?;

@@ -203,15 +203,16 @@ impl MetaStore {
             profile.updated_at_ms = now;
         }
         let saved = crate::profile::save_profile(&tx, &profile, expected_revision)?;
-        // A report also repairs policies left stale by older server versions,
-        // including an identical report that needs no new profile revision.
-        crate::workload::follow_profile_change(
-            &tx,
-            rig,
-            saved.revision,
-            saved.revision,
-            Some(&report.configuration.id),
-        )?;
+        // Saving a change moves the policy. An identical report saves nothing,
+        // so it repairs a policy left stale by an older server here.
+        if unchanged {
+            crate::workload::follow_profile_change(
+                &tx,
+                rig,
+                saved.revision,
+                Some(&report.configuration.id),
+            )?;
+        }
         report.accepted_revision = Some(saved.revision);
         report.accepted_from_revision = Some(expected_revision);
         tx.execute(

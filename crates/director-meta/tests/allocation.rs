@@ -847,6 +847,77 @@ fn reconciliation_replaces_uncertain_work_without_losing_images_or_sealing_late_
     );
 }
 
+/// Attempts left for the fixture's goal once the store's budget applies.
+fn attempts_left(store: &MetaStore, a: &Allocation) -> u32 {
+    let mut program: psf_guard_director_core::program::Program =
+        serde_json::from_value(a.snapshot["program"].clone()).unwrap();
+    store.carry_workload_budget(a.rig_id, &mut program).unwrap();
+    program.assignment.goals[0].attempts_remaining
+}
+
+#[test]
+fn retiring_work_keeps_the_attempts_earlier_work_spent() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("meta.sqlite");
+    let (mut store, mut a) = fixture(&path);
+    let policy = commission(&mut store, &path, &mut a);
+    store.admit_workload(&a, policy.revision).unwrap();
+    let ledger = Uuid::new_v4();
+    store
+        .start_allocation(a.rig_id, a.allocation_id, a.client_id, ledger, 1002)
+        .unwrap();
+    store
+        .store_receipts(&receipts(&a, ledger, "failed"), 1100)
+        .unwrap();
+    store
+        .release_workload(a.rig_id, a.client_id, a.allocation_id, ledger, 2)
+        .unwrap();
+    let left = attempts_left(&store, &a);
+
+    let mut next = next_grant(&a, a.client_id);
+    next.snapshot["program"]["assignment"]["goals"][0]["attempts_remaining"] = json!(left);
+    store.admit_workload(&next, policy.revision).unwrap();
+    store
+        .reconcile_workload(next.rig_id, next.client_id, next.allocation_id, 1200)
+        .unwrap();
+
+    assert_eq!(attempts_left(&store, &a), left, "retiring refunds nothing");
+}
+
+#[test]
+fn a_lost_release_acknowledgement_leaves_clean_work_as_released() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("meta.sqlite");
+    let (mut store, mut a) = fixture(&path);
+    let policy = commission(&mut store, &path, &mut a);
+    store.admit_workload(&a, policy.revision).unwrap();
+    let ledger = Uuid::new_v4();
+    store
+        .start_allocation(a.rig_id, a.allocation_id, a.client_id, ledger, 1002)
+        .unwrap();
+    store
+        .store_receipts(&receipts(&a, ledger, "saved"), 1100)
+        .unwrap();
+    let sealed = store
+        .release_workload(a.rig_id, a.client_id, a.allocation_id, ledger, 2)
+        .unwrap();
+    let left = attempts_left(&store, &a);
+
+    let answer = store
+        .reconcile_workload(a.rig_id, a.client_id, a.allocation_id, 1200)
+        .unwrap();
+
+    assert_eq!(answer, sealed);
+    assert_eq!(answer.closed_at_ms, None);
+    assert_eq!(
+        store
+            .workload(a.rig_id, a.client_id, a.allocation_id)
+            .unwrap(),
+        Some(sealed)
+    );
+    assert_eq!(attempts_left(&store, &a), left);
+}
+
 #[test]
 fn allowing_every_plan_covers_one_activated_later_and_a_list_does_not() {
     let dir = tempfile::tempdir().unwrap();

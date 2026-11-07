@@ -17,7 +17,7 @@ const plugin: DirectorPluginClient = {
 };
 const reported: DirectorPluginClient = {
   ...plugin,
-  review: 'ready',
+  review: 'not_applied',
   report: { report_id: 'report-1', observed_at_ms: Date.now(), received_at_ms: Date.now(), configuration: equipment, filter_names: { ha: 'H-alpha' }, accepted_revision: null },
 };
 const plans = [{ id: 'plan-1', name: 'Heart Nebula' }, { id: 'plan-2', name: 'M31' }];
@@ -108,10 +108,11 @@ describe('RigPluginPanel', () => {
     expect(onRigChanged).toHaveBeenCalledTimes(1);
   });
 
-  it('offers no way to accept an old report or one that open work blocks', async () => {
-    show({ ...base, clients: [{ ...reported, review: 'old' }] });
-    expect(await screen.findByText(/No approval is needed/)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Accept equipment' })).toBeNull();
+  it('explains why a report from a plugin that is not allowed to take work is not applied', async () => {
+    const other = { ...reported, client_id: 'client-2', client_name: 'Second PC' };
+    show({ ...base, configuration: equipment, clients: [plugin, other], policy });
+    expect(await screen.findByText(/Not applied, because another plugin is allowed to take work/)).toBeInTheDocument();
+    expect(screen.queryByText(/No approval is needed/)).toBeNull();
   });
 
   it('says what is missing before work can be allowed', async () => {

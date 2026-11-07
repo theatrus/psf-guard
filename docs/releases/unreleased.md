@@ -6,7 +6,7 @@
 
 ## Changes
 
-- **Start Director without manual recovery:** Paired equipment reports apply automatically and preserve work permission and plan selection. With the matching Director plugin update, interrupted assignments retire automatically after the plugin confirms idle equipment. Saved images and receipts remain available, and fresh work uses current image counts.
+- **Start Director without manual recovery:** Paired equipment reports apply automatically and preserve work permission and plan selection. With the matching Director plugin update, interrupted assignments retire automatically after the plugin confirms idle equipment. Saved images and receipts remain available, and fresh work uses current image counts. On a rig with two paired plugins, only the plugin allowed to take work updates the equipment.
 
 - **Run a rig with the Director plugin:** Rig setup has a new **Director** tab. Generate a pairing code, see the equipment the plugin reports automatically, manage work permission and follow its work without calling the API.
 - **Use Director and Sync on one rig:** Both plugins can stay active. Changing a rig's **Mode** keeps both pairings, the accepted equipment and the allowed work, so you can compare the two. Pairing Director no longer switches a rig set to Target Scheduler.
