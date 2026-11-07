@@ -745,7 +745,7 @@ fn an_operator_admitted_allocation_keeps_its_spent_attempts_when_closed() {
 }
 
 #[test]
-fn changing_only_the_mode_keeps_the_rig_allowed_to_take_work() {
+fn profile_changes_preserve_work_permission_and_selected_projects() {
     use psf_guard_director_meta::profile::RigMode;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("meta.sqlite");
@@ -764,27 +764,86 @@ fn changing_only_the_mode_keeps_the_rig_allowed_to_take_work() {
         assert_eq!(kept.revision, policy.revision, "no new review happened");
     }
 
-    // Any other change still needs a person to look at it again.
+    // Equipment and other setup changes also preserve the operator's choice.
     let current = store.rig_profile(a.rig_id).unwrap().unwrap();
     let mut next = current.clone();
     next.mode = Some(RigMode::TargetScheduler);
     next.peer_id = Some("peer".into());
     let saved = store.save_rig_profile(&next, current.revision).unwrap();
-    let stale = store.workload_policy(a.rig_id).unwrap().unwrap();
-    assert_eq!(stale.profile_revision, current.revision);
-    assert_ne!(stale.profile_revision, saved.revision);
+    let kept = store.workload_policy(a.rig_id).unwrap().unwrap();
+    assert_eq!(kept.profile_revision, saved.revision);
+    assert_eq!(kept.project_ids, policy.project_ids);
+    assert!(kept.enabled);
 
-    // A policy already out of date does not come back on a mode change.
+    // An explicit off setting stays off across later setup changes.
+    let mut disabled = kept.clone();
+    disabled.enabled = false;
+    disabled.revision += 1;
+    store
+        .save_workload_policy(&disabled, kept.revision)
+        .unwrap();
     let mut again = saved.clone();
     again.mode = Some(RigMode::Director);
-    store.save_rig_profile(&again, saved.revision).unwrap();
+    let saved = store.save_rig_profile(&again, saved.revision).unwrap();
+    let kept = store.workload_policy(a.rig_id).unwrap().unwrap();
+    assert_eq!(kept.profile_revision, saved.revision);
+    assert_eq!(kept.project_ids, policy.project_ids);
+    assert!(!kept.enabled);
+}
+
+#[test]
+fn reconciliation_replaces_uncertain_work_without_losing_images_or_sealing_late_receipts() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("meta.sqlite");
+    let (mut store, mut a) = fixture(&path);
+    let policy = commission(&mut store, &path, &mut a);
+    store.admit_workload(&a, policy.revision).unwrap();
+    let ledger = Uuid::new_v4();
+    store
+        .start_allocation(a.rig_id, a.allocation_id, a.client_id, ledger, 1002)
+        .unwrap();
+    let rows = receipts(&a, ledger, "saved");
+    store.store_receipts(&rows[..1], 1100).unwrap();
+    assert!(store
+        .reconcile_workload(a.rig_id, Uuid::new_v4(), a.allocation_id, 1200)
+        .is_err());
+    let retired = store
+        .reconcile_workload(a.rig_id, a.client_id, a.allocation_id, 1200)
+        .unwrap();
+    assert!(retired.released);
+    assert_eq!(retired.ledger_id, Some(ledger));
+    assert_eq!(retired.terminal_sequence, None);
+    assert_eq!(retired.closed_at_ms, Some(1200));
+    assert_eq!(store.workload_policy(a.rig_id).unwrap().unwrap(), policy);
+    let mut next = a.clone();
+    next.allocation_id = Uuid::new_v4();
+    next.snapshot["program"]["assignment"]["id"] =
+        json!(format!("allocation-{}", next.allocation_id));
+    store.admit_workload(&next, policy.revision).unwrap();
+    // A lost retirement acknowledgement cannot retire newer work or refill its budget.
     assert_eq!(
         store
-            .workload_policy(a.rig_id)
-            .unwrap()
-            .unwrap()
-            .profile_revision,
-        current.revision
+            .reconcile_workload(a.rig_id, a.client_id, a.allocation_id, 1300)
+            .unwrap(),
+        retired
+    );
+    assert_eq!(
+        store.allocation(a.rig_id).unwrap().unwrap().allocation_id,
+        next.allocation_id
+    );
+    store.store_receipts(&rows[1..], 1400).unwrap();
+    let saved = store.saved_captures_by_goal(a.rig_id).unwrap();
+    assert!(!saved.is_empty());
+    store.store_receipts(&rows, 1500).unwrap();
+    assert_eq!(store.saved_captures_by_goal(a.rig_id).unwrap(), saved);
+    drop(store);
+    let store = MetaStore::open(&path).unwrap();
+    assert_eq!(store.saved_captures_by_goal(a.rig_id).unwrap(), saved);
+    assert_eq!(
+        store
+            .workload(a.rig_id, a.client_id, a.allocation_id)
+            .unwrap(),
+        Some(retired)
     );
 }
 

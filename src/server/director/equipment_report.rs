@@ -1,5 +1,5 @@
-//! Native evidence may be submitted by a paired client; only an interactive
-//! operator can adopt it into the existing rig setup after explicit review.
+//! Paired native reports update the rig's equipment automatically. Manual
+//! optics, limits, work permission and project selection remain unchanged.
 use super::*;
 use axum::{
     http::{
@@ -84,7 +84,7 @@ pub(super) async fn submit(
             {
                 return Err(Error::WrongRig);
             }
-            let report = store.report_equipment(&EquipmentReport {
+            let mut report = store.report_equipment(&EquipmentReport {
                 report_id: input.report_id,
                 client_id: client.client_id,
                 catalog_id: input.catalog_id,
@@ -98,6 +98,40 @@ pub(super) async fn submit(
                 accepted_revision: None,
                 accepted_from_revision: None,
             })?;
+            if report.accepted_revision.is_none() {
+                let revision = store
+                    .rig_profile(rig)?
+                    .map_or(0, |profile| profile.revision);
+                store.accept_equipment_report(
+                    rig,
+                    client.client_id,
+                    report.report_id,
+                    revision,
+                    now_ms()?,
+                )?;
+                report = store
+                    .equipment_reports(rig)?
+                    .into_iter()
+                    .find(|value| value.client_id == client.client_id)
+                    .ok_or(Error::Missing)?;
+            }
+            if store.workload_policy(rig)?.is_none() {
+                let profile = store.rig_profile(rig)?.ok_or(Error::Missing)?;
+                store.save_workload_policy(
+                    &psf_guard_director_meta::workload::Policy {
+                        rig_id: rig,
+                        catalog_id: client.catalog_id,
+                        client_id: client.client_id,
+                        profile_id: client.profile_id,
+                        profile_revision: profile.revision,
+                        configuration_id: report.configuration.id.clone(),
+                        project_ids: Vec::new(),
+                        enabled: true,
+                        revision: 1,
+                    },
+                    0,
+                )?;
+            }
             Ok::<_, Error>(Acknowledgement {
                 coordinator_instance_id: instance,
                 catalog_id: report.catalog_id,

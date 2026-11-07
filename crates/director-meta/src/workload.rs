@@ -1,6 +1,5 @@
-//! Reviewed authority for automatic intake. Started work never expires into a
-//! fresh budget: only an executor's quiescent, fully delivered terminal ledger
-//! can release it. Immutable history survives client revocation.
+//! Automatic intake with immutable assignment history. A quiescent executor
+//! can retire interrupted work; fresh work uses current image counts.
 use super::*;
 use allocation::Allocation;
 use psf_guard_director_core::program::Program;
@@ -32,8 +31,8 @@ pub struct Workload {
     pub released: bool,
     pub ledger_id: Option<Uuid>,
     pub terminal_sequence: Option<u64>,
-    /// When an operator closed work whose plugin was removed. Such work was
-    /// never released by its executor, so nothing proves it stopped cleanly.
+    /// When work was retired by reconciliation or an operator. This does not
+    /// assert that its interrupted operations completed successfully.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub closed_at_ms: Option<u64>,
 }
@@ -85,13 +84,14 @@ fn profile_matches(conn: &Connection, p: &Policy) -> Result<bool, Error> {
     }))
 }
 
-/// Keep a policy on the rig's new profile revision after a change of mode
-/// alone. A policy that was already out of date stays out of date.
-pub(crate) fn follow_mode_change(
+/// Keep the operator's work permission and project selection when the rig's
+/// reported setup changes. New assignments use the new profile and equipment.
+pub(crate) fn follow_profile_change(
     conn: &Connection,
     rig: Uuid,
     from: u64,
     to: u64,
+    configuration_id: Option<&str>,
 ) -> Result<(), Error> {
     let Some(mut value) = policy(conn, rig)? else {
         return Ok(());
@@ -100,6 +100,9 @@ pub(crate) fn follow_mode_change(
         return Ok(());
     }
     value.profile_revision = to;
+    if let Some(configuration_id) = configuration_id {
+        value.configuration_id = configuration_id.to_owned();
+    }
     conn.execute(
         "UPDATE workload_policy SET payload=?2 WHERE rig_id=?1",
         params![
@@ -130,6 +133,67 @@ fn carry_budget(conn: &Connection, rig: Uuid, program: &mut Program) -> Result<(
 }
 
 impl MetaStore {
+    /// Retire an executor's previous assignment without claiming its operations
+    /// finished. Saved receipts remain valid; fresh work uses current image counts.
+    pub fn reconcile_workload(
+        &mut self,
+        rig: Uuid,
+        client: Uuid,
+        id: Uuid,
+        now_ms: u64,
+    ) -> Result<Workload, Error> {
+        for value in [rig, client, id] {
+            valid_id(value)?;
+        }
+        if now_ms == 0 {
+            return Err(Error::InvalidInput);
+        }
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let recorded = history(&tx, id)?;
+        if let Some(done) = recorded.as_ref() {
+            if done.allocation.rig_id != rig || done.allocation.client_id != client {
+                return Err(Error::Conflict);
+            }
+            if done.closed_at_ms.is_some() {
+                return Ok(done.clone());
+            }
+        }
+        let grant = allocation::read(&tx, rig, self.instance_id)?
+            .filter(|grant| grant.allocation_id == id && grant.client_id == client)
+            .ok_or(Error::NotFound)?;
+        let ledger: Option<String> = tx
+            .query_row(
+                "SELECT ledger_id FROM execution_start WHERE rig_id=?1 AND allocation_id=?2",
+                params![rig.to_string(), id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let mut closed = recorded.unwrap_or(Workload {
+            allocation: grant,
+            released: false,
+            ledger_id: None,
+            terminal_sequence: None,
+            closed_at_ms: None,
+        });
+        if let Some(ledger) = ledger {
+            closed.ledger_id = Some(Uuid::parse_str(&ledger).map_err(|_| Error::CorruptDatabase)?);
+        }
+        closed.released = true;
+        closed.closed_at_ms = Some(now_ms);
+        tx.execute("INSERT INTO workload_history VALUES(?1,?2,?3) ON CONFLICT(allocation_id) DO UPDATE SET payload=excluded.payload",
+            params![id.to_string(), rig.to_string(), serde_json::to_string(&closed).map_err(|_| Error::InvalidInput)?])?;
+        // Assignment attempts are replaceable. Captures and accepted/pending
+        // counts are retained; the next program gets a new bounded attempt set.
+        tx.execute(
+            "DELETE FROM workload_budget WHERE rig_id=?1",
+            [rig.to_string()],
+        )?;
+        tx.commit()?;
+        Ok(closed)
+    }
+
     pub fn workload_policy(&self, rig: Uuid) -> Result<Option<Policy>, Error> {
         valid_id(rig)?;
         policy(&self.connection, rig)

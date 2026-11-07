@@ -20,7 +20,7 @@ async fn personal_access_tokens_cannot_accept_equipment_reports() {
 }
 
 #[tokio::test]
-async fn native_evidence_is_staged_and_only_operator_review_changes_profile() {
+async fn paired_native_reports_apply_automatically_and_preserve_work_permission() {
     let (_dir, state, app, instance, catalog, rig) = fixture().await;
     let profile = Uuid::new_v4();
     let paired = credential(&app, instance, catalog, rig, profile).await;
@@ -58,22 +58,41 @@ async fn native_evidence_is_staged_and_only_operator_review_changes_profile() {
     let (code, ack) = client_call(&app, "POST", &path, input.clone(), token, Some(profile)).await;
     assert_eq!(code, StatusCode::OK, "{ack}");
     assert_eq!(ack["data"]["report_id"], report.to_string());
-    assert!(ack["data"]["accepted_revision"].is_null());
+    assert_eq!(ack["data"]["accepted_revision"], 2);
     let service = state.director.clone().unwrap();
-    // Staged, not applied: the profile pairing made holds no equipment.
+    // Pairing authorizes reports for this exact rig, catalog and profile.
     let paired = service
+        .clone()
         .query(move |s| s.rig_profile(rig))
         .await
         .unwrap()
         .unwrap();
     assert_eq!(
-        (paired.revision, paired.configuration.is_none(), paired.mode),
+        (paired.revision, paired.configuration.is_some(), paired.mode),
         (
-            1,
+            2,
             true,
             Some(psf_guard_director_meta::profile::RigMode::Director)
         )
     );
+    let policy = service
+        .clone()
+        .query(move |s| s.workload_policy(rig))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(policy.enabled);
+    assert_eq!(policy.profile_revision, paired.revision);
+    assert!(policy.project_ids.is_empty());
+    // Explicitly turning work off survives both repeated and changed reports.
+    let mut disabled = policy.clone();
+    disabled.enabled = false;
+    disabled.revision += 1;
+    service
+        .clone()
+        .with_writer(move |s| Ok::<_, Error>(s.save_workload_policy(&disabled, policy.revision)?))
+        .await
+        .unwrap();
     assert_eq!(
         client_call(&app, "GET", &path, Value::Null, token, Some(profile))
             .await
@@ -108,6 +127,22 @@ async fn native_evidence_is_staged_and_only_operator_review_changes_profile() {
     );
     let (_, retry) = client_call(&app, "POST", &path, input, token, Some(profile)).await;
     assert_eq!(retry["data"]["accepted_revision"], 2);
+    let mut changed = json!({"coordinator_instance_id":instance,"catalog_id":catalog,"report_id":Uuid::new_v4(),"observed_at_ms":now+1,
+        "configuration":program.configuration,"filter_names":{"ha":"New filter name"}});
+    changed["configuration"]["id"] = json!("changed-equipment");
+    let (code, ack) = client_call(&app, "POST", &path, changed, token, Some(profile)).await;
+    assert_eq!(code, StatusCode::OK, "{ack}");
+    let policy = service
+        .clone()
+        .query(move |s| s.workload_policy(rig))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!policy.enabled);
+    assert_eq!(
+        policy.profile_revision,
+        ack["data"]["accepted_revision"].as_u64().unwrap()
+    );
     assert_eq!(
         call(
             &app,

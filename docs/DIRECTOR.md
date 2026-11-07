@@ -18,20 +18,20 @@ enable acquisition.
 ## Run a rig with the Director plugin
 
 Open **Settings › Rig setup**, choose the rig, then open its **Director** tab.
-The tab shows who picks the work, both plugins, and four steps.
+The tab shows pairing, reported equipment, work permission and current work.
 
 1. **Pair.** Click **Generate Director pairing code**. In N.I.N.A., open the
    Director plugin settings, enter the server URL and the code, then click
    **Pair**. The code works once and expires after an hour. The tab updates
    when the plugin pairs. The plugin needs HTTPS unless the server runs on the
    same computer or you allow plain HTTP in its settings.
-2. **Equipment.** Connect the equipment, then click **Report equipment** in the
-   Director Session. Check the report, then click **Accept equipment**. A report
-   older than 15 minutes must be sent again. Equipment cannot change while work
-   is open. The report includes the camera's default gain and offset from
+2. **Equipment.** Connect the equipment in N.I.N.A. Director reports it
+   automatically when the session starts, and PSF Guard applies the report
+   without approval. The report includes the camera's default gain and offset from
    N.I.N.A. Director uses them for any exposure template left at the camera
    default (`-1`).
-3. **Allow work.** Click **Allow work**. The plugin runs every plan activated
+3. **Allow work.** Work is allowed automatically after the paired plugin's
+   first equipment report. The plugin runs every plan activated
    on this rig, including plans you activate later. To keep a plan away from
    the plugin, leave it inactive on this rig. **Turn off** stops new work.
 4. **Work.** This step shows the plugin's open work and last status. The
@@ -40,10 +40,19 @@ The tab shows who picks the work, both plugins, and four steps.
    in N.I.N.A., turn on **Enable acquisition**, and run the sequence. If no
    activated plan can run on this rig, the step lists why.
 
-Saving other rig setup stops new work until you click **Allow work again**, so
-the plugin never runs on setup nobody reviewed. Accepting new equipment or
-removing the allowed plugin does the same. The **Allow work** step explains
-which of these happened. Changing the mode or activating a plan does not.
+Equipment reports and setup changes preserve work permission and the selected
+plans. An explicit **Turn off** stays off until you allow work again. Removing
+the allowed plugin still stops that plugin from taking new work.
+
+### Recover an interrupted session
+
+With the matching Director plugin update, a new Run confirms idle equipment,
+stops mount motion and guiding, delivers saved capture receipts and retires the
+previous assignment automatically. PSF Guard retains images and assignment
+history. Director requests fresh work using current accepted and pending image
+counts. An uncertain operation is not marked successful and its old assignment
+cannot run again. Automatic retries keep the current Run's original duration
+limit; previous observing-night records no longer require manual removal.
 
 ### Use Director and Sync on one rig
 

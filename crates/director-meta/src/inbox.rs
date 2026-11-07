@@ -164,7 +164,8 @@ impl MetaStore {
         if wrong_owner {
             return Err(Error::Conflict);
         }
-        let sealed: Option<i64> = tx.query_row("SELECT json_extract(payload,'$.terminal_sequence') FROM workload_history WHERE json_extract(payload,'$.ledger_id')=?1", [&ledger], |r| r.get(0)).optional()?;
+        let sealed: Option<Option<i64>> = tx.query_row("SELECT json_extract(payload,'$.terminal_sequence') FROM workload_history WHERE json_extract(payload,'$.ledger_id')=?1", [&ledger], |r| r.get(0)).optional()?;
+        let sealed = sealed.flatten();
         if sealed.is_some_and(|end| {
             receipts
                 .iter()

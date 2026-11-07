@@ -6,6 +6,8 @@
 
 ## Changes
 
+- **Start Director without manual recovery:** Paired equipment reports apply automatically and preserve work permission and plan selection. With the matching Director plugin update, interrupted assignments retire automatically after the plugin confirms idle equipment. Saved images and receipts remain available, and fresh work uses current image counts.
+
 - **Run a rig with the Director plugin:** Rig setup has a new **Director** tab. Generate a pairing code, review the equipment the plugin reports, allow it to run the plans activated on the rig and follow its work without calling the API.
 - **Use Director and Sync on one rig:** Both plugins can stay active. Changing a rig's **Mode** keeps both pairings, the accepted equipment and the allowed work, so you can compare the two. Pairing Director no longer switches a rig set to Target Scheduler.
 - **Run plans whose templates use the camera default:** Director dropped every exposure template left at gain or offset `-1`, so a rig with those templates had nothing to run once you accepted its equipment. The plugin now reports N.I.N.A.'s default gain and offset, and Director uses them. Update PSF Guard Director, click **Report equipment**, accept the report, then click **Allow work again**.

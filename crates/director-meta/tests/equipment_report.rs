@@ -295,7 +295,7 @@ fn globally_reused_ids_conflict_and_schema_sixteen_upgrades() {
 }
 
 #[test]
-fn outstanding_allocations_block_acceptance_and_reports_survive_backup() {
+fn reports_update_equipment_without_replacing_outstanding_work_and_survive_backup() {
     let (dir, mut store, report) = fixture();
     store.report_equipment(&report).unwrap();
     let id = Uuid::new_v4();
@@ -319,15 +319,20 @@ fn outstanding_allocations_block_acceptance_and_reports_survive_backup() {
         snapshot: serde_json::json!({"coordinator_instance_id":store.instance_id(),"catalog_id":report.catalog_id,"rig_id":report.rig_id,"program":program}),
     };
     store.admit_allocation(&allocation).unwrap();
-    assert!(matches!(
-        store.accept_equipment_report(report.rig_id, report.client_id, report.report_id, 0, 1100),
-        Err(Error::Conflict)
-    ));
-    assert!(store.rig_profile(report.rig_id).unwrap().is_none());
+    let saved = store
+        .accept_equipment_report(report.rig_id, report.client_id, report.report_id, 0, 1100)
+        .unwrap();
+    assert_eq!(saved.configuration.unwrap().value, report.configuration);
     let backup = dir.path().join("backup.sqlite");
     store.backup(&backup).unwrap();
     let copy = MetaStore::open(&backup).unwrap();
-    assert_eq!(copy.equipment_reports(report.rig_id).unwrap(), vec![report]);
+    let mut expected = report.clone();
+    expected.accepted_revision = Some(1);
+    expected.accepted_from_revision = Some(0);
+    assert_eq!(
+        copy.equipment_reports(report.rig_id).unwrap(),
+        vec![expected]
+    );
     assert_eq!(
         copy.allocation(allocation.rig_id).unwrap(),
         Some(allocation)

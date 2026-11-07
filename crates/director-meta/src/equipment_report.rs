@@ -145,8 +145,8 @@ impl MetaStore {
             .collect()
     }
 
-    /// Review and profile CAS share a transaction. A pending report cannot
-    /// replace an outstanding allocation's equipment assumptions.
+    /// Applying a report and profile CAS share a transaction. Existing
+    /// allocations retain their immutable equipment snapshot.
     pub fn accept_equipment_report(
         &mut self,
         rig: Uuid,
@@ -180,24 +180,28 @@ impl MetaStore {
             }
             return Err(Error::Conflict);
         }
+        let unchanged = profile
+            .configuration
+            .as_ref()
+            .is_some_and(|current| current.value == report.configuration)
+            && profile.filter_names == report.filter_names
+            && profile.camera_defaults == report.camera_defaults;
         if now < report.received_at_ms
-            || now.saturating_sub(report.observed_at_ms.min(report.received_at_ms)) > MAX_REPORT_AGE_MS
-            || tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM execution_allocation a WHERE rig_id=?1 AND NOT EXISTS(SELECT 1 FROM workload_history w WHERE w.allocation_id=a.allocation_id AND json_extract(w.payload,'$.released')=1))",
-                [rig.to_string()],
-                |r| r.get::<_, bool>(0),
-            )?
+            || now.saturating_sub(report.observed_at_ms.min(report.received_at_ms))
+                > MAX_REPORT_AGE_MS
         {
             return Err(Error::Conflict);
         }
-        profile.configuration = Some(Reported {
-            value: report.configuration.clone(),
-            source: Source::Plugin {},
-            reported_at_ms: report.observed_at_ms,
-        });
-        profile.filter_names = report.filter_names.clone();
-        profile.camera_defaults = report.camera_defaults;
-        profile.updated_at_ms = now;
+        if !unchanged {
+            profile.configuration = Some(Reported {
+                value: report.configuration.clone(),
+                source: Source::Plugin {},
+                reported_at_ms: report.observed_at_ms,
+            });
+            profile.filter_names = report.filter_names.clone();
+            profile.camera_defaults = report.camera_defaults;
+            profile.updated_at_ms = now;
+        }
         let saved = crate::profile::save_profile(&tx, &profile, expected_revision)?;
         report.accepted_revision = Some(saved.revision);
         report.accepted_from_revision = Some(expected_revision);

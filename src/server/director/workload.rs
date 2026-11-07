@@ -366,6 +366,58 @@ pub(super) struct Close {
     catalog_id: Uuid,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Reconcile {
+    coordinator_instance_id: Uuid,
+    catalog_id: Uuid,
+    camera_idle: bool,
+    mount_stopped: bool,
+    guider_stopped: bool,
+}
+
+pub(super) async fn reconcile(
+    State(state): State<Arc<AppState>>,
+    Path((rig, allocation)): Path<(Uuid, Uuid)>,
+    headers: axum::http::HeaderMap,
+    Json(input): Json<Reconcile>,
+) -> Response {
+    response(
+        async {
+            let service = enabled(&state)?;
+            if input.coordinator_instance_id != service.instance_id
+                || !input.camera_idle
+                || !input.mount_stopped
+                || !input.guider_stopped
+            {
+                return Err(Error::Invalid.into());
+            }
+            let (hash, profile) = credential(&headers)?;
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .and_then(|value| u64::try_from(value.as_millis()).ok())
+                .ok_or(Error::Internal)?;
+            service
+                .with_writer(move |store| {
+                    let client = store.client_for_token(&hash)?.ok_or(Error::Invalid)?;
+                    if client.rig_id != rig
+                        || client.catalog_id != input.catalog_id
+                        || client.profile_id != profile
+                    {
+                        return Err(Error::WrongRig.into());
+                    }
+                    store.reconcile_workload(rig, client.client_id, allocation, now)?;
+                    Ok::<_, program::PullError>(
+                        serde_json::json!({"allocation_id":allocation,"retired":true}),
+                    )
+                })
+                .await
+        }
+        .await,
+    )
+}
+
 /// Close work whose plugin was removed, so the rig can take work again.
 pub(super) async fn close(
     State(state): State<Arc<AppState>>,

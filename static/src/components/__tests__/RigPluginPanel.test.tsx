@@ -87,25 +87,24 @@ describe('RigPluginPanel', () => {
     expect(onRigChanged).toHaveBeenCalled();
   });
 
-  it('accepts a fresh report against the revision it loaded', async () => {
-    const { calls, onRigChanged } = show({ ...base, clients: [reported] });
+  it('shows automatic equipment updates without a manual approval step', async () => {
+    const { calls } = show({ ...base, clients: [reported] });
     await screen.findByText(/reported ASI2600/);
     expect(screen.getByText(/Filters: H-alpha/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Accept equipment' }));
-    await waitFor(() => expect(calls).toHaveLength(1));
-    expect(calls[0].body).toEqual({ coordinator_instance_id: instance, catalog_id: catalog, report_id: 'report-1', expected_revision: 4 });
-    await waitFor(() => expect(onRigChanged).toHaveBeenCalled());
+    expect(screen.getByText(/No approval is needed/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Accept equipment' })).toBeNull();
+    expect(calls).toHaveLength(0);
   });
 
   it('offers no way to accept an old report or one that open work blocks', async () => {
     show({ ...base, clients: [{ ...reported, review: 'old' }] });
-    expect(await screen.findByText(/more than 15 minutes old/)).toBeInTheDocument();
+    expect(await screen.findByText(/No approval is needed/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Accept equipment' })).toBeNull();
   });
 
   it('says what is missing before work can be allowed', async () => {
     show({ ...base, clients: [plugin] });
-    expect(await screen.findByText('Accept the equipment first.')).toBeInTheDocument();
+    expect(await screen.findByText('Connect equipment in N.I.N.A. and run Director Session.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Allow work' })).toBeNull();
   });
 
