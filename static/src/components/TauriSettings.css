@@ -3143,6 +3143,12 @@
   padding: 0;
 }
 
+.tauri-settings .settings-rig-databases > li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 .tauri-settings .settings-rig-database-open {
   display: flex;
   align-items: center;

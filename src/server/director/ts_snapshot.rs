@@ -73,7 +73,7 @@ impl Columns {
 fn read_profile(connection: &Connection, profile_id: &str) -> rusqlite::Result<ReadSnapshot> {
     let mut warnings = Vec::new();
     let others: i64 = connection.query_row(
-        "SELECT COUNT(*) FROM project WHERE state=1 AND IFNULL(profileId,'')<>?1",
+        "SELECT COUNT(*) FROM project WHERE state=1 AND IFNULL(profileId,'') NOT IN (?1,'00000000-0000-4000-8000-505346475244')",
         [profile_id],
         |row| row.get(0),
     )?;
@@ -153,7 +153,7 @@ fn read_preferences(connection: &Connection, profile_id: &str) -> rusqlite::Resu
         return Ok(defaults);
     }
     let sql = format!(
-        "SELECT {}, {}, {}, {} FROM profilepreference p WHERE p.profileId=?1 ORDER BY p.Id LIMIT 1",
+        "SELECT {}, {}, {}, {} FROM profilepreference p WHERE p.profileId IN (?1,'00000000-0000-4000-8000-505346475244') ORDER BY p.Id LIMIT 1",
         columns.or("p", "enableSlewCenter", "1"),
         columns.or("p", "parkonwait", "0"),
         columns.or("p", "exposurethrottle", "125"),
@@ -182,7 +182,7 @@ fn read_templates(
     let sql = format!(
         "SELECT t.Id, t.name, t.filtername, t.gain, t.offset, t.bin, t.readoutmode,
                 {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}
-         FROM exposuretemplate t WHERE t.profileId=?1 ORDER BY t.Id",
+         FROM exposuretemplate t WHERE t.profileId IN (?1,'00000000-0000-4000-8000-505346475244') ORDER BY t.Id",
         c.or("t", "twilightlevel", "0"),
         c.or("t", "minutesOffset", "0"),
         c.or("t", "moonavoidanceenabled", "0"),
@@ -254,7 +254,7 @@ fn read_projects(connection: &Connection, profile_id: &str) -> rusqlite::Result<
     let c = Columns::of(connection, "project")?;
     let sql = format!(
         "SELECT p.Id, {}, p.name, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}
-         FROM project p WHERE p.profileId=?1 ORDER BY p.Id",
+         FROM project p WHERE p.profileId IN (?1,'00000000-0000-4000-8000-505346475244') ORDER BY p.Id",
         c.or("p", "guid", "NULL"),
         c.or("p", "state", "0"),
         c.or("p", "priority", "1"),
@@ -309,7 +309,7 @@ fn read_rule_weights(
     let rows = connection
         .prepare(
             "SELECT r.projectid, r.name, r.weight FROM ruleweight r
-             JOIN project p ON p.Id=r.projectid WHERE p.profileId=?1 ORDER BY r.Id",
+             JOIN project p ON p.Id=r.projectid WHERE p.profileId IN (?1,'00000000-0000-4000-8000-505346475244') ORDER BY r.Id",
         )?
         .query_map([profile_id], |row| {
             Ok((
@@ -336,7 +336,7 @@ fn read_targets(
     let c = Columns::of(connection, "target")?;
     let sql = format!(
         "SELECT t.Id, {}, t.name, t.active, t.ra, t.dec, {}, {}, t.projectid
-         FROM target t JOIN project p ON p.Id=t.projectid WHERE p.profileId=?1 ORDER BY t.Id",
+         FROM target t JOIN project p ON p.Id=t.projectid WHERE p.profileId IN (?1,'00000000-0000-4000-8000-505346475244') ORDER BY t.Id",
         c.or("t", "guid", "NULL"),
         c.or("t", "rotation", "0"),
         c.or("t", "roi", "100"),
@@ -405,7 +405,7 @@ fn read_plans(
         "SELECT e.Id, {}, e.targetid, e.exposureTemplateId, e.exposure,
                 COALESCE(e.desired, 0), COALESCE(e.acquired, 0), COALESCE(e.accepted, 0), {}
          FROM exposureplan e JOIN target t ON t.Id=e.targetid JOIN project p ON p.Id=t.projectid
-         WHERE p.profileId=?1 ORDER BY e.Id",
+         WHERE p.profileId IN (?1,'00000000-0000-4000-8000-505346475244') ORDER BY e.Id",
         c.or("e", "guid", "NULL"),
         c.or("e", "enabled", "1"),
     );
@@ -461,7 +461,7 @@ fn read_items(
     let sql = format!(
         "SELECT i.targetid, i.\"order\", {next}, i.action, i.referenceIdx
          FROM \"{table}\" i JOIN target t ON t.Id=i.targetid JOIN project p ON p.Id=t.projectid
-         WHERE p.profileId=?1 ORDER BY i.targetid, i.\"order\", i.Id"
+         WHERE p.profileId IN (?1,'00000000-0000-4000-8000-505346475244') ORDER BY i.targetid, i.\"order\", i.Id"
     );
     let rows = connection
         .prepare(&sql)?

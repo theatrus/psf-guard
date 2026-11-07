@@ -6,6 +6,7 @@ import { CalibrationPill, DatesPill, DbPill, DensityToggle, FamilyPill, FoldButt
 import { familyMatchesShow, parseShow, SHOW_OPTIONS } from './libraryShow';
 import { usePlans } from './header/useCurrentPlan';
 import LibraryPlans from './director/LibraryPlans';
+import { shownWaitingPlans, waitingPlans } from './director/waitingPlans';
 import { stage, stageShort } from './director/planCardModel';
 import type { DirectorPlanRow } from '../api/directorTypes';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -429,6 +430,11 @@ export default function Overview() {
   // Every project row the Library has, whatever its filters show: a plan
   // with none of these waits in the plans section below the list.
   const projectKeys = useMemo(() => new Set(projects.map((project) => projectKey(project.db_id, project.id))), [projects]);
+
+  const shownWaiting = useMemo(
+    () => shownWaitingPlans(waitingPlans(plans.rows, projectKeys, projectsIncomplete), show, projectSearch, dbFilter).length,
+    [plans.rows, projectKeys, projectsIncomplete, show, projectSearch, dbFilter],
+  );
 
   const projectsByDb = useMemo(() => {
     const map: Record<string, WithDb<ProjectOverview>[]> = {};
@@ -987,6 +993,14 @@ export default function Overview() {
             </p>
           )}
           {stateNotice && !stateNotice.inArchive && <p ref={listNotice} tabIndex={-1} className="library-narrowed" role="status">{stateNotice.text}</p>}
+          {/* These plans list below every project, which can be a long way down. */}
+          {shownWaiting > 0 && activeProjectGroups.length > 0 && (
+            <p className="library-narrowed">
+              <button type="button" className="library-link-button" onClick={() => document.getElementById('library-plans')?.scrollIntoView({ block: 'start' })}>
+                {shownWaiting === 1 ? '1 plan' : `${shownWaiting} plans`} with nothing captured yet
+              </button>
+            </p>
+          )}
 
           {activeProjectGroups.length === 0 && archivedProjects.length === 0 && show !== 'unlinked' && (
             <div className="empty-state">
@@ -1737,7 +1751,8 @@ export default function Overview() {
           })}
           </div>
 
-          <LibraryPlans search={projectSearch} show={show} listed={projectKeys} dbFilter={dbFilter} incomplete={projectsIncomplete} />
+          <LibraryPlans search={projectSearch} show={show} listed={projectKeys} dbFilter={dbFilter} incomplete={projectsIncomplete}
+            onShowNoRig={() => updateParams({ dbfilter: null, show: 'unlinked' })} />
 
           {/* Outside the archive: reopening its last project removes it. */}
           {stateNotice?.inArchive && <p ref={archiveNotice} tabIndex={-1} className="library-narrowed" role="status">{stateNotice.text}</p>}

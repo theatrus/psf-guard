@@ -361,7 +361,7 @@ fn write(context: &DatabaseContext, changes: &TsChanges) -> Result<Saved, Error>
     for change in &changes.projects {
         let (guid, name): (Option<String>, String) = catalog_tx
             .query_row(
-                "SELECT guid, name FROM project WHERE Id = ?1 AND profileId = ?2",
+                "SELECT guid, name FROM project WHERE Id = ?1 AND profileId IN (?2,'00000000-0000-4000-8000-505346475244')",
                 params![change.project_id, profile],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
@@ -394,7 +394,7 @@ fn write(context: &DatabaseContext, changes: &TsChanges) -> Result<Saved, Error>
         let (guid, name): (Option<String>, String) = catalog_tx
             .query_row(
                 "SELECT t.guid, t.name FROM target t JOIN project p ON p.Id = t.projectid
-                 WHERE t.Id = ?1 AND p.profileId = ?2",
+                 WHERE t.Id = ?1 AND p.profileId IN (?2,'00000000-0000-4000-8000-505346475244')",
                 params![change.target_id, profile],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
@@ -462,7 +462,7 @@ fn update_project(
     let written = tx.execute(
         &format!(
             "UPDATE project SET priority = ?1, state = ?2
-             WHERE {} = ?3 AND profileId = ?4 AND priority = ?5 AND state = ?6",
+             WHERE {} = ?3 AND profileId IN (?4,'00000000-0000-4000-8000-505346475244') AND priority = ?5 AND state = ?6",
             row.clause()
         ),
         params![
@@ -489,7 +489,7 @@ fn update_target(
     let written = tx.execute(
         &format!(
             "UPDATE target SET active = ?1
-             WHERE {} = ?2 AND active = ?3 AND projectid IN (SELECT Id FROM project WHERE profileId = ?4)",
+             WHERE {} = ?2 AND active = ?3 AND projectid IN (SELECT Id FROM project WHERE profileId IN (?4,'00000000-0000-4000-8000-505346475244'))",
             row.clause()
         ),
         params![active, row.value(), was, profile],

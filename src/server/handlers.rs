@@ -1283,17 +1283,30 @@ fn reset_catalog_directory_layout(config: &mut crate::db_registry::RemoteImageUp
 #[cfg(test)]
 mod remote_image_layout_settings_tests;
 
-/// `DELETE /api/databases/{db_id}` — drop the registered database. Returns
-/// 200 with `{removed: true}` even on first-call (idempotent on the surface).
+/// `DELETE /api/databases/{db_id}` — drop the registered database and delete
+/// its rig's records, which cannot be undone. The file and its images stay on
+/// disk. Open work refuses it with 409 and changes nothing. Returns 200 with
+/// `{removed: true}` even on first-call (idempotent on the surface).
 pub async fn remove_database_route(
     State(state): State<Arc<AppState>>,
     Path(db_id): Path<String>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
     use crate::db_registry::DbRegistry;
+    use crate::server::director::rig_removal::RemovalError;
 
     require_database_management_allowed(&state)?;
     let registry_path = require_registry_path(&state)?;
     let _registry_guard = state.registry_write.lock().await;
+    // The rig first: when it refuses, the database stays registered.
+    let rig_removed = match state.get_database(&db_id) {
+        Some(catalog) => crate::server::director::rig_removal::remove(&state, catalog)
+            .await
+            .map_err(|error| match error {
+                RemovalError::Refused(reason) => AppError::Conflict(reason),
+                RemovalError::Failed(reason) => AppError::InternalError(reason),
+            })?,
+        None => false,
+    };
     let mut reg = DbRegistry::load_or_init(&registry_path)
         .map_err(|e| AppError::InternalError(format!("loading registry: {}", e)))?;
     let removed_from_registry = reg
@@ -1306,6 +1319,7 @@ pub async fn remove_database_route(
 
     Ok(Json(ApiResponse::success(serde_json::json!({
         "removed": removed_from_registry || removed_from_state,
+        "rig_removed": rig_removed,
     }))))
 }
 

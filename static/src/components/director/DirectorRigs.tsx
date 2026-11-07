@@ -1,10 +1,13 @@
 import { useId, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { BookOpen, ChevronDown, ChevronRight, Telescope } from 'lucide-react';
+import { BookOpen, ChevronDown, ChevronRight, Telescope, Trash2 } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import type { CalibrationRigSettings } from '../../api/types';
+import { useAccess } from '../../auth/access';
 import { useAllDatabases } from '../../hooks/useDatabases';
+import { isTauriApp } from '../../utils/tauri';
+import DatabaseRemoveDialog from '../DatabaseRemoveDialog';
 import { openSettings } from '../../utils/settingsIntent';
 import { formatDegrees } from './framingModel';
 import RigProfileCard from './RigProfileCard';
@@ -32,6 +35,11 @@ export default function DirectorRigs({ databaseId }: { databaseId?: string } = {
   // The calibration library's rigs (a camera and its frame size) each
   // catalog records: its row links to their calibration settings.
   const calibration = useQuery({ queryKey: ['calibration-settings'], queryFn: apiClient.getCalibrationSettings, retry: false, refetchOnWindowFocus: false });
+  // Removing a database needs database management as well as an editor's account.
+  const { canWrite } = useAccess();
+  const { data: serverInfo } = useQuery({ queryKey: ['serverInfo'], queryFn: apiClient.getServerInfo, staleTime: 5 * 60 * 1000 });
+  const canRemove = canWrite && (isTauriApp() || (serverInfo?.allow_database_management ?? false));
+  const [removing, setRemoving] = useState<{ id: string; name: string } | null>(null);
   return <><section aria-label="Rig databases" className="director-records director-rigs">
     {!databaseId && <div className="director-toolbar"><div className="early-beta-heading"><h2>Rigs</h2><EarlyBeta /></div></div>}
     {databases.isPending && <p role="status">Loading rig databases...</p>}
@@ -54,11 +62,13 @@ export default function DirectorRigs({ databaseId }: { databaseId?: string } = {
             <CalibrationRigLinks rigs={calibration.data?.rigs?.filter(rig => rig.database_ids?.includes(db.id)) ?? []} />
           </div>
           <Link to={`/?${new URLSearchParams({ db: db.id, dbfilter: db.id })}`}><BookOpen size={16} aria-hidden="true" />Library</Link>
+          {canRemove && <button type="button" aria-label={`Remove ${db.name}`} title={`Remove ${db.name} from PSF Guard; its files stay on disk`} onClick={() => setRemoving({ id: db.id, name: db.name })}><Trash2 size={16} aria-hidden="true" />Remove</button>}
           {!databaseId && <button type="button" aria-expanded={expanded} aria-controls={setupId} aria-label={`Setup ${db.name}`} title={`Setup ${db.name}`} onClick={() => { setOpenSetup(expanded ? null : db.id); setOpened(current => current.has(db.id) ? current : new Set(current).add(db.id)); }}>{expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}Setup</button>}
         </div>
         <div id={setupId} hidden={!expanded}>{(expanded || opened.has(db.id)) && <RigProfileCard key={db.id} slug={db.id} />}</div>
       </li>;
     })}</ul>
+    {removing && <DatabaseRemoveDialog database={removing} onClose={() => setRemoving(null)} onRemoved={() => setRemoving(null)} />}
   </section>
   </>;
 }

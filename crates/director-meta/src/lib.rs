@@ -27,6 +27,7 @@ pub mod preferences;
 pub mod profile;
 pub mod program_issue;
 pub mod project;
+pub mod rig_removal;
 pub mod site_forecast;
 pub mod site_profile;
 mod storage;
@@ -38,6 +39,11 @@ pub mod workload;
 /// The most plans the plan list shows and a project order can rank. Every
 /// Target Scheduler project becomes a plan, so both follow the same bound.
 pub const MAX_PLANS: usize = 1024;
+
+/// The N.I.N.A. profile PSF Guard gives rows no profile has claimed yet. No
+/// N.I.N.A. profile has this id: the Sync plugin writes these rows into the
+/// profile it runs in. The plugin holds the same value, so it must not change.
+pub const SYNC_PLACED_PROFILE: &str = "00000000-0000-4000-8000-505346475244";
 
 #[derive(Debug)]
 pub enum Error {

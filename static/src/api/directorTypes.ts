@@ -46,6 +46,15 @@ export interface DirectorMappingPage {
   next_after: string | null;
 }
 export interface DirectorRigPlan { catalog_id: string }
+/** What removing a rig's database deletes. A blocker refuses the removal; a
+ *  rig with collaboration records keeps them, and only the database goes. */
+export interface DirectorRigRemoval {
+  rig: DirectorIdentity;
+  plans: string[];
+  plugins: string[];
+  blocker: 'open_work' | null;
+  collaboration: boolean;
+}
 export interface DirectorRigReport {
   binding: { catalog: DirectorCatalogIdentity; rig: DirectorIdentity };
   preview_digest: string;

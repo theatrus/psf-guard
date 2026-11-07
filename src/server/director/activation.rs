@@ -21,7 +21,7 @@ use psf_guard_director_meta::{
     framing::FramingDraft,
     plan::{Contribution, Goal, Objective, PlanDraft},
     preferences::{ResolvedScheduling, SchedulingValues},
-    CatalogIdentity,
+    CatalogIdentity, SYNC_PLACED_PROFILE,
 };
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBehavior};
 use std::{
@@ -851,6 +851,7 @@ async fn execute_guarded(
                         now,
                         scheduling: &scheduling,
                         collaboration: assignment,
+                        sync_plugin_paired: sync_plugin_paired(&catalog.context),
                     },
                 );
                 match outcome {
@@ -902,6 +903,9 @@ async fn execute_guarded(
                 carried.extend(previous_rig(*rig_id));
                 continue;
             };
+            if outcome.record.profile_id == SYNC_PLACED_PROFILE {
+                warnings.push(placement_note(sync_plugin_paired(&catalog.context)));
+            }
             reports.push(RigReport {
                 rig,
                 catalog_slug: Some(catalog.context.id.clone()),
@@ -1741,6 +1745,8 @@ struct Inputs<'a> {
     /// Target Scheduler scheduling limits for this rig and project.
     scheduling: &'a ResolvedScheduling,
     collaboration: Option<&'a collaboration_activation::Admitted>,
+    /// A Sync plugin delivers this database's plans, so it picks the profile.
+    sync_plugin_paired: bool,
 }
 
 struct Outcome {
@@ -1795,12 +1801,7 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
             ));
         }
     }
-    let profile_id = resolve_profile(tx)?.ok_or_else(|| {
-        RigError::Skip(
-            "Database has no N.I.N.A. profile yet; open it in Target Scheduler once, or import a frame."
-                .into(),
-        )
-    })?;
+    let profile_id = new_row_profile(tx, inputs.sync_plugin_paired)?;
     ensure_director_tables(tx)?;
     let mut changes = Vec::new();
     let project_name = inputs.project.name.clone();
@@ -2964,14 +2965,56 @@ fn required_frames(objective: &Objective, contribution: &Contribution) -> Option
     }
 }
 
+/// Whether a Sync plugin can reach this database, and so write its plans into
+/// the N.I.N.A. profile it runs in.
+fn sync_plugin_paired(context: &DatabaseContext) -> bool {
+    context.remote_image_upload.as_ref().is_some_and(|config| {
+        config.sync_enabled && (!config.clients.is_empty() || !config.token_sha256.is_empty())
+    })
+}
+
+/// The profile for rows activation adds. Only N.I.N.A. knows which profile it
+/// has open, so a database the Sync plugin serves, or one with no profile
+/// yet, uses PSF Guard's own: the plugin writes those rows into the profile
+/// it runs in. Any other database is read directly, so its rows need a
+/// profile it already has.
+fn new_row_profile(tx: &Connection, sync_plugin_paired: bool) -> Result<String, RigError> {
+    let known = if sync_plugin_paired {
+        None
+    } else {
+        resolve_profile(tx)?
+    };
+    Ok(known.unwrap_or_else(|| {
+        // Target Scheduler adds a preference row of its own when it needs one.
+        if let Err(error) =
+            crate::commands::import::ensure_profile_preference(tx, SYNC_PLACED_PROFILE)
+        {
+            tracing::debug!(%error, "No preference row for PSF Guard's profile");
+        }
+        SYNC_PLACED_PROFILE.to_owned()
+    }))
+}
+
+/// What the preview says about a project under PSF Guard's own profile.
+fn placement_note(sync_plugin_paired: bool) -> String {
+    if sync_plugin_paired {
+        "The Sync plugin adds this project to the N.I.N.A. profile it runs in.".into()
+    } else {
+        "No N.I.N.A. profile yet. Pair the PSF Guard Sync plugin, and it adds this project to the profile it runs in."
+            .into()
+    }
+}
+
 /// The profile that owns the database's projects, else its only preference
-/// row, else the templates' profile. Target Scheduler shows a project only
+/// row, else the templates' profile. PSF Guard's own profile counts last: its
+/// projects join the profile the Sync plugin runs in, so the snapshot and
+/// the scheduling limits read them with that profile's. Target Scheduler shows a project only
 /// under its own profile, so a fresh GUID would hide everything we write.
 pub(super) fn resolve_profile(tx: &Connection) -> rusqlite::Result<Option<String>> {
     let dominant: Option<String> = tx
         .query_row(
-            "SELECT profileId FROM project WHERE profileId IS NOT NULL AND profileId<>'' GROUP BY profileId ORDER BY COUNT(*) DESC, profileId LIMIT 1",
-            [],
+            "SELECT profileId FROM project WHERE profileId IS NOT NULL AND profileId<>'' GROUP BY profileId ORDER BY profileId=?1, COUNT(*) DESC, profileId LIMIT 1",
+            [SYNC_PLACED_PROFILE],
             |row| row.get(0),
         )
         .optional()?;
