@@ -1112,13 +1112,28 @@ fn build(
                 ));
                 continue;
             };
-            let gain = pick_control(&configuration.gain, row.template_gain);
-            let offset = pick_control(&configuration.offset, row.template_offset);
+            // A recipe is explicit: a template that leaves gain or offset to
+            // the camera (-1) takes the default the plugin reported.
+            let defaults = profile.and_then(|p| p.camera_defaults).unwrap_or_default();
+            let wanted_gain = row.template_gain.or(defaults.gain);
+            let wanted_offset = row.template_offset.or(defaults.offset);
+            let gain = pick_control(&configuration.gain, wanted_gain);
+            let offset = pick_control(&configuration.offset, wanted_offset);
             let (Ok(gain), Ok(offset)) = (gain, offset) else {
-                built.omitted.push(format!(
-                    "{}: template '{}' has no gain or offset this camera supports; check its camera settings",
-                    project.name, row.template_filter
-                ));
+                let default_missing = (wanted_gain.is_none()
+                    && configuration.gain != Control::Unsupported {})
+                    || (wanted_offset.is_none() && configuration.offset != Control::Unsupported {});
+                built.omitted.push(if default_missing {
+                    format!(
+                        "{}: template '{}' uses the camera's default gain or offset, and the plugin has not reported them. Update PSF Guard Director, click Report equipment, then accept the report",
+                        project.name, row.template_filter
+                    )
+                } else {
+                    format!(
+                        "{}: template '{}' has no gain or offset this camera supports; check its camera settings",
+                        project.name, row.template_filter
+                    )
+                });
                 continue;
             };
             let bin = i16::try_from(row.template_bin.unwrap_or(1)).ok();

@@ -9,7 +9,10 @@ use axum::{
     Extension,
 };
 use psf_guard_director_core::program::Configuration;
-use psf_guard_director_meta::{equipment_report::EquipmentReport, profile::RigProfile};
+use psf_guard_director_meta::{
+    equipment_report::EquipmentReport,
+    profile::{CameraDefaults, RigProfile},
+};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -20,6 +23,8 @@ pub(super) struct Submit {
     observed_at_ms: u64,
     configuration: Configuration,
     filter_names: BTreeMap<String, String>,
+    #[serde(default)]
+    camera_defaults: Option<CameraDefaults>,
 }
 
 #[derive(Serialize)]
@@ -89,6 +94,7 @@ pub(super) async fn submit(
                 received_at_ms: now_ms()?,
                 configuration: input.configuration,
                 filter_names: input.filter_names,
+                camera_defaults: input.camera_defaults,
                 accepted_revision: None,
                 accepted_from_revision: None,
             })?;

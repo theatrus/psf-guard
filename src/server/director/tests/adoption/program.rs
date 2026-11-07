@@ -30,6 +30,98 @@ async fn raw_get(
     )
 }
 
+/// Most Target Scheduler templates leave gain and offset to the camera (-1).
+/// A recipe must be explicit, so they take the defaults the plugin reported.
+#[tokio::test]
+async fn a_template_left_to_the_camera_takes_the_reported_default() {
+    let a = activated().await;
+    let instance = a.f.state.director.as_ref().unwrap().instance_id;
+    let path = format!(
+        "/rigs/{}/program?coordinator_instance_id={instance}&catalog_id={}",
+        a.rig, a.rig
+    );
+    let (status, preview) = call(
+        &a.f.app,
+        "POST",
+        &format!("/projects/{}/activation/preview", a.project),
+        json!({}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    let (status, applied) = call(
+        &a.f.app,
+        "POST",
+        &format!("/projects/{}/activation/apply", a.project),
+        json!({"preview_digest": preview["data"]["preview_digest"]}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    a.db.execute("UPDATE exposuretemplate SET gain=-1, offset=-1", [])
+        .unwrap();
+
+    let program: Value = serde_json::from_str(include_str!(
+        "../../../../../crates/director-core/tests/fixtures/execution-program.json"
+    ))
+    .unwrap();
+    let mut configuration = program["configuration"].clone();
+    configuration["rig_id"] = json!(a.rig.to_string());
+    configuration["filters"][0]["id"] = json!("filter-2");
+    configuration["gain"] = json!({"support":"range","minimum":0,"maximum":700});
+    configuration["offset"] = json!({"support":"range","minimum":0,"maximum":200});
+    let report = |defaults: Value| {
+        json!({
+            "coordinator_instance_id": instance, "catalog_id": a.rig, "configuration": configuration,
+            "filter_names": {"filter-2":"Ha"}, "camera_defaults": defaults,
+            "optics": {"sensor_width_px": 6248, "sensor_height_px": 4176, "pixel_size_um": 3.76, "focal_length_mm": 250.0, "aperture_mm": 51.0, "rotation": {"mode":"rotator"}},
+            "site": {"latitude_degrees": 34.2, "longitude_degrees": -118.3, "elevation_meters": 400.0},
+            "horizon": null, "limits": null, "reported_at_ms": 1_700_000_000_000u64,
+        })
+    };
+    let equipment = format!("/rigs/{}/equipment", a.rig);
+
+    // A plugin too old to report defaults: the refusal says what to do.
+    let (status, reported) = call(&a.f.app, "PUT", &equipment, report(Value::Null), None).await;
+    assert_eq!(status, StatusCode::OK, "{reported}");
+    let (status, _, refused) = raw_get(&a.f.app, &path, None).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    assert!(
+        refused["error"]
+            .as_str()
+            .unwrap()
+            .contains("has not reported them"),
+        "{refused}"
+    );
+
+    let (status, reported) = call(
+        &a.f.app,
+        "PUT",
+        &equipment,
+        report(json!({"gain": 100, "offset": 30})),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{reported}");
+    let (status, _, pulled) = raw_get(&a.f.app, &path, None).await;
+    assert_eq!(status, StatusCode::OK, "{pulled}");
+    let recipes = pulled["data"]["program"]["recipes"].as_array().unwrap();
+    assert!(!recipes.is_empty(), "{pulled}");
+    for recipe in recipes {
+        assert_eq!(recipe["gain"], 100, "{recipe}");
+        assert_eq!(recipe["offset"], 30, "{recipe}");
+    }
+
+    // A template's own value beats the default.
+    a.db.execute("UPDATE exposuretemplate SET gain=250", [])
+        .unwrap();
+    let (status, _, pulled) = raw_get(&a.f.app, &path, None).await;
+    assert_eq!(status, StatusCode::OK, "{pulled}");
+    let recipe = &pulled["data"]["program"]["recipes"][0];
+    assert_eq!(recipe["gain"], 250, "{recipe}");
+    assert_eq!(recipe["offset"], 30, "{recipe}");
+}
+
 #[tokio::test]
 async fn the_plugin_pulls_a_program_built_from_activation_and_its_own_equipment() {
     let a = activated().await;

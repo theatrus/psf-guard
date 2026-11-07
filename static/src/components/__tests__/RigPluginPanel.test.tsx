@@ -22,8 +22,8 @@ const reported: DirectorPluginClient = {
 };
 const plans = [{ id: 'plan-1', name: 'Heart Nebula' }, { id: 'plan-2', name: 'M31' }];
 const base: DirectorPluginView = {
-  coordinator_instance_id: instance, catalog_id: catalog, rig_id: rig, profile_revision: 4, configuration: null, filter_names: {},
-  clients: [], plans: [], policy: null, work: 'not_allowed', grant: null, last_contact_at_ms: null,
+  coordinator_instance_id: instance, catalog_id: catalog, rig_id: rig, profile_revision: 4, configuration: null, filter_names: {}, camera_defaults: null,
+  clients: [], plans: [], policy: null, work: 'not_allowed', left_out: [], grant: null, last_contact_at_ms: null,
 };
 const policy = {
   rig_id: rig, catalog_id: catalog, client_id: 'client-1', profile_id: 'profile-1', profile_revision: 4, configuration_id: 'config-1',
@@ -141,6 +141,35 @@ describe('RigPluginPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Allow work again' }));
     await waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0].body).toEqual({ coordinator_instance_id: instance, expected_revision: 2, policy: { ...policy, profile_revision: 7, project_ids: [], revision: 3 } });
+  });
+
+  it('says the plugin would get no work, and why, even though work is allowed', async () => {
+    const reason = "M31: template 'HA' uses the camera's default gain or offset, and the plugin has not reported them.";
+    show({ ...base, clients: [plugin], configuration: equipment, plans, policy, work: 'nothing_to_run', left_out: [reason] });
+    expect(await screen.findByTestId('rig-plugin-work')).toHaveTextContent('no plan can run');
+    expect(screen.getByRole('alert')).toHaveTextContent('The plugin would get no work');
+    expect(within(screen.getByRole('list', { name: 'Left out of the work' })).getByText(reason)).toBeInTheDocument();
+    expect(screen.queryByText(/To start, add Director Session/)).not.toBeInTheDocument();
+  });
+
+  it('lists goals left out of a rig that still has work, without alarm', async () => {
+    show({ ...base, clients: [plugin], configuration: equipment, plans, policy, work: 'ready', left_out: ['M31: 3 finished goals left out'] });
+    expect(await screen.findByText('M31: 3 finished goals left out')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('tells a silent plugin apart from a broken one and gives the next step', async () => {
+    show({ ...base, clients: [plugin], configuration: equipment, plans, policy, work: 'ready' });
+    expect(await screen.findByText('No status yet. The plugin only reports while a Director Session runs.')).toBeInTheDocument();
+    expect(screen.getByText(/To start, add Director Session to a sequence in N\.I\.N\.A\./)).toBeInTheDocument();
+  });
+
+  it('shows camera defaults for review and flags a change', async () => {
+    const report = { ...reported.report!, camera_defaults: { gain: 100, offset: 30 } };
+    show({ ...base, clients: [{ ...reported, report }], configuration: equipment, filter_names: { ha: 'H-alpha' }, camera_defaults: { gain: 100, offset: 10 } });
+    expect(await screen.findByText(/reported ASI2600.*Camera defaults: gain 100, offset 30\./)).toBeInTheDocument();
+    expect(screen.getByText(/Accepted: ASI2600.*Camera defaults: gain 100, offset 10\./)).toBeInTheDocument();
+    expect(screen.getByText('Differs from the accepted equipment: camera defaults.')).toBeInTheDocument();
   });
 
   it('turns work off', async () => {

@@ -28,11 +28,17 @@ The tab shows who picks the work, both plugins, and four steps.
 2. **Equipment.** Connect the equipment, then click **Report equipment** in the
    Director Session. Check the report, then click **Accept equipment**. A report
    older than 15 minutes must be sent again. Equipment cannot change while work
-   is open.
+   is open. The report includes the camera's default gain and offset from
+   N.I.N.A. Director uses them for any exposure template left at the camera
+   default (`-1`).
 3. **Allow work.** Click **Allow work**. The plugin runs every plan activated
    on this rig, including plans you activate later. To keep a plan away from
    the plugin, leave it inactive on this rig. **Turn off** stops new work.
-4. **Work.** This step shows the plugin's open work and last status.
+4. **Work.** This step shows the plugin's open work and last status. The
+   plugin only contacts PSF Guard while a Director Session runs, so the step
+   shows no status until then. To start, add **Director Session** to a sequence
+   in N.I.N.A., turn on **Enable acquisition**, and run the sequence. If no
+   activated plan can run on this rig, the step lists why.
 
 Saving other rig setup stops new work until you click **Allow work again**, so
 the plugin never runs on setup nobody reviewed. Accepting new equipment or
@@ -898,7 +904,8 @@ All routes below are relative to `/api/director/v1`:
 
 - Paired `POST /rigs/{rig}/equipment-reports`: strict body fields are
   `coordinator_instance_id`, `catalog_id`, `report_id` (fresh UUID),
-  `observed_at_ms`, `configuration`, and complete `filter_names`.
+  `observed_at_ms`, `configuration`, complete `filter_names`, and optional
+  `camera_defaults`.
 - Operator `GET /rigs/{rig}/equipment-reports`: latest report per live paired
   client, including its client/catalog/rig/profile tuple, observation and receipt
   times, and nullable `accepted_revision` / `accepted_from_revision`.
@@ -923,10 +930,19 @@ refresh, pairing or activation. Keep allocation admission a separate action.
 interactive operator: `coordinator_instance_id`, `catalog_id`, `rig_id`,
 `profile_revision`, the accepted `configuration` and `filter_names`, `clients`
 with each `report` and `review` (`none`, `ready`, `old`, `work_open`, `accepted`),
-activated `plans`, `policy`, `grant`, `last_contact_at_ms` and `work`. `work`
-is `not_allowed`, `off`, `ready`, `plugin_removed`, `equipment_changed`,
-`setup_changed` or `plans_changed`, and gives the reason a saved policy no longer
-issues work.
+activated `plans`, `policy`, `grant`, `last_contact_at_ms`, `camera_defaults`,
+`left_out` and `work`. `work` is `not_allowed`, `off`, `ready`,
+`plugin_removed`, `equipment_changed`, `setup_changed`, `plans_changed` or
+`nothing_to_run`, and gives the reason a saved policy no longer issues work.
+`nothing_to_run` means the policy allows work but the program the plugin would
+pull has no goals. `left_out` lists what that program omits, and why.
+
+A report may carry `camera_defaults`, `{"gain": 100, "offset": 30}`, beside
+`filter_names`: the values N.I.N.A. uses when a sequence leaves gain or offset
+at `-1`. Each is `null` when the camera has no such control. Accepting the
+report stores them in the rig profile. A recipe stays explicit: a template at
+`-1` takes these values, and without them the program omits that template. The
+field sits outside `configuration`, so it does not change a configuration ID.
 
 A workload policy with an empty `project_ids` allows every plan activated on the
 rig, now or later. A grant carries every activated plan, so a list refuses work
@@ -2071,8 +2087,10 @@ Darkness in the cells is the Sun below −12°, as in [Visibility](#visibility).
 Choose a cell to open the night below the grid:
 
 - **Dark**, **Clear**, **Moon** and **Load**: dusk and dawn, the clear
-  hours, the Moon's phase and hours up in the dark, and the hours of work
-  that fit against the clear hours.
+  hours, the Moon's phase and hours up in the dark, and whether the rig has
+  work for the clear hours. **Load** shows the idle hours, or **Full** when the
+  targets can use every clear hour. A Director rig counts only the plans
+  activated on it.
 - **The schedule** from the runtime that drives the rig: a timeline from an
   hour before dusk to an hour after dawn, with a block for each stretch on
   a target and its filter runs inside. Each filter run shows the closest

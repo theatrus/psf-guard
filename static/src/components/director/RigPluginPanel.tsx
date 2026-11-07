@@ -4,7 +4,7 @@ import { isAxiosError } from 'axios';
 import { Check, Copy, KeyRound, Power, RefreshCw, Settings, Trash2, X } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
-import type { DirectorEquipmentReport, DirectorPluginClient, DirectorPluginEquipment, DirectorPluginView, DirectorPluginWork, DirectorRigMode } from '../../api/directorTypes';
+import type { DirectorCameraDefaults, DirectorEquipmentReport, DirectorPluginClient, DirectorPluginEquipment, DirectorPluginView, DirectorPluginWork, DirectorRigMode } from '../../api/directorTypes';
 import { useAllDatabases } from '../../hooks/useDatabases';
 import { openSettings } from '../../utils/settingsIntent';
 import EarlyBeta from './EarlyBeta';
@@ -19,6 +19,7 @@ const WORK_NOTE: Record<DirectorPluginWork, string> = {
   equipment_changed: 'Stopped. The accepted equipment changed.',
   setup_changed: "Stopped. This rig's setup changed. Check it, then allow work again.",
   plans_changed: 'Stopped. A plan activated on this rig is outside the allowed list.',
+  nothing_to_run: 'Allowed, but no plan can run. The Work section explains why.',
 };
 
 const statusOf = (error: unknown) => isAxiosError(error) ? error.response?.status : undefined;
@@ -48,6 +49,14 @@ function filterList(equipment: DirectorPluginEquipment, names: Record<string, st
 }
 
 /** What a report would change, in the words the review shows. */
+function cameraDefaults(defaults: DirectorCameraDefaults | null | undefined): string {
+  const parts = [
+    defaults?.gain != null && `gain ${defaults.gain}`,
+    defaults?.offset != null && `offset ${defaults.offset}`,
+  ].filter(Boolean);
+  return parts.length ? ` Camera defaults: ${parts.join(', ')}.` : '';
+}
+
 function reportChanges(report: DirectorEquipmentReport, view: DirectorPluginView): string {
   const accepted = view.configuration;
   if (!accepted) return 'Nothing accepted yet.';
@@ -55,6 +64,7 @@ function reportChanges(report: DirectorEquipmentReport, view: DirectorPluginView
     report.configuration.camera_id !== accepted.camera_id && 'camera',
     filterList(report.configuration, report.filter_names) !== filterList(accepted, view.filter_names) && 'filters',
     report.configuration.id !== accepted.id && accepted.camera_id === report.configuration.camera_id && 'camera modes',
+    cameraDefaults(report.camera_defaults) !== cameraDefaults(view.camera_defaults) && 'camera defaults',
   ].filter(Boolean);
   return changed.length ? `Differs from the accepted equipment: ${changed.join(', ')}.` : 'Same as the accepted equipment.';
 }
@@ -176,7 +186,7 @@ export default function RigPluginPanel({ slug, mode, onRigChanged, onChangeMode 
     <fieldset>
       <legend>Equipment</legend>
       {view.configuration
-        ? <p>Accepted: {view.configuration.camera_id}. Filters: {filterList(view.configuration, view.filter_names)}.</p>
+        ? <p>Accepted: {view.configuration.camera_id}. Filters: {filterList(view.configuration, view.filter_names)}.{cameraDefaults(view.camera_defaults)}</p>
         : <p className="director-muted">No equipment accepted yet.</p>}
       {view.clients.length === 0 && <p className="director-muted">Pair the plugin first.</p>}
       {view.clients.map(entry => <EquipmentReview key={entry.client_id} entry={entry} view={view} busy={act.isPending} onAccept={() => accept(entry)} />)}
@@ -188,8 +198,15 @@ export default function RigPluginPanel({ slug, mode, onRigChanged, onChangeMode 
       <legend>Work</legend>
       {view.last_contact_at_ms
         ? <p className="director-muted">Last status: {ago(view.last_contact_at_ms)}</p>
-        : view.clients.length > 0 && <p className="director-muted">No status from the plugin yet.</p>}
+        : view.clients.length > 0 && <p className="director-muted">No status yet. The plugin only reports while a Director Session runs.</p>}
       {!view.grant?.open && <p>No open work.</p>}
+      {!view.grant?.open && view.work === 'ready' && <p className="director-muted">To start, add Director Session to a sequence in N.I.N.A., turn on Enable acquisition, and run the sequence.</p>}
+      {view.left_out.length > 0 && <>
+        <p className={view.work === 'nothing_to_run' ? 'director-error' : undefined} role={view.work === 'nothing_to_run' ? 'alert' : undefined}>
+          {view.work === 'nothing_to_run' ? 'The plugin would get no work:' : 'Left out of the work:'}
+        </p>
+        <ul className="rig-plugin-left-out" aria-label="Left out of the work">{view.left_out.map(reason => <li key={reason}>{reason}</li>)}</ul>
+      </>}
       {view.grant && !view.grant.open && view.grant.closed_at_ms && <p className="director-muted">Last work closed by an operator {ago(view.grant.closed_at_ms)}.</p>}
       {view.grant?.open && view.grant.plugin_paired && <p>{view.grant.started ? 'Running' : 'Not started'}. Issued {ago(view.grant.admitted_at_ms)}. The plugin ends this work when its session finishes.</p>}
       {view.grant?.open && !view.grant.plugin_paired && <>
@@ -213,7 +230,7 @@ function EquipmentReview({ entry, view, busy, onAccept }: { entry: DirectorPlugi
   if (!report) return <p className="director-muted">{entry.client_name}: connect the equipment in N.I.N.A., then click Report equipment in the Director Session.</p>;
   if (entry.review === 'accepted') return <p className="director-muted">{entry.client_name}: report accepted.</p>;
   return <div className="rig-plugin-report">
-    <p>{entry.client_name} reported {report.configuration.camera_id} {ago(report.received_at_ms)}. Filters: {filterList(report.configuration, report.filter_names)}.</p>
+    <p>{entry.client_name} reported {report.configuration.camera_id} {ago(report.received_at_ms)}. Filters: {filterList(report.configuration, report.filter_names)}.{cameraDefaults(report.camera_defaults)}</p>
     <p className="director-muted">{reportChanges(report, view)}</p>
     {entry.review === 'ready' && <div className="director-actions"><button type="button" disabled={busy} onClick={onAccept}><Check size={16} />Accept equipment</button></div>}
     {entry.review === 'old' && <p className="director-muted">This report is more than 15 minutes old. Click Report equipment in the Director Session again.</p>}

@@ -119,7 +119,9 @@ export interface DirectorEdited<T> { value: T; source: DirectorSource }
 /** What an operator can do with a plugin's equipment report. */
 export type DirectorEquipmentReview = 'none' | 'ready' | 'old' | 'work_open' | 'accepted';
 /** Whether the plugin can get work, and if not, why. */
-export type DirectorPluginWork = 'not_allowed' | 'off' | 'ready' | 'plugin_removed' | 'equipment_changed' | 'setup_changed' | 'plans_changed';
+export type DirectorPluginWork = 'not_allowed' | 'off' | 'ready' | 'plugin_removed' | 'equipment_changed' | 'setup_changed' | 'plans_changed' | 'nothing_to_run';
+/** What the camera uses for a template that leaves gain or offset to it. */
+export interface DirectorCameraDefaults { gain: number | null; offset: number | null }
 export interface DirectorPluginEquipment {
   id: string;
   camera_id: string;
@@ -132,6 +134,8 @@ export interface DirectorEquipmentReport {
   received_at_ms: number;
   configuration: DirectorPluginEquipment;
   filter_names: Record<string, string>;
+  /** Absent from a plugin too old to report them. */
+  camera_defaults?: DirectorCameraDefaults;
   accepted_revision: number | null;
 }
 export interface DirectorPluginClient {
@@ -174,10 +178,13 @@ export interface DirectorPluginView {
   profile_revision: number;
   configuration: DirectorPluginEquipment | null;
   filter_names: Record<string, string>;
+  camera_defaults: DirectorCameraDefaults | null;
   clients: DirectorPluginClient[];
   plans: { id: string; name: string }[];
   policy: DirectorWorkPolicy | null;
   work: DirectorPluginWork;
+  /** What the rig's program leaves out, and why. */
+  left_out: string[];
   grant: DirectorPluginGrant | null;
   last_contact_at_ms: number | null;
 }

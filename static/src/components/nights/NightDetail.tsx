@@ -331,12 +331,10 @@ function ForecastNote({ rig, night }: { rig: RigNights; night: RigNight }) {
 }
 
 function describeLoad(night: RigNight): string {
-  const { demand_hours, available_hours, idle_hours, overbooked_hours } = night.load;
+  const { demand_hours, available_hours, idle_hours } = night.load;
   if (demand_hours <= 0) return available_hours > 0 ? `Nothing fits; ${formatHours(available_hours)} idle` : 'Nothing fits';
-  const load = `${formatHours(demand_hours)} of work, ${formatHours(available_hours)} clear`;
-  if (overbooked_hours >= 0.05) return `${load}: ${formatHours(overbooked_hours)} over`;
-  if (idle_hours >= 0.05) return `${load}: ${formatHours(idle_hours)} idle`;
-  return load;
+  if (idle_hours >= 0.05) return `${formatHours(demand_hours)} of work, ${formatHours(available_hours)} clear: ${formatHours(idle_hours)} idle`;
+  return `Full: work for all ${formatHours(available_hours)} clear`;
 }
 
 /**

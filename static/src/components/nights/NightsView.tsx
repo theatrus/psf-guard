@@ -214,7 +214,7 @@ export default function NightsView() {
                     {working.slice(0, 6).map(plan => <span key={plan.name} className="nights-plan-dot" data-colour={colours.get(plan.name) ?? 0} title={`${plan.name}: ${formatHours(plan.hours)}`} />)}
                     {working.length > 6 && <span className="nights-plan-more">+{working.length - 6}</span>}
                   </span>
-                  <span className={`nights-cell-load${plannedHours === null && night.load.overbooked_hours >= 0.05 ? ' is-over' : ''}`}>{plannedHours === null ? loadWords(night) : plannedHours > 0 ? `${formatHours(plannedHours)} planned` : scheduleDone(rig, night.date) ? 'all done' : night.available_dark_hours > 0 ? 'nothing planned' : ''}</span>
+                  <span className="nights-cell-load">{plannedHours === null ? loadWords(night) : plannedHours > 0 ? `${formatHours(plannedHours)} planned` : scheduleDone(rig, night.date) ? 'all done' : night.available_dark_hours > 0 ? 'nothing planned' : ''}</span>
                 </button>
               </td>;
             })}

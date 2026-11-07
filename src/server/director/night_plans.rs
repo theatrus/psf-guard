@@ -31,7 +31,7 @@ use psf_guard_director_meta::{
     site_profile::RigSite,
 };
 use psf_guard_ts_planner::snapshot::{Project, ProjectPriority, ProjectState, Snapshot};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 mod cache;
@@ -450,6 +450,9 @@ struct RigInput {
     start_ms: u64,
     /// What a Director schedule runs from, when one is wanted.
     director: Option<Result<DirectorInput, String>>,
+    /// The Target Scheduler projects of the plans activated on the rig: all
+    /// Director can run.
+    activated: BTreeSet<Uuid>,
     catalog_slug: String,
     catalog_name: String,
     profile: RigProfile,
@@ -710,6 +713,13 @@ async fn compute(
                 let director = wanted.then(|| {
                     director_input(store, &catalogs, service.instance_id, rig.id, identity.id)
                 });
+                let activated = store
+                    .activations_for_rig(rig.id)?
+                    .into_iter()
+                    .flat_map(|activation| activation.rigs)
+                    .filter(|activated| activated.rig_id == rig.id)
+                    .map(|activated| activated.project_guid)
+                    .collect();
                 let first = match first_night {
                     Some(date) => date,
                     None => {
@@ -765,6 +775,7 @@ async fn compute(
                 inputs.push(RigInput {
                     schedule: options,
                     director,
+                    activated,
                     database_path: catalog.database_path.clone(),
                     // An hour after the night's noon: inside it at any longitude.
                     start_ms: first.span(location.longitude_degrees).start_ms + 3_600_000,
@@ -902,11 +913,22 @@ struct Chunk {
     owed: Vec<Owed>,
 }
 
+/// Whether a project is one of the rig's activated plans. A project in the
+/// rig's database that was never activated stays Target Scheduler's.
+fn runs_under_director(project: &Project, activated: &BTreeSet<Uuid>) -> bool {
+    project
+        .guid
+        .as_deref()
+        .and_then(|guid| Uuid::parse_str(guid).ok())
+        .is_some_and(|guid| activated.contains(&guid))
+}
+
 fn rig_nights(input: RigInput, nights: u32) -> Result<RigNights, String> {
     let RigInput {
         rig,
         schedule: options,
         director,
+        activated,
         database_path: _,
         start_ms,
         catalog_slug,
@@ -962,6 +984,11 @@ fn rig_nights(input: RigInput, nights: u32) -> Result<RigNights, String> {
                 .collect()
         })
         .unwrap_or_default();
+    let used = match options.runtime {
+        RuntimeChoice::Auto => runtime,
+        RuntimeChoice::TargetScheduler => Runtime::TargetScheduler,
+        RuntimeChoice::Director => Runtime::Director,
+    };
     let mut plans = Vec::new();
     let mut chunks = Vec::new();
     for project in snapshot
@@ -970,6 +997,7 @@ fn rig_nights(input: RigInput, nights: u32) -> Result<RigNights, String> {
         .unwrap_or_default()
         .iter()
         .filter(|project| project.state == ProjectState::Active)
+        .filter(|project| used != Runtime::Director || runs_under_director(project, &activated))
     {
         let Some(snapshot) = snapshot.as_ref() else {
             break;
@@ -1179,11 +1207,6 @@ fn rig_nights(input: RigInput, nights: u32) -> Result<RigNights, String> {
     let schedule = if options.nights == 0 {
         None
     } else {
-        let used = match options.runtime {
-            RuntimeChoice::Auto => runtime,
-            RuntimeChoice::TargetScheduler => Runtime::TargetScheduler,
-            RuntimeChoice::Director => Runtime::Director,
-        };
         match (used, snapshot.as_ref()) {
             (Runtime::TargetScheduler, Some(snapshot)) => Some(target_scheduler_schedule(
                 snapshot,
