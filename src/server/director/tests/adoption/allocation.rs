@@ -23,7 +23,7 @@ async fn only_operator_admits_exact_client_and_retries_never_rebuild_or_replace_
         )
         .await
         .0,
-        StatusCode::UNAUTHORIZED
+        StatusCode::NOT_FOUND
     );
     let (_, preview) = call(
         &a.f.app,

@@ -16,8 +16,8 @@ const WORK_NOTE: Record<DirectorPluginWork, string> = {
   off: 'Off. The plugin gets no work.',
   ready: 'Allowed. The plugin can request work.',
   plugin_removed: 'Stopped. The plugin allowed to take work was removed.',
-  equipment_changed: 'Stopped. The accepted equipment changed.',
-  setup_changed: "Stopped. This rig's setup changed. Check it, then allow work again.",
+  equipment_changed: 'The equipment changed. Run Director Session to report the current setup automatically.',
+  setup_changed: "This rig's setup changed. Run Director Session to update its equipment automatically.",
   plans_changed: 'Stopped. A plan activated on this rig is outside the allowed list.',
   nothing_to_run: 'Allowed, but no plan can run. The Work section explains why.',
 };

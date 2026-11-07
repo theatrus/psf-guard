@@ -89,24 +89,14 @@ async fn the_view_follows_a_plugin_from_pairing_to_removal() {
     let (status, body) = client_call(&app, "POST", &path, input, token, Some(profile)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let reported = view(&app).await;
-    assert_eq!(reported["clients"][0]["review"], "ready");
+    assert_eq!(reported["clients"][0]["review"], "accepted");
     assert_eq!(
         reported["clients"][0]["report"]["report_id"],
         report.to_string()
     );
-    assert_eq!(reported["configuration"], Value::Null);
-
-    let (status, body) = call(
-        &app,
-        "POST",
-        &format!("{path}/{client}/accept"),
-        json!({"coordinator_instance_id":instance,"catalog_id":catalog,"report_id":report,
-            "expected_revision":reported["profile_revision"]}),
-        None,
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    let accepted = view(&app).await;
+    assert_eq!(reported["configuration"]["id"], program.configuration.id);
+    assert_eq!(reported["policy"]["enabled"], true);
+    let accepted = reported;
     assert_eq!(accepted["clients"][0]["review"], "accepted");
     assert_eq!(accepted["configuration"]["id"], program.configuration.id);
     assert_eq!(accepted["filter_names"]["ha"], "H-alpha");
@@ -122,7 +112,7 @@ async fn the_view_follows_a_plugin_from_pairing_to_removal() {
     assert_eq!(status, StatusCode::OK);
     let removed = view(&app).await;
     assert_eq!(removed["clients"], json!([]));
-    // The equipment an operator accepted outlives the plugin that reported it.
+    // Reported equipment outlives the plugin that reported it.
     assert_eq!(removed["configuration"]["id"], program.configuration.id);
 }
 
