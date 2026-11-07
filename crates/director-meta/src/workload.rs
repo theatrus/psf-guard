@@ -89,16 +89,13 @@ fn profile_matches(conn: &Connection, p: &Policy) -> Result<bool, Error> {
 pub(crate) fn follow_profile_change(
     conn: &Connection,
     rig: Uuid,
-    from: u64,
+    _from: u64,
     to: u64,
     configuration_id: Option<&str>,
 ) -> Result<(), Error> {
     let Some(mut value) = policy(conn, rig)? else {
         return Ok(());
     };
-    if value.profile_revision != from {
-        return Ok(());
-    }
     value.profile_revision = to;
     if let Some(configuration_id) = configuration_id {
         value.configuration_id = configuration_id.to_owned();

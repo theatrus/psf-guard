@@ -203,7 +203,7 @@ export default function RigPluginPanel({ slug, mode, onRigChanged, onChangeMode 
         </p>
         <ul className="rig-plugin-left-out" aria-label="Left out of the work">{view.left_out.map(reason => <li key={reason}>{reason}</li>)}</ul>
       </>}
-      {view.grant && !view.grant.open && view.grant.closed_at_ms && <p className="director-muted">Last work closed by an operator {ago(view.grant.closed_at_ms)}.</p>}
+      {view.grant && !view.grant.open && view.grant.closed_at_ms && <p className="director-muted">Previous work retired {ago(view.grant.closed_at_ms)}. Saved images and history are retained.</p>}
       {view.grant?.open && view.grant.plugin_paired && <p>{view.grant.started ? 'Running' : 'Not started'}. Issued {ago(view.grant.admitted_at_ms)}. The plugin ends this work when its session finishes.</p>}
       {view.grant?.open && !view.grant.plugin_paired && <>
         <p className="director-error" role="alert">The plugin with this work was removed, so this rig cannot take new work.</p>

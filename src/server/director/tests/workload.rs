@@ -49,7 +49,7 @@ async fn paired_recovery_confirms_absence_and_retires_only_its_own_quiescent_wor
             client_call(&app, "POST", &path, unsafe_input, token, Some(profile))
                 .await
                 .0,
-            StatusCode::CONFLICT
+            StatusCode::BAD_REQUEST
         );
     }
     assert_eq!(
