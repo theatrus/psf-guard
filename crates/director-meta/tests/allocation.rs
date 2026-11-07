@@ -787,3 +787,34 @@ fn changing_only_the_mode_keeps_the_rig_allowed_to_take_work() {
         current.revision
     );
 }
+
+#[test]
+fn allowing_every_plan_covers_one_activated_later_and_a_list_does_not() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("meta.sqlite");
+    let (mut store, mut a) = fixture(&path);
+    let listed = commission(&mut store, &path, &mut a);
+    // A grant carries every activated plan, so one outside a list stops work.
+    let later = store
+        .create_project(Uuid::new_v4(), "Activated later")
+        .unwrap()
+        .id;
+    let mut links = a.snapshot["links"].as_array().unwrap().clone();
+    links.push(json!({"project_id":later}));
+    a.snapshot["links"] = json!(links);
+    assert!(matches!(
+        store.admit_workload(&a, listed.revision),
+        Err(Error::Conflict)
+    ));
+    let every = store
+        .save_workload_policy(
+            &psf_guard_director_meta::workload::Policy {
+                project_ids: vec![],
+                revision: listed.revision + 1,
+                ..listed.clone()
+            },
+            listed.revision,
+        )
+        .unwrap();
+    store.admit_workload(&a, every.revision).unwrap();
+}

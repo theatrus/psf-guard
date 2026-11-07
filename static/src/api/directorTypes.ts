@@ -119,7 +119,7 @@ export interface DirectorEdited<T> { value: T; source: DirectorSource }
 /** What an operator can do with a plugin's equipment report. */
 export type DirectorEquipmentReview = 'none' | 'ready' | 'old' | 'work_open' | 'accepted';
 /** Whether the plugin can get work, and if not, why. */
-export type DirectorPluginWork = 'not_allowed' | 'off' | 'ready' | 'plugin_removed' | 'equipment_changed' | 'setup_changed';
+export type DirectorPluginWork = 'not_allowed' | 'off' | 'ready' | 'plugin_removed' | 'equipment_changed' | 'setup_changed' | 'plans_changed';
 export interface DirectorPluginEquipment {
   id: string;
   camera_id: string;
@@ -149,6 +149,7 @@ export interface DirectorWorkPolicy {
   profile_id: string;
   profile_revision: number;
   configuration_id: string;
+  /** Empty allows every plan activated on the rig, now or later. */
   project_ids: string[];
   enabled: boolean;
   revision: number;

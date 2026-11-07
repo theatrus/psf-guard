@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
-import { Check, Copy, KeyRound, Power, Settings, Trash2, X } from 'lucide-react';
+import { Check, Copy, KeyRound, Power, RefreshCw, Settings, Trash2, X } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import type { DirectorEquipmentReport, DirectorPluginClient, DirectorPluginEquipment, DirectorPluginView, DirectorPluginWork, DirectorRigMode } from '../../api/directorTypes';
@@ -17,7 +17,8 @@ const WORK_NOTE: Record<DirectorPluginWork, string> = {
   ready: 'Allowed. The plugin can request work.',
   plugin_removed: 'Stopped. The plugin allowed to take work was removed.',
   equipment_changed: 'Stopped. The accepted equipment changed.',
-  setup_changed: "Stopped. This rig's setup changed. Check the plans, then allow work again.",
+  setup_changed: "Stopped. This rig's setup changed. Check it, then allow work again.",
+  plans_changed: 'Stopped. A plan activated on this rig is outside the allowed list.',
 };
 
 const statusOf = (error: unknown) => isAxiosError(error) ? error.response?.status : undefined;
@@ -129,19 +130,27 @@ export default function RigPluginPanel({ slug, mode, onRigChanged, onChangeMode 
     await apiClient.acceptDirectorEquipment(view.rig_id, entry.client_id, { ...scope, report_id: entry.report!.report_id, expected_revision: view.profile_revision });
     onRigChanged();
   });
-  return <div className="rig-plugin">
-    <div className="early-beta-heading"><h4>Plugins on this rig</h4><EarlyBeta /></div>
-    <dl className="rig-plugin-paths">
-      <div><dt>Picks the work</dt><dd>{MODE_LABEL[mode]} <button type="button" className="link-button" onClick={onChangeMode}>Change mode</button></dd></div>
-      <div><dt>PSF Guard Director</dt><dd>{view.clients.length ? `${view.clients.length} paired` : 'Not paired'}</dd></div>
-      <div><dt>PSF Guard Sync</dt><dd>{syncClients ? `${syncClients} paired` : 'Not paired'} <button type="button" className="link-button" onClick={() => openSettings('sync', { databaseId: slug })}><Settings size={14} />Open Sync</button></dd></div>
-    </dl>
-    <p className="director-muted">Both plugins can stay installed. N.I.N.A. runs the instruction in its sequence. Sync still moves images and catalog data in either mode.</p>
-
+  return <section className="rig-profile-form rig-plugin" aria-label="Director plugin">
+    <div className="director-toolbar">
+      <div className="early-beta-heading"><h4>Director plugin</h4><EarlyBeta /></div>
+      <button type="button" aria-label="Reload Director plugin" title="Reload Director plugin" disabled={loaded.isFetching} onClick={() => void loaded.refetch()}><RefreshCw size={16} /></button>
+    </div>
     {act.isError && <p className="director-error" role="alert">{problemOf(act.error)}</p>}
 
-    <section aria-label="Pair" className="rig-plugin-step">
-      <h5>1. Pair</h5>
+    <fieldset>
+      <legend>Plugins on this rig</legend>
+      <div className="rig-profile-grid rig-plugin-paths">
+        <div className="rig-profile-field"><span>Picks the work</span><span>{MODE_LABEL[mode]}</span>
+          <button type="button" className="link-button" onClick={onChangeMode}>Change mode</button></div>
+        <div className="rig-profile-field"><span>PSF Guard Director</span><span>{view.clients.length ? `${view.clients.length} paired` : 'Not paired'}</span></div>
+        <div className="rig-profile-field"><span>PSF Guard Sync</span><span>{syncClients ? `${syncClients} paired` : 'Not paired'}</span>
+          <button type="button" className="link-button" onClick={() => openSettings('sync', { databaseId: slug })}><Settings size={14} />Open Sync</button></div>
+      </div>
+      <p className="director-muted">Both plugins can stay installed. N.I.N.A. runs the instruction in its sequence. Sync still moves images and catalog data in either mode.</p>
+    </fieldset>
+
+    <fieldset>
+      <legend>Pair</legend>
       <ul className="rig-plugin-rows" aria-label="Paired Director plugins">
         {view.clients.map(entry => <li key={entry.client_id}>
           <span>{entry.client_name} <small className="director-muted">Paired {new Date(entry.created_at_ms).toLocaleDateString()}</small></span>
@@ -162,21 +171,21 @@ export default function RigPluginPanel({ slug, mode, onRigChanged, onChangeMode 
         <p role="status">{copy === 'failed' ? 'Copy failed. Select and copy the code.' : `In N.I.N.A., open the Director plugin settings, enter the server URL and this code, then click Pair. One use, expires ${new Date(code.expiresAt).toLocaleTimeString()}. This page updates when the plugin pairs.`}</p>
         {needsHttps(address) && <p className="director-muted">This address uses HTTP. The plugin needs HTTPS unless you allow plain HTTP in its settings.</p>}
       </div>}
-    </section>
+    </fieldset>
 
-    <section aria-label="Equipment" className="rig-plugin-step">
-      <h5>2. Equipment</h5>
+    <fieldset>
+      <legend>Equipment</legend>
       {view.configuration
         ? <p>Accepted: {view.configuration.camera_id}. Filters: {filterList(view.configuration, view.filter_names)}.</p>
         : <p className="director-muted">No equipment accepted yet.</p>}
       {view.clients.length === 0 && <p className="director-muted">Pair the plugin first.</p>}
       {view.clients.map(entry => <EquipmentReview key={entry.client_id} entry={entry} view={view} busy={act.isPending} onAccept={() => accept(entry)} />)}
-    </section>
+    </fieldset>
 
     <AllowWork view={view} mode={mode} busy={act.isPending} onSave={change => act.mutate(() => apiClient.saveDirectorWorkPolicy(view.rig_id, change))} />
 
-    <section aria-label="Work" className="rig-plugin-step">
-      <h5>4. Work</h5>
+    <fieldset>
+      <legend>Work</legend>
       {view.last_contact_at_ms
         ? <p className="director-muted">Last status: {ago(view.last_contact_at_ms)}</p>
         : view.clients.length > 0 && <p className="director-muted">No status from the plugin yet.</p>}
@@ -195,8 +204,8 @@ export default function RigPluginPanel({ slug, mode, onRigChanged, onChangeMode 
           }}><X size={16} />Close work</button>
         </div>
       </>}
-    </section>
-  </div>;
+    </fieldset>
+  </section>;
 }
 
 function EquipmentReview({ entry, view, busy, onAccept }: { entry: DirectorPluginClient; view: DirectorPluginView; busy: boolean; onAccept: () => void }) {
@@ -216,11 +225,8 @@ function AllowWork({ view, mode, busy, onSave }: {
   view: DirectorPluginView; mode: DirectorRigMode; busy: boolean;
   onSave: (change: { coordinator_instance_id: string; expected_revision: number; policy: NonNullable<DirectorPluginView['policy']> }) => void;
 }) {
-  // No edits (null) shows what is allowed now, or every plan the first time.
-  const [picked, setPicked] = useState<string[] | null>(null);
   const [chosenClient, setChosenClient] = useState<string | null>(null);
   const policy = view.policy;
-  const planIds = picked ?? (policy ? policy.project_ids.filter(id => view.plans.some(plan => plan.id === id)) : view.plans.map(plan => plan.id));
   const allowed = view.clients.find(entry => entry.client_id === chosenClient)
     ?? view.clients.find(entry => entry.client_id === policy?.client_id)
     ?? view.clients[view.clients.length - 1];
@@ -233,16 +239,18 @@ function AllowWork({ view, mode, busy, onSave }: {
       policy: {
         rig_id: view.rig_id, catalog_id: view.catalog_id, client_id: allowed.client_id, profile_id: allowed.profile_id,
         profile_revision: view.profile_revision, configuration_id: view.configuration.id,
-        project_ids: planIds, enabled, revision: expected + 1,
+        // Activating a plan on the rig is what puts it in the plugin's work.
+        project_ids: [], enabled, revision: expected + 1,
       },
     });
-    setPicked(null);
   };
-  const blocked = !allowed ? 'Pair the plugin first.' : !view.configuration ? 'Accept the equipment first.'
-    : view.plans.length === 0 ? 'Activate a plan on this rig first.' : null;
-  return <section aria-label="Allow work" className="rig-plugin-step">
-    <h5>3. Allow work</h5>
+  const blocked = !allowed ? 'Pair the plugin first.' : !view.configuration ? 'Accept the equipment first.' : null;
+  return <fieldset>
+    <legend>Allow work</legend>
     <p data-testid="rig-plugin-work" data-state={view.work}>{WORK_NOTE[view.work]}</p>
+    <p className="director-muted" data-testid="rig-plugin-plans">{view.plans.length
+      ? `Runs every plan activated on this rig: ${view.plans.map(plan => plan.name).join(', ')}.`
+      : 'No plans are activated on this rig yet. Allowed work covers each plan you activate.'}</p>
     {blocked && <p className="director-muted">{blocked}</p>}
     {!blocked && <>
       {view.clients.length > 1 && <label className="rig-profile-field"><span>Plugin</span>
@@ -250,17 +258,11 @@ function AllowWork({ view, mode, busy, onSave }: {
           {view.clients.map(entry => <option key={entry.client_id} value={entry.client_id}>{entry.client_name} ({new Date(entry.created_at_ms).toLocaleDateString()})</option>)}
         </select></span>
       </label>}
-      <fieldset className="rig-plugin-plans"><legend>Plans the plugin may run</legend>
-        {view.plans.map(plan => <label key={plan.id}>
-          <input type="checkbox" checked={planIds.includes(plan.id)} onChange={event => setPicked(event.target.checked ? [...planIds, plan.id] : planIds.filter(id => id !== plan.id))} />
-          {plan.name}
-        </label>)}
-      </fieldset>
       <div className="director-actions">
-        <button type="button" disabled={busy || planIds.length === 0} onClick={() => save(true)}><Check size={16} />{view.work === 'ready' ? 'Save plans' : policy ? 'Allow work again' : 'Allow work'}</button>
+        {view.work !== 'ready' && <button type="button" disabled={busy} onClick={() => save(true)}><Check size={16} />{policy ? 'Allow work again' : 'Allow work'}</button>}
         {view.work === 'ready' && <button type="button" disabled={busy} onClick={() => save(false)}><Power size={16} />Turn off</button>}
       </div>
       {view.work === 'ready' && mode === 'target_scheduler' && <p className="director-muted">Mode is Target Scheduler. The plugin still gets work when the N.I.N.A. sequence runs Director.</p>}
     </>}
-  </section>;
+  </fieldset>;
 }

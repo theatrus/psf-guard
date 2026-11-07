@@ -29,15 +29,15 @@ The tab shows who picks the work, both plugins, and four steps.
    Director Session. Check the report, then click **Accept equipment**. A report
    older than 15 minutes must be sent again. Equipment cannot change while work
    is open.
-3. **Allow work.** Choose the plans the plugin may run, then click **Allow
-   work**. Only plans activated on this rig are listed. **Turn off** stops new
-   work without changing the plans.
+3. **Allow work.** Click **Allow work**. The plugin runs every plan activated
+   on this rig, including plans you activate later. To keep a plan away from
+   the plugin, leave it inactive on this rig. **Turn off** stops new work.
 4. **Work.** This step shows the plugin's open work and last status.
 
 Saving other rig setup stops new work until you click **Allow work again**, so
 the plugin never runs on setup nobody reviewed. Accepting new equipment or
 removing the allowed plugin does the same. The **Allow work** step explains
-which of these happened. Changing the mode does not.
+which of these happened. Changing the mode or activating a plan does not.
 
 ### Use Director and Sync on one rig
 
@@ -924,8 +924,13 @@ interactive operator: `coordinator_instance_id`, `catalog_id`, `rig_id`,
 `profile_revision`, the accepted `configuration` and `filter_names`, `clients`
 with each `report` and `review` (`none`, `ready`, `old`, `work_open`, `accepted`),
 activated `plans`, `policy`, `grant`, `last_contact_at_ms` and `work`. `work`
-is `not_allowed`, `off`, `ready`, `plugin_removed`, `equipment_changed` or
-`setup_changed`, and gives the reason a saved policy no longer issues work.
+is `not_allowed`, `off`, `ready`, `plugin_removed`, `equipment_changed`,
+`setup_changed` or `plans_changed`, and gives the reason a saved policy no longer
+issues work.
+
+A workload policy with an empty `project_ids` allows every plan activated on the
+rig, now or later. A grant carries every activated plan, so a list refuses work
+as soon as a plan is activated outside it (`plans_changed`).
 
 A change to the rig profile's `mode` alone keeps a current policy on the new
 profile revision. Any other profile change leaves the policy on its old

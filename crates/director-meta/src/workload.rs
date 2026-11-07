@@ -16,6 +16,10 @@ pub struct Policy {
     pub profile_id: Uuid,
     pub profile_revision: u64,
     pub configuration_id: String,
+    /// Empty allows every plan activated on the rig, now or later: activation
+    /// is the reviewed step that puts a plan on a rig. A list limits work to
+    /// those plans, and a grant carries every activated plan, so a plan
+    /// activated outside the list stops work until the list changes.
     pub project_ids: Vec<Uuid>,
     pub enabled: bool,
     pub revision: u64,
@@ -146,7 +150,6 @@ impl MetaStore {
             || value.profile_revision == 0
             || value.configuration_id.is_empty()
             || value.configuration_id.len() > 128
-            || value.project_ids.is_empty()
             || value.project_ids.len() > 128
             || value.project_ids.iter().any(Uuid::is_nil)
             || value.project_ids.iter().collect::<BTreeSet<_>>().len() != value.project_ids.len()
@@ -240,8 +243,9 @@ impl MetaStore {
             .ok_or(Error::InvalidInput)?;
         if links.is_empty()
             || links.iter().any(|l| {
-                serde_json::from_value::<Uuid>(l["project_id"].clone())
-                    .map_or(true, |id| !p.project_ids.contains(&id))
+                serde_json::from_value::<Uuid>(l["project_id"].clone()).map_or(true, |id| {
+                    !p.project_ids.is_empty() && !p.project_ids.contains(&id)
+                })
             })
             || grant.snapshot["program"]["configuration"]["id"] != p.configuration_id
             || grant.snapshot["rig"]["profile_revision"] != p.profile_revision

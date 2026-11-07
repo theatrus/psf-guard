@@ -95,16 +95,16 @@ test('a rig pairs, reviews, allows and recovers the Director plugin beside Targe
     await json(await request.post(`/api/director/v1/rigs/${rig}/equipment-reports`, { headers: plugin, data: {
       coordinator_instance_id: instance, catalog_id: catalog, report_id: randomUUID(), observed_at_ms: Date.now(), configuration, filter_names: { 'filter-2': 'Ha' },
     } }));
-    const equipment = panel.getByRole('region', { name: 'Equipment' });
+    const equipment = panel.getByRole('group', { name: 'Equipment', exact: true });
     await expect(equipment.getByRole('button', { name: 'Accept equipment' })).toBeVisible({ timeout: 20_000 });
     await expect(equipment).toContainText('reported camera-1');
     await equipment.getByRole('button', { name: 'Accept equipment' }).click();
     await expect(equipment).toContainText('Accepted: camera-1');
 
-    const allow = panel.getByRole('region', { name: 'Allow work' });
+    const allow = panel.getByRole('group', { name: 'Allow work', exact: true });
     const work = allow.getByTestId('rig-plugin-work');
     await expect(work).toHaveAttribute('data-state', 'not_allowed');
-    await expect(allow.getByRole('checkbox', { name: 'Plugin Heart' })).toBeChecked();
+    await expect(allow.getByTestId('rig-plugin-plans')).toContainText('Plugin Heart');
     await allow.getByRole('button', { name: 'Allow work', exact: true }).click();
     await expect(work).toHaveAttribute('data-state', 'ready');
 
@@ -135,9 +135,10 @@ test('a rig pairs, reviews, allows and recovers the Director plugin beside Targe
       coordinator_instance_id: instance, catalog_id: catalog, request_id: randomUUID(), configuration_id: 'config-1', execution_mode: 'native_imaging_v1',
     } }));
     expect(requested.state).toBe('issued');
-    const running = panel.getByRole('region', { name: 'Work', exact: true });
+    const running = panel.getByRole('group', { name: 'Work', exact: true });
     await expect(running).toContainText('Not started. Issued', { timeout: 20_000 });
     await expect(running.getByRole('button', { name: 'Close work' })).toHaveCount(0);
+    await shot(page, 'director-in-settings', name => testInfo.outputPath(name), false);
     await shot(panel, 'director-lifecycle', name => testInfo.outputPath(name), false);
 
     await panel.getByRole('button', { name: 'Remove NINA observatory' }).click();

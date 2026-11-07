@@ -66,7 +66,7 @@ describe('RigPluginPanel', () => {
 
   it('shows both plugins side by side, whichever picks the work', async () => {
     const { onChangeMode } = show({ ...base, clients: [plugin] }, { syncClients: 2 });
-    const paths = (await screen.findByText('Picks the work')).closest('dl')!;
+    const paths = (await screen.findByText('Picks the work')).closest('fieldset')!;
     expect(paths).toHaveTextContent('Target Scheduler');
     expect(paths).toHaveTextContent('PSF Guard Director1 paired');
     await waitFor(() => expect(paths).toHaveTextContent('PSF Guard Sync2 paired'));
@@ -109,15 +109,30 @@ describe('RigPluginPanel', () => {
     expect(screen.queryByRole('button', { name: 'Allow work' })).toBeNull();
   });
 
-  it('allows the chosen plans for the current equipment and revision', async () => {
+  it('allows every activated plan, with no list that a later plan could fall outside', async () => {
     const { calls } = show({ ...base, clients: [plugin], configuration: equipment, plans });
-    fireEvent.click(await screen.findByLabelText('M31'));
+    expect(await screen.findByTestId('rig-plugin-plans')).toHaveTextContent('Runs every plan activated on this rig: Heart Nebula, M31.');
+    expect(screen.queryByRole('checkbox')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Allow work' }));
     await waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0].body).toEqual({
       coordinator_instance_id: instance, expected_revision: 0,
-      policy: { ...policy, profile_revision: 4, project_ids: ['plan-1'], revision: 1 },
+      policy: { ...policy, profile_revision: 4, project_ids: [], revision: 1 },
     });
+  });
+
+  it('can allow work before any plan is activated', async () => {
+    show({ ...base, clients: [plugin], configuration: equipment });
+    expect(await screen.findByTestId('rig-plugin-plans')).toHaveTextContent('No plans are activated on this rig yet');
+    expect(screen.getByRole('button', { name: 'Allow work' })).toBeEnabled();
+  });
+
+  it('replaces an out-of-date list of plans when work is allowed again', async () => {
+    const { calls } = show({ ...base, clients: [plugin], configuration: equipment, plans, policy, work: 'plans_changed' });
+    expect(await screen.findByTestId('rig-plugin-work')).toHaveTextContent('outside the allowed list');
+    fireEvent.click(screen.getByRole('button', { name: 'Allow work again' }));
+    await waitFor(() => expect(calls).toHaveLength(1));
+    expect(calls[0].body).toMatchObject({ expected_revision: 2, policy: { project_ids: [], revision: 3 } });
   });
 
   it('explains a stopped rig and allows work again on the new setup', async () => {
@@ -125,14 +140,14 @@ describe('RigPluginPanel', () => {
     expect(await screen.findByTestId('rig-plugin-work')).toHaveTextContent("This rig's setup changed");
     fireEvent.click(screen.getByRole('button', { name: 'Allow work again' }));
     await waitFor(() => expect(calls).toHaveLength(1));
-    expect(calls[0].body).toEqual({ coordinator_instance_id: instance, expected_revision: 2, policy: { ...policy, profile_revision: 7, revision: 3 } });
+    expect(calls[0].body).toEqual({ coordinator_instance_id: instance, expected_revision: 2, policy: { ...policy, profile_revision: 7, project_ids: [], revision: 3 } });
   });
 
-  it('turns work off without losing the allowed plans', async () => {
+  it('turns work off', async () => {
     const { calls } = show({ ...base, clients: [plugin], configuration: equipment, plans, policy, work: 'ready' });
     fireEvent.click(await screen.findByRole('button', { name: 'Turn off' }));
     await waitFor(() => expect(calls).toHaveLength(1));
-    expect(calls[0].body).toMatchObject({ expected_revision: 2, policy: { enabled: false, project_ids: ['plan-1'], revision: 3 } });
+    expect(calls[0].body).toMatchObject({ expected_revision: 2, policy: { enabled: false, revision: 3 } });
   });
 
   it('notes that Target Scheduler mode does not stop allowed work', async () => {

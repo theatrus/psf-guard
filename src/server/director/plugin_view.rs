@@ -22,7 +22,7 @@ pub(super) struct PluginView {
     configuration: Option<Configuration>,
     filter_names: BTreeMap<String, String>,
     clients: Vec<PluginClient>,
-    /// Plans activated on this rig, which work can be allowed for.
+    /// Plans activated on this rig, which allowed work runs.
     plans: Vec<ActivatedPlan>,
     policy: Option<Policy>,
     work: WorkState,
@@ -72,6 +72,8 @@ enum WorkState {
     EquipmentChanged,
     /// The rig's setup changed since the policy was saved.
     SetupChanged,
+    /// A plan is activated on the rig outside the policy's list of plans.
+    PlansChanged,
 }
 
 #[derive(Serialize)]
@@ -111,6 +113,7 @@ fn work_state(
     clients: &[Client],
     revision: u64,
     configuration: Option<&Configuration>,
+    plans: &[ActivatedPlan],
 ) -> WorkState {
     let Some(policy) = policy else {
         return WorkState::NotAllowed;
@@ -123,6 +126,10 @@ fn work_state(
         WorkState::EquipmentChanged
     } else if revision != policy.profile_revision {
         WorkState::SetupChanged
+    } else if !policy.project_ids.is_empty()
+        && plans.iter().any(|p| !policy.project_ids.contains(&p.id))
+    {
+        WorkState::PlansChanged
     } else {
         WorkState::Ready
     }
@@ -178,7 +185,6 @@ pub(super) async fn get(
                     || (0, None, BTreeMap::new()),
                     |p| (p.revision, p.configuration.map(|c| c.value), p.filter_names),
                 );
-                let work = work_state(policy.as_ref(), &clients, revision, configuration.as_ref());
                 let mut plans = Vec::new();
                 for activation in store.activations_for_rig(rig)? {
                     if let Some(project) = store.project(activation.project_id)? {
@@ -189,6 +195,13 @@ pub(super) async fn get(
                     }
                 }
                 plans.sort_by(|a, b| a.name.cmp(&b.name));
+                let work = work_state(
+                    policy.as_ref(),
+                    &clients,
+                    revision,
+                    configuration.as_ref(),
+                    &plans,
+                );
                 let clients = clients
                     .into_iter()
                     .map(|client| {
@@ -276,8 +289,9 @@ mod tests {
         let id = Uuid::new_v4();
         let clients = [client(id)];
         let accepted = configuration("config-1");
-        let state = work_state;
+        let other = configuration("config-2");
         let allowed = policy(id);
+        let state = |p, c, r, a| work_state(p, c, r, a, &[]);
         assert_eq!(
             state(None, &clients, 3, Some(&accepted)),
             WorkState::NotAllowed
@@ -294,7 +308,6 @@ mod tests {
             state(Some(&allowed), &[], 3, Some(&accepted)),
             WorkState::PluginRemoved
         );
-        let other = configuration("config-2");
         assert_eq!(
             state(Some(&allowed), &clients, 4, Some(&other)),
             WorkState::EquipmentChanged
@@ -304,5 +317,29 @@ mod tests {
             ..allowed
         };
         assert_eq!(state(Some(&off), &[], 9, None), WorkState::Off);
+    }
+
+    #[test]
+    fn a_plan_outside_a_list_stops_work_but_an_empty_list_takes_every_plan() {
+        let id = Uuid::new_v4();
+        let clients = [client(id)];
+        let accepted = configuration("config-1");
+        let plans = [ActivatedPlan {
+            id: Uuid::new_v4(),
+            name: "Activated later".into(),
+        }];
+        let listed = policy(id);
+        assert_eq!(
+            work_state(Some(&listed), &clients, 3, Some(&accepted), &plans),
+            WorkState::PlansChanged
+        );
+        let every = Policy {
+            project_ids: vec![],
+            ..listed
+        };
+        assert_eq!(
+            work_state(Some(&every), &clients, 3, Some(&accepted), &plans),
+            WorkState::Ready
+        );
     }
 }
