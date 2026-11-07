@@ -314,7 +314,7 @@ mod tests {
         );
         let off = Policy {
             enabled: false,
-            ..allowed
+            ..allowed.clone()
         };
         assert_eq!(state(Some(&off), &[], 9, None), WorkState::Off);
     }
