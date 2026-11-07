@@ -103,15 +103,17 @@ export default function RigPluginPanel({ slug, mode, onRigChanged, onChangeMode 
     onSettled: () => { void client.invalidateQueries({ queryKey }); },
   });
   const clientCount = view?.clients.length;
-  const known = useRef(clientCount);
+  const profileRevision = view?.profile_revision;
+  const known = useRef<{ slug: string; clientCount: number; profileRevision: number } | null>(null);
   useEffect(() => {
-    if (clientCount === undefined) return;
-    if (known.current !== undefined && known.current !== clientCount) {
-      setCode(null);
+    if (clientCount === undefined || profileRevision === undefined) return;
+    const previous = known.current;
+    if (previous?.slug === slug && (previous.clientCount !== clientCount || previous.profileRevision !== profileRevision)) {
+      if (previous.clientCount !== clientCount) setCode(null);
       onRigChanged();
     }
-    known.current = clientCount;
-  }, [clientCount, onRigChanged]);
+    known.current = { slug, clientCount, profileRevision };
+  }, [slug, clientCount, profileRevision, onRigChanged]);
   const databases = useAllDatabases();
   const syncClients = databases.data?.find(db => db.id === slug)?.remote_image_upload?.clients?.length ?? 0;
   if (!canWrite) return <p className="director-muted">Sign in as an editor to manage the Director plugin.</p>;

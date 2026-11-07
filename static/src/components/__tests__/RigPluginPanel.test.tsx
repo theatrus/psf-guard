@@ -96,6 +96,18 @@ describe('RigPluginPanel', () => {
     expect(calls).toHaveLength(0);
   });
 
+  it('refreshes the rig editor after an automatic equipment revision change', async () => {
+    const { update, onRigChanged } = show({ ...base, clients: [plugin] });
+    await screen.findByTestId('rig-plugin-work');
+    expect(onRigChanged).not.toHaveBeenCalled();
+    update({ ...base, profile_revision: 5, configuration: equipment, clients: [plugin] });
+    fireEvent.click(screen.getByRole('button', { name: 'Reload Director plugin' }));
+    await waitFor(() => expect(onRigChanged).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole('button', { name: 'Reload Director plugin' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Reload Director plugin' })).toBeEnabled());
+    expect(onRigChanged).toHaveBeenCalledTimes(1);
+  });
+
   it('offers no way to accept an old report or one that open work blocks', async () => {
     show({ ...base, clients: [{ ...reported, review: 'old' }] });
     expect(await screen.findByText(/No approval is needed/)).toBeInTheDocument();
