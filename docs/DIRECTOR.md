@@ -13,7 +13,60 @@ N.I.N.A. Pairing a rig with the N.I.N.A. Director plugin is an early beta: a
 paired plugin pulls its program, checks in captures and reports live status.
 The app marks what the plugin drives **Early beta**: the **Live** table, the
 rig's plugin status and its camera modes. Pairing does not allocate work or
-enable acquisition, and PSF Guard Sync stays separate from it.
+enable acquisition.
+
+## Run a rig with the Director plugin
+
+Open **Settings › Rig setup**, choose the rig, then open its **Director** tab.
+The tab shows who picks the work, both plugins, and four steps.
+
+1. **Pair.** Click **Generate Director pairing code**. In N.I.N.A., open the
+   Director plugin settings, enter the server URL and the code, then click
+   **Pair**. The code works once and expires after an hour. The tab updates
+   when the plugin pairs. The plugin needs HTTPS unless the server runs on the
+   same computer or you allow plain HTTP in its settings.
+2. **Equipment.** Connect the equipment, then click **Report equipment** in the
+   Director Session. Check the report, then click **Accept equipment**. A report
+   older than 15 minutes must be sent again. Equipment cannot change while work
+   is open.
+3. **Allow work.** Click **Allow work**. The plugin runs every plan activated
+   on this rig, including plans you activate later. To keep a plan away from
+   the plugin, leave it inactive on this rig. **Turn off** stops new work.
+4. **Work.** This step shows the plugin's open work and last status.
+
+Saving other rig setup stops new work until you click **Allow work again**, so
+the plugin never runs on setup nobody reviewed. Accepting new equipment or
+removing the allowed plugin does the same. The **Allow work** step explains
+which of these happened. Changing the mode or activating a plan does not.
+
+### Use Director and Sync on one rig
+
+Both plugins can stay installed and active, and each has its own code and
+credential. Sync moves images and catalog data. Director runs acquisition, so a
+rig on another computer still needs Sync or a folder copy to deliver its files.
+
+To compare the two, change **Mode** in rig setup. The mode decides whether
+PSF Guard plans the rig's nights as Target Scheduler or Director. Changing it
+keeps both pairings, accepted equipment and allowed work. N.I.N.A. runs the
+instruction in its sequence, so a plugin with allowed work still gets work in
+Target Scheduler mode when the sequence runs Director.
+
+Pairing Director sets the mode to Director only when the rig has no mode yet.
+A rig set to Target Scheduler stays on Target Scheduler.
+
+### Recover work from a removed plugin
+
+Only the plugin that holds work can end it. Removing that plugin, or using
+**Reset pairing** in the plugin while work is open, stops the rig from taking
+new work.
+
+1. Stop the Director Session in N.I.N.A.
+2. In the **Work** step, click **Close work**.
+3. Pair the plugin again if needed, then click **Allow work again**.
+
+Attempts the plugin reported stay spent, and closing refunds nothing. PSF Guard
+cannot count attempts the plugin never reported. **Close work** appears only
+after the plugin holding the work is removed. A paired plugin ends its own work.
 
 ## Contribution File Uploads
 
@@ -760,10 +813,12 @@ below; Sync credentials remain unrelated.
 
 Early beta, like everything the Director plugin drives.
 
-This operator API has no pairing UI yet. Open Director to adopt the registered
-database first, then use its exact `catalog_id` and bound `rig_id`; get the coordinator's
-`instance_id` from `/status`. Use an interactive read-write browser session, or the
-existing explicitly trusted local/anonymous operator mode, to issue a code:
+Rig setup's **Director** tab drives this API; see [Run a rig with the Director
+plugin](#run-a-rig-with-the-director-plugin). To call it directly, adopt the
+registered database first, then use its exact `catalog_id` and bound `rig_id`; get
+the coordinator's `instance_id` from `/status`. Use an interactive read-write browser
+session, or the existing explicitly trusted local/anonymous operator mode, to issue a
+code:
 
 ```text
 POST /api/director/v1/rigs/{rig_id}/pairing-token
@@ -860,10 +915,33 @@ original receipt time; retrying an acceptance is safe only while that accepted
 profile revision remains current. Revocation removes pending reports, not the
 operator-approved profile. A receipt is not a readiness or acquisition permit.
 
-The review UI is not implemented yet. These endpoints are the handoff for the
-rig setup screen; show the exact paired profile and report age, compare pending
-and active capabilities, and require explicit acceptance. Do not auto-accept
-on refresh, pairing or activation. Keep allocation admission a separate action.
+Rig setup's **Director** tab shows the report's age, compares it with the
+accepted equipment and requires explicit acceptance. Do not auto-accept on
+refresh, pairing or activation. Keep allocation admission a separate action.
+
+`GET /catalogs/{slug}/rig/plugin` returns one rig's plugin state for an
+interactive operator: `coordinator_instance_id`, `catalog_id`, `rig_id`,
+`profile_revision`, the accepted `configuration` and `filter_names`, `clients`
+with each `report` and `review` (`none`, `ready`, `old`, `work_open`, `accepted`),
+activated `plans`, `policy`, `grant`, `last_contact_at_ms` and `work`. `work`
+is `not_allowed`, `off`, `ready`, `plugin_removed`, `equipment_changed`,
+`setup_changed` or `plans_changed`, and gives the reason a saved policy no longer
+issues work.
+
+A workload policy with an empty `project_ids` allows every plan activated on the
+rig, now or later. A grant carries every activated plan, so a list refuses work
+as soon as a plan is activated outside it (`plans_changed`).
+
+A change to the rig profile's `mode` alone keeps a current policy on the new
+profile revision. Any other profile change leaves the policy on its old
+revision, which stops new work until an operator saves the policy again.
+
+`POST /rigs/{rig}/workloads/{allocation}/close` closes open work whose client
+was revoked. The body is `coordinator_instance_id` and `catalog_id`, and it needs
+an interactive operator. Every attempt in the work's ledger stays spent. The
+call answers `409` while the client exists or after the client released the work,
+and `404` when the rig's current work is another allocation. Repeating a close
+returns the same record, with `closed_at_ms` set.
 
 An operator lists nonsecret client records with `GET /rigs/{rig_id}/clients` and
 revokes with `DELETE /rigs/{rig_id}/clients/{client_id}` (both relative to the API
@@ -982,9 +1060,9 @@ decides a rig's night](#who-decides-a-rigs-night)). Until a mode is set,
 neither is chosen, and the card says which one PSF Guard guesses: a rig
 that has reported its equipment and runs an enabled workload policy is
 Director's, and every other rig Target Scheduler's. Choosing either, the
-guess included, sets it. Pairing a Director plugin with the rig sets
-its mode to Director. With Director chosen, the card lists what Director
-needs there: the plugin paired, and the rig's equipment reported. The mode
+guess included, sets it. Pairing a Director plugin sets the mode to
+Director only when none is set. With Director chosen, the card lists what
+Director needs there: the plugin paired, and the rig's equipment accepted. The mode
 grants the plugin nothing, and N.I.N.A. still runs whichever instruction
 the rig's sequence holds: Target Scheduler's or Director's.
 
@@ -2091,7 +2169,7 @@ safety monitor and N.I.N.A. still decide on the night.
 The night's title says who picks the rig's work: **Director decides** or
 **Target Scheduler decides**, from the rig's **Mode** in [Rig
 setup](#rig-profile), or PSF Guard's guess until one is set. Pairing a
-Director plugin sets the mode to Director. What the night offers to change
+Director plugin sets the mode to Director only when none is set. What the night offers to change
 follows from it: a Director rig takes overrides for one night, and a
 Target Scheduler rig has its Target Scheduler settings.
 

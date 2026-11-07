@@ -155,7 +155,7 @@ test('first-run plugin import creates a catalog and opens pairing without a TS f
   await page.getByRole('button', { name: 'Create database for plugin' }).click();
   const created = (await (await createResponse).json()).data.database;
   expect(realpathSync(created.database_path)).toBe(realpathSync(destination));
-  await page.getByRole('button', { name: 'Generate pairing code' }).click();
+  await page.getByRole('button', { name: 'Generate Sync pairing code' }).click();
   await expect(page.locator('.remote-upload-token-notice').filter({ hasText: 'Paste this code' })).toBeVisible();
 });
 

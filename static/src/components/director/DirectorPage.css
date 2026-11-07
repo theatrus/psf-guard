@@ -192,7 +192,7 @@ a.workspace-pill:hover { color: var(--color-text-primary); }
 @media (max-width: 700px) { .workspace-top { position: static; } }
 .horizon-editor { display: grid; gap: 0.4rem; margin-top: 0.5rem; min-width: 0; }
 .horizon-paste { display: grid; gap: 0.2rem; }
-.horizon-paste textarea { background: var(--color-input-bg); color: var(--color-input-text); border: 1px solid var(--color-input-border); border-radius: 4px; padding: 7px 9px; width: 100%; box-sizing: border-box; font-family: var(--font-mono, monospace); font-size: 13px; resize: vertical; }
+.horizon-paste textarea { background: var(--color-input-bg); color: var(--color-input-text); border: 1px solid var(--color-input-border); border-radius: 4px; padding: 7px 9px; width: 100%; box-sizing: border-box; font-family: monospace; font-size: 13px; resize: vertical; }
 .horizon-upload { position: relative; display: inline-flex; align-items: center; gap: 4px; cursor: pointer; padding: 4px 10px; border: 1px solid var(--color-border-secondary); border-radius: 4px; }
 .horizon-upload input { position: absolute; width: 1px; height: 1px; opacity: 0; }
 .director-sites { margin-top: 1.5rem; }
@@ -279,3 +279,18 @@ a.workspace-pill:hover { color: var(--color-text-primary); }
 .director-weather-values dd {
   margin: 0;
 }
+
+/* Rig setup › Director uses the setup form's groups and fields. */
+.rig-plugin h4 { margin: 0; }
+.rig-plugin fieldset { display: grid; gap: 6px; }
+.rig-plugin fieldset p { margin: 0; font-size: 0.9rem; }
+.rig-plugin .director-actions { flex-wrap: wrap; }
+.rig-plugin .link-button { display: inline-flex; align-items: center; gap: 0.25rem; align-self: flex-start; padding: 0; border: none; background: none; color: inherit; text-decoration: underline; cursor: pointer; }
+.rig-plugin-paths { margin-bottom: 0.25rem; }
+.rig-plugin-rows { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.rig-plugin-rows:empty { display: none; }
+.rig-plugin-rows li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.rig-plugin-code { display: grid; gap: 4px; }
+.rig-plugin-code input { font-family: monospace; }
+.rig-plugin-code code { overflow-wrap: anywhere; }
+.rig-plugin-report { display: grid; gap: 4px; }

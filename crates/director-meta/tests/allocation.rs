@@ -577,3 +577,244 @@ fn an_allocation_uuid_cannot_be_reused_by_a_different_rig() {
     assert_eq!(store.allocation(rig).unwrap(), None);
     assert_eq!(store.allocation(a.rig_id).unwrap(), Some(a));
 }
+
+/// A second pairing on the fixture's rig, as a plugin paired again would make.
+fn pair_again(store: &mut MetaStore, a: &Allocation) -> psf_guard_director_meta::client::Client {
+    store
+        .issue_client_pairing(a.catalog_id, a.rig_id, &"c".repeat(64), 100, 200)
+        .unwrap();
+    store
+        .redeem_client_pairing(&"c".repeat(64), &"d".repeat(64), a.profile_id, "NINA", 101)
+        .unwrap()
+}
+
+/// The next grant the fixture's rig would get, for the given client.
+fn next_grant(a: &Allocation, client: Uuid) -> Allocation {
+    let mut next = a.clone();
+    next.allocation_id = Uuid::new_v4();
+    next.client_id = client;
+    next.preview_revision = "c".repeat(64);
+    next.snapshot["program"]["assignment"]["id"] =
+        json!(format!("allocation-{}", next.allocation_id));
+    next
+}
+
+#[test]
+fn a_removed_plugin_strands_its_work_until_an_operator_closes_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("meta.sqlite");
+    let (mut store, mut a) = fixture(&path);
+    a.snapshot["program"]["assignment"]["goals"][0]["requested"] = json!(3);
+    let policy = commission(&mut store, &path, &mut a);
+    store.admit_workload(&a, policy.revision).unwrap();
+    let ledger = Uuid::new_v4();
+    store
+        .start_allocation(a.rig_id, a.allocation_id, a.client_id, ledger, 1002)
+        .unwrap();
+    store
+        .store_receipts(&receipts(&a, ledger, "saved"), 1100)
+        .unwrap();
+
+    // A plugin that can still release its work must do so.
+    assert!(matches!(
+        store.close_orphaned_workload(a.rig_id, a.allocation_id, 3000),
+        Err(Error::Conflict)
+    ));
+
+    assert!(store.revoke_client(a.rig_id, a.client_id).unwrap());
+    let client = pair_again(&mut store, &a);
+    let allowed = store
+        .save_workload_policy(
+            &psf_guard_director_meta::workload::Policy {
+                client_id: client.client_id,
+                revision: policy.revision + 1,
+                ..policy.clone()
+            },
+            policy.revision,
+        )
+        .unwrap();
+
+    // Paired again and allowed again, the rig still cannot get work.
+    let next = next_grant(&a, client.client_id);
+    assert!(store.admit_workload(&next, allowed.revision).is_err());
+
+    let closed = store
+        .close_orphaned_workload(a.rig_id, a.allocation_id, 3000)
+        .unwrap();
+    assert!(closed.released);
+    assert_eq!(closed.closed_at_ms, Some(3000));
+    assert_eq!(closed.ledger_id, None);
+    assert_eq!(
+        store
+            .close_orphaned_workload(a.rig_id, a.allocation_id, 4000)
+            .unwrap(),
+        closed,
+        "a retried close changes nothing and spends nothing twice"
+    );
+
+    // The attempt the plugin reported stays spent.
+    let mut program: psf_guard_director_core::program::Program =
+        serde_json::from_value(a.snapshot["program"].clone()).unwrap();
+    let limit = program.assignment.goals[0].attempts_remaining;
+    store.carry_workload_budget(a.rig_id, &mut program).unwrap();
+    assert_eq!(program.assignment.goals[0].attempts_remaining, limit - 1);
+
+    let mut next = next;
+    program.assignment.id = format!("allocation-{}", next.allocation_id);
+    next.snapshot["program"] = serde_json::to_value(&program).unwrap();
+    store.admit_workload(&next, allowed.revision).unwrap();
+}
+
+#[test]
+fn closing_counts_an_attempt_the_plugin_never_settled() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("meta.sqlite");
+    let (mut store, mut a) = fixture(&path);
+    a.snapshot["program"]["assignment"]["goals"][0]["requested"] = json!(3);
+    let policy = commission(&mut store, &path, &mut a);
+    store.admit_workload(&a, policy.revision).unwrap();
+    let ledger = Uuid::new_v4();
+    store
+        .start_allocation(a.rig_id, a.allocation_id, a.client_id, ledger, 1002)
+        .unwrap();
+    let mut reserved = receipts(&a, ledger, "saved");
+    reserved.truncate(1);
+    store.store_receipts(&reserved, 1100).unwrap();
+    store.revoke_client(a.rig_id, a.client_id).unwrap();
+    store
+        .close_orphaned_workload(a.rig_id, a.allocation_id, 3000)
+        .unwrap();
+    let mut program: psf_guard_director_core::program::Program =
+        serde_json::from_value(a.snapshot["program"].clone()).unwrap();
+    let limit = program.assignment.goals[0].attempts_remaining;
+    store.carry_workload_budget(a.rig_id, &mut program).unwrap();
+    assert_eq!(program.assignment.goals[0].attempts_remaining, limit - 1);
+}
+
+#[test]
+fn work_its_plugin_released_cannot_be_closed() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("meta.sqlite");
+    let (mut store, mut a) = fixture(&path);
+    let policy = commission(&mut store, &path, &mut a);
+    store.admit_workload(&a, policy.revision).unwrap();
+    let ledger = Uuid::new_v4();
+    store
+        .start_allocation(a.rig_id, a.allocation_id, a.client_id, ledger, 1002)
+        .unwrap();
+    store
+        .store_receipts(&receipts(&a, ledger, "saved"), 1100)
+        .unwrap();
+    store
+        .release_workload(a.rig_id, a.client_id, a.allocation_id, ledger, 2)
+        .unwrap();
+    store.revoke_client(a.rig_id, a.client_id).unwrap();
+    assert!(matches!(
+        store.close_orphaned_workload(a.rig_id, a.allocation_id, 3000),
+        Err(Error::Conflict)
+    ));
+}
+
+#[test]
+fn an_operator_admitted_allocation_keeps_its_spent_attempts_when_closed() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("meta.sqlite");
+    let (mut store, mut a) = fixture(&path);
+    a.snapshot["program"]["assignment"]["goals"][0]["requested"] = json!(3);
+    let policy = commission(&mut store, &path, &mut a);
+    // Admitted by hand, so no workload record or budget exists for it.
+    store.admit_allocation(&a).unwrap();
+    let ledger = Uuid::new_v4();
+    store
+        .start_allocation(a.rig_id, a.allocation_id, a.client_id, ledger, 1002)
+        .unwrap();
+    store
+        .store_receipts(&receipts(&a, ledger, "saved"), 1100)
+        .unwrap();
+    store.revoke_client(a.rig_id, a.client_id).unwrap();
+    let closed = store
+        .close_orphaned_workload(a.rig_id, a.allocation_id, 3000)
+        .unwrap();
+    assert!(closed.released);
+    let mut program: psf_guard_director_core::program::Program =
+        serde_json::from_value(a.snapshot["program"].clone()).unwrap();
+    let limit = program.assignment.goals[0].attempts_remaining;
+    store.carry_workload_budget(a.rig_id, &mut program).unwrap();
+    assert_eq!(program.assignment.goals[0].attempts_remaining, limit - 1);
+    assert!(policy.enabled);
+}
+
+#[test]
+fn changing_only_the_mode_keeps_the_rig_allowed_to_take_work() {
+    use psf_guard_director_meta::profile::RigMode;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("meta.sqlite");
+    let (mut store, mut a) = fixture(&path);
+    let policy = commission(&mut store, &path, &mut a);
+
+    // Switching back and forth, as someone comparing the two paths would.
+    for mode in [RigMode::TargetScheduler, RigMode::Director] {
+        let current = store.rig_profile(a.rig_id).unwrap().unwrap();
+        let mut next = current.clone();
+        next.mode = Some(mode);
+        let saved = store.save_rig_profile(&next, current.revision).unwrap();
+        assert_eq!(saved.revision, current.revision + 1);
+        let kept = store.workload_policy(a.rig_id).unwrap().unwrap();
+        assert_eq!(kept.profile_revision, saved.revision);
+        assert_eq!(kept.revision, policy.revision, "no new review happened");
+    }
+
+    // Any other change still needs a person to look at it again.
+    let current = store.rig_profile(a.rig_id).unwrap().unwrap();
+    let mut next = current.clone();
+    next.mode = Some(RigMode::TargetScheduler);
+    next.peer_id = Some("peer".into());
+    let saved = store.save_rig_profile(&next, current.revision).unwrap();
+    let stale = store.workload_policy(a.rig_id).unwrap().unwrap();
+    assert_eq!(stale.profile_revision, current.revision);
+    assert_ne!(stale.profile_revision, saved.revision);
+
+    // A policy already out of date does not come back on a mode change.
+    let mut again = saved.clone();
+    again.mode = Some(RigMode::Director);
+    store.save_rig_profile(&again, saved.revision).unwrap();
+    assert_eq!(
+        store
+            .workload_policy(a.rig_id)
+            .unwrap()
+            .unwrap()
+            .profile_revision,
+        current.revision
+    );
+}
+
+#[test]
+fn allowing_every_plan_covers_one_activated_later_and_a_list_does_not() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("meta.sqlite");
+    let (mut store, mut a) = fixture(&path);
+    let listed = commission(&mut store, &path, &mut a);
+    // A grant carries every activated plan, so one outside a list stops work.
+    let later = store
+        .create_project(Uuid::new_v4(), "Activated later")
+        .unwrap()
+        .id;
+    let mut links = a.snapshot["links"].as_array().unwrap().clone();
+    links.push(json!({"project_id":later}));
+    a.snapshot["links"] = json!(links);
+    assert!(matches!(
+        store.admit_workload(&a, listed.revision),
+        Err(Error::Conflict)
+    ));
+    let every = store
+        .save_workload_policy(
+            &psf_guard_director_meta::workload::Policy {
+                project_ids: vec![],
+                revision: listed.revision + 1,
+                ..listed.clone()
+            },
+            listed.revision,
+        )
+        .unwrap();
+    store.admit_workload(&a, every.revision).unwrap();
+}

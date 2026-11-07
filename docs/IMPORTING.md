@@ -18,7 +18,7 @@ choices keeps any folders you have already added. To connect TS, choose:
 - **Use the PSF Guard Sync plugin**: add an empty image folder or a shared
   folder containing your images, then click **Create database for plugin**.
   PSF Guard opens the catalog's pairing controls. Install **PSF Guard Sync**
-  in N.I.N.A., click **Generate pairing code**, and enter the server URL and
+  in N.I.N.A., click **Generate Sync pairing code**, and enter the server URL and
   code in the plugin. Click **Pair**, then **Test connection**. The plugin
   controls its sync schedule; a local TS file is not required. Enable
   **Accept remote image uploads** and choose a **Receive directory** if you

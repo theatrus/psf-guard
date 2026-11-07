@@ -293,9 +293,11 @@ async fn pair(
                     &input.client_name,
                     now,
                 )?;
-                // A rig paired with a Director plugin is run by Director.
-                // The pairing stands even if the mode cannot be written.
-                if let Err(error) = store.set_rig_mode(
+                // A rig nobody has chosen a mode for is run by the plugin
+                // it just paired. A chosen mode stays, so pairing the plugin
+                // to try it leaves Target Scheduler running the rig. The
+                // pairing stands even if the mode cannot be written.
+                if let Err(error) = store.default_rig_mode(
                     client.rig_id,
                     psf_guard_director_meta::profile::RigMode::Director,
                     u64::try_from(now).unwrap_or(0),

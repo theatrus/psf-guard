@@ -1015,7 +1015,7 @@ describe('TauriSettings first run', () => {
     fireEvent.change(screen.getByPlaceholderText('Type an absolute path and press Add'), { target: { value: '/receive' } });
     fireEvent.click(screen.getByRole('button', { name: 'Add' }));
     fireEvent.click(screen.getByRole('button', { name: 'Create database for plugin' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Generate pairing code' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Generate Sync pairing code' }));
     expect(await screen.findByDisplayValue('ONE-USE-CODE')).toBeInTheDocument();
     expect(requests).toEqual([{ name: 'Plugin catalog', image_dirs: ['/receive'], backfill: false, fill_metadata: true }]);
     expect(screen.getByText('https://nina-plugins.psf-guard.com/')).toBeInTheDocument();

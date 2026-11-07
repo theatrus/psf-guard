@@ -4,6 +4,9 @@ use crate::profile::{Reported, RigProfile, Source};
 use psf_guard_director_core::program::Configuration;
 use std::collections::BTreeMap;
 
+/// How old a report may be when an operator accepts it.
+pub const MAX_REPORT_AGE_MS: u64 = 900_000;
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct EquipmentReport {
@@ -174,7 +177,7 @@ impl MetaStore {
             return Err(Error::Conflict);
         }
         if now < report.received_at_ms
-            || now.saturating_sub(report.observed_at_ms.min(report.received_at_ms)) > 900_000
+            || now.saturating_sub(report.observed_at_ms.min(report.received_at_ms)) > MAX_REPORT_AGE_MS
             || tx.query_row(
                 "SELECT EXISTS(SELECT 1 FROM execution_allocation a WHERE rig_id=?1 AND NOT EXISTS(SELECT 1 FROM workload_history w WHERE w.allocation_id=a.allocation_id AND json_extract(w.payload,'$.released')=1))",
                 [rig.to_string()],

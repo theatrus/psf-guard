@@ -16,6 +16,10 @@ pub struct Policy {
     pub profile_id: Uuid,
     pub profile_revision: u64,
     pub configuration_id: String,
+    /// Empty allows every plan activated on the rig, now or later: activation
+    /// is the reviewed step that puts a plan on a rig. A list limits work to
+    /// those plans, and a grant carries every activated plan, so a plan
+    /// activated outside the list stops work until the list changes.
     pub project_ids: Vec<Uuid>,
     pub enabled: bool,
     pub revision: u64,
@@ -28,6 +32,10 @@ pub struct Workload {
     pub released: bool,
     pub ledger_id: Option<Uuid>,
     pub terminal_sequence: Option<u64>,
+    /// When an operator closed work whose plugin was removed. Such work was
+    /// never released by its executor, so nothing proves it stopped cleanly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub closed_at_ms: Option<u64>,
 }
 
 pub(crate) fn create_tables(conn: &Connection) -> Result<(), Error> {
@@ -77,6 +85,31 @@ fn profile_matches(conn: &Connection, p: &Policy) -> Result<bool, Error> {
     }))
 }
 
+/// Keep a policy on the rig's new profile revision after a change of mode
+/// alone. A policy that was already out of date stays out of date.
+pub(crate) fn follow_mode_change(
+    conn: &Connection,
+    rig: Uuid,
+    from: u64,
+    to: u64,
+) -> Result<(), Error> {
+    let Some(mut value) = policy(conn, rig)? else {
+        return Ok(());
+    };
+    if value.profile_revision != from {
+        return Ok(());
+    }
+    value.profile_revision = to;
+    conn.execute(
+        "UPDATE workload_policy SET payload=?2 WHERE rig_id=?1",
+        params![
+            rig.to_string(),
+            serde_json::to_string(&value).map_err(|_| Error::InvalidInput)?
+        ],
+    )?;
+    Ok(())
+}
+
 fn carry_budget(conn: &Connection, rig: Uuid, program: &mut Program) -> Result<(), Error> {
     let mut stmt =
         conn.prepare("SELECT goal_id,initial_limit,spent FROM workload_budget WHERE rig_id=?1")?;
@@ -117,7 +150,6 @@ impl MetaStore {
             || value.profile_revision == 0
             || value.configuration_id.is_empty()
             || value.configuration_id.len() > 128
-            || value.project_ids.is_empty()
             || value.project_ids.len() > 128
             || value.project_ids.iter().any(Uuid::is_nil)
             || value.project_ids.iter().collect::<BTreeSet<_>>().len() != value.project_ids.len()
@@ -211,8 +243,9 @@ impl MetaStore {
             .ok_or(Error::InvalidInput)?;
         if links.is_empty()
             || links.iter().any(|l| {
-                serde_json::from_value::<Uuid>(l["project_id"].clone())
-                    .map_or(true, |id| !p.project_ids.contains(&id))
+                serde_json::from_value::<Uuid>(l["project_id"].clone()).map_or(true, |id| {
+                    !p.project_ids.is_empty() && !p.project_ids.contains(&id)
+                })
             })
             || grant.snapshot["program"]["configuration"]["id"] != p.configuration_id
             || grant.snapshot["rig"]["profile_revision"] != p.profile_revision
@@ -246,6 +279,7 @@ impl MetaStore {
             released: false,
             ledger_id: None,
             terminal_sequence: None,
+            closed_at_ms: None,
         };
         for g in &original.assignment.goals {
             tx.execute("INSERT INTO workload_budget VALUES(?1,?2,?3,0) ON CONFLICT(rig_id,goal_id) DO NOTHING", params![grant.rig_id.to_string(),g.id,g.attempts_remaining])?;
@@ -265,6 +299,111 @@ impl MetaStore {
         )?;
         tx.commit()?;
         Ok(result)
+    }
+
+    /// Whether the rig's executor has started this allocation.
+    pub fn allocation_started(&self, rig: Uuid, id: Uuid) -> Result<bool, Error> {
+        valid_id(rig)?;
+        valid_id(id)?;
+        Ok(self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM execution_start WHERE rig_id=?1 AND allocation_id=?2)",
+            params![rig.to_string(), id.to_string()],
+            |r| r.get(0),
+        )?)
+    }
+
+    /// Close work whose executor can no longer release it. Only the client
+    /// holding a grant can release it, so a removed client would otherwise
+    /// leave the rig without work for good. A client that still exists must
+    /// release its own work, which proves that it stopped and parked.
+    ///
+    /// Every attempt the plugin reported stays spent, whatever its outcome,
+    /// and nothing is refunded. An attempt the plugin never reported cannot
+    /// be counted here.
+    pub fn close_orphaned_workload(
+        &mut self,
+        rig: Uuid,
+        id: Uuid,
+        now_ms: u64,
+    ) -> Result<Workload, Error> {
+        valid_id(rig)?;
+        valid_id(id)?;
+        if now_ms == 0 {
+            return Err(Error::InvalidInput);
+        }
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let grant = allocation::read(&tx, rig, self.instance_id)?
+            .filter(|grant| grant.allocation_id == id)
+            .ok_or(Error::NotFound)?;
+        let recorded = history(&tx, id)?;
+        if let Some(done) = recorded.as_ref().filter(|w| w.released) {
+            // A retried close answers with the same result. Work its plugin
+            // released was never this call's to close.
+            return if done.closed_at_ms.is_some() {
+                Ok(done.clone())
+            } else {
+                Err(Error::Conflict)
+            };
+        }
+        let held: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM director_client WHERE id=?1 AND rig_id=?2)",
+            params![grant.client_id.to_string(), rig.to_string()],
+            |r| r.get(0),
+        )?;
+        if held {
+            return Err(Error::Conflict);
+        }
+        let program: Program = serde_json::from_value(grant.snapshot["program"].clone())
+            .map_err(|_| Error::CorruptDatabase)?;
+        let ledger: Option<String> = tx
+            .query_row(
+                "SELECT ledger_id FROM execution_start WHERE rig_id=?1 AND allocation_id=?2",
+                params![rig.to_string(), id.to_string()],
+                |r| r.get(0),
+            )
+            .optional()?;
+        for goal in &program.assignment.goals {
+            let spent: i64 = match &ledger {
+                Some(ledger) => tx.query_row(
+                    "SELECT COUNT(DISTINCT capture_id) FROM rig_event WHERE rig_id=?1 AND ledger_id=?2 AND goal_id=?3",
+                    params![rig.to_string(), ledger, goal.id],
+                    |r| r.get(0),
+                )?,
+                None => 0,
+            };
+            // An operator-admitted allocation has no budget row yet. The
+            // next grant must start from what this one used.
+            tx.execute(
+                "INSERT INTO workload_budget VALUES(?1,?2,?3,0) ON CONFLICT(rig_id,goal_id) DO NOTHING",
+                params![rig.to_string(), goal.id, goal.attempts_remaining],
+            )?;
+            tx.execute(
+                "UPDATE workload_budget SET spent=MIN(initial_limit,spent+?1) WHERE rig_id=?2 AND goal_id=?3",
+                params![spent, rig.to_string(), goal.id],
+            )?;
+        }
+        let mut closed = recorded.unwrap_or(Workload {
+            allocation: grant,
+            released: false,
+            ledger_id: None,
+            terminal_sequence: None,
+            closed_at_ms: None,
+        });
+        closed.released = true;
+        closed.closed_at_ms = Some(now_ms);
+        tx.execute(
+            "INSERT INTO workload_history VALUES(?1,?2,?3)
+             ON CONFLICT(allocation_id) DO UPDATE SET payload=excluded.payload",
+            params![
+                id.to_string(),
+                rig.to_string(),
+                serde_json::to_string(&closed).map_err(|_| Error::InvalidInput)?
+            ],
+        )?;
+        tx.commit()?;
+        Ok(closed)
     }
 
     /// The authenticated executor attests it has stopped all operations and

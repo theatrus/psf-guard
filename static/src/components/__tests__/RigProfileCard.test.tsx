@@ -503,7 +503,7 @@ describe('Rig profile card', () => {
     expect(screen.queryByText(/^Not set\./)).toBeNull();
     fireEvent.click(within(modes).getByLabelText('Director'));
     const needs = screen.getByRole('list', { name: 'What Director needs' });
-    expect(needs).toHaveTextContent('Pair the N.I.N.A. Director plugin with this rig. Pairing sets this mode by itself.');
+    expect(needs).toHaveTextContent('Pair the N.I.N.A. Director plugin with this rig.');
     expect(screen.queryByText(/^Not set\./)).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Save rig profile' }));
     await waitFor(() => expect(saves).toHaveLength(1));
