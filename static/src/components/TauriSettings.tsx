@@ -1310,9 +1310,9 @@ export default function TauriSettings({
                 </ul>
                 {olderPlugins.length > 0 && (
                   <small role="note">
-                    {olderPlugins.join(', ')} {olderPlugins.length === 1 ? 'uses' : 'use'} an older Sync plugin.
-                    PSF Guard gives its new projects a N.I.N.A. profile before sending them, and can't when it doesn't know the profile.
-                    Update the plugin in N.I.N.A. so new projects always reach the profile it runs in.
+                    {olderPlugins.join(', ')} {olderPlugins.length === 1 ? 'uses' : 'use'} an older Sync plugin, which cannot add new projects to a N.I.N.A. profile.
+                    PSF Guard sends new projects under the N.I.N.A. profile the plugin last reported. When PSF Guard knows no profile, N.I.N.A. hides those projects.
+                    Update the Sync plugin in N.I.N.A. so new projects always reach the profile N.I.N.A. has open.
                   </small>
                 )}
               </div>

@@ -1,4 +1,4 @@
-import type { DirectorEdited, DirectorFieldOfView, DirectorHorizon, DirectorOptics, DirectorReported, DirectorRigMode, DirectorRigProfile, DirectorRigProfileEdit, DirectorRigProfileView, DirectorSource } from '../../api/directorTypes';
+import type { DirectorEdited, DirectorRigFilters, DirectorFieldOfView, DirectorHorizon, DirectorOptics, DirectorReported, DirectorRigMode, DirectorRigProfile, DirectorRigProfileEdit, DirectorRigProfileView, DirectorSource } from '../../api/directorTypes';
 
 /** Text fields for every number the form edits, so a half-typed value never throws. */
 export interface RigProfileForm {
@@ -14,7 +14,7 @@ export interface RigProfileForm {
   horizon: DirectorEdited<DirectorHorizon> | null;
   /** Who picks the rig's work; '' leaves it to PSF Guard's guess. */
   mode: DirectorRigMode | '';
-  /** Typed filter names, comma-separated; '' has no list. */
+  /** Typed filter names, one per line; '' has no list. */
   filters: string;
 }
 
@@ -38,14 +38,14 @@ export function formFromProfile(profile: DirectorRigProfile): RigProfileForm {
     peerId: profile.peer_id ?? '',
     horizon: profile.horizon ? { value: profile.horizon.value, source: profile.horizon.source } : null,
     mode: profile.mode ?? '',
-    filters: profile.filters?.value.join(', ') ?? '',
+    filters: profile.filters?.value.join('\n') ?? '',
   };
 }
 
-/** The typed names as the server stores them: trimmed, no blanks, each once regardless of case. */
+/** The typed names, one per line, as the server stores them: trimmed, no blanks, each once regardless of case. */
 export function filterNames(text: string): string[] {
   const seen = new Set<string>();
-  return text.split(',').map(name => name.trim()).filter(name => {
+  return text.split(/\r?\n/).map(name => name.trim()).filter(name => {
     const key = name.toLowerCase();
     if (!name || seen.has(key)) return false;
     seen.add(key);
@@ -53,10 +53,21 @@ export function filterNames(text: string): string[] {
   });
 }
 
-/** Whether the rig's filter list has this template's filter. */
-export function hasFilter(list: string[] | null | undefined, filter: string): boolean {
-  return !list || list.some(name => name.trim().toLowerCase() === filter.trim().toLowerCase());
+/** Whether the rig can shoot a template's filter, by the server's rule: Target
+ *  Scheduler needs the name itself; a Director plugin's wheel also serves the
+ *  one filter of the template's bandpass. True when the rig has no list. */
+export function hasFilter(list: DirectorRigFilters | null | undefined, filter: string, bandpass: string): boolean {
+  if (!list) return true;
+  const same = (name: string) => name.trim().toLowerCase() === filter.trim().toLowerCase();
+  if (!list.reported) return list.filters.some(entry => same(entry.name));
+  const exact = list.filters.filter(entry => same(entry.name));
+  return (exact.length > 0 ? exact : list.filters.filter(entry => entry.bandpass === bandpass)).length === 1;
 }
+
+/** Bytes a name takes in UTF-8, as the server measures it. */
+const utf8Length = (name: string) => new TextEncoder().encode(name).length;
+// eslint-disable-next-line no-control-regex
+const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
 
 /** Copy the header-derived optics and site into the form, keeping their source. */
 export function applyDefaults(form: RigProfileForm, defaults: DirectorRigProfileView['defaults']): RigProfileForm {
@@ -118,7 +129,9 @@ export function editFromForm(form: RigProfileForm, profile: DirectorRigProfile):
   if (!finite(minAlt) || !finite(maxAlt) || maxAlt <= minAlt) return 'The maximum altitude must be above the minimum.';
   if (!finite(before) || !finite(after) || before < 0 || after < 0) return 'Meridian minutes cannot be negative.';
   const filters = filterNames(form.filters);
-  if (filters.some(name => name.length > 64)) return 'A filter name can be at most 64 characters.';
+  const long = filters.find(name => utf8Length(name) > 64);
+  if (long) return `The filter name "${long}" is too long. Use at most 64 bytes.`;
+  if (filters.some(name => CONTROL.test(name))) return 'Filter names cannot contain tabs or other control characters.';
   if (filters.length > 64) return 'Enter at most 64 filters.';
   const stored = (part: DirectorReported<unknown> | null, source: DirectorSource | null) => source ?? part?.source ?? manual;
   return {

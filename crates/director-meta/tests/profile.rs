@@ -232,11 +232,19 @@ fn a_typed_filter_list_is_checked_and_a_reported_wheel_wins_over_it() {
     let saved = store
         .save_rig_profile(&typed(&["L", "Ha", "OIII"], Source::Manual {}), 0)
         .unwrap();
-    assert_eq!(
-        store.rig_profile(rig.id).unwrap().unwrap().filter_list(),
-        Some(vec!["L".to_string(), "Ha".into(), "OIII".into()])
-    );
-    assert_eq!(RigProfile::empty(rig.id, 0).filter_list(), None);
+    let typed_list = store
+        .rig_profile(rig.id)
+        .unwrap()
+        .unwrap()
+        .known_filters()
+        .unwrap();
+    assert!(!typed_list.reported);
+    let names: Vec<&str> = typed_list.filters.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, ["L", "Ha", "OIII"]);
+    // Target Scheduler needs the name itself, in any case.
+    assert!(typed_list.serves(" ha "));
+    assert!(!typed_list.serves("H-alpha"));
+    assert_eq!(RigProfile::empty(rig.id, 0).known_filters(), None);
 
     // A Director plugin's wheel, by its native labels, replaces the typed list.
     let mut reported = saved.clone();
@@ -254,9 +262,18 @@ fn a_typed_filter_list_is_checked_and_a_reported_wheel_wins_over_it() {
         source: Source::Plugin {},
         reported_at_ms: 1,
     });
-    reported.filter_names = [("f1".to_string(), "Lum".to_string())].into();
-    assert_eq!(
-        reported.filter_list(),
-        Some(vec!["Lum".to_string(), "f2".into()])
-    );
+    reported.filter_names = [
+        ("f1".to_string(), "Lum".to_string()),
+        ("f2".to_string(), "H-alpha".to_string()),
+    ]
+    .into();
+    let wheel = reported.known_filters().unwrap();
+    assert!(wheel.reported);
+    let names: Vec<&str> = wheel.filters.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, ["Lum", "H-alpha"]);
+    // Director also takes the one wheel filter of the template's bandpass,
+    // as its compiler does; a typed "OIII" no longer counts.
+    assert!(wheel.serves("lum"));
+    assert!(wheel.serves("Ha"));
+    assert!(!wheel.serves("OIII"));
 }

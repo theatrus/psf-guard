@@ -571,7 +571,7 @@ async fn activation_warns_when_a_template_filter_is_not_on_the_typed_list() {
     let revision = type_filters(0, json!(["L", "R", "G", "B"])).await;
     let warnings = preview_warnings(&a).await;
     assert!(
-        warnings.contains("Filter Ha is not on this rig's filter list (L, R, G, B)."),
+        warnings.contains("Filter Ha: not on this rig's filter list (L, R, G, B)."),
         "{warnings}"
     );
 

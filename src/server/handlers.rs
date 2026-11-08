@@ -775,7 +775,7 @@ fn remote_image_upload_summary(
             })
             .unwrap_or_default(),
         key_contact: config
-            .filter(|config| config.token_is_configured() && !config.token_sha256.is_empty())
+            .filter(|config| config.legacy_key_configured())
             .and_then(|_| contacts.remove(crate::db_registry::LEGACY_KEY_HOLDER))
             .map(Into::into),
     }

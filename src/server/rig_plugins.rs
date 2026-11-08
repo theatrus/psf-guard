@@ -10,7 +10,7 @@
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -50,9 +50,10 @@ pub(crate) fn plugin_supports(headers: &HeaderMap, capability: &str) -> bool {
 /// Whether a Sync plugin can reach this database, and so write its plans into
 /// the N.I.N.A. profile it runs in.
 pub(crate) fn sync_plugin_paired(context: &DatabaseContext) -> bool {
-    context.remote_image_upload.as_ref().is_some_and(|config| {
-        config.sync_enabled && (!config.clients.is_empty() || !config.token_sha256.is_empty())
-    })
+    context
+        .remote_image_upload
+        .as_ref()
+        .is_some_and(|config| config.sync_enabled && config.token_is_configured())
 }
 
 /// The N.I.N.A. profile a plugin paired with `catalog_id` last reported,
@@ -167,7 +168,18 @@ const CONTACT_WRITE_INTERVAL: Duration = Duration::from_secs(10 * 60);
 pub struct SyncContacts {
     /// `None` keeps the contacts in memory only.
     path: Option<PathBuf>,
-    state: Mutex<(Contacts, Option<Instant>)>,
+    state: Mutex<ContactState>,
+    /// Serializes file writes, and holds the generation last written so an
+    /// older snapshot never replaces a newer one.
+    written: Arc<Mutex<u64>>,
+}
+
+#[derive(Default)]
+struct ContactState {
+    contacts: Contacts,
+    /// Bumped for each snapshot sent to the file.
+    generation: u64,
+    last_write: Option<Instant>,
 }
 
 impl SyncContacts {
@@ -183,7 +195,11 @@ impl SyncContacts {
             .unwrap_or_default();
         Self {
             path: Some(path),
-            state: Mutex::new((contacts, None)),
+            state: Mutex::new(ContactState {
+                contacts,
+                ..ContactState::default()
+            }),
+            written: Arc::default(),
         }
     }
 
@@ -191,37 +207,76 @@ impl SyncContacts {
     pub fn in_memory() -> Self {
         Self {
             path: None,
-            state: Mutex::new((Contacts::new(), None)),
+            state: Mutex::default(),
+            written: Arc::default(),
         }
     }
 
     /// Record an authenticated request from `holder` to `catalog_id`.
-    pub(crate) fn note(&self, catalog_id: &str, holder: &str, headers: &HeaderMap) {
+    /// `current(catalog, holder)` says whether a recorded credential still
+    /// exists; the others are dropped when the file is next written. The
+    /// file is written off the request path.
+    pub(crate) fn note(
+        &self,
+        catalog_id: &str,
+        holder: &str,
+        headers: &HeaderMap,
+        current: impl Fn(&str, &str) -> bool,
+    ) {
         let contact = SyncContact {
             at: chrono::Utc::now().timestamp(),
             version: plugin_version(headers).map(str::to_owned),
             capabilities: plugin_capabilities(headers),
         };
-        let Ok(mut state) = self.state.lock() else {
+        let snapshot = {
+            let Ok(mut state) = self.state.lock() else {
+                return;
+            };
+            let previous = state
+                .contacts
+                .entry(catalog_id.to_owned())
+                .or_default()
+                .insert(holder.to_owned(), contact.clone());
+            let changed = previous.is_none_or(|previous| {
+                previous.version != contact.version || previous.capabilities != contact.capabilities
+            });
+            if !changed
+                && state
+                    .last_write
+                    .is_some_and(|at| at.elapsed() < CONTACT_WRITE_INTERVAL)
+            {
+                return;
+            }
+            state.last_write = Some(Instant::now());
+            state.contacts.retain(|catalog, holders| {
+                holders.retain(|holder, _| current(catalog, holder));
+                !holders.is_empty()
+            });
+            state.generation += 1;
+            (state.generation, state.contacts.clone())
+        };
+        let Some(path) = self.path.clone() else {
             return;
         };
-        let (contacts, written) = &mut *state;
-        let previous = contacts
-            .entry(catalog_id.to_owned())
-            .or_default()
-            .insert(holder.to_owned(), contact.clone());
-        let changed = previous.is_none_or(|previous| {
-            previous.version != contact.version || previous.capabilities != contact.capabilities
-        });
-        if !changed && written.is_some_and(|at| at.elapsed() < CONTACT_WRITE_INTERVAL) {
-            return;
-        }
-        *written = Some(Instant::now());
-        let Some(path) = &self.path else {
-            return;
+        let written = self.written.clone();
+        let write = move || {
+            let (generation, contacts) = snapshot;
+            let Ok(mut last) = written.lock() else {
+                return;
+            };
+            if *last >= generation {
+                return;
+            }
+            match write_atomically(&path, &contacts) {
+                Ok(()) => *last = generation,
+                Err(error) => tracing::debug!(%error, "Sync plugin contacts were not saved"),
+            }
         };
-        if let Err(error) = write_atomically(path, contacts) {
-            tracing::debug!(%error, "Sync plugin contacts were not saved");
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => {
+                runtime.spawn_blocking(write);
+            }
+            Err(_) => write(),
         }
     }
 
@@ -230,7 +285,7 @@ impl SyncContacts {
         self.state
             .lock()
             .ok()
-            .and_then(|state| state.0.get(catalog_id).cloned())
+            .and_then(|state| state.contacts.get(catalog_id).cloned())
             .unwrap_or_default()
     }
 }
@@ -469,8 +524,14 @@ mod tests {
                 .parse()
                 .unwrap(),
         );
-        contacts.note("rig", "client-a", &headers);
-        contacts.note("rig", "remote-api-key", &HeaderMap::new());
+        let all = |_: &str, _: &str| true;
+        contacts.note("rig", "client-a", &headers, all);
+        contacts.note("rig", "remote-api-key", &HeaderMap::new(), all);
+        contacts.note("gone", "client-b", &headers, all);
+        // A write drops credentials and catalogs that no longer exist.
+        contacts.note("rig", "client-c", &headers, |catalog, holder| {
+            catalog == "rig" && holder != "client-c-revoked"
+        });
 
         let reopened = SyncContacts::new(directory.path());
         let seen = reopened.for_catalog("rig");
@@ -483,5 +544,7 @@ mod tests {
         assert_eq!(seen["remote-api-key"].version, None);
         assert!(!seen["remote-api-key"].places_new_projects());
         assert!(reopened.for_catalog("other").is_empty());
+        assert!(reopened.for_catalog("gone").is_empty());
+        assert!(seen.contains_key("client-c"));
     }
 }

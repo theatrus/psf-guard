@@ -346,14 +346,18 @@ impl RemoteImageUploadConfig {
     }
 
     pub fn token_is_configured(&self) -> bool {
-        let legacy = self.token_salt.len() == 32
+        self.legacy_key_configured() || !self.clients.is_empty()
+    }
+
+    /// Whether the single remote API key is set, as a well-formed salted hash.
+    pub fn legacy_key_configured(&self) -> bool {
+        self.token_salt.len() == 32
             && self.token_salt.bytes().all(|byte| byte.is_ascii_hexdigit())
             && self.token_sha256.len() == 64
             && self
                 .token_sha256
                 .bytes()
-                .all(|byte| byte.is_ascii_hexdigit());
-        legacy || !self.clients.is_empty()
+                .all(|byte| byte.is_ascii_hexdigit())
     }
 
     pub fn token_matches(&self, token: &str) -> bool {

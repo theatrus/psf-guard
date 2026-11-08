@@ -128,9 +128,15 @@ export interface DirectorRigProfileView {
     equipment: boolean;
   };
   /** The rig's filters: its Director plugin's wheel, else the typed list. Absent or null when unknown. */
-  filter_list?: string[] | null;
+  filter_list?: DirectorRigFilters | null;
 }
 export interface DirectorEdited<T> { value: T; source: DirectorSource }
+/** A rig's filters, as planning checks templates against them. */
+export interface DirectorRigFilters {
+  /** A Director plugin reported the wheel; otherwise the names were typed in Rig setup. */
+  reported: boolean;
+  filters: { name: string; bandpass: string }[];
+}
 /** What an operator can do with a plugin's equipment report. */
 export type DirectorEquipmentReview = 'none' | 'not_applied' | 'accepted';
 /** Whether the plugin can get work, and if not, why. */
@@ -325,7 +331,7 @@ export interface DirectorRigProfileSummary {
   /** The location and horizon planning uses. Absent from older servers. */
   site?: DirectorRigSite;
   /** The rig's filters: its Director plugin's wheel, else the typed list. Absent or null when unknown. */
-  filter_list?: string[] | null;
+  filter_list?: DirectorRigFilters | null;
 }
 /** Which record a rig's location or horizon came from. */
 export type DirectorSiteOrigin = 'rig' | 'site' | 'none';

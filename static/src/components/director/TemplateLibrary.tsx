@@ -31,7 +31,7 @@ export default function TemplateLibrary() {
   const filterListId = useId();
   const knownFilters = useMemo(() => {
     const names = new Map<string, string>();
-    for (const rig of rigList) for (const name of rig.filter_list ?? []) if (!names.has(name.toLowerCase())) names.set(name.toLowerCase(), name);
+    for (const rig of rigList) for (const { name } of rig.filter_list?.filters ?? []) if (!names.has(name.toLowerCase())) names.set(name.toLowerCase(), name);
     return [...names.values()];
   }, [rigList]);
   const [copyFrom, setCopyFrom] = useState('');

@@ -26,7 +26,7 @@ pub(super) struct ProfileView {
     mode: ModeView,
     /// The rig's filters: its Director plugin's wheel, else the list typed
     /// in Rig setup. `None` when neither is known.
-    filter_list: Option<Vec<String>>,
+    filter_list: Option<psf_guard_director_meta::profile::RigFilters>,
 }
 
 #[derive(Default, Serialize)]
@@ -135,7 +135,7 @@ fn view(
     };
     Ok(ProfileView {
         rig,
-        filter_list: profile.filter_list(),
+        filter_list: profile.known_filters(),
         profile,
         field_of_view,
         defaults,
@@ -162,7 +162,12 @@ pub(super) async fn get(
         .await?;
     // The first header search of a database scans its image folders; no
     // store gate is held while it runs.
-    shown.defaults = blocking(move || header_defaults(&catalog, &connection)).await?;
+    shown.defaults = blocking(move || {
+        let mut defaults = header_defaults(&catalog, &connection);
+        defaults.filters = database_filters(&connection);
+        defaults
+    })
+    .await?;
     Ok(Json(ApiResponse::success(shown)))
 }
 
@@ -250,6 +255,12 @@ pub(super) async fn put(
         })
         .await
         .map(|value| Json(ApiResponse::success(value)))
+}
+
+/// Whether a typed list can store this filter name.
+fn typed_filter_fits(name: &str) -> bool {
+    name.len() <= psf_guard_director_meta::profile::MAX_FILTER_NAME_LEN
+        && !name.chars().any(char::is_control)
 }
 
 /// Typed filter names as stored: trimmed, blanks dropped, and each name once
@@ -362,10 +373,9 @@ pub(super) async fn file_identity(
     .await?
 }
 
-/// Optics and site from the newest frames whose files can be found. One
-/// header read per candidate, first usable file wins.
 /// The filter names a Target Scheduler database uses, in its exposure
 /// templates and frames, most used first; each name once regardless of case.
+/// Names a typed list could not store are left out.
 fn database_filters(connection: &Connection) -> Vec<String> {
     // Name as first seen, and uses, by lower-case name.
     let mut counted: std::collections::HashMap<String, (String, i64)> = Default::default();
@@ -383,7 +393,10 @@ fn database_filters(connection: &Connection) -> Vec<String> {
         }) else {
             continue;
         };
-        for (name, uses) in rows.filter_map(Result::ok) {
+        for (name, uses) in rows
+            .filter_map(Result::ok)
+            .filter(|(name, _)| typed_filter_fits(name))
+        {
             counted
                 .entry(name.to_lowercase())
                 .or_insert_with(|| (name, 0))
@@ -402,11 +415,10 @@ fn database_filters(connection: &Connection) -> Vec<String> {
         .collect()
 }
 
+/// Optics and site from the newest frames whose files can be found. One
+/// header read per candidate, first usable file wins.
 pub(super) fn header_defaults(catalog: &DatabaseContext, connection: &Connection) -> Defaults {
-    let mut defaults = Defaults {
-        filters: database_filters(connection),
-        ..Defaults::default()
-    };
+    let mut defaults = Defaults::default();
     // No frames, no reason to scan the image folders.
     let Some(names) = recent_file_names(connection).filter(|names| !names.is_empty()) else {
         return defaults;

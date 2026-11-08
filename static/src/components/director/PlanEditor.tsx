@@ -333,7 +333,9 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
                 {contribution && templateValue(contribution, library).startsWith('lib:') && !listed.some(t => t.id === contribution.template.template_guid) && <option value={templateValue(contribution, library)}>{contribution.template.name} (library, since removed)</option>}
               </select>;
             })()}
-              {contribution && !hasFilter(rig.filter_list, contribution.template.filter_name) && <small className="plan-filter-warning" role="note">Filter {contribution.template.filter_name} isn't on this rig's filter list. Choose another template, or add the filter in Rig setup.</small>}
+              {contribution && !hasFilter(rig.filter_list, contribution.template.filter_name, objective.bandpass_id) && <small className="plan-filter-warning" role="note">{rig.filter_list?.reported
+                ? `No single filter on the wheel the Director plugin reported matches ${contribution.template.filter_name}. Choose another template, or rename the filter in N.I.N.A.`
+                : `Filter ${contribution.template.filter_name} isn't on this rig's filter list. Choose another template, or add the filter in Rig setup.`}</small>}
             </td>
             <td>{contribution && <span className="plan-goal"><NumberInput aria-label={`${rig.catalog_name} exposure for ${label}`} min={1} step="any" value={contribution.exposure_seconds} onChange={event => setContribution(rig, objective, current => current ? { ...current, exposure_seconds: number(event.target.value, current.exposure_seconds) } : current)} /><small>s</small></span>}</td>
             <td className="plan-rig-goal">{contribution && (contribution.goal

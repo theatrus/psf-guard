@@ -250,16 +250,23 @@ describe('Rig profile card', () => {
     const names = await screen.findByLabelText('Filter names');
     expect(screen.getByText(/Planning warns when a template uses a filter that isn't on this list/)).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: "Use this database's filters (Ha, OIII)" }));
-    expect(names).toHaveValue('Ha, OIII');
+    expect(names).toHaveValue('Ha\nOIII');
     // Once the field matches, the offer goes away.
     expect(screen.queryByRole('button', { name: /Use this database's filters/ })).not.toBeInTheDocument();
-    fireEvent.change(names, { target: { value: ' L, Ha,, ha, OIII ' } });
+    // One per line, so a name with a comma survives.
+    fireEvent.change(names, { target: { value: ' L\nHa 7nm, Astrodon\n\nha 7NM, astrodon\nOIII ' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save rig profile' }));
     expect(await screen.findByText('Saved rig profile revision 1.')).toBeInTheDocument();
-    expect(saves[0].filters).toEqual({ value: ['L', 'Ha', 'OIII'], source: { kind: 'manual' } });
-    expect(await screen.findByLabelText('Filter names')).toHaveValue('L, Ha, OIII');
+    expect(saves[0].filters).toEqual({ value: ['L', 'Ha 7nm, Astrodon', 'OIII'], source: { kind: 'manual' } });
+    expect(await screen.findByLabelText('Filter names')).toHaveValue('L\nHa 7nm, Astrodon\nOIII');
 
-    fireEvent.change(screen.getByLabelText('Filter names'), { target: { value: ' , ' } });
+    // The server counts bytes: 22 three-byte characters are too long.
+    fireEvent.change(screen.getByLabelText('Filter names'), { target: { value: 'L\n' + '€'.repeat(22) } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save rig profile' }));
+    expect(await screen.findByText(/is too long\. Use at most 64 bytes\./)).toBeInTheDocument();
+    expect(saves).toHaveLength(1);
+
+    fireEvent.change(screen.getByLabelText('Filter names'), { target: { value: ' \n ' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save rig profile' }));
     await waitFor(() => expect(saves).toHaveLength(2));
     expect(saves[1].filters).toBeNull();

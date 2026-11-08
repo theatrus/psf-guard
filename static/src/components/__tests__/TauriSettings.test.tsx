@@ -672,7 +672,7 @@ describe('TauriSettings import state', () => {
     expect(screen.getByText(/Observatory PC · paired .* · last contact 5 min ago, plugin 1\.4\.0\.0/)).toBeVisible();
     expect(screen.getByText(/Old laptop · paired .* · last contact 5 min ago$/)).toBeVisible();
     expect(screen.getByText(/Spare · paired .* · no contact recorded/)).toBeVisible();
-    expect(screen.getByRole('note')).toHaveTextContent('Old laptop uses an older Sync plugin.');
+    expect(screen.getByRole('note')).toHaveTextContent('Old laptop uses an older Sync plugin, which cannot add new projects to a N.I.N.A. profile.');
   });
 
   it('keeps the editor with the selected database in a multi-database list', async () => {

@@ -2987,34 +2987,42 @@ fn required_frames(objective: &Objective, contribution: &Contribution) -> Option
     }
 }
 
-/// A warning for templates whose filter is not on the rig's filter list, the
-/// one its Director plugin reported or the one typed in Rig setup. N.I.N.A.
-/// cannot shoot a filter its wheel lacks. `None` when every filter is on the
-/// list, or the rig has none.
+/// A warning for templates whose filter the rig cannot shoot: one its
+/// Director plugin's wheel does not serve, or one not on the list typed in
+/// Rig setup. `None` when every filter is served, or the rig has no list.
 fn filters_off_the_rig(
     profile: Option<&psf_guard_director_meta::profile::RigProfile>,
     contributions: &[&Contribution],
 ) -> Option<String> {
-    let listed = profile?.filter_list()?;
+    let known = profile?.known_filters()?;
     let mut missing: Vec<&str> = Vec::new();
     for contribution in contributions {
         let filter = contribution.template.filter_name.trim();
-        if !listed
-            .iter()
-            .any(|name| name.trim().eq_ignore_ascii_case(filter))
-            && !missing.iter().any(|seen| seen.eq_ignore_ascii_case(filter))
-        {
+        if !known.serves(filter) && !missing.iter().any(|seen| seen.eq_ignore_ascii_case(filter)) {
             missing.push(filter);
         }
     }
-    (!missing.is_empty()).then(|| {
+    if missing.is_empty() {
+        return None;
+    }
+    let names: Vec<&str> = known
+        .filters
+        .iter()
+        .map(|filter| filter.name.as_str())
+        .collect();
+    let subject = match missing.as_slice() {
+        [one] => format!("Filter {one}"),
+        many => format!("Filters {}", many.join(", ")),
+    };
+    Some(if known.reported {
         format!(
-            "{} not on this rig's filter list ({}). Choose another template, or add the filter in Rig setup.",
-            match missing.as_slice() {
-                [one] => format!("Filter {one} is"),
-                many => format!("Filters {} are", many.join(", ")),
-            },
-            listed.join(", ")
+            "{subject}: no single filter on the wheel the Director plugin reported ({}) matches. Choose another template, or rename the filter in N.I.N.A.",
+            names.join(", ")
+        )
+    } else {
+        format!(
+            "{subject}: not on this rig's filter list ({}). Choose another template, or add the filter in Rig setup.",
+            names.join(", ")
         )
     })
 }

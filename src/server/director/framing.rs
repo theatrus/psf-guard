@@ -328,7 +328,7 @@ pub(super) struct RigProfileSummary {
     site: RigSite,
     /// The rig's filters: its Director plugin's wheel, else the list typed
     /// in Rig setup. `None` when neither is known.
-    filter_list: Option<Vec<String>>,
+    filter_list: Option<psf_guard_director_meta::profile::RigFilters>,
 }
 
 #[derive(Serialize)]
@@ -389,7 +389,7 @@ pub(super) async fn rig_profiles(
                         profile.as_ref(),
                         field_of_view.as_ref(),
                     ),
-                    filter_list: profile.as_ref().and_then(RigProfile::filter_list),
+                    filter_list: profile.as_ref().and_then(RigProfile::known_filters),
                     profile,
                     field_of_view,
                     site,

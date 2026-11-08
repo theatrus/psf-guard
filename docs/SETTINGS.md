@@ -63,12 +63,15 @@ control. The selected page includes the database name.
     to add new projects to its N.I.N.A. profile itself. Update that plugin
     in N.I.N.A. so new projects always reach the profile it runs in.
   - **Rig setup → Optics → Filters** stores the rig's filter names for a rig
-    with no Director plugin. Type them separated by commas, or click
-    **Use this database's filters** to copy the names its templates and
-    frames use. When a plan uses a template whose filter is not on the
-    list, the plan editor and the activation preview warn you. A filter
-    wheel the Director plugin reports replaces the typed list. Leave the
-    field empty to skip the check.
+    with no Director plugin. Type one name per line, as N.I.N.A. spells it,
+    or click **Use this database's filters** to copy the names its
+    templates and frames use. When a plan uses a template whose filter is
+    not on the list, the plan editor and the activation preview warn you.
+    Leave the field empty to skip the check.
+  - A filter wheel the Director plugin reports replaces the typed list.
+    Director then also accepts the one filter on the wheel with the
+    template filter's bandpass, so a template for `Ha` runs on a wheel
+    filter named `H-alpha`.
 - **Database & files** contains database paths, image folders and maintenance.
   Click **Edit database** to change the name and paths.
 - **Import** contains editable scan rules, automatic-import settings and
