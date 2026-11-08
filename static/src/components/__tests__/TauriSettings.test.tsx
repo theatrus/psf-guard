@@ -554,7 +554,7 @@ describe('TauriSettings import state', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Open Remote catalog' }));
     fireEvent.click(screen.getByRole('tab', { name: 'Database & files' }));
-    fireEvent.click(screen.getByRole('tab', { name: 'Sync' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Rig setup' }));
     fireEvent.click(screen.getByRole('button', { name: 'Edit remote receive and pairing' }));
     expect(
       screen.getByRole('checkbox', { name: 'Accept remote image uploads' })
@@ -846,6 +846,11 @@ describe('TauriSettings first run', () => {
     expect(
       screen.queryByRole('heading', { name: /Configured Databases/ })
     ).not.toBeInTheDocument();
+    // The Sync plugin's pairing moved to Rig setup; the Sync page points there.
+    expect(screen.queryByRole('button', { name: 'Edit remote receive and pairing' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Open Rig setup' }));
+    expect(await screen.findByRole('tab', { name: 'Rig setup', selected: true })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Edit remote receive and pairing' })).toBeInTheDocument();
   });
 
   it('opens straight onto the create form when the caller asks for it', async () => {

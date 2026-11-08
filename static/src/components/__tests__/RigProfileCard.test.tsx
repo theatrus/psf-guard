@@ -62,16 +62,42 @@ function fixture(conflictOnce = false) {
   );
   return { saves };
 }
-function mount(canWrite = true, client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } }), onRender?: () => void) {
+function mount(canWrite = true, client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } }), onRender?: () => void, card = <RigProfileCard slug="catalog" />) {
   function Wrapper({ children }: { children: ReactNode }) {
     const access = useAccess();
     return <QueryClientProvider client={client}><AccessContext.Provider value={{ ...access, canWrite }}>{children}</AccessContext.Provider></QueryClientProvider>;
   }
-  const card = <RigProfileCard slug="catalog" />;
   return render(onRender ? <Profiler id="rig-profile" onRender={onRender}>{card}</Profiler> : card, { wrapper: Wrapper });
 }
 
 describe('Rig profile card', () => {
+  it('shows the Sync plugin beside the Director plugin on the Plugins tab', async () => {
+    fixture();
+    server.use(
+      http.get('/api/director/v1/catalogs/catalog/rig/plugin', () => HttpResponse.json(ok({
+        coordinator_instance_id: '44444444-4444-4444-8444-444444444444', catalog_id: '33333333-3333-4333-8333-333333333333', rig_id: rig.id,
+        profile_revision: 4, configuration: null, filter_names: {}, camera_defaults: null,
+        clients: [], plans: [], policy: null, work: 'not_allowed', left_out: [], grant: null, last_contact_at_ms: null,
+      }))),
+      http.get('/api/databases', () => HttpResponse.json(ok([{ id: 'catalog', name: 'RedCat 61' }]))),
+    );
+    mount(true, undefined, undefined, <RigProfileCard slug="catalog" initialTab="director" syncPlugin={<section aria-label="Sync plugin">Pair the Sync plugin</section>} />);
+
+    expect(await screen.findByRole('tab', { name: 'Plugins' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('region', { name: 'Sync plugin' })).toBeVisible();
+    expect(await screen.findByRole('heading', { name: 'Director plugin' })).toBeVisible();
+    fireEvent.click(screen.getByRole('tab', { name: 'Optics' }));
+    expect(screen.queryByRole('region', { name: 'Sync plugin' })).not.toBeInTheDocument();
+  });
+
+  it('still offers the Sync plugin when the rig profile cannot load', async () => {
+    server.use(http.get('/api/director/v1/catalogs/catalog/rig/profile', () => HttpResponse.json({ success: false, data: null, error: 'No rig yet' }, { status: 404 })));
+    mount(true, undefined, undefined, <RigProfileCard slug="catalog" syncPlugin={<section aria-label="Sync plugin">Pair the Sync plugin</section>} />);
+
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Sync plugin' })).toBeVisible();
+  });
+
   it('uses vertical keyboard navigation on the setup rail and horizontal navigation on narrow screens', async () => {
     let wide = true;
     let onChange = () => {};

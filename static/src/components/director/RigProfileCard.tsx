@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type FormEvent } from 'react';
+import { useEffect, useId, useState, type FormEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError, type AxiosError } from 'axios';
 import { Camera, Check, CloudSun, Download, Link2, MapPin, Plug, RefreshCw, SlidersHorizontal } from 'lucide-react';
@@ -28,8 +28,10 @@ class SettingsNotSaved extends Error {}
 const httpErrorOf = (error: unknown): AxiosError | null => isAxiosError(error) ? error
   : error instanceof Error ? httpErrorOf(error.cause) : null;
 
-const TABS = [{ id: 'optics', label: 'Optics', icon: <Camera size={16} /> }, { id: 'site', label: 'Site', icon: <MapPin size={16} /> }, { id: 'limits', label: 'Limits and delivery', icon: <SlidersHorizontal size={16} /> }, { id: 'weather', label: 'Weather', icon: <CloudSun size={16} /> }, { id: 'director', label: 'Director', icon: <Plug size={16} /> }, { id: 'collaboration', label: 'Collaboration', icon: <Link2 size={16} /> }] as const;
+const TABS = [{ id: 'optics', label: 'Optics', icon: <Camera size={16} /> }, { id: 'site', label: 'Site', icon: <MapPin size={16} /> }, { id: 'limits', label: 'Limits and delivery', icon: <SlidersHorizontal size={16} /> }, { id: 'weather', label: 'Weather', icon: <CloudSun size={16} /> }, { id: 'director', label: 'Plugins', icon: <Plug size={16} /> }, { id: 'collaboration', label: 'Collaboration', icon: <Link2 size={16} /> }] as const;
 type Tab = (typeof TABS)[number]['id'];
+/** A Rig setup tab. `director` is the Plugins tab: its id predates the Sync plugin moving there. */
+export type RigSetupTab = Tab;
 
 function Field({ id, label, value, onChange, disabled, unit, step = 'any' }: {
   id: string; label: string; value: string; onChange: (value: string) => void; disabled: boolean; unit?: string; step?: string;
@@ -48,9 +50,14 @@ const MODE_HELP = {
   target_scheduler: "Target Scheduler picks the rig's targets. Use its instruction in the rig's N.I.N.A. sequence.",
   director: "The Director plugin picks the rig's targets from the plans activated on it. Use the Director instruction in the rig's N.I.N.A. sequence.",
 } as const;
-export default function RigProfileCard({ slug }: { slug: string }) {
+export default function RigProfileCard({ slug, syncPlugin, initialTab }: {
+  slug: string;
+  /** The Sync plugin's section, shown on the Plugins tab. Settings owns its form. */
+  syncPlugin?: ReactNode;
+  initialTab?: Tab;
+}) {
   const id = useId();
-  const [tab, setTab] = useState<Tab>('optics');
+  const [tab, setTab] = useState<Tab>(initialTab ?? 'optics');
   const [collaborationVisited, setCollaborationVisited] = useState(false);
   const [vertical, setVertical] = useState(() => window.matchMedia?.('(min-width: 800px)').matches ?? false);
   useEffect(() => {
@@ -175,6 +182,8 @@ export default function RigProfileCard({ slug }: { slug: string }) {
     </div>
     {loaded.isPending && <p role="status">Loading rig profile...</p>}
     {loaded.isError && <p className="director-error" role="alert">{message(loaded.error)}</p>}
+    {/* Without a rig profile the Sync plugin can still be paired. */}
+    {loaded.isError && syncPlugin}
     {notice && <p role="status">{notice}</p>}
     {stale && <p className="director-error" role="alert">{save.error instanceof SettingsNotSaved
       ? 'The rig profile was saved. Its planning site and Target Scheduler limits changed since you loaded them. '
@@ -300,7 +309,7 @@ export default function RigProfileCard({ slug }: { slug: string }) {
       {!canWrite && <p className="director-muted">Read only</p>}
     </form>
     <div {...workspacePanel(id, 'weather', tab)}>{tab === 'weather' && <RigWeatherPanel rig={data.rig.id} />}</div>
-    <div {...workspacePanel(id, 'director', tab)}>{tab === 'director' && <RigPluginPanel slug={slug} mode={data.mode.runtime} onRigChanged={() => { if (!unsaved) void loaded.refetch(); }} onChangeMode={() => setTab('optics')} />}</div>
+    <div {...workspacePanel(id, 'director', tab)}>{tab === 'director' && syncPlugin}{tab === 'director' && <RigPluginPanel slug={slug} mode={data.mode.runtime} onRigChanged={() => { if (!unsaved) void loaded.refetch(); }} onChangeMode={() => setTab('optics')} />}</div>
     <div {...workspacePanel(id, 'collaboration', tab)}>{data && collaborationVisited && <CollaborationConnections rig={data.rig.id} name={data.rig.name} active={tab === 'collaboration'} />}</div>
     </div>
     </div>}

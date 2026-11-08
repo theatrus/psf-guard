@@ -113,8 +113,9 @@ calibration frames also work without Target Scheduler.
 2. In PSF Guard, open **Settings → Databases & rigs → New / import → Import from Target Scheduler**,
    choose **Use the PSF Guard Sync plugin**, add a shared or empty image folder,
    and click **Create database for plugin**. No local TS file is required.
-   To use an existing catalog, open it from **Overview**, choose **Sync**,
-   then click **Edit remote receive and pairing**.
+   To use an existing catalog, open it from **Overview**, choose **Rig setup**,
+   then click **Edit remote receive and pairing**. With planning on, it is on
+   the **Plugins** tab, beside the Director plugin.
 3. Choose **Generate pairing code** in the catalog's pairing controls. In the
    N.I.N.A. plugin, enter the server URL and code, then click **Pair** and
    **Test connection**.
@@ -953,7 +954,8 @@ also support `--target` and `--status`.
 Open the local database under **Settings → Databases & rigs → Overview**,
 then choose **Sync → Remote PSF Guard**. Add the peer URL and its manual API
 key, test the connection, then preview and apply a transfer.
-In the receiving catalog's **Sync** page, click **Edit remote receive and pairing**,
+On the receiving catalog's **Rig setup** page (the **Plugins** tab with planning
+on), click **Edit remote receive and pairing**,
 generate a **Remote API key** and enable
 **Accept remote scheduler sync**. Enable
 **Accept remote image uploads** separately if the client will send files.

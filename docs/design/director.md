@@ -605,9 +605,9 @@ not become a blanket restriction on permitted database/sync operations.
 
 | Page | Task and field ownership |
 |---|---|
-| **Rig setup** | Equipment, current site/horizon, planning limits, setup provenance and reported status for the selected rig. Link to its database and sync settings. Calibration configurations represented in its images link to their existing override editor. |
+| **Rig setup** | Equipment, current site/horizon, planning limits, setup provenance and reported status for the selected rig. The **Plugins** tab pairs both N.I.N.A. plugins: the Sync plugin with its remote-receiver settings, and the Director plugin. A database is one rig, so the Sync settings stay stored on the database registration. Without planning, the page shows only the Sync plugin. Calibration configurations represented in its images link to their existing override editor. |
 | **Database & files** | Catalog location, image folders, import/scan options, exports, processed-output folder and catalog-management actions for the same root. Show connection summaries with links to Sync rather than another copy of its editable settings. |
-| **Sync** | Automatic TS connection settings, incoming Sync/remote-receiver configuration, staged previews and explicit transfers for that local catalog. Show peer/client links and their capability differences; shared peer records and credentials remain shared. |
+| **Sync** | Automatic TS connection settings, staged previews and explicit transfers for that local catalog. Links to **Rig setup** for the Sync plugin's pairing. Show peer/client links and their capability differences; shared peer records and credentials remain shared. |
 
 Creating/importing a database starts from New / import, including the source
 information needed to establish its initial TS connection. After it succeeds,

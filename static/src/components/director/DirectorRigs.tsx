@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { useId, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { BookOpen, ChevronDown, ChevronRight, Telescope, Trash2 } from 'lucide-react';
@@ -10,7 +10,7 @@ import { isTauriApp } from '../../utils/tauri';
 import DatabaseRemoveDialog from '../DatabaseRemoveDialog';
 import { openSettings } from '../../utils/settingsIntent';
 import { formatDegrees } from './framingModel';
-import RigProfileCard from './RigProfileCard';
+import RigProfileCard, { type RigSetupTab } from './RigProfileCard';
 import EarlyBeta from './EarlyBeta';
 import { retryWhenBusy } from './retry';
 
@@ -21,7 +21,12 @@ function describeStatus(payload: Record<string, unknown>, at: number): string {
 }
 
 /** Every registered database as a rig: planning state, optics and last word from its plugin. */
-export default function DirectorRigs({ databaseId }: { databaseId?: string } = {}) {
+export default function DirectorRigs({ databaseId, syncPlugin, initialTab }: {
+  databaseId?: string;
+  /** The opened database's Sync plugin section, for its Plugins tab. */
+  syncPlugin?: ReactNode;
+  initialTab?: RigSetupTab;
+} = {}) {
   const id = useId();
   const databases = useAllDatabases();
   const [openSetup, setOpenSetup] = useState<string | null>(null);
@@ -65,7 +70,7 @@ export default function DirectorRigs({ databaseId }: { databaseId?: string } = {
           {canRemove && <button type="button" aria-label={`Remove ${db.name}`} title={`Remove ${db.name} from PSF Guard; its files stay on disk`} onClick={() => setRemoving({ id: db.id, name: db.name })}><Trash2 size={16} aria-hidden="true" />Remove</button>}
           {!databaseId && <button type="button" aria-expanded={expanded} aria-controls={setupId} aria-label={`Setup ${db.name}`} title={`Setup ${db.name}`} onClick={() => { setOpenSetup(expanded ? null : db.id); setOpened(current => current.has(db.id) ? current : new Set(current).add(db.id)); }}>{expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}Setup</button>}
         </div>
-        <div id={setupId} hidden={!expanded}>{(expanded || opened.has(db.id)) && <RigProfileCard key={db.id} slug={db.id} />}</div>
+        <div id={setupId} hidden={!expanded}>{(expanded || opened.has(db.id)) && <RigProfileCard key={db.id} slug={db.id} syncPlugin={db.id === databaseId ? syncPlugin : undefined} initialTab={db.id === databaseId ? initialTab : undefined} />}</div>
       </li>;
     })}</ul>
     {removing && <DatabaseRemoveDialog database={removing} onClose={() => setRemoving(null)} onRemoved={() => setRemoving(null)} />}

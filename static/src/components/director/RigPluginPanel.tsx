@@ -1,12 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
-import { Check, Copy, KeyRound, Power, RefreshCw, Settings, Trash2, X } from 'lucide-react';
+import { Check, Copy, KeyRound, Power, RefreshCw, Trash2, X } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import type { DirectorCameraDefaults, DirectorEquipmentReport, DirectorPluginClient, DirectorPluginEquipment, DirectorPluginView, DirectorPluginWork, DirectorRigMode } from '../../api/directorTypes';
 import { useAllDatabases } from '../../hooks/useDatabases';
-import { openSettings } from '../../utils/settingsIntent';
 import EarlyBeta from './EarlyBeta';
 
 const MODE_LABEL = { target_scheduler: 'Target Scheduler', director: 'Director' } as const;
@@ -151,8 +150,7 @@ export default function RigPluginPanel({ slug, mode, onRigChanged, onChangeMode 
         <div className="rig-profile-field"><span>Picks the work</span><span>{MODE_LABEL[mode]}</span>
           <button type="button" className="link-button" onClick={onChangeMode}>Change mode</button></div>
         <div className="rig-profile-field"><span>PSF Guard Director</span><span>{view.clients.length ? `${view.clients.length} paired` : 'Not paired'}</span></div>
-        <div className="rig-profile-field"><span>PSF Guard Sync</span><span>{syncClients ? `${syncClients} paired` : 'Not paired'}</span>
-          <button type="button" className="link-button" onClick={() => openSettings('sync', { databaseId: slug })}><Settings size={14} />Open Sync</button></div>
+        <div className="rig-profile-field"><span>PSF Guard Sync</span><span>{syncClients ? `${syncClients} paired` : 'Not paired'}</span></div>
       </div>
       <p className="director-muted">Both plugins can stay installed. N.I.N.A. runs the instruction in its sequence. Sync still moves images and catalog data in either mode.</p>
     </fieldset>
