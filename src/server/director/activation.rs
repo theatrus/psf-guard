@@ -746,6 +746,9 @@ async fn execute_guarded(
             if profile.as_ref().is_none_or(|p| p.configuration.is_none()) {
                 warnings.push("The N.I.N.A. plugin has not reported this rig's camera yet. Target Scheduler can still run this plan.".into());
             }
+            if let Some(missing) = filters_off_the_rig(profile.as_ref(), contributions) {
+                warnings.push(missing);
+            }
             // A rig on another PSF Guard: its rows land here first, then go
             // to the peer by Sync once Apply has committed them.
             let mut push = if guard.is_none() {
@@ -2982,6 +2985,38 @@ fn required_frames(objective: &Objective, contribution: &Contribution) -> Option
         Goal::Hours { value } => frames_for_hours(value, contribution.exposure_seconds),
         Goal::Frames { value } => Some(value),
     }
+}
+
+/// A warning for templates whose filter is not on the rig's filter list, the
+/// one its Director plugin reported or the one typed in Rig setup. N.I.N.A.
+/// cannot shoot a filter its wheel lacks. `None` when every filter is on the
+/// list, or the rig has none.
+fn filters_off_the_rig(
+    profile: Option<&psf_guard_director_meta::profile::RigProfile>,
+    contributions: &[&Contribution],
+) -> Option<String> {
+    let listed = profile?.filter_list()?;
+    let mut missing: Vec<&str> = Vec::new();
+    for contribution in contributions {
+        let filter = contribution.template.filter_name.trim();
+        if !listed
+            .iter()
+            .any(|name| name.trim().eq_ignore_ascii_case(filter))
+            && !missing.iter().any(|seen| seen.eq_ignore_ascii_case(filter))
+        {
+            missing.push(filter);
+        }
+    }
+    (!missing.is_empty()).then(|| {
+        format!(
+            "{} not on this rig's filter list ({}). Choose another template, or add the filter in Rig setup.",
+            match missing.as_slice() {
+                [one] => format!("Filter {one} is"),
+                many => format!("Filters {} are", many.join(", ")),
+            },
+            listed.join(", ")
+        )
+    })
 }
 
 /// The profile for rows activation adds. Only N.I.N.A. knows which profile it

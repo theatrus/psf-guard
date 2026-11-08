@@ -289,3 +289,58 @@ async fn the_rig_profile_reads_while_a_write_holds_the_store() {
     release.send(()).unwrap();
     write.await.unwrap().unwrap();
 }
+
+#[tokio::test]
+async fn a_typed_filter_list_saves_and_an_edit_that_leaves_it_out_keeps_it() {
+    let (f, _) = bound_fixture().await;
+    f.source
+        .execute_batch(
+            "ALTER TABLE acquiredimage ADD COLUMN filtername TEXT;
+             UPDATE acquiredimage SET filtername = 'Ha';
+             INSERT INTO acquiredimage(Id,gradingStatus,filtername) VALUES(3,1,'ha'),(4,1,'OIII');",
+        )
+        .unwrap();
+    let (status, first) = call(&f.app, "GET", PROFILE, Value::Null, None).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    // The database's own filter names, most used first.
+    assert_eq!(first["data"]["defaults"]["filters"], json!(["Ha", "OIII"]));
+
+    let limits = json!({"value": {"minimum_altitude_degrees": 20.0, "maximum_altitude_degrees": 90.0,
+        "meridian_exclusion": {"before_ms": 0, "after_ms": 0}}, "source": {"kind":"manual"}});
+    let edit = |revision: u64, filters: Option<Value>| {
+        let mut body = json!({"expected_revision": revision, "optics": null, "site": null,
+            "horizon": null, "sky_quality": null, "limits": limits});
+        if let Some(filters) = filters {
+            body["filters"] = filters;
+        }
+        body
+    };
+    let typed = json!({"value": [" L ", "Ha", "", "ha", "OIII"], "source": {"kind":"manual"}});
+    let (status, saved) = call(&f.app, "PUT", PROFILE, edit(0, Some(typed)), None).await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(
+        saved["data"]["profile"]["filters"]["value"],
+        json!(["L", "Ha", "OIII"])
+    );
+
+    // A page that does not know the field leaves the list alone: nothing
+    // changes, so the revision stays.
+    let (status, kept) = call(&f.app, "PUT", PROFILE, edit(1, None), None).await;
+    assert_eq!(status, StatusCode::OK, "{kept}");
+    assert_eq!(kept["data"]["profile"]["revision"], 1);
+    assert_eq!(
+        kept["data"]["profile"]["filters"]["value"],
+        json!(["L", "Ha", "OIII"])
+    );
+    // Only a Director plugin reports filters as the plugin.
+    let claimed = json!({"value": ["Ha"], "source": {"kind":"plugin"}});
+    assert_eq!(
+        call(&f.app, "PUT", PROFILE, edit(1, Some(claimed)), None)
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+    let (status, cleared) = call(&f.app, "PUT", PROFILE, edit(1, Some(Value::Null)), None).await;
+    assert_eq!(status, StatusCode::OK, "{cleared}");
+    assert_eq!(cleared["data"]["profile"].get("filters"), None);
+}

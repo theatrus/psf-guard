@@ -526,3 +526,55 @@ async fn removing_one_of_two_names_for_a_file_keeps_its_rig() {
         "{kept}"
     );
 }
+
+#[tokio::test]
+async fn activation_warns_when_a_template_filter_is_not_on_the_typed_list() {
+    let a = activated().await;
+    let preview_warnings = |a: &Activated| {
+        let app = a.f.app.clone();
+        let project = a.project;
+        async move {
+            let (status, preview) = call(
+                &app,
+                "POST",
+                &format!("/projects/{project}/activation/preview"),
+                json!({}),
+                None,
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{preview}");
+            preview["data"]["rigs"][0]["warnings"].to_string()
+        }
+    };
+    let type_filters = |revision: u64, names: Value| {
+        let app = a.f.app.clone();
+        async move {
+            let (status, saved) = call(
+                &app,
+                "PUT",
+                "/catalogs/rig/rig/profile",
+                json!({"expected_revision": revision, "optics": null, "site": null, "horizon": null,
+                    "sky_quality": null, "limits": {"value": {"minimum_altitude_degrees": 0.0,
+                    "maximum_altitude_degrees": 90.0, "meridian_exclusion": {"before_ms": 0, "after_ms": 0}},
+                    "source": {"kind": "manual"}},
+                    "filters": {"value": names, "source": {"kind": "manual"}}}),
+                None,
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{saved}");
+            saved["data"]["profile"]["revision"].as_u64().unwrap()
+        }
+    };
+    // No list, no check.
+    assert!(!preview_warnings(&a).await.contains("filter list"));
+
+    let revision = type_filters(0, json!(["L", "R", "G", "B"])).await;
+    let warnings = preview_warnings(&a).await;
+    assert!(
+        warnings.contains("Filter Ha is not on this rig's filter list (L, R, G, B)."),
+        "{warnings}"
+    );
+
+    type_filters(revision, json!(["L", "ha"])).await;
+    assert!(!preview_warnings(&a).await.contains("filter list"));
+}

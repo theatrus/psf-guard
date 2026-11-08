@@ -31,6 +31,9 @@ pub(super) struct Defaults {
     pub(super) optics: Option<Reported<Optics>>,
     pub(super) site: Option<Reported<Site>>,
     pub(super) field_of_view: Option<FieldOfView>,
+    /// Filter names the database uses, in its exposure templates and frames,
+    /// most used first.
+    pub(super) filters: Vec<String>,
 }
 
 /// An operator's edit. Timestamps are stamped by the server.
@@ -51,6 +54,10 @@ pub(super) struct Edit {
     /// returns the rig to PSF Guard's guess, and a mode sets it.
     #[serde(default, deserialize_with = "present")]
     mode: Option<Option<RigMode>>,
+    /// The rig's filter names, typed for a rig whose filters no Director
+    /// plugin reports. Left out keeps the stored list, and `null` clears it.
+    #[serde(default, deserialize_with = "present")]
+    filters: Option<Option<Edited<Vec<String>>>>,
 }
 
 /// A field that is present, `null` included, as opposed to left out.
@@ -183,6 +190,10 @@ pub(super) async fn put(
         edit.horizon.as_ref().map(|part| &part.source),
         edit.sky_quality.as_ref().map(|part| &part.source),
         Some(&edit.limits.source),
+        edit.filters
+            .as_ref()
+            .and_then(Option::as_ref)
+            .map(|part| &part.source),
     ]
     .into_iter()
     .flatten()
@@ -218,12 +229,34 @@ pub(super) async fn put(
             if let Some(mode) = edit.mode {
                 next.mode = mode;
             }
+            if let Some(filters) = edit.filters {
+                let filters = filters.map(|mut part| {
+                    part.value = typed_filters(part.value);
+                    part
+                });
+                next.filters = stamp(
+                    filters.filter(|part| !part.value.is_empty()),
+                    previous.and_then(|p| p.filters.as_ref()),
+                    now,
+                );
+            }
             next.updated_at_ms = now;
             let saved = store.save_rig_profile(&next, edit.expected_revision)?;
             view(store, rig, saved, Defaults::default())
         })
         .await
         .map(|value| Json(ApiResponse::success(value)))
+}
+
+/// Typed filter names as stored: trimmed, blanks dropped, and each name once
+/// regardless of case, in the order typed.
+fn typed_filters(names: Vec<String>) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    names
+        .into_iter()
+        .map(|name| name.trim().to_owned())
+        .filter(|name| !name.is_empty() && seen.insert(name.to_lowercase()))
+        .collect()
 }
 
 /// Keep the old timestamp when nothing about the part changed, so a resave of
@@ -327,16 +360,57 @@ pub(super) async fn file_identity(
 
 /// Optics and site from the newest frames whose files can be found. One
 /// header read per candidate, first usable file wins.
+/// The filter names a Target Scheduler database uses, in its exposure
+/// templates and frames, most used first; each name once regardless of case.
+fn database_filters(connection: &Connection) -> Vec<String> {
+    // Name as first seen, and uses, by lower-case name.
+    let mut counted: std::collections::HashMap<String, (String, i64)> = Default::default();
+    // Either table may lack the column in an older or partial database.
+    for table in ["exposuretemplate", "acquiredimage"] {
+        let Ok(mut statement) = connection.prepare(&format!(
+            "SELECT TRIM(filtername), COUNT(*) FROM {table}
+             WHERE filtername IS NOT NULL AND TRIM(filtername) != ''
+             GROUP BY TRIM(filtername)"
+        )) else {
+            continue;
+        };
+        let Ok(rows) = statement.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        }) else {
+            continue;
+        };
+        for (name, uses) in rows.filter_map(Result::ok) {
+            counted
+                .entry(name.to_lowercase())
+                .or_insert_with(|| (name, 0))
+                .1 += uses;
+        }
+    }
+    let mut filters: Vec<(String, i64)> = counted.into_values().collect();
+    filters.sort_by(|a, b| {
+        b.1.cmp(&a.1)
+            .then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase()))
+    });
+    filters
+        .into_iter()
+        .take(psf_guard_director_meta::profile::MAX_TYPED_FILTERS)
+        .map(|(name, _)| name)
+        .collect()
+}
+
 pub(super) fn header_defaults(catalog: &DatabaseContext, connection: &Connection) -> Defaults {
+    let mut defaults = Defaults {
+        filters: database_filters(connection),
+        ..Defaults::default()
+    };
     // No frames, no reason to scan the image folders.
     let Some(names) = recent_file_names(connection).filter(|names| !names.is_empty()) else {
-        return Defaults::default();
+        return defaults;
     };
     let Ok(tree) = catalog.get_directory_tree() else {
-        return Defaults::default();
+        return defaults;
     };
     let now = now_ms();
-    let mut defaults = Defaults::default();
     for name in names {
         // Catalogs written on Windows keep backslash paths; the tree is keyed
         // by basename either way.

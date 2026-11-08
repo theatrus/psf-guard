@@ -200,3 +200,63 @@ fn pairing_fills_in_a_mode_but_never_replaces_one() {
     assert_eq!(after.mode, Some(RigMode::TargetScheduler));
     assert_eq!(after.revision, saved.revision);
 }
+
+#[test]
+fn a_typed_filter_list_is_checked_and_a_reported_wheel_wins_over_it() {
+    let dir = TempDir::new().unwrap();
+    let mut store = MetaStore::create(&dir.path().join("meta.sqlite")).unwrap();
+    let rig = store.create_rig(Uuid::new_v4(), "Rig").unwrap();
+    let typed = |names: &[&str], source: Source| {
+        let mut profile = RigProfile::empty(rig.id, 0);
+        profile.filters = Some(Reported {
+            value: names.iter().map(|name| name.to_string()).collect(),
+            source,
+            reported_at_ms: 0,
+        });
+        profile
+    };
+
+    for bad in [
+        typed(&[], Source::Manual {}),
+        typed(&["Ha", "ha"], Source::Manual {}),
+        typed(&[" Ha"], Source::Manual {}),
+        typed(&[""], Source::Manual {}),
+        typed(&[&"x".repeat(65)], Source::Manual {}),
+        typed(&["Ha"], Source::Plugin {}),
+    ] {
+        assert!(matches!(
+            store.save_rig_profile(&bad, 0),
+            Err(Error::InvalidInput)
+        ));
+    }
+    let saved = store
+        .save_rig_profile(&typed(&["L", "Ha", "OIII"], Source::Manual {}), 0)
+        .unwrap();
+    assert_eq!(
+        store.rig_profile(rig.id).unwrap().unwrap().filter_list(),
+        Some(vec!["L".to_string(), "Ha".into(), "OIII".into()])
+    );
+    assert_eq!(RigProfile::empty(rig.id, 0).filter_list(), None);
+
+    // A Director plugin's wheel, by its native labels, replaces the typed list.
+    let mut reported = saved.clone();
+    reported.configuration = Some(Reported {
+        value: serde_json::from_value(serde_json::json!({
+            "rig_id": rig.id.to_string(), "id": "c", "camera_id": "cam",
+            "filter_wheel_id": "fw",
+            "filters": [{"id": "f1", "position": 0}, {"id": "f2", "position": 1}],
+            "binning_modes": [{"x": 1, "y": 1}], "readout_modes": [0],
+            "gain": {"support": "unsupported"}, "offset": {"support": "unsupported"},
+            "exposure_min_ms": 1, "exposure_max_ms": 3_600_000,
+            "enable_slew_center": true, "dither_every": 0
+        }))
+        .unwrap(),
+        source: Source::Plugin {},
+        reported_at_ms: 1,
+    });
+    reported.filter_names = [("f1".to_string(), "Lum".to_string())].into();
+    assert_eq!(
+        reported.filter_list(),
+        Some(vec!["Lum".to_string(), "f2".into()])
+    );
+}

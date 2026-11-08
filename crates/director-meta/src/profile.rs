@@ -128,6 +128,11 @@ pub struct RigProfile {
     /// `None` until a plugin that reports them is accepted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub camera_defaults: Option<CameraDefaults>,
+    /// Filter names typed in Rig setup, for a rig whose filters no Director
+    /// plugin has reported. A reported configuration wins: see
+    /// [`RigProfile::filter_list`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filters: Option<Reported<Vec<String>>>,
     /// The registered Sync peer that holds this rig's database when the rig
     /// runs on another PSF Guard. Activation pushes the plan there. `None`
     /// means the database on this server is the one the rig executes from.
@@ -158,12 +163,40 @@ impl RigProfile {
             configuration: None,
             filter_names: Default::default(),
             camera_defaults: None,
+            filters: None,
             peer_id: None,
             mode: None,
             updated_at_ms: now_ms,
         }
     }
+
+    /// The rig's filter names: the ones its Director plugin reported, by
+    /// their native labels, else the ones typed in Rig setup. `None` when
+    /// neither is known.
+    pub fn filter_list(&self) -> Option<Vec<String>> {
+        if let Some(configuration) = &self.configuration {
+            return Some(
+                configuration
+                    .value
+                    .filters
+                    .iter()
+                    .map(|filter| {
+                        self.filter_names
+                            .get(&filter.id)
+                            .cloned()
+                            .unwrap_or_else(|| filter.id.clone())
+                    })
+                    .collect(),
+            );
+        }
+        self.filters.as_ref().map(|filters| filters.value.clone())
+    }
 }
+
+/// Most filters a typed list may name.
+pub const MAX_TYPED_FILTERS: usize = 64;
+/// Longest typed filter name, in bytes.
+pub const MAX_FILTER_NAME_LEN: usize = 64;
 
 const MAX_PEER_ID_LEN: usize = 128;
 
@@ -266,6 +299,26 @@ pub(crate) fn validate_profile(profile: &RigProfile) -> Result<(), Error> {
             })
         {
             return Err(Error::InvalidInput);
+        }
+    }
+    if let Some(filters) = &profile.filters {
+        valid_reported(filters)?;
+        if filters.source != (Source::Manual {})
+            || filters.value.is_empty()
+            || filters.value.len() > MAX_TYPED_FILTERS
+        {
+            return Err(Error::InvalidInput);
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for name in &filters.value {
+            if name.is_empty()
+                || name.len() > MAX_FILTER_NAME_LEN
+                || name.trim() != name
+                || name.chars().any(char::is_control)
+                || !seen.insert(name.to_lowercase())
+            {
+                return Err(Error::InvalidInput);
+            }
         }
     }
     if let Some(defaults) = &profile.camera_defaults {
