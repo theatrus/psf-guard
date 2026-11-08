@@ -8,7 +8,8 @@
 //! (`POST …/profiles/import`), or the PSF Guard plugin sends a snapshot as
 //! it captures (`POST /sync/v1/star-detection/profile`, authenticated by
 //! the catalog's paired client token like the rest of `/sync/v1`). A
-//! snapshot equal to the record already in effect stores nothing.
+//! snapshot equal to the record already in effect, from the same catalog,
+//! stores nothing.
 //!
 //! GET is open to viewers so the panel can show the current values; PUT and
 //! DELETE land in `requires_write`. A change applies as soon as it is saved:
@@ -503,9 +504,13 @@ fn add_record(
     if name.is_some() {
         profile.name = name;
     }
+    // A snapshot from another catalog is stored even with the same
+    // settings: it shows which catalog the profile now pairs with, and
+    // Director plans each catalog for that profile.
     let same = |current: &ProfileRecord| {
         current.settings == record.settings
             && current.hocus_focus_version == record.hocus_focus_version
+            && current.catalog_id == record.catalog_id
     };
     // A dated snapshot repeats the record in effect at its date; one for
     // every frame repeats the newest record for every frame.
@@ -984,6 +989,18 @@ mod tests {
         let profile = &settings.profiles[PROFILE];
         assert_eq!(profile.records.len(), 3);
         assert_eq!(profile.name.as_deref(), Some("redcat"));
+
+        // Paired with another catalog, the same settings are stored once, so
+        // that catalog learns its profile and the old one stops claiming it.
+        let moved = |captured: &str| ProfileRecord {
+            catalog_id: Some("db-2".into()),
+            ..plugin_record(captured, cropped(0.7))
+        };
+        assert!(add_record(&mut settings, PROFILE, None, moved("2026-09-11T03:00:00Z")).unwrap());
+        assert!(!add_record(&mut settings, PROFILE, None, moved("2026-09-12T03:00:00Z")).unwrap());
+        assert_eq!(settings.plugin_profile("db-2"), Some(PROFILE));
+        assert_eq!(settings.plugin_profile("db-1"), None);
+        settings.profiles.get_mut(PROFILE).unwrap().records.pop();
 
         // The same file imported twice for every frame is stored once.
         let all_frames = ProfileRecord {

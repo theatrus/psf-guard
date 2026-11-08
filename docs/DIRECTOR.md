@@ -1848,7 +1848,8 @@ Director plans and reads scheduling limits for one profile per rig database:
 
 1. The profile a paired plugin last reported, when the database already has
    projects, templates or preferences in it. The plugin reports its profile
-   when it sends star-detection settings.
+   when you pair it and whenever its star-detection settings change. When you
+   pair a profile with another database, it stops counting for the old one.
 2. Otherwise, the profile with the most projects.
 3. Then the database's only preference row, then the templates' profile.
 

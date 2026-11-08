@@ -629,18 +629,23 @@ impl StarDetectionSettings {
 
     /// The N.I.N.A. profile a plugin paired with `catalog_id` last sent
     /// settings from: the profile that catalog's rig captures in. `None`
-    /// until a plugin sends one. A plugin stores a record only when the
-    /// settings change, so with two profiles paired to one catalog this is
-    /// the one whose settings changed last.
+    /// until a plugin sends one. A profile belongs to the catalog of its
+    /// newest plugin record, so one paired again elsewhere stops counting
+    /// here. With two profiles still paired to one catalog, the newer record
+    /// wins.
     pub fn plugin_profile(&self, catalog_id: &str) -> Option<&str> {
         self.profiles
             .iter()
-            .flat_map(|(id, profile)| profile.records.iter().map(move |record| (id, record)))
-            .filter(|(_, record)| {
-                record.source != RecordSource::Import
-                    && record.catalog_id.as_deref() == Some(catalog_id)
+            .filter_map(|(id, profile)| {
+                profile
+                    .records
+                    .iter()
+                    .filter(|record| record.source != RecordSource::Import)
+                    .max_by_key(|record| record.received_at)
+                    .filter(|newest| newest.catalog_id.as_deref() == Some(catalog_id))
+                    .map(|newest| (id, newest.received_at))
             })
-            .max_by_key(|(_, record)| record.received_at)
+            .max_by_key(|(_, received_at)| *received_at)
             .map(|(id, _)| id.as_str())
     }
 }
@@ -926,7 +931,7 @@ mod tests {
     }
 
     #[test]
-    fn plugin_profile_is_the_catalogs_newest_plugin_record() {
+    fn plugin_profile_follows_each_profiles_newest_plugin_record() {
         let sent = |id: &str, source: RecordSource, catalog: &str, at: &str| ProfileRecord {
             source,
             catalog_id: Some(catalog.into()),
@@ -980,9 +985,11 @@ mod tests {
             ..Default::default()
         };
 
+        // Profile b was paired again with "other", so it no longer counts
+        // for "rig".
         assert_eq!(
             settings.plugin_profile("rig"),
-            Some("bbbbbbbb-0000-4000-8000-000000000002")
+            Some("aaaaaaaa-0000-4000-8000-000000000001")
         );
         assert_eq!(
             settings.plugin_profile("other"),
