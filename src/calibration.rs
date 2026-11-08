@@ -2712,7 +2712,10 @@ fn external_master_notes(
             let matches = chosen
                 .iter()
                 .any(|frame| frame.frame_uuid == candidate.frame_uuid);
-            let reason = (!matches).then(|| refusal(light, &light_signature, &candidate, rules));
+            let reason = (!matches).then(|| {
+                stale_flat_master(light, &candidate, rules)
+                    .unwrap_or_else(|| refusal(light, &light_signature, &candidate, rules))
+            });
             let file = candidate
                 .source_path
                 .file_name()
@@ -2728,6 +2731,42 @@ fn external_master_notes(
         }
     }
     Ok(notes)
+}
+
+/// Why selection left out a flat master that otherwise matches the light:
+/// under the Prefer policy, a master past the flat age limit gives way to
+/// raw flats that can build a master. `None` for any other master.
+fn stale_flat_master(
+    light: &FrameMeta,
+    candidate: &CalibrationFrame,
+    rules: &Rules,
+) -> Option<String> {
+    let limit = rules.flat_max_age_days;
+    if candidate.kind != CalibrationKind::Flat
+        || rules.external_masters != ExternalMasterPolicy::Prefer
+        || !limit.is_finite()
+        || candidate.kept_out.is_some()
+        || !validity_admits(candidate, light.timestamp)
+        || !sensor_matches(light, candidate, rules)
+        || !seiza_calibration::library::matching::flat_matches(
+            &library_light(light),
+            candidate,
+            rules,
+        )
+    {
+        return None;
+    }
+    let age = candidate.captured_at?.abs_diff(light.timestamp?) as f64 / 86_400.0;
+    if age <= limit {
+        return None;
+    }
+    let by = rules
+        .who_set(SettingKey::FlatMaxAgeDays)
+        .map(|by| format!(" {by}"))
+        .unwrap_or_default();
+    Some(format!(
+        "{age:.0} days from the light, past the {limit:.0}-day flat age limit{by}; raw flats build a master instead"
+    ))
 }
 
 /// Why a frame of the library does not calibrate this light, in the
@@ -10326,6 +10365,58 @@ pub(crate) mod tests {
             ]),
             [(1, "an external master is used instead".to_string())]
         );
+    }
+
+    #[test]
+    fn a_flat_master_past_the_age_limit_gives_way_to_the_nights_raw_flats() {
+        let _settings = POLICY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        configure_flat_max_age(Some(1.0));
+        let light_at = 1_790_000_000;
+        let mut light = frame("/light.fits", "LIGHT");
+        light.timestamp = Some(light_at);
+        light.rotator_position = Some(90.0);
+        let old_master = test_flat(-21.0, 0, |flat| {
+            flat.is_master = true;
+            flat.dark_subtracted = true;
+        });
+        let select = |frames: Vec<CalibrationFrame>| {
+            seiza_calibration::library::Library::new(frames, Default::default(), Vec::new())
+                .select(&library_light(&light), global_rules())
+        };
+        let mut frames: Vec<CalibrationFrame> =
+            (0..3).map(|index| test_flat(0.01, index, |_| {})).collect();
+        frames.push(old_master.clone());
+
+        // Flats from the light's own night build its master; the old one is
+        // left out, and the report says why.
+        let selected = select(frames.clone());
+        let at = nearest_master_flat_at(&selected, light_at);
+        assert!(
+            at.is_some_and(|at| at.abs_diff(light_at) < 86_400),
+            "{at:?}"
+        );
+        assert_eq!(
+            stale_flat_master(&light, &old_master, &selected.rules).as_deref(),
+            Some(
+                "21 days from the light, past the 1-day flat age limit set globally; \
+                 raw flats build a master instead"
+            )
+        );
+        // With one raw flat no master can be built: the old master is used,
+        // and the age check flags it.
+        let lone = select(vec![frames[0].clone(), old_master.clone()]);
+        assert_eq!(
+            nearest_master_flat_at(&lone, light_at),
+            old_master.captured_at
+        );
+        configure_flat_max_age(None);
+        // Within the default limit the master is preferred as before.
+        let within = select(frames);
+        assert_eq!(
+            nearest_master_flat_at(&within, light_at),
+            old_master.captured_at
+        );
+        assert_eq!(stale_flat_master(&light, &old_master, &within.rules), None);
     }
 
     #[test]

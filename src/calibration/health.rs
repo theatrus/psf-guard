@@ -49,7 +49,9 @@ use std::time::UNIX_EPOCH;
 /// measured response family. 6: flat age and nightly coverage use the nearest
 /// contributing flat, rather than the median of the master inputs. 7: a light
 /// a stack gives an external flat master is judged by that master's date.
-pub const HEALTH_ALGORITHM_VERSION: u32 = 7;
+/// 8: a Prefer flat master past the flat age limit gives way to raw flats
+/// that can build a master.
+pub const HEALTH_ALGORITHM_VERSION: u32 = 8;
 
 /// Flats further than this from a light are worth a look, though they are
 /// within the age limit that makes a light one that cannot be calibrated,

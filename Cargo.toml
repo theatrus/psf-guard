@@ -174,3 +174,10 @@ panic = "unwind"
 [build-dependencies]
 tauri-build = { version = "2.7.4", features = [] }
 toml_edit = "0.25"
+
+# Unreleased Seiza: a Prefer flat master only within the flat age limit
+# (theatrus/seiza flat-master-age-limit). Drop once released.
+[patch.crates-io]
+seiza-calibration = { git = "https://github.com/theatrus/seiza", rev = "2825640a" }
+seiza-imgproc = { git = "https://github.com/theatrus/seiza", rev = "2825640a" }
+seiza-stats = { git = "https://github.com/theatrus/seiza", rev = "2825640a" }
