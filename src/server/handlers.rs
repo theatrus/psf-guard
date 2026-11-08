@@ -1297,16 +1297,13 @@ pub async fn remove_database_route(
     require_database_management_allowed(&state)?;
     let registry_path = require_registry_path(&state)?;
     let _registry_guard = state.registry_write.lock().await;
-    // The rig first: when it refuses, the database stays registered.
-    let rig_removed = match state.get_database(&db_id) {
-        Some(catalog) => crate::server::director::rig_removal::remove(&state, catalog)
-            .await
-            .map_err(|error| match error {
-                RemovalError::Refused(reason) => AppError::Conflict(reason),
-                RemovalError::Failed(reason) => AppError::InternalError(reason),
-            })?,
-        None => false,
-    };
+    // Open work stops the removal while the database is still registered.
+    let catalog = state.get_database(&db_id);
+    if let Some(catalog) = &catalog
+        && let Some(reason) = crate::server::director::rig_removal::refusal(&state, catalog).await
+    {
+        return Err(AppError::Conflict(reason));
+    }
     let mut reg = DbRegistry::load_or_init(&registry_path)
         .map_err(|e| AppError::InternalError(format!("loading registry: {}", e)))?;
     let removed_from_registry = reg
@@ -1316,6 +1313,22 @@ pub async fn remove_database_route(
         .map_err(|e| AppError::InternalError(format!("persisting registry: {}", e)))?;
 
     let removed_from_state = state.databases.write().unwrap().remove(&db_id).is_some();
+
+    // The rig last, once the database is gone, so a registry failure above
+    // leaves both in place. A rig that cannot be deleted now keeps its
+    // records, and the database is removed all the same.
+    let rig_removed = match catalog {
+        Some(catalog) => {
+            match crate::server::director::rig_removal::remove(&state, catalog).await {
+                Ok(removed) => removed,
+                Err(RemovalError::Refused(reason) | RemovalError::Failed(reason)) => {
+                    tracing::warn!(database = %db_id, %reason, "Removed a database but kept its rig's records");
+                    false
+                }
+            }
+        }
+        None => false,
+    };
 
     Ok(Json(ApiResponse::success(serde_json::json!({
         "removed": removed_from_registry || removed_from_state,

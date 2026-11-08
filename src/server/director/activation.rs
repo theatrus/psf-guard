@@ -2053,6 +2053,18 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
         .ok()
         .filter(|profile| !profile.is_empty())
         .unwrap_or(profile_id);
+    // A waiting project's plans may use the rig's own templates first: the
+    // Sync plugin finds them in Target Scheduler by GUID, so the user's
+    // template settings carry over rather than a default copy.
+    let template_profiles: Vec<String> = if profile_id == SYNC_PLACED_PROFILE {
+        resolve_profile(tx, inputs.reported_profile.as_deref())?
+            .filter(|profile| profile != SYNC_PLACED_PROFILE)
+            .into_iter()
+            .chain([profile_id.clone()])
+            .collect()
+    } else {
+        vec![profile_id.clone()]
+    };
 
     // Targets: one per panel this rig owns, matched by panel id. A
     // contribution with no panel list covers every panel.
@@ -2459,7 +2471,7 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                 objective.bandpass_id, contribution.exposure_seconds
             )));
         };
-        let template = resolve_template(tx, &profile_id, contribution)?;
+        let template = resolve_template(tx, &profile_id, &template_profiles, contribution)?;
         if template.created && reported_templates.insert(template.id) {
             changes.push(Change {
                 kind: "template",
@@ -3595,11 +3607,15 @@ struct ResolvedTemplate {
 
 /// The chosen template by id or GUID when it still exists with the same
 /// filter, else the profile's template with the same settings, else a new one.
+/// The template for a contribution: one of `profiles`' templates, in that
+/// order, else a new one under `profile_id`, the project's profile.
 fn resolve_template(
     tx: &Connection,
     profile_id: &str,
+    profiles: &[String],
     contribution: &Contribution,
 ) -> Result<ResolvedTemplate, RigError> {
+    let usable = |profile: &str| profiles.iter().any(|wanted| wanted == profile);
     let chosen = |id: i64| -> Result<ResolvedTemplate, RigError> {
         let name: String = tx.query_row(
             "SELECT IFNULL(name, '') FROM exposuretemplate WHERE Id=?1",
@@ -3638,7 +3654,7 @@ fn resolve_template(
         guid_used = found.is_some();
         if let Some((id, filter, profile)) = found
             && filter.eq_ignore_ascii_case(&choice.filter_name)
-            && profile == profile_id
+            && usable(&profile)
             && moon_matches(id)?
         {
             return chosen(id);
@@ -3666,7 +3682,7 @@ fn resolve_template(
                     && offset == i64::from(choice.offset.unwrap_or(-1))
                     && bin == i64::from(choice.bin.unwrap_or(1).max(1))
                     && readout == i64::from(choice.readout_mode.unwrap_or(-1))
-                    && profile == profile_id
+                    && usable(&profile)
             }),
         )
     };
@@ -3680,22 +3696,24 @@ fn resolve_template(
     let offset = choice.offset.unwrap_or(-1);
     let bin = choice.bin.unwrap_or(1);
     let readout = choice.readout_mode.unwrap_or(-1);
-    let existing: Vec<i64> = tx
-        .prepare(
-            "SELECT Id FROM exposuretemplate
-             WHERE profileId = ?1 AND LOWER(TRIM(filtername)) = LOWER(TRIM(?2))
-               AND IFNULL(gain, -1) = ?3 AND IFNULL(offset, -1) = ?4
-               AND IFNULL(bin, 1) = ?5 AND IFNULL(readoutmode, -1) = ?6
-             ORDER BY Id LIMIT 512",
-        )?
-        .query_map(
-            params![profile_id, choice.filter_name, gain, offset, bin, readout],
-            |row| row.get(0),
-        )?
-        .collect::<Result<_, _>>()?;
-    for id in existing {
-        if moon_matches(id)? {
-            return chosen(id);
+    for profile in profiles {
+        let existing: Vec<i64> = tx
+            .prepare(
+                "SELECT Id FROM exposuretemplate
+                 WHERE profileId = ?1 AND LOWER(TRIM(filtername)) = LOWER(TRIM(?2))
+                   AND IFNULL(gain, -1) = ?3 AND IFNULL(offset, -1) = ?4
+                   AND IFNULL(bin, 1) = ?5 AND IFNULL(readoutmode, -1) = ?6
+                 ORDER BY Id LIMIT 512",
+            )?
+            .query_map(
+                params![profile, choice.filter_name, gain, offset, bin, readout],
+                |row| row.get(0),
+            )?
+            .collect::<Result<_, _>>()?;
+        for id in existing {
+            if moon_matches(id)? {
+                return chosen(id);
+            }
         }
     }
     let moon = choice.moon.clone().unwrap_or_default();

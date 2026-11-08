@@ -140,6 +140,15 @@ async fn a_sync_plugin_rig_leaves_a_new_project_for_the_plugin_to_place() {
         )
         .unwrap();
     assert_eq!(others, 3);
+    // The plan uses the rig's own template, which the plugin finds in Target
+    // Scheduler by GUID, rather than a default copy under the waiting profile.
+    assert_eq!(profiles(&a.db, "exposuretemplate"), ["profile-a"]);
+    let templates: i64 =
+        a.db.query_row("SELECT COUNT(*) FROM exposuretemplate", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(templates, 1);
 }
 
 #[tokio::test]
@@ -414,4 +423,78 @@ async fn an_older_sync_plugin_gets_waiting_rows_under_the_rigs_profile() {
     assert_eq!(old["exposuretemplate"], ["profile-a"]);
     assert_eq!(current["project"], ["profile-a", SYNC_PLACED_PROFILE]);
     assert_eq!(current["exposuretemplate"], [SYNC_PLACED_PROFILE]);
+}
+
+#[tokio::test]
+async fn the_real_profiles_preferences_beat_the_waiting_profiles() {
+    let a = activated().await;
+    // Activation on a blank rig left a waiting preference row first.
+    crate::commands::import::ensure_profile_preference(&a.db, SYNC_PLACED_PROFILE).unwrap();
+    crate::commands::import::ensure_profile_preference(&a.db, "profile-a").unwrap();
+    a.db.execute(
+        "UPDATE profilepreference SET parkonwait = 1 WHERE profileId = 'profile-a'",
+        [],
+    )
+    .unwrap();
+    let path = a.f._dir.path().join("rig.sqlite");
+
+    let read = crate::server::director::ts_snapshot::read(path.to_str().unwrap(), None)
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(read.snapshot.profile_id, "profile-a");
+    assert!(read.snapshot.preferences.park_on_wait);
+}
+
+#[tokio::test]
+async fn removing_one_of_two_names_for_a_file_keeps_its_rig() {
+    let a = activated().await;
+    preview_and_apply(&a).await;
+    let original = a.f.state.get_database("rig").unwrap();
+    let path = a.f._dir.path();
+    let twin = crate::server::database_context::DatabaseContext::new(
+        "twin".into(),
+        "Same file".into(),
+        original.database_path.clone(),
+        vec![path.to_string_lossy().into()],
+        None,
+        None,
+        None,
+        path.join("twin-cache"),
+    )
+    .unwrap();
+    a.f.state
+        .databases
+        .write()
+        .unwrap()
+        .insert("twin".into(), Arc::new(twin));
+    let twin = a.f.state.get_database("twin").unwrap();
+
+    let (_, review) = call(
+        &a.f.app,
+        "GET",
+        "/catalogs/twin/rig/removal",
+        Value::Null,
+        None,
+    )
+    .await;
+    let removed = crate::server::director::rig_removal::remove(&a.f.state, twin).await;
+
+    assert_eq!(review["data"]["removal"], Value::Null, "{review}");
+    assert!(matches!(removed, Ok(false)));
+    // The route drops the twin from the server before deleting its rig.
+    a.f.state.databases.write().unwrap().remove("twin");
+    let (_, kept) = call(
+        &a.f.app,
+        "GET",
+        "/catalogs/rig/rig/removal",
+        Value::Null,
+        None,
+    )
+    .await;
+    assert_eq!(
+        kept["data"]["removal"]["rig"]["id"],
+        a.rig.to_string(),
+        "{kept}"
+    );
 }

@@ -46,6 +46,25 @@ describe('DatabaseRemoveDialog', () => {
     expect(screen.getByRole('button', { name: 'Remove' })).toBeDisabled();
   });
 
+  it('waits for Director before enabling Remove', async () => {
+    let answer: (value: Awaited<ReturnType<typeof apiClient.getDirectorStatus>>) => void = () => {};
+    api.getDirectorStatus.mockReturnValue(new Promise(resolve => { answer = resolve; }));
+    api.getDirectorRigRemoval.mockResolvedValue(null);
+    show();
+
+    expect(screen.getByRole('button', { name: 'Remove' })).toBeDisabled();
+    answer({ enabled: true } as Awaited<ReturnType<typeof apiClient.getDirectorStatus>>);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Remove' })).toBeEnabled());
+  });
+
+  it('still removes the database when the rig cannot be read', async () => {
+    api.getDirectorRigRemoval.mockRejectedValue(new Error('The store is busy.'));
+    show();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('could not list this rig');
+    expect(screen.getByRole('button', { name: 'Remove' })).toBeEnabled();
+  });
+
   it('keeps a collaborating rig and says so', async () => {
     api.getDirectorRigRemoval.mockResolvedValue({ rig, plans: ['M31'], plugins: [], blocker: null, collaboration: true });
     show();

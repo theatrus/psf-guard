@@ -48,7 +48,9 @@ export default function DatabaseRemoveDialog({ database, onClose, onRemoved }: P
   });
   const busy = remove.isPending;
   const removal = review.data ?? null;
-  const reading = planning && review.isLoading;
+  // Until Director's status arrives, the dialog cannot tell whether a rig's
+  // records go too, so Remove waits for it.
+  const reading = director.isLoading || (planning && review.isLoading);
   const blocked = removal?.blocker ? BLOCKERS[removal.blocker] : null;
 
   return (
@@ -63,7 +65,7 @@ export default function DatabaseRemoveDialog({ database, onClose, onRemoved }: P
           <button
             type="button"
             className="action-button reject project-delete-confirm"
-            disabled={busy || reading || review.isError || !!blocked}
+            disabled={busy || reading || !!blocked}
             onClick={() => remove.mutate()}
           >
             {busy ? 'Removing...' : 'Remove'}
@@ -72,7 +74,12 @@ export default function DatabaseRemoveDialog({ database, onClose, onRemoved }: P
       }
     >
       {reading && <p role="status">Reading what this rig has...</p>}
-      {review.isError && <p className="project-delete-error" role="alert">{message(review.error)}</p>}
+      {review.isError && (
+        <p className="project-delete-error" role="alert">
+          PSF Guard could not list this rig's records: {message(review.error)} Remove still removes the database, and
+          deletes the rig's settings, pairing and plan parts if PSF Guard can.
+        </p>
+      )}
       <p>The database file and its images stay on disk. PSF Guard stops listing <strong>{database.name}</strong>.</p>
       {removal?.collaboration && (
         <p className="project-delete-note">
