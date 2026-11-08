@@ -17,8 +17,9 @@ enable acquisition.
 
 ## Run a rig with the Director plugin
 
-Open **Settings › Rig setup**, choose the rig, then open its **Director** tab.
-The tab shows pairing, reported equipment, work permission and current work.
+Open **Settings › Rig setup**, choose the rig, then open its **Plugins** tab.
+The Director plugin's section shows pairing, reported equipment, work
+permission and current work.
 
 1. **Pair.** Click **Generate Director pairing code**. In N.I.N.A., open the
    Director plugin settings, enter the server URL and the code, then click
@@ -833,7 +834,7 @@ below; Sync credentials remain unrelated.
 
 Early beta, like everything the Director plugin drives.
 
-Rig setup's **Director** tab drives this API; see [Run a rig with the Director
+Rig setup's **Plugins** tab drives this API; see [Run a rig with the Director
 plugin](#run-a-rig-with-the-director-plugin). To call it directly, adopt the
 registered database first, then use its exact `catalog_id` and bound `rig_id`; get
 the coordinator's `instance_id` from `/status`. Use an interactive read-write browser
@@ -941,7 +942,7 @@ original receipt time; retrying an acceptance is safe only while that accepted
 profile revision remains current. Revocation removes pending reports, not the
 rig's equipment. A receipt is not a readiness or acquisition permit.
 
-Rig setup's **Director** tab shows each client's latest report and compares it
+Rig setup's **Plugins** tab shows each Director client's latest report and compares it
 with the rig's equipment. Keep allocation admission a separate action.
 
 `GET /catalogs/{slug}/rig/plugin` returns one rig's plugin state for an
@@ -1134,7 +1135,7 @@ theirs. Adding the file back later creates a new rig, and its projects arrive as
 new plans.
 
 PSF Guard refuses to remove a rig with open work: choose **Close work** on the
-**Director** tab, then remove it. `DELETE /api/databases/{id}` answers `409` in
+**Plugins** tab, then remove it. `DELETE /api/databases/{id}` answers `409` in
 this case and changes nothing. A rig with collaboration records keeps them, since
 they can hold reports not sent yet: only the database leaves PSF Guard, and
 adding the file back restores the rig. It answers `rig_removed` beside `removed`. When

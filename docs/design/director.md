@@ -273,7 +273,7 @@ client retires it through `reconcile`. Reports and acceptance are retry-safe;
 revocation removes reports without erasing accepted setup.
 
 Implemented: staging, transactional acceptance, strict native report transport,
-session command, and the rig setup **Director** tab for pairing, commissioning
+session command, and the rig setup **Plugins** tab for pairing, commissioning
 and closing work a removed client held. Not implemented: manual
 allocation admission UI, successor reconciliation that hands open work to a new
 client, automatic optics or site commissioning. A received or accepted report is
