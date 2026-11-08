@@ -86,7 +86,9 @@ fn snapshots_nest_and_one_dropped_early_leaves_the_reader_current() {
         reader.catalog_rig(second).unwrap().is_none(),
         "the snapshot predates the second rig"
     );
+    assert!(!reader.is_idle());
     // Dropped without end, as after an error: the next read is current.
     drop(outer);
+    assert!(reader.is_idle());
     assert!(reader.catalog_rig(second).unwrap().is_some());
 }

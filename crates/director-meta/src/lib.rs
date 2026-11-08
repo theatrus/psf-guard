@@ -144,10 +144,15 @@ impl<'a> Snapshot<'a> {
         Ok(Self { connection, began })
     }
 
-    /// End the read transaction this snapshot began.
+    /// End the read transaction this snapshot began. If the end fails, the
+    /// transaction is rolled back, so the connection never keeps an old
+    /// snapshot for its next reads.
     pub fn end(mut self) -> Result<(), Error> {
-        if std::mem::take(&mut self.began) {
-            self.connection.execute_batch("COMMIT")?;
+        if std::mem::take(&mut self.began)
+            && let Err(error) = self.connection.execute_batch("COMMIT")
+        {
+            let _ = self.connection.execute_batch("ROLLBACK");
+            return Err(error.into());
         }
         Ok(())
     }
@@ -183,6 +188,12 @@ impl MetaStore {
     /// each operation.
     pub fn snapshot(&self) -> Result<Snapshot<'_>, Error> {
         Snapshot::begin(&self.connection)
+    }
+
+    /// No transaction is open on this connection: a pooled reader can be
+    /// handed to the next operation without an old snapshot.
+    pub fn is_idle(&self) -> bool {
+        self.connection.is_autocommit()
     }
 
     pub fn instance_id(&self) -> Uuid {

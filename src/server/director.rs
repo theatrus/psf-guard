@@ -408,7 +408,11 @@ impl Service {
                 }
                 Err(error) => Err(Error::from(error).into()),
             };
-            if let Ok(mut idle) = self.readers.lock() {
+            // A reader whose snapshot could not be ended is dropped, never
+            // pooled with an old view.
+            if reader.is_idle()
+                && let Ok(mut idle) = self.readers.lock()
+            {
                 idle.push(reader);
             }
             result
