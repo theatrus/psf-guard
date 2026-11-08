@@ -1084,27 +1084,11 @@ fn build(
             });
             // The filter the plugin reported that serves this template's filter.
             let wanted = bandpass_for_filter(&row.template_filter).id;
-            let names = profile.map(|p| &p.filter_names);
-            let label = |f: &psf_guard_director_core::program::Filter| {
-                names
-                    .and_then(|n| n.get(&f.id))
-                    .cloned()
-                    .unwrap_or_else(|| f.id.clone())
-            };
-            let exact: Vec<_> = configuration
-                .filters
-                .iter()
-                .filter(|f| label(f).eq_ignore_ascii_case(&row.template_filter))
-                .collect();
-            let candidates = if exact.is_empty() {
-                configuration
-                    .filters
-                    .iter()
-                    .filter(|f| bandpass_for_filter(&label(f)).id == wanted)
-                    .collect::<Vec<_>>()
-            } else {
-                exact
-            };
+            let candidates = psf_guard_director_meta::profile::wheel_filters_for(
+                configuration,
+                profile.map(|p| &p.filter_names),
+                &row.template_filter,
+            );
             let [filter] = candidates.as_slice() else {
                 built.omitted.push(format!(
                     "{}: the rig reports no single filter that matches template filter '{}' ({})",

@@ -102,6 +102,8 @@ export interface DirectorRigProfile {
   peer_id: string | null;
   /** Who picks the rig's work, once set in Rig setup or by pairing a plugin. */
   mode?: DirectorRigMode | null;
+  /** Filter names typed in Rig setup; a Director plugin's wheel wins over them. */
+  filters?: DirectorReported<string[]> | null;
   updated_at_ms: number;
 }
 export type DirectorRigMode = 'target_scheduler' | 'director';
@@ -113,6 +115,8 @@ export interface DirectorRigProfileView {
     optics: DirectorReported<DirectorOptics> | null;
     site: DirectorReported<DirectorSite> | null;
     field_of_view: DirectorFieldOfView | null;
+    /** Filter names the database uses, most used first. Absent from older servers. */
+    filters?: string[];
   };
   /** Who picks the rig's work, and what Director needs to run it. */
   mode: {
@@ -123,8 +127,16 @@ export interface DirectorRigProfileView {
     paired: boolean;
     equipment: boolean;
   };
+  /** The rig's filters: its Director plugin's wheel, else the typed list. Absent or null when unknown. */
+  filter_list?: DirectorRigFilters | null;
 }
 export interface DirectorEdited<T> { value: T; source: DirectorSource }
+/** A rig's filters, as planning checks templates against them. */
+export interface DirectorRigFilters {
+  /** A Director plugin reported the wheel; otherwise the names were typed in Rig setup. */
+  reported: boolean;
+  filters: { name: string; bandpass: string }[];
+}
 /** What an operator can do with a plugin's equipment report. */
 export type DirectorEquipmentReview = 'none' | 'not_applied' | 'accepted';
 /** Whether the plugin can get work, and if not, why. */
@@ -207,6 +219,8 @@ export interface DirectorRigProfileEdit {
   peer_id: string | null;
   /** Left out keeps the mode, null returns the rig to the guess. */
   mode?: DirectorRigMode | null;
+  /** Left out keeps the typed filter list, null clears it. */
+  filters?: DirectorEdited<string[]> | null;
 }
 
 export interface DirectorSurvey {
@@ -316,6 +330,8 @@ export interface DirectorRigProfileSummary {
   default_exposure_seconds: { broadband: number; narrowband: number };
   /** The location and horizon planning uses. Absent from older servers. */
   site?: DirectorRigSite;
+  /** The rig's filters: its Director plugin's wheel, else the typed list. Absent or null when unknown. */
+  filter_list?: DirectorRigFilters | null;
 }
 /** Which record a rig's location or horizon came from. */
 export type DirectorSiteOrigin = 'rig' | 'site' | 'none';

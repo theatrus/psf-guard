@@ -60,6 +60,7 @@ pub mod remote_sync;
 pub mod remote_upload;
 pub mod remote_upload_layout;
 pub mod renamed_lights;
+pub mod rig_plugins;
 pub mod schedule;
 pub mod scheduler;
 pub mod scoring_defaults;

@@ -4,6 +4,7 @@
 
 use super::*;
 use psf_guard_director_core::{
+    bandpass::bandpass_for_filter,
     optics::Optics,
     program::{validate_configuration, Configuration},
     visibility::{AltitudeLimits, Horizon, Site},
@@ -128,6 +129,11 @@ pub struct RigProfile {
     /// `None` until a plugin that reports them is accepted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub camera_defaults: Option<CameraDefaults>,
+    /// Filter names typed in Rig setup, for a rig whose filters no Director
+    /// plugin has reported. A reported configuration wins: see
+    /// [`RigProfile::known_filters`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filters: Option<Reported<Vec<String>>>,
     /// The registered Sync peer that holds this rig's database when the rig
     /// runs on another PSF Guard. Activation pushes the plan there. `None`
     /// means the database on this server is the one the rig executes from.
@@ -158,12 +164,126 @@ impl RigProfile {
             configuration: None,
             filter_names: Default::default(),
             camera_defaults: None,
+            filters: None,
             peer_id: None,
             mode: None,
             updated_at_ms: now_ms,
         }
     }
+
+    /// The rig's filters, which planning checks templates against: the
+    /// wheel its Director plugin reported, by native labels, else the names
+    /// typed in Rig setup. `None` when neither is known.
+    pub fn known_filters(&self) -> Option<RigFilters> {
+        let (reported, names): (bool, Vec<String>) = match (&self.configuration, &self.filters) {
+            (Some(configuration), _) => (
+                true,
+                configuration
+                    .value
+                    .filters
+                    .iter()
+                    .map(|filter| wheel_label(filter, Some(&self.filter_names)))
+                    .collect(),
+            ),
+            (None, Some(typed)) => (false, typed.value.clone()),
+            (None, None) => return None,
+        };
+        Some(RigFilters {
+            reported,
+            filters: names
+                .into_iter()
+                .map(|name| RigFilter {
+                    bandpass: bandpass_for_filter(&name).id,
+                    name,
+                })
+                .collect(),
+        })
+    }
 }
+
+/// A rig's filters, as planning checks templates against them.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct RigFilters {
+    /// A Director plugin reported the wheel. Otherwise the names were typed
+    /// in Rig setup for Target Scheduler.
+    pub reported: bool,
+    pub filters: Vec<RigFilter>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct RigFilter {
+    pub name: String,
+    /// The bandpass the name resolves to.
+    pub bandpass: String,
+}
+
+impl RigFilters {
+    /// Whether a template with this filter can run on the rig. Target
+    /// Scheduler needs the name itself. Director also takes the one reported
+    /// filter of the same bandpass, as [`wheel_filters_for`] does.
+    pub fn serves(&self, template_filter: &str) -> bool {
+        if self.reported {
+            matching(&self.filters, |filter| filter.name.clone(), template_filter).len() == 1
+        } else {
+            self.filters.iter().any(|filter| {
+                filter
+                    .name
+                    .trim()
+                    .eq_ignore_ascii_case(template_filter.trim())
+            })
+        }
+    }
+}
+
+/// A wheel filter's native label, or its ID when the plugin gave none.
+pub fn wheel_label(
+    filter: &psf_guard_director_core::program::Filter,
+    filter_names: Option<&std::collections::BTreeMap<String, String>>,
+) -> String {
+    filter_names
+        .and_then(|names| names.get(&filter.id))
+        .cloned()
+        .unwrap_or_else(|| filter.id.clone())
+}
+
+/// The reported wheel filters that serve a template's filter: those whose
+/// label is the filter's name, else those of the same bandpass. Director
+/// runs the template only when exactly one serves it.
+pub fn wheel_filters_for<'a>(
+    configuration: &'a Configuration,
+    filter_names: Option<&std::collections::BTreeMap<String, String>>,
+    template_filter: &str,
+) -> Vec<&'a psf_guard_director_core::program::Filter> {
+    matching(
+        &configuration.filters,
+        |filter| wheel_label(filter, filter_names),
+        template_filter,
+    )
+}
+
+fn matching<'a, T>(
+    items: &'a [T],
+    label: impl Fn(&T) -> String,
+    template_filter: &str,
+) -> Vec<&'a T> {
+    let exact: Vec<&T> = items
+        .iter()
+        .filter(|item| label(item).eq_ignore_ascii_case(template_filter))
+        .collect();
+    if !exact.is_empty() {
+        return exact;
+    }
+    let wanted = bandpass_for_filter(template_filter).id;
+    items
+        .iter()
+        .filter(|item| bandpass_for_filter(&label(item)).id == wanted)
+        .collect()
+}
+
+/// Most filters a typed list may name.
+pub const MAX_TYPED_FILTERS: usize = 64;
+/// Longest typed filter name, in bytes.
+pub const MAX_FILTER_NAME_LEN: usize = 64;
 
 const MAX_PEER_ID_LEN: usize = 128;
 
@@ -266,6 +386,26 @@ pub(crate) fn validate_profile(profile: &RigProfile) -> Result<(), Error> {
             })
         {
             return Err(Error::InvalidInput);
+        }
+    }
+    if let Some(filters) = &profile.filters {
+        valid_reported(filters)?;
+        if filters.source != (Source::Manual {})
+            || filters.value.is_empty()
+            || filters.value.len() > MAX_TYPED_FILTERS
+        {
+            return Err(Error::InvalidInput);
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for name in &filters.value {
+            if name.is_empty()
+                || name.len() > MAX_FILTER_NAME_LEN
+                || name.trim() != name
+                || name.chars().any(char::is_control)
+                || !seen.insert(name.to_lowercase())
+            {
+                return Err(Error::InvalidInput);
+            }
         }
     }
     if let Some(defaults) = &profile.camera_defaults {

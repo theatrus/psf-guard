@@ -1,4 +1,4 @@
-import type { DirectorEdited, DirectorFieldOfView, DirectorHorizon, DirectorOptics, DirectorReported, DirectorRigMode, DirectorRigProfile, DirectorRigProfileEdit, DirectorRigProfileView, DirectorSource } from '../../api/directorTypes';
+import type { DirectorEdited, DirectorRigFilters, DirectorFieldOfView, DirectorHorizon, DirectorOptics, DirectorReported, DirectorRigMode, DirectorRigProfile, DirectorRigProfileEdit, DirectorRigProfileView, DirectorSource } from '../../api/directorTypes';
 
 /** Text fields for every number the form edits, so a half-typed value never throws. */
 export interface RigProfileForm {
@@ -14,6 +14,8 @@ export interface RigProfileForm {
   horizon: DirectorEdited<DirectorHorizon> | null;
   /** Who picks the rig's work; '' leaves it to PSF Guard's guess. */
   mode: DirectorRigMode | '';
+  /** Typed filter names, one per line; '' has no list. */
+  filters: string;
 }
 
 const text = (value: number | null | undefined) => value === null || value === undefined ? '' : String(value);
@@ -36,8 +38,36 @@ export function formFromProfile(profile: DirectorRigProfile): RigProfileForm {
     peerId: profile.peer_id ?? '',
     horizon: profile.horizon ? { value: profile.horizon.value, source: profile.horizon.source } : null,
     mode: profile.mode ?? '',
+    filters: profile.filters?.value.join('\n') ?? '',
   };
 }
+
+/** The typed names, one per line, as the server stores them: trimmed, no blanks, each once regardless of case. */
+export function filterNames(text: string): string[] {
+  const seen = new Set<string>();
+  return text.split(/\r?\n/).map(name => name.trim()).filter(name => {
+    const key = name.toLowerCase();
+    if (!name || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/** Whether the rig can shoot a template's filter, by the server's rule: Target
+ *  Scheduler needs the name itself; a Director plugin's wheel also serves the
+ *  one filter of the template's bandpass. True when the rig has no list. */
+export function hasFilter(list: DirectorRigFilters | null | undefined, filter: string, bandpass: string): boolean {
+  if (!list) return true;
+  const same = (name: string) => name.trim().toLowerCase() === filter.trim().toLowerCase();
+  if (!list.reported) return list.filters.some(entry => same(entry.name));
+  const exact = list.filters.filter(entry => same(entry.name));
+  return (exact.length > 0 ? exact : list.filters.filter(entry => entry.bandpass === bandpass)).length === 1;
+}
+
+/** A name's length in UTF-8 bytes, as the server measures it. */
+const utf8Length = (name: string) => new TextEncoder().encode(name).length;
+// eslint-disable-next-line no-control-regex
+const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
 
 /** Copy the header-derived optics and site into the form, keeping their source. */
 export function applyDefaults(form: RigProfileForm, defaults: DirectorRigProfileView['defaults']): RigProfileForm {
@@ -98,6 +128,11 @@ export function editFromForm(form: RigProfileForm, profile: DirectorRigProfile):
   const [minAlt, maxAlt, before, after] = [form.minAltitude, form.maxAltitude, form.meridianBefore, form.meridianAfter].map(num);
   if (!finite(minAlt) || !finite(maxAlt) || maxAlt <= minAlt) return 'The maximum altitude must be above the minimum.';
   if (!finite(before) || !finite(after) || before < 0 || after < 0) return 'Meridian minutes cannot be negative.';
+  const filters = filterNames(form.filters);
+  const long = filters.find(name => utf8Length(name) > 64);
+  if (long) return `The filter name "${long}" is too long. Use at most 64 bytes.`;
+  if (filters.some(name => CONTROL.test(name))) return 'Filter names cannot contain tabs or other control characters.';
+  if (filters.length > 64) return 'Enter at most 64 filters.';
   const stored = (part: DirectorReported<unknown> | null, source: DirectorSource | null) => source ?? part?.source ?? manual;
   return {
     expected_revision: profile.revision,
@@ -108,6 +143,7 @@ export function editFromForm(form: RigProfileForm, profile: DirectorRigProfile):
     limits: { value: { minimum_altitude_degrees: minAlt, maximum_altitude_degrees: maxAlt, meridian_exclusion: { before_ms: Math.round(before * 60000), after_ms: Math.round(after * 60000) } }, source: manual },
     peer_id: form.peerId || null,
     mode: form.mode || null,
+    filters: filters.length > 0 ? { value: filters, source: manual } : null,
   };
 }
 

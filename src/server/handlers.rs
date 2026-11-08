@@ -633,7 +633,7 @@ pub async fn list_databases(
     let mut summaries: Vec<DatabaseSummary> = state
         .all_databases()
         .iter()
-        .map(|ctx| summary_of(ctx))
+        .map(|ctx| summary_of(&state, ctx))
         .collect();
     summaries.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(Json(ApiResponse::success(summaries)))
@@ -705,14 +705,17 @@ fn display_project_name(
     }
 }
 
-fn summary_of(ctx: &crate::server::database_context::DatabaseContext) -> DatabaseSummary {
+fn summary_of(
+    state: &AppState,
+    ctx: &crate::server::database_context::DatabaseContext,
+) -> DatabaseSummary {
     DatabaseSummary {
         ts_sync: ctx.ts_sync.clone(),
         id: ctx.id.clone(),
         name: ctx.name.clone(),
         database_path: ctx.database_path.clone(),
         image_directories: ctx.image_dirs.clone(),
-        remote_image_upload: remote_image_upload_summary(ctx),
+        remote_image_upload: remote_image_upload_summary(ctx, &state.sync_contacts),
         export_directory: ctx
             .export_dir
             .as_ref()
@@ -728,8 +731,10 @@ fn summary_of(ctx: &crate::server::database_context::DatabaseContext) -> Databas
 
 fn remote_image_upload_summary(
     ctx: &crate::server::database_context::DatabaseContext,
+    contacts: &crate::server::rig_plugins::SyncContacts,
 ) -> RemoteImageUploadSummary {
     let config = ctx.remote_image_upload.as_ref();
+    let mut contacts = contacts.for_catalog(&ctx.id);
     let directory_layout = config.and_then(|config| config.directory_layout.as_ref());
     RemoteImageUploadSummary {
         // As saved: a folder that is missing now refuses uploads but does
@@ -764,10 +769,15 @@ fn remote_image_upload_summary(
                         client_uuid: client.client_uuid.clone(),
                         name: client.name.clone(),
                         paired_at: client.paired_at,
+                        last_contact: contacts.remove(&client.client_uuid).map(Into::into),
                     })
                     .collect()
             })
             .unwrap_or_default(),
+        key_contact: config
+            .filter(|config| config.legacy_key_configured())
+            .and_then(|_| contacts.remove(crate::db_registry::LEGACY_KEY_HOLDER))
+            .map(Into::into),
     }
 }
 
@@ -851,7 +861,7 @@ pub async fn add_database_route(
         crate::calibration::flat_groups::job::Scope::everything(),
     );
 
-    Ok(Json(ApiResponse::success(summary_of(&ctx))))
+    Ok(Json(ApiResponse::success(summary_of(&state, &ctx))))
 }
 
 /// `PUT /api/databases/{db_id}` — update name / slug / db_path / image_dirs.
@@ -1110,7 +1120,7 @@ pub async fn update_database_route(
         crate::server::calibration_health::request(&state, &new_ctx.database_path);
     }
 
-    Ok(Json(ApiResponse::success(summary_of(&new_ctx))))
+    Ok(Json(ApiResponse::success(summary_of(&state, &new_ctx))))
 }
 
 /// Apply a management client's receiver settings. Returns whether the
@@ -1808,7 +1818,7 @@ pub async fn create_database_route(
     );
 
     Ok(Json(ApiResponse::success(CreateDatabaseResponse {
-        database: summary_of(&ctx),
+        database: summary_of(&state, &ctx),
         import: crate::server::import_job::progress_snapshot(&ctx.import_job),
     })))
 }

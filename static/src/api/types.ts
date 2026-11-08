@@ -2784,10 +2784,22 @@ export interface ExportStatus {
   progress: ExportJobProgress;
 }
 
+/** A client's last Sync request, with what its plugin reported. */
+export interface SyncContactSummary {
+  /** Unix seconds. */
+  at: number;
+  /** Absent from Sync plugins older than the version header, and from PSF Guard. */
+  version?: string;
+  capabilities: string[];
+  /** The client writes new projects into its own N.I.N.A. profile; else the server places them. */
+  places_new_projects: boolean;
+}
+
 export interface RemoteClientSummary {
   client_uuid: string;
   name: string;
   paired_at: number;
+  last_contact?: SyncContactSummary;
 }
 
 export type RemoteImageUploadPlacement = 'flat' | 'target_tree';
@@ -2811,6 +2823,8 @@ export interface RemoteImageUploadSummary {
   sync_enabled: boolean;
   /** Paired clients; each holds its own revocable credential. */
   clients?: RemoteClientSummary[];
+  /** The last request made with the remote API key. */
+  key_contact?: SyncContactSummary;
 }
 
 export type SchedulerSyncKind = 'pull' | 'push_planning' | 'push_grades';

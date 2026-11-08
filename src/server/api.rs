@@ -517,6 +517,10 @@ pub struct RemoteImageUploadSummary {
     /// Paired clients, for the Settings list and per-client revocation.
     #[serde(default)]
     pub clients: Vec<RemoteClientSummary>,
+    /// The last request made with the remote API key, which belongs to no
+    /// paired client.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_contact: Option<SyncContactSummary>,
 }
 
 #[derive(Debug, Serialize)]
@@ -524,6 +528,35 @@ pub struct RemoteClientSummary {
     pub client_uuid: String,
     pub name: String,
     pub paired_at: i64,
+    /// The client's last Sync request since contacts were first recorded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_contact: Option<SyncContactSummary>,
+}
+
+/// A client's last Sync request, as Settings shows it.
+#[derive(Debug, Serialize)]
+pub struct SyncContactSummary {
+    /// Unix seconds.
+    pub at: i64,
+    /// The plugin version it reported; `None` when it sent none: a Sync
+    /// plugin older than the version header, or another PSF Guard.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    pub capabilities: Vec<String>,
+    /// The client writes new projects into its own N.I.N.A. profile.
+    /// Otherwise the server places them before sending.
+    pub places_new_projects: bool,
+}
+
+impl From<crate::server::rig_plugins::SyncContact> for SyncContactSummary {
+    fn from(contact: crate::server::rig_plugins::SyncContact) -> Self {
+        Self {
+            places_new_projects: contact.places_new_projects(),
+            at: contact.at,
+            version: contact.version,
+            capabilities: contact.capabilities,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -140,6 +140,42 @@ describe('Plan editor', () => {
     expect(screen.getByLabelText('RedCat 61 template for H-alpha')).toHaveValue('lib:11111111-1111-4111-8111-111111111111');
   });
 
+  it("warns beside a template whose filter is not on the rig's filter list", async () => {
+    fixture();
+    const typed = { reported: false, filters: ['L', 'R', 'G', 'B'].map(name => ({ name, bandpass: name })) };
+    server.use(http.get('/api/director/v1/rigs/profiles', () => HttpResponse.json(ok([redcat, { ...c925, filter_list: typed }]))));
+    mount();
+    await screen.findByText(/3 templates/);
+    fireEvent.click(screen.getByRole('button', { name: 'Add objective' }));
+    fireEvent.change(screen.getByLabelText('Objective bandpass'), { target: { value: 'h_alpha' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: /C925 data/ }));
+    await screen.findByLabelText('C925 data template for H-alpha');
+    expect(screen.getByText("Filter Ha isn't on this rig's filter list. Choose another template, or add the filter in Rig setup.")).toBeVisible();
+    // A rig with no list is not checked.
+    fireEvent.click(screen.getByRole('checkbox', { name: /RedCat 61/ }));
+    await screen.findByLabelText('RedCat 61 template for H-alpha');
+    expect(screen.getAllByText(/isn't on this rig's filter list/)).toHaveLength(1);
+  });
+
+  it("accepts a reported wheel's one filter of the template's bandpass, as Director does", async () => {
+    fixture();
+    const wheel = (names: Array<[string, string]>) => ({ reported: true, filters: names.map(([name, bandpass]) => ({ name, bandpass })) });
+    server.use(http.get('/api/director/v1/rigs/profiles', () => HttpResponse.json(ok([
+      { ...redcat, filter_list: wheel([['H-alpha 3nm', 'h_alpha'], ['L', 'luminance']]) },
+      { ...c925, filter_list: wheel([['L', 'luminance'], ['R', 'red']]) },
+    ]))));
+    mount();
+    await screen.findByText(/3 templates/);
+    fireEvent.click(screen.getByRole('button', { name: 'Add objective' }));
+    fireEvent.change(screen.getByLabelText('Objective bandpass'), { target: { value: 'h_alpha' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: /RedCat 61/ }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /C925 data/ }));
+    await screen.findByLabelText('C925 data template for H-alpha');
+    // RedCat's wheel serves Ha through its one H-alpha filter; C925's has none.
+    expect(screen.getAllByText("Template filter Ha matches no filter, or more than one, on the wheel the Director plugin reported. Choose another template, or rename the wheel's filter in N.I.N.A. to Ha.")).toHaveLength(1);
+    expect(screen.queryByText(/isn't on this rig's filter list/)).not.toBeInTheDocument();
+  });
+
   it("offers a library template the rig's database already holds once, as the database's, and binds the plan to it", async () => {
     // Copied in from RedCat's own Ha 300: the same settings under a new id.
     const copied = { ...libraryHa, id: '22222222-2222-4222-8222-222222222222', name: 'Ha 300 copy', gain: 100, offset: 30, bin: 1, default_exposure_seconds: 300 };

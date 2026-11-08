@@ -399,6 +399,13 @@ plugin last reported with its star-detection settings, else the bundle's only
 other profile, and is sealed again. When neither is known, the rows go out
 unchanged and the server logs a warning.
 
+The server code for these rules is in `src/server/rig_plugins.rs`. The same
+module records each paired client's last authenticated request, with the
+version and capabilities it sent, in `sync-plugin-contacts.json` below the
+cache folder. Settings shows that record beside each paired client and points
+out a client whose plugin cannot place new projects. Losing the file loses
+only this record.
+
 ### Deleted projects
 
 `project_tombstones_v1` advertises that a peer reads the projects a catalog

@@ -9,7 +9,7 @@ use super::*;
 use crate::{
     commands::sync::{sync_remote, RemoteDirection, RemoteSyncOptions},
     db_registry::PeerEntry,
-    server::peers::registered_peers,
+    server::{peers::registered_peers, rig_plugins},
     ts_schema::new_guid,
 };
 use psf_guard_director_core::{bandpass::frames_for_hours, framing::Panel};
@@ -746,6 +746,9 @@ async fn execute_guarded(
             if profile.as_ref().is_none_or(|p| p.configuration.is_none()) {
                 warnings.push("The N.I.N.A. plugin has not reported this rig's camera yet. Target Scheduler can still run this plan.".into());
             }
+            if let Some(missing) = filters_off_the_rig(profile.as_ref(), contributions) {
+                warnings.push(missing);
+            }
             // A rig on another PSF Guard: its rows land here first, then go
             // to the peer by Sync once Apply has committed them.
             let mut push = if guard.is_none() {
@@ -851,8 +854,8 @@ async fn execute_guarded(
                         now,
                         scheduling: &scheduling,
                         collaboration: assignment,
-                        sync_plugin_paired: sync_plugin_paired(&catalog.context),
-                        reported_profile: reported_profile(&catalog.context.id),
+                        sync_plugin_paired: rig_plugins::sync_plugin_paired(&catalog.context),
+                        reported_profile: rig_plugins::reported_profile(&catalog.context.id),
                     },
                 );
                 match outcome {
@@ -905,7 +908,7 @@ async fn execute_guarded(
                 continue;
             };
             if outcome.record.profile_id == SYNC_PLACED_PROFILE {
-                warnings.push(placement_note(sync_plugin_paired(&catalog.context)));
+                warnings.push(placement_note(rig_plugins::sync_plugin_paired(&catalog.context)));
             }
             reports.push(RigReport {
                 rig,
@@ -2984,11 +2987,50 @@ fn required_frames(objective: &Objective, contribution: &Contribution) -> Option
     }
 }
 
-/// Whether a Sync plugin can reach this database, and so write its plans into
-/// the N.I.N.A. profile it runs in.
-fn sync_plugin_paired(context: &DatabaseContext) -> bool {
-    context.remote_image_upload.as_ref().is_some_and(|config| {
-        config.sync_enabled && (!config.clients.is_empty() || !config.token_sha256.is_empty())
+/// A warning for templates whose filter the rig cannot shoot: one its
+/// Director plugin's wheel does not serve, or one not on the list typed in
+/// Rig setup. `None` when every filter is served, or the rig has no list.
+fn filters_off_the_rig(
+    profile: Option<&psf_guard_director_meta::profile::RigProfile>,
+    contributions: &[&Contribution],
+) -> Option<String> {
+    let known = profile?.known_filters()?;
+    let mut missing: Vec<&str> = Vec::new();
+    for contribution in contributions {
+        let filter = contribution.template.filter_name.trim();
+        if !known.serves(filter) && !missing.iter().any(|seen| seen.eq_ignore_ascii_case(filter)) {
+            missing.push(filter);
+        }
+    }
+    if missing.is_empty() {
+        return None;
+    }
+    let names: Vec<&str> = known
+        .filters
+        .iter()
+        .map(|filter| filter.name.as_str())
+        .collect();
+    Some(if known.reported {
+        let (subject, verb) = match missing.as_slice() {
+            [one] => (format!("Template filter {one}"), "matches"),
+            many => (
+                format!("Template filters {} each", many.join(", ")),
+                "match",
+            ),
+        };
+        format!(
+            "{subject} {verb} no filter, or more than one, on the wheel the Director plugin reported ({}). Choose another template, or rename the wheel's filter in N.I.N.A.",
+            names.join(", ")
+        )
+    } else {
+        let (subject, verb) = match missing.as_slice() {
+            [one] => (format!("Filter {one}"), "is"),
+            many => (format!("Filters {}", many.join(", ")), "are"),
+        };
+        format!(
+            "{subject} {verb} not on this rig's filter list ({}). Choose another template, or add the filter in Rig setup.",
+            names.join(", ")
+        )
     })
 }
 
@@ -3026,14 +3068,6 @@ fn placement_note(sync_plugin_paired: bool) -> String {
         "No N.I.N.A. profile yet. Pair the PSF Guard Sync plugin, and it adds this project to the profile it runs in."
             .into()
     }
-}
-
-/// The N.I.N.A. profile a plugin paired with `catalog_slug` last reported,
-/// from its star-detection settings.
-pub(super) fn reported_profile(catalog_slug: &str) -> Option<String> {
-    crate::star_detection::current()
-        .plugin_profile(catalog_slug)
-        .map(str::to_owned)
 }
 
 /// The profile the database's plugin reports, when the database uses it.
