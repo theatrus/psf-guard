@@ -102,6 +102,31 @@ pub const FRAME_DERIVATIVES_CAPABILITY: &str = "frame_derivatives_v1";
 /// when nothing was captured for them there.
 pub const PROJECT_TOMBSTONES_CAPABILITY: &str = "project_tombstones_v1";
 
+/// The Sync plugin's release version, sent with every request. The server
+/// logs it; behavior follows [`PLUGIN_CAPABILITIES_HEADER`], not the
+/// version, since a local build reports `0.1.0.0`.
+pub const PLUGIN_VERSION_HEADER: &str = "x-psf-guard-plugin-version";
+/// What the Sync plugin supports, comma-separated, sent with every request.
+/// A request without it comes from a plugin older than the header.
+pub const PLUGIN_CAPABILITIES_HEADER: &str = "x-psf-guard-plugin-capabilities";
+/// A plugin capability: the plugin writes rows on PSF Guard's waiting
+/// profile ([`psf_guard_director_meta::SYNC_PLACED_PROFILE`]) into the
+/// N.I.N.A. profile it runs in. An older plugin copies the ID as sent, and
+/// N.I.N.A. then hides the rows, so the server gives them a real profile
+/// first (see [`place_waiting_rows`]).
+pub const PLUGIN_WAITING_PROFILE_CAPABILITY: &str = "waiting_profile_v1";
+
+/// Whether the requesting plugin lists `capability` in
+/// [`PLUGIN_CAPABILITIES_HEADER`].
+pub(crate) fn plugin_supports(headers: &HeaderMap, capability: &str) -> bool {
+    headers
+        .get_all(PLUGIN_CAPABILITIES_HEADER)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .any(|listed| listed.trim().eq_ignore_ascii_case(capability))
+}
+
 /// Which optional PSF Guard tables a bundle may carry: the ones the
 /// receiver can read.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -505,6 +530,11 @@ pub async fn capabilities(
         "star_detection_profile_v1",
         FRAME_DERIVATIVES_CAPABILITY,
         PROJECT_TOMBSTONES_CAPABILITY,
+        // Planning and merge exports may carry rows on PSF Guard's waiting
+        // profile. A plugin that lists the same capability in
+        // `X-PSF-Guard-Plugin-Capabilities` gets them as they are; any other
+        // gets them under a real profile.
+        PLUGIN_WAITING_PROFILE_CAPABILITY,
     ];
     if catalog
         .remote_image_upload
@@ -1003,6 +1033,22 @@ pub async fn create_export(
         frame_derivatives: request.include_frame_derivatives,
         project_tombstones: request.include_project_tombstones,
     };
+    // A plugin that cannot place waiting rows gets them under a real profile:
+    // the one it reported, else the catalog's only one.
+    let place_for_plugin = operation != SyncOperation::PushGrades
+        && !plugin_supports(&headers, PLUGIN_WAITING_PROFILE_CAPABILITY);
+    let reported = place_for_plugin
+        .then(|| {
+            crate::star_detection::current()
+                .plugin_profile(&catalog.id)
+                .map(str::to_owned)
+        })
+        .flatten();
+    let plugin_version = headers
+        .get(PLUGIN_VERSION_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("not sent")
+        .to_owned();
     let audit = |outcome, detail: Option<&str>, summary| {
         state.remote_audit.record(
             &catalog.id,
@@ -1017,14 +1063,29 @@ pub async fn create_export(
         );
     };
     let bundle = match tokio::task::spawn_blocking(move || {
-        export_bundle(
+        let mut bundle = export_bundle(
             &database_path,
             &catalog_id,
             operation,
             reviewed_only,
             include_thumbnails,
             optional,
-        )
+        )?;
+        if place_for_plugin {
+            match place_waiting_rows(&mut bundle, reported.as_deref())? {
+                Placement::Placed(profile) => tracing::info!(
+                    catalog = %catalog_id, %profile, %plugin_version,
+                    "Gave waiting rows a N.I.N.A. profile for a Sync plugin that cannot place them"
+                ),
+                Placement::Unknown => tracing::warn!(
+                    catalog = %catalog_id, %plugin_version,
+                    "Rows wait for a N.I.N.A. profile, and this Sync plugin cannot place them; \
+                     N.I.N.A. hides them until the plugin is updated"
+                ),
+                Placement::NothingWaiting => {}
+            }
+        }
+        anyhow::Ok(bundle)
     })
     .await
     .map_err(|error| AppError::InternalError(format!("export task failed: {error}")))?
@@ -1460,6 +1521,94 @@ fn wire_to_sqlite(value: &WireValue) -> anyhow::Result<Value> {
             )?,
         ),
     })
+}
+
+/// What [`place_waiting_rows`] did.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Placement {
+    NothingWaiting,
+    /// The waiting rows now carry this profile.
+    Placed(String),
+    /// No profile is known, so the rows stay on the waiting profile.
+    Unknown,
+}
+
+/// Give rows on PSF Guard's waiting profile a real N.I.N.A. profile, for a
+/// plugin that copies `profileId` as sent: `reported`, the profile the
+/// plugin last reported, else the bundle's only other profile. Keeps the
+/// bundle's spelling of that profile, and seals the bundle again.
+pub(crate) fn place_waiting_rows(
+    bundle: &mut CatalogBundle,
+    reported: Option<&str>,
+) -> anyhow::Result<Placement> {
+    use psf_guard_director_meta::SYNC_PLACED_PROFILE;
+    let profile_column = |table: &BundleTable| {
+        table
+            .columns
+            .iter()
+            .position(|column| column.name.eq_ignore_ascii_case("profileId"))
+    };
+    let waiting = |value: &WireValue| {
+        value
+            .value
+            .as_deref()
+            .is_some_and(|value| value.trim().eq_ignore_ascii_case(SYNC_PLACED_PROFILE))
+    };
+    let mut any_waiting = false;
+    let mut others: BTreeMap<String, String> = BTreeMap::new();
+    for table in bundle.tables.values() {
+        let Some(column) = profile_column(table) else {
+            continue;
+        };
+        for row in &table.rows {
+            let value = &row.values[column];
+            if waiting(value) {
+                any_waiting = true;
+            } else if let Some(profile) = value
+                .value
+                .as_deref()
+                .map(str::trim)
+                .filter(|profile| !profile.is_empty())
+            {
+                others
+                    .entry(profile.to_lowercase())
+                    .or_insert_with(|| profile.to_owned());
+            }
+        }
+    }
+    if !any_waiting {
+        return Ok(Placement::NothingWaiting);
+    }
+    let profile = match reported {
+        Some(reported) => Some(
+            others
+                .get(&reported.to_lowercase())
+                .cloned()
+                .unwrap_or_else(|| reported.to_owned()),
+        ),
+        None if others.len() == 1 => others.into_values().next(),
+        None => None,
+    };
+    let Some(profile) = profile else {
+        return Ok(Placement::Unknown);
+    };
+    for table in bundle.tables.values_mut() {
+        let Some(column) = profile_column(table) else {
+            continue;
+        };
+        for row in &mut table.rows {
+            if waiting(&row.values[column]) {
+                row.values[column] = WireValue {
+                    kind: WireValueKind::Text,
+                    value: Some(profile.clone()),
+                };
+            }
+        }
+    }
+    bundle.payload_sha256 = None;
+    let payload = serde_json::to_vec(&*bundle)?;
+    bundle.payload_sha256 = Some(digest_hex(&payload));
+    Ok(Placement::Placed(profile))
 }
 
 pub(crate) fn export_bundle(
@@ -2294,6 +2443,125 @@ mod tests {
         drop(staged_connection);
         let _ = std::fs::remove_file(&staged);
         let _ = std::fs::remove_file(&path);
+    }
+
+    fn waiting_bundle(profiles: &[&str]) -> CatalogBundle {
+        let column = |name: &str| BundleColumn {
+            name: name.into(),
+            declared_type: "TEXT".into(),
+            not_null: false,
+            primary_key: false,
+        };
+        let text = |value: &str| WireValue {
+            kind: WireValueKind::Text,
+            value: Some(value.into()),
+        };
+        let table = BundleTable {
+            columns: vec![column("Id"), column("profileId")],
+            rows: profiles
+                .iter()
+                .enumerate()
+                .map(|(id, profile)| BundleRow {
+                    values: vec![text(&id.to_string()), text(profile)],
+                })
+                .collect(),
+        };
+        CatalogBundle {
+            protocol_version: PROTOCOL_VERSION,
+            bundle_id: "bundle".into(),
+            created_at_utc: "2026-11-07T00:00:00Z".into(),
+            operation: SyncOperation::PushPlanning,
+            source: CatalogIdentity {
+                id: "rig".into(),
+                product: "PSF Guard".into(),
+                product_version: "test".into(),
+                schema_version: 23,
+            },
+            tables: [
+                ("project".to_string(), table.clone()),
+                ("exposuretemplate".to_string(), table),
+            ]
+            .into(),
+            payload_sha256: Some("stale".into()),
+        }
+    }
+
+    fn profiles_in(bundle: &CatalogBundle) -> Vec<String> {
+        bundle.tables["project"]
+            .rows
+            .iter()
+            .map(|row| row.values[1].value.clone().unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn waiting_rows_get_the_reported_profile_in_the_bundles_spelling() {
+        const WAITING: &str = psf_guard_director_meta::SYNC_PLACED_PROFILE;
+        let reducer = "9F1C0D2E-0000-4000-8000-00000000000A";
+        let mut bundle = waiting_bundle(&[reducer, "profile-b", WAITING]);
+
+        let placed = place_waiting_rows(&mut bundle, Some(&reducer.to_lowercase())).unwrap();
+
+        assert_eq!(placed, Placement::Placed(reducer.into()));
+        assert_eq!(profiles_in(&bundle), [reducer, "profile-b", reducer]);
+        assert!(bundle.tables["exposuretemplate"]
+            .rows
+            .iter()
+            .all(|row| row.values[1].value.as_deref() != Some(WAITING)));
+        // Sealed again over the changed rows.
+        let mut unsealed = bundle.clone();
+        unsealed.payload_sha256 = None;
+        assert_eq!(
+            bundle.payload_sha256,
+            Some(digest_hex(&serde_json::to_vec(&unsealed).unwrap()))
+        );
+    }
+
+    #[test]
+    fn waiting_rows_fall_back_to_the_only_profile_and_stay_when_none_is_known() {
+        const WAITING: &str = psf_guard_director_meta::SYNC_PLACED_PROFILE;
+        // A reported profile the bundle does not use is still the plugin's.
+        let mut blank = waiting_bundle(&[WAITING]);
+        assert_eq!(
+            place_waiting_rows(&mut blank, Some("profile-new")).unwrap(),
+            Placement::Placed("profile-new".into())
+        );
+
+        let mut single = waiting_bundle(&["profile-a", "PROFILE-A", WAITING]);
+        assert_eq!(
+            place_waiting_rows(&mut single, None).unwrap(),
+            Placement::Placed("profile-a".into())
+        );
+
+        let mut two = waiting_bundle(&["profile-a", "profile-b", WAITING]);
+        assert_eq!(
+            place_waiting_rows(&mut two, None).unwrap(),
+            Placement::Unknown
+        );
+        assert_eq!(profiles_in(&two)[2], WAITING);
+        assert_eq!(two.payload_sha256.as_deref(), Some("stale"));
+
+        let mut none = waiting_bundle(&["profile-a"]);
+        assert_eq!(
+            place_waiting_rows(&mut none, Some("profile-b")).unwrap(),
+            Placement::NothingWaiting
+        );
+        assert_eq!(profiles_in(&none), ["profile-a"]);
+    }
+
+    #[test]
+    fn plugin_capabilities_are_read_from_a_comma_separated_header() {
+        let mut headers = HeaderMap::new();
+        assert!(!plugin_supports(
+            &headers,
+            PLUGIN_WAITING_PROFILE_CAPABILITY
+        ));
+        headers.insert(
+            PLUGIN_CAPABILITIES_HEADER,
+            "something_v2, Waiting_Profile_V1".parse().unwrap(),
+        );
+        assert!(plugin_supports(&headers, PLUGIN_WAITING_PROFILE_CAPABILITY));
+        assert!(!plugin_supports(&headers, "waiting_profile_v2"));
     }
 
     #[test]

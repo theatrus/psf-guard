@@ -296,3 +296,122 @@ async fn the_profile_the_plugin_reports_beats_the_larger_profile() {
     assert_eq!(unknown.snapshot.profile_id, "profile-b");
     assert_eq!(unreported.snapshot.profile_id, "profile-b");
 }
+
+/// A rig database opened for sync with one token: a project N.I.N.A. made
+/// under `profile-a`, and a project and template left waiting by activation.
+/// Returns the planning export's profile IDs, by table.
+async fn exported_profiles(
+    plugin_capabilities: Option<&str>,
+) -> std::collections::BTreeMap<String, Vec<String>> {
+    use crate::db_registry::DbEntry;
+    use crate::server::remote_sync;
+    use axum::routing::post;
+    use tower::ServiceExt;
+    const TOKEN: &str = "rig-sync-key-long-enough-to-pass";
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rig.sqlite");
+    let db = crate::ts_schema::create_fresh_db(&path).unwrap();
+    for profile in ["profile-a", SYNC_PLACED_PROFILE] {
+        db.execute(
+            "INSERT INTO project (profileId, name, description, state, priority, isMosaic, flatsHandling, guid,
+                minimumtime, minimumaltitude, maximumAltitude, usecustomhorizon, horizonoffset, meridianwindow)
+             VALUES (?1, ?1, '', 1, 1, 0, 0, ?2, 30, 0, 0, 0, 0, 0)",
+            rusqlite::params![profile, Uuid::new_v4().to_string()],
+        )
+        .unwrap();
+    }
+    db.execute(
+        "INSERT INTO exposuretemplate (profileId, name, filtername, gain, offset, bin, readoutmode, twilightlevel, moonavoidanceenabled,
+            moonavoidanceseparation, moonavoidancewidth, maximumhumidity, defaultexposure, moonrelaxscale, moonrelaxmaxaltitude,
+            moonrelaxminaltitude, moondownenabled, ditherevery, minutesOffset, guid)
+         VALUES (?1, 'Ha 300', 'Ha', 100, 30, 1, -1, 0, 0, 60, 7, 0, 300, 0, 5, -15, 0, -1, 0, ?2)",
+        rusqlite::params![SYNC_PLACED_PROFILE, Uuid::new_v4().to_string()],
+    )
+    .unwrap();
+    let mut access = RemoteImageUploadConfig::default();
+    access.set_token(TOKEN).unwrap();
+    access.sync_enabled = true;
+    let entry = DbEntry {
+        ts_sync: None,
+        id: "rig".into(),
+        name: "Rig".into(),
+        db_path: path.to_string_lossy().into_owned(),
+        image_dirs: vec![dir.path().to_string_lossy().into_owned()],
+        reject_archive: None,
+        remote_image_upload: Some(access),
+        export_dir: None,
+        process_dir: None,
+        autoimport: None,
+        scan_rules: None,
+        analyze_new_frames: false,
+        pair_calibrated_copies: true,
+        scan_calibrated_copies: false,
+        processing_overrides: None,
+    };
+    let state = Arc::new(
+        AppState::from_databases(
+            vec![entry],
+            dir.path().join("cache").to_string_lossy().into_owned(),
+            PregenerationConfig::default(),
+        )
+        .unwrap(),
+    );
+    let router = axum::Router::new()
+        .route("/api/sync/v1/exports", post(remote_sync::create_export))
+        .with_state(state);
+    let mut request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/api/sync/v1/exports")
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .header(remote_sync::PLUGIN_VERSION_HEADER, "0.4.0.99");
+    if let Some(capabilities) = plugin_capabilities {
+        request = request.header(remote_sync::PLUGIN_CAPABILITIES_HEADER, capabilities);
+    }
+    let body = json!({"protocol_version": 1, "catalog_id": "rig", "operation": "push_planning"});
+    let response = router
+        .oneshot(
+            request
+                .body(axum::body::Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let export: Value = serde_json::from_slice(&bytes).unwrap();
+    let tables = export["data"]["bundle"]["tables"].as_object().unwrap();
+    tables
+        .iter()
+        .filter_map(|(name, table)| {
+            let column = table["columns"]
+                .as_array()?
+                .iter()
+                .position(|column| column["name"] == "profileId")?;
+            let profiles = table["rows"]
+                .as_array()?
+                .iter()
+                .map(|row| {
+                    row["values"][column]["value"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_owned()
+                })
+                .collect();
+            Some((name.clone(), profiles))
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn an_older_sync_plugin_gets_waiting_rows_under_the_rigs_profile() {
+    let old = exported_profiles(None).await;
+    let current = exported_profiles(Some("waiting_profile_v1")).await;
+
+    assert_eq!(old["project"], ["profile-a", "profile-a"]);
+    assert_eq!(old["exposuretemplate"], ["profile-a"]);
+    assert_eq!(current["project"], ["profile-a", SYNC_PLACED_PROFILE]);
+    assert_eq!(current["exposuretemplate"], [SYNC_PLACED_PROFILE]);
+}

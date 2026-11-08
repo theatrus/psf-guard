@@ -1863,9 +1863,13 @@ the plugin pulls: that pull decides where a new project goes, and switching
 profiles later does not move it. The preview shows a note for each rig whose
 project is waiting.
 
-Rigs that use the plugin need a release that recognizes PSF Guard's profile. An
-older plugin copies the rows under that ID, and N.I.N.A. does not show them.
-Updating the plugin moves those rows on its next pull.
+Older Sync plugins still work. A plugin that does not support PSF Guard's
+profile gets a new project under the profile it last reported with its
+star-detection settings, else under the database's only profile. It does not
+reuse a matching template, so Target Scheduler gets a copy. When PSF Guard knows
+neither profile, the project stays under PSF Guard's profile, N.I.N.A. hides it,
+and updating the plugin moves it on the next pull. The plugin and the server
+tell each other what they support; see [data transfer](design/data-transfer.md#plugin-version-and-capabilities).
 
 ### Activate through a connected TS file
 
