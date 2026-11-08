@@ -254,9 +254,9 @@ impl MetaStore {
         // The scope revision and its marks are read by separate statements:
         // keep them on one snapshot, or a save that commits between them
         // shows marks newer than their scope, which reads as corruption.
-        let tx = self.connection.unchecked_transaction()?;
-        let marks = read_marks(&tx, scope, scope_id, from, to)?;
-        tx.commit()?;
+        let snapshot = self.snapshot()?;
+        let marks = read_marks(&snapshot, scope, scope_id, from, to)?;
+        snapshot.end()?;
         Ok(marks)
     }
 

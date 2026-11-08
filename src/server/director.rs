@@ -396,7 +396,18 @@ impl Service {
                 Some(reader) => reader,
                 None => MetaStore::open_reader(&self.path).map_err(Error::from)?,
             };
-            let result = operation(&reader);
+            // One snapshot for the whole operation, so reads that belong
+            // together never straddle a write that commits between them.
+            let result = match reader.snapshot() {
+                Ok(snapshot) => {
+                    let result = operation(&reader);
+                    match snapshot.end() {
+                        Err(error) if result.is_ok() => Err(Error::from(error).into()),
+                        _ => result,
+                    }
+                }
+                Err(error) => Err(Error::from(error).into()),
+            };
             if let Ok(mut idle) = self.readers.lock() {
                 idle.push(reader);
             }

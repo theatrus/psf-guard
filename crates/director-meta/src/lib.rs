@@ -119,6 +119,56 @@ pub struct ProjectLink {
 
 /// Local blocking storage. Hosts must not hold this across network operations.
 /// Database-backed rig bindings are explicit; names never establish identity.
+/// One snapshot of the store for a run of reads: every statement made
+/// through it sees the same committed state, whatever commits meanwhile.
+/// Without one, each statement on a reader sees its own moment, and a read
+/// that compares two of them can catch a write half done.
+///
+/// A read transaction takes no write lock: in WAL mode writers carry on
+/// beside it. Inside a transaction already open on the connection the
+/// snapshot is that transaction's, so snapshots nest. Dropping it without
+/// [`Snapshot::end`], after an error or a panic, ends it too, so a pooled
+/// reader never keeps an old snapshot.
+pub struct Snapshot<'a> {
+    connection: &'a Connection,
+    /// This snapshot began the read transaction, and so ends it.
+    began: bool,
+}
+
+impl<'a> Snapshot<'a> {
+    pub(crate) fn begin(connection: &'a Connection) -> Result<Self, Error> {
+        let began = connection.is_autocommit();
+        if began {
+            connection.execute_batch("BEGIN DEFERRED")?;
+        }
+        Ok(Self { connection, began })
+    }
+
+    /// End the read transaction this snapshot began.
+    pub fn end(mut self) -> Result<(), Error> {
+        if std::mem::take(&mut self.began) {
+            self.connection.execute_batch("COMMIT")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::ops::Deref for Snapshot<'_> {
+    type Target = Connection;
+
+    fn deref(&self) -> &Connection {
+        self.connection
+    }
+}
+
+impl Drop for Snapshot<'_> {
+    fn drop(&mut self) {
+        if self.began {
+            let _ = self.connection.execute_batch("ROLLBACK");
+        }
+    }
+}
+
 pub struct MetaStore {
     connection: Connection,
     instance_id: Uuid,
@@ -128,6 +178,13 @@ pub struct MetaStore {
 }
 
 impl MetaStore {
+    /// One snapshot of the store for the reads made until it ends; see
+    /// [`Snapshot`]. A host reading on a pooled reader takes one around
+    /// each operation.
+    pub fn snapshot(&self) -> Result<Snapshot<'_>, Error> {
+        Snapshot::begin(&self.connection)
+    }
+
     pub fn instance_id(&self) -> Uuid {
         self.instance_id
     }

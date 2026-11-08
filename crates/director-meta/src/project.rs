@@ -43,9 +43,9 @@ impl MetaStore {
 
     pub fn project_intent(&self, id: Uuid) -> Result<Option<Project>, Error> {
         // Keep payload, reference inventory and immutable setup reads on one snapshot.
-        let tx = self.connection.unchecked_transaction()?;
-        let result = read_project(&tx, id)?;
-        tx.commit()?;
+        let snapshot = self.snapshot()?;
+        let result = read_project(&snapshot, id)?;
+        snapshot.end()?;
         Ok(result)
     }
 
