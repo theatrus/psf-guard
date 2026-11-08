@@ -111,7 +111,9 @@ describe('Rig profile card', () => {
     fixture();
     let listed = 0;
     let lookups = 0;
+    let summaries = 0;
     server.use(
+      http.get('/api/director/v1/rigs/profiles', () => { summaries += 1; return HttpResponse.json(ok([])); }),
       http.get('/api/director/v1/plans', () => { listed += 1; return HttpResponse.json(ok({ rows: [], warnings: [] })); }),
       http.get('/api/director/v1/catalogs/catalog/rig/profile', () => {
         lookups += 1;
@@ -125,6 +127,8 @@ describe('Rig profile card', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(listed).toBe(1);
     expect(lookups).toBe(2);
+    // The rig list reads the summaries again, so its header shows the new rig.
+    await waitFor(() => expect(summaries).toBeGreaterThan(1));
   });
 
   it('uses vertical keyboard navigation on the setup rail and horizontal navigation on narrow screens', async () => {
