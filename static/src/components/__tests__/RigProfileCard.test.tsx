@@ -248,7 +248,7 @@ describe('Rig profile card', () => {
   it("saves a typed filter list, offers the database's filters, and clears an empty list", async () => {
     const { saves } = fixture(); mount();
     const names = await screen.findByLabelText('Filter names');
-    expect(screen.getByText(/Planning warns when a template uses a filter that isn't on this list/)).toBeVisible();
+    expect(screen.getByText(/Type one name per line, as N\.I\.N\.A\. spells it\. Planning warns when a template uses a filter that isn't on this list\./)).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: "Use this database's filters (Ha, OIII)" }));
     expect(names).toHaveValue('Ha\nOIII');
     // Once the field matches, the offer goes away.

@@ -3010,18 +3010,25 @@ fn filters_off_the_rig(
         .iter()
         .map(|filter| filter.name.as_str())
         .collect();
-    let subject = match missing.as_slice() {
-        [one] => format!("Filter {one}"),
-        many => format!("Filters {}", many.join(", ")),
-    };
     Some(if known.reported {
+        let (subject, verb) = match missing.as_slice() {
+            [one] => (format!("Template filter {one}"), "matches"),
+            many => (
+                format!("Template filters {} each", many.join(", ")),
+                "match",
+            ),
+        };
         format!(
-            "{subject}: no single filter on the wheel the Director plugin reported ({}) matches. Choose another template, or rename the filter in N.I.N.A.",
+            "{subject} {verb} no filter, or more than one, on the wheel the Director plugin reported ({}). Choose another template, or rename the wheel's filter in N.I.N.A.",
             names.join(", ")
         )
     } else {
+        let (subject, verb) = match missing.as_slice() {
+            [one] => (format!("Filter {one}"), "is"),
+            many => (format!("Filters {}", many.join(", ")), "are"),
+        };
         format!(
-            "{subject}: not on this rig's filter list ({}). Choose another template, or add the filter in Rig setup.",
+            "{subject} {verb} not on this rig's filter list ({}). Choose another template, or add the filter in Rig setup.",
             names.join(", ")
         )
     })

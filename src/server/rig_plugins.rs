@@ -169,7 +169,7 @@ pub struct SyncContacts {
     /// `None` keeps the contacts in memory only.
     path: Option<PathBuf>,
     state: Mutex<ContactState>,
-    /// Serializes file writes, and holds the generation last written so an
+    /// Serializes file writes, and records the generation last written so an
     /// older snapshot never replaces a newer one.
     written: Arc<Mutex<u64>>,
 }
@@ -213,7 +213,7 @@ impl SyncContacts {
     }
 
     /// Record an authenticated request from `holder` to `catalog_id`.
-    /// `current(catalog, holder)` says whether a recorded credential still
+    /// `current(catalog, holder)` returns whether a recorded credential still
     /// exists; the others are dropped when the file is next written. The
     /// file is written off the request path.
     pub(crate) fn note(

@@ -58,16 +58,16 @@ control. The selected page includes the database name.
   the Sync plugin, with what the database accepts from it, and the Director
   plugin. Each database is one rig. Without planning, **Rig setup** shows only
   the Sync plugin.
-  - Each paired Sync client shows when it last connected and which plugin
-    version it reported. A note identifies a client whose plugin is too old
+  - The **Paired clients** list shows when each Sync client last connected
+    and which plugin version it reported. A note identifies a client whose plugin is too old
     to add new projects to its N.I.N.A. profile itself. Update that plugin
     in N.I.N.A.: until then, PSF Guard sends new projects under the profile
     the plugin last reported, and N.I.N.A. hides them when PSF Guard knows
     no profile.
-  - **Rig setup → Optics → Filters** stores the rig's filter names for a rig
-    with no Director plugin. Type one name per line, as N.I.N.A. spells it,
-    or click **Use this database's filters** to copy the names its
-    templates and frames use. When a plan uses a template whose filter is
+  - For a rig with no Director plugin, list its filters under
+    **Rig setup → Optics → Filters**. Type one name per line, as N.I.N.A.
+    spells it, or click **Use this database's filters** to copy the names
+    its templates and frames use. When a plan uses a template whose filter is
     not on the list, the plan editor and the activation preview warn you.
     Leave the field empty to skip the check.
   - A filter wheel the Director plugin reports replaces the typed list.

@@ -334,7 +334,7 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
               </select>;
             })()}
               {contribution && !hasFilter(rig.filter_list, contribution.template.filter_name, objective.bandpass_id) && <small className="plan-filter-warning" role="note">{rig.filter_list?.reported
-                ? `No single filter on the wheel the Director plugin reported matches ${contribution.template.filter_name}. Choose another template, or rename the filter in N.I.N.A.`
+                ? `Template filter ${contribution.template.filter_name} matches no filter, or more than one, on the wheel the Director plugin reported. Choose another template, or rename the wheel's filter in N.I.N.A. to ${contribution.template.filter_name}.`
                 : `Filter ${contribution.template.filter_name} isn't on this rig's filter list. Choose another template, or add the filter in Rig setup.`}</small>}
             </td>
             <td>{contribution && <span className="plan-goal"><NumberInput aria-label={`${rig.catalog_name} exposure for ${label}`} min={1} step="any" value={contribution.exposure_seconds} onChange={event => setContribution(rig, objective, current => current ? { ...current, exposure_seconds: number(event.target.value, current.exposure_seconds) } : current)} /><small>s</small></span>}</td>

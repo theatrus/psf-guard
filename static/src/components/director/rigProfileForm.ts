@@ -64,7 +64,7 @@ export function hasFilter(list: DirectorRigFilters | null | undefined, filter: s
   return (exact.length > 0 ? exact : list.filters.filter(entry => entry.bandpass === bandpass)).length === 1;
 }
 
-/** Bytes a name takes in UTF-8, as the server measures it. */
+/** A name's length in UTF-8 bytes, as the server measures it. */
 const utf8Length = (name: string) => new TextEncoder().encode(name).length;
 // eslint-disable-next-line no-control-regex
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;

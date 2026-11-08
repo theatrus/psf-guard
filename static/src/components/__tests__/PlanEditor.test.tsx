@@ -172,7 +172,7 @@ describe('Plan editor', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: /C925 data/ }));
     await screen.findByLabelText('C925 data template for H-alpha');
     // RedCat's wheel serves Ha through its one H-alpha filter; C925's has none.
-    expect(screen.getAllByText(/No single filter on the wheel the Director plugin reported matches Ha/)).toHaveLength(1);
+    expect(screen.getAllByText("Template filter Ha matches no filter, or more than one, on the wheel the Director plugin reported. Choose another template, or rename the wheel's filter in N.I.N.A. to Ha.")).toHaveLength(1);
     expect(screen.queryByText(/isn't on this rig's filter list/)).not.toBeInTheDocument();
   });
 

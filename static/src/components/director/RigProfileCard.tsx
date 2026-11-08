@@ -267,9 +267,9 @@ export default function RigProfileCard({ slug, syncPlugin, initialTab }: {
       <fieldset disabled={disabled}>
         <legend>Filters</legend>
         <p className="director-muted">{data.profile.configuration
-          ? `The Director plugin reported this rig's filters: ${data.filter_list?.filters.map(filter => filter.name).join(', ') || 'none'}. Planning checks templates against those, not the names below.`
-          : "Planning warns when a template uses a filter that isn't on this list. Leave it empty to skip the check."}</p>
-        <label className="rig-profile-field rig-profile-filters" htmlFor={`${slug}-filters`}><span>Filter names, one per line, as N.I.N.A. spells them</span>
+          ? `The Director plugin reported this rig's filters: ${data.filter_list?.filters.map(filter => filter.name).join(', ') || 'none'}. Planning checks templates against the reported filters, not this list.`
+          : "Type one name per line, as N.I.N.A. spells it. Planning warns when a template uses a filter that isn't on this list. Leave the list empty to skip the check."}</p>
+        <label className="rig-profile-field rig-profile-filters" htmlFor={`${slug}-filters`}><span>Filter names</span>
           <span className="rig-profile-input"><textarea id={`${slug}-filters`} aria-label="Filter names" rows={Math.min(8, Math.max(3, filterNames(form.filters).length + 1))} placeholder={'L\nHa\nOIII'} value={form.filters} disabled={disabled} onChange={event => update({ filters: event.target.value })} /></span>
         </label>
         {canWrite && suggestedFilters.length > 0 && filterNames(form.filters).join('\n') !== suggestedFilters.join('\n') && <p className="director-muted rig-profile-source">

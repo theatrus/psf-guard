@@ -640,7 +640,7 @@ describe('TauriSettings import state', () => {
     expect(savedUpdates[1].rescan_directory_layout).toBeUndefined();
   });
 
-  it("shows each paired client's last contact and plugin version, and names older plugins", async () => {
+  it("shows each paired client's last contact and plugin version, and points out older plugins", async () => {
     const at = Math.floor(Date.now() / 1000) - 5 * 60;
     server.use(
       http.get('/api/info', () => HttpResponse.json({ success: true, data: { version: 'test', cache_directory: '/cache', allow_database_management: true }, error: null, status: 'ready' })),
@@ -672,7 +672,7 @@ describe('TauriSettings import state', () => {
     expect(screen.getByText(/Observatory PC · paired .* · last contact 5 min ago, plugin 1\.4\.0\.0/)).toBeVisible();
     expect(screen.getByText(/Old laptop · paired .* · last contact 5 min ago$/)).toBeVisible();
     expect(screen.getByText(/Spare · paired .* · no contact recorded/)).toBeVisible();
-    expect(screen.getByRole('note')).toHaveTextContent('Old laptop uses an older Sync plugin. Update the plugin in N.I.N.A., or N.I.N.A. may not show new projects.');
+    expect(screen.getByRole('note')).toHaveTextContent('Old laptop is running an older Sync plugin. Update the plugin in N.I.N.A., or N.I.N.A. may not show new projects.');
   });
 
   it('keeps the editor with the selected database in a multi-database list', async () => {

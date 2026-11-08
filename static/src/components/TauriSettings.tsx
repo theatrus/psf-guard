@@ -956,7 +956,7 @@ export default function TauriSettings({
   // Clients whose last request came from a plugin that can't place new projects.
   const olderPlugins = [
     ...(editingUpload?.clients ?? []).filter((client) => client.last_contact && !client.last_contact.places_new_projects).map((client) => client.name),
-    ...(editingUpload?.key_contact && !editingUpload.key_contact.places_new_projects ? ['The remote API key\'s client'] : []),
+    ...(editingUpload?.key_contact && !editingUpload.key_contact.places_new_projects ? ['The client using the remote API key'] : []),
   ];
   const tsJobs = useTsSyncJobs(managementAllowed && canEdit);
   const tsImportRunning = tsJobs.data?.some(job => job.id.startsWith('import:') && job.running) ?? false;
@@ -1310,7 +1310,7 @@ export default function TauriSettings({
                 </ul>
                 {olderPlugins.length > 0 && (
                   <small role="note">
-                    {olderPlugins.join(', ')} {olderPlugins.length === 1 ? 'uses' : 'use'} an older Sync plugin.
+                    {olderPlugins.join(', ')} {olderPlugins.length === 1 ? 'is' : 'are'} running an older Sync plugin.
                     Update the plugin in N.I.N.A., or N.I.N.A. may not show new projects.
                   </small>
                 )}
