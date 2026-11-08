@@ -1841,9 +1841,21 @@ writes the project:
   match.
 - **Rig with no profile and no plugin yet:** The project waits the same way.
   Pair the Sync plugin, and its next pull adds the project to N.I.N.A.
-- **Database N.I.N.A. reads directly:** A new project uses the profile with the
-  most projects, then the database's only preference row, then the templates'
-  profile.
+- **Database N.I.N.A. reads directly:** A new project uses the profile Director
+  plans for, described next.
+
+Director plans and reads scheduling limits for one profile per rig database:
+
+1. The profile a paired plugin last reported, when the database already has
+   projects, templates or preferences in it. The plugin reports its profile
+   when it sends star-detection settings.
+2. Otherwise, the profile with the most projects.
+3. Then the database's only preference row, then the templates' profile.
+
+The schedule view warns when it leaves out projects of another profile. Pair
+each N.I.N.A. profile with its own PSF Guard database, for example one with the
+reducer and one without it. The plugin then sends each database only its own
+profile's projects.
 
 A project keeps its profile once it has one. Open the profile you want before
 the plugin pulls: that pull decides where a new project goes, and switching

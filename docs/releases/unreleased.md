@@ -6,7 +6,7 @@
 
 ## Changes
 
-- **Activate a new rig before it has images:** A plan now activates on a new rig with no frames and no plugin. Update the PSF Guard Sync plugin first: on its next pull it adds the project to the N.I.N.A. profile you have open, so a rig with two profiles no longer gets the wrong one.
+- **Activate a new rig before it has images:** A plan now activates on a new rig with no frames and no plugin. Update the PSF Guard Sync plugin first: on its next pull it adds the project to the N.I.N.A. profile you have open, so a rig with two profiles no longer gets the wrong one. Pair each N.I.N.A. profile with its own PSF Guard database. When one database already holds two profiles, Director now plans for the profile its plugin reports instead of the one with the most projects.
 - **Remove a rig:** **Remove** now appears beside each database under **Settings › Databases & rigs**, and on its **Rig setup** tab. The dialog lists what goes. Removing deletes the rig's settings, Director history and pairing, and takes the rig out of its plans; you cannot undo this. The database file and images stay on disk, and a rig with open work must close it first.
 - **Find plans with nothing captured:** The Library links to these plans from the top of its list. A Database filter now offers plans that are on no rig.
 - **Start Director without manual recovery:** Paired equipment reports apply automatically and preserve work permission and plan selection. With the matching Director plugin update, interrupted assignments retire automatically after the plugin confirms idle equipment. Saved images and receipts remain available, and fresh work uses current image counts. On a rig with two paired plugins, only the plugin allowed to take work updates the equipment.

@@ -626,6 +626,23 @@ impl StarDetectionSettings {
         }
         resolve(&self.default, facts, fwhm)
     }
+
+    /// The N.I.N.A. profile a plugin paired with `catalog_id` last sent
+    /// settings from: the profile that catalog's rig captures in. `None`
+    /// until a plugin sends one. A plugin stores a record only when the
+    /// settings change, so with two profiles paired to one catalog this is
+    /// the one whose settings changed last.
+    pub fn plugin_profile(&self, catalog_id: &str) -> Option<&str> {
+        self.profiles
+            .iter()
+            .flat_map(|(id, profile)| profile.records.iter().map(move |record| (id, record)))
+            .filter(|(_, record)| {
+                record.source != RecordSource::Import
+                    && record.catalog_id.as_deref() == Some(catalog_id)
+            })
+            .max_by_key(|(_, record)| record.received_at)
+            .map(|(id, _)| id.as_str())
+    }
 }
 
 /// Read the registry's `star_detection` block, or none with a warning when
@@ -906,6 +923,72 @@ mod tests {
             profile_id: profile_key(&REDCAT.to_uppercase()),
             captured_at: Some(captured.parse::<DateTime<Utc>>().unwrap().timestamp()),
         }
+    }
+
+    #[test]
+    fn plugin_profile_is_the_catalogs_newest_plugin_record() {
+        let sent = |id: &str, source: RecordSource, catalog: &str, at: &str| ProfileRecord {
+            source,
+            catalog_id: Some(catalog.into()),
+            received_at: at.parse().unwrap(),
+            ..record(id, None, StarDetectorSelection::Nina, 1.0)
+        };
+        let profile = |records: Vec<ProfileRecord>| ProfileStarDetection {
+            records,
+            ..Default::default()
+        };
+        let settings = StarDetectionSettings {
+            profiles: [
+                (
+                    "aaaaaaaa-0000-4000-8000-000000000001".to_string(),
+                    profile(vec![sent(
+                        "a1",
+                        RecordSource::SyncPlugin,
+                        "rig",
+                        "2026-11-01T00:00:00Z",
+                    )]),
+                ),
+                (
+                    "bbbbbbbb-0000-4000-8000-000000000002".to_string(),
+                    profile(vec![
+                        sent(
+                            "b1",
+                            RecordSource::DirectorPlugin,
+                            "rig",
+                            "2026-11-03T00:00:00Z",
+                        ),
+                        sent(
+                            "b2",
+                            RecordSource::SyncPlugin,
+                            "other",
+                            "2026-11-05T00:00:00Z",
+                        ),
+                    ]),
+                ),
+                (
+                    "cccccccc-0000-4000-8000-000000000003".to_string(),
+                    // An import names no rig, whatever catalog it lists.
+                    profile(vec![sent(
+                        "c1",
+                        RecordSource::Import,
+                        "rig",
+                        "2026-11-06T00:00:00Z",
+                    )]),
+                ),
+            ]
+            .into(),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            settings.plugin_profile("rig"),
+            Some("bbbbbbbb-0000-4000-8000-000000000002")
+        );
+        assert_eq!(
+            settings.plugin_profile("other"),
+            Some("bbbbbbbb-0000-4000-8000-000000000002")
+        );
+        assert_eq!(settings.plugin_profile("unpaired"), None);
     }
 
     fn redcat_history() -> StarDetectionSettings {

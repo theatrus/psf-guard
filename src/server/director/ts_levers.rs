@@ -355,7 +355,8 @@ fn write(context: &DatabaseContext, changes: &TsChanges) -> Result<Saved, Error>
     let catalog_tx = catalog
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(store_error)?;
-    let profile = super::activation::resolve_profile(&catalog_tx)
+    let reported = super::activation::reported_profile(&context.id);
+    let profile = super::activation::resolve_profile(&catalog_tx, reported.as_deref())
         .map_err(store_error)?
         .ok_or_else(|| Error::Changed("The rig's database has no N.I.N.A. profile.".into()))?;
     for change in &changes.projects {

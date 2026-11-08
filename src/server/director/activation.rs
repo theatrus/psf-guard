@@ -852,6 +852,7 @@ async fn execute_guarded(
                         scheduling: &scheduling,
                         collaboration: assignment,
                         sync_plugin_paired: sync_plugin_paired(&catalog.context),
+                        reported_profile: reported_profile(&catalog.context.id),
                     },
                 );
                 match outcome {
@@ -1747,6 +1748,8 @@ struct Inputs<'a> {
     collaboration: Option<&'a collaboration_activation::Admitted>,
     /// A Sync plugin delivers this database's plans, so it picks the profile.
     sync_plugin_paired: bool,
+    /// The profile the database's plugin last reported, if any.
+    reported_profile: Option<String>,
 }
 
 struct Outcome {
@@ -1801,7 +1804,11 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
             ));
         }
     }
-    let profile_id = new_row_profile(tx, inputs.sync_plugin_paired)?;
+    let profile_id = new_row_profile(
+        tx,
+        inputs.sync_plugin_paired,
+        inputs.reported_profile.as_deref(),
+    )?;
     ensure_director_tables(tx)?;
     let mut changes = Vec::new();
     let project_name = inputs.project.name.clone();
@@ -2978,11 +2985,15 @@ fn sync_plugin_paired(context: &DatabaseContext) -> bool {
 /// yet, uses PSF Guard's own: the plugin writes those rows into the profile
 /// it runs in. Any other database is read directly, so its rows need a
 /// profile it already has.
-fn new_row_profile(tx: &Connection, sync_plugin_paired: bool) -> Result<String, RigError> {
+fn new_row_profile(
+    tx: &Connection,
+    sync_plugin_paired: bool,
+    reported: Option<&str>,
+) -> Result<String, RigError> {
     let known = if sync_plugin_paired {
         None
     } else {
-        resolve_profile(tx)?
+        resolve_profile(tx, reported)?
     };
     Ok(known.unwrap_or_else(|| {
         // Target Scheduler adds a preference row of its own when it needs one.
@@ -3005,12 +3016,31 @@ fn placement_note(sync_plugin_paired: bool) -> String {
     }
 }
 
-/// The profile that owns the database's projects, else its only preference
+/// The N.I.N.A. profile a plugin paired with `catalog_slug` last reported,
+/// from its star-detection settings.
+pub(super) fn reported_profile(catalog_slug: &str) -> Option<String> {
+    crate::star_detection::current()
+        .plugin_profile(catalog_slug)
+        .map(str::to_owned)
+}
+
+/// The profile the database's plugin reports, when the database uses it.
+/// Else the profile that owns most of its projects, else its only preference
 /// row, else the templates' profile. PSF Guard's own profile counts last: its
 /// projects join the profile the Sync plugin runs in, so the snapshot and
 /// the scheduling limits read them with that profile's. Target Scheduler shows a project only
 /// under its own profile, so a fresh GUID would hide everything we write.
-pub(super) fn resolve_profile(tx: &Connection) -> rusqlite::Result<Option<String>> {
+pub(super) fn resolve_profile(
+    tx: &Connection,
+    reported: Option<&str>,
+) -> rusqlite::Result<Option<String>> {
+    if let Some(stored) = reported
+        .map(|profile| stored_profile(tx, profile))
+        .transpose()?
+        .flatten()
+    {
+        return Ok(Some(stored));
+    }
     let dominant: Option<String> = tx
         .query_row(
             "SELECT profileId FROM project WHERE profileId IS NOT NULL AND profileId<>'' GROUP BY profileId ORDER BY profileId=?1, COUNT(*) DESC, profileId LIMIT 1",
@@ -3033,6 +3063,27 @@ pub(super) fn resolve_profile(tx: &Connection) -> rusqlite::Result<Option<String
     tx.query_row(
         "SELECT profileId FROM exposuretemplate WHERE profileId IS NOT NULL AND profileId<>'' GROUP BY profileId ORDER BY COUNT(*) DESC, profileId LIMIT 1",
         [],
+        |row| row.get(0),
+    )
+    .optional()
+}
+
+/// `profile` as the database spells it, when a project, template or
+/// preference row uses it. The plugin reports IDs in lower case, and the
+/// snapshot's queries match the stored spelling.
+fn stored_profile(tx: &Connection, profile: &str) -> rusqlite::Result<Option<String>> {
+    let preference = if has_column(tx, "profilepreference", "profileId")? {
+        " UNION ALL SELECT profileId FROM profilepreference WHERE lower(profileId)=lower(?1)"
+    } else {
+        ""
+    };
+    tx.query_row(
+        &format!(
+            "SELECT profileId FROM project WHERE lower(profileId)=lower(?1)
+             UNION ALL SELECT profileId FROM exposuretemplate WHERE lower(profileId)=lower(?1){preference}
+             LIMIT 1"
+        ),
+        [profile],
         |row| row.get(0),
     )
     .optional()

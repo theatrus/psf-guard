@@ -22,10 +22,11 @@ pub(super) struct ReadSnapshot {
     pub(super) warnings: Vec<String>,
 }
 
-/// Read the database at `path` for its N.I.N.A. profile: the profile that
-/// owns most projects, as activation chooses it. `None` when the database
-/// has no profile at all.
-pub(super) fn read(path: &str) -> rusqlite::Result<Option<ReadSnapshot>> {
+/// Read the database at `path` for its N.I.N.A. profile, as activation
+/// chooses it: `reported`, the profile its plugin last reported, when the
+/// database uses it, else the profile that owns most projects. `None` when
+/// the database has no profile at all.
+pub(super) fn read(path: &str, reported: Option<&str>) -> rusqlite::Result<Option<ReadSnapshot>> {
     let mut connection = crate::server::database_context::open_scheduler_connection_with_flags(
         Path::new(path),
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -34,7 +35,7 @@ pub(super) fn read(path: &str) -> rusqlite::Result<Option<ReadSnapshot>> {
     // One read transaction, so Target Scheduler writing counts or a project
     // between the queries cannot leave the snapshot half old, half new.
     let snapshot = connection.transaction()?;
-    let Some(profile_id) = super::activation::resolve_profile(&snapshot)? else {
+    let Some(profile_id) = super::activation::resolve_profile(&snapshot, reported)? else {
         return Ok(None);
     };
     let read = read_profile(&snapshot, &profile_id)?;

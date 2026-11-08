@@ -237,7 +237,7 @@ async fn waiting_projects_count_with_the_profile_the_plugin_runs_in() {
     .unwrap();
     let path = a.f._dir.path().join("rig.sqlite");
 
-    let read = crate::server::director::ts_snapshot::read(path.to_str().unwrap())
+    let read = crate::server::director::ts_snapshot::read(path.to_str().unwrap(), None)
         .unwrap()
         .unwrap();
 
@@ -250,4 +250,49 @@ async fn waiting_projects_count_with_the_profile_the_plugin_runs_in() {
         "{:?}",
         read.warnings
     );
+}
+
+#[tokio::test]
+async fn the_profile_the_plugin_reports_beats_the_larger_profile() {
+    let a = activated().await;
+    // The reducer profile, stored in upper case, has one project; another
+    // profile has more.
+    let reducer = "9F1C0D2E-0000-4000-8000-00000000000A";
+    let add = |profile: &str, name: &str| {
+        a.db.execute(
+            "INSERT INTO project (profileId, name, description, state, priority, isMosaic, flatsHandling, guid,
+                minimumtime, minimumaltitude, maximumAltitude, usecustomhorizon, horizonoffset, meridianwindow)
+             VALUES (?1, ?2, '', 1, 1, 0, 0, ?3, 30, 0, 0, 0, 0, 0)",
+            rusqlite::params![profile, name, Uuid::new_v4().to_string()],
+        )
+        .unwrap();
+    };
+    add(reducer, "With reducer");
+    for name in ["One", "Two", "Three", "Four"] {
+        add("profile-b", name);
+    }
+    let path = a.f._dir.path().join("rig.sqlite");
+    let read = |reported: Option<&str>| {
+        crate::server::director::ts_snapshot::read(path.to_str().unwrap(), reported)
+            .unwrap()
+            .unwrap()
+    };
+
+    let reported = read(Some(&reducer.to_lowercase()));
+    let unknown = read(Some("00000000-0000-4000-8000-0000000000ff"));
+    let unreported = read(None);
+
+    assert_eq!(reported.snapshot.profile_id, reducer);
+    assert_eq!(reported.snapshot.projects.len(), 1);
+    assert!(
+        reported
+            .warnings
+            .iter()
+            .any(|w| w.contains("another N.I.N.A. profile")),
+        "{:?}",
+        reported.warnings
+    );
+    // A profile the database does not use, or none, falls back to the count.
+    assert_eq!(unknown.snapshot.profile_id, "profile-b");
+    assert_eq!(unreported.snapshot.profile_id, "profile-b");
 }
