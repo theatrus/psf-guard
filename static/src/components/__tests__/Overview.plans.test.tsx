@@ -136,4 +136,20 @@ describe('the Library with Planning', () => {
     expect(confirm).toHaveBeenCalledTimes(2);
     confirm.mockRestore();
   });
+  it('links to plans with nothing captured, which list below every project', async () => {
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    mount('/');
+    fireEvent.click(await screen.findByRole('button', { name: '1 plan with nothing captured yet' }));
+    expect(scroll).toHaveBeenCalled();
+  });
+
+  it('offers plans on no rig when a Database filter leaves them out', async () => {
+    mount('/?dbfilter=redcat');
+    expect(await screen.findByText(/1 plan is not on any rig/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Show it' }));
+    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('show=unlinked'));
+    expect(screen.getByTestId('location')).not.toHaveTextContent('dbfilter');
+    expect(await screen.findByRole('link', { name: 'Open Bare' })).toBeInTheDocument();
+  });
 });

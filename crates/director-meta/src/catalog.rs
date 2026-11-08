@@ -231,9 +231,15 @@ impl MetaStore {
                     return Err(Error::CorruptDatabase);
                 }
             }
-            if old_profile
-                .as_ref()
-                .is_some_and(|id| id != &mapping.source_profile_id)
+            // A project activated under the placeholder takes the real profile
+            // once the Sync plugin has placed it; any other change is refused.
+            let placed = old_profile
+                .as_deref()
+                .is_some_and(|id| id == SYNC_PLACED_PROFILE && id != mapping.source_profile_id);
+            if !placed
+                && old_profile
+                    .as_ref()
+                    .is_some_and(|id| id != &mapping.source_profile_id)
             {
                 return Err(Error::Conflict);
             }
@@ -253,6 +259,9 @@ impl MetaStore {
             }
             if old_profile.is_none() {
                 tx.execute("INSERT INTO project_profile(catalog_id,source_project_guid,source_profile_id) VALUES(?1,?2,?3)",
+                params![mapping.catalog_id.to_string(), mapping.source_project_guid.to_string(), mapping.source_profile_id])?;
+            } else if placed {
+                tx.execute("UPDATE project_profile SET source_profile_id=?3 WHERE catalog_id=?1 AND source_project_guid=?2",
                 params![mapping.catalog_id.to_string(), mapping.source_project_guid.to_string(), mapping.source_profile_id])?;
             }
         }

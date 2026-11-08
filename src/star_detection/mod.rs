@@ -489,7 +489,7 @@ pub fn resolve_record(
 }
 
 /// Where a recorded profile snapshot came from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum RecordSource {
     /// The PSF Guard Sync plugin sent it as it captured.
     #[serde(rename = "plugin:sync", alias = "plugin")]
@@ -532,9 +532,86 @@ pub struct ProfileStarDetection {
     pub manual: Option<RigStarDetection>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub records: Vec<ProfileRecord>,
+    /// The catalog each plugin last sent this profile's settings from, and
+    /// since when. Kept apart from the records, which change only with the
+    /// settings, so pairing a profile elsewhere adds no record.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub paired: BTreeMap<RecordSource, PairedCatalog>,
+}
+
+/// A catalog a plugin sends a profile's settings from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PairedCatalog {
+    pub catalog_id: String,
+    /// When the plugin first sent from this catalog.
+    pub since: DateTime<Utc>,
 }
 
 impl ProfileStarDetection {
+    /// Each plugin's catalog: [`Self::paired`], else the catalog of that
+    /// plugin's newest record.
+    fn pairings(&self) -> BTreeMap<RecordSource, PairedCatalog> {
+        if !self.paired.is_empty() {
+            return self.paired.clone();
+        }
+        let mut found: BTreeMap<RecordSource, PairedCatalog> = BTreeMap::new();
+        for record in &self.records {
+            let Some(catalog_id) = record.catalog_id.clone() else {
+                continue;
+            };
+            if record.source == RecordSource::Import {
+                continue;
+            }
+            let newer = found
+                .get(&record.source)
+                .is_none_or(|current| current.since < record.received_at);
+            if newer {
+                found.insert(
+                    record.source,
+                    PairedCatalog {
+                        catalog_id,
+                        since: record.received_at,
+                    },
+                );
+            }
+        }
+        found
+    }
+
+    /// Note that `source` now sends from `catalog_id`. False when nothing
+    /// changed, so nothing needs saving.
+    pub fn note_pairing(
+        &mut self,
+        source: RecordSource,
+        catalog_id: &str,
+        at: DateTime<Utc>,
+    ) -> bool {
+        if source == RecordSource::Import {
+            return false;
+        }
+        let mut paired = self.pairings();
+        if paired
+            .get(&source)
+            .is_some_and(|current| current.catalog_id == catalog_id)
+        {
+            if self.paired.is_empty() {
+                // Keep what the records gave, so it outlives them.
+                self.paired = paired;
+                return true;
+            }
+            return false;
+        }
+        paired.insert(
+            source,
+            PairedCatalog {
+                catalog_id: catalog_id.to_owned(),
+                since: at,
+            },
+        );
+        self.paired = paired;
+        true
+    }
+
     /// The record in effect at `captured_at` (epoch seconds): the newest
     /// whose start is not after it, the latest received among equals. A
     /// frame taken before every record takes the earliest: a plugin sends
@@ -625,6 +702,27 @@ impl StarDetectionSettings {
             return resolve_record(record, facts, fwhm);
         }
         resolve(&self.default, facts, fwhm)
+    }
+
+    /// The N.I.N.A. profile a plugin paired with `catalog_id` captures in:
+    /// among the profiles a plugin sends from that catalog, the one paired
+    /// most recently. A profile paired again elsewhere stops counting here.
+    /// `None` until a plugin sends one. A profile stored before pairings were
+    /// kept counts with its newest record from each plugin.
+    pub fn plugin_profile(&self, catalog_id: &str) -> Option<&str> {
+        self.profiles
+            .iter()
+            .filter_map(|(id, profile)| {
+                profile
+                    .pairings()
+                    .into_values()
+                    .filter(|paired| paired.catalog_id == catalog_id)
+                    .map(|paired| paired.since)
+                    .max()
+                    .map(|since| (id, since))
+            })
+            .max_by_key(|(_, since)| *since)
+            .map(|(id, _)| id.as_str())
     }
 }
 
@@ -908,6 +1006,100 @@ mod tests {
         }
     }
 
+    #[test]
+    fn plugin_profile_follows_each_profiles_newest_plugin_record() {
+        let sent = |id: &str, source: RecordSource, catalog: &str, at: &str| ProfileRecord {
+            source,
+            catalog_id: Some(catalog.into()),
+            received_at: at.parse().unwrap(),
+            ..record(id, None, StarDetectorSelection::Nina, 1.0)
+        };
+        let profile = |records: Vec<ProfileRecord>| ProfileStarDetection {
+            records,
+            ..Default::default()
+        };
+        let settings = StarDetectionSettings {
+            profiles: [
+                (
+                    "aaaaaaaa-0000-4000-8000-000000000001".to_string(),
+                    profile(vec![sent(
+                        "a1",
+                        RecordSource::SyncPlugin,
+                        "rig",
+                        "2026-11-01T00:00:00Z",
+                    )]),
+                ),
+                (
+                    "bbbbbbbb-0000-4000-8000-000000000002".to_string(),
+                    profile(vec![
+                        sent(
+                            "b1",
+                            RecordSource::SyncPlugin,
+                            "rig",
+                            "2026-11-03T00:00:00Z",
+                        ),
+                        sent(
+                            "b2",
+                            RecordSource::SyncPlugin,
+                            "other",
+                            "2026-11-05T00:00:00Z",
+                        ),
+                    ]),
+                ),
+                (
+                    "cccccccc-0000-4000-8000-000000000003".to_string(),
+                    // An import names no rig, whatever catalog it lists.
+                    profile(vec![sent(
+                        "c1",
+                        RecordSource::Import,
+                        "rig",
+                        "2026-11-06T00:00:00Z",
+                    )]),
+                ),
+            ]
+            .into(),
+            ..Default::default()
+        };
+
+        // Profile b was paired again with "other", so it no longer counts
+        // for "rig".
+        assert_eq!(
+            settings.plugin_profile("rig"),
+            Some("aaaaaaaa-0000-4000-8000-000000000001")
+        );
+        assert_eq!(
+            settings.plugin_profile("other"),
+            Some("bbbbbbbb-0000-4000-8000-000000000002")
+        );
+        assert_eq!(settings.plugin_profile("unpaired"), None);
+
+        // The Director plugin pairs profile b with "rig" as well: both
+        // plugins' catalogs count, and the newer pairing wins.
+        let mut settings = settings;
+        let b = settings
+            .profiles
+            .get_mut("bbbbbbbb-0000-4000-8000-000000000002")
+            .unwrap();
+        assert!(b.note_pairing(
+            RecordSource::DirectorPlugin,
+            "rig",
+            "2026-11-06T00:00:00Z".parse().unwrap()
+        ));
+        assert!(!b.note_pairing(
+            RecordSource::DirectorPlugin,
+            "rig",
+            "2026-11-07T00:00:00Z".parse().unwrap()
+        ));
+        assert_eq!(
+            settings.plugin_profile("rig"),
+            Some("bbbbbbbb-0000-4000-8000-000000000002")
+        );
+        assert_eq!(
+            settings.plugin_profile("other"),
+            Some("bbbbbbbb-0000-4000-8000-000000000002")
+        );
+    }
+
     fn redcat_history() -> StarDetectionSettings {
         let mut settings = StarDetectionSettings::default();
         settings.profiles.insert(
@@ -915,6 +1107,7 @@ mod tests {
             ProfileStarDetection {
                 name: Some("starfront-mini-redcat61".into()),
                 manual: None,
+                paired: BTreeMap::new(),
                 records: vec![
                     record("all", None, StarDetectorSelection::HocusFocus, 1.0),
                     record(

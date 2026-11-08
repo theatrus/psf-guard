@@ -1283,17 +1283,27 @@ fn reset_catalog_directory_layout(config: &mut crate::db_registry::RemoteImageUp
 #[cfg(test)]
 mod remote_image_layout_settings_tests;
 
-/// `DELETE /api/databases/{db_id}` — drop the registered database. Returns
-/// 200 with `{removed: true}` even on first-call (idempotent on the surface).
+/// `DELETE /api/databases/{db_id}` — drop the registered database and delete
+/// its rig's records, which cannot be undone. The file and its images stay on
+/// disk. Open work refuses it with 409 and changes nothing. Returns 200 with
+/// `{removed: true}` even on first-call (idempotent on the surface).
 pub async fn remove_database_route(
     State(state): State<Arc<AppState>>,
     Path(db_id): Path<String>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
     use crate::db_registry::DbRegistry;
+    use crate::server::director::rig_removal::RemovalError;
 
     require_database_management_allowed(&state)?;
     let registry_path = require_registry_path(&state)?;
     let _registry_guard = state.registry_write.lock().await;
+    // Open work stops the removal while the database is still registered.
+    let catalog = state.get_database(&db_id);
+    if let Some(catalog) = &catalog
+        && let Some(reason) = crate::server::director::rig_removal::refusal(&state, catalog).await
+    {
+        return Err(AppError::Conflict(reason));
+    }
     let mut reg = DbRegistry::load_or_init(&registry_path)
         .map_err(|e| AppError::InternalError(format!("loading registry: {}", e)))?;
     let removed_from_registry = reg
@@ -1304,8 +1314,25 @@ pub async fn remove_database_route(
 
     let removed_from_state = state.databases.write().unwrap().remove(&db_id).is_some();
 
+    // The rig last, once the database is gone, so a registry failure above
+    // leaves both in place. A rig that cannot be deleted now keeps its
+    // records, and the database is removed all the same.
+    let rig_removed = match catalog {
+        Some(catalog) => {
+            match crate::server::director::rig_removal::remove(&state, catalog).await {
+                Ok(removed) => removed,
+                Err(RemovalError::Refused(reason) | RemovalError::Failed(reason)) => {
+                    tracing::warn!(database = %db_id, %reason, "Removed a database but kept its rig's records");
+                    false
+                }
+            }
+        }
+        None => false,
+    };
+
     Ok(Json(ApiResponse::success(serde_json::json!({
         "removed": removed_from_registry || removed_from_state,
+        "rig_removed": rig_removed,
     }))))
 }
 

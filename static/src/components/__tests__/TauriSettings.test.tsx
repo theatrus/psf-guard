@@ -706,7 +706,8 @@ describe('TauriSettings import state', () => {
       )
     );
 
-    render(<TauriSettings isOpen onClose={() => undefined} />, {
+    const onClose = vi.fn();
+    render(<TauriSettings isOpen onClose={onClose} />, {
       wrapper: createWrapper(),
     });
 
@@ -733,10 +734,13 @@ describe('TauriSettings import state', () => {
     expect(screen.getByLabelText('Display name (optional):')).toHaveValue('Ultra Cat');
     expect(screen.getByPlaceholderText('Type an absolute path and press Add')).toHaveValue('');
 
-    const confirmRemove = vi.spyOn(window, 'confirm').mockReturnValue(true);
     fireEvent.click(within(ultraCat).getByRole('button', { name: 'Remove Ultra Cat' }));
-    confirmRemove.mockRestore();
+    const removal = await screen.findByRole('dialog', { name: 'Remove Ultra Cat' });
+    await waitFor(() => expect(within(removal).getByRole('button', { name: 'Remove' })).toBeEnabled());
+    fireEvent.click(within(removal).getByRole('button', { name: 'Remove' }));
     await screen.findByText('Removed Ultra Cat.');
+    // The dialog's clicks stay inside Settings.
+    expect(onClose).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('button', { name: 'Databases & rigs' }));
     fireEvent.click(screen.getByRole('tab', { name: 'New / import' }));

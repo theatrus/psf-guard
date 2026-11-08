@@ -206,8 +206,11 @@ test('add then remove a database', async ({ page }) => {
   const row = page.locator('.db-row').first();
   await expect(row).toBeVisible();
 
-  page.on('dialog', (dialog) => dialog.accept());
   await row.getByRole('button', { name: 'Remove' }).click();
+  // The dialog lists what goes; confirm there.
+  const dialog = page.getByRole('dialog', { name: /^Remove / });
+  await expect(dialog.getByText(/stay on disk/)).toBeVisible();
+  await dialog.getByRole('button', { name: 'Remove', exact: true }).click();
 
   await expect(page.getByText(/Removed/i)).toBeVisible();
   await page.getByRole('button', { name: 'Databases & rigs', exact: true }).click();

@@ -8,7 +8,8 @@
 //! (`POST …/profiles/import`), or the PSF Guard plugin sends a snapshot as
 //! it captures (`POST /sync/v1/star-detection/profile`, authenticated by
 //! the catalog's paired client token like the rest of `/sync/v1`). A
-//! snapshot equal to the record already in effect stores nothing.
+//! snapshot equal to the record already in effect stores no record; it
+//! still notes which catalog the profile's plugin now sends from.
 //!
 //! GET is open to viewers so the panel can show the current values; PUT and
 //! DELETE land in `requires_write`. A change applies as soon as it is saved:
@@ -768,10 +769,16 @@ pub(crate) async fn store_plugin_snapshot(
         hocus_focus_version: reported_hocus_focus_version(request.hocus_focus_version.as_deref())?,
         settings: request.settings,
     };
-    // Most captures repeat the settings in force: answer those without
-    // writing the registry.
+    // Most captures repeat the settings in force from the same catalog:
+    // answer those without writing the registry.
+    let catalog = record.catalog_id.clone().unwrap_or_default();
+    let received = record.received_at;
+    let pair = |settings: &mut StarDetectionSettings| -> Result<bool, AppError> {
+        Ok(profile_entry(settings, &key)?.note_pairing(source, &catalog, received))
+    };
     let mut probe = (*crate::star_detection::current()).clone();
-    if !add_record(&mut probe, &key, None, record.clone())? {
+    let new_record = add_record(&mut probe, &key, None, record.clone())?;
+    if !new_record && !pair(&mut probe)? {
         return Ok(PluginProfileResponse {
             profile_id: key,
             stored: false,
@@ -780,6 +787,7 @@ pub(crate) async fn store_plugin_snapshot(
     let mut stored = false;
     save_and_apply(state, |settings| {
         stored = add_record(settings, &key, name, record)?;
+        pair(settings)?;
         Ok(())
     })
     .await?;
@@ -984,6 +992,21 @@ mod tests {
         let profile = &settings.profiles[PROFILE];
         assert_eq!(profile.records.len(), 3);
         assert_eq!(profile.name.as_deref(), Some("redcat"));
+
+        // Paired with another catalog, the same settings add no record, but
+        // the pairing moves: that catalog learns its profile and the old one
+        // stops claiming it.
+        let moved = ProfileRecord {
+            catalog_id: Some("db-2".into()),
+            ..plugin_record("2026-09-11T03:00:00Z", cropped(0.7))
+        };
+        assert!(!add_record(&mut settings, PROFILE, None, moved).unwrap());
+        let profile = settings.profiles.get_mut(PROFILE).unwrap();
+        assert!(profile.note_pairing(RecordSource::SyncPlugin, "db-2", chrono::Utc::now()));
+        assert!(!profile.note_pairing(RecordSource::SyncPlugin, "db-2", chrono::Utc::now()));
+        assert_eq!(settings.plugin_profile("db-2"), Some(PROFILE));
+        assert_eq!(settings.plugin_profile("db-1"), None);
+        settings.profiles.get_mut(PROFILE).unwrap().paired.clear();
 
         // The same file imported twice for every frame is stored once.
         let all_frames = ProfileRecord {

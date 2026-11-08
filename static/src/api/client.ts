@@ -474,6 +474,13 @@ export const apiClient = {
     if (!data.data) throw new Error(data.error || 'Failed to enable database planning');
     return data.data;
   },
+  /** What removing a database deletes from Director; `null` when it has no rig. */
+  getDirectorRigRemoval: async (slug: string): Promise<import('./directorTypes').DirectorRigRemoval | null> => {
+    const api = await getApi();
+    const { data } = await api.get<ApiResponse<{ removal: import('./directorTypes').DirectorRigRemoval | null }>>(`/director/v1/catalogs/${encodeURIComponent(slug)}/rig/removal`);
+    if (!data.data) throw new Error(data.error || 'Failed to read what removing this database deletes');
+    return data.data.removal;
+  },
   getDirectorPlugin: async (slug: string): Promise<import('./directorTypes').DirectorPluginView> => {
     const api = await getApi();
     const { data } = await api.get<ApiResponse<import('./directorTypes').DirectorPluginView>>(`/director/v1/catalogs/${encodeURIComponent(slug)}/rig/plugin`);
@@ -1819,7 +1826,7 @@ export const apiClient = {
     return data.data;
   },
 
-  /** Remove a database by slug. */
+  /** Remove a database by slug, with its rig's Director records. */
   removeDatabase: async (dbId: string): Promise<boolean> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.delete<ApiResponse<{ removed: boolean }>>(

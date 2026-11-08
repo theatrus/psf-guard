@@ -21,7 +21,7 @@ use psf_guard_director_meta::{
     framing::FramingDraft,
     plan::{Contribution, Goal, Objective, PlanDraft},
     preferences::{ResolvedScheduling, SchedulingValues},
-    CatalogIdentity,
+    CatalogIdentity, SYNC_PLACED_PROFILE,
 };
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBehavior};
 use std::{
@@ -851,6 +851,8 @@ async fn execute_guarded(
                         now,
                         scheduling: &scheduling,
                         collaboration: assignment,
+                        sync_plugin_paired: sync_plugin_paired(&catalog.context),
+                        reported_profile: reported_profile(&catalog.context.id),
                     },
                 );
                 match outcome {
@@ -902,6 +904,9 @@ async fn execute_guarded(
                 carried.extend(previous_rig(*rig_id));
                 continue;
             };
+            if outcome.record.profile_id == SYNC_PLACED_PROFILE {
+                warnings.push(placement_note(sync_plugin_paired(&catalog.context)));
+            }
             reports.push(RigReport {
                 rig,
                 catalog_slug: Some(catalog.context.id.clone()),
@@ -1741,6 +1746,10 @@ struct Inputs<'a> {
     /// Target Scheduler scheduling limits for this rig and project.
     scheduling: &'a ResolvedScheduling,
     collaboration: Option<&'a collaboration_activation::Admitted>,
+    /// A Sync plugin delivers this database's plans, so it picks the profile.
+    sync_plugin_paired: bool,
+    /// The profile the database's plugin last reported, if any.
+    reported_profile: Option<String>,
 }
 
 struct Outcome {
@@ -1795,12 +1804,11 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
             ));
         }
     }
-    let profile_id = resolve_profile(tx)?.ok_or_else(|| {
-        RigError::Skip(
-            "Database has no N.I.N.A. profile yet; open it in Target Scheduler once, or import a frame."
-                .into(),
-        )
-    })?;
+    let profile_id = new_row_profile(
+        tx,
+        inputs.sync_plugin_paired,
+        inputs.reported_profile.as_deref(),
+    )?;
     ensure_director_tables(tx)?;
     let mut changes = Vec::new();
     let project_name = inputs.project.name.clone();
@@ -2045,6 +2053,18 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
         .ok()
         .filter(|profile| !profile.is_empty())
         .unwrap_or(profile_id);
+    // A waiting project's plans may use the rig's own templates first: the
+    // Sync plugin finds them in Target Scheduler by GUID, so the user's
+    // template settings carry over rather than a default copy.
+    let template_profiles: Vec<String> = if profile_id == SYNC_PLACED_PROFILE {
+        resolve_profile(tx, inputs.reported_profile.as_deref())?
+            .filter(|profile| profile != SYNC_PLACED_PROFILE)
+            .into_iter()
+            .chain([profile_id.clone()])
+            .collect()
+    } else {
+        vec![profile_id.clone()]
+    };
 
     // Targets: one per panel this rig owns, matched by panel id. A
     // contribution with no panel list covers every panel.
@@ -2451,7 +2471,7 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
                 objective.bandpass_id, contribution.exposure_seconds
             )));
         };
-        let template = resolve_template(tx, &profile_id, contribution)?;
+        let template = resolve_template(tx, &profile_id, &template_profiles, contribution)?;
         if template.created && reported_templates.insert(template.id) {
             changes.push(Change {
                 kind: "template",
@@ -2964,14 +2984,79 @@ fn required_frames(objective: &Objective, contribution: &Contribution) -> Option
     }
 }
 
-/// The profile that owns the database's projects, else its only preference
-/// row, else the templates' profile. Target Scheduler shows a project only
+/// Whether a Sync plugin can reach this database, and so write its plans into
+/// the N.I.N.A. profile it runs in.
+fn sync_plugin_paired(context: &DatabaseContext) -> bool {
+    context.remote_image_upload.as_ref().is_some_and(|config| {
+        config.sync_enabled && (!config.clients.is_empty() || !config.token_sha256.is_empty())
+    })
+}
+
+/// The profile for rows activation adds. Only N.I.N.A. knows which profile it
+/// has open, so a database the Sync plugin serves, or one with no profile
+/// yet, uses PSF Guard's own: the plugin writes those rows into the profile
+/// it runs in. Any other database is read directly, so its rows need a
+/// profile it already has.
+fn new_row_profile(
+    tx: &Connection,
+    sync_plugin_paired: bool,
+    reported: Option<&str>,
+) -> Result<String, RigError> {
+    let known = if sync_plugin_paired {
+        None
+    } else {
+        resolve_profile(tx, reported)?
+    };
+    Ok(known.unwrap_or_else(|| {
+        // Target Scheduler adds a preference row of its own when it needs one.
+        if let Err(error) =
+            crate::commands::import::ensure_profile_preference(tx, SYNC_PLACED_PROFILE)
+        {
+            tracing::debug!(%error, "No preference row for PSF Guard's profile");
+        }
+        SYNC_PLACED_PROFILE.to_owned()
+    }))
+}
+
+/// What the preview says about a project under PSF Guard's own profile.
+fn placement_note(sync_plugin_paired: bool) -> String {
+    if sync_plugin_paired {
+        "The Sync plugin adds this project to the N.I.N.A. profile it runs in.".into()
+    } else {
+        "No N.I.N.A. profile yet. Pair the PSF Guard Sync plugin, and it adds this project to the profile it runs in."
+            .into()
+    }
+}
+
+/// The N.I.N.A. profile a plugin paired with `catalog_slug` last reported,
+/// from its star-detection settings.
+pub(super) fn reported_profile(catalog_slug: &str) -> Option<String> {
+    crate::star_detection::current()
+        .plugin_profile(catalog_slug)
+        .map(str::to_owned)
+}
+
+/// The profile the database's plugin reports, when the database uses it.
+/// Else the profile that owns most of its projects, else its only preference
+/// row, else the templates' profile. PSF Guard's own profile counts last: its
+/// projects join the profile the Sync plugin runs in, so the snapshot and
+/// the scheduling limits read them with that profile's. Target Scheduler shows a project only
 /// under its own profile, so a fresh GUID would hide everything we write.
-pub(super) fn resolve_profile(tx: &Connection) -> rusqlite::Result<Option<String>> {
+pub(super) fn resolve_profile(
+    tx: &Connection,
+    reported: Option<&str>,
+) -> rusqlite::Result<Option<String>> {
+    if let Some(stored) = reported
+        .map(|profile| stored_profile(tx, profile))
+        .transpose()?
+        .flatten()
+    {
+        return Ok(Some(stored));
+    }
     let dominant: Option<String> = tx
         .query_row(
-            "SELECT profileId FROM project WHERE profileId IS NOT NULL AND profileId<>'' GROUP BY profileId ORDER BY COUNT(*) DESC, profileId LIMIT 1",
-            [],
+            "SELECT profileId FROM project WHERE profileId IS NOT NULL AND profileId<>'' GROUP BY profileId ORDER BY profileId=?1, COUNT(*) DESC, profileId LIMIT 1",
+            [SYNC_PLACED_PROFILE],
             |row| row.get(0),
         )
         .optional()?;
@@ -2990,6 +3075,27 @@ pub(super) fn resolve_profile(tx: &Connection) -> rusqlite::Result<Option<String
     tx.query_row(
         "SELECT profileId FROM exposuretemplate WHERE profileId IS NOT NULL AND profileId<>'' GROUP BY profileId ORDER BY COUNT(*) DESC, profileId LIMIT 1",
         [],
+        |row| row.get(0),
+    )
+    .optional()
+}
+
+/// `profile` as the database spells it, when a project, template or
+/// preference row uses it. The plugin reports IDs in lower case, and the
+/// snapshot's queries match the stored spelling.
+fn stored_profile(tx: &Connection, profile: &str) -> rusqlite::Result<Option<String>> {
+    let preference = if has_column(tx, "profilepreference", "profileId")? {
+        " UNION ALL SELECT profileId FROM profilepreference WHERE lower(profileId)=lower(?1)"
+    } else {
+        ""
+    };
+    tx.query_row(
+        &format!(
+            "SELECT profileId FROM project WHERE lower(profileId)=lower(?1)
+             UNION ALL SELECT profileId FROM exposuretemplate WHERE lower(profileId)=lower(?1){preference}
+             LIMIT 1"
+        ),
+        [profile],
         |row| row.get(0),
     )
     .optional()
@@ -3501,11 +3607,15 @@ struct ResolvedTemplate {
 
 /// The chosen template by id or GUID when it still exists with the same
 /// filter, else the profile's template with the same settings, else a new one.
+/// The template for a contribution: one of `profiles`' templates, in that
+/// order, else a new one under `profile_id`, the project's profile.
 fn resolve_template(
     tx: &Connection,
     profile_id: &str,
+    profiles: &[String],
     contribution: &Contribution,
 ) -> Result<ResolvedTemplate, RigError> {
+    let usable = |profile: &str| profiles.iter().any(|wanted| wanted == profile);
     let chosen = |id: i64| -> Result<ResolvedTemplate, RigError> {
         let name: String = tx.query_row(
             "SELECT IFNULL(name, '') FROM exposuretemplate WHERE Id=?1",
@@ -3544,7 +3654,7 @@ fn resolve_template(
         guid_used = found.is_some();
         if let Some((id, filter, profile)) = found
             && filter.eq_ignore_ascii_case(&choice.filter_name)
-            && profile == profile_id
+            && usable(&profile)
             && moon_matches(id)?
         {
             return chosen(id);
@@ -3572,7 +3682,7 @@ fn resolve_template(
                     && offset == i64::from(choice.offset.unwrap_or(-1))
                     && bin == i64::from(choice.bin.unwrap_or(1).max(1))
                     && readout == i64::from(choice.readout_mode.unwrap_or(-1))
-                    && profile == profile_id
+                    && usable(&profile)
             }),
         )
     };
@@ -3586,22 +3696,24 @@ fn resolve_template(
     let offset = choice.offset.unwrap_or(-1);
     let bin = choice.bin.unwrap_or(1);
     let readout = choice.readout_mode.unwrap_or(-1);
-    let existing: Vec<i64> = tx
-        .prepare(
-            "SELECT Id FROM exposuretemplate
-             WHERE profileId = ?1 AND LOWER(TRIM(filtername)) = LOWER(TRIM(?2))
-               AND IFNULL(gain, -1) = ?3 AND IFNULL(offset, -1) = ?4
-               AND IFNULL(bin, 1) = ?5 AND IFNULL(readoutmode, -1) = ?6
-             ORDER BY Id LIMIT 512",
-        )?
-        .query_map(
-            params![profile_id, choice.filter_name, gain, offset, bin, readout],
-            |row| row.get(0),
-        )?
-        .collect::<Result<_, _>>()?;
-    for id in existing {
-        if moon_matches(id)? {
-            return chosen(id);
+    for profile in profiles {
+        let existing: Vec<i64> = tx
+            .prepare(
+                "SELECT Id FROM exposuretemplate
+                 WHERE profileId = ?1 AND LOWER(TRIM(filtername)) = LOWER(TRIM(?2))
+                   AND IFNULL(gain, -1) = ?3 AND IFNULL(offset, -1) = ?4
+                   AND IFNULL(bin, 1) = ?5 AND IFNULL(readoutmode, -1) = ?6
+                 ORDER BY Id LIMIT 512",
+            )?
+            .query_map(
+                params![profile, choice.filter_name, gain, offset, bin, readout],
+                |row| row.get(0),
+            )?
+            .collect::<Result<_, _>>()?;
+        for id in existing {
+            if moon_matches(id)? {
+                return chosen(id);
+            }
         }
     }
     let moon = choice.moon.clone().unwrap_or_default();

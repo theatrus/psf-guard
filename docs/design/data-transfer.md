@@ -382,6 +382,23 @@ for it on an export with `include_frame_derivatives`. An older peer rejects
 a bundle carrying a table it does not know, so neither side sends one
 unasked. A bundle without the table leaves the receiver's records alone.
 
+### Plugin version and capabilities
+
+The Sync plugin sends `X-PSF-Guard-Plugin-Version` (its release version, for
+logs) and `X-PSF-Guard-Plugin-Capabilities` (a comma-separated list) with every
+request. The server keys behavior on the list, never on the version, since a
+local plugin build reports `0.1.0.0`. A request without the header comes from a
+plugin older than it. The server's own version and list come back from
+`GET /api/sync/v1/capabilities` as `product_version` and `capabilities`.
+
+`waiting_profile_v1`, in both lists, covers rows on PSF Guard's waiting
+profile (`00000000-0000-4000-8000-505346475244`). A plugin that lists it gets
+planning and merge exports as stored and writes the rows into the profile it
+runs in. For any other client, the export gives those rows the profile the
+plugin last reported with its star-detection settings, else the bundle's only
+other profile, and is sealed again. When neither is known, the rows go out
+unchanged and the server logs a warning.
+
 ### Deleted projects
 
 `project_tombstones_v1` advertises that a peer reads the projects a catalog

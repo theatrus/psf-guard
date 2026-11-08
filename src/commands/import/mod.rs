@@ -1433,7 +1433,7 @@ fn resolve_profile(conn: &Connection, options: &ImportOptions) -> Result<String>
 
 /// Insert a `profilepreference` row with the plugin's constructor defaults
 /// (TS 5 `ProfilePreference(string profileId)`), if none exists yet.
-fn ensure_profile_preference(conn: &Connection, profile_id: &str) -> Result<()> {
+pub(crate) fn ensure_profile_preference(conn: &Connection, profile_id: &str) -> Result<()> {
     let exists: i64 = conn.query_row(
         "SELECT COUNT(*) FROM profilepreference WHERE profileId = ?1",
         params![profile_id],

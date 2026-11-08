@@ -1,0 +1,4 @@
+/* Opened from Settings, which sits above ordinary dialogs. */
+.dialog-backdrop:has(> .database-remove-dialog) {
+  z-index: 100100;
+}

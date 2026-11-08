@@ -8,6 +8,7 @@
 //! lasts until it is changed back.
 
 use super::*;
+use psf_guard_director_meta::SYNC_PLACED_PROFILE as WAITING;
 use psf_guard_ts_planner::snapshot::{ProjectPriority, ProjectState, Snapshot};
 use rusqlite::{params, OpenFlags, OptionalExtension, Transaction, TransactionBehavior};
 
@@ -355,13 +356,14 @@ fn write(context: &DatabaseContext, changes: &TsChanges) -> Result<Saved, Error>
     let catalog_tx = catalog
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(store_error)?;
-    let profile = super::activation::resolve_profile(&catalog_tx)
+    let reported = super::activation::reported_profile(&context.id);
+    let profile = super::activation::resolve_profile(&catalog_tx, reported.as_deref())
         .map_err(store_error)?
         .ok_or_else(|| Error::Changed("The rig's database has no N.I.N.A. profile.".into()))?;
     for change in &changes.projects {
         let (guid, name): (Option<String>, String) = catalog_tx
             .query_row(
-                "SELECT guid, name FROM project WHERE Id = ?1 AND profileId = ?2",
+                &format!("SELECT guid, name FROM project WHERE Id = ?1 AND profileId IN (?2,'{WAITING}')"),
                 params![change.project_id, profile],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
@@ -393,8 +395,10 @@ fn write(context: &DatabaseContext, changes: &TsChanges) -> Result<Saved, Error>
     for change in &changes.targets {
         let (guid, name): (Option<String>, String) = catalog_tx
             .query_row(
-                "SELECT t.guid, t.name FROM target t JOIN project p ON p.Id = t.projectid
-                 WHERE t.Id = ?1 AND p.profileId = ?2",
+                &format!(
+                    "SELECT t.guid, t.name FROM target t JOIN project p ON p.Id = t.projectid
+                 WHERE t.Id = ?1 AND p.profileId IN (?2,'{WAITING}')"
+                ),
                 params![change.target_id, profile],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
@@ -462,7 +466,7 @@ fn update_project(
     let written = tx.execute(
         &format!(
             "UPDATE project SET priority = ?1, state = ?2
-             WHERE {} = ?3 AND profileId = ?4 AND priority = ?5 AND state = ?6",
+             WHERE {} = ?3 AND profileId IN (?4,'{WAITING}') AND priority = ?5 AND state = ?6",
             row.clause()
         ),
         params![
@@ -489,7 +493,7 @@ fn update_target(
     let written = tx.execute(
         &format!(
             "UPDATE target SET active = ?1
-             WHERE {} = ?2 AND active = ?3 AND projectid IN (SELECT Id FROM project WHERE profileId = ?4)",
+             WHERE {} = ?2 AND active = ?3 AND projectid IN (SELECT Id FROM project WHERE profileId IN (?4,'{WAITING}'))",
             row.clause()
         ),
         params![active, row.value(), was, profile],

@@ -1118,7 +1118,28 @@ the rig's sequence holds: Target Scheduler's or Director's.
 | --- | --- | --- |
 | GET | `/catalogs/{slug}/rig/profile` | The rig, its profile (revision 0 when nothing is saved), the computed `field_of_view`, and header-derived `defaults`. `404` until planning is enabled on the database. |
 | PUT | `/catalogs/{slug}/rig/profile` | `expected_revision` plus `optics`, `site`, `horizon`, `sky_quality` (each `{value, source}` or `null`), `limits`, `peer_id` (a registered Sync peer or `null`), and an optional `mode` (`target_scheduler` or `director`; `null` returns the rig to the guess, and left out keeps the mode). Sources may be `manual` or `frame_headers`; `409` when the revision moved, `400` for a peer this server does not know. The plugin's configuration is kept as stored. Both routes return `mode`: the mode `set` (`null` while guessed), the `runtime` night plans use, and whether the plugin is `paired` and its `equipment` reported. |
+| GET | `/catalogs/{slug}/rig/removal` | What [removing the rig](#remove-a-rig) deletes: `removal` with `rig`, `plans`, `plugins`, `blocker` (`open_work` or `null`) and `collaboration` (the rig's records stay), or `null` when the database has no rig. |
 | PUT | `/rigs/{rig}/equipment` | Plugin report: `coordinator_instance_id`, `catalog_id`, core `configuration`, `optics`, optional `site`, `horizon` and `limits`, and `reported_at_ms`. All three identities must match this server's binding or the call returns `403`. An identical report does not bump the revision. |
+
+### Remove a rig
+
+Choose **Remove** beside the database under **Settings › Databases & rigs ›
+Overview**, or on its **Rig setup** or **Database & files** tab. This needs the desktop app, or a server started with
+`--allow-database-management`. The dialog lists what goes. The database file and
+its images stay on disk.
+
+PSF Guard deletes the rig's settings, Director history and plugin pairing, and
+you cannot undo this. Plans stay: each loses this rig's part, and other rigs keep
+theirs. Adding the file back later creates a new rig, and its projects arrive as
+new plans.
+
+PSF Guard refuses to remove a rig with open work: choose **Close work** on the
+**Director** tab, then remove it. `DELETE /api/databases/{id}` answers `409` in
+this case and changes nothing. A rig with collaboration records keeps them, since
+they can hold reports not sent yet: only the database leaves PSF Guard, and
+adding the file back restores the rig. It answers `rig_removed` beside `removed`. When
+the database file cannot be read, PSF Guard may not find its rig: the database
+is removed, and the rig's records stay.
 
 **Remote site** picks the Sync peer that holds the rig's real database when
 the rig runs on another PSF Guard. The database registered here is then a
@@ -1629,9 +1650,9 @@ linked project:
 rig's database, the same rows Target Scheduler and the Director plugin read:
 
 - one Target Scheduler project per rig, named after the global project, in
-  the Active state, marked as a mosaic when there is more than one panel, under
-  the profile that owns the database's existing projects, with the plan's
-  [scheduling limits](#scheduling-limits);
+  the Active state, marked as a mosaic when there is more than one panel, with
+  the plan's [scheduling limits](#scheduling-limits). See
+  [Which N.I.N.A. profile a project uses](#which-nina-profile-a-project-uses);
 - one target per panel the rig owns, named after the target with the panel
   id appended for mosaics, at the panel center with its own camera angle:
   the framing's (the rig's own when it is framed on its own), plus the
@@ -1787,8 +1808,8 @@ panels short of the minimum overlap or leaving sky uncovered across every
 framing that rigs shoot, a rig's own panels under its name (a warning, never
 a refusal), and gives
 any reason a rig is skipped: no registered database on this server, a Target
-Scheduler schema older than 22, a database with no N.I.N.A. profile yet, or
-one that cannot be opened or written. On **Activate**, each rig database waits
+Scheduler schema older than 22, or a database that cannot be opened or
+written. On **Activate**, each rig database waits
 up to a minute for its write lock, as every other writer on the server does,
 since N.I.N.A. and a directory refresh can hold the file that long; the
 preview, on its copy, never waits. A plan saved
@@ -1806,6 +1827,49 @@ on a read connection and take its one writer only to record the result, so
 check-ins, program pulls and saves never wait behind rig databases. A rig
 whose plugin has not yet reported its camera still gets its rows; the Target
 Scheduler plugin can run them until Director acquisition arrives.
+
+### Which N.I.N.A. profile a project uses
+
+You can activate a plan on a new rig before it has any images. Only N.I.N.A.
+knows which profile is open, so the Sync plugin chooses the profile when it
+writes the project:
+
+- **Rig paired with the Sync plugin:** A new project waits under PSF Guard's own
+  profile, `00000000-0000-4000-8000-505346475244`. On its next pull, the plugin
+  writes the project into the profile N.I.N.A. has open. It uses a template that
+  profile already has when the filter, gain, offset, binning and readout mode
+  match.
+- **Rig with no profile and no plugin yet:** The project waits the same way.
+  Pair the Sync plugin, and its next pull adds the project to N.I.N.A.
+- **Database N.I.N.A. reads directly:** A new project uses the profile Director
+  plans for, described next.
+
+Director plans and reads scheduling limits for one profile per rig database:
+
+1. The profile a paired plugin last reported, when the database already has
+   projects, templates or preferences in it. The plugin reports its profile
+   when you pair it and whenever its star-detection settings change. When you
+   pair a profile with another database, it stops counting for the old one.
+2. Otherwise, the profile with the most projects.
+3. Then the database's only preference row, then the templates' profile.
+
+The schedule view warns when it leaves out projects of another profile. Pair
+each N.I.N.A. profile with its own PSF Guard database, for example one with the
+reducer and one without it. The plugin then sends each database only its own
+profile's projects.
+
+A project keeps its profile once it has one. Open the profile you want before
+the plugin pulls: that pull decides where a new project goes, and switching
+profiles later does not move it. The preview shows a note for each rig whose
+project is waiting.
+
+Older Sync plugins still work. A plugin that does not support PSF Guard's
+profile gets a new project under the profile it last reported with its
+star-detection settings, else under the database's only profile. It does not
+reuse a matching template, so Target Scheduler gets a copy. When PSF Guard knows
+neither profile, the project stays under PSF Guard's profile, N.I.N.A. hides it,
+and updating the plugin moves it on the next pull. The plugin and the server
+tell each other what they support; see [data transfer](design/data-transfer.md#plugin-version-and-capabilities).
 
 ### Activate through a connected TS file
 

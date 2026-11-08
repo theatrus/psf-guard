@@ -8,6 +8,7 @@
 //! vendored migrations in `src/ts_schema` add them.
 
 use psf_guard_director_core::{moon::MoonPolicy, visibility::IcrsPosition};
+use psf_guard_director_meta::SYNC_PLACED_PROFILE as WAITING;
 use psf_guard_ts_planner::snapshot::{
     CadenceItem, ExposurePlan, ExposureTemplate, OrderItem, Preferences, Project, ProjectPriority,
     ProjectState, RuleWeight, Snapshot, Target, TwilightLevel,
@@ -22,10 +23,11 @@ pub(super) struct ReadSnapshot {
     pub(super) warnings: Vec<String>,
 }
 
-/// Read the database at `path` for its N.I.N.A. profile: the profile that
-/// owns most projects, as activation chooses it. `None` when the database
-/// has no profile at all.
-pub(super) fn read(path: &str) -> rusqlite::Result<Option<ReadSnapshot>> {
+/// Read the database at `path` for its N.I.N.A. profile, as activation
+/// chooses it: `reported`, the profile its plugin last reported, when the
+/// database uses it, else the profile that owns most projects. `None` when
+/// the database has no profile at all.
+pub(super) fn read(path: &str, reported: Option<&str>) -> rusqlite::Result<Option<ReadSnapshot>> {
     let mut connection = crate::server::database_context::open_scheduler_connection_with_flags(
         Path::new(path),
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -34,7 +36,7 @@ pub(super) fn read(path: &str) -> rusqlite::Result<Option<ReadSnapshot>> {
     // One read transaction, so Target Scheduler writing counts or a project
     // between the queries cannot leave the snapshot half old, half new.
     let snapshot = connection.transaction()?;
-    let Some(profile_id) = super::activation::resolve_profile(&snapshot)? else {
+    let Some(profile_id) = super::activation::resolve_profile(&snapshot, reported)? else {
         return Ok(None);
     };
     let read = read_profile(&snapshot, &profile_id)?;
@@ -73,7 +75,7 @@ impl Columns {
 fn read_profile(connection: &Connection, profile_id: &str) -> rusqlite::Result<ReadSnapshot> {
     let mut warnings = Vec::new();
     let others: i64 = connection.query_row(
-        "SELECT COUNT(*) FROM project WHERE state=1 AND IFNULL(profileId,'')<>?1",
+        &format!("SELECT COUNT(*) FROM project WHERE state=1 AND IFNULL(profileId,'') NOT IN (?1,'{WAITING}')"),
         [profile_id],
         |row| row.get(0),
     )?;
@@ -153,7 +155,7 @@ fn read_preferences(connection: &Connection, profile_id: &str) -> rusqlite::Resu
         return Ok(defaults);
     }
     let sql = format!(
-        "SELECT {}, {}, {}, {} FROM profilepreference p WHERE p.profileId=?1 ORDER BY p.Id LIMIT 1",
+        "SELECT {}, {}, {}, {} FROM profilepreference p WHERE p.profileId IN (?1,'{WAITING}') ORDER BY p.profileId = '{WAITING}', p.Id LIMIT 1",
         columns.or("p", "enableSlewCenter", "1"),
         columns.or("p", "parkonwait", "0"),
         columns.or("p", "exposurethrottle", "125"),
@@ -182,7 +184,7 @@ fn read_templates(
     let sql = format!(
         "SELECT t.Id, t.name, t.filtername, t.gain, t.offset, t.bin, t.readoutmode,
                 {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}
-         FROM exposuretemplate t WHERE t.profileId=?1 ORDER BY t.Id",
+         FROM exposuretemplate t WHERE t.profileId IN (?1,'{WAITING}') ORDER BY t.Id",
         c.or("t", "twilightlevel", "0"),
         c.or("t", "minutesOffset", "0"),
         c.or("t", "moonavoidanceenabled", "0"),
@@ -254,7 +256,7 @@ fn read_projects(connection: &Connection, profile_id: &str) -> rusqlite::Result<
     let c = Columns::of(connection, "project")?;
     let sql = format!(
         "SELECT p.Id, {}, p.name, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}
-         FROM project p WHERE p.profileId=?1 ORDER BY p.Id",
+         FROM project p WHERE p.profileId IN (?1,'{WAITING}') ORDER BY p.Id",
         c.or("p", "guid", "NULL"),
         c.or("p", "state", "0"),
         c.or("p", "priority", "1"),
@@ -308,8 +310,8 @@ fn read_rule_weights(
     let mut found: BTreeMap<i64, Vec<RuleWeight>> = BTreeMap::new();
     let rows = connection
         .prepare(
-            "SELECT r.projectid, r.name, r.weight FROM ruleweight r
-             JOIN project p ON p.Id=r.projectid WHERE p.profileId=?1 ORDER BY r.Id",
+            &format!("SELECT r.projectid, r.name, r.weight FROM ruleweight r
+             JOIN project p ON p.Id=r.projectid WHERE p.profileId IN (?1,'{WAITING}') ORDER BY r.Id"),
         )?
         .query_map([profile_id], |row| {
             Ok((
@@ -336,7 +338,7 @@ fn read_targets(
     let c = Columns::of(connection, "target")?;
     let sql = format!(
         "SELECT t.Id, {}, t.name, t.active, t.ra, t.dec, {}, {}, t.projectid
-         FROM target t JOIN project p ON p.Id=t.projectid WHERE p.profileId=?1 ORDER BY t.Id",
+         FROM target t JOIN project p ON p.Id=t.projectid WHERE p.profileId IN (?1,'{WAITING}') ORDER BY t.Id",
         c.or("t", "guid", "NULL"),
         c.or("t", "rotation", "0"),
         c.or("t", "roi", "100"),
@@ -405,7 +407,7 @@ fn read_plans(
         "SELECT e.Id, {}, e.targetid, e.exposureTemplateId, e.exposure,
                 COALESCE(e.desired, 0), COALESCE(e.acquired, 0), COALESCE(e.accepted, 0), {}
          FROM exposureplan e JOIN target t ON t.Id=e.targetid JOIN project p ON p.Id=t.projectid
-         WHERE p.profileId=?1 ORDER BY e.Id",
+         WHERE p.profileId IN (?1,'{WAITING}') ORDER BY e.Id",
         c.or("e", "guid", "NULL"),
         c.or("e", "enabled", "1"),
     );
@@ -461,7 +463,7 @@ fn read_items(
     let sql = format!(
         "SELECT i.targetid, i.\"order\", {next}, i.action, i.referenceIdx
          FROM \"{table}\" i JOIN target t ON t.Id=i.targetid JOIN project p ON p.Id=t.projectid
-         WHERE p.profileId=?1 ORDER BY i.targetid, i.\"order\", i.Id"
+         WHERE p.profileId IN (?1,'{WAITING}') ORDER BY i.targetid, i.\"order\", i.Id"
     );
     let rows = connection
         .prepare(&sql)?

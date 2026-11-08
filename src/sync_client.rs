@@ -110,6 +110,7 @@ impl SyncClient {
             token: token.trim().to_string(),
             http: reqwest::Client::builder()
                 .timeout(REQUEST_TIMEOUT)
+                .default_headers(peer_headers())
                 .build()
                 .context("building the sync HTTP client")?,
         })
@@ -283,6 +284,21 @@ pub fn local_bundle(
 /// table the peer left out.
 pub fn materialize(bundle: &CatalogBundle, into: &Path, template_path: &Path) -> Result<()> {
     crate::server::remote_sync::materialize_bundle(into, template_path, bundle)
+}
+
+/// Headers PSF Guard sends as a sync client. A PSF Guard catalog stores rows
+/// on the waiting N.I.N.A. profile as they are, so it asks for them
+/// unchanged, as an up-to-date Sync plugin does.
+fn peer_headers() -> reqwest::header::HeaderMap {
+    use crate::server::remote_sync::{
+        PLUGIN_CAPABILITIES_HEADER, PLUGIN_WAITING_PROFILE_CAPABILITY,
+    };
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        PLUGIN_CAPABILITIES_HEADER,
+        reqwest::header::HeaderValue::from_static(PLUGIN_WAITING_PROFILE_CAPABILITY),
+    );
+    headers
 }
 
 #[cfg(test)]

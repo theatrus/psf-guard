@@ -5,9 +5,10 @@ import { apiClient } from '../../api/client';
 import type { DirectorIdentity, DirectorPlanLink, DirectorPlanRow } from '../../api/directorTypes';
 import { useAccess } from '../../auth/access';
 import { usePlans } from '../header/useCurrentPlan';
-import { waitingPlanMatchesShow, type LibraryShow } from '../libraryShow';
+import type { LibraryShow } from '../libraryShow';
 import { identityId } from './identityId';
 import { matchesSearch } from './planFilters';
+import { shownWaitingPlans, waitingPlans } from './waitingPlans';
 import PlanRow from './PlanRow';
 import PlanDeleteDialog from './PlanDeleteDialog';
 import { coordinatorResult } from './collaborationLeaveText';
@@ -30,7 +31,7 @@ interface Edit { record: DirectorIdentity; creating: boolean }
  *  that have not captured yet, has no row there, so it waits here until its
  *  first frame arrives. `listed` holds every project row the Library has,
  *  as `slug:id`, whatever its filters show. */
-export default function LibraryPlans({ search, show, listed, dbFilter = null, incomplete = false }: { search: string; show: LibraryShow; listed: ReadonlySet<string>; dbFilter?: string | null; incomplete?: boolean }) {
+export default function LibraryPlans({ search, show, listed, dbFilter = null, incomplete = false, onShowNoRig }: { search: string; show: LibraryShow; listed: ReadonlySet<string>; dbFilter?: string | null; incomplete?: boolean; onShowNoRig?: () => void }) {
   const { canWrite } = useAccess();
   const client = useQueryClient();
   const plans = usePlans();
@@ -114,12 +115,10 @@ export default function LibraryPlans({ search, show, listed, dbFilter = null, in
       {(validation || save.isError) && <p className="director-error" role="alert">{validation || message(save.error)}</p>}
     </form>
   );
-  // When a database's projects could not be read, `listed` is short and a
-  // linked plan would look empty; only plans with no database are certain.
-  const waiting = plans.rows.filter(row => (!incomplete || row.links.length === 0)
-    && row.links.every(link => link.source_row_id === null || !listed.has(`${link.catalog_slug}:${link.source_row_id}`)));
-  const shown = waiting.filter(row => waitingPlanMatchesShow(row.links, show) && matchesSearch(row, search)
-    && (!dbFilter || row.links.some(link => link.catalog_slug === dbFilter)));
+  const waiting = waitingPlans(plans.rows, listed, incomplete);
+  const shown = shownWaitingPlans(waiting, show, search, dbFilter);
+  // The Database filter leaves out plans on no rig, which have nowhere else to appear.
+  const onNoRig = dbFilter ? waiting.filter(row => row.links.length === 0 && matchesSearch(row, search)).length : 0;
   // Nothing to show and nothing to do: stay out of the Library.
   if (!canWrite && shown.length === 0 && !plans.error && !plans.query.data?.warnings.length) return null;
   const item = (row: DirectorPlanRow) => <li key={row.project.id} className="director-plan">
@@ -129,7 +128,7 @@ export default function LibraryPlans({ search, show, listed, dbFilter = null, in
       onDelete={deleteAllowed ? () => { setNotice(''); setDeleting(row); } : undefined} />
     {edit?.record.id === row.project.id && !edit.creating && form}
   </li>;
-  return <section className="director-page director-embedded library-plans" aria-label="Plans with nothing captured yet">
+  return <section id="library-plans" className="director-page director-embedded library-plans" aria-label="Plans with nothing captured yet">
     <div className="director-toolbar">
       <h3>Plans with nothing captured yet</h3>
       <div className="director-actions">
@@ -145,6 +144,10 @@ export default function LibraryPlans({ search, show, listed, dbFilter = null, in
     {plans.error && <p className="director-error" role="alert">{message(plans.query.error)}</p>}
     {plans.query.isSuccess && shown.length === 0 && <p className="director-muted">{waiting.length === 0 ? 'Every plan has frames.' : 'No plan matches.'}</p>}
     <ul className="director-plan-list is-compact">{shown.map(item)}</ul>
+    {onNoRig > 0 && onShowNoRig && <p className="director-muted">
+      {onNoRig === 1 ? '1 plan is' : `${onNoRig} plans are`} not on any rig.{' '}
+      <button type="button" className="library-link-button" onClick={onShowNoRig}>Show {onNoRig === 1 ? 'it' : 'them'}</button>
+    </p>}
     {deleting && <PlanDeleteDialog
       planId={deleting.project.id}
       name={deleting.project.name}

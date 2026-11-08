@@ -64,6 +64,7 @@ mod rig_availability;
 mod ts_levers;
 pub(crate) use remote_push::{peer_reached, resends_under_way};
 mod rig_profile;
+pub(crate) mod rig_removal;
 mod rig_scheduling;
 mod site_forecast;
 mod site_profile;
@@ -686,6 +687,7 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
                 )),
         )
         .route("/catalogs/{slug}/rig/plugin", get(plugin_view::get))
+        .route("/catalogs/{slug}/rig/removal", get(rig_removal::preview))
         .route(
             "/rigs/{rig}/equipment",
             axum::routing::put(rig_profile::report_equipment).layer(DefaultBodyLimit::max(

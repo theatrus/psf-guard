@@ -833,7 +833,8 @@ async fn compute(
                 if stopped.requested() {
                     return Err(String::new());
                 }
-                match ts_snapshot::read(&input.database_path) {
+                let reported = super::activation::reported_profile(&input.catalog_slug);
+                match ts_snapshot::read(&input.database_path, reported.as_deref()) {
                     Ok(Some(read)) => {
                         input.warnings.extend(read.warnings);
                         let mut snapshot = read.snapshot;

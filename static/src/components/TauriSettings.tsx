@@ -17,6 +17,7 @@ import type {
 import type { DbEntry, DbRegistry } from '../utils/tauri';
 import { apiClient } from '../api/client';
 import { useAccess } from '../auth/access';
+import DatabaseRemoveDialog from './DatabaseRemoveDialog';
 import type { SettingsIntent, SettingsRig } from '../utils/settingsIntent';
 import ReviewPreferences from './ReviewPreferences';
 import DirectorRigs from './director/DirectorRigs';
@@ -148,6 +149,7 @@ export default function TauriSettings({
   // gate is enforced server-side; we mirror it here to hide UI that would
   // just 403.
   const managementAllowed = isTauri || (serverInfo?.allow_database_management ?? false);
+  const [removing, setRemoving] = useState<DbEntry | null>(null);
   // What edits a catalog, installs catalogs, syncs, imports from the image
   // folders or moves rejects needs only an editor: the gate guards server
   // paths a client names.
@@ -921,29 +923,11 @@ export default function TauriSettings({
     }
   };
 
-  const handleRemove = async (entry: DbEntry) => {
-    if (!confirm(
-      `Remove "${entry.name}" from PSF Guard? Its database file and images stay on disk, and you can add it again.`
-    )) return;
-    setIsApplying(true);
-    try {
-      const ok = await apiClient.removeDatabase(entry.id);
-      if (ok) {
-        queryClient.invalidateQueries({ queryKey: ['databases'] });
-        queryClient.invalidateQueries({ queryKey: ['db', entry.id] });
-        await reload();
-        if (editingId === entry.id) resetForm();
-        setStatusMessage(`Removed ${entry.name}.`);
-      } else {
-        setStatusMessage('Remove failed.');
-      }
-    } catch (err) {
-      console.error('remove failed:', err);
-      const msg = err instanceof Error ? err.message : String(err);
-      setStatusMessage(`Failed to remove: ${msg}`);
-    } finally {
-      setIsApplying(false);
-    }
+  const handleRemoved = async (entry: DbEntry) => {
+    setRemoving(null);
+    await reload();
+    if (editingId === entry.id) resetForm();
+    setStatusMessage(`Removed ${entry.name}.`);
   };
 
   const databases = registry?.databases ?? [];
@@ -1874,6 +1858,8 @@ export default function TauriSettings({
     <UnsavedMark label={currentTab === 'sync' ? 'sync connection' : 'database files'} dirty={!!editDirty} />
     <div className="tauri-settings modal-overlay" onClick={requestClose}>
       <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+        {/* Inside the panel, so the dialog's clicks do not close Settings. */}
+        {removing && <DatabaseRemoveDialog database={removing} onClose={() => setRemoving(null)} onRemoved={() => void handleRemoved(removing)} />}
         <div className="modal-header">
           <h2>PSF Guard Settings</h2>
           <div className="settings-header-actions" role="group" aria-label="Settings actions">
@@ -1949,7 +1935,8 @@ export default function TauriSettings({
             {isLoading || !registry ? 'Loading the selected database…' : 'This database is no longer registered. Return to Databases & rigs to choose another.'}
             <button type="button" className="link-button" onClick={() => requestSection('rig-databases')}>Databases &amp; rigs</button>
           </p>}
-          {currentTab === 'rig-databases' && hasDatabases && !showAddForm && <RigDatabaseList databases={databases} onOpen={openDatabase} />}
+          {currentTab === 'rig-databases' && hasDatabases && !showAddForm && <RigDatabaseList databases={databases} onOpen={openDatabase}
+            onRemove={managementAllowed && canEdit ? setRemoving : undefined} managementHint={!managementAllowed && canEdit} />}
           {currentTab === 'database-overview' && selectedDatabase && <section className="settings-section">
             <h3>{selectedDatabase.name}</h3><p>Choose a page beneath this database in the Settings navigation.</p>
             <dl className="db-row-paths"><div><dt>Database</dt><dd>{selectedDatabase.db_path}</dd></div><div><dt>Image folders</dt><dd>{selectedDatabase.image_dirs.join(', ')}</dd></div></dl>
@@ -2065,13 +2052,14 @@ export default function TauriSettings({
                               </button>
                               <button
                                 type="button"
-                                className="db-action-button is-icon is-danger"
-                                onClick={() => handleRemove(entry)}
+                                className="db-action-button is-danger"
+                                onClick={() => setRemoving(entry)}
                                 disabled={isApplying}
                                 aria-label={`Remove ${entry.name}`}
-                                title="Remove this database from PSF Guard; its files stay on disk"
+                                title="Remove this database and its rig from PSF Guard; its files stay on disk"
                               >
                                 <Trash2 size={15} aria-hidden="true" />
+                                Remove
                               </button>
                             </>
                           )}
