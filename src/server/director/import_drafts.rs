@@ -795,6 +795,12 @@ pub(super) fn refresh_drafts(
         plan: stored_plan,
     } = follow;
     let project_id = record.project_id;
+    // Activated since the listing chose to follow it: an activated plan
+    // stops following, and keeps its drafts.
+    if store.activation(project_id)?.is_some() {
+        store.forget_draft_import(project_id)?;
+        return Ok(false);
+    }
     let mut changed = false;
     if let Some(mut framing) = drafts.framing {
         framing.project_id = project_id;
