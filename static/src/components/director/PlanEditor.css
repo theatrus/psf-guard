@@ -34,3 +34,5 @@
 .plan-progress-bar { height: 6px; border-radius: 3px; background: var(--color-bg-tertiary); overflow: hidden; }
 .plan-progress-bar > span { display: block; height: 100%; background: var(--color-success); }
 @media (max-width: 700px) { .plan-contributions .plan-rig-summary { padding: 8px; border-radius: 6px; background: var(--color-bg-secondary); } .plan-contributions .plan-rig-summary td { background: none; } }
+
+.plan-filter-warning { display: block; margin-top: 0.25rem; color: var(--color-warning-light); font-size: 0.85rem; }

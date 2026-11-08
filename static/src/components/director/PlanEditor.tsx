@@ -9,6 +9,7 @@ import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import type { DirectorContribution, DirectorFrameCounts, DirectorGoal, DirectorObjective, DirectorPlanDraft, DirectorPlanView, DirectorRigProfileSummary, DirectorTemplate } from '../../api/directorTypes';
 import { layoutOf } from './framingModel';
+import { hasFilter } from './rigProfileForm';
 import { PURPOSES, bandpassKind, bandpassOptions, bindOwnTemplates, choiceFrom, convertGoal, coverageGaps, goalFor, speedAdjustedHours, defaultExposure, emptyPlan, formatHours, framesFor, goalExposure, hoursFor, libraryChoice, libraryFor, newContribution, newLibraryContribution, newObjective, objectiveName, onePartEach, ownTwin, panelIds, partStatus, panelsByRig, planProblem, rigPanels, rigStatus, rigTotals, samePlan, shootingRigs, templateValue, templatesFor } from './planModel';
 import './PlanEditor.css';
 
@@ -331,7 +332,9 @@ export default function PlanEditor({ projectId, linkedRigIds = [], rigExtras, fo
                 {shared.length > 0 && <optgroup label="Library, written on activation">{shared.map(t => <option key={t.id} value={`lib:${t.id}`}>{t.name} ({t.filter_name}{t.bin && t.bin > 1 ? `, ${t.bin}×${t.bin}` : ''})</option>)}</optgroup>}
                 {contribution && templateValue(contribution, library).startsWith('lib:') && !listed.some(t => t.id === contribution.template.template_guid) && <option value={templateValue(contribution, library)}>{contribution.template.name} (library, since removed)</option>}
               </select>;
-            })()}</td>
+            })()}
+              {contribution && !hasFilter(rig.filter_list, contribution.template.filter_name) && <small className="plan-filter-warning" role="note">Filter {contribution.template.filter_name} isn't on this rig's filter list. Choose another template, or add the filter in Rig setup.</small>}
+            </td>
             <td>{contribution && <span className="plan-goal"><NumberInput aria-label={`${rig.catalog_name} exposure for ${label}`} min={1} step="any" value={contribution.exposure_seconds} onChange={event => setContribution(rig, objective, current => current ? { ...current, exposure_seconds: number(event.target.value, current.exposure_seconds) } : current)} /><small>s</small></span>}</td>
             <td className="plan-rig-goal">{contribution && (contribution.goal
               ? <span className="plan-goal">

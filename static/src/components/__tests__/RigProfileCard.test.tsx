@@ -41,6 +41,7 @@ function fixture(conflictOnce = false) {
       optics: { value: optics, source: { kind: 'frame_headers', file_name: 'newest.fits' }, reported_at_ms: 2 },
       site: { value: site, source: { kind: 'frame_headers', file_name: 'newest.fits' }, reported_at_ms: 2 },
       field_of_view: null,
+      filters: ['Ha', 'OIII'],
     },
     mode: { set: profile.mode ?? null, runtime: profile.mode ?? 'target_scheduler', paired: false, equipment: false },
   });
@@ -56,7 +57,8 @@ function fixture(conflictOnce = false) {
         site: edit.site ? { ...edit.site, reported_at_ms: 3 } : null,
         sky_quality: edit.sky_quality ? { ...edit.sky_quality, reported_at_ms: 3 } : null,
         limits: { ...edit.limits, reported_at_ms: 3 }, peer_id: edit.peer_id,
-        ...(edit.mode !== undefined ? { mode: edit.mode } : {}) };
+        ...(edit.mode !== undefined ? { mode: edit.mode } : {}),
+        ...(edit.filters !== undefined ? { filters: edit.filters ? { ...edit.filters, reported_at_ms: 3 } : null } : {}) };
       return HttpResponse.json(ok({ ...view(), profile, field_of_view: { width_degrees: 5.38, height_degrees: 3.6, pixel_scale_arcsec: 3.1, focal_ratio: 4.9 } }));
     }),
   );
@@ -241,6 +243,26 @@ describe('Rig profile card', () => {
     const gone = formFromProfile({ ...empty, peer_id: 'old-site' });
     expect(gone.peerId).toBe('old-site');
     expect((editFromForm(gone, empty) as DirectorRigProfileEdit).peer_id).toBe('old-site');
+  });
+
+  it("saves a typed filter list, offers the database's filters, and clears an empty list", async () => {
+    const { saves } = fixture(); mount();
+    const names = await screen.findByLabelText('Filter names');
+    expect(screen.getByText(/Planning warns when a template uses a filter that isn't on this list/)).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: "Use this database's filters (Ha, OIII)" }));
+    expect(names).toHaveValue('Ha, OIII');
+    // Once the field matches, the offer goes away.
+    expect(screen.queryByRole('button', { name: /Use this database's filters/ })).not.toBeInTheDocument();
+    fireEvent.change(names, { target: { value: ' L, Ha,, ha, OIII ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save rig profile' }));
+    expect(await screen.findByText('Saved rig profile revision 1.')).toBeInTheDocument();
+    expect(saves[0].filters).toEqual({ value: ['L', 'Ha', 'OIII'], source: { kind: 'manual' } });
+    expect(await screen.findByLabelText('Filter names')).toHaveValue('L, Ha, OIII');
+
+    fireEvent.change(screen.getByLabelText('Filter names'), { target: { value: ' , ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save rig profile' }));
+    await waitFor(() => expect(saves).toHaveLength(2));
+    expect(saves[1].filters).toBeNull();
   });
 
   it('shows values read only without a save button', async () => {

@@ -666,7 +666,7 @@ describe('TauriSettings import state', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Open Remote catalog' }));
     fireEvent.click(screen.getByRole('tab', { name: 'Database & files' }));
-    fireEvent.click(screen.getByRole('tab', { name: 'Sync' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Rig setup' }));
     fireEvent.click(screen.getByRole('button', { name: 'Edit remote receive and pairing' }));
 
     expect(screen.getByText(/Observatory PC · paired .* · last contact 5 min ago, plugin 1\.4\.0\.0/)).toBeVisible();

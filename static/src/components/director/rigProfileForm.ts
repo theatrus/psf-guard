@@ -14,6 +14,8 @@ export interface RigProfileForm {
   horizon: DirectorEdited<DirectorHorizon> | null;
   /** Who picks the rig's work; '' leaves it to PSF Guard's guess. */
   mode: DirectorRigMode | '';
+  /** Typed filter names, comma-separated; '' has no list. */
+  filters: string;
 }
 
 const text = (value: number | null | undefined) => value === null || value === undefined ? '' : String(value);
@@ -36,7 +38,24 @@ export function formFromProfile(profile: DirectorRigProfile): RigProfileForm {
     peerId: profile.peer_id ?? '',
     horizon: profile.horizon ? { value: profile.horizon.value, source: profile.horizon.source } : null,
     mode: profile.mode ?? '',
+    filters: profile.filters?.value.join(', ') ?? '',
   };
+}
+
+/** The typed names as the server stores them: trimmed, no blanks, each once regardless of case. */
+export function filterNames(text: string): string[] {
+  const seen = new Set<string>();
+  return text.split(',').map(name => name.trim()).filter(name => {
+    const key = name.toLowerCase();
+    if (!name || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/** Whether the rig's filter list has this template's filter. */
+export function hasFilter(list: string[] | null | undefined, filter: string): boolean {
+  return !list || list.some(name => name.trim().toLowerCase() === filter.trim().toLowerCase());
 }
 
 /** Copy the header-derived optics and site into the form, keeping their source. */
@@ -98,6 +117,9 @@ export function editFromForm(form: RigProfileForm, profile: DirectorRigProfile):
   const [minAlt, maxAlt, before, after] = [form.minAltitude, form.maxAltitude, form.meridianBefore, form.meridianAfter].map(num);
   if (!finite(minAlt) || !finite(maxAlt) || maxAlt <= minAlt) return 'The maximum altitude must be above the minimum.';
   if (!finite(before) || !finite(after) || before < 0 || after < 0) return 'Meridian minutes cannot be negative.';
+  const filters = filterNames(form.filters);
+  if (filters.some(name => name.length > 64)) return 'A filter name can be at most 64 characters.';
+  if (filters.length > 64) return 'Enter at most 64 filters.';
   const stored = (part: DirectorReported<unknown> | null, source: DirectorSource | null) => source ?? part?.source ?? manual;
   return {
     expected_revision: profile.revision,
@@ -108,6 +130,7 @@ export function editFromForm(form: RigProfileForm, profile: DirectorRigProfile):
     limits: { value: { minimum_altitude_degrees: minAlt, maximum_altitude_degrees: maxAlt, meridian_exclusion: { before_ms: Math.round(before * 60000), after_ms: Math.round(after * 60000) } }, source: manual },
     peer_id: form.peerId || null,
     mode: form.mode || null,
+    filters: filters.length > 0 ? { value: filters, source: manual } : null,
   };
 }
 

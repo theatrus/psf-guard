@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from 'react';
+import { Fragment, useId, useMemo, useState } from 'react';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, Copy, Moon, Plus, Trash2 } from 'lucide-react';
 import { apiClient } from '../../api/client';
@@ -27,6 +27,13 @@ export default function TemplateLibrary() {
   const library = useQuery({ queryKey: ['directorTemplateLibrary'], queryFn: apiClient.getDirectorTemplateLibrary, retry: retryWhenBusy, retryDelay: 1200, refetchOnWindowFocus: false });
   const rigs = useQuery({ queryKey: ['directorRigProfiles'], queryFn: apiClient.getDirectorRigProfiles, retry: retryWhenBusy, retryDelay: 1200, refetchOnWindowFocus: false });
   const rigList = useMemo(() => rigs.data ?? [], [rigs.data]);
+  // Every rig's filter names, offered while typing a template's filter.
+  const filterListId = useId();
+  const knownFilters = useMemo(() => {
+    const names = new Map<string, string>();
+    for (const rig of rigList) for (const name of rig.filter_list ?? []) if (!names.has(name.toLowerCase())) names.set(name.toLowerCase(), name);
+    return [...names.values()];
+  }, [rigList]);
   const [copyFrom, setCopyFrom] = useState('');
   const [moonEditor, setMoonEditor] = useState<string | null>(null);
   const rigTemplates = useQueries({ queries: rigList.map(rig => ({ queryKey: ['directorTemplates', rig.catalog_slug], queryFn: () => apiClient.getDirectorTemplates(rig.catalog_slug), enabled: rig.catalog_slug === copyFrom, retry: retryWhenBusy, retryDelay: 1200, refetchOnWindowFocus: false })) });
@@ -107,7 +114,7 @@ export default function TemplateLibrary() {
         const trouble = problemWith(row);
         return <Fragment key={row.id}><tr className={dirty ? 'is-dirty' : undefined}>
           <td><input aria-label="Template name" value={row.name} maxLength={256} disabled={!canWrite} onChange={event => edit(row.id, { name: event.target.value })} /></td>
-          <td><input aria-label="Template filter" value={row.filter_name} maxLength={128} placeholder="Ha, L, OIII" disabled={!canWrite} onChange={event => edit(row.id, { filter_name: event.target.value })} /></td>
+          <td><input aria-label="Template filter" list={knownFilters.length > 0 ? filterListId : undefined} value={row.filter_name} maxLength={128} placeholder="Ha, L, OIII" disabled={!canWrite} onChange={event => edit(row.id, { filter_name: event.target.value })} /></td>
           <td className="director-muted">{stored && !dirty ? `${stored.bandpass.name}${stored.bandpass.kind === 'narrowband' ? ' (narrowband)' : ''}` : '—'}</td>
           <td><input aria-label="Template gain" type="number" min={0} step={1} value={row.gain ?? ''} disabled={!canWrite} onChange={event => edit(row.id, { gain: numberOrNull(event.target.value) })} /></td>
           <td><input aria-label="Template offset" type="number" min={0} step={1} value={row.offset ?? ''} disabled={!canWrite} onChange={event => edit(row.id, { offset: numberOrNull(event.target.value) })} /></td>
@@ -129,5 +136,6 @@ export default function TemplateLibrary() {
     </table></div>}
     {notice && <p role="status">{notice}</p>}
     {problem && <p className="director-error" role="alert">{problem}</p>}
+    {knownFilters.length > 0 && <datalist id={filterListId}>{knownFilters.map(name => <option key={name} value={name} />)}</datalist>}
   </section>;
 }

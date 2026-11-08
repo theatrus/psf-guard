@@ -76,6 +76,7 @@
 .rig-profile-input input, .rig-profile-input select { flex: 1 1 5rem; min-width: 0; width: 100%; box-sizing: border-box; background: var(--color-input-bg); color: var(--color-input-text); border: 1px solid var(--color-input-border); border-radius: 4px; padding: 7px 9px; font: inherit; }
 .rig-profile-input small { white-space: nowrap; opacity: 0.7; }
 .rig-profile-rotation { grid-column: 1 / -1; max-width: 28rem; }
+.rig-profile-filters { max-width: 36rem; }
 .rig-profile-rotation .rig-profile-input { flex-wrap: wrap; }
 .rig-profile-rotation select { flex: 2 1 10rem; }
 .rig-profile-rotation input { flex: 1 1 4rem; }

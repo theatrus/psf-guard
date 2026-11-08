@@ -16,7 +16,7 @@ import RigPluginPanel from './RigPluginPanel';
 import RigWeatherPanel from './RigWeather';
 import WorkspaceTabs from './WorkspaceTabs';
 import { workspacePanel } from './workspacePanel';
-import { applyDefaults, describeSource, editFromForm, fieldOfView, formFromProfile, formatFieldOfView, opticsFromForm, type RigProfileForm } from './rigProfileForm';
+import { applyDefaults, describeSource, editFromForm, fieldOfView, filterNames, formFromProfile, formatFieldOfView, opticsFromForm, type RigProfileForm } from './rigProfileForm';
 import { useUnsavedChanges } from '../../hooks/useUnsavedChanges';
 
 const message = (error: unknown) => isAxiosError(error)
@@ -193,6 +193,8 @@ export default function RigProfileCard({ slug, syncPlugin, initialTab }: {
   // planning site and the Target Scheduler limits. Settings asks before
   // closing over them.
   const siteChanged = !!rigSettings.data && siteId !== rigSettings.data.site_id;
+  // The filter names the database's templates and frames use.
+  const suggestedFilters = data?.defaults.filters ?? [];
   const unsaved = !!data && !!form && canWrite
     && (JSON.stringify(form) !== JSON.stringify(formFromProfile(data.profile)) || siteChanged || schedulingChanged);
   useUnsavedChanges(`${data?.rig.name ?? slug} setup`, unsaved);
@@ -261,6 +263,18 @@ export default function RigProfileCard({ slug, syncPlugin, initialTab }: {
           </label>
         </div>
         <p className="director-muted" data-testid="rig-profile-fov">{preview ? `Field ${formatFieldOfView(preview)}` : 'Enter the sensor size, pixel size and focal length to see the field of view.'}</p>
+      </fieldset>
+      <fieldset disabled={disabled}>
+        <legend>Filters</legend>
+        <p className="director-muted">{data.profile.configuration
+          ? `The Director plugin reported this rig's filters: ${data.filter_list?.join(', ') || 'none'}. Planning checks templates against those, not the names below.`
+          : "Planning warns when a template uses a filter that isn't on this list. Leave it empty to skip the check."}</p>
+        <label className="rig-profile-field rig-profile-filters" htmlFor={`${slug}-filters`}><span>Filter names, separated by commas</span>
+          <span className="rig-profile-input"><input id={`${slug}-filters`} aria-label="Filter names" type="text" placeholder="L, R, G, B, Ha, OIII, SII" value={form.filters} disabled={disabled} onChange={event => update({ filters: event.target.value })} /></span>
+        </label>
+        {canWrite && suggestedFilters.length > 0 && filterNames(form.filters).join(', ') !== suggestedFilters.join(', ') && <p className="director-muted rig-profile-source">
+          <button type="button" className="link-button" onClick={() => update({ filters: suggestedFilters.join(', ') })}><Download size={14} />Use this database's filters ({suggestedFilters.join(', ')})</button>
+        </p>}
       </fieldset>
       </div>
       <div {...workspacePanel(id, 'site', tab)}>

@@ -24,6 +24,9 @@ pub(super) struct ProfileView {
     defaults: Defaults,
     /// Who picks the rig's work, and what Director needs to run it.
     mode: ModeView,
+    /// The rig's filters: its Director plugin's wheel, else the list typed
+    /// in Rig setup. `None` when neither is known.
+    filter_list: Option<Vec<String>>,
 }
 
 #[derive(Default, Serialize)]
@@ -132,6 +135,7 @@ fn view(
     };
     Ok(ProfileView {
         rig,
+        filter_list: profile.filter_list(),
         profile,
         field_of_view,
         defaults,
