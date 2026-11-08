@@ -58,6 +58,17 @@ control. The selected page includes the database name.
   the Sync plugin, with what the database accepts from it, and the Director
   plugin. Each database is one rig. Without planning, **Rig setup** shows only
   the Sync plugin.
+  - Each paired Sync client shows when it last connected and which plugin
+    version it reported. A note identifies a client whose plugin is too old
+    to add new projects to its N.I.N.A. profile itself. Update that plugin
+    in N.I.N.A. so new projects always reach the profile it runs in.
+  - **Rig setup → Optics → Filters** stores the rig's filter names for a rig
+    with no Director plugin. Type them separated by commas, or click
+    **Use this database's filters** to copy the names its templates and
+    frames use. When a plan uses a template whose filter is not on the
+    list, the plan editor and the activation preview warn you. A filter
+    wheel the Director plugin reports replaces the typed list. Leave the
+    field empty to skip the check.
 - **Database & files** contains database paths, image folders and maintenance.
   Click **Edit database** to change the name and paths.
 - **Import** contains editable scan rules, automatic-import settings and
