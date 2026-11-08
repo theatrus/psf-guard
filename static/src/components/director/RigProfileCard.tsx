@@ -69,7 +69,10 @@ async function profileOrRig(slug: string, client: QueryClient): Promise<Director
       throw error;
     }
     void client.invalidateQueries({ queryKey: ['directorPlans'] });
-    return apiClient.getDirectorRigProfile(slug);
+    const created = await apiClient.getDirectorRigProfile(slug);
+    // The rig list's header line reads the summaries, which predate the rig.
+    void client.invalidateQueries({ queryKey: ['directorRigProfiles'] });
+    return created;
   }
 }
 

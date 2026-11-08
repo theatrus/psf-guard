@@ -59,7 +59,7 @@ export default function DirectorRigs({ databaseId, syncPlugin, initialTab }: {
         <div className="director-record director-record-wide">
           <div className="director-record-name">
             <h3 className="director-rig-title"><Telescope size={20} aria-hidden="true" />{db.name}</h3>
-            <span className="director-muted">{!profiles.data ? (profiles.isError ? 'Could not load rig settings' : 'Checking rig...') : !profile ? 'Open the Library to add this database as a rig'
+            <span className="director-muted">{!profiles.data ? (profiles.isError ? 'Could not load rig settings' : 'Checking rig...') : !profile ? (expanded ? 'Setting up the rig…' : 'No rig yet. Click Setup to create it.')
               : profile.field_of_view ? `Field ${formatDegrees(profile.field_of_view.width_degrees)} × ${formatDegrees(profile.field_of_view.height_degrees)}, ${profile.field_of_view.pixel_scale_arcsec.toFixed(2)}″/px${profile.profile?.configuration ? ', camera reported' : ', camera not reported yet'}`
               : 'Field of view not set'}</span>
             {profile?.profile?.peer_id && <span className="director-muted">Plans push to {peers.data?.find(peer => peer.id === profile.profile?.peer_id)?.name ?? profile.profile.peer_id}</span>}
