@@ -795,6 +795,9 @@ impl DatabaseContext {
         }
 
         let conn = open_scheduler_connection(&db_path)?;
+        // Write-ahead logging on a local disk, the rollback journal on a
+        // network share; only PSF Guard opens its catalogs.
+        crate::catalog_journal::choose(&conn, Path::new(&db_path));
         let fingerprint = fingerprint_path(&db_path);
         // Master builds find a catalog's measured flat responses by its path.
         crate::calibration::flat_groups::register_response_dir(
