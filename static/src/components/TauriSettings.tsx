@@ -42,7 +42,7 @@ import BackupSettings from './BackupSettings';
 import ExportDefaultsSettings from './ExportDefaultsSettings';
 import AstroBinSettings from './AstroBinSettings';
 import PixInsightSettings from './PixInsightSettings';
-import type { DatabaseSummary, ScanRules } from '../api/types';
+import type { DatabaseSummary, ScanRules, SyncContactSummary } from '../api/types';
 import { DEFAULT_SCAN_RULES } from '../api/types';
 import { planChanges, scanRuleNotes } from '../utils/importNotes';
 import {
@@ -84,6 +84,16 @@ const SYNC_PLUGIN_PAGE = 'rigs' satisfies SettingsTab;
 type TabIntent = Extract<SettingsIntent, SettingsTab>;
 function isTabIntent(intent: SettingsIntent | null): intent is TabIntent {
   return isSettingsSection(intent);
+}
+
+/** When a Sync client last called, and which plugin version it reported. */
+function contactText(contact: SyncContactSummary | undefined): string {
+  if (!contact) return 'no contact recorded';
+  const minutes = Math.round((Date.now() - contact.at * 1000) / 60_000);
+  const when = minutes < 1 ? 'just now'
+    : minutes < 60 ? `${minutes} min ago`
+      : new Date(contact.at * 1000).toLocaleString();
+  return `last contact ${when}${contact.version ? `, plugin ${contact.version}` : ''}`;
 }
 
 const DEFAULT_REMOTE_UPLOAD_DIRECTORY_TEMPLATE =
@@ -316,6 +326,7 @@ export default function TauriSettings({
                   sync_enabled:
                     summary.remote_image_upload?.sync_enabled ?? false,
                   clients: summary.remote_image_upload?.clients ?? [],
+                  key_contact: summary.remote_image_upload?.key_contact,
                 },
               };
             }),
@@ -351,6 +362,7 @@ export default function TauriSettings({
               token_configured: s.remote_image_upload?.token_configured ?? false,
               sync_enabled: s.remote_image_upload?.sync_enabled ?? false,
               clients: s.remote_image_upload?.clients ?? [],
+              key_contact: s.remote_image_upload?.key_contact,
             },
           })),
         };
@@ -940,6 +952,12 @@ export default function TauriSettings({
   };
 
   const databases = registry?.databases ?? [];
+  const editingUpload = databases.find((db) => db.id === editingId)?.remote_image_upload;
+  // Clients whose last request came from a plugin that can't place new projects.
+  const olderPlugins = [
+    ...(editingUpload?.clients ?? []).filter((client) => client.last_contact && !client.last_contact.places_new_projects).map((client) => client.name),
+    ...(editingUpload?.key_contact && !editingUpload.key_contact.places_new_projects ? ['The remote API key\'s client'] : []),
+  ];
   const tsJobs = useTsSyncJobs(managementAllowed && canEdit);
   const tsImportRunning = tsJobs.data?.some(job => job.id.startsWith('import:') && job.running) ?? false;
   const observedImports = useRef(new Set<string>());
@@ -1264,18 +1282,16 @@ export default function TauriSettings({
                     }. Each pairing adds its own revocable credential.`}
               </small>
             )}
-            {(databases.find((db) => db.id === editingId)?.remote_image_upload
-              ?.clients?.length ?? 0) > 0 && (
+            {editingUpload && ((editingUpload.clients?.length ?? 0) > 0 || editingUpload.key_contact) && (
               <div className="paired-clients">
                 <label>Paired clients:</label>
                 <ul>
-                  {databases
-                    .find((db) => db.id === editingId)!
-                    .remote_image_upload!.clients!.map((client) => (
+                  {(editingUpload.clients ?? []).map((client) => (
                       <li key={client.client_uuid}>
                         <span>
-                          {client.name} ·{' '}
+                          {client.name} · paired{' '}
                           {new Date(client.paired_at * 1000).toLocaleDateString()}
+                          {' · '}{contactText(client.last_contact)}
                         </span>
                         <button
                           type="button"
@@ -1286,7 +1302,19 @@ export default function TauriSettings({
                         </button>
                       </li>
                     ))}
+                  {editingUpload.key_contact && (
+                    <li>
+                      <span>Remote API key · {contactText(editingUpload.key_contact)}</span>
+                    </li>
+                  )}
                 </ul>
+                {olderPlugins.length > 0 && (
+                  <small role="note">
+                    {olderPlugins.join(', ')} {olderPlugins.length === 1 ? 'uses' : 'use'} an older Sync plugin.
+                    PSF Guard gives its new projects a N.I.N.A. profile before sending them, and can't when it doesn't know the profile.
+                    Update the plugin in N.I.N.A. so new projects always reach the profile it runs in.
+                  </small>
+                )}
               </div>
             )}
             <label htmlFor="remote-upload-token">Remote API key:</label>

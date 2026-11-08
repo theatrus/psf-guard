@@ -9,7 +9,7 @@ use super::*;
 use crate::{
     commands::sync::{sync_remote, RemoteDirection, RemoteSyncOptions},
     db_registry::PeerEntry,
-    server::peers::registered_peers,
+    server::{peers::registered_peers, rig_plugins},
     ts_schema::new_guid,
 };
 use psf_guard_director_core::{bandpass::frames_for_hours, framing::Panel};
@@ -851,8 +851,8 @@ async fn execute_guarded(
                         now,
                         scheduling: &scheduling,
                         collaboration: assignment,
-                        sync_plugin_paired: sync_plugin_paired(&catalog.context),
-                        reported_profile: reported_profile(&catalog.context.id),
+                        sync_plugin_paired: rig_plugins::sync_plugin_paired(&catalog.context),
+                        reported_profile: rig_plugins::reported_profile(&catalog.context.id),
                     },
                 );
                 match outcome {
@@ -905,7 +905,7 @@ async fn execute_guarded(
                 continue;
             };
             if outcome.record.profile_id == SYNC_PLACED_PROFILE {
-                warnings.push(placement_note(sync_plugin_paired(&catalog.context)));
+                warnings.push(placement_note(rig_plugins::sync_plugin_paired(&catalog.context)));
             }
             reports.push(RigReport {
                 rig,
@@ -2984,14 +2984,6 @@ fn required_frames(objective: &Objective, contribution: &Contribution) -> Option
     }
 }
 
-/// Whether a Sync plugin can reach this database, and so write its plans into
-/// the N.I.N.A. profile it runs in.
-fn sync_plugin_paired(context: &DatabaseContext) -> bool {
-    context.remote_image_upload.as_ref().is_some_and(|config| {
-        config.sync_enabled && (!config.clients.is_empty() || !config.token_sha256.is_empty())
-    })
-}
-
 /// The profile for rows activation adds. Only N.I.N.A. knows which profile it
 /// has open, so a database the Sync plugin serves, or one with no profile
 /// yet, uses PSF Guard's own: the plugin writes those rows into the profile
@@ -3026,14 +3018,6 @@ fn placement_note(sync_plugin_paired: bool) -> String {
         "No N.I.N.A. profile yet. Pair the PSF Guard Sync plugin, and it adds this project to the profile it runs in."
             .into()
     }
-}
-
-/// The N.I.N.A. profile a plugin paired with `catalog_slug` last reported,
-/// from its star-detection settings.
-pub(super) fn reported_profile(catalog_slug: &str) -> Option<String> {
-    crate::star_detection::current()
-        .plugin_profile(catalog_slug)
-        .map(str::to_owned)
 }
 
 /// The profile the database's plugin reports, when the database uses it.

@@ -290,7 +290,7 @@ pub fn materialize(bundle: &CatalogBundle, into: &Path, template_path: &Path) ->
 /// on the waiting N.I.N.A. profile as they are, so it asks for them
 /// unchanged, as an up-to-date Sync plugin does.
 fn peer_headers() -> reqwest::header::HeaderMap {
-    use crate::server::remote_sync::{
+    use crate::server::rig_plugins::{
         PLUGIN_CAPABILITIES_HEADER, PLUGIN_WAITING_PROFILE_CAPABILITY,
     };
     let mut headers = reqwest::header::HeaderMap::new();

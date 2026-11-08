@@ -640,6 +640,41 @@ describe('TauriSettings import state', () => {
     expect(savedUpdates[1].rescan_directory_layout).toBeUndefined();
   });
 
+  it("shows each paired client's last contact and plugin version, and names older plugins", async () => {
+    const at = Math.floor(Date.now() / 1000) - 5 * 60;
+    server.use(
+      http.get('/api/info', () => HttpResponse.json({ success: true, data: { version: 'test', cache_directory: '/cache', allow_database_management: true }, error: null, status: 'ready' })),
+      http.get('/api/databases', () => HttpResponse.json({
+        success: true,
+        data: [{
+          id: 'remote', name: 'Remote catalog', database_path: '/remote.sqlite', image_directories: ['/images/remote'],
+          remote_image_upload: {
+            enabled: true, image_directory: '/images/remote', token_configured: true, sync_enabled: true,
+            placement: 'flat', directory_template: '%TARGET%/%TYPE%/%FILTER%', directory_template_source: 'preset', directory_template_samples: 0,
+            clients: [
+              { client_uuid: 'a', name: 'Observatory PC', paired_at: at, last_contact: { at, version: '1.4.0.0', capabilities: ['waiting_profile_v1'], places_new_projects: true } },
+              { client_uuid: 'b', name: 'Old laptop', paired_at: at, last_contact: { at, capabilities: [], places_new_projects: false } },
+              { client_uuid: 'c', name: 'Spare', paired_at: at },
+            ],
+          },
+        }],
+        error: null, status: 'ready',
+      })),
+      http.get('/api/db/remote/import', () => HttpResponse.json({ success: true, data: { started: false, progress: { running: false, stage: '', image_dirs: [], total_files: 0, scanned_files: 0, outcome: null, started_at: null, finished_at: null, error: null } }, error: null, status: 'ready' })),
+    );
+    render(<TauriSettings isOpen onClose={() => undefined} />, { wrapper: createWrapper() });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Open Remote catalog' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Database & files' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Sync' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit remote receive and pairing' }));
+
+    expect(screen.getByText(/Observatory PC · paired .* · last contact 5 min ago, plugin 1\.4\.0\.0/)).toBeVisible();
+    expect(screen.getByText(/Old laptop · paired .* · last contact 5 min ago$/)).toBeVisible();
+    expect(screen.getByText(/Spare · paired .* · no contact recorded/)).toBeVisible();
+    expect(screen.getByRole('note')).toHaveTextContent('Old laptop uses an older Sync plugin.');
+  });
+
   it('keeps the editor with the selected database in a multi-database list', async () => {
     server.use(
       http.get('/api/info', () =>

@@ -102,7 +102,8 @@ export interface DbEntry {
     directory_template_source?: 'catalog' | 'preset';
     directory_template_samples?: number;
     /** Paired clients; each holds its own revocable credential. */
-    clients?: { client_uuid: string; name: string; paired_at: number }[];
+    clients?: import('../api/types').RemoteClientSummary[];
+    key_contact?: import('../api/types').SyncContactSummary;
   };
   /** Server-side destination for UI-triggered exports. */
   export_dir?: string;

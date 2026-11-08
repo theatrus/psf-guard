@@ -308,13 +308,14 @@ async fn the_profile_the_plugin_reports_beats_the_larger_profile() {
 
 /// A rig database opened for sync with one token: a project N.I.N.A. made
 /// under `profile-a`, and a project and template left waiting by activation.
-/// Returns the planning export's profile IDs, by table.
+/// Returns the planning export's profile IDs, by table, and the contact
+/// the database list then shows for the remote API key.
 async fn exported_profiles(
     plugin_capabilities: Option<&str>,
-) -> std::collections::BTreeMap<String, Vec<String>> {
+) -> (std::collections::BTreeMap<String, Vec<String>>, Value) {
     use crate::db_registry::DbEntry;
-    use crate::server::remote_sync;
-    use axum::routing::post;
+    use crate::server::{handlers, remote_sync, rig_plugins};
+    use axum::routing::{get, post};
     use tower::ServiceExt;
     const TOKEN: &str = "rig-sync-key-long-enough-to-pass";
     let dir = tempfile::tempdir().unwrap();
@@ -367,18 +368,20 @@ async fn exported_profiles(
     );
     let router = axum::Router::new()
         .route("/api/sync/v1/exports", post(remote_sync::create_export))
+        .route("/api/databases", get(handlers::list_databases))
         .with_state(state);
     let mut request = axum::http::Request::builder()
         .method("POST")
         .uri("/api/sync/v1/exports")
         .header("content-type", "application/json")
         .header("authorization", format!("Bearer {TOKEN}"))
-        .header(remote_sync::PLUGIN_VERSION_HEADER, "0.4.0.99");
+        .header(rig_plugins::PLUGIN_VERSION_HEADER, "0.4.0.99");
     if let Some(capabilities) = plugin_capabilities {
-        request = request.header(remote_sync::PLUGIN_CAPABILITIES_HEADER, capabilities);
+        request = request.header(rig_plugins::PLUGIN_CAPABILITIES_HEADER, capabilities);
     }
     let body = json!({"protocol_version": 1, "catalog_id": "rig", "operation": "push_planning"});
     let response = router
+        .clone()
         .oneshot(
             request
                 .body(axum::body::Body::from(body.to_string()))
@@ -391,8 +394,23 @@ async fn exported_profiles(
         .await
         .unwrap();
     let export: Value = serde_json::from_slice(&bytes).unwrap();
+    let listed = router
+        .oneshot(
+            axum::http::Request::get("/api/databases")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let listed: Value = serde_json::from_slice(
+        &axum::body::to_bytes(listed.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let contact = listed["data"][0]["remote_image_upload"]["key_contact"].clone();
     let tables = export["data"]["bundle"]["tables"].as_object().unwrap();
-    tables
+    let profiles = tables
         .iter()
         .filter_map(|(name, table)| {
             let column = table["columns"]
@@ -411,18 +429,28 @@ async fn exported_profiles(
                 .collect();
             Some((name.clone(), profiles))
         })
-        .collect()
+        .collect();
+    (profiles, contact)
 }
 
 #[tokio::test]
 async fn an_older_sync_plugin_gets_waiting_rows_under_the_rigs_profile() {
-    let old = exported_profiles(None).await;
-    let current = exported_profiles(Some("waiting_profile_v1")).await;
+    let (old, old_contact) = exported_profiles(None).await;
+    let (current, current_contact) = exported_profiles(Some("waiting_profile_v1")).await;
 
     assert_eq!(old["project"], ["profile-a", "profile-a"]);
     assert_eq!(old["exposuretemplate"], ["profile-a"]);
     assert_eq!(current["project"], ["profile-a", SYNC_PLACED_PROFILE]);
     assert_eq!(current["exposuretemplate"], [SYNC_PLACED_PROFILE]);
+    // Settings shows what each plugin reported.
+    assert_eq!(old_contact["version"], "0.4.0.99");
+    assert_eq!(old_contact["capabilities"], json!([]));
+    assert_eq!(old_contact["places_new_projects"], false);
+    assert_eq!(
+        current_contact["capabilities"],
+        json!(["waiting_profile_v1"])
+    );
+    assert_eq!(current_contact["places_new_projects"], true);
 }
 
 #[tokio::test]

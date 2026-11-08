@@ -202,6 +202,10 @@ impl AutoImportSettings {
     }
 }
 
+/// What [`RemoteImageUploadConfig::token_holder`] answers for the single
+/// remote API key, which belongs to no paired client.
+pub const LEGACY_KEY_HOLDER: &str = "remote-api-key";
+
 /// One paired client credential. Each pairing mints its own, so revoking a
 /// laptop does not sign out the observatory machine. Only the salted hash
 /// is stored; the plaintext existed once, in the pairing response.
@@ -353,9 +357,14 @@ impl RemoteImageUploadConfig {
     }
 
     pub fn token_matches(&self, token: &str) -> bool {
-        // Legacy single token, then every paired client. All comparisons run
-        // (no early exit on the legacy match shape) with constant-time
-        // equality per candidate.
+        self.token_holder(token).is_some()
+    }
+
+    /// Which credential `token` belongs to: a paired client's ID, or
+    /// [`LEGACY_KEY_HOLDER`] for the single remote API key. All comparisons
+    /// run (no early exit on the legacy match shape) with constant-time
+    /// equality per candidate.
+    pub fn token_holder(&self, token: &str) -> Option<&str> {
         let legacy = {
             let candidate = salted_token_sha256(&self.token_salt, token);
             constant_time_eq(self.token_sha256.as_bytes(), candidate.as_bytes())
@@ -364,11 +373,12 @@ impl RemoteImageUploadConfig {
             .clients
             .iter()
             .filter(|client| client.token_salt.len() == 32 && client.token_sha256.len() == 64)
-            .fold(false, |matched, client| {
+            .fold(None, |matched, client| {
                 let candidate = salted_token_sha256(&client.token_salt, token);
-                matched | constant_time_eq(client.token_sha256.as_bytes(), candidate.as_bytes())
+                let this = constant_time_eq(client.token_sha256.as_bytes(), candidate.as_bytes());
+                matched.or(this.then_some(client.client_uuid.as_str()))
             });
-        legacy | client
+        client.or(legacy.then_some(LEGACY_KEY_HOLDER))
     }
 
     /// Add a paired client credential, returning its id. Validates the token
@@ -1418,6 +1428,20 @@ mod tests {
         assert!(config.token_matches("psfrc_laptop_credential_0123456789"));
         assert!(config.token_matches("psfrc_observatory_credential_0123456789"));
         assert!(!config.token_matches("psfrc_never_issued_0123456789"));
+        // Each token belongs to its own credential.
+        assert_eq!(
+            config.token_holder("psfrc_laptop_credential_0123456789"),
+            Some(laptop.as_str())
+        );
+        assert_eq!(
+            config.token_holder("psfrc_observatory_credential_0123456789"),
+            Some(observatory.as_str())
+        );
+        assert_eq!(
+            config.token_holder("legacy-manual-key-0123456789"),
+            Some(LEGACY_KEY_HOLDER)
+        );
+        assert_eq!(config.token_holder("psfrc_never_issued_0123456789"), None);
 
         // Revoking one client leaves the other and the legacy key alone.
         assert!(config.revoke_client(&laptop));
@@ -1425,7 +1449,6 @@ mod tests {
         assert!(!config.token_matches("psfrc_laptop_credential_0123456789"));
         assert!(config.token_matches("psfrc_observatory_credential_0123456789"));
         assert!(config.token_matches("legacy-manual-key-0123456789"));
-        let _ = observatory;
     }
 
     #[test]

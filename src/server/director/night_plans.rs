@@ -833,7 +833,7 @@ async fn compute(
                 if stopped.requested() {
                     return Err(String::new());
                 }
-                let reported = super::activation::reported_profile(&input.catalog_slug);
+                let reported = crate::server::rig_plugins::reported_profile(&input.catalog_slug);
                 match ts_snapshot::read(&input.database_path, reported.as_deref()) {
                     Ok(Some(read)) => {
                         input.warnings.extend(read.warnings);
