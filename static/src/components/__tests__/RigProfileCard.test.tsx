@@ -92,12 +92,37 @@ describe('Rig profile card', () => {
   });
 
   it('still offers the Sync plugin when the rig profile cannot load', async () => {
-    server.use(http.get('/api/director/v1/catalogs/catalog/rig/profile', () => HttpResponse.json({ success: false, data: null, error: 'No rig yet' }, { status: 404 })));
+    let listed = 0;
+    server.use(
+      http.get('/api/director/v1/catalogs/catalog/rig/profile', () => HttpResponse.json({ success: false, data: null, error: 'No rig yet' }, { status: 404 })),
+      http.get('/api/director/v1/plans', () => { listed += 1; return HttpResponse.json(ok({ rows: [], warnings: [] })); }),
+    );
     mount(true, undefined, undefined, <RigProfileCard slug="catalog" syncPlugin={<section aria-label="Sync plugin">Pair the Sync plugin</section>} />);
 
     expect(await screen.findByRole('region', { name: 'Sync plugin' })).toBeVisible();
+    await waitFor(() => expect(listed).toBe(1));
     // The rig is missing, not broken: no error beside the Sync plugin.
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('lists the plans once to create the rig of a database added since the last listing', async () => {
+    fixture();
+    let listed = 0;
+    let lookups = 0;
+    server.use(
+      http.get('/api/director/v1/plans', () => { listed += 1; return HttpResponse.json(ok({ rows: [], warnings: [] })); }),
+      http.get('/api/director/v1/catalogs/catalog/rig/profile', () => {
+        lookups += 1;
+        if (listed === 0) return HttpResponse.json({ success: false, data: null, error: 'No rig yet' }, { status: 404 });
+        return undefined;
+      }),
+    );
+    mount();
+
+    expect(await screen.findByRole('tab', { name: 'Optics' })).toBeVisible();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(listed).toBe(1);
+    expect(lookups).toBe(2);
   });
 
   it('uses vertical keyboard navigation on the setup rail and horizontal navigation on narrow screens', async () => {

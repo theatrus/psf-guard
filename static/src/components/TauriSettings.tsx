@@ -668,6 +668,8 @@ export default function TauriSettings({
         });
         queryClient.invalidateQueries({ queryKey: ['databases'] });
         queryClient.invalidateQueries({ queryKey: ['db'] });
+        // Listing plans gives the new database its rig.
+        queryClient.invalidateQueries({ queryKey: ['directorPlans'] });
         setImportDbId(created.database.id);
         await reload();
         setSelectedDatabaseId(created.database.id);
@@ -808,6 +810,7 @@ export default function TauriSettings({
       // fresh data for the just-added/edited DB.
       queryClient.invalidateQueries({ queryKey: ['databases'] });
       queryClient.invalidateQueries({ queryKey: ['db'] });
+      queryClient.invalidateQueries({ queryKey: ['directorPlans'] });
 
       await reload();
       resetForm();

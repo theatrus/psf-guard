@@ -1,5 +1,5 @@
 import { useEffect, useId, useState, type FormEvent, type ReactNode } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { type QueryClient, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError, type AxiosError } from 'axios';
 import { Camera, Check, CloudSun, Download, Link2, MapPin, Plug, RefreshCw, SlidersHorizontal } from 'lucide-react';
 import { apiClient } from '../../api/client';
@@ -56,6 +56,23 @@ function statusOf(error: unknown): number | undefined {
   return error instanceof Error && isAxiosError(error.cause) ? error.cause.response?.status : undefined;
 }
 
+/** The rig's profile. A database added since the plans were last listed has
+ *  no rig yet; listing the plans creates it, so list them once and ask again. */
+async function profileOrRig(slug: string, client: QueryClient): Promise<DirectorRigProfileView> {
+  try {
+    return await apiClient.getDirectorRigProfile(slug);
+  } catch (error) {
+    if (statusOf(error) !== 404) throw error;
+    try {
+      await apiClient.getDirectorPlans();
+    } catch {
+      throw error;
+    }
+    void client.invalidateQueries({ queryKey: ['directorPlans'] });
+    return apiClient.getDirectorRigProfile(slug);
+  }
+}
+
 export default function RigProfileCard({ slug, syncPlugin, initialTab }: {
   slug: string;
   /** The Sync plugin's section, shown on the Plugins tab. Settings owns its form. */
@@ -76,7 +93,7 @@ export default function RigProfileCard({ slug, syncPlugin, initialTab }: {
   const { canWrite } = useAccess();
   const client = useQueryClient();
   const queryKey = ['directorRigProfile', slug];
-  const loaded = useQuery({ queryKey, queryFn: () => apiClient.getDirectorRigProfile(slug), refetchOnWindowFocus: false,
+  const loaded = useQuery({ queryKey, queryFn: () => profileOrRig(slug, client), refetchOnWindowFocus: false,
     // Director admits one metadata request at a time; a 503 means wait, not fail.
     retry: (count, error) => count < 5 && statusOf(error) === 503, retryDelay: 700 });
   const peers = useQuery({ queryKey: ['peers'], queryFn: apiClient.getPeers, retry: false, refetchOnWindowFocus: false });
