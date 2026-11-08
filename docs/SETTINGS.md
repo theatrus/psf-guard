@@ -61,7 +61,9 @@ control. The selected page includes the database name.
   - Each paired Sync client shows when it last connected and which plugin
     version it reported. A note identifies a client whose plugin is too old
     to add new projects to its N.I.N.A. profile itself. Update that plugin
-    in N.I.N.A. so new projects always reach the profile it runs in.
+    in N.I.N.A.: until then, PSF Guard sends new projects under the profile
+    the plugin last reported, and N.I.N.A. hides them when PSF Guard knows
+    no profile.
   - **Rig setup → Optics → Filters** stores the rig's filter names for a rig
     with no Director plugin. Type one name per line, as N.I.N.A. spells it,
     or click **Use this database's filters** to copy the names its
