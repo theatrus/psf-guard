@@ -15,9 +15,11 @@ Only the selected page loads its controls.
 | **Review** | **Grading & display** |
 | **Server & access** | **Server**, **Users**, **Agents (MCP)** |
 
-Pages depend on the connection and your permissions. Planning enables **Rig setup**
-and **Exposure templates**. **Sync** appears when you have a database and an
-editor account. **Server** configures the desktop app's server connection.
+Pages depend on the connection and your permissions. Planning enables
+**Exposure templates** and the planning tabs of **Rig setup**. **Rig setup**
+also appears without planning for an editor who can manage databases, to pair
+the Sync plugin. **Sync** appears when you have a database and an editor
+account. **Server** configures the desktop app's server connection.
 The web interface shows **Users** and API tokens when server login is
 enabled. Instances without accounts show **Agents (MCP)**. The desktop app
 also offers its own worker controls under **Workers**.
@@ -52,15 +54,19 @@ control. The selected page includes the database name.
 - **Rig setup** shows equipment, field of view, the selected observing site,
   scheduling limits and planning connections. Sites are shared: edit them
   under **Presets → Sites**, then choose a rig's **Planning site** in
-  **Rig setup → Site**.
+  **Rig setup → Site**. **Rig setup → Plugins** pairs both N.I.N.A. plugins:
+  the Sync plugin, with what the database accepts from it, and the Director
+  plugin. Each database is one rig. Without planning, **Rig setup** shows only
+  the Sync plugin.
 - **Database & files** contains database paths, image folders and maintenance.
   Click **Edit database** to change the name and paths.
 - **Import** contains editable scan rules, automatic-import settings and
   import previews. Exclusion and include patterns are editable directly;
   there is no separate Edit step.
-- **Sync** configures the selected database's Target Scheduler connection,
-  incoming uploads and pairing. Transfers use the opened database as their
-  local endpoint. Peers and credentials remain shared.
+- **Sync** configures the selected database's Target Scheduler connection and
+  transfers. Transfers use the opened database as their local endpoint. Peers
+  and credentials remain shared. The Sync plugin's pairing and incoming uploads
+  are on **Rig setup**; **Open Rig setup** goes there.
 
 The shared **Overview** lists databases and staged transfer previews. Each
 preview acts on its recorded database and endpoints. Choose **New / import**

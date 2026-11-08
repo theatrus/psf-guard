@@ -64,7 +64,7 @@ test('a rig applies reported equipment and preserves Director work permission be
     await settings.getByRole('button', { name: 'Open Plugin rig' }).click();
     await settings.getByRole('tab', { name: 'Rig setup', exact: true }).click();
     const sections = settings.getByRole('tablist', { name: 'Rig setup sections' });
-    await sections.getByRole('tab', { name: 'Director', exact: true }).click();
+    await sections.getByRole('tab', { name: 'Plugins', exact: true }).click();
     const panel = settings.locator('.rig-plugin');
     await expect(panel.getByText('Picks the work')).toBeVisible();
     await expect(panel.locator('.rig-plugin-paths')).toContainText('Target Scheduler');
@@ -122,7 +122,7 @@ test('a rig applies reported equipment and preserves Director work permission be
       await mode.getByRole('radio', { name: next }).check();
       await settings.getByRole('button', { name: 'Save rig profile' }).click();
       await expect(settings.getByRole('status').filter({ hasText: /Saved rig profile revision/ })).toBeVisible();
-      await sections.getByRole('tab', { name: 'Director', exact: true }).click();
+      await sections.getByRole('tab', { name: 'Plugins', exact: true }).click();
       await expect(panel.locator('.rig-plugin-paths')).toContainText(next);
       await expect(work).toHaveAttribute('data-state', 'ready');
     }
@@ -132,7 +132,7 @@ test('a rig applies reported equipment and preserves Director work permission be
     await settings.getByLabel('Focal length').fill('750');
     await settings.getByRole('button', { name: 'Save rig profile' }).click();
     await expect(settings.getByRole('status').filter({ hasText: /Saved rig profile revision/ })).toBeVisible();
-    await sections.getByRole('tab', { name: 'Director', exact: true }).click();
+    await sections.getByRole('tab', { name: 'Plugins', exact: true }).click();
     await expect(work).toHaveAttribute('data-state', 'ready');
 
     // The plugin gets work under that policy, then is removed while holding it.
@@ -154,10 +154,12 @@ test('a rig applies reported equipment and preserves Director work permission be
     await expect(running).toContainText('No open work.');
     await expect(running).toContainText('Previous work retired');
 
-    // Sync keeps its own place and says where Director pairs.
+    // Both plugins pair on the Plugins tab, and Sync points there.
+    await expect(settings.getByRole('heading', { name: 'Sync plugin', exact: true })).toBeVisible();
+    await expect(settings.getByText(/The Director plugin below has its own pairing code/)).toBeVisible();
     await settings.getByRole('tab', { name: 'Sync', exact: true }).click();
     await expect(settings.getByRole('heading', { name: 'PSF Guard Sync plugin' })).toBeVisible();
-    await expect(settings.getByText(/uses its own pairing code, under Rig setup › Director/)).toBeVisible();
+    await expect(settings.getByRole('button', { name: 'Open Rig setup' })).toBeVisible();
     expect(errors).toEqual([]);
   } finally {
     await request.delete(`/api/databases/${slug}`).catch(() => undefined);

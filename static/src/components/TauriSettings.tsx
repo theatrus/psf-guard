@@ -21,6 +21,7 @@ import DatabaseRemoveDialog from './DatabaseRemoveDialog';
 import type { SettingsIntent, SettingsRig } from '../utils/settingsIntent';
 import ReviewPreferences from './ReviewPreferences';
 import DirectorRigs from './director/DirectorRigs';
+import type { RigSetupTab } from './director/RigProfileCard';
 import DirectorSites from './director/DirectorSites';
 import ProcessingPolicySettings from './ProcessingPolicySettings';
 import { RigDatabaseList, RigDatabaseNavigation } from './RigDatabaseNavigation';
@@ -76,6 +77,8 @@ import SettingsNavigation from './SettingsNavigation';
 import { isSettingsSection, isRigDatabasePage, settingsGroups, settingsPage, type SettingsSection, RIG_DATABASE_PAGES, databaseSettingsId, parseDatabaseSettingsId } from './settingsSections';
 
 type SettingsTab = SettingsSection;
+/** The page that holds the Sync plugin's pairing and receive settings. */
+const SYNC_PLUGIN_PAGE = 'rigs' satisfies SettingsTab;
 
 /** An intent that only picks a tab. */
 type TabIntent = Extract<SettingsIntent, SettingsTab>;
@@ -203,6 +206,8 @@ export default function TauriSettings({
     useState<'idle' | 'copied' | 'failed'>('idle');
   const [showAddForm, setShowAddForm] = useState(false);
   const [activeTab, setActiveTab] = useState<SettingsTab>(isTabIntent(initialIntent) ? initialIntent : 'rig-databases');
+  // The Rig setup tab to open, such as Plugins after creating a database for the Sync plugin.
+  const [rigTab, setRigTab] = useState<RigSetupTab | undefined>(undefined);
   const [selectedDatabaseId, setSelectedDatabaseId] = useState<string | null>(initialDatabaseId);
   const [editOriginal, setEditOriginal] = useState<DbEntry | null>(null);
   const director = useDirectorStatus();
@@ -663,10 +668,13 @@ export default function TauriSettings({
         });
         queryClient.invalidateQueries({ queryKey: ['databases'] });
         queryClient.invalidateQueries({ queryKey: ['db'] });
+        // Listing plans gives the new database its rig.
+        queryClient.invalidateQueries({ queryKey: ['directorPlans'] });
         setImportDbId(created.database.id);
         await reload();
         setSelectedDatabaseId(created.database.id);
-        setActiveTab(pluginImport ? 'sync' : 'database-import');
+        setActiveTab(pluginImport ? SYNC_PLUGIN_PAGE : 'database-import');
+        if (pluginImport) setRigTab('director');
         if (pluginImport) {
           startEdit({ id: created.database.id, name: created.database.name,
             db_path: created.database.database_path, image_dirs: created.database.image_directories });
@@ -703,13 +711,13 @@ export default function TauriSettings({
       // mode, and updating live `AppState.databases` rather than waiting for
       // a server restart.
       if (editingId) {
-        if (activeTab === 'sync' && formRemoteUploadEnabled && !formRemoteUploadDir) {
+        if (activeTab === SYNC_PLUGIN_PAGE && formRemoteUploadEnabled && !formRemoteUploadDir) {
           setStatusMessage('Select an image directory for remote uploads');
           setIsApplying(false);
           return;
         }
         if (
-          activeTab === 'sync' &&
+          activeTab === SYNC_PLUGIN_PAGE &&
           formRemoteUploadEnabled &&
           formRemoteUploadPlacement === 'target_tree' &&
           formRemoteUploadLayoutChoice === 'preset' &&
@@ -720,7 +728,7 @@ export default function TauriSettings({
           return;
         }
         if (
-          activeTab === 'sync' &&
+          activeTab === SYNC_PLUGIN_PAGE &&
           formRemoteUploadToken.length > 0 &&
           formRemoteUploadToken.length < 24
         ) {
@@ -729,7 +737,7 @@ export default function TauriSettings({
           return;
         }
         if (
-          activeTab === 'sync' &&
+          activeTab === SYNC_PLUGIN_PAGE &&
           formRemoteUploadEnabled &&
           !formRemoteUploadTokenConfigured &&
           formRemoteUploadToken.length === 0
@@ -739,7 +747,7 @@ export default function TauriSettings({
           return;
         }
         if (
-          activeTab === 'sync' &&
+          activeTab === SYNC_PLUGIN_PAGE &&
           formRemoteSyncEnabled &&
           !formRemoteUploadTokenConfigured &&
           formRemoteUploadToken.length === 0
@@ -748,7 +756,7 @@ export default function TauriSettings({
           setIsApplying(false);
           return;
         }
-        await apiClient.updateDatabase(editingId, activeTab === 'sync' ? {
+        await apiClient.updateDatabase(editingId, activeTab === SYNC_PLUGIN_PAGE ? {
           remote_image_upload: {
             enabled: formRemoteUploadEnabled,
             image_directory: formRemoteUploadDir || undefined,
@@ -802,6 +810,7 @@ export default function TauriSettings({
       // fresh data for the just-added/edited DB.
       queryClient.invalidateQueries({ queryKey: ['databases'] });
       queryClient.invalidateQueries({ queryKey: ['db'] });
+      queryClient.invalidateQueries({ queryKey: ['directorPlans'] });
 
       await reload();
       resetForm();
@@ -963,7 +972,9 @@ export default function TauriSettings({
   const availableSections: SettingsSection[] = [
     'rig-databases', 'database-overview', 'databases', 'database-import',
     ...(managementAllowed ? ['database-add'] as const : []),
-    ...(planningEnabled ? ['rigs', 'templates', 'sites'] as const : []),
+    // Rig setup holds the Sync plugin's pairing, so it shows without Director too.
+    ...(planningEnabled || (managementAllowed && canEdit && hasDatabases) ? ['rigs'] as const : []),
+    ...(planningEnabled ? ['templates', 'sites'] as const : []),
     ...(canEdit && hasDatabases ? ['sync'] as const : []),
     'setups', 'calibration', 'stacking', 'performance', 'gpu',
     ...(isTauri || (canEdit && managementAllowed) ? ['workers'] as const : []),
@@ -1049,11 +1060,11 @@ export default function TauriSettings({
     entry.remote_image_upload?.directory_template ?? DEFAULT_REMOTE_UPLOAD_DIRECTORY_TEMPLATE,
     entry.remote_image_upload?.directory_template_source === 'catalog' ? 'catalog' : 'preset', '', false];
   const editDirty = showAddForm && (editingId && editOriginal
-    ? (currentTab !== 'sync' && !!pendingImageDir) || JSON.stringify(currentTab === 'sync'
+    ? (currentTab !== SYNC_PLUGIN_PAGE && !!pendingImageDir) || JSON.stringify(currentTab === SYNC_PLUGIN_PAGE
       ? [formRemoteUploadEnabled, formRemoteSyncEnabled, formRemoteUploadDir, formRemoteUploadPlacement,
         formRemoteUploadDirectoryTemplate, formRemoteUploadLayoutChoice, formRemoteUploadToken, formRemoteUploadRescanRequested]
       : [formName, formDbPath, formImageDirs, formExportDir, formProcessDir])
-      !== JSON.stringify(currentTab === 'sync' ? remoteValues(editOriginal) : fileValues(editOriginal))
+      !== JSON.stringify(currentTab === SYNC_PLUGIN_PAGE ? remoteValues(editOriginal) : fileValues(editOriginal))
     : !!(formName || formDbPath || formImageDirs.length || pendingImageDir || importDestination
       || (createMode && (createAnalyzeQuality || JSON.stringify(formScanRules) !== JSON.stringify(DEFAULT_SCAN_RULES)))));
 
@@ -1853,9 +1864,22 @@ export default function TauriSettings({
       </div>
     ) : null;
 
+  // The Sync plugin's pairing and what this database accepts from it. It sits
+  // on Rig setup, beside the Director plugin when planning is on: each
+  // database is one rig. The section ids and the saved settings are unchanged.
+  const syncPluginSection = selectedDatabase && managementAllowed && canEdit
+    ? (showAddForm && editingId === selectedDatabase.id
+      ? renderDatabaseForm(selectedDatabase, true)
+      : <section className="settings-section rig-sync-plugin" aria-labelledby={`sync-plugin-${selectedDatabase.id}`}>
+          <h4 id={`sync-plugin-${selectedDatabase.id}`}>Sync plugin</h4>
+          <p>Pair the PSF Guard Sync plugin in N.I.N.A., and choose whether {selectedDatabase.name} accepts its images and scheduler sync.</p>
+          <button type="button" className="cancel-button" onClick={() => startEdit(selectedDatabase)}>Edit remote receive and pairing</button>
+        </section>)
+    : null;
+
   return (
     <UnsavedScopeContext.Provider value={unsavedScope.current}>
-    <UnsavedMark label={currentTab === 'sync' ? 'sync connection' : 'database files'} dirty={!!editDirty} />
+    <UnsavedMark label={currentTab === SYNC_PLUGIN_PAGE ? 'sync connection' : 'database files'} dirty={!!editDirty} />
     <div className="tauri-settings modal-overlay" onClick={requestClose}>
       <div className="modal-content" onClick={(e) => e.stopPropagation()}>
         {/* Inside the panel, so the dialog's clicks do not close Settings. */}
@@ -2151,7 +2175,9 @@ export default function TauriSettings({
           )}
 
           {/* Planning's panels keep Planning's controls; the container adds no padding. */}
-          {currentTab === 'rigs' && selectedDatabase && <div className="settings-setups director-page director-embedded"><DirectorRigs key={selectedDatabase.id} databaseId={selectedDatabase.id} /></div>}
+          {currentTab === 'rigs' && selectedDatabase && (planningEnabled
+            ? <div className="settings-setups director-page director-embedded"><DirectorRigs key={selectedDatabase.id} databaseId={selectedDatabase.id} syncPlugin={syncPluginSection} initialTab={rigTab} /></div>
+            : <div className="settings-setups">{syncPluginSection}</div>)}
 
           {currentTab === 'sites' && <div className="settings-setups director-page director-embedded"><DirectorSites /></div>}
 
@@ -2161,14 +2187,11 @@ export default function TauriSettings({
             <div className="settings-setups">
               {managementAllowed && selectedDatabase.ts_sync && <TsSyncSettings key={selectedDatabase.id}
                 dbId={selectedDatabase.id} settings={selectedDatabase.ts_sync} onSaved={reload} />}
-              {managementAllowed && canEdit && (showAddForm && editingId === selectedDatabase.id
-                ? renderDatabaseForm(selectedDatabase, true)
-                : <section className="settings-section">
-                    <h3>PSF Guard Sync plugin</h3>
-                    <p>Connect the PSF Guard Sync plugin in N.I.N.A. or configure incoming images and scheduler sync for {selectedDatabase.name}.</p>
-                    {planningEnabled && <p>The PSF Guard Director plugin uses its own pairing code, under Rig setup › Director. Both plugins can run on this rig.</p>}
-                    <button type="button" className="cancel-button" onClick={() => startEdit(selectedDatabase)}>Edit remote receive and pairing</button>
-                  </section>)}
+              {managementAllowed && canEdit && <section className="settings-section">
+                <h3>PSF Guard Sync plugin</h3>
+                <p>Pair the plugin and choose what {selectedDatabase.name} accepts from it on the Rig setup page.</p>
+                <button type="button" className="cancel-button" onClick={() => { setRigTab('director'); requestSection(SYNC_PLUGIN_PAGE); }}>Open Rig setup</button>
+              </section>}
               <SchedulerSyncControls key={`scheduler:${selectedDatabase.id}`} databases={databases} localDatabaseId={selectedDatabase.id} disabled={isApplying} />
               <RemoteSyncPreviews databases={[selectedDatabase]} disabled={isApplying} />
               <RemotePeerSync key={`peer:${selectedDatabase.id}`} databases={databases} localDatabaseId={selectedDatabase.id} disabled={isApplying} />

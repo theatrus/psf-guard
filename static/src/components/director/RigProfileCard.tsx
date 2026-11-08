@@ -1,5 +1,5 @@
-import { useEffect, useId, useState, type FormEvent } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useId, useState, type FormEvent, type ReactNode } from 'react';
+import { type QueryClient, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError, type AxiosError } from 'axios';
 import { Camera, Check, CloudSun, Download, Link2, MapPin, Plug, RefreshCw, SlidersHorizontal } from 'lucide-react';
 import { apiClient } from '../../api/client';
@@ -28,8 +28,10 @@ class SettingsNotSaved extends Error {}
 const httpErrorOf = (error: unknown): AxiosError | null => isAxiosError(error) ? error
   : error instanceof Error ? httpErrorOf(error.cause) : null;
 
-const TABS = [{ id: 'optics', label: 'Optics', icon: <Camera size={16} /> }, { id: 'site', label: 'Site', icon: <MapPin size={16} /> }, { id: 'limits', label: 'Limits and delivery', icon: <SlidersHorizontal size={16} /> }, { id: 'weather', label: 'Weather', icon: <CloudSun size={16} /> }, { id: 'director', label: 'Director', icon: <Plug size={16} /> }, { id: 'collaboration', label: 'Collaboration', icon: <Link2 size={16} /> }] as const;
+const TABS = [{ id: 'optics', label: 'Optics', icon: <Camera size={16} /> }, { id: 'site', label: 'Site', icon: <MapPin size={16} /> }, { id: 'limits', label: 'Limits and delivery', icon: <SlidersHorizontal size={16} /> }, { id: 'weather', label: 'Weather', icon: <CloudSun size={16} /> }, { id: 'director', label: 'Plugins', icon: <Plug size={16} /> }, { id: 'collaboration', label: 'Collaboration', icon: <Link2 size={16} /> }] as const;
 type Tab = (typeof TABS)[number]['id'];
+/** A Rig setup tab. `director` is the Plugins tab: its id predates the Sync plugin moving there. */
+export type RigSetupTab = Tab;
 
 function Field({ id, label, value, onChange, disabled, unit, step = 'any' }: {
   id: string; label: string; value: string; onChange: (value: string) => void; disabled: boolean; unit?: string; step?: string;
@@ -48,9 +50,40 @@ const MODE_HELP = {
   target_scheduler: "Target Scheduler picks the rig's targets. Use its instruction in the rig's N.I.N.A. sequence.",
   director: "The Director plugin picks the rig's targets from the plans activated on it. Use the Director instruction in the rig's N.I.N.A. sequence.",
 } as const;
-export default function RigProfileCard({ slug }: { slug: string }) {
+/** The HTTP status behind a request error, which the client may wrap. */
+function statusOf(error: unknown): number | undefined {
+  if (isAxiosError(error)) return error.response?.status;
+  return error instanceof Error && isAxiosError(error.cause) ? error.cause.response?.status : undefined;
+}
+
+/** The rig's profile. A database added since the plans were last listed has
+ *  no rig yet; listing the plans creates it, so list them once and ask again. */
+async function profileOrRig(slug: string, client: QueryClient): Promise<DirectorRigProfileView> {
+  try {
+    return await apiClient.getDirectorRigProfile(slug);
+  } catch (error) {
+    if (statusOf(error) !== 404) throw error;
+    try {
+      await apiClient.getDirectorPlans();
+    } catch {
+      throw error;
+    }
+    void client.invalidateQueries({ queryKey: ['directorPlans'] });
+    const created = await apiClient.getDirectorRigProfile(slug);
+    // The rig list's header line reads the summaries, which predate the rig.
+    void client.invalidateQueries({ queryKey: ['directorRigProfiles'] });
+    return created;
+  }
+}
+
+export default function RigProfileCard({ slug, syncPlugin, initialTab }: {
+  slug: string;
+  /** The Sync plugin's section, shown on the Plugins tab. Settings owns its form. */
+  syncPlugin?: ReactNode;
+  initialTab?: Tab;
+}) {
   const id = useId();
-  const [tab, setTab] = useState<Tab>('optics');
+  const [tab, setTab] = useState<Tab>(initialTab ?? 'optics');
   const [collaborationVisited, setCollaborationVisited] = useState(false);
   const [vertical, setVertical] = useState(() => window.matchMedia?.('(min-width: 800px)').matches ?? false);
   useEffect(() => {
@@ -63,9 +96,9 @@ export default function RigProfileCard({ slug }: { slug: string }) {
   const { canWrite } = useAccess();
   const client = useQueryClient();
   const queryKey = ['directorRigProfile', slug];
-  const loaded = useQuery({ queryKey, queryFn: () => apiClient.getDirectorRigProfile(slug), refetchOnWindowFocus: false,
+  const loaded = useQuery({ queryKey, queryFn: () => profileOrRig(slug, client), refetchOnWindowFocus: false,
     // Director admits one metadata request at a time; a 503 means wait, not fail.
-    retry: (count, error) => count < 5 && (isAxiosError(error) ? error.response?.status : error instanceof Error && isAxiosError(error.cause) ? error.cause.response?.status : undefined) === 503, retryDelay: 700 });
+    retry: (count, error) => count < 5 && statusOf(error) === 503, retryDelay: 700 });
   const peers = useQuery({ queryKey: ['peers'], queryFn: apiClient.getPeers, retry: false, refetchOnWindowFocus: false });
   // Where the rig stands for planning: the site it names, and what that
   // gives it. The rig's own location and horizon still win.
@@ -174,7 +207,11 @@ export default function RigProfileCard({ slug }: { slug: string }) {
       <button type="button" aria-label="Reload rig profile" title="Reload rig profile" disabled={loaded.isFetching || save.isPending} onClick={reload}><RefreshCw size={16} /></button>
     </div>
     {loaded.isPending && <p role="status">Loading rig profile...</p>}
-    {loaded.isError && <p className="director-error" role="alert">{message(loaded.error)}</p>}
+    {/* A database with no rig yet still pairs the Sync plugin; its record line
+        already says how to add the rig, so the not-found error stays out. */}
+    {loaded.isError && !(syncPlugin && statusOf(loaded.error) === 404)
+      && <p className="director-error" role="alert">{message(loaded.error)}</p>}
+    {loaded.isError && syncPlugin}
     {notice && <p role="status">{notice}</p>}
     {stale && <p className="director-error" role="alert">{save.error instanceof SettingsNotSaved
       ? 'The rig profile was saved. Its planning site and Target Scheduler limits changed since you loaded them. '
@@ -300,7 +337,7 @@ export default function RigProfileCard({ slug }: { slug: string }) {
       {!canWrite && <p className="director-muted">Read only</p>}
     </form>
     <div {...workspacePanel(id, 'weather', tab)}>{tab === 'weather' && <RigWeatherPanel rig={data.rig.id} />}</div>
-    <div {...workspacePanel(id, 'director', tab)}>{tab === 'director' && <RigPluginPanel slug={slug} mode={data.mode.runtime} onRigChanged={() => { if (!unsaved) void loaded.refetch(); }} onChangeMode={() => setTab('optics')} />}</div>
+    <div {...workspacePanel(id, 'director', tab)}>{tab === 'director' && syncPlugin && <>{syncPlugin}<p className="director-muted">The Director plugin below has its own pairing code. Both plugins can run on this rig.</p></>}{tab === 'director' && <RigPluginPanel slug={slug} mode={data.mode.runtime} onRigChanged={() => { if (!unsaved) void loaded.refetch(); }} onChangeMode={() => setTab('optics')} />}</div>
     <div {...workspacePanel(id, 'collaboration', tab)}>{data && collaborationVisited && <CollaborationConnections rig={data.rig.id} name={data.rig.name} active={tab === 'collaboration'} />}</div>
     </div>
     </div>}

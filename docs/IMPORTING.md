@@ -166,8 +166,10 @@ them to everyone instead. See [server authentication](AUTHENTICATION.md).
 
 Settings lists each database in the left pane. Choose the database, then its
 **Rig setup**, **Database & files**, or **Sync** page. **New / import** has
-the starting choices for additional databases. Planning enables **Rig setup**,
-**Presets → Sites** and **Presets → Exposure templates**. **Sync** requires an editor.
+the starting choices for additional databases. Planning enables the planning
+tabs of **Rig setup**, **Presets → Sites** and **Presets → Exposure templates**.
+**Rig setup** pairs the Sync plugin with or without planning. **Sync** requires
+an editor.
 Install Seiza data packages under **Storage & backups → Reference catalogs**;
 catalog installation also requires an editor. See [Settings navigation](SETTINGS.md).
 

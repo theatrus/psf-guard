@@ -29,7 +29,9 @@ for (const width of [1280, 390]) {
     await page.getByRole('button', { name: 'Open C925', exact: true }).click();
     await selectSettingsSection(page, 'databases');
     await expect(page.locator('.settings-rig-database-pages')).toHaveCount(0);
-    await expect(page.getByRole('tab', { name: 'Rig setup' })).toHaveCount(0);
+    // Without planning, Rig setup holds only the Sync plugin.
+    await selectSettingsSection(page, 'rigs');
+    await expect(page.getByRole('button', { name: 'Edit remote receive and pairing' })).toBeVisible();
     await selectSettingsSection(page, 'database-import');
     const savedRules = page.getByText('Scan rules · Saved', { exact: true });
     await expect(savedRules.locator('..')).not.toHaveAttribute('open');

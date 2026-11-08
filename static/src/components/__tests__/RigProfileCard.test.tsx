@@ -62,16 +62,73 @@ function fixture(conflictOnce = false) {
   );
   return { saves };
 }
-function mount(canWrite = true, client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } }), onRender?: () => void) {
+function mount(canWrite = true, client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } }), onRender?: () => void, card = <RigProfileCard slug="catalog" />) {
   function Wrapper({ children }: { children: ReactNode }) {
     const access = useAccess();
     return <QueryClientProvider client={client}><AccessContext.Provider value={{ ...access, canWrite }}>{children}</AccessContext.Provider></QueryClientProvider>;
   }
-  const card = <RigProfileCard slug="catalog" />;
   return render(onRender ? <Profiler id="rig-profile" onRender={onRender}>{card}</Profiler> : card, { wrapper: Wrapper });
 }
 
 describe('Rig profile card', () => {
+  it('shows the Sync plugin beside the Director plugin on the Plugins tab', async () => {
+    fixture();
+    server.use(
+      http.get('/api/director/v1/catalogs/catalog/rig/plugin', () => HttpResponse.json(ok({
+        coordinator_instance_id: '44444444-4444-4444-8444-444444444444', catalog_id: '33333333-3333-4333-8333-333333333333', rig_id: rig.id,
+        profile_revision: 4, configuration: null, filter_names: {}, camera_defaults: null,
+        clients: [], plans: [], policy: null, work: 'not_allowed', left_out: [], grant: null, last_contact_at_ms: null,
+      }))),
+      http.get('/api/databases', () => HttpResponse.json(ok([{ id: 'catalog', name: 'RedCat 61' }]))),
+    );
+    mount(true, undefined, undefined, <RigProfileCard slug="catalog" initialTab="director" syncPlugin={<section aria-label="Sync plugin">Pair the Sync plugin</section>} />);
+
+    expect(await screen.findByRole('tab', { name: 'Plugins' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('region', { name: 'Sync plugin' })).toBeVisible();
+    expect(screen.getByText(/The Director plugin below has its own pairing code/)).toBeVisible();
+    expect(await screen.findByRole('heading', { name: 'Director plugin' })).toBeVisible();
+    fireEvent.click(screen.getByRole('tab', { name: 'Optics' }));
+    expect(screen.queryByRole('region', { name: 'Sync plugin' })).not.toBeInTheDocument();
+  });
+
+  it('still offers the Sync plugin when the rig profile cannot load', async () => {
+    let listed = 0;
+    server.use(
+      http.get('/api/director/v1/catalogs/catalog/rig/profile', () => HttpResponse.json({ success: false, data: null, error: 'No rig yet' }, { status: 404 })),
+      http.get('/api/director/v1/plans', () => { listed += 1; return HttpResponse.json(ok({ rows: [], warnings: [] })); }),
+    );
+    mount(true, undefined, undefined, <RigProfileCard slug="catalog" syncPlugin={<section aria-label="Sync plugin">Pair the Sync plugin</section>} />);
+
+    expect(await screen.findByRole('region', { name: 'Sync plugin' })).toBeVisible();
+    await waitFor(() => expect(listed).toBe(1));
+    // The rig is missing, not broken: no error beside the Sync plugin.
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('lists the plans once to create the rig of a database added since the last listing', async () => {
+    fixture();
+    let listed = 0;
+    let lookups = 0;
+    let summaries = 0;
+    server.use(
+      http.get('/api/director/v1/rigs/profiles', () => { summaries += 1; return HttpResponse.json(ok([])); }),
+      http.get('/api/director/v1/plans', () => { listed += 1; return HttpResponse.json(ok({ rows: [], warnings: [] })); }),
+      http.get('/api/director/v1/catalogs/catalog/rig/profile', () => {
+        lookups += 1;
+        if (listed === 0) return HttpResponse.json({ success: false, data: null, error: 'No rig yet' }, { status: 404 });
+        return undefined;
+      }),
+    );
+    mount();
+
+    expect(await screen.findByRole('tab', { name: 'Optics' })).toBeVisible();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(listed).toBe(1);
+    expect(lookups).toBe(2);
+    // The rig list reads the summaries again, so its header shows the new rig.
+    await waitFor(() => expect(summaries).toBeGreaterThan(1));
+  });
+
   it('uses vertical keyboard navigation on the setup rail and horizontal navigation on narrow screens', async () => {
     let wide = true;
     let onChange = () => {};
