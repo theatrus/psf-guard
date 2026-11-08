@@ -1870,7 +1870,6 @@ export default function TauriSettings({
       : <section className="settings-section rig-sync-plugin" aria-labelledby={`sync-plugin-${selectedDatabase.id}`}>
           <h4 id={`sync-plugin-${selectedDatabase.id}`}>Sync plugin</h4>
           <p>Pair the PSF Guard Sync plugin in N.I.N.A., and choose whether {selectedDatabase.name} accepts its images and scheduler sync.</p>
-          {planningEnabled && <p className="muted">The Director plugin below has its own pairing code. Both plugins can run on this rig.</p>}
           <button type="button" className="cancel-button" onClick={() => startEdit(selectedDatabase)}>Edit remote receive and pairing</button>
         </section>)
     : null;

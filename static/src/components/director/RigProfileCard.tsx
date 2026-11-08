@@ -50,6 +50,12 @@ const MODE_HELP = {
   target_scheduler: "Target Scheduler picks the rig's targets. Use its instruction in the rig's N.I.N.A. sequence.",
   director: "The Director plugin picks the rig's targets from the plans activated on it. Use the Director instruction in the rig's N.I.N.A. sequence.",
 } as const;
+/** The HTTP status behind a request error, which the client may wrap. */
+function statusOf(error: unknown): number | undefined {
+  if (isAxiosError(error)) return error.response?.status;
+  return error instanceof Error && isAxiosError(error.cause) ? error.cause.response?.status : undefined;
+}
+
 export default function RigProfileCard({ slug, syncPlugin, initialTab }: {
   slug: string;
   /** The Sync plugin's section, shown on the Plugins tab. Settings owns its form. */
@@ -72,7 +78,7 @@ export default function RigProfileCard({ slug, syncPlugin, initialTab }: {
   const queryKey = ['directorRigProfile', slug];
   const loaded = useQuery({ queryKey, queryFn: () => apiClient.getDirectorRigProfile(slug), refetchOnWindowFocus: false,
     // Director admits one metadata request at a time; a 503 means wait, not fail.
-    retry: (count, error) => count < 5 && (isAxiosError(error) ? error.response?.status : error instanceof Error && isAxiosError(error.cause) ? error.cause.response?.status : undefined) === 503, retryDelay: 700 });
+    retry: (count, error) => count < 5 && statusOf(error) === 503, retryDelay: 700 });
   const peers = useQuery({ queryKey: ['peers'], queryFn: apiClient.getPeers, retry: false, refetchOnWindowFocus: false });
   // Where the rig stands for planning: the site it names, and what that
   // gives it. The rig's own location and horizon still win.
@@ -181,8 +187,10 @@ export default function RigProfileCard({ slug, syncPlugin, initialTab }: {
       <button type="button" aria-label="Reload rig profile" title="Reload rig profile" disabled={loaded.isFetching || save.isPending} onClick={reload}><RefreshCw size={16} /></button>
     </div>
     {loaded.isPending && <p role="status">Loading rig profile...</p>}
-    {loaded.isError && <p className="director-error" role="alert">{message(loaded.error)}</p>}
-    {/* Without a rig profile the Sync plugin can still be paired. */}
+    {/* A database with no rig yet still pairs the Sync plugin; its record line
+        already says how to add the rig, so the not-found error stays out. */}
+    {loaded.isError && !(syncPlugin && statusOf(loaded.error) === 404)
+      && <p className="director-error" role="alert">{message(loaded.error)}</p>}
     {loaded.isError && syncPlugin}
     {notice && <p role="status">{notice}</p>}
     {stale && <p className="director-error" role="alert">{save.error instanceof SettingsNotSaved
@@ -309,7 +317,7 @@ export default function RigProfileCard({ slug, syncPlugin, initialTab }: {
       {!canWrite && <p className="director-muted">Read only</p>}
     </form>
     <div {...workspacePanel(id, 'weather', tab)}>{tab === 'weather' && <RigWeatherPanel rig={data.rig.id} />}</div>
-    <div {...workspacePanel(id, 'director', tab)}>{tab === 'director' && syncPlugin}{tab === 'director' && <RigPluginPanel slug={slug} mode={data.mode.runtime} onRigChanged={() => { if (!unsaved) void loaded.refetch(); }} onChangeMode={() => setTab('optics')} />}</div>
+    <div {...workspacePanel(id, 'director', tab)}>{tab === 'director' && syncPlugin && <>{syncPlugin}<p className="director-muted">The Director plugin below has its own pairing code. Both plugins can run on this rig.</p></>}{tab === 'director' && <RigPluginPanel slug={slug} mode={data.mode.runtime} onRigChanged={() => { if (!unsaved) void loaded.refetch(); }} onChangeMode={() => setTab('optics')} />}</div>
     <div {...workspacePanel(id, 'collaboration', tab)}>{data && collaborationVisited && <CollaborationConnections rig={data.rig.id} name={data.rig.name} active={tab === 'collaboration'} />}</div>
     </div>
     </div>}

@@ -85,6 +85,7 @@ describe('Rig profile card', () => {
 
     expect(await screen.findByRole('tab', { name: 'Plugins' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByRole('region', { name: 'Sync plugin' })).toBeVisible();
+    expect(screen.getByText(/The Director plugin below has its own pairing code/)).toBeVisible();
     expect(await screen.findByRole('heading', { name: 'Director plugin' })).toBeVisible();
     fireEvent.click(screen.getByRole('tab', { name: 'Optics' }));
     expect(screen.queryByRole('region', { name: 'Sync plugin' })).not.toBeInTheDocument();
@@ -94,8 +95,9 @@ describe('Rig profile card', () => {
     server.use(http.get('/api/director/v1/catalogs/catalog/rig/profile', () => HttpResponse.json({ success: false, data: null, error: 'No rig yet' }, { status: 404 })));
     mount(true, undefined, undefined, <RigProfileCard slug="catalog" syncPlugin={<section aria-label="Sync plugin">Pair the Sync plugin</section>} />);
 
-    expect(await screen.findByRole('alert')).toBeInTheDocument();
-    expect(screen.getByRole('region', { name: 'Sync plugin' })).toBeVisible();
+    expect(await screen.findByRole('region', { name: 'Sync plugin' })).toBeVisible();
+    // The rig is missing, not broken: no error beside the Sync plugin.
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('uses vertical keyboard navigation on the setup rail and horizontal navigation on narrow screens', async () => {
