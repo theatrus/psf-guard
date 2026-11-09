@@ -17,6 +17,8 @@ describe('Sync plugin on Live', () => {
     expect(describeSyncAction({ at_ms: 1, action: 'image_upload', outcome: 'ok', operation: 'light', detail: 'M31_0001.fits' })).toBe('Uploaded M31_0001.fits');
     expect(describeSyncAction({ at_ms: 1, action: 'image_upload', outcome: 'refused', detail: 'sha256 mismatch' })).toBe('Uploaded an image: refused (sha256 mismatch)');
     expect(describeSyncAction({ at_ms: 1, action: 'something_new', outcome: 'ok' })).toBe('something new');
+    expect(describeSyncAction({ at_ms: 1, action: 'director_image_upload', outcome: 'ok', detail: 'M31_0003.fits' })).toBe('Director uploaded M31_0003.fits');
+    expect(describeSyncAction({ at_ms: 1, action: 'director_image_upload', outcome: 'refused', detail: 'image uploads are off' })).toBe('Director uploaded an image: refused (image uploads are off)');
   });
 
   it('describes each running instruction', () => {

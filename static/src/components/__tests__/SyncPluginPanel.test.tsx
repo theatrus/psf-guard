@@ -75,58 +75,12 @@ describe('Sync plugin panel', () => {
     expect(saves[1]).toMatchObject({ sync_enabled: false, enabled: true });
   });
 
-  it('asks for pairing before sync or uploads can be turned on', async () => {
+  it('asks for pairing before scheduler sync can be turned on, and leaves uploads to their own panel', async () => {
     show({});
     await screen.findByTestId('sync-scheduler-state');
-    expect(screen.getAllByText('Pair the plugin first.')).toHaveLength(2);
+    expect(screen.getByText('Pair the plugin first.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Turn on scheduler sync' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Turn on image uploads' })).toBeNull();
-  });
-
-  it('turns image uploads on with a receive folder and the database layout, then saves layout changes', async () => {
-    const { saves } = show({
-      token_configured: true, clients: [paired],
-      catalog_directory_template: '2026/%TARGET%/%NIGHT%/%TYPE%', directory_template_source: 'catalog', directory_template_samples: 18,
-    });
-    expect(await screen.findByTestId('sync-upload-state')).toHaveAttribute('data-on', 'false');
-    const turnOn = screen.getByRole('button', { name: 'Turn on image uploads' });
-    expect(turnOn).toBeDisabled();
-    fireEvent.change(screen.getByLabelText('Receive folder'), { target: { value: '/images/remote' } });
-    fireEvent.change(screen.getByLabelText('Folder layout'), { target: { value: 'target_tree' } });
-    const layout = screen.getByLabelText('Layout');
-    expect(layout).toHaveValue('catalog');
-    expect(within(layout).getAllByRole('option').map(option => option.textContent)).toEqual([
-      'Match database: 2026/%TARGET%/%NIGHT%/%TYPE%',
-      '%YEAR%/%TARGET%/%NIGHT%/%TYPE%', '%TARGET%/%NIGHT%/%TYPE%', '%TARGET%/%DATE%/%TYPE%', '%TARGET%/%TYPE%/%FILTER%', '%NIGHT%/%TARGET%/%TYPE%', 'Custom',
-    ]);
-    expect(screen.getByText('Detected from 18 database images:')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Turn on image uploads' }));
-    await waitFor(() => expect(saves).toHaveLength(1));
-    // The database's match stays: no layout is sent with it.
-    expect(saves[0]).toMatchObject({ enabled: true, image_directory: '/images/remote', placement: 'target_tree', directory_template_source: 'catalog' });
-    expect(saves[0].directory_template).toBeUndefined();
-
-    await waitFor(() => expect(screen.getByTestId('sync-upload-state')).toHaveTextContent('On. Paired plugins send image files to /images/remote.'));
-    // A rescan asked for, then a layout chosen: the choice cancels it.
-    const rescan = screen.getByRole('button', { name: 'Rescan' });
-    fireEvent.click(rescan);
-    expect(screen.getByRole('button', { name: 'Rescan on save' })).toHaveAttribute('aria-pressed', 'true');
-    fireEvent.change(screen.getByLabelText('Layout'), { target: { value: 'custom' } });
-    expect(screen.getByRole('button', { name: 'Rescan' })).toHaveAttribute('aria-pressed', 'false');
-    const save = screen.getByRole('button', { name: 'Save upload settings' });
-    expect(save).toBeDisabled();
-    expect(screen.getByText("Enter the custom layout's folders.")).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText('Custom layout'), { target: { value: '%TARGET%/%DATE%/%TYPE%/%FILTER%' } });
-    fireEvent.click(save);
-    await waitFor(() => expect(saves).toHaveLength(2));
-    expect(saves[1]).toMatchObject({ placement: 'target_tree', directory_template: '%TARGET%/%DATE%/%TYPE%/%FILTER%', directory_template_source: 'preset' });
-    expect(saves[1].rescan_directory_layout).toBeUndefined();
-
-    // Buttons wait while a save is under way.
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Turn off image uploads' })).toBeEnabled());
-    fireEvent.click(screen.getByRole('button', { name: 'Turn off image uploads' }));
-    await waitFor(() => expect(saves).toHaveLength(3));
-    expect(saves[2]).toMatchObject({ enabled: false });
+    expect(screen.queryByTestId('sync-upload-state')).toBeNull();
   });
 
   it('generates a remote API key, shows it once, and saves it', async () => {
@@ -145,12 +99,10 @@ describe('Sync plugin panel', () => {
   it('still offers Turn off when sync and uploads stay on after the last plugin is removed', async () => {
     const { saves } = show({ token_configured: false, sync_enabled: true, enabled: true, image_directory: '/images/remote' });
     expect(await screen.findByTestId('sync-scheduler-state')).toHaveTextContent('On, but no plugin is paired, so nothing arrives.');
-    expect(screen.getByTestId('sync-upload-state')).toHaveTextContent('On, but no plugin is paired, so nothing arrives.');
     expect(screen.queryByRole('button', { name: 'Turn on scheduler sync' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Turn off scheduler sync' }));
     await waitFor(() => expect(saves).toHaveLength(1));
     expect(saves[0]).toMatchObject({ sync_enabled: false });
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Turn off image uploads' })).toBeEnabled());
   });
 
   it('keeps a generated key on screen when saving it fails', async () => {

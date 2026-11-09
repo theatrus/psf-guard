@@ -88,7 +88,7 @@ describe('Rig profile card', () => {
     expect(await screen.findByRole('tab', { name: 'Plugins' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByRole('region', { name: 'Sync plugin' })).toBeVisible();
     expect(screen.getByRole('group', { name: 'Plugins on this rig' })).toBeVisible();
-    expect(await screen.findByRole('heading', { name: 'Director plugin' })).toBeVisible();
+    expect(await screen.findByRole('heading', { name: 'PSF Guard Director' })).toBeVisible();
     fireEvent.click(screen.getByRole('tab', { name: 'Optics' }));
     expect(screen.queryByRole('region', { name: 'Sync plugin' })).not.toBeInTheDocument();
   });
