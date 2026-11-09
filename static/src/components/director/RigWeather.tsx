@@ -8,29 +8,50 @@ import { PROVIDER_LABEL, PROVIDER_URL } from './forecastLabels';
 import { openSettings } from '../../utils/settingsIntent';
 
 const number = (value: number | null | undefined, suffix: string) => value == null || !Number.isFinite(value) ? '—' : `${value.toFixed(1).replace(/\.0$/, '')}${suffix}`;
-const state = (cloud: CloudAssessment, evaluated: number, now: number) => {
+/** The page clock ticks every few seconds and the request took time too,
+ *  so a lease is treated as over this much early: an expired decision
+ *  never shows as current. */
+const LEASE_MARGIN_MS = 5_000;
+
+/** The server's time now, from its evaluation of `weather` plus the time
+ *  since this browser received it. The two clocks are never compared.
+ *  `null` when the browser clock has jumped back past the fetch, which
+ *  leaves the reading's age unknown. */
+export function serverNow(weather: RigWeather, browserNow: number, receivedAt: number): number | null {
+  const elapsed = browserNow - receivedAt;
+  // The page clock may lag the fetch by one tick; more is a jump.
+  if (elapsed < -LEASE_MARGIN_MS) return null;
+  return weather.evaluated_at_ms + Math.max(0, elapsed);
+}
+
+const state = (cloud: CloudAssessment, evaluated: number, now: number | null) => {
   if (cloud.state === 'unknown') {
     if (cloud.reason === 'forecast_location_mismatch') return 'location mismatch';
     if (cloud.reason === 'forecast_location_unavailable') return 'location unavailable';
     return 'unknown or stale';
   }
-  return now < evaluated || now >= evaluated + cloud.valid_for_ms ? 'unknown or stale' : cloud.state === 'dewy' ? 'near dew point' : cloud.state;
+  return now === null || now < evaluated || now >= evaluated + cloud.valid_for_ms - LEASE_MARGIN_MS ? 'unknown or stale' : cloud.state === 'dewy' ? 'near dew point' : cloud.state;
 };
 
 /** A rig's reported and forecast weather. `compact`, for a table cell,
  *  leaves out what is unavailable and the provider's credit, which the page
- *  gives once. */
-export function RigWeatherSummary({ weather, now, compact = false }: { weather?: RigWeather; now: number; compact?: boolean }) {
+ *  gives once. `receivedAt` is when this browser fetched `weather`. The
+ *  server's times are on its own clock, so ages and leases count from its
+ *  evaluation plus the time since the fetch, never from this clock. */
+export function RigWeatherSummary({ weather, now: browserNow, receivedAt, compact = false }: { weather?: RigWeather; now: number; receivedAt: number; compact?: boolean }) {
   const r = weather?.reported;
   const f = weather?.forecast;
+  const now = weather ? serverNow(weather, browserNow, receivedAt) : null;
+  // The server stamped the report when it arrived, on its own clock.
+  const reportAge = (received: number) => now === null ? '' : ` · ${formatAge(now - received)}`;
   if (!weather && !compact) return <span className="director-muted">Weather not reported</span>;
   if (!weather || compact && !r && !f) return <span className="director-muted live-no-weather">No weather</span>;
   if (compact) return <div aria-label="Rig weather" className="live-weather">
-    {r && <div><span className="director-muted">NINA</span> {r.sample.source_name}{!r.sample.connected && ' (disconnected)'} · {number(r.sample.values.cloud_percent, '% cloud')} · {state(weather.reported_cloud, weather.evaluated_at_ms, now)}<span className="director-muted"> · {formatAge(now - r.sample.reported_at_ms)}</span></div>}
+    {r && <div><span className="director-muted">NINA</span> {r.sample.source_name}{!r.sample.connected && ' (disconnected)'} · {number(r.sample.values.cloud_percent, '% cloud')} · {state(weather.reported_cloud, weather.evaluated_at_ms, now)}<span className="director-muted">{reportAge(r.received_at_ms)}</span></div>}
     {f && <div><span className="director-muted">Forecast</span> {PROVIDER_LABEL[f.provider]} · {number(f.hour?.cloud_total, '% cloud')} · {state(weather.forecast_conditions, weather.evaluated_at_ms, now)}</div>}
   </div>;
   return <div aria-label="Rig weather">
-    <div><strong>NINA reported:</strong> {r ? <>{r.sample.source_name}{!r.sample.connected && ' (disconnected)'} · {number(r.sample.values.cloud_percent, '% cloud')} · {state(weather.reported_cloud, weather.evaluated_at_ms, now)}<span className="director-muted"> · {formatAge(now - r.sample.reported_at_ms)}</span></> : 'unavailable'}</div>
+    <div><strong>NINA reported:</strong> {r ? <>{r.sample.source_name}{!r.sample.connected && ' (disconnected)'} · {number(r.sample.values.cloud_percent, '% cloud')} · {state(weather.reported_cloud, weather.evaluated_at_ms, now)}<span className="director-muted">{reportAge(r.received_at_ms)}</span></> : 'unavailable'}</div>
     <div><strong>Forecast:</strong> {f ? <>{PROVIDER_LABEL[f.provider]} · {number(f.hour?.cloud_total, '% cloud')} · {state(weather.forecast_conditions, weather.evaluated_at_ms, now)} <small className="director-muted"><a href={PROVIDER_URL[f.provider]} target="_blank" rel="noreferrer">{f.attribution}</a></small></> : 'unavailable'}</div>
   </div>;
 }
@@ -42,12 +63,13 @@ export default function RigWeatherPanel({ rig }: { rig: string }) {
   const history = useQuery({ queryKey: ['directorWeatherHistory', rig], queryFn: () => apiClient.getDirectorWeatherHistory(rig), enabled: historyOpen, refetchOnWindowFocus: false });
   const weather = current.data;
   const values = weather?.reported?.sample.values;
+  const forecastNow = weather ? serverNow(weather, now, current.dataUpdatedAt) : null;
   return <section aria-label="Weather telemetry">
     <div className="director-toolbar"><h4>Weather</h4><button type="button" disabled={current.isFetching} onClick={() => { void current.refetch(); if (historyOpen) void history.refetch(); }}>Refresh weather</button></div>
     {current.isPending && <p role="status">Loading weather...</p>}
     {current.isError && <p role="alert">Weather could not be loaded. {current.error.message}</p>}
     {weather && <>
-      <RigWeatherSummary weather={weather} now={now} />
+      <RigWeatherSummary weather={weather} now={now} receivedAt={current.dataUpdatedAt} />
       {weather.forecast_conditions.reason === 'forecast_location_mismatch' && <p role="status">The site's forecast does not match this rig's location. In the Site tab, select the site where the rig is located and check the rig's latitude and longitude.</p>}
       {weather.forecast_conditions.reason === 'forecast_location_unavailable' && <p role="status">The forecast location could not be checked. Set the planning site's coordinates under Settings → Presets → Sites and check the rig's location in its Site tab.</p>}
       <p>Clear at or under {weather.cloud_threshold_percent}% cloud. {weather.site_id
@@ -66,7 +88,7 @@ export default function RigWeatherPanel({ rig }: { rig: string }) {
         <dt>Sky temperature</dt><dd>{number(values.sky_temperature_celsius, ' °C')}</dd>
         <dt>Sky quality</dt><dd>{number(values.sky_quality_mag_arcsec2, ' mag/arcsec²')}</dd>
       </dl>}
-      {weather.forecast && <p className="director-muted">Forecast fetched {formatAge(now - weather.forecast.fetched_at_ms)}</p>}
+      {weather.forecast && forecastNow !== null && <p className="director-muted">Forecast fetched {formatAge(forecastNow - weather.forecast.fetched_at_ms)}</p>}
     </>}
     <details onToggle={event => setHistoryOpen(event.currentTarget.open)}><summary>Reported weather history (24 hours)</summary>
       {history.isPending && historyOpen && <p role="status">Loading weather history...</p>}

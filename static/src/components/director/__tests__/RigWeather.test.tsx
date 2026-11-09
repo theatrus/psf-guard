@@ -19,6 +19,34 @@ const weather: RigWeather = {
 };
 
 describe('rig weather', () => {
+  it('judges a lease from the fetch, not the browser clock, so clock skew never flips the state', () => {
+    // The browser runs 40 s ahead of the server. Fetched 10 s ago, the
+    // 30 s lease from the server's evaluation still holds.
+    const received = now + 40_000;
+    const { rerender } = render(<RigWeatherSummary weather={weather} now={received + 10_000} receivedAt={received} />);
+    expect(screen.getByText(/85% cloud · cloudy/)).toBeInTheDocument();
+    // The report's age counts from the server's receipt, not the rig PC's clock.
+    expect(screen.getByText(/· 10 s ago/)).toBeInTheDocument();
+    // The lease ends early by the margin: 25 s after the fetch it is over.
+    rerender(<RigWeatherSummary weather={weather} now={received + 25_000} receivedAt={received} />);
+    expect(screen.getAllByText(/unknown or stale/)).toHaveLength(2);
+    // A browser behind the server is no different.
+    rerender(<RigWeatherSummary weather={weather} now={now - 60_000 + 5_000} receivedAt={now - 60_000} />);
+    expect(screen.getByText(/85% cloud · cloudy/)).toBeInTheDocument();
+    // A browser clock that jumped back past the fetch leaves the age unknown.
+    rerender(<RigWeatherSummary weather={weather} now={now - 600_000} receivedAt={now} />);
+    expect(screen.getAllByText(/unknown or stale/)).toHaveLength(2);
+  });
+
+  it("gives the forecast's fetch age on the server's clock", async () => {
+    // The server is far from this browser's clock; the age still reads true.
+    const fetched = { ...weather, forecast: { ...weather.forecast!, fetched_at_ms: now - 120_000 } };
+    server.use(http.get('/api/director/v1/rigs/rig/weather', () => HttpResponse.json({ success: true, data: fetched })));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><RigWeatherPanel rig="rig" /></QueryClientProvider>);
+    expect(await screen.findByText('Forecast fetched 2 min ago')).toBeInTheDocument();
+  });
+
   it.each([
     ['site', true],
     [null, false],
@@ -41,18 +69,18 @@ describe('rig weather', () => {
   });
 
   it('keeps reported clouds and a contradictory forecast visible with attribution', () => {
-    render(<RigWeatherSummary weather={weather} now={now} />);
+    render(<RigWeatherSummary weather={weather} now={now} receivedAt={now} />);
     expect(screen.getByText(/85% cloud · cloudy/)).toBeInTheDocument();
     expect(screen.getByText(/Open-Meteo · 10% cloud · clear/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /CC BY 4.0/ })).toHaveAttribute('href', 'https://open-meteo.com/');
   });
   it('expires a cached clear forecast and keeps missing cloud cover unknown', () => {
-    render(<RigWeatherSummary weather={{ ...weather, reported: { ...weather.reported!, sample: { ...weather.reported!.sample, values: { ...weather.reported!.sample.values, cloud_percent: null } } } }} now={now + 30000} />);
+    render(<RigWeatherSummary weather={{ ...weather, reported: { ...weather.reported!, sample: { ...weather.reported!.sample, values: { ...weather.reported!.sample.values, cloud_percent: null } } } }} now={now + 30000} receivedAt={now} />);
     expect(screen.getAllByText(/unknown or stale/)).toHaveLength(2);
     expect(screen.queryByText(/Cloud sensor · 0% cloud/)).not.toBeInTheDocument();
   });
   it('shows the shared dew decision separately from reported cloud cover', () => {
-    render(<RigWeatherSummary weather={{ ...weather, forecast_conditions: { state: 'dewy', reason: 'dew_limit_reached', valid_for_ms: 30000 } }} now={now} />);
+    render(<RigWeatherSummary weather={{ ...weather, forecast_conditions: { state: 'dewy', reason: 'dew_limit_reached', valid_for_ms: 30000 } }} now={now} receivedAt={now} />);
     expect(screen.getByText(/Open-Meteo · 10% cloud · near dew point/)).toBeInTheDocument();
     expect(screen.getByText(/85% cloud · cloudy/)).toBeInTheDocument();
   });
