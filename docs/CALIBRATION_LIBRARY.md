@@ -327,10 +327,11 @@ database's configured folders.
 
 ## Flat coverage
 
-Open a rig's **Calibration → Flat coverage** tab to review batches reported by
-Director or Target Scheduler. Select suspect coverage and choose **Invalidate
-coverage** with a reason. This requires an editor account. Image files and
-calibration masters are kept.
+Open the database's [Calibration page](#browse-the-library) and choose **Flat
+coverage** to review the flat batches Director and Target Scheduler report.
+Select suspect coverage and choose **Invalidate coverage** with a reason. This
+requires an editor account. PSF Guard keeps the image files and calibration
+masters.
 
 Director checks replacement requests before its **Director Flats** sequence
 instruction and every 30 seconds between calibration images in a running

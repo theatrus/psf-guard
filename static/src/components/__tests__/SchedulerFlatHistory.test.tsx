@@ -34,8 +34,8 @@ describe('scheduler flat coverage', () => {
     render(<SchedulerFlatHistory dbId="demo" canManage />, { wrapper: wrapper() });
     fireEvent.click(await screen.findByRole('checkbox', { name: 'Select coverage 1 for profile flats' }));
     expect(screen.getByRole('tabpanel', { name: 'Flat coverage' })).toBeInTheDocument();
-    expect(screen.getByText(/Director checks replacement requests before Director Flats/)).toHaveTextContent("Sync plugin's next grade pull");
-    expect(screen.getByText(/Image files are kept/)).toBeInTheDocument();
+    expect(screen.getByText(/Director gets the request at its next Director Flats instruction/)).toHaveTextContent("Sync plugin's next grade pull");
+    expect(screen.getByText(/Director gets the request/)).toHaveTextContent('Your files and calibration masters are unchanged.');
   });
   it('requires a reason and submits exact selected records, including duplicates', async () => {
     serve([row, { ...row, record_id: 'record-b', source_row_id: 2 }]);

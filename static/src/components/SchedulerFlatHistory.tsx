@@ -79,7 +79,6 @@ export default function SchedulerFlatHistory({ dbId, canManage }: {
   }, [history.data, history.isFetching, history.error, offset]);
   return (
     <div className="scheduler-flat-history" role="tabpanel" aria-label="Flat coverage">
-      <p>Flat coverage from Director and Target Scheduler. Invalidate a suspect batch to request replacement flats. Image files are kept.</p>
       <form className="flat-history-toolbar" onSubmit={(event) => {
         event.preventDefault();
         resetSelection();
@@ -120,9 +119,9 @@ export default function SchedulerFlatHistory({ dbId, canManage }: {
           }
         }}>
           <strong>Invalidate {selectedIds.length} coverage record{selectedIds.length === 1 ? '' : 's'}?</strong>
-          <p>Director checks replacement requests before Director Flats and while its session is taking calibration frames.
-            Target Scheduler receives requests through the Sync plugin's next grade pull or applied reconcile;
-            sync before its next flats action. Each plugin uses its current capture settings.
+          <p>Director gets the request at its next Director Flats instruction, or while a session takes calibration
+            frames. Target Scheduler gets it at the Sync plugin's next grade pull or applied reconcile, so sync
+            before its next flats action. Each plugin takes the new flats with its current capture settings.
             Your files and calibration masters are unchanged.</p>
           <p>Duplicate coverage can still satisfy the scheduler. Include all suspect records for the run.</p>
           <label>Reason
