@@ -220,7 +220,7 @@ fn open(path: &str) -> anyhow::Result<Connection> {
 ///
 /// This is an optimization, not a correctness step, and the expensive half
 /// of opening a catalog: building an index takes the catalog's write lock,
-/// which on a rollback journal blocks every other writer meanwhile. A
+/// which blocks every other writer meanwhile. A
 /// catalog being written now is left alone; per-target lookups scan until
 /// the next start builds the indexes.
 fn build_indexes(path: &str) {

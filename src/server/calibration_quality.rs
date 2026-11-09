@@ -36,9 +36,9 @@ use std::time::{Duration, Instant};
 const UPLOAD_SETTLE: Duration = Duration::from_secs(2 * 60);
 
 /// How long the pass waits for the catalog's write lock before it stops for
-/// now. Short, as for the other background passes: N.I.N.A. may be saving
-/// frames into this file, and the next pass continues where this one left
-/// off.
+/// now. Short, as for the other background passes: a Sync apply or an
+/// upload may be saving frames into this file, and the next pass continues
+/// where this one left off.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// How often a pass looks again while interactive work runs.

@@ -915,9 +915,10 @@ overwrites an existing file. See [reject archives](docs/design/reject-archive.md
 <a id="syncing-between-machines"></a>
 ## 🔄 Syncing between machines
 
-For a N.I.N.A. rig, start with [PSF Guard Sync](#connect-nina). Use the
-workflows below when transferring between database files or PSF Guard
-servers. No sync is needed when both tools open the same database.
+For a N.I.N.A. rig, start with [PSF Guard Sync](#connect-nina): N.I.N.A.
+reaches a PSF Guard database only through the Sync plugin, never by opening
+the file. Use the workflows below when transferring between database files
+or PSF Guard servers.
 
 ### Transfer between database files
 
