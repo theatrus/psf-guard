@@ -1144,7 +1144,11 @@ async fn saving_target_scheduler_changes_writes_rows_that_still_hold_what_was_re
 fn keep_in_step(a: &Activated) -> std::path::PathBuf {
     let rig_db = a.f._dir.path().join("rig.sqlite");
     let source = a.f._dir.path().join("TargetScheduler.sqlite");
-    std::fs::copy(&rig_db, &source).unwrap();
+    // Through SQLite: a file copy would miss what the write-ahead log holds.
+    Connection::open(&rig_db)
+        .unwrap()
+        .execute("VACUUM INTO ?1", [source.to_string_lossy()])
+        .unwrap();
     let mut context = crate::server::database_context::DatabaseContext::new(
         "rig".into(),
         "RedCat rig".into(),

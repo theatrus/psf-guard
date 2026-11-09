@@ -81,11 +81,46 @@ fn journal_of(mode: &str) -> Journal {
 /// Whether `path` lies on a network share, or on a filesystem this cannot
 /// tell from one. A file that does not exist yet is judged by its folder.
 pub fn on_network_share(path: &Path) -> bool {
+    #[cfg(test)]
+    if test_shares::covers(path) {
+        return true;
+    }
     let existing = path
         .ancestors()
         .find(|candidate| candidate.exists())
         .unwrap_or(path);
     platform::on_network_share(existing)
+}
+
+/// Folders tests treat as network shares, to exercise the rollback
+/// journal on a local disk. Each test names its own temporary folder.
+#[cfg(test)]
+mod test_shares {
+    use std::{
+        path::{Path, PathBuf},
+        sync::Mutex,
+    };
+
+    static SHARES: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+    pub(crate) fn add(root: &Path) {
+        SHARES.lock().unwrap().push(root.to_path_buf());
+    }
+
+    pub(super) fn covers(path: &Path) -> bool {
+        SHARES
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|root| path.starts_with(root))
+    }
+}
+
+/// Treat catalogs under `root` as on a network share, so they keep the
+/// rollback journal. For tests of what a share's locking does.
+#[cfg(test)]
+pub(crate) fn treat_as_network_share(root: &Path) {
+    test_shares::add(root);
 }
 
 #[cfg(target_os = "linux")]
@@ -217,6 +252,19 @@ mod tests {
         let conn =
             Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
         assert_eq!(choose(&conn, &path), Journal::Rollback);
+    }
+
+    #[test]
+    fn a_catalog_on_a_network_share_keeps_the_rollback_journal() {
+        let dir = tempfile::tempdir().unwrap();
+        treat_as_network_share(dir.path());
+        let path = dir.path().join("catalog.sqlite");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE t(x)")
+            .unwrap();
+        // Moved onto a share in WAL mode: it goes back to the rollback journal.
+        assert_eq!(choose(&conn, &path), Journal::Rollback);
+        assert_eq!(current(&conn), Journal::Rollback);
     }
 
     #[test]

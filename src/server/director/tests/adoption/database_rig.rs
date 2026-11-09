@@ -110,10 +110,7 @@ async fn durable_source_identity_after_interruption_allows_the_exact_rig_retry()
 
 #[tokio::test]
 async fn source_commit_lock_rolls_back_the_rig_and_retries_after_release() {
-    let f = Fixture::new();
-    f.source
-        .execute_batch("PRAGMA journal_mode=DELETE")
-        .unwrap();
+    let f = Fixture::on_network_share();
     let reviewed = review(&f).await;
     f.source
         .execute_batch("BEGIN; SELECT * FROM project;")

@@ -1061,7 +1061,9 @@ fn warns(listed: &Value, text: &str) -> bool {
 /// rather than gone.
 #[tokio::test]
 async fn the_plan_list_reads_rig_databases_beside_their_writers() {
-    let f = Fixture::new();
+    // On a network share the rig keeps the rollback journal, where a writer
+    // can lock readers out; on a local disk the write-ahead log never does.
+    let f = Fixture::on_network_share();
     let path = register(
         &f,
         "nina",
@@ -1765,4 +1767,38 @@ async fn locking_a_solved_panel_in_the_editor_keeps_an_import_following() {
     assert_eq!(plan.objectives[0].goal, Goal::Frames { value: 45 });
     assert!(kept.layout.panels[0].locked, "{kept:?}");
     assert!(kept.layout.panels[0].measured.is_some(), "{kept:?}");
+}
+
+/// On a local disk the rig keeps the write-ahead log: a writer holding the
+/// database never locks the plan list out, and the list reads what was
+/// committed.
+#[tokio::test]
+async fn the_plan_list_reads_a_local_rig_while_a_writer_holds_it() {
+    let f = Fixture::new();
+    let path = register(
+        &f,
+        "local",
+        "Local rig",
+        &[(1, "Pelican", Some(Uuid::new_v4()))],
+    );
+    // The first listing writes the catalog's identity into the file;
+    // writers still take turns, so it runs before the writer holds the file.
+    let (status, first) = call(&f.app, "GET", "/plans", Value::Null, None).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    let writer = rusqlite::Connection::open(&path).unwrap();
+    writer.busy_timeout(std::time::Duration::ZERO).unwrap();
+    let journal: String = writer
+        .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(journal, "wal");
+    writer
+        .execute_batch("BEGIN EXCLUSIVE; UPDATE project SET description='writing' WHERE Id=1;")
+        .unwrap();
+    let started = std::time::Instant::now();
+    let (status, listed) = call(&f.app, "GET", "/plans", Value::Null, None).await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    assert!(!warns(&listed, "Local rig"), "{listed}");
+    assert!(plan_named(&listed, "Pelican").is_object(), "{listed}");
+    writer.execute_batch("COMMIT").unwrap();
 }

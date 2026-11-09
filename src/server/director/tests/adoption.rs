@@ -39,7 +39,20 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        Self::build(false)
+    }
+
+    /// The catalog on a network share: it keeps the rollback journal, where
+    /// a reader on another connection blocks a commit.
+    fn on_network_share() -> Self {
+        Self::build(true)
+    }
+
+    fn build(network_share: bool) -> Self {
         let dir = TempDir::new().unwrap();
+        if network_share {
+            crate::catalog_journal::treat_as_network_share(dir.path());
+        }
         let state = Arc::new(state(&dir, true));
         let path = dir.path().join("catalog.sqlite");
         let source = Connection::open(&path).unwrap();
@@ -325,11 +338,7 @@ async fn interrupted_coordinator_commit_recovers_using_the_same_durable_lineage(
 
 #[tokio::test]
 async fn blocked_catalog_commit_rolls_back_both_databases_and_allows_exact_retry() {
-    let fixture = Fixture::new();
-    fixture
-        .source
-        .execute_batch("PRAGMA journal_mode=DELETE;")
-        .unwrap();
+    let fixture = Fixture::on_network_share();
     let preview = fixture.preview().await;
     // A rollback-journal reader permits BEGIN IMMEDIATE and writes, but blocks
     // COMMIT. This exercises the real catalog finalizer, not an injected error.
