@@ -40,12 +40,19 @@ pub enum AuditAction {
     StarDetectionProfile,
     /// An image file sent to the database's receive folder.
     ImageUpload,
+    /// An image file a paired Director plugin sent to the receive folder.
+    DirectorImageUpload,
     /// A report of what N.I.N.A.'s sequence is doing. Only refusals reach
     /// the log; accepted reports arrive every few seconds.
     SequenceStatus,
 }
 
 impl AuditAction {
+    /// Whether a Sync client took this action, rather than a Director one.
+    fn is_sync(self) -> bool {
+        self != Self::DirectorImageUpload
+    }
+
     /// Whether the Live page can show this as a client's action. A
     /// capabilities call and a poll for pending flat history run before
     /// nearly everything else, so they count only as contact.
@@ -288,7 +295,7 @@ impl RemoteAuditLog {
         }
     }
 
-    /// The newest notable action on `catalog_id`, if there is one.
+    /// The Sync plugin's newest notable action on `catalog_id`, if any.
     pub fn latest(&self, catalog_id: &str) -> Option<LatestAction> {
         let latest = self
             .latest
@@ -298,11 +305,27 @@ impl RemoteAuditLog {
             .by_catalog
             .get(catalog_id)?
             .values()
+            .filter(|action| action.action.is_sync())
             .max_by_key(|action| action.at_ms)
             .cloned()
     }
 
-    /// Kinds of action whose newest entry on `catalog_id` was refused or
+    /// A Director plugin's newest image upload to `catalog_id`, whatever
+    /// its outcome.
+    pub fn director_upload(&self, catalog_id: &str) -> Option<LatestAction> {
+        let latest = self
+            .latest
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        latest
+            .by_catalog
+            .get(catalog_id)?
+            .values()
+            .find(|action| action.action == AuditAction::DirectorImageUpload)
+            .cloned()
+    }
+
+    /// The Sync plugin's kinds of action whose newest entry on `catalog_id` was refused or
     /// failed, newest first. A later success of the same kind clears one,
     /// and other kinds of action never hide one.
     pub fn problems(&self, catalog_id: &str) -> Vec<LatestAction> {
@@ -315,7 +338,7 @@ impl RemoteAuditLog {
             .get(catalog_id)
             .into_iter()
             .flat_map(|kinds| kinds.values())
-            .filter(|action| action.outcome != AuditOutcome::Ok)
+            .filter(|action| action.action.is_sync() && action.outcome != AuditOutcome::Ok)
             .cloned()
             .collect();
         problems.sort_by_key(|action| std::cmp::Reverse(action.at_ms));

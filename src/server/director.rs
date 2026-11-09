@@ -44,6 +44,7 @@ pub(crate) async fn transfer_jobs(state: &Arc<AppState>) -> Vec<serde_json::Valu
         .unwrap_or_default()
 }
 mod framing;
+mod image_uploads;
 mod import_drafts;
 #[cfg(test)]
 pub(crate) use activation::create_director_tables as create_rig_tables_for_tests;
@@ -716,6 +717,13 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
                 .layer(DefaultBodyLimit::max(
                     psf_guard_director_core::MAX_REQUEST_BYTES,
                 )),
+        )
+        .route("/rigs/{rig}/uploads", get(image_uploads::state))
+        .route(
+            "/rigs/{rig}/images",
+            axum::routing::post(image_uploads::upload).layer(DefaultBodyLimit::max(
+                crate::server::remote_upload::MAX_MULTIPART_BYTES,
+            )),
         )
         .route(
             "/rigs/{rig}/star-detection-settings",

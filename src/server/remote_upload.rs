@@ -61,7 +61,7 @@ pub async fn upload_image(
     headers: HeaderMap,
     multipart: Multipart,
 ) -> Result<Json<ApiResponse<RemoteImageUploadResponse>>, AppError> {
-    use crate::server::remote_audit::{AuditAction, AuditOutcome, AuditRecord};
+    use crate::server::remote_audit::AuditAction;
     let catalog_id = ctx.id.clone();
     // Only a request with a valid key is the client's action; anything else
     // must not show up as what the rig last did.
@@ -74,12 +74,62 @@ pub async fn upload_image(
         config.token_holder(token).map(str::to_owned)
     });
     let Some(holder) = holder else {
-        return receive_image(state, ctx, headers, multipart).await;
+        return receive_image(state, ctx, headers, multipart, Caller::SyncKey).await;
     };
     // An upload is contact too, so the rig stays online between syncs.
     crate::server::remote_sync::note_sync_contact(&state, &catalog_id, &holder, &headers);
-    let result = receive_image(state.clone(), ctx, headers, multipart).await;
-    let (outcome, detail, operation, summary) = match &result {
+    let result = receive_image(state.clone(), ctx, headers, multipart, Caller::SyncKey).await;
+    record_upload(&state, &catalog_id, AuditAction::ImageUpload, &result);
+    result
+}
+
+/// Receive an image from a paired Director plugin into `ctx`, the database
+/// its pairing names. The Director pairing middleware has checked the
+/// token, rig and profile; everything after that is the Sync upload's: the
+/// receive folder, layout, header import and calibration matching.
+pub(crate) async fn receive_director_image(
+    state: std::sync::Arc<crate::server::state::AppState>,
+    ctx: std::sync::Arc<crate::server::database_context::DatabaseContext>,
+    headers: HeaderMap,
+    multipart: Multipart,
+) -> Result<Json<ApiResponse<RemoteImageUploadResponse>>, AppError> {
+    use crate::server::remote_audit::AuditAction;
+    let catalog_id = ctx.id.clone();
+    let result = receive_image(
+        state.clone(),
+        DbContext(ctx),
+        headers,
+        multipart,
+        Caller::Paired,
+    )
+    .await;
+    record_upload(
+        &state,
+        &catalog_id,
+        AuditAction::DirectorImageUpload,
+        &result,
+    );
+    result
+}
+
+/// Who an upload comes from, which decides the checks before the file.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Caller {
+    /// A Sync key or paired Sync client, checked here against the database.
+    SyncKey,
+    /// A client whose pairing was already checked, such as Director's.
+    Paired,
+}
+
+/// Log an upload with a valid credential, so the Live page can show it.
+fn record_upload(
+    state: &crate::server::state::AppState,
+    catalog_id: &str,
+    action: crate::server::remote_audit::AuditAction,
+    result: &Result<Json<ApiResponse<RemoteImageUploadResponse>>, AppError>,
+) {
+    use crate::server::remote_audit::{AuditOutcome, AuditRecord};
+    let (outcome, detail, operation, summary) = match result {
         Ok(Json(response)) => match &response.data {
             Some(upload) => (
                 AuditOutcome::Ok,
@@ -90,7 +140,7 @@ pub async fn upload_image(
                     ("already_present".to_owned(), upload.already_present as i64),
                 ]),
             ),
-            None => return result,
+            None => return,
         },
         Err(error) => {
             let outcome = crate::server::remote_sync::outcome_of(error);
@@ -109,8 +159,8 @@ pub async fn upload_image(
         }
     };
     state.remote_audit.record(
-        &catalog_id,
-        AuditAction::ImageUpload,
+        catalog_id,
+        action,
         outcome,
         AuditRecord {
             operation: operation.as_deref(),
@@ -119,7 +169,6 @@ pub async fn upload_image(
             ..Default::default()
         },
     );
-    result
 }
 
 async fn receive_image(
@@ -127,6 +176,7 @@ async fn receive_image(
     ctx: DbContext,
     headers: HeaderMap,
     mut multipart: Multipart,
+    caller: Caller,
 ) -> Result<Json<ApiResponse<RemoteImageUploadResponse>>, AppError> {
     let config = ctx
         .remote_image_upload
@@ -144,8 +194,10 @@ async fn receive_image(
         ))
     })?;
 
-    require_database_identity(&headers, &ctx.id)?;
-    require_bearer_token(&headers, &config)?;
+    if caller == Caller::SyncKey {
+        require_database_identity(&headers, &ctx.id)?;
+        require_bearer_token(&headers, &config)?;
+    }
     let expected_sha256 = required_sha256_header(&headers)?;
 
     let mut received = None;

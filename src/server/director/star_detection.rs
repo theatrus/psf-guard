@@ -9,7 +9,7 @@ use crate::server::star_detection_settings::{
     plugin_body, store_plugin_snapshot, PluginProfileRequest, PluginProfileResponse,
 };
 use crate::star_detection::RecordSource;
-use axum::http::{header::AUTHORIZATION, HeaderMap};
+use axum::http::HeaderMap;
 
 /// POST /api/director/v1/rigs/{rig}/star-detection-settings
 pub(super) async fn submit(
@@ -18,27 +18,10 @@ pub(super) async fn submit(
     headers: HeaderMap,
     body: Result<Json<PluginProfileRequest>, axum::extract::rejection::JsonRejection>,
 ) -> Result<Response, AppError> {
-    let denied = || AppError::Forbidden("this rig's pairing does not cover the request".into());
     let service = enabled(&state).map_err(|_| AppError::NotFound)?;
     // The pairing middleware checked the token, rig and profile header; read
     // the client again here for its catalog.
-    let secret = headers
-        .get(AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.split_once(' '))
-        .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer"))
-        .map(|(_, secret)| secret.trim())
-        .filter(|secret| secret.starts_with("psfdrc_"))
-        .ok_or_else(denied)?;
-    let hash = crate::auth_registry::hash_token(secret);
-    let client = service
-        .query(move |store| store.client_for_token(&hash))
-        .await
-        .map_err(|_| AppError::InternalError("the Director store could not be read".into()))?
-        .ok_or_else(denied)?;
-    if client.rig_id != rig {
-        return Err(denied());
-    }
+    let client = super::image_uploads::paired_client(&service, rig, &headers).await?;
     let request = plugin_body(body)?;
     if request.catalog_id.is_some() {
         return Err(AppError::BadRequest(
