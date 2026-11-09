@@ -116,6 +116,8 @@ function LibraryPage() {
   // Plans from Planning: which project rows belong to one, and the plans no
   // database shoots yet. Nothing is asked when Planning is off.
   const plans = usePlans();
+  // Stable while the plan list is, unlike `plans` itself.
+  const planFor = plans.planFor;
   // What to show and the search text are URL state too, so a reload or a
   // shared link lands on the same list.
   const show = parseShow(getParam('show'), plans.enabled);
@@ -126,23 +128,26 @@ function LibraryPage() {
   const projectSort = parseProjectSort(getParam('sort'));
   const setProjectSort = (value: ProjectSort) => updateParams({ sort: value === 'recent' ? null : value });
   // A link that opens the Library afresh puts back the filters last set in
-  // this tab; any change after that, a cleared one too, is kept for next
-  // time.
+  // this tab, and any change after that, a cleared one too, is kept for
+  // next time. Arriving with no filter is not a change, so it keeps what was
+  // set. A link back to a project (`project` in the URL) is left as it is:
+  // a kept filter could hide the row the Library should mark.
   const filterSignature = JSON.stringify(filtersOf(searchParams));
   const lookedAtArrival = useRef(false);
+  const backToProject = searchParams.has('project');
   useEffect(() => {
     const current = JSON.parse(filterSignature) as ReturnType<typeof filtersOf>;
     if (!lookedAtArrival.current) {
       lookedAtArrival.current = true;
-      const saved = recallLibraryFilters();
-      if (Object.keys(current).length === 0 && Object.keys(saved).length > 0) {
+      if (Object.keys(current).length === 0) {
+        const saved = recallLibraryFilters();
         // The restored URL comes back through here and is kept.
-        updateParams(saved);
+        if (Object.keys(saved).length > 0 && !backToProject) updateParams(saved);
         return;
       }
     }
     rememberLibraryFilters(current);
-  }, [filterSignature, updateParams]);
+  }, [backToProject, filterSignature, updateParams]);
   const [archivedOpen, setArchivedOpen] = useState(false);
   const [organizing, setOrganizing] = useState<Organizing | null>(null);
   const [organizationScope, setOrganizationScope] = useState<OrganizationScope | null>(null);
@@ -494,13 +499,13 @@ function LibraryPage() {
       const members = family.members.map((member) => ({
         ...member,
         calibration_level: calibrationHealth.get(projectKey(member.db_id, member.id))?.level ?? null,
-        activation_due: !!plans.planFor(member.db_id, member.id)?.activation_due,
+        activation_due: !!planFor(member.db_id, member.id)?.activation_due,
       }));
       if (!familyMatchesShow(members, show)) continue;
       for (const member of family.members) keep.add(projectKey(member.db_id, member.id));
     }
     return searchedProjects.filter((project) => keep.has(projectKey(project.db_id, project.id)));
-  }, [calibrationHealth, plans, searchedProjects, show]);
+  }, [calibrationHealth, planFor, searchedProjects, show]);
   const narrowed = show !== 'all' || projectSearch.trim() !== '';
 
   const activeProjectGroups = useMemo(

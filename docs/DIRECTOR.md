@@ -810,10 +810,14 @@ not have what is saved in Planning:
 
 - the plan was never activated;
 - its plan or framing was saved after the last activation;
-- it shoots a rig the last activation left out; or
+- it shoots a rig the last activation left out;
 - a rig's Target Scheduler rows differ from what the last activation wrote
   there, such as a goal, exposure, template, coordinates or rotation edited
-  in N.I.N.A. or in the plan editor.
+  in N.I.N.A. or in the plan editor, or a change to the filter, gain,
+  offset, binning, readout mode or default exposure of a template the plan
+  uses; or
+- a remote site or Target Scheduler file has not received the last
+  activation.
 
 A plan imported from Target Scheduler and never edited in Planning is that
 project's own rows, so it is not listed. Frames taken, the project's state
@@ -826,15 +830,18 @@ show the result after the plan leaves the list.
 
 The server works this out from its records and one query per database, so
 the Library does not run the workspace's full activation check for each
-plan. Apply stores a fingerprint of the rows it wrote on each rig. An
-activation from before this release has no fingerprint, so its rows are
-only compared after the next activation.
+plan. Apply stores a fingerprint of the rows it wrote on each rig in the
+activation record (meta schema 38). An activation from before this release
+has no fingerprint, so its rows are only compared after the next
+activation. A build older than schema 38 cannot open the store afterwards.
 
 The Database filter (`dbfilter`), Show, the search and **Sort** all live in
 the URL, so the header and a plan's **Library** link return to the same
 list. The Library also keeps the last filters for the browser tab: when a
-link opens it with no filter, it puts them back. **Show all** clears them
-for the tab too.
+link opens it with no filter, it puts them back. A link back to a project
+(one with `project` in the URL) is the exception, since a kept filter could
+hide the row the Library marks. **Show all** clears Show and the search for
+the tab too; the Database filter and Sort stay.
 
 To delete a project from one database, open its **Edit project** panel and
 click **Delete project...**, or click **Delete** beside it under **Archived

@@ -35,7 +35,7 @@ const plans = [
   // Activated, then its Target Scheduler rows changed on RedCat.
   plan('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'Pelican', [link('redcat', 'RedCat', 2)], {
     activation: { revision: 1, applied_at_ms: 1_700_000_000_000, rigs: 1 } as DirectorPlanRow['activation'],
-    activation_due: { never: false, parts: [], left_out: [], differs: [rig.id] },
+    activation_due: { never: false, parts: [], left_out: [], differs: [rig], unsent: [] },
   }),
   plan('cccccccc-cccc-4ccc-8ccc-cccccccccccc', 'Bare', []),
 ];
@@ -147,13 +147,18 @@ describe('the Library with Planning', () => {
     const first = mount('/?show=needs-activation&sort=name');
     await screen.findByRole('combobox', { name: 'Show projects' });
     first.unmount();
+    // A link back to a project keeps its own URL: a kept filter could hide the row.
+    const back = mount('/?db=redcat&project=2');
+    await screen.findByRole('combobox', { name: 'Show projects' });
+    expect(screen.getByTestId('location')).toHaveTextContent(/^\/\?db=redcat&project=2$/);
+    back.unmount();
     // A fresh Library address, as a link from another page builds it.
-    const second = mount('/?db=redcat&project=2');
-    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/?db=redcat&project=2&show=needs-activation&sort=name'));
+    const second = mount('/?db=redcat');
+    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/?db=redcat&show=needs-activation&sort=name'));
     expect(await screen.findByRole('combobox', { name: 'Show projects' })).toHaveValue('needs-activation');
-    // Show all clears them for next time too.
+    // Show all clears Show and the search for next time too; the order stays.
     fireEvent.click(await screen.findByRole('button', { name: 'Show all' }));
-    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent(/^\/\?db=redcat&project=2&sort=name$/));
+    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent(/^\/\?db=redcat&sort=name$/));
     second.unmount();
     mount('/');
     await screen.findByRole('combobox', { name: 'Show projects' });

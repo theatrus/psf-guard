@@ -10,6 +10,9 @@ beforeAll(() => server.listen({ onUnhandledFrame: 'error' }));
 // Reset handlers after each test
 afterEach(() => {
   cleanup();
+  // What a page keeps for the tab (the Library's filters, for one) must not
+  // carry into the next test.
+  window.sessionStorage.clear();
   server.resetHandlers();
   scoringServer.reset();
 });
