@@ -270,7 +270,7 @@ pub(super) struct Gathered {
 
 impl Gathered {
     pub(super) fn calibration_recipes(&self) -> &[Recipe] {
-        &self.built.recipes
+        &self.built.calibration_recipes
     }
 
     pub(super) fn goals(&self) -> &[Goal] {
@@ -945,6 +945,7 @@ struct Built {
     goals: Vec<Goal>,
     targets: Vec<Target>,
     recipes: Vec<Recipe>,
+    calibration_recipes: Vec<Recipe>,
     bindings: Vec<Binding>,
     links: Vec<Link>,
     omitted: Vec<String>,
@@ -999,6 +1000,7 @@ fn build(
         goals: vec![],
         targets: vec![],
         recipes: vec![],
+        calibration_recipes: vec![],
         bindings: vec![],
         links: vec![],
         omitted: vec![],
@@ -1274,6 +1276,9 @@ fn build(
             ));
         }
     }
+    // Calibration still needs the settings of completed light goals, and is
+    // independent of the observing program's goal limit.
+    built.calibration_recipes = built.recipes.clone();
     // Targets and recipes only a finished goal used go with it.
     prune_unbound(&mut built);
     // The core takes at most MAX_PROGRAM_GOALS goals. Past that, the most
