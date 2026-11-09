@@ -415,6 +415,8 @@ async fn the_live_list_shows_what_the_sync_plugin_last_did_and_its_sequence() {
             .clone()
     };
     let slug = row(&listed)["catalog_slug"].as_str().unwrap().to_owned();
+    // The count of Active projects is there, even when it is zero.
+    assert!(row(&listed)["active_projects"].is_u64());
     // A database the Sync plugin never reached shows no Sync section.
     assert_eq!(row(&listed)["sync"], Value::Null);
 

@@ -772,6 +772,9 @@ export interface DirectorRigStatusView {
   assignments: Array<{ project: DirectorIdentity; activation_revision: number; applied_at_ms: number }>;
   pending_receipts: number;
   recent_operations?: DirectorOperationReceipt[];
+  /** Projects Target Scheduler has Active in the rig's database, including
+   *  Director activations; null when the database could not be read. */
+  active_projects?: number | null;
   /** The Sync plugin on this rig's database; absent without Sync. */
   sync?: SyncLive | null;
 }

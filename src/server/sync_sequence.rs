@@ -239,6 +239,27 @@ impl SyncLive {
     }
 }
 
+#[derive(Debug, serde::Deserialize)]
+pub struct HistoryQuery {
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+/// `GET /api/db/{id}/plugin-history`: the plugins' recent actions on this
+/// database from the Sync audit log, newest first, for the Live page.
+pub async fn history(
+    State(state): State<Arc<AppState>>,
+    ctx: crate::server::extract::DbContext,
+    axum::extract::Query(query): axum::extract::Query<HistoryQuery>,
+) -> Result<Json<ApiResponse<Vec<crate::server::remote_audit::LatestAction>>>, AppError> {
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    let catalog = ctx.0.id.clone();
+    let entries = tokio::task::spawn_blocking(move || state.remote_audit.history(&catalog, limit))
+        .await
+        .map_err(|error| AppError::InternalError(format!("reading plugin history: {error}")))?;
+    Ok(Json(ApiResponse::success(entries)))
+}
+
 #[derive(Debug, Serialize)]
 pub struct SequenceAnswer {
     accepted: bool,

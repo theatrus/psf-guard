@@ -343,6 +343,41 @@ pub(super) struct RigStatusView {
     /// The Sync plugin on this rig's database: its last contact and action,
     /// and what N.I.N.A.'s sequence is doing. `None` without Sync.
     sync: Option<crate::server::sync_sequence::SyncLive>,
+    /// Projects in the rig's database that Target Scheduler has Active,
+    /// including those a Director activation wrote. `None` when the
+    /// database could not be read.
+    active_projects: Option<u32>,
+}
+
+/// Each database's count of Active projects, by its ID and file path, read
+/// off the request path. A file that cannot be read has no count.
+async fn active_projects(paths: Vec<(String, String)>) -> std::collections::HashMap<String, u32> {
+    tokio::task::spawn_blocking(move || {
+        paths
+            .into_iter()
+            .filter_map(|(id, path)| {
+                let connection =
+                    crate::server::database_context::open_scheduler_connection_with_flags(
+                        &path,
+                        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+                    )
+                    .ok()?;
+                // Live polls every few seconds: a database another writer
+                // holds is left without a count rather than waited on.
+                connection
+                    .busy_timeout(std::time::Duration::from_millis(250))
+                    .ok()?;
+                let count: i64 = connection
+                    .query_row("SELECT COUNT(*) FROM project WHERE state=1", [], |row| {
+                        row.get(0)
+                    })
+                    .ok()?;
+                Some((id, u32::try_from(count).unwrap_or(u32::MAX)))
+            })
+            .collect()
+    })
+    .await
+    .unwrap_or_default()
 }
 
 fn contacts(list: Vec<Contact>) -> Contacts {
@@ -398,6 +433,13 @@ pub(super) async fn statuses(
         .collect();
     let service = enabled(&state)?;
     let instance = service.instance_id;
+    let mut active = active_projects(
+        catalogs
+            .iter()
+            .map(|catalog| (catalog.id.clone(), catalog.database_path.clone()))
+            .collect(),
+    )
+    .await;
     let sync_now = now_ms();
     let mut sync: std::collections::HashMap<String, crate::server::sync_sequence::SyncLive> =
         catalogs
@@ -435,6 +477,7 @@ pub(super) async fn statuses(
                     .map(|s| now.saturating_sub(s.received_at_ms));
                 let contacts = contacts(store.contacts_for_rig(rig_id)?);
                 let sync = catalog_slug.as_ref().and_then(|slug| sync.remove(slug));
+                let active_projects = catalog_slug.as_ref().and_then(|slug| active.remove(slug));
                 let connectivity = connectivity(
                     &contacts,
                     sync.as_ref().and_then(|sync| sync.last_contact_ms),
@@ -477,6 +520,7 @@ pub(super) async fn statuses(
                     pending_receipts,
                     recent_operations: store.recent_operations(rig_id)?,
                     sync,
+                    active_projects,
                 });
             }
             views.sort_by(|a, b| a.rig.name.cmp(&b.rig.name).then(a.rig.id.cmp(&b.rig.id)));
@@ -484,4 +528,36 @@ pub(super) async fn statuses(
         })
         .await?;
     Ok(Json(ApiResponse::success(views)))
+}
+
+#[cfg(test)]
+mod active_project_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn counts_the_projects_target_scheduler_has_active() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rig.sqlite");
+        let db = crate::ts_schema::create_fresh_db(&path).unwrap();
+        for (id, state) in [(1, 1), (2, 1), (3, 2), (4, 0)] {
+            db.execute(
+                "INSERT INTO project(Id, profileId, name, state) VALUES(?1, 'profile', ?2, ?3)",
+                rusqlite::params![id, format!("Project {id}"), state],
+            )
+            .unwrap();
+        }
+        // A catalog on a local disk runs in write-ahead-log mode with the
+        // server's own connection open.
+        db.query_row("PRAGMA journal_mode=WAL", [], |_| Ok(()))
+            .unwrap();
+        let missing = dir.path().join("missing.sqlite");
+        let counts = active_projects(vec![
+            ("rig".into(), path.to_string_lossy().into_owned()),
+            ("missing".into(), missing.to_string_lossy().into_owned()),
+        ])
+        .await;
+        assert_eq!(counts.get("rig"), Some(&2));
+        assert_eq!(counts.get("missing"), None);
+        drop(db);
+    }
 }

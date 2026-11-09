@@ -568,33 +568,44 @@ database, so its targets and exposures editor is open on arrival. Old `/director
 Library with its scope, `directorShow` and `directorSearch` becoming the
 Library's `show` and `q`.
 
-**Live** is the operator's table of rigs. For each rig it shows the link
-state, from the server's own receipt times of the plugin's calls: *Online*
-within three minutes of any call, *Quiet* within thirty, *Offline* beyond,
-*Never seen* before the first. Then what the rig says it is doing, from its
-last status report (phase, target, current operation and how long, wait
-reason, safety, queue depth, and any errors it reported); a report older than ten
-minutes is marked stale rather than shown as the present. The next columns
-give how long ago the rig last pulled its program (with the revision), checked
-in (with saved frames grading has not yet accepted), and reported status, and
-which activated plans it is assigned to, each a link to the workspace. The
-table refreshes every fifteen seconds.
+**Live** is the operator's table of rigs, refreshed every fifteen seconds.
+Each row shows:
 
-The **Sync plugin** column covers a rig whose database uses PSF Guard Sync.
-It shows the plugin's latest action, such as a merge with its counts, planning
-or grades sent to N.I.N.A., or an image upload, then when the plugin last
-called and its version. A kind of action whose last attempt was refused or
-failed stays listed in red, with its reason, until the same kind succeeds, so
-later uploads never hide a refused merge. Calls that only test the connection,
-such as reading capabilities or asking for pending flat history, count as
-contact but not as actions. Live lists the plans once when it opens, which
-gives every registered database its rig, so a database used only by the Sync
-plugin appears before anyone opens Planning. A Sync plugin that reports N.I.N.A.'s sequence adds a line under
-**Now**: the running instruction (exposing with exposure, filter and count,
-autofocus, a slew, a wait with its end time, cooling, and others), how long it
-has run, and when the last frame, dither, autofocus and meridian flip
-happened. When the rig has no Director report, that line takes its place.
-Any Sync call keeps the rig *Online*.
+- **Rig:** the name, and under it the link state from the server's receipt
+  times of the plugins' calls: *Online* within three minutes of any Director
+  or Sync call, *Quiet* within thirty, *Offline* beyond, *Never seen* before
+  the first.
+- **Now:** what the rig is doing, from its last Director status report
+  (phase, target, current operation and how long, wait reason, safety, queue
+  depth, and any errors it reported). A report older than ten minutes is
+  marked stale rather than shown as the present. A Sync plugin that reports
+  N.I.N.A.'s sequence adds a line: the running instruction (exposing with
+  exposure, filter and count, autofocus, a slew, a wait with its end time,
+  cooling, and others), how long it has run, and when the last frame, dither,
+  autofocus and meridian flip happened. Without a Director report, that line
+  takes its place.
+- **Weather:** N.I.N.A.'s reported cloud cover and the site forecast, one line
+  each, or *No weather*. The forecast providers are credited once, below the
+  table.
+- **Plugins:** the plugins that have called, with their contact times in the
+  tooltip; frames Director saved that grading has not accepted yet; and, in
+  red, any Sync action that was refused or failed, with its reason, until
+  the same work succeeds later: an upload clears a refused upload, and a
+  sync exchange clears one with the same operation (a merge clears a refused
+  merge preview). A preview or export, which only reads, never clears a
+  refused apply, and uploads never clear a sync exchange. **History** opens
+  when each plugin last called and the database's recent plugin actions,
+  newest first, from the Sync audit log. Calls that only test the connection, such
+  as reading capabilities or asking for pending flat history, count as
+  contact but not as actions.
+- **Projects:** how many projects Target Scheduler has Active in the rig's
+  database, including those a Director activation wrote, linked to the
+  Library's Active filter for that database.
+- **Tonight:** the rig's clear dark hours and the plans it would shoot.
+
+Live lists the plans once when it opens, which gives every registered
+database its rig, so a database used only by the Sync plugin appears before
+anyone opens Planning.
 
 **Settings → Databases & rigs → Overview** lists registered databases. Open a
 database and choose **Rig setup** to see its field of view, pixel scale,
@@ -2065,7 +2076,7 @@ Early beta. The **Live** table on the Rigs page reads these reports.
 | POST | `/rigs/{rig}/checkin` | `coordinator_instance_id`, `catalog_id`, `ledger_id`, optional `program_revision` (the revision the plugin runs), and `events`: up to 256 ledger `ExecutionEvent`s from that one ledger in ascending sequence, sent verbatim. Returns `acknowledged_through` (every sequence up to it is stored), `highest_seen`, per-event `outcomes` (`applied`, `duplicate`, `conflict`), the sequences in `conflicts`, and `program_revision` with `program_changed`. `400` for a page that mixes ledgers or rigs, runs backwards or is empty; `403` on a tuple mismatch. |
 | POST | `/rigs/{rig}/operations` | Same envelope and acknowledgement as check-in, with up to 32 schema-1 preparation events. Independent contiguous cursor; gaps return `409`, changed duplicates report conflicts. Uses the paired client's existing `checkin:write` scope. Does not change capture credit or live status. |
 | POST | `/rigs/{rig}/status` | `coordinator_instance_id`, `catalog_id`, `session_id`, `reported_at_ms`, optional `program_revision`, and `status`: the plugin's coalesced live report (phase, goal and target IDs, elapsed time, wait reason, safety, connectivity, queue depth), stored verbatim. `accepted: false` means a newer report was already held for that session, or a newer session exists. |
-| GET | `/rigs/status` | Operator view, one row per bound rig (and any rig that reported and lost its binding): `catalog_slug` and `catalog_name`; `status` (or `null`) with `status_age_ms` and `status_stale`; capture `checkins` cursors; `contacts` (`program_pull`, `check_in`, `status`, each `{at_ms, detail}` or `null`, server receipt times); `connectivity` (`state` of `online`, `stale`, `offline` or `never`, `last_contact_ms`, `age_ms`); `assignments`; `pending_receipts`; up to 20 `recent_operations` (completed preparation events with their first server receipt time); and `sync` (or `null` when the database neither accepts Sync nor has heard from it): `last_contact_ms` and `plugin_version` of the newest Sync call, `latest_action` (the newest Sync audit entry other than a capabilities call, a flat-history poll or an unchanged star-detection snapshot: `at_ms`, `action`, `outcome`, `operation`, `detail`, `summary`), `problems` (for each kind of action whose newest attempt was refused or failed, that entry, newest first), `sequence` (the newest [sequence report](design/data-transfer.md#sequence-status), or `null`) and `sequence_stale`. A Sync call counts toward `connectivity`. |
+| GET | `/rigs/status` | Operator view, one row per bound rig (and any rig that reported and lost its binding): `catalog_slug` and `catalog_name`; `status` (or `null`) with `status_age_ms` and `status_stale`; capture `checkins` cursors; `contacts` (`program_pull`, `check_in`, `status`, each `{at_ms, detail}` or `null`, server receipt times); `connectivity` (`state` of `online`, `stale`, `offline` or `never`, `last_contact_ms`, `age_ms`); `assignments`; `pending_receipts`; up to 20 `recent_operations` (completed preparation events with their first server receipt time); and `sync` (or `null` when the database neither accepts Sync nor has heard from it): `last_contact_ms` and `plugin_version` of the newest Sync call, `latest_action` (the newest Sync audit entry other than a capabilities call, a flat-history poll or an unchanged star-detection snapshot: `at_ms`, `action`, `outcome`, `operation`, `detail`, `summary`), `problems` (for each kind of action whose newest attempt was refused or failed and with no later success of the same work, that entry, newest first), `sequence` (the newest [sequence report](design/data-transfer.md#sequence-status), or `null`) and `sequence_stale`. `active_projects` counts the database's projects in the Active state, or is `null` when the database could not be read. `GET /api/db/{id}/plugin-history?limit=` lists the database's recent notable Sync audit entries, newest first, up to 200 (default 50). A Sync call counts toward `connectivity`. |
 
 A receipt is stored once by ledger and sequence and never rewritten: a replay
 is acknowledged again, a replay with different content is reported as a

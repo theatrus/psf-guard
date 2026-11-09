@@ -1,6 +1,6 @@
 import { type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -19,7 +19,7 @@ const online: DirectorRigStatusView = {
     payload: { phase: 'exposing', target_name: 'IC 1805 r1c1', operation: 'exposure', operation_started_ms: NOW - 200_000, queue_depth: 2, errors: ['guider lost the star once'] } },
   status_age_ms: 40_000, status_stale: false, checkins: [],
   contacts: { program_pull: { at_ms: NOW - 3_600_000, detail: 'abcdef0123456789' }, check_in: { at_ms: NOW - 120_000, detail: 'ledger-1' }, status: { at_ms: NOW - 40_000, detail: 's1' } },
-  connectivity: { state: 'online', last_contact_ms: NOW - 40_000, age_ms: 40_000 }, assignments: [{ project, activation_revision: 2, applied_at_ms: NOW - 86_400_000 }], pending_receipts: 5,
+  connectivity: { state: 'online', last_contact_ms: NOW - 40_000, age_ms: 40_000 }, assignments: [{ project, activation_revision: 2, applied_at_ms: NOW - 86_400_000 }], pending_receipts: 5, active_projects: 3,
 };
 const quiet: DirectorRigStatusView = {
   rig: rig('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'C925'), catalog_slug: 'c925', catalog_name: 'C925',
@@ -52,16 +52,23 @@ describe('Director live dashboard', () => {
     expect(screen.getByText('Online')).toBeInTheDocument();
     expect(screen.getByText('exposing, IC 1805 r1c1, exposure for 3 min, 2 queued')).toBeInTheDocument();
     expect(screen.getByText('guider lost the star once')).toBeInTheDocument();
-    expect(screen.getByText('5 saved, ungraded')).toBeInTheDocument();
-    expect(screen.getByText('rev abcdef01')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Heart Nebula' })).toHaveAttribute('href', `/plan?db=redcat&plan=${project.id}`);
+    expect(screen.getByText(/5 saved, ungraded/)).toBeInTheDocument();
+    expect(screen.getAllByText('Director')[0]).toHaveAttribute('title', expect.stringContaining('(rev abcdef01)'));
+    // Projects link to the database's Active projects in the Library.
+    expect(screen.getByRole('link', { name: '3 active' })).toHaveAttribute('href', '/?db=redcat&dbfilter=redcat&show=active');
     // An old report is history, not the present.
     expect(screen.getByText('Offline')).toBeInTheDocument();
     expect(screen.getByText('exposing (stale, reported 50 min ago)')).toBeInTheDocument();
     expect(screen.getByText('Never seen')).toBeInTheDocument();
     expect(screen.getByText('No report yet')).toBeInTheDocument();
-    expect(screen.getAllByText('never')).toHaveLength(5);
-    expect(screen.getAllByText('nothing activated')).toHaveLength(2);
+    // Director's line appears once the plugin has called, with what it has not done yet.
+    // Each rig lists the plugins that have called; the ages are in the tooltip.
+    const plugins = screen.getAllByTestId('rig-plugins');
+    expect(plugins[1]).toHaveTextContent(/^PluginsDirector/);
+    expect(within(plugins[1]).getByText('Director')).toHaveAttribute('title', 'Program pull never, check-in never, status report 50 min ago');
+    expect(plugins[2]).toHaveTextContent('No plugin has called');
+    expect(screen.getAllByRole('columnheader').map(header => header.textContent)).toEqual(['Rig', 'Now', 'Weather', 'Plugins', 'Projects', 'Tonight']);
+    expect(screen.getAllByRole('link', { name: 'Active projects' })).toHaveLength(2);
   });
 
   it('marks live status as the Director plugin early beta, and names Target Scheduler as the main way to run a rig', async () => {
@@ -91,13 +98,12 @@ describe('Director live dashboard', () => {
     const refused = { at_ms: NOW - 600_000, action: 'apply', outcome: 'refused' as const, operation: 'merge', detail: 'destination changed' };
     mount([{ ...never, sync: { ...sync, latest_action: { at_ms: NOW - 180_000, action: 'image_upload', outcome: 'ok' as const, detail: 'M31_0001.fits' }, problems: [refused] } },
       { ...online, sync: { ...sync, latest_action: null } }, quiet]);
-    const rows = await screen.findAllByTestId('sync-plugin');
-    expect(rows[0]).toHaveTextContent('Uploaded M31_0001.fits 3 min ago');
+    const plugins = await screen.findAllByTestId('rig-plugins');
+    expect(within(plugins[0]).getByText('Sync')).toHaveAttribute('title', 'Contact 1 min ago, plugin 1.5.0.0');
     // A refused merge stays in view after later uploads.
-    expect(within(rows[0]).getByText("Merged N.I.N.A.'s catalog: refused (destination changed)")).toHaveClass('director-error');
-    expect(rows[0]).toHaveTextContent('contact 1 min ago, plugin 1.5.0.0');
-    expect(rows[1]).toHaveTextContent('no action yet');
-    expect(rows[2]).toHaveTextContent('not used');
+    expect(within(plugins[0]).getByText("Merged N.I.N.A.'s catalog: refused (destination changed)")).toHaveClass('director-error');
+    expect(plugins[1]).toHaveTextContent('Director · Sync');
+    expect(plugins[2]).toHaveTextContent('Director');
     const sequences = screen.getAllByTestId('sync-sequence');
     // Without its own report, Desert's row shows the Sync plugin's alone.
     expect(sequences[0]).toHaveTextContent(/^Exposing M 31: 300 s L, 3 of 30$/);
@@ -119,6 +125,34 @@ describe('Director live dashboard', () => {
     expect(await screen.findByText('RedCat 61')).toBeInTheDocument();
     expect(listings).toBe(1);
     expect(reads).toBeGreaterThanOrEqual(2);
+  });
+
+  it('shows no weather in a word, and only the weather a rig has', async () => {
+    const base = { rig_id: 'a', site_id: null, evaluated_at_ms: NOW, cloud_threshold_percent: 30, dew_limit_celsius: null,
+      reported_cloud: { state: 'unknown' as const, reason: 'no_report', valid_for_ms: 0 }, forecast_conditions: { state: 'unknown' as const, reason: 'no_forecast', valid_for_ms: 0 } };
+    mount([{ ...online, weather: { ...base, reported: null, forecast: null } }]);
+    expect(await screen.findByText('No weather')).toBeInTheDocument();
+    expect(screen.queryByText(/unavailable/)).toBeNull();
+  });
+
+  it("opens a rig's plugin history on click", async () => {
+    server.use(http.get('/api/db/redcat/plugin-history', () => HttpResponse.json(ok([
+      { at_ms: NOW - 120_000, action: 'image_upload', outcome: 'ok', operation: 'light', detail: 'M31_0002.fits' },
+      { at_ms: NOW - 600_000, action: 'apply', outcome: 'refused', operation: 'merge', detail: 'destination changed' },
+    ]))));
+    mount([online]);
+    const button = await screen.findByRole('button', { name: 'History' });
+    expect(button).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(button);
+    const history = await screen.findByRole('list', { name: 'Plugin history' });
+    expect(button).toHaveAttribute('aria-expanded', 'true');
+    // Contact times are visible here too, not only in a tooltip.
+    expect(screen.getByText(/Program pull 1 h ago \(rev abcdef01\), check-in 2 min ago/)).toBeInTheDocument();
+    const items = within(history).getAllByRole('listitem');
+    expect(items[0]).toHaveTextContent('2 min ago Uploaded M31_0002.fits');
+    expect(items[1]).toHaveClass('director-error');
+    fireEvent.click(button);
+    expect(screen.queryByRole('list', { name: 'Plugin history' })).toBeNull();
   });
 
   it('says when no rig exists yet', async () => {

@@ -17,7 +17,7 @@ import type { PixelRect, PixelWindow } from '../utils/pixelWindow';
 import { BUILD_HEADER, noteServerBuild } from '../updates/pageBuild';
 import type { DirectorAdoptionPlan, DirectorAdoptionReport, DirectorCollection, DirectorCutoutRequest, DirectorCutoutResult, DirectorDiscovery, DirectorFramingDraft, DirectorFramingDraftView, DirectorFramingPreview, DirectorFramingRequest, DirectorIdentity, DirectorIdentityPage, DirectorMappingPage, DirectorFeasibility, DirectorMosaicPreview, DirectorResolvedName,
   DirectorSkyMarks,
-  DirectorSkyMarksQuery, DirectorActivation, DirectorActivationPushReport, DirectorActivationReport, DirectorPlanDraft, DirectorPlanList, DirectorPlanView, DirectorRigStatusView, DirectorRigProfileSummary, DirectorTemplateList, DirectorStatus, DirectorRigPlan, DirectorRigProfileEdit, DirectorRigProfileView, DirectorRigReport, DirectorSurvey, DirectorNameSearch, DirectorLibraryTemplate, DirectorAttached, DirectorTakenValues, DirectorRigScheduling, DirectorPlanProgress, DirectorPlanDeletion, DirectorPlanDeletionOutcome, DirectorCollaborationLeave, DirectorCollaborationLeft } from './directorTypes';
+  DirectorSkyMarksQuery, DirectorActivation, DirectorActivationPushReport, DirectorActivationReport, DirectorPlanDraft, DirectorPlanList, DirectorPlanView, DirectorRigStatusView, SyncLatestAction, DirectorRigProfileSummary, DirectorTemplateList, DirectorStatus, DirectorRigPlan, DirectorRigProfileEdit, DirectorRigProfileView, DirectorRigReport, DirectorSurvey, DirectorNameSearch, DirectorLibraryTemplate, DirectorAttached, DirectorTakenValues, DirectorRigScheduling, DirectorPlanProgress, DirectorPlanDeletion, DirectorPlanDeletionOutcome, DirectorCollaborationLeave, DirectorCollaborationLeft } from './directorTypes';
 import type { GuidFillReport, GuidReport, RenamedLightsMerged, RenamedLightsReport,
   ProjectMosaic,
   ProjectProcessingSettings,
@@ -822,6 +822,14 @@ export const apiClient = {
     const api = await getApi();
     const { data } = await api.get<ApiResponse<DirectorPlanList>>('/director/v1/plans');
     if (!data.data) throw new Error(data.error || 'Failed to load plans');
+    return data.data;
+  },
+
+  /** The plugins' recent actions on a database, newest first. */
+  getPluginHistory: async (dbId: string, limit = 50): Promise<SyncLatestAction[]> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<SyncLatestAction[]>>(dbPath(dbId, '/plugin-history'), { params: { limit } });
+    if (!data.data) throw new Error(data.error || 'Failed to read plugin history');
     return data.data;
   },
 
