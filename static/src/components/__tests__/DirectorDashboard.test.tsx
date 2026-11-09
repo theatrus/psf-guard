@@ -83,6 +83,26 @@ describe('Director live dashboard', () => {
     expect(screen.getByTestId('forecast-credits')).toContainElement(credits[0]);
   });
 
+  it('shows what the Sync plugin last did and what N.I.N.A. is doing', async () => {
+    const sync = { last_contact_ms: NOW - 60_000, plugin_version: '1.5.0.0', sequence_stale: false,
+      latest_action: { at_ms: NOW - 180_000, action: 'apply', outcome: 'ok' as const, operation: 'merge', summary: { total_updated: 4 } },
+      sequence: { session_id: 's', reported_at_ms: NOW - 1_000, received_at_ms: NOW - 1_000, fresh_for_ms: 45_000, running: true,
+        activity: { kind: 'exposing', target_name: 'M 31', exposure_seconds: 300, filter: 'L', completed: 3, total: 30 }, recent: {} } };
+    mount([{ ...never, sync }, { ...online, sync: { ...sync, latest_action: null } }, quiet]);
+    const rows = await screen.findAllByTestId('sync-plugin');
+    expect(rows[0]).toHaveTextContent("Merged N.I.N.A.'s catalog: 4 updated 3 min ago");
+    expect(rows[0]).toHaveTextContent('contact 1 min ago, plugin 1.5.0.0');
+    expect(rows[1]).toHaveTextContent('no action yet');
+    expect(rows[2]).toHaveTextContent('not used');
+    const sequences = screen.getAllByTestId('sync-sequence');
+    // Without its own report, Desert's row shows the Sync plugin's alone.
+    expect(sequences[0]).toHaveTextContent(/^Exposing M 31: 300 s L, 3 of 30$/);
+    expect(screen.queryByText('No report yet')).toBeNull();
+    // RedCat's Director report stays first; the Sync plugin's follows.
+    expect(sequences[1]).toHaveTextContent(/^Sync plugin: Exposing M 31/);
+    expect(screen.getByText('exposing, IC 1805 r1c1, exposure for 3 min, 2 queued')).toBeInTheDocument();
+  });
+
   it('says when no rig exists yet', async () => {
     mount([]);
     expect(await screen.findByText(/No rigs yet/)).toBeInTheDocument();

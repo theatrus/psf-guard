@@ -511,6 +511,9 @@ pub async fn capabilities(
         // `X-PSF-Guard-Plugin-Capabilities` gets them as they are; any other
         // gets them under a real profile.
         PLUGIN_WAITING_PROFILE_CAPABILITY,
+        // POST /sync/v1/sequence-status takes what N.I.N.A.'s sequence is
+        // doing, for the Live page.
+        crate::server::sync_sequence::SEQUENCE_STATUS_CAPABILITY,
     ];
     if catalog
         .remote_image_upload
@@ -1832,7 +1835,7 @@ fn unknown_preview() -> AppError {
 }
 
 /// Whether the server turned this request away on purpose, or broke.
-fn outcome_of(error: &AppError) -> AuditOutcome {
+pub(crate) fn outcome_of(error: &AppError) -> AuditOutcome {
     match error {
         AppError::BadRequest(_)
         | AppError::Conflict(_)
@@ -1844,7 +1847,7 @@ fn outcome_of(error: &AppError) -> AuditOutcome {
     }
 }
 
-fn detail_of(error: &AppError) -> String {
+pub(crate) fn detail_of(error: &AppError) -> String {
     match error {
         AppError::NotFound => "not found".into(),
         AppError::NotFoundMessage(message)

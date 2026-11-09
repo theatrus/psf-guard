@@ -313,6 +313,7 @@ GET  /api/sync/v1/previews/{preview_id}
 POST /api/sync/v1/previews/{preview_id}/apply
 POST /api/sync/v1/previews/{preview_id}/refresh
 GET  /api/sync/v1/jobs/{job_id}
+POST /api/sync/v1/sequence-status
 ```
 
 Clients send `Prefer: respond-async` when a preview may outlive an HTTP proxy
@@ -483,6 +484,43 @@ without `catalog_id`, to `POST /api/director/v1/rigs/{rig_id}/star-detection-set
 Both write one store, so a rig running both plugins records each change once.
 Records are process-global in the registry, not per catalog: a profile GUID
 identifies the same N.I.N.A. profile whichever catalog its frames reach.
+
+### Sequence status
+
+`sequence_status_v1` advertises the plugin's report of what N.I.N.A.'s
+Advanced Sequencer is doing, for the Live page:
+
+```
+POST /api/sync/v1/sequence-status
+```
+
+The body carries `session_id` (a UUID, new for each sequence run),
+`reported_at_ms` (plugin clock), `running`, optional `fresh_for_ms` (15 s to
+10 min, default 45 s), `operation` (the running instructions' paths, as the
+Director plugin builds them), `activity` and `recent`. `activity` describes
+the most specific running instruction: `kind` (`exposing`, `autofocus`,
+`dithering`, `meridian_flip`, `mount_slew`, `mount_center`, `plate_solve`,
+`camera_cooling`, `camera_warming`, `time_wait`, `astronomical_wait`,
+`safety_wait`, `condition_wait`, `manual_wait`, `guiding`, or another the
+page shows as an instruction), and optional `name`, `started_ms`, `until_ms`,
+`target_name`, `filter`, `exposure_seconds`, `completed`, `total` and
+`target_temperature_c`. `recent` holds optional `image_saved_ms`, `dither_ms`,
+`autofocus_ms` and `meridian_flip_ms`. Unknown fields are ignored; text is
+trimmed of control characters and cut to 200 characters. Nothing carries
+coordinates, wait conditions or file paths.
+
+The server keeps the newest report per database in memory: a report older
+than the stored one from the same session is answered `accepted: false`, and
+a new session replaces the old. Reports go stale after `fresh_for_ms` and are
+lost on restart. Accepted reports are not written to the audit log; refusals
+are. A plugin sends reports only to a server that lists the capability, so an
+older server never receives one.
+
+The Live page also shows each database's latest Sync action from the audit
+log, read back from the end of the log after a restart. Image uploads to
+`/api/db/{id}/images/upload` with a valid key are now logged as
+`image_upload`, with the file name, frame kind, size and whether the file was
+already present.
 
 ### Scheduler flat coverage
 

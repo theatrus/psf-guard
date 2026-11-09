@@ -144,6 +144,8 @@ pub struct AppState {
     /// Append-only record of remote sync actions, so an operator can tell
     /// afterwards which token-holder changed the scheduler database and when.
     pub remote_audit: crate::server::remote_audit::RemoteAuditLog,
+    /// What N.I.N.A.'s sequence is doing, per database, as Sync reports it.
+    pub sync_sequences: crate::server::sync_sequence::SyncSequenceStatuses,
     /// When each paired Sync client last called, and what it reported.
     pub sync_contacts: crate::server::rig_plugins::SyncContacts,
     /// Outstanding one-time pairing codes (see `server::pairing`).
@@ -589,6 +591,7 @@ impl AppState {
             remote_exports: crate::server::remote_sync::ExportStore::new(),
             remote_preview_jobs: crate::server::remote_sync::PreviewJobStore::new(),
             remote_audit: crate::server::remote_audit::RemoteAuditLog::new(&cache_dir),
+            sync_sequences: Default::default(),
             sync_contacts: crate::server::rig_plugins::SyncContacts::new(&cache_dir),
             pairing: crate::server::pairing::PairingStore::new(),
             registry_write: tokio::sync::Mutex::new(()),
@@ -939,6 +942,7 @@ impl AppState {
             remote_exports: crate::server::remote_sync::ExportStore::new(),
             remote_preview_jobs: crate::server::remote_sync::PreviewJobStore::new(),
             remote_audit: crate::server::remote_audit::RemoteAuditLog::new("/tmp/psf-guard-test"),
+            sync_sequences: Default::default(),
             sync_contacts: crate::server::rig_plugins::SyncContacts::in_memory(),
             pairing: crate::server::pairing::PairingStore::new(),
             registry_write: tokio::sync::Mutex::new(()),

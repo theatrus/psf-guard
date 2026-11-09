@@ -59,6 +59,58 @@ pub async fn upload_image(
     >,
     ctx: DbContext,
     headers: HeaderMap,
+    multipart: Multipart,
+) -> Result<Json<ApiResponse<RemoteImageUploadResponse>>, AppError> {
+    use crate::server::remote_audit::{AuditAction, AuditOutcome, AuditRecord};
+    let catalog_id = ctx.id.clone();
+    // Only a request with a valid key is the client's action; anything else
+    // must not show up as what the rig last did.
+    let authenticated = ctx
+        .remote_image_upload
+        .as_ref()
+        .is_some_and(|config| require_bearer_token(&headers, config).is_ok());
+    let result = receive_image(state.clone(), ctx, headers, multipart).await;
+    if !authenticated {
+        return result;
+    }
+    let (outcome, detail, operation, summary) = match &result {
+        Ok(Json(response)) => match &response.data {
+            Some(upload) => (
+                AuditOutcome::Ok,
+                upload.filename.clone(),
+                Some(upload.frame_kind.clone()),
+                std::collections::BTreeMap::from([
+                    ("bytes".to_owned(), upload.bytes as i64),
+                    ("already_present".to_owned(), upload.already_present as i64),
+                ]),
+            ),
+            None => return result,
+        },
+        Err(error) => (
+            crate::server::remote_sync::outcome_of(error),
+            crate::server::remote_sync::detail_of(error),
+            None,
+            std::collections::BTreeMap::new(),
+        ),
+    };
+    state.remote_audit.record(
+        &catalog_id,
+        AuditAction::ImageUpload,
+        outcome,
+        AuditRecord {
+            operation: operation.as_deref(),
+            detail: Some(&detail),
+            summary,
+            ..Default::default()
+        },
+    );
+    result
+}
+
+async fn receive_image(
+    state: std::sync::Arc<crate::server::state::AppState>,
+    ctx: DbContext,
+    headers: HeaderMap,
     mut multipart: Multipart,
 ) -> Result<Json<ApiResponse<RemoteImageUploadResponse>>, AppError> {
     let config = ctx

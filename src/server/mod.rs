@@ -76,6 +76,7 @@ pub mod static_file_service;
 pub mod storage;
 pub mod storage_settings;
 pub mod sync_preview;
+pub mod sync_sequence;
 pub mod ts_sync;
 pub mod update_notice;
 pub mod user_admin;
@@ -996,6 +997,7 @@ pub fn api_router(state: Arc<AppState>) -> Router {
             post(remote_sync::refresh_preview),
         )
         .route("/sync/v1/exports", post(remote_sync::create_export))
+        .route("/sync/v1/sequence-status", post(sync_sequence::report))
         .route("/sync/v1/exports/{export_id}", get(remote_sync::get_export))
         .route("/sync/v1/jobs/{job_id}", get(remote_sync::get_preview_job))
         .merge(backup_job::routes())

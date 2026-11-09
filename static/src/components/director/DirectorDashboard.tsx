@@ -5,6 +5,7 @@ import { apiClient } from '../../api/client';
 import type { DirectorRigStatusView, ForecastProvider } from '../../api/directorTypes';
 import type { RigNights } from '../../api/nightPlanTypes';
 import { describeNow, errorsOf, formatAge } from './dashboardModel';
+import { describeRecent, describeSequence, describeSyncAction } from './syncLiveModel';
 import { retryWhenBusy } from './retry';
 import EarlyBeta from './EarlyBeta';
 import { RigWeatherSummary } from './RigWeather';
@@ -53,13 +54,19 @@ export default function DirectorDashboard() {
     {statuses.isError && <p className="director-error" role="alert">{message(statuses.error)}</p>}
     {statuses.isSuccess && rows.length === 0 && <p className="director-muted">No rigs yet. Add a database under Settings → Databases &amp; rigs.</p>}
     {rows.length > 0 && <div className="director-table-scroll"><table className="director-dashboard-table" data-testid="director-dashboard">
-      <thead><tr><th>Rig</th><th>Link</th><th>Now</th><th>Weather</th><th>Program pull</th><th>Check-in</th><th>Status report</th><th>Assigned</th><th>Tonight</th></tr></thead>
+      <thead><tr><th>Rig</th><th>Link</th><th>Now</th><th>Weather</th><th>Program pull</th><th>Check-in</th><th>Status report</th><th>Sync plugin</th><th>Assigned</th><th>Tonight</th></tr></thead>
       <tbody>{rows.map(view => {
         const errors = errorsOf(view);
+        const sequence = describeSequence(view.sync, now);
+        const recent = describeRecent(view.sync, now);
+        // Without a Director report, the Sync plugin's report is the rig's.
+        const directorNow = view.status || !sequence ? describeNow(view, now) : null;
+        const action = view.sync?.latest_action;
         return <tr key={view.rig.id} className={`is-${view.connectivity.state}`}>
           <td><span className="director-cell-label">Rig</span><strong>{view.catalog_name ?? view.rig.name}</strong>{view.catalog_name && view.catalog_name !== view.rig.name && <span className="director-muted"> {view.rig.name}</span>}</td>
           <td><span className="director-cell-label">Link</span><span className={`director-connectivity is-${view.connectivity.state}`}>{STATE_LABEL[view.connectivity.state]}</span>{view.connectivity.age_ms !== null && <span className="director-muted"> {formatAge(view.connectivity.age_ms)}</span>}</td>
-          <td><span className="director-cell-label">Now</span>{describeNow(view, now)}{errors.map(error => <span key={error} className="director-error"> {error}</span>)}
+          <td><span className="director-cell-label">Now</span>{directorNow}{errors.map(error => <span key={error} className="director-error"> {error}</span>)}
+            {sequence && <div data-testid="sync-sequence" title={view.sync?.sequence?.operation}>{directorNow && <span className="director-muted">Sync plugin: </span>}{sequence}{recent && <small className="director-muted"> · {recent}</small>}</div>}
             {!!view.recent_operations?.length && <details><summary>Completed operations ({view.recent_operations.length})</summary>
               <ol>{view.recent_operations.map(receipt => {
                 const { command, completion } = receipt.event.event.observation;
@@ -75,6 +82,10 @@ export default function DirectorDashboard() {
           <td><span className="director-cell-label">Program pull</span>{age(view.contacts.program_pull?.at_ms)}{view.contacts.program_pull?.detail && <span className="director-muted"> rev {view.contacts.program_pull.detail.slice(0, 8)}</span>}</td>
           <td><span className="director-cell-label">Check-in</span>{age(view.contacts.check_in?.at_ms)}{view.pending_receipts > 0 && <span className="director-muted"> {view.pending_receipts} saved, ungraded</span>}</td>
           <td><span className="director-cell-label">Status report</span>{age(view.contacts.status?.at_ms)}</td>
+          <td data-testid="sync-plugin"><span className="director-cell-label">Sync plugin</span>{!view.sync ? <span className="director-muted">not used</span> : <>
+            {action ? <span className={action.outcome === 'ok' ? undefined : 'director-error'}>{describeSyncAction(action)} <span className="director-muted">{age(action.at_ms)}</span></span> : <span className="director-muted">no action yet</span>}
+            <br /><span className="director-muted">contact {age(view.sync.last_contact_ms)}{view.sync.plugin_version && `, plugin ${view.sync.plugin_version}`}</span>
+          </>}</td>
           <td><span className="director-cell-label">Assigned</span>{view.assignments.length === 0 ? <span className="director-muted">nothing activated</span>
             : view.assignments.map((assignment, index) => <span key={assignment.project.id}>{index > 0 && ', '}<Link to={workspaceHref(assignment.project.id)}>{assignment.project.name}</Link></span>)}</td>
           <td><span className="director-cell-label">Tonight</span><TonightCell rig={tonight.data?.rigs.find(entry => entry.rig.id === view.rig.id)} pending={tonight.isPending} failed={tonight.isError ? message(tonight.error) : null} /></td>

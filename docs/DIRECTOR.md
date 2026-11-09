@@ -580,6 +580,17 @@ in (with saved frames grading has not yet accepted), and reported status, and
 which activated plans it is assigned to, each a link to the workspace. The
 table refreshes every fifteen seconds.
 
+The **Sync plugin** column covers a rig whose database uses PSF Guard Sync.
+It shows the plugin's latest action, such as a merge with its counts, planning
+or grades sent to N.I.N.A., an image upload, or a refusal with its reason, then
+when the plugin last called and its version. Check-ins count as contact, not
+as an action. A Sync plugin that reports N.I.N.A.'s sequence adds a line under
+**Now**: the running instruction (exposing with exposure, filter and count,
+autofocus, a slew, a wait with its end time, cooling, and others), how long it
+has run, and when the last frame, dither, autofocus and meridian flip
+happened. When the rig has no Director report, that line takes its place.
+Any Sync call keeps the rig *Online*.
+
 **Settings → Databases & rigs → Overview** lists registered databases. Open a
 database and choose **Rig setup** to see its field of view, pixel scale,
 camera-reporting state and plugin status, then edit its equipment, site or
@@ -2011,7 +2022,7 @@ Early beta. The **Live** table on the Rigs page reads these reports.
 | POST | `/rigs/{rig}/checkin` | `coordinator_instance_id`, `catalog_id`, `ledger_id`, optional `program_revision` (the revision the plugin runs), and `events`: up to 256 ledger `ExecutionEvent`s from that one ledger in ascending sequence, sent verbatim. Returns `acknowledged_through` (every sequence up to it is stored), `highest_seen`, per-event `outcomes` (`applied`, `duplicate`, `conflict`), the sequences in `conflicts`, and `program_revision` with `program_changed`. `400` for a page that mixes ledgers or rigs, runs backwards or is empty; `403` on a tuple mismatch. |
 | POST | `/rigs/{rig}/operations` | Same envelope and acknowledgement as check-in, with up to 32 schema-1 preparation events. Independent contiguous cursor; gaps return `409`, changed duplicates report conflicts. Uses the paired client's existing `checkin:write` scope. Does not change capture credit or live status. |
 | POST | `/rigs/{rig}/status` | `coordinator_instance_id`, `catalog_id`, `session_id`, `reported_at_ms`, optional `program_revision`, and `status`: the plugin's coalesced live report (phase, goal and target IDs, elapsed time, wait reason, safety, connectivity, queue depth), stored verbatim. `accepted: false` means a newer report was already held for that session, or a newer session exists. |
-| GET | `/rigs/status` | Operator view, one row per bound rig (and any rig that reported and lost its binding): `catalog_slug` and `catalog_name`; `status` (or `null`) with `status_age_ms` and `status_stale`; capture `checkins` cursors; `contacts` (`program_pull`, `check_in`, `status`, each `{at_ms, detail}` or `null`, server receipt times); `connectivity` (`state` of `online`, `stale`, `offline` or `never`, `last_contact_ms`, `age_ms`); `assignments`; `pending_receipts`; and up to 20 `recent_operations` (completed preparation events with their first server receipt time). |
+| GET | `/rigs/status` | Operator view, one row per bound rig (and any rig that reported and lost its binding): `catalog_slug` and `catalog_name`; `status` (or `null`) with `status_age_ms` and `status_stale`; capture `checkins` cursors; `contacts` (`program_pull`, `check_in`, `status`, each `{at_ms, detail}` or `null`, server receipt times); `connectivity` (`state` of `online`, `stale`, `offline` or `never`, `last_contact_ms`, `age_ms`); `assignments`; `pending_receipts`; up to 20 `recent_operations` (completed preparation events with their first server receipt time); and `sync` (or `null` when the database neither accepts Sync nor has heard from it): `last_contact_ms` and `plugin_version` of the newest Sync call, `latest_action` (the newest Sync audit entry other than a capabilities call or flat-history poll: `at_ms`, `action`, `outcome`, `operation`, `detail`, `summary`), `sequence` (the newest [sequence report](design/data-transfer.md#sequence-status), or `null`) and `sequence_stale`. A Sync call counts toward `connectivity`. |
 
 A receipt is stored once by ledger and sequence and never rewritten: a replay
 is acknowledged again, a replay with different content is reported as a

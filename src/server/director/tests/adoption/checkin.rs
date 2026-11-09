@@ -399,3 +399,50 @@ async fn check_in_stores_receipts_once_acknowledges_cursors_and_status_feeds_the
     assert_eq!(quiet["pending_receipts"], 0);
     let _ = a.objective;
 }
+
+#[tokio::test]
+async fn the_live_list_shows_what_the_sync_plugin_last_did_and_its_sequence() {
+    use crate::server::remote_audit::{AuditAction, AuditOutcome, AuditRecord};
+    let a = activated().await;
+    let (_, listed) = call(&a.f.app, "GET", "/rigs/status", Value::Null, None).await;
+    let row = |listed: &Value| {
+        listed["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["rig"]["id"] == json!(a.rig))
+            .unwrap()
+            .clone()
+    };
+    let slug = row(&listed)["catalog_slug"].as_str().unwrap().to_owned();
+    // A database the Sync plugin never reached shows no Sync section.
+    assert_eq!(row(&listed)["sync"], Value::Null);
+
+    a.f.state.remote_audit.record(
+        &slug,
+        AuditAction::Apply,
+        AuditOutcome::Ok,
+        AuditRecord {
+            operation: Some("merge"),
+            summary: std::collections::BTreeMap::from([("total_updated".into(), 4)]),
+            ..Default::default()
+        },
+    );
+    let report: crate::server::sync_sequence::SequenceReport = serde_json::from_value(json!({
+        "session_id": Uuid::new_v4(), "reported_at_ms": 1, "running": true,
+        "activity": {"kind": "autofocus", "name": "Run Autofocus"},
+    }))
+    .unwrap();
+    let now = chrono::Utc::now().timestamp_millis() as u64;
+    a.f.state
+        .sync_sequences
+        .record(&slug, report.into_status(now).unwrap());
+
+    let (_, listed) = call(&a.f.app, "GET", "/rigs/status", Value::Null, None).await;
+    let sync = row(&listed)["sync"].clone();
+    assert_eq!(sync["latest_action"]["action"], "apply");
+    assert_eq!(sync["latest_action"]["operation"], "merge");
+    assert_eq!(sync["latest_action"]["summary"]["total_updated"], 4);
+    assert_eq!(sync["sequence"]["activity"]["kind"], "autofocus");
+    assert_eq!(sync["sequence_stale"], false);
+}
