@@ -113,15 +113,17 @@ calibration frames also work without Target Scheduler.
 2. In PSF Guard, open **Settings → Databases & rigs → New / import → Import from Target Scheduler**,
    choose **Use the PSF Guard Sync plugin**, add a shared or empty image folder,
    and click **Create database for plugin**. No local TS file is required.
-   To use an existing catalog, open it from **Overview**, choose **Rig setup**,
-   then click **Edit remote receive and pairing**. With planning on, it is on
-   the **Plugins** tab, beside the Director plugin.
-3. Choose **Generate pairing code** in the catalog's pairing controls. In the
-   N.I.N.A. plugin, enter the server URL and code, then click **Pair** and
-   **Test connection**.
-4. Choose what to sync. To transfer image files, also enable
-   **Accept remote image uploads** and set a **Receive directory** in
-   PSF Guard.
+   To use an existing catalog, open it from **Overview** and choose
+   **Rig setup**. With planning on, the Sync plugin is on the **Plugins** tab,
+   beside the Director plugin.
+3. Under **Pair**, click **Generate Sync pairing code**. In the N.I.N.A.
+   plugin, enter the server URL and code, then click **Pair** and
+   **Test connection**. Pairing turns on **Scheduler sync**.
+4. To transfer image files too, choose a **Receive folder** under
+   **Image uploads** and click **Turn on image uploads**.
+
+**Plugins on this rig**, at the top of the tab, shows whether each plugin is
+on.
 
 Use HTTPS for a remote server; HTTP works for loopback connections. Pairing
 codes work once and expire after an hour. Pairing enables catalog sync, but
@@ -956,10 +958,9 @@ Open the local database under **Settings → Databases & rigs → Overview**,
 then choose **Sync → Remote PSF Guard**. Add the peer URL and its manual API
 key, test the connection, then preview and apply a transfer.
 On the receiving catalog's **Rig setup** page (the **Plugins** tab with planning
-on), click **Edit remote receive and pairing**,
-generate a **Remote API key** and enable
-**Accept remote scheduler sync**. Enable
-**Accept remote image uploads** separately if the client will send files.
+on), click **Generate key** under **Remote API key**, copy the key, and click
+**Save key**. Then click **Turn on scheduler sync**. Turn on
+**Image uploads** separately if the client will send files.
 
 ```bash
 psf-guard sync remote --direction pull \

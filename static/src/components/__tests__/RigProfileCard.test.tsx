@@ -1,5 +1,5 @@
 import { Profiler, type ReactNode } from 'react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { focusManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -87,7 +87,7 @@ describe('Rig profile card', () => {
 
     expect(await screen.findByRole('tab', { name: 'Plugins' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByRole('region', { name: 'Sync plugin' })).toBeVisible();
-    expect(screen.getByText(/The Director plugin below has its own pairing code/)).toBeVisible();
+    expect(screen.getByRole('group', { name: 'Plugins on this rig' })).toBeVisible();
     expect(await screen.findByRole('heading', { name: 'Director plugin' })).toBeVisible();
     fireEvent.click(screen.getByRole('tab', { name: 'Optics' }));
     expect(screen.queryByRole('region', { name: 'Sync plugin' })).not.toBeInTheDocument();
@@ -500,19 +500,26 @@ describe('Rig profile card', () => {
       expect(meridian()).toHaveValue(30);
     });
 
-    it('keeps site, limit and profile edits through a Reload that finds nothing new', async () => {
+    it('reads the rig again on coming back, but never over unsaved edits', async () => {
       fixture();
       const settings = settingsServer();
       mount();
       const site = await openSite();
+      const comeBack = () => act(() => { focusManager.setFocused(false); focusManager.setFocused(true); });
+      // No edits: coming back reads the rig's settings again.
+      let reads = settings.reads;
+      comeBack();
+      await waitFor(() => expect(settings.reads).toBe(reads + 1));
       fireEvent.change(site, { target: { value: backyard.id } });
       fireEvent.change(screen.getByLabelText('Bortle class'), { target: { value: '6' } });
       fireEvent.click(screen.getByRole('tab', { name: 'Limits and delivery' }));
       fireEvent.change(meridian(), { target: { value: '45' } });
-      const reads = settings.reads;
-      fireEvent.click(screen.getByRole('button', { name: 'Reload rig profile' }));
-      await waitFor(() => expect(settings.reads).toBe(reads + 1));
-      await waitFor(() => expect(screen.getByRole('button', { name: 'Reload rig profile' })).toBeEnabled());
+      // With edits, it does not: a read would replace them.
+      reads = settings.reads;
+      comeBack();
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(settings.reads).toBe(reads);
+      focusManager.setFocused(undefined);
       expect(meridian()).toHaveValue(45);
       fireEvent.click(screen.getByRole('tab', { name: 'Site' }));
       expect(site).toHaveValue(backyard.id);

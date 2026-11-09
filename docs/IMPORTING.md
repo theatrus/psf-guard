@@ -17,12 +17,12 @@ choices keeps any folders you have already added. To connect TS, choose:
   name, add the image folders, then click **Import from Target Scheduler**.
 - **Use the PSF Guard Sync plugin**: add an empty image folder or a shared
   folder containing your images, then click **Create database for plugin**.
-  PSF Guard opens the catalog's pairing controls. Install **PSF Guard Sync**
+  PSF Guard opens **Rig setup** on the Sync plugin. Install **PSF Guard Sync**
   in N.I.N.A., click **Generate Sync pairing code**, and enter the server URL and
   code in the plugin. Click **Pair**, then **Test connection**. The plugin
-  controls its sync schedule; a local TS file is not required. Enable
-  **Accept remote image uploads** and choose a **Receive directory** if you
-  also want the plugin to send image files. See
+  controls its sync schedule; a local TS file is not required. To have the
+  plugin send image files too, choose a **Receive folder** under
+  **Image uploads** and click **Turn on image uploads**. See
   [Connect N.I.N.A. with PSF Guard Sync](../README.md#connect-nina).
 
 Database management must be enabled for a browser server, as described under

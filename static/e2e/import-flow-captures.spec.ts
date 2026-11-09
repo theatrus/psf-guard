@@ -121,9 +121,9 @@ test('capture the owned catalog import and sync flow', async ({ page, request, b
   await form.getByLabel('Display name (optional):').fill('Remote observatory');
   await capture('import-sync-plugin.png', form, 'Sync plugin selected; Remote observatory name; shared fixture image folder retained when switching; no local TS file; managed storage; catalog not yet created.');
   await form.getByRole('button', { name: 'Create database for plugin' }).click();
-  const pairing = modal.locator('.database-config').filter({ has: page.getByRole('button', { name: 'Generate Sync pairing code' }) });
-  const pairingRow = pairing.locator('.remote-upload-token-row').first();
+  const pairing = modal.getByRole('region', { name: 'Sync plugin' }).getByRole('group', { name: 'Pair' });
+  const pairingRow = pairing.locator('.director-actions').first();
   await capture('import-plugin-pairing.png', pairing, 'Remote observatory catalog created. Pairing controls open automatically; no code issued, no client paired, no uploads enabled. Crop ends after Generate pairing code.', pairingRow);
   await pairing.getByRole('button', { name: 'Generate Sync pairing code' }).click();
-  await expect(pairing.getByText(/Paste this code into the client/)).toBeVisible();
+  await expect(pairing.getByText(/Pairing turns on scheduler sync/)).toBeVisible();
 });

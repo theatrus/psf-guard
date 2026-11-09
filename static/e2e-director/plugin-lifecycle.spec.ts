@@ -65,9 +65,10 @@ test('a rig applies reported equipment and preserves Director work permission be
     await settings.getByRole('tab', { name: 'Rig setup', exact: true }).click();
     const sections = settings.getByRole('tablist', { name: 'Rig setup sections' });
     await sections.getByRole('tab', { name: 'Plugins', exact: true }).click();
-    const panel = settings.locator('.rig-plugin');
-    await expect(panel.getByText('Picks the work')).toBeVisible();
-    await expect(panel.locator('.rig-plugin-paths')).toContainText('Target Scheduler');
+    const panel = settings.getByRole('region', { name: 'Director plugin' });
+    const plugins = settings.getByRole('group', { name: 'Plugins on this rig' });
+    await expect(plugins).toContainText('Picks the work: Target Scheduler');
+    await expect(plugins.getByTestId('plugin-director')).toContainText('Not paired');
 
     // The code comes from the page; everything the plugin does goes over HTTP.
     await panel.getByRole('button', { name: 'Generate Director pairing code' }).click();
@@ -85,7 +86,7 @@ test('a rig applies reported equipment and preserves Director work permission be
     await expect(panel.getByLabel('Director pairing code')).toHaveCount(0);
 
     // Trying the plugin leaves Target Scheduler running the rig.
-    await expect(panel.locator('.rig-plugin-paths')).toContainText('Target Scheduler');
+    await expect(plugins).toContainText('Picks the work: Target Scheduler');
     const instance = paired.coordinator_instance_id as string;
     const configuration = {
       rig_id: rig, id: 'config-1', camera_id: 'camera-1', filter_wheel_id: 'wheel-1', filters: [{ id: 'filter-2', position: 2 }],
@@ -110,7 +111,8 @@ test('a rig applies reported equipment and preserves Director work permission be
     await json(await request.post(`/api/director/v1/rigs/${rig}/equipment-reports`, { headers: plugin, data: {
       coordinator_instance_id: instance, catalog_id: catalog, report_id: randomUUID(), observed_at_ms: Date.now(), configuration, filter_names: { 'filter-2': 'Ha' },
     } }));
-    await panel.getByRole('button', { name: 'Reload Director plugin' }).click();
+    // Coming back to the page reads the plugin again.
+    await page.evaluate(() => window.dispatchEvent(new Event('visibilitychange')));
     await expect(work).toHaveAttribute('data-state', 'off');
     await allow.getByRole('button', { name: 'Allow work again' }).click();
     await expect(work).toHaveAttribute('data-state', 'ready');
@@ -118,12 +120,12 @@ test('a rig applies reported equipment and preserves Director work permission be
     // Switching paths to compare them preserves work permission.
     const mode = settings.getByRole('group', { name: 'Mode' });
     for (const next of ['Director', 'Target Scheduler']) {
-      await panel.getByRole('button', { name: 'Change mode' }).click();
+      await plugins.getByRole('button', { name: 'Change mode' }).click();
       await mode.getByRole('radio', { name: next }).check();
       await settings.getByRole('button', { name: 'Save rig profile' }).click();
       await expect(settings.getByRole('status').filter({ hasText: /Saved rig profile revision/ })).toBeVisible();
       await sections.getByRole('tab', { name: 'Plugins', exact: true }).click();
-      await expect(panel.locator('.rig-plugin-paths')).toContainText(next);
+      await expect(plugins).toContainText(`Picks the work: ${next}`);
       await expect(work).toHaveAttribute('data-state', 'ready');
     }
 
@@ -156,7 +158,7 @@ test('a rig applies reported equipment and preserves Director work permission be
 
     // Both plugins pair on the Plugins tab, and Sync points there.
     await expect(settings.getByRole('heading', { name: 'Sync plugin', exact: true })).toBeVisible();
-    await expect(settings.getByText(/The Director plugin below has its own pairing code/)).toBeVisible();
+    await expect(plugins.getByTestId('plugin-sync')).toBeVisible();
     await settings.getByRole('tab', { name: 'Sync', exact: true }).click();
     await expect(settings.getByRole('heading', { name: 'PSF Guard Sync plugin' })).toBeVisible();
     await expect(settings.getByRole('button', { name: 'Open Rig setup' })).toBeVisible();

@@ -1789,7 +1789,8 @@ pub enum SyncKind {
     /// nothing until the preview it issued is applied by name.
     ///
     /// The peer must have opened the catalog with a `[[remote_sync]]` block in
-    /// its config, or the Settings panel's "Accept remote scheduler sync".
+    /// its config, or Scheduler sync turned on under the database's Rig
+    /// setup › Plugins.
     Remote {
         /// What to do: pull, push-planning, or push-grades. Pull merges the
         /// peer's structure and captures into the local database, keeping

@@ -54,11 +54,19 @@ control. The selected page includes the database name.
 - **Rig setup** shows equipment, field of view, the selected observing site,
   scheduling limits and planning connections. Sites are shared: edit them
   under **Presets → Sites**, then choose a rig's **Planning site** in
-  **Rig setup → Site**. **Rig setup → Plugins** pairs both N.I.N.A. plugins:
-  the Sync plugin, with what the database accepts from it, and the Director
-  plugin. Each database is one rig. Without planning, **Rig setup** shows only
-  the Sync plugin.
-  - The **Paired clients** list shows when each Sync client last connected
+  **Rig setup → Site**. **Rig setup → Plugins** pairs both N.I.N.A. plugins.
+  Each database is one rig. Without planning, **Rig setup** shows only the
+  Sync plugin.
+  - **Plugins on this rig** shows each plugin **On** or **Off**, and what it
+    does: the Sync plugin's scheduler sync and image uploads, and whether the
+    Director plugin may take work.
+  - The Sync plugin's panel follows the Director plugin's: **Pair**,
+    **Scheduler sync**, **Image uploads** and **Remote API key**. Each part
+    shows whether it is on. **Scheduler sync** and **Image uploads** each have
+    **Turn on** or **Turn off**, which applies at once. Changes to the receive
+    folder or folder layout need **Save upload settings**. A new remote API
+    key is shown once, then saved with **Save key**.
+  - Under **Pair**, each paired Sync plugin shows when it last connected
     and which plugin version it reported. A note identifies a client whose plugin is too old
     to add new projects to its N.I.N.A. profile itself. Update that plugin
     in N.I.N.A.: until then, PSF Guard sends new projects under the profile

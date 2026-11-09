@@ -445,236 +445,6 @@ describe('TauriSettings import state', () => {
     expect(screen.queryByRole('button', { name: 'Import' })).not.toBeInTheDocument();
   });
 
-  it('edits the per-database remote image receiver without exposing its token', async () => {
-    const savedUpdates: Array<{
-      placement?: string;
-      directory_template?: string;
-      directory_template_source?: string;
-      rescan_directory_layout?: boolean;
-    }> = [];
-    server.use(
-      http.get('/api/info', () =>
-        HttpResponse.json({
-          success: true,
-          data: {
-            version: 'test',
-            cache_directory: '/tmp/cache',
-            allow_database_management: true,
-          },
-          error: null,
-          status: 'ready',
-        })
-      ),
-      http.get('/api/databases', () =>
-        HttpResponse.json({
-          success: true,
-          data: [
-            {
-              id: 'remote',
-              name: 'Remote catalog',
-              database_path: '/tmp/remote.sqlite',
-              image_directories: ['/images/remote'],
-              remote_image_upload: {
-                enabled: true,
-                image_directory: '/images/remote',
-                token_configured: true,
-                sync_enabled: false,
-                placement: 'target_tree',
-                directory_template: '%TARGET%/%DATE%/%TYPE%',
-                catalog_directory_template: '2026/%TARGET%/%NIGHT%/%TYPE%',
-                directory_template_source: 'catalog',
-                directory_template_samples: 18,
-              },
-            },
-          ],
-          error: null,
-          status: 'ready',
-        })
-      ),
-      http.get('/api/db/remote/import', () =>
-        HttpResponse.json({
-          success: true,
-          data: {
-            started: false,
-            progress: {
-              running: false,
-              stage: '',
-              image_dirs: [],
-              total_files: 0,
-              scanned_files: 0,
-              outcome: null,
-              started_at: null,
-              finished_at: null,
-              error: null,
-            },
-          },
-          error: null,
-          status: 'ready',
-        })
-      ),
-      http.put('/api/databases/remote', async ({ request }) => {
-        const body = await request.json() as {
-          remote_image_upload?: {
-            placement?: string;
-            directory_template?: string;
-            rescan_directory_layout?: boolean;
-          };
-        };
-        expect(Object.keys(body)).toEqual(['remote_image_upload']);
-        const update = body.remote_image_upload ?? {};
-        savedUpdates.push(update);
-        return HttpResponse.json({
-          success: true,
-          data: {
-            id: 'remote',
-            name: 'Remote catalog',
-            database_path: '/tmp/remote.sqlite',
-            image_directories: ['/images/remote'],
-            remote_image_upload: {
-              enabled: true,
-              image_directory: '/images/remote',
-              token_configured: true,
-              sync_enabled: false,
-              placement: update.placement,
-              directory_template:
-                update.directory_template ?? '%YEAR%/%TARGET%/%NIGHT%/%TYPE%',
-              directory_template_source: 'preset',
-              directory_template_samples: 0,
-            },
-          },
-          error: null,
-          status: 'ready',
-        });
-      })
-    );
-
-    render(<TauriSettings isOpen onClose={() => undefined} />, {
-      wrapper: createWrapper(),
-    });
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Open Remote catalog' }));
-    fireEvent.click(screen.getByRole('tab', { name: 'Database & files' }));
-    fireEvent.click(screen.getByRole('tab', { name: 'Rig setup' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Edit remote receive and pairing' }));
-    expect(
-      screen.getByRole('checkbox', { name: 'Accept remote image uploads' })
-    ).toBeChecked();
-    expect(screen.getByLabelText('Receive directory:')).toHaveValue('/images/remote');
-    expect(screen.getByLabelText('Folder layout:')).toHaveValue('target_tree');
-    // A catalog match in force shows as the selected choice, with the
-    // remembered fallback available as a preset below it.
-    const directoryTemplateSelect = screen.getByLabelText('Layout:');
-    expect(directoryTemplateSelect).toHaveValue('catalog');
-    expect(
-      screen.getByText('Detected from 18 database images:')
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText('2026/%TARGET%/%NIGHT%/%TYPE%')
-    ).toBeInTheDocument();
-    expect(
-      within(directoryTemplateSelect)
-        .getAllByRole('option')
-        .map((option) => option.textContent)
-    ).toEqual([
-      'Match database: 2026/%TARGET%/%NIGHT%/%TYPE%',
-      '%YEAR%/%TARGET%/%NIGHT%/%TYPE%',
-      '%TARGET%/%NIGHT%/%TYPE%',
-      '%TARGET%/%DATE%/%TYPE%',
-      '%TARGET%/%TYPE%/%FILTER%',
-      '%NIGHT%/%TARGET%/%TYPE%',
-      'Custom',
-    ]);
-    expect(screen.getByLabelText('Remote API key:')).toHaveAttribute(
-      'placeholder',
-      'Unchanged'
-    );
-
-    fireEvent.click(screen.getByRole('button', { name: 'Generate' }));
-    const generatedToken = screen.getByLabelText('Remote API key:');
-    expect(generatedToken).toHaveAttribute('type', 'text');
-    expect((generatedToken as HTMLInputElement).value).toMatch(/^[0-9a-f]{64}$/);
-    expect(
-      screen.getByText('Copy this key now. It will not be shown again after saving.')
-    ).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Copy' })).toBeEnabled();
-
-    // Queue a rescan first, then choose Custom: the choice cancels the
-    // rescan, because a scan would only find the same match again.
-    const rescanButton = screen.getByRole('button', {
-      name: 'Rescan database layout',
-    });
-    fireEvent.click(rescanButton);
-    expect(rescanButton).toHaveAttribute('aria-pressed', 'true');
-    fireEvent.change(screen.getByLabelText('Layout:'), {
-      target: { value: 'custom' },
-    });
-    expect(rescanButton).toHaveAttribute('aria-pressed', 'false');
-    fireEvent.change(screen.getByLabelText('Custom database layout:'), {
-      target: { value: '%TARGET%/%DATE%/%TYPE%/%FILTER%' },
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: 'Save connection settings' }));
-    await waitFor(() => expect(savedUpdates).toHaveLength(1));
-    // Choosing Custom is a choice of layout (#399): the save says so, and
-    // the server will keep it rather than re-scanning the catalog over it.
-    expect(savedUpdates[0]).toMatchObject({
-      placement: 'target_tree',
-      directory_template: '%TARGET%/%DATE%/%TYPE%/%FILTER%',
-      directory_template_source: 'preset',
-    });
-    expect(savedUpdates[0].rescan_directory_layout).toBeUndefined();
-
-    await screen.findByText('Saved.');
-    fireEvent.click(screen.getByRole('button', { name: 'Edit remote receive and pairing' }));
-    expect(
-      screen.getByRole('button', { name: 'Rescan database layout' })
-    ).toHaveAttribute('aria-pressed', 'false');
-
-    fireEvent.change(screen.getByLabelText('Folder layout:'), {
-      target: { value: 'flat' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: 'Save connection settings' }));
-    await waitFor(() => expect(savedUpdates).toHaveLength(2));
-    expect(savedUpdates[1].placement).toBe('flat');
-    expect(savedUpdates[1].directory_template).toBeUndefined();
-    expect(savedUpdates[1].rescan_directory_layout).toBeUndefined();
-  });
-
-  it("shows each paired client's last contact and plugin version, and points out older plugins", async () => {
-    const at = Math.floor(Date.now() / 1000) - 5 * 60;
-    server.use(
-      http.get('/api/info', () => HttpResponse.json({ success: true, data: { version: 'test', cache_directory: '/cache', allow_database_management: true }, error: null, status: 'ready' })),
-      http.get('/api/databases', () => HttpResponse.json({
-        success: true,
-        data: [{
-          id: 'remote', name: 'Remote catalog', database_path: '/remote.sqlite', image_directories: ['/images/remote'],
-          remote_image_upload: {
-            enabled: true, image_directory: '/images/remote', token_configured: true, sync_enabled: true,
-            placement: 'flat', directory_template: '%TARGET%/%TYPE%/%FILTER%', directory_template_source: 'preset', directory_template_samples: 0,
-            clients: [
-              { client_uuid: 'a', name: 'Observatory PC', paired_at: at, last_contact: { at, version: '1.4.0.0', capabilities: ['waiting_profile_v1'], places_new_projects: true } },
-              { client_uuid: 'b', name: 'Old laptop', paired_at: at, last_contact: { at, capabilities: [], places_new_projects: false } },
-              { client_uuid: 'c', name: 'Spare', paired_at: at },
-            ],
-          },
-        }],
-        error: null, status: 'ready',
-      })),
-      http.get('/api/db/remote/import', () => HttpResponse.json({ success: true, data: { started: false, progress: { running: false, stage: '', image_dirs: [], total_files: 0, scanned_files: 0, outcome: null, started_at: null, finished_at: null, error: null } }, error: null, status: 'ready' })),
-    );
-    render(<TauriSettings isOpen onClose={() => undefined} />, { wrapper: createWrapper() });
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Open Remote catalog' }));
-    fireEvent.click(screen.getByRole('tab', { name: 'Database & files' }));
-    fireEvent.click(screen.getByRole('tab', { name: 'Rig setup' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Edit remote receive and pairing' }));
-
-    expect(screen.getByText(/Observatory PC · paired .* · last contact 5 min ago, plugin 1\.4\.0\.0/)).toBeVisible();
-    expect(screen.getByText(/Old laptop · paired .* · last contact 5 min ago$/)).toBeVisible();
-    expect(screen.getByText(/Spare · paired .* · no contact recorded/)).toBeVisible();
-    expect(screen.getByRole('note')).toHaveTextContent('Old laptop is running an older Sync plugin. Update the plugin in N.I.N.A., or N.I.N.A. may not show new projects.');
-  });
-
   it('keeps the editor with the selected database in a multi-database list', async () => {
     server.use(
       http.get('/api/info', () =>
@@ -882,10 +652,11 @@ describe('TauriSettings first run', () => {
       screen.queryByRole('heading', { name: /Configured Databases/ })
     ).not.toBeInTheDocument();
     // The Sync plugin's pairing moved to Rig setup; the Sync page points there.
-    expect(screen.queryByRole('button', { name: 'Edit remote receive and pairing' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Sync plugin' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Open Rig setup' }));
     expect(await screen.findByRole('tab', { name: 'Rig setup', selected: true })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Edit remote receive and pairing' })).toBeInTheDocument();
+    expect(await screen.findByRole('region', { name: 'Sync plugin' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Plugins on this rig' })).toBeInTheDocument();
   });
 
   it('opens straight onto the create form when the caller asks for it', async () => {
@@ -1059,9 +830,10 @@ describe('TauriSettings first run', () => {
     fireEvent.change(screen.getByPlaceholderText('Type an absolute path and press Add'), { target: { value: '/receive' } });
     fireEvent.click(screen.getByRole('button', { name: 'Add' }));
     fireEvent.click(screen.getByRole('button', { name: 'Create database for plugin' }));
+    expect(await screen.findByText('https://nina-plugins.psf-guard.com/')).toBeInTheDocument();
+    // Rig setup opens on the Sync plugin, ready to pair.
     fireEvent.click(await screen.findByRole('button', { name: 'Generate Sync pairing code' }));
     expect(await screen.findByDisplayValue('ONE-USE-CODE')).toBeInTheDocument();
     expect(requests).toEqual([{ name: 'Plugin catalog', image_dirs: ['/receive'], backfill: false, fill_metadata: true }]);
-    expect(screen.getByText('https://nina-plugins.psf-guard.com/')).toBeInTheDocument();
   });
 });
