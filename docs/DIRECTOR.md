@@ -978,7 +978,10 @@ the server takes. `POST images` takes one multipart `image` part and an
 same upload response. Both plugins share the database's **Image uploads**
 setting, receive folder, folder layout, header import, calibration matching
 and audit log; Director uploads are logged as `director_image_upload`. An
-older server denies both routes, which the plugin takes as no uploads.
+older server denies both routes, which the plugin takes as no uploads. While
+another upload imports into the same database, an upload answers `503` with
+`Retry-After`, and the plugin tries again; `409` is kept for a refusal of the
+file itself.
 
 A ledger already reported by one rig cannot accept any sequence from
 another rig, even if that rig has its own valid credential. Equipment registration,

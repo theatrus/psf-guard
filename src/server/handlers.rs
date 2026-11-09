@@ -2388,6 +2388,9 @@ pub enum AppError {
     /// purpose, so retrying it cannot succeed.
     Gone(String),
     InternalError(String),
+    /// 503 with `Retry-After`: the work is fine but the server is busy
+    /// with the same kind of work; the client tries again.
+    Busy(String),
     NotImplemented,
 }
 
@@ -2411,6 +2414,7 @@ impl AppError {
             | AppError::Conflict(message)
             | AppError::Forbidden(message)
             | AppError::Gone(message)
+            | AppError::Busy(message)
             | AppError::InternalError(message) => message.clone(),
         }
     }
@@ -2475,6 +2479,15 @@ impl IntoResponse for AppError {
                 tracing::error!("⚠️  Internal server error: {}", msg);
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ApiResponse::<()>::error(msg.clone())),
+                )
+                    .into_response();
+            }
+            AppError::Busy(msg) => {
+                tracing::debug!("⏳ Busy: {}", msg);
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    [(axum::http::header::RETRY_AFTER, "5")],
                     Json(ApiResponse::<()>::error(msg.clone())),
                 )
                     .into_response();

@@ -2176,6 +2176,7 @@ fn error_text(error: &AppError) -> String {
         | AppError::Conflict(message)
         | AppError::Forbidden(message)
         | AppError::Gone(message)
+        | AppError::Busy(message)
         | AppError::InternalError(message) => message.clone(),
         AppError::DatabaseError(message) => format!("Database error: {message}"),
         AppError::NotImplemented => "Not implemented".to_string(),

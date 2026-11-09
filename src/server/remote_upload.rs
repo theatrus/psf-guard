@@ -129,6 +129,10 @@ fn record_upload(
     result: &Result<Json<ApiResponse<RemoteImageUploadResponse>>, AppError>,
 ) {
     use crate::server::remote_audit::{AuditOutcome, AuditRecord};
+    // Busy is neither the client's action failing nor a refusal: it retries.
+    if matches!(result, Err(AppError::Busy(_))) {
+        return;
+    }
     let (outcome, detail, operation, summary) = match result {
         Ok(Json(response)) => match &response.data {
             Some(upload) => (
@@ -337,7 +341,8 @@ async fn receive_image(
     }
 
     let _upload_guard = ctx.image_import_mutex.try_lock().map_err(|_| {
-        AppError::Conflict("another image import is already running for this database".into())
+        // Busy, not a refusal of this file: the client tries again.
+        AppError::Busy("another image import is already running for this database".into())
     })?;
     let database_path = ctx.database_path.clone();
     let database_id = ctx.id.clone();

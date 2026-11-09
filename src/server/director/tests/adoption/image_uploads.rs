@@ -159,3 +159,14 @@ async fn a_paired_rig_uploads_through_the_databases_image_upload_setting() {
         "{status}"
     );
 }
+
+#[test]
+fn a_busy_import_answers_503_so_both_plugins_retry() {
+    use axum::response::IntoResponse;
+    let response = crate::server::handlers::AppError::Busy(
+        "another image import is already running for this database".into(),
+    )
+    .into_response();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(response.headers()["retry-after"], "5");
+}

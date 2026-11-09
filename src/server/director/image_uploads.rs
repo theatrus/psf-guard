@@ -105,7 +105,7 @@ pub(super) async fn state(
 
 /// POST /api/director/v1/rigs/{rig}/images
 ///
-/// One multipart `image` field, with `X-PSF-Guard-Content-SHA256`, as the
+/// One multipart `image` field, with `X-Content-SHA256`, as the
 /// Sync upload takes it.
 pub(super) async fn upload(
     State(state): State<Arc<AppState>>,
