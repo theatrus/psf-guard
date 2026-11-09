@@ -283,7 +283,7 @@ impl MetaStore {
         if !(1..=256).contains(&limit) {
             return Err(Error::InvalidInput);
         }
-        let tx = self.connection.unchecked_transaction()?;
+        let tx = self.snapshot()?;
         if read_catalog(&tx, catalog)?.is_none() {
             return Err(Error::NotFound);
         }
@@ -323,7 +323,7 @@ impl MetaStore {
         items.truncate(limit);
         drop(rows);
         drop(statement);
-        tx.commit()?;
+        tx.end()?;
         Ok(MappingPage { items, next_after })
     }
 }

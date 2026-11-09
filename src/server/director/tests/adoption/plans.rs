@@ -1802,3 +1802,77 @@ async fn the_plan_list_reads_a_local_rig_while_a_writer_holds_it() {
     assert!(plan_named(&listed, "Pelican").is_object(), "{listed}");
     writer.execute_batch("COMMIT").unwrap();
 }
+
+/// The listing decides a plan follows Target Scheduler on a reader, then
+/// saves its drafts on the writer. A plan activated in between keeps its
+/// drafts and stops following.
+#[tokio::test]
+async fn a_plan_activated_while_the_listing_reads_keeps_its_drafts() {
+    use crate::server::director::import_drafts::{following, refresh_drafts, Drafts};
+    use psf_guard_director_meta::activation::Activation;
+    let f = Fixture::new();
+    let path = register(
+        &f,
+        "heart",
+        "Heart rig",
+        &[(1, "Heart Nebula", Some(Uuid::new_v4()))],
+    );
+    let db = rusqlite::Connection::open(&path).unwrap();
+    db.execute_batch(
+        "INSERT INTO target (Id, name, active, ra, dec, epochcode, rotation, roi, projectid, guid)
+         VALUES (1, 'Heart', 1, 2.5333, 0.0, 2, 0.0, 100, 1, 'tgt-1');",
+    )
+    .unwrap();
+    let (status, listed) = call(&f.app, "GET", "/plans", Value::Null, None).await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    let project = Uuid::parse_str(
+        listed["data"]["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["project"]["name"] == "Heart Nebula")
+            .unwrap()["project"]["id"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    let mut store = f.state.director.as_ref().unwrap().writer.lock().unwrap();
+    let import = store.draft_import(project).unwrap().expect("imported");
+    let framing = store.framing_draft(project).unwrap().expect("a framing");
+    let follow = following(
+        &store,
+        project,
+        import.catalog_id,
+        import.source_project_guid,
+    )
+    .expect("it follows Target Scheduler");
+    let instance = store.instance_id();
+    store
+        .record_activation(&Activation {
+            project_id: project,
+            revision: 0,
+            framing_revision: framing.layout_revision,
+            plan_revision: 1,
+            coordinator_instance_id: instance,
+            applied_at_ms: 5,
+            rigs: vec![],
+            inactive_rigs: vec![],
+            pushes: vec![],
+        })
+        .unwrap();
+    let mut moved = framing.clone();
+    moved.center.dec_degrees = 5.0;
+    let drafts = Drafts {
+        framing: Some(moved),
+        plan: None,
+        separate_targets: 0,
+        warnings: vec![],
+        test_frames: vec![],
+    };
+    assert!(!refresh_drafts(&mut store, follow, drafts).unwrap());
+    assert_eq!(store.framing_draft(project).unwrap().unwrap(), framing);
+    assert!(
+        store.draft_import(project).unwrap().is_none(),
+        "stopped following"
+    );
+}

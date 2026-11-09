@@ -581,7 +581,7 @@ fn snapshot(source: &Connection, destination: &Path) -> Result<(), Error> {
     let mut target = Connection::open(file.path())?;
     // Pin the source snapshot before copying. Do not retry Busy indefinitely or
     // chase an active writer by restarting the backup on each page batch.
-    let tx = source.unchecked_transaction()?;
+    let tx = super::Snapshot::begin(source)?;
     validate(&tx)?;
     let backup = Backup::new(&tx, &mut target)?;
     match backup.step(-1)? {
@@ -589,7 +589,7 @@ fn snapshot(source: &Connection, destination: &Path) -> Result<(), Error> {
         _ => return Err(Error::Conflict),
     }
     drop(backup);
-    tx.commit()?;
+    tx.end()?;
     validate(&target)?;
     let check: String = target.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
     if check != "ok" {
