@@ -251,7 +251,13 @@ impl MetaStore {
         from: NightDate,
         to: NightDate,
     ) -> Result<NightMarks, Error> {
-        read_marks(&self.connection, scope, scope_id, from, to)
+        // The scope revision and its marks are read by separate statements:
+        // keep them on one snapshot, or a save that commits between them
+        // shows marks newer than their scope, which reads as corruption.
+        let snapshot = self.snapshot()?;
+        let marks = read_marks(&snapshot, scope, scope_id, from, to)?;
+        snapshot.end()?;
+        Ok(marks)
     }
 
     /// Mark one or more nights in one transaction, replacing any manual mark
