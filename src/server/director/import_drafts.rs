@@ -744,6 +744,21 @@ pub(super) fn following(
         })
 }
 
+/// Whether a plan that was never activated still has the drafts its Target
+/// Scheduler import saved: an import is recorded, and neither the plan nor
+/// the framing's layout has been saved here since. One primary-key read;
+/// the caller has already read the activation record.
+pub(super) fn follows_import(
+    store: &MetaStore,
+    project: Uuid,
+    framing: &FramingDraft,
+    plan: &PlanDraft,
+) -> bool {
+    matches!(store.draft_import(project), Ok(Some(record))
+        if record.framing_revision == framing.layout_revision
+            && record.plan_revision == plan.revision)
+}
+
 /// Give a plan read again the ids its last import had, band and purpose
 /// by band and purpose, so an unchanged plan reads the same and a changed
 /// one keeps its objectives.

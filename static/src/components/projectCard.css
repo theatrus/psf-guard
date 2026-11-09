@@ -436,3 +436,9 @@ a.library-name:hover, a.library-family-name:hover { text-decoration: underline; 
 .deleted-projects-help {
   margin: 6px 8px 0;
 }
+
+/* A plan whose rigs lack its saved work: it needs a person to activate it. */
+.library-pill.library-pill-due { border-color: var(--state-attention-border); color: var(--state-attention-fg); }
+.library-planning.library-activate { color: var(--state-attention-fg); }
+.library-planning.library-activate:hover { border-color: var(--state-attention-border); }
+.project-settings-button.library-activate { display: inline-flex; align-items: center; gap: 4px; border-color: var(--state-attention-border); color: var(--state-attention-fg); }

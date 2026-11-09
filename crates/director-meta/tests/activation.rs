@@ -22,6 +22,7 @@ fn activations_advance_a_revision_and_read_back_after_reopen() {
         coordinator_instance_id: store.instance_id(),
         applied_at_ms: 5,
         rigs: vec![ActivatedRig {
+            rows_digest: None,
             rig_id: Uuid::new_v4(),
             catalog_id: Uuid::new_v4(),
             project_guid: Uuid::new_v4(),
@@ -85,6 +86,7 @@ fn activations_advance_a_revision_and_read_back_after_reopen() {
 #[test]
 fn validate_refuses_a_record_the_store_would_refuse() {
     let rig = ActivatedRig {
+        rows_digest: None,
         rig_id: Uuid::new_v4(),
         catalog_id: Uuid::new_v4(),
         project_guid: Uuid::new_v4(),
@@ -127,6 +129,7 @@ fn a_push_lands_on_its_own_activation_and_never_on_a_newer_one() {
     let project = store.create_project(Uuid::new_v4(), "Heart").unwrap();
     let (remote, local) = (Uuid::new_v4(), Uuid::new_v4());
     let rig = |rig_id| ActivatedRig {
+        rows_digest: None,
         rig_id,
         catalog_id: Uuid::new_v4(),
         project_guid: Uuid::new_v4(),

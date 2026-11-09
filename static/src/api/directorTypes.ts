@@ -722,6 +722,21 @@ export interface DirectorPlanRow {
   framing: DirectorFramingSummary | null;
   plan: { revision: number; objectives: number; rigs: number } | null;
   activation: { revision: number; applied_at_ms: number; rigs: number } | null;
+  /** Why the rigs lack the plan: never activated, the saved plan or
+   *  framing newer than the last activation, rigs it left out, or rigs
+   *  whose Target Scheduler rows changed since it wrote them.
+   *  Null when there is nothing to activate, including a plan that still
+   *  follows its Target Scheduler import. Older servers leave it out. */
+  activation_due?: DirectorActivationDue | null;
+}
+export interface DirectorActivationDue {
+  never: boolean;
+  /** The saved parts newer than the last activation. */
+  parts: Array<'plan' | 'framing'>;
+  /** Rigs the saved plan shoots that the last activation left out. */
+  left_out: string[];
+  /** Rigs whose Target Scheduler rows changed since the last activation wrote them. */
+  differs: string[];
 }
 export interface DirectorPlanList { rows: DirectorPlanRow[]; warnings: string[] }
 /** What attaching a plan did: whose links moved, and which drafts came along because this plan had none. */

@@ -32,7 +32,11 @@ const link = (slug: string, name: string, row: number, guid = `guid-${slug}-${ro
 const plan = (id: string, name: string, links: DirectorPlanLink[], extra: Partial<DirectorPlanRow> = {}): DirectorPlanRow => ({ project: { id, name, revision: 1 }, links, progress: null, framing: null, plan: null, activation: null, ...extra });
 const plans = [
   plan('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'Heart Nebula', [link('redcat', 'RedCat', 1, shared), link('c925', 'C925', 1, shared)], { plan: { revision: 1, objectives: 2, rigs: 2 } }),
-  plan('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'Pelican', [link('redcat', 'RedCat', 2)], { activation: { revision: 1, applied_at_ms: 1_700_000_000_000, rigs: 1 } as DirectorPlanRow['activation'] }),
+  // Activated, then its Target Scheduler rows changed on RedCat.
+  plan('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'Pelican', [link('redcat', 'RedCat', 2)], {
+    activation: { revision: 1, applied_at_ms: 1_700_000_000_000, rigs: 1 } as DirectorPlanRow['activation'],
+    activation_due: { never: false, parts: [], left_out: [], differs: [rig.id] },
+  }),
   plan('cccccccc-cccc-4ccc-8ccc-cccccccccccc', 'Bare', []),
 ];
 
@@ -40,6 +44,9 @@ function Location() {
   const location = useLocation();
   return <output data-testid="location">{location.pathname}{location.search}</output>;
 }
+
+let currentClient: QueryClient | null = null;
+const client = () => currentClient!;
 
 function mount(route: string, puts: { path: string; body: unknown }[] = []) {
   server.use(
@@ -53,8 +60,9 @@ function mount(route: string, puts: { path: string; body: unknown }[] = []) {
     http.get('/api/director/v1/plans', () => ok({ rows: plans, warnings: [] })),
     http.put('/api/db/:dbId/projects/:id', async ({ request, params }) => { puts.push({ path: `${params.dbId}/${params.id}`, body: await request.json() }); return ok({ updated: true }); }),
   );
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
-  const Wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}><MemoryRouter initialEntries={[route]}>{children}<Location /></MemoryRouter></QueryClientProvider>;
+  const queries = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  currentClient = queries;
+  const Wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queries}><MemoryRouter initialEntries={[route]}>{children}<Location /></MemoryRouter></QueryClientProvider>;
   return render(<Overview />, { wrapper: Wrapper });
 }
 
@@ -62,7 +70,7 @@ const compact = { showNightChip: true, showAllChip: true, showCalibrationChip: t
 const names = () => screen.getAllByTestId('library-row').map(row => within(row).getByRole('button', { name: /image grid/ }).textContent);
 
 describe('the Library with Planning', () => {
-  afterEach(() => setDisplayPreferences(compact));
+  afterEach(() => { setDisplayPreferences(compact); window.sessionStorage.clear(); });
 
   it('carries each plan: its stage and workspace on a family, the workspace on a lone row, and plans without a database', async () => {
     setDisplayPreferences(compact);
@@ -111,6 +119,55 @@ describe('the Library with Planning', () => {
     fireEvent.change(screen.getByRole('searchbox', { name: 'Search projects or targets' }), { target: { value: 'peli' } });
     expect(screen.getByTestId('location')).toHaveTextContent('/?q=peli');
     await waitFor(() => expect(names()).toEqual(['Pelican']));
+  });
+
+  it('lists the plans that need activating and opens the activation preview from a row', async () => {
+    setDisplayPreferences(compact);
+    mount('/?show=needs-activation');
+    const showSelect = await screen.findByRole('combobox', { name: 'Show projects' });
+    expect(showSelect).toHaveValue('needs-activation');
+    await waitFor(() => expect(names()).toEqual(['Pelican']));
+    // Heart Nebula is planned but follows its import, so it is not listed.
+    expect(screen.queryByTestId('library-family')).not.toBeInTheDocument();
+    const pill = screen.getByText('Needs activating', { selector: '.library-pill' });
+    expect(pill).toHaveAttribute('title', 'Needs activating: RedCat differs from the plan in Target Scheduler');
+    fireEvent.click(screen.getByRole('button', { name: 'Activate the Pelican plan' }));
+    expect(await screen.findByRole('dialog', { name: 'Activate Pelican on the rigs' })).toBeInTheDocument();
+    // Activated, the plan leaves this list, and the dialog stays to show how it went.
+    server.use(http.get('/api/director/v1/plans', () => ok({ rows: plans.map(row => ({ ...row, activation_due: null })), warnings: [] })));
+    await client().invalidateQueries({ queryKey: ['directorPlans'] });
+    await waitFor(() => expect(screen.queryAllByTestId('library-row')).toHaveLength(0));
+    expect(screen.getByRole('dialog', { name: 'Activate Pelican on the rigs' })).toBeInTheDocument();
+    // The Library stays where it was underneath.
+    expect(screen.getByTestId('location')).toHaveTextContent(/^\/\?show=needs-activation$/);
+  });
+
+  it('puts back the filters last set in this tab when the Library opens without any', async () => {
+    setDisplayPreferences(compact);
+    const first = mount('/?show=needs-activation&sort=name');
+    await screen.findByRole('combobox', { name: 'Show projects' });
+    first.unmount();
+    // A fresh Library address, as a link from another page builds it.
+    const second = mount('/?db=redcat&project=2');
+    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/?db=redcat&project=2&show=needs-activation&sort=name'));
+    expect(await screen.findByRole('combobox', { name: 'Show projects' })).toHaveValue('needs-activation');
+    // Show all clears them for next time too.
+    fireEvent.click(await screen.findByRole('button', { name: 'Show all' }));
+    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent(/^\/\?db=redcat&project=2&sort=name$/));
+    second.unmount();
+    mount('/');
+    await screen.findByRole('combobox', { name: 'Show projects' });
+    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent(/^\/\?sort=name$/));
+  });
+
+  it('keeps the sort order in the URL, leaving newest first out', async () => {
+    setDisplayPreferences(compact);
+    mount('/?show=active');
+    const sort = await screen.findByRole('combobox', { name: 'Sort within groups' });
+    fireEvent.change(sort, { target: { value: 'name' } });
+    expect(screen.getByTestId('location')).toHaveTextContent('/?show=active&sort=name');
+    fireEvent.change(sort, { target: { value: 'recent' } });
+    expect(screen.getByTestId('location')).toHaveTextContent(/^\/\?show=active$/);
   });
 
   it("changes a project's state in its database from the row, once confirmed", async () => {

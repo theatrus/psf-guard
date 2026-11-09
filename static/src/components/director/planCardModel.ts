@@ -37,3 +37,20 @@ export function stage(row: DirectorPlanRow): string {
   if (row.framing) return `Framed: ${row.framing.target_name || 'target'}, ${plural(row.framing.panels, 'panel')}`;
   return row.links.length ? 'Linked; its database has no target with coordinates yet' : 'Not linked to any database';
 }
+
+const listed = (words: string[]) => words.length <= 1 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`;
+
+/** Why a plan needs activating, in the workspace's words, or null when its
+ *  rigs have everything saved here. */
+export function activationDueText(row: DirectorPlanRow): string | null {
+  const due = row.activation_due;
+  if (!due) return null;
+  if (due.never) return 'Not activated yet';
+  const rigName = (id: string) => row.links.find(link => link.rig.id === id)?.catalog_name ?? 'a rig';
+  const reasons = [
+    due.parts.length > 0 && `saved ${listed(due.parts)} not activated yet`,
+    due.left_out.length > 0 && `${listed(due.left_out.map(rigName))} not activated yet`,
+    due.differs.length > 0 && `${listed(due.differs.map(rigName))} ${due.differs.length === 1 ? 'differs' : 'differ'} from the plan in Target Scheduler`,
+  ].filter((reason): reason is string => !!reason);
+  return `Needs activating: ${reasons.join('; ')}`;
+}

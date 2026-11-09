@@ -2957,13 +2957,18 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
         }
     }
 
+    let project_guid = Uuid::parse_str(&project_guid).map_err(|_| bad_guid(&project_guid))?;
+    // The rows as this activation leaves them, read in its own transaction.
+    let rows_digest =
+        super::rows_digest::project_digests(tx, Some(project_guid))?.remove(&project_guid);
     Ok(Outcome {
         changes,
         shoots,
         record: ActivatedRig {
             rig_id: inputs.rig_id,
             catalog_id: inputs.catalog.id,
-            project_guid: Uuid::parse_str(&project_guid).map_err(|_| bad_guid(&project_guid))?,
+            project_guid,
+            rows_digest,
             profile_id,
             targets: targets
                 .into_iter()

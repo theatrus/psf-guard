@@ -1,7 +1,7 @@
 /** What the Library can narrow to. A project shot by several rigs is one
  *  family: it matches a state when any rig has it, since the plan is live
  *  wherever one rig still shoots it; Closed and Done ask for every rig. */
-export type LibraryShow = 'all' | 'active' | 'open' | 'done' | 'draft' | 'inactive' | 'closed' | 'calibration' | 'unlinked';
+export type LibraryShow = 'all' | 'active' | 'open' | 'done' | 'draft' | 'inactive' | 'closed' | 'calibration' | 'needs-activation' | 'unlinked';
 
 export const SHOW_OPTIONS: ReadonlyArray<{ value: LibraryShow; label: string; planning?: true }> = [
   { value: 'all', label: 'All projects' },
@@ -14,6 +14,8 @@ export const SHOW_OPTIONS: ReadonlyArray<{ value: LibraryShow; label: string; pl
   // Projects whose lights the calibration library serves poorly, or that
   // hold something worth a look.
   { value: 'calibration', label: 'Calibration issues' },
+  // Plans whose saved plan or framing the rigs do not have yet.
+  { value: 'needs-activation', label: 'Needs activating', planning: true },
   // Only Planning has projects without a database.
   { value: 'unlinked', label: 'No database', planning: true },
 ];
@@ -29,13 +31,16 @@ interface Member {
   total_desired: number;
   /** The calibration health level, when the background check found one. */
   calibration_level?: string | null;
+  /** The project's plan has saved work its rigs do not have yet. */
+  activation_due?: boolean;
 }
 
 /** A plan the Library has no row for: nothing captured yet, so its rigs'
  *  project states are all there is to go on, and it cannot be done. Closed
  *  on every rig, it stays hidden until Closed is asked for, the way the
  *  Library folds closed projects into its archive. */
-export function waitingPlanMatchesShow(links: { source_state?: number | null }[], show: LibraryShow): boolean {
+export function waitingPlanMatchesShow(links: { source_state?: number | null }[], show: LibraryShow, activationDue = false): boolean {
+  if (show === 'needs-activation') return activationDue;
   if (links.length === 0) return show === 'all' || show === 'unlinked';
   const states = links.map(link => link.source_state);
   const closed = states.every(state => state === 3);
@@ -50,6 +55,7 @@ export function waitingPlanMatchesShow(links: { source_state?: number | null }[]
     case 'calibration': return false;
     case 'unlinked': return false;
   }
+  return false;
 }
 
 /** The goal is met: accepted frames reach the desired count. No goal is never done. */
@@ -71,6 +77,7 @@ export function familyMatchesShow(members: Member[], show: LibraryShow): boolean
     case 'done': return done;
     case 'open': return !done && !closed;
     case 'calibration': return members.some(member => !!member.calibration_level);
+    case 'needs-activation': return members.some(member => !!member.activation_due);
     case 'unlinked': return false;
   }
 }

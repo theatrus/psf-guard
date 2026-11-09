@@ -12,6 +12,6 @@ export function waitingPlans(rows: DirectorPlanRow[], listed: ReadonlySet<string
 
 /** The waiting plans the Library's search, Show and Database filters leave. */
 export function shownWaitingPlans(waiting: DirectorPlanRow[], show: LibraryShow, search: string, dbFilter: string | null): DirectorPlanRow[] {
-  return waiting.filter(row => waitingPlanMatchesShow(row.links, show) && matchesSearch(row, search)
+  return waiting.filter(row => waitingPlanMatchesShow(row.links, show, !!row.activation_due) && matchesSearch(row, search)
     && (!dbFilter || row.links.some(link => link.catalog_slug === dbFilter)));
 }
