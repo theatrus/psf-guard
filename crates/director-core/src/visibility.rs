@@ -222,6 +222,7 @@ pub fn observe(
 /// at the same instant for the price of one. The result is the same as
 /// [`observe`] to the last bit; SOFA's `atco13` is this followed by the
 /// per-body steps.
+#[derive(Clone, Copy)]
 pub struct Observer {
     astrom: sofars::astro::IauAstrom,
 }
@@ -257,7 +258,7 @@ impl Observer {
         Ok(Self { astrom })
     }
 
-    pub fn observe(&mut self, position: IcrsPosition) -> Result<ObservedPosition, VisibilityError> {
+    pub fn observe(&self, position: IcrsPosition) -> Result<ObservedPosition, VisibilityError> {
         if !bounded(position.ra_degrees, 0.0, 360.0)
             || position.ra_degrees == 360.0
             || !bounded(position.dec_degrees, -90.0, 90.0)
@@ -271,7 +272,8 @@ impl Observer {
             0.0,
             0.0,
             0.0,
-            &mut self.astrom,
+            // `atciq` only reads it, but asks for it mutably.
+            &mut self.astrom.clone(),
         );
         let (azimuth, zenith, hour_angle, declination, _) =
             sofars::astro::atioq(ri, di, &self.astrom);
@@ -418,7 +420,7 @@ mod observer_tests {
             },
         ];
         for t in [1_759_000_000_000_u64, 1_759_000_300_000, 1_762_345_678_901] {
-            let mut prepared = Observer::at(site, orientation, t).unwrap();
+            let prepared = Observer::at(site, orientation, t).unwrap();
             for body in bodies {
                 let one_shot = observe(body, site, orientation, t).unwrap();
                 let shared = prepared.observe(body).unwrap();

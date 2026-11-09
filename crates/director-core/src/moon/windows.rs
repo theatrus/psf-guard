@@ -28,7 +28,9 @@ pub fn moon_windows(
     MoonTrack::new(site, orientation, span)?.windows(policy, target)
 }
 
-struct Cell {
+/// One minute of a [`MoonTrack`]: where the Moon is in it, at its worst.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Cell {
     span: Interval,
     moon: IcrsPosition,
     radius: f64,
@@ -39,45 +41,75 @@ struct Cell {
 /// One site's evidence is shared across every recipe in the immutable grant.
 pub(crate) struct MoonTrack(Vec<Cell>);
 
+impl Cell {
+    /// The cell over `span`, one of [`MoonTrack::spans`].
+    pub(crate) fn at(
+        site: Site,
+        orientation: EarthOrientation,
+        span: Interval,
+    ) -> Result<Self, VisibilityError> {
+        let (start, end) = (span.start_ms, span.end_ms);
+        let midpoint = start + (end - start) / 2;
+        let moon = moon_position(midpoint);
+        let sun = sun_position(midpoint).ok_or(VisibilityError::AstronomyUnavailable)?;
+        // Geocentric Moon parallax and model guard, plus an envelope faster
+        // than apparent sky motion. Use worse altitude/separation throughout
+        // the cell, not an instantaneous sample as capture permission.
+        let radius = 1.2 + (end - start) as f64 / 2000.0 * 0.01;
+        // Great-circle elongation differs from ecliptic phase near conjunction.
+        // Half a day covers lunar latitude; move toward full for the bound.
+        let days_from_full =
+            ((180.0 - separation_degrees(sun, moon)) * 29.5 / 360.0 - 0.5 - radius * 29.5 / 360.0)
+                .max(0.0);
+        Ok(Self {
+            span,
+            moon,
+            radius,
+            days_from_full,
+            altitude_degrees: (observe(moon, site, orientation, midpoint)?.altitude_degrees
+                + radius)
+                .min(90.0),
+        })
+    }
+}
+
 impl MoonTrack {
     pub(crate) fn new(
         site: Site,
         orientation: EarthOrientation,
         span: Interval,
     ) -> Result<Self, VisibilityError> {
+        let cells = Self::spans(span)?
+            .into_iter()
+            .map(|cell| Cell::at(site, orientation, cell))
+            .collect::<Result<_, _>>()?;
+        Ok(Self(cells))
+    }
+
+    /// The minutes a track over `span` is made of, in order.
+    pub(crate) fn spans(span: Interval) -> Result<Vec<Interval>, VisibilityError> {
         if span.start_ms >= span.end_ms || span.end_ms - span.start_ms > 86_400_000 {
             return Err(VisibilityError::InvalidSpan);
         }
-        let mut cells = vec![];
+        let mut spans = vec![];
         let mut start = span.start_ms;
         while start < span.end_ms {
             let end = start.saturating_add(60_000).min(span.end_ms);
-            let midpoint = start + (end - start) / 2;
-            let moon = moon_position(midpoint);
-            let sun = sun_position(midpoint).ok_or(VisibilityError::AstronomyUnavailable)?;
-            // Geocentric Moon parallax and model guard, plus an envelope faster
-            // than apparent sky motion. Use worse altitude/separation throughout
-            // the cell, not an instantaneous sample as capture permission.
-            let radius = 1.2 + (end - start) as f64 / 2000.0 * 0.01;
-            // Great-circle elongation differs from ecliptic phase near conjunction.
-            // Half a day covers lunar latitude; move toward full for the bound.
-            let days_from_full = ((180.0 - separation_degrees(sun, moon)) * 29.5 / 360.0
-                - 0.5
-                - radius * 29.5 / 360.0)
-                .max(0.0);
-            cells.push(Cell {
-                span: Interval {
-                    start_ms: start,
-                    end_ms: end,
-                },
-                moon,
-                radius,
-                days_from_full,
-                altitude_degrees: (observe(moon, site, orientation, midpoint)?.altitude_degrees
-                    + radius)
-                    .min(90.0),
+            spans.push(Interval {
+                start_ms: start,
+                end_ms: end,
             });
             start = end;
+        }
+        Ok(spans)
+    }
+
+    /// A track from its cells, computed apart: [`MoonTrack::new`] when they
+    /// are the cells of `span` in order.
+    pub(crate) fn from_cells(span: Interval, cells: Vec<Cell>) -> Result<Self, VisibilityError> {
+        let spans = Self::spans(span)?;
+        if spans.len() != cells.len() || spans.iter().zip(&cells).any(|(a, b)| *a != b.span) {
+            return Err(VisibilityError::InvalidSpan);
         }
         Ok(Self(cells))
     }

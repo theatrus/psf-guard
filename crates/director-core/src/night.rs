@@ -4,10 +4,10 @@
 //! from sampled positions; the rig still decides at dispatch time.
 
 use crate::ephemeris::{moon_illumination, moon_position, separation_degrees, sun_position};
-use crate::moon::{MoonPolicy, MoonTrack};
+use crate::moon::{MoonCell, MoonPolicy, MoonTrack};
 use crate::visibility::{
     altitude_allowed, meridian_windows, AltitudeLimits, EarthOrientation, Horizon, IcrsPosition,
-    Observer, Site, VisibilityError,
+    ObservedPosition, Observer, Site, VisibilityError,
 };
 use crate::windows::{Interval, MeridianExclusion};
 use serde::{Deserialize, Serialize};
@@ -375,7 +375,7 @@ fn merged(windows: &[Interval]) -> Vec<Interval> {
 pub fn night_preview(request: &NightRequest) -> Result<Vec<Night>, NightError> {
     validate(request)?;
     (0..request.nights)
-        .map(|index| one_night(request, index, false).map(|curve| curve.night))
+        .map(|index| one_night(request, index, false, None).map(|curve| curve.night))
         .collect()
 }
 
@@ -387,7 +387,7 @@ pub fn night_summary(request: &NightRequest, index: u32) -> Result<Night, NightE
     if index >= request.nights {
         return Err(NightError::InvalidRequest);
     }
-    one_night(request, index, false).map(|curve| curve.night)
+    one_night(request, index, false, None).map(|curve| curve.night)
 }
 
 /// The curves for one of the requested nights, by index from the first.
@@ -396,21 +396,334 @@ pub fn night_curve(request: &NightRequest, index: u32) -> Result<NightCurve, Nig
     if index >= request.nights {
         return Err(NightError::InvalidRequest);
     }
-    one_night(request, index, true)
+    one_night(request, index, true, None)
+}
+
+/// [`night_summary`] under a sky computed beforehand: the same night, to
+/// the bit, without computing the Sun, the Moon and the Earth again. The
+/// sky must be the night's, at the request's site and step:
+/// [`NightRequest::noon_ms`] gives its noon.
+pub fn night_summary_under(
+    request: &NightRequest,
+    index: u32,
+    sky: &NightSky,
+) -> Result<Night, NightError> {
+    validate(request)?;
+    if index >= request.nights {
+        return Err(NightError::InvalidRequest);
+    }
+    one_night(request, index, false, Some(sky)).map(|curve| curve.night)
+}
+
+/// [`night_curve`] under a sky computed beforehand, as
+/// [`night_summary_under`] takes it.
+pub fn night_curve_under(
+    request: &NightRequest,
+    index: u32,
+    sky: &NightSky,
+) -> Result<NightCurve, NightError> {
+    validate(request)?;
+    if index >= request.nights {
+        return Err(NightError::InvalidRequest);
+    }
+    one_night(request, index, true, Some(sky))
+}
+
+impl NightRequest {
+    /// The local mean noon that opens the night `index` from the first: the
+    /// noon of the [`NightSky`] its summary takes.
+    pub fn noon_ms(&self, index: u32) -> Option<u64> {
+        let first = night_noon(self.start_ms, self.site.longitude_degrees)?;
+        first.checked_add(u64::from(index).checked_mul(DAY_MS)?)
+    }
+}
+
+/// The Earth orientation a night's sky is computed with: planning grade,
+/// valid for the night.
+fn sky_orientation(noon_ms: u64) -> EarthOrientation {
+    planning_orientation(noon_ms, noon_ms + DAY_MS)
+}
+
+/// The Sun, the Moon and the Earth at one instant of a night, as every
+/// target's sums that night take them.
+#[derive(Clone, Copy)]
+pub struct SkyStep {
+    t_ms: u64,
+    /// The star-independent part of each observation at the instant.
+    observer: Observer,
+    sun_altitude_degrees: f64,
+    moon: IcrsPosition,
+}
+
+impl SkyStep {
+    /// The sky at `t_ms`, one of [`NightSky::instants`] of the night that
+    /// opens at `noon_ms`.
+    pub fn at(site: Site, noon_ms: u64, t_ms: u64) -> Result<Self, NightError> {
+        let observer = Observer::at(site, sky_orientation(noon_ms), t_ms)?;
+        let sun = sun_position(t_ms).ok_or(VisibilityError::AstronomyUnavailable)?;
+        let sun_altitude_degrees = observer.observe(sun)?.altitude_degrees;
+        Ok(Self {
+            t_ms,
+            observer,
+            sun_altitude_degrees,
+            moon: moon_position(t_ms),
+        })
+    }
+}
+
+/// One minute of a night's Moon track, for the Moon rules.
+#[derive(Clone, Copy)]
+pub struct SkyMoonCell(MoonCell);
+
+impl SkyMoonCell {
+    /// The cell over `span`, one of [`NightSky::moon_spans`] of the night
+    /// that opens at `noon_ms`.
+    pub fn at(site: Site, noon_ms: u64, span: Interval) -> Result<Self, NightError> {
+        Ok(Self(MoonCell::at(site, sky_orientation(noon_ms), span)?))
+    }
+}
+
+/// What every target's hours in one night at one site share: the Sun's
+/// altitude, the Moon and the Earth's orientation at each step, and the
+/// Moon track its Moon rules are judged on. Computing it is most of a
+/// night's work, so a caller planning many targets at one site, or the
+/// same night again, computes it once and passes it to
+/// [`night_summary_under`]. The summaries are the same to the bit.
+///
+/// [`NightSky::new`] computes it on the calling thread. A caller with
+/// threads to spare computes each of [`NightSky::instants`] with
+/// [`SkyStep::at`] and each of [`NightSky::moon_spans`] with
+/// [`SkyMoonCell::at`], in any order, and puts them together with
+/// [`NightSky::from_steps`] and [`NightSky::set_moon_track`].
+pub struct NightSky {
+    site: Site,
+    noon_ms: u64,
+    step_ms: u64,
+    steps: Vec<SkyStep>,
+    /// Built on first use, by the first summary whose targets have Moon
+    /// rules, unless set beforehand.
+    track: std::sync::OnceLock<Result<MoonTrack, VisibilityError>>,
+    /// Each target's windows outside a meridian pause, by its position, the
+    /// pause and the span searched: kept as summaries ask for them.
+    meridian: std::sync::Mutex<std::collections::HashMap<MeridianKey, MeridianFound>>,
+    /// The Moon's altitude every quarter hour, kept once asked for.
+    moon_strip: std::sync::OnceLock<Vec<Option<f64>>>,
+}
+
+/// A target's meridian search, to the bit: right ascension, declination,
+/// the pause before and after, and the span searched.
+type MeridianKey = (u64, u64, u64, u64, u64, u64);
+type MeridianFound = Result<Vec<Interval>, VisibilityError>;
+/// The most meridian searches one sky keeps; past it they are computed
+/// each time.
+const MAX_MERIDIAN_KEPT: usize = 4096;
+/// The Moon strip's step.
+pub const MOON_STRIP_STEP_MS: u64 = 15 * 60_000;
+
+impl NightSky {
+    /// The night that opens at `noon_ms` at `site`, sampled every
+    /// `step_ms`.
+    pub fn new(site: Site, noon_ms: u64, step_ms: u64) -> Result<Self, NightError> {
+        let steps = Self::instants(noon_ms, step_ms)?
+            .into_iter()
+            .map(|t| SkyStep::at(site, noon_ms, t))
+            .collect::<Result<_, _>>()?;
+        Self::from_steps(site, noon_ms, step_ms, steps)
+    }
+
+    /// The instants a night's summary samples, in order.
+    pub fn instants(noon_ms: u64, step_ms: u64) -> Result<Vec<u64>, NightError> {
+        if !(MIN_STEP_MS..=DAY_MS / 24).contains(&step_ms) {
+            return Err(NightError::InvalidRequest);
+        }
+        let next_noon = noon_ms
+            .checked_add(DAY_MS)
+            .ok_or(NightError::InvalidRequest)?;
+        let mut instants = Vec::with_capacity((DAY_MS / step_ms) as usize + 1);
+        let mut t = noon_ms;
+        while t < next_noon {
+            instants.push(t);
+            t += step_ms;
+        }
+        Ok(instants)
+    }
+
+    /// The sky from its steps, computed apart: one per instant of
+    /// [`NightSky::instants`], in order.
+    pub fn from_steps(
+        site: Site,
+        noon_ms: u64,
+        step_ms: u64,
+        steps: Vec<SkyStep>,
+    ) -> Result<Self, NightError> {
+        let instants = Self::instants(noon_ms, step_ms)?;
+        if instants.len() != steps.len()
+            || instants.iter().zip(&steps).any(|(t, step)| *t != step.t_ms)
+        {
+            return Err(NightError::InvalidRequest);
+        }
+        Ok(Self {
+            site,
+            noon_ms,
+            step_ms,
+            steps,
+            track: std::sync::OnceLock::new(),
+            meridian: std::sync::Mutex::default(),
+            moon_strip: std::sync::OnceLock::new(),
+        })
+    }
+
+    /// The minutes the night's Moon track is made of, in order.
+    pub fn moon_spans(&self) -> Vec<Interval> {
+        MoonTrack::spans(self.span()).unwrap_or_default()
+    }
+
+    /// Whether the Moon track is computed, or set.
+    pub fn has_moon_track(&self) -> bool {
+        self.track.get().is_some()
+    }
+
+    /// Set the Moon track from its cells, computed apart: one per span of
+    /// [`NightSky::moon_spans`], in order. A track already set stays.
+    pub fn set_moon_track(&self, cells: Vec<SkyMoonCell>) -> Result<(), NightError> {
+        let track = MoonTrack::from_cells(self.span(), cells.into_iter().map(|c| c.0).collect())?;
+        let _ = self.track.set(Ok(track));
+        Ok(())
+    }
+
+    /// When the Sun is below `below_degrees`: the first such step and the
+    /// end of the last, as a summary gives `dusk_ms` and `dawn_ms`. `None`
+    /// when it never gets that low.
+    pub fn darkness(&self, below_degrees: f64) -> Option<(u64, u64)> {
+        let dark = |step: &&SkyStep| step.sun_altitude_degrees < below_degrees;
+        let dusk = self.steps.iter().find(dark)?.t_ms;
+        let dawn = self.steps.iter().rev().find(dark)?.t_ms + self.step_ms;
+        Some((dusk, dawn))
+    }
+
+    /// A position as the site sees it at `t_ms`, one of the sky's
+    /// instants, to the bit as [`crate::visibility::observe`] gives it.
+    /// `None` when `t_ms` is not one of them.
+    pub fn observe_at(
+        &self,
+        t_ms: u64,
+        position: IcrsPosition,
+    ) -> Option<Result<ObservedPosition, NightError>> {
+        let offset = t_ms.checked_sub(self.noon_ms)?;
+        if offset % self.step_ms != 0 {
+            return None;
+        }
+        let step = self
+            .steps
+            .get(usize::try_from(offset / self.step_ms).ok()?)?;
+        Some(step.observer.observe(position).map_err(NightError::from))
+    }
+
+    /// The Moon's altitude as the site sees it, parallax included, every
+    /// [`MOON_STRIP_STEP_MS`] from the night's noon to the next: `None`
+    /// where the ephemeris cannot place it. Each is
+    /// [`crate::ephemeris::moon_at_site`] observed as
+    /// [`crate::visibility::observe`] observes it, to the bit. Computed on
+    /// first use and kept with the sky.
+    pub fn moon_strip(&self) -> &[Option<f64>] {
+        self.moon_strip.get_or_init(|| {
+            (0..DAY_MS / MOON_STRIP_STEP_MS)
+                .map(|step| {
+                    let at = self.noon_ms + step * MOON_STRIP_STEP_MS;
+                    let moon = crate::ephemeris::moon_at_site(at, self.site)?;
+                    let seen = match self.observe_at(at, moon) {
+                        Some(seen) => seen.ok()?,
+                        None => crate::visibility::observe(
+                            moon,
+                            self.site,
+                            planning_orientation(at, at),
+                            at,
+                        )
+                        .ok()?,
+                    };
+                    Some(seen.altitude_degrees)
+                })
+                .collect()
+        })
+    }
+
+    /// A target's windows outside the meridian pause over `span`, as
+    /// [`meridian_windows`] finds them, kept for the next summary that
+    /// asks.
+    fn meridian_windows(
+        &self,
+        position: IcrsPosition,
+        span: Interval,
+        pause: MeridianExclusion,
+    ) -> Result<Vec<Interval>, VisibilityError> {
+        let key = (
+            position.ra_degrees.to_bits(),
+            position.dec_degrees.to_bits(),
+            pause.before_ms,
+            pause.after_ms,
+            span.start_ms,
+            span.end_ms,
+        );
+        if let Ok(kept) = self.meridian.lock()
+            && let Some(found) = kept.get(&key)
+        {
+            return found.clone();
+        }
+        let found = meridian_windows(
+            position,
+            self.site,
+            sky_orientation(self.noon_ms),
+            span,
+            pause,
+        )
+        .map(|found| found.windows);
+        if let Ok(mut kept) = self.meridian.lock()
+            && kept.len() < MAX_MERIDIAN_KEPT
+        {
+            kept.insert(key, found.clone());
+        }
+        found
+    }
+
+    fn span(&self) -> Interval {
+        Interval {
+            start_ms: self.noon_ms,
+            end_ms: self.noon_ms + DAY_MS,
+        }
+    }
+
+    fn moon_track(&self) -> Result<&MoonTrack, NightError> {
+        self.track
+            .get_or_init(|| MoonTrack::new(self.site, sky_orientation(self.noon_ms), self.span()))
+            .as_ref()
+            .map_err(|error| NightError::Visibility(*error))
+    }
 }
 
 fn one_night(
     request: &NightRequest,
     index: u32,
     keep_samples: bool,
+    sky: Option<&NightSky>,
 ) -> Result<NightCurve, NightError> {
     let first_noon = night_noon(request.start_ms, request.site.longitude_degrees)
         .ok_or(NightError::InvalidRequest)?;
-    let end = first_noon + u64::from(request.nights) * DAY_MS;
-    let orientation = planning_orientation(first_noon, end);
     let step_hours = request.step_ms as f64 / 3_600_000.0;
     let noon = first_noon + u64::from(index) * DAY_MS;
     let next_noon = noon + DAY_MS;
+    let computed;
+    let sky = match sky {
+        Some(sky) => {
+            if sky.site != request.site || sky.noon_ms != noon || sky.step_ms != request.step_ms {
+                return Err(NightError::InvalidRequest);
+            }
+            sky
+        }
+        None => {
+            computed = NightSky::new(request.site, noon, request.step_ms)?;
+            &computed
+        }
+    };
     let mut dusk = None;
     let mut dawn = None;
     let mut dark_hours = 0.0;
@@ -461,14 +774,8 @@ fn one_night(
                 // A pause longer than the day blocks everything.
                 return Ok(Some(vec![]));
             }
-            meridian_windows(
-                target.position,
-                request.site,
-                orientation,
-                span,
-                request.meridian_exclusion,
-            )
-            .map(|found| Some(found.windows))
+            sky.meridian_windows(target.position, span, request.meridian_exclusion)
+                .map(Some)
         })
         .collect::<Result<_, VisibilityError>>()?;
     // Where each target's Moon rules allow imaging, met with availability:
@@ -478,7 +785,7 @@ fn one_night(
         end_ms: next_noon,
     };
     let track = if request.targets.iter().any(|target| !target.moon.is_empty()) {
-        Some(MoonTrack::new(request.site, orientation, night_span)?)
+        Some(sky.moon_track()?)
     } else {
         None
     };
@@ -498,17 +805,16 @@ fn one_night(
         })
         .collect::<Result<_, VisibilityError>>()?;
     let mut last_hour_angle: Vec<Option<f64>> = vec![None; request.targets.len()];
-    let mut t = noon;
-    while t < next_noon {
+    for step in &sky.steps {
         // One prepared observer per instant: the Earth's part of the sum is
         // the same for the Sun, the Moon and every target.
-        let mut observer = Observer::at(request.site, orientation, t)?;
-        let sun = sun_position(t).ok_or(VisibilityError::AstronomyUnavailable)?;
-        let sun_altitude = observer.observe(sun)?.altitude_degrees;
+        let t = step.t_ms;
+        let observer = &step.observer;
+        let sun_altitude = step.sun_altitude_degrees;
         let dark = sun_altitude < request.dark_below_degrees;
         // Outside darkness only the drawing needs positions.
         let wanted = dark || keep_samples;
-        let moon = moon_position(t);
+        let moon = step.moon;
         let moon_altitude = if wanted {
             observer.observe(moon)?.altitude_degrees
         } else {
@@ -606,7 +912,6 @@ fn one_night(
                 targets: target_samples,
             });
         }
-        t += request.step_ms;
     }
     let midnight = noon + DAY_MS / 2;
     Ok(NightCurve {
@@ -1033,5 +1338,366 @@ mod tests {
         bad = request();
         bad.step_ms = 1_000;
         assert_eq!(night_preview(&bad), Err(NightError::InvalidRequest));
+    }
+
+    /// The night's sums before skies were shared: kept here to show the
+    /// shared sky changes nothing.
+    mod before {
+        use super::super::*;
+
+        fn one_night_before(
+            request: &NightRequest,
+            index: u32,
+            keep_samples: bool,
+        ) -> Result<NightCurve, NightError> {
+            let first_noon = night_noon(request.start_ms, request.site.longitude_degrees)
+                .ok_or(NightError::InvalidRequest)?;
+            let end = first_noon + u64::from(request.nights) * DAY_MS;
+            let orientation = planning_orientation(first_noon, end);
+            let step_hours = request.step_ms as f64 / 3_600_000.0;
+            let noon = first_noon + u64::from(index) * DAY_MS;
+            let next_noon = noon + DAY_MS;
+            let mut dusk = None;
+            let mut dawn = None;
+            let mut dark_hours = 0.0;
+            let mut available_dark_hours = 0.0;
+            let mut moon_hours = 0.0;
+            let available: Option<Vec<Interval>> = request.available.as_deref().map(merged);
+            let mut samples = Vec::new();
+            let mut per_target: Vec<TargetNight> = request
+                .targets
+                .iter()
+                .map(|target| TargetNight {
+                    id: target.id.clone(),
+                    hours_up: 0.0,
+                    hours_up_moon_down: 0.0,
+                    hours_up_available: 0.0,
+                    hours_up_moon_allowed: 0.0,
+                    hours_lost_to_meridian: 0.0,
+                    transit_ms: None,
+                    max_altitude_degrees: -90.0,
+                    min_moon_separation_degrees: 180.0,
+                })
+                .collect();
+            // Allowed intervals around the meridian for each target, once per night.
+            // The search widens the span by the pause on each side and allows at most
+            // a day, so ask for the night less those margins; the margins fall around
+            // local noon, where nothing is dark anyway.
+            let paused =
+                request.meridian_exclusion.before_ms > 0 || request.meridian_exclusion.after_ms > 0;
+            let span = Interval {
+                start_ms: noon
+                    .saturating_add(request.meridian_exclusion.before_ms)
+                    .saturating_add(1_000),
+                end_ms: next_noon
+                    .saturating_sub(request.meridian_exclusion.after_ms)
+                    .saturating_sub(1_000),
+            };
+            // The window as an hour angle either side of the meridian; zero is off.
+            let window_degrees = (request.meridian_window_ms > 0).then(|| {
+                request.meridian_window_ms as f64 / 3_600_000.0 * SIDEREAL_DEGREES_PER_HOUR
+            });
+            let allowed_by_meridian: Vec<Option<Vec<Interval>>> = request
+                .targets
+                .iter()
+                .map(|target| {
+                    if !paused {
+                        return Ok(None);
+                    }
+                    if span.start_ms >= span.end_ms {
+                        // A pause longer than the day blocks everything.
+                        return Ok(Some(vec![]));
+                    }
+                    meridian_windows(
+                        target.position,
+                        request.site,
+                        orientation,
+                        span,
+                        request.meridian_exclusion,
+                    )
+                    .map(|found| Some(found.windows))
+                })
+                .collect::<Result<_, VisibilityError>>()?;
+            // Where each target's Moon rules allow imaging, met with availability:
+            // one Moon track for the night, shared by every target and rule.
+            let night_span = Interval {
+                start_ms: noon,
+                end_ms: next_noon,
+            };
+            let track = if request.targets.iter().any(|target| !target.moon.is_empty()) {
+                Some(MoonTrack::new(request.site, orientation, night_span)?)
+            } else {
+                None
+            };
+            let open = available.clone().unwrap_or_else(|| vec![night_span]);
+            let moon_allowed: Vec<Option<Vec<Interval>>> = request
+                .targets
+                .iter()
+                .map(|target| {
+                    let Some(track) = track.as_ref().filter(|_| !target.moon.is_empty()) else {
+                        return Ok(None);
+                    };
+                    let mut allowed = Vec::new();
+                    for policy in &target.moon {
+                        allowed.extend(track.windows(policy, target.position)?);
+                    }
+                    Ok(Some(intersection(&merged(&allowed), &open)))
+                })
+                .collect::<Result<_, VisibilityError>>()?;
+            let mut last_hour_angle: Vec<Option<f64>> = vec![None; request.targets.len()];
+            let mut t = noon;
+            while t < next_noon {
+                // One prepared observer per instant: the Earth's part of the sum is
+                // the same for the Sun, the Moon and every target.
+                let observer = Observer::at(request.site, orientation, t)?;
+                let sun = sun_position(t).ok_or(VisibilityError::AstronomyUnavailable)?;
+                let sun_altitude = observer.observe(sun)?.altitude_degrees;
+                let dark = sun_altitude < request.dark_below_degrees;
+                // Outside darkness only the drawing needs positions.
+                let wanted = dark || keep_samples;
+                let moon = moon_position(t);
+                let moon_altitude = if wanted {
+                    observer.observe(moon)?.altitude_degrees
+                } else {
+                    0.0
+                };
+                let moon_up = moon_altitude > 0.0;
+                let share = if dark {
+                    available_share(available.as_deref(), t, request.step_ms)
+                } else {
+                    0.0
+                };
+                if dark {
+                    if dusk.is_none() {
+                        dusk = Some(t);
+                    }
+                    dawn = Some(t + request.step_ms);
+                    dark_hours += step_hours;
+                    available_dark_hours += step_hours * share;
+                    if moon_up {
+                        moon_hours += step_hours;
+                    }
+                }
+                let mut target_samples = Vec::new();
+                // Transit detection needs every sample, dark or not.
+                for (index, (target, entry)) in request
+                    .targets
+                    .iter()
+                    .zip(per_target.iter_mut())
+                    .enumerate()
+                {
+                    let observed = observer.observe(target.position)?;
+                    if let Some(previous) = last_hour_angle[index]
+                        && previous < 0.0
+                        && observed.hour_angle_degrees >= 0.0
+                        && observed.hour_angle_degrees - previous < 180.0
+                    {
+                        entry.transit_ms = Some(t);
+                    }
+                    last_hour_angle[index] = Some(observed.hour_angle_degrees);
+                    if !wanted {
+                        continue;
+                    }
+                    let allowed = altitude_allowed(
+                        &request.horizon,
+                        request.limits,
+                        observed.azimuth_degrees,
+                        observed.altitude_degrees,
+                    )? && window_degrees
+                        .is_none_or(|limit| observed.hour_angle_degrees.abs() <= limit);
+                    let meridian_blocked =
+                        allowed_by_meridian[index].as_ref().is_some_and(|windows| {
+                            span.start_ms >= span.end_ms
+                                || (t >= span.start_ms
+                                    && t < span.end_ms
+                                    && !windows.iter().any(|w| t >= w.start_ms && t < w.end_ms))
+                        });
+                    if dark {
+                        entry.max_altitude_degrees =
+                            entry.max_altitude_degrees.max(observed.altitude_degrees);
+                        entry.min_moon_separation_degrees = entry
+                            .min_moon_separation_degrees
+                            .min(separation_degrees(target.position, moon));
+                        if allowed && meridian_blocked {
+                            entry.hours_lost_to_meridian += step_hours;
+                        } else if allowed {
+                            entry.hours_up += step_hours;
+                            entry.hours_up_available += step_hours * share;
+                            entry.hours_up_moon_allowed += step_hours
+                                * match &moon_allowed[index] {
+                                    Some(windows) => {
+                                        available_share(Some(windows), t, request.step_ms)
+                                    }
+                                    None => share,
+                                };
+                            if !moon_up {
+                                entry.hours_up_moon_down += step_hours;
+                            }
+                        }
+                    }
+                    if keep_samples {
+                        target_samples.push(TargetSample {
+                            altitude_degrees: observed.altitude_degrees,
+                            azimuth_degrees: observed.azimuth_degrees,
+                            horizon_altitude_degrees: request
+                                .horizon
+                                .altitude(observed.azimuth_degrees)?
+                                .map(|curve| curve + request.limits.horizon_offset_degrees),
+                            allowed,
+                            meridian_blocked,
+                        });
+                    }
+                }
+                if keep_samples {
+                    samples.push(Sample {
+                        t_ms: t,
+                        sun_altitude_degrees: sun_altitude,
+                        moon_altitude_degrees: moon_altitude,
+                        targets: target_samples,
+                    });
+                }
+                t += request.step_ms;
+            }
+            let midnight = noon + DAY_MS / 2;
+            Ok(NightCurve {
+                night: Night {
+                    date: local_date(noon, request.site.longitude_degrees),
+                    noon_ms: noon,
+                    dusk_ms: dusk,
+                    dawn_ms: dawn,
+                    dark_hours,
+                    available_dark_hours,
+                    moon_illumination: moon_illumination(midnight).unwrap_or(0.0),
+                    moon_hours_up_in_dark: moon_hours,
+                    targets: per_target,
+                },
+                samples,
+            })
+        }
+
+        fn rich() -> NightRequest {
+            let mut request = super::request();
+            request.horizon = Horizon::Custom {
+                points: vec![
+                    crate::visibility::HorizonPoint {
+                        azimuth_degrees: 0.0,
+                        altitude_degrees: 10.0,
+                    },
+                    crate::visibility::HorizonPoint {
+                        azimuth_degrees: 180.0,
+                        altitude_degrees: 40.0,
+                    },
+                    crate::visibility::HorizonPoint {
+                        azimuth_degrees: 360.0,
+                        altitude_degrees: 10.0,
+                    },
+                ],
+            };
+            request.limits.horizon_offset_degrees = 3.0;
+            request.nights = 4;
+            request.meridian_exclusion = MeridianExclusion {
+                before_ms: 600_000,
+                after_ms: 900_000,
+            };
+            request.meridian_window_ms = 3 * 3_600_000;
+            let strict = MoonPolicy {
+                enabled: true,
+                separation_degrees: 120.0,
+                ..Default::default()
+            };
+            let loose = MoonPolicy {
+                enabled: true,
+                separation_degrees: 30.0,
+                width_days: 3.0,
+                ..Default::default()
+            };
+            request.targets = (0..6)
+                .map(|i| NightTarget {
+                    id: i.to_string(),
+                    position: IcrsPosition {
+                        ra_degrees: 15.0 + 57.0 * f64::from(i),
+                        dec_degrees: -20.0 + 15.0 * f64::from(i),
+                    },
+                    moon: match i % 3 {
+                        0 => vec![],
+                        1 => vec![strict.clone()],
+                        _ => vec![strict.clone(), loose.clone()],
+                    },
+                })
+                .collect();
+            let noon = request.noon_ms(0).unwrap();
+            request.available = Some(vec![
+                Interval {
+                    start_ms: noon + 7 * 3_600_000,
+                    end_ms: noon + 11 * 3_600_000 + 120_000,
+                },
+                Interval {
+                    start_ms: noon + 10 * 3_600_000,
+                    end_ms: noon + 30 * 3_600_000,
+                },
+                Interval {
+                    start_ms: noon + 50 * 3_600_000,
+                    end_ms: noon + 90 * 3_600_000,
+                },
+            ]);
+            request
+        }
+
+        #[test]
+        fn every_night_and_curve_is_what_it_was_before_skies_were_shared() {
+            let mut requests = vec![super::request(), rich()];
+            let mut dawn = rich();
+            dawn.dark_below_degrees = -6.0;
+            dawn.step_ms = 600_000;
+            requests.push(dawn);
+            let mut arctic = rich();
+            arctic.site.latitude_degrees = 66.0;
+            arctic.start_ms = 1_781_740_800_000;
+            requests.push(arctic);
+            for request in &requests {
+                for index in 0..request.nights {
+                    let before = one_night_before(request, index, true).unwrap();
+                    assert_eq!(night_curve(request, index).unwrap(), before);
+                    assert_eq!(night_summary(request, index).unwrap(), before.night);
+                    // Its sky put together from steps and Moon cells
+                    // computed apart, in reverse, as a pool would.
+                    let noon = request.noon_ms(index).unwrap();
+                    let mut steps: Vec<SkyStep> = NightSky::instants(noon, request.step_ms)
+                        .unwrap()
+                        .into_iter()
+                        .rev()
+                        .map(|t| SkyStep::at(request.site, noon, t).unwrap())
+                        .collect();
+                    steps.reverse();
+                    let sky =
+                        NightSky::from_steps(request.site, noon, request.step_ms, steps).unwrap();
+                    let cells = sky
+                        .moon_spans()
+                        .into_iter()
+                        .map(|span| SkyMoonCell::at(request.site, noon, span).unwrap())
+                        .collect();
+                    sky.set_moon_track(cells).unwrap();
+                    assert_eq!(
+                        night_summary_under(request, index, &sky).unwrap(),
+                        before.night
+                    );
+                    assert_eq!(night_curve_under(request, index, &sky).unwrap(), before);
+                    // Another night's sky, or another step's, is refused.
+                    if index > 0 {
+                        assert_eq!(
+                            night_summary_under(request, index - 1, &sky),
+                            Err(NightError::InvalidRequest)
+                        );
+                    }
+                }
+            }
+            // A sky's darkness is its summary's dusk and dawn.
+            let request = super::request();
+            let night = night_summary(&request, 0).unwrap();
+            let sky =
+                NightSky::new(request.site, request.noon_ms(0).unwrap(), request.step_ms).unwrap();
+            assert_eq!(sky.darkness(-12.0), night.dusk_ms.zip(night.dawn_ms));
+            assert!(!sky.has_moon_track());
+        }
     }
 }
