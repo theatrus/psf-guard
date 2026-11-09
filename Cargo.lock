@@ -5481,8 +5481,9 @@ dependencies = [
 
 [[package]]
 name = "seiza-calibration"
-version = "0.12.1"
-source = "git+https://github.com/theatrus/seiza?rev=2825640a#2825640a281a461a8b164d21a2c26894eb1592a3"
+version = "0.12.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6992bb61e35bfba0ebad860c0615f81be42e64d4674e3ce5e94fe27667dc8445"
 dependencies = [
  "chrono",
  "nalgebra",
@@ -5567,7 +5568,8 @@ dependencies = [
 [[package]]
 name = "seiza-imgproc"
 version = "0.3.2"
-source = "git+https://github.com/theatrus/seiza?rev=2825640a#2825640a281a461a8b164d21a2c26894eb1592a3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "43903045bca0b629b5bda14bfda11b26758bbb3fd51d24dedb253c0155020f1d"
 dependencies = [
  "rayon",
 ]
@@ -5639,8 +5641,9 @@ dependencies = [
 
 [[package]]
 name = "seiza-stats"
-version = "0.1.1"
-source = "git+https://github.com/theatrus/seiza?rev=2825640a#2825640a281a461a8b164d21a2c26894eb1592a3"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7c8186b69bfb28834e39261d8caa00f07059d26ddf0712888e80d73a573ee9c6"
 dependencies = [
  "bytemuck",
 ]
@@ -6739,7 +6742,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",

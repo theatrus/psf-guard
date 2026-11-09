@@ -63,7 +63,7 @@ seiza-stretch = "0.3.2"
 # containers into the same `seiza_fits::FitsImage`.
 seiza-xisf = "0.9.0"
 seiza-background = "0.3.1"
-seiza-calibration = "0.12.1"
+seiza-calibration = "0.12.2"
 seiza-deconvolution = "0.1.2"
 seiza-stars = "0.5.0"
 sha2 = "0.11"
@@ -175,9 +175,3 @@ panic = "unwind"
 tauri-build = { version = "2.7.4", features = [] }
 toml_edit = "0.25"
 
-# Unreleased Seiza: a Prefer flat master only within the flat age limit
-# (theatrus/seiza flat-master-age-limit). Drop once released.
-[patch.crates-io]
-seiza-calibration = { git = "https://github.com/theatrus/seiza", rev = "2825640a" }
-seiza-imgproc = { git = "https://github.com/theatrus/seiza", rev = "2825640a" }
-seiza-stats = { git = "https://github.com/theatrus/seiza", rev = "2825640a" }
