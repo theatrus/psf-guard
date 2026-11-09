@@ -26,6 +26,7 @@ export function serverNow(weather: RigWeather, browserNow: number, receivedAt: n
 
 const state = (cloud: CloudAssessment, evaluated: number, now: number | null) => {
   if (cloud.state === 'unknown') {
+    if (cloud.reason === 'weather_source_disconnected') return 'disconnected';
     if (cloud.reason === 'forecast_location_mismatch') return 'location mismatch';
     if (cloud.reason === 'forecast_location_unavailable') return 'location unavailable';
     return 'unknown or stale';
@@ -34,8 +35,9 @@ const state = (cloud: CloudAssessment, evaluated: number, now: number | null) =>
 };
 
 /** A rig's reported and forecast weather. `compact`, for a table cell,
- *  leaves out what is unavailable and the provider's credit, which the page
- *  gives once. `receivedAt` is when this browser fetched `weather`. The
+ *  marks them Observed and Forecast without naming the sensor or provider
+ *  (a site has one forecast), and leaves out what is unavailable and the
+ *  provider's credit, which the page gives once. `receivedAt` is when this browser fetched `weather`. The
  *  server's times are on its own clock, so ages and leases count from its
  *  evaluation plus the time since the fetch, never from this clock. */
 export function RigWeatherSummary({ weather, now: browserNow, receivedAt, compact = false }: { weather?: RigWeather; now: number; receivedAt: number; compact?: boolean }) {
@@ -47,8 +49,8 @@ export function RigWeatherSummary({ weather, now: browserNow, receivedAt, compac
   if (!weather && !compact) return <span className="director-muted">Weather not reported</span>;
   if (!weather || compact && !r && !f) return <span className="director-muted live-no-weather">No weather</span>;
   if (compact) return <div aria-label="Rig weather" className="live-weather">
-    {r && <div><span className="director-muted">NINA</span> {r.sample.source_name}{!r.sample.connected && ' (disconnected)'} · {number(r.sample.values.cloud_percent, '% cloud')} · {state(weather.reported_cloud, weather.evaluated_at_ms, now)}<span className="director-muted">{reportAge(r.received_at_ms)}</span></div>}
-    {f && <div><span className="director-muted">Forecast</span> {PROVIDER_LABEL[f.provider]} · {number(f.hour?.cloud_total, '% cloud')} · {state(weather.forecast_conditions, weather.evaluated_at_ms, now)}</div>}
+    {r && <div title={`Reported by NINA from ${r.sample.source_name}`}><span className="director-muted">Observed</span> {r.sample.connected ? `${number(r.sample.values.cloud_percent, '% cloud')} · ` : ''}{state(weather.reported_cloud, weather.evaluated_at_ms, now)}<span className="director-muted">{reportAge(r.received_at_ms)}</span></div>}
+    {f && <div title={`The site's ${PROVIDER_LABEL[f.provider]} forecast`}><span className="director-muted">Forecast</span> {number(f.hour?.cloud_total, '% cloud')} · {state(weather.forecast_conditions, weather.evaluated_at_ms, now)}</div>}
   </div>;
   return <div aria-label="Rig weather">
     <div><strong>NINA reported:</strong> {r ? <>{r.sample.source_name}{!r.sample.connected && ' (disconnected)'} · {number(r.sample.values.cloud_percent, '% cloud')} · {state(weather.reported_cloud, weather.evaluated_at_ms, now)}<span className="director-muted">{reportAge(r.received_at_ms)}</span></> : 'unavailable'}</div>
