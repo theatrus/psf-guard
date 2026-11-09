@@ -87,7 +87,7 @@ describe('Rig profile card', () => {
 
     expect(await screen.findByRole('tab', { name: 'Plugins' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByRole('region', { name: 'Sync plugin' })).toBeVisible();
-    expect(screen.getByText(/The Director plugin below has its own pairing code/)).toBeVisible();
+    expect(screen.getByRole('group', { name: 'Plugins on this rig' })).toBeVisible();
     expect(await screen.findByRole('heading', { name: 'Director plugin' })).toBeVisible();
     fireEvent.click(screen.getByRole('tab', { name: 'Optics' }));
     expect(screen.queryByRole('region', { name: 'Sync plugin' })).not.toBeInTheDocument();

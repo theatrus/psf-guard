@@ -296,3 +296,14 @@ a.workspace-pill:hover { color: var(--color-text-primary); }
 .rig-plugin-code input { font-family: monospace; }
 .rig-plugin-code code { overflow-wrap: anywhere; }
 .rig-plugin-report { display: grid; gap: 4px; }
+
+/* Whether a plugin, or one of its parts, is on: a filled dot, or a ring. */
+.plugin-state::before { content: '○ '; }
+.plugin-state[data-on='true']::before { content: '● '; color: var(--state-on-fill); }
+.plugin-state[data-on='true'] { font-weight: 600; }
+.plugins-on-rig ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.plugins-on-rig li { display: grid; grid-template-columns: minmax(9rem, 12rem) 4rem 1fr; gap: 8px; align-items: baseline; }
+@media (max-width: 520px) {
+  .plugins-on-rig li { grid-template-columns: 1fr auto; }
+  .plugins-on-rig li > :last-child { grid-column: 1 / -1; }
+}

@@ -2,13 +2,12 @@ import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
 import { Check, Copy, KeyRound, Power, RefreshCw, Trash2, X } from 'lucide-react';
+import { ago, needsHttps, serverAddress } from '../rigs/pluginShared';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import type { DirectorCameraDefaults, DirectorEquipmentReport, DirectorPluginClient, DirectorPluginEquipment, DirectorPluginView, DirectorPluginWork, DirectorRigMode } from '../../api/directorTypes';
-import { useAllDatabases } from '../../hooks/useDatabases';
 import EarlyBeta from './EarlyBeta';
 
-const MODE_LABEL = { target_scheduler: 'Target Scheduler', director: 'Director' } as const;
 
 const WORK_NOTE: Record<DirectorPluginWork, string> = {
   not_allowed: 'Not allowed yet.',
@@ -26,22 +25,6 @@ const problemOf = (error: unknown) => statusOf(error) === 409
   ? 'This rig changed. Check these steps and try again.'
   : isAxiosError(error) ? error.response?.data?.error || error.message
     : error instanceof Error ? error.message : 'The Director request failed';
-
-function ago(ms: number): string {
-  const minutes = Math.round((Date.now() - ms) / 60_000);
-  if (minutes < 1) return 'just now';
-  if (minutes < 60) return `${minutes} min ago`;
-  return new Date(ms).toLocaleString();
-}
-
-/** This server's address as the plugin needs it; a desktop window has none to offer. */
-function serverAddress(): string | null {
-  const { protocol, origin, pathname } = window.location;
-  return /^https?:$/.test(protocol) ? `${origin}${pathname.replace(/\/$/, '')}` : null;
-}
-
-const needsHttps = (address: string | null) => !!address && address.startsWith('http:')
-  && !/^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/.test(address);
 
 function filterList(equipment: DirectorPluginEquipment, names: Record<string, string>): string {
   return equipment.filters.map(filter => names[filter.id] ?? filter.id).join(', ') || 'None';
@@ -69,13 +52,12 @@ function reportChanges(report: DirectorEquipmentReport, view: DirectorPluginView
 }
 
 /** Pair, review and allow the N.I.N.A. Director plugin on one rig. */
-export default function RigPluginPanel({ slug, mode, onRigChanged, onChangeMode }: {
+export default function RigPluginPanel({ slug, mode, onRigChanged }: {
   slug: string;
   /** Who picks the rig's work now. */
   mode: DirectorRigMode;
   /** Pairing and accepting equipment change the rig's profile. */
   onRigChanged: () => void;
-  onChangeMode: () => void;
 }) {
   const { canWrite } = useAccess();
   const client = useQueryClient();
@@ -113,8 +95,6 @@ export default function RigPluginPanel({ slug, mode, onRigChanged, onChangeMode 
     }
     known.current = { slug, clientCount, profileRevision };
   }, [slug, clientCount, profileRevision, onRigChanged]);
-  const databases = useAllDatabases();
-  const syncClients = databases.data?.find(db => db.id === slug)?.remote_image_upload?.clients?.length ?? 0;
   if (!canWrite) return <p className="director-muted">Sign in as an editor to manage the Director plugin.</p>;
   if (loaded.isPending) return <p role="status">Loading the Director plugin...</p>;
   if (!view) return <p className="director-error" role="alert">{problemOf(loaded.error)}</p>;
@@ -143,17 +123,6 @@ export default function RigPluginPanel({ slug, mode, onRigChanged, onChangeMode 
       <button type="button" aria-label="Reload Director plugin" title="Reload Director plugin" disabled={loaded.isFetching} onClick={() => void loaded.refetch()}><RefreshCw size={16} /></button>
     </div>
     {act.isError && <p className="director-error" role="alert">{problemOf(act.error)}</p>}
-
-    <fieldset>
-      <legend>Plugins on this rig</legend>
-      <div className="rig-profile-grid rig-plugin-paths">
-        <div className="rig-profile-field"><span>Picks the work</span><span>{MODE_LABEL[mode]}</span>
-          <button type="button" className="link-button" onClick={onChangeMode}>Change mode</button></div>
-        <div className="rig-profile-field"><span>PSF Guard Director</span><span>{view.clients.length ? `${view.clients.length} paired` : 'Not paired'}</span></div>
-        <div className="rig-profile-field"><span>PSF Guard Sync</span><span>{syncClients ? `${syncClients} paired` : 'Not paired'}</span></div>
-      </div>
-      <p className="director-muted">Both plugins can stay installed. N.I.N.A. runs the instruction in its sequence. Sync still moves images and catalog data in either mode.</p>
-    </fieldset>
 
     <fieldset>
       <legend>Pair</legend>

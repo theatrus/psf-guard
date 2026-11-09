@@ -8,12 +8,7 @@ import { isTauriApp, tauriConfig, tauriFileSystem } from '../utils/tauri';
 import OpenLogsButton from './OpenLogsButton';
 import DesktopServerSettings from './DesktopServerSettings';
 import DesktopWorkerSettings from './DesktopWorkerSettings';
-import type {
-  RemoteImageUploadDirectoryTemplateSource,
-  ImportFolder,
-  ImportScope,
-  RemoteImageUploadPlacement,
-} from '../api/types';
+import type { ImportFolder, ImportScope } from '../api/types';
 import type { DbEntry, DbRegistry } from '../utils/tauri';
 import { apiClient } from '../api/client';
 import { useAccess } from '../auth/access';
@@ -28,6 +23,8 @@ import { RigDatabaseList, RigDatabaseNavigation } from './RigDatabaseNavigation'
 import UnsavedMark from './UnsavedMark';
 import { Database as DatabaseIcon, Pencil, Trash2 } from 'lucide-react';
 import TemplateLibrary from './director/TemplateLibrary';
+import SyncPluginPanel from './rigs/SyncPluginPanel';
+import PluginsOnRig from './rigs/PluginsOnRig';
 import './director/DirectorPage.css';
 import { useDirectorStatus } from '../hooks/useDirectorStatus';
 import CalibrationMatchingSettings from './CalibrationMatchingSettings';
@@ -42,7 +39,7 @@ import BackupSettings from './BackupSettings';
 import ExportDefaultsSettings from './ExportDefaultsSettings';
 import AstroBinSettings from './AstroBinSettings';
 import PixInsightSettings from './PixInsightSettings';
-import type { DatabaseSummary, ScanRules, SyncContactSummary } from '../api/types';
+import type { DatabaseSummary, ScanRules } from '../api/types';
 import { DEFAULT_SCAN_RULES } from '../api/types';
 import { planChanges, scanRuleNotes } from '../utils/importNotes';
 import {
@@ -86,28 +83,8 @@ function isTabIntent(intent: SettingsIntent | null): intent is TabIntent {
   return isSettingsSection(intent);
 }
 
-/** When a Sync client last called, and which plugin version it reported. */
-function contactText(contact: SyncContactSummary | undefined): string {
-  if (!contact) return 'no contact recorded';
-  const minutes = Math.round((Date.now() - contact.at * 1000) / 60_000);
-  const when = minutes < 1 ? 'just now'
-    : minutes < 60 ? `${minutes} min ago`
-      : new Date(contact.at * 1000).toLocaleString();
-  return `last contact ${when}${contact.version ? `, plugin ${contact.version}` : ''}`;
-}
-
 const DEFAULT_REMOTE_UPLOAD_DIRECTORY_TEMPLATE =
   '%YEAR%/%TARGET%/%NIGHT%/%TYPE%';
-const REMOTE_UPLOAD_DIRECTORY_TEMPLATE_PRESETS = [
-  '%YEAR%/%TARGET%/%NIGHT%/%TYPE%',
-  '%TARGET%/%NIGHT%/%TYPE%',
-  '%TARGET%/%DATE%/%TYPE%',
-  '%TARGET%/%TYPE%/%FILTER%',
-  '%NIGHT%/%TARGET%/%TYPE%',
-] as const;
-
-const isRemoteUploadDirectoryTemplatePreset = (value: string) =>
-  REMOTE_UPLOAD_DIRECTORY_TEMPLATE_PRESETS.some((preset) => preset === value);
 
 interface TauriSettingsProps {
   isOpen: boolean;
@@ -177,43 +154,21 @@ export default function TauriSettings({
   const [formName, setFormName] = useState('');
   const [formDbPath, setFormDbPath] = useState('');
   const [formImageDirs, setFormImageDirs] = useState<string[]>([]);
-  const [formRemoteUploadEnabled, setFormRemoteUploadEnabled] = useState(false);
-  const [formRemoteSyncEnabled, setFormRemoteSyncEnabled] = useState(false);
-  const [formRemoteUploadDir, setFormRemoteUploadDir] = useState('');
-  const [formRemoteUploadPlacement, setFormRemoteUploadPlacement] =
-    useState<RemoteImageUploadPlacement>('flat');
   /**
    * Whether uploads follow the layout detected from the catalog ('catalog')
    * or the preset/custom template below ('preset'). Choosing a template is a
    * decision: it replaces the catalog match rather than hiding behind it as
    * the fallback (#399).
    */
-  const [formRemoteUploadLayoutChoice, setFormRemoteUploadLayoutChoice] =
-    useState<RemoteImageUploadDirectoryTemplateSource>('preset');
   /**
    * Whether the person touched the layout select in this edit. Untouched,
    * the save sends no source: the server then treats the template as the
    * form's default, and a first switch to the catalog tree lets detection
    * decide. Touched, `preset` is a pick that holds.
    */
-  const [formRemoteUploadLayoutTouched, setFormRemoteUploadLayoutTouched] =
-    useState(false);
-  const [formRemoteUploadDirectoryTemplate, setFormRemoteUploadDirectoryTemplate] =
-    useState(DEFAULT_REMOTE_UPLOAD_DIRECTORY_TEMPLATE);
-  const [formRemoteUploadCatalogMatch, setFormRemoteUploadCatalogMatch] =
-    useState<{ template: string; samples: number } | null>(null);
-  const [formRemoteUploadRescanRequested, setFormRemoteUploadRescanRequested] =
-    useState(false);
   const [formExportDir, setFormExportDir] = useState('');
   const [formProcessDir, setFormProcessDir] = useState('');
   const [formScanRules, setFormScanRules] = useState<ScanRules>(DEFAULT_SCAN_RULES);
-  const [formRemoteUploadToken, setFormRemoteUploadToken] = useState('');
-  const [formRemoteUploadTokenConfigured, setFormRemoteUploadTokenConfigured] =
-    useState(false);
-  const [formRemoteUploadTokenRevealed, setFormRemoteUploadTokenRevealed] =
-    useState(false);
-  const [formRemoteUploadTokenCopyState, setFormRemoteUploadTokenCopyState] =
-    useState<'idle' | 'copied' | 'failed'>('idle');
   const [showAddForm, setShowAddForm] = useState(false);
   const [activeTab, setActiveTab] = useState<SettingsTab>(isTabIntent(initialIntent) ? initialIntent : 'rig-databases');
   // The Rig setup tab to open, such as Plugins after creating a database for the Sync plugin.
@@ -416,20 +371,6 @@ export default function TauriSettings({
     setFormName('');
     setFormDbPath('');
     setFormImageDirs([]);
-    setFormRemoteUploadEnabled(false);
-    setFormRemoteUploadDir('');
-    setFormRemoteUploadPlacement('flat');
-    setFormRemoteUploadDirectoryTemplate(
-      DEFAULT_REMOTE_UPLOAD_DIRECTORY_TEMPLATE
-    );
-    setFormRemoteUploadCatalogMatch(null);
-    setFormRemoteUploadLayoutChoice('preset');
-    setFormRemoteUploadLayoutTouched(false);
-    setFormRemoteUploadRescanRequested(false);
-    setFormRemoteUploadToken('');
-    setFormRemoteUploadTokenConfigured(false);
-    setFormRemoteUploadTokenRevealed(false);
-    setFormRemoteUploadTokenCopyState('idle');
     setShowAddForm(false);
     setTsImportMethod('file');
     setConnectImportedSource(true);
@@ -444,52 +385,12 @@ export default function TauriSettings({
     setPendingImageDir('');
     setEditingId(entry.id);
     setEditOriginal(entry);
-    // A pairing code is scoped to one database; never show it under another.
-    setPairingCode(null);
-    setPairingExpiresAt(null);
-    setPairingCopyState('idle');
     setFormName(entry.name);
     setFormDbPath(entry.db_path);
     setFormImageDirs(entry.image_dirs);
     setFormExportDir(entry.export_dir ?? '');
     setFormProcessDir(entry.process_dir ?? '');
     setFormScanRules({ ...DEFAULT_SCAN_RULES, ...(entry.scan_rules ?? {}) });
-    setFormRemoteUploadEnabled(entry.remote_image_upload?.enabled ?? false);
-    setFormRemoteSyncEnabled(entry.remote_image_upload?.sync_enabled ?? false);
-    setFormRemoteUploadDir(
-      entry.remote_image_upload?.image_dir ?? entry.image_dirs[0] ?? ''
-    );
-    setFormRemoteUploadPlacement(
-      entry.remote_image_upload?.placement ?? 'flat'
-    );
-    const directoryTemplate =
-      entry.remote_image_upload?.directory_template ??
-      DEFAULT_REMOTE_UPLOAD_DIRECTORY_TEMPLATE;
-    setFormRemoteUploadDirectoryTemplate(directoryTemplate);
-    setFormRemoteUploadLayoutChoice(
-      entry.remote_image_upload?.directory_template_source === 'catalog'
-        ? 'catalog'
-        : 'preset'
-    );
-    setFormRemoteUploadLayoutTouched(false);
-    setFormRemoteUploadCatalogMatch(
-      entry.remote_image_upload?.directory_template_source === 'catalog'
-        ? {
-            template:
-              entry.remote_image_upload.catalog_directory_template ??
-              directoryTemplate,
-            samples: entry.remote_image_upload.directory_template_samples ?? 0,
-          }
-        : null
-    );
-    setFormRemoteUploadRescanRequested(false);
-    setFormRemoteUploadToken('');
-    setFormRemoteUploadTokenConfigured(
-      entry.remote_image_upload?.token_configured ??
-        Boolean(entry.remote_image_upload?.token_sha256)
-    );
-    setFormRemoteUploadTokenRevealed(false);
-    setFormRemoteUploadTokenCopyState('idle');
     setShowAddForm(true);
     setTsImportMethod('file');
     setCreateMode(false);
@@ -502,20 +403,6 @@ export default function TauriSettings({
     setFormName('');
     setFormDbPath('');
     setFormImageDirs([]);
-    setFormRemoteUploadEnabled(false);
-    setFormRemoteUploadDir('');
-    setFormRemoteUploadPlacement('flat');
-    setFormRemoteUploadDirectoryTemplate(
-      DEFAULT_REMOTE_UPLOAD_DIRECTORY_TEMPLATE
-    );
-    setFormRemoteUploadCatalogMatch(null);
-    setFormRemoteUploadLayoutChoice('preset');
-    setFormRemoteUploadLayoutTouched(false);
-    setFormRemoteUploadRescanRequested(false);
-    setFormRemoteUploadToken('');
-    setFormRemoteUploadTokenConfigured(false);
-    setFormRemoteUploadTokenRevealed(false);
-    setFormRemoteUploadTokenCopyState('idle');
     setShowAddForm(true);
     setCreateMode(true);
     setCreateAnalyzeQuality(false);
@@ -528,20 +415,6 @@ export default function TauriSettings({
     setEditOriginal(null);
     setFormName('');
     setFormImageDirs([]);
-    setFormRemoteUploadEnabled(false);
-    setFormRemoteUploadDir('');
-    setFormRemoteUploadPlacement('flat');
-    setFormRemoteUploadDirectoryTemplate(
-      DEFAULT_REMOTE_UPLOAD_DIRECTORY_TEMPLATE
-    );
-    setFormRemoteUploadCatalogMatch(null);
-    setFormRemoteUploadLayoutChoice('preset');
-    setFormRemoteUploadLayoutTouched(false);
-    setFormRemoteUploadRescanRequested(false);
-    setFormRemoteUploadToken('');
-    setFormRemoteUploadTokenConfigured(false);
-    setFormRemoteUploadTokenRevealed(false);
-    setFormRemoteUploadTokenCopyState('idle');
     setShowAddForm(true);
     setTsImportMethod('file');
     setCreateMode(false);
@@ -583,74 +456,8 @@ export default function TauriSettings({
   };
 
   const handleRemoveImageDir = (index: number) => {
-    const removed = formImageDirs[index];
     const remaining = formImageDirs.filter((_, i) => i !== index);
     setFormImageDirs(remaining);
-    if (formRemoteUploadDir === removed) {
-      setFormRemoteUploadDir(remaining[0] ?? '');
-    }
-  };
-
-  const [pairingCode, setPairingCode] = useState<string | null>(null);
-  const [pairingExpiresAt, setPairingExpiresAt] = useState<number | null>(null);
-  const [pairingCopyState, setPairingCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
-
-  const handleIssuePairingCode = async () => {
-    if (!editingId) return;
-    try {
-      const issued = await apiClient.issuePairingCode(editingId);
-      setPairingCode(issued.pairing_token);
-      setPairingExpiresAt(issued.expires_at);
-      setPairingCopyState('idle');
-    } catch (error) {
-      setStatusMessage(error instanceof Error ? error.message : String(error));
-    }
-  };
-
-  const handleRevokeClient = async (clientUuid: string) => {
-    if (!editingId) return;
-    try {
-      await apiClient.revokePairedClient(editingId, clientUuid);
-      // The databases list is component state fed by reload(), not a
-      // react-query cache — invalidation alone would leave the revoked
-      // client on screen.
-      await reload();
-      queryClient.invalidateQueries({ queryKey: ['databases'] });
-      setStatusMessage('Client revoked');
-    } catch (error) {
-      setStatusMessage(error instanceof Error ? error.message : String(error));
-    }
-  };
-
-  const handleCopyPairingCode = async () => {
-    if (!pairingCode) return;
-    try {
-      await navigator.clipboard.writeText(pairingCode);
-      setPairingCopyState('copied');
-    } catch {
-      setPairingCopyState('failed');
-    }
-  };
-
-  const handleGenerateRemoteUploadToken = () => {
-    const bytes = new Uint8Array(32);
-    crypto.getRandomValues(bytes);
-    const token = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join(
-      ''
-    );
-    setFormRemoteUploadToken(token);
-    setFormRemoteUploadTokenRevealed(true);
-    setFormRemoteUploadTokenCopyState('idle');
-  };
-
-  const handleCopyRemoteUploadToken = async () => {
-    try {
-      await navigator.clipboard.writeText(formRemoteUploadToken);
-      setFormRemoteUploadTokenCopyState('copied');
-    } catch (error) {
-      console.error('Failed to copy remote upload token:', error);
-      setFormRemoteUploadTokenCopyState('failed');
-    }
   };
 
   const handleSaveForm = async () => {
@@ -688,8 +495,7 @@ export default function TauriSettings({
         setActiveTab(pluginImport ? SYNC_PLUGIN_PAGE : 'database-import');
         if (pluginImport) setRigTab('director');
         if (pluginImport) {
-          startEdit({ id: created.database.id, name: created.database.name,
-            db_path: created.database.database_path, image_dirs: created.database.image_directories });
+          resetForm();
           setStatusMessage('Database created. Generate a pairing code below to connect PSF Guard Sync in N.I.N.A.');
         } else {
           resetForm();
@@ -723,81 +529,7 @@ export default function TauriSettings({
       // mode, and updating live `AppState.databases` rather than waiting for
       // a server restart.
       if (editingId) {
-        if (activeTab === SYNC_PLUGIN_PAGE && formRemoteUploadEnabled && !formRemoteUploadDir) {
-          setStatusMessage('Select an image directory for remote uploads');
-          setIsApplying(false);
-          return;
-        }
-        if (
-          activeTab === SYNC_PLUGIN_PAGE &&
-          formRemoteUploadEnabled &&
-          formRemoteUploadPlacement === 'target_tree' &&
-          formRemoteUploadLayoutChoice === 'preset' &&
-          !formRemoteUploadDirectoryTemplate.trim()
-        ) {
-          setStatusMessage('Enter a folder layout');
-          setIsApplying(false);
-          return;
-        }
-        if (
-          activeTab === SYNC_PLUGIN_PAGE &&
-          formRemoteUploadToken.length > 0 &&
-          formRemoteUploadToken.length < 24
-        ) {
-          setStatusMessage('Remote API key must be at least 24 characters');
-          setIsApplying(false);
-          return;
-        }
-        if (
-          activeTab === SYNC_PLUGIN_PAGE &&
-          formRemoteUploadEnabled &&
-          !formRemoteUploadTokenConfigured &&
-          formRemoteUploadToken.length === 0
-        ) {
-          setStatusMessage('Generate a remote API key before enabling image uploads');
-          setIsApplying(false);
-          return;
-        }
-        if (
-          activeTab === SYNC_PLUGIN_PAGE &&
-          formRemoteSyncEnabled &&
-          !formRemoteUploadTokenConfigured &&
-          formRemoteUploadToken.length === 0
-        ) {
-          setStatusMessage('Generate a remote API key before enabling scheduler sync');
-          setIsApplying(false);
-          return;
-        }
-        await apiClient.updateDatabase(editingId, activeTab === SYNC_PLUGIN_PAGE ? {
-          remote_image_upload: {
-            enabled: formRemoteUploadEnabled,
-            image_directory: formRemoteUploadDir || undefined,
-            token: formRemoteUploadToken || undefined,
-            sync_enabled: formRemoteSyncEnabled,
-            placement: formRemoteUploadPlacement,
-            // In catalog mode no template is sent: the match stays as it is
-            // and the server leaves the stored fallback alone.
-            directory_template:
-              formRemoteUploadEnabled &&
-              formRemoteUploadPlacement === 'target_tree' &&
-              formRemoteUploadLayoutChoice === 'preset'
-                ? formRemoteUploadDirectoryTemplate.trim()
-                : undefined,
-            directory_template_source:
-              formRemoteUploadEnabled &&
-              formRemoteUploadPlacement === 'target_tree' &&
-              (formRemoteUploadLayoutTouched ||
-                formRemoteUploadLayoutChoice === 'catalog')
-                ? formRemoteUploadLayoutChoice
-                : undefined,
-            rescan_directory_layout:
-              formRemoteUploadEnabled &&
-              formRemoteUploadPlacement === 'target_tree' &&
-              formRemoteUploadRescanRequested
-                ? true
-                : undefined,
-          },
-        } : {
+        await apiClient.updateDatabase(editingId, {
           name: inferredName,
           db_path: formDbPath.trim(),
           image_dirs: formImageDirs,
@@ -952,12 +684,6 @@ export default function TauriSettings({
   };
 
   const databases = registry?.databases ?? [];
-  const editingUpload = databases.find((db) => db.id === editingId)?.remote_image_upload;
-  // Clients whose last request came from a plugin that can't place new projects.
-  const olderPlugins = [
-    ...(editingUpload?.clients ?? []).filter((client) => client.last_contact && !client.last_contact.places_new_projects).map((client) => client.name),
-    ...(editingUpload?.key_contact && !editingUpload.key_contact.places_new_projects ? ['The client using the remote API key'] : []),
-  ];
   const tsJobs = useTsSyncJobs(managementAllowed && canEdit);
   const tsImportRunning = tsJobs.data?.some(job => job.id.startsWith('import:') && job.running) ?? false;
   const observedImports = useRef(new Set<string>());
@@ -1071,24 +797,15 @@ export default function TauriSettings({
 
   const fileValues = (entry: DbEntry) => [entry.name, entry.db_path, entry.image_dirs,
     entry.export_dir ?? '', entry.process_dir ?? ''];
-  const remoteValues = (entry: DbEntry) => [entry.remote_image_upload?.enabled ?? false,
-    entry.remote_image_upload?.sync_enabled ?? false,
-    entry.remote_image_upload?.image_dir ?? entry.image_dirs[0] ?? '',
-    entry.remote_image_upload?.placement ?? 'flat',
-    entry.remote_image_upload?.directory_template ?? DEFAULT_REMOTE_UPLOAD_DIRECTORY_TEMPLATE,
-    entry.remote_image_upload?.directory_template_source === 'catalog' ? 'catalog' : 'preset', '', false];
   const editDirty = showAddForm && (editingId && editOriginal
-    ? (currentTab !== SYNC_PLUGIN_PAGE && !!pendingImageDir) || JSON.stringify(currentTab === SYNC_PLUGIN_PAGE
-      ? [formRemoteUploadEnabled, formRemoteSyncEnabled, formRemoteUploadDir, formRemoteUploadPlacement,
-        formRemoteUploadDirectoryTemplate, formRemoteUploadLayoutChoice, formRemoteUploadToken, formRemoteUploadRescanRequested]
-      : [formName, formDbPath, formImageDirs, formExportDir, formProcessDir])
-      !== JSON.stringify(currentTab === SYNC_PLUGIN_PAGE ? remoteValues(editOriginal) : fileValues(editOriginal))
+    ? !!pendingImageDir || JSON.stringify([formName, formDbPath, formImageDirs, formExportDir, formProcessDir])
+      !== JSON.stringify(fileValues(editOriginal))
     : !!(formName || formDbPath || formImageDirs.length || pendingImageDir || importDestination
       || (createMode && (createAnalyzeQuality || JSON.stringify(formScanRules) !== JSON.stringify(DEFAULT_SCAN_RULES)))));
 
   if (!isOpen) return null;
 
-  const renderDatabaseForm = (entry: DbEntry | null, sync = false) => {
+  const renderDatabaseForm = (entry: DbEntry | null) => {
     const editorHeadingId = entry ? `database-editor-heading-${entry.id}` : undefined;
 
     return (
@@ -1098,7 +815,7 @@ export default function TauriSettings({
       >
         {entry ? (
           <div className="db-editor-heading">
-            <span className="db-editor-context">{sync ? 'Remote receive and pairing' : 'Editing database'}</span>
+            <span className="db-editor-context">Editing database</span>
             <h3 id={editorHeadingId}>
               {entry.name} <code className="db-row-slug">{entry.id}</code>
             </h3>
@@ -1107,7 +824,7 @@ export default function TauriSettings({
           <h3>{createMode ? 'New Database from Images' : !pluginImport && !connectImportedSource ? 'Import a database copy' : 'Import from Target Scheduler'}</h3>
         )}
 
-        {!sync && <>
+        <>
         {!editingId && <>
           <fieldset className="catalog-source-options" disabled={isApplying || tsImportRunning}>
             <legend>Start a database</legend>
@@ -1238,289 +955,9 @@ export default function TauriSettings({
           )}
         </div>
 
-        </>}
+        </>
 
-        {editingId && sync && (
-          <div className="database-config">
-            <label>Connect PSF Guard Sync in N.I.N.A.:</label>
-            <p>Install <strong>PSF Guard Sync</strong> from the N.I.N.A. plugin repository <code>https://nina-plugins.psf-guard.com/</code>, then restart N.I.N.A. Generate a pairing code and enter it with this server’s URL in the plugin. Click <strong>Pair</strong>, then <strong>Test connection</strong>. The plugin controls its own sync schedule. To receive image files too, enable <strong>Accept remote image uploads</strong> below and choose a <strong>Receive directory</strong>.</p>
-            <div className="remote-upload-token-row">
-              <button
-                type="button"
-                onClick={handleIssuePairingCode}
-                className="browse-button"
-              >
-                Generate Sync pairing code
-              </button>
-              {pairingCode && (
-                <>
-                  <input
-                    type="text"
-                    readOnly
-                    value={pairingCode}
-                    className="file-path-input"
-                    onFocus={(event) => event.target.select()}
-                  />
-                  <button
-                    type="button"
-                    onClick={handleCopyPairingCode}
-                    className="browse-button"
-                  >
-                    {pairingCopyState === 'copied' ? 'Copied' : 'Copy'}
-                  </button>
-                </>
-              )}
-            </div>
-            {pairingCode && (
-              <small className="remote-upload-token-notice" role="status">
-                {pairingCopyState === 'failed'
-                  ? 'Copy failed. Select and copy the code manually.'
-                  : `Paste this code into the client. One use, expires ${
-                      pairingExpiresAt
-                        ? new Date(pairingExpiresAt * 1000).toLocaleTimeString()
-                        : 'in an hour'
-                    }. Each pairing adds its own revocable credential.`}
-              </small>
-            )}
-            {editingUpload && ((editingUpload.clients?.length ?? 0) > 0 || editingUpload.key_contact) && (
-              <div className="paired-clients">
-                <label>Paired clients:</label>
-                <ul>
-                  {(editingUpload.clients ?? []).map((client) => (
-                      <li key={client.client_uuid}>
-                        <span>
-                          {client.name} · paired{' '}
-                          {new Date(client.paired_at * 1000).toLocaleDateString()}
-                          {' · '}{contactText(client.last_contact)}
-                        </span>
-                        <button
-                          type="button"
-                          className="browse-button"
-                          onClick={() => handleRevokeClient(client.client_uuid)}
-                        >
-                          Revoke
-                        </button>
-                      </li>
-                    ))}
-                  {editingUpload.key_contact && (
-                    <li>
-                      <span>Remote API key · {contactText(editingUpload.key_contact)}</span>
-                    </li>
-                  )}
-                </ul>
-                {olderPlugins.length > 0 && (
-                  <small role="note">
-                    {olderPlugins.join(', ')} {olderPlugins.length === 1 ? 'is' : 'are'} running an older Sync plugin.
-                    Update the plugin in N.I.N.A., or N.I.N.A. may not show new projects.
-                  </small>
-                )}
-              </div>
-            )}
-            <label htmlFor="remote-upload-token">Remote API key:</label>
-            <div className="remote-upload-token-row">
-              <input
-                id="remote-upload-token"
-                type={formRemoteUploadTokenRevealed ? 'text' : 'password'}
-                value={formRemoteUploadToken}
-                onChange={(event) => {
-                  setFormRemoteUploadToken(event.target.value);
-                  setFormRemoteUploadTokenCopyState('idle');
-                }}
-                placeholder={
-                  formRemoteUploadTokenConfigured
-                    ? 'Unchanged'
-                    : 'At least 24 characters'
-                }
-                className="file-path-input"
-                autoComplete="new-password"
-              />
-              <button
-                type="button"
-                onClick={handleGenerateRemoteUploadToken}
-                className="browse-button"
-              >
-                Generate
-              </button>
-              {formRemoteUploadTokenRevealed &&
-                formRemoteUploadToken.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={handleCopyRemoteUploadToken}
-                    className="browse-button"
-                  >
-                    {formRemoteUploadTokenCopyState === 'copied'
-                      ? 'Copied'
-                      : 'Copy'}
-                  </button>
-                )}
-            </div>
-            {formRemoteUploadTokenRevealed && (
-              <small
-                className={`remote-upload-token-notice ${
-                  formRemoteUploadTokenCopyState === 'failed' ? 'error' : ''
-                }`}
-                role="status"
-              >
-                {formRemoteUploadTokenCopyState === 'failed'
-                  ? 'Copy failed. Select and copy the key manually.'
-                  : 'Copy this key now. It will not be shown again after saving.'}
-              </small>
-            )}
-            <label className="quality-analysis-option">
-              <input
-                type="checkbox"
-                checked={formRemoteSyncEnabled}
-                onChange={(event) =>
-                  setFormRemoteSyncEnabled(event.target.checked)
-                }
-              />
-              <span>
-                <strong>Accept remote scheduler sync</strong>
-                <small>
-                  Lets a holder of this key merge projects, targets,
-                  plans, and grades into this database.
-                </small>
-              </span>
-            </label>
-            <label className="quality-analysis-option">
-              <input
-                type="checkbox"
-                checked={formRemoteUploadEnabled}
-                onChange={(event) =>
-                  setFormRemoteUploadEnabled(event.target.checked)
-                }
-              />
-              <span>
-                <strong>Accept remote image uploads</strong>
-              </span>
-            </label>
-            {formRemoteUploadEnabled && (
-              <>
-                <label htmlFor="remote-upload-directory">Receive directory:</label>
-                <select
-                  id="remote-upload-directory"
-                  value={formRemoteUploadDir}
-                  onChange={(event) => setFormRemoteUploadDir(event.target.value)}
-                  className="file-path-input"
-                >
-                  <option value="">Select an image directory</option>
-                  {formImageDirs.map((directory) => (
-                    <option key={directory} value={directory}>
-                      {directory}
-                    </option>
-                  ))}
-                </select>
-                <label htmlFor="remote-upload-placement">Folder layout:</label>
-                <select
-                  id="remote-upload-placement"
-                  value={formRemoteUploadPlacement}
-                  onChange={(event) =>
-                    setFormRemoteUploadPlacement(
-                      event.target.value as RemoteImageUploadPlacement
-                    )
-                  }
-                  className="file-path-input"
-                >
-                  <option value="flat">Receive directory</option>
-                  <option value="target_tree">Match database</option>
-                </select>
-                {formRemoteUploadPlacement === 'target_tree' && (
-                  <>
-                    {formRemoteUploadCatalogMatch && (
-                      <small className="remote-upload-token-notice" role="status">
-                        Detected from {formRemoteUploadCatalogMatch.samples}{' '}
-                        database {formRemoteUploadCatalogMatch.samples === 1
-                          ? 'image'
-                          : 'images'}:{' '}
-                        <code>{formRemoteUploadCatalogMatch.template}</code>
-                      </small>
-                    )}
-                    <label htmlFor="remote-upload-directory-template">
-                      Layout:
-                    </label>
-                    <div className="file-input-group">
-                      <select
-                        id="remote-upload-directory-template"
-                        value={
-                          formRemoteUploadLayoutChoice === 'catalog' &&
-                          formRemoteUploadCatalogMatch
-                            ? 'catalog'
-                            : isRemoteUploadDirectoryTemplatePreset(
-                                  formRemoteUploadDirectoryTemplate
-                                )
-                              ? formRemoteUploadDirectoryTemplate
-                              : 'custom'
-                        }
-                        onChange={(event) => {
-                          const choice = event.target.value;
-                          setFormRemoteUploadLayoutTouched(true);
-                          if (choice === 'catalog') {
-                            setFormRemoteUploadLayoutChoice('catalog');
-                            return;
-                          }
-                          setFormRemoteUploadLayoutChoice('preset');
-    setFormRemoteUploadLayoutTouched(false);
-                          setFormRemoteUploadDirectoryTemplate(
-                            choice === 'custom' ? '' : choice
-                          );
-                          // A queued rescan would find the catalog match again;
-                          // the person just chose something else.
-                          setFormRemoteUploadRescanRequested(false);
-                        }}
-                        className="file-path-input"
-                      >
-                        {formRemoteUploadCatalogMatch && (
-                          <option value="catalog">
-                            Match database: {formRemoteUploadCatalogMatch.template}
-                          </option>
-                        )}
-                        {REMOTE_UPLOAD_DIRECTORY_TEMPLATE_PRESETS.map((template) => (
-                          <option key={template} value={template}>
-                            {template}
-                          </option>
-                        ))}
-                        <option value="custom">Custom</option>
-                      </select>
-                      <button
-                        type="button"
-                        className="browse-button"
-                        aria-label="Rescan database layout"
-                        aria-pressed={formRemoteUploadRescanRequested}
-                        title={
-                          formRemoteUploadRescanRequested
-                            ? 'Database layout rescan queued for Save connection settings'
-                            : 'Rescan database paths when changes are saved'
-                        }
-                        disabled={formRemoteUploadRescanRequested}
-                        onClick={() => setFormRemoteUploadRescanRequested(true)}
-                      >
-                        ↻ {formRemoteUploadRescanRequested ? 'Rescan queued' : 'Rescan'}
-                      </button>
-                    </div>
-                    {formRemoteUploadLayoutChoice === 'preset' &&
-                      !isRemoteUploadDirectoryTemplatePreset(
-                        formRemoteUploadDirectoryTemplate
-                      ) && (
-                      <input
-                        type="text"
-                        aria-label="Custom database layout:"
-                        className="file-path-input"
-                        value={formRemoteUploadDirectoryTemplate}
-                        onChange={(event) => {
-                          setFormRemoteUploadLayoutTouched(true);
-                          setFormRemoteUploadDirectoryTemplate(event.target.value);
-                        }}
-                        placeholder="%TARGET%/%NIGHT%/%TYPE%"
-                        maxLength={240}
-                      />
-                    )}
-                  </>
-                )}
-              </>
-            )}
-          </div>
-        )}
-        {editingId && !sync && <div className="database-config">
+        {editingId && <div className="database-config">
             <label htmlFor="server-export-directory">
               Server export directory:
             </label>
@@ -1586,7 +1023,7 @@ export default function TauriSettings({
             onClick={handleSaveForm}
             className="save-button"
             disabled={
-              (!sync && (createMode || pluginImport ? formImageDirs.length === 0 : !formDbPath.trim() || formImageDirs.length === 0)) || isApplying || (!editingId && !createMode && tsImportRunning)
+              (createMode || pluginImport ? formImageDirs.length === 0 : !formDbPath.trim() || formImageDirs.length === 0) || isApplying || (!editingId && !createMode && tsImportRunning)
             }
           >
             {pluginImport
@@ -1594,7 +1031,7 @@ export default function TauriSettings({
               : createMode
                 ? 'Create & Import'
               : editingId
-                ? sync ? 'Save connection settings' : 'Save Changes'
+                ? 'Save Changes'
                 : connectImportedSource ? 'Import from Target Scheduler' : 'Import database copy'}
           </button>
         </div>
@@ -1895,18 +1332,12 @@ export default function TauriSettings({
   // on Rig setup, beside the Director plugin when planning is on: each
   // database is one rig. The section ids and the saved settings are unchanged.
   const syncPluginSection = selectedDatabase && managementAllowed && canEdit
-    ? (showAddForm && editingId === selectedDatabase.id
-      ? renderDatabaseForm(selectedDatabase, true)
-      : <section className="settings-section rig-sync-plugin" aria-labelledby={`sync-plugin-${selectedDatabase.id}`}>
-          <h4 id={`sync-plugin-${selectedDatabase.id}`}>Sync plugin</h4>
-          <p>Pair the PSF Guard Sync plugin in N.I.N.A., and choose whether {selectedDatabase.name} accepts its images and scheduler sync.</p>
-          <button type="button" className="cancel-button" onClick={() => startEdit(selectedDatabase)}>Edit remote receive and pairing</button>
-        </section>)
+    ? <SyncPluginPanel databaseId={selectedDatabase.id} />
     : null;
 
   return (
     <UnsavedScopeContext.Provider value={unsavedScope.current}>
-    <UnsavedMark label={currentTab === SYNC_PLUGIN_PAGE ? 'sync connection' : 'database files'} dirty={!!editDirty} />
+    <UnsavedMark label="database files" dirty={!!editDirty} />
     <div className="tauri-settings modal-overlay" onClick={requestClose}>
       <div className="modal-content" onClick={(e) => e.stopPropagation()}>
         {/* Inside the panel, so the dialog's clicks do not close Settings. */}
@@ -2204,7 +1635,7 @@ export default function TauriSettings({
           {/* Planning's panels keep Planning's controls; the container adds no padding. */}
           {currentTab === 'rigs' && selectedDatabase && (planningEnabled
             ? <div className="settings-setups director-page director-embedded"><DirectorRigs key={selectedDatabase.id} databaseId={selectedDatabase.id} syncPlugin={syncPluginSection} initialTab={rigTab} /></div>
-            : <div className="settings-setups">{syncPluginSection}</div>)}
+            : <div className="settings-setups director-page director-embedded">{syncPluginSection && <><PluginsOnRig databaseId={selectedDatabase.id} />{syncPluginSection}</>}</div>)}
 
           {currentTab === 'sites' && <div className="settings-setups director-page director-embedded"><DirectorSites /></div>}
 

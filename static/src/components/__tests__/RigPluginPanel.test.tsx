@@ -33,7 +33,7 @@ const grant: DirectorPluginGrant = {
   allocation_id: 'work-1', client_id: 'client-1', admitted_at_ms: Date.now(), expires_at_ms: null, started: true, open: true, plugin_paired: true, closed_at_ms: null,
 };
 
-function show(view: DirectorPluginView, { mode = 'target_scheduler' as DirectorRigMode, canWrite = true, syncClients = 0 } = {}) {
+function show(view: DirectorPluginView, { mode = 'target_scheduler' as DirectorRigMode, canWrite = true } = {}) {
   let current = view;
   const calls: { path: string; body: unknown }[] = [];
   const record = (path: string) => async ({ request }: { request: Request }) => {
@@ -42,7 +42,6 @@ function show(view: DirectorPluginView, { mode = 'target_scheduler' as DirectorR
   };
   server.use(
     http.get('/api/director/v1/catalogs/rig/rig/plugin', () => HttpResponse.json(ok(current))),
-    http.get('/api/databases', () => HttpResponse.json(ok([{ id: 'rig', name: 'Rig', remote_image_upload: { clients: Array.from({ length: syncClients }, (_, i) => ({ client_uuid: `${i}`, name: 'Sync', paired_at: 1 })) } }]))),
     http.post(`/api/director/v1/rigs/${rig}/pairing-token`, record('pairing-token')),
     http.delete(`/api/director/v1/rigs/${rig}/clients/client-1`, record('remove')),
     http.post(`/api/director/v1/rigs/${rig}/equipment-reports/client-1/accept`, record('accept')),
@@ -50,29 +49,18 @@ function show(view: DirectorPluginView, { mode = 'target_scheduler' as DirectorR
     http.post(`/api/director/v1/rigs/${rig}/workloads/work-1/close`, record('close')),
   );
   const onRigChanged = vi.fn();
-  const onChangeMode = vi.fn();
   const access = { ...({} as ReturnType<typeof useAccess>), canWrite };
   render(<AccessContext.Provider value={access}>
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-      <RigPluginPanel slug="rig" mode={mode} onRigChanged={onRigChanged} onChangeMode={onChangeMode} />
+      <RigPluginPanel slug="rig" mode={mode} onRigChanged={onRigChanged} />
     </QueryClientProvider>
   </AccessContext.Provider>);
-  return { calls, onRigChanged, onChangeMode, update: (next: DirectorPluginView) => { current = next; } };
+  return { calls, onRigChanged, update: (next: DirectorPluginView) => { current = next; } };
 }
 
 describe('RigPluginPanel', () => {
   beforeEach(() => { vi.spyOn(window, 'confirm').mockReturnValue(true); });
   afterEach(() => { vi.restoreAllMocks(); });
-
-  it('shows both plugins side by side, whichever picks the work', async () => {
-    const { onChangeMode } = show({ ...base, clients: [plugin] }, { syncClients: 2 });
-    const paths = (await screen.findByText('Picks the work')).closest('fieldset')!;
-    expect(paths).toHaveTextContent('Target Scheduler');
-    expect(paths).toHaveTextContent('PSF Guard Director1 paired');
-    await waitFor(() => expect(paths).toHaveTextContent('PSF Guard Sync2 paired'));
-    fireEvent.click(within(paths).getByRole('button', { name: 'Change mode' }));
-    expect(onChangeMode).toHaveBeenCalled();
-  });
 
   it('generates a code for this rig and stops showing it once the plugin pairs', async () => {
     const { calls, update, onRigChanged } = show(base);

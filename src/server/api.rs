@@ -513,6 +513,8 @@ pub struct RemoteImageUploadSummary {
     pub directory_template_source: crate::db_registry::RemoteImageUploadTemplateSource,
     pub directory_template_samples: usize,
     pub token_configured: bool,
+    /// The single remote API key is set, apart from any paired client.
+    pub key_configured: bool,
     pub sync_enabled: bool,
     /// Paired clients, for the Settings list and per-client revocation.
     #[serde(default)]

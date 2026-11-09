@@ -369,8 +369,8 @@ project/target join. A bundle of bare `acquiredimage` rows is not a Target
 Scheduler database and the read fails outright.
 
 Each database opts into this protocol on its own. Holding a valid key is not
-enough: the operator ticks **Accept remote scheduler sync** for that database,
-separately from **Accept remote image uploads**.
+enough: the operator turns on **Scheduler sync** for that database (pairing
+turns it on too), separately from **Image uploads**.
 
 ### Calibrated copy records
 
@@ -656,9 +656,10 @@ image=@capture.fits
 ```
 
 The database settings select one of that database's registered image roots as
-the receive directory and a placement policy. **Receive directory** keeps the
-compatibility layout with every upload at that root. **Target and frame type**
-uses PSF Guard's standard tree: `<target>/LIGHT/<filter>` for lights,
+the receive directory and a placement policy. **All in the receive folder**
+keeps the compatibility layout with every upload at that root. **Folders like the
+database's** uses the layout detected from the database's paths, or a preset
+such as PSF Guard's standard tree: `<target>/LIGHT/<filter>` for lights,
 `<target>/FLAT/<filter>` for flats, and top-level `BIAS`, `DARK`, or `DARKFLAT`
 folders for the other calibration kinds. A light with no resolvable catalog
 target or `OBJECT` header uses the importer's `Unknown Target`; a flat with no

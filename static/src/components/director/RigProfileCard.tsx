@@ -13,6 +13,7 @@ import SchedulingFields from './SchedulingFields';
 import { compactOverrides, inheritedLimits, sameOverrides } from './schedulingModel';
 import EarlyBeta from './EarlyBeta';
 import RigPluginPanel from './RigPluginPanel';
+import PluginsOnRig from '../rigs/PluginsOnRig';
 import RigWeatherPanel from './RigWeather';
 import WorkspaceTabs from './WorkspaceTabs';
 import { workspacePanel } from './workspacePanel';
@@ -213,7 +214,7 @@ export default function RigProfileCard({ slug, syncPlugin, initialTab }: {
         already says how to add the rig, so the not-found error stays out. */}
     {loaded.isError && !(syncPlugin && statusOf(loaded.error) === 404)
       && <p className="director-error" role="alert">{message(loaded.error)}</p>}
-    {loaded.isError && syncPlugin}
+    {loaded.isError && syncPlugin && <><PluginsOnRig databaseId={slug} />{syncPlugin}</>}
     {notice && <p role="status">{notice}</p>}
     {stale && <p className="director-error" role="alert">{save.error instanceof SettingsNotSaved
       ? 'The rig profile was saved. Its planning site and Target Scheduler limits changed since you loaded them. '
@@ -351,7 +352,11 @@ export default function RigProfileCard({ slug, syncPlugin, initialTab }: {
       {!canWrite && <p className="director-muted">Read only</p>}
     </form>
     <div {...workspacePanel(id, 'weather', tab)}>{tab === 'weather' && <RigWeatherPanel rig={data.rig.id} />}</div>
-    <div {...workspacePanel(id, 'director', tab)}>{tab === 'director' && syncPlugin && <>{syncPlugin}<p className="director-muted">The Director plugin below has its own pairing code. Both plugins can run on this rig.</p></>}{tab === 'director' && <RigPluginPanel slug={slug} mode={data.mode.runtime} onRigChanged={() => { if (!unsaved) void loaded.refetch(); }} onChangeMode={() => setTab('optics')} />}</div>
+    <div {...workspacePanel(id, 'director', tab)}>{tab === 'director' && <>
+      <PluginsOnRig databaseId={slug} director={{ mode: data.mode.runtime, onChangeMode: () => setTab('optics') }} />
+      {syncPlugin}
+      <RigPluginPanel slug={slug} mode={data.mode.runtime} onRigChanged={() => { if (!unsaved) void loaded.refetch(); }} />
+    </>}</div>
     <div {...workspacePanel(id, 'collaboration', tab)}>{data && collaborationVisited && <CollaborationConnections rig={data.rig.id} name={data.rig.name} active={tab === 'collaboration'} />}</div>
     </div>
     </div>}

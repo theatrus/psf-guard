@@ -2819,6 +2819,8 @@ export interface RemoteImageUploadSummary {
   /** Number of catalog paths supporting a detected layout. */
   directory_template_samples: number;
   token_configured: boolean;
+  /** The single remote API key is set, apart from paired clients. Absent from older servers. */
+  key_configured?: boolean;
   /** Remote scheduler sync is a separate grant from image upload. */
   sync_enabled: boolean;
   /** Paired clients; each holds its own revocable credential. */

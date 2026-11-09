@@ -759,6 +759,7 @@ fn remote_image_upload_summary(
             .unwrap_or_default(),
         directory_template_samples: directory_layout.map(|layout| layout.samples).unwrap_or(0),
         token_configured: config.is_some_and(|config| config.token_is_configured()),
+        key_configured: config.is_some_and(|config| config.legacy_key_configured()),
         sync_enabled: config.is_some_and(|config| config.sync_enabled),
         clients: config
             .map(|config| {

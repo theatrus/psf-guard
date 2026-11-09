@@ -158,7 +158,7 @@ test('first-run plugin import creates a catalog and opens pairing without a TS f
   // Pairing opens on Rig setup, where both N.I.N.A. plugins are.
   await expect(page.getByRole('tab', { name: 'Rig setup', selected: true })).toBeVisible();
   await page.getByRole('button', { name: 'Generate Sync pairing code' }).click();
-  await expect(page.locator('.remote-upload-token-notice').filter({ hasText: 'Paste this code' })).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: 'Pairing turns on scheduler sync' })).toBeVisible();
 });
 
 test('switch from TS setup to importing an image folder without selecting a database', async ({ page, request }, testInfo) => {
