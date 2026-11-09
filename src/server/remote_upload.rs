@@ -59,6 +59,73 @@ pub async fn upload_image(
     >,
     ctx: DbContext,
     headers: HeaderMap,
+    multipart: Multipart,
+) -> Result<Json<ApiResponse<RemoteImageUploadResponse>>, AppError> {
+    use crate::server::remote_audit::{AuditAction, AuditOutcome, AuditRecord};
+    let catalog_id = ctx.id.clone();
+    // Only a request with a valid key is the client's action; anything else
+    // must not show up as what the rig last did.
+    let holder = ctx.remote_image_upload.as_ref().and_then(|config| {
+        let token = headers
+            .get(AUTHORIZATION)?
+            .to_str()
+            .ok()?
+            .strip_prefix("Bearer ")?;
+        config.token_holder(token).map(str::to_owned)
+    });
+    let Some(holder) = holder else {
+        return receive_image(state, ctx, headers, multipart).await;
+    };
+    // An upload is contact too, so the rig stays online between syncs.
+    crate::server::remote_sync::note_sync_contact(&state, &catalog_id, &holder, &headers);
+    let result = receive_image(state.clone(), ctx, headers, multipart).await;
+    let (outcome, detail, operation, summary) = match &result {
+        Ok(Json(response)) => match &response.data {
+            Some(upload) => (
+                AuditOutcome::Ok,
+                upload.filename.clone(),
+                Some(upload.frame_kind.clone()),
+                std::collections::BTreeMap::from([
+                    ("bytes".to_owned(), upload.bytes as i64),
+                    ("already_present".to_owned(), upload.already_present as i64),
+                ]),
+            ),
+            None => return result,
+        },
+        Err(error) => {
+            let outcome = crate::server::remote_sync::outcome_of(error);
+            (
+                outcome,
+                // A refusal says what was wrong with the request. A failure
+                // can name server folders, which the log never holds.
+                if outcome == AuditOutcome::Refused {
+                    crate::server::remote_sync::detail_of(error)
+                } else {
+                    "server error; see the PSF Guard log".to_owned()
+                },
+                None,
+                std::collections::BTreeMap::new(),
+            )
+        }
+    };
+    state.remote_audit.record(
+        &catalog_id,
+        AuditAction::ImageUpload,
+        outcome,
+        AuditRecord {
+            operation: operation.as_deref(),
+            detail: Some(&detail),
+            summary,
+            ..Default::default()
+        },
+    );
+    result
+}
+
+async fn receive_image(
+    state: std::sync::Arc<crate::server::state::AppState>,
+    ctx: DbContext,
+    headers: HeaderMap,
     mut multipart: Multipart,
 ) -> Result<Json<ApiResponse<RemoteImageUploadResponse>>, AppError> {
     let config = ctx

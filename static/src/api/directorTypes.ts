@@ -754,6 +754,53 @@ export interface DirectorRigStatusView {
   assignments: Array<{ project: DirectorIdentity; activation_revision: number; applied_at_ms: number }>;
   pending_receipts: number;
   recent_operations?: DirectorOperationReceipt[];
+  /** The Sync plugin on this rig's database; absent without Sync. */
+  sync?: SyncLive | null;
+}
+
+/** What a Sync client last did, from the server's Sync audit log. */
+export interface SyncLatestAction {
+  at_ms: number;
+  action: 'export' | 'preview' | 'preview_refresh' | 'apply' | 'pair' | 'flat_history_snapshot' | 'flat_history_acknowledge' | 'star_detection_profile' | 'image_upload' | string;
+  outcome: 'ok' | 'refused' | 'failed';
+  operation?: string;
+  detail?: string;
+  summary?: Record<string, number>;
+}
+
+/** The running N.I.N.A. instruction the Sync plugin judged most specific. */
+export interface SyncSequenceActivity {
+  kind: string;
+  name?: string;
+  started_ms?: number;
+  until_ms?: number;
+  target_name?: string;
+  filter?: string;
+  exposure_seconds?: number;
+  completed?: number;
+  total?: number;
+  target_temperature_c?: number;
+}
+
+export interface SyncSequenceStatus {
+  session_id: string;
+  reported_at_ms: number;
+  received_at_ms: number;
+  fresh_for_ms: number;
+  running: boolean;
+  operation?: string;
+  activity?: SyncSequenceActivity;
+  recent: { image_saved_ms?: number; dither_ms?: number; autofocus_ms?: number; meridian_flip_ms?: number };
+}
+
+export interface SyncLive {
+  last_contact_ms: number | null;
+  plugin_version: string | null;
+  latest_action: SyncLatestAction | null;
+  /** Kinds of action whose newest attempt was refused or failed, newest first. */
+  problems?: SyncLatestAction[];
+  sequence: SyncSequenceStatus | null;
+  sequence_stale: boolean;
 }
 
 export interface DirectorResolvedName { query: string; name: string; ra_degrees: number; dec_degrees: number; source: string }

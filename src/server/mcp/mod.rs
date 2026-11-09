@@ -1449,7 +1449,7 @@ impl PsfGuardMcp {
     }
 
     #[tool(
-        description = "Rigs: each rig's profile (camera, scope, site, catalog) and its live status as last reported (phase, target, time). Each profile's `rig.id` is the rig id the other tools take."
+        description = "Rigs: each rig's profile (camera, scope, site, catalog) and its live status as last reported (phase, target, time), with the Sync plugin's latest action and what N.I.N.A.'s sequence is doing under `sync`. Each profile's `rig.id` is the rig id the other tools take."
     )]
     async fn list_rigs(&self, ctx: RequestContext<RoleServer>) -> ToolResult {
         let profiles = attempt!(self.get(&ctx, "/director/v1/rigs/profiles").await);

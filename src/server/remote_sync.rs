@@ -511,6 +511,9 @@ pub async fn capabilities(
         // `X-PSF-Guard-Plugin-Capabilities` gets them as they are; any other
         // gets them under a real profile.
         PLUGIN_WAITING_PROFILE_CAPABILITY,
+        // POST /sync/v1/sequence-status takes what N.I.N.A.'s sequence is
+        // doing, for the Live page.
+        crate::server::sync_sequence::SEQUENCE_STATUS_CAPABILITY,
     ];
     if catalog
         .remote_image_upload
@@ -1085,6 +1088,30 @@ pub async fn get_export(
     export_response(export)
 }
 
+/// Record a call from `holder` as the Sync plugin's contact with
+/// `catalog_id`.
+pub(crate) fn note_sync_contact(
+    state: &AppState,
+    catalog_id: &str,
+    holder: &str,
+    headers: &HeaderMap,
+) {
+    state
+        .sync_contacts
+        .note(catalog_id, holder, headers, |catalog_id, holder| {
+            state.get_database(catalog_id).is_some_and(|catalog| {
+                catalog.remote_image_upload.as_ref().is_some_and(|config| {
+                    config
+                        .clients
+                        .iter()
+                        .any(|client| client.client_uuid == holder)
+                        || (holder == crate::db_registry::LEGACY_KEY_HOLDER
+                            && config.legacy_key_configured())
+                })
+            })
+        });
+}
+
 pub(super) fn authenticated_catalog(
     state: &AppState,
     headers: &HeaderMap,
@@ -1143,20 +1170,7 @@ pub(super) fn authenticated_catalog(
             "remote scheduler sync is disabled for this database",
         ));
     }
-    state
-        .sync_contacts
-        .note(&catalog.id, &holder, headers, |catalog_id, holder| {
-            state.get_database(catalog_id).is_some_and(|catalog| {
-                catalog.remote_image_upload.as_ref().is_some_and(|config| {
-                    config
-                        .clients
-                        .iter()
-                        .any(|client| client.client_uuid == holder)
-                        || (holder == crate::db_registry::LEGACY_KEY_HOLDER
-                            && config.legacy_key_configured())
-                })
-            })
-        });
+    note_sync_contact(state, &catalog.id, &holder, headers);
     Ok(catalog)
 }
 
@@ -1832,7 +1846,7 @@ fn unknown_preview() -> AppError {
 }
 
 /// Whether the server turned this request away on purpose, or broke.
-fn outcome_of(error: &AppError) -> AuditOutcome {
+pub(crate) fn outcome_of(error: &AppError) -> AuditOutcome {
     match error {
         AppError::BadRequest(_)
         | AppError::Conflict(_)
@@ -1844,7 +1858,7 @@ fn outcome_of(error: &AppError) -> AuditOutcome {
     }
 }
 
-fn detail_of(error: &AppError) -> String {
+pub(crate) fn detail_of(error: &AppError) -> String {
     match error {
         AppError::NotFound => "not found".into(),
         AppError::NotFoundMessage(message)

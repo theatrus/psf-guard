@@ -340,6 +340,9 @@ pub(super) struct RigStatusView {
     pending_receipts: u32,
     /// Historical receipts, never a substitute for the coalesced live report.
     recent_operations: Vec<psf_guard_director_meta::operation_inbox::OperationReceipt>,
+    /// The Sync plugin on this rig's database: its last contact and action,
+    /// and what N.I.N.A.'s sequence is doing. `None` without Sync.
+    sync: Option<crate::server::sync_sequence::SyncLive>,
 }
 
 fn contacts(list: Vec<Contact>) -> Contacts {
@@ -358,11 +361,14 @@ fn contacts(list: Vec<Contact>) -> Contacts {
     contacts
 }
 
-fn connectivity(contacts: &Contacts, now: u64) -> Connectivity {
+/// `sync_contact_ms`: the Sync plugin's newest call, which counts as contact
+/// too.
+fn connectivity(contacts: &Contacts, sync_contact_ms: Option<u64>, now: u64) -> Connectivity {
     let last = [&contacts.program_pull, &contacts.check_in, &contacts.status]
         .into_iter()
         .flatten()
         .map(|c| c.at_ms)
+        .chain(sync_contact_ms)
         .max();
     let age = last.map(|at| now.saturating_sub(at));
     Connectivity {
@@ -392,6 +398,15 @@ pub(super) async fn statuses(
         .collect();
     let service = enabled(&state)?;
     let instance = service.instance_id;
+    let sync_now = now_ms();
+    let mut sync: std::collections::HashMap<String, crate::server::sync_sequence::SyncLive> =
+        catalogs
+            .iter()
+            .filter_map(|catalog| {
+                crate::server::sync_sequence::SyncLive::for_catalog(&state, catalog, sync_now)
+                    .map(|view| (catalog.id.clone(), view))
+            })
+            .collect();
     let views = service
         .query(move |store| {
             let now = now_ms();
@@ -419,7 +434,12 @@ pub(super) async fn statuses(
                     .as_ref()
                     .map(|s| now.saturating_sub(s.received_at_ms));
                 let contacts = contacts(store.contacts_for_rig(rig_id)?);
-                let connectivity = connectivity(&contacts, now);
+                let sync = catalog_slug.as_ref().and_then(|slug| sync.remove(slug));
+                let connectivity = connectivity(
+                    &contacts,
+                    sync.as_ref().and_then(|sync| sync.last_contact_ms),
+                    now,
+                );
                 let mut assignments = Vec::new();
                 for activation in store.activations_for_rig(rig_id)? {
                     if let Some(project) = store.project(activation.project_id)? {
@@ -456,6 +476,7 @@ pub(super) async fn statuses(
                     assignments,
                     pending_receipts,
                     recent_operations: store.recent_operations(rig_id)?,
+                    sync,
                 });
             }
             views.sort_by(|a, b| a.rig.name.cmp(&b.rig.name).then(a.rig.id.cmp(&b.rig.id)));
