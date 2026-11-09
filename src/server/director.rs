@@ -53,6 +53,7 @@ mod mosaic;
 mod night_availability;
 mod night_overrides;
 mod night_plans;
+mod night_sky;
 pub(super) mod pairing;
 mod plan;
 mod plan_progress;
@@ -192,6 +193,8 @@ pub struct Service {
     forecast_turn: tokio::sync::Mutex<()>,
     /// The night plans kept, and those being computed.
     night_plans: night_plans::Cache,
+    /// The skies of each night at each site, kept across requests.
+    skies: night_sky::Skies,
     /// The writer's [`MetaStore::planning_rows_written`] after its last
     /// write: night plans kept from an older count may be out of date.
     planning_rows: std::sync::atomic::AtomicU64,
@@ -259,6 +262,7 @@ impl Service {
             resending: Mutex::new(std::collections::BTreeSet::new()),
             forecast_turn: tokio::sync::Mutex::new(()),
             night_plans: night_plans::Cache::default(),
+            skies: night_sky::Skies::default(),
         })))
     }
 

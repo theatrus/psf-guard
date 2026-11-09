@@ -5,9 +5,9 @@
 
 use super::*;
 use psf_guard_director_core::{
-    night::{night_summary, NightDate, NightRequest},
-    visibility::{AltitudeLimits, Horizon, Site},
-    windows::{Interval, MeridianExclusion},
+    night::{NightDate, NightSky},
+    visibility::Site,
+    windows::Interval,
 };
 use psf_guard_director_meta::{
     night_availability::{Availability, MarkScope, NightMark},
@@ -151,10 +151,21 @@ impl RigConditions {
     /// Each night's availability at the rig's site. An expired forecast
     /// says nothing, so freshness is judged at `now_ms`, not when planning
     /// starts.
-    pub(super) fn nights(&self, dates: &[NightDate], site: Site, now_ms: u64) -> Nights {
+    ///
+    /// `skies` holds each night's sky at the site, sampled every five
+    /// minutes as the summaries are, as
+    /// [`Skies::nights`](super::night_sky::Skies::nights) gives them for
+    /// the noons of `dates`.
+    pub(super) fn nights(
+        &self,
+        dates: &[NightDate],
+        site: Site,
+        now_ms: u64,
+        skies: &[Option<Arc<NightSky>>],
+    ) -> Nights {
         let longitude_degrees = site.longitude_degrees;
-        let dark = darkness(site, dates, DARK_BELOW_DEGREES);
-        let twilight = darkness(site, dates, TWILIGHT_BELOW_DEGREES);
+        let dark = darkness(skies, DARK_BELOW_DEGREES);
+        let twilight = darkness(skies, TWILIGHT_BELOW_DEGREES);
         let forecast = self.clouds.as_ref().and_then(|clouds| {
             let kept = clouds.forecast.as_ref().filter(|f| f.fresh(now_ms))?;
             Some((clouds.settings, kept))
@@ -404,39 +415,12 @@ fn judge_by_darkness(
 }
 
 /// Each night's dusk and dawn at the site, with the Sun below
-/// `below_degrees`; `None` for a night when it never gets that low.
-fn darkness(site: Site, dates: &[NightDate], below_degrees: f64) -> Vec<Option<(u64, u64)>> {
-    let Some(first) = dates.first() else {
-        return vec![];
-    };
-    let request = NightRequest {
-        site,
-        horizon: Horizon::FixedMinimum {},
-        limits: AltitudeLimits {
-            rig_minimum_degrees: 0.0,
-            project_minimum_degrees: 0.0,
-            horizon_offset_degrees: 0.0,
-            rig_maximum_degrees: 90.0,
-            project_maximum_degrees: 90.0,
-        },
-        targets: vec![],
-        // An hour after the first night's noon: inside it at any longitude.
-        start_ms: first.span(site.longitude_degrees).start_ms + 3_600_000,
-        nights: dates.len() as u32,
-        step_ms: 300_000,
-        dark_below_degrees: below_degrees,
-        meridian_exclusion: MeridianExclusion {
-            before_ms: 0,
-            after_ms: 0,
-        },
-        meridian_window_ms: 0,
-        available: None,
-    };
-    (0..dates.len() as u32)
-        .map(|index| {
-            let night = night_summary(&request, index).ok()?;
-            Some((night.dusk_ms?, night.dawn_ms?))
-        })
+/// `below_degrees`, from its sky: `None` for a night when it never gets
+/// that low, or whose sky could not be computed.
+fn darkness(skies: &[Option<Arc<NightSky>>], below_degrees: f64) -> Vec<Option<(u64, u64)>> {
+    skies
+        .iter()
+        .map(|sky| sky.as_ref()?.darkness(below_degrees))
         .collect()
 }
 
@@ -584,5 +568,65 @@ mod tests {
             (marked.marks[0].state, marked.marks[1].source),
             (Availability::Available, MarkSource::Manual)
         );
+    }
+
+    /// A night's darkness from its sky is the dusk and dawn a summary with
+    /// no targets gives, as it was found before skies were kept; a night
+    /// that never gets dark enough has none.
+    #[test]
+    fn darkness_from_a_sky_is_a_summarys_dusk_and_dawn() {
+        use psf_guard_director_core::{
+            night::{night_summary, NightRequest},
+            visibility::{AltitudeLimits, Horizon},
+            windows::MeridianExclusion,
+        };
+        const STEP_MS: u64 = 300_000;
+        let sites = [(34.2, -118.3), (-33.9, 151.2), (64.8, -147.7), (0.0, 0.0)];
+        let dates: Vec<NightDate> = ["2026-06-20", "2026-11-03"]
+            .iter()
+            .map(|d| d.parse().unwrap())
+            .collect();
+        let mut nights_without_darkness = 0;
+        for (latitude, longitude) in sites {
+            let site = Site {
+                latitude_degrees: latitude,
+                longitude_degrees: longitude,
+                elevation_meters: 100.0,
+            };
+            for date in &dates {
+                let noon = date.span(longitude).start_ms;
+                let sky = Arc::new(NightSky::new(site, noon, STEP_MS).unwrap());
+                for below in [DARK_BELOW_DEGREES, TWILIGHT_BELOW_DEGREES] {
+                    let request = NightRequest {
+                        site,
+                        horizon: Horizon::FixedMinimum {},
+                        limits: AltitudeLimits {
+                            rig_minimum_degrees: 0.0,
+                            project_minimum_degrees: 0.0,
+                            horizon_offset_degrees: 0.0,
+                            rig_maximum_degrees: 90.0,
+                            project_maximum_degrees: 90.0,
+                        },
+                        targets: vec![],
+                        start_ms: noon + 3_600_000,
+                        nights: 1,
+                        step_ms: STEP_MS,
+                        dark_below_degrees: below,
+                        meridian_exclusion: MeridianExclusion {
+                            before_ms: 0,
+                            after_ms: 0,
+                        },
+                        meridian_window_ms: 0,
+                        available: None,
+                    };
+                    let night = night_summary(&request, 0).unwrap();
+                    let summary = night.dusk_ms.zip(night.dawn_ms);
+                    nights_without_darkness += usize::from(summary.is_none());
+                    assert_eq!(darkness(&[Some(Arc::clone(&sky))], below), vec![summary]);
+                }
+            }
+        }
+        assert!(nights_without_darkness > 0);
+        assert_eq!(darkness(&[None], DARK_BELOW_DEGREES), vec![None]);
     }
 }
