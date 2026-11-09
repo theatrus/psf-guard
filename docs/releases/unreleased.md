@@ -24,4 +24,5 @@
 - **Trust a Director rig's night load:** The Nights page counts only the plans activated on a Director rig, and shows **Full** instead of large overbooked hours from targets that overlap.
 - **See why a rig gets no work:** The **Plugins** tab explains when work is off, a plugin was removed or an activated plan cannot run. Equipment and setup updates preserve work permission.
 - **Recover a stuck rig:** When a plugin is removed while it holds work, **Close work** lets the rig take work again. Attempts it reported stay spent.
+- **One forecast credit on Live:** The **Live** page credits the forecast provider once, below the rig table, instead of on every rig.
 - **Clearer pairing codes:** **Generate pairing code** is now **Generate Sync pairing code**, and the Sync tab shows where Director pairs.
