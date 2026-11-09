@@ -80,8 +80,8 @@ export default function DirectorDashboard() {
         const slug = view.catalog_slug;
         const historyShown = !!slug && historyOpen.has(view.rig.id);
         return <Fragment key={view.rig.id}><tr className={`is-${view.connectivity.state}`}>
-          <td><span className="director-cell-label">Rig</span><strong>{view.catalog_name ?? view.rig.name}</strong>{view.catalog_name && view.catalog_name !== view.rig.name && <span className="director-muted"> {view.rig.name}</span>}
-            <span className="live-link"><span className={`director-connectivity is-${view.connectivity.state}`}>{STATE_LABEL[view.connectivity.state]}</span>{view.connectivity.age_ms !== null && <span className="director-muted"> {formatAge(view.connectivity.age_ms)}</span>}</span>
+          <td className="live-rig"><span className="director-cell-label">Rig</span><strong>{view.catalog_name ?? view.rig.name}</strong>{view.catalog_name && view.catalog_name !== view.rig.name && <span className="director-muted"> {view.rig.name}</span>}
+            <span className="live-link"><span className={`director-connectivity is-${view.connectivity.state}`}>{STATE_LABEL[view.connectivity.state]}</span>{view.connectivity.age_ms !== null && <span className="director-muted">{formatAge(view.connectivity.age_ms)}</span>}</span>
           </td>
           <td><span className="director-cell-label">Now</span>{directorNow}{errors.map(error => <span key={error} className="director-error"> {error}</span>)}
             {sequence && <div data-testid="sync-sequence" title={view.sync?.sequence?.operation}>{directorNow && <span className="director-muted">Sync plugin: </span>}{sequence}{recent && <small className="director-muted"> · {recent}</small>}</div>}
@@ -109,7 +109,10 @@ export default function DirectorDashboard() {
             : <span className="director-muted">no database</span>}</td>
           <td><span className="director-cell-label">Tonight</span><TonightCell rig={tonight.data?.rigs.find(entry => entry.rig.id === view.rig.id)} pending={tonight.isPending} failed={tonight.isError ? message(tonight.error) : null} /></td>
         </tr>
-        {historyShown && slug && <tr className="live-history-row"><td colSpan={6} id={`history-${view.rig.id}`}><PluginHistory slug={slug} now={now} /></td></tr>}
+        {historyShown && slug && <tr className="live-history-row"><td colSpan={6} id={`history-${view.rig.id}`}>
+          {plugins.map(plugin => <p key={plugin.name} className="live-history-details"><strong>{plugin.name}:</strong> {plugin.title}</p>)}
+          <PluginHistory slug={slug} now={now} />
+        </td></tr>}
         </Fragment>;
       })}</tbody>
     </table></div>}

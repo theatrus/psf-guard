@@ -146,6 +146,8 @@ describe('Director live dashboard', () => {
     fireEvent.click(button);
     const history = await screen.findByRole('list', { name: 'Plugin history' });
     expect(button).toHaveAttribute('aria-expanded', 'true');
+    // Contact times are visible here too, not only in a tooltip.
+    expect(screen.getByText(/Program pull 1 h ago \(rev abcdef01\), check-in 2 min ago/)).toBeInTheDocument();
     const items = within(history).getAllByRole('listitem');
     expect(items[0]).toHaveTextContent('2 min ago Uploaded M31_0002.fits');
     expect(items[1]).toHaveClass('director-error');

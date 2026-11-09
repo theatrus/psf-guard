@@ -311,10 +311,8 @@ impl RemoteAuditLog {
     }
 
     /// Kinds of action whose newest entry on `catalog_id` was refused or
-    /// failed, newest first, while nothing in the same group has worked
-    /// since. Uploads are one group and the sync exchanges another, so a
-    /// stream of uploads never hides a refused merge, but a later merge or
-    /// send that worked clears it.
+    /// failed, newest first, while nothing that does the same work has
+    /// worked since: see [`clears`].
     pub fn problems(&self, catalog_id: &str) -> Vec<LatestAction> {
         let latest = self
             .latest
@@ -326,8 +324,10 @@ impl RemoteAuditLog {
         let worked_since = |problem: &LatestAction| {
             kinds.values().any(|other| {
                 other.outcome == AuditOutcome::Ok
-                    && other.at_ms >= problem.at_ms
-                    && other.action.is_upload() == problem.action.is_upload()
+                    // Strictly later: entries read back from the log keep
+                    // whole seconds, and a tie proves nothing.
+                    && other.at_ms > problem.at_ms
+                    && clears(other, problem)
             })
         };
         let mut problems: Vec<_> = kinds
@@ -344,27 +344,38 @@ impl RemoteAuditLog {
     /// files, so call it off the async runtime.
     pub fn history(&self, catalog_id: &str, limit: usize) -> Vec<LatestAction> {
         let mut entries = Vec::new();
-        for path in [self.path.with_extension("jsonl.1"), self.path.clone()] {
+        // The previous generation follows on only when the current file is
+        // read whole; otherwise the list would jump over the unread middle.
+        let current_whole =
+            fs::metadata(&self.path).map_or(true, |meta| meta.len() <= HISTORY_TAIL_BYTES);
+        let previous = current_whole.then(|| self.path.with_extension("jsonl.1"));
+        // Skip other catalogs' lines before parsing them.
+        let marker = format!("\"catalog_id\":{}", serde_json::Value::from(catalog_id));
+        for path in previous.into_iter().chain([self.path.clone()]) {
             let Ok(tail) = read_tail(&path, HISTORY_TAIL_BYTES) else {
                 continue;
             };
-            entries.extend(tail.lines().filter_map(|line| {
-                let entry = serde_json::from_str::<LoggedEntry>(line).ok()?;
-                if entry.catalog_id != catalog_id
-                    || !is_notable(entry.action, entry.detail.as_deref())
-                {
-                    return None;
-                }
-                let at = chrono::DateTime::parse_from_rfc3339(&entry.at).ok()?;
-                Some(LatestAction {
-                    at_ms: at.timestamp_millis(),
-                    action: entry.action,
-                    outcome: entry.outcome,
-                    operation: entry.operation,
-                    detail: entry.detail,
-                    summary: entry.summary,
-                })
-            }));
+            entries.extend(
+                tail.lines()
+                    .filter(|line| line.contains(&marker))
+                    .filter_map(|line| {
+                        let entry = serde_json::from_str::<LoggedEntry>(line).ok()?;
+                        if entry.catalog_id != catalog_id
+                            || !is_notable(entry.action, entry.detail.as_deref())
+                        {
+                            return None;
+                        }
+                        let at = chrono::DateTime::parse_from_rfc3339(&entry.at).ok()?;
+                        Some(LatestAction {
+                            at_ms: at.timestamp_millis(),
+                            action: entry.action,
+                            outcome: entry.outcome,
+                            operation: entry.operation,
+                            detail: entry.detail,
+                            summary: entry.summary,
+                        })
+                    }),
+            );
         }
         entries.reverse();
         entries.truncate(limit);
@@ -435,6 +446,32 @@ impl RemoteAuditLog {
             return;
         }
         let _ = fs::rename(&self.path, self.path.with_extension("jsonl.1"));
+    }
+}
+
+/// Whether `worked`, a success, shows that `problem` no longer applies. An
+/// upload clears an upload. A sync exchange clears one with the same
+/// operation (a merge preview refused while scheduler sync was off clears
+/// once a merge works), and one without an operation clears with the same
+/// action. Uploads never clear a sync exchange, so a stream of frames does
+/// not hide a refused merge, and a preview or export, which reads only,
+/// never clears a refused apply.
+fn clears(worked: &LatestAction, problem: &LatestAction) -> bool {
+    if problem.action.is_upload() || worked.action.is_upload() {
+        return problem.action.is_upload() && worked.action.is_upload();
+    }
+    let reads_only = |action: AuditAction| {
+        matches!(
+            action,
+            AuditAction::Preview | AuditAction::PreviewRefresh | AuditAction::Export
+        )
+    };
+    if reads_only(worked.action) && !reads_only(problem.action) {
+        return false;
+    }
+    match &problem.operation {
+        Some(operation) => worked.operation.as_ref() == Some(operation),
+        None => worked.action == problem.action,
     }
 }
 
@@ -657,85 +694,108 @@ mod tests {
     }
 
     #[test]
-    fn a_problem_stays_until_something_in_its_group_works() {
+    fn a_problem_stays_until_the_same_work_succeeds() {
         let directory = tempdir().unwrap();
         let log = RemoteAuditLog::new(directory.path());
-        let merge = |outcome| AuditRecord {
-            operation: Some("merge"),
-            detail: (outcome != AuditOutcome::Ok).then_some("destination changed"),
-            ..Default::default()
+        let tick = || std::thread::sleep(std::time::Duration::from_millis(2));
+        let record = |action, outcome, operation: Option<&str>, detail: Option<&str>| {
+            tick();
+            log.record(
+                "rig",
+                action,
+                outcome,
+                AuditRecord {
+                    operation,
+                    detail,
+                    ..Default::default()
+                },
+            );
         };
-        log.record(
-            "rig",
-            AuditAction::Apply,
+        // A merge preview refused while scheduler sync was off.
+        record(
+            AuditAction::Preview,
             AuditOutcome::Refused,
-            merge(AuditOutcome::Refused),
+            Some("merge"),
+            Some("remote scheduler sync is disabled for this database"),
         );
-        log.record(
-            "rig",
+        record(
             AuditAction::ImageUpload,
             AuditOutcome::Ok,
-            AuditRecord {
-                operation: Some("light"),
-                detail: Some("M31_0001.fits"),
-                ..Default::default()
-            },
+            Some("light"),
+            Some("M31_0001.fits"),
         );
-        // An unchanged star-detection snapshot is contact, not an action.
-        log.record(
-            "rig",
+        record(
             AuditAction::StarDetectionProfile,
             AuditOutcome::Ok,
-            AuditRecord {
-                operation: Some("star_detection_profile"),
-                detail: Some("unchanged"),
-                ..Default::default()
-            },
+            Some("star_detection_profile"),
+            Some("unchanged"),
         );
-        assert_eq!(log.latest("rig").unwrap().action, AuditAction::ImageUpload);
-        let problems = log.problems("rig");
-        assert_eq!(problems.len(), 1);
-        assert_eq!(problems[0].detail.as_deref(), Some("destination changed"));
-        // A later sync exchange that worked, of any kind, clears it.
-        log.record(
-            "rig",
-            AuditAction::Export,
-            AuditOutcome::Ok,
-            AuditRecord {
-                operation: Some("push_planning"),
-                ..Default::default()
-            },
-        );
-        assert!(log.problems("rig").is_empty());
-        // Uploads and sync exchanges each clear only their own group.
-        std::thread::sleep(std::time::Duration::from_millis(2));
-        log.record(
-            "rig",
-            AuditAction::ImageUpload,
-            AuditOutcome::Refused,
-            AuditRecord {
-                detail: Some("sha256 mismatch"),
-                ..Default::default()
-            },
-        );
-        std::thread::sleep(std::time::Duration::from_millis(2));
-        log.record(
-            "rig",
+        record(
             AuditAction::Apply,
             AuditOutcome::Ok,
-            merge(AuditOutcome::Ok),
+            Some("push_grades"),
+            None,
         );
+        // Uploads, an unchanged snapshot and another operation leave it.
+        assert_eq!(log.latest("rig").unwrap().action, AuditAction::Apply);
         assert_eq!(log.problems("rig").len(), 1);
-        log.record(
-            "rig",
+        // A merge that works clears it.
+        record(AuditAction::Apply, AuditOutcome::Ok, Some("merge"), None);
+        assert!(log.problems("rig").is_empty());
+
+        // A refused apply stays while each cycle's preview works.
+        record(
+            AuditAction::Apply,
+            AuditOutcome::Refused,
+            Some("merge"),
+            Some("destination changed"),
+        );
+        record(AuditAction::Preview, AuditOutcome::Ok, Some("merge"), None);
+        record(AuditAction::Export, AuditOutcome::Ok, Some("merge"), None);
+        assert_eq!(
+            log.problems("rig")[0].detail.as_deref(),
+            Some("destination changed")
+        );
+        record(AuditAction::Apply, AuditOutcome::Ok, Some("merge"), None);
+        assert!(log.problems("rig").is_empty());
+
+        // An upload clears an upload, and only an upload.
+        record(
+            AuditAction::ImageUpload,
+            AuditOutcome::Refused,
+            None,
+            Some("sha256 mismatch"),
+        );
+        record(AuditAction::Apply, AuditOutcome::Ok, Some("merge"), None);
+        assert_eq!(log.problems("rig").len(), 1);
+        record(
             AuditAction::ImageUpload,
             AuditOutcome::Ok,
-            AuditRecord {
-                detail: Some("M31_0002.fits"),
-                ..Default::default()
-            },
+            Some("light"),
+            Some("M31_0002.fits"),
         );
         assert!(log.problems("rig").is_empty());
+    }
+
+    #[test]
+    fn a_success_in_the_same_second_does_not_clear_a_problem() {
+        let directory = tempdir().unwrap();
+        let log = RemoteAuditLog::new(directory.path());
+        let entry = |at_ms, action, outcome| LatestAction {
+            at_ms,
+            action,
+            outcome,
+            operation: Some("merge".into()),
+            detail: None,
+            summary: BTreeMap::new(),
+        };
+        // Read back from the log, both carry whole seconds.
+        log.remember(
+            "rig",
+            entry(1_000, AuditAction::Apply, AuditOutcome::Refused),
+        );
+        log.remember("rig", entry(1_000, AuditAction::Preview, AuditOutcome::Ok));
+        assert_eq!(log.problems("rig").len(), 1);
     }
 
     #[test]

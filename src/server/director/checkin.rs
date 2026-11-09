@@ -362,6 +362,11 @@ async fn active_projects(paths: Vec<(String, String)>) -> std::collections::Hash
                         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
                     )
                     .ok()?;
+                // Live polls every few seconds: a database another writer
+                // holds is left without a count rather than waited on.
+                connection
+                    .busy_timeout(std::time::Duration::from_millis(250))
+                    .ok()?;
                 let count: i64 = connection
                     .query_row("SELECT COUNT(*) FROM project WHERE state=1", [], |row| {
                         row.get(0)
@@ -543,7 +548,8 @@ mod active_project_tests {
         }
         // A catalog on a local disk runs in write-ahead-log mode with the
         // server's own connection open.
-        db.query_row("PRAGMA journal_mode=WAL", [], |_| Ok(())).unwrap();
+        db.query_row("PRAGMA journal_mode=WAL", [], |_| Ok(()))
+            .unwrap();
         let missing = dir.path().join("missing.sqlite");
         let counts = active_projects(vec![
             ("rig".into(), path.to_string_lossy().into_owned()),

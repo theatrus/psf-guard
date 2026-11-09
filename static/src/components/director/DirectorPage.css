@@ -125,7 +125,10 @@ a.library-planning { display: inline-flex; align-items: center; justify-content:
 }
 .director-dashboard-table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .director-dashboard-table th { text-align: left; font-weight: 500; color: var(--color-text-secondary); padding: 4px 6px; white-space: nowrap; }
-.director-dashboard-table .live-link { display: block; margin-top: 4px; white-space: nowrap; }
+.director-dashboard-table .live-rig { white-space: nowrap; }
+.director-dashboard-table .live-link { display: flex; align-items: center; gap: 6px; margin-top: 4px; white-space: nowrap; font-size: 12px; }
+.director-dashboard-table .live-link .director-connectivity { min-width: 6.5em; text-align: center; }
+.director-dashboard-table .live-history-details { margin: 0 0 4px; font-size: 13px; }
 .director-dashboard-table .live-history-row td { border-top: none; padding-top: 0; }
 .director-dashboard-table .live-history { margin: 0; padding-left: 0; list-style: none; font-size: 13px; }
 .director-dashboard-table .live-no-weather { white-space: nowrap; }
