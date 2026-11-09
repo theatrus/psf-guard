@@ -742,12 +742,12 @@ describe('CalibrationPage', () => {
     await waitFor(() => expect(params().get('calMaster')).toBeNull());
   });
 
-  it('moves the Scheduler flats tab into the page', async () => {
+  it('keeps the flat coverage tab on its existing route', async () => {
     serve();
     server.use(http.get('/api/db/demo/flat-history', () => ok({ records: [], total: 0, limit: 50, offset: 0, pending: 0 })));
     renderPage('/calibration?db=demo&calTab=scheduler');
-    expect(await screen.findByRole('tabpanel', { name: 'Scheduler flats' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Scheduler flats' })).toHaveAttribute('aria-selected', 'true');
+    expect(await screen.findByRole('tabpanel', { name: 'Flat coverage' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Flat coverage' })).toHaveAttribute('aria-selected', 'true');
   });
 
   describe('duplicates', () => {

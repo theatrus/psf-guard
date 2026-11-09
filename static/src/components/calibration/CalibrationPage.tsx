@@ -43,7 +43,7 @@ const GROUP_STRIP_FRAMES = 5_000;
 const TABS: { value: CalibrationTab; label: string }[] = [
   { value: 'frames', label: 'Frames' },
   { value: 'masters', label: 'Masters' },
-  { value: 'scheduler', label: 'Scheduler flats' },
+  { value: 'scheduler', label: 'Flat coverage' },
 ];
 
 /**
@@ -72,7 +72,7 @@ export default function CalibrationPage() {
   // The project whose calibration the page shows, from calProject.
   const scopedName = projects.find((project) => project.db_id === dbId && project.id === filters.project)?.name;
   const { scope: projectScope, query: scopeQuery } = useProjectScope(dbId, filters.project, scopedName);
-  // Scheduler flats and Duplicates read the whole library, so they say no
+  // Flat coverage and Duplicates read the whole library, so they show no
   // scope; it comes back with Frames or Masters.
   const scope = state.tab !== 'scheduler' && !filters.duplicates ? projectScope : null;
   const scopeUse = scopeQuery.data;

@@ -29,6 +29,14 @@ function serve(rows: SchedulerFlatHistoryRecord[], total = rows.length) {
 }
 
 describe('scheduler flat coverage', () => {
+  it('shows Director profile coverage and explains both replacement workflows', async () => {
+    serve([{ ...row, source_name: 'Director', flats_type: 'Director panel', target_guid: null, target_name: null }]);
+    render(<SchedulerFlatHistory dbId="demo" canManage />, { wrapper: wrapper() });
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Select coverage 1 for profile flats' }));
+    expect(screen.getByRole('tabpanel', { name: 'Flat coverage' })).toBeInTheDocument();
+    expect(screen.getByText(/Director checks replacement requests before Director Flats/)).toHaveTextContent("Sync plugin's next grade pull");
+    expect(screen.getByText(/Image files are kept/)).toBeInTheDocument();
+  });
   it('requires a reason and submits exact selected records, including duplicates', async () => {
     serve([row, { ...row, record_id: 'record-b', source_row_id: 2 }]);
     let received: unknown;

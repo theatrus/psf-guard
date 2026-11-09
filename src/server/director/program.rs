@@ -269,6 +269,10 @@ pub(super) struct Gathered {
 }
 
 impl Gathered {
+    pub(super) fn calibration_recipes(&self) -> &[Recipe] {
+        &self.built.recipes
+    }
+
     pub(super) fn goals(&self) -> &[Goal] {
         &self.built.goals
     }
