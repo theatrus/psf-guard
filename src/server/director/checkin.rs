@@ -541,7 +541,9 @@ mod active_project_tests {
             )
             .unwrap();
         }
-        drop(db);
+        // A catalog on a local disk runs in write-ahead-log mode with the
+        // server's own connection open.
+        db.query_row("PRAGMA journal_mode=WAL", [], |_| Ok(())).unwrap();
         let missing = dir.path().join("missing.sqlite");
         let counts = active_projects(vec![
             ("rig".into(), path.to_string_lossy().into_owned()),
@@ -550,5 +552,6 @@ mod active_project_tests {
         .await;
         assert_eq!(counts.get("rig"), Some(&2));
         assert_eq!(counts.get("missing"), None);
+        drop(db);
     }
 }

@@ -23,7 +23,7 @@ const state = (cloud: CloudAssessment, evaluated: number, now: number) => {
 export function RigWeatherSummary({ weather, now, compact = false }: { weather?: RigWeather; now: number; compact?: boolean }) {
   const r = weather?.reported;
   const f = weather?.forecast;
-  if (!weather || compact && !r && !f) return <span className="director-muted">No weather</span>;
+  if (!weather || compact && !r && !f) return <span className="director-muted live-no-weather">No weather</span>;
   if (compact) return <div aria-label="Rig weather" className="live-weather">
     {r && <div><span className="director-muted">NINA</span> {r.sample.source_name}{!r.sample.connected && ' (disconnected)'} · {number(r.sample.values.cloud_percent, '% cloud')} · {state(weather.reported_cloud, weather.evaluated_at_ms, now)}<span className="director-muted"> · {formatAge(now - r.sample.reported_at_ms)}</span></div>}
     {f && <div><span className="director-muted">Forecast</span> {PROVIDER_LABEL[f.provider]} · {number(f.hour?.cloud_total, '% cloud')} · {state(weather.forecast_conditions, weather.evaluated_at_ms, now)}</div>}

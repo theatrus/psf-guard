@@ -102,7 +102,7 @@ export default function DirectorDashboard() {
               : plugins.map((plugin, index) => <span key={plugin.name} title={plugin.title}>{index > 0 && ' · '}{plugin.name}</span>)}
             {view.pending_receipts > 0 && <span className="director-muted"> · {view.pending_receipts} saved, ungraded</span>}
             {problems.map(problem => <div key={`${problem.action}:${problem.operation ?? ''}`} className="director-error">{describeSyncAction(problem)} <span className="director-muted">{age(problem.at_ms)}</span></div>)}
-            {slug && <div><button type="button" className="link-button" aria-expanded={historyShown} aria-controls={`history-${view.rig.id}`} onClick={() => toggleHistory(view.rig.id)}>History</button></div>}
+            {slug && (plugins.length > 0 || view.sync) && <div><button type="button" className="director-link-button" aria-expanded={historyShown} aria-controls={`history-${view.rig.id}`} onClick={() => toggleHistory(view.rig.id)}>History</button></div>}
           </td>
           <td><span className="director-cell-label">Projects</span>{slug
             ? <Link to={`/?${new URLSearchParams({ db: slug, dbfilter: slug, show: 'active' })}`}>{view.active_projects == null ? 'Active projects' : `${view.active_projects} active`}</Link>
