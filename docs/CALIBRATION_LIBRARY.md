@@ -387,6 +387,14 @@ calibration, and the source file needs no header edits.
 how they take part: use one whenever it matches (the default), only when raw
 frames cannot build a master, or never. A rig can choose for itself.
 
+With the default, a flat master shot further from the lights than the
+**Flat age limit** is used only when the raw flats cannot build a master.
+For example, a night with its own raw flats but no master of its own builds
+a master from those flats, rather than taking a master from three weeks
+before. The calibration report lists the older master with the reason, such
+as `21 days from the light, past the 1-day flat age limit set globally; raw
+flats build a master instead`.
+
 A flat master integrated at another gain or offset than the lights, such as
 flats and flat darks shot at gain 0 for lights at gain 100, is refused by
 default, and the report says so: `gain light=100 master=0; offset light=80

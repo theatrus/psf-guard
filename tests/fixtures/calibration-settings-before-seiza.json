@@ -76,7 +76,7 @@
       "key": "external_masters",
       "group": "matching",
       "label": "External masters",
-      "help": "Masters from PixInsight, Siril and other tools, matched by their headers.",
+      "help": "Masters from PixInsight, Siril and other tools, matched by their headers. A flat master past the flat age limit is used only when the raw flats can't build one.",
       "effect": "matching",
       "kind": {
         "type": "choice",
