@@ -45,17 +45,31 @@ function fixture() {
   return { saves, parsed };
 }
 
-function mount() {
+function mount(focusSite: string | null = null) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   function Wrapper({ children }: { children: ReactNode }) {
     const access = useAccess();
     return <QueryClientProvider client={client}><AccessContext.Provider value={{ ...access, canWrite: true }}>{children}</AccessContext.Provider></QueryClientProvider>;
   }
-  return render(<DirectorSites />, { wrapper: Wrapper });
+  return render(<DirectorSites focusSite={focusSite} />, { wrapper: Wrapper });
 }
 
 describe('Director sites', () => {
   afterEach(() => vi.unstubAllGlobals());
+
+  it('opens the site a rig asked for, with focus on its forecast', async () => {
+    fixture();
+    server.use(
+      http.get('/api/director/v1/sites', () => HttpResponse.json(ok({ items: [{ id: 'a', name: 'Folsom', revision: 1 }, { id: 'b', name: 'Starfront', revision: 1 }], next_after: null }))),
+      http.get('/api/director/v1/sites/:id/profile', ({ params }) => HttpResponse.json(ok({ site: { id: params.id, name: params.id === 'a' ? 'Folsom' : 'Starfront', revision: 1 },
+        profile: { site_id: params.id, revision: 1, location: null, horizon: null, forecast: { provider: 'open_meteo', cloud_threshold_percent: 30 }, updated_at_ms: 1 } }))),
+    );
+    mount('b');
+    const starfront = await screen.findByRole('region', { name: 'Site Starfront' });
+    await waitFor(() => expect(within(starfront).getByLabelText('Forecast')).toHaveFocus());
+    expect(screen.getByRole('button', { name: 'Edit Starfront' })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('button', { name: 'Edit Folsom' })).toHaveAttribute('aria-expanded', 'false');
+  });
 
   it('keeps a site\'s unsaved edits while another is open, and says they are unsaved', async () => {
     fixture();

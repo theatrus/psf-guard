@@ -1,10 +1,11 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { server } from '../../../test/msw-server';
 import type { RigWeather } from '../../../api/weatherTypes';
 import RigWeatherPanel, { RigWeatherSummary } from '../RigWeather';
+import { OPEN_SETTINGS_EVENT, type OpenSettingsDetail } from '../../../utils/settingsIntent';
 
 const now = 1_800_000_000_000;
 const weather: RigWeather = {
@@ -18,6 +19,27 @@ const weather: RigWeather = {
 };
 
 describe('rig weather', () => {
+  it.each([
+    ['site', true],
+    [null, false],
+  ] as const)('links a rig with site %s to its weather settings', async (site, linked) => {
+    server.use(http.get('/api/director/v1/rigs/rig/weather', () => HttpResponse.json({ success: true, data: { ...weather, site_id: site } })));
+    const opened = vi.fn();
+    const listener = (event: Event) => opened((event as CustomEvent<OpenSettingsDetail>).detail);
+    window.addEventListener(OPEN_SETTINGS_EVENT, listener);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><RigWeatherPanel rig="rig" /></QueryClientProvider>);
+    expect(await screen.findByText(/Clear at or under 30% cloud/)).toBeInTheDocument();
+    if (linked) {
+      fireEvent.click(screen.getByRole('button', { name: 'Edit site weather' }));
+      expect(opened).toHaveBeenCalledWith({ intent: 'sites', field: 'site' });
+    } else {
+      expect(screen.queryByRole('button', { name: 'Edit site weather' })).toBeNull();
+      expect(screen.getByText(/Choose a planning site in the Site tab/)).toBeInTheDocument();
+    }
+    window.removeEventListener(OPEN_SETTINGS_EVENT, listener);
+  });
+
   it('keeps reported clouds and a contradictory forecast visible with attribution', () => {
     render(<RigWeatherSummary weather={weather} now={now} />);
     expect(screen.getByText(/85% cloud · cloudy/)).toBeInTheDocument();

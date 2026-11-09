@@ -2411,7 +2411,8 @@ With a compatible plugin update, set up weather holds:
    or both. Both are off by default.
 
 The forecast uses the site's cloud threshold and optional dew limit from **Settings
-› Presets › Sites**, including a paid source configured on the server. Provider
+› Presets › Sites**, including a paid source configured on the server. On a rig's
+**Rig setup › Weather** tab, **Edit site weather** opens its planning site there. Provider
 keys stay on the server; reading weather never requests a provider refresh.
 N.I.N.A. cloud cover uses the same cloud threshold, independently of forecasts.
 

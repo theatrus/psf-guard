@@ -2206,7 +2206,7 @@ export default function TauriSettings({
             ? <div className="settings-setups director-page director-embedded"><DirectorRigs key={selectedDatabase.id} databaseId={selectedDatabase.id} syncPlugin={syncPluginSection} initialTab={rigTab} /></div>
             : <div className="settings-setups">{syncPluginSection}</div>)}
 
-          {currentTab === 'sites' && <div className="settings-setups director-page director-embedded"><DirectorSites /></div>}
+          {currentTab === 'sites' && <div className="settings-setups director-page director-embedded"><DirectorSites focusSite={initialIntent === 'sites' ? initialField : null} /></div>}
 
           {currentTab === 'templates' && <div className="settings-setups director-page director-embedded"><TemplateLibrary /></div>}
 
