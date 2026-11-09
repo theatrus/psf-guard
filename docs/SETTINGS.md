@@ -62,9 +62,10 @@ control. The selected page includes the database name.
     Director plugin may take work.
   - The Sync plugin's panel follows the Director plugin's: **Pair**,
     **Scheduler sync**, **Image uploads** and **Remote API key**. Each part
-    shows whether it is on, and **Turn on** or **Turn off** applies at once.
-    Changes to the receive folder or folder layout need
-    **Save upload settings**.
+    shows whether it is on. **Scheduler sync** and **Image uploads** each have
+    **Turn on** or **Turn off**, which applies at once. Changes to the receive
+    folder or folder layout need **Save upload settings**. A new remote API
+    key is shown once, then saved with **Save key**.
   - Under **Pair**, each paired Sync plugin shows when it last connected
     and which plugin version it reported. A note identifies a client whose plugin is too old
     to add new projects to its N.I.N.A. profile itself. Update that plugin

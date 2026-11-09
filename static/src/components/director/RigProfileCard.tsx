@@ -1,7 +1,7 @@
-import { useEffect, useId, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { type QueryClient, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError, type AxiosError } from 'axios';
-import { Camera, Check, CloudSun, Download, Link2, MapPin, Plug, RefreshCw, SlidersHorizontal } from 'lucide-react';
+import { Camera, Check, CloudSun, Download, Link2, MapPin, Plug, SlidersHorizontal } from 'lucide-react';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
 import type { DirectorRigProfileView, DirectorRigSite } from '../../api/directorTypes';
@@ -97,7 +97,11 @@ export default function RigProfileCard({ slug, syncPlugin, initialTab }: {
   const { canWrite } = useAccess();
   const client = useQueryClient();
   const queryKey = ['directorRigProfile', slug];
-  const loaded = useQuery({ queryKey, queryFn: () => profileOrRig(slug, client), refetchOnWindowFocus: false,
+  // Coming back to the page reads the rig again, unless you have edits a
+  // reload would replace.
+  const unsavedRef = useRef(false);
+  const fresh = () => !unsavedRef.current;
+  const loaded = useQuery({ queryKey, queryFn: () => profileOrRig(slug, client), refetchOnWindowFocus: fresh,
     // Director admits one metadata request at a time; a 503 means wait, not fail.
     retry: (count, error) => count < 5 && statusOf(error) === 503, retryDelay: 700 });
   const peers = useQuery({ queryKey: ['peers'], queryFn: apiClient.getPeers, retry: false, refetchOnWindowFocus: false });
@@ -105,7 +109,7 @@ export default function RigProfileCard({ slug, syncPlugin, initialTab }: {
   // gives it. The rig's own location and horizon still win.
   const rigId = loaded.data?.rig.id;
   const sites = useQuery({ queryKey: ['observingDefaults'], queryFn: apiClient.getObservingDefaults, refetchOnWindowFocus: false });
-  const rigSettings = useQuery({ queryKey: ['observingSettings', 'rig', rigId], queryFn: () => apiClient.getObservingSettings('rig', rigId!), enabled: !!rigId, refetchOnWindowFocus: false });
+  const rigSettings = useQuery({ queryKey: ['observingSettings', 'rig', rigId], queryFn: () => apiClient.getObservingSettings('rig', rigId!), enabled: !!rigId, refetchOnWindowFocus: fresh });
   const summaries = useQuery({ queryKey: ['directorRigProfiles'], queryFn: apiClient.getDirectorRigProfiles, refetchOnWindowFocus: false });
   const placed = summaries.data?.find(entry => entry.catalog_slug === slug)?.site;
   const [form, setForm] = useState<RigProfileForm | null>(null);
@@ -202,13 +206,12 @@ export default function RigProfileCard({ slug, syncPlugin, initialTab }: {
   const unsaved = !!data && !!form && canWrite
     && (JSON.stringify(form) !== JSON.stringify(formFromProfile(data.profile)) || siteChanged || schedulingChanged);
   useUnsavedChanges(`${data?.rig.name ?? slug} setup`, unsaved);
+  useEffect(() => { unsavedRef.current = unsaved; }, [unsaved]);
   const disabled = !canWrite || save.isPending || stale;
   const optics = form ? opticsFromForm(form) : null;
   const preview = optics ? fieldOfView(optics) : null;
   return <section className="rig-profile" aria-label="Rig profile">
-    <div className="director-toolbar rig-profile-heading"><h4>Setup</h4>
-      <button type="button" aria-label="Reload rig profile" title="Reload rig profile" disabled={loaded.isFetching || save.isPending} onClick={reload}><RefreshCw size={16} /></button>
-    </div>
+    <div className="director-toolbar rig-profile-heading"><h4>Setup</h4></div>
     {loaded.isPending && <p role="status">Loading rig profile...</p>}
     {/* A database with no rig yet still pairs the Sync plugin; its record line
         already says how to add the rig, so the not-found error stays out. */}

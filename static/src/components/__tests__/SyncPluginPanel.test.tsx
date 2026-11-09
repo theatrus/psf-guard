@@ -11,7 +11,7 @@ const at = Math.floor(Date.now() / 1000) - 5 * 60;
 const paired = { client_uuid: 'a', name: 'Observatory PC', paired_at: at, last_contact: { at, version: '1.4.0.0', capabilities: ['waiting_profile_v1'], places_new_projects: true } };
 
 type Receiver = Record<string, unknown>;
-function show(receiver: Receiver) {
+function show(receiver: Receiver, { failSaves = false, expiresIn = 3600 } = {}) {
   let current: Receiver = {
     enabled: false, sync_enabled: false, token_configured: false, key_configured: false, clients: [], placement: 'flat',
     directory_template: '%TARGET%/%DATE%/%TYPE%', directory_template_source: 'preset', directory_template_samples: 0, ...receiver,
@@ -23,10 +23,11 @@ function show(receiver: Receiver) {
     http.put('/api/databases/remote', async ({ request }) => {
       const body = await request.json() as { remote_image_upload: Record<string, unknown> };
       saves.push(body.remote_image_upload);
+      if (failSaves) return HttpResponse.json({ success: false, data: null, error: 'resolving remote image upload directory' }, { status: 400 });
       current = { ...current, ...Object.fromEntries(Object.entries(body.remote_image_upload).filter(([, value]) => value !== undefined)) };
       return HttpResponse.json(ok({ id: 'remote' }));
     }),
-    http.post('/api/databases/remote/pairing-token', () => HttpResponse.json(ok({ pairing_token: 'psfpt_code', expires_at: Math.floor(Date.now() / 1000) + 3600 }))),
+    http.post('/api/databases/remote/pairing-token', () => HttpResponse.json(ok({ pairing_token: 'psfpt_code', expires_at: Math.floor(Date.now() / 1000) + expiresIn }))),
     http.delete('/api/databases/remote/clients/:client', ({ params }) => { revoked.push(String(params.client)); return HttpResponse.json(ok(null)); }),
   );
   const access = { ...({} as ReturnType<typeof useAccess>), canWrite: true };
@@ -139,5 +140,32 @@ describe('Sync plugin panel', () => {
     await waitFor(() => expect(saves).toHaveLength(1));
     expect(saves[0].token).toBe((key as HTMLInputElement).value);
     expect(screen.queryByLabelText('New remote API key')).toBeNull();
+  });
+
+  it('still offers Turn off when sync and uploads stay on after the last plugin is removed', async () => {
+    const { saves } = show({ token_configured: false, sync_enabled: true, enabled: true, image_directory: '/images/remote' });
+    expect(await screen.findByTestId('sync-scheduler-state')).toHaveTextContent('On, but no plugin is paired, so nothing arrives.');
+    expect(screen.getByTestId('sync-upload-state')).toHaveTextContent('On, but no plugin is paired, so nothing arrives.');
+    expect(screen.queryByRole('button', { name: 'Turn on scheduler sync' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Turn off scheduler sync' }));
+    await waitFor(() => expect(saves).toHaveLength(1));
+    expect(saves[0]).toMatchObject({ sync_enabled: false });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Turn off image uploads' })).toBeEnabled());
+  });
+
+  it('keeps a generated key on screen when saving it fails', async () => {
+    show({}, { failSaves: true });
+    fireEvent.click(await screen.findByRole('button', { name: 'Generate key' }));
+    const key = (screen.getByLabelText('New remote API key') as HTMLInputElement).value;
+    fireEvent.click(screen.getByRole('button', { name: 'Save key' }));
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    expect(screen.getByLabelText('New remote API key')).toHaveValue(key);
+  });
+
+  it('drops a pairing code once it expires', async () => {
+    show({}, { expiresIn: 1 });
+    fireEvent.click(await screen.findByRole('button', { name: 'Generate Sync pairing code' }));
+    expect(await screen.findByLabelText('Sync pairing code')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByLabelText('Sync pairing code')).toBeNull(), { timeout: 3_000 });
   });
 });

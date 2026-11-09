@@ -494,13 +494,10 @@ export default function TauriSettings({
         setSelectedDatabaseId(created.database.id);
         setActiveTab(pluginImport ? SYNC_PLUGIN_PAGE : 'database-import');
         if (pluginImport) setRigTab('director');
-        if (pluginImport) {
-          resetForm();
-          setStatusMessage('Database created. Generate a pairing code below to connect PSF Guard Sync in N.I.N.A.');
-        } else {
-          resetForm();
-          setStatusMessage(`Created ${created.database.name}; importing frames…`);
-        }
+        resetForm();
+        setStatusMessage(pluginImport
+          ? 'Database created. Generate a pairing code below to connect PSF Guard Sync in N.I.N.A.'
+          : `Created ${created.database.name}; importing frames…`);
       } catch (err) {
         console.error('create-from-images failed:', err);
         const msg = err instanceof Error ? err.message : String(err);
@@ -1332,7 +1329,8 @@ export default function TauriSettings({
   // on Rig setup, beside the Director plugin when planning is on: each
   // database is one rig. The section ids and the saved settings are unchanged.
   const syncPluginSection = selectedDatabase && managementAllowed && canEdit
-    ? <SyncPluginPanel databaseId={selectedDatabase.id} />
+    // One panel per database: a code or key never carries to another.
+    ? <SyncPluginPanel key={selectedDatabase.id} databaseId={selectedDatabase.id} onChanged={() => void reload()} />
     : null;
 
   return (
@@ -1563,15 +1561,15 @@ export default function TauriSettings({
                       )}
                       {entry.remote_image_upload?.enabled && (
                         <div>
-                          <dt>Remote receive</dt>
+                          <dt>Image uploads</dt>
                           <dd>
                             {entry.remote_image_upload.image_dir} (
                             {entry.remote_image_upload.placement === 'target_tree'
                               ? entry.remote_image_upload.directory_template_source ===
                                 'catalog'
-                                ? `match database, ${entry.remote_image_upload.directory_template_samples ?? 0} ${entry.remote_image_upload.directory_template_samples === 1 ? 'sample' : 'samples'}`
-                                : 'match database'
-                              : 'receive directory'}
+                                ? `folders like the database's, from ${entry.remote_image_upload.directory_template_samples ?? 0} ${entry.remote_image_upload.directory_template_samples === 1 ? 'image' : 'images'}`
+                                : "folders like the database's"
+                              : 'all in the receive folder'}
                             )
                           </dd>
                         </div>

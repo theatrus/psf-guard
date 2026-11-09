@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { isAxiosError } from 'axios';
 import { apiClient } from '../../api/client';
 import type { DirectorRigMode } from '../../api/directorTypes';
 import { useAccess } from '../../auth/access';
@@ -20,7 +21,10 @@ export default function PluginsOnRig({ databaseId, director }: {
     enabled: !!director && canWrite,
     staleTime: 0,
     refetchOnWindowFocus: false,
-    retry: false,
+    // The Director panel shares this query: the store answers 503 while
+    // busy, which means wait, as there.
+    retry: (count, error) => count < 5 && isAxiosError(error) && error.response?.status === 503,
+    retryDelay: 700,
   });
   const upload = databases.data?.find(entry => entry.id === databaseId)?.remote_image_upload;
   // A paired plugin, or the remote API key a script uses.
@@ -32,7 +36,9 @@ export default function PluginsOnRig({ databaseId, director }: {
     : syncOn ? parts.join(', ') : 'Paired, scheduler sync and image uploads off';
   const view = plugin.data;
   const directorOn = !!view && view.clients.length > 0 && view.work === 'ready';
-  const directorState = !view
+  const directorState = !canWrite
+    ? 'Shown to editors'
+    : !view
     ? (plugin.isError ? 'Could not be read' : 'Checking...')
     : view.clients.length === 0
       ? 'Not paired'
@@ -47,7 +53,7 @@ export default function PluginsOnRig({ databaseId, director }: {
       </li>
       {director && <li data-testid="plugin-director">
         <span>PSF Guard Director</span>
-        <span className="plugin-state" data-on={directorOn}>{directorOn ? 'On' : 'Off'}</span>
+        {canWrite ? <span className="plugin-state" data-on={directorOn}>{directorOn ? 'On' : 'Off'}</span> : <span />}
         <span className="director-muted">{directorState}</span>
       </li>}
     </ul>

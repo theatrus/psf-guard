@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
-import { Check, Copy, KeyRound, Power, RefreshCw, Trash2, X } from 'lucide-react';
+import { Check, Copy, KeyRound, Power, Trash2, X } from 'lucide-react';
 import { ago, needsHttps, serverAddress } from '../rigs/pluginShared';
 import { apiClient } from '../../api/client';
 import { useAccess } from '../../auth/access';
@@ -73,7 +73,8 @@ export default function RigPluginPanel({ slug, mode, onRigChanged }: {
     // A save on another tab can stop work, so opening this tab always looks.
     staleTime: 0,
     refetchOnMount: 'always',
-    refetchOnWindowFocus: false,
+    // Coming back to the page reads the plugin again.
+    refetchOnWindowFocus: true,
     retry: (count, error) => count < 5 && statusOf(error) === 503,
     retryDelay: 700,
   });
@@ -120,7 +121,6 @@ export default function RigPluginPanel({ slug, mode, onRigChanged }: {
   return <section className="rig-profile-form rig-plugin" aria-label="Director plugin">
     <div className="director-toolbar">
       <div className="early-beta-heading"><h4>Director plugin</h4><EarlyBeta /></div>
-      <button type="button" aria-label="Reload Director plugin" title="Reload Director plugin" disabled={loaded.isFetching} onClick={() => void loaded.refetch()}><RefreshCw size={16} /></button>
     </div>
     {act.isError && <p className="director-error" role="alert">{problemOf(act.error)}</p>}
 

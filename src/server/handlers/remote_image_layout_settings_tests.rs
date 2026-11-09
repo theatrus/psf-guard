@@ -354,3 +354,36 @@ fn a_failed_or_empty_scan_returns_a_catalog_layout_to_its_preset() {
     );
     assert_eq!(layout.samples, 0);
 }
+
+#[test]
+fn a_missing_receive_folder_blocks_only_changes_that_need_it() {
+    // Uploads on, with a receive folder that is gone now (a drive not
+    // mounted). The setting stays on and other changes still save.
+    let mut entry = legacy_target_tree_entry();
+    entry.image_dirs = vec!["/psf-guard-test/not-mounted".into()];
+    entry.remote_image_upload = Some(crate::db_registry::RemoteImageUploadConfig {
+        enabled: true,
+        sync_enabled: true,
+        image_dir: "/psf-guard-test/not-mounted".into(),
+        ..Default::default()
+    });
+    entry
+        .remote_image_upload
+        .as_mut()
+        .unwrap()
+        .add_client("Observatory", "psfrc_observatory_credential_0123456789")
+        .unwrap();
+    let mut request = update();
+    request.enabled = true;
+    request.placement = None;
+    request.image_directory = Some("/psf-guard-test/not-mounted".into());
+    request.sync_enabled = Some(false);
+    apply_remote_image_upload_update(&mut entry, &request).unwrap();
+    let config = entry.remote_image_upload.as_ref().unwrap();
+    assert!(!config.sync_enabled);
+    assert!(config.enabled, "uploads stay on");
+
+    // Turning uploads on again checks the folder.
+    entry.remote_image_upload.as_mut().unwrap().enabled = false;
+    assert!(apply_remote_image_upload_update(&mut entry, &request).is_err());
+}

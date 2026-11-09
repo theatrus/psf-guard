@@ -1,5 +1,5 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { focusManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { server } from '../../test/msw-server';
@@ -89,11 +89,14 @@ describe('RigPluginPanel', () => {
     await screen.findByTestId('rig-plugin-work');
     expect(onRigChanged).not.toHaveBeenCalled();
     update({ ...base, profile_revision: 5, configuration: equipment, clients: [plugin] });
-    fireEvent.click(screen.getByRole('button', { name: 'Reload Director plugin' }));
+    // Coming back to the page reads the plugin again.
+    const comeBack = () => act(() => { focusManager.setFocused(false); focusManager.setFocused(true); });
+    comeBack();
     await waitFor(() => expect(onRigChanged).toHaveBeenCalledTimes(1));
-    fireEvent.click(screen.getByRole('button', { name: 'Reload Director plugin' }));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Reload Director plugin' })).toBeEnabled());
+    comeBack();
+    await new Promise(resolve => setTimeout(resolve, 50));
     expect(onRigChanged).toHaveBeenCalledTimes(1);
+    focusManager.setFocused(undefined);
   });
 
   it('explains why a report from a plugin that is not allowed to take work is not applied', async () => {

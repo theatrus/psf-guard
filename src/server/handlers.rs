@@ -1132,6 +1132,8 @@ fn apply_remote_image_upload_update(
     update: &RemoteImageUploadUpdate,
 ) -> Result<bool, AppError> {
     let mut config = entry.remote_image_upload.clone().unwrap_or_default();
+    let was_receiving = config.enabled;
+    let previous_dir = config.image_dir.clone();
     config.enabled = update.enabled;
     if let Some(directory) = update.image_directory.as_ref() {
         config.image_dir = directory.trim().to_string();
@@ -1216,7 +1218,10 @@ fn apply_remote_image_upload_update(
             "generate a remote API key before enabling remote scheduler sync".into(),
         ));
     }
-    if config.enabled {
+    // The receive folder is checked when uploads turn on or the folder
+    // changes. A folder missing now refuses uploads but leaves the setting
+    // on, so other changes (sync off, a new key) still save meanwhile.
+    if config.enabled && (!was_receiving || config.image_dir != previous_dir) {
         config
             .validated_image_dir(&entry.image_dirs)
             .map_err(|error| AppError::BadRequest(error.to_string()))?;

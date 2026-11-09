@@ -17,13 +17,13 @@ const pluginView = (clients: number, work: string) => ({
   plans: [], policy: null, work, left_out: [], grant: null, last_contact_at_ms: null,
 });
 
-function show(receiver: Record<string, unknown>, director?: { clients: number; work: string }) {
+function show(receiver: Record<string, unknown>, director?: { clients: number; work: string }, canWrite = true) {
   server.use(
     http.get('/api/databases', () => HttpResponse.json(ok([{ id: 'rig', name: 'Rig', image_directories: [], remote_image_upload: upload(receiver) }]))),
     http.get('/api/director/v1/catalogs/rig/rig/plugin', () => HttpResponse.json(ok(pluginView(director?.clients ?? 0, director?.work ?? 'not_allowed')))),
   );
   const onChangeMode = vi.fn();
-  const access = { ...({} as ReturnType<typeof useAccess>), canWrite: true };
+  const access = { ...({} as ReturnType<typeof useAccess>), canWrite };
   render(<AccessContext.Provider value={access}>
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
       <PluginsOnRig databaseId="rig" director={director ? { mode: 'target_scheduler', onChangeMode } : undefined} />
@@ -60,5 +60,10 @@ describe('Plugins on this rig', () => {
     expect(await screen.findByTestId('plugin-sync')).toHaveTextContent('Not paired');
     expect(screen.queryByTestId('plugin-director')).toBeNull();
     expect(screen.queryByText(/Picks the work/)).toBeNull();
+  });
+
+  it('tells a read-only viewer the Director plugin is shown to editors', async () => {
+    show({}, { clients: 1, work: 'ready' }, false);
+    expect(await screen.findByTestId('plugin-director')).toHaveTextContent('PSF Guard DirectorShown to editors');
   });
 });

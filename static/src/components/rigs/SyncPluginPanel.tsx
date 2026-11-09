@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, Copy, KeyRound, Power, RefreshCw, Save, Trash2 } from 'lucide-react';
+import UnsavedMark from '../UnsavedMark';
 import { apiClient } from '../../api/client';
 import type { DatabaseSummary, RemoteImageUploadPlacement, RemoteImageUploadSummary } from '../../api/types';
 import { useAccess } from '../../auth/access';
@@ -33,7 +34,11 @@ function unchanged(upload: RemoteImageUploadSummary | undefined) {
 /** The PSF Guard Sync plugin on a rig: who is paired, and what the database
  *  takes from it. Built like the Director plugin's panel: each part says
  *  whether it is on and acts at once. */
-export default function SyncPluginPanel({ databaseId }: { databaseId: string }) {
+export default function SyncPluginPanel({ databaseId, onChanged }: {
+  databaseId: string;
+  /** After a change is saved, for pages that keep their own copy of the database list. */
+  onChanged?: () => void;
+}) {
   const { canWrite } = useAccess();
   const client = useQueryClient();
   const [code, setCode] = useState<{ token: string; expiresAt: number } | null>(null);
@@ -41,10 +46,11 @@ export default function SyncPluginPanel({ databaseId }: { databaseId: string }) 
   const loaded = useQuery({
     queryKey: ['databases'],
     queryFn: apiClient.getDatabases,
-    // The plugin pairs from N.I.N.A., so the page looks while a code waits.
+    // The plugin pairs from N.I.N.A., so the page looks while a code waits,
+    // and again whenever you come back to it.
     refetchInterval: code ? 3_000 : false,
     staleTime: 0,
-    refetchOnWindowFocus: false,
+    refetchOnWindowFocus: true,
   });
   const database: DatabaseSummary | undefined = loaded.data?.find(entry => entry.id === databaseId);
   const upload = database?.remote_image_upload;
@@ -52,23 +58,30 @@ export default function SyncPluginPanel({ databaseId }: { databaseId: string }) 
   const act = useMutation({
     retry: false,
     mutationFn: (work: () => Promise<unknown>) => work(),
-    onSettled: () => { void client.invalidateQueries({ queryKey: ['databases'] }); },
+    onSettled: () => { void client.invalidateQueries({ queryKey: ['databases'] }); onChanged?.(); },
   });
-  const save = (change: UploadChange) => act.mutate(() => apiClient.updateDatabase(databaseId, {
+  const save = (change: UploadChange, onSaved?: () => void) => act.mutate(() => apiClient.updateDatabase(databaseId, {
     remote_image_upload: { ...unchanged(upload), ...change },
-  }));
+  }), { onSuccess: () => onSaved?.() });
   // A plugin that pairs answers the code: it is spent.
   const pairedCount = useRef(clients.length);
   useEffect(() => {
     if (clients.length > pairedCount.current) setCode(null);
     pairedCount.current = clients.length;
   }, [clients.length]);
+  // An expired code can no longer pair: it goes, and so does the polling.
+  useEffect(() => {
+    if (!code) return;
+    const timer = window.setTimeout(() => setCode(null), Math.max(0, code.expiresAt - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [code]);
 
   if (!canWrite) return <p className="director-muted">Sign in as an editor to manage the Sync plugin.</p>;
   if (loaded.isPending) return <p role="status">Loading the Sync plugin...</p>;
   if (!database) return <p className="director-error" role="alert">{loaded.isError ? message(loaded.error) : 'This database is not registered.'}</p>;
 
   const credential = upload?.token_configured ?? false;
+  const syncOn = upload?.sync_enabled ?? false;
   const address = serverAddress();
   const generate = () => act.mutate(async () => {
     const issued = await apiClient.issuePairingCode(databaseId);
@@ -92,7 +105,6 @@ export default function SyncPluginPanel({ databaseId }: { databaseId: string }) 
   return <section className="rig-profile-form rig-plugin" aria-label="Sync plugin">
     <div className="director-toolbar">
       <h4>Sync plugin</h4>
-      <button type="button" aria-label="Reload Sync plugin" title="Reload Sync plugin" disabled={loaded.isFetching} onClick={() => void loaded.refetch()}><RefreshCw size={16} /></button>
     </div>
     {act.isError && <p className="director-error" role="alert">{message(act.error)}</p>}
 
@@ -122,12 +134,14 @@ export default function SyncPluginPanel({ databaseId }: { databaseId: string }) 
 
     <fieldset>
       <legend>Scheduler sync</legend>
-      <p className="plugin-state" data-on={upload?.sync_enabled ?? false} data-testid="sync-scheduler-state">{upload?.sync_enabled
-        ? 'On. Paired plugins merge projects, targets, plans and grades into this database.'
-        : 'Off. Paired plugins cannot merge projects, targets, plans or grades into this database.'}</p>
-      {!credential && <p className="director-muted">Pair the plugin first.</p>}
-      {credential && <div className="director-actions">
-        {upload?.sync_enabled
+      <p className="plugin-state" data-on={syncOn} data-testid="sync-scheduler-state">{!syncOn
+        ? 'Off. Paired plugins cannot merge projects, targets, plans or grades into this database.'
+        : credential
+          ? 'On. Paired plugins merge projects, targets, plans and grades into this database.'
+          : 'On, but no plugin is paired, so nothing arrives.'}</p>
+      {!syncOn && !credential && <p className="director-muted">Pair the plugin first.</p>}
+      {(syncOn || credential) && <div className="director-actions">
+        {syncOn
           ? <button type="button" disabled={act.isPending} onClick={() => save({ sync_enabled: false })}><Power size={16} />Turn off scheduler sync</button>
           : <button type="button" disabled={act.isPending} onClick={() => save({ sync_enabled: true })}><Check size={16} />Turn on scheduler sync</button>}
       </div>}
@@ -136,7 +150,7 @@ export default function SyncPluginPanel({ databaseId }: { databaseId: string }) 
     <UploadSettings key={JSON.stringify([upload?.enabled, upload?.image_directory, upload?.placement, upload?.directory_template, upload?.directory_template_source, upload?.catalog_directory_template])}
       upload={upload} folders={database.image_directories} credential={credential} busy={act.isPending} onSave={save} />
 
-    <KeySettings upload={upload} busy={act.isPending} onSave={token => save({ token })} />
+    <KeySettings upload={upload} busy={act.isPending} onSave={(token, onSaved) => save({ token }, onSaved)} />
   </section>;
 }
 
@@ -146,7 +160,7 @@ function UploadSettings({ upload, folders, credential, busy, onSave }: {
   folders: string[];
   credential: boolean;
   busy: boolean;
-  onSave: (change: UploadChange) => void;
+  onSave: (change: UploadChange, onSaved?: () => void) => void;
 }) {
   const on = upload?.enabled ?? false;
   const match = upload?.catalog_directory_template
@@ -172,13 +186,18 @@ function UploadSettings({ upload, folders, credential, busy, onSave }: {
   const layoutValue = choice === 'catalog' && match ? 'catalog' : isUploadLayoutPreset(template) ? template : 'custom';
   // A custom layout needs its folders written out.
   const ready = !!folder && !(tree && choice === 'preset' && !template.trim());
+  // A save that changes nothing the summary shows keeps this form mounted.
+  const saved = () => { setTouched(false); setRescan(false); };
   return <fieldset>
     <legend>Image uploads</legend>
-    <p className="plugin-state" data-on={on} data-testid="sync-upload-state">{on
-      ? `On. Paired plugins send image files to ${upload?.image_directory}.`
-      : 'Off. Paired plugins do not send image files.'}</p>
-    {!credential && <p className="director-muted">Pair the plugin first.</p>}
-    {credential && <>
+    <UnsavedMark label="image upload settings" dirty={changed && (on || credential)} />
+    <p className="plugin-state" data-on={on} data-testid="sync-upload-state">{!on
+      ? 'Off. Paired plugins do not send image files.'
+      : credential
+        ? `On. Paired plugins send image files to ${upload?.image_directory}.`
+        : 'On, but no plugin is paired, so nothing arrives.'}</p>
+    {!on && !credential && <p className="director-muted">Pair the plugin first.</p>}
+    {(on || credential) && <>
       <div className="rig-profile-grid">
         <label className="rig-profile-field" htmlFor="sync-upload-folder"><span>Receive folder</span>
           <span className="rig-profile-input"><select id="sync-upload-folder" value={folder} onChange={event => setFolder(event.target.value)}>
@@ -218,10 +237,10 @@ function UploadSettings({ upload, folders, credential, busy, onSave }: {
       <div className="director-actions">
         {on
           ? <>
-            <button type="button" disabled={busy || !changed || !ready} onClick={() => onSave(settings())}><Save size={16} />Save upload settings</button>
+            <button type="button" disabled={busy || !changed || !ready} onClick={() => onSave(settings(), saved)}><Save size={16} />Save upload settings</button>
             <button type="button" disabled={busy} onClick={() => onSave({ enabled: false })}><Power size={16} />Turn off image uploads</button>
           </>
-          : <button type="button" disabled={busy || !ready} onClick={() => onSave({ ...settings(), enabled: true })}><Check size={16} />Turn on image uploads</button>}
+          : <button type="button" disabled={busy || !ready} onClick={() => onSave({ ...settings(), enabled: true }, saved)}><Check size={16} />Turn on image uploads</button>}
       </div>
       {!folder && <p className="director-muted">Choose a receive folder.</p>}
       {folder && !ready && <p className="director-muted">Enter the custom layout's folders.</p>}
@@ -233,7 +252,7 @@ function UploadSettings({ upload, folders, credential, busy, onSave }: {
 function KeySettings({ upload, busy, onSave }: {
   upload: RemoteImageUploadSummary | undefined;
   busy: boolean;
-  onSave: (token: string) => void;
+  onSave: (token: string, onSaved: () => void) => void;
 }) {
   const [key, setKey] = useState('');
   const [copy, setCopy] = useState<'idle' | 'copied' | 'failed'>('idle');
@@ -249,6 +268,7 @@ function KeySettings({ upload, busy, onSave }: {
   };
   return <fieldset>
     <legend>Remote API key</legend>
+    <UnsavedMark label="remote API key" dirty={!!key} />
     <p className="plugin-state" data-on={set} data-testid="sync-key-state">{set ? 'Set.' : 'Not set.'} <span className="director-muted">For scripts and clients that cannot pair. The Sync plugin pairs with a code instead.</span></p>
     {upload?.key_contact && <p className="director-muted">{contactText(upload.key_contact)}</p>}
     {key
@@ -260,7 +280,7 @@ function KeySettings({ upload, busy, onSave }: {
         </label>
         <p role="status">{copy === 'failed' ? 'Copy failed. Select and copy the key.' : 'Copy this key now. It is not shown again after you save it.'}</p>
         <div className="director-actions">
-          <button type="button" disabled={busy} onClick={() => { onSave(key); setKey(''); }}><Save size={16} />Save key</button>
+          <button type="button" disabled={busy} onClick={() => onSave(key, () => setKey(''))}><Save size={16} />Save key</button>
           <button type="button" disabled={busy} onClick={() => setKey('')}>Cancel</button>
         </div>
       </div>

@@ -287,7 +287,6 @@ a.workspace-pill:hover { color: var(--color-text-primary); }
 .rig-plugin fieldset p { margin: 0; font-size: 0.9rem; }
 .rig-plugin .director-actions { flex-wrap: wrap; }
 .rig-plugin .link-button { display: inline-flex; align-items: center; gap: 0.25rem; align-self: flex-start; padding: 0; border: none; background: none; color: inherit; text-decoration: underline; cursor: pointer; }
-.rig-plugin-paths { margin-bottom: 0.25rem; }
 .rig-plugin-left-out { margin: 0; padding-left: 20px; }
 .rig-plugin-rows { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
 .rig-plugin-rows:empty { display: none; }
