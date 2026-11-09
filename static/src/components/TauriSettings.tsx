@@ -24,6 +24,7 @@ import UnsavedMark from './UnsavedMark';
 import { Database as DatabaseIcon, Pencil, Trash2 } from 'lucide-react';
 import TemplateLibrary from './director/TemplateLibrary';
 import SyncPluginPanel from './rigs/SyncPluginPanel';
+import ImageUploadsPanel from './rigs/ImageUploadsPanel';
 import PluginsOnRig from './rigs/PluginsOnRig';
 import './director/DirectorPage.css';
 import { useDirectorStatus } from '../hooks/useDirectorStatus';
@@ -1330,7 +1331,10 @@ export default function TauriSettings({
   // database is one rig. The section ids and the saved settings are unchanged.
   const syncPluginSection = selectedDatabase && managementAllowed && canEdit
     // One panel per database: a code or key never carries to another.
-    ? <SyncPluginPanel key={selectedDatabase.id} databaseId={selectedDatabase.id} onChanged={() => void reload()} />
+    ? <div className="plugin-cards" key={selectedDatabase.id}>
+      <SyncPluginPanel databaseId={selectedDatabase.id} onChanged={() => void reload()} />
+      <ImageUploadsPanel databaseId={selectedDatabase.id} onChanged={() => void reload()} />
+    </div>
     : null;
 
   return (
