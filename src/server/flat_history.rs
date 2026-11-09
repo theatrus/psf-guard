@@ -643,6 +643,38 @@ fn invalidate_records(
     Ok(invalidated)
 }
 
+/// Director uses the same explicit invalidation records as Sync, but its
+/// credential and profile scope are checked by the Director handler.
+pub(super) async fn director_exchange(
+    ctx: Arc<DatabaseContext>,
+    snapshot: SnapshotRequest,
+    results: Vec<AcknowledgeResult>,
+) -> Result<(usize, usize, Vec<Decision>, Vec<Decision>), AppError> {
+    validate_scope(&snapshot.scope, &ctx)?;
+    database_task(ctx, true, move |conn| {
+        let now = chrono::Utc::now().timestamp();
+        let scope = snapshot.scope.clone();
+        let received = store_snapshot(conn, &snapshot, now)?;
+        let acknowledged = acknowledge_records(conn, &AcknowledgeRequest { scope: scope.clone(), results }, now)?;
+        let decisions = pending_decisions(conn, &PendingRequest { scope, target_guid: None })?;
+        // A restored client backup must also forget batches already voided and
+        // acknowledged. Return terminal decisions only for the replayed records,
+        // so old history cannot crowd new pending requests out of the response.
+        let mut retired = Vec::new();
+        for record in &snapshot.records {
+            let decision = conn.query_row(
+                "SELECT record_id,reason FROM psf_guard_scheduler_flat_history
+                 WHERE origin_id=?1 AND source_row_id=?2 AND fingerprint=?3 AND state IN ('removed','absent')",
+                params![snapshot.scope.origin_id, record.source_row_id, record.fingerprint],
+                |row| Ok(Decision { record_id: row.get(0)?, source_row_id: record.source_row_id,
+                    fingerprint: record.fingerprint.clone(), target_guid: None, reason: row.get(1)? }),
+            ).optional().map_err(AppError::db)?;
+            if let Some(decision) = decision { retired.push(decision); }
+        }
+        Ok((received, acknowledged, decisions, retired))
+    }).await
+}
+
 async fn database_task<T: Send + 'static>(
     ctx: Arc<DatabaseContext>,
     write: bool,

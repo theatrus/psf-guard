@@ -38,9 +38,9 @@ test('invalidates selected flat coverage, retains decisions across stale snapsho
     .getByRole('button', { name: 'Open Calibration', exact: true }).click();
   // Open Calibration leaves Settings for the database's calibration page.
   await expect(page).toHaveURL(new RegExp(`#/calibration\\?db=${REVIEW_DB}`));
-  await page.getByRole('tab', { name: 'Scheduler flats', exact: true }).click();
+  await page.getByRole('tab', { name: 'Flat coverage', exact: true }).click();
   await expect(page).toHaveURL(/calTab=scheduler/);
-  const panel = page.getByRole('tabpanel', { name: 'Scheduler flats' });
+  const panel = page.getByRole('tabpanel', { name: 'Flat coverage' });
   await panel.getByLabel('Target, source or filter').fill(source);
   await panel.getByRole('button', { name: 'Search', exact: true }).click();
   await expect(panel.locator('tbody tr')).toHaveCount(3);

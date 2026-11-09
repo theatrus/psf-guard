@@ -7,6 +7,7 @@
 ## Changes
 
 - **Faster Nights and Live:** **Rigs › Nights**, **Night details** and Live's **Tonight** column load many times faster. With four rigs and three dozen targets on each, a week of nights takes about 0.5 s instead of 11 s, a month about 1.5 s instead of 45 s, and tonight about 0.1 s instead of 1.3 s. The first time PSF Guard plans a night at a site, it takes longer, up to about 6 s for a month, while it works out that night's sky. It keeps each sky, so later requests take the shorter times. The nights and schedules are the same as before.
+- **Request replacement Director flats:** The Calibration page's **Flat coverage** tab, formerly **Scheduler flats**, lists Director flat batches next to Target Scheduler's. Invalidate a suspect batch to ask for new flats; PSF Guard keeps the image files. This needs the Director plugin update that adds **Director Flats**, which also takes flats for plans whose light frames are done.
 - **Steady weather on Live:** On **Rigs › Live** and **Rig setup › Weather**, N.I.N.A.'s reported cloud cover and the forecast no longer switch between *cloudy* (or *clear*) and *unknown or stale* every few seconds when this computer's clock differs from the server's. The report's age and **Forecast fetched** read true, too.
 - **See every rig on Live, Target Scheduler rigs included:** **Rigs › Live** has six columns: Rig, Now, Weather, Plugins, Projects and Tonight.
   - Each rig's link state sits under its name. Any call from the Director or Sync plugin, including an image upload, keeps the rig **Online**.

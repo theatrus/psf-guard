@@ -22,6 +22,7 @@ use std::{
 use tokio::sync::Semaphore;
 mod activation;
 mod allocation;
+mod calibration;
 mod catalog_adoption;
 mod catalog_discovery;
 mod catalog_rig;
@@ -870,6 +871,7 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
         .merge(site_profile::routes())
         .merge(site_forecast::routes())
         .merge(weather::routes())
+        .merge(calibration::routes())
         .merge(night_availability::routes())
         .merge(night_overrides::routes())
         .merge(ts_levers::routes())

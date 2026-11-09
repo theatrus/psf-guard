@@ -189,7 +189,7 @@ heading to browse the whole library with the Rig filter still applied. Choose
 filter and all other filters. Choosing another project in the header updates
 the project filter; if you already chose to show the whole library, that view
 stays open. The URL stores the project filter as `calProject=<id>`.
-**Scheduler flats** and **Duplicates** always use the whole library.
+**Flat coverage** and **Duplicates** always use the whole library.
 
 The server calculates project scope on a separate database connection, using
 light headers saved by the calibration health pass. A background job reads any
@@ -325,11 +325,32 @@ them.
 New frames come in through **Import** in Settings, which scans the
 database's configured folders.
 
-## Scheduler flat coverage
+## Flat coverage
+
+Open the database's [Calibration page](#browse-the-library) and choose **Flat
+coverage** to review the flat batches Director and Target Scheduler report.
+Select suspect coverage and choose **Invalidate coverage** with a reason. This
+requires an editor account. PSF Guard keeps the image files and calibration
+masters.
+
+Director checks replacement requests before its **Director Flats** sequence
+instruction and every 30 seconds between calibration images in a running
+session. It records the request locally, takes replacement flats when that
+setup is next eligible, and reports the result. A stopped plugin receives the
+request the next time calibration runs. Flat coverage survives plugin restarts;
+an old snapshot cannot restore a batch already voided on the server. Updating
+PSF Guard alone does not add this behavior to older Director plugins.
+
+Director uses the current camera angle and camera/filter settings. Its flat
+instruction also reads active plans whose light goals are complete, so flats
+can run after imaging. It does not allocate work or change whether the rig is
+allowed to image.
+
+### Target Scheduler coverage
 
 The NINA plugin sends Target Scheduler's `flathistory` coverage records during
 grade pulls and applied reconciles. Open the database's
-[Calibration page](#browse-the-library) and choose **Scheduler flats**. Filter by target,
+[Calibration page](#browse-the-library) and choose **Flat coverage**. Filter by target,
 source, filter, or status, then select the suspect coverage records and choose
 **Invalidate coverage** with a reason. This takes an editor account.
 

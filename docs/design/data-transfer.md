@@ -530,6 +530,30 @@ whether the file was already present; a failed upload is logged as a server
 error without its message, which can include server folders. An upload with a
 valid key also counts as the client's contact.
 
+### Director flat coverage
+
+`POST /api/director/v1/rigs/{rig_id}/calibration` uses the paired Director token
+and exact `X-PSF-Director-Profile`. The request includes `protocol_version: 1`,
+`coordinator_instance_id`, `catalog_id`, up to 1000 `records`, and up to 1000
+`acknowledgements` using the flat-history types below. Director records use
+`flats_type: "Director panel"`, the paired profile ID, and a null target GUID.
+The server chooses the profile UUID as the origin within the paired catalog;
+the client cannot select another origin. Re-pairing the same profile preserves
+that origin.
+
+The response echoes the instance, catalog, rig, profile and origin. It returns
+camera `configuration`, active-plan `recipes` (including completed light goals),
+`received` and `acknowledged` counts, pending `decisions`, and `retired` decisions
+for replayed coverage already voided and acknowledged. The client verifies the
+identity and camera capabilities before applying responses. Retired decisions
+also invalidate coverage restored from a local backup without requiring another
+acknowledgement. This response grants no observing assignment or movement permit.
+
+Director persists each confirmed flat save, applies invalidation and its pending
+acknowledgement atomically, and gives replacement batches new IDs. It retries
+after failed requests and never deletes image files. The existing operator
+flat-history list and invalidation endpoints serve both clients.
+
 ### Scheduler flat coverage
 
 `flat_history_v1` advertises a separate typed exchange for the NINA plugin.

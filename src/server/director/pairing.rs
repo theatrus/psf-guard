@@ -106,6 +106,7 @@ pub(in crate::server) async fn authorize(
         | "operations"
         | "status"
         | "equipment-reports"
+        | "calibration"
         | "star-detection-settings"
         | "weather"]
             if method == Method::POST =>

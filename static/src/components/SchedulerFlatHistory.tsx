@@ -78,7 +78,7 @@ export default function SchedulerFlatHistory({ dbId, canManage }: {
     }
   }, [history.data, history.isFetching, history.error, offset]);
   return (
-    <div className="scheduler-flat-history" role="tabpanel" aria-label="Scheduler flats">
+    <div className="scheduler-flat-history" role="tabpanel" aria-label="Flat coverage">
       <form className="flat-history-toolbar" onSubmit={(event) => {
         event.preventDefault();
         resetSelection();
@@ -106,7 +106,7 @@ export default function SchedulerFlatHistory({ dbId, canManage }: {
       </form>
       {message && <p className="flat-history-message" role="status">{message}</p>}
       {history.error && <p className="calibration-error" role="alert">
-        Could not load scheduler flat coverage: {history.error.message}
+        Could not load flat coverage: {history.error.message}
       </p>}
       {invalidate.error && <p className="calibration-error" role="alert">
         {invalidate.error.message}
@@ -119,10 +119,10 @@ export default function SchedulerFlatHistory({ dbId, canManage }: {
           }
         }}>
           <strong>Invalidate {selectedIds.length} coverage record{selectedIds.length === 1 ? '' : 's'}?</strong>
-          <p>The next grade pull or applied reconcile removes these coverage records from
-            Target Scheduler. Sync before the next flats action so Target Scheduler can check
-            whether new flats are needed. Its scheduling rules still apply. Your files and
-            calibration masters are unchanged.</p>
+          <p>Director gets the request at its next Director Flats instruction, or while a session takes calibration
+            frames. Target Scheduler gets it at the Sync plugin's next grade pull or applied reconcile, so sync
+            before its next flats action. Each plugin takes the new flats with its current capture settings.
+            Your files and calibration masters are unchanged.</p>
           <p>Duplicate coverage can still satisfy the scheduler. Include all suspect records for the run.</p>
           <label>Reason
             <input value={reason} required maxLength={1000} disabled={invalidate.isPending}
@@ -139,9 +139,9 @@ export default function SchedulerFlatHistory({ dbId, canManage }: {
         </form>
       )}
       <div className="flat-history-table-scroll" aria-busy={history.isFetching}>
-        {history.isLoading && <p className="calibration-empty">Loading scheduler flat coverage...</p>}
+        {history.isLoading && <p className="calibration-empty">Loading flat coverage...</p>}
         {!history.isLoading && !history.error && rows.length === 0 && (
-          <p className="calibration-empty">No scheduler flat coverage matches these filters.</p>
+          <p className="calibration-empty">No flat coverage matches these filters.</p>
         )}
         {rows.length > 0 && <table className="flat-history-table">
           <thead><tr>
