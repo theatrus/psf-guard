@@ -6,6 +6,7 @@
 
 ## Changes
 
+- **Simpler weather on Live:** **Rigs › Live** marks weather **Observed** (from N.I.N.A.) or **Forecast** (the site's), without naming the sensor or provider in each row. The tooltip still names them.
 - **Steady weather on Live:** On **Rigs › Live** and **Rig setup › Weather**, N.I.N.A.'s reported cloud cover and the forecast no longer switch between *cloudy* (or *clear*) and *unknown or stale* every few seconds when this computer's clock differs from the server's. The report's age and **Forecast fetched** read true, too.
 - **See every rig on Live, Target Scheduler rigs included:** **Rigs › Live** has six columns: Rig, Now, Weather, Plugins, Projects and Tonight.
   - Each rig's link state sits under its name. Any call from the Director or Sync plugin, including an image upload, keeps the rig **Online**.

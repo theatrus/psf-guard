@@ -84,7 +84,9 @@ describe('Director live dashboard', () => {
       reported_cloud: { state: 'unknown' as const, reason: 'no_report', valid_for_ms: 30_000 },
       forecast_conditions: { state: 'clear' as const, reason: 'cloud_cover_clear', valid_for_ms: 30_000 } });
     mount([{ ...online, weather: weather('a') }, { ...quiet, weather: weather('b') }]);
-    expect(await screen.findAllByText(/Open-Meteo · 10% cloud/)).toHaveLength(2);
+    // Live marks the forecast without naming the provider; the credit names it once.
+    expect(await screen.findAllByText(/^10% cloud · clear$/)).toHaveLength(2);
+    expect(screen.queryByText(/Open-Meteo · /)).toBeNull();
     const credits = screen.getAllByRole('link', { name: forecast.attribution });
     expect(credits).toHaveLength(1);
     expect(screen.getByTestId('forecast-credits')).toContainElement(credits[0]);
@@ -163,7 +165,7 @@ describe('Director live dashboard', () => {
       reported_cloud: { state: 'cloudy' as const, reason: 'cloud_cover_above_threshold', valid_for_ms: 30_000 },
       forecast_conditions: { state: 'unknown' as const, reason: 'no_site_forecast', valid_for_ms: 0 } };
     mount([{ ...online, weather }]);
-    expect(await screen.findByText(/Cloud sensor · 85% cloud · cloudy/)).toBeInTheDocument();
+    expect(await screen.findByText(/^85% cloud · cloudy/)).toBeInTheDocument();
   });
 
   it('says when no rig exists yet', async () => {
