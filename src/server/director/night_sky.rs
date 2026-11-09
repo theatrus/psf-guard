@@ -45,6 +45,37 @@ impl Key {
 #[derive(Default)]
 pub(super) struct Skies {
     kept: Mutex<Kept>,
+    /// The most skies kept: [`MAX_KEPT`], or fewer in a test.
+    #[cfg(test)]
+    limit: std::sync::atomic::AtomicUsize,
+    /// How many skies, and how many Moon tracks, were computed.
+    #[cfg(test)]
+    computed: (
+        std::sync::atomic::AtomicUsize,
+        std::sync::atomic::AtomicUsize,
+    ),
+}
+
+/// The skies one request plans under, held for as long as it runs. A
+/// request may need more skies than [`MAX_KEPT`], so it does not count on
+/// the kept skies still holding the ones it computed at its start.
+#[derive(Default)]
+pub(super) struct Held(HashMap<Key, Result<Arc<NightSky>, NightError>>);
+
+impl Held {
+    /// The held skies of the nights opening at each of `noons` at `site`,
+    /// in order; `None` unless every one is held.
+    pub(super) fn nights(
+        &self,
+        site: Site,
+        noons: &[u64],
+        step_ms: u64,
+    ) -> Option<Vec<Result<Arc<NightSky>, NightError>>> {
+        noons
+            .iter()
+            .map(|noon| self.0.get(&Key::of(site, *noon, step_ms)).cloned())
+            .collect()
+    }
 }
 
 #[derive(Default)]
@@ -111,11 +142,15 @@ impl Skies {
                 .map(Arc::new);
             if let Ok(sky) = &sky {
                 found[*i] = Some(Arc::clone(sky));
+                #[cfg(test)]
+                self.computed
+                    .0
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
             computed[*i] = Some(sky);
         }
         if moon_track {
-            self.moon_tracks(site, &found, noons);
+            self.moon_tracks(site, &found);
         }
         // Keep what was computed, with its track when it has one.
         {
@@ -129,7 +164,7 @@ impl Skies {
                         .or_insert_with(|| (Arc::clone(sky), reads));
                 }
             }
-            while kept.skies.len() > MAX_KEPT {
+            while kept.skies.len() > self.max_kept() {
                 let Some(oldest) = kept
                     .skies
                     .iter()
@@ -152,6 +187,59 @@ impl Skies {
             .collect()
     }
 
+    /// [`Skies::nights`], held in `held` for the rest of the request.
+    pub(super) fn hold(
+        &self,
+        held: &mut Held,
+        site: Site,
+        noons: &[u64],
+        step_ms: u64,
+        moon_track: bool,
+    ) {
+        let skies = self.nights(site, noons, step_ms, moon_track);
+        for (noon, sky) in noons.iter().zip(skies) {
+            held.0.insert(Key::of(site, *noon, step_ms), sky);
+        }
+    }
+
+    /// Give each of these skies at `site` its Moon track, when it has none
+    /// yet, every missing minute at once across the pool. The skies kept
+    /// are the same skies, so they gain the tracks too.
+    pub(super) fn add_moon_tracks(&self, site: Site, skies: &[Result<Arc<NightSky>, NightError>]) {
+        let skies: Vec<Option<Arc<NightSky>>> =
+            skies.iter().map(|sky| sky.as_ref().ok().cloned()).collect();
+        self.moon_tracks(site, &skies);
+    }
+
+    fn max_kept(&self) -> usize {
+        #[cfg(test)]
+        {
+            let limit = self.limit.load(std::sync::atomic::Ordering::Relaxed);
+            if limit > 0 {
+                return limit;
+            }
+        }
+        MAX_KEPT
+    }
+
+    /// Keep at most `limit` skies, so a test can plan more nights than
+    /// are kept without computing [`MAX_KEPT`] of them.
+    #[cfg(test)]
+    pub(super) fn limit(&self, limit: usize) {
+        self.limit
+            .store(limit, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// How many skies and Moon tracks this has computed.
+    #[cfg(test)]
+    pub(super) fn computed(&self) -> (usize, usize) {
+        use std::sync::atomic::Ordering;
+        (
+            self.computed.0.load(Ordering::Relaxed),
+            self.computed.1.load(Ordering::Relaxed),
+        )
+    }
+
     /// Let go of every kept sky, so the next request computes its own.
     #[cfg(test)]
     pub(super) fn clear(&self) {
@@ -162,26 +250,34 @@ impl Skies {
     /// Give each sky without a Moon track its track, every missing
     /// minute at once across the pool. A night whose track cannot be
     /// computed is left to fail as its summary asks for it.
-    fn moon_tracks(&self, site: Site, skies: &[Option<Arc<NightSky>>], noons: &[u64]) {
-        let wanting: Vec<(usize, &Arc<NightSky>)> = skies
+    fn moon_tracks(&self, site: Site, skies: &[Option<Arc<NightSky>>]) {
+        let wanting: Vec<&Arc<NightSky>> = skies
             .iter()
-            .enumerate()
-            .filter_map(|(i, sky)| sky.as_ref().map(|sky| (i, sky)))
-            .filter(|(_, sky)| !sky.has_moon_track())
+            .flatten()
+            .filter(|sky| !sky.has_moon_track())
             .collect();
-        let spans: Vec<(usize, _)> = wanting
+        let spans: Vec<(u64, _)> = wanting
             .iter()
-            .flat_map(|(i, sky)| sky.moon_spans().into_iter().map(move |span| (*i, span)))
+            .flat_map(|sky| {
+                sky.moon_spans()
+                    .into_iter()
+                    .map(move |span| (sky.noon_ms(), span))
+            })
             .collect();
         let cells: Vec<Result<SkyMoonCell, NightError>> = spans
             .par_iter()
-            .map(|(i, span)| SkyMoonCell::at(site, noons[*i], *span))
+            .map(|(noon, span)| SkyMoonCell::at(site, *noon, *span))
             .collect();
         let mut cells = cells.into_iter();
-        for (_, sky) in wanting {
+        for sky in wanting {
             let count = sky.moon_spans().len();
-            if let Ok(track) = cells.by_ref().take(count).collect::<Result<Vec<_>, _>>() {
-                let _ = sky.set_moon_track(track);
+            if let Ok(track) = cells.by_ref().take(count).collect::<Result<Vec<_>, _>>()
+                && sky.set_moon_track(track).is_ok()
+            {
+                #[cfg(test)]
+                self.computed
+                    .1
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
         }
     }

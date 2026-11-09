@@ -880,10 +880,12 @@ async fn compute(
             })
             .collect();
         // Every site's skies before any rig's nights, so rigs that share a
-        // site do not compute them twice at once.
+        // site do not compute them twice at once. The request holds them
+        // until it ends: it may need more than the server keeps.
+        let mut held = super::night_sky::Held::default();
         if !stopped.requested() {
             for (site, noons, moon_track) in sites_to_plan(&inputs) {
-                shared.skies.nights(site, &noons, STEP_MS, moon_track);
+                shared.skies.hold(&mut held, site, &noons, STEP_MS, moon_track);
             }
         }
         let outcomes: Vec<Result<RigNights, String>> = inputs
@@ -892,7 +894,7 @@ async fn compute(
                 if stopped.requested() {
                     return Err(String::new());
                 }
-                rig_nights(input, nights, &shared.skies)
+                rig_nights(input, nights, &shared.skies, &held)
             })
             .collect();
         let mut rigs = Vec::new();
@@ -1000,6 +1002,7 @@ fn rig_nights(
     input: RigInput,
     nights: u32,
     skies: &super::night_sky::Skies,
+    held: &super::night_sky::Held,
 ) -> Result<RigNights, String> {
     let RigInput {
         rig,
@@ -1032,13 +1035,15 @@ fn rig_nights(
         phase = std::time::Instant::now();
         ms
     };
-    // Each night's sky at the rig's site, kept or computed now: darkness,
+    // Each night's sky at the rig's site, held for the request: darkness,
     // every project's summaries and the Moon strip read it.
     let noons: Vec<u64> = dates
         .iter()
         .map(|date| date.span(location.longitude_degrees).start_ms)
         .collect();
-    let night_skies = skies.nights(location, &noons, STEP_MS, false);
+    let night_skies = held
+        .nights(location, &noons, STEP_MS)
+        .unwrap_or_else(|| skies.nights(location, &noons, STEP_MS, false));
     let super::rig_availability::Nights {
         nights: availability,
         clouds: cloud_hours,
@@ -1230,16 +1235,14 @@ fn rig_nights(
     }
     use rayon::prelude::*;
     let projects_ms = lap();
-    // Moon rules need each night's Moon track, which the kept skies may
-    // not have yet.
-    let night_skies = if chunks
+    // Moon rules need each night's Moon track. The request computed the
+    // tracks its sites need at its start; this fills any it missed.
+    if chunks
         .iter()
         .any(|chunk| chunk.request.targets.iter().any(|t| !t.moon.is_empty()))
     {
-        skies.nights(location, &noons, STEP_MS, true)
-    } else {
-        night_skies
-    };
+        skies.add_moon_tracks(location, &night_skies);
+    }
     let computed: Vec<Result<psf_guard_director_core::night::Night, _>> = (0..chunks.len()
         * nights as usize)
         .into_par_iter()

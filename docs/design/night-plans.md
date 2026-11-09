@@ -679,7 +679,9 @@ refused.
   - The sky also keeps the night's Moon strip and each target's meridian
     pause windows, as summaries ask for them.
   - Night plans compute every site's skies before any rig's nights, so
-    rigs at one site do not compute them twice. Darkness and twilight for
+    rigs at one site do not compute them twice. The request holds those
+    skies until it ends, so a request for more site-nights than are kept
+    still computes each once. Darkness and twilight for
     availability, feasibility and the summaries all read the same skies.
   - `night_summary_under` gives the same summary as `night_summary` to the
     bit; a test keeps the summary code from before skies were shared and

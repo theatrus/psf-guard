@@ -573,6 +573,11 @@ impl NightSky {
         })
     }
 
+    /// The noon that opens the night.
+    pub fn noon_ms(&self) -> u64 {
+        self.noon_ms
+    }
+
     /// The minutes the night's Moon track is made of, in order.
     pub fn moon_spans(&self) -> Vec<Interval> {
         MoonTrack::spans(self.span()).unwrap_or_default()
