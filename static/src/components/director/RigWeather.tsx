@@ -17,7 +17,7 @@ const LEASE_MARGIN_MS = 5_000;
  *  since this browser received it. The two clocks are never compared.
  *  `null` when the browser clock has jumped back past the fetch, which
  *  leaves the reading's age unknown. */
-export function serverNow(weather: RigWeather, browserNow: number, receivedAt: number): number | null {
+function serverNow(weather: RigWeather, browserNow: number, receivedAt: number): number | null {
   const elapsed = browserNow - receivedAt;
   // The page clock may lag the fetch by one tick; more is a jump.
   if (elapsed < -LEASE_MARGIN_MS) return null;
