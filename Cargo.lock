@@ -3592,6 +3592,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0676bb32a98c1a483ce53e500a81ad9c3d5b3f7c920c28c24e9cb0980d0b5bc8"
 
 [[package]]
+name = "ntapi"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3b335231dfd352ffb0f8017f3b6027a4917f7df785ea2143d8af2adc66980ae"
+dependencies = [
+ "winapi",
+]
+
+[[package]]
 name = "nu-ansi-term"
 version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3849,6 +3858,16 @@ dependencies = [
  "block2",
  "libc",
  "objc2",
+ "objc2-core-foundation",
+]
+
+[[package]]
+name = "objc2-io-kit"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33fafba39597d6dc1fb709123dfa8289d39406734be322956a69f0931c73bb15"
+dependencies = [
+ "libc",
  "objc2-core-foundation",
 ]
 
@@ -5444,9 +5463,9 @@ dependencies = [
 
 [[package]]
 name = "seiza"
-version = "0.49.0"
+version = "0.50.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fceaa6c25712827581eb87f11abb8b368c651c0482ba3cbd320a5d229ea9ebd8"
+checksum = "7c2ce9d80aaa31545133ac912c10514469c03ace5f996d4d2eb59709bbdc57e2"
 dependencies = [
  "directories",
  "image",
@@ -5468,9 +5487,9 @@ dependencies = [
 
 [[package]]
 name = "seiza-background"
-version = "0.3.1"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6ec7fbc75e5e6fea680f4d32240c29d360613ba7152972ea95dbbcdb265fb532"
+checksum = "cec7740417db261ce2a55f8197d9082d53f65d847efc565150fa7f2ede834419"
 dependencies = [
  "multiversion",
  "rayon",
@@ -5481,8 +5500,9 @@ dependencies = [
 
 [[package]]
 name = "seiza-calibration"
-version = "0.12.1"
-source = "git+https://github.com/theatrus/seiza?rev=2825640a#2825640a281a461a8b164d21a2c26894eb1592a3"
+version = "0.12.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6992bb61e35bfba0ebad860c0615f81be42e64d4674e3ce5e94fe27667dc8445"
 dependencies = [
  "chrono",
  "nalgebra",
@@ -5497,27 +5517,29 @@ dependencies = [
 
 [[package]]
 name = "seiza-core"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dcc138b25739bdb6456c81373a8042bdddcfc957283e08af18ad9f6c083f95bc"
+checksum = "3217ccd48c3bf00968d8e14b1f2fc4b5d0ab6e82a255c05859bc8bab6b333ed7"
 
 [[package]]
 name = "seiza-deconvolution"
-version = "0.1.2"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a85ee414469a1f075915a2efcf3fce4007a5b49f65a89ea6d8a745b634ce2aca"
+checksum = "40542fd28fea0701af35b5b832fe684691593d97e300050f591d6d256029ba8a"
 dependencies = [
  "multiversion",
  "rayon",
+ "rustfft",
+ "seiza-stars",
  "serde",
  "thiserror 2.0.21",
 ]
 
 [[package]]
 name = "seiza-download"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3838b2a298fe5ad7d27f8f7fc5bf6189307b621684f87909839d168009bc84d"
+checksum = "cbf8bb36900db9bdd3297f8c29928c451649b79ccbd51feb737fe421c1a32dc3"
 dependencies = [
  "async-compression",
  "directories",
@@ -5534,9 +5556,9 @@ dependencies = [
 
 [[package]]
 name = "seiza-fits"
-version = "0.8.0"
+version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7500c218dd19051536126f4f90df83b64eec054531ad75ff2087e557c3c8adc4"
+checksum = "3bdd5b67d495aa30181e545c5300bc6be668093235ea016ea7ae34cf2f0c8452"
 dependencies = [
  "flate2",
  "memmap2",
@@ -5549,9 +5571,9 @@ dependencies = [
 
 [[package]]
 name = "seiza-image-io"
-version = "0.13.0"
+version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a3a1f0a3e6642f07893d328a0989436f2bc0fbe459648e670caa4d5ac1da025"
+checksum = "240bd04b2b26f17d9e1e76b463defa5dbc56f49048f29d9ab1f8f99afd6c345c"
 dependencies = [
  "chrono",
  "image",
@@ -5567,16 +5589,17 @@ dependencies = [
 [[package]]
 name = "seiza-imgproc"
 version = "0.3.2"
-source = "git+https://github.com/theatrus/seiza?rev=2825640a#2825640a281a461a8b164d21a2c26894eb1592a3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "43903045bca0b629b5bda14bfda11b26758bbb3fd51d24dedb253c0155020f1d"
 dependencies = [
  "rayon",
 ]
 
 [[package]]
 name = "seiza-satellites"
-version = "0.22.2"
+version = "0.22.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1c64083feb27f6ce3cb1d7da9169ef94e961e52a9e0a9deeebda31faeac8742"
+checksum = "89828ddbba96c1abfade6ee10b4f279b4338d2bb3ee042d0062f4d586e24cd6f"
 dependencies = [
  "directories",
  "fs2",
@@ -5592,9 +5615,9 @@ dependencies = [
 
 [[package]]
 name = "seiza-stacking"
-version = "0.57.0"
+version = "0.58.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b0136f5c25a4eebacc96f8f79c223b56d60be336037ede697154879153678ec"
+checksum = "f196997ecd9e7b3e1f61bd429d60be3c867375188c8847355452697bc67c06f6"
 dependencies = [
  "bytemuck",
  "fs2",
@@ -5619,6 +5642,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.1",
  "statrs",
+ "sysinfo",
  "tempfile",
  "thiserror 2.0.21",
  "wgpu",
@@ -5628,28 +5652,30 @@ dependencies = [
 
 [[package]]
 name = "seiza-stars"
-version = "0.5.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "20e20ef99897c9bb4830166058531da9382e31d1e57f6983b4faa49830d64166"
+checksum = "2e7f6a1fe831590b30cad9bb191f761a1e973e2eb76e1780626b45a18f3671a6"
 dependencies = [
  "nalgebra",
  "rayon",
  "seiza-imgproc",
+ "serde",
 ]
 
 [[package]]
 name = "seiza-stats"
-version = "0.1.1"
-source = "git+https://github.com/theatrus/seiza?rev=2825640a#2825640a281a461a8b164d21a2c26894eb1592a3"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7c8186b69bfb28834e39261d8caa00f07059d26ddf0712888e80d73a573ee9c6"
 dependencies = [
  "bytemuck",
 ]
 
 [[package]]
 name = "seiza-stretch"
-version = "0.3.2"
+version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a1f98d4c8a11bff8c04b8f684967336f5f07f4f94df86b507a4a2f148a08b69"
+checksum = "358bddce897ba302e6a62625ae86f013b8dbc14c7364b9a25eb94a9b2cecfb6a"
 dependencies = [
  "rayon",
  "seiza-stats",
@@ -5659,9 +5685,9 @@ dependencies = [
 
 [[package]]
 name = "seiza-xisf"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "036fb003e9037533ad8cf5b38167677f7564d9baf334b258f51d02ab5fd5a261"
+checksum = "3a9fa0f3faae579ade93c5ae82760af8f9bfdb99d45743ccd70a25609cf6c52a"
 dependencies = [
  "flate2",
  "lz4_flex",
@@ -6299,6 +6325,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "sysinfo"
+version = "0.38.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92ab6a2f8bfe508deb3c6406578252e491d299cbbf3bc0529ecc3313aee4a52f"
+dependencies = [
+ "libc",
+ "memchr",
+ "ntapi",
+ "objc2-core-foundation",
+ "objc2-io-kit",
+ "windows",
+]
+
+[[package]]
 name = "system-configuration"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6739,7 +6779,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",

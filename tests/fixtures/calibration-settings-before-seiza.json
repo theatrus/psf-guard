@@ -403,8 +403,8 @@
       "key": "flat_max_age_days",
       "group": "checks",
       "label": "Flat age limit",
-      "help": "Flag lights as uncalibratable when the elapsed time to the nearest flat contributing to their master exceeds this limit. One day includes exactly 24 hours before or after the light.",
-      "effect": "flags",
+      "help": "Prefer raw flats that can build a master over an external flat master past this limit. Flag lights as uncalibratable when the elapsed time to the nearest flat contributing to their master exceeds this limit. One day includes exactly 24 hours before or after the light.",
+      "effect": "matching",
       "kind": {
         "type": "number",
         "min": 0.0,
