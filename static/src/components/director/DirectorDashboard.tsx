@@ -2,12 +2,13 @@ import { Link, useLocation, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { RefreshCw } from 'lucide-react';
 import { apiClient } from '../../api/client';
-import type { DirectorRigStatusView } from '../../api/directorTypes';
+import type { DirectorRigStatusView, ForecastProvider } from '../../api/directorTypes';
 import type { RigNights } from '../../api/nightPlanTypes';
 import { describeNow, errorsOf, formatAge } from './dashboardModel';
 import { retryWhenBusy } from './retry';
 import EarlyBeta from './EarlyBeta';
 import { RigWeatherSummary } from './RigWeather';
+import { PROVIDER_URL } from './forecastLabels';
 import { planHref } from './planAddress';
 import { useDirectorClock } from '../../hooks/useDirectorClock';
 import { formatHours } from './visibilityFormat';
@@ -38,6 +39,11 @@ export default function DirectorDashboard() {
   const workspaceHref = (projectId: string) => planHref(projectId, params);
   const rows = statuses.data ?? [];
   const age = (at: number | null | undefined) => at ? formatAge(now - at) : 'never';
+  // Each forecast provider's credit, once for the page rather than on every rig.
+  const credits = [...new Map<ForecastProvider, string>([
+    ...rows.flatMap(view => view.weather?.forecast ? [[view.weather.forecast.provider, view.weather.forecast.attribution] as const] : []),
+    ...(tonight.data?.rigs ?? []).flatMap(rig => rig.forecast ? [[rig.forecast.provider, rig.forecast.attribution] as const] : []),
+  ]).entries()];
   return <section className="director-records director-dashboard" aria-label="Live rigs">
     <div className="director-toolbar">
       <div className="early-beta-heading"><h2>Live</h2><EarlyBeta /></div>
@@ -65,7 +71,7 @@ export default function DirectorDashboard() {
               })}</ol>
             </details>}
           </td>
-          <td><span className="director-cell-label">Weather</span><RigWeatherSummary weather={view.weather} now={now} /></td>
+          <td><span className="director-cell-label">Weather</span><RigWeatherSummary weather={view.weather} now={now} credit={false} /></td>
           <td><span className="director-cell-label">Program pull</span>{age(view.contacts.program_pull?.at_ms)}{view.contacts.program_pull?.detail && <span className="director-muted"> rev {view.contacts.program_pull.detail.slice(0, 8)}</span>}</td>
           <td><span className="director-cell-label">Check-in</span>{age(view.contacts.check_in?.at_ms)}{view.pending_receipts > 0 && <span className="director-muted"> {view.pending_receipts} saved, ungraded</span>}</td>
           <td><span className="director-cell-label">Status report</span>{age(view.contacts.status?.at_ms)}</td>
@@ -75,6 +81,7 @@ export default function DirectorDashboard() {
         </tr>;
       })}</tbody>
     </table></div>}
+    {credits.length > 0 && <p className="director-muted" data-testid="forecast-credits">Forecasts: {credits.map(([provider, attribution], index) => <span key={provider}>{index > 0 && ' · '}<a href={PROVIDER_URL[provider]} target="_blank" rel="noreferrer">{attribution}</a></span>)}</p>}
   </section>;
 }
 
@@ -90,9 +97,8 @@ function TonightCell({ rig, pending, failed }: { rig: RigNights | undefined; pen
   const href = nightHref(rig.rig.id, night.date, search);
   const clear = night.availability.state === 'unavailable' ? 'not available' : `${formatHours(night.available_dark_hours)} clear`;
   const forecast = night.availability.marks.some(mark => mark.source.kind === 'forecast') ? rig.forecast : null;
-  // The credit the forecast provider's licence requires.
-  const credit = forecast ? `Clear hours from the site's cloud forecast. ${forecast.attribution}` : undefined;
-  return <Link to={href} title={credit}>
+  // The provider's credit is at the foot of the page.
+  return <Link to={href} title={forecast ? "Clear hours from the site's cloud forecast." : undefined}>
     {clear}{plans.length > 0 ? `: ${plans.slice(0, 2).map(plan => plan.name).join(', ')}${plans.length > 2 ? ` +${plans.length - 2}` : ''}` : night.available_dark_hours > 0 ? ', nothing planned' : ''}
   </Link>;
 }

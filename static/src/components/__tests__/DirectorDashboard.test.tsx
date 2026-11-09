@@ -70,6 +70,19 @@ describe('Director live dashboard', () => {
     expect(screen.getByText('Early beta')).toHaveAttribute('title', expect.stringContaining('Target Scheduler with PSF Guard Sync is the main way to run a rig'));
   });
 
+  it('credits the forecast provider once, at the foot of the page', async () => {
+    const forecast = { provider: 'open_meteo' as const, attribution: 'Weather data by Open-Meteo.com (CC BY 4.0)', fetched_at_ms: NOW, expires_at_ms: NOW + 3_600_000, fresh: true,
+      hour: { start_ms: NOW, end_ms: NOW + 3_600_000, cloud_total: 10, cloud_low: null, cloud_mid: null, cloud_high: null, temperature_celsius: 7, dew_point_celsius: 6, humidity_percent: 93 } };
+    const weather = (rig_id: string) => ({ rig_id, site_id: 'site', evaluated_at_ms: NOW, cloud_threshold_percent: 30, dew_limit_celsius: 2, forecast, reported: null,
+      reported_cloud: { state: 'unknown' as const, reason: 'no_report', valid_for_ms: 30_000 },
+      forecast_conditions: { state: 'clear' as const, reason: 'cloud_cover_clear', valid_for_ms: 30_000 } });
+    mount([{ ...online, weather: weather('a') }, { ...quiet, weather: weather('b') }]);
+    expect(await screen.findAllByText(/Open-Meteo · 10% cloud/)).toHaveLength(2);
+    const credits = screen.getAllByRole('link', { name: forecast.attribution });
+    expect(credits).toHaveLength(1);
+    expect(screen.getByTestId('forecast-credits')).toContainElement(credits[0]);
+  });
+
   it('says when no rig exists yet', async () => {
     mount([]);
     expect(await screen.findByText(/No rigs yet/)).toBeInTheDocument();
