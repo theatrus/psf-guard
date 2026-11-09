@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { Link, useLocation, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { RefreshCw } from 'lucide-react';
@@ -27,6 +28,12 @@ export default function DirectorDashboard() {
   const [params] = useSearchParams();
   const statuses = useQuery({ queryKey: ['directorRigStatuses'], queryFn: apiClient.getDirectorRigStatuses, retry: retryWhenBusy, retryDelay: 1200, refetchInterval: 15_000, refetchOnWindowFocus: true });
   const now = useDirectorClock();
+  // Listing the plans gives each new database its rig, as Rig setup does, so
+  // a database only the Sync plugin uses appears here before anyone opens
+  // Planning. Read the rigs again once it has.
+  const bound = useQuery({ queryKey: ['liveRigBinding'], queryFn: async () => { await apiClient.getDirectorPlans(); return Date.now(); }, retry: false, staleTime: 5 * 60_000, refetchOnWindowFocus: false });
+  const refetchStatuses = statuses.refetch;
+  useEffect(() => { if (bound.data) void refetchStatuses(); }, [bound.data, refetchStatuses]);
   // Tonight for each rig: its clear dark hours and what it plans to shoot.
   const tonight = useQuery({
     queryKey: ['nightPlansTonight'],
@@ -62,6 +69,8 @@ export default function DirectorDashboard() {
         // Without a Director report, the Sync plugin's report is the rig's.
         const directorNow = view.status || !sequence ? describeNow(view, now) : null;
         const action = view.sync?.latest_action;
+        // Problems the latest action does not already show.
+        const problems = (view.sync?.problems ?? []).filter(problem => !action || problem.at_ms !== action.at_ms || problem.action !== action.action);
         return <tr key={view.rig.id} className={`is-${view.connectivity.state}`}>
           <td><span className="director-cell-label">Rig</span><strong>{view.catalog_name ?? view.rig.name}</strong>{view.catalog_name && view.catalog_name !== view.rig.name && <span className="director-muted"> {view.rig.name}</span>}</td>
           <td><span className="director-cell-label">Link</span><span className={`director-connectivity is-${view.connectivity.state}`}>{STATE_LABEL[view.connectivity.state]}</span>{view.connectivity.age_ms !== null && <span className="director-muted"> {formatAge(view.connectivity.age_ms)}</span>}</td>
@@ -84,6 +93,7 @@ export default function DirectorDashboard() {
           <td><span className="director-cell-label">Status report</span>{age(view.contacts.status?.at_ms)}</td>
           <td data-testid="sync-plugin"><span className="director-cell-label">Sync plugin</span>{!view.sync ? <span className="director-muted">not used</span> : <>
             {action ? <span className={action.outcome === 'ok' ? undefined : 'director-error'}>{describeSyncAction(action)} <span className="director-muted">{age(action.at_ms)}</span></span> : <span className="director-muted">no action yet</span>}
+            {problems.map(problem => <span key={`${problem.action}:${problem.operation ?? ''}`} className="director-error"><br />{describeSyncAction(problem)} <span className="director-muted">{age(problem.at_ms)}</span></span>)}
             <br /><span className="director-muted">contact {age(view.sync.last_contact_ms)}{view.sync.plugin_version && `, plugin ${view.sync.plugin_version}`}</span>
           </>}</td>
           <td><span className="director-cell-label">Assigned</span>{view.assignments.length === 0 ? <span className="director-muted">nothing activated</span>

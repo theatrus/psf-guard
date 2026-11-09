@@ -37,6 +37,14 @@ describe('Sync plugin on Live', () => {
     expect(describeSequence(live(null), NOW)).toBeNull();
   });
 
+  it("shows a wait's end on the server clock", () => {
+    // The plugin's clock is 4 min behind: its 03:10 is the server's 03:14.
+    const until = new Date(2026, 10, 9, 3, 10).getTime();
+    const behind = live({ reported_at_ms: NOW - 240_000 - 1_000, received_at_ms: NOW - 1_000, activity: { kind: 'time_wait', until_ms: until } });
+    const shown = new Date(until + 240_000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    expect(describeSequence(behind, NOW)).toBe(`Waiting until ${shown}`);
+  });
+
   it('lists recent N.I.N.A. events on the server clock', () => {
     // The report arrived 5 s after the plugin read it, so plugin times shift by 5 s.
     expect(describeRecent(live({ recent: { image_saved_ms: NOW - 125_000, autofocus_ms: NOW - 2_405_000 } }), NOW)).toBe('last frame 2 min ago · autofocus 40 min ago');

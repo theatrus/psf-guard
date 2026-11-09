@@ -509,18 +509,26 @@ page shows as an instruction), and optional `name`, `started_ms`, `until_ms`,
 trimmed of control characters and cut to 200 characters. Nothing carries
 coordinates, wait conditions or file paths.
 
-The server keeps the newest report per database in memory: a report older
-than the stored one from the same session is answered `accepted: false`, and
-a new session replaces the old. Reports go stale after `fresh_for_ms` and are
-lost on restart. Accepted reports are not written to the audit log; refusals
-are. A plugin sends reports only to a server that lists the capability, so an
-older server never receives one.
+The server keeps the newest report per database in memory. A report read
+before the stored one, by `reported_at_ms`, is answered `accepted: false`
+whatever its session, so a late retry from a finished run never replaces the
+current one; once the stored report is stale, any report replaces it. Reports
+go stale after `fresh_for_ms` and are lost on restart. Accepted reports are
+not written to the audit log. Refusals are, at most once every ten minutes
+per database, because a plugin whose key was revoked keeps reporting. A
+plugin sends reports only to a server that lists the capability, so an older
+server never receives one.
 
-The Live page also shows each database's latest Sync action from the audit
-log, read back from the end of the log after a restart. Image uploads to
-`/api/db/{id}/images/upload` with a valid key are now logged as
-`image_upload`, with the file name, frame kind, size and whether the file was
-already present.
+The Live page also shows what each database's Sync clients last did. The
+audit log keeps the newest entry of each kind of action (action and
+operation) per database in memory and saves it to `remote-sync-latest.json`
+beside the log, so a restart keeps it however many polls fill the log. Without
+that file, as on the first start after an upgrade, the server reads the end
+of the log instead. Image uploads to `/api/db/{id}/images/upload` with a valid
+key are now logged as `image_upload`, with the file name, frame kind, size and
+whether the file was already present; a failed upload is logged as a server
+error without its message, which can include server folders. An upload with a
+valid key also counts as the client's contact.
 
 ### Scheduler flat coverage
 

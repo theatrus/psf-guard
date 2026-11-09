@@ -157,15 +157,17 @@ pub struct SyncSequenceStatuses {
 }
 
 impl SyncSequenceStatuses {
-    /// Keep `status` unless it is older than the stored report from the same
-    /// session. A new session always replaces the old one.
+    /// Keep `status` unless it was observed before the stored report, so a
+    /// late retry from a finished run never replaces the current one. Once
+    /// the stored report is stale, any report replaces it, so a plugin whose
+    /// clock moved back is not locked out.
     pub fn record(&self, catalog_id: &str, status: SequenceStatus) -> bool {
         let mut latest = self
             .latest
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         if latest.get(catalog_id).is_some_and(|stored| {
-            stored.session_id == status.session_id && stored.reported_at_ms > status.reported_at_ms
+            stored.reported_at_ms > status.reported_at_ms && !stored.is_stale(status.received_at_ms)
         }) {
             return false;
         }
@@ -189,8 +191,11 @@ pub struct SyncLive {
     pub last_contact_ms: Option<u64>,
     /// The version that client reported.
     pub plugin_version: Option<String>,
-    /// The newest action that was more than a check-in.
+    /// The newest action that was more than contact.
     pub latest_action: Option<crate::server::remote_audit::LatestAction>,
+    /// Kinds of action whose newest attempt was refused or failed, newest
+    /// first, so a later upload never hides a refused merge.
+    pub problems: Vec<crate::server::remote_audit::LatestAction>,
     /// The newest sequence report; stale ones are history.
     pub sequence: Option<SequenceStatus>,
     pub sequence_stale: bool,
@@ -210,6 +215,7 @@ impl SyncLive {
             .into_values()
             .max_by_key(|contact| contact.at);
         let latest_action = state.remote_audit.latest(&catalog.id);
+        let problems = state.remote_audit.problems(&catalog.id);
         let sequence = state.sync_sequences.get(&catalog.id);
         let accepts = catalog
             .remote_image_upload
@@ -224,6 +230,7 @@ impl SyncLive {
                 .map(|contact| (contact.at.max(0) as u64).saturating_mul(1000)),
             plugin_version: newest.and_then(|contact| contact.version),
             latest_action,
+            problems,
             sequence_stale: sequence
                 .as_ref()
                 .is_some_and(|status| status.is_stale(now_ms)),
@@ -462,16 +469,24 @@ mod tests {
     }
 
     #[test]
-    fn an_older_report_from_the_same_session_never_replaces_a_newer_one() {
+    fn an_older_report_never_replaces_a_newer_one() {
         let statuses = SyncSequenceStatuses::default();
         let session = Uuid::new_v4();
         assert!(statuses.record("rig", report(session, 200).into_status(1).unwrap()));
         assert!(!statuses.record("rig", report(session, 100).into_status(2).unwrap()));
         assert_eq!(statuses.get("rig").unwrap().reported_at_ms, 200);
-        // A new sequence run replaces the old one, whatever its clock says.
+        // A late report from an earlier run never replaces the current one.
+        let earlier = Uuid::new_v4();
+        assert!(!statuses.record("rig", report(earlier, 150).into_status(3).unwrap()));
+        assert_eq!(statuses.get("rig").unwrap().session_id, session);
         let next = Uuid::new_v4();
-        assert!(statuses.record("rig", report(next, 50).into_status(3).unwrap()));
+        assert!(statuses.record("rig", report(next, 300).into_status(4).unwrap()));
         assert_eq!(statuses.get("rig").unwrap().session_id, next);
+        // Once the stored report is stale, an older clock is accepted.
+        let late = report(Uuid::new_v4(), 10)
+            .into_status(4 + MIN_FRESH_MS + 1)
+            .unwrap();
+        assert!(statuses.record("rig", late));
         assert!(statuses.get("other").is_none());
     }
 }

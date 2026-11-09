@@ -46,7 +46,7 @@ pub enum AuditAction {
 }
 
 impl AuditAction {
-    /// Whether the Live page shows this as a client's latest action. A
+    /// Whether the Live page can show this as a client's action. A
     /// capabilities call and a poll for pending flat history run before
     /// nearly everything else, so they count only as contact.
     fn is_notable(self) -> bool {
@@ -130,17 +130,40 @@ struct LoggedEntry {
     summary: BTreeMap<String, i64>,
 }
 
-/// How much of the end of the log to read back after a restart.
+/// How much of the end of the log to read back when there is no saved record
+/// of the latest actions yet, as on the first start after an upgrade.
 const LATEST_TAIL_BYTES: u64 = 512 * 1024;
+
+/// Log a refused sequence report at most this often per catalog. A plugin
+/// whose key was revoked keeps sending them every 15 s.
+const SEQUENCE_REFUSAL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+/// Catalog ID, then a kind of action (its action and operation), to the
+/// newest entry of that kind.
+type LatestByKind = HashMap<String, BTreeMap<String, LatestAction>>;
+
+#[derive(Default)]
+struct LatestState {
+    by_catalog: LatestByKind,
+    /// Bumped for each snapshot sent to the file.
+    generation: u64,
+}
 
 pub struct RemoteAuditLog {
     path: PathBuf,
     max_bytes: u64,
     /// Serializes appends so two concurrent applies cannot interleave a line.
     write_lock: Mutex<()>,
-    /// Catalog ID to its newest notable entry. `None` until first used, then
-    /// read back from the end of the log, so a restart keeps it.
-    latest: Mutex<Option<HashMap<String, LatestAction>>>,
+    /// The newest notable entry of each kind, per catalog. Loaded when the
+    /// server starts and saved beside the log, so a restart keeps it however
+    /// much the log grows.
+    latest: Mutex<LatestState>,
+    latest_path: PathBuf,
+    /// Serializes snapshot writes, and records the generation last written so
+    /// an older snapshot never replaces a newer one.
+    latest_written: std::sync::Arc<Mutex<u64>>,
+    /// When each catalog last had a refused sequence report logged.
+    sequence_refusals: Mutex<HashMap<String, std::time::Instant>>,
 }
 
 impl RemoteAuditLog {
@@ -149,12 +172,31 @@ impl RemoteAuditLog {
         cache_root.as_ref().join("remote-sync-audit.jsonl")
     }
 
+    /// Where the latest actions are saved below a cache folder.
+    pub fn latest_path_in(cache_root: impl AsRef<Path>) -> PathBuf {
+        cache_root.as_ref().join("remote-sync-latest.json")
+    }
+
+    /// Reads the saved latest actions, or the end of the log when none are
+    /// saved. Called while the server starts, never on a request.
     pub fn new(cache_root: impl AsRef<Path>) -> Self {
+        let path = Self::path_in(&cache_root);
+        let latest_path = Self::latest_path_in(&cache_root);
+        let by_catalog = fs::read(&latest_path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_else(|| read_latest_from_log(&path));
         Self {
-            path: Self::path_in(cache_root),
+            path,
             max_bytes: MAX_LOG_BYTES,
             write_lock: Mutex::new(()),
-            latest: Mutex::new(None),
+            latest: Mutex::new(LatestState {
+                by_catalog,
+                generation: 0,
+            }),
+            latest_path,
+            latest_written: std::sync::Arc::default(),
+            sequence_refusals: Mutex::default(),
         }
     }
 
@@ -179,8 +221,15 @@ impl RemoteAuditLog {
         outcome: AuditOutcome,
         record: AuditRecord<'_>,
     ) {
+        if action == AuditAction::SequenceStatus
+            && outcome != AuditOutcome::Ok
+            && !self.sequence_refusal_due(catalog_id)
+        {
+            tracing::debug!("remote sync sequence report {outcome:?} for db={catalog_id}");
+            return;
+        }
         let now = chrono::Utc::now();
-        if action.is_notable() {
+        if is_notable(action, record.detail) {
             self.remember(
                 catalog_id,
                 LatestAction {
@@ -224,60 +273,89 @@ impl RemoteAuditLog {
         }
     }
 
-    /// The newest notable action on `catalog_id`, if the log has one.
+    fn sequence_refusal_due(&self, catalog_id: &str) -> bool {
+        let mut refusals = self
+            .sequence_refusals
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let now = std::time::Instant::now();
+        match refusals.get(catalog_id) {
+            Some(at) if now.duration_since(*at) < SEQUENCE_REFUSAL_INTERVAL => false,
+            _ => {
+                refusals.insert(catalog_id.to_owned(), now);
+                true
+            }
+        }
+    }
+
+    /// The newest notable action on `catalog_id`, if there is one.
     pub fn latest(&self, catalog_id: &str) -> Option<LatestAction> {
-        let mut latest = self
+        let latest = self
             .latest
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         latest
-            .get_or_insert_with(|| self.read_latest())
-            .get(catalog_id)
+            .by_catalog
+            .get(catalog_id)?
+            .values()
+            .max_by_key(|action| action.at_ms)
             .cloned()
     }
 
-    fn remember(&self, catalog_id: &str, action: LatestAction) {
-        let mut latest = self
+    /// Kinds of action whose newest entry on `catalog_id` was refused or
+    /// failed, newest first. A later success of the same kind clears one,
+    /// and other kinds of action never hide one.
+    pub fn problems(&self, catalog_id: &str) -> Vec<LatestAction> {
+        let latest = self
             .latest
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        latest
-            .get_or_insert_with(|| self.read_latest())
-            .insert(catalog_id.to_owned(), action);
+        let mut problems: Vec<_> = latest
+            .by_catalog
+            .get(catalog_id)
+            .into_iter()
+            .flat_map(|kinds| kinds.values())
+            .filter(|action| action.outcome != AuditOutcome::Ok)
+            .cloned()
+            .collect();
+        problems.sort_by_key(|action| std::cmp::Reverse(action.at_ms));
+        problems
     }
 
-    /// The newest notable entry per catalog in the end of the log and, when
-    /// the log rolled recently, the end of the previous generation.
-    fn read_latest(&self) -> HashMap<String, LatestAction> {
-        let mut latest = HashMap::new();
-        for path in [self.path.with_extension("jsonl.1"), self.path.clone()] {
-            let Ok(tail) = read_tail(&path, LATEST_TAIL_BYTES) else {
-                continue;
+    fn remember(&self, catalog_id: &str, action: LatestAction) {
+        let (generation, snapshot) = {
+            let mut latest = self
+                .latest
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            latest
+                .by_catalog
+                .entry(catalog_id.to_owned())
+                .or_default()
+                .insert(kind_of(action.action, action.operation.as_deref()), action);
+            latest.generation += 1;
+            (latest.generation, latest.by_catalog.clone())
+        };
+        let path = self.latest_path.clone();
+        let written = self.latest_written.clone();
+        let write = move || {
+            let Ok(mut last) = written.lock() else {
+                return;
             };
-            for line in tail.lines() {
-                let Ok(entry) = serde_json::from_str::<LoggedEntry>(line) else {
-                    continue;
-                };
-                if !entry.action.is_notable() {
-                    continue;
-                }
-                let Ok(at) = chrono::DateTime::parse_from_rfc3339(&entry.at) else {
-                    continue;
-                };
-                latest.insert(
-                    entry.catalog_id,
-                    LatestAction {
-                        at_ms: at.timestamp_millis(),
-                        action: entry.action,
-                        outcome: entry.outcome,
-                        operation: entry.operation,
-                        detail: entry.detail,
-                        summary: entry.summary,
-                    },
-                );
+            if *last >= generation {
+                return;
             }
+            match write_json_atomically(&path, &snapshot) {
+                Ok(()) => *last = generation,
+                Err(error) => tracing::debug!(%error, "latest Sync actions were not saved"),
+            }
+        };
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => {
+                runtime.spawn_blocking(write);
+            }
+            Err(_) => write(),
         }
-        latest
     }
 
     fn append(&self, entry: &AuditEntry<'_>) -> std::io::Result<()> {
@@ -311,11 +389,77 @@ impl RemoteAuditLog {
     }
 }
 
+/// Whether the Live page shows this entry as an action. A capabilities call,
+/// a flat-history poll and a sequence report count only as contact, and so
+/// does a star-detection snapshot the server already had.
+fn is_notable(action: AuditAction, detail: Option<&str>) -> bool {
+    action.is_notable()
+        && !(action == AuditAction::StarDetectionProfile && detail == Some("unchanged"))
+}
+
+fn kind_of(action: AuditAction, operation: Option<&str>) -> String {
+    let action = serde_json::to_value(action)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_default();
+    match operation {
+        // An upload's operation is the frame kind; every upload is one kind.
+        Some(operation) if action != "image_upload" => format!("{action}:{operation}"),
+        _ => action,
+    }
+}
+
+/// The newest notable entry of each kind per catalog, from the end of the
+/// log and, when the log rolled recently, the end of the previous generation.
+fn read_latest_from_log(path: &Path) -> LatestByKind {
+    let mut latest = LatestByKind::new();
+    for path in [path.with_extension("jsonl.1"), path.to_path_buf()] {
+        let Ok(tail) = read_tail(&path, LATEST_TAIL_BYTES) else {
+            continue;
+        };
+        for line in tail.lines() {
+            let Ok(entry) = serde_json::from_str::<LoggedEntry>(line) else {
+                continue;
+            };
+            if !is_notable(entry.action, entry.detail.as_deref()) {
+                continue;
+            }
+            let Ok(at) = chrono::DateTime::parse_from_rfc3339(&entry.at) else {
+                continue;
+            };
+            let kind = kind_of(entry.action, entry.operation.as_deref());
+            latest.entry(entry.catalog_id).or_default().insert(
+                kind,
+                LatestAction {
+                    at_ms: at.timestamp_millis(),
+                    action: entry.action,
+                    outcome: entry.outcome,
+                    operation: entry.operation,
+                    detail: entry.detail,
+                    summary: entry.summary,
+                },
+            );
+        }
+    }
+    latest
+}
+
+fn write_json_atomically(path: &Path, value: &impl Serialize) -> anyhow::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let temporary = path.with_extension("json.tmp");
+    fs::write(&temporary, serde_json::to_vec(value)?)?;
+    fs::rename(&temporary, path)?;
+    Ok(())
+}
+
 /// The last `limit` bytes of `path`, from the first whole line.
 fn read_tail(path: &Path, limit: u64) -> std::io::Result<String> {
     let mut file = File::open(path)?;
     let length = file.metadata()?.len();
-    let start = length.saturating_sub(limit);
+    // Start one byte early: when that byte ends a line, the next one is whole.
+    let start = length.saturating_sub(limit.saturating_add(1));
     file.seek(SeekFrom::Start(start))?;
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)?;
@@ -323,7 +467,8 @@ fn read_tail(path: &Path, limit: u64) -> std::io::Result<String> {
     Ok(if start == 0 {
         text.into_owned()
     } else {
-        // The first line was cut; skip it.
+        // Drop everything up to the first line break: a cut line, or only
+        // the break before a whole line.
         text.split_once('\n')
             .map(|(_, rest)| rest.to_owned())
             .unwrap_or_default()
@@ -413,16 +558,139 @@ mod tests {
     }
 
     #[test]
-    fn reading_back_skips_a_cut_first_line_and_broken_lines() {
+    fn without_a_saved_record_the_end_of_the_log_is_read_back() {
         let directory = tempdir().unwrap();
-        let log = RemoteAuditLog::new(directory.path());
+        let path = RemoteAuditLog::path_in(directory.path());
         let line = r#"{"at":"2026-11-08T10:00:00Z","catalog_id":"rig","action":"image_upload","outcome":"ok","detail":"M31_0001.fits"}"#;
+        // The tail starts exactly at a line: that line is whole and kept.
         let filler = format!("{}\n", "x".repeat(LATEST_TAIL_BYTES as usize));
-        fs::write(log.path(), format!("{filler}not json\n{line}\n")).unwrap();
-        let latest = log.latest("rig").unwrap();
+        fs::write(&path, format!("{filler}not json\n{line}\n")).unwrap();
+        let latest = RemoteAuditLog::new(directory.path()).latest("rig").unwrap();
         assert_eq!(latest.action, AuditAction::ImageUpload);
         assert_eq!(latest.detail.as_deref(), Some("M31_0001.fits"));
         assert_eq!(latest.at_ms, 1_794_132_000_000);
+
+        let exact = format!("{line}\n");
+        let padding = LATEST_TAIL_BYTES as usize - exact.len();
+        fs::write(&path, format!("{}\n{exact}", "y".repeat(padding))).unwrap();
+        let tail = read_tail(&path, exact.len() as u64).unwrap();
+        assert_eq!(tail, exact);
+    }
+
+    #[test]
+    fn the_saved_record_outlives_a_log_full_of_polls() {
+        let directory = tempdir().unwrap();
+        let log = RemoteAuditLog::new(directory.path());
+        log.record(
+            "rig",
+            AuditAction::Apply,
+            AuditOutcome::Ok,
+            AuditRecord {
+                operation: Some("merge"),
+                ..Default::default()
+            },
+        );
+        // Polls push the merge out of the end of the log.
+        fs::write(log.path(), "").unwrap();
+        for _ in 0..50 {
+            log.record(
+                "rig",
+                AuditAction::FlatHistoryPending,
+                AuditOutcome::Ok,
+                AuditRecord::default(),
+            );
+        }
+        let reopened = RemoteAuditLog::new(directory.path());
+        assert_eq!(
+            reopened.latest("rig").and_then(|latest| latest.operation),
+            Some("merge".into())
+        );
+    }
+
+    #[test]
+    fn a_problem_stays_until_the_same_kind_of_action_succeeds() {
+        let directory = tempdir().unwrap();
+        let log = RemoteAuditLog::new(directory.path());
+        let merge = |outcome| AuditRecord {
+            operation: Some("merge"),
+            detail: (outcome != AuditOutcome::Ok).then_some("destination changed"),
+            ..Default::default()
+        };
+        log.record(
+            "rig",
+            AuditAction::Apply,
+            AuditOutcome::Refused,
+            merge(AuditOutcome::Refused),
+        );
+        log.record(
+            "rig",
+            AuditAction::ImageUpload,
+            AuditOutcome::Ok,
+            AuditRecord {
+                operation: Some("light"),
+                detail: Some("M31_0001.fits"),
+                ..Default::default()
+            },
+        );
+        // An unchanged star-detection snapshot is contact, not an action.
+        log.record(
+            "rig",
+            AuditAction::StarDetectionProfile,
+            AuditOutcome::Ok,
+            AuditRecord {
+                operation: Some("star_detection_profile"),
+                detail: Some("unchanged"),
+                ..Default::default()
+            },
+        );
+        assert_eq!(log.latest("rig").unwrap().action, AuditAction::ImageUpload);
+        let problems = log.problems("rig");
+        assert_eq!(problems.len(), 1);
+        assert_eq!(problems[0].detail.as_deref(), Some("destination changed"));
+        // A push of planning is another kind; it does not clear the merge.
+        log.record(
+            "rig",
+            AuditAction::Apply,
+            AuditOutcome::Ok,
+            AuditRecord {
+                operation: Some("push_planning"),
+                ..Default::default()
+            },
+        );
+        assert_eq!(log.problems("rig").len(), 1);
+        log.record(
+            "rig",
+            AuditAction::Apply,
+            AuditOutcome::Ok,
+            merge(AuditOutcome::Ok),
+        );
+        assert!(log.problems("rig").is_empty());
+    }
+
+    #[test]
+    fn refused_sequence_reports_are_logged_once_in_a_while() {
+        let directory = tempdir().unwrap();
+        let log = RemoteAuditLog::new(directory.path());
+        for _ in 0..5 {
+            log.record(
+                "rig",
+                AuditAction::SequenceStatus,
+                AuditOutcome::Refused,
+                AuditRecord {
+                    detail: Some("remote scheduler sync is disabled"),
+                    ..Default::default()
+                },
+            );
+        }
+        log.record(
+            "other",
+            AuditAction::SequenceStatus,
+            AuditOutcome::Refused,
+            AuditRecord::default(),
+        );
+        let contents = fs::read_to_string(log.path()).unwrap();
+        assert_eq!(contents.lines().count(), 2, "{contents}");
+        assert!(log.latest("rig").is_none());
     }
 
     #[test]

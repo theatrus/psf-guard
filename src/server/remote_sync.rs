@@ -1088,6 +1088,30 @@ pub async fn get_export(
     export_response(export)
 }
 
+/// Record a call from `holder` as the Sync plugin's contact with
+/// `catalog_id`.
+pub(crate) fn note_sync_contact(
+    state: &AppState,
+    catalog_id: &str,
+    holder: &str,
+    headers: &HeaderMap,
+) {
+    state
+        .sync_contacts
+        .note(catalog_id, holder, headers, |catalog_id, holder| {
+            state.get_database(catalog_id).is_some_and(|catalog| {
+                catalog.remote_image_upload.as_ref().is_some_and(|config| {
+                    config
+                        .clients
+                        .iter()
+                        .any(|client| client.client_uuid == holder)
+                        || (holder == crate::db_registry::LEGACY_KEY_HOLDER
+                            && config.legacy_key_configured())
+                })
+            })
+        });
+}
+
 pub(super) fn authenticated_catalog(
     state: &AppState,
     headers: &HeaderMap,
@@ -1146,20 +1170,7 @@ pub(super) fn authenticated_catalog(
             "remote scheduler sync is disabled for this database",
         ));
     }
-    state
-        .sync_contacts
-        .note(&catalog.id, &holder, headers, |catalog_id, holder| {
-            state.get_database(catalog_id).is_some_and(|catalog| {
-                catalog.remote_image_upload.as_ref().is_some_and(|config| {
-                    config
-                        .clients
-                        .iter()
-                        .any(|client| client.client_uuid == holder)
-                        || (holder == crate::db_registry::LEGACY_KEY_HOLDER
-                            && config.legacy_key_configured())
-                })
-            })
-        });
+    note_sync_contact(state, &catalog.id, &holder, headers);
     Ok(catalog)
 }
 

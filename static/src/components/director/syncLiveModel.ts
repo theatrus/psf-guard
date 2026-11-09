@@ -36,11 +36,13 @@ export function describeSyncAction(action: SyncLatestAction): string {
   return verb;
 }
 
-const clock = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+const clockTime = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 const seconds = (value: number) => `${Number.isInteger(value) ? value : value.toFixed(1)} s`;
 
-/** One running instruction in plain words: "Exposing M 31: 300 s L, 3 of 30". */
-export function describeActivity(activity: SyncSequenceActivity): string {
+/** One running instruction in plain words: "Exposing M 31: 300 s L, 3 of 30".
+ *  `skewMs` moves plugin clock times onto the server's clock. */
+export function describeActivity(activity: SyncSequenceActivity, skewMs = 0): string {
+  const clock = (ms: number) => clockTime(ms + skewMs);
   const at = activity.target_name ? ` ${activity.target_name}` : '';
   switch (activity.kind) {
     case 'exposing': {
@@ -79,7 +81,7 @@ export function describeSequence(sync: SyncLive | null | undefined, nowMs: numbe
   let line: string;
   if (!sequence.running) line = 'Sequence stopped';
   else if (sequence.activity) {
-    line = describeActivity(sequence.activity);
+    line = describeActivity(sequence.activity, sequence.received_at_ms - sequence.reported_at_ms);
     const started = sequence.activity.started_ms;
     if (started !== undefined && !stale) {
       // Plugin clock for the span it saw, server clock since it arrived.

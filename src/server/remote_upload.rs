@@ -65,14 +65,20 @@ pub async fn upload_image(
     let catalog_id = ctx.id.clone();
     // Only a request with a valid key is the client's action; anything else
     // must not show up as what the rig last did.
-    let authenticated = ctx
-        .remote_image_upload
-        .as_ref()
-        .is_some_and(|config| require_bearer_token(&headers, config).is_ok());
+    let holder = ctx.remote_image_upload.as_ref().and_then(|config| {
+        let token = headers
+            .get(AUTHORIZATION)?
+            .to_str()
+            .ok()?
+            .strip_prefix("Bearer ")?;
+        config.token_holder(token).map(str::to_owned)
+    });
+    let Some(holder) = holder else {
+        return receive_image(state, ctx, headers, multipart).await;
+    };
+    // An upload is contact too, so the rig stays online between syncs.
+    crate::server::remote_sync::note_sync_contact(&state, &catalog_id, &holder, &headers);
     let result = receive_image(state.clone(), ctx, headers, multipart).await;
-    if !authenticated {
-        return result;
-    }
     let (outcome, detail, operation, summary) = match &result {
         Ok(Json(response)) => match &response.data {
             Some(upload) => (
@@ -86,12 +92,21 @@ pub async fn upload_image(
             ),
             None => return result,
         },
-        Err(error) => (
-            crate::server::remote_sync::outcome_of(error),
-            crate::server::remote_sync::detail_of(error),
-            None,
-            std::collections::BTreeMap::new(),
-        ),
+        Err(error) => {
+            let outcome = crate::server::remote_sync::outcome_of(error);
+            (
+                outcome,
+                // A refusal says what was wrong with the request. A failure
+                // can name server folders, which the log never holds.
+                if outcome == AuditOutcome::Refused {
+                    crate::server::remote_sync::detail_of(error)
+                } else {
+                    "server error; see the PSF Guard log".to_owned()
+                },
+                None,
+                std::collections::BTreeMap::new(),
+            )
+        }
     };
     state.remote_audit.record(
         &catalog_id,

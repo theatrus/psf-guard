@@ -1,6 +1,6 @@
 import { type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -88,9 +88,13 @@ describe('Director live dashboard', () => {
       latest_action: { at_ms: NOW - 180_000, action: 'apply', outcome: 'ok' as const, operation: 'merge', summary: { total_updated: 4 } },
       sequence: { session_id: 's', reported_at_ms: NOW - 1_000, received_at_ms: NOW - 1_000, fresh_for_ms: 45_000, running: true,
         activity: { kind: 'exposing', target_name: 'M 31', exposure_seconds: 300, filter: 'L', completed: 3, total: 30 }, recent: {} } };
-    mount([{ ...never, sync }, { ...online, sync: { ...sync, latest_action: null } }, quiet]);
+    const refused = { at_ms: NOW - 600_000, action: 'apply', outcome: 'refused' as const, operation: 'merge', detail: 'destination changed' };
+    mount([{ ...never, sync: { ...sync, latest_action: { at_ms: NOW - 180_000, action: 'image_upload', outcome: 'ok' as const, detail: 'M31_0001.fits' }, problems: [refused] } },
+      { ...online, sync: { ...sync, latest_action: null } }, quiet]);
     const rows = await screen.findAllByTestId('sync-plugin');
-    expect(rows[0]).toHaveTextContent("Merged N.I.N.A.'s catalog: 4 updated 3 min ago");
+    expect(rows[0]).toHaveTextContent('Uploaded M31_0001.fits 3 min ago');
+    // A refused merge stays in view after later uploads.
+    expect(within(rows[0]).getByText("Merged N.I.N.A.'s catalog: refused (destination changed)")).toHaveClass('director-error');
     expect(rows[0]).toHaveTextContent('contact 1 min ago, plugin 1.5.0.0');
     expect(rows[1]).toHaveTextContent('no action yet');
     expect(rows[2]).toHaveTextContent('not used');
@@ -101,6 +105,20 @@ describe('Director live dashboard', () => {
     // RedCat's Director report stays first; the Sync plugin's follows.
     expect(sequences[1]).toHaveTextContent(/^Sync plugin: Exposing M 31/);
     expect(screen.getByText('exposing, IC 1805 r1c1, exposure for 3 min, 2 queued')).toBeInTheDocument();
+  });
+
+  it('lists the plans once, so a new database gets its rig, then reads the rigs again', async () => {
+    let listings = 0;
+    let reads = 0;
+    server.use(
+      http.get('/api/director/v1/plans', () => { listings++; return HttpResponse.json(ok({ warnings: [], rows: [] })); }),
+    );
+    server.use(http.get('/api/director/v1/rigs/status', () => { reads++; return HttpResponse.json(ok(reads > 1 ? [online] : [])); }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    render(<QueryClientProvider client={client}><MemoryRouter><DirectorDashboard /></MemoryRouter></QueryClientProvider>);
+    expect(await screen.findByText('RedCat 61')).toBeInTheDocument();
+    expect(listings).toBe(1);
+    expect(reads).toBeGreaterThanOrEqual(2);
   });
 
   it('says when no rig exists yet', async () => {

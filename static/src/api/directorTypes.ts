@@ -797,6 +797,8 @@ export interface SyncLive {
   last_contact_ms: number | null;
   plugin_version: string | null;
   latest_action: SyncLatestAction | null;
+  /** Kinds of action whose newest attempt was refused or failed, newest first. */
+  problems?: SyncLatestAction[];
   sequence: SyncSequenceStatus | null;
   sequence_stale: boolean;
 }

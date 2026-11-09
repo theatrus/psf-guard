@@ -46,6 +46,7 @@ named `other.auth.json` and so on.
 | `director-meta.sqlite` | Planning's store: rigs, sites, plans and pairings |
 | The server's TOML file | When the server started with `--config` |
 | `remote-sync-audit.jsonl` | The record of remote sync actions, in the cache folder |
+| `remote-sync-latest.json` | Each database's latest Sync actions, for the Live page, in the cache folder |
 
 ### Catalogs
 
