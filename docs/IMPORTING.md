@@ -22,7 +22,8 @@ choices keeps any folders you have already added. To connect TS, choose:
   code in the plugin. Click **Pair**, then **Test connection**. The plugin
   controls its sync schedule; a local TS file is not required. To have the
   plugin send image files too, choose a **Receive folder** under
-  **Image uploads** and click **Turn on image uploads**. See
+  **Image uploads** and click **Turn on image uploads**. The Director plugin
+  uses the same setting for the frames it captures. See
   [Connect N.I.N.A. with PSF Guard Sync](../README.md#connect-nina).
 
 Database management must be enabled for a browser server, as described under

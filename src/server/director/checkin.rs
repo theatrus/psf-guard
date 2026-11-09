@@ -441,6 +441,13 @@ pub(super) async fn statuses(
     )
     .await;
     let sync_now = now_ms();
+    let uploads: std::collections::HashMap<String, u64> = catalogs
+        .iter()
+        .filter_map(|catalog| {
+            let at = state.remote_audit.director_upload_at(&catalog.id)?;
+            Some((catalog.id.clone(), at.max(0) as u64))
+        })
+        .collect();
     let mut sync: std::collections::HashMap<String, crate::server::sync_sequence::SyncLive> =
         catalogs
             .iter()
@@ -478,9 +485,15 @@ pub(super) async fn statuses(
                 let contacts = contacts(store.contacts_for_rig(rig_id)?);
                 let sync = catalog_slug.as_ref().and_then(|slug| sync.remove(slug));
                 let active_projects = catalog_slug.as_ref().and_then(|slug| active.remove(slug));
+                // A Director upload is contact too, as is any Sync call.
+                let director_upload = catalog_slug
+                    .as_ref()
+                    .and_then(|slug| uploads.get(slug).copied());
                 let connectivity = connectivity(
                     &contacts,
-                    sync.as_ref().and_then(|sync| sync.last_contact_ms),
+                    sync.as_ref()
+                        .and_then(|sync| sync.last_contact_ms)
+                        .max(director_upload),
                     now,
                 );
                 let mut assignments = Vec::new();

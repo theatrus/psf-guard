@@ -83,14 +83,14 @@ describe('Rig profile card', () => {
       }))),
       http.get('/api/databases', () => HttpResponse.json(ok([{ id: 'catalog', name: 'RedCat 61' }]))),
     );
-    mount(true, undefined, undefined, <RigProfileCard slug="catalog" initialTab="director" syncPlugin={<section aria-label="Sync plugin">Pair the Sync plugin</section>} />);
+    mount(true, undefined, undefined, <RigProfileCard slug="catalog" initialTab="director" syncPlugin={<section aria-label="PSF Guard Sync">Pair the Sync plugin</section>} />);
 
     expect(await screen.findByRole('tab', { name: 'Plugins' })).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByRole('region', { name: 'Sync plugin' })).toBeVisible();
+    expect(screen.getByRole('region', { name: 'PSF Guard Sync' })).toBeVisible();
     expect(screen.getByRole('group', { name: 'Plugins on this rig' })).toBeVisible();
-    expect(await screen.findByRole('heading', { name: 'Director plugin' })).toBeVisible();
+    expect(await screen.findByRole('heading', { name: 'PSF Guard Director' })).toBeVisible();
     fireEvent.click(screen.getByRole('tab', { name: 'Optics' }));
-    expect(screen.queryByRole('region', { name: 'Sync plugin' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'PSF Guard Sync' })).not.toBeInTheDocument();
   });
 
   it('still offers the Sync plugin when the rig profile cannot load', async () => {
@@ -99,9 +99,9 @@ describe('Rig profile card', () => {
       http.get('/api/director/v1/catalogs/catalog/rig/profile', () => HttpResponse.json({ success: false, data: null, error: 'No rig yet' }, { status: 404 })),
       http.get('/api/director/v1/plans', () => { listed += 1; return HttpResponse.json(ok({ rows: [], warnings: [] })); }),
     );
-    mount(true, undefined, undefined, <RigProfileCard slug="catalog" syncPlugin={<section aria-label="Sync plugin">Pair the Sync plugin</section>} />);
+    mount(true, undefined, undefined, <RigProfileCard slug="catalog" syncPlugin={<section aria-label="PSF Guard Sync">Pair the Sync plugin</section>} />);
 
-    expect(await screen.findByRole('region', { name: 'Sync plugin' })).toBeVisible();
+    expect(await screen.findByRole('region', { name: 'PSF Guard Sync' })).toBeVisible();
     await waitFor(() => expect(listed).toBe(1));
     // The rig is missing, not broken: no error beside the Sync plugin.
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();

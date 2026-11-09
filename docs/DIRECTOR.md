@@ -959,6 +959,8 @@ exact methods/routes are allowed, for the paired rig:
 - `POST /api/director/v1/rigs/{rig_id}/status`
 - `POST /api/director/v1/rigs/{rig_id}/equipment-reports`
 - `POST /api/director/v1/rigs/{rig_id}/star-detection-settings`
+- `GET /api/director/v1/rigs/{rig_id}/uploads`
+- `POST /api/director/v1/rigs/{rig_id}/images`
 - `POST /api/director/v1/rigs/{rig_id}/workloads/request`
 - `POST /api/director/v1/rigs/{rig_id}/workloads/release`
 
@@ -966,7 +968,22 @@ Their existing coordinator/catalog query or body fields are still required and
 validated. `star-detection-settings` is the exception: it accepts the Sync
 plugin's star detection snapshot (see the data-transfer design record) without
 `catalog_id`, reads the catalog from the pairing, and refuses a `profile_id`
-other than the paired profile. A ledger already reported by one rig cannot accept any sequence from
+other than the paired profile.
+
+`uploads` and `images` carry the frames the plugin captures to the paired
+database, also without `catalog_id`. `GET uploads` answers `enabled`, the
+`reason` uploads are off when they are (including a paired database that is
+not registered), and `max_bytes`, the largest image file the server takes. `POST images` takes one multipart `image` part and an
+`X-Content-SHA256` header, exactly as the Sync upload does, and answers the
+same upload response. Both plugins share the database's **Image uploads**
+setting, receive folder, folder layout, header import, calibration matching
+and audit log; Director uploads are logged as `director_image_upload`. An
+older server denies both routes, which the plugin takes as no uploads. While
+another upload imports into the same database, an upload waits up to 10 s for
+it, then answers `503` with `Retry-After`, and the plugin tries again; `409` is kept for a refusal of the
+file itself.
+
+A ledger already reported by one rig cannot accept any sequence from
 another rig, even if that rig has its own valid credential. Equipment registration,
 planning edits and operator-wide status remain
 operator-managed. A profile header asserts the profile context; possession of the

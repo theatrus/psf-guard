@@ -1548,7 +1548,8 @@ async fn database_echo_token_and_checksum_are_required_before_publish() {
         &checksum,
     )
     .await;
-    assert_eq!(status, StatusCode::CONFLICT);
+    // Busy, so the plugin tries again: not a refusal of the file.
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert!(!fixture.images_a.join("m33-001.fits").exists());
     assert_eq!(image_count(&fixture.database_a), 0);
     assert_eq!(image_count(&fixture.database_b), 0);

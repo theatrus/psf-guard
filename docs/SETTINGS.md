@@ -58,14 +58,19 @@ control. The selected page includes the database name.
   Each database is one rig. Without planning, **Rig setup** shows only the
   Sync plugin.
   - **Plugins on this rig** shows each plugin **On** or **Off**, and what it
-    does: the Sync plugin's scheduler sync and image uploads, and whether the
-    Director plugin may take work.
-  - The Sync plugin's panel follows the Director plugin's: **Pair**,
-    **Scheduler sync**, **Image uploads** and **Remote API key**. Each part
-    shows whether it is on. **Scheduler sync** and **Image uploads** each have
-    **Turn on** or **Turn off**, which applies at once. Changes to the receive
-    folder or folder layout need **Save upload settings**. A new remote API
-    key is shown once, then saved with **Save key**.
+    does: the Sync plugin's scheduler sync, whether the Director plugin may
+    take work, and, in a row of its own, whether **Image uploads** are on.
+  - Below it, each part has its own card: **PSF Guard Sync**, **Image
+    uploads**, and, with planning, **PSF Guard Director**.
+  - The **PSF Guard Sync** card follows the Director plugin's: **Pair**,
+    **Scheduler sync** and **Remote API key**. Each part shows whether it is
+    on. **Scheduler sync** has **Turn on** or **Turn off**, which applies at
+    once. A new remote API key is shown once, then saved with **Save key**.
+  - **Image uploads** serves both plugins: the Sync plugin sends frames from
+    its upload instruction, and the Director plugin sends the frames it
+    captures. **Turn on image uploads** needs a **Receive folder**, not a
+    pairing; each plugin still needs its own. Changes to the receive folder
+    or folder layout need **Save upload settings**.
   - Under **Pair**, each paired Sync plugin shows when it last connected
     and which plugin version it reported. A note identifies a client whose plugin is too old
     to add new projects to its N.I.N.A. profile itself. Update that plugin

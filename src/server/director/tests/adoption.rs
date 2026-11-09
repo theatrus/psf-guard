@@ -10,6 +10,7 @@ mod feasibility;
 mod file_delivery;
 mod forecasts;
 mod framing;
+mod image_uploads;
 mod mosaic;
 mod new_rig;
 mod night_overrides;

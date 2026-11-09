@@ -18,6 +18,7 @@ export function describeSyncAction(action: SyncLatestAction): string {
       case 'flat_history_acknowledge': return 'Confirmed flat history';
       case 'star_detection_profile': return 'Sent star detection settings';
       case 'image_upload': return action.outcome === 'ok' && action.detail ? `Uploaded ${action.detail}` : 'Uploaded an image';
+      case 'director_image_upload': return action.outcome === 'ok' && action.detail ? `Director uploaded ${action.detail}` : 'Director uploaded an image';
       default: return action.action.replaceAll('_', ' ');
     }
   })();

@@ -40,6 +40,8 @@ pub enum AuditAction {
     StarDetectionProfile,
     /// An image file sent to the database's receive folder.
     ImageUpload,
+    /// An image file a paired Director plugin sent to the receive folder.
+    DirectorImageUpload,
     /// A report of what N.I.N.A.'s sequence is doing. Only refusals reach
     /// the log; accepted reports arrive every few seconds.
     SequenceStatus,
@@ -48,7 +50,12 @@ pub enum AuditAction {
 impl AuditAction {
     /// An image file sent in, rather than a sync exchange.
     fn is_upload(self) -> bool {
-        self == Self::ImageUpload
+        matches!(self, Self::ImageUpload | Self::DirectorImageUpload)
+    }
+
+    /// Whether a Sync client took this action, rather than a Director one.
+    fn is_sync(self) -> bool {
+        self != Self::DirectorImageUpload
     }
 
     /// Whether the Live page can show this as a client's action. A
@@ -296,7 +303,7 @@ impl RemoteAuditLog {
         }
     }
 
-    /// The newest notable action on `catalog_id`, if there is one.
+    /// The Sync plugin's newest notable action on `catalog_id`, if any.
     pub fn latest(&self, catalog_id: &str) -> Option<LatestAction> {
         let latest = self
             .latest
@@ -306,6 +313,7 @@ impl RemoteAuditLog {
             .by_catalog
             .get(catalog_id)?
             .values()
+            .filter(|action| action.action.is_sync())
             .max_by_key(|action| action.at_ms)
             .cloned()
     }
@@ -337,6 +345,22 @@ impl RemoteAuditLog {
             .collect();
         problems.sort_by_key(|action| std::cmp::Reverse(action.at_ms));
         problems
+    }
+
+    /// When a Director plugin last uploaded to `catalog_id`, whatever the
+    /// outcome: any authenticated upload is contact.
+    pub fn director_upload_at(&self, catalog_id: &str) -> Option<i64> {
+        let latest = self
+            .latest
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        latest
+            .by_catalog
+            .get(catalog_id)?
+            .values()
+            .filter(|action| action.action == AuditAction::DirectorImageUpload)
+            .map(|action| action.at_ms)
+            .max()
     }
 
     /// The newest notable actions on `catalog_id`, newest first, at most
@@ -450,7 +474,7 @@ impl RemoteAuditLog {
 }
 
 /// Whether `worked`, a success, shows that `problem` no longer applies. An
-/// upload clears an upload. A sync exchange clears one with the same
+/// upload clears an upload from the same plugin. A sync exchange clears one with the same
 /// operation (a merge preview refused while scheduler sync was off clears
 /// once a merge works), and one without an operation clears with the same
 /// action. Uploads never clear a sync exchange, so a stream of frames does
@@ -458,7 +482,8 @@ impl RemoteAuditLog {
 /// never clears a refused apply.
 fn clears(worked: &LatestAction, problem: &LatestAction) -> bool {
     if problem.action.is_upload() || worked.action.is_upload() {
-        return problem.action.is_upload() && worked.action.is_upload();
+        // Each plugin's uploads clear only its own.
+        return problem.action == worked.action;
     }
     let reads_only = |action: AuditAction| {
         matches!(
@@ -489,8 +514,9 @@ fn kind_of(action: AuditAction, operation: Option<&str>) -> String {
         .and_then(|value| value.as_str().map(str::to_owned))
         .unwrap_or_default();
     match operation {
-        // An upload's operation is the frame kind; every upload is one kind.
-        Some(operation) if action != "image_upload" => format!("{action}:{operation}"),
+        // An upload's operation is the frame kind; each plugin's uploads
+        // are one kind.
+        Some(operation) if !action.ends_with("image_upload") => format!("{action}:{operation}"),
         _ => action,
     }
 }

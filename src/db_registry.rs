@@ -425,9 +425,8 @@ impl RemoteImageUploadConfig {
         if !self.enabled {
             anyhow::bail!("remote image upload is disabled");
         }
-        if !self.token_is_configured() {
-            anyhow::bail!("remote image upload token is not configured");
-        }
+        // No Sync key is needed: a Director pairing uploads too, and each
+        // route checks its own credential on every request.
         if self.image_dir.trim().is_empty() {
             anyhow::bail!("remote image upload directory is not configured");
         }
@@ -1839,6 +1838,15 @@ mod tests {
                 .unwrap(),
             dunce::canonicalize(&images).unwrap()
         );
+        // The folder needs no Sync key: a Director pairing uploads too.
+        let keyless = RemoteImageUploadConfig {
+            enabled: true,
+            image_dir: images.to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+        assert!(keyless
+            .validated_image_dir(&[images.to_string_lossy().into_owned()])
+            .is_ok());
 
         let mut registry = DbRegistry::default();
         registry

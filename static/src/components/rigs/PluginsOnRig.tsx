@@ -29,11 +29,10 @@ export default function PluginsOnRig({ databaseId, director }: {
   const upload = databases.data?.find(entry => entry.id === databaseId)?.remote_image_upload;
   // A paired plugin, or the remote API key a script uses.
   const paired = upload?.token_configured ?? false;
-  const parts = [upload?.sync_enabled && 'scheduler sync', upload?.enabled && 'image uploads'].filter(Boolean) as string[];
-  const syncOn = paired && parts.length > 0;
-  const sync = !paired
-    ? 'Not paired'
-    : syncOn ? parts.join(', ') : 'Paired, scheduler sync and image uploads off';
+  const syncOn = paired && !!upload?.sync_enabled;
+  const sync = !paired ? 'Not paired' : syncOn ? 'scheduler sync' : 'Paired, scheduler sync off';
+  // Uploads serve both plugins, so they have their own row.
+  const uploadsOn = !!upload?.enabled;
   const view = plugin.data;
   const directorOn = !!view && view.clients.length > 0 && view.work === 'ready';
   const directorState = !canWrite
@@ -50,6 +49,11 @@ export default function PluginsOnRig({ databaseId, director }: {
         <span>PSF Guard Sync</span>
         <span className="plugin-state" data-on={syncOn}>{syncOn ? 'On' : 'Off'}</span>
         <span className="director-muted">{sync}</span>
+      </li>
+      <li data-testid="plugin-uploads">
+        <span>Image uploads</span>
+        <span className="plugin-state" data-on={uploadsOn}>{uploadsOn ? 'On' : 'Off'}</span>
+        <span className="director-muted">{uploadsOn ? `to ${upload?.image_directory}` : 'Neither plugin sends image files'}</span>
       </li>
       {director && <li data-testid="plugin-director">
         <span>PSF Guard Director</span>

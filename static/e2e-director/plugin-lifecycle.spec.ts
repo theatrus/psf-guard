@@ -65,7 +65,7 @@ test('a rig applies reported equipment and preserves Director work permission be
     await settings.getByRole('tab', { name: 'Rig setup', exact: true }).click();
     const sections = settings.getByRole('tablist', { name: 'Rig setup sections' });
     await sections.getByRole('tab', { name: 'Plugins', exact: true }).click();
-    const panel = settings.getByRole('region', { name: 'Director plugin' });
+    const panel = settings.getByRole('region', { name: 'PSF Guard Director' });
     const plugins = settings.getByRole('group', { name: 'Plugins on this rig' });
     await expect(plugins).toContainText('Picks the work: Target Scheduler');
     await expect(plugins.getByTestId('plugin-director')).toContainText('Not paired');
@@ -157,7 +157,7 @@ test('a rig applies reported equipment and preserves Director work permission be
     await expect(running).toContainText('Previous work retired');
 
     // Both plugins pair on the Plugins tab, and Sync points there.
-    await expect(settings.getByRole('heading', { name: 'Sync plugin', exact: true })).toBeVisible();
+    await expect(settings.getByRole('heading', { name: 'PSF Guard Sync', exact: true })).toBeVisible();
     await expect(plugins.getByTestId('plugin-sync')).toBeVisible();
     await settings.getByRole('tab', { name: 'Sync', exact: true }).click();
     await expect(settings.getByRole('heading', { name: 'PSF Guard Sync plugin' })).toBeVisible();

@@ -1867,6 +1867,7 @@ pub(crate) fn detail_of(error: &AppError) -> String {
         | AppError::Conflict(message)
         | AppError::Forbidden(message)
         | AppError::Gone(message)
+        | AppError::Busy(message)
         | AppError::InternalError(message) => message.clone(),
         AppError::NotImplemented => "not implemented".into(),
     }

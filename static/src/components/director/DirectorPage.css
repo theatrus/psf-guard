@@ -290,6 +290,12 @@ a.workspace-pill:hover { color: var(--color-text-primary); }
 
 /* Rig setup › Director uses the setup form's groups and fields. */
 .rig-plugin h4 { margin: 0; }
+/* Each plugin is its own card, so the Sync, upload and Director settings
+   never run into each other. */
+.plugin-cards { display: grid; gap: 16px; }
+.rig-plugin.plugin-card { border: 1px solid var(--color-border-secondary); border-radius: 8px; padding: 12px 16px; margin: 16px 0; background: var(--color-bg-secondary); }
+.plugin-cards .rig-plugin.plugin-card { margin: 0; }
+.plugin-card-heading { align-items: baseline; gap: 8px; justify-content: flex-start; }
 .rig-plugin fieldset { display: grid; gap: 6px; }
 .rig-plugin fieldset p { margin: 0; font-size: 0.9rem; }
 .rig-plugin .director-actions { flex-wrap: wrap; }
