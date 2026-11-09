@@ -191,6 +191,20 @@ describe('Nights', () => {
     await waitFor(() => expect(requests).toEqual([expect.objectContaining({ refresh: true })]));
   }, 10_000);
 
+  it('asks for the nights up to the one opened, not the whole range', async () => {
+    mount();
+    const grid = await screen.findByTestId('nights-grid');
+    const requests: Array<{ rigs?: string[]; nights?: number; schedule_nights?: number; explain?: string }> = [];
+    server.use(http.post('/api/director/v1/night-plans', async ({ request }) => {
+      requests.push(await request.json() as (typeof requests)[number]);
+      return HttpResponse.json(ok(plans()));
+    }));
+    const second = night(1);
+    fireEvent.click(within(grid).getByRole('button', { name: new RegExp(`^RedCat 61, ${formatNightDate(second.date)}:`) }));
+    await waitFor(() => expect(requests).toHaveLength(1));
+    expect(requests[0]).toEqual(expect.objectContaining({ nights: 2, schedule_nights: 2, explain: second.date }));
+  });
+
   it('still asks for fresh plans when Compute again is retried after the server was busy', async () => {
     mount();
     await screen.findByTestId('nights-grid');

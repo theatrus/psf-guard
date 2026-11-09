@@ -221,7 +221,9 @@ function useNightSchedule(rig: RigNights, night: RigNight, range: Props['range']
     queryFn: () => apiClient.getNightPlans({
       rigs: [rig.rig.id],
       ...(range.first ? { first_night: range.first } : {}),
-      nights: range.count,
+      // The nights up to this one: a schedule plans each from the frames
+      // the nights before it took, and the nights after change nothing.
+      nights: index + 1,
       schedule_nights: index + 1,
       explain: night.date,
       ...(previewed ? { override_draft: { rig: rig.rig.id, date: night.date, entries: previewed } } : {}),

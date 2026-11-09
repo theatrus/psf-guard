@@ -286,6 +286,38 @@ pub(crate) struct Planner {
     pub(crate) targets: Vec<Target>,
     frames: HashMap<i64, Frame>,
     twilights: HashMap<i64, Twilight>,
+    /// The Moon at the instant last tested, which every exposure's Moon
+    /// avoidance then shares.
+    moon: Option<MoonAt>,
+}
+
+/// The Moon at one instant, as Target Scheduler's Moon avoidance reads it,
+/// each part computed when a test first needs it.
+#[derive(Clone, Copy)]
+struct MoonAt {
+    at: i64,
+    /// Where the site sees it, of date, and its altitude.
+    seen: Option<(crate::astro::OfDate, f64)>,
+    /// Its age in days.
+    age_days: Option<Option<f64>>,
+}
+
+impl MoonAt {
+    fn new(at: i64) -> Self {
+        Self {
+            at,
+            seen: None,
+            age_days: None,
+        }
+    }
+
+    fn seen(&mut self, frame: &Frame) -> (crate::astro::OfDate, f64) {
+        let at = self.at;
+        *self.seen.get_or_insert_with(|| {
+            let seen = frame.moon_seen(at);
+            (seen, frame.altitude_of(seen, at))
+        })
+    }
 }
 
 /// The planner could not decide: a night without sunset or sunrise.
@@ -462,6 +494,7 @@ impl Planner {
             targets,
             frames: HashMap::new(),
             twilights: HashMap::new(),
+            moon: None,
         }
     }
 
@@ -967,6 +1000,10 @@ impl Planner {
         let preferences = self.preferences.clone();
         let noon = self.clock.noon(at);
         let frame = self.frame(noon).clone();
+        let mut moon = match self.moon.take() {
+            Some(moon) if moon.at == at => moon,
+            _ => MoonAt::new(at),
+        };
         let target = &mut self.targets[t];
         let (ra, dec) = (target.ra_hours, target.dec_degrees);
         for plan in target.plans.clone() {
@@ -974,10 +1011,11 @@ impl Planner {
             if !exposure.incomplete(grader, &preferences) {
                 continue;
             }
-            if moon_rejects(&frame, exposure, at, ra, dec) {
+            if moon_rejects(&frame, &mut moon, exposure, at, ra, dec) {
                 exposure.rejected = Some(ExposureReason::MoonAvoidance);
             }
         }
+        self.moon = Some(moon);
     }
 
     fn filter_twilight(&mut self, at: i64) -> Result<(), NoNight> {
@@ -1522,6 +1560,7 @@ fn twilight_rejects(
 /// which also sets the exposure's Moon score.
 fn moon_rejects(
     frame: &Frame,
+    moon: &mut MoonAt,
     exposure: &mut Exposure,
     at: i64,
     ra_hours: f64,
@@ -1533,7 +1572,7 @@ fn moon_rejects(
         return false;
     }
     exposure.moon_score = exposure.score_moon();
-    let altitude = frame.moon_altitude(at);
+    let (seen, altitude) = moon.seen(frame);
     let mut separation = policy.separation_degrees;
     let mut width = policy.width_days;
     let relaxing = policy.relax_degrees_per_degree > 0.0;
@@ -1552,7 +1591,7 @@ fn moon_rejects(
     if separation <= 0.0 {
         return false;
     }
-    let Some(age) = frame.moon_age_days(at) else {
+    let Some(age) = *moon.age_days.get_or_insert_with(|| frame.moon_age_days(at)) else {
         return false;
     };
     const CYCLE: f64 = 29.53059;
@@ -1561,5 +1600,40 @@ fn moon_rejects(
     } else {
         separation / (1.0 + ((0.5 - age / CYCLE) / (width / CYCLE)).powi(2))
     };
-    frame.moon_separation(at, ra_hours, dec_degrees) < need
+    frame.separation_from(seen, ra_hours, dec_degrees) < need
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use psf_guard_director_core::visibility::Site;
+
+    /// The Moon kept for an instant is the Moon each test computed for
+    /// itself before: its altitude, age and every target's separation, to
+    /// the bit.
+    #[test]
+    fn the_moon_kept_for_an_instant_is_the_moon_each_test_computed() {
+        let site = Site {
+            latitude_degrees: 34.2,
+            longitude_degrees: -118.3,
+            elevation_meters: 400.0,
+        };
+        // Noon in Los Angeles on 2026-09-26, the day of the full Moon.
+        let noon = 1_790_449_200_000;
+        let frame = Frame::new(site, noon);
+        for step in 0..48 {
+            let at = noon + step * 30 * 60_000;
+            let mut moon = MoonAt::new(at);
+            let (seen, altitude) = moon.seen(&frame);
+            assert_eq!(altitude.to_bits(), frame.moon_altitude(at).to_bits());
+            for (ra_hours, dec_degrees) in [(2.55, 61.45), (12.0, -20.0), (20.7, 44.3)] {
+                assert_eq!(
+                    frame.separation_from(seen, ra_hours, dec_degrees).to_bits(),
+                    frame.moon_separation(at, ra_hours, dec_degrees).to_bits()
+                );
+            }
+            // Kept, not computed again.
+            assert_eq!(moon.seen(&frame).1.to_bits(), altitude.to_bits());
+        }
+    }
 }

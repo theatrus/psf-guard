@@ -17,7 +17,7 @@ use psf_guard_director_core::{
     ephemeris::{moon_at_site, separation_degrees},
     moon::MoonPolicy,
     night::{
-        night_summary, planning_orientation, NightDate, NightRequest, NightTarget,
+        night_summary_under, planning_orientation, NightDate, NightRequest, NightSky, NightTarget,
         EARLIEST_START_MS, LATEST_START_MS, MAX_NIGHTS, MAX_TARGETS,
     },
     visibility::{observe, AltitudeLimits, Horizon, IcrsPosition, Site},
@@ -563,21 +563,30 @@ struct MoonAltitudes {
     degrees: Vec<f64>,
 }
 
-const MOON_ALTITUDE_STEP_MS: u64 = 15 * 60_000;
+const MOON_ALTITUDE_STEP_MS: u64 = psf_guard_director_core::night::MOON_STRIP_STEP_MS;
 
 /// The Moon's altitude as the site sees it, parallax included, every
 /// quarter hour from one noon to the next, for the night view's Moon
-/// strip. Empty when the ephemeris cannot place it.
-fn moon_altitudes(noon_ms: u64, site: Site) -> MoonAltitudes {
-    let degrees = (0..24 * 3_600_000 / MOON_ALTITUDE_STEP_MS)
-        .map(|step| {
-            let at = noon_ms + step * MOON_ALTITUDE_STEP_MS;
-            let moon = moon_at_site(at, site)?;
-            let seen = observe(moon, site, planning_orientation(at, at), at).ok()?;
-            Some((seen.altitude_degrees * 10.0).round() / 10.0)
-        })
-        .collect::<Option<Vec<f64>>>()
-        .unwrap_or_default();
+/// strip. Empty when the ephemeris cannot place it. The night's sky keeps
+/// it once computed.
+fn moon_altitudes(noon_ms: u64, site: Site, sky: Option<&NightSky>) -> MoonAltitudes {
+    let round = |degrees: f64| (degrees * 10.0).round() / 10.0;
+    let degrees = match sky {
+        Some(sky) => sky
+            .moon_strip()
+            .iter()
+            .map(|degrees| degrees.map(round))
+            .collect::<Option<Vec<f64>>>(),
+        None => (0..24 * 3_600_000 / MOON_ALTITUDE_STEP_MS)
+            .map(|step| {
+                let at = noon_ms + step * MOON_ALTITUDE_STEP_MS;
+                let moon = moon_at_site(at, site)?;
+                let seen = observe(moon, site, planning_orientation(at, at), at).ok()?;
+                Some(round(seen.altitude_degrees))
+            })
+            .collect::<Option<Vec<f64>>>(),
+    }
+    .unwrap_or_default();
     MoonAltitudes {
         start_ms: noon_ms,
         step_ms: MOON_ALTITUDE_STEP_MS,
@@ -612,6 +621,8 @@ async fn compute(
     stop: &Stop,
 ) -> Result<View, NightPlanError> {
     let service = enabled(state)?;
+    // The kept skies, for the computation once the store is let go.
+    let shared = Arc::clone(&service);
     let nights = request.nights.unwrap_or(DEFAULT_NIGHTS);
     if nights == 0 || nights > MAX_NIGHTS {
         return Err(NightPlanError::Rejected(format!(
@@ -661,6 +672,7 @@ async fn compute(
         .values()
         .cloned()
         .collect();
+    let started = std::time::Instant::now();
     let gathered = service
         .clone()
         .with_reader(move |store| {
@@ -819,6 +831,7 @@ async fn compute(
     // The rest reads each rig's database and computes, with the store's
     // read slot let go: each rig, and each of its requests and nights, on
     // the shared pool.
+    let read_ms = started.elapsed().as_millis();
     let (inputs, mut warnings) = gathered;
     let catalogs: Vec<String> = inputs
         .iter()
@@ -827,14 +840,21 @@ async fn compute(
     let stopped = stop.clone();
     let view = blocking(move || {
         use rayon::prelude::*;
-        let outcomes: Vec<Result<RigNights, String>> = inputs
+        let inputs: Vec<RigInput> = inputs
             .into_par_iter()
             .map(|mut input| {
                 if stopped.requested() {
-                    return Err(String::new());
+                    return input;
                 }
                 let reported = crate::server::rig_plugins::reported_profile(&input.catalog_slug);
-                match ts_snapshot::read(&input.database_path, reported.as_deref()) {
+                let reading = std::time::Instant::now();
+                let read = ts_snapshot::read(&input.database_path, reported.as_deref());
+                tracing::debug!(
+                    catalog = %input.catalog_slug,
+                    ms = reading.elapsed().as_millis(),
+                    "night plans read the rig's database"
+                );
+                match read {
                     Ok(Some(read)) => {
                         input.warnings.extend(read.warnings);
                         let mut snapshot = read.snapshot;
@@ -856,7 +876,25 @@ async fn compute(
                             .push("The rig's database could not be read, so its plans are left out.".into());
                     }
                 }
-                rig_nights(input, nights)
+                input
+            })
+            .collect();
+        // Every site's skies before any rig's nights, so rigs that share a
+        // site do not compute them twice at once. The request holds them
+        // until it ends: it may need more than the server keeps.
+        let mut held = super::night_sky::Held::default();
+        if !stopped.requested() {
+            for (site, noons, moon_track) in sites_to_plan(&inputs) {
+                shared.skies.hold(&mut held, site, &noons, STEP_MS, moon_track);
+            }
+        }
+        let outcomes: Vec<Result<RigNights, String>> = inputs
+            .into_par_iter()
+            .map(|input| {
+                if stopped.requested() {
+                    return Err(String::new());
+                }
+                rig_nights(input, nights, &shared.skies, &held)
             })
             .collect();
         let mut rigs = Vec::new();
@@ -885,10 +923,46 @@ async fn compute(
         }
     })
     .await?;
+    tracing::debug!(
+        nights,
+        store_ms = read_ms,
+        total_ms = started.elapsed().as_millis(),
+        "night plans computed"
+    );
     if stop.requested() {
         return Err(NightPlanError::Stopped);
     }
     Ok(view)
+}
+
+/// Each site the rigs plan at, the noons of their nights there, and
+/// whether any of their templates has Moon avoidance on, so its skies need
+/// a Moon track.
+fn sites_to_plan(inputs: &[RigInput]) -> Vec<(Site, Vec<u64>, bool)> {
+    let mut sites: Vec<(Site, Vec<u64>, bool)> = Vec::new();
+    for input in inputs {
+        let Some(site) = input.placed.location else {
+            continue;
+        };
+        let moon = input
+            .snapshot
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.templates.iter().any(|t| t.moon.enabled));
+        let noons = input
+            .dates
+            .iter()
+            .map(|date| date.span(site.longitude_degrees).start_ms);
+        match sites.iter_mut().find(|(known, _, _)| *known == site) {
+            Some((_, known, track)) => {
+                known.extend(noons);
+                known.sort_unstable();
+                known.dedup();
+                *track |= moon;
+            }
+            None => sites.push((site, noons.collect(), moon)),
+        }
+    }
+    sites
 }
 
 /// The program the rig would pull, and each goal's limits.
@@ -924,7 +998,12 @@ fn runs_under_director(project: &Project, activated: &BTreeSet<Uuid>) -> bool {
         .is_some_and(|guid| activated.contains(&guid))
 }
 
-fn rig_nights(input: RigInput, nights: u32) -> Result<RigNights, String> {
+fn rig_nights(
+    input: RigInput,
+    nights: u32,
+    skies: &super::night_sky::Skies,
+    held: &super::night_sky::Held,
+) -> Result<RigNights, String> {
     let RigInput {
         rig,
         schedule: options,
@@ -950,12 +1029,36 @@ fn rig_nights(input: RigInput, nights: u32) -> Result<RigNights, String> {
     let location = placed
         .location
         .ok_or_else(|| format!("{catalog_name} has no location. Choose a site in Rig setup."))?;
+    let mut phase = std::time::Instant::now();
+    let mut lap = || {
+        let ms = phase.elapsed().as_millis();
+        phase = std::time::Instant::now();
+        ms
+    };
+    // Each night's sky at the rig's site, held for the request: darkness,
+    // every project's summaries and the Moon strip read it.
+    let noons: Vec<u64> = dates
+        .iter()
+        .map(|date| date.span(location.longitude_degrees).start_ms)
+        .collect();
+    let night_skies = held
+        .nights(location, &noons, STEP_MS)
+        .unwrap_or_else(|| skies.nights(location, &noons, STEP_MS, false));
     let super::rig_availability::Nights {
         nights: availability,
         clouds: cloud_hours,
         available,
         forecast,
-    } = conditions.nights(&dates, location, now_ms());
+    } = conditions.nights(
+        &dates,
+        location,
+        now_ms(),
+        &night_skies
+            .iter()
+            .map(|sky| sky.as_ref().ok().cloned())
+            .collect::<Vec<_>>(),
+    );
+    let skies_ms = lap();
     let projects = snapshot
         .as_ref()
         .map(|snapshot| {
@@ -1131,16 +1234,25 @@ fn rig_nights(input: RigInput, nights: u32) -> Result<RigNights, String> {
         });
     }
     use rayon::prelude::*;
+    let projects_ms = lap();
+    // Moon rules need each night's Moon track. The request computed the
+    // tracks its sites need at its start; this fills any it missed.
+    if chunks
+        .iter()
+        .any(|chunk| chunk.request.targets.iter().any(|t| !t.moon.is_empty()))
+    {
+        skies.add_moon_tracks(location, &night_skies);
+    }
     let computed: Vec<Result<psf_guard_director_core::night::Night, _>> = (0..chunks.len()
         * nights as usize)
         .into_par_iter()
         .map(|index| {
-            night_summary(
-                &chunks[index / nights as usize].request,
-                (index % nights as usize) as u32,
-            )
+            let night = index % nights as usize;
+            let sky = night_skies[night].as_ref().map_err(|error| *error)?;
+            night_summary_under(&chunks[index / nights as usize].request, night as u32, sky)
         })
         .collect();
+    let summaries_ms = lap();
     let mut by_night: Vec<Vec<psf_guard_director_core::night::Night>> =
         (0..nights).map(|_| Vec::new()).collect();
     for (index, night) in computed.into_iter().enumerate() {
@@ -1149,12 +1261,18 @@ fn rig_nights(input: RigInput, nights: u32) -> Result<RigNights, String> {
         })?;
         by_night[index % nights as usize].push(night);
     }
+    // Each night's Moon strip, kept with its sky: computed now, across the
+    // pool, when it is not.
+    night_skies.par_iter().flatten().for_each(|sky| {
+        sky.moon_strip();
+    });
     let mut out = Vec::with_capacity(nights as usize);
-    for (((summaries, (_, availability)), date), clouds) in by_night
+    for ((((summaries, (_, availability)), date), clouds), sky) in by_night
         .into_iter()
         .zip(availability)
         .zip(&dates)
         .zip(cloud_hours)
+        .zip(&night_skies)
     {
         let Some(first) = summaries.first() else {
             return Err(format!("{catalog_name}: the nights could not be computed."));
@@ -1190,7 +1308,11 @@ fn rig_nights(input: RigInput, nights: u32) -> Result<RigNights, String> {
             availability,
             moon_illumination: first.moon_illumination,
             moon_hours_up_in_dark: first.moon_hours_up_in_dark,
-            moon_altitudes: moon_altitudes(first.noon_ms, location),
+            moon_altitudes: moon_altitudes(
+                first.noon_ms,
+                location,
+                sky.as_ref().ok().map(|sky| &**sky),
+            ),
             targets,
             load: Load {
                 demand_hours,
@@ -1205,6 +1327,7 @@ fn rig_nights(input: RigInput, nights: u32) -> Result<RigNights, String> {
                 .map_or(0, |applied| applied.entries.len()),
         });
     }
+    let nights_ms = lap();
     let schedule = if options.nights == 0 {
         None
     } else {
@@ -1255,6 +1378,17 @@ fn rig_nights(input: RigInput, nights: u32) -> Result<RigNights, String> {
             },
         }
     };
+    tracing::debug!(
+        catalog = %catalog_slug,
+        nights,
+        projects = chunks.len(),
+        skies_ms,
+        projects_ms,
+        summaries_ms,
+        nights_ms,
+        schedule_ms = lap(),
+        "night plans for a rig"
+    );
     Ok(RigNights {
         rig,
         catalog_slug,
@@ -2264,7 +2398,36 @@ mod tests {
             longitude_degrees: -118.25,
             elevation_meters: 100.0,
         };
-        let curve = moon_altitudes(noon, site);
+        let curve = moon_altitudes(noon, site, None);
+        // The night's sky gives the same curve, each observation to the bit.
+        let sky = NightSky::new(site, noon, STEP_MS).unwrap();
+        assert_eq!(
+            moon_altitudes(noon, site, Some(&sky)).degrees,
+            curve.degrees
+        );
+        for step in 0..96 {
+            let at = noon + step * MOON_ALTITUDE_STEP_MS;
+            let moon = moon_at_site(at, site).unwrap();
+            let alone = observe(moon, site, planning_orientation(at, at), at).unwrap();
+            let shared = sky.observe_at(at, moon).unwrap().unwrap();
+            assert_eq!(
+                shared.altitude_degrees.to_bits(),
+                alone.altitude_degrees.to_bits()
+            );
+            assert_eq!(
+                shared.azimuth_degrees.to_bits(),
+                alone.azimuth_degrees.to_bits()
+            );
+        }
+        assert!(sky
+            .observe_at(
+                noon + 1,
+                IcrsPosition {
+                    ra_degrees: 0.0,
+                    dec_degrees: 0.0
+                }
+            )
+            .is_none());
         assert_eq!(curve.start_ms, noon);
         assert_eq!(curve.step_ms, 15 * 60_000);
         assert_eq!(curve.degrees.len(), 96);

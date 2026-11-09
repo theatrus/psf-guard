@@ -8,8 +8,8 @@ use super::rig_availability::{NightAvailability, RigConditions};
 use super::*;
 use psf_guard_director_core::{
     night::{
-        night_curve, night_summary, Night, NightCurve, NightDate, NightRequest, NightTarget,
-        EARLIEST_START_MS, LATEST_START_MS,
+        night_curve, night_curve_under, night_summary, night_summary_under, Night, NightCurve,
+        NightDate, NightRequest, NightTarget, EARLIEST_START_MS, LATEST_START_MS,
     },
     visibility::{AltitudeLimits, Horizon, IcrsPosition, Site},
     windows::MeridianExclusion,
@@ -292,10 +292,22 @@ pub(super) async fn evaluate(
             let Some(site) = placed.location else {
                 return Err(format!("{catalog_name} has no location. Choose a site in Rig setup."));
             };
+            // Each night's sky at the site, kept or computed now.
+            let noons: Vec<u64> = std::iter::successors(
+                NightDate::at(start_ms, site.longitude_degrees),
+                |date| date.next(),
+            )
+            .take(nights as usize)
+            .map(|date| date.span(site.longitude_degrees).start_ms)
+            .collect();
+            let skies = service.skies.nights(site, &noons, STEP_MS, false);
             let available = conditions
                 .as_ref()
                 .filter(|_| dates.len() == nights as usize)
-                .map(|conditions| conditions.nights(&dates, site, now_ms));
+                .map(|conditions| {
+                    let skies: Vec<_> = skies.iter().map(|sky| sky.as_ref().ok().cloned()).collect();
+                    conditions.nights(&dates, site, now_ms, &skies)
+                });
             let (altitude, applied) = match applied_limits(&profile.limits.value, &scheduling) {
                 Ok(limits) => limits,
                 Err(limits) => return Err(format!("{catalog_name}: the altitude limits leave nothing to image ({limits}).")),
@@ -325,10 +337,14 @@ pub(super) async fn evaluate(
             };
             let computed: Vec<Result<(Night, Option<NightCurve>), _>> = (0..nights)
                 .into_par_iter()
-                .map(|index| if index == 0 {
-                    night_curve(&night_request, 0).map(|curve| (curve.night.clone(), Some(curve)))
-                } else {
-                    night_summary(&night_request, index).map(|night| (night, None))
+                .map(|index| match (index, skies.get(index as usize)) {
+                    (0, Some(Ok(sky))) => night_curve_under(&night_request, 0, sky)
+                        .map(|curve| (curve.night.clone(), Some(curve))),
+                    (0, _) => night_curve(&night_request, 0)
+                        .map(|curve| (curve.night.clone(), Some(curve))),
+                    (_, Some(Ok(sky))) => night_summary_under(&night_request, index, sky)
+                        .map(|night| (night, None)),
+                    _ => night_summary(&night_request, index).map(|night| (night, None)),
                 })
                 .collect();
             let mut nights_out = Vec::with_capacity(computed.len());

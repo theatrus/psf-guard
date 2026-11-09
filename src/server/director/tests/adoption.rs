@@ -13,6 +13,7 @@ mod mosaic;
 mod new_rig;
 mod night_overrides;
 mod night_plans;
+mod night_plans_timing;
 mod plan;
 mod plan_progress;
 mod plan_removal;

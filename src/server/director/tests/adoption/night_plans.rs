@@ -1292,3 +1292,49 @@ async fn target_scheduler_changes_are_refused_where_they_would_not_decide_or_rea
         .unwrap()
         .contains("Director picks this rig's targets"));
 }
+
+/// A request that plans more site-nights than the server keeps holds the
+/// skies it computed at its start, Moon tracks included, so each is
+/// computed once, and the next request reuses the ones still kept.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_request_computes_each_sky_once_even_past_what_is_kept() {
+    let rigs = super::night_plans_timing::rigs().await;
+    let skies = &rigs.state.director.as_ref().unwrap().skies;
+    // Two sites over three nights: six skies, two more than are kept.
+    skies.limit(4);
+    skies.clear();
+    let before = skies.computed();
+    let body = json!({"nights": 3, "start_ms": START_MS});
+    let (status, planned) = super::night_plans_timing::post(&rigs.app, "/night-plans", &body).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&planned)
+    );
+    let planned: Value = serde_json::from_slice(&planned).unwrap();
+    assert_eq!(planned["data"]["rigs"].as_array().unwrap().len(), 4);
+    let (skies_computed, tracks_computed) = skies.computed();
+    assert_eq!(
+        (skies_computed - before.0, tracks_computed - before.1),
+        (6, 6)
+    );
+    // With room for them all, the same request again computes only the
+    // two skies let go, each with its track, and reads the four kept.
+    skies.limit(8);
+    let (status, again) = super::night_plans_timing::post(&rigs.app, "/night-plans", &body).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&again)
+    );
+    let after = skies.computed();
+    assert_eq!(
+        (after.0 - skies_computed, after.1 - tracks_computed),
+        (2, 2)
+    );
+    // What was computed again is what was computed at first.
+    let again: Value = serde_json::from_slice(&again).unwrap();
+    assert_eq!(again["data"]["rigs"], planned["data"]["rigs"]);
+}

@@ -666,6 +666,26 @@ refused.
     minutes that changed or aged. At most 32 views are kept, the least
     recently read let go first, and none unread for an hour. Projections
     read the same views.
+- **Kept skies** (`night_sky`): a night's sky at a site is the Sun's
+  altitude, the Moon and the Earth's orientation at each five-minute step,
+  plus the Moon track that Moon rules use. Computing it is most of a
+  summary's work, and it is the same for every target, every rig at the
+  site and every request. The server computes each sky once, across the
+  rayon pool, and keeps it.
+  - A sky's key is the site's latitude, longitude and elevation, the
+    night's noon and the step, to the bit. Nothing else changes it, so a
+    kept sky never goes stale. The server keeps up to 128, about 170 kB
+    each, and lets the least recently read go first.
+  - The sky also keeps the night's Moon strip and each target's meridian
+    pause windows, as summaries ask for them.
+  - Night plans compute every site's skies before any rig's nights, so
+    rigs at one site do not compute them twice. The request holds those
+    skies until it ends, so a request for more site-nights than are kept
+    still computes each once. Darkness and twilight for
+    availability, feasibility and the summaries all read the same skies.
+  - `night_summary_under` gives the same summary as `night_summary` to the
+    bit; a test keeps the summary code from before skies were shared and
+    compares them.
 - **Gather:**
   - Split `program::assemble` into `gather`, read-only (activations,
     Target Scheduler rows, saved captures, project order, and the night's
@@ -699,9 +719,11 @@ refused.
     because of carry-over.
   - The handler reads the meta store under a read slot, then lets it go
     before reading the rigs' databases and computing, as feasibility
-    computes in its request. A month of 30 targets takes about 1.4 s. If
-    real catalogs take much longer, the schedules move to a tracked job
-    that the page polls.
+    computes in its request. Four rigs with 36 targets each take about
+    0.1 s for tonight and 1.5 s for a month once their skies are kept;
+    the Target Scheduler schedules take most of that. The
+    `night_plans_timing` test in `src/server/director/tests/adoption`
+    measures each request the pages send.
   - Read access is the same as feasibility's. Nothing is written.
 - **Availability:**
   - `GET /api/director/v1/night-availability` takes `scope`, `id`, `from`

@@ -157,6 +157,7 @@ impl Frame {
     }
 
     /// The Moon's topocentric altitude at the site, geometric.
+    #[cfg(test)]
     pub(crate) fn moon_altitude(&self, utc_ms: i64) -> f64 {
         let moon = self.moon_from(utc_ms, &self.observer);
         self.horizontal(moon.ra_hours, moon.dec_degrees, utc_ms).0
@@ -181,9 +182,29 @@ impl Frame {
 
     /// Degrees between the Moon, seen from the site, and a target's J2000
     /// coordinates brought to the equinox of date.
+    #[cfg(test)]
     pub(crate) fn moon_separation(&self, utc_ms: i64, ra_hours: f64, dec_degrees: f64) -> f64 {
         let moon = self.moon_from(utc_ms, &self.observer);
         separation(moon, self.target_of_date(ra_hours, dec_degrees))
+    }
+
+    /// The Moon seen from the site, of date: what [`Frame::moon_altitude`]
+    /// and [`Frame::moon_separation`] start from.
+    pub(crate) fn moon_seen(&self, utc_ms: i64) -> OfDate {
+        self.moon_from(utc_ms, &self.observer)
+    }
+
+    /// The altitude of a body of date at an instant, as
+    /// [`Frame::moon_altitude`] takes the Moon's.
+    pub(crate) fn altitude_of(&self, body: OfDate, utc_ms: i64) -> f64 {
+        self.horizontal(body.ra_hours, body.dec_degrees, utc_ms).0
+    }
+
+    /// Degrees between a body of date and a target's J2000 coordinates
+    /// brought to the equinox of date, as [`Frame::moon_separation`]
+    /// measures the Moon's.
+    pub(crate) fn separation_from(&self, body: OfDate, ra_hours: f64, dec_degrees: f64) -> f64 {
+        separation(body, self.target_of_date(ra_hours, dec_degrees))
     }
 
     /// The Moon's altitude and its separation from a target, from one

@@ -40,7 +40,7 @@ impl BoundGeometry {
                 priority::Error::InvalidCandidates,
             ));
         }
-        let mut observer = crate::visibility::Observer::at(
+        let observer = crate::visibility::Observer::at(
             current.rig.site,
             current.rig.orientation,
             request.state.now_ms,
