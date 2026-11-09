@@ -8,6 +8,11 @@ const MONTH_SECONDS = 30 * 24 * 60 * 60;
 export type ProjectActivityGroupId = 'recent' | 'month' | 'earlier' | 'undated';
 export type ProjectSort = 'recent' | 'name' | 'images';
 
+/** The Library's order from its `sort` URL value; anything else is newest first. */
+export function parseProjectSort(value: string | null): ProjectSort {
+  return value === 'name' || value === 'images' ? value : 'recent';
+}
+
 export interface NavigableProject {
   id: number;
   db_id: string;

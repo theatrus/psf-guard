@@ -354,6 +354,20 @@ async fn a_site_offline_at_apply_is_not_sent_until_it_answers_then_gets_it_once(
     assert_eq!(pushes[0]["applied"], false);
     assert!(pushes[0]["error"].is_string(), "{record}");
     assert!(pushes[0]["attempted_at_ms"].as_u64().unwrap() > 0);
+    // The rows here match, but the Library lists the plan for the site.
+    let due = || async {
+        let (_, listed) = call(&a.f.app, "GET", "/plans", Value::Null, None).await;
+        listed["data"]["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["project"]["name"] == "Heart Nebula")
+            .unwrap()["activation_due"]
+            .clone()
+    };
+    let waiting = due().await;
+    assert_eq!(waiting["unsent"], json!(["Observatory"]), "{waiting}");
+    assert_eq!(waiting["differs"], json!([]), "{waiting}");
 
     // The site comes back; a check reaches it, and the activation goes in
     // the background.
@@ -388,6 +402,7 @@ async fn a_site_offline_at_apply_is_not_sent_until_it_answers_then_gets_it_once(
     assert_eq!(sent["pushes"][0]["error"], Value::Null);
     assert_eq!(sent["pushes"][0]["peer_name"], "observatory-pi");
     assert_eq!(projects(&peer_db), 1);
+    assert_eq!(due().await, Value::Null, "the site has it");
     let guid: String =
         a.db.query_row("SELECT guid FROM project", [], |r| r.get(0))
             .unwrap();

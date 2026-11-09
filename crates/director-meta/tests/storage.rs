@@ -16,7 +16,7 @@ fn schema_36_upgrade_adds_weather_after_the_dew_model() {
     assert_eq!(
         conn.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
             .unwrap(),
-        37
+        38
     );
     conn.prepare("SELECT rig_id,profile_id,payload FROM rig_weather")
         .unwrap();
@@ -110,7 +110,7 @@ fn future_schema_and_corrupt_instance_are_refused() {
     let path = dir.path().join("meta.sqlite");
     drop(MetaStore::create(&path).unwrap());
     let conn = Connection::open(&path).unwrap();
-    conn.pragma_update(None, "user_version", 38).unwrap();
+    conn.pragma_update(None, "user_version", 39).unwrap();
     assert!(matches!(
         MetaStore::open(&path),
         Err(Error::UnsupportedSchema)
@@ -118,9 +118,9 @@ fn future_schema_and_corrupt_instance_are_refused() {
     assert_eq!(
         conn.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
             .unwrap(),
-        38
+        39
     );
-    conn.pragma_update(None, "user_version", 37).unwrap();
+    conn.pragma_update(None, "user_version", 38).unwrap();
     conn.execute("UPDATE meta SET instance_id=?1", [Uuid::nil().to_string()])
         .unwrap();
     assert!(matches!(
@@ -255,7 +255,7 @@ fn schema_eleven_upgrade_adds_contacts_without_recreating_client_tables() {
     assert_eq!(
         conn.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
             .unwrap(),
-        37
+        38
     );
     conn.prepare("SELECT rig_id,kind,at_ms,detail FROM rig_contact")
         .unwrap();

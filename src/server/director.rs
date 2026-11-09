@@ -66,6 +66,7 @@ pub(crate) use remote_push::{peer_reached, resends_under_way};
 mod rig_profile;
 pub(crate) mod rig_removal;
 mod rig_scheduling;
+mod rows_digest;
 mod site_forecast;
 mod site_profile;
 mod sky_image;

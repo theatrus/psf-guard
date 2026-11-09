@@ -52,6 +52,7 @@ fn plan_with(project: Uuid, rigs: &[Uuid]) -> PlanDraft {
 
 fn activated(rig: Uuid, catalog: Uuid) -> ActivatedRig {
     ActivatedRig {
+        rows_digest: None,
         rig_id: rig,
         catalog_id: catalog,
         project_guid: Uuid::new_v4(),

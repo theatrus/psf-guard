@@ -4,6 +4,8 @@ import { setDisplayPreferences, useDisplayPreferences } from '../hooks/useDispla
 import { useFoldedRows } from '../hooks/useFoldedRows';
 import { CalibrationPill, DatesPill, DbPill, DensityToggle, FamilyPill, FoldButton, GradingPill, ProgressPill, RowCells, StateControl } from './projectPills';
 import { familyMatchesShow, parseShow, SHOW_OPTIONS } from './libraryShow';
+import ActivateButton, { LibraryActivationHost, NeedsActivationPill } from './director/LibraryActivate';
+import { filtersOf, recallLibraryFilters, rememberLibraryFilters } from './libraryFilterMemory';
 import { usePlans } from './header/useCurrentPlan';
 import LibraryPlans from './director/LibraryPlans';
 import { shownWaitingPlans, waitingPlans } from './director/waitingPlans';
@@ -50,6 +52,7 @@ import {
   INACTIVE_PROJECT_STATE,
   isArchivedProject,
   isRecentProject,
+  parseProjectSort,
   projectMatchesSearch,
   sortProjects,
   type ProjectSort,
@@ -94,26 +97,57 @@ function projectKey(dbId: string, projectId: number): string {
 }
 
 
+/** The Library, with one activation dialog for all its plan rows. */
 export default function Overview() {
+  return <LibraryActivationHost><LibraryPage /></LibraryActivationHost>;
+}
+
+function LibraryPage() {
   const color = useColorPreview();
   const navigate = useNavigate();
   const navigateNow = useNavigateNow();
   const location = useLocation();
   const queryClient = useQueryClient();
-  const [projectSort, setProjectSort] = useState<ProjectSort>('recent');
   // Narrows the projects list to one catalog. Lives in URL state (`dbfilter`)
   // so reload restores it. Distinct from the parked `db` return-scope slug,
   // which marks where the user came from and never filters this view.
-  const { getParam, updateParams } = useUrlParams();
+  const { getParam, updateParams, searchParams } = useUrlParams();
   const dbFilter = getParam('dbfilter');
   // Plans from Planning: which project rows belong to one, and the plans no
   // database shoots yet. Nothing is asked when Planning is off.
   const plans = usePlans();
+  // Stable while the plan list is, unlike `plans` itself.
+  const planFor = plans.planFor;
   // What to show and the search text are URL state too, so a reload or a
   // shared link lands on the same list.
   const show = parseShow(getParam('show'), plans.enabled);
   const projectSearch = getParam('q') ?? '';
   const setProjectSearch = (value: string) => updateParams({ q: value });
+  // The order too, so a trip to a plan and back keeps it; newest first is
+  // the default and stays out of the URL.
+  const projectSort = parseProjectSort(getParam('sort'));
+  const setProjectSort = (value: ProjectSort) => updateParams({ sort: value === 'recent' ? null : value });
+  // A link that opens the Library afresh puts back the filters last set in
+  // this tab, and any change after that, a cleared one too, is kept for
+  // next time. Arriving with no filter is not a change, so it keeps what was
+  // set. A link back to a project (`project` in the URL) is left as it is:
+  // a kept filter could hide the row the Library should mark.
+  const filterSignature = JSON.stringify(filtersOf(searchParams));
+  const lookedAtArrival = useRef(false);
+  const backToProject = searchParams.has('project');
+  useEffect(() => {
+    const current = JSON.parse(filterSignature) as ReturnType<typeof filtersOf>;
+    if (!lookedAtArrival.current) {
+      lookedAtArrival.current = true;
+      if (Object.keys(current).length === 0) {
+        const saved = recallLibraryFilters();
+        // The restored URL comes back through here and is kept.
+        if (Object.keys(saved).length > 0 && !backToProject) updateParams(saved);
+        return;
+      }
+    }
+    rememberLibraryFilters(current);
+  }, [backToProject, filterSignature, updateParams]);
   const [archivedOpen, setArchivedOpen] = useState(false);
   const [organizing, setOrganizing] = useState<Organizing | null>(null);
   const [organizationScope, setOrganizationScope] = useState<OrganizationScope | null>(null);
@@ -465,12 +499,13 @@ export default function Overview() {
       const members = family.members.map((member) => ({
         ...member,
         calibration_level: calibrationHealth.get(projectKey(member.db_id, member.id))?.level ?? null,
+        activation_due: !!planFor(member.db_id, member.id)?.activation_due,
       }));
       if (!familyMatchesShow(members, show)) continue;
       for (const member of family.members) keep.add(projectKey(member.db_id, member.id));
     }
     return searchedProjects.filter((project) => keep.has(projectKey(project.db_id, project.id)));
-  }, [calibrationHealth, searchedProjects, show]);
+  }, [calibrationHealth, planFor, searchedProjects, show]);
   const narrowed = show !== 'all' || projectSearch.trim() !== '';
 
   const activeProjectGroups = useMemo(
@@ -1065,6 +1100,7 @@ export default function Overview() {
                         {projectNewImages > 0 && <span className="new-images-badge"><span aria-hidden="true" />{projectNewImages} new</span>}
                         {!project.has_files && <span className="no-files-badge">No Files</span>}
                         {project.files_missing > 0 && <span className="library-pill files-missing">{project.files_missing} missing</span>}
+                        {plans.enabled && !inFamily && plan && <NeedsActivationPill row={plan} />}
                       </>,
                       db: <DbPill name={project.db_name} title={`Database ID: ${project.db_id}`} />,
                       state: <StateControl state={project.state} name={project.display_name} dbName={project.db_name} editable={organizeAllowed} pending={pendingStates[key] ?? null} onChange={(state) => void changeState(project, state)} />,
@@ -1076,7 +1112,10 @@ export default function Overview() {
                         <button type="button" className="library-view" disabled={!project.has_files} aria-label={`Open ${project.display_name} sequence`} title="Sequence analysis" onClick={() => openProjectView('sequence', project, projectTargets)}>Sequence</button>
                         <button type="button" className="library-view" disabled={!project.has_files} aria-label={`Open ${project.display_name} stacks`} title="Stack previews" onClick={() => openProjectView('stacks', project, projectTargets)}>Stacks</button>
                       </>,
-                      plan: plans.enabled && !inFamily && <button type="button" className="library-planning" title="Open this project's plan: framing, rigs and activation" aria-label={`Open the ${project.display_name} plan`} onClick={() => openPlan(project, plan)}>⚙</button>,
+                      plan: plans.enabled && !inFamily && <>
+                        <button type="button" className="library-planning" title="Open this project's plan: framing, rigs and activation" aria-label={`Open the ${project.display_name} plan`} onClick={() => openPlan(project, plan)}>⚙</button>
+                        <ActivateButton row={plan} name={project.display_name} />
+                      </>,
                     }} />
                   </div>
                 );
@@ -1166,6 +1205,7 @@ export default function Overview() {
                           Planning
                         </button>
                       )}
+                      {plans.enabled && !inFamily && <ActivateButton row={plan} name={project.display_name} variant="text" />}
                       <button
                         type="button"
                         className="project-settings-button"
@@ -1733,12 +1773,17 @@ export default function Overview() {
                       <strong className="library-family-name" title={family.name}>{family.name}</strong>
                     </>,
                     db: <DbPill name={rigNames} title={rigNames} />,
-                    state: familyPlan?.activation
+                    state: familyPlan?.activation_due
+                      ? <NeedsActivationPill row={familyPlan} />
+                      : familyPlan?.activation
                       ? <span className="director-stage-badge">Activated on {familyPlan.activation.rigs} rig{familyPlan.activation.rigs === 1 ? '' : 's'}</span>
                       : familyPlan && (familyPlan.framing || familyPlan.plan) && <span className="library-pill library-pill-stage" title={stage(familyPlan)}>{stageShort(familyPlan)}</span>,
                     progress: <ProgressPill accepted={family.accepted} desired={family.desired} totalImages={family.totalImages} title={`${family.accepted} of ${family.desired} desired frames accepted across the rigs`} />,
                     dates: family.latest !== null && <DatesPill earliest={family.earliest} latest={family.latest} nowMs={relativeNow} title={`Across the rigs: ${formatDateRange({ earliest: family.earliest ?? undefined, latest: family.latest })}`} />,
-                    plan: plans.enabled && <button type="button" className="library-planning" title="Open this plan: framing, rigs and activation" aria-label={`Open the ${family.name} plan`} onClick={() => openPlan(planMember, familyPlan)}>⚙</button>,
+                    plan: plans.enabled && <>
+                      <button type="button" className="library-planning" title="Open this plan: framing, rigs and activation" aria-label={`Open the ${family.name} plan`} onClick={() => openPlan(planMember, familyPlan)}>⚙</button>
+                      <ActivateButton row={familyPlan} name={family.name} />
+                    </>,
                   }} />
                 </div>
                 <div className="library-family-members">{family.members.map(renderProject)}</div>

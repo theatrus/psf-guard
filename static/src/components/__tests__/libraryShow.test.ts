@@ -39,6 +39,19 @@ describe('Library show filter', () => {
     expect(parseShow('calibration', false)).toBe('calibration');
   });
 
+  it('shows a plan that needs activating on any rig, waiting or not, only with Planning', () => {
+    const quiet = member(1, 10, 40);
+    expect(familyMatchesShow([quiet, { ...quiet, activation_due: true }], 'needs-activation')).toBe(true);
+    expect(familyMatchesShow([quiet, { ...quiet, activation_due: false }], 'needs-activation')).toBe(false);
+    // Even closed or done: the rigs still lack what was saved.
+    expect(familyMatchesShow([{ ...member(3, 40, 40), activation_due: true }], 'needs-activation')).toBe(true);
+    expect(waitingPlanMatchesShow([], 'needs-activation', true)).toBe(true);
+    expect(waitingPlanMatchesShow([{ source_state: 1 }], 'needs-activation')).toBe(false);
+    expect(waitingPlanMatchesShow([{ source_state: 3 }], 'needs-activation', true)).toBe(true);
+    expect(parseShow('needs-activation', true)).toBe('needs-activation');
+    expect(parseShow('needs-activation', false)).toBe('all');
+  });
+
   it('keeps a waiting plan closed on every rig out of the list until Closed is asked for', () => {
     expect(waitingPlanMatchesShow([{ source_state: 3 }, { source_state: 3 }], 'all')).toBe(false);
     expect(waitingPlanMatchesShow([{ source_state: 3 }, { source_state: 3 }], 'closed')).toBe(true);

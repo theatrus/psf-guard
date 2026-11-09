@@ -735,13 +735,36 @@ pub(super) fn following(
     }
     let framing = store.framing_draft(project).ok()?;
     let plan = store.plan_draft(project).ok()?;
-    (framing.as_ref().map_or(0, |f| f.layout_revision) == record.framing_revision
-        && plan.as_ref().map_or(0, |p| p.revision) == record.plan_revision)
-        .then_some(Follow {
-            record,
-            framing,
-            plan,
-        })
+    untouched(&record, framing.as_ref(), plan.as_ref()).then_some(Follow {
+        record,
+        framing,
+        plan,
+    })
+}
+
+/// Whether a plan's drafts are still at the revisions its import saved: a
+/// framing by its layout, and a missing draft as revision 0.
+fn untouched(
+    record: &DraftImport,
+    framing: Option<&FramingDraft>,
+    plan: Option<&PlanDraft>,
+) -> bool {
+    framing.map_or(0, |f| f.layout_revision) == record.framing_revision
+        && plan.map_or(0, |p| p.revision) == record.plan_revision
+}
+
+/// Whether a plan that was never activated still has the drafts its Target
+/// Scheduler import saved: an import is recorded, and neither the plan nor
+/// the framing's layout has been saved here since. One primary-key read;
+/// the caller has already read the activation record.
+pub(super) fn follows_import(
+    store: &MetaStore,
+    project: Uuid,
+    framing: &FramingDraft,
+    plan: &PlanDraft,
+) -> bool {
+    matches!(store.draft_import(project), Ok(Some(record))
+        if untouched(&record, Some(framing), Some(plan)))
 }
 
 /// Give a plan read again the ids its last import had, band and purpose

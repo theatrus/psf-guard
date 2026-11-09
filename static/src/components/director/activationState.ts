@@ -15,7 +15,8 @@ export const writesRows = (rig: DirectorActivationRig) => rig.changes.some(chang
  *  write there. */
 const holdsPlan = (rig: DirectorActivationRig) => rig.profile_id !== null && rig.changes.length > 0 && !writesRows(rig);
 
-const listed = (words: string[]) => words.length <= 1 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`;
+/** Words joined as a sentence lists them: "a", "a and b", "a, b and c". */
+export const listed = (words: string[]) => words.length <= 1 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`;
 
 /** A remote rig whose site has not had the last activation, with the
  *  rig's database name. */

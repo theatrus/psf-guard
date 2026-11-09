@@ -46,6 +46,11 @@ pub struct ActivatedRig {
     pub profile_id: String,
     pub targets: Vec<ActivatedTarget>,
     pub plans: Vec<ActivatedPlan>,
+    /// A fingerprint of the project's planning rows in the rig database
+    /// once this activation wrote them, so a later listing can tell they
+    /// changed there. Absent in records written before it was kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rows_digest: Option<String>,
 }
 
 /// A rig turned off in the plan whose Target Scheduler project activation
@@ -172,6 +177,13 @@ fn validate_activation(activation: &Activation) -> Result<(), Error> {
             || rig.profile_id.len() > 128
             || rig.targets.len() > 256
             || rig.plans.len() > 4096
+            // A SHA-256 in lowercase hex.
+            || rig.rows_digest.as_ref().is_some_and(|digest| {
+                digest.len() != 64
+                    || !digest
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            })
         {
             return Err(Error::InvalidInput);
         }

@@ -18,7 +18,10 @@ use psf_guard_director_core::{
     framing::{Layout, PanelSize},
     visibility::IcrsPosition,
 };
-use psf_guard_director_meta::{catalog::SourceProject, profile::RigProfile, MAX_PLANS};
+use psf_guard_director_meta::{
+    activation::Activation, catalog::SourceProject, framing::FramingDraft, plan::PlanDraft,
+    profile::RigProfile, MAX_PLANS,
+};
 use rusqlite::{Connection, OpenFlags, TransactionBehavior};
 use std::{
     collections::{BTreeMap, HashMap},
@@ -193,6 +196,29 @@ struct ActivationSummary {
     rigs: u32,
 }
 
+/// Why the rig databases lack a plan: it was never activated, its saved
+/// plan or framing is newer than the last activation, it shoots rigs that
+/// activation left out, a rig's Target Scheduler rows changed since
+/// activation wrote them, or a remote site has not received the last
+/// activation. Read from the records and one fingerprint query per
+/// database; the activation check, run in the workspace, also finds what a
+/// newer build would write differently.
+#[derive(Serialize)]
+struct ActivationDue {
+    never: bool,
+    /// `plan` and `framing`: the saved parts newer than the last activation.
+    parts: Vec<&'static str>,
+    /// Rigs the saved plan shoots that the last activation left out.
+    left_out: Vec<NamedIdentity>,
+    /// Rigs whose planning rows differ from what the last activation wrote.
+    differs: Vec<NamedIdentity>,
+    /// Sites, by name, that have not applied the last activation's push.
+    unsent: Vec<String>,
+}
+
+/// Each freshly read database's planning-row fingerprints, by catalog id.
+type RowDigests<'a> = HashMap<Uuid, &'a HashMap<Uuid, String>>;
+
 #[derive(Serialize)]
 pub(super) struct PlanRow {
     project: NamedIdentity,
@@ -202,6 +228,103 @@ pub(super) struct PlanRow {
     framing: Option<FramingSummary>,
     plan: Option<PlanSummary>,
     activation: Option<ActivationSummary>,
+    /// `None` when there is nothing to activate: no saved plan that shoots a
+    /// rig, no saved framing, the rigs have everything saved here, or the
+    /// plan still follows the Target Scheduler project it was imported from.
+    activation_due: Option<ActivationDue>,
+}
+
+/// What the rigs lack of a plan's saved drafts, by the records. A plan that
+/// follows its Target Scheduler import is that project's own rows, so it
+/// needs no activation.
+fn activation_due(
+    store: &MetaStore,
+    project: Uuid,
+    framing: Option<&FramingDraft>,
+    plan: Option<&PlanDraft>,
+    activation: Option<&Activation>,
+    digests: &RowDigests<'_>,
+    links: &[PlanLink],
+) -> Option<ActivationDue> {
+    let (framing, plan) = (framing?, plan?);
+    let shooting: std::collections::BTreeSet<Uuid> = plan
+        .contributions
+        .iter()
+        .filter(|c| c.enabled)
+        .map(|c| c.rig_id)
+        .collect();
+    if shooting.is_empty() {
+        return None;
+    }
+    let Some(activation) = activation else {
+        if import_drafts::follows_import(store, project, framing, plan) {
+            return None;
+        }
+        return Some(ActivationDue {
+            never: true,
+            parts: Vec::new(),
+            left_out: Vec::new(),
+            differs: Vec::new(),
+            unsent: Vec::new(),
+        });
+    };
+    let mut parts = Vec::new();
+    if plan.revision > activation.plan_revision {
+        parts.push("plan");
+    }
+    if framing.layout_revision > activation.framing_revision {
+        parts.push("framing");
+    }
+    let activated: std::collections::BTreeSet<Uuid> =
+        activation.rigs.iter().map(|rig| rig.rig_id).collect();
+    // A rig's name from the plan's links, else from the store: a rig left
+    // out has no link to its database yet.
+    let named = |id: Uuid| {
+        links
+            .iter()
+            .find(|link| link.rig.id == id)
+            .map(|link| link.rig.clone())
+            .or_else(|| store.rig(id).ok().flatten())
+            .unwrap_or(NamedIdentity {
+                id,
+                name: String::new(),
+                revision: 0,
+            })
+    };
+    let left_out: Vec<NamedIdentity> = shooting
+        .difference(&activated)
+        .map(|id| named(*id))
+        .collect();
+    // A record from before fingerprints were kept, or a database not read
+    // this time, is not compared.
+    let differs: Vec<NamedIdentity> = activation
+        .rigs
+        .iter()
+        .filter(|rig| {
+            rig.rows_digest.as_ref().is_some_and(|written| {
+                digests
+                    .get(&rig.catalog_id)
+                    .is_some_and(|now| now.get(&rig.project_guid) != Some(written))
+            })
+        })
+        .map(|rig| named(rig.rig_id))
+        .collect();
+    // The rows here can match while a remote site or a Target Scheduler
+    // file still lacks them, as the workspace's bar says.
+    let mut unsent: Vec<String> = Vec::new();
+    for push in activation.pushes.iter().filter(|push| !push.applied) {
+        if !unsent.contains(&push.peer_name) {
+            unsent.push(push.peer_name.clone());
+        }
+    }
+    (!parts.is_empty() || !left_out.is_empty() || !differs.is_empty() || !unsent.is_empty())
+        .then_some(ActivationDue {
+            never: false,
+            parts,
+            left_out,
+            differs,
+            unsent,
+        })
 }
 
 /// Every target's frame counts, grouped by project row.
@@ -319,6 +442,9 @@ pub(super) struct Contents {
     facts: BTreeMap<i64, ProjectFacts>,
     /// The newest frame's row.
     newest_frame: Option<i64>,
+    /// Each project's planning-row fingerprint by project GUID, to compare
+    /// with the last activation's; `None` when the rows could not be read.
+    digests: Option<HashMap<Uuid, String>>,
 }
 
 /// One registered database as this listing sees it.
@@ -423,6 +549,15 @@ fn read_contents(instance: Uuid, catalog: &DatabaseContext, notes: &mut Vec<Stri
             row.get::<_, Option<i64>>(0)
         })
         .unwrap_or(None);
+    // One query for every project; a database it cannot read is only not
+    // compared, so its plans are not called out of step.
+    let digests = super::rows_digest::project_digests(&tx, None)
+        // Every listing reads it again, so a schema it cannot read is not
+        // worth a warning each time.
+        .inspect_err(|error| {
+            tracing::debug!(%error, catalog = %catalog.name, "Plan list could not read planning rows")
+        })
+        .ok();
     Read::Done {
         saved,
         contents: Contents {
@@ -430,6 +565,7 @@ fn read_contents(instance: Uuid, catalog: &DatabaseContext, notes: &mut Vec<Stri
             targets,
             facts,
             newest_frame,
+            digests,
         },
     }
 }
@@ -1148,6 +1284,16 @@ fn assemble(
 ) -> Result<PlanList, Error> {
     let mut links: BTreeMap<Uuid, Vec<PlanLink>> = BTreeMap::new();
     let mut panels: HashMap<Uuid, Option<PanelSize>> = HashMap::new();
+    // Only a database read now: rows kept from an earlier read could
+    // predate the last activation.
+    let digests: RowDigests<'_> = sources
+        .iter()
+        .filter(|source| source.fresh)
+        .filter_map(|source| {
+            let digests = source.contents.as_ref()?.digests.as_ref()?;
+            Some((source.identity.id, digests))
+        })
+        .collect();
     let mut total = 0;
     'sources: for source in sources {
         let name = &source.catalog.name;
@@ -1250,14 +1396,15 @@ fn assemble(
     }
     let mut rows = Vec::with_capacity(projects.len());
     for project in projects {
-        let unreadable = |record: &str, error: StoreError| {
+        let unreadable = |record: &str, error: &StoreError| {
             format!(
                 "{}: its {record} could not be read, so it is left out ({error})",
                 project.name
             )
         };
         let links = links.remove(&project.id).unwrap_or_default();
-        let framing = match store.framing_draft(project.id) {
+        let framing_draft = store.framing_draft(project.id);
+        let framing = match &framing_draft {
             Ok(Some(draft)) => {
                 let preview = draft
                     .shared_request()
@@ -1288,8 +1435,9 @@ fn assemble(
                 None
             }
         };
-        let plan = match store.plan_draft(project.id) {
-            Ok(plan) => plan.map(|plan| PlanSummary {
+        let plan_draft = store.plan_draft(project.id);
+        let plan = match &plan_draft {
+            Ok(plan) => plan.as_ref().map(|plan| PlanSummary {
                 revision: plan.revision,
                 objectives: plan.objectives.len() as u32,
                 rigs: plan
@@ -1305,8 +1453,9 @@ fn assemble(
                 None
             }
         };
-        let activation = match store.activation(project.id) {
-            Ok(activation) => activation.map(|a| ActivationSummary {
+        let activation_record = store.activation(project.id);
+        let activation = match &activation_record {
+            Ok(activation) => activation.as_ref().map(|a| ActivationSummary {
                 revision: a.revision,
                 applied_at_ms: a.applied_at_ms,
                 rigs: a.rigs.len() as u32,
@@ -1315,6 +1464,19 @@ fn assemble(
                 warnings.push(unreadable("last activation", error));
                 None
             }
+        };
+        // A record that could not be read says nothing either way.
+        let activation_due = match (&framing_draft, &plan_draft, &activation_record) {
+            (Ok(framing), Ok(plan), Ok(activation)) => activation_due(
+                store,
+                project.id,
+                framing.as_ref(),
+                plan.as_ref(),
+                activation.as_ref(),
+                &digests,
+                &links,
+            ),
+            _ => None,
         };
         let targets: Vec<&TargetProgress> = links.iter().flat_map(|l| &l.targets).collect();
         let progress = (!targets.is_empty()).then(|| Progress {
@@ -1331,6 +1493,7 @@ fn assemble(
             framing,
             plan,
             activation,
+            activation_due,
         });
     }
     Ok(PlanList { rows, warnings })

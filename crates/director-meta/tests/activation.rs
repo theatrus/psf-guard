@@ -22,6 +22,7 @@ fn activations_advance_a_revision_and_read_back_after_reopen() {
         coordinator_instance_id: store.instance_id(),
         applied_at_ms: 5,
         rigs: vec![ActivatedRig {
+            rows_digest: None,
             rig_id: Uuid::new_v4(),
             catalog_id: Uuid::new_v4(),
             project_guid: Uuid::new_v4(),
@@ -85,6 +86,7 @@ fn activations_advance_a_revision_and_read_back_after_reopen() {
 #[test]
 fn validate_refuses_a_record_the_store_would_refuse() {
     let rig = ActivatedRig {
+        rows_digest: None,
         rig_id: Uuid::new_v4(),
         catalog_id: Uuid::new_v4(),
         project_guid: Uuid::new_v4(),
@@ -127,6 +129,7 @@ fn a_push_lands_on_its_own_activation_and_never_on_a_newer_one() {
     let project = store.create_project(Uuid::new_v4(), "Heart").unwrap();
     let (remote, local) = (Uuid::new_v4(), Uuid::new_v4());
     let rig = |rig_id| ActivatedRig {
+        rows_digest: None,
         rig_id,
         catalog_id: Uuid::new_v4(),
         project_guid: Uuid::new_v4(),
@@ -223,4 +226,73 @@ fn a_push_lands_on_its_own_activation_and_never_on_a_newer_one() {
         ..record
     };
     assert!(serde_json::to_value(&none).unwrap().get("pushes").is_none());
+}
+
+/// Schema 38 adds `rows_digest` to activated rigs. A store at 37 opens at 38
+/// with its records intact, and a record keeps a digest only in SHA-256 hex.
+#[test]
+fn schema_38_keeps_older_activations_and_adds_the_rows_digest() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("meta.sqlite");
+    let mut store = MetaStore::create(&path).unwrap();
+    let project = store.create_project(Uuid::new_v4(), "Heart").unwrap();
+    let rig = ActivatedRig {
+        rows_digest: None,
+        rig_id: Uuid::new_v4(),
+        catalog_id: Uuid::new_v4(),
+        project_guid: Uuid::new_v4(),
+        profile_id: "profile".into(),
+        targets: vec![],
+        plans: vec![],
+    };
+    let record = Activation {
+        project_id: project.id,
+        revision: 0,
+        framing_revision: 1,
+        plan_revision: 1,
+        coordinator_instance_id: store.instance_id(),
+        applied_at_ms: 5,
+        rigs: vec![rig.clone()],
+        inactive_rigs: vec![],
+        pushes: vec![],
+    };
+    let older = store.record_activation(&record).unwrap();
+    drop(store);
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.pragma_update(None, "user_version", 37).unwrap();
+    let mut store = MetaStore::open(&path).unwrap();
+    assert_eq!(
+        conn.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))
+            .unwrap(),
+        38
+    );
+    assert_eq!(store.activation(project.id).unwrap(), Some(older));
+
+    let digest = "0123456789abcdef".repeat(4);
+    let with = Activation {
+        rigs: vec![ActivatedRig {
+            rows_digest: Some(digest.clone()),
+            ..rig.clone()
+        }],
+        ..record.clone()
+    };
+    let kept = store.record_activation(&with).unwrap();
+    assert_eq!(
+        store.activation(project.id).unwrap().unwrap().rigs[0].rows_digest,
+        Some(digest.clone())
+    );
+    assert_eq!(kept.rigs[0].rows_digest, Some(digest));
+    for bad in ["", "ABCDEF", &"0".repeat(63), &"g".repeat(64)] {
+        let refused = Activation {
+            rigs: vec![ActivatedRig {
+                rows_digest: Some(bad.to_string()),
+                ..rig.clone()
+            }],
+            ..record.clone()
+        };
+        assert!(
+            matches!(store.record_activation(&refused), Err(Error::InvalidInput)),
+            "{bad:?}"
+        );
+    }
 }

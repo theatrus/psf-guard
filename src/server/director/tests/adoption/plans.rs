@@ -239,6 +239,11 @@ async fn the_plan_list_joins_framing_plan_and_activation_per_project() {
     assert_eq!(heart["plan"]["objectives"], 1);
     assert_eq!(heart["plan"]["rigs"], 1);
     assert_eq!(heart["activation"], Value::Null);
+    // Made here and never activated: the rigs have none of it.
+    assert_eq!(
+        heart["activation_due"],
+        json!({"never": true, "parts": [], "left_out": [], "differs": [], "unsent": []})
+    );
 
     let (_, preview) = call(
         &a.f.app,
@@ -266,10 +271,59 @@ async fn the_plan_list_joins_framing_plan_and_activation_per_project() {
         .unwrap();
     assert_eq!(heart["activation"]["revision"], 1);
     assert_eq!(heart["activation"]["rigs"], 1);
+    assert_eq!(heart["activation_due"], Value::Null);
     assert_eq!(heart["links"].as_array().unwrap().len(), 1);
     assert_eq!(heart["links"][0]["catalog_slug"], "rig");
     assert_eq!(heart["links"][0]["rig"]["id"], a.rig.to_string());
     assert_eq!(heart["links"][0]["source_name"], "Heart Nebula");
+
+    // Frames taken there leave it in step.
+    a.db.execute("UPDATE exposureplan SET acquired = 5, accepted = 4", [])
+        .unwrap();
+    let heart_due = |listed: &Value| {
+        listed["data"]["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["project"]["name"] == "Heart Nebula")
+            .unwrap()["activation_due"]
+            .clone()
+    };
+    let (_, counted) = call(&a.f.app, "GET", "/plans", Value::Null, None).await;
+    assert_eq!(heart_due(&counted), Value::Null);
+    // A goal changed in Target Scheduler is out of step with the plan.
+    a.db.execute("UPDATE exposureplan SET desired = desired + 7", [])
+        .unwrap();
+    let (_, drifted) = call(&a.f.app, "GET", "/plans", Value::Null, None).await;
+    let drift = heart_due(&drifted);
+    assert_eq!(drift["never"], false);
+    assert_eq!(drift["parts"], json!([]));
+    assert_eq!(drift["left_out"], json!([]));
+    assert_eq!(drift["unsent"], json!([]));
+    // Named, so the Library need not find the rig among the plan's links.
+    assert_eq!(drift["differs"][0]["id"], a.rig.to_string());
+    assert_eq!(drift["differs"][0]["name"], "RedCat rig");
+
+    // A plan saved since the activation is due again.
+    {
+        let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        let mut plan = store.plan_draft(a.project).unwrap().unwrap();
+        plan.objectives[0].goal = Goal::Frames { value: 99 };
+        let saved = store.save_plan_draft(&plan, plan.revision).unwrap();
+        assert_eq!(saved.revision, plan.revision + 1);
+    }
+    let (_, edited) = call(&a.f.app, "GET", "/plans", Value::Null, None).await;
+    let heart = edited["data"]["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["project"]["name"] == "Heart Nebula")
+        .unwrap();
+    assert_eq!(heart["activation_due"]["parts"], json!(["plan"]));
+    assert_eq!(
+        heart["activation_due"]["differs"][0]["id"],
+        a.rig.to_string()
+    );
     let _ = a.objective;
 }
 
@@ -1557,6 +1611,17 @@ async fn an_imported_plan_follows_target_scheduler_until_it_is_saved_here() {
     };
     let (framing, plan, import) = saved();
     assert_eq!((framing.revision, plan.revision), (1, 1));
+    let due = |listed: &Value| {
+        listed["data"]["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["project"]["name"] == "Heart Nebula")
+            .unwrap()["activation_due"]
+            .clone()
+    };
+    // Its drafts are Target Scheduler's own rows: nothing to activate.
+    assert_eq!(due(&listed), Value::Null);
     let import = import.expect("the import is recorded");
     assert_eq!((import.framing_revision, import.plan_revision), (1, 1));
     assert_eq!(plan.objectives[0].goal, Goal::Frames { value: 30 });
@@ -1621,6 +1686,8 @@ async fn an_imported_plan_follows_target_scheduler_until_it_is_saved_here() {
     list().await;
     let (held, _, import_held) = saved();
     assert!(import_held.is_none(), "stopped following");
+    // The plan keeps a framing the rig no longer has.
+    assert_eq!(due(&list().await)["never"], true);
     assert_eq!(
         held.revision, kept.revision,
         "the framing is the plan's own"
