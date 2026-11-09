@@ -155,6 +155,17 @@ describe('Director live dashboard', () => {
     expect(screen.queryByRole('list', { name: 'Plugin history' })).toBeNull();
   });
 
+  it('keeps reported weather current while the server clock is far behind the browser', async () => {
+    const reported = { rig_id: 'a', received_at_ms: NOW - 600_000, sample: { sample_id: 's', profile_id: 'p', source_name: 'Cloud sensor', source_key: 'k', reported_at_ms: NOW - 600_000, connected: true,
+      values: { cloud_percent: 85, temperature_celsius: null, dew_point_celsius: null, humidity_percent: null, pressure_hpa: null, rain_mm_per_hour: null, sky_brightness_lux: null, sky_quality_mag_arcsec2: null, sky_temperature_celsius: null, seeing_arcsec: null, wind_direction_degrees: null, wind_speed_m_s: null, wind_gust_m_s: null } } };
+    // The server evaluated it ten minutes before this browser's clock.
+    const weather = { rig_id: 'a', site_id: null, evaluated_at_ms: NOW - 600_000, cloud_threshold_percent: 30, dew_limit_celsius: null, reported, forecast: null,
+      reported_cloud: { state: 'cloudy' as const, reason: 'cloud_cover_above_threshold', valid_for_ms: 30_000 },
+      forecast_conditions: { state: 'unknown' as const, reason: 'no_site_forecast', valid_for_ms: 0 } };
+    mount([{ ...online, weather }]);
+    expect(await screen.findByText(/Cloud sensor · 85% cloud · cloudy/)).toBeInTheDocument();
+  });
+
   it('says when no rig exists yet', async () => {
     mount([]);
     expect(await screen.findByText(/No rigs yet/)).toBeInTheDocument();
