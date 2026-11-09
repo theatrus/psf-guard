@@ -46,6 +46,11 @@ pub enum AuditAction {
 }
 
 impl AuditAction {
+    /// An image file sent in, rather than a sync exchange.
+    fn is_upload(self) -> bool {
+        self == Self::ImageUpload
+    }
+
     /// Whether the Live page can show this as a client's action. A
     /// capabilities call and a poll for pending flat history run before
     /// nearly everything else, so they count only as contact.
@@ -133,6 +138,9 @@ struct LoggedEntry {
 /// How much of the end of the log to read back when there is no saved record
 /// of the latest actions yet, as on the first start after an upgrade.
 const LATEST_TAIL_BYTES: u64 = 512 * 1024;
+
+/// How much of the end of each log generation the history reads.
+const HISTORY_TAIL_BYTES: u64 = 2 * 1024 * 1024;
 
 /// Log a refused sequence report at most this often per catalog. A plugin
 /// whose key was revoked keeps sending them every 15 s.
@@ -303,23 +311,64 @@ impl RemoteAuditLog {
     }
 
     /// Kinds of action whose newest entry on `catalog_id` was refused or
-    /// failed, newest first. A later success of the same kind clears one,
-    /// and other kinds of action never hide one.
+    /// failed, newest first, while nothing in the same group has worked
+    /// since. Uploads are one group and the sync exchanges another, so a
+    /// stream of uploads never hides a refused merge, but a later merge or
+    /// send that worked clears it.
     pub fn problems(&self, catalog_id: &str) -> Vec<LatestAction> {
         let latest = self
             .latest
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let mut problems: Vec<_> = latest
-            .by_catalog
-            .get(catalog_id)
-            .into_iter()
-            .flat_map(|kinds| kinds.values())
-            .filter(|action| action.outcome != AuditOutcome::Ok)
+        let Some(kinds) = latest.by_catalog.get(catalog_id) else {
+            return Vec::new();
+        };
+        let worked_since = |problem: &LatestAction| {
+            kinds.values().any(|other| {
+                other.outcome == AuditOutcome::Ok
+                    && other.at_ms >= problem.at_ms
+                    && other.action.is_upload() == problem.action.is_upload()
+            })
+        };
+        let mut problems: Vec<_> = kinds
+            .values()
+            .filter(|action| action.outcome != AuditOutcome::Ok && !worked_since(action))
             .cloned()
             .collect();
         problems.sort_by_key(|action| std::cmp::Reverse(action.at_ms));
         problems
+    }
+
+    /// The newest notable actions on `catalog_id`, newest first, at most
+    /// `limit`, from the end of the log and its previous generation. Reads
+    /// files, so call it off the async runtime.
+    pub fn history(&self, catalog_id: &str, limit: usize) -> Vec<LatestAction> {
+        let mut entries = Vec::new();
+        for path in [self.path.with_extension("jsonl.1"), self.path.clone()] {
+            let Ok(tail) = read_tail(&path, HISTORY_TAIL_BYTES) else {
+                continue;
+            };
+            entries.extend(tail.lines().filter_map(|line| {
+                let entry = serde_json::from_str::<LoggedEntry>(line).ok()?;
+                if entry.catalog_id != catalog_id
+                    || !is_notable(entry.action, entry.detail.as_deref())
+                {
+                    return None;
+                }
+                let at = chrono::DateTime::parse_from_rfc3339(&entry.at).ok()?;
+                Some(LatestAction {
+                    at_ms: at.timestamp_millis(),
+                    action: entry.action,
+                    outcome: entry.outcome,
+                    operation: entry.operation,
+                    detail: entry.detail,
+                    summary: entry.summary,
+                })
+            }));
+        }
+        entries.reverse();
+        entries.truncate(limit);
+        entries
     }
 
     fn remember(&self, catalog_id: &str, action: LatestAction) {
@@ -608,7 +657,7 @@ mod tests {
     }
 
     #[test]
-    fn a_problem_stays_until_the_same_kind_of_action_succeeds() {
+    fn a_problem_stays_until_something_in_its_group_works() {
         let directory = tempdir().unwrap();
         let log = RemoteAuditLog::new(directory.path());
         let merge = |outcome| AuditRecord {
@@ -647,24 +696,82 @@ mod tests {
         let problems = log.problems("rig");
         assert_eq!(problems.len(), 1);
         assert_eq!(problems[0].detail.as_deref(), Some("destination changed"));
-        // A push of planning is another kind; it does not clear the merge.
+        // A later sync exchange that worked, of any kind, clears it.
         log.record(
             "rig",
-            AuditAction::Apply,
+            AuditAction::Export,
             AuditOutcome::Ok,
             AuditRecord {
                 operation: Some("push_planning"),
                 ..Default::default()
             },
         );
-        assert_eq!(log.problems("rig").len(), 1);
+        assert!(log.problems("rig").is_empty());
+        // Uploads and sync exchanges each clear only their own group.
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        log.record(
+            "rig",
+            AuditAction::ImageUpload,
+            AuditOutcome::Refused,
+            AuditRecord {
+                detail: Some("sha256 mismatch"),
+                ..Default::default()
+            },
+        );
+        std::thread::sleep(std::time::Duration::from_millis(2));
         log.record(
             "rig",
             AuditAction::Apply,
             AuditOutcome::Ok,
             merge(AuditOutcome::Ok),
         );
+        assert_eq!(log.problems("rig").len(), 1);
+        log.record(
+            "rig",
+            AuditAction::ImageUpload,
+            AuditOutcome::Ok,
+            AuditRecord {
+                detail: Some("M31_0002.fits"),
+                ..Default::default()
+            },
+        );
         assert!(log.problems("rig").is_empty());
+    }
+
+    #[test]
+    fn the_history_lists_one_database_newest_first() {
+        let directory = tempdir().unwrap();
+        let log = RemoteAuditLog::new(directory.path());
+        for operation in ["merge", "push_planning", "push_grades"] {
+            log.record(
+                "rig",
+                AuditAction::Apply,
+                AuditOutcome::Ok,
+                AuditRecord {
+                    operation: Some(operation),
+                    ..Default::default()
+                },
+            );
+            log.record(
+                "rig",
+                AuditAction::Capabilities,
+                AuditOutcome::Ok,
+                AuditRecord::default(),
+            );
+            log.record(
+                "other",
+                AuditAction::Export,
+                AuditOutcome::Ok,
+                AuditRecord::default(),
+            );
+        }
+        let history = log.history("rig", 2);
+        let operations: Vec<_> = history
+            .iter()
+            .map(|entry| entry.operation.as_deref())
+            .collect();
+        assert_eq!(operations, [Some("push_grades"), Some("push_planning")]);
+        assert!(log.history("missing", 10).is_empty());
     }
 
     #[test]

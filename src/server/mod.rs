@@ -246,6 +246,7 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         )
         .route("/calibrations", get(handlers::get_calibration_library))
         .route("/flat-history", get(flat_history::list))
+        .route("/plugin-history", get(sync_sequence::history))
         .route("/flat-history/invalidate", post(flat_history::invalidate))
         .route(
             "/calibrations/details",

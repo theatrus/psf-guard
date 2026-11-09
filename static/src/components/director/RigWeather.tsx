@@ -17,15 +17,20 @@ const state = (cloud: CloudAssessment, evaluated: number, now: number) => {
   return now < evaluated || now >= evaluated + cloud.valid_for_ms ? 'unknown or stale' : cloud.state === 'dewy' ? 'near dew point' : cloud.state;
 };
 
-/** A rig's reported and forecast weather. `credit` off leaves the
- *  provider's credit to the page, which gives it once. */
-export function RigWeatherSummary({ weather, now, credit = true }: { weather?: RigWeather; now: number; credit?: boolean }) {
-  if (!weather) return <span className="director-muted">Weather not reported</span>;
-  const r = weather.reported;
-  const f = weather.forecast;
+/** A rig's reported and forecast weather. `compact`, for a table cell,
+ *  leaves out what is unavailable and the provider's credit, which the page
+ *  gives once. */
+export function RigWeatherSummary({ weather, now, compact = false }: { weather?: RigWeather; now: number; compact?: boolean }) {
+  const r = weather?.reported;
+  const f = weather?.forecast;
+  if (!weather || compact && !r && !f) return <span className="director-muted">No weather</span>;
+  if (compact) return <div aria-label="Rig weather" className="live-weather">
+    {r && <div><span className="director-muted">NINA</span> {r.sample.source_name}{!r.sample.connected && ' (disconnected)'} · {number(r.sample.values.cloud_percent, '% cloud')} · {state(weather.reported_cloud, weather.evaluated_at_ms, now)}<span className="director-muted"> · {formatAge(now - r.sample.reported_at_ms)}</span></div>}
+    {f && <div><span className="director-muted">Forecast</span> {PROVIDER_LABEL[f.provider]} · {number(f.hour?.cloud_total, '% cloud')} · {state(weather.forecast_conditions, weather.evaluated_at_ms, now)}</div>}
+  </div>;
   return <div aria-label="Rig weather">
     <div><strong>NINA reported:</strong> {r ? <>{r.sample.source_name}{!r.sample.connected && ' (disconnected)'} · {number(r.sample.values.cloud_percent, '% cloud')} · {state(weather.reported_cloud, weather.evaluated_at_ms, now)}<span className="director-muted"> · {formatAge(now - r.sample.reported_at_ms)}</span></> : 'unavailable'}</div>
-    <div><strong>Forecast:</strong> {f ? <>{PROVIDER_LABEL[f.provider]} · {number(f.hour?.cloud_total, '% cloud')} · {state(weather.forecast_conditions, weather.evaluated_at_ms, now)}{credit && <> <small className="director-muted"><a href={PROVIDER_URL[f.provider]} target="_blank" rel="noreferrer">{f.attribution}</a></small></>}</> : 'unavailable'}</div>
+    <div><strong>Forecast:</strong> {f ? <>{PROVIDER_LABEL[f.provider]} · {number(f.hour?.cloud_total, '% cloud')} · {state(weather.forecast_conditions, weather.evaluated_at_ms, now)} <small className="director-muted"><a href={PROVIDER_URL[f.provider]} target="_blank" rel="noreferrer">{f.attribution}</a></small></> : 'unavailable'}</div>
   </div>;
 }
 
