@@ -17,8 +17,9 @@ const message = (error: unknown) => isAxiosError(error)
   : error instanceof Error ? error.message : 'Site request failed';
 
 /** Observing sites: where rigs stand and what blocks their sky. A rig that
- *  names a site as its planning site takes both. */
-export default function DirectorSites() {
+ *  names a site as its planning site takes both. `focusSite` opens that
+ *  site and moves focus to its weather forecast settings. */
+export default function DirectorSites({ focusSite = null }: { focusSite?: string | null } = {}) {
   const { canWrite } = useAccess();
   const client = useQueryClient();
   const sites = useQuery({ queryKey: ['directorSites'], queryFn: () => apiClient.getDirectorIdentities('sites'), retry: retryWhenBusy, retryDelay: 1200, refetchOnWindowFocus: false });
@@ -30,6 +31,8 @@ export default function DirectorSites() {
     setOpen(id);
     if (id) setOpened(current => current.has(id) ? current : new Set(current).add(id));
   };
+  const focusable = !!focusSite && !!sites.data?.items.some(site => site.id === focusSite);
+  useEffect(() => { if (focusable && focusSite) show(focusSite); }, [focusable, focusSite]);
   const [name, setName] = useState('');
   const create = useMutation({
     mutationFn: (siteName: string) => apiClient.createDirectorIdentity('sites', { id: identityId(), name: siteName }),
@@ -55,7 +58,7 @@ export default function DirectorSites() {
         <div className="director-record-name"><strong>{site.name}</strong></div>
         <button type="button" aria-expanded={open === site.id} aria-label={`Edit ${site.name}`} title={`Edit ${site.name}`} onClick={() => show(open === site.id ? null : site.id)}>{open === site.id ? <ChevronDown size={16} /> : <ChevronRight size={16} />}Edit</button>
       </div>
-      {(open === site.id || opened.has(site.id)) && <div hidden={open !== site.id}><SiteProfileCard key={site.id} site={site} /></div>}
+      {(open === site.id || opened.has(site.id)) && <div hidden={open !== site.id}><SiteProfileCard key={site.id} site={site} focusForecast={focusable && focusSite === site.id} /></div>}
     </li>)}</ul>
     {canWrite && <form className="director-site-new" onSubmit={add}>
       <input aria-label="New site name" placeholder="Site name" value={name} maxLength={200} onChange={event => setName(event.target.value)} />
@@ -103,7 +106,7 @@ function formFrom(view: DirectorSiteProfileView): SiteForm {
   };
 }
 
-function SiteProfileCard({ site }: { site: DirectorIdentity }) {
+function SiteProfileCard({ site, focusForecast = false }: { site: DirectorIdentity; focusForecast?: boolean }) {
   const { canWrite } = useAccess();
   const client = useQueryClient();
   const queryKey = ['directorSiteProfile', site.id];
@@ -112,6 +115,16 @@ function SiteProfileCard({ site }: { site: DirectorIdentity }) {
   const [problem, setProblem] = useState('');
   const [notice, setNotice] = useState('');
   useEffect(() => { if (loaded.data) setForm(formFrom(loaded.data)); }, [loaded.data]);
+  const formReady = form !== null;
+  const forecastFocused = useRef(false);
+  useEffect(() => {
+    if (!focusForecast || !formReady || forecastFocused.current) return;
+    const select = document.getElementById(`${site.id}-forecast`);
+    if (!select) return;
+    forecastFocused.current = true;
+    select.scrollIntoView?.({ block: 'center' });
+    select.focus();
+  }, [focusForecast, formReady, site.id]);
   // A rename the last Save got through before its profile step failed: the
   // next Save starts from it rather than renaming again and conflicting.
   const renamed = useRef<DirectorIdentity | null>(null);

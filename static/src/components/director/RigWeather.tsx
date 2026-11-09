@@ -5,6 +5,7 @@ import type { CloudAssessment, RigWeather } from '../../api/weatherTypes';
 import { useDirectorClock } from '../../hooks/useDirectorClock';
 import { formatAge } from './dashboardModel';
 import { PROVIDER_LABEL, PROVIDER_URL } from './forecastLabels';
+import { openSettings } from '../../utils/settingsIntent';
 
 const number = (value: number | null | undefined, suffix: string) => value == null || !Number.isFinite(value) ? '—' : `${value.toFixed(1).replace(/\.0$/, '')}${suffix}`;
 const state = (cloud: CloudAssessment, evaluated: number, now: number) => {
@@ -43,7 +44,9 @@ export default function RigWeatherPanel({ rig }: { rig: string }) {
       <RigWeatherSummary weather={weather} now={now} />
       {weather.forecast_conditions.reason === 'forecast_location_mismatch' && <p role="status">The site's forecast does not match this rig's location. In the Site tab, select the site where the rig is located and check the rig's latitude and longitude.</p>}
       {weather.forecast_conditions.reason === 'forecast_location_unavailable' && <p role="status">The forecast location could not be checked. Set the planning site's coordinates under Settings → Presets → Sites and check the rig's location in its Site tab.</p>}
-      <p>Clear at or under {weather.cloud_threshold_percent}% cloud. Configure the provider and threshold in Settings → Presets → Sites.</p>
+      <p>Clear at or under {weather.cloud_threshold_percent}% cloud. {weather.site_id
+        ? <>The planning site sets the forecast, cloud limit and dew limit. <button type="button" className="link-button" onClick={() => openSettings('sites', { field: weather.site_id ?? undefined })}>Edit site weather</button></>
+        : 'Choose a planning site in the Site tab to set the forecast, cloud limit and dew limit.'}</p>
       {weather.dew_limit_celsius != null && <p>Forecasts also require air more than {weather.dew_limit_celsius} °C above its dew point, using the site's weather rule.</p>}
       {weather.forecast?.hour && <p>Forecast air {number(weather.forecast.hour.temperature_celsius, ' °C')} · dew point {number(weather.forecast.hour.dew_point_celsius, ' °C')} · humidity {number(weather.forecast.hour.humidity_percent, '%')}</p>}
       <p className="director-muted">NINA's report time records when it supplied the values. Its source may be a sensor or a weather service; the source's measurement time is unavailable. Forecasts remain predictions.</p>
