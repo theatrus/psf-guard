@@ -6,6 +6,7 @@
 
 ## Changes
 
+- **Steady weather on Live:** Reported cloud cover no longer flips between its state and *unknown or stale* when the browser's clock differs from the server's. Weather ages now count from the server's own reading.
 - **See every rig on Live, Target Scheduler rigs included:** **Rigs › Live** has six columns: Rig, Now, Weather, Plugins, Projects and Tonight.
   - Each rig's link state sits under its name. Any call from the Director or Sync plugin, including an image upload, keeps the rig **Online**.
   - A database used only by the Sync plugin appears without opening Planning first.

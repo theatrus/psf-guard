@@ -19,10 +19,13 @@ const state = (cloud: CloudAssessment, evaluated: number, now: number) => {
 
 /** A rig's reported and forecast weather. `compact`, for a table cell,
  *  leaves out what is unavailable and the provider's credit, which the page
- *  gives once. */
-export function RigWeatherSummary({ weather, now, compact = false }: { weather?: RigWeather; now: number; compact?: boolean }) {
+ *  gives once. `receivedAt` is when this browser fetched `weather`. The
+ *  server's times are on its own clock, so ages and leases count from its
+ *  evaluation plus the time since the fetch, never from this clock. */
+export function RigWeatherSummary({ weather, now: browserNow, receivedAt, compact = false }: { weather?: RigWeather; now: number; receivedAt?: number; compact?: boolean }) {
   const r = weather?.reported;
   const f = weather?.forecast;
+  const now = weather && receivedAt ? weather.evaluated_at_ms + Math.max(0, browserNow - receivedAt) : browserNow;
   if (!weather && !compact) return <span className="director-muted">Weather not reported</span>;
   if (!weather || compact && !r && !f) return <span className="director-muted live-no-weather">No weather</span>;
   if (compact) return <div aria-label="Rig weather" className="live-weather">
@@ -47,7 +50,7 @@ export default function RigWeatherPanel({ rig }: { rig: string }) {
     {current.isPending && <p role="status">Loading weather...</p>}
     {current.isError && <p role="alert">Weather could not be loaded. {current.error.message}</p>}
     {weather && <>
-      <RigWeatherSummary weather={weather} now={now} />
+      <RigWeatherSummary weather={weather} now={now} receivedAt={current.dataUpdatedAt} />
       {weather.forecast_conditions.reason === 'forecast_location_mismatch' && <p role="status">The site's forecast does not match this rig's location. In the Site tab, select the site where the rig is located and check the rig's latitude and longitude.</p>}
       {weather.forecast_conditions.reason === 'forecast_location_unavailable' && <p role="status">The forecast location could not be checked. Set the planning site's coordinates under Settings → Presets → Sites and check the rig's location in its Site tab.</p>}
       <p>Clear at or under {weather.cloud_threshold_percent}% cloud. {weather.site_id
@@ -66,7 +69,7 @@ export default function RigWeatherPanel({ rig }: { rig: string }) {
         <dt>Sky temperature</dt><dd>{number(values.sky_temperature_celsius, ' °C')}</dd>
         <dt>Sky quality</dt><dd>{number(values.sky_quality_mag_arcsec2, ' mag/arcsec²')}</dd>
       </dl>}
-      {weather.forecast && <p className="director-muted">Forecast fetched {formatAge(now - weather.forecast.fetched_at_ms)}</p>}
+      {weather.forecast && <p className="director-muted">Forecast fetched {formatAge(weather.evaluated_at_ms + Math.max(0, now - current.dataUpdatedAt) - weather.forecast.fetched_at_ms)}</p>}
     </>}
     <details onToggle={event => setHistoryOpen(event.currentTarget.open)}><summary>Reported weather history (24 hours)</summary>
       {history.isPending && historyOpen && <p role="status">Loading weather history...</p>}

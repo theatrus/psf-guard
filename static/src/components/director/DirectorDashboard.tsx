@@ -96,7 +96,7 @@ export default function DirectorDashboard() {
               })}</ol>
             </details>}
           </td>
-          <td><span className="director-cell-label">Weather</span><RigWeatherSummary weather={view.weather} now={now} compact /></td>
+          <td><span className="director-cell-label">Weather</span><RigWeatherSummary weather={view.weather} now={now} receivedAt={statuses.dataUpdatedAt} compact /></td>
           <td data-testid="rig-plugins"><span className="director-cell-label">Plugins</span>
             {plugins.length === 0 ? <span className="director-muted">No plugin has called</span>
               : plugins.map((plugin, index) => <span key={plugin.name} title={plugin.title}>{index > 0 && ' · '}{plugin.name}</span>)}

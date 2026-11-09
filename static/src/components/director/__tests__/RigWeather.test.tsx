@@ -19,6 +19,21 @@ const weather: RigWeather = {
 };
 
 describe('rig weather', () => {
+  it('judges a lease from the fetch, not the browser clock, so clock skew never flips the state', () => {
+    // The browser runs 40 s ahead of the server. Fetched 10 s ago, the
+    // 30 s lease from the server's evaluation still holds.
+    const received = now + 40_000;
+    const { rerender } = render(<RigWeatherSummary weather={weather} now={received + 10_000} receivedAt={received} />);
+    expect(screen.getByText(/85% cloud · cloudy/)).toBeInTheDocument();
+    expect(screen.getByText(/· 10 s ago/)).toBeInTheDocument();
+    // 31 s after the fetch the lease has run out.
+    rerender(<RigWeatherSummary weather={weather} now={received + 31_000} receivedAt={received} />);
+    expect(screen.getAllByText(/unknown or stale/)).toHaveLength(2);
+    // A browser behind the server is no different.
+    rerender(<RigWeatherSummary weather={weather} now={now - 60_000 + 5_000} receivedAt={now - 60_000} />);
+    expect(screen.getByText(/85% cloud · cloudy/)).toBeInTheDocument();
+  });
+
   it.each([
     ['site', true],
     [null, false],
