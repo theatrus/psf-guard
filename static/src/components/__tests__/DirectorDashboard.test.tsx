@@ -84,7 +84,7 @@ describe('Director live dashboard', () => {
       reported_cloud: { state: 'unknown' as const, reason: 'no_report', valid_for_ms: 30_000 },
       forecast_conditions: { state: 'clear' as const, reason: 'cloud_cover_clear', valid_for_ms: 30_000 } });
     mount([{ ...online, weather: weather('a') }, { ...quiet, weather: weather('b') }]);
-    // Live marks the forecast without naming the provider; the credit names it once.
+    // Live marks the forecast without the provider; the credit below the table shows it once.
     expect(await screen.findAllByText(/^10% cloud · clear$/)).toHaveLength(2);
     expect(screen.queryByText(/Open-Meteo · /)).toBeNull();
     const credits = screen.getAllByRole('link', { name: forecast.attribution });
@@ -165,7 +165,19 @@ describe('Director live dashboard', () => {
       reported_cloud: { state: 'cloudy' as const, reason: 'cloud_cover_above_threshold', valid_for_ms: 30_000 },
       forecast_conditions: { state: 'unknown' as const, reason: 'no_site_forecast', valid_for_ms: 0 } };
     mount([{ ...online, weather }]);
-    expect(await screen.findByText(/^85% cloud · cloudy/)).toBeInTheDocument();
+    const observed = await screen.findByText(/^85% cloud · cloudy/);
+    expect(observed.closest('div')).toHaveAttribute('title', 'Reported by NINA from Cloud sensor');
+  });
+
+  it('shows a disconnected weather source without its last cloud cover', async () => {
+    const reported = { rig_id: 'a', received_at_ms: NOW, sample: { sample_id: 's', profile_id: 'p', source_name: 'Cloud sensor', source_key: 'k', reported_at_ms: NOW, connected: false,
+      values: { cloud_percent: 5, temperature_celsius: null, dew_point_celsius: null, humidity_percent: null, pressure_hpa: null, rain_mm_per_hour: null, sky_brightness_lux: null, sky_quality_mag_arcsec2: null, sky_temperature_celsius: null, seeing_arcsec: null, wind_direction_degrees: null, wind_speed_m_s: null, wind_gust_m_s: null } } };
+    const weather = { rig_id: 'a', site_id: null, evaluated_at_ms: NOW, cloud_threshold_percent: 30, dew_limit_celsius: null, reported, forecast: null,
+      reported_cloud: { state: 'unknown' as const, reason: 'weather_source_disconnected', valid_for_ms: 0 },
+      forecast_conditions: { state: 'unknown' as const, reason: 'no_site_forecast', valid_for_ms: 0 } };
+    mount([{ ...online, weather }]);
+    expect(await screen.findByText(/^disconnected/)).toBeInTheDocument();
+    expect(screen.queryByText(/5% cloud/)).toBeNull();
   });
 
   it('says when no rig exists yet', async () => {

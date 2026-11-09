@@ -585,9 +585,9 @@ Each row shows:
   autofocus and meridian flip happened. Without a Director report, that line
   takes its place.
 - **Weather:** **Observed**, N.I.N.A.'s reported cloud cover, and
-  **Forecast**, the site's forecast, one line each, or *No weather*. The
-  tooltip names the sensor or the forecast provider. The forecast providers are credited once, below the
-  table.
+  **Forecast**, the site's forecast, one line each, or *No weather*. Hover a
+  line to see the sensor or the forecast provider. The forecast providers are
+  credited once, below the table.
 - **Plugins:** the plugins that have called, with their contact times in the
   tooltip; frames Director saved that grading has not accepted yet; and, in
   red, any Sync action that was refused or failed, with its reason, until
@@ -2455,8 +2455,8 @@ reporting and holds need a later Director plugin update. The published
 0.1.0.3 Beta 1 does not include these controls. The plugin steps below apply
 once that update is available.
 
-Open **Rigs › Live** to compare each rig's **NINA reported** weather with its
-site's **Forecast**. Open the rig's **Weather** tab for temperatures, dew point,
+Open **Rigs › Live** to compare each rig's **Observed** weather, from N.I.N.A.,
+with its site's **Forecast**. Open the rig's **Weather** tab for temperatures, dew point,
 humidity, wind and other supported values. Expand **Reported weather history
 (24 hours)** to see earlier N.I.N.A. reports. Missing values stay blank; zero
 cloud cover means the source reported zero.

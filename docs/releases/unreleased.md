@@ -6,7 +6,6 @@
 
 ## Changes
 
-- **Simpler weather on Live:** **Rigs › Live** marks weather **Observed** (from N.I.N.A.) or **Forecast** (the site's), without naming the sensor or provider in each row. The tooltip still names them.
 - **Steady weather on Live:** On **Rigs › Live** and **Rig setup › Weather**, N.I.N.A.'s reported cloud cover and the forecast no longer switch between *cloudy* (or *clear*) and *unknown or stale* every few seconds when this computer's clock differs from the server's. The report's age and **Forecast fetched** read true, too.
 - **See every rig on Live, Target Scheduler rigs included:** **Rigs › Live** has six columns: Rig, Now, Weather, Plugins, Projects and Tonight.
   - Each rig's link state sits under its name. Any call from the Director or Sync plugin, including an image upload, keeps the rig **Online**.
@@ -14,7 +13,7 @@
   - With the updated PSF Guard Sync plugin, **Now** shows what N.I.N.A.'s sequence is doing: the exposure and its count, autofocus, a slew, a wait and when it ends. It also shows when the last frame, dither and autofocus happened.
   - **Plugins** lists the plugins that have called. A refused or failed Sync action shows in red until the same work succeeds; a stream of uploads never hides a refused merge. **History** opens the rig's recent plugin actions and when each plugin last called.
   - **Projects** counts the Active projects in the rig's database, Target Scheduler and Director alike, and opens them in the Library.
-  - A rig without weather data shows *No weather*.
+  - **Weather** marks each rig's lines **Observed** (from N.I.N.A.) and **Forecast** (the site's), and shows *No weather* when there is none. The forecast providers are credited once, below the table; hover a line to see its sensor or provider.
 - **Find and activate plans that need it from the Library:** **Show › Needs activating** lists plans whose rigs lack what you saved in Planning. That covers a plan never activated, a plan or framing saved since the last activation, a rig left out, a remote site that has not received the last activation, and Target Scheduler rows changed since the last activation, such as a goal, exposure or template edited in N.I.N.A. Each plan shows a **Needs activating** pill, and its **Activate** button opens the activation preview without leaving the Library. Plans imported from Target Scheduler and not edited in Planning are not listed. A plan activated before this update is checked for Target Scheduler changes only after its next activation. After this update, older PSF Guard versions cannot open the planning store.
 - **The Library keeps its filters:** **Sort** now lives in the URL with Database, Show and the search. All four survive a trip to a plan and back. When a link opens the Library without filters, it restores the last ones set in that browser tab, except on a link back to a project.
 - **Edit site weather from Rig setup:** The **Weather** tab on **Rig setup** has an **Edit site weather** link. It opens the rig's planning site under **Settings › Presets › Sites**, ready to change its forecast, cloud limit and dew limit.
@@ -36,5 +35,4 @@
 - **Trust a Director rig's night load:** The Nights page counts only the plans activated on a Director rig, and shows **Full** instead of large overbooked hours from targets that overlap.
 - **See why a rig gets no work:** The **Plugins** tab explains when work is off, a plugin was removed or an activated plan cannot run. Equipment and setup updates preserve work permission.
 - **Recover a stuck rig:** When a plugin is removed while it holds work, **Close work** lets the rig take work again. Attempts it reported stay spent.
-- **One forecast credit on Live:** The **Live** page credits the forecast provider once, below the rig table, instead of on every rig.
 - **Clearer pairing codes:** **Generate pairing code** is now **Generate Sync pairing code**, and the Sync tab shows where Director pairs.

@@ -26,6 +26,7 @@ export function serverNow(weather: RigWeather, browserNow: number, receivedAt: n
 
 const state = (cloud: CloudAssessment, evaluated: number, now: number | null) => {
   if (cloud.state === 'unknown') {
+    if (cloud.reason === 'weather_source_disconnected') return 'disconnected';
     if (cloud.reason === 'forecast_location_mismatch') return 'location mismatch';
     if (cloud.reason === 'forecast_location_unavailable') return 'location unavailable';
     return 'unknown or stale';
@@ -48,7 +49,7 @@ export function RigWeatherSummary({ weather, now: browserNow, receivedAt, compac
   if (!weather && !compact) return <span className="director-muted">Weather not reported</span>;
   if (!weather || compact && !r && !f) return <span className="director-muted live-no-weather">No weather</span>;
   if (compact) return <div aria-label="Rig weather" className="live-weather">
-    {r && <div title={`Reported by N.I.N.A. from ${r.sample.source_name}`}><span className="director-muted">Observed</span> {number(r.sample.values.cloud_percent, '% cloud')} · {r.sample.connected ? state(weather.reported_cloud, weather.evaluated_at_ms, now) : 'disconnected'}<span className="director-muted">{reportAge(r.received_at_ms)}</span></div>}
+    {r && <div title={`Reported by NINA from ${r.sample.source_name}`}><span className="director-muted">Observed</span> {r.sample.connected ? `${number(r.sample.values.cloud_percent, '% cloud')} · ` : ''}{state(weather.reported_cloud, weather.evaluated_at_ms, now)}<span className="director-muted">{reportAge(r.received_at_ms)}</span></div>}
     {f && <div title={`The site's ${PROVIDER_LABEL[f.provider]} forecast`}><span className="director-muted">Forecast</span> {number(f.hour?.cloud_total, '% cloud')} · {state(weather.forecast_conditions, weather.evaluated_at_ms, now)}</div>}
   </div>;
   return <div aria-label="Rig weather">
