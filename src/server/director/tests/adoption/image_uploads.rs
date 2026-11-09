@@ -83,6 +83,21 @@ async fn a_paired_rig_uploads_through_the_databases_image_upload_setting() {
     );
     // Not the Sync plugin's action.
     assert!(a.f.state.remote_audit.latest("rig").is_none());
+    // Live shows the refusal on a Director-only rig, and the upload counts
+    // as contact.
+    let (_, listed) = call(&a.f.app, "GET", "/rigs/status", Value::Null, None).await;
+    let row = listed["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["rig"]["id"] == json!(a.rig))
+        .unwrap()
+        .clone();
+    assert_eq!(
+        row["sync"]["problems"][0]["action"], "director_image_upload",
+        "{row}"
+    );
+    assert_eq!(row["connectivity"]["state"], "online", "{row}");
 
     // Turn uploads on for the database.
     // The rig's own database, which its pairing names.

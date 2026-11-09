@@ -12,7 +12,7 @@ import '../director/DirectorPage.css';
  *  own pairing to send files; turning uploads on needs none. */
 export default function ImageUploadsPanel({ databaseId, onChanged }: { databaseId: string; onChanged?: () => void }) {
   const { canWrite } = useAccess();
-  const { loaded, database, upload, act, save } = useRemoteReceiver(databaseId, { onChanged });
+  const { loaded, database, upload, act, save, busy } = useRemoteReceiver(databaseId, { onChanged });
   if (!canWrite || loaded.isPending || !database) return null;
   return <section className="rig-profile-form rig-plugin plugin-card" aria-label="Image uploads">
     <div className="director-toolbar plugin-card-heading">
@@ -22,7 +22,7 @@ export default function ImageUploadsPanel({ databaseId, onChanged }: { databaseI
     <p className="director-muted">The Sync plugin uploads frames from its upload instruction. The Director plugin uploads the frames it captures.</p>
     {act.isError && <p className="director-error" role="alert">{requestMessage(act.error)}</p>}
     <UploadSettings key={JSON.stringify([upload?.enabled, upload?.image_directory, upload?.placement, upload?.directory_template, upload?.directory_template_source, upload?.catalog_directory_template])}
-      upload={upload} folders={database.image_directories} busy={act.isPending} onSave={save} />
+      upload={upload} folders={database.image_directories} busy={busy} onSave={save} />
   </section>;
 }
 
@@ -63,8 +63,8 @@ function UploadSettings({ upload, folders, busy, onSave }: {
     <legend>Receive folder</legend>
     <UnsavedMark label="image upload settings" dirty={changed} />
     <p className="plugin-state" data-on={on} data-testid="sync-upload-state">{on
-      ? `On. Paired plugins send image files to ${upload?.image_directory}.`
-      : 'Off. Neither plugin sends image files.'}</p>
+      ? `On. Received image files go to ${upload?.image_directory}.`
+      : 'Off. PSF Guard takes no image files from either plugin.'}</p>
     {<>
       <div className="rig-profile-grid">
         <label className="rig-profile-field" htmlFor="sync-upload-folder"><span>Receive folder</span>

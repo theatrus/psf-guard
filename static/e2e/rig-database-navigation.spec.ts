@@ -31,7 +31,7 @@ for (const width of [1280, 390]) {
     await expect(page.locator('.settings-rig-database-pages')).toHaveCount(0);
     // Without planning, Rig setup holds only the Sync plugin.
     await selectSettingsSection(page, 'rigs');
-    await expect(page.getByRole('region', { name: 'Sync plugin' })).toBeVisible();
+    await expect(page.getByRole('region', { name: 'PSF Guard Sync' })).toBeVisible();
     await expect(page.getByRole('group', { name: 'Plugins on this rig' })).toBeVisible();
     await selectSettingsSection(page, 'database-import');
     const savedRules = page.getByText('Scan rules · Saved', { exact: true });

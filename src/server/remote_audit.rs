@@ -347,6 +347,22 @@ impl RemoteAuditLog {
         problems
     }
 
+    /// When a Director plugin last uploaded to `catalog_id`, whatever the
+    /// outcome: any authenticated upload is contact.
+    pub fn director_upload_at(&self, catalog_id: &str) -> Option<i64> {
+        let latest = self
+            .latest
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        latest
+            .by_catalog
+            .get(catalog_id)?
+            .values()
+            .filter(|action| action.action == AuditAction::DirectorImageUpload)
+            .map(|action| action.at_ms)
+            .max()
+    }
+
     /// The newest notable actions on `catalog_id`, newest first, at most
     /// `limit`, from the end of the log and its previous generation. Reads
     /// files, so call it off the async runtime.
@@ -498,8 +514,9 @@ fn kind_of(action: AuditAction, operation: Option<&str>) -> String {
         .and_then(|value| value.as_str().map(str::to_owned))
         .unwrap_or_default();
     match operation {
-        // An upload's operation is the frame kind; every upload is one kind.
-        Some(operation) if action != "image_upload" => format!("{action}:{operation}"),
+        // An upload's operation is the frame kind; each plugin's uploads
+        // are one kind.
+        Some(operation) if !action.ends_with("image_upload") => format!("{action}:{operation}"),
         _ => action,
     }
 }

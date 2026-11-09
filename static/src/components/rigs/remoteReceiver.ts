@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../../api/client';
 import type { DatabaseSummary, RemoteImageUploadPlacement, RemoteImageUploadSummary } from '../../api/types';
 
@@ -40,7 +40,9 @@ export function useRemoteReceiver(databaseId: string, options: { onChanged?: () 
   });
   const database: DatabaseSummary | undefined = loaded.data?.find(entry => entry.id === databaseId);
   const upload = database?.remote_image_upload;
+  const mutationKey = ['remoteReceiver', databaseId];
   const act = useMutation({
+    mutationKey,
     retry: false,
     mutationFn: (work: () => Promise<unknown>) => work(),
     onSettled: () => { void client.invalidateQueries({ queryKey: ['databases'] }); options.onChanged?.(); },
@@ -48,5 +50,9 @@ export function useRemoteReceiver(databaseId: string, options: { onChanged?: () 
   const save = (change: ReceiverChange, onSaved?: () => void) => act.mutate(() => apiClient.updateDatabase(databaseId, {
     remote_image_upload: { ...unchanged(upload), ...change },
   }), { onSuccess: () => onSaved?.() });
-  return { loaded, database, upload, act, save };
+  // The Sync and Image uploads cards each save the whole receiver. While
+  // either saves, both wait, and the next save starts from fresh settings,
+  // so one card never undoes the other.
+  const busy = useIsMutating({ mutationKey }) > 0 || loaded.isFetching;
+  return { loaded, database, upload, act, save, busy };
 }

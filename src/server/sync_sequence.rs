@@ -221,7 +221,13 @@ impl SyncLive {
             .remote_image_upload
             .as_ref()
             .is_some_and(|config| config.sync_enabled || config.enabled);
-        if !accepts && newest.is_none() && latest_action.is_none() && sequence.is_none() {
+        // A Director-only rig's refused upload still shows.
+        if !accepts
+            && newest.is_none()
+            && latest_action.is_none()
+            && sequence.is_none()
+            && problems.is_empty()
+        {
             return None;
         }
         Some(Self {

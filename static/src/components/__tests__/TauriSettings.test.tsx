@@ -652,10 +652,10 @@ describe('TauriSettings first run', () => {
       screen.queryByRole('heading', { name: /Configured Databases/ })
     ).not.toBeInTheDocument();
     // The Sync plugin's pairing moved to Rig setup; the Sync page points there.
-    expect(screen.queryByRole('region', { name: 'Sync plugin' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'PSF Guard Sync' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Open Rig setup' }));
     expect(await screen.findByRole('tab', { name: 'Rig setup', selected: true })).toBeInTheDocument();
-    expect(await screen.findByRole('region', { name: 'Sync plugin' })).toBeInTheDocument();
+    expect(await screen.findByRole('region', { name: 'PSF Guard Sync' })).toBeInTheDocument();
     expect(screen.getByRole('group', { name: 'Plugins on this rig' })).toBeInTheDocument();
   });
 

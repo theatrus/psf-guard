@@ -972,15 +972,15 @@ other than the paired profile.
 
 `uploads` and `images` carry the frames the plugin captures to the paired
 database, also without `catalog_id`. `GET uploads` answers `enabled`, the
-`reason` uploads are off when they are, and `max_bytes`, the largest request
-the server takes. `POST images` takes one multipart `image` part and an
+`reason` uploads are off when they are (including a paired database that is
+not registered), and `max_bytes`, the largest image file the server takes. `POST images` takes one multipart `image` part and an
 `X-Content-SHA256` header, exactly as the Sync upload does, and answers the
 same upload response. Both plugins share the database's **Image uploads**
 setting, receive folder, folder layout, header import, calibration matching
 and audit log; Director uploads are logged as `director_image_upload`. An
 older server denies both routes, which the plugin takes as no uploads. While
-another upload imports into the same database, an upload answers `503` with
-`Retry-After`, and the plugin tries again; `409` is kept for a refusal of the
+another upload imports into the same database, an upload waits up to 10 s for
+it, then answers `503` with `Retry-After`, and the plugin tries again; `409` is kept for a refusal of the
 file itself.
 
 A ledger already reported by one rig cannot accept any sequence from

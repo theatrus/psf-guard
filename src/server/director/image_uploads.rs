@@ -38,12 +38,14 @@ pub(super) async fn paired_client(
     Ok(client)
 }
 
-/// The registered database a paired client's catalog identity names.
-fn paired_database(
+/// The registered database a paired client's catalog identity names, or
+/// `None` when none is registered now. Reads each database's identity, so it
+/// runs off the async workers.
+async fn paired_database(
     state: &AppState,
     service: &Service,
     client: &Client,
-) -> Result<Arc<DatabaseContext>, AppError> {
+) -> Result<Option<Arc<DatabaseContext>>, AppError> {
     let catalogs: Vec<_> = state
         .databases
         .read()
@@ -51,15 +53,18 @@ fn paired_database(
         .values()
         .cloned()
         .collect();
-    identified_catalogs(&catalogs, service.instance_id)
-        .get(client.catalog_id)
-        .cloned()
-        .ok_or_else(|| {
-            AppError::NotFoundMessage(
-                "the database this rig is paired with is not registered".into(),
-            )
-        })
+    let (instance, catalog) = (service.instance_id, client.catalog_id);
+    blocking(move || {
+        identified_catalogs(&catalogs, instance)
+            .get(catalog)
+            .cloned()
+    })
+    .await
+    .map_err(|_| AppError::InternalError("the database list could not be read".into()))
 }
+
+const NOT_REGISTERED: &str =
+    "The database this rig is paired with is not registered on the server.";
 
 /// Whether the paired database takes image uploads now.
 #[derive(Debug, Serialize)]
@@ -69,15 +74,17 @@ pub(super) struct UploadState {
     /// Why uploads are off; absent when they are on.
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<&'static str>,
-    /// The largest request the server accepts, in bytes.
-    max_bytes: usize,
+    /// The largest image file the server accepts, in bytes.
+    max_bytes: u64,
 }
 
-fn upload_state(database: &DatabaseContext) -> UploadState {
-    let config = database.remote_image_upload.as_ref();
-    let reason = if !config.is_some_and(|config| config.enabled) {
+fn upload_state(database: Option<&DatabaseContext>) -> UploadState {
+    let config = database.and_then(|database| database.remote_image_upload.as_ref());
+    let reason = if database.is_none() {
+        Some(NOT_REGISTERED)
+    } else if !config.is_some_and(|config| config.enabled) {
         Some("Image uploads are off for this database. Turn them on under Rig setup › Plugins.")
-    } else if database.remote_image_upload_dir.is_none() {
+    } else if database.is_some_and(|database| database.remote_image_upload_dir.is_none()) {
         Some("The database's receive folder is not available on the server.")
     } else {
         None
@@ -85,7 +92,7 @@ fn upload_state(database: &DatabaseContext) -> UploadState {
     UploadState {
         enabled: reason.is_none(),
         reason,
-        max_bytes: crate::server::remote_upload::MAX_MULTIPART_BYTES,
+        max_bytes: crate::server::remote_upload::MAX_IMAGE_BYTES,
     }
 }
 
@@ -97,9 +104,11 @@ pub(super) async fn state(
 ) -> Result<Response, AppError> {
     let service = enabled(&state).map_err(|_| AppError::NotFound)?;
     let client = paired_client(&service, rig, &headers).await?;
-    let database = paired_database(&state, &service, &client)?;
+    // A database that is not registered yet answers "off", so the plugin
+    // keeps its frames and asks again rather than taking the route as gone.
+    let database = paired_database(&state, &service, &client).await?;
     Ok(super::pairing::no_store(Json(ApiResponse::success(
-        upload_state(&database),
+        upload_state(database.as_deref()),
     ))))
 }
 
@@ -115,7 +124,9 @@ pub(super) async fn upload(
 ) -> Result<Response, AppError> {
     let service = enabled(&state).map_err(|_| AppError::NotFound)?;
     let client = paired_client(&service, rig, &headers).await?;
-    let database = paired_database(&state, &service, &client)?;
+    let database = paired_database(&state, &service, &client)
+        .await?
+        .ok_or_else(|| AppError::Forbidden(NOT_REGISTERED.into()))?;
     let answer =
         crate::server::remote_upload::receive_director_image(state, database, headers, multipart)
             .await?;

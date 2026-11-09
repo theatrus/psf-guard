@@ -118,7 +118,7 @@ export default function RigPluginPanel({ slug, mode, onRigChanged }: {
       : `Remove ${entry.client_name}? The plugin must pair again to reach this rig.`;
     if (window.confirm(warning)) act.mutate(() => apiClient.removeDirectorClient(view.rig_id, entry.client_id));
   };
-  return <section className="rig-profile-form rig-plugin plugin-card" aria-label="Director plugin">
+  return <section className="rig-profile-form rig-plugin plugin-card" aria-label="PSF Guard Director">
     <div className="director-toolbar">
       <div className="early-beta-heading"><h4>PSF Guard Director</h4><EarlyBeta /></div>
     </div>

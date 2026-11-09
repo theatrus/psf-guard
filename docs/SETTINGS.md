@@ -58,8 +58,8 @@ control. The selected page includes the database name.
   Each database is one rig. Without planning, **Rig setup** shows only the
   Sync plugin.
   - **Plugins on this rig** shows each plugin **On** or **Off**, and what it
-    does: the Sync plugin's scheduler sync and image uploads, and whether the
-    Director plugin may take work.
+    does: the Sync plugin's scheduler sync, whether the Director plugin may
+    take work, and, in a row of its own, whether **Image uploads** are on.
   - Below it, each part has its own card: **PSF Guard Sync**, **Image
     uploads**, and, with planning, **PSF Guard Director**.
   - The **PSF Guard Sync** card follows the Director plugin's: **Pair**,

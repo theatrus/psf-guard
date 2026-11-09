@@ -35,11 +35,13 @@ function show(receiver: Record<string, unknown>, director?: { clients: number; w
 describe('Plugins on this rig', () => {
   it('shows each plugin on or off with what it does', async () => {
     const { onChangeMode } = show(
-      { token_configured: true, sync_enabled: true, enabled: true, clients: [{ client_uuid: 'a', name: 'PC', paired_at: 1 }] },
+      { token_configured: true, sync_enabled: true, enabled: true, image_directory: '/images/rig', clients: [{ client_uuid: 'a', name: 'PC', paired_at: 1 }] },
       { clients: 1, work: 'off' },
     );
     const sync = await screen.findByTestId('plugin-sync');
-    await waitFor(() => expect(sync).toHaveTextContent('PSF Guard SyncOnscheduler sync, image uploads'));
+    await waitFor(() => expect(sync).toHaveTextContent('PSF Guard SyncOnscheduler sync'));
+    // Uploads serve both plugins, in a row of their own.
+    expect(screen.getByTestId('plugin-uploads')).toHaveTextContent('Image uploadsOnto /images/rig');
     const director = screen.getByTestId('plugin-director');
     await waitFor(() => expect(director).toHaveTextContent('PSF Guard DirectorOffPaired, work off'));
     expect(sync.querySelector('.plugin-state')).toHaveAttribute('data-on', 'true');
@@ -51,7 +53,8 @@ describe('Plugins on this rig', () => {
 
   it('says a plugin that is paired but does nothing is off, and one never paired is not paired', async () => {
     show({ token_configured: true, clients: [{ client_uuid: 'a', name: 'PC', paired_at: 1 }] }, { clients: 0, work: 'not_allowed' });
-    await waitFor(() => expect(screen.getByTestId('plugin-sync')).toHaveTextContent('OffPaired, scheduler sync and image uploads off'));
+    await waitFor(() => expect(screen.getByTestId('plugin-sync')).toHaveTextContent('OffPaired, scheduler sync off'));
+    expect(screen.getByTestId('plugin-uploads')).toHaveTextContent('OffNeither plugin sends image files');
     await waitFor(() => expect(screen.getByTestId('plugin-director')).toHaveTextContent('OffNot paired'));
   });
 

@@ -61,7 +61,7 @@ describe('Image uploads panel', () => {
     expect(saves[0]).toMatchObject({ enabled: true, image_directory: '/images/remote', placement: 'target_tree', directory_template_source: 'catalog' });
     expect(saves[0].directory_template).toBeUndefined();
 
-    await waitFor(() => expect(screen.getByTestId('sync-upload-state')).toHaveTextContent('On. Paired plugins send image files to /images/remote.'));
+    await waitFor(() => expect(screen.getByTestId('sync-upload-state')).toHaveTextContent('On. Received image files go to /images/remote.'));
     // A rescan asked for, then a layout chosen: the choice cancels it.
     const rescan = screen.getByRole('button', { name: 'Rescan' });
     fireEvent.click(rescan);
@@ -86,7 +86,7 @@ describe('Image uploads panel', () => {
 
   it('turns image uploads off while no plugin is paired', async () => {
     const { saves } = show({ enabled: true, image_directory: '/images/remote' });
-    expect(await screen.findByTestId('sync-upload-state')).toHaveTextContent('On. Paired plugins send image files to /images/remote.');
+    expect(await screen.findByTestId('sync-upload-state')).toHaveTextContent('On. Received image files go to /images/remote.');
     fireEvent.click(screen.getByRole('button', { name: 'Turn off image uploads' }));
     await waitFor(() => expect(saves).toHaveLength(1));
     expect(saves[0]).toMatchObject({ enabled: false });

@@ -22,7 +22,7 @@ export default function SyncPluginPanel({ databaseId, onChanged }: {
   const [copy, setCopy] = useState<'idle' | 'copied' | 'failed'>('idle');
   // The plugin pairs from N.I.N.A., so the page looks while a code waits,
   // and again whenever you come back to it.
-  const { loaded, database, upload, act, save } = useRemoteReceiver(databaseId, { onChanged, pollMs: code ? 3_000 : false });
+  const { loaded, database, upload, act, save, busy } = useRemoteReceiver(databaseId, { onChanged, pollMs: code ? 3_000 : false });
   const clients = upload?.clients ?? [];
   // A plugin that pairs answers the code: it is spent.
   const pairedCount = useRef(clients.length);
@@ -63,7 +63,7 @@ export default function SyncPluginPanel({ databaseId, onChanged }: {
     ...(upload?.key_contact && !upload.key_contact.places_new_projects ? ['The client using the remote API key'] : []),
   ];
 
-  return <section className="rig-profile-form rig-plugin plugin-card" aria-label="Sync plugin">
+  return <section className="rig-profile-form rig-plugin plugin-card" aria-label="PSF Guard Sync">
     <div className="director-toolbar plugin-card-heading">
       <h4>PSF Guard Sync</h4>
       <span className="director-muted">Target Scheduler</span>
@@ -75,13 +75,13 @@ export default function SyncPluginPanel({ databaseId, onChanged }: {
       <ul className="rig-plugin-rows" aria-label="Paired Sync plugins">
         {clients.map(entry => <li key={entry.client_uuid}>
           <span>{entry.name} <small className="director-muted">Paired {new Date(entry.paired_at * 1000).toLocaleDateString()} · {contactText(entry.last_contact)}</small></span>
-          <button type="button" disabled={act.isPending} aria-label={`Remove ${entry.name}`} onClick={() => remove(entry.name, entry.client_uuid)}><Trash2 size={14} />Remove</button>
+          <button type="button" disabled={busy} aria-label={`Remove ${entry.name}`} onClick={() => remove(entry.name, entry.client_uuid)}><Trash2 size={14} />Remove</button>
         </li>)}
       </ul>
       {older.length > 0 && <p className="director-muted" role="note">{older.join(', ')} {older.length === 1 ? 'is' : 'are'} running an older Sync plugin. Update the plugin in N.I.N.A., or N.I.N.A. may not show new projects.</p>}
       {clients.length === 0 && !code && <p className="director-muted">Install PSF Guard Sync from the N.I.N.A. plugin repository <code>https://nina-plugins.psf-guard.com/</code>, restart N.I.N.A., then generate a code.</p>}
       <div className="director-actions">
-        <button type="button" disabled={act.isPending} onClick={generate}><KeyRound size={16} />Generate Sync pairing code</button>
+        <button type="button" disabled={busy} onClick={generate}><KeyRound size={16} />Generate Sync pairing code</button>
       </div>
       {code && <div className="rig-plugin-code">
         <label className="rig-profile-field"><span>Pairing code</span>
@@ -104,12 +104,12 @@ export default function SyncPluginPanel({ databaseId, onChanged }: {
       {!syncOn && !credential && <p className="director-muted">Pair the plugin first.</p>}
       {(syncOn || credential) && <div className="director-actions">
         {syncOn
-          ? <button type="button" disabled={act.isPending} onClick={() => save({ sync_enabled: false })}><Power size={16} />Turn off scheduler sync</button>
-          : <button type="button" disabled={act.isPending} onClick={() => save({ sync_enabled: true })}><Check size={16} />Turn on scheduler sync</button>}
+          ? <button type="button" disabled={busy} onClick={() => save({ sync_enabled: false })}><Power size={16} />Turn off scheduler sync</button>
+          : <button type="button" disabled={busy} onClick={() => save({ sync_enabled: true })}><Check size={16} />Turn on scheduler sync</button>}
       </div>}
     </fieldset>
 
-    <KeySettings upload={upload} busy={act.isPending} onSave={(token, onSaved) => save({ token }, onSaved)} />
+    <KeySettings upload={upload} busy={busy} onSave={(token, onSaved) => save({ token }, onSaved)} />
   </section>;
 }
 

@@ -29,6 +29,9 @@ use crate::server::extract::DbContext;
 use crate::server::handlers::AppError;
 
 pub const MAX_IMAGE_BYTES: u64 = 512 * 1024 * 1024;
+/// How long an upload waits for another import into the same database.
+const IMPORT_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
 pub const MAX_MULTIPART_BYTES: usize = MAX_IMAGE_BYTES as usize + 1024 * 1024;
 
 const DATABASE_ID_HEADER: &str = "x-psf-guard-database-id";
@@ -340,10 +343,14 @@ async fn receive_image(
         ));
     }
 
-    let _upload_guard = ctx.image_import_mutex.try_lock().map_err(|_| {
-        // Busy, not a refusal of this file: the client tries again.
-        AppError::Busy("another image import is already running for this database".into())
-    })?;
+    // One import per database at a time. The file is already here, so wait a
+    // while for the one under way rather than make the client send it again;
+    // only a long wait answers busy, which the client retries.
+    let _upload_guard = tokio::time::timeout(IMPORT_WAIT, ctx.image_import_mutex.lock())
+        .await
+        .map_err(|_| {
+            AppError::Busy("another image import is already running for this database".into())
+        })?;
     let database_path = ctx.database_path.clone();
     let database_id = ctx.id.clone();
     let directory_layout = UploadDirectoryLayout {
