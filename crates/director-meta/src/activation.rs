@@ -177,6 +177,13 @@ fn validate_activation(activation: &Activation) -> Result<(), Error> {
             || rig.profile_id.len() > 128
             || rig.targets.len() > 256
             || rig.plans.len() > 4096
+            // A SHA-256 in lowercase hex.
+            || rig.rows_digest.as_ref().is_some_and(|digest| {
+                digest.len() != 64
+                    || !digest
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            })
         {
             return Err(Error::InvalidInput);
         }

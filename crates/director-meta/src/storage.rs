@@ -3,7 +3,7 @@ use rusqlite::backup::{Backup, StepResult};
 use tempfile::NamedTempFile;
 
 const APPLICATION_ID: i32 = 0x50474d44;
-const SCHEMA_VERSION: i32 = 37;
+const SCHEMA_VERSION: i32 = 38;
 
 impl MetaStore {
     /// Publish a complete database at a new path. Never adopt an existing empty
@@ -190,6 +190,10 @@ impl MetaStore {
             if version < 37 {
                 super::weather::create_tables(&tx)?;
             }
+            // Schema 38 adds an optional fingerprint of each activated rig's
+            // planning rows to activation payloads. Existing payloads need no
+            // rewrite; the version keeps older builds, whose payloads deny
+            // unknown fields, from opening newer records.
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         tx.commit()?;

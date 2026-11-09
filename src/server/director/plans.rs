@@ -198,19 +198,22 @@ struct ActivationSummary {
 
 /// Why the rig databases lack a plan: it was never activated, its saved
 /// plan or framing is newer than the last activation, it shoots rigs that
-/// activation left out, or a rig's Target Scheduler rows changed since
-/// activation wrote them. Read from the records and one fingerprint query
-/// per database; the activation check, run in the workspace, also finds
-/// what a newer build would write differently.
+/// activation left out, a rig's Target Scheduler rows changed since
+/// activation wrote them, or a remote site has not received the last
+/// activation. Read from the records and one fingerprint query per
+/// database; the activation check, run in the workspace, also finds what a
+/// newer build would write differently.
 #[derive(Serialize)]
 struct ActivationDue {
     never: bool,
     /// `plan` and `framing`: the saved parts newer than the last activation.
     parts: Vec<&'static str>,
     /// Rigs the saved plan shoots that the last activation left out.
-    left_out: Vec<Uuid>,
+    left_out: Vec<NamedIdentity>,
     /// Rigs whose planning rows differ from what the last activation wrote.
-    differs: Vec<Uuid>,
+    differs: Vec<NamedIdentity>,
+    /// Sites, by name, that have not applied the last activation's push.
+    unsent: Vec<String>,
 }
 
 /// Each freshly read database's planning-row fingerprints, by catalog id.
@@ -241,6 +244,7 @@ fn activation_due(
     plan: Option<&PlanDraft>,
     activation: Option<&Activation>,
     digests: &RowDigests<'_>,
+    links: &[PlanLink],
 ) -> Option<ActivationDue> {
     let (framing, plan) = (framing?, plan?);
     let shooting: std::collections::BTreeSet<Uuid> = plan
@@ -261,6 +265,7 @@ fn activation_due(
             parts: Vec::new(),
             left_out: Vec::new(),
             differs: Vec::new(),
+            unsent: Vec::new(),
         });
     };
     let mut parts = Vec::new();
@@ -272,10 +277,27 @@ fn activation_due(
     }
     let activated: std::collections::BTreeSet<Uuid> =
         activation.rigs.iter().map(|rig| rig.rig_id).collect();
-    let left_out: Vec<Uuid> = shooting.difference(&activated).copied().collect();
+    // A rig's name from the plan's links, else from the store: a rig left
+    // out has no link to its database yet.
+    let named = |id: Uuid| {
+        links
+            .iter()
+            .find(|link| link.rig.id == id)
+            .map(|link| link.rig.clone())
+            .or_else(|| store.rig(id).ok().flatten())
+            .unwrap_or(NamedIdentity {
+                id,
+                name: String::new(),
+                revision: 0,
+            })
+    };
+    let left_out: Vec<NamedIdentity> = shooting
+        .difference(&activated)
+        .map(|id| named(*id))
+        .collect();
     // A record from before fingerprints were kept, or a database not read
     // this time, is not compared.
-    let differs: Vec<Uuid> = activation
+    let differs: Vec<NamedIdentity> = activation
         .rigs
         .iter()
         .filter(|rig| {
@@ -285,14 +307,24 @@ fn activation_due(
                     .is_some_and(|now| now.get(&rig.project_guid) != Some(written))
             })
         })
-        .map(|rig| rig.rig_id)
+        .map(|rig| named(rig.rig_id))
         .collect();
-    (!parts.is_empty() || !left_out.is_empty() || !differs.is_empty()).then_some(ActivationDue {
-        never: false,
-        parts,
-        left_out,
-        differs,
-    })
+    // The rows here can match while a remote site or a Target Scheduler
+    // file still lacks them, as the workspace's bar says.
+    let mut unsent: Vec<String> = Vec::new();
+    for push in activation.pushes.iter().filter(|push| !push.applied) {
+        if !unsent.contains(&push.peer_name) {
+            unsent.push(push.peer_name.clone());
+        }
+    }
+    (!parts.is_empty() || !left_out.is_empty() || !differs.is_empty() || !unsent.is_empty())
+        .then_some(ActivationDue {
+            never: false,
+            parts,
+            left_out,
+            differs,
+            unsent,
+        })
 }
 
 /// Every target's frame counts, grouped by project row.
@@ -520,8 +552,10 @@ fn read_contents(instance: Uuid, catalog: &DatabaseContext, notes: &mut Vec<Stri
     // One query for every project; a database it cannot read is only not
     // compared, so its plans are not called out of step.
     let digests = super::rows_digest::project_digests(&tx, None)
+        // Every listing reads it again, so a schema it cannot read is not
+        // worth a warning each time.
         .inspect_err(|error| {
-            tracing::warn!(%error, catalog = %catalog.name, "Plan list could not read planning rows")
+            tracing::debug!(%error, catalog = %catalog.name, "Plan list could not read planning rows")
         })
         .ok();
     Read::Done {
@@ -1440,6 +1474,7 @@ fn assemble(
                 plan.as_ref(),
                 activation.as_ref(),
                 &digests,
+                &links,
             ),
             _ => None,
         };

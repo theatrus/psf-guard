@@ -242,7 +242,7 @@ async fn the_plan_list_joins_framing_plan_and_activation_per_project() {
     // Made here and never activated: the rigs have none of it.
     assert_eq!(
         heart["activation_due"],
-        json!({"never": true, "parts": [], "left_out": [], "differs": []})
+        json!({"never": true, "parts": [], "left_out": [], "differs": [], "unsent": []})
     );
 
     let (_, preview) = call(
@@ -295,10 +295,14 @@ async fn the_plan_list_joins_framing_plan_and_activation_per_project() {
     a.db.execute("UPDATE exposureplan SET desired = desired + 7", [])
         .unwrap();
     let (_, drifted) = call(&a.f.app, "GET", "/plans", Value::Null, None).await;
-    assert_eq!(
-        heart_due(&drifted),
-        json!({"never": false, "parts": [], "left_out": [], "differs": [a.rig]})
-    );
+    let drift = heart_due(&drifted);
+    assert_eq!(drift["never"], false);
+    assert_eq!(drift["parts"], json!([]));
+    assert_eq!(drift["left_out"], json!([]));
+    assert_eq!(drift["unsent"], json!([]));
+    // Named, so the Library need not find the rig among the plan's links.
+    assert_eq!(drift["differs"][0]["id"], a.rig.to_string());
+    assert_eq!(drift["differs"][0]["name"], "RedCat rig");
 
     // A plan saved since the activation is due again.
     {
@@ -315,9 +319,10 @@ async fn the_plan_list_joins_framing_plan_and_activation_per_project() {
         .iter()
         .find(|r| r["project"]["name"] == "Heart Nebula")
         .unwrap();
+    assert_eq!(heart["activation_due"]["parts"], json!(["plan"]));
     assert_eq!(
-        heart["activation_due"],
-        json!({"never": false, "parts": ["plan"], "left_out": [], "differs": [a.rig]})
+        heart["activation_due"]["differs"][0]["id"],
+        a.rig.to_string()
     );
     let _ = a.objective;
 }
