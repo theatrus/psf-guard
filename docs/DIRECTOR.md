@@ -1146,7 +1146,7 @@ is removed, and the rig's records stay.
 the rig runs on another PSF Guard. The database registered here is then a
 copy pulled from that peer, and activation pushes the plan back to it; see
 [Activation](#activation). Leave it at **This server only** for a rig whose
-N.I.N.A. writes into this server's database.
+N.I.N.A. syncs with this server through the Sync plugin.
 
 Optics hold the unbinned sensor size in pixels, pixel pitch in micrometres,
 effective focal length and clear aperture in millimetres, and how the camera

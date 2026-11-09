@@ -7,6 +7,7 @@ pub mod auth_registry;
 pub mod backup;
 pub mod calibration;
 pub mod catalog_identity;
+pub mod catalog_journal;
 pub mod cli;
 pub mod commands;
 pub mod concurrency;

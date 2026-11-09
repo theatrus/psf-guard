@@ -297,7 +297,8 @@ fn store_error(error: rusqlite::Error) -> Error {
     StoreError::Sqlite(error).into()
 }
 
-/// A failure in Target Scheduler's file, which N.I.N.A. may hold open.
+/// A failure in the rig's Target Scheduler file, which a Sync apply or
+/// another of the server's writers may hold.
 fn source_error(error: rusqlite::Error) -> Error {
     if let rusqlite::Error::SqliteFailure(code, _) = &error
         && matches!(

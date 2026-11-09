@@ -31,8 +31,10 @@ fn db_read_only_flags() -> OpenFlags {
     OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX
 }
 
-/// How long a connection waits on SQLITE_BUSY before giving up. The scheduler
-/// DB is rollback-journal SQLite, so a write (grade update) needs the
+/// How long a connection waits on SQLITE_BUSY before giving up. A catalog on
+/// a local disk uses the write-ahead log, where only writers wait for each
+/// other. One on a network share keeps the rollback journal
+/// ([`crate::catalog_journal`]): there a write (grade update) needs the
 /// exclusive lock at commit and conflicts with any in-flight read on ANOTHER
 /// connection. We create that contention OURSELVES: the background file-check
 /// refresh runs on its own dedicated connection (so its slow queries never
@@ -41,8 +43,8 @@ fn db_read_only_flags() -> OpenFlags {
 /// DB. Without a busy handler, a grade written during a refresh surfaces
 /// instantly as "database is locked" → HTTP 500; with one, the writer waits
 /// out the current refresh statement and wins the gap between statements.
-/// Sized to cover the worst observed single-query duration. (External writers
-/// like N.I.N.A. on a network share get the same courtesy.)
+/// Sized to cover the worst observed single-query duration. Only PSF Guard
+/// opens its catalogs; N.I.N.A. reaches them through the Sync plugin.
 ///
 /// The wait only helps a transaction that asks for the write lock before it
 /// reads. One that reads and then writes cannot wait: while another
@@ -154,8 +156,9 @@ fn upgrade_psf_guard_tables(conn: &Connection, path: &str) {
 }
 
 /// How long the index build waits for the catalog's write lock before giving
-/// up for now. Deliberately short: N.I.N.A. may be saving frames into this
-/// file, and a query that scans is far better than a capture that blocks.
+/// up for now. Deliberately short: a Sync apply or an upload may be saving
+/// frames into this file, and a query that scans is far better than a
+/// capture that waits.
 pub(crate) const INDEX_BUILD_BUSY_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Identity of the on-disk database file: the `(device, inode)` pair on unix.
@@ -795,6 +798,9 @@ impl DatabaseContext {
         }
 
         let conn = open_scheduler_connection(&db_path)?;
+        // Write-ahead logging on a local disk, the rollback journal on a
+        // network share; only PSF Guard opens its catalogs.
+        crate::catalog_journal::choose(&conn, Path::new(&db_path));
         let fingerprint = fingerprint_path(&db_path);
         // Master builds find a catalog's measured flat responses by its path.
         crate::calibration::flat_groups::register_response_dir(

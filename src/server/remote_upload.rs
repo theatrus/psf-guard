@@ -426,8 +426,8 @@ fn publish_and_import(
         )?
     };
 
-    // N.I.N.A. may commit the scheduler row after the initial lookup but
-    // before these bytes finish publishing. Recheck at that boundary so the
+    // The Sync plugin's push may commit the scheduler row after the initial
+    // lookup but before these bytes finish publishing. Recheck at that boundary so the
     // ordinary import does not race a row that has just appeared.
     let resolution_after_publish = if calibration_kind.is_none() && existing_resolution.is_none() {
         match find_resolution(&connection, registered_roots, &filename, &sha256, &frame) {

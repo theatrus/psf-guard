@@ -55,7 +55,7 @@ records, flat measurements, the reject archive's records and the rest.
 
 SQLite files are copied with SQLite's online backup, never by copying the
 file. The source opens read-only. The copy runs 1 MiB at a time with a short
-pause between steps, so N.I.N.A. and the server keep writing while it runs.
+pause between steps, so the server keeps writing while it runs.
 A write makes SQLite start that file again, and after a few restarts the
 steps grow so a busy catalog still finishes. A catalog in WAL mode never
 blocks a writer, so its last step may take the rest of the file at once. A
@@ -64,6 +64,13 @@ steps stay at 16 MiB or less, and one that keeps changing through 40
 restarts is left out of that backup rather than locked. A catalog that cannot be
 reached is listed in the manifest and left out; the rest of the backup goes
 on.
+
+A catalog on a local disk uses SQLite's write-ahead log. While PSF Guard
+runs, two more files sit beside it, ending in `-wal` and `-shm`. Keep them
+with the catalog: the newest changes can be in the `-wal` file until SQLite
+folds them in. To copy a catalog while PSF Guard runs, make a backup rather
+than copying the file. A catalog on a network share keeps SQLite's rollback
+journal, because the write-ahead log needs a local disk.
 
 ### What a backup leaves out
 
