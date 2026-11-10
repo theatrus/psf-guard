@@ -76,7 +76,7 @@ impl ContactKind {
         }
     }
 
-    fn parse(value: &str) -> Option<Self> {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
         match value {
             "program_pull" => Some(Self::ProgramPull),
             "check_in" => Some(Self::CheckIn),
@@ -352,6 +352,9 @@ impl MetaStore {
             ],
         )?;
         tx.commit()?;
+        if let Some(liveness) = &self.liveness {
+            liveness.status_written(status);
+        }
         Ok(true)
     }
 
@@ -393,6 +396,9 @@ impl MetaStore {
             params![rig.to_string(), kind.as_str(), at_ms as i64, detail],
         )?;
         tx.commit()?;
+        if let Some(liveness) = &self.liveness {
+            liveness.contact_written(rig, kind, at_ms, detail);
+        }
         Ok(())
     }
 

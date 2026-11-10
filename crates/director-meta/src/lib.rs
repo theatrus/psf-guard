@@ -18,6 +18,7 @@ pub mod draft_import;
 pub mod equipment_report;
 pub mod framing;
 pub mod inbox;
+pub mod liveness;
 pub mod merge;
 pub mod night_availability;
 pub mod night_override;
@@ -180,6 +181,9 @@ pub struct MetaStore {
     /// Rows [`MetaStore::record_status`] and [`MetaStore::record_contact`]
     /// wrote on this connection.
     liveness_rows: u64,
+    /// The memory [`MetaStore::keep_liveness`] made, kept current as this
+    /// connection writes statuses, contacts and weather.
+    liveness: Option<std::sync::Arc<liveness::Liveness>>,
 }
 
 impl MetaStore {

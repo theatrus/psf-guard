@@ -239,7 +239,7 @@ impl MetaStore {
     ) -> Result<bool, Error> {
         valid_id(rig)?;
         sample.validate(now)?;
-        self.writing_liveness(|store| {
+        let written = self.writing_liveness(|store| {
             if store.rig(rig)?.is_none() { return Err(Error::NotFound); }
             if let Some(previous) = store.weather_observation_for(rig, Some(sample.profile_id))? {
                 if previous.sample.sample_id == sample.sample_id {
@@ -261,7 +261,12 @@ impl MetaStore {
                 params![rig.to_string(), now.saturating_sub(RETENTION_MS) as i64])?;
             tx.commit()?;
             Ok(true)
-        })
+        });
+        // After the commit, so weather judged at the new count includes it.
+        if let Some(liveness) = &self.liveness {
+            liveness.weather_reported();
+        }
+        written
     }
 
     pub fn weather_history(

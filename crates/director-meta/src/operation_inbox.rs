@@ -22,7 +22,7 @@ pub(crate) fn create_tables(conn: &Connection) -> Result<(), Error> {
     Ok(())
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OperationReceipt {
     pub event: Event,
     pub received_at_ms: u64,

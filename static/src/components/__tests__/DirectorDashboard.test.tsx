@@ -6,7 +6,7 @@ import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { server } from '../../test/msw-server';
 import DirectorDashboard from '../director/DirectorDashboard';
-import { describeNow, formatAge, isExposing } from '../director/dashboardModel';
+import { describeNow, formatAge, statusIsStale } from '../director/dashboardModel';
 import type { DirectorRigStatusView } from '../../api/directorTypes';
 
 const ok = (data: unknown) => ({ success: true, data, error: null });
@@ -225,8 +225,8 @@ describe('Director live dashboard', () => {
   it('expires an explicit lease even when the cached server response was fresh', () => {
     const row = { ...online, status: { ...online.status!, payload: { phase: 'exposing', fresh_for_ms: 45000,
       operation: 'Exposure', operation_elapsed_ms: 10000 } } };
-    expect(isExposing(row, NOW)).toBe(true);
-    expect(isExposing(row, NOW + 6000)).toBe(false);
+    expect(statusIsStale(row, NOW)).toBe(false);
+    expect(statusIsStale(row, NOW + 6000)).toBe(true);
     expect(describeNow(row, NOW + 6000)).toContain('Exposure for 10 s (stale');
   });
 });

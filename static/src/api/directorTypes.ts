@@ -779,6 +779,20 @@ export interface DirectorRigStatusView {
   sync?: SyncLive | null;
 }
 
+/** The fields that say what a rig is doing now. */
+export type DirectorRigNowFields = Pick<DirectorRigStatusView, 'rig' | 'catalog_slug' | 'catalog_name' | 'status' | 'status_age_ms' | 'status_stale' | 'connectivity' | 'sync'>;
+
+/** What each rig is doing now, from `/rigs/summary`: the server keeps it in
+ *  memory and decides which plugin's report speaks and whether the rig is
+ *  exposing. The header's Rigs tab, the Sky and Night details read this;
+ *  Live reads the full `/rigs/status`. */
+export interface DirectorRigSummary extends DirectorRigNowFields {
+  /** The plugin whose report says what the rig is doing now. */
+  report: 'director' | 'sync' | null;
+  /** A fresh report from either plugin says the rig is exposing. */
+  exposing: boolean;
+}
+
 /** What a Sync client last did, from the server's Sync audit log. */
 export interface SyncLatestAction {
   at_ms: number;

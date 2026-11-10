@@ -73,12 +73,18 @@ export function describeActivity(activity: SyncSequenceActivity, skewMs = 0): st
   }
 }
 
+/** The Sync plugin's sequence report is past its freshness window. */
+export function sequenceIsStale(sync: SyncLive, nowMs: number): boolean {
+  const sequence = sync.sequence;
+  return !sequence || sync.sequence_stale || nowMs - sequence.received_at_ms > sequence.fresh_for_ms;
+}
+
 /** What N.I.N.A.'s sequence is doing, as the Sync plugin last reported it,
  *  or null without a report. A stale report says when it arrived. */
 export function describeSequence(sync: SyncLive | null | undefined, nowMs: number): string | null {
   const sequence = sync?.sequence;
   if (!sequence) return null;
-  const stale = sync.sequence_stale || nowMs - sequence.received_at_ms > sequence.fresh_for_ms;
+  const stale = sequenceIsStale(sync, nowMs);
   let line: string;
   if (!sequence.running) line = 'Sequence stopped';
   else if (sequence.activity) {

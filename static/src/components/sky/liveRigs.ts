@@ -1,17 +1,17 @@
-import type { DirectorPlanRow, DirectorRigStatusView } from '../../api/directorTypes';
-import { describeNow, isExposing, statusIsStale } from '../director/dashboardModel';
+import type { DirectorPlanRow, DirectorRigSummary } from '../../api/directorTypes';
+import { describeRigNow, rigIsExposing, rigReportIsStale, rigTargetName } from '../director/rigNow';
 
 /** A rig as the Sky draws it: where it points now, if that can be told. */
 export interface PlacedRig {
   id: string;
   name: string;
-  /** Plugin report says it is exposing, and the report is fresh. */
+  /** A fresh report from either plugin says it is exposing. */
   exposing: boolean;
   /** Drawn faded: the rig stopped talking (`quiet`), or it talks but its
    *  last status report is over ten minutes old (`old report`). */
   stale: boolean;
   staleReason: 'quiet' | 'old report' | null;
-  connectivity: DirectorRigStatusView['connectivity']['state'];
+  connectivity: DirectorRigSummary['connectivity']['state'];
   /** What the rig says it is doing, as the Live table words it. */
   now: string;
   /** ICRS degrees, or null when neither a pointing nor a known target is reported. */
@@ -25,7 +25,6 @@ export interface PlacedRig {
   unplaced: string | null;
 }
 
-const text = (value: unknown): string | null => typeof value === 'string' && value.trim() ? value.trim() : null;
 const finite = (value: unknown): number | null => typeof value === 'number' && Number.isFinite(value) ? value : null;
 
 /** The mount's pointing from the plugin's `pointing` field, ICRS degrees. */
@@ -38,29 +37,32 @@ function pointingOf(payload: Record<string, unknown>): { ra: number; dec: number
   return { ra: ((ra % 360) + 360) % 360, dec };
 }
 
-/** Place every reporting rig. The plugin's `pointing` wins; otherwise the
- *  target it names (`target_name`, or `target`) is looked up among the
+/** Place every reporting rig. The Director plugin's `pointing` wins;
+ *  otherwise the target the rig reports (the Director plugin's `target_name`
+ *  or `target`, or the Sync plugin's current instruction) is looked up among the
  *  targets of that rig's own plan links, and its centre is used. A rig with
  *  neither is listed but not drawn. */
-export function placeRigs(views: DirectorRigStatusView[], plans: DirectorPlanRow[], nowMs: number): PlacedRig[] {
+export function placeRigs(views: DirectorRigSummary[], plans: DirectorPlanRow[], nowMs: number): PlacedRig[] {
   return views.map(view => {
     const payload = view.status?.payload ?? {};
-    const targetName = text(payload.target_name) ?? text(payload.target);
+    const targetName = rigTargetName(view);
     const quiet = view.connectivity.state === 'stale' || view.connectivity.state === 'offline';
-    const staleReason = quiet ? 'quiet' as const : statusIsStale(view, nowMs) ? 'old report' as const : null;
+    const staleReason = quiet ? 'quiet' as const : rigReportIsStale(view, nowMs) ? 'old report' as const : null;
     const base = {
       id: view.rig.id,
       name: view.catalog_name ?? view.rig.name,
-      exposing: isExposing(view, nowMs),
+      exposing: rigIsExposing(view, nowMs),
       stale: staleReason !== null,
       staleReason,
       connectivity: view.connectivity.state,
-      now: describeNow(view, nowMs),
+      now: describeRigNow(view, nowMs),
       targetName,
     };
-    const pointing = pointingOf(payload);
+    // The Director report's pointing only while that report speaks: an
+    // old one would draw a Sync-only rig where it no longer is.
+    const pointing = view.report === 'director' ? pointingOf(payload) : null;
     if (pointing) return { ...base, ra: pointing.ra, dec: pointing.dec, source: 'pointing' as const, unplaced: null };
-    if (!targetName) return { ...base, ra: null, dec: null, source: null, unplaced: view.status ? 'Reports no pointing and no target' : 'No report yet' };
+    if (!targetName) return { ...base, ra: null, dec: null, source: null, unplaced: view.status || view.sync?.sequence ? 'Reports no pointing and no target' : 'No report yet' };
     // The first of the rig's own plan targets with that name and a centre.
     const wanted = targetName.toLowerCase();
     for (const row of plans) for (const link of row.links) {

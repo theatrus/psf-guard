@@ -207,6 +207,7 @@ impl MetaStore {
             connection: conn,
             instance_id,
             liveness_rows: 0,
+            liveness: None,
         })
     }
 
@@ -228,6 +229,7 @@ impl MetaStore {
             connection: conn,
             instance_id,
             liveness_rows: 0,
+            liveness: None,
         })
     }
 
