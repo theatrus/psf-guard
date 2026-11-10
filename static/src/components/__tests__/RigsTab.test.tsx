@@ -44,6 +44,14 @@ describe('Live chip', () => {
     const leased = view('C925', 'online', 'exposing');
     leased.status!.payload.fresh_for_ms = 15000;
     expect(liveSummary([leased], now).label).toBe('1 rig · 1 online');
+    // A rig with only the Sync plugin exposes through N.I.N.A.'s sequence report.
+    const syncOnly = view('Ultracat', 'online', null);
+    syncOnly.sync = { last_contact_ms: now - 5000, plugin_version: '1.4.0', latest_action: null, sequence_stale: false,
+      sequence: { session_id: 's', reported_at_ms: now - 5000, received_at_ms: now - 5000, fresh_for_ms: 120_000, running: true,
+        activity: { kind: 'exposing', target_name: 'Propeller Nebula', exposure_seconds: 300 }, recent: {} } };
+    const summary = liveSummary([view('C925', 'online', 'idle'), syncOnly], now);
+    expect(summary.label).toBe('2 rigs · 1 exposing');
+    expect(summary.title).toContain('Ultracat: Exposing Propeller Nebula: 300 s');
   });
 
   it('carries the fleet on the Rigs tab, red when a rig went quiet', async () => {

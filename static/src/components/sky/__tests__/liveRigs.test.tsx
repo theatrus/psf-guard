@@ -49,6 +49,16 @@ describe('placing rigs on the sky', () => {
     expect(waiting.exposing).toBe(false);
   });
 
+  it("places a Sync-only rig at the target N.I.N.A.'s sequence is exposing", () => {
+    const syncOnly = view('C925', 'c925', 'online', null);
+    syncOnly.sync = { last_contact_ms: now - 5000, plugin_version: '1.4.0', latest_action: null, sequence_stale: false,
+      sequence: { session_id: 's', reported_at_ms: now - 5000, received_at_ms: now - 5000, fresh_for_ms: 120_000, running: true,
+        activity: { kind: 'exposing', target_name: 'M31 panel 1', exposure_seconds: 300 }, recent: {} } };
+    const [placed] = placeRigs([syncOnly], plans, now);
+    expect(placed).toMatchObject({ source: 'target', ra: 10.68, dec: 41.27, exposing: true, stale: false, targetName: 'M31 panel 1' });
+    expect(placed.now).toMatch(/^Exposing M31 panel 1: 300 s/);
+  });
+
   it('draws placed rigs on the map with their state, and skips the unplaced', () => {
     const rigs = placeRigs([
       view('C925', 'c925', 'online', { phase: 'exposing', target_name: 'M31 panel 1' }),

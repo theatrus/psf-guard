@@ -2143,6 +2143,14 @@ with neither is listed beside the map but not drawn. The phases `exposing`,
 `imaging` and `capturing` count as exposing. The rest of the payload is
 stored and shown nowhere yet.
 
+A rig with only the PSF Guard Sync plugin has no Director report. Its
+sequence report stands in: an `exposing` instruction counts as exposing
+while the report is fresh, and the Sky places the rig at that
+instruction's target. When both plugins report, a fresh exposing report
+from either one is enough for the **Rigs** count. The **Rigs** tooltip,
+the Sky and Night details show the Director plugin's report while it is
+fresh and the Sync plugin's otherwise; **Live** shows both.
+
 ## Visibility
 
 Under the framing stage, **Visibility** times the target from each rig that

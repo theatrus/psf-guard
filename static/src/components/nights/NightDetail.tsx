@@ -6,7 +6,7 @@ import type { NightAvailabilityState, NightInterval, NightMarkEdit, NightMarkSco
 import { formatHours } from '../director/visibilityFormat';
 import { httpStatus } from '../../utils/httpStatus';
 import { retryWhenBusy } from '../director/retry';
-import { describeNow } from '../director/dashboardModel';
+import { describeRigNow } from '../director/rigNow';
 import { useDirectorClock } from '../../hooks/useDirectorClock';
 import NightTimeline from './NightTimeline';
 import OverrideEditor from './OverrideEditor';
@@ -280,7 +280,7 @@ function NightSchedule({ rig, night, colours, view, edit, moveProblem, saved, on
       {onEdit && <button type="button" className="is-primary" onClick={onEdit}>Edit night</button>}
     </div>
     {tonight && <p className="nights-live" role="status">
-      <strong>Now:</strong> {live ? describeNow(live, now) : 'No report yet'}
+      <strong>Now:</strong> {live ? describeRigNow(live, now) : 'No report yet'}
     </p>}
     {query.isPending && <p role="status">Planning {formatNightDate(night.date)}...</p>}
     {query.isError && <p className="director-error" role="alert">{query.error instanceof Error ? query.error.message : 'The schedule could not be computed'}</p>}

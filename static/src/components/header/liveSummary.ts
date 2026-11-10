@@ -1,5 +1,5 @@
 import type { DirectorRigStatusView } from '../../api/directorTypes';
-import { describeNow, isExposing } from '../director/dashboardModel';
+import { describeRigNow, rigIsExposing } from '../director/rigNow';
 
 export interface LiveSummary {
   /** "2 rigs · 1 exposing", or "2 rigs · 1 online" when none is exposing. */
@@ -11,14 +11,14 @@ export interface LiveSummary {
 }
 
 /** Count the fleet the way the header chip states it. A rig is exposing when
- *  its last report says so and that report is not stale. */
+ *  a fresh report from either plugin says so. */
 export function liveSummary(rows: DirectorRigStatusView[], nowMs: number): LiveSummary {
   const rigs = rows.length;
-  const exposing = rows.filter(view => isExposing(view, nowMs)).length;
+  const exposing = rows.filter(view => rigIsExposing(view, nowMs)).length;
   const online = rows.filter(view => view.connectivity.state === 'online').length;
   const quiet = rows.filter(view => view.connectivity.state === 'stale' || view.connectivity.state === 'offline').length;
   const plural = rigs === 1 ? 'rig' : 'rigs';
   const label = exposing > 0 ? `${rigs} ${plural} · ${exposing} exposing` : `${rigs} ${plural} · ${online} online`;
-  const title = rows.map(view => `${view.catalog_name ?? view.rig.name}: ${describeNow(view, nowMs)}`).join('\n');
+  const title = rows.map(view => `${view.catalog_name ?? view.rig.name}: ${describeRigNow(view, nowMs)}`).join('\n');
   return { label, alert: quiet > 0, title };
 }
