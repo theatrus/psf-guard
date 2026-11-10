@@ -1424,6 +1424,13 @@ pub(super) fn planning_copy(path: &str) -> Result<Connection, String> {
 pub(super) fn planning_copy_from(read: &Connection) -> Result<Connection, String> {
     let read_failed = |error: rusqlite::Error| format!("Its database could not be read: {error}.");
     let copy = Connection::open_in_memory().map_err(read_failed)?;
+    // The bundled SQLite enforces foreign keys by default; N.I.N.A. does not,
+    // so a rig database can hold rows whose parent is gone, such as rule
+    // weights left behind by a deleted project. The copy takes the rows as
+    // they are, then enforces keys again so a run on it checks what it
+    // writes as Apply on the file would.
+    copy.execute_batch("PRAGMA foreign_keys=OFF")
+        .map_err(read_failed)?;
     for table in PLANNING_TABLES {
         let schema: Vec<(String, String)> = read
             .prepare(
@@ -1464,6 +1471,8 @@ pub(super) fn planning_copy_from(read: &Connection) -> Result<Connection, String
                 .map_err(read_failed)?;
         }
     }
+    copy.execute_batch("PRAGMA foreign_keys=ON")
+        .map_err(read_failed)?;
     Ok(copy)
 }
 
@@ -3906,6 +3915,41 @@ fn format_dec(dec: f64) -> String {
     let d = abs.floor();
     let m = ((abs - d) * 60.0).floor();
     format!("{sign}{d:02.0}° {m:02.0}′")
+}
+
+#[cfg(test)]
+mod copy_tests {
+    use super::*;
+
+    /// A rig database can hold rule weights whose project is gone, as
+    /// Askar107PHQ's do: the copy takes them, and still checks new writes.
+    #[test]
+    fn the_planning_copy_takes_rows_whose_parent_is_gone() {
+        let source = Connection::open_in_memory().unwrap();
+        source
+            .execute_batch(
+                "PRAGMA foreign_keys=OFF;
+                 CREATE TABLE `project` (`Id` INTEGER NOT NULL, `name` TEXT, PRIMARY KEY(`Id`));
+                 CREATE TABLE `ruleweight` (`Id` INTEGER NOT NULL, `name` TEXT NOT NULL, `weight` REAL NOT NULL,
+                     `projectid` INTEGER, FOREIGN KEY(`projectId`) REFERENCES `project`(`Id`), PRIMARY KEY(`Id`));
+                 INSERT INTO project VALUES (1, 'Kept');
+                 INSERT INTO ruleweight VALUES (1, 'Project Priority', 50, 1), (209, 'Project Priority', 50, 27);",
+            )
+            .unwrap();
+        let copy = planning_copy_from(&source).unwrap();
+        let rows: i64 = copy
+            .query_row("SELECT count(*) FROM ruleweight", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(rows, 2);
+        // A run on the copy still meets the keys Apply meets on the file.
+        let error = copy
+            .execute(
+                "INSERT INTO ruleweight VALUES (300, 'Project Priority', 50, 99)",
+                [],
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("FOREIGN KEY"), "{error}");
+    }
 }
 
 #[cfg(test)]
