@@ -8,7 +8,7 @@ import { usePlans } from '../header/useCurrentPlan';
 import type { LibraryShow } from '../libraryShow';
 import { identityId } from './identityId';
 import { matchesSearch } from './planFilters';
-import { shownWaitingPlans, waitingPlans } from './waitingPlans';
+import { linksInScope, shownWaitingPlans, waitingPlans } from './waitingPlans';
 import PlanRow from './PlanRow';
 import PlanDeleteDialog from './PlanDeleteDialog';
 import { coordinatorResult } from './collaborationLeaveText';
@@ -19,9 +19,10 @@ import './DirectorPage.css';
 
 const message = (error: unknown) => error instanceof Error ? error.message : 'Director request failed';
 
-/** The rigs where a plan's project is Closed, which Reopen sets Inactive. */
-const closedLinks = (row: DirectorPlanRow): DirectorPlanLink[] =>
-  row.links.filter(link => link.source_row_id !== null && link.source_state === CLOSED_PROJECT_STATE);
+/** The rigs where a plan's project is Closed, which Reopen sets Inactive:
+ *  with the Database filter on, only that database's. */
+const closedLinks = (row: DirectorPlanRow, dbFilter: string | null): DirectorPlanLink[] =>
+  linksInScope(row, dbFilter).filter(link => link.source_row_id !== null && link.source_state === CLOSED_PROJECT_STATE);
 
 interface Edit { record: DirectorIdentity; creating: boolean }
 
@@ -69,7 +70,7 @@ export default function LibraryPlans({ search, show, listed, dbFilter = null, in
   const reopen = useMutation({
     retry: false,
     mutationFn: async (row: DirectorPlanRow) => {
-      const closed = closedLinks(row);
+      const closed = closedLinks(row, dbFilter);
       const results = await Promise.allSettled(closed.map(link =>
         apiClient.updateProject(link.catalog_slug, link.source_row_id!, { state: INACTIVE_PROJECT_STATE })));
       return closed.map((link, index) => ({ link, result: results[index] }));
@@ -115,7 +116,7 @@ export default function LibraryPlans({ search, show, listed, dbFilter = null, in
       {(validation || save.isError) && <p className="director-error" role="alert">{validation || message(save.error)}</p>}
     </form>
   );
-  const waiting = waitingPlans(plans.rows, listed, incomplete);
+  const waiting = waitingPlans(plans.rows, listed, incomplete, dbFilter);
   const shown = shownWaitingPlans(waiting, show, search, dbFilter);
   // The Database filter leaves out plans on no rig, which have nowhere else to appear.
   const onNoRig = dbFilter ? waiting.filter(row => row.links.length === 0 && matchesSearch(row, search)).length : 0;
@@ -123,7 +124,7 @@ export default function LibraryPlans({ search, show, listed, dbFilter = null, in
   if (!canWrite && shown.length === 0 && !plans.error && !plans.query.data?.warnings.length) return null;
   const item = (row: DirectorPlanRow) => <li key={row.project.id} className="director-plan">
     <PlanRow row={row} href={plans.hrefFor(row)} canWrite={canWrite} editing={!!edit} onRename={() => begin({ creating: false, record: row.project })}
-      reopenOn={closedLinks(row).map(link => link.catalog_name)} reopenDisabled={reopen.isPending}
+      reopenOn={closedLinks(row, dbFilter).map(link => link.catalog_name)} reopenDisabled={reopen.isPending}
       onReopen={() => { setNotice(''); reopen.mutate(row); }} reopening={reopen.isPending && reopen.variables?.project.id === row.project.id}
       onDelete={deleteAllowed ? () => { setNotice(''); setDeleting(row); } : undefined} />
     {edit?.record.id === row.project.id && !edit.creating && form}

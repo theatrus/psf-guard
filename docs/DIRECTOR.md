@@ -506,6 +506,8 @@ framed before any rig takes them, and plans activated on rigs that have not
 captured a frame. Each shows its rigs and their project states, or that no
 database takes it yet; **New plan** starts one and the pencil renames one.
 A plan leaves that list for the projects above once its first frame arrives.
+With the Database filter on, a plan stays in that list until the filtered
+database has a frame for it, even when another rig's row has frames.
 A plan closed on every rig stays out of it until Show asks for Closed, and
 when a database's projects cannot be read, plans linked to databases are
 left out rather than shown as empty.
@@ -540,6 +542,11 @@ Live** shows them both under the table, read only. Choosing a
 project in the Review picker from the Library, Sky or a workspace opens
 Images for it, and the workspace's own URL parameter (`plan`) stays behind, so a
 plan you had open does not follow you into review.
+
+The picker lists projects that have frames. Below them, **Plans waiting
+for frames** lists plans on no rig and plans activated on a rig that has
+no frames yet. Each entry shows the rigs without frames; choosing it opens
+the plan's workspace.
 
 Choose a project to enable **Planning**, including a project imported from
 image folders. If its catalog cannot be planned, Planning opens the catalog

@@ -17,14 +17,14 @@ const enabled = { protocol_version: 1, enabled: true, instance_id: record.id, da
 const row = (project = record, extra: Partial<DirectorPlanRow> = {}): DirectorPlanRow => ({ project, links: [], progress: null, framing: null, plan: null, activation: null, ...extra });
 const list = (rows: DirectorPlanRow[], warnings: string[] = []) => ({ rows, warnings });
 
-function mount(canWrite = true, props: { search?: string; show?: LibraryShow; listed?: Set<string> } = {}, status: unknown = enabled) {
+function mount(canWrite = true, props: { search?: string; show?: LibraryShow; listed?: Set<string>; dbFilter?: string } = {}, status: unknown = enabled) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   function Wrapper({ children }: { children: ReactNode }) {
     const access = useAccess();
     return <QueryClientProvider client={client}><AccessContext.Provider value={{ ...access, canWrite }}><MemoryRouter initialEntries={['/?db=c925&project=3']}>{children}</MemoryRouter></AccessContext.Provider></QueryClientProvider>;
   }
   server.use(http.get('/api/director/v1/status', () => HttpResponse.json(ok(status))));
-  return render(<LibraryPlans search={props.search ?? ''} show={props.show ?? 'all'} listed={props.listed ?? new Set()} />, { wrapper: Wrapper });
+  return render(<LibraryPlans search={props.search ?? ''} show={props.show ?? 'all'} listed={props.listed ?? new Set()} dbFilter={props.dbFilter} />, { wrapper: Wrapper });
 }
 
 describe("The Library's plans with nothing captured yet", () => {
@@ -125,6 +125,22 @@ describe("The Library's plans with nothing captured yet", () => {
     view.rerender(<LibraryPlans search="" show="unlinked" listed={listed} />);
     expect(screen.queryByRole('link', { name: 'Open Waiting' })).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open Pelican' })).toBeInTheDocument();
+  });
+
+  it('lists a plan for a filtered rig with no frames when another rig has frames', async () => {
+    const ultracat = { ...rig, id: '66666666-6666-4666-8666-666666666666', name: 'Ultracat' };
+    const link = (catalog_slug: string, catalog_name: string, linkRig: typeof rig, source_row_id: number) => ({ catalog_slug, catalog_name, rig: linkRig, source_project_guid: catalog_slug, source_row_id, source_name: 'Propeller', source_state: 1, earliest_capture_s: null, latest_capture_s: null, targets: [] });
+    const propeller = row({ ...record, id: '77777777-7777-4777-8777-777777777777', name: 'Propeller' }, { links: [link('askar', 'Askar', rig, 6), link('ultracat', 'Ultracat', ultracat, 20)] });
+    server.use(http.get('/api/director/v1/plans', () => HttpResponse.json(ok(list([propeller])))));
+    // Askar has frames, so the Library has its row; Ultracat has none.
+    const listed = new Set(['askar:6']);
+    const view = mount(false, { listed, dbFilter: 'ultracat' });
+    expect(await screen.findByRole('link', { name: 'Open Propeller' })).toBeInTheDocument();
+    // Without the filter, or filtered to Askar, the Askar row stands for the plan.
+    view.rerender(<LibraryPlans search="" show="all" listed={listed} />);
+    await waitFor(() => expect(screen.queryByRole('link', { name: 'Open Propeller' })).not.toBeInTheDocument());
+    view.rerender(<LibraryPlans search="" show="all" listed={listed} dbFilter="askar" />);
+    expect(screen.queryByRole('link', { name: 'Open Propeller' })).not.toBeInTheDocument();
   });
 
   it('leaves linked plans out when a database could not be read', async () => {

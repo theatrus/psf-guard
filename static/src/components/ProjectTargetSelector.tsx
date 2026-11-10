@@ -13,6 +13,8 @@ import { useDisplayPreferences } from '../hooks/useDisplayPreferences';
 import ProjectTreeOption from './projectSelector/ProjectTreeOption';
 import ProjectFamilyOption from './projectSelector/ProjectFamilyOption';
 import { useCurrentPlan, usePlans } from './header/useCurrentPlan';
+import { plansWaitingForFrames } from './director/waitingPlans';
+import { listNames } from './director/listNames';
 
 export default function ProjectTargetSelector() {
   const {
@@ -43,7 +45,7 @@ export default function ProjectTargetSelector() {
   // Settings → Review and stored in this browser.
   const { projectPickerGrouping } = useDisplayPreferences();
 
-  const { data: projects, databases, isLoading: projectsLoading } = useMergedProjects();
+  const { data: projects, databases, isLoading: projectsLoading, isError: projectsIncomplete } = useMergedProjects();
   const {
     data: targets,
     isLoading: targetsLoading,
@@ -223,9 +225,12 @@ export default function ProjectTargetSelector() {
       : selectedFamily
         ? `${selectedFamily.members.length} rigs`
         : selectedProject?.db_name ?? selectedDatabase?.name ?? null;
-  // Plans no database takes yet can only be planned: their workspace.
-  const databaseless = plans.rows.filter((row) => row.links.length === 0)
-    .filter((row) => !search.trim() || row.project.name.toLowerCase().includes(search.trim().toLowerCase()));
+  // The list above has projects with frames. A plan on no rig, or activated
+  // on a rig with no frame yet, opens its workspace from below it instead.
+  const waiting = useMemo(() => {
+    const listed = new Set(projects.map((project) => `${project.db_id}:${project.id}`));
+    return plansWaitingForFrames(plans.rows, listed, projectsIncomplete, search);
+  }, [projects, plans.rows, projectsIncomplete, search]);
 
   const renderProject = (project: NavigationProject) => {
     const family = navigation.familyOf(project);
@@ -370,13 +375,13 @@ export default function ProjectTargetSelector() {
                 </details>
               )}
 
-              {databaseless.length > 0 && (
-                <section className="selector-option-group" aria-label="Plans without a database">
+              {waiting.length > 0 && (
+                <section className="selector-option-group" aria-label="Plans waiting for frames">
                   <div className="selector-group-heading">
-                    <span>Plans without a database</span>
-                    <span>{databaseless.length}</span>
+                    <span>Plans waiting for frames</span>
+                    <span>{waiting.length}</span>
                   </div>
-                  {databaseless.map((row) => (
+                  {waiting.map(({ row, rigs }) => (
                     <button
                       key={row.project.id}
                       type="button"
@@ -385,13 +390,13 @@ export default function ProjectTargetSelector() {
                       onClick={() => { setPickerOpen(false); setSearch(''); navigate(plans.hrefFor(row)); }}
                     >
                       <span>{row.project.name}</span>
-                      <small>Opens its workspace</small>
+                      <small>{rigs.length > 0 ? `No frames on ${listNames(rigs.map((link) => link.catalog_name))}` : 'Not on any rig'}</small>
                     </button>
                   ))}
                 </section>
               )}
 
-              {navigation.projectGroups.length === 0 && databaseless.length === 0 &&
+              {navigation.projectGroups.length === 0 && waiting.length === 0 &&
                 navigation.archivedProjects.length === 0 &&
                 navigation.matchingDatabases.length === 0 && (
                   <p className="selector-empty">No projects or targets match.</p>
