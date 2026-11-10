@@ -70,7 +70,7 @@ test("a mosaic's panels open as one view in Images, Sequence and Stacks, and a l
   await page.goto(`/#/grid?db=${encodeURIComponent(dbId)}&project=1`);
   const switcher = page.getByRole('combobox', { name: 'Rig and target' });
   await expect(switcher.locator('option', { hasText: 'Heart mosaic (4 panels)' })).toHaveCount(1, { timeout: 30_000 });
-  await switcher.selectOption({ label: 'Heart mosaic (4 panels)' });
+  await switcher.selectOption({ label: 'Mosaic rig · Heart mosaic (4 panels)' });
   await expect(page).toHaveURL(/mosaic=1/);
 
   const headings = page.locator('.mosaic-panel-heading');

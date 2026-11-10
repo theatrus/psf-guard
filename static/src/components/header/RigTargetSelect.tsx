@@ -14,8 +14,9 @@ const valueOf = (db: string, project: number, target: number | 'mosaic' | null) 
 
 /** The second half of the scope: which rig's project Images and Sequence
  *  show, and which of its targets. A plan shot by several rigs lists each
- *  rig with its targets; a lone rig lists its targets alone, and with one
- *  target there is nothing to choose, so it only names the database. */
+ *  rig with its targets. A lone rig lists its targets, each after the rig's
+ *  name, since the project picker leaves the rig to this control; with one
+ *  target there is nothing to choose, so it shows the rig and target. */
 export default function RigTargetSelect() {
   const location = useLocation();
   const { pathname } = location;
@@ -96,22 +97,25 @@ export default function RigTargetSelect() {
     if (target === MOSAIC) setMosaic(db, project);
     else setDbProjectTarget(db, project, target);
   };
-  // Each option's full and shown text; mosaic panels drop the start they share.
+  // Each option's full and shown text; mosaic panels drop the start they
+  // share. A lone rig's options start with its name, which the closed select
+  // then shows: the project picker does not repeat it.
   const labels = new Map<string, { full: string; shown: string }>();
   const groupLabel = new Map<string, string>();
   for (const member of members) {
     const own = targetsOf(member);
     const prefix = sharedStart(own.map(target => target.name));
     groupLabel.set(`${member.db_id}:${member.id}`, prefix ? `${member.db_name} · ${prefix}` : member.db_name);
-    const all = single ? 'All targets' : `${member.db_name} · all targets`;
+    const all = `${member.db_name} · all targets`;
     labels.set(valueOf(member.db_id, member.id, null), { full: prefix ? `${all} (${prefix})` : all, shown: all });
     const mosaic = mosaicOf(member);
     if (mosaic) {
       const label = mosaicLabel(mosaic, prefix);
-      labels.set(valueOf(member.db_id, member.id, MOSAIC), { full: label, shown: single ? label : `${member.db_name} · ${label}` });
+      labels.set(valueOf(member.db_id, member.id, MOSAIC), { full: label, shown: `${member.db_name} · ${label}` });
     }
     for (const target of own) {
-      labels.set(valueOf(member.db_id, member.id, target.id), { full: target.name, shown: shortLabel(target.name, prefix) });
+      const short = shortLabel(target.name, prefix);
+      labels.set(valueOf(member.db_id, member.id, target.id), { full: target.name, shown: single ? `${member.db_name} · ${short}` : short });
     }
   }
   const options = (member: Member) => [

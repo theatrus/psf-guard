@@ -43,10 +43,10 @@ describe('rig and target switcher', () => {
     expect(screen.getByTestId('location')).toHaveTextContent('/grid?db=rc51&project=7&target=70');
   });
 
-  it("lists a lone rig's targets, and only names the database when there is nothing to choose", async () => {
+  it("lists a lone rig's targets after its name, and shows the rig and target when there is nothing to choose", async () => {
     const lone = mount('/grid?db=c925&project=3');
     const select = await screen.findByRole('combobox', { name: 'Rig and target' });
-    expect(within(select).getAllByRole('option').map(option => option.textContent)).toEqual(['All targets', 'Veil east', 'Veil west']);
+    expect(within(select).getAllByRole('option').map(option => option.textContent)).toEqual(['C925 · all targets', 'C925 · Veil east', 'C925 · Veil west']);
     fireEvent.change(select, { target: { value: 'c925:3:31' } });
     expect(screen.getByTestId('location')).toHaveTextContent('/grid?db=c925&project=3&target=31');
     lone.unmount();
@@ -62,8 +62,8 @@ describe('rig and target switcher', () => {
     server.use(http.get('/api/db/c925/projects/3/mosaic', () => ok({ mosaic: { project_id: 3, name: 'Veil', source: 'inferred', rows: 1, columns: 2, panels: [panel(30, 1), panel(31, 2)] } })));
     const first = mount('/grid?db=c925&project=3');
     const select = await screen.findByRole('combobox', { name: 'Rig and target' });
-    await within(select).findByRole('option', { name: 'Veil mosaic (2 panels)' });
-    expect(within(select).getAllByRole('option').map(option => option.textContent)).toEqual(['All targets', 'Veil mosaic (2 panels)', 'Veil east', 'Veil west']);
+    await within(select).findByRole('option', { name: 'C925 · Veil mosaic (2 panels)' });
+    expect(within(select).getAllByRole('option').map(option => option.textContent)).toEqual(['C925 · all targets', 'C925 · Veil mosaic (2 panels)', 'C925 · Veil east', 'C925 · Veil west']);
     fireEvent.change(select, { target: { value: 'c925:3:mosaic' } });
     expect(screen.getByTestId('location')).toHaveTextContent('/grid?db=c925&project=3&mosaic=1');
     // Choosing one panel leaves the mosaic.
