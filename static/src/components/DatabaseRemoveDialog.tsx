@@ -40,7 +40,7 @@ export default function DatabaseRemoveDialog({ database, onClose, onRemoved }: P
     mutationFn: () => apiClient.removeDatabase(database.id),
     onSuccess: (removed) => {
       if (!removed) return;
-      for (const queryKey of [['databases'], ['db', database.id], ['directorPlans'], ['directorRigProfiles'], ['directorRigStatuses']]) {
+      for (const queryKey of [['databases'], ['db', database.id], ['directorPlans'], ['directorRigProfiles'], ['directorRigStatuses'], ['directorRigSummary']]) {
         void client.invalidateQueries({ queryKey });
       }
       onRemoved(database.name);

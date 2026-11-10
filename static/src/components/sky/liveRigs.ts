@@ -1,4 +1,4 @@
-import type { DirectorPlanRow, DirectorRigStatusView } from '../../api/directorTypes';
+import type { DirectorPlanRow, DirectorRigSummary } from '../../api/directorTypes';
 import { describeRigNow, rigIsExposing, rigReportIsStale, rigTargetName } from '../director/rigNow';
 
 /** A rig as the Sky draws it: where it points now, if that can be told. */
@@ -11,7 +11,7 @@ export interface PlacedRig {
    *  last status report is over ten minutes old (`old report`). */
   stale: boolean;
   staleReason: 'quiet' | 'old report' | null;
-  connectivity: DirectorRigStatusView['connectivity']['state'];
+  connectivity: DirectorRigSummary['connectivity']['state'];
   /** What the rig says it is doing, as the Live table words it. */
   now: string;
   /** ICRS degrees, or null when neither a pointing nor a known target is reported. */
@@ -42,10 +42,10 @@ function pointingOf(payload: Record<string, unknown>): { ra: number; dec: number
  *  or `target`, or the Sync plugin's current instruction) is looked up among the
  *  targets of that rig's own plan links, and its centre is used. A rig with
  *  neither is listed but not drawn. */
-export function placeRigs(views: DirectorRigStatusView[], plans: DirectorPlanRow[], nowMs: number): PlacedRig[] {
+export function placeRigs(views: DirectorRigSummary[], plans: DirectorPlanRow[], nowMs: number): PlacedRig[] {
   return views.map(view => {
     const payload = view.status?.payload ?? {};
-    const targetName = rigTargetName(view, nowMs);
+    const targetName = rigTargetName(view);
     const quiet = view.connectivity.state === 'stale' || view.connectivity.state === 'offline';
     const staleReason = quiet ? 'quiet' as const : rigReportIsStale(view, nowMs) ? 'old report' as const : null;
     const base = {

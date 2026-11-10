@@ -2108,6 +2108,7 @@ Early beta. The **Live** table on the Rigs page reads these reports.
 | POST | `/rigs/{rig}/operations` | Same envelope and acknowledgement as check-in, with up to 32 schema-1 preparation events. Independent contiguous cursor; gaps return `409`, changed duplicates report conflicts. Uses the paired client's existing `checkin:write` scope. Does not change capture credit or live status. |
 | POST | `/rigs/{rig}/status` | `coordinator_instance_id`, `catalog_id`, `session_id`, `reported_at_ms`, optional `program_revision`, and `status`: the plugin's coalesced live report (phase, goal and target IDs, elapsed time, wait reason, safety, connectivity, queue depth), stored verbatim. `accepted: false` means a newer report was already held for that session, or a newer session exists. |
 | GET | `/rigs/status` | Operator view, one row per bound rig (and any rig that reported and lost its binding): `catalog_slug` and `catalog_name`; `status` (or `null`) with `status_age_ms` and `status_stale`; capture `checkins` cursors; `contacts` (`program_pull`, `check_in`, `status`, each `{at_ms, detail}` or `null`, server receipt times); `connectivity` (`state` of `online`, `stale`, `offline` or `never`, `last_contact_ms`, `age_ms`); `assignments`; `pending_receipts`; up to 20 `recent_operations` (completed preparation events with their first server receipt time); and `sync` (or `null` when the database neither accepts Sync nor has heard from it): `last_contact_ms` and `plugin_version` of the newest Sync call, `latest_action` (the newest Sync audit entry other than a capabilities call, a flat-history poll or an unchanged star-detection snapshot: `at_ms`, `action`, `outcome`, `operation`, `detail`, `summary`), `problems` (for each kind of action whose newest attempt was refused or failed and with no later success of the same work, that entry, newest first), `sequence` (the newest [sequence report](design/data-transfer.md#sequence-status), or `null`) and `sequence_stale`. `active_projects` counts the database's projects in the Active state, or is `null` when the database could not be read. `GET /api/db/{id}/plugin-history?limit=` lists the database's recent notable Sync audit entries, newest first, up to 200 (default 50). A Sync call counts toward `connectivity`. |
+| GET | `/rigs/summary` | What each rig is doing now, for the header's **Rigs** tab, the Sky and Night details. Each row has `rig`, `catalog_slug`, `catalog_name`, `status`, `status_age_ms`, `status_stale`, `connectivity` and `sync` as in `/rigs/status`, and two more fields. `report` is `director` or `sync`: the plugin whose report says what the rig is doing now, or `null` before either reports. `exposing` is true when a fresh report from either plugin says the rig is exposing. The server answers from memory and opens no database. |
 
 A receipt is stored once by ledger and sequence and never rewritten: a replay
 is acknowledged again, a replay with different content is reported as a
@@ -2149,7 +2150,26 @@ while the report is fresh, and the Sky places the rig at that
 instruction's target. When both plugins report, a fresh exposing report
 from either one is enough for the **Rigs** count. The **Rigs** tooltip,
 the Sky and Night details show the Director plugin's report while it is
-fresh and the Sync plugin's otherwise; **Live** shows both.
+fresh and the Sync plugin's otherwise; **Live** shows both. The server
+makes these choices and sends them in `/rigs/summary`.
+
+The server keeps what these polls need in memory, so a poll opens no rig
+database:
+
+- **Status and contacts:** the planning store's single writer keeps each
+  rig's newest status report and plugin contacts in memory as it commits
+  them, and loads them when the server starts.
+- **The rig list:** names and database bindings are read from the planning
+  store again only after another change to it.
+- **Catalog identities:** each database's identity is read from its file
+  again only when the registered databases change or PSF Guard adopts an
+  identity.
+- **The Live table's other columns:** assignments, check-ins, recent
+  operations and weather are read again after a change to the store or a
+  new weather report. Weather is also judged again each minute, since a
+  report's freshness and the forecast hour depend on the time.
+- **Active projects:** each count is kept for a minute, since N.I.N.A.
+  changes project states too.
 
 ## Visibility
 

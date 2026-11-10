@@ -239,6 +239,9 @@ impl MetaStore {
     ) -> Result<bool, Error> {
         valid_id(rig)?;
         sample.validate(now)?;
+        if let Some(liveness) = &self.liveness {
+            liveness.weather_reported();
+        }
         self.writing_liveness(|store| {
             if store.rig(rig)?.is_none() { return Err(Error::NotFound); }
             if let Some(previous) = store.weather_observation_for(rig, Some(sample.profile_id))? {

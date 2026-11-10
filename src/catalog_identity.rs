@@ -4,7 +4,19 @@
 use psf_guard_director_meta::CatalogIdentity;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
 use uuid::Uuid;
+
+/// How many times this process has adopted an identity into a file. PSF
+/// Guard is the only writer of identities, so memory that holds files'
+/// identities is current while this count is unchanged.
+static ADOPTIONS: AtomicU64 = AtomicU64::new(0);
+
+/// See [`ADOPTIONS`]. A rolled-back adoption counts too; that only costs a
+/// reread.
+pub fn adoptions() -> u64 {
+    ADOPTIONS.load(Ordering::Acquire)
+}
 
 #[derive(Debug)]
 pub enum Error {
@@ -151,6 +163,7 @@ pub fn adopt(
     if proposed.id.is_nil() || proposed.origin_instance_id.is_nil() {
         return Err(Error::InvalidIdentity);
     }
+    ADOPTIONS.fetch_add(1, Ordering::AcqRel);
     let savepoint = transaction.savepoint()?;
     if let Some(existing) = read(&savepoint)? {
         return if existing == proposed {

@@ -1,14 +1,17 @@
 import { render } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import type { DirectorPlanRow, DirectorRigStatusView } from '../../../api/directorTypes';
+import type { DirectorPlanRow, DirectorRigStatusView, DirectorRigSummary } from '../../../api/directorTypes';
 import { placeRigs } from '../liveRigs';
 import SkyMap from '../SkyMap';
 
-const view = (name: string, slug: string, state: DirectorRigStatusView['connectivity']['state'], payload: Record<string, unknown> | null, stale = false): DirectorRigStatusView => ({
-  rig: { id: `id-${name}`, name, revision: 1 }, catalog_slug: slug, catalog_name: name, checkins: [],
+// As the server sends it: the Director report speaks, exposing while fresh.
+const view = (name: string, slug: string, state: DirectorRigStatusView['connectivity']['state'], payload: Record<string, unknown> | null, stale = false): DirectorRigSummary => ({
+  rig: { id: `id-${name}`, name, revision: 1 }, catalog_slug: slug, catalog_name: name,
   status: payload ? { rig_id: `id-${name}`, session_id: 's', reported_at_ms: 1_700_000_000_000, received_at_ms: 1_700_000_000_001, payload } : null,
-  status_age_ms: 5000, status_stale: stale, contacts: { program_pull: null, check_in: null, status: null },
-  connectivity: { state, last_contact_ms: 1_700_000_000_001, age_ms: 5000 }, assignments: [], pending_receipts: 0,
+  status_age_ms: 5000, status_stale: stale,
+  connectivity: { state, last_contact_ms: 1_700_000_000_001, age_ms: 5000 },
+  report: payload ? 'director' : null,
+  exposing: !stale && typeof payload?.phase === 'string' && ['exposing', 'imaging', 'capturing'].includes(payload.phase.trim().toLowerCase()),
 });
 const rig = { id: 'r', name: 'r', revision: 1 };
 const target = (name: string, ra: number, dec: number) => ({ name, desired: 10, acquired: 0, accepted: 0, rejected: 0, center: { ra_degrees: ra, dec_degrees: dec }, rotation_degrees: 0 });
@@ -50,7 +53,7 @@ describe('placing rigs on the sky', () => {
   });
 
   it("places a Sync-only rig at the target N.I.N.A.'s sequence is exposing", () => {
-    const syncOnly = view('C925', 'c925', 'online', null);
+    const syncOnly = { ...view('C925', 'c925', 'online', null), report: 'sync' as const, exposing: true };
     syncOnly.sync = { last_contact_ms: now - 5000, plugin_version: '1.4.0', latest_action: null, sequence_stale: false,
       sequence: { session_id: 's', reported_at_ms: now - 5000, received_at_ms: now - 5000, fresh_for_ms: 120_000, running: true,
         activity: { kind: 'exposing', target_name: 'M31 panel 1', exposure_seconds: 300 }, recent: {} } };

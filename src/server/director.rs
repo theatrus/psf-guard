@@ -47,6 +47,7 @@ pub(crate) async fn transfer_jobs(state: &Arc<AppState>) -> Vec<serde_json::Valu
 mod framing;
 mod image_uploads;
 mod import_drafts;
+mod live_rigs;
 #[cfg(test)]
 pub(crate) use activation::create_director_tables as create_rig_tables_for_tests;
 pub(crate) use import_drafts::inferred_mosaic;
@@ -200,6 +201,13 @@ pub struct Service {
     /// The writer's [`MetaStore::planning_rows_written`] after its last
     /// write: night plans kept from an older count may be out of date.
     planning_rows: std::sync::atomic::AtomicU64,
+    /// The last known state of every rig, for Live's polls.
+    live_rigs: live_rigs::LiveRigs,
+    /// Every rig's newest status and contacts, which the writer keeps
+    /// current as it writes them.
+    liveness: Arc<psf_guard_director_meta::liveness::Liveness>,
+    /// What the Live table read from the store for each rig.
+    live_table: checkin::LiveTable,
 }
 
 /// Ask for each site's cloud forecast when it is due.
@@ -250,6 +258,8 @@ impl Service {
             MetaStore::create(path)?
         };
         let planning_rows = std::sync::atomic::AtomicU64::new(store.planning_rows_written());
+        let mut store = store;
+        let liveness = store.keep_liveness()?;
         Ok(Some(Arc::new(Self {
             path: path.to_path_buf(),
             instance_id: store.instance_id(),
@@ -265,6 +275,9 @@ impl Service {
             forecast_turn: tokio::sync::Mutex::new(()),
             night_plans: night_plans::Cache::default(),
             skies: night_sky::Skies::default(),
+            live_rigs: live_rigs::LiveRigs::default(),
+            liveness,
+            live_table: checkin::LiveTable::default(),
         })))
     }
 
@@ -817,6 +830,7 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
             )),
         )
         .route("/rigs/status", get(checkin::statuses))
+        .route("/rigs/summary", get(checkin::summary))
         .route("/plans", get(plans::list))
         .route(
             "/projects/{id}/feasibility",

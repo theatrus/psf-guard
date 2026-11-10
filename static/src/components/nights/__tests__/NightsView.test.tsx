@@ -34,6 +34,7 @@ function mount(body = plans(), route = '/rigs?rigsTab=nights') {
     http.post('/api/director/v1/night-plans', planned),
     http.put('/api/director/v1/night-availability/:scope/:id', saved),
     http.get('/api/director/v1/rigs/status', () => HttpResponse.json(ok([]))),
+    http.get('/api/director/v1/rigs/summary', () => HttpResponse.json(ok([]))),
   );
   const Wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}><MemoryRouter initialEntries={[route]}>{children}<Location /></MemoryRouter></QueryClientProvider>;
   return { ...render(<RigsPage />, { wrapper: Wrapper }), client, planned, saved, writes };

@@ -23,7 +23,7 @@ interface RigsTabProps {
 export default function RigsTab({ current, onClick }: RigsTabProps) {
   const director = useDirectorStatus();
   const enabled = !!director.data?.enabled && director.data.protocol_version === 1 && !!director.data.instance_id;
-  const statuses = useQuery({ queryKey: ['directorRigStatuses'], queryFn: apiClient.getDirectorRigStatuses, enabled, retry: retryWhenBusy, retryDelay: 1200, refetchInterval: 15_000, refetchOnWindowFocus: true });
+  const statuses = useQuery({ queryKey: ['directorRigSummary'], queryFn: apiClient.getDirectorRigSummary, enabled, retry: retryWhenBusy, retryDelay: 1200, refetchInterval: 15_000, refetchOnWindowFocus: true });
   const now = useDirectorClock();
   if (!enabled) return null;
   const rows = statuses.data ?? [];

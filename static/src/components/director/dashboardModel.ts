@@ -1,24 +1,24 @@
-import type { DirectorRigStatusView } from '../../api/directorTypes';
+import type { DirectorRigNowFields, DirectorRigStatusView } from '../../api/directorTypes';
 
 /** The phases that count as exposing, as the plugin names them. */
 export const EXPOSING_PHASES = ['exposing', 'imaging', 'capturing'] as const;
 
 /** The reported phase (or state), lower-cased, or '' when none. */
-export function phaseOf(view: DirectorRigStatusView): string {
+export function phaseOf(view: DirectorRigNowFields): string {
   const p = view.status?.payload ?? {};
   const phase = typeof p.phase === 'string' ? p.phase : typeof p.state === 'string' ? p.state : '';
   return phase.trim().toLowerCase();
 }
 
 /** A fresh report of one of the exposing phases. */
-export function statusIsStale(view: DirectorRigStatusView, nowMs: number): boolean {
+export function statusIsStale(view: DirectorRigNowFields, nowMs: number): boolean {
   const ttl = view.status?.payload.fresh_for_ms;
   // Explicit client leases also expire while a cached query cannot reach the server.
   return view.status_stale || (typeof ttl === 'number' && Number.isFinite(ttl) && !!view.status
     && nowMs - view.status.received_at_ms > Math.min(600_000, Math.max(15_000, ttl)));
 }
 
-export function isExposing(view: DirectorRigStatusView, nowMs = Date.now()): boolean {
+export function isExposing(view: DirectorRigNowFields, nowMs = Date.now()): boolean {
   return !statusIsStale(view, nowMs) && (EXPOSING_PHASES as readonly string[]).includes(phaseOf(view));
 }
 
@@ -44,7 +44,7 @@ const text = (value: unknown): string | null => typeof value === 'string' && val
 /** What the rig says it is doing, from the plugin's coalesced report. The
  *  payload is the plugin's; only the fields the design names are read, and
  *  anything else is left alone. */
-export function describeNow(view: DirectorRigStatusView, nowMs: number): string {
+export function describeNow(view: DirectorRigNowFields, nowMs: number): string {
   const { status } = view;
   if (!status) return view.connectivity.state === 'never' ? 'No report yet' : 'No status report yet';
   const p = status.payload;

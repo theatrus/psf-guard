@@ -272,7 +272,7 @@ function NightSchedule({ rig, night, colours, view, edit, moveProblem, saved, on
   const zone = usableZone(rig.time_zone);
   const bands = scheduled?.overrides ? overrideBands(scheduled.overrides.entries, goals, { start_ms: scheduled.start_ms, end_ms: scheduled.end_ms }, zone) : [];
   // Tonight: what the rig says it is doing, beside what it is planned to do.
-  const statuses = useQuery({ queryKey: ['directorRigStatuses'], queryFn: apiClient.getDirectorRigStatuses, enabled: tonight, retry: retryWhenBusy, retryDelay: 1200, refetchInterval: 15_000 });
+  const statuses = useQuery({ queryKey: ['directorRigSummary'], queryFn: apiClient.getDirectorRigSummary, enabled: tonight, retry: retryWhenBusy, retryDelay: 1200, refetchInterval: 15_000 });
   const live = statuses.data?.find(status => status.rig.id === rig.rig.id);
   return <section className="nights-schedule" aria-label="Schedule">
     <div className="nights-mark-row">

@@ -41,7 +41,7 @@ export default function SkyPage() {
   const { getParam, updateParams } = useUrlParams();
   const plans = usePlans();
   const live = plans.enabled && getParam('live') === '1';
-  const statuses = useQuery({ queryKey: ['directorRigStatuses'], queryFn: apiClient.getDirectorRigStatuses, enabled: plans.enabled, retry: retryWhenBusy, retryDelay: 1200, refetchInterval: 15_000, refetchOnWindowFocus: true });
+  const statuses = useQuery({ queryKey: ['directorRigSummary'], queryFn: apiClient.getDirectorRigSummary, enabled: plans.enabled, retry: retryWhenBusy, retryDelay: 1200, refetchInterval: 15_000, refetchOnWindowFocus: true });
   const now = useDirectorClock();
   const placed = useMemo(() => placeRigs(statuses.data ?? [], plans.rows, now), [statuses.data, plans.rows, now]);
   const [focus, setFocus] = useState<{ ra: number; dec: number; nonce: number } | null>(null);

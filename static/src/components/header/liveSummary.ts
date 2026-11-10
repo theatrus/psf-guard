@@ -1,4 +1,4 @@
-import type { DirectorRigStatusView } from '../../api/directorTypes';
+import type { DirectorRigSummary } from '../../api/directorTypes';
 import { describeRigNow, rigIsExposing } from '../director/rigNow';
 
 export interface LiveSummary {
@@ -12,7 +12,7 @@ export interface LiveSummary {
 
 /** Count the fleet the way the header chip states it. A rig is exposing when
  *  a fresh report from either plugin says so. */
-export function liveSummary(rows: DirectorRigStatusView[], nowMs: number): LiveSummary {
+export function liveSummary(rows: DirectorRigSummary[], nowMs: number): LiveSummary {
   const rigs = rows.length;
   const exposing = rows.filter(view => rigIsExposing(view, nowMs)).length;
   const online = rows.filter(view => view.connectivity.state === 'online').length;
