@@ -203,10 +203,10 @@ export default function ProjectTargetSelector() {
     });
   };
 
-  // The trigger names the whole: the plan in a workspace, else the project,
-  // with its rig count when several rigs shoot it or its database when one
-  // does (project names repeat across catalogs). The rig and target switcher
-  // beside it names the part.
+  // The trigger shows the whole: the plan in a workspace, else the project,
+  // with its rig count when several rigs shoot it. The rig and target
+  // switcher beside it shows a lone rig, so the trigger does not repeat it.
+  // With no project chosen, it shows the database whose projects are listed.
   const selectedFamily = selectedProject ? navigation.familyOf(selectedProject) : null;
   const workspacePlan = onPlan ? currentPlan.current : null;
   const scopeLabel = projectsLoading
@@ -220,11 +220,13 @@ export default function ProjectTargetSelector() {
       ? (() => {
           // Count the rigs the switcher can show: links with a project row.
           const rigs = workspacePlan.links.filter((link) => link.source_row_id !== null);
-          return rigs.length > 1 ? `${rigs.length} rigs` : rigs[0]?.catalog_name ?? 'no database';
+          return rigs.length > 1 ? `${rigs.length} rigs` : rigs.length === 0 ? 'no database' : null;
         })()
       : selectedFamily
         ? `${selectedFamily.members.length} rigs`
-        : selectedProject?.db_name ?? selectedDatabase?.name ?? null;
+        : selectedProject
+          ? null
+          : selectedDatabase?.name ?? null;
   // The list above has projects with frames. A plan on no rig, or activated
   // on a rig with no frame yet, opens its workspace from below it instead.
   const waiting = useMemo(() => {

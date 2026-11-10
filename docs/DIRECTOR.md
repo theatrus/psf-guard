@@ -514,7 +514,8 @@ left out rather than shown as empty.
 
 The header reads Library, then the **scope**, then Sky. The scope runs from
 the whole to the part: the project picker (a plan shot by several rigs is
-one row there, and the closed picker shows it with its rig count), the
+one row there, and the closed picker shows it with its rig count; for a
+project on one rig, the switcher shows the rig, so the picker does not), the
 **Planning** button for that plan's workspace, then a switcher for which rig and
 target **Images** and **Sequence** show. For a plan shot by several rigs
 the switcher lists each rig with its targets; for a lone rig it lists the

@@ -75,25 +75,23 @@ function scopeLines() {
 }
 
 describe('the closed project picker', () => {
-  it('names the database under the project', async () => {
+  it('leaves a lone rig to the rig and target switcher beside it', async () => {
     serveTwoCatalogs();
     renderAt('/grid?db=shed&project=1');
 
+    // The switcher shows "Shed catalog", so the picker does not repeat it.
     await waitFor(() =>
-      expect(scopeLines()).toEqual({ name: '2026 - Sh2 86', database: 'Shed catalog' })
+      expect(scopeLines()).toEqual({ name: '2026 - Sh2 86', database: null })
     );
   });
 
-  it('keeps naming the project and database once a target narrows the view', async () => {
+  it('keeps showing the project once a target narrows the view', async () => {
     serveTwoCatalogs();
     renderAt('/grid?db=attic&project=1&target=4');
 
-    // The target is named by the rig and target switcher beside the picker.
+    // The rig and target are shown by the switcher beside the picker.
     await waitFor(() =>
-      expect(scopeLines()).toEqual({
-        name: '2026 - Sh2 86',
-        database: 'Attic catalog',
-      })
+      expect(scopeLines()).toEqual({ name: '2026 - Sh2 86', database: null })
     );
   });
 
