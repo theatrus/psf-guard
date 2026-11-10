@@ -49,8 +49,8 @@ export function RigWeatherSummary({ weather, now: browserNow, receivedAt, compac
   if (!weather && !compact) return <span className="director-muted">Weather not reported</span>;
   if (!weather || compact && !r && !f) return <span className="director-muted live-no-weather">No weather</span>;
   if (compact) return <div aria-label="Rig weather" className="live-weather">
-    {r && <div title={`Reported by NINA from ${r.sample.source_name}`}><span className="director-muted">Observed</span> {r.sample.connected ? `${number(r.sample.values.cloud_percent, '% cloud')} · ` : ''}{state(weather.reported_cloud, weather.evaluated_at_ms, now)}<span className="director-muted">{reportAge(r.received_at_ms)}</span></div>}
-    {f && <div title={`The site's ${PROVIDER_LABEL[f.provider]} forecast`}><span className="director-muted">Forecast</span> {number(f.hour?.cloud_total, '% cloud')} · {state(weather.forecast_conditions, weather.evaluated_at_ms, now)}</div>}
+    {r && <div title={`Reported by NINA from ${r.sample.source_name}`}><span className="director-muted live-weather-label">Observed</span><span>{r.sample.connected ? `${number(r.sample.values.cloud_percent, '% cloud')} · ` : ''}{state(weather.reported_cloud, weather.evaluated_at_ms, now)}<span className="director-muted">{reportAge(r.received_at_ms)}</span></span></div>}
+    {f && <div title={`The site's ${PROVIDER_LABEL[f.provider]} forecast`}><span className="director-muted live-weather-label">Forecast</span><span>{number(f.hour?.cloud_total, '% cloud')} · {state(weather.forecast_conditions, weather.evaluated_at_ms, now)}</span></div>}
   </div>;
   return <div aria-label="Rig weather">
     <div><strong>NINA reported:</strong> {r ? <>{r.sample.source_name}{!r.sample.connected && ' (disconnected)'} · {number(r.sample.values.cloud_percent, '% cloud')} · {state(weather.reported_cloud, weather.evaluated_at_ms, now)}<span className="director-muted">{reportAge(r.received_at_ms)}</span></> : 'unavailable'}</div>
