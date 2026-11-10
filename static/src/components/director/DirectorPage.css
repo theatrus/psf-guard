@@ -132,6 +132,8 @@ a.library-planning { display: inline-flex; align-items: center; justify-content:
 .director-dashboard-table .live-history-row td { border-top: none; padding-top: 0; }
 .director-dashboard-table .live-history { margin: 0; padding-left: 0; list-style: none; font-size: 13px; }
 .director-dashboard-table .live-no-weather { white-space: nowrap; }
+.director-dashboard-table .live-weather { display: grid; gap: 6px; }
+.director-dashboard-table .live-weather-label { display: block; font-size: 12px; }
 .director-dashboard-table td { padding: 6px; vertical-align: top; border-top: 1px solid var(--color-border-secondary); }
 .director-dashboard-table .director-cell-label { display: none; }
 .director-connectivity { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; font-weight: 600; background: var(--color-bg-secondary); color: var(--color-text-secondary); }

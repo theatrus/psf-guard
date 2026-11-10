@@ -85,7 +85,11 @@ describe('Director live dashboard', () => {
       forecast_conditions: { state: 'clear' as const, reason: 'cloud_cover_clear', valid_for_ms: 30_000 } });
     mount([{ ...online, weather: weather('a') }, { ...quiet, weather: weather('b') }]);
     // Live marks the forecast without the provider; the credit below the table shows it once.
-    expect(await screen.findAllByText(/^10% cloud · clear$/)).toHaveLength(2);
+    const forecasts = await screen.findAllByText(/^10% cloud · clear$/);
+    expect(forecasts).toHaveLength(2);
+    // The label sits on its own line above the value.
+    expect(forecasts[0].previousElementSibling).toHaveTextContent(/^Forecast$/);
+    expect(forecasts[0].previousElementSibling).toHaveClass('live-weather-label');
     expect(screen.queryByText(/Open-Meteo · /)).toBeNull();
     const credits = screen.getAllByRole('link', { name: forecast.attribution });
     expect(credits).toHaveLength(1);
@@ -192,6 +196,14 @@ describe('Director live dashboard', () => {
     expect(formatAge(3 * 86_400_000)).toBe('3 d ago');
     expect(describeNow({ ...never, connectivity: { state: 'online', last_contact_ms: NOW, age_ms: 0 } }, NOW)).toBe('No status report yet');
     expect(describeNow({ ...online, status: { ...online.status!, payload: { state: 'idle', wait_reason: 'clouds', safety: 'unsafe' } } }, NOW)).toBe('idle, waiting: clouds, safety unsafe');
+  });
+
+  it('leaves out the reconciliation older Director plugins asked for, which needs nobody', () => {
+    const phase = (value: string) => describeNow({ ...online, status: { ...online.status!, payload: { phase: value, target_name: 'Sh2 230' } } }, NOW);
+    expect(phase('Stopped; parked; reconciliation required')).toBe('Stopped; parked, Sh2 230');
+    expect(phase('Stopped; tracking off; reconciliation required')).toBe('Stopped; tracking off, Sh2 230');
+    expect(phase('Stopped; allocation consumed, reconciliation required')).toBe('Stopped, Sh2 230');
+    expect(phase('Mount parked.')).toBe('Mount parked, Sh2 230');
   });
 
   it('freezes stale operation duration and keeps replay history distinct from current status', async () => {

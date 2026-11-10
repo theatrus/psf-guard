@@ -33,6 +33,12 @@ export function formatAge(ageMs: number): string {
   return `${Math.round(h / 24)} d ago`;
 }
 
+/** Director plugins before #78 (November 2026) ended a stopped session's
+ *  phase with "reconciliation required". Nobody had to act on it: the
+ *  plugin and PSF Guard settle the session's work at its next check-in.
+ *  Live drops the phrase rather than show it as a task. */
+const OLD_RECONCILE = /[;,]\s*(?:allocation consumed,\s*)?reconciliation required\.?$/i;
+
 const text = (value: unknown): string | null => typeof value === 'string' && value.trim() ? value : typeof value === 'number' && Number.isFinite(value) ? String(value) : null;
 
 /** What the rig says it is doing, from the plugin's coalesced report. The
@@ -43,7 +49,9 @@ export function describeNow(view: DirectorRigStatusView, nowMs: number): string 
   if (!status) return view.connectivity.state === 'never' ? 'No report yet' : 'No status report yet';
   const p = status.payload;
   const stale = statusIsStale(view, nowMs);
-  const phase = text(p.phase) ?? text(p.state) ?? 'reported';
+  const phase = (text(p.phase) ?? text(p.state) ?? 'reported').replace(OLD_RECONCILE, '')
+    // Newer plugins end a phase with a full stop; the details follow it here.
+    .replace(/\.$/, '');
   const parts = [phase];
   const target = text(p.target_name) ?? text(p.target) ?? text(p.target_id);
   if (target) parts.push(target);
