@@ -481,7 +481,7 @@ function LibraryPage() {
   const projectKeys = useMemo(() => new Set(projects.map((project) => projectKey(project.db_id, project.id))), [projects]);
 
   const shownWaiting = useMemo(
-    () => shownWaitingPlans(waitingPlans(plans.rows, projectKeys, projectsIncomplete), show, projectSearch, dbFilter).length,
+    () => shownWaitingPlans(waitingPlans(plans.rows, projectKeys, projectsIncomplete, dbFilter), show, projectSearch, dbFilter).length,
     [plans.rows, projectKeys, projectsIncomplete, show, projectSearch, dbFilter],
   );
 

@@ -506,13 +506,17 @@ framed before any rig takes them, and plans activated on rigs that have not
 captured a frame. Each shows its rigs and their project states, or that no
 database takes it yet; **New plan** starts one and the pencil renames one.
 A plan leaves that list for the projects above once its first frame arrives.
+With the Database filter on, a plan stays in that list until the filtered
+database has a frame for it, even when another rig's row has frames.
 A plan closed on every rig stays out of it until Show asks for Closed, and
 when a database's projects cannot be read, plans linked to databases are
 left out rather than shown as empty.
 
 The header reads Library, then the **scope**, then Sky. The scope runs from
 the whole to the part: the project picker (a plan shot by several rigs is
-one row there, and the closed picker shows it with its rig count), the
+one row there, and the closed picker shows it with its rig count; below
+the projects, **Plans waiting for frames** opens the workspace of a plan on
+no rig, or of one activated on a rig with no frames yet), the
 **Planning** button for that plan's workspace, then a switcher for which rig and
 target **Images** and **Sequence** show. For a plan shot by several rigs
 the switcher lists each rig with its targets; for a lone rig it lists the

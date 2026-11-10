@@ -115,7 +115,7 @@ export default function LibraryPlans({ search, show, listed, dbFilter = null, in
       {(validation || save.isError) && <p className="director-error" role="alert">{validation || message(save.error)}</p>}
     </form>
   );
-  const waiting = waitingPlans(plans.rows, listed, incomplete);
+  const waiting = waitingPlans(plans.rows, listed, incomplete, dbFilter);
   const shown = shownWaitingPlans(waiting, show, search, dbFilter);
   // The Database filter leaves out plans on no rig, which have nowhere else to appear.
   const onNoRig = dbFilter ? waiting.filter(row => row.links.length === 0 && matchesSearch(row, search)).length : 0;
