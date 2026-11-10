@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { fireEvent, render, renderHook, screen, within } from '@testing-library/react';
+import { fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import type { ReactNode } from 'react';
 import { http, HttpResponse } from 'msw';
 import { server } from '../../test/msw-server';
@@ -22,10 +22,16 @@ function project(id: number, name: string, guid: string | null, accepted: number
   };
 }
 
+let search = '';
+function LocationProbe() {
+  search = useLocation().search;
+  return null;
+}
+
 function wrapper(route: string) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   return function Wrapper({ children }: { children: ReactNode }) {
-    return <QueryClientProvider client={queryClient}><MemoryRouter initialEntries={[route]}>{children}</MemoryRouter></QueryClientProvider>;
+    return <QueryClientProvider client={queryClient}><MemoryRouter initialEntries={[route]}>{children}<LocationProbe /></MemoryRouter></QueryClientProvider>;
   };
 }
 
@@ -191,6 +197,46 @@ describe('compact Library', () => {
     // Compact / Detailed is the segmented group, its choice a checked radio.
     expect(screen.getByRole('radiogroup', { name: 'Project view' })).toHaveClass('tool-segmented');
     expect(screen.getByRole('radio', { name: 'Compact' })).toHaveAttribute('aria-checked', 'true');
+  });
+
+  it("keeps the Database filter on the header's whole database, and moves the header with it", async () => {
+    setDisplayPreferences({ showNightChip: true, showAllChip: true, showCalibrationChip: true, advanceOnGrade: true, projectPickerGrouping: 'activity', libraryDensity: 'compact' });
+    twoRigs();
+    // The header shows All projects for C925, while an older filter names RedCat.
+    render(<Overview />, { wrapper: wrapper('/?db=c925&dbfilter=redcat') });
+    const database = await screen.findByRole('combobox', { name: 'Filter projects by database' });
+    await waitFor(() => expect(database).toHaveValue('c925'));
+    expect(new URLSearchParams(search).get('dbfilter')).toBe('c925');
+    // Choosing another database here moves the header's database too.
+    fireEvent.change(database, { target: { value: 'redcat' } });
+    await waitFor(() => expect(new URLSearchParams(search).get('db')).toBe('redcat'));
+    expect(new URLSearchParams(search).get('dbfilter')).toBe('redcat');
+    // All databases leaves the header without a database.
+    fireEvent.change(database, { target: { value: 'all' } });
+    await waitFor(() => expect(new URLSearchParams(search).has('db')).toBe(false));
+    expect(new URLSearchParams(search).has('dbfilter')).toBe(false);
+    expect(database).toHaveValue('all');
+  });
+
+  it('leaves the Database filter alone for a parked slug no database has', async () => {
+    setDisplayPreferences({ showNightChip: true, showAllChip: true, showCalibrationChip: true, advanceOnGrade: true, projectPickerGrouping: 'activity', libraryDensity: 'compact' });
+    twoRigs();
+    render(<Overview />, { wrapper: wrapper('/?db=parked') });
+    expect(await screen.findAllByTestId('library-row')).toHaveLength(4);
+    expect(screen.getByRole('combobox', { name: 'Filter projects by database' })).toHaveValue('all');
+    expect(new URLSearchParams(search).has('dbfilter')).toBe(false);
+  });
+
+  it('leaves the Database filter alone while the header shows a project', async () => {
+    setDisplayPreferences({ showNightChip: true, showAllChip: true, showCalibrationChip: true, advanceOnGrade: true, projectPickerGrouping: 'activity', libraryDensity: 'compact' });
+    twoRigs();
+    render(<Overview />, { wrapper: wrapper('/?db=c925&project=1&dbfilter=redcat') });
+    const database = await screen.findByRole('combobox', { name: 'Filter projects by database' });
+    expect(database).toHaveValue('redcat');
+    fireEvent.change(database, { target: { value: 'all' } });
+    await waitFor(() => expect(new URLSearchParams(search).has('dbfilter')).toBe(false));
+    expect(new URLSearchParams(search).get('db')).toBe('c925');
+    expect(new URLSearchParams(search).get('project')).toBe('1');
   });
 
   it('narrows the Library to projects with calibration issues', async () => {
