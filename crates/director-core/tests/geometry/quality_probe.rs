@@ -2,12 +2,16 @@ use super::*;
 use psf_guard_director_core::recovery as r;
 
 fn recovering() -> r::Snapshot {
+    recovering_at(START)
+}
+
+fn recovering_at(start: u64) -> r::Snapshot {
     let id = r::Identity {
         rig_id: "rig-1".into(),
         configuration_id: "config-1".into(),
         night_id: "night".into(),
-        starts_at_ms: START,
-        ends_at_ms: START + 60_000,
+        starts_at_ms: start,
+        ends_at_ms: start + 60_000,
     };
     let policy = r::Policy {
         revision: 1,
@@ -19,7 +23,7 @@ fn recovering() -> r::Snapshot {
         maximum_probes: 3,
         operation_timeout_ms: 40_000,
         evidence_max_age_ms: 1000,
-        latest_resume_ms: START + 59_000,
+        latest_resume_ms: start + 59_000,
         maximum_consecutive_failures: 2,
         maximum_total_failures: 3,
         park_on_stop: true,
@@ -29,17 +33,17 @@ fn recovering() -> r::Snapshot {
         safety: Safety::Safe,
         motion: r::Motion::Permitted,
     };
-    r::Snapshot::new(id, policy, START)
+    r::Snapshot::new(id, policy, start)
         .unwrap()
         .apply(
-            START + 1,
+            start + 1,
             safe,
             &r::Event::Quality {
                 sample: r::QualitySample {
                     rig_id: "rig-1".into(),
                     configuration_id: "config-1".into(),
                     capture_id: "saved".into(),
-                    observed_at_ms: START + 1,
+                    observed_at_ms: start + 1,
                     context: r::QualityContext {
                         target_id: "target".into(),
                         filter_id: "L".into(),
@@ -56,13 +60,72 @@ fn recovering() -> r::Snapshot {
         )
         .unwrap()
         .apply(
-            START + 11,
+            start + 11,
             safe,
             &r::Event::BeginRecovery {
                 attempt_id: "probe".into(),
             },
         )
         .unwrap()
+}
+
+#[test]
+fn probe_compares_freshness_and_deadlines_on_the_recovery_clock() {
+    let (program, mut request, constraints) = fixture();
+    request.state.now_ms = START + 11;
+    let bound = compile(program.clone(), &request, constraints.clone()).unwrap();
+    let expected = bound
+        .check_quality_probe(
+            "goal",
+            &constraints,
+            &request.state,
+            &recovering(),
+            "probe",
+            &program.recipes[0],
+        )
+        .unwrap();
+    for offset in [-900_000_i64, -20, 20, 900_000] {
+        let local_start = (START as i64 + offset) as u64;
+        let snapshot = recovering_at(local_start);
+        let check = |snapshot: &r::Snapshot, now| {
+            bound.check_quality_probe_at(
+                "goal",
+                &constraints,
+                &request.state,
+                snapshot,
+                "probe",
+                &program.recipes[0],
+                now,
+            )
+        };
+        assert_eq!(check(&snapshot, local_start + 11).unwrap(), expected);
+        assert_eq!(
+            check(&snapshot, local_start + 10),
+            Err(Error::InvalidCheckpoint)
+        );
+        assert_eq!(
+            check(&snapshot, local_start + 1012),
+            Err(Error::InvalidCheckpoint)
+        );
+        let safe = r::Conditions {
+            safety: Safety::Safe,
+            motion: r::Motion::Permitted,
+        };
+        let later = snapshot
+            .apply(local_start + 30_011, safe, &r::Event::Tick {})
+            .unwrap();
+        assert!(check(&later, local_start + 30_011)
+            .unwrap()
+            .latest_start_ms
+            .is_none());
+        let stopped = snapshot
+            .apply(local_start + 12, safe, &r::Event::StopNight {})
+            .unwrap();
+        assert_eq!(
+            check(&stopped, local_start + 12),
+            Err(Error::InvalidCheckpoint)
+        );
+    }
 }
 
 #[test]

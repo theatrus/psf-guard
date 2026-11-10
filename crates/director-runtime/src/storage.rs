@@ -33,7 +33,7 @@ pub enum Operation {
         constraints: Box<Constraints>,
         state: State,
         #[serde(skip)]
-        recovery: Option<Box<psf_guard_director_core::recovery::Snapshot>>,
+        recovery: Option<(Box<psf_guard_director_core::recovery::Snapshot>, u64)>,
     },
     CheckGeometryPendingDispatch {
         command: Box<Command>,
@@ -555,14 +555,15 @@ impl Storage {
                 state,
                 recovery,
             } => {
-                let recovery = recovery.ok_or(StorageError::InvalidInput)?;
-                let check = ledger.check_quality_probe(
+                let (recovery, recovery_now_ms) = recovery.ok_or(StorageError::InvalidInput)?;
+                let check = ledger.check_quality_probe_at(
                     &goal_id,
                     &attempt_id,
                     &recipe,
                     &constraints,
                     &state,
                     &recovery,
+                    recovery_now_ms,
                 )?;
                 StorageReply::DispatchChecked {
                     decision: check.decision,

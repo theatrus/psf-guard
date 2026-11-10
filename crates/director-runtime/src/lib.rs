@@ -11,7 +11,7 @@ pub mod recovery;
 pub mod storage;
 // Shared read-only mapping; no IPC command or acquisition authority is added.
 pub use psf_guard_director_interop as interop;
-pub const PROTOCOL_VERSION: u32 = 14;
+pub const PROTOCOL_VERSION: u32 = 15;
 pub const RUNTIME_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const MAX_FRAME_BYTES: usize = psf_guard_director_core::MAX_REQUEST_BYTES + 4096;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -41,6 +41,8 @@ pub enum Command {
     },
     Ledger {
         operation: Box<serde_json::value::RawValue>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        recovery_now_ms: Option<u64>,
     },
     Recovery {
         operation: Box<serde_json::value::RawValue>,
@@ -69,6 +71,8 @@ impl<'de> Deserialize<'de> for Command {
         struct LedgerOperation {
             r#type: String,
             operation: Box<serde_json::value::RawValue>,
+            #[serde(default)]
+            recovery_now_ms: Option<u64>,
         }
         #[derive(Deserialize)]
         #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -97,8 +101,12 @@ impl<'de> Deserialize<'de> for Command {
             return Ok(if operation.r#type == "ledger" {
                 Self::Ledger {
                     operation: operation.operation,
+                    recovery_now_ms: operation.recovery_now_ms,
                 }
             } else {
+                if operation.recovery_now_ms.is_some() {
+                    return Err(serde::de::Error::custom("clock belongs to ledger requests"));
+                }
                 Self::Recovery {
                     operation: operation.operation,
                 }
@@ -370,7 +378,10 @@ pub async fn serve_with_recovery<S: AsyncRead + AsyncWrite + Unpin>(
                     response: evaluate_json(request.get().as_bytes()),
                 }
             }
-            Command::Ledger { operation } => {
+            Command::Ledger {
+                operation,
+                recovery_now_ms,
+            } => {
                 if operation.get().len() > psf_guard_director_core::MAX_REQUEST_BYTES {
                     ResultMessage::Ledger {
                         response: storage::StorageReply::Error {
@@ -381,8 +392,13 @@ pub async fn serve_with_recovery<S: AsyncRead + AsyncWrite + Unpin>(
                     let mut operation = serde_json::from_str(operation.get())
                         .map_err(|_| ProtocolError::InvalidMessage)?;
                     ResultMessage::Ledger {
-                        response: match recovery::gate(&mut recovery, &mut operation, &rig_id)
-                            .await?
+                        response: match recovery::gate_at(
+                            &mut recovery,
+                            &mut operation,
+                            &rig_id,
+                            recovery_now_ms,
+                        )
+                        .await?
                         {
                             Ok(()) => storage::execute(&mut storage, operation, &rig_id).await?,
                             Err(code) => storage::StorageReply::RecoveryBlocked { code },

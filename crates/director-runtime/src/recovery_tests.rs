@@ -5,6 +5,93 @@ use serde_json::{json, value::to_raw_value};
 use tempfile::TempDir;
 use tokio::io::{duplex, DuplexStream};
 
+#[tokio::test]
+async fn local_recovery_clock_is_independent_of_planning_clock() {
+    for offset in [-900_000_i64, -20, 20, 900_000] {
+        let dir = TempDir::new().unwrap();
+        let mut storage = Some(recovery::Storage::acquire(dir.path()).unwrap());
+        let local_now = 1_000_000;
+        let planning_now = (local_now as i64 + offset) as u64;
+        let mut opening = open();
+        let Operation::Open {
+            identity,
+            policy,
+            now_ms,
+        } = &mut opening
+        else {
+            unreachable!()
+        };
+        identity.starts_at_ms = local_now;
+        identity.ends_at_ms = local_now + 60_000;
+        policy.latest_resume_ms = local_now + 60_000;
+        policy.evidence_max_age_ms = 30_000;
+        *now_ms = local_now;
+        let request = |operation| recovery::Request {
+            recovery_version: recovery::CONTRACT_VERSION,
+            operation,
+        };
+        assert!(matches!(
+            recovery::execute(&mut storage, request(opening), "rig-1")
+                .await
+                .unwrap(),
+            recovery::Reply::Opened { .. }
+        ));
+        assert!(matches!(
+            recovery::execute(
+                &mut storage,
+                request(apply(0, local_now, core::Event::Tick {})),
+                "rig-1"
+            )
+            .await
+            .unwrap(),
+            recovery::Reply::Applied { .. }
+        ));
+        let operation = || {
+            let mut state = storage_tests::fixture().state;
+            state.now_ms = planning_now;
+            state.conditions_valid_until_ms = planning_now + 120_000;
+            state.completion_deadline_ms = Some(planning_now + 90_000);
+            storage::Operation::Evaluate { state }
+        };
+        let mut allowed = operation();
+        assert_eq!(
+            recovery::gate_at(&mut storage, &mut allowed, "rig-1", Some(local_now))
+                .await
+                .unwrap(),
+            Ok(())
+        );
+        let state = allowed.acquisition_state_mut().unwrap();
+        assert_eq!(state.now_ms, planning_now);
+        assert_eq!(state.conditions_valid_until_ms, planning_now + 60_000);
+        assert_eq!(state.completion_deadline_ms, Some(planning_now + 60_000));
+        for (now, expected) in [
+            (local_now - 1, Error::ClockReversed),
+            (local_now + 30_001, Error::AcquisitionBlocked),
+            (local_now + 60_000, Error::AcquisitionBlocked),
+        ] {
+            assert_eq!(
+                recovery::gate_at(&mut storage, &mut operation(), "rig-1", Some(now))
+                    .await
+                    .unwrap(),
+                Err(expected)
+            );
+        }
+        recovery::execute(
+            &mut storage,
+            request(apply(1, local_now, core::Event::StopNight {})),
+            "rig-1",
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            recovery::gate_at(&mut storage, &mut operation(), "rig-1", Some(local_now))
+                .await
+                .unwrap(),
+            Err(Error::AcquisitionBlocked)
+        );
+    }
+}
+
 fn open() -> Operation {
     Operation::Open {
         identity: core::Identity {

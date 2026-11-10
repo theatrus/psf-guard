@@ -86,13 +86,43 @@ impl Ledger {
         state: &State,
         recovery: &psf_guard_director_core::recovery::Snapshot,
     ) -> Result<DispatchCheck, Error> {
+        self.check_quality_probe_at(
+            goal_id,
+            attempt_id,
+            recipe,
+            constraints,
+            state,
+            recovery,
+            state.now_ms,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn check_quality_probe_at(
+        &mut self,
+        goal_id: &str,
+        attempt_id: &str,
+        recipe: &psf_guard_director_core::program::Recipe,
+        constraints: &Constraints,
+        state: &State,
+        recovery: &psf_guard_director_core::recovery::Snapshot,
+        recovery_now_ms: u64,
+    ) -> Result<DispatchCheck, Error> {
         if self.unresolved_attempt()?.is_some() || self.active_preparation()?.is_some() {
             return Err(Error::ConflictingEvidence);
         }
         self.geometry
             .as_ref()
             .ok_or(Error::ConflictingEvidence)?
-            .check_quality_probe(goal_id, constraints, state, recovery, attempt_id, recipe)
+            .check_quality_probe_at(
+                goal_id,
+                constraints,
+                state,
+                recovery,
+                attempt_id,
+                recipe,
+                recovery_now_ms,
+            )
             .map_err(Error::Geometry)
     }
 
