@@ -83,4 +83,20 @@ describe('plans in the project picker', () => {
     expect(within(waiting).queryByRole('button', { name: /Sh2 86/ })).not.toBeInTheDocument();
     expect(within(waiting).queryByRole('button', { name: /Old plan/ })).not.toBeInTheDocument();
   });
+
+  it('lists no linked plan while a database is still reading its files', async () => {
+    server.use(
+      http.get('/api/databases', () => ok([{ id: 'askar', name: 'Askar', path: '/askar.sqlite' }, { id: 'ultracat', name: 'Ultracat', path: '/ultracat.sqlite' }])),
+      http.get('/api/db/askar/projects', () => HttpResponse.json({ success: true, data: null, error: null, status: 'loading' })),
+      http.get('/api/db/ultracat/projects', () => ok([])),
+    );
+    renderAt('/');
+    const trigger = document.querySelector<HTMLButtonElement>('#scope-select')!;
+    await vi.waitFor(() => expect(trigger).not.toBeDisabled(), { timeout: 15_000 });
+    await userEvent.click(trigger);
+    const waiting = await screen.findByRole('region', { name: 'Plans waiting for frames' });
+    expect(within(waiting).getByRole('button', { name: /Veil mosaic/ })).toBeInTheDocument();
+    expect(within(waiting).queryByRole('button', { name: /Propeller Nebula/ })).not.toBeInTheDocument();
+    expect(within(waiting).queryByRole('button', { name: /Sh2 86/ })).not.toBeInTheDocument();
+  }, 20_000);
 });

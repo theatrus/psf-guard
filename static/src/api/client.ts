@@ -2820,6 +2820,9 @@ export const apiClient = {
   getProjects: async (dbId: string): Promise<Project[]> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.get<ApiResponse<Project[]>>(dbPath(dbId, '/projects'));
+    // While the server first reads the database's files it answers "loading"
+    // with no list. An empty list would read as a database with no projects.
+    if (data.status === 'loading') throw new Error('The project list is still loading.');
     return data.data || [];
   },
 

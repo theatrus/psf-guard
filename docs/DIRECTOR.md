@@ -514,9 +514,7 @@ left out rather than shown as empty.
 
 The header reads Library, then the **scope**, then Sky. The scope runs from
 the whole to the part: the project picker (a plan shot by several rigs is
-one row there, and the closed picker shows it with its rig count; below
-the projects, **Plans waiting for frames** opens the workspace of a plan on
-no rig, or of one activated on a rig with no frames yet), the
+one row there, and the closed picker shows it with its rig count), the
 **Planning** button for that plan's workspace, then a switcher for which rig and
 target **Images** and **Sequence** show. For a plan shot by several rigs
 the switcher lists each rig with its targets; for a lone rig it lists the
@@ -544,6 +542,11 @@ Live** shows them both under the table, read only. Choosing a
 project in the Review picker from the Library, Sky or a workspace opens
 Images for it, and the workspace's own URL parameter (`plan`) stays behind, so a
 plan you had open does not follow you into review.
+
+The picker lists projects that have frames. Below them, **Plans waiting
+for frames** lists plans on no rig and plans activated on a rig that has
+no frames yet. Each entry shows the rigs without frames; choosing it opens
+the plan's workspace.
 
 Choose a project to enable **Planning**, including a project imported from
 image folders. If its catalog cannot be planned, Planning opens the catalog

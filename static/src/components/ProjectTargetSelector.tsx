@@ -13,7 +13,7 @@ import { useDisplayPreferences } from '../hooks/useDisplayPreferences';
 import ProjectTreeOption from './projectSelector/ProjectTreeOption';
 import ProjectFamilyOption from './projectSelector/ProjectFamilyOption';
 import { useCurrentPlan, usePlans } from './header/useCurrentPlan';
-import { rigsWithoutFrames } from './director/waitingPlans';
+import { plansWaitingForFrames } from './director/waitingPlans';
 import { listNames } from './director/listNames';
 
 export default function ProjectTargetSelector() {
@@ -226,14 +226,11 @@ export default function ProjectTargetSelector() {
         ? `${selectedFamily.members.length} rigs`
         : selectedProject?.db_name ?? selectedDatabase?.name ?? null;
   // The list above has projects with frames. A plan on no rig, or activated
-  // on a rig with no frame yet, opens its workspace from here instead. When a
-  // database could not be read its rows are missing, so only plans on no rig
-  // are certain.
-  const listed = new Set(projects.map((project) => `${project.db_id}:${project.id}`));
-  const waiting = plans.rows
-    .map((row) => ({ row, rigs: row.links.length === 0 || projectsIncomplete ? [] : rigsWithoutFrames(row, listed) }))
-    .filter(({ row, rigs }) => row.links.length === 0 || rigs.length > 0)
-    .filter(({ row }) => !search.trim() || row.project.name.toLowerCase().includes(search.trim().toLowerCase()));
+  // on a rig with no frame yet, opens its workspace from below it instead.
+  const waiting = useMemo(() => {
+    const listed = new Set(projects.map((project) => `${project.db_id}:${project.id}`));
+    return plansWaitingForFrames(plans.rows, listed, projectsIncomplete, search);
+  }, [projects, plans.rows, projectsIncomplete, search]);
 
   const renderProject = (project: NavigationProject) => {
     const family = navigation.familyOf(project);
