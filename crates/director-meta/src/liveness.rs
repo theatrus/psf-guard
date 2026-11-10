@@ -78,6 +78,13 @@ impl Liveness {
         }
     }
 
+    /// The rig's status and contacts were deleted with it.
+    pub(crate) fn rig_removed(&self, rig: Uuid) {
+        let mut rigs = self.rigs();
+        rigs.statuses.remove(&rig);
+        rigs.contacts.remove(&rig);
+    }
+
     pub(crate) fn weather_reported(&self) {
         self.weather_reports.fetch_add(1, Ordering::AcqRel);
     }
@@ -168,5 +175,40 @@ mod tests {
         let reloaded = store.keep_liveness().unwrap();
         assert_eq!(reloaded.status(rig), Some(status));
         assert_eq!(reloaded.contacts(rig), store.contacts_for_rig(rig).unwrap());
+        // Removing a rig deletes its status and contacts; memory follows.
+        reloaded.rig_removed(rig);
+        assert_eq!(reloaded.status(rig), None);
+        assert!(reloaded.contacts(rig).is_empty());
+    }
+
+    #[test]
+    fn removing_a_rig_forgets_its_status_and_contacts() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = MetaStore::create(&dir.path().join("meta.sqlite")).unwrap();
+        let liveness = store.keep_liveness().unwrap();
+        let catalog = crate::CatalogIdentity {
+            id: Uuid::new_v4(),
+            origin_instance_id: store.instance_id(),
+        };
+        let rig = store
+            .bind_catalog_rig_after(catalog, "Askar", true, || Ok(()))
+            .unwrap()
+            .rig
+            .id;
+        let status = RigStatus {
+            rig_id: rig,
+            session_id: "s".into(),
+            reported_at_ms: 10,
+            payload: serde_json::json!({ "phase": "exposing" }),
+            received_at_ms: 11,
+        };
+        store.record_status(&status).unwrap();
+        store
+            .record_contact(rig, ContactKind::Status, 11, Some("s"))
+            .unwrap();
+        assert!(liveness.status(rig).is_some());
+        assert!(store.remove_rig(catalog.id).unwrap().is_some());
+        assert_eq!(liveness.status(rig), None);
+        assert!(liveness.contacts(rig).is_empty());
     }
 }

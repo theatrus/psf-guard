@@ -11,10 +11,11 @@
 //!   ([`psf_guard_director_meta::liveness`]), current with every write.
 //! - Any other store write moves [`Service::planning_rows`], and the next
 //!   poll reads the rig list again from the store, opening no rig file.
-//! - Identities are read again only when the registered databases change or
-//!   an identity was adopted ([`crate::catalog_identity::adoptions`]). They
-//!   are read under the store's writer, which every adoption that can change
-//!   an identity holds until its file is committed.
+//! - Identities are read again only when the registered databases change,
+//!   an identity was adopted ([`crate::catalog_identity::adoptions`]), or a
+//!   file could not be read last time. They are read holding the discovery
+//!   permit, which every adoption holds until its file is committed, so a
+//!   read never sees an adoption half done; writes to the store do not wait.
 
 use super::*;
 use psf_guard_director_meta::inbox::{Contact, RigStatus};
@@ -52,6 +53,8 @@ struct Listed {
 struct Snapshot {
     catalogs: CatalogsKey,
     planning_rows: u64,
+    /// The adoption count of the identities the list was read with.
+    adoptions: u64,
     rigs: Arc<Vec<Listed>>,
 }
 
@@ -117,44 +120,69 @@ impl Service {
         // Read before the store, so a write that lands while it is read
         // leaves the count behind and the next poll reads again.
         let planning_rows = self.planning_rows.load(Ordering::Acquire);
-        let adoptions = crate::catalog_identity::adoptions();
+        let current = |kept: &Kept| {
+            let adoptions = crate::catalog_identity::adoptions();
+            kept.identities.clone().filter(|identities| {
+                identities.catalogs == key && identities.adoptions == adoptions
+            })
+        };
         let identities = {
             let kept = self.live_rigs.kept();
-            let identities = kept.identities.clone().filter(|identities| {
-                identities.catalogs == key && identities.adoptions == adoptions
-            });
-            if let Some(snapshot) = kept.snapshot.as_ref().filter(|snapshot| {
-                snapshot.catalogs == key && snapshot.planning_rows == planning_rows
-            }) && identities.is_some()
+            let identities = current(&kept);
+            if let Some(identities) = &identities
+                && let Some(snapshot) = kept.snapshot.as_ref().filter(|snapshot| {
+                    snapshot.catalogs == key
+                        && snapshot.planning_rows == planning_rows
+                        && snapshot.adoptions == identities.adoptions
+                })
             {
                 return Ok(snapshot.rigs.clone());
             }
             identities
         };
-        let identities = match identities {
-            Some(identities) => identities,
+        let (identities, keep) = match identities {
+            Some(identities) => (identities, true),
             None => {
-                let instance = self.instance_id;
-                let catalogs_key = key.clone();
-                let identities = self
-                    .clone()
-                    .with_writer(move |_store| {
-                        let adoptions = crate::catalog_identity::adoptions();
-                        let list = identified_catalogs(&catalogs, instance)
-                            .iter()
-                            .map(|(identity, catalog)| {
-                                (identity.id, catalog.id.clone(), catalog.name.clone())
-                            })
-                            .collect();
-                        Ok::<_, Error>(Identities {
-                            catalogs: catalogs_key,
-                            adoptions,
-                            list: Arc::new(list),
+                // Every adoption holds this permit until its file is
+                // committed. Without it (busy), read anyway and keep nothing.
+                let permit = admit(&self.discovery_admission).await.ok();
+                let waited = permit
+                    .as_ref()
+                    .and_then(|_| current(&self.live_rigs.kept()));
+                match waited {
+                    // Another poll read them while this one waited.
+                    Some(identities) => (identities, true),
+                    None => {
+                        let instance = self.instance_id;
+                        let catalogs_key = key.clone();
+                        let (identities, all_read) = blocking(move || {
+                            let adoptions = crate::catalog_identity::adoptions();
+                            let (found, all_read) = identified_catalogs_read(&catalogs, instance);
+                            let list = found
+                                .iter()
+                                .map(|(identity, catalog)| {
+                                    (identity.id, catalog.id.clone(), catalog.name.clone())
+                                })
+                                .collect();
+                            (
+                                Identities {
+                                    catalogs: catalogs_key,
+                                    adoptions,
+                                    list: Arc::new(list),
+                                },
+                                all_read,
+                            )
                         })
-                    })
-                    .await?;
-                self.live_rigs.kept().identities = Some(identities.clone());
-                identities
+                        .await?;
+                        // A file that could not be read stands under its
+                        // derived identity; read it again next time.
+                        let keep = all_read && permit.is_some();
+                        if keep {
+                            self.live_rigs.kept().identities = Some(identities.clone());
+                        }
+                        (identities, keep)
+                    }
+                }
             }
         };
         let list = identities.list.clone();
@@ -186,11 +214,33 @@ impl Service {
             })
             .await?;
         let rigs = Arc::new(rigs);
-        self.live_rigs.kept().snapshot = Some(Snapshot {
-            catalogs: key,
-            planning_rows,
-            rigs: rigs.clone(),
-        });
+        if keep {
+            self.live_rigs.kept().snapshot = Some(Snapshot {
+                catalogs: key,
+                planning_rows,
+                adoptions: identities.adoptions,
+                rigs: rigs.clone(),
+            });
+        }
         Ok(rigs)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_file_that_cannot_be_read_is_not_taken_as_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing.sqlite");
+        let mut catalog =
+            DatabaseContext::new_for_test(rusqlite::Connection::open_in_memory().unwrap());
+        catalog.database_path = missing.to_string_lossy().into_owned();
+        let catalog = Arc::new(catalog);
+        let (found, all_read) = identified_catalogs_read(&[catalog], Uuid::new_v4());
+        assert!(!all_read);
+        // It still counts, under its derived identity, for this poll.
+        assert_eq!(found.iter().count(), 1);
     }
 }

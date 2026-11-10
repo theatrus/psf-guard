@@ -359,32 +359,31 @@ const ACTIVE_PROJECTS_KEPT_MS: u64 = 60_000;
 /// Each database's count of Active projects, by file path, with when it was
 /// read. N.I.N.A. changes project states too, so unlike the rigs' state
 /// this is read again after a while rather than updated as PSF Guard writes.
-type ActiveCounts = HashMap<String, (u64, Option<u32>)>;
-static ACTIVE_PROJECTS: std::sync::LazyLock<Mutex<ActiveCounts>> =
-    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+type ActiveCounts = HashMap<String, (u64, u32)>;
 
 /// Each database's count of Active projects, by its ID and file path, read
 /// off the request path and kept for a minute. A file that cannot be read
-/// has no count.
-async fn active_projects(paths: Vec<(String, String)>) -> HashMap<String, u32> {
+/// has no count, and is tried again on the next poll.
+async fn active_projects(
+    kept: &Mutex<ActiveCounts>,
+    paths: Vec<(String, String)>,
+) -> HashMap<String, u32> {
     let now = now_ms();
-    let kept = |path: &str| {
-        ACTIVE_PROJECTS.lock().ok().and_then(|counts| {
-            counts
-                .get(path)
-                .filter(|(at, _)| now.saturating_sub(*at) < ACTIVE_PROJECTS_KEPT_MS)
-                .map(|(_, count)| *count)
-        })
-    };
     let mut counts = HashMap::new();
     let mut stale = Vec::new();
-    for (id, path) in paths {
-        match kept(&path) {
-            Some(Some(count)) => {
-                counts.insert(id, count);
+    if let Ok(mut kept) = kept.lock() {
+        // Forget databases no longer registered.
+        kept.retain(|path, _| paths.iter().any(|(_, registered)| registered == path));
+        for (id, path) in paths {
+            match kept
+                .get(&path)
+                .filter(|(at, _)| now.saturating_sub(*at) < ACTIVE_PROJECTS_KEPT_MS)
+            {
+                Some((_, count)) => {
+                    counts.insert(id, *count);
+                }
+                None => stale.push((id, path)),
             }
-            Some(None) => {}
-            None => stale.push((id, path)),
         }
     }
     if stale.is_empty() {
@@ -401,9 +400,11 @@ async fn active_projects(paths: Vec<(String, String)>) -> HashMap<String, u32> {
     })
     .await
     .unwrap_or_default();
-    if let Ok(mut kept) = ACTIVE_PROJECTS.lock() {
+    if let Ok(mut kept) = kept.lock() {
         for (_, path, count) in &read {
-            kept.insert(path.clone(), (now, *count));
+            if let Some(count) = count {
+                kept.insert(path.clone(), (now, *count));
+            }
         }
     }
     counts.extend(
@@ -609,6 +610,7 @@ struct TableSnapshot {
 #[derive(Default)]
 pub(super) struct LiveTable {
     kept: Mutex<Option<TableSnapshot>>,
+    active_projects: Mutex<ActiveCounts>,
 }
 
 impl Service {
@@ -690,25 +692,27 @@ pub(super) async fn statuses(
 ) -> Result<Json<ApiResponse<Vec<RigStatusView>>>, Error> {
     let catalogs = registered(&state)?;
     let service = enabled(&state)?;
-    let mut active = active_projects(
-        catalogs
-            .iter()
-            .map(|catalog| (catalog.id.clone(), catalog.database_path.clone()))
-            .collect(),
-    )
-    .await;
+    let paths = catalogs
+        .iter()
+        .map(|catalog| (catalog.id.clone(), catalog.database_path.clone()))
+        .collect();
+    let rigs_and_extras = async {
+        let rigs = service.clone().live_rigs(catalogs.clone()).await?;
+        let ids = rigs.iter().map(|entry| entry.rig.id).collect();
+        let extras = service.clone().live_table(ids).await?;
+        Ok::<_, Error>((rigs, extras))
+    };
+    let (mut active, rigs_and_extras) = tokio::join!(
+        active_projects(&service.live_table.active_projects, paths),
+        rigs_and_extras
+    );
+    let (rigs, extras) = rigs_and_extras?;
     let now = now_ms();
     let (mut sync, uploads) = plugin_contacts(&state, &catalogs, now);
-    let rigs = service.clone().live_rigs(catalogs).await?;
-    let extras = service
-        .live_table(rigs.iter().map(|entry| entry.rig.id).collect())
-        .await?;
     let mut views = Vec::new();
     for entry in rigs.iter() {
-        // A rig the kept reads lack has just appeared; the next poll has it.
-        let Some(extra) = extras.get(&entry.rig.id).cloned() else {
-            continue;
-        };
+        // live_table reads every rig it is given.
+        let extra = extras.get(&entry.rig.id).cloned().ok_or(Error::Internal)?;
         let sync = entry
             .catalog_slug
             .as_ref()
@@ -743,7 +747,9 @@ pub(super) async fn statuses(
 }
 
 /// What each rig is doing now, for the header's Rigs tab, the Sky and Night
-/// details. Read from memory alone: no database is opened.
+/// details. Answered from memory: the planning store is read again only
+/// after it changes, and a rig database is opened only to read catalog
+/// identities again (see [`super::live_rigs`]).
 #[derive(Serialize)]
 pub(super) struct RigSummaryView {
     rig: NamedIdentity,
@@ -820,13 +826,25 @@ mod active_project_tests {
         db.query_row("PRAGMA journal_mode=WAL", [], |_| Ok(()))
             .unwrap();
         let missing = dir.path().join("missing.sqlite");
-        let counts = active_projects(vec![
+        let kept = Mutex::new(ActiveCounts::new());
+        let paths = vec![
             ("rig".into(), path.to_string_lossy().into_owned()),
             ("missing".into(), missing.to_string_lossy().into_owned()),
-        ])
-        .await;
+        ];
+        let counts = active_projects(&kept, paths.clone()).await;
         assert_eq!(counts.get("rig"), Some(&2));
         assert_eq!(counts.get("missing"), None);
+        // The count is kept; a file that could not be read is not.
+        db.execute("UPDATE project SET state=1 WHERE Id=3", [])
+            .unwrap();
+        assert_eq!(
+            active_projects(&kept, paths.clone()).await.get("rig"),
+            Some(&2)
+        );
+        assert_eq!(kept.lock().unwrap().len(), 1);
+        // A database no longer registered is forgotten.
+        active_projects(&kept, paths[1..].to_vec()).await;
+        assert!(kept.lock().unwrap().is_empty());
         drop(db);
     }
 }

@@ -1,25 +1,11 @@
 import type { DirectorRigNowFields, DirectorRigStatusView } from '../../api/directorTypes';
 
-/** The phases that count as exposing, as the plugin names them. */
-export const EXPOSING_PHASES = ['exposing', 'imaging', 'capturing'] as const;
-
-/** The reported phase (or state), lower-cased, or '' when none. */
-export function phaseOf(view: DirectorRigNowFields): string {
-  const p = view.status?.payload ?? {};
-  const phase = typeof p.phase === 'string' ? p.phase : typeof p.state === 'string' ? p.state : '';
-  return phase.trim().toLowerCase();
-}
-
-/** A fresh report of one of the exposing phases. */
+/** The Director report is past its freshness lease. */
 export function statusIsStale(view: DirectorRigNowFields, nowMs: number): boolean {
   const ttl = view.status?.payload.fresh_for_ms;
   // Explicit client leases also expire while a cached query cannot reach the server.
   return view.status_stale || (typeof ttl === 'number' && Number.isFinite(ttl) && !!view.status
     && nowMs - view.status.received_at_ms > Math.min(600_000, Math.max(15_000, ttl)));
-}
-
-export function isExposing(view: DirectorRigNowFields, nowMs = Date.now()): boolean {
-  return !statusIsStale(view, nowMs) && (EXPOSING_PHASES as readonly string[]).includes(phaseOf(view));
 }
 
 /** "40 s ago", "12 min ago", "3 h ago", "2 d ago". */
@@ -39,7 +25,8 @@ export function formatAge(ageMs: number): string {
  *  Live drops the phrase rather than show it as a task. */
 const OLD_RECONCILE = /[;,]\s*(?:allocation consumed,\s*)?reconciliation required\.?$/i;
 
-const text = (value: unknown): string | null => typeof value === 'string' && value.trim() ? value : typeof value === 'number' && Number.isFinite(value) ? String(value) : null;
+/** A report field as trimmed text, or null when it is empty or not text. */
+export const text = (value: unknown): string | null => typeof value === 'string' && value.trim() ? value.trim() : typeof value === 'number' && Number.isFinite(value) ? String(value) : null;
 
 /** What the rig says it is doing, from the plugin's coalesced report. The
  *  payload is the plugin's; only the fields the design names are read, and

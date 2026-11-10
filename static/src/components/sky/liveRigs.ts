@@ -58,7 +58,9 @@ export function placeRigs(views: DirectorRigSummary[], plans: DirectorPlanRow[],
       now: describeRigNow(view, nowMs),
       targetName,
     };
-    const pointing = pointingOf(payload);
+    // The Director report's pointing only while that report speaks: an
+    // old one would draw a Sync-only rig where it no longer is.
+    const pointing = view.report === 'director' ? pointingOf(payload) : null;
     if (pointing) return { ...base, ra: pointing.ra, dec: pointing.dec, source: 'pointing' as const, unplaced: null };
     if (!targetName) return { ...base, ra: null, dec: null, source: null, unplaced: view.status || view.sync?.sequence ? 'Reports no pointing and no target' : 'No report yet' };
     // The first of the rig's own plan targets with that name and a centre.

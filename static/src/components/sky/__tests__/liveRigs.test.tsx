@@ -60,6 +60,9 @@ describe('placing rigs on the sky', () => {
     const [placed] = placeRigs([syncOnly], plans, now);
     expect(placed).toMatchObject({ source: 'target', ra: 10.68, dec: 41.27, exposing: true, stale: false, targetName: 'M31 panel 1' });
     expect(placed.now).toMatch(/^Exposing M31 panel 1: 300 s/);
+    // An old Director report's pointing does not move it while Sync speaks.
+    const oldDirector = { ...syncOnly, status: view('C925', 'c925', 'online', { phase: 'exposing', pointing: { ra_degrees: 200, dec_degrees: -10 } }, true).status, status_stale: true };
+    expect(placeRigs([oldDirector], plans, now)[0]).toMatchObject({ source: 'target', ra: 10.68, dec: 41.27 });
   });
 
   it('draws placed rigs on the map with their state, and skips the unplaced', () => {

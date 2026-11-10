@@ -650,14 +650,33 @@ pub(super) fn identified_catalogs(
     catalogs: &[Arc<DatabaseContext>],
     instance: Uuid,
 ) -> IdentifiedCatalogs {
+    identified_catalogs_read(catalogs, instance).0
+}
+
+/// [`identified_catalogs`], and whether every file could be read. A file
+/// that could not be read counts under its derived identity, which may not
+/// be the one it carries, so a caller that keeps the answer should not keep
+/// that one.
+pub(super) fn identified_catalogs_read(
+    catalogs: &[Arc<DatabaseContext>],
+    instance: Uuid,
+) -> (IdentifiedCatalogs, bool) {
     let mut sorted: Vec<&Arc<DatabaseContext>> = catalogs.iter().collect();
     sorted.sort_by(|a, b| a.id.cmp(&b.id));
     let mut found = IdentifiedCatalogs {
         by_id: BTreeMap::new(),
         duplicates: Vec::new(),
     };
+    let mut all_read = true;
     for context in sorted {
-        let identity = identity_of(instance, &context.database_path);
+        let identity = match read_identity_checked(&context.database_path) {
+            Ok(Some(identity)) => identity,
+            Ok(None) => derived_identity(instance, &context.database_path),
+            Err(()) => {
+                all_read = false;
+                derived_identity(instance, &context.database_path)
+            }
+        };
         match found.by_id.get(&identity.id) {
             Some((_, first)) => {
                 found
@@ -669,7 +688,7 @@ pub(super) fn identified_catalogs(
             }
         }
     }
-    found
+    (found, all_read)
 }
 
 /// What the operator reads about a registered file that carries another
@@ -683,15 +702,21 @@ pub(super) fn copy_warning(copy: &str, original: &str) -> String {
 /// The identity a database file carries, or `None` for an unadopted or
 /// unreadable file. Never writes.
 pub(super) fn read_identity(path: &str) -> Option<CatalogIdentity> {
+    read_identity_checked(path).ok().flatten()
+}
+
+/// [`read_identity`], telling an unadopted file (`Ok(None)`) from one that
+/// could not be read (`Err`).
+fn read_identity_checked(path: &str) -> Result<Option<CatalogIdentity>, ()> {
     let connection = super::database_context::open_scheduler_connection_with_flags(
         FilePath::new(path),
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
-    .ok()?;
+    .map_err(|_| ())?;
     connection
         .busy_timeout(std::time::Duration::from_secs(1))
-        .ok()?;
-    crate::catalog_identity::read(&connection).ok().flatten()
+        .map_err(|_| ())?;
+    crate::catalog_identity::read(&connection).map_err(|_| ())
 }
 
 pub(super) fn routes() -> Router<Arc<AppState>> {

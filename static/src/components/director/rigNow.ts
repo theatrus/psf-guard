@@ -1,5 +1,5 @@
 import type { DirectorRigSummary, SyncLive } from '../../api/directorTypes';
-import { describeNow, statusIsStale } from './dashboardModel';
+import { describeNow, statusIsStale, text } from './dashboardModel';
 import { describeSequence, sequenceIsStale } from './syncLiveModel';
 
 /** What a rig is doing now, from whichever plugin reports it. The Director
@@ -30,8 +30,7 @@ export function describeRigNow(view: DirectorRigSummary, nowMs: number): string 
 /** The target the rig reports working on, from the same plugin as
  *  `describeRigNow`, or null. */
 export function rigTargetName(view: DirectorRigSummary): string | null {
-  const name = (value: unknown) => typeof value === 'string' && value.trim() ? value.trim() : null;
-  if (syncSpeaks(view)) return name(view.sync?.sequence?.activity?.target_name);
+  if (syncSpeaks(view)) return text(view.sync?.sequence?.activity?.target_name);
   const payload = view.status?.payload ?? {};
-  return name(payload.target_name) ?? name(payload.target);
+  return text(payload.target_name) ?? text(payload.target);
 }

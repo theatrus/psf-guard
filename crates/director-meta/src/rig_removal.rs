@@ -102,6 +102,9 @@ impl MetaStore {
         tx.execute("DELETE FROM catalog WHERE id=?1", [&catalog_id])?;
         tx.execute("DELETE FROM rig WHERE id=?1", [&rig_id])?;
         tx.commit()?;
+        if let Some(liveness) = &self.liveness {
+            liveness.rig_removed(rig);
+        }
         Ok(Some(removal))
     }
 }
