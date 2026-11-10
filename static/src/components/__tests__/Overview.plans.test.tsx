@@ -152,17 +152,18 @@ describe('the Library with Planning', () => {
     await screen.findByRole('combobox', { name: 'Show projects' });
     expect(screen.getByTestId('location')).toHaveTextContent(/^\/\?db=redcat&project=2$/);
     back.unmount();
-    // A fresh Library address, as a link from another page builds it.
+    // A fresh Library address, as a link from another page builds it. The
+    // header shows All projects for RedCat, so Database shows RedCat too.
     const second = mount('/?db=redcat');
-    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/?db=redcat&show=needs-activation&sort=name'));
+    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/?db=redcat&show=needs-activation&sort=name&dbfilter=redcat'));
     expect(await screen.findByRole('combobox', { name: 'Show projects' })).toHaveValue('needs-activation');
     // Show all clears Show and the search for next time too; the order stays.
     fireEvent.click(await screen.findByRole('button', { name: 'Show all' }));
-    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent(/^\/\?db=redcat&sort=name$/));
+    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent(/^\/\?db=redcat&sort=name&dbfilter=redcat$/));
     second.unmount();
     mount('/');
     await screen.findByRole('combobox', { name: 'Show projects' });
-    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent(/^\/\?sort=name$/));
+    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent(/^\/\?dbfilter=redcat&sort=name$/));
   });
 
   it('keeps the sort order in the URL, leaving newest first out', async () => {

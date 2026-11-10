@@ -135,19 +135,35 @@ function LibraryPage() {
   const filterSignature = JSON.stringify(filtersOf(searchParams));
   const lookedAtArrival = useRef(false);
   const backToProject = searchParams.has('project');
+  const { data: databases } = useAllDatabases();
+  // The header's All projects for one database (`db` without `project`) is
+  // that database here too: the Database filter follows it, and choosing
+  // another database below moves the header along. A project in the header
+  // leaves the filter alone, and so does a slug no database has, which the
+  // header does not show as a database either.
+  const parkedDatabase = backToProject ? null : getParam('db');
+  const headerDatabase = parkedDatabase && databases?.some((database) => database.id === parkedDatabase) ? parkedDatabase : null;
   useEffect(() => {
     const current = JSON.parse(filterSignature) as ReturnType<typeof filtersOf>;
     if (!lookedAtArrival.current) {
       lookedAtArrival.current = true;
       if (Object.keys(current).length === 0) {
         const saved = recallLibraryFilters();
+        const restored = headerDatabase ? { ...saved, dbfilter: headerDatabase } : saved;
         // The restored URL comes back through here and is kept.
-        if (Object.keys(saved).length > 0 && !backToProject) updateParams(saved);
+        if (Object.keys(restored).length > 0 && !backToProject) updateParams(restored);
         return;
       }
     }
+    if (headerDatabase && current.dbfilter !== headerDatabase) {
+      updateParams({ dbfilter: headerDatabase });
+      return;
+    }
     rememberLibraryFilters(current);
-  }, [backToProject, filterSignature, updateParams]);
+  }, [backToProject, filterSignature, headerDatabase, updateParams]);
+  // Database's choice, carried to the header when it shows a whole database.
+  const chooseDatabase = (value: string | null) =>
+    updateParams(headerDatabase ? { dbfilter: value, db: value } : { dbfilter: value });
   const [archivedOpen, setArchivedOpen] = useState(false);
   const [organizing, setOrganizing] = useState<Organizing | null>(null);
   const [organizationScope, setOrganizationScope] = useState<OrganizationScope | null>(null);
@@ -176,7 +192,6 @@ function LibraryPage() {
     name: string;
   } | null>(null);
 
-  const { data: databases } = useAllDatabases();
   const { data: serverInfo } = useQuery({
     queryKey: ['serverInfo'],
     queryFn: apiClient.getServerInfo,
@@ -969,7 +984,7 @@ function LibraryPage() {
                     active={!!dbFilter}
                     pillClassName="project-db-filter"
                     value={dbFilter ?? 'all'}
-                    onChange={(event) => updateParams({ dbfilter: event.target.value })}
+                    onChange={(event) => chooseDatabase(event.target.value)}
                     aria-label="Filter projects by database"
                   >
                     <option value="all">All databases</option>
@@ -1797,7 +1812,7 @@ function LibraryPage() {
           </div>
 
           <LibraryPlans search={projectSearch} show={show} listed={projectKeys} dbFilter={dbFilter} incomplete={projectsIncomplete}
-            onShowNoRig={() => updateParams({ dbfilter: null, show: 'unlinked' })} />
+            onShowNoRig={() => updateParams(headerDatabase ? { dbfilter: null, db: null, show: 'unlinked' } : { dbfilter: null, show: 'unlinked' })} />
 
           {/* Outside the archive: reopening its last project removes it. */}
           {stateNotice?.inArchive && <p ref={archiveNotice} tabIndex={-1} className="library-narrowed" role="status">{stateNotice.text}</p>}

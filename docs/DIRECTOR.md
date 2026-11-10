@@ -855,6 +855,12 @@ link opens it with no filter, it puts them back. A link back to a project
 hide the row the Library marks. **Show all** clears Show and the search for
 the tab too; the Database filter and Sort stay.
 
+When the header's project picker shows **All projects** for one database,
+the Library's Database filter shows that database too. Choosing another
+database in the filter moves the header to **All projects** for it, and
+**All databases** clears the header's database. While the header shows a
+project, the two are independent.
+
 To delete a project from one database, open its **Edit project** panel and
 click **Delete project...**, or click **Delete** beside it under **Archived
 projects**. The dialog lists what goes: the project's targets,
