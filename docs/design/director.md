@@ -2556,6 +2556,15 @@ creates a science reservation. Native dispatch must still consume the newly
 issued recovery attempt once and journal probe measurements separately from
 saved science frames.
 
+Runtime 0.15.0 / IPC 15 accepts an optional `recovery_now_ms` on ledger
+requests. The host supplies time from the same local clock used for recovery
+events; assignment state and geometry retain coordinator time. The runtime
+checks the durable safety evidence and night limit on the recovery clock, then
+converts the remaining duration to the planning clock without extending any
+caller deadline. Quality probes use the same separation for freshness and their
+one-shot recovery deadline. Omitting the field retains the single-clock contract.
+The host still checks its own clock and consumes dispatch callbacks only once.
+
 Cloud monitoring/recovery stays off by default. Equipment failure shutdown is
 independent: failed slews and uncertain operations stop, and optional focus/guide
 retries have a per-night failure cap as well as attempt/time caps. Exhaustion

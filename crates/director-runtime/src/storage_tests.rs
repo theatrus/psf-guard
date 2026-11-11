@@ -134,8 +134,39 @@ pub(super) fn ledger_command(id: u64, operation: Operation) -> Message {
         id,
         Command::Ledger {
             operation: to_raw_value(&operation).unwrap(),
+            recovery_now_ms: None,
         },
     )
+}
+
+#[test]
+fn ledger_clock_is_a_separate_typed_field() {
+    let mut message = ledger_command(1, Operation::UnresolvedAttempt {});
+    let Command::Ledger {
+        recovery_now_ms, ..
+    } = &mut message.payload
+    else {
+        unreachable!()
+    };
+    *recovery_now_ms = Some(123456);
+    let mut encoded = serde_json::to_value(message).unwrap();
+    let decoded: Message = serde_json::from_value(encoded.clone()).unwrap();
+    assert!(matches!(
+        decoded.payload,
+        Command::Ledger {
+            recovery_now_ms: Some(123456),
+            ..
+        }
+    ));
+    for invalid in [
+        json!("123456"),
+        json!(-1),
+        json!(1.5),
+        json!({"now": 123456}),
+    ] {
+        encoded["payload"]["recovery_now_ms"] = invalid;
+        assert!(serde_json::from_value::<Message>(encoded.clone()).is_err());
+    }
 }
 
 pub(super) async fn exchange(
@@ -564,6 +595,7 @@ async fn malformed_storage_operation_closes_session_without_file_creation() {
             1,
             Command::Ledger {
                 operation: to_raw_value(&json!({"action":"open","request":{}})).unwrap(),
+                recovery_now_ms: None,
             },
         ),
     )
@@ -587,6 +619,7 @@ async fn valid_but_oversized_storage_operation_is_bounded_before_decoding() {
             1,
             Command::Ledger {
                 operation: serde_json::value::RawValue::from_string(raw).unwrap(),
+                recovery_now_ms: None,
             },
         ),
     )

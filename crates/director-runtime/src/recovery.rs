@@ -450,6 +450,18 @@ pub async fn gate(
     operation: &mut storage::Operation,
     rig_id: &str,
 ) -> Result<Result<(), Error>, ProtocolError> {
+    gate_at(storage, operation, rig_id, None).await
+}
+
+/// Recovery evidence uses the equipment PC's clock. Planning may use a
+/// coordinator clock with a different offset. Translate only the remaining
+/// recovery duration, never the assignment's timestamps or persisted history.
+pub async fn gate_at(
+    storage: &mut Option<Storage>,
+    operation: &mut storage::Operation,
+    rig_id: &str,
+    recovery_now_ms: Option<u64>,
+) -> Result<Result<(), Error>, ProtocolError> {
     if let storage::Operation::CheckQualityProbe {
         recovery: bound,
         state,
@@ -478,7 +490,10 @@ pub async fn gate(
         {
             return Ok(Err(Error::AcquisitionBlocked));
         }
-        *bound = Some(Box::new(record.snapshot));
+        *bound = Some((
+            Box::new(record.snapshot),
+            recovery_now_ms.unwrap_or(state.now_ms),
+        ));
         return Ok(Ok(()));
     }
     let Some(state) = operation.acquisition_state_mut() else {
@@ -487,7 +502,9 @@ pub async fn gate(
     let Some(mut owned) = storage.take() else {
         return Ok(Ok(()));
     };
-    let query = state.clone();
+    let mut query = state.clone();
+    let recovery_now = recovery_now_ms.unwrap_or(state.now_ms);
+    query.now_ms = recovery_now;
     let rig = rig_id.to_owned();
     let (owned, result) = tokio::task::spawn_blocking(move || {
         let result = owned.gate(&rig, &query);
@@ -496,7 +513,15 @@ pub async fn gate(
     .await
     .map_err(|_| ProtocolError::StorageFailure)?;
     *storage = Some(owned);
-    Ok(result.map(|deadline| {
+    Ok(result.and_then(|deadline| {
+        let deadline = state
+            .now_ms
+            .checked_add(
+                deadline
+                    .checked_sub(recovery_now)
+                    .ok_or(Error::AcquisitionBlocked)?,
+            )
+            .ok_or(Error::InvalidInput)?;
         // The existing planner enforces this bound across the complete operation,
         // not only its start. Never let recovery expand the caller's validity.
         state.conditions_valid_until_ms = state.conditions_valid_until_ms.min(deadline);
@@ -505,5 +530,6 @@ pub async fn gate(
                 .completion_deadline_ms
                 .map_or(deadline, |end| end.min(deadline)),
         );
+        Ok(())
     }))
 }

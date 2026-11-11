@@ -34,8 +34,12 @@ for (const width of [1440, 390]) {
       await page.addLocatorHandler(settings, () => page.getByRole('button', { name: 'Close settings' }).click());
       await page.goto('/#/rigs');
       const live = page.getByRole('region', { name: 'Live rigs' });
-      await expect(live).toContainText('Observed 85% cloud · cloudy');
-      await expect(live).toContainText(`Forecast 10% cloud · ${condition.label}`);
+      // Compact labels and values are separate elements; check each row
+      // without depending on whitespace between those elements.
+      const observed = live.getByText('Observed', { exact: true }).locator('..');
+      const forecast = live.getByText('Forecast', { exact: true }).locator('..');
+      await expect(observed).toContainText('85% cloud · cloudy');
+      await expect(forecast).toContainText(`10% cloud · ${condition.label}`);
       await expect(live.getByRole('link', { name: /CC BY 4.0/ })).toHaveAttribute('href', 'https://open-meteo.com/');
       await expect(settings).toBeHidden();
       await live.scrollIntoViewIfNeeded();

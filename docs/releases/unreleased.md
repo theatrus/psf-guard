@@ -6,6 +6,8 @@
 
 ## Changes
 
+- **Director tolerates clock differences:** With the matching Director plugin update, local safety and recovery checks no longer fail because the observing PC and PSF Guard server have different clock offsets. Assignment windows still follow the server clock; local safety freshness and shutdown deadlines keep their original limits.
+
 - **Activate rigs whose database has leftover rows:** The activation preview no longer fails with *Its database could not be read: FOREIGN KEY constraint failed.* on a rig database that holds rows from a deleted project, such as its rule weights. PSF Guard leaves those rows alone.
 - **Faster Nights and Live:** **Rigs › Nights**, **Night details** and Live's **Tonight** column load many times faster. With four rigs and three dozen targets on each, a week of nights takes about 0.5 s instead of 11 s, a month about 1.5 s instead of 45 s, and tonight about 0.1 s instead of 1.3 s. The first time PSF Guard plans a night at a site, it takes longer, up to about 6 s for a month, while it works out that night's sky. It keeps each sky, so later requests take the shorter times. The nights and schedules are the same as before.
 - **Request replacement Director flats:** The Calibration page's **Flat coverage** tab, formerly **Scheduler flats**, lists Director flat batches next to Target Scheduler's. Invalidate a suspect batch to ask for new flats; PSF Guard keeps the image files. This needs the Director plugin update that adds **Director Flats**, which also takes flats for plans whose light frames are done.

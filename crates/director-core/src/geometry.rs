@@ -294,6 +294,30 @@ impl BoundGeometry {
         attempt_id: &str,
         reference_recipe: &crate::program::Recipe,
     ) -> Result<crate::dispatch::DispatchCheck, Error> {
+        self.check_quality_probe_at(
+            goal_id,
+            current,
+            state,
+            recovery,
+            attempt_id,
+            reference_recipe,
+            state.now_ms,
+        )
+    }
+
+    /// Like `check_quality_probe`, with recovery evidence measured on its own
+    /// clock. Only remaining durations cross into the planner's clock domain.
+    #[allow(clippy::too_many_arguments)]
+    pub fn check_quality_probe_at(
+        &self,
+        goal_id: &str,
+        current: &Constraints,
+        state: &State,
+        recovery: &crate::recovery::Snapshot,
+        attempt_id: &str,
+        reference_recipe: &crate::program::Recipe,
+        recovery_now_ms: u64,
+    ) -> Result<crate::dispatch::DispatchCheck, Error> {
         use crate::recovery::{Cause, Phase};
         recovery.validate().map_err(|_| Error::InvalidCheckpoint)?;
         let Phase::Recovering {
@@ -311,8 +335,8 @@ impl BoundGeometry {
         let resolved = self.source.resolve(goal_id).map_err(Error::Program)?;
         if resolved.recipe != reference_recipe
             || actual != attempt_id
-            || state.now_ms < recovery.last_event_ms
-            || state.now_ms - recovery.last_event_ms > recovery.policy.evidence_max_age_ms
+            || recovery_now_ms < recovery.last_event_ms
+            || recovery_now_ms - recovery.last_event_ms > recovery.policy.evidence_max_age_ms
             || recovery.identity.rig_id != state.rig_id
             || recovery.identity.configuration_id != state.configuration_id
             || context.target_id != resolved.target.id
@@ -336,14 +360,19 @@ impl BoundGeometry {
         goal.attempts_remaining = 1;
         goal.eligible_windows = self.windows[goal_id].clone();
         request.assignment.goals = vec![goal];
+        let recovery_end = (*deadline_ms)
+            .min(recovery.identity.ends_at_ms)
+            .min(recovery.policy.latest_resume_ms);
+        let planning_end = state
+            .now_ms
+            .checked_add(recovery_end.saturating_sub(recovery_now_ms))
+            .ok_or(Error::InvalidCheckpoint)?;
         request.state.completion_deadline_ms = Some(
             request
                 .state
                 .completion_deadline_ms
                 .unwrap_or(u64::MAX)
-                .min(*deadline_ms)
-                .min(recovery.identity.ends_at_ms)
-                .min(recovery.policy.latest_resume_ms),
+                .min(planning_end),
         );
         crate::dispatch::evaluate_dispatch(&request).map_err(Error::Planning)
     }
