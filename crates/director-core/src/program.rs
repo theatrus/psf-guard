@@ -223,7 +223,7 @@ impl BoundProgram {
         if program.schema_version != PROGRAM_VERSION {
             return Err(Error::UnsupportedVersion);
         }
-        crate::validate(&Request {
+        crate::validate_program(&Request {
             contract_version: CONTRACT_VERSION,
             assignment: program.assignment.clone(),
             state: state.clone(),

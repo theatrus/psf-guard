@@ -403,6 +403,21 @@ no scope plans is left alone. The preview lists each change as
 `minimum altitude 10° → 30°`. Columns an older Target Scheduler schema lacks
 are skipped.
 
+### Pause a Director plan around transit
+
+In the plan's **Scheduling limits for every rig**, set **Avoid before transit**
+and **Avoid after transit** independently, from 0 to 360 minutes. For example,
+before **60** and after **0** pauses the plan for the hour before transit and
+allows it again at transit. Director can use another eligible plan during that
+pause. An exposure and its preparation must fit in the available time.
+
+Leave a side blank to inherit from the rig, site or global scheduling defaults.
+If none of those set it, Director uses the session's value in N.I.N.A. Zero is
+an explicit override: it disables that side even when the default is nonzero.
+These settings apply to Director and need the matching plugin update; they do
+not write Target Scheduler's database or change N.I.N.A.'s meridian flips.
+Already assigned work keeps its settings until Director requests fresh work.
+
 ### A rig's limits for every project
 
 A rig's limits also reach the projects no plan holds, such as ones made in

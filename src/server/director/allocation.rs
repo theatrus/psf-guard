@@ -57,6 +57,10 @@ pub(super) async fn start(
                         .duration_since(std::time::UNIX_EPOCH)
                         .map_err(|_| Error::Internal)?
                         .as_millis();
+                    let allocation = store.allocation(rig)?.ok_or(Error::Missing)?;
+                    let program = serde_json::from_value(allocation.snapshot["program"].clone())
+                        .map_err(|_| Error::Internal)?;
+                    program::require_meridian_support(&program, &headers)?;
                     store.start_allocation(
                         rig,
                         input.allocation_id,
@@ -104,6 +108,7 @@ pub(super) async fn get_allocation(
     State(state): State<Arc<AppState>>,
     Path(rig): Path<Uuid>,
     Query(scope): Query<Scope>,
+    headers: axum::http::HeaderMap,
 ) -> Response {
     response(
         async {
@@ -117,6 +122,19 @@ pub(super) async fn get_allocation(
                 .ok_or(Error::Missing)?;
             if allocation.catalog_id != scope.catalog_id {
                 return Err(Error::WrongRig.into());
+            }
+            if headers
+                .get(axum::http::header::AUTHORIZATION)
+                .and_then(|v| v.to_str().ok())
+                .is_some_and(|v| {
+                    v.split_whitespace()
+                        .nth(1)
+                        .is_some_and(|v| v.starts_with("psfdrc_"))
+                })
+            {
+                let program = serde_json::from_value(allocation.snapshot["program"].clone())
+                    .map_err(|_| Error::Internal)?;
+                program::require_meridian_support(&program, &headers)?;
             }
             Ok(allocation)
         }

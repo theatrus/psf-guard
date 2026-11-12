@@ -75,7 +75,8 @@ export default function PlanScheduling({ projectId, rigs }: { projectId: string;
   return <section className="plan-scheduling" aria-label="Scheduling limits">
     {stored.isError && <p className="director-error" role="alert">{message(stored.error)}</p>}
     {stored.data && <SchedulingFields label="This plan's limits" overrides={draft} onChange={change} disabled={!canWrite}
-      inherited={first?.values ?? TS_DEFAULTS} inheritedFrom={limit => rigs.length > 1 ? 'per rig, below' : describeSource(first?.sources[limit])} />}
+      inherited={first?.values ?? TS_DEFAULTS} inheritedFrom={limit => rigs.length > 1 ? 'per rig, below' : describeSource(first?.sources[limit], limit)} />}
+    <p className="director-muted">Transit avoidance applies to Director. Leave either side blank to inherit its default; 0 disables that side. For a pause only before transit, set the before value and set after to 0. N.I.N.A. meridian flip settings still apply.</p>
     {(stale || changedElsewhere)
       ? <p className="director-error" role="alert">These limits changed elsewhere. <button type="button" onClick={reload}>Reload</button></p>
       : save.isError && <p className="director-error" role="alert">{message(save.error)}</p>}
@@ -88,7 +89,7 @@ export default function PlanScheduling({ projectId, rigs }: { projectId: string;
           {rigs.map((rig, index) => {
             const scheduling = resolved[index]?.data?.scheduling;
             if (!scheduling) return <td key={rig.id} className="director-muted">…</td>;
-            return <td key={rig.id}>{describeLimit(spec, scheduling.values[spec.key])}<br /><small className="director-muted">{describeSource(scheduling.sources[spec.key])}</small></td>;
+            return <td key={rig.id}>{describeLimit(spec, scheduling.values[spec.key])}<br /><small className="director-muted">{describeSource(scheduling.sources[spec.key], spec.key)}</small></td>;
           })}
         </tr>)}</tbody>
       </table>

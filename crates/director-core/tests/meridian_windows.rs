@@ -270,7 +270,7 @@ fn expanded_search_requires_fresh_supported_geometry_including_finish() {
             interval(START, START + 86_400_000),
             policy
         ),
-        Err(VisibilityError::InvalidSpan)
+        Err(VisibilityError::StaleEarthOrientation)
     );
     assert_eq!(
         meridian_windows(
