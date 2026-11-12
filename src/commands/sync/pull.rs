@@ -355,55 +355,26 @@ fn dest_guid_map(
     Ok((map, dups))
 }
 
-/// What makes two exposure templates the same to Target Scheduler: profile,
-/// name and filter, compared without case or surrounding spaces, and gain,
-/// offset, binning and readout mode with a camera default (NULL or below
-/// zero) as -1 and a binning below one as one.
-type TemplateTwinKey = (String, String, String, i64, i64, i64, i64);
-
 /// One destination template a source template may take.
 struct TemplateTwin {
     id: i64,
     values: Vec<Value>,
-    /// Another source row has this template's GUID, or already took it in
-    /// this sync: that row's settings win, so this one only maps to it.
+    /// [`crate::template_repeats::identical_template_key`] of `values`.
+    identical: String,
+    /// A source row sent in this sync has this template's GUID, or took
+    /// it already: that row's settings win, so another row only maps to it
+    /// when the two are identical.
     claimed: bool,
 }
 
-/// Destination templates by [`TemplateTwinKey`], lowest Id first.
-type TemplateTwins = HashMap<TemplateTwinKey, Vec<TemplateTwin>>;
+/// Destination templates by
+/// [`crate::template_repeats::same_template_key`], lowest Id first.
+type TemplateTwins = HashMap<crate::template_repeats::SameTemplateKey, Vec<TemplateTwin>>;
 
-fn template_twin_key(write_cols: &[&str], values: &[Value]) -> TemplateTwinKey {
-    let column = |name: &str| {
-        write_cols
-            .iter()
-            .position(|column| column.eq_ignore_ascii_case(name))
-            .map(|position| &values[position])
-    };
-    let text = |name: &str| match column(name) {
-        Some(Value::Text(text)) => text.trim().to_lowercase(),
-        _ => String::new(),
-    };
-    let number = |name: &str, unset: i64, floor: i64| {
-        column(name)
-            .and_then(as_i64)
-            .filter(|value| *value >= floor)
-            .unwrap_or(unset)
-    };
-    (
-        text("profileId"),
-        text("name"),
-        text("filtername"),
-        number("gain", -1, 0),
-        number("offset", -1, 0),
-        number("bin", 1, 1),
-        number("readoutmode", -1, 0),
-    )
-}
-
-/// The destination's exposure templates by [`template_twin_key`], lowest Id
-/// first. One whose GUID the source also has is claimed by that row. Rows
-/// with an ambiguous GUID are left out.
+/// The destination's exposure templates by
+/// [`crate::template_repeats::same_template_key`], lowest Id first. One
+/// whose GUID a source row sent in this sync has is claimed by that row.
+/// Rows with an ambiguous GUID are left out.
 fn dest_template_twins(
     tx: &Transaction,
     write_cols: &[&str],
@@ -433,10 +404,13 @@ fn dest_template_twins(
         }
         let claimed = guid.is_some_and(|guid| source_guids.contains(guid));
         twins
-            .entry(template_twin_key(write_cols, &vals))
+            .entry(crate::template_repeats::same_template_key(
+                write_cols, &vals,
+            ))
             .or_default()
             .push(TemplateTwin {
                 id: dest_id,
+                identical: crate::template_repeats::identical_template_key(write_cols, &vals),
                 values: vals,
                 claimed,
             });
@@ -444,13 +418,22 @@ fn dest_template_twins(
     Ok(twins)
 }
 
-/// Every non-empty GUID in the source `table`.
-fn source_guids(src: &Connection, table: &str) -> Result<HashSet<String>> {
-    let mut stmt = src.prepare(&format!("SELECT guid FROM {table}"))?;
+/// Every non-empty GUID of the source `table`'s rows this sync sends: all
+/// of them, or those `allowed` lists.
+fn source_guids(
+    src: &Connection,
+    table: &str,
+    allowed: Option<&HashSet<i64>>,
+) -> Result<HashSet<String>> {
+    let mut stmt = src.prepare(&format!("SELECT Id, guid FROM {table}"))?;
     let mut guids = HashSet::new();
     let mut rows = stmt.query([])?;
     while let Some(row) = rows.next()? {
-        if let Some(guid) = row.get::<_, Option<String>>(0)?
+        let id = as_i64(&row.get::<_, Value>(0)?);
+        if allowed.is_some_and(|allowed| !id.is_some_and(|id| allowed.contains(&id))) {
+            continue;
+        }
+        if let Some(guid) = row.get::<_, Option<String>>(1)?
             && !guid.is_empty()
         {
             guids.insert(guid);
@@ -539,7 +522,7 @@ fn upsert_guid_table(
             tx,
             &write_cols,
             guid_w,
-            &source_guids(src, table)?,
+            &source_guids(src, table, allowed_src_ids)?,
             &dest_dups,
         )?)
     } else {
@@ -610,8 +593,28 @@ fn upsert_guid_table(
 
         let twin = match template_twins.as_mut() {
             Some(twins) if !dest_map.contains_key(&guid) => twins
-                .get_mut(&template_twin_key(&write_cols, &write_values))
-                .and_then(|rows| rows.first_mut()),
+                .get_mut(&crate::template_repeats::same_template_key(
+                    &write_cols,
+                    &write_values,
+                ))
+                .and_then(|rows| {
+                    // An identical template first, claimed or not; else the
+                    // only template no other row has claimed. With two or
+                    // more to choose from, none is right, so a new one is
+                    // added.
+                    let identical =
+                        crate::template_repeats::identical_template_key(&write_cols, &write_values);
+                    match rows.iter().position(|twin| twin.identical == identical) {
+                        Some(position) => Some(&mut rows[position]),
+                        None => {
+                            let mut open = rows.iter_mut().filter(|twin| !twin.claimed);
+                            match (open.next(), open.next()) {
+                                (Some(twin), None) => Some(twin),
+                                _ => None,
+                            }
+                        }
+                    }
+                }),
             _ => None,
         };
         if let Some(twin) = twin {
@@ -642,6 +645,9 @@ fn upsert_guid_table(
                     row_label(&write_cols, &write_values, &guid),
                     diffs.join(", "),
                 ));
+                twin.identical =
+                    crate::template_repeats::identical_template_key(&write_cols, &write_values);
+                twin.values = write_values;
             }
             continue;
         }
@@ -694,10 +700,17 @@ fn upsert_guid_table(
                 // takes this one.
                 if let Some(twins) = template_twins.as_mut() {
                     twins
-                        .entry(template_twin_key(&write_cols, &write_values))
+                        .entry(crate::template_repeats::same_template_key(
+                            &write_cols,
+                            &write_values,
+                        ))
                         .or_default()
                         .push(TemplateTwin {
                             id: dest_id,
+                            identical: crate::template_repeats::identical_template_key(
+                                &write_cols,
+                                &write_values,
+                            ),
                             values: write_values.clone(),
                             claimed: true,
                         });
@@ -1480,6 +1493,18 @@ fn used_template_ids(src: &Connection, plans: Option<&HashSet<i64>>) -> Result<H
     Ok(used)
 }
 
+/// Which exposure templates a structure sync sends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum TemplateScope {
+    /// Every template: a merge mirrors its source, so Planning can offer
+    /// each one.
+    All,
+    /// Only the templates the sent plans use: a planning push. N.I.N.A.
+    /// lists every template a rig's database has, and a template a catalog
+    /// made for imported frames would only add clutter there.
+    UsedByPlans,
+}
+
 /// Structure sync result plus the FK maps needed by acquired-image syncing.
 pub(super) struct StructureSync {
     pub exposuretemplate: TableCounts,
@@ -1521,12 +1546,14 @@ pub(super) struct StructureSync {
 /// nothing was captured for them there. `destination` says whether the
 /// sync may also record that deletion as a tombstone (a PSF Guard catalog)
 /// or must write no PSF Guard table (a rig's Target Scheduler database).
+#[allow(clippy::too_many_arguments)]
 pub(super) fn sync_structure(
     src: &Connection,
     tx: &Transaction,
     project_filter: Option<&str>,
     excluded_plan_counts: &[&str],
     preserve_existing: bool,
+    templates: TemplateScope,
     deletions: SourceDeletionContext<'_>,
     changes: &mut Vec<String>,
 ) -> Result<StructureSync> {
@@ -1639,18 +1666,20 @@ pub(super) fn sync_structure(
         None => None,
     };
 
-    // Templates are profile-scoped. A catalog takes all of them, so Planning
-    // can offer each one. A rig's Target Scheduler database takes only the
-    // ones the plans sent use: N.I.N.A. lists every template it has, and a
-    // template a catalog made for imported frames would only add clutter
-    // there.
-    let used_templates = match destination {
-        SyncDestination::Catalog => None,
-        SyncDestination::Scheduler => Some(used_template_ids(src, included_plans.as_ref())?),
+    // Templates are profile-scoped; see [`TemplateScope`].
+    let used_templates = match templates {
+        TemplateScope::All => None,
+        TemplateScope::UsedByPlans => Some(used_template_ids(src, included_plans.as_ref())?),
     };
     // Templates the destination repeats are merged first, so a source
     // template finds the one kept.
     let merged_templates = crate::template_repeats::merge_repeated(tx)?;
+    if !merged_templates.is_empty() {
+        tracing::info!(
+            templates = merged_templates.len(),
+            "merged repeated exposure templates in the sync destination"
+        );
+    }
     for merged in &merged_templates {
         changes.push(format!(
             "merge exposuretemplate \"{}\" #{} into #{} ({} plans moved)",
@@ -2220,6 +2249,7 @@ pub(crate) fn sync_arrivals(
         None,
         &["accepted"],
         true,
+        TemplateScope::All,
         SourceDeletionContext {
             destination: SyncDestination::Catalog,
             rules: deletions,
@@ -2274,6 +2304,7 @@ pub(crate) fn sync_pull_in_transaction(
         opts.project_filter.as_deref(),
         &["accepted"],
         false,
+        TemplateScope::All,
         SourceDeletionContext {
             destination: SyncDestination::Catalog,
             rules: &opts.deletions,

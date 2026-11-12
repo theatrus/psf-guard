@@ -284,10 +284,12 @@ export default function SchedulerSyncControls({
       sessionStorage.removeItem(previewStorageKey);
       setPending(null);
       const deleted = result.project?.deleted ?? 0;
+      const merged = result.exposuretemplate?.deleted ?? 0;
       setMessage(
         `${operationLabel(result.kind)} complete: ${result.total_inserted} added, ` +
           `${result.total_updated} updated` +
-          (deleted > 0 ? `, ${plural(deleted, 'project')} deleted.` : '.')
+          (deleted > 0 ? `, ${plural(deleted, 'project')} deleted` : '') +
+          (merged > 0 ? `, ${plural(merged, 'repeated exposure template')} merged.` : '.')
       );
       queryClient.invalidateQueries({ queryKey: ['databases'] });
       queryClient.invalidateQueries({ queryKey: ['db'] });

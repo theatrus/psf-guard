@@ -112,11 +112,13 @@ source's counter.
 Source planning fields win. The destination keeps capture history, plan
 `acquired` and `accepted` counts, images, grades, and reject reasons.
 
-A rig's Target Scheduler database gets only the exposure templates the sent
-plans use, and so does the planning export the N.I.N.A. Sync plugin pulls.
-N.I.N.A. lists every template a profile has, so a template a catalog made
-for imported frames would only add clutter there. A PSF Guard catalog
-destination gets every template, so Planning can offer each one.
+Send planning carries only the exposure templates the sent plans use, and
+so does the planning export, which the N.I.N.A. Sync plugin's **Pull
+planning** and a PSF Guard peer receive. N.I.N.A. lists every template a
+profile has, and the destination may be a rig's own Target Scheduler
+database, so a template a catalog made for imported frames would only add
+clutter there. A merge carries every template, so Planning can offer each
+one.
 
 ### Send grades
 
@@ -133,7 +135,7 @@ filters remain available.
 | Data | Match | Default rule |
 | --- | --- | --- |
 | Project, target, template, plan | Stable GUID | Directional source wins |
-| Exposure template whose GUID the destination lacks, when the destination has a template in the same profile with the same name, filter, gain, offset, binning and readout mode | That template | Update it in place; it keeps its own GUID. When another source row has that template's GUID, or took it earlier in the same sync, that row's settings win and this one only maps to it |
+| Exposure template whose GUID the destination lacks, when the destination has templates in the same profile with the same name, filter, gain, offset, binning and readout mode | One identical to it in every other setting; else the only one no other sent row's GUID or earlier match has claimed; else none, and it is inserted | Update it in place; it keeps its own GUID. A claimed template is only mapped to, never rewritten |
 | Destination templates that repeat one another: one profile, the same name and filter (without case or surrounding spaces) and every other column but `Id` and `guid` equal | The one most plans use, then the lowest `Id` | Merged before the sync: the copies' plans move to it and the copies are deleted (`exposuretemplate.deleted` counts them). Import and activation merge them the same way |
 | Rule weight | Project GUID plus name | Directional source wins |
 | Captured image | Stable GUID | Insert or update capture fields |

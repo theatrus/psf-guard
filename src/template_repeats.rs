@@ -41,12 +41,74 @@ struct Row {
     key: String,
 }
 
+/// A whole number stored as an integer or as a real with no fraction.
 fn integer(value: &Value) -> Option<i64> {
     match value {
         Value::Integer(value) => Some(*value),
         Value::Real(value) if value.fract() == 0.0 => Some(*value as i64),
         _ => None,
     }
+}
+
+fn folded_text(value: Option<&Value>) -> String {
+    match value {
+        Some(Value::Text(text)) => text.trim().to_lowercase(),
+        _ => String::new(),
+    }
+}
+
+/// Gain, offset or readout mode: -1 for the camera default, written as
+/// `NULL` or any value below zero.
+fn camera_setting(value: Option<&Value>) -> i64 {
+    value.and_then(integer).filter(|v| *v >= 0).unwrap_or(-1)
+}
+
+/// Binning: one for `NULL` or any value below one.
+fn binning(value: Option<&Value>) -> i64 {
+    value.and_then(integer).filter(|v| *v >= 1).unwrap_or(1)
+}
+
+fn column<'a>(columns: &[&str], values: &'a [Value], name: &str) -> Option<&'a Value> {
+    columns
+        .iter()
+        .position(|column| column.eq_ignore_ascii_case(name))
+        .map(|position| &values[position])
+}
+
+/// What Target Scheduler tells templates apart by: profile, name, filter,
+/// gain, offset, binning and readout mode, folded as the module explains.
+/// Templates with the same key may still differ in other settings, such as
+/// the default exposure or Moon avoidance.
+pub type SameTemplateKey = (String, String, String, i64, i64, i64, i64);
+
+pub fn same_template_key(columns: &[&str], values: &[Value]) -> SameTemplateKey {
+    (
+        folded_text(column(columns, values, "profileId")),
+        folded_text(column(columns, values, "name")),
+        folded_text(column(columns, values, "filtername")),
+        camera_setting(column(columns, values, "gain")),
+        camera_setting(column(columns, values, "offset")),
+        binning(column(columns, values, "bin")),
+        camera_setting(column(columns, values, "readoutmode")),
+    )
+}
+
+/// Every column but `Id` and `guid`, folded as [`same_template_key`] folds
+/// its columns: two templates with the same identity key repeat each other.
+pub fn identical_template_key(columns: &[&str], values: &[Value]) -> String {
+    let mut key = Vec::new();
+    for (column, value) in columns.iter().zip(values) {
+        let folded = match column.to_ascii_lowercase().as_str() {
+            "id" | "guid" => continue,
+            "profileid" | "name" | "filtername" => Value::Text(folded_text(Some(value))),
+            "gain" | "offset" | "readoutmode" => Value::Integer(camera_setting(Some(value))),
+            "bin" => Value::Integer(binning(Some(value))),
+            _ => value.clone(),
+        };
+        key.push(format!("{}={folded:?}", column.to_ascii_lowercase()));
+    }
+    key.sort();
+    key.join("\u{0}")
 }
 
 fn has_table(conn: &Connection, table: &str) -> Result<bool> {
@@ -101,34 +163,17 @@ fn read_rows(conn: &Connection) -> Result<Vec<Row>> {
         let Some(id) = integer(&values[id_column]) else {
             continue;
         };
-        let mut name = String::new();
-        let mut key = Vec::new();
-        for (column, value) in columns.iter().zip(&values) {
-            let folded = match column.to_ascii_lowercase().as_str() {
-                "id" | "guid" => continue,
-                "profileid" | "name" | "filtername" => {
-                    let text = match value {
-                        Value::Text(text) => text.clone(),
-                        _ => String::new(),
-                    };
-                    if column.eq_ignore_ascii_case("name") {
-                        name = text.clone();
-                    }
-                    Value::Text(text.trim().to_lowercase())
-                }
-                "gain" | "offset" | "readoutmode" => {
-                    Value::Integer(integer(value).filter(|v| *v >= 0).unwrap_or(-1))
-                }
-                "bin" => Value::Integer(integer(value).filter(|v| *v >= 1).unwrap_or(1)),
-                _ => value.clone(),
-            };
-            key.push(format!("{column}={folded:?}"));
-        }
+        let names: Vec<&str> = columns.iter().map(String::as_str).collect();
+        let name = match column(&names, &values, "name") {
+            Some(Value::Text(name)) => name.clone(),
+            _ => String::new(),
+        };
+        let key = identical_template_key(&names, &values);
         out.push(Row {
             id,
             name,
             plans: plans.get(&id).copied().unwrap_or(0),
-            key: key.join("\u{0}"),
+            key,
         });
     }
     Ok(out)

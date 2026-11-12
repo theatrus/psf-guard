@@ -233,7 +233,8 @@ before the GitHub release fallback. See [docs/UPDATES.md](docs/UPDATES.md).
   name, and capture time and updates it in place rather than inserting a
   twin. The other exception is an exposure template whose GUID the
   destination lacks: it takes the destination's template in the same profile
-  with the same name, filter, gain, offset, binning and readout mode, because
+  with the same name, filter, gain, offset, binning and readout mode
+  (`template_repeats::same_template_key`), because
   two copies of one Target Scheduler database fill in different GUIDs on
   upgrade. Beyond that, do not substitute names or nearby coordinates for
   sync identity.

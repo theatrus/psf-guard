@@ -303,6 +303,12 @@ describe('SchedulerSyncControls', () => {
         error: null,
         status: 'ready',
       })),
+      http.post('/api/databases/local/sync/previews/merging-preview/apply', () => HttpResponse.json({
+        success: true,
+        data: { ...result, dry_run: false },
+        error: null,
+        status: 'ready',
+      })),
     );
 
     const user = userEvent.setup();
@@ -312,6 +318,9 @@ describe('SchedulerSyncControls', () => {
     expect(await screen.findByText(
       'Merges 3 repeated exposure templates in the destination. Their plans move to the identical template that stays.',
     )).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Apply this preview' }));
+    expect(await screen.findByText('Send planning complete: 0 added, 0 updated, 3 repeated exposure templates merged.')).toBeInTheDocument();
   });
 
   it('stops a preview whose inputs changed and ignores its late reply', async () => {

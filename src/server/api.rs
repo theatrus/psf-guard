@@ -684,8 +684,9 @@ pub struct SchedulerSyncTableCounts {
     pub unchanged: usize,
     pub skipped: usize,
     /// Rows deleted because the source catalog deleted their project and
-    /// nothing was captured for it in the destination. Absent on older
-    /// responses.
+    /// nothing was captured for it in the destination; for exposure
+    /// templates, the destination's repeated templates merged into another.
+    /// Absent on older responses.
     #[serde(default)]
     pub deleted: usize,
 }
