@@ -26,6 +26,12 @@ pub struct SchedulingOverrides {
     /// Image only within this many minutes either side of the meridian, as
     /// Target Scheduler's meridian window does; 0 turns it off.
     pub meridian_window_minutes: Option<u32>,
+    /// Director only: independently override either side of transit. None
+    /// inherits; zero disables that side without changing N.I.N.A. flip settings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meridian_avoidance_before_minutes: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meridian_avoidance_after_minutes: Option<u32>,
     /// Exposures before switching filter; 0 lets Target Scheduler decide.
     pub filter_switch_frequency: Option<u32>,
     /// Exposures between dithers; 0 dithers per the exposure template.
@@ -44,6 +50,10 @@ pub struct SchedulingValues {
     pub use_custom_horizon: bool,
     pub horizon_offset_degrees: f64,
     pub meridian_window_minutes: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meridian_avoidance_before_minutes: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meridian_avoidance_after_minutes: Option<u32>,
     pub filter_switch_frequency: u32,
     pub dither_every: u32,
     pub smart_exposure_order: bool,
@@ -59,6 +69,8 @@ impl Default for SchedulingValues {
             use_custom_horizon: false,
             horizon_offset_degrees: 0.0,
             meridian_window_minutes: 0,
+            meridian_avoidance_before_minutes: None,
+            meridian_avoidance_after_minutes: None,
             filter_switch_frequency: 0,
             dither_every: 0,
             smart_exposure_order: false,
@@ -97,6 +109,8 @@ impl SchedulingOverrides {
             && ordered
             && within(self.minimum_time_minutes, 24 * 60)
             && within(self.meridian_window_minutes, 12 * 60)
+            && within(self.meridian_avoidance_before_minutes, 360)
+            && within(self.meridian_avoidance_after_minutes, 360)
             && within(self.filter_switch_frequency, 10_000)
             && within(self.dither_every, 10_000)
         {
@@ -127,11 +141,34 @@ pub fn resolve_scheduling(layers: &[(&SchedulingOverrides, Source)]) -> Resolved
         take!(use_custom_horizon);
         take!(horizon_offset_degrees);
         take!(meridian_window_minutes);
+        if overrides.meridian_avoidance_before_minutes.is_some() {
+            values.meridian_avoidance_before_minutes = overrides.meridian_avoidance_before_minutes;
+            sources.insert("meridian_avoidance_before_minutes".into(), source.clone());
+        }
+        if overrides.meridian_avoidance_after_minutes.is_some() {
+            values.meridian_avoidance_after_minutes = overrides.meridian_avoidance_after_minutes;
+            sources.insert("meridian_avoidance_after_minutes".into(), source.clone());
+        }
         take!(filter_switch_frequency);
         take!(dither_every);
         take!(smart_exposure_order);
     }
     ResolvedScheduling { values, sources }
+}
+
+impl SchedulingValues {
+    pub fn meridian_override(&self) -> Option<psf_guard_director_core::windows::MeridianOverride> {
+        (self.meridian_avoidance_before_minutes.is_some()
+            || self.meridian_avoidance_after_minutes.is_some())
+        .then_some(psf_guard_director_core::windows::MeridianOverride {
+            before_ms: self
+                .meridian_avoidance_before_minutes
+                .map(|v| u64::from(v) * 60_000),
+            after_ms: self
+                .meridian_avoidance_after_minutes
+                .map(|v| u64::from(v) * 60_000),
+        })
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

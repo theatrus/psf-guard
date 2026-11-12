@@ -65,6 +65,8 @@ pub struct Goal {
     pub overhead_ms: u64,
     pub eligible_windows: Vec<Interval>,
     pub transits: Option<TransitCoverage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meridian_avoidance: Option<windows::MeridianOverride>,
 }
 
 impl Goal {
@@ -162,6 +164,17 @@ fn valid_id(id: &str) -> bool {
 }
 
 fn validate(request: &Request) -> Result<Vec<Vec<Interval>>, Error> {
+    validate_windows(request, false)
+}
+
+// A program may omit transit evidence because BoundGeometry calculates it from
+// coordinates and the local site. This only validates/binds intent; legacy
+// selection and dispatch still require complete transit coverage.
+pub(crate) fn validate_program(request: &Request) -> Result<Vec<Vec<Interval>>, Error> {
+    validate_windows(request, true)
+}
+
+fn validate_windows(request: &Request, defer_transits: bool) -> Result<Vec<Vec<Interval>>, Error> {
     if request.contract_version != CONTRACT_VERSION {
         return Err(Error::UnsupportedContract);
     }
@@ -189,6 +202,7 @@ fn validate(request: &Request) -> Result<Vec<Vec<Interval>>, Error> {
             || goal.requested == 0
             || goal.exposure_ms == 0
             || goal.exposure_ms.checked_add(goal.overhead_ms).is_none()
+            || goal.meridian_avoidance.is_some_and(|p| !p.valid())
         {
             return Err(Error::InvalidGoal);
         }
@@ -198,7 +212,16 @@ fn validate(request: &Request) -> Result<Vec<Vec<Interval>>, Error> {
                 start_ms: a.valid_from_ms,
                 end_ms: a.expires_at_ms,
             },
-            request.state.meridian_exclusion,
+            if defer_transits && goal.transits.is_none() {
+                MeridianExclusion {
+                    before_ms: 0,
+                    after_ms: 0,
+                }
+            } else {
+                goal.meridian_avoidance
+                    .unwrap_or_default()
+                    .resolve(request.state.meridian_exclusion)
+            },
             goal.transits.as_ref(),
         )?;
         if let Some(deadline) = request.state.completion_deadline_ms {

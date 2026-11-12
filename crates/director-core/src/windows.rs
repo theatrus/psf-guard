@@ -23,6 +23,29 @@ pub struct MeridianExclusion {
     pub after_ms: u64,
 }
 
+/// Project overrides for each side of transit. Missing sides inherit the local
+/// session setting; explicit zero disables that side. This does not control flips.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct MeridianOverride {
+    pub before_ms: Option<u64>,
+    pub after_ms: Option<u64>,
+}
+
+impl MeridianOverride {
+    pub fn resolve(self, inherited: MeridianExclusion) -> MeridianExclusion {
+        MeridianExclusion {
+            before_ms: self.before_ms.unwrap_or(inherited.before_ms),
+            after_ms: self.after_ms.unwrap_or(inherited.after_ms),
+        }
+    }
+
+    pub fn valid(self) -> bool {
+        self.before_ms.is_none_or(|v| v <= 360 * 60_000)
+            && self.after_ms.is_none_or(|v| v <= 360 * 60_000)
+    }
+}
+
 /// Complete, sorted transit results for the stated search interval. An empty
 /// result is known absence; `None` at the caller is unknown, not absence.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

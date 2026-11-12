@@ -120,7 +120,7 @@ impl BoundGeometry {
         // evaluation clips these windows to its current completion deadline.
         let mut geometry_state = state.clone();
         geometry_state.completion_deadline_ms = None;
-        let permitted = crate::validate(&Request {
+        let permitted = crate::validate_program(&Request {
             contract_version: CONTRACT_VERSION,
             assignment: assignment.clone(),
             state: geometry_state,
@@ -133,7 +133,7 @@ impl BoundGeometry {
         let mut windows = BTreeMap::new();
         let mut non_lunar_windows = BTreeMap::new();
         let mut moon_track = None;
-        let mut cache: Vec<(String, AltitudeLimits, Vec<Interval>)> = vec![];
+        let mut cache: Vec<(String, AltitudeLimits, MeridianExclusion, Vec<Interval>)> = vec![];
         for (goal, allocated) in assignment.goals.iter().zip(permitted) {
             let resolved = source.resolve(&goal.id).map_err(Error::Program)?;
             let preferences = &constraints.goals[constraints
@@ -148,10 +148,14 @@ impl BoundGeometry {
                 horizon_offset_degrees: preferences.horizon_offset_degrees,
             };
             // A hit copies the cached windows; a miss keeps a copy of its own.
-            let computed = if let Some((_, _, computed)) = cache
-                .iter()
-                .find(|(id, previous, _)| id == &resolved.target.id && *previous == limits)
-            {
+            let meridian_policy = goal
+                .meridian_avoidance
+                .unwrap_or_default()
+                .resolve(constraints.rig.meridian_exclusion);
+            let computed = if let Some((_, _, _, computed)) =
+                cache.iter().find(|(id, previous, policy, _)| {
+                    id == &resolved.target.id && *previous == limits && *policy == meridian_policy
+                }) {
                 computed.clone()
             } else {
                 let position = resolved.target.position();
@@ -169,11 +173,16 @@ impl BoundGeometry {
                     constraints.rig.site,
                     constraints.rig.orientation,
                     span,
-                    constraints.rig.meridian_exclusion,
+                    meridian_policy,
                 )
                 .map_err(Error::Geometry)?;
                 let computed = intersect(&altitude.windows, &meridian.windows)?;
-                cache.push((resolved.target.id.clone(), limits, computed.clone()));
+                cache.push((
+                    resolved.target.id.clone(),
+                    limits,
+                    meridian_policy,
+                    computed.clone(),
+                ));
                 computed
             };
             let mut eligible = intersect(&allocated, &computed)?;
@@ -359,7 +368,13 @@ impl BoundGeometry {
         goal.pending = 0;
         goal.attempts_remaining = 1;
         goal.eligible_windows = self.windows[goal_id].clone();
+        goal.meridian_avoidance = None;
+        goal.transits = None;
         request.assignment.goals = vec![goal];
+        request.state.meridian_exclusion = MeridianExclusion {
+            before_ms: 0,
+            after_ms: 0,
+        };
         let recovery_end = (*deadline_ms)
             .min(recovery.identity.ends_at_ms)
             .min(recovery.policy.latest_resume_ms);
@@ -399,7 +414,8 @@ impl BoundGeometry {
         self.source
             .validate_projection(&request.assignment)
             .map_err(Error::Program)?;
-        let original = crate::evaluate(request).map_err(Error::Planning)?;
+        let original =
+            crate::evaluate(&Self::allocated_request(request)?).map_err(Error::Planning)?;
         // Geometry changes must not prevent a safety stop or interrupt an
         // indivisible native operation. Revalidate before any new work or wait.
         if !matches!(original, Decision::Acquire { .. } | Decision::Wait { .. }) {
@@ -456,13 +472,35 @@ impl BoundGeometry {
         self.source
             .validate_projection(&request.assignment)
             .map_err(Error::Program)?;
-        crate::validate(request).map_err(Error::Planning)?;
-        let mut narrowed = request.clone();
+        let mut narrowed = Self::allocated_request(request)?;
         for goal in &mut narrowed.assignment.goals {
             goal.eligible_windows = self.windows[&goal.id].clone();
             goal.priority = self.priorities[&goal.id];
         }
         Ok(narrowed)
+    }
+
+    // Only used inside the geometry-bound path. Apply any supplied legacy
+    // transit evidence once, then let the independently computed windows enforce
+    // the effective policy. Reapplying the session default would undo a project's
+    // explicit zero or require transit lists that server programs do not carry.
+    fn allocated_request(request: &Request) -> Result<Request, Error> {
+        let mut allocated = request.clone();
+        // Keep deadline clipping in evaluate, which distinguishes a short night
+        // from work that is never visible inside the allocation.
+        allocated.state.completion_deadline_ms = None;
+        let windows = crate::validate_program(&allocated).map_err(Error::Planning)?;
+        allocated.state.completion_deadline_ms = request.state.completion_deadline_ms;
+        allocated.state.meridian_exclusion = MeridianExclusion {
+            before_ms: 0,
+            after_ms: 0,
+        };
+        for (goal, windows) in allocated.assignment.goals.iter_mut().zip(windows) {
+            goal.eligible_windows = windows;
+            goal.meridian_avoidance = None;
+            goal.transits = None;
+        }
+        Ok(allocated)
     }
 }
 

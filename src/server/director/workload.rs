@@ -220,6 +220,7 @@ pub(super) async fn request(
                             serde_json::from_value(w.allocation.snapshot["program"].clone())
                                 .map_err(|_| Error::Internal)?;
                         input.execution_mode.validate(&program)?;
+                        program::require_meridian_support(&program, &headers)?;
                         return Ok(Reply {
                             request_id: input.request_id,
                             state: if w.released { "released" } else { "issued" },
@@ -272,6 +273,7 @@ pub(super) async fn request(
                     }
                     let revision = preview.revision.clone();
                     input.execution_mode.validate(&preview.program)?;
+                    program::require_meridian_support(&preview.program, &headers)?;
                     preview.program.assignment.id = format!("allocation-{}", input.request_id);
                     let mut snapshot =
                         serde_json::to_value(preview).map_err(|_| Error::Internal)?;

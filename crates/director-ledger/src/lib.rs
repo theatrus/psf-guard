@@ -283,7 +283,13 @@ impl Ledger {
         if serde_json::to_vec(&request)?.len() > MAX_REQUEST_BYTES {
             return Err(Error::InvalidInput);
         }
-        psf_guard_director_core::evaluate(&request).map_err(Error::Planner)?;
+        if let Some(bound) = &geometry {
+            bound
+                .evaluate(&request, bound.constraints())
+                .map_err(Error::Geometry)?;
+        } else {
+            psf_guard_director_core::evaluate(&request).map_err(Error::Planner)?;
+        }
         if request.assignment.rig_id != request.state.rig_id
             || request.assignment.configuration_id != request.state.configuration_id
         {

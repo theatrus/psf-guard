@@ -333,6 +333,7 @@ struct PlanLimits {
     horizon_offset_degrees: f64,
     custom_horizon: bool,
     meridian_window_minutes: u32,
+    meridian_exclusion: psf_guard_director_core::windows::MeridianExclusion,
 }
 
 #[derive(Serialize)]
@@ -1106,7 +1107,7 @@ fn rig_nights(
         let Some(snapshot) = snapshot.as_ref() else {
             break;
         };
-        let (limits, applied) = match project_limits(&profile.limits.value, project) {
+        let (limits, mut applied) = match project_limits(&profile.limits.value, project) {
             Ok(limits) => limits,
             Err(range) => {
                 warnings.push(format!(
@@ -1116,6 +1117,19 @@ fn rig_nights(
                 continue;
             }
         };
+        if used == Runtime::Director
+            && let Some(Ok(input)) = &director
+            && let Some(link) = input.gathered.goal_links().find(|link| {
+                project.guid.as_deref() == Some(link.source_project_guid.to_string().as_str())
+            })
+            && let Some(values) = input.limits.get(link.goal_id)
+        {
+            applied.meridian_exclusion = values
+                .meridian_override()
+                .unwrap_or_default()
+                .resolve(profile.limits.value.meridian_exclusion);
+        }
+        let meridian_exclusion = applied.meridian_exclusion;
         let horizon = if project.use_custom_horizon {
             placed.horizon.clone()
         } else {
@@ -1204,7 +1218,7 @@ fn rig_nights(
                     nights,
                     step_ms: STEP_MS,
                     dark_below_degrees: DARK_BELOW_DEGREES,
-                    meridian_exclusion: profile.limits.value.meridian_exclusion,
+                    meridian_exclusion,
                     meridian_window_ms: u64::from(project.meridian_window_minutes) * 60_000,
                     available: available.clone(),
                 },
@@ -1965,6 +1979,7 @@ fn project_limits(rig: &Limits, project: &Project) -> Result<(AltitudeLimits, Pl
         horizon_offset_degrees: altitude.horizon_offset_degrees,
         custom_horizon: project.use_custom_horizon,
         meridian_window_minutes: project.meridian_window_minutes,
+        meridian_exclusion: rig.meridian_exclusion,
     };
     Ok((altitude, applied))
 }

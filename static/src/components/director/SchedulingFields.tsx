@@ -34,7 +34,8 @@ export default function SchedulingFields({ overrides, onChange, inherited, inher
             : <>
                 <NumberInput id={`${label}-${spec.key}`} aria-label={spec.label} disabled={disabled} min={spec.min} max={spec.max} step={spec.step}
                   placeholder={describeLimit(spec, inherited[spec.key])} value={setHere ? Number(own) : ''}
-                  onChange={event => set(spec.key, Number(event.target.value))} />
+                  onChange={event => set(spec.key, Number(event.target.value))}
+                  onBlur={event => { if (event.target.value === '') set(spec.key, null); }} />
                 {spec.unit && <small>{spec.unit}</small>}
               </>}
           {setHere && !disabled && <button type="button" className="scheduling-clear" aria-label={`Inherit ${spec.label.toLowerCase()}`} title={`Inherit: ${fallback}`} onClick={() => set(spec.key, null)}><X size={14} /></button>}
