@@ -574,7 +574,7 @@ pub fn import_frames(
         .context("starting import transaction")?;
     // Templates the catalog repeats are merged first, so new plans find the
     // one kept.
-    let merged = crate::template_repeats::merge_repeated(&tx)?;
+    let merged = crate::template_repeats::merge_repeated(&tx, &HashSet::new())?;
     if !merged.is_empty() {
         tracing::info!(
             templates = merged.len(),

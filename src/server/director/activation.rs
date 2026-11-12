@@ -1825,7 +1825,15 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
     let mut changes = Vec::new();
     // Templates the rig repeats are merged first, so the plan's templates
     // find the one kept.
-    let merged = crate::template_repeats::merge_repeated(tx).map_err(|error| {
+    // The copy kept is one with a library template's GUID, so the library
+    // template keeps its GUID on the rig.
+    let library_guids = inputs
+        .contributions
+        .iter()
+        .filter_map(|contribution| contribution.template.template_guid)
+        .map(|guid| guid.to_string())
+        .collect();
+    let merged = crate::template_repeats::merge_repeated(tx, &library_guids).map_err(|error| {
         RigError::Skip(format!(
             "Its repeated exposure templates could not be merged: {error:#}."
         ))

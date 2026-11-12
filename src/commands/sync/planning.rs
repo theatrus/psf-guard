@@ -324,33 +324,34 @@ mod tests {
     }
 
     #[test]
-    fn a_template_under_another_guid_takes_the_rigs_template_of_the_same_name_and_settings() {
+    fn a_template_under_another_guid_takes_the_rigs_identical_template_and_its_guid() {
         let src = local();
         let dest = Connection::open_in_memory().unwrap();
         schema(&dest);
-        // The rig's own copy of the catalog's template: same name and
-        // settings, but a GUID of its own, as an upgrade gives each copy of
-        // a database.
+        // The rig's own copy of the catalog's template: the same settings,
+        // but a GUID of its own, as an upgrade gives each copy of a
+        // database.
         dest.execute_batch(
             "INSERT INTO exposuretemplate VALUES (40,'p',' ha 300','HA',120,'rig-guid');",
         )
         .unwrap();
-        for _ in 0..2 {
+        for push in 0..2 {
             let summary = sync_planning(&src, &dest, &opts()).unwrap();
             assert_eq!(summary.exposuretemplate.inserted, 0);
-            assert!(
+            assert_eq!(
                 summary
                     .changes
                     .iter()
-                    .any(|line| line.contains("same name and settings")),
-                "{:?}",
+                    .any(|line| line.contains("identical template")),
+                push == 0,
+                "only the first push matches by settings: {:?}",
                 summary.changes
             );
             assert_eq!(template_rows(&dest).len(), 1);
             assert_eq!(
                 template_rows(&dest)[0].2,
-                "rig-guid",
-                "the rig's GUID stays"
+                "template-guid",
+                "the rig's template takes the catalog's GUID"
             );
             assert_eq!(plan_templates(&dest), [40]);
         }
@@ -502,7 +503,7 @@ mod tests {
     }
 
     #[test]
-    fn an_edit_reaches_the_rig_when_the_template_whose_guid_it_has_stays_behind() {
+    fn an_edited_template_never_rewrites_the_rigs_older_copy() {
         let src = local();
         with_default_exposure(&src);
         // The catalog's edited template, and an older copy no plan uses any
@@ -521,8 +522,12 @@ mod tests {
         )
         .unwrap();
         let summary = sync_planning(&src, &dest, &opts()).unwrap();
-        assert_eq!(summary.exposuretemplate.updated, 1, "{:?}", summary.changes);
-        assert_eq!(default_exposures(&dest), [(40, 180.0)]);
-        assert_eq!(plan_templates(&dest), [40]);
+        assert_eq!(
+            summary.exposuretemplate.inserted, 1,
+            "{:?}",
+            summary.changes
+        );
+        assert_eq!(default_exposures(&dest), [(40, 300.0), (41, 180.0)]);
+        assert_eq!(plan_templates(&dest), [41]);
     }
 }

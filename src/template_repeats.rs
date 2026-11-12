@@ -9,13 +9,14 @@
 //! other setting is equal, camera defaults written either way (`NULL` or
 //! below zero). Target Scheduler shoots a plan on either one the same way,
 //! so [`merge_repeated`] moves each copy's plans to one template and deletes
-//! the copy. It keeps the template most plans use, then the oldest.
+//! the copy. It keeps a template whose GUID the caller is about to write,
+//! then the one most plans use, then the oldest.
 //! PSF Guard runs it whenever it writes planning to a database.
 //!
 //! Only `exposureplan.exposureTemplateId` refers to a template, in Target
 //! Scheduler's schema and in PSF Guard's tables alike.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
 use rusqlite::types::Value;
@@ -35,6 +36,7 @@ pub struct MergedTemplate {
 
 struct Row {
     id: i64,
+    guid: Option<String>,
     name: String,
     plans: u64,
     /// Every column but `Id` and `guid`, folded as the module explains.
@@ -75,26 +77,11 @@ fn column<'a>(columns: &[&str], values: &'a [Value], name: &str) -> Option<&'a V
         .map(|position| &values[position])
 }
 
-/// What Target Scheduler tells templates apart by: profile, name, filter,
-/// gain, offset, binning and readout mode, folded as the module explains.
-/// Templates with the same key may still differ in other settings, such as
-/// the default exposure or Moon avoidance.
-pub type SameTemplateKey = (String, String, String, i64, i64, i64, i64);
-
-pub fn same_template_key(columns: &[&str], values: &[Value]) -> SameTemplateKey {
-    (
-        folded_text(column(columns, values, "profileId")),
-        folded_text(column(columns, values, "name")),
-        folded_text(column(columns, values, "filtername")),
-        camera_setting(column(columns, values, "gain")),
-        camera_setting(column(columns, values, "offset")),
-        binning(column(columns, values, "bin")),
-        camera_setting(column(columns, values, "readoutmode")),
-    )
-}
-
-/// Every column but `Id` and `guid`, folded as [`same_template_key`] folds
-/// its columns: two templates with the same identity key repeat each other.
+/// Every column but `Id` and `guid`, with profile, name and filter
+/// compared without case or surrounding spaces, gain, offset and readout
+/// mode read as -1 for a camera default (`NULL` or below zero), and a
+/// binning below one read as one. Two templates with the same key repeat
+/// each other.
 pub fn identical_template_key(columns: &[&str], values: &[Value]) -> String {
     let mut key = Vec::new();
     for (column, value) in columns.iter().zip(values) {
@@ -169,8 +156,13 @@ fn read_rows(conn: &Connection) -> Result<Vec<Row>> {
             _ => String::new(),
         };
         let key = identical_template_key(&names, &values);
+        let guid = match column(&names, &values, "guid") {
+            Some(Value::Text(guid)) if !guid.is_empty() => Some(guid.clone()),
+            _ => None,
+        };
         out.push(Row {
             id,
+            guid,
             name,
             plans: plans.get(&id).copied().unwrap_or(0),
             key,
@@ -180,7 +172,7 @@ fn read_rows(conn: &Connection) -> Result<Vec<Row>> {
 }
 
 /// Each group of repeated templates, the one kept first.
-fn repeated_groups(conn: &Connection) -> Result<Vec<Vec<Row>>> {
+fn repeated_groups(conn: &Connection, prefer: &HashSet<String>) -> Result<Vec<Vec<Row>>> {
     let mut groups: Vec<Vec<Row>> = Vec::new();
     let mut by_key: HashMap<String, usize> = HashMap::new();
     for row in read_rows(conn)? {
@@ -194,16 +186,24 @@ fn repeated_groups(conn: &Connection) -> Result<Vec<Vec<Row>>> {
     }
     groups.retain(|group| group.len() > 1);
     for group in &mut groups {
-        group.sort_by_key(|row| (std::cmp::Reverse(row.plans), row.id));
+        group.sort_by_key(|row| {
+            let preferred = row.guid.as_ref().is_some_and(|guid| prefer.contains(guid));
+            (!preferred, std::cmp::Reverse(row.plans), row.id)
+        });
     }
     Ok(groups)
 }
 
 /// Move each repeated template's plans to the one kept and delete it. Runs
 /// in the caller's transaction, so a dry run rolls it back with the rest.
-pub fn merge_repeated(conn: &Connection) -> Result<Vec<MergedTemplate>> {
+///
+/// The copy kept is one whose GUID `prefer` lists, when the group has one:
+/// the GUID the caller is about to write, such as a sync source's template
+/// or Director's library template. Then the one most plans use, then the
+/// oldest.
+pub fn merge_repeated(conn: &Connection, prefer: &HashSet<String>) -> Result<Vec<MergedTemplate>> {
     let mut merged = Vec::new();
-    for group in repeated_groups(conn)? {
+    for group in repeated_groups(conn, prefer)? {
         let kept = &group[0];
         for copy in &group[1..] {
             let plans = conn.execute(
@@ -265,7 +265,7 @@ mod tests {
     #[test]
     fn merges_copies_with_every_setting_equal_into_the_one_most_plans_use() {
         let conn = catalog();
-        let merged = merge_repeated(&conn).unwrap();
+        let merged = merge_repeated(&conn, &HashSet::new()).unwrap();
         assert_eq!(
             merged
                 .iter()
@@ -286,12 +286,27 @@ mod tests {
             [3, 3, 3, 4]
         );
         // A second run finds nothing.
-        assert!(merge_repeated(&conn).unwrap().is_empty());
+        assert!(merge_repeated(&conn, &HashSet::new()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn keeps_the_copy_whose_guid_the_caller_writes() {
+        let conn = catalog();
+        // #1 has no plans, but its GUID is the one about to be written.
+        let merged = merge_repeated(&conn, &HashSet::from(["a".to_string()])).unwrap();
+        assert!(merged.iter().all(|m| m.kept_id == 1), "{merged:?}");
+        assert_eq!(
+            column(
+                &conn,
+                "SELECT exposureTemplateId FROM exposureplan ORDER BY Id"
+            ),
+            [1, 1, 1, 4]
+        );
     }
 
     #[test]
     fn a_database_without_scheduler_tables_has_nothing_to_merge() {
         let conn = Connection::open_in_memory().unwrap();
-        assert!(merge_repeated(&conn).unwrap().is_empty());
+        assert!(merge_repeated(&conn, &HashSet::new()).unwrap().is_empty());
     }
 }

@@ -359,22 +359,19 @@ fn dest_guid_map(
 struct TemplateTwin {
     id: i64,
     values: Vec<Value>,
-    /// [`crate::template_repeats::identical_template_key`] of `values`.
-    identical: String,
     /// A source row sent in this sync has this template's GUID, or took
-    /// it already: that row's settings win, so another row only maps to it
-    /// when the two are identical.
+    /// it already: that row writes it, so another row only maps to it.
     claimed: bool,
 }
 
 /// Destination templates by
-/// [`crate::template_repeats::same_template_key`], lowest Id first.
-type TemplateTwins = HashMap<crate::template_repeats::SameTemplateKey, Vec<TemplateTwin>>;
+/// [`crate::template_repeats::identical_template_key`], lowest Id first.
+type TemplateTwins = HashMap<String, Vec<TemplateTwin>>;
 
 /// The destination's exposure templates by
-/// [`crate::template_repeats::same_template_key`], lowest Id first. One
-/// whose GUID a source row sent in this sync has is claimed by that row.
-/// Rows with an ambiguous GUID are left out.
+/// [`crate::template_repeats::identical_template_key`], lowest Id first.
+/// One whose GUID a source row sent in this sync has is claimed by that
+/// row. Rows with an ambiguous GUID are left out.
 fn dest_template_twins(
     tx: &Transaction,
     write_cols: &[&str],
@@ -404,13 +401,12 @@ fn dest_template_twins(
         }
         let claimed = guid.is_some_and(|guid| source_guids.contains(guid));
         twins
-            .entry(crate::template_repeats::same_template_key(
+            .entry(crate::template_repeats::identical_template_key(
                 write_cols, &vals,
             ))
             .or_default()
             .push(TemplateTwin {
                 id: dest_id,
-                identical: crate::template_repeats::identical_template_key(write_cols, &vals),
                 values: vals,
                 claimed,
             });
@@ -514,9 +510,8 @@ fn upsert_guid_table(
     // An exposure template whose GUID the destination lacks may still be
     // there under another GUID: two copies of one Target Scheduler database
     // each fill in their own GUIDs on upgrade. A template carries no
-    // captures, and Target Scheduler tells its templates apart by name and
-    // settings, so the source's row takes the destination's template of the
-    // same name and settings instead of adding a second one.
+    // captures, so the source's row takes the destination's identical
+    // template instead of adding a second one.
     let mut template_twins = if table.eq_ignore_ascii_case("exposuretemplate") {
         Some(dest_template_twins(
             tx,
@@ -591,35 +586,23 @@ fn upsert_guid_table(
             continue;
         }
 
+        // A template identical to this one in every setting, under
+        // another GUID. A claimed one belongs to another source row, so
+        // this one only maps to it; otherwise it takes this row's GUID, so
+        // later syncs match it by GUID. A template that differs in any
+        // setting is never rewritten: this row is inserted instead.
         let twin = match template_twins.as_mut() {
             Some(twins) if !dest_map.contains_key(&guid) => twins
-                .get_mut(&crate::template_repeats::same_template_key(
+                .get_mut(&crate::template_repeats::identical_template_key(
                     &write_cols,
                     &write_values,
                 ))
-                .and_then(|rows| {
-                    // An identical template first, claimed or not; else the
-                    // only template no other row has claimed. With two or
-                    // more to choose from, none is right, so a new one is
-                    // added.
-                    let identical =
-                        crate::template_repeats::identical_template_key(&write_cols, &write_values);
-                    match rows.iter().position(|twin| twin.identical == identical) {
-                        Some(position) => Some(&mut rows[position]),
-                        None => {
-                            let mut open = rows.iter_mut().filter(|twin| !twin.claimed);
-                            match (open.next(), open.next()) {
-                                (Some(twin), None) => Some(twin),
-                                _ => None,
-                            }
-                        }
-                    }
-                }),
+                .and_then(|rows| rows.first_mut()),
             _ => None,
         };
         if let Some(twin) = twin {
             changes.push(format!(
-                "match {} {} to the destination's template of the same name and settings",
+                "match {} {} to the destination's identical template",
                 table,
                 row_label(&write_cols, &write_values, &guid),
             ));
@@ -629,26 +612,18 @@ fn upsert_guid_table(
                 continue;
             }
             twin.claimed = true;
-            // The destination's template keeps its own GUID.
-            write_values[guid_w] = twin.values[guid_w].clone();
-            if values_equal(&write_values, &twin.values) {
-                counts.unchanged += 1;
-            } else {
-                let diffs = column_diffs(&write_cols, &write_values, &twin.values);
-                let mut p: Vec<&dyn ToSql> = write_values.iter().map(|v| v as &dyn ToSql).collect();
-                p.push(&twin.id);
-                upd_stmt.execute(p.as_slice())?;
-                counts.updated += 1;
-                changes.push(format!(
-                    "update {} {}: {}",
-                    table,
-                    row_label(&write_cols, &write_values, &guid),
-                    diffs.join(", "),
-                ));
-                twin.identical =
-                    crate::template_repeats::identical_template_key(&write_cols, &write_values);
-                twin.values = write_values;
-            }
+            let diffs = column_diffs(&write_cols, &write_values, &twin.values);
+            let mut p: Vec<&dyn ToSql> = write_values.iter().map(|v| v as &dyn ToSql).collect();
+            p.push(&twin.id);
+            upd_stmt.execute(p.as_slice())?;
+            counts.updated += 1;
+            changes.push(format!(
+                "update {} {}: {}",
+                table,
+                row_label(&write_cols, &write_values, &guid),
+                diffs.join(", "),
+            ));
+            twin.values = write_values;
             continue;
         }
         match dest_map.get(&guid) {
@@ -696,21 +671,16 @@ fn upsert_guid_table(
                 ins_stmt.execute(params_from_iter(write_values.iter()))?;
                 let dest_id = tx.last_insert_rowid();
                 id_map.insert(src_id, dest_id);
-                // A second source template of the same name and settings
-                // takes this one.
+                // A second source template identical to this one takes it.
                 if let Some(twins) = template_twins.as_mut() {
                     twins
-                        .entry(crate::template_repeats::same_template_key(
+                        .entry(crate::template_repeats::identical_template_key(
                             &write_cols,
                             &write_values,
                         ))
                         .or_default()
                         .push(TemplateTwin {
                             id: dest_id,
-                            identical: crate::template_repeats::identical_template_key(
-                                &write_cols,
-                                &write_values,
-                            ),
                             values: write_values.clone(),
                             claimed: true,
                         });
@@ -1673,7 +1643,12 @@ pub(super) fn sync_structure(
     };
     // Templates the destination repeats are merged first, so a source
     // template finds the one kept.
-    let merged_templates = crate::template_repeats::merge_repeated(tx)?;
+    // The copy kept is the one with a GUID this sync sends, so it keeps
+    // matching by GUID.
+    let merged_templates = crate::template_repeats::merge_repeated(
+        tx,
+        &source_guids(src, "exposuretemplate", used_templates.as_ref())?,
+    )?;
     if !merged_templates.is_empty() {
         tracing::info!(
             templates = merged_templates.len(),
