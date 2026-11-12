@@ -558,4 +558,53 @@ async fn the_plugin_pulls_a_program_built_from_activation_and_its_own_equipment(
             .collect::<Vec<_>>()
     };
     assert_eq!(priorities(&after), priorities(&ranked_program));
+    // Project transit settings are immutable in issued programs, distinguish
+    // zero from inheritance, and are never silently sent to older executors.
+    {
+        use psf_guard_director_core::priority::Scope;
+        let mut store = a.f.state.director.as_ref().unwrap().writer.lock().unwrap();
+        let mut settings = store.observing_settings(Scope::Project, a.project).unwrap();
+        settings.scheduling.meridian_avoidance_before_minutes = Some(60);
+        settings.scheduling.meridian_avoidance_after_minutes = Some(0);
+        store.save_observing_settings(&settings).unwrap();
+    }
+    let (status, _, refused) = raw_get(&a.f.app, &path, None).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    assert!(refused["error"]
+        .as_str()
+        .unwrap()
+        .contains("Update the Director plugin"));
+    let response =
+        a.f.app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/director/v1{path}"))
+                    .header(
+                        "x-psf-guard-plugin-capabilities",
+                        "director_project_meridian_v1",
+                    )
+                    .header("if-none-match", ranked_etag.unwrap())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), 1_000_000).await.unwrap();
+    let changed: Value = serde_json::from_slice(&bytes).unwrap();
+    for goal in changed["data"]["program"]["assignment"]["goals"]
+        .as_array()
+        .unwrap()
+    {
+        assert_eq!(
+            goal["meridian_avoidance"],
+            json!({"before_ms":3_600_000,"after_ms":0})
+        );
+    }
+    assert!(after
+        .assignment
+        .goals
+        .iter()
+        .all(|g| g.meridian_avoidance.is_none()));
 }

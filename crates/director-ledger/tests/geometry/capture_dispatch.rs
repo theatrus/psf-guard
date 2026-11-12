@@ -369,6 +369,11 @@ fn program_mode_uses_its_reservation_and_refuses_geometry_adoption() {
 
 #[test]
 fn computed_meridian_window_still_gates_an_already_reserved_exposure() {
+    computed_meridian_dispatch(false);
+    computed_meridian_dispatch(true);
+}
+
+fn computed_meridian_dispatch(project_override: bool) {
     let mut f = Fixture::new();
     let transit = START + 30_000;
     let mut position = IcrsPosition {
@@ -395,13 +400,21 @@ fn computed_meridian_window_still_gates_an_already_reserved_exposure() {
         after_ms: 2000,
     };
     f.state.meridian_exclusion = f.constraints.rig.meridian_exclusion;
-    f.program.assignment.goals[0].transits = Some(TransitCoverage {
-        searched: Interval {
-            start_ms: START - 2000,
-            end_ms: START + 61000,
-        },
-        transits_ms: vec![],
-    });
+    // Server programs omit the legacy transit list. Both inherited and
+    // per-project avoidance must be enforced at the actual capture boundary.
+    f.program.assignment.goals[0].transits = None;
+    if project_override {
+        f.program.assignment.goals[0].meridian_avoidance =
+            Some(psf_guard_director_core::windows::MeridianOverride {
+                before_ms: Some(1000),
+                after_ms: Some(2000),
+            });
+        f.constraints.rig.meridian_exclusion = MeridianExclusion {
+            before_ms: 0,
+            after_ms: 0,
+        };
+        f.state.meridian_exclusion = f.constraints.rig.meridian_exclusion;
+    }
     let dir = TempDir::new().unwrap();
     let mut ledger = f.open(&dir.path().join("execution.sqlite"));
     reserve(&f, &mut ledger);

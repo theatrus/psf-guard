@@ -67,10 +67,24 @@ fn calculate(
             .checked_add(policy.before_ms)
             .ok_or(VisibilityError::MeridianTimeOverflow)?,
     };
-    validate_span(position, site, orientation, searched)?;
-    let mut observations = 2;
+    // A full-day assignment plus avoidance on either side can exceed the
+    // per-span model limit. Validate two bounded search segments, retaining the
+    // same total observation budget and requiring EOP evidence for both margins.
+    validate_span(position, site, orientation, assignment)?;
+    let midpoint = searched.start_ms + (searched.end_ms - searched.start_ms) / 2;
+    let first = Interval {
+        start_ms: searched.start_ms,
+        end_ms: midpoint,
+    };
+    let last = Interval {
+        start_ms: midpoint,
+        end_ms: searched.end_ms,
+    };
+    validate_span(position, site, orientation, first)?;
+    validate_span(position, site, orientation, last)?;
+    let mut observations = 6;
     let mut possible_transits: Vec<Interval> = vec![];
-    let mut pending = vec![searched];
+    let mut pending = vec![last, first];
     while let Some(part) = pending.pop() {
         if observations >= budget {
             return Err(VisibilityError::SpanBudgetExceeded);

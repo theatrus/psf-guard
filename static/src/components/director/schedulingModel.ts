@@ -23,6 +23,8 @@ export const LIMITS: LimitSpec[] = [
   { key: 'use_custom_horizon', label: 'Custom horizon', kind: 'flag', hint: "Follow the N.I.N.A. profile's custom horizon instead of a flat minimum altitude." },
   { key: 'horizon_offset_degrees', label: 'Horizon offset', kind: 'number', unit: '°', min: -90, max: 90, step: 0.1, hint: 'Degrees added to the custom horizon.' },
   { key: 'meridian_window_minutes', label: 'Meridian window', kind: 'number', unit: 'min', min: 0, max: 719, step: 1, zero: 'off', hint: 'Image only this many minutes either side of the meridian; 0 turns it off.' },
+  { key: 'meridian_avoidance_before_minutes', label: 'Avoid before transit', kind: 'number', unit: 'min', min: 0, max: 360, step: 1, zero: 'off', hint: 'Director pauses this plan before transit. Leave blank to inherit; 0 disables this side. N.I.N.A. meridian flips still apply.' },
+  { key: 'meridian_avoidance_after_minutes', label: 'Avoid after transit', kind: 'number', unit: 'min', min: 0, max: 360, step: 1, zero: 'off', hint: 'Director pauses this plan after transit. Leave blank to inherit; 0 allows imaging again at transit when before-transit avoidance is set.' },
   { key: 'minimum_time_minutes', label: 'Minimum time', kind: 'number', unit: 'min', min: 0, max: 1440, step: 1, hint: 'Shortest stretch worth starting the project for.' },
   { key: 'dither_every', label: 'Dither every', kind: 'number', unit: 'frames', min: 0, max: 10000, step: 1, zero: 'per template', hint: "Exposures between dithers; 0 follows each exposure template's setting." },
   { key: 'filter_switch_frequency', label: 'Filter switch every', kind: 'number', unit: 'frames', min: 0, max: 10000, step: 1, zero: 'automatic', hint: 'Exposures before changing filter; 0 lets Target Scheduler decide.' },
@@ -35,7 +37,8 @@ export const TS_DEFAULTS: SchedulingValues = {
   horizon_offset_degrees: 0, meridian_window_minutes: 0, filter_switch_frequency: 0, dither_every: 0, smart_exposure_order: false,
 };
 
-export function describeLimit(spec: LimitSpec, value: number | boolean): string {
+export function describeLimit(spec: LimitSpec, value: number | boolean | null | undefined): string {
+  if (value == null) return 'Director session';
   if (spec.kind === 'flag') return value ? 'on' : 'off';
   if (value === 0 && spec.zero) return spec.zero;
   return `${value}${spec.unit === '°' ? '°' : ` ${spec.unit}`}`;
@@ -44,8 +47,8 @@ export function describeLimit(spec: LimitSpec, value: number | boolean): string 
 const SCOPE_NAMES: Record<string, string> = { global: 'every plan', site: 'site', rig: 'rig', project: 'this plan' };
 
 /** Where a resolved value came from, in words. */
-export function describeSource(source: PreferenceSource | undefined): string {
-  return source ? `from ${SCOPE_NAMES[source.scope] ?? source.scope}` : 'Target Scheduler default';
+export function describeSource(source: PreferenceSource | undefined, key?: LimitKey): string {
+  return source ? `from ${SCOPE_NAMES[source.scope] ?? source.scope}` : key?.startsWith('meridian_avoidance_') ? 'from Director session' : 'Target Scheduler default';
 }
 
 /** Overrides with unset limits dropped, as the server stores them. */
@@ -62,7 +65,7 @@ export function sameOverrides(left: SchedulingOverrides, right: SchedulingOverri
  *  value and where it comes from. Unset everywhere is Target Scheduler's. */
 export function inheritedLimits(layers: Array<{ overrides?: SchedulingOverrides; from: string } | null>): { values: SchedulingValues; from: Record<LimitKey, string> } {
   const values = { ...TS_DEFAULTS };
-  const from = Object.fromEntries(LIMITS.map(spec => [spec.key, 'Target Scheduler default'])) as Record<LimitKey, string>;
+  const from = Object.fromEntries(LIMITS.map(spec => [spec.key, describeSource(undefined, spec.key)])) as Record<LimitKey, string>;
   for (const layer of layers) {
     if (!layer?.overrides) continue;
     for (const spec of LIMITS) {

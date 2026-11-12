@@ -21,6 +21,8 @@ export interface SchedulingOverrides {
   use_custom_horizon?: boolean | null;
   horizon_offset_degrees?: number | null;
   meridian_window_minutes?: number | null;
+  meridian_avoidance_before_minutes?: number | null;
+  meridian_avoidance_after_minutes?: number | null;
   filter_switch_frequency?: number | null;
   dither_every?: number | null;
   smart_exposure_order?: boolean | null;
@@ -32,6 +34,8 @@ export interface SchedulingValues {
   use_custom_horizon: boolean;
   horizon_offset_degrees: number;
   meridian_window_minutes: number;
+  meridian_avoidance_before_minutes?: number | null;
+  meridian_avoidance_after_minutes?: number | null;
   filter_switch_frequency: number;
   dither_every: number;
   smart_exposure_order: boolean;

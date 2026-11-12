@@ -521,7 +521,10 @@ fn applied_limits(
         maximum_altitude_degrees: altitude
             .rig_maximum_degrees
             .min(altitude.project_maximum_degrees),
-        meridian_exclusion: rig.meridian_exclusion,
+        meridian_exclusion: plan
+            .meridian_override()
+            .unwrap_or_default()
+            .resolve(rig.meridian_exclusion),
         horizon_offset_degrees: altitude.horizon_offset_degrees,
         meridian_window_minutes: plan.meridian_window_minutes,
     };

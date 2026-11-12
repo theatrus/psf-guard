@@ -3,6 +3,70 @@ use psf_guard_director_meta::{preferences::Settings, Error, MetaStore, Uuid};
 use tempfile::TempDir;
 
 #[test]
+fn project_meridian_sides_inherit_independently_and_zero_survives_reopen() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("meta.sqlite");
+    let mut store = MetaStore::create(&path).unwrap();
+    let rig = store.create_rig(Uuid::new_v4(), "Rig").unwrap().id;
+    let project = store.create_project(Uuid::new_v4(), "Project").unwrap().id;
+    assert_eq!(
+        store
+            .effective_observing_preferences(rig, Some(project))
+            .unwrap()
+            .scheduling
+            .values
+            .meridian_override(),
+        None
+    );
+    let mut global = Settings::empty(Scope::Global, store.instance_id());
+    global.scheduling.meridian_avoidance_before_minutes = Some(60);
+    global.scheduling.meridian_avoidance_after_minutes = Some(10);
+    store.save_observing_settings(&global).unwrap();
+    let mut specific = Settings::empty(Scope::Project, project);
+    specific.scheduling.meridian_avoidance_after_minutes = Some(0);
+    let mut specific = store.save_observing_settings(&specific).unwrap();
+    let before = store
+        .effective_observing_preferences(rig, Some(project))
+        .unwrap()
+        .scheduling;
+    assert_eq!(before.values.meridian_avoidance_before_minutes, Some(60));
+    assert_eq!(before.values.meridian_avoidance_after_minutes, Some(0));
+    assert_eq!(
+        before.sources["meridian_avoidance_before_minutes"].scope,
+        Scope::Global
+    );
+    assert_eq!(
+        before.sources["meridian_avoidance_after_minutes"].scope,
+        Scope::Project
+    );
+    specific.scheduling.meridian_avoidance_after_minutes = Some(361);
+    assert!(matches!(
+        store.save_observing_settings(&specific),
+        Err(Error::InvalidInput)
+    ));
+    drop(store);
+    let mut store = MetaStore::open(&path).unwrap();
+    assert_eq!(
+        before,
+        store
+            .effective_observing_preferences(rig, Some(project))
+            .unwrap()
+            .scheduling
+    );
+    specific.scheduling.meridian_avoidance_after_minutes = None;
+    store.save_observing_settings(&specific).unwrap();
+    assert_eq!(
+        store
+            .effective_observing_preferences(rig, Some(project))
+            .unwrap()
+            .scheduling
+            .values
+            .meridian_avoidance_after_minutes,
+        Some(10)
+    );
+}
+
+#[test]
 fn inherited_preferences_are_revisioned_and_survive_reopen() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("meta.sqlite");

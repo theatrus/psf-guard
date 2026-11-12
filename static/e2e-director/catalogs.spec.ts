@@ -117,6 +117,28 @@ test('every database project is a plan, shared GUIDs make one plan across rigs, 
     await expect(tab('Rigs')).toContainText('●');
     await page.getByRole('region', { name: 'Unsaved changes' }).getByRole('button', { name: 'Save changes' }).click();
     await expect(limits.getByRole('row', { name: /^Minimum altitude/ })).toContainText('30°from this plan');
+    const beforeTransit = limits.getByRole('spinbutton', { name: 'Avoid before transit' });
+    const afterTransit = limits.getByRole('spinbutton', { name: 'Avoid after transit' });
+    await expect(beforeTransit).toHaveAttribute('placeholder', 'Director session');
+    await beforeTransit.fill('60');
+    await afterTransit.fill('0');
+    await page.getByRole('region', { name: 'Unsaved changes' }).getByRole('button', { name: 'Save changes' }).click();
+    await expect(limits.getByRole('row', { name: /^Avoid before transit/ })).toContainText('60 minfrom this plan');
+    await expect(limits.getByRole('row', { name: /^Avoid after transit/ })).toContainText('offfrom this plan');
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 1000 });
+      await limits.scrollIntoViewIfNeeded();
+      await expect(beforeTransit).toBeVisible();
+      await expect(afterTransit).toBeVisible();
+      expect(await limits.evaluate(element => element.scrollWidth <= element.clientWidth)).toBeTruthy();
+      await page.screenshot({ path: testInfo.outputPath(`project-transit-${width}.png`) });
+    }
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await beforeTransit.fill('');
+    await beforeTransit.blur();
+    await page.getByRole('region', { name: 'Unsaved changes' }).getByRole('button', { name: 'Save changes' }).click();
+    await expect(beforeTransit).toHaveValue('');
+    await expect(afterTransit).toHaveValue('0');
     // Activation is no tab. This plan, adopted from catalogs, has no panel
     // rig or panel size yet, so the server cannot activate it: the summary
     // says what to do first instead of offering an activation, and no bar asks.

@@ -192,6 +192,24 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+pub(super) fn require_meridian_support(
+    program: &Program,
+    headers: &HeaderMap,
+) -> Result<(), PullError> {
+    if program
+        .assignment
+        .goals
+        .iter()
+        .any(|goal| goal.meridian_avoidance.is_some())
+        && !crate::server::rig_plugins::plugin_supports(headers, "director_project_meridian_v1")
+    {
+        return Err(PullError::NotReady(
+            "Update the Director plugin to use this plan's before/after transit settings. No new work was started.".into(),
+        ));
+    }
+    Ok(())
+}
+
 pub(super) async fn pull(
     State(state): State<Arc<AppState>>,
     Path(rig): Path<Uuid>,
@@ -231,6 +249,7 @@ pub(super) async fn pull(
                 }
             }
             let assembled = assembled?;
+            require_meridian_support(&assembled.program, &headers)?;
             if if_none_match.as_deref() == Some(assembled.revision.as_str()) {
                 return Err(PullError::NotModified(format!(
                     "\"{}\"",
@@ -640,6 +659,25 @@ pub(super) fn gather(
         &saved,
     )?;
     snapshot.commit()?;
+    // Freeze each project's effective policy into its goals. Missing sides are
+    // intentionally unresolved until the plugin supplies its session defaults.
+    let mut meridian = BTreeMap::new();
+    for link in &built.links {
+        let policy = if let Some(policy) = meridian.get(&link.project_id) {
+            *policy
+        } else {
+            let policy = store
+                .effective_observing_preferences(rig, Some(link.project_id))?
+                .scheduling
+                .values
+                .meridian_override();
+            meridian.insert(link.project_id, policy);
+            policy
+        };
+        if let Some(goal) = built.goals.iter_mut().find(|g| g.id == link.goal_id) {
+            goal.meridian_avoidance = policy;
+        }
+    }
     let assignment_revision = activations.iter().map(|a| a.revision).max().unwrap_or(1);
     let preference_settings = store.effective_observing_preferences(rig, None)?;
     if let Some(order) = &preference_settings.project_order {
@@ -1236,6 +1274,7 @@ fn build(
                 overhead_ms: OVERHEAD_MS,
                 eligible_windows: vec![],
                 transits: None,
+                meridian_avoidance: None,
             });
             built.bindings.push(Binding {
                 goal_id: goal_id.clone(),
@@ -1451,6 +1490,7 @@ mod tests {
                 overhead_ms: 15_000,
                 eligible_windows: vec![NIGHT],
                 transits: None,
+                meridian_avoidance: None,
             });
         }
         (links, goals)

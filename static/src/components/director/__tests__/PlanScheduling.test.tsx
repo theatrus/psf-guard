@@ -58,6 +58,25 @@ function mount(canWrite = true, client = new QueryClient({ defaultOptions: { que
 }
 
 describe('plan scheduling limits', () => {
+  it('keeps explicit zero separate from inheritance for each transit side', async () => {
+    const { saves } = fixture();
+    const drafts = mount();
+    const before = await screen.findByRole('spinbutton', { name: 'Avoid before transit' });
+    const after = screen.getByRole('spinbutton', { name: 'Avoid after transit' });
+    expect(before).toHaveAttribute('placeholder', 'Director session');
+    fireEvent.change(before, { target: { value: '60' } });
+    fireEvent.change(after, { target: { value: '0' } });
+    await waitFor(() => expect(drafts.current!.unsaved).toHaveLength(1));
+    await act(async () => { expect(await drafts.current!.saveAll()).toBeNull(); });
+    expect(saves[0].scheduling).toEqual({ meridian_avoidance_before_minutes: 60, meridian_avoidance_after_minutes: 0 });
+    fireEvent.change(before, { target: { value: '' } });
+    fireEvent.blur(before);
+    await act(async () => { expect(await drafts.current!.saveAll()).toBeNull(); });
+    expect(saves[1].scheduling).toEqual({ meridian_avoidance_after_minutes: 0 });
+    fireEvent.click(screen.getByRole('button', { name: 'Inherit avoid after transit' }));
+    await act(async () => { expect(await drafts.current!.saveAll()).toBeNull(); });
+    expect(saves[2].scheduling).toEqual({});
+  });
   it('shows what each rig gets and where each value comes from', async () => {
     fixture();
     mount();
