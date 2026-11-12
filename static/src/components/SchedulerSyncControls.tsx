@@ -45,6 +45,14 @@ const deletedProjectsLine = (result: SchedulerSyncResponse) => {
   }. Nothing was captured for ${projects === 1 ? 'it' : 'them'} in the destination.`;
 };
 
+/** Templates the destination repeated: each copy's plans move to the
+ *  template kept, and the copy is deleted. */
+const mergedTemplatesLine = (result: SchedulerSyncResponse) => {
+  const merged = result.exposuretemplate.deleted ?? 0;
+  if (merged === 0) return null;
+  return `Merges ${plural(merged, 'repeated exposure template')} in the destination. ${merged === 1 ? 'Its' : 'Their'} plans move to the identical template that stays.`;
+};
+
 /** The Keep out and Use anyway choices a pull carries: each changes which
  * frames the destination's masters take, so the preview says so. */
 const calibrationChoiceLine = (result: SchedulerSyncResponse) => {
@@ -481,6 +489,9 @@ export default function SchedulerSyncControls({
               </small>
               {deletedProjectsLine(pending.result) && (
                 <small>{deletedProjectsLine(pending.result)}</small>
+              )}
+              {mergedTemplatesLine(pending.result) && (
+                <small>{mergedTemplatesLine(pending.result)}</small>
               )}
               {calibrationChoiceLine(pending.result) && (
                 <small>{calibrationChoiceLine(pending.result)}</small>

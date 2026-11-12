@@ -558,6 +558,55 @@ fn actions(report: &Value, kind: &str) -> Vec<String> {
         .collect()
 }
 
+/// A rig that repeats the plan's template, as older syncs left it, loses
+/// the copy: its plans move to the template kept, and activation writes no
+/// third one.
+#[tokio::test]
+async fn activation_merges_the_templates_a_rig_repeats() {
+    let a = activated().await;
+    let count = |sql: &str| a.db.query_row(sql, [], |row| row.get::<_, i64>(0)).unwrap();
+    a.db.execute_batch(
+        "INSERT INTO exposuretemplate (profileId, name, filtername, gain, offset, bin, readoutmode, twilightlevel,
+             moonavoidanceenabled, moonavoidanceseparation, moonavoidancewidth, maximumhumidity, defaultexposure,
+             moonrelaxscale, moonrelaxmaxaltitude, moonrelaxminaltitude, moondownenabled, ditherevery, minutesOffset, guid)
+         SELECT profileId, name, filtername, gain, offset, bin, readoutmode, twilightlevel,
+             moonavoidanceenabled, moonavoidanceseparation, moonavoidancewidth, maximumhumidity, defaultexposure,
+             moonrelaxscale, moonrelaxmaxaltitude, moonrelaxminaltitude, moondownenabled, ditherevery, minutesOffset,
+             'aaaaaaaa-2222-4222-8222-222222222222'
+         FROM exposuretemplate WHERE Id = 1;",
+    )
+    .unwrap();
+    let preview_path = format!("/projects/{}/activation/preview", a.project);
+    let apply_path = format!("/projects/{}/activation/apply", a.project);
+    let (status, preview) = call(&a.f.app, "POST", &preview_path, json!({}), None).await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    let data = &preview["data"];
+    assert_eq!(actions(data, "template"), ["merge"], "{data}");
+    assert_eq!(
+        count("SELECT count(*) FROM exposuretemplate"),
+        2,
+        "a preview writes nothing"
+    );
+    let digest = data["preview_digest"].as_str().unwrap().to_owned();
+    let (status, applied) = call(
+        &a.f.app,
+        "POST",
+        &apply_path,
+        json!({"preview_digest": digest}),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    assert_eq!(count("SELECT count(*) FROM exposuretemplate"), 1);
+    assert_eq!(
+        count("SELECT count(*) FROM exposureplan WHERE exposureTemplateId <> 1"),
+        0
+    );
+    // The next activation has nothing to merge.
+    let (_, again) = call(&a.f.app, "POST", &preview_path, json!({}), None).await;
+    assert!(actions(&again["data"], "template").is_empty(), "{again}");
+}
+
 #[tokio::test]
 async fn activation_previews_without_writing_then_applies_and_updates_in_place() {
     let a = activated().await;

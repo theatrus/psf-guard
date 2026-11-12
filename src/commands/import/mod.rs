@@ -572,6 +572,15 @@ pub fn import_frames(
     let tx = conn
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .context("starting import transaction")?;
+    // Templates the catalog repeats are merged first, so new plans find the
+    // one kept.
+    let merged = crate::template_repeats::merge_repeated(&tx)?;
+    if !merged.is_empty() {
+        tracing::info!(
+            templates = merged.len(),
+            "merged repeated exposure templates before importing"
+        );
+    }
     // Pairing records point at a light's guid; a catalog without the column
     // imports copies as it always has.
     let options = &ImportOptions {

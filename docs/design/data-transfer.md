@@ -112,6 +112,12 @@ source's counter.
 Source planning fields win. The destination keeps capture history, plan
 `acquired` and `accepted` counts, images, grades, and reject reasons.
 
+A rig's Target Scheduler database gets only the exposure templates the sent
+plans use, and so does the planning export the N.I.N.A. Sync plugin pulls.
+N.I.N.A. lists every template a profile has, so a template a catalog made
+for imported frames would only add clutter there. A PSF Guard catalog
+destination gets every template, so Planning can offer each one.
+
 ### Send grades
 
 Only `gradingStatus` and `rejectreason` change on images, and the
@@ -127,6 +133,8 @@ filters remain available.
 | Data | Match | Default rule |
 | --- | --- | --- |
 | Project, target, template, plan | Stable GUID | Directional source wins |
+| Exposure template whose GUID the destination lacks, when the destination has a template in the same profile with the same name, filter, gain, offset, binning and readout mode | That template | Update it in place; it keeps its own GUID. When another source row has that template's GUID, or took it earlier in the same sync, that row's settings win and this one only maps to it |
+| Destination templates that repeat one another: one profile, the same name and filter (without case or surrounding spaces) and every other column but `Id` and `guid` equal | The one most plans use, then the lowest `Id` | Merged before the sync: the copies' plans move to it and the copies are deleted (`exposuretemplate.deleted` counts them). Import and activation merge them the same way |
 | Rule weight | Project GUID plus name | Directional source wins |
 | Captured image | Stable GUID | Insert or update capture fields |
 | Captured image whose GUID the source has never seen, when the destination already holds a row it minted itself (import or upload) for the same target, file name, and capture time within 2 s | That row | Update it in place; it takes the source GUID and capture fields, keeps a reviewed grade |

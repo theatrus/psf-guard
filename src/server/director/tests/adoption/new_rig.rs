@@ -307,7 +307,8 @@ async fn the_profile_the_plugin_reports_beats_the_larger_profile() {
 }
 
 /// A rig database opened for sync with one token: a project N.I.N.A. made
-/// under `profile-a`, and a project and template left waiting by activation.
+/// under `profile-a`, and a project, target, plan and template left waiting
+/// by activation.
 /// Returns the planning export's profile IDs, by table, and the contact
 /// the database list then shows for the remote API key.
 async fn exported_profiles(
@@ -337,6 +338,16 @@ async fn exported_profiles(
          VALUES (?1, 'Ha 300', 'Ha', 100, 30, 1, -1, 0, 0, 60, 7, 0, 300, 0, 5, -15, 0, -1, 0, ?2)",
         rusqlite::params![SYNC_PLACED_PROFILE, Uuid::new_v4().to_string()],
     )
+    .unwrap();
+    // A planning export carries a template only for a plan that uses it.
+    db.execute_batch(&format!(
+        "INSERT INTO target (name, active, ra, dec, epochcode, projectId, guid)
+         SELECT 'M42', 1, 5.5, -5.4, 2, Id, '{target}' FROM project WHERE profileId = '{SYNC_PLACED_PROFILE}';
+         INSERT INTO exposureplan (profileId, exposure, desired, acquired, accepted, targetId, exposureTemplateId, guid)
+         SELECT '{SYNC_PLACED_PROFILE}', 300, 10, 0, 0, (SELECT Id FROM target), Id, '{plan}' FROM exposuretemplate;",
+        target = Uuid::new_v4(),
+        plan = Uuid::new_v4(),
+    ))
     .unwrap();
     let mut access = RemoteImageUploadConfig::default();
     access.set_token(TOKEN).unwrap();

@@ -1665,6 +1665,12 @@ revision they were read at; **Copy from** lists a rig's own templates and
 copies any of them into the library, skipping ones already there. Removing
 a template leaves plans that chose it with their copy of its settings.
 
+Activation first merges the templates a rig's database repeats: templates
+in one profile with the same name and filter and every other setting equal.
+Each copy's exposure plans move to the template most plans use, and the copy
+is deleted. The preview lists each copy as **Merged** under **Exposure
+templates**.
+
 ## Activation
 
 ### The activation dialog

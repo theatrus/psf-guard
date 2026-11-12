@@ -141,6 +141,7 @@ describe('Activation panel', () => {
       { kind: 'project', action: 'update', name: 'Heart', detail: 'linked Target Scheduler project' },
       { kind: 'target', action: 'adopt', name: 'IC 1805 r1c1', detail: 'uses the existing target at 02h 32m +61° 27′' },
       { kind: 'template', action: 'create', name: '#4 OIII 300', detail: 'OIII: no template in this database has these settings' },
+      { kind: 'template', action: 'merge', name: '#2 Ha 300', detail: 'same name and settings as #1; this copy is deleted' },
       { kind: 'plan', action: 'adopt', name: 'IC 1805 r1c1 · Ha 300 · 300 s', detail: 'takes over plan #11 (12 of 40 frames taken); desired 40 → 72' },
       { kind: 'plan', action: 'create', name: 'IC 1805 r1c1 · OIII 300 · 300 s', detail: '72 frames, template #4 OIII 300' },
       { kind: 'plan', action: 'keep', name: 'IC 1805 r1c1 · Ha 300 · 600 s', detail: 'plan #12 (0 of 10 frames taken) is not part of this plan; left as it is' },
@@ -164,6 +165,8 @@ describe('Activation panel', () => {
     expect(changes).not.toHaveTextContent('Turned off');
     expect(changes).toHaveTextContent('Exposure templates');
     expect(changes).toHaveTextContent('New#4 OIII 300');
+    expect(rigSummary).toHaveTextContent('Exposure templates: 1 new, 1 merged');
+    expect(changes).toHaveTextContent('Merged#2 Ha 300 same name and settings as #1; this copy is deleted');
   });
   it('shows what a preview only turns off, with the details closed and the count once applied', async () => {
     fixture(); mount();

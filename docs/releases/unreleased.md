@@ -6,6 +6,7 @@
 
 ## Changes
 
+- **Fewer repeated exposure templates on rigs:** **Send planning** to a Target Scheduler database, and the Sync plugin's **Pull planning**, now give the rig only the exposure templates its plans use. Templates PSF Guard made for imported frames stay in the catalog. When the rig already has a template with the same name, filter, gain, offset, binning and readout mode, PSF Guard uses it, even when its GUID differs, so sending planning again no longer adds a second copy. Templates a database already repeats, with the same name and every setting equal in one N.I.N.A. profile, are merged the next time PSF Guard writes planning there: **Send planning**, **Merge databases**, an import or an activation. Their exposure plans move to the template that stays, and the preview counts the merged copies.
 - **Director tolerates clock differences:** With the matching Director plugin update, local safety and recovery checks no longer fail because the observing PC and PSF Guard server have different clock offsets. Assignment windows still follow the server clock; local safety freshness and shutdown deadlines keep their original limits.
 
 - **Activate rigs whose database has leftover rows:** The activation preview no longer fails with *Its database could not be read: FOREIGN KEY constraint failed.* on a rig database that holds rows from a deleted project, such as its rule weights. PSF Guard leaves those rows alone.
