@@ -883,7 +883,7 @@ pub fn main() -> Result<()> {
                             ""
                         }
                     );
-                    for copy in &pair.copies {
+                    for copy in pair.copies.iter().chain(&pair.twin_copies) {
                         println!("      and its copy #{} {}", copy.id, copy.file_name);
                     }
                 }

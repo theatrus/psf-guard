@@ -4831,9 +4831,10 @@ export interface RenamedLight {
   reject_reason: string | null;
 }
 /** A light whose file is gone, and the second light an import made of its renamed file. */
-/** `copies` are other rows of the kept light's file, whose file is gone too;
- *  a merge removes them with the twin. */
-export interface RenamedPair { kept: RenamedLight; twin: RenamedLight; copies: RenamedLight[]; takes_grade: boolean }
+/** `copies` are other lights under the kept light's name, whose file is gone
+ *  too; `twin_copies` are other lights of the renamed file. A merge removes
+ *  them with the twin. */
+export interface RenamedPair { kept: RenamedLight; twin: RenamedLight; copies: RenamedLight[]; twin_copies: RenamedLight[]; takes_grade: boolean }
 /** A pair the merge leaves alone, and why. */
 export interface HeldRenamedPair { kept: RenamedLight; twin: RenamedLight; reason: string }
 /** Lights catalogued twice because their file was renamed after it was imported. */

@@ -555,17 +555,19 @@ keeps its grade, or takes the second frame's grade when it had none. The
 second frame is removed, and a sync does not bring it back.
 
 Merging two catalogs that hold the same frames under different GUIDs, such
-as two catalogs that each imported the same folder, can leave a first
-frame in the catalog more than once under its old name. **Settings** shows such a pair as
-*catalogued 2 times*, and the merge keeps one of those frames: a graded one,
-or else the oldest. The renamed file's frame and the other copies are
-removed, and a sync does not bring them back.
+as two catalogs that each imported the same folder, can leave a frame in
+the catalog more than once, under its old name or the renamed one.
+**Settings** shows such a pair as *catalogued 2 times*, and the merge keeps
+one frame. That is a frame in a collaboration report if there is one, then
+the frame in the same target as the renamed file, then the oldest. It takes
+the renamed file, and the grade one of the others has when it has none. The
+other copies are removed, and a sync does not bring them back.
 
 A pair stays as it is when the frames have different grades, when the
 second frame or a copy is in a collaboration report or the reject archive,
-or when calibrated copies or a remote upload are recorded against it. The check waits while an image
-folder is missing, since a frame whose file is there would look renamed;
-**Settings** names the missing folder.
+or when calibrated copies or a remote upload are recorded against it. The
+check waits while an image folder is missing, since a frame whose file is
+there would look renamed; **Settings** shows which folder is missing.
 Close N.I.N.A. on that rig before merging. To merge from the command line,
 run `psf-guard merge-renamed-lights --db <slug>` to see the pairs, then
 again with `--apply`.
