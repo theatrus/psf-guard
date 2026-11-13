@@ -988,13 +988,6 @@ mod tests {
                 .unwrap();
         }
 
-        /// The first light's Id.
-        fn first(&self) -> i64 {
-            self.conn
-                .query_row("SELECT min(Id) FROM acquiredimage", [], |row| row.get(0))
-                .unwrap()
-        }
-
         /// Catalogue light `row` again under `guid`, as a merge of another
         /// catalog that holds the same frame under a guid of its own does:
         /// in a twin of its target, also under a guid of its own.
