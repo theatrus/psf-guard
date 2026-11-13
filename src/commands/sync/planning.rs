@@ -5,7 +5,9 @@
 //! image data, or grades. Existing telescope plan progress (`acquired` and
 //! `accepted`) stays unchanged; a new plan starts with both counts at zero.
 
-use super::pull::{sync_structure, SourceDeletionContext, SourceDeletionRules, SyncDestination};
+use super::pull::{
+    sync_structure, SourceDeletionContext, SourceDeletionRules, SyncDestination, TemplateScope,
+};
 use super::{require_planning_capable, TableCounts};
 use anyhow::{Context, Result};
 use rusqlite::{Connection, Transaction, TransactionBehavior};
@@ -98,6 +100,7 @@ pub(crate) fn sync_planning_in_transaction(
         opts.project_filter.as_deref(),
         &["acquired", "accepted"],
         false,
+        TemplateScope::UsedByPlans,
         SourceDeletionContext {
             destination: opts.destination,
             rules: &opts.deletions,
@@ -266,5 +269,265 @@ mod tests {
         assert_eq!(one::<i64>(&dest, "SELECT COUNT(*) FROM project"), 1);
         assert_eq!(one::<i64>(&dest, "SELECT COUNT(*) FROM target"), 1);
         assert_eq!(one::<i64>(&dest, "SELECT COUNT(*) FROM exposureplan"), 1);
+    }
+
+    fn template_rows(conn: &Connection) -> Vec<(i64, String, String)> {
+        conn.prepare("SELECT Id, name, guid FROM exposuretemplate ORDER BY Id")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+
+    fn plan_templates(conn: &Connection) -> Vec<i64> {
+        conn.prepare("SELECT exposureTemplateId FROM exposureplan ORDER BY Id")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+
+    #[test]
+    fn a_planning_push_sends_only_the_templates_its_plans_use() {
+        let src = local();
+        // A template an import made in the catalog, used by no plan.
+        src.execute(
+            "INSERT INTO exposuretemplate VALUES (2,'p','Ha G139 O50 1x1','Ha',139,'import-guid')",
+            [],
+        )
+        .unwrap();
+        let dest = Connection::open_in_memory().unwrap();
+        schema(&dest);
+        let summary = sync_planning(&src, &dest, &opts()).unwrap();
+        assert_eq!(summary.exposuretemplate.inserted, 1);
+        assert_eq!(
+            template_rows(&dest),
+            [(1, "Ha 300".to_string(), "template-guid".to_string())]
+        );
+
+        // So does a registered database, which may be a rig's own Target
+        // Scheduler database opened directly.
+        let catalog = Connection::open_in_memory().unwrap();
+        schema(&catalog);
+        sync_planning(
+            &src,
+            &catalog,
+            &PlanningOptions {
+                destination: SyncDestination::Catalog,
+                ..opts()
+            },
+        )
+        .unwrap();
+        assert_eq!(template_rows(&catalog).len(), 1);
+    }
+
+    #[test]
+    fn a_template_under_another_guid_takes_the_rigs_identical_template_and_its_guid() {
+        let src = local();
+        let dest = Connection::open_in_memory().unwrap();
+        schema(&dest);
+        // The rig's own copy of the catalog's template: the same settings,
+        // but a GUID of its own, as an upgrade gives each copy of a
+        // database.
+        dest.execute_batch(
+            "INSERT INTO exposuretemplate VALUES (40,'p',' ha 300','HA',120,'rig-guid');",
+        )
+        .unwrap();
+        for push in 0..2 {
+            let summary = sync_planning(&src, &dest, &opts()).unwrap();
+            assert_eq!(summary.exposuretemplate.inserted, 0);
+            assert_eq!(
+                summary
+                    .changes
+                    .iter()
+                    .any(|line| line.contains("identical template")),
+                push == 0,
+                "only the first push matches by settings: {:?}",
+                summary.changes
+            );
+            assert_eq!(template_rows(&dest).len(), 1);
+            assert_eq!(
+                template_rows(&dest)[0].2,
+                "template-guid",
+                "the rig's template takes the catalog's GUID"
+            );
+            assert_eq!(plan_templates(&dest), [40]);
+        }
+
+        // Another gain is another template.
+        let dest = Connection::open_in_memory().unwrap();
+        schema(&dest);
+        dest.execute(
+            "INSERT INTO exposuretemplate VALUES (40,'p','Ha 300','Ha',100,'rig-guid')",
+            [],
+        )
+        .unwrap();
+        let summary = sync_planning(&src, &dest, &opts()).unwrap();
+        assert_eq!(summary.exposuretemplate.inserted, 1);
+        assert_eq!(plan_templates(&dest), [41]);
+    }
+
+    #[test]
+    fn two_source_templates_of_the_same_name_and_settings_arrive_as_one() {
+        let src = local();
+        src.execute_batch(
+            "INSERT INTO exposuretemplate VALUES (2,'p','Ha 300','Ha',120,'second-guid');
+             INSERT INTO target VALUES (2,'M43',1,5.5,-5.2,0,1,'target-guid-2');
+             INSERT INTO exposureplan VALUES (2,'p',300,10,0,0,1,2,2,'plan-guid-2');",
+        )
+        .unwrap();
+        let dest = Connection::open_in_memory().unwrap();
+        schema(&dest);
+        let summary = sync_planning(&src, &dest, &opts()).unwrap();
+        assert_eq!(summary.exposuretemplate.inserted, 1);
+        assert_eq!(template_rows(&dest).len(), 1);
+        assert_eq!(plan_templates(&dest), [1, 1]);
+    }
+
+    #[test]
+    fn a_push_merges_the_templates_the_rig_repeats() {
+        let src = local();
+        let dest = telescope();
+        // A copy of the rig's template an older push added under its own
+        // GUID, with a plan of its own.
+        dest.execute_batch(
+            "INSERT INTO exposuretemplate VALUES (41,'p','Old Ha','Ha',100,'copy-guid');
+             INSERT INTO exposureplan VALUES (51,'p',120,5,0,0,1,30,41,'other-plan');",
+        )
+        .unwrap();
+        let preview = sync_planning(
+            &src,
+            &dest,
+            &PlanningOptions {
+                dry_run: true,
+                ..opts()
+            },
+        )
+        .unwrap();
+        assert_eq!(preview.exposuretemplate.deleted, 1);
+        assert_eq!(template_rows(&dest).len(), 2, "a preview writes nothing");
+
+        let summary = sync_planning(&src, &dest, &opts()).unwrap();
+        assert_eq!(summary.exposuretemplate.deleted, 1);
+        assert_eq!(summary.exposuretemplate.inserted, 0);
+        assert_eq!(
+            template_rows(&dest),
+            [(40, "Ha 300".to_string(), "template-guid".to_string())]
+        );
+        assert_eq!(plan_templates(&dest), [40, 40]);
+    }
+
+    #[test]
+    fn a_copy_merged_on_the_rig_stays_merged_when_the_catalog_still_has_it() {
+        // The catalog still has both copies the rig once had, each with a
+        // plan; the rig has them too.
+        let src = local();
+        src.execute_batch(
+            "INSERT INTO exposuretemplate VALUES (2,'p','Ha 300','Ha',120,'copy-guid');
+             INSERT INTO target VALUES (2,'M43',1,5.5,-5.2,0,1,'target-guid-2');
+             INSERT INTO exposureplan VALUES (2,'p',300,10,0,0,1,2,2,'plan-guid-2');",
+        )
+        .unwrap();
+        let dest = Connection::open_in_memory().unwrap();
+        schema(&dest);
+        dest.execute_batch(
+            "INSERT INTO exposuretemplate VALUES (40,'p','Ha 300','Ha',120,'template-guid'),
+                                                 (41,'p','Ha 300','Ha',120,'copy-guid');",
+        )
+        .unwrap();
+        for push in 0..2 {
+            let summary = sync_planning(&src, &dest, &opts()).unwrap();
+            assert_eq!(summary.exposuretemplate.inserted, 0, "push {push}");
+            assert_eq!(
+                summary.exposuretemplate.deleted,
+                usize::from(push == 0),
+                "push {push}"
+            );
+            assert_eq!(template_rows(&dest).len(), 1, "push {push}");
+            assert_eq!(plan_templates(&dest), [40, 40], "push {push}");
+        }
+    }
+
+    fn with_default_exposure(conn: &Connection) {
+        conn.execute_batch("ALTER TABLE exposuretemplate ADD COLUMN defaultexposure REAL")
+            .unwrap();
+    }
+
+    fn default_exposures(conn: &Connection) -> Vec<(i64, f64)> {
+        conn.prepare("SELECT Id, defaultexposure FROM exposuretemplate ORDER BY Id")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+
+    #[test]
+    fn a_template_takes_the_identical_one_and_never_rewrites_another() {
+        let src = local();
+        with_default_exposure(&src);
+        src.execute("UPDATE exposuretemplate SET defaultexposure = 180", [])
+            .unwrap();
+        let rig = || {
+            let dest = Connection::open_in_memory().unwrap();
+            schema(&dest);
+            with_default_exposure(&dest);
+            // Two templates of the same name and camera settings that
+            // differ in their default exposure: neither repeats the other.
+            dest.execute_batch(
+                "INSERT INTO exposuretemplate VALUES (40,'p','Ha 300','Ha',120,'rig-a',300),
+                                                     (41,'p','Ha 300','Ha',120,'rig-b',180);",
+            )
+            .unwrap();
+            dest
+        };
+        let dest = rig();
+        let summary = sync_planning(&src, &dest, &opts()).unwrap();
+        assert_eq!(summary.exposuretemplate.inserted, 0);
+        assert_eq!(plan_templates(&dest), [41], "the identical one");
+        assert_eq!(default_exposures(&dest), [(40, 300.0), (41, 180.0)]);
+
+        // Identical to neither: which one is meant cannot be told, so
+        // neither is rewritten.
+        src.execute("UPDATE exposuretemplate SET defaultexposure = 600", [])
+            .unwrap();
+        let dest = rig();
+        let summary = sync_planning(&src, &dest, &opts()).unwrap();
+        assert_eq!(summary.exposuretemplate.inserted, 1);
+        assert_eq!(
+            default_exposures(&dest),
+            [(40, 300.0), (41, 180.0), (42, 600.0)]
+        );
+    }
+
+    #[test]
+    fn an_edited_template_never_rewrites_the_rigs_older_copy() {
+        let src = local();
+        with_default_exposure(&src);
+        // The catalog's edited template, and an older copy no plan uses any
+        // more, which carries the rig's GUID.
+        src.execute_batch(
+            "UPDATE exposuretemplate SET defaultexposure = 180;
+             INSERT INTO exposuretemplate VALUES (2,'p','Ha 300','Ha',120,'rig-guid',300);",
+        )
+        .unwrap();
+        let dest = Connection::open_in_memory().unwrap();
+        schema(&dest);
+        with_default_exposure(&dest);
+        dest.execute(
+            "INSERT INTO exposuretemplate VALUES (40,'p','Ha 300','Ha',120,'rig-guid',300)",
+            [],
+        )
+        .unwrap();
+        let summary = sync_planning(&src, &dest, &opts()).unwrap();
+        assert_eq!(
+            summary.exposuretemplate.inserted, 1,
+            "{:?}",
+            summary.changes
+        );
+        assert_eq!(default_exposures(&dest), [(40, 300.0), (41, 180.0)]);
+        assert_eq!(plan_templates(&dest), [41]);
     }
 }

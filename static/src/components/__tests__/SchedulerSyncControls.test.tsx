@@ -276,6 +276,53 @@ describe('SchedulerSyncControls', () => {
     expect(await screen.findByText('Send planning complete: 0 added, 0 updated, 1 project deleted.')).toBeInTheDocument();
   });
 
+  it('says when a transfer merges the destination’s repeated exposure templates', async () => {
+    const result = {
+      kind: 'push_planning',
+      dry_run: true,
+      source_db_id: 'local',
+      destination_db_id: 'scope',
+      exposuretemplate: { ...counts, deleted: 3 },
+      project: counts,
+      ruleweight: counts,
+      target: counts,
+      exposureplan: counts,
+      acquiredimage: null,
+      imagedata: null,
+      grades: null,
+      grade_filled: 0,
+      grade_preserved: 0,
+      imagedata_bytes: 0,
+      total_inserted: 0,
+      total_updated: 0,
+    };
+    server.use(
+      http.post('/api/databases/local/sync/preview', () => HttpResponse.json({
+        success: true,
+        data: { preview_id: 'merging-preview', created_at: 1, expires_at: 4_102_444_800, result },
+        error: null,
+        status: 'ready',
+      })),
+      http.post('/api/databases/local/sync/previews/merging-preview/apply', () => HttpResponse.json({
+        success: true,
+        data: { ...result, dry_run: false },
+        error: null,
+        status: 'ready',
+      })),
+    );
+
+    const user = userEvent.setup();
+    render(<SchedulerSyncControls databases={[local, telescope]} />, { wrapper: wrapper() });
+    await user.click(screen.getByRole('button', { name: 'Send planning' }));
+    await user.click(screen.getByRole('button', { name: 'Preview changes' }));
+    expect(await screen.findByText(
+      'Merges 3 repeated exposure templates in the destination. Their plans move to the identical template that stays.',
+    )).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Apply this preview' }));
+    expect(await screen.findByText('Send planning complete: 0 added, 0 updated, 3 repeated exposure templates merged.')).toBeInTheDocument();
+  });
+
   it('stops a preview whose inputs changed and ignores its late reply', async () => {
     let answer: (() => void) | undefined;
     const stops: string[] = [];

@@ -112,6 +112,14 @@ source's counter.
 Source planning fields win. The destination keeps capture history, plan
 `acquired` and `accepted` counts, images, grades, and reject reasons.
 
+Send planning carries only the exposure templates the sent plans use, and
+so does the planning export, which the N.I.N.A. Sync plugin's **Pull
+planning** and a PSF Guard peer receive. N.I.N.A. lists every template a
+profile has, and the destination may be a rig's own Target Scheduler
+database, so a template a catalog made for imported frames would only add
+clutter there. A merge carries every template, so Planning can offer each
+one.
+
 ### Send grades
 
 Only `gradingStatus` and `rejectreason` change on images, and the
@@ -127,6 +135,8 @@ filters remain available.
 | Data | Match | Default rule |
 | --- | --- | --- |
 | Project, target, template, plan | Stable GUID | Directional source wins |
+| Exposure template whose GUID the destination lacks, when the destination has a template in the same profile that is identical in every other column (profile, name and filter without case or surrounding spaces; a camera default written as `NULL` or below zero alike) | That template, the lowest `Id` first | Update it in place; it takes the source's GUID, so later syncs match it by GUID. One whose GUID another sent row has, or that an earlier row took, is only mapped to. A template that differs in any setting is never rewritten: the row is inserted |
+| Destination templates that repeat one another: one profile, identical in every column but `Id` and `guid` | One whose GUID the sync sends, then the one most plans use, then the lowest `Id` | Merged before the sync: the copies' plans move to it and the copies are deleted (`exposuretemplate.deleted` counts them). Import and activation merge them the same way; activation keeps a copy with a Director library template's GUID |
 | Rule weight | Project GUID plus name | Directional source wins |
 | Captured image | Stable GUID | Insert or update capture fields |
 | Captured image whose GUID the source has never seen, when the destination already holds a row it minted itself (import or upload) for the same target, file name, and capture time within 2 s | That row | Update it in place; it takes the source GUID and capture fields, keeps a reviewed grade |

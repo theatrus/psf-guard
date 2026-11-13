@@ -6,6 +6,7 @@
 
 ## Changes
 
+- **Fewer repeated exposure templates on rigs:** **Send planning**, and the Sync plugin's **Pull planning**, now give the destination only the exposure templates its plans use. Templates PSF Guard made for imported frames stay in the catalog. When the rig already has an identical template under another GUID, PSF Guard uses it and gives it the catalog's GUID, so sending planning again no longer adds a second copy. A rig template that differs in any setting is never changed. Templates a database already repeats, with the same name and every setting equal in one N.I.N.A. profile, are merged the next time PSF Guard writes planning there: **Send planning**, **Merge databases**, an import or an activation. Their exposure plans move to the template that stays, and the preview counts the merged copies. A Director plan whose rig rows moved to another template may show **Needs activating** once.
 - **Director transit avoidance per plan:** Set independent minutes before and after transit in a plan's scheduling limits. A blank side inherits the default; zero disables that side. The matching Director plugin uses these settings when choosing targets and checking exposures. N.I.N.A. meridian flips remain separate.
 
 - **Director tolerates clock differences:** With the matching Director plugin update, local safety and recovery checks no longer fail because the observing PC and PSF Guard server have different clock offsets. Assignment windows still follow the server clock; local safety freshness and shutdown deadlines keep their original limits.

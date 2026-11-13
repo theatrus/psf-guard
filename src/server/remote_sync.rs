@@ -1531,9 +1531,19 @@ pub(crate) fn export_bundle(
         // Only acquiredimage narrows: reviewed_only means "the rows I have
         // actually graded". project and target ride along whole because the
         // grade read joins against them.
-        let where_clause =
-            (operation == SyncOperation::PushGrades && reviewed_only && *name == "acquiredimage")
-                .then_some("gradingStatus <> 0");
+        // A planning export carries only the templates its plans use: a
+        // rig's N.I.N.A. lists every template it is given, and a template a
+        // catalog made for imported frames would only add clutter there.
+        let where_clause = if operation == SyncOperation::PushGrades
+            && reviewed_only
+            && *name == "acquiredimage"
+        {
+            Some("gradingStatus <> 0")
+        } else if operation == SyncOperation::PushPlanning && *name == "exposuretemplate" {
+            Some("Id IN (SELECT exposureTemplateId FROM exposureplan)")
+        } else {
+            None
+        };
         let mut table = read_bundle_table(&connection, name, where_clause)?;
         if *name == "acquiredimage" {
             send_source_file_names(&connection, &mut table)?;
@@ -2343,6 +2353,55 @@ mod tests {
         );
         drop(staged_connection);
         let _ = std::fs::remove_file(&staged);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_planning_export_carries_only_the_templates_its_plans_use() {
+        let path = temp_snapshot("export-templates");
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "PRAGMA user_version = 23;
+                 CREATE TABLE project (Id INTEGER PRIMARY KEY, guid TEXT);
+                 CREATE TABLE target (Id INTEGER PRIMARY KEY, guid TEXT);
+                 CREATE TABLE exposuretemplate (Id INTEGER PRIMARY KEY, name TEXT, guid TEXT);
+                 CREATE TABLE exposureplan (Id INTEGER PRIMARY KEY, exposureTemplateId INTEGER, guid TEXT);
+                 CREATE TABLE ruleweight (Id INTEGER PRIMARY KEY, name TEXT);
+                 CREATE TABLE acquiredimage (Id INTEGER PRIMARY KEY, gradingStatus INTEGER, guid TEXT);
+                 CREATE TABLE imagedata (Id INTEGER PRIMARY KEY, imagedata BLOB, acquiredimageid INTEGER);
+                 INSERT INTO exposuretemplate VALUES (1, 'Ha Cyg', 'used'), (2, 'Ha G139 O50 1x1', 'unused');
+                 INSERT INTO exposureplan VALUES (1, 1, 'plan');",
+            )
+            .unwrap();
+        drop(connection);
+        let template_names = |operation| {
+            let bundle = export_bundle(
+                &path,
+                "cat",
+                operation,
+                false,
+                false,
+                OptionalTables::default(),
+            )
+            .unwrap();
+            let name = bundle.tables["exposuretemplate"]
+                .columns
+                .iter()
+                .position(|column| column.name == "name")
+                .unwrap();
+            bundle.tables["exposuretemplate"]
+                .rows
+                .iter()
+                .map(|row| row.values[name].value.clone().unwrap())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(template_names(SyncOperation::PushPlanning), ["Ha Cyg"]);
+        // A merge mirrors the catalog: every template goes.
+        assert_eq!(
+            template_names(SyncOperation::Merge),
+            ["Ha Cyg", "Ha G139 O50 1x1"]
+        );
         let _ = std::fs::remove_file(&path);
     }
 

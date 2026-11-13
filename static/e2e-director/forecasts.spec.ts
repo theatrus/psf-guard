@@ -78,7 +78,11 @@ test('a site with a forecast and a horizon file shapes its rigs\' nights', async
     await expect(cells).toHaveCount(7);
     await expect(cells.filter({ has: page.locator('.nights-cell-forecast') })).toHaveCount(7);
     await expect(grid.getByRole('button', { name: /not available by the forecast/ }).first()).toBeVisible();
-    const limited = grid.getByRole('button', { name: /limited by the forecast/ }).first();
+    // The last night limited by cloud. The stand-in forecast starts 12 hours
+    // back, so a night already under way before then is limited too, by the
+    // hours the forecast lacks, and has no cloud to show. The first night
+    // was such a night when this ran between about 13:30 and 20:00 UTC.
+    const limited = grid.getByRole('button', { name: /limited by the forecast: cloud/ }).last();
     await expect(limited).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath('nights-forecast-grid.png'), fullPage: true, animations: 'disabled' });
 
@@ -92,7 +96,10 @@ test('a site with a forecast and a horizon file shapes its rigs\' nights', async
     const clouds = detail.getByRole('group', { name: 'Cloud cover' });
     await expect(clouds).toBeVisible({ timeout: 30_000 });
     await expect(clouds.locator('.nights-cloud.is-cloudy').first()).toBeAttached();
-    // The site's horizon file keeps the walled Heart out of the night.
+    // The site's horizon file keeps the walled Heart out of a night with a
+    // schedule. Only the next few nights have one, and the last cloudy one
+    // may be beyond them.
+    await cells.filter({ hasText: /\d h planned/ }).first().click();
     const plans = detail.getByRole('region', { name: /^This night:/ });
     await plans.getByText(/^Not this night: \d+ targets?$/).click();
     await expect(plans.getByRole('listitem').filter({ hasText: 'Heart behind the wall · IC 1805' })).toContainText('not above its horizon and altitude limits during darkness');

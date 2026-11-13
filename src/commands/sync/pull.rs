@@ -41,7 +41,9 @@ pub struct TableCounts {
     /// parent FK that didn't map to a destination row.
     pub skipped: usize,
     /// Destination rows deleted because the source catalog deleted their
-    /// project and nothing was captured for it in the destination.
+    /// project and nothing was captured for it in the destination. For
+    /// exposure templates: the destination's repeated templates merged
+    /// into another ([`crate::template_repeats`]).
     pub deleted: usize,
 }
 
@@ -353,6 +355,89 @@ fn dest_guid_map(
     Ok((map, dups))
 }
 
+/// One destination template a source template may take.
+struct TemplateTwin {
+    id: i64,
+    values: Vec<Value>,
+    /// A source row sent in this sync has this template's GUID, or took
+    /// it already: that row writes it, so another row only maps to it.
+    claimed: bool,
+}
+
+/// Destination templates by
+/// [`crate::template_repeats::identical_template_key`], lowest Id first.
+type TemplateTwins = HashMap<String, Vec<TemplateTwin>>;
+
+/// The destination's exposure templates by
+/// [`crate::template_repeats::identical_template_key`], lowest Id first.
+/// One whose GUID a source row sent in this sync has is claimed by that
+/// row. Rows with an ambiguous GUID are left out.
+fn dest_template_twins(
+    tx: &Transaction,
+    write_cols: &[&str],
+    guid_w: usize,
+    source_guids: &HashSet<String>,
+    dest_dups: &HashSet<String>,
+) -> Result<TemplateTwins> {
+    let sql = format!(
+        "SELECT Id,{} FROM exposuretemplate ORDER BY Id",
+        quoted(write_cols)
+    );
+    let mut stmt = tx.prepare(&sql)?;
+    let n = write_cols.len();
+    let mut twins = TemplateTwins::new();
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let dest_id: i64 = row.get(0)?;
+        let vals: Vec<Value> = (0..n)
+            .map(|i| row.get::<_, Value>(i + 1))
+            .collect::<rusqlite::Result<_>>()?;
+        let guid = match &vals[guid_w] {
+            Value::Text(guid) => Some(guid.as_str()),
+            _ => None,
+        };
+        if guid.is_some_and(|guid| dest_dups.contains(guid)) {
+            continue;
+        }
+        let claimed = guid.is_some_and(|guid| source_guids.contains(guid));
+        twins
+            .entry(crate::template_repeats::identical_template_key(
+                write_cols, &vals,
+            ))
+            .or_default()
+            .push(TemplateTwin {
+                id: dest_id,
+                values: vals,
+                claimed,
+            });
+    }
+    Ok(twins)
+}
+
+/// Every non-empty GUID of the source `table`'s rows this sync sends: all
+/// of them, or those `allowed` lists.
+fn source_guids(
+    src: &Connection,
+    table: &str,
+    allowed: Option<&HashSet<i64>>,
+) -> Result<HashSet<String>> {
+    let mut stmt = src.prepare(&format!("SELECT Id, guid FROM {table}"))?;
+    let mut guids = HashSet::new();
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let id = as_i64(&row.get::<_, Value>(0)?);
+        if allowed.is_some_and(|allowed| !id.is_some_and(|id| allowed.contains(&id))) {
+            continue;
+        }
+        if let Some(guid) = row.get::<_, Option<String>>(1)?
+            && !guid.is_empty()
+        {
+            guids.insert(guid);
+        }
+    }
+    Ok(guids)
+}
+
 /// Remap an FK column in place. Returns `false` if the column held a non-null id
 /// absent from `map` — the caller must skip the row rather than retain the
 /// source id (which could attach the child to an unrelated destination row).
@@ -422,6 +507,22 @@ fn upsert_guid_table(
     // set of guids that are duplicated within the (filtered) source.
     let (dest_map, dest_dups) = dest_guid_map(tx, table, &write_cols, guid_w)?;
     let src_dups = source_dup_guids(src, table)?;
+    // An exposure template whose GUID the destination lacks may still be
+    // there under another GUID: two copies of one Target Scheduler database
+    // each fill in their own GUIDs on upgrade. A template carries no
+    // captures, so the source's row takes the destination's identical
+    // template instead of adding a second one.
+    let mut template_twins = if table.eq_ignore_ascii_case("exposuretemplate") {
+        Some(dest_template_twins(
+            tx,
+            &write_cols,
+            guid_w,
+            &source_guids(src, table, allowed_src_ids)?,
+            &dest_dups,
+        )?)
+    } else {
+        None
+    };
 
     let insert_sql = format!(
         "INSERT INTO {} ({}) VALUES ({})",
@@ -485,6 +586,46 @@ fn upsert_guid_table(
             continue;
         }
 
+        // A template identical to this one in every setting, under
+        // another GUID. A claimed one belongs to another source row, so
+        // this one only maps to it; otherwise it takes this row's GUID, so
+        // later syncs match it by GUID. A template that differs in any
+        // setting is never rewritten: this row is inserted instead.
+        let twin = match template_twins.as_mut() {
+            Some(twins) if !dest_map.contains_key(&guid) => twins
+                .get_mut(&crate::template_repeats::identical_template_key(
+                    &write_cols,
+                    &write_values,
+                ))
+                .and_then(|rows| rows.first_mut()),
+            _ => None,
+        };
+        if let Some(twin) = twin {
+            changes.push(format!(
+                "match {} {} to the destination's identical template",
+                table,
+                row_label(&write_cols, &write_values, &guid),
+            ));
+            id_map.insert(src_id, twin.id);
+            if preserve_existing || twin.claimed {
+                counts.unchanged += 1;
+                continue;
+            }
+            twin.claimed = true;
+            let diffs = column_diffs(&write_cols, &write_values, &twin.values);
+            let mut p: Vec<&dyn ToSql> = write_values.iter().map(|v| v as &dyn ToSql).collect();
+            p.push(&twin.id);
+            upd_stmt.execute(p.as_slice())?;
+            counts.updated += 1;
+            changes.push(format!(
+                "update {} {}: {}",
+                table,
+                row_label(&write_cols, &write_values, &guid),
+                diffs.join(", "),
+            ));
+            twin.values = write_values;
+            continue;
+        }
         match dest_map.get(&guid) {
             Some((dest_id, cur_vals)) => {
                 id_map.insert(src_id, *dest_id);
@@ -530,6 +671,20 @@ fn upsert_guid_table(
                 ins_stmt.execute(params_from_iter(write_values.iter()))?;
                 let dest_id = tx.last_insert_rowid();
                 id_map.insert(src_id, dest_id);
+                // A second source template identical to this one takes it.
+                if let Some(twins) = template_twins.as_mut() {
+                    twins
+                        .entry(crate::template_repeats::identical_template_key(
+                            &write_cols,
+                            &write_values,
+                        ))
+                        .or_default()
+                        .push(TemplateTwin {
+                            id: dest_id,
+                            values: write_values.clone(),
+                            claimed: true,
+                        });
+                }
                 counts.inserted += 1;
                 changes.push(format!(
                     "insert {} {}",
@@ -1289,6 +1444,37 @@ pub(super) fn child_ids(
     Ok(set)
 }
 
+/// The source templates that `plans` use, or that any plan uses when
+/// `plans` is `None`.
+fn used_template_ids(src: &Connection, plans: Option<&HashSet<i64>>) -> Result<HashSet<i64>> {
+    let mut stmt = src.prepare(
+        "SELECT Id, exposureTemplateId FROM exposureplan WHERE exposureTemplateId IS NOT NULL",
+    )?;
+    let mut used = HashSet::new();
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let plan: i64 = row.get(0)?;
+        if plans.is_none_or(|plans| plans.contains(&plan))
+            && let Some(template) = as_i64(&row.get::<_, Value>(1)?)
+        {
+            used.insert(template);
+        }
+    }
+    Ok(used)
+}
+
+/// Which exposure templates a structure sync sends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum TemplateScope {
+    /// Every template: a merge mirrors its source, so Planning can offer
+    /// each one.
+    All,
+    /// Only the templates the sent plans use: a planning push. N.I.N.A.
+    /// lists every template a rig's database has, and a template a catalog
+    /// made for imported frames would only add clutter there.
+    UsedByPlans,
+}
+
 /// Structure sync result plus the FK maps needed by acquired-image syncing.
 pub(super) struct StructureSync {
     pub exposuretemplate: TableCounts,
@@ -1330,12 +1516,14 @@ pub(super) struct StructureSync {
 /// nothing was captured for them there. `destination` says whether the
 /// sync may also record that deletion as a tombstone (a PSF Guard catalog)
 /// or must write no PSF Guard table (a rig's Target Scheduler database).
+#[allow(clippy::too_many_arguments)]
 pub(super) fn sync_structure(
     src: &Connection,
     tx: &Transaction,
     project_filter: Option<&str>,
     excluded_plan_counts: &[&str],
     preserve_existing: bool,
+    templates: TemplateScope,
     deletions: SourceDeletionContext<'_>,
     changes: &mut Vec<String>,
 ) -> Result<StructureSync> {
@@ -1448,18 +1636,42 @@ pub(super) fn sync_structure(
         None => None,
     };
 
-    // Templates are profile-scoped. Sync all of them so every selected plan
-    // can remap its template FK.
-    let tmpl = upsert_guid_table(
+    // Templates are profile-scoped; see [`TemplateScope`].
+    let used_templates = match templates {
+        TemplateScope::All => None,
+        TemplateScope::UsedByPlans => Some(used_template_ids(src, included_plans.as_ref())?),
+    };
+    // Templates the destination repeats are merged first, so a source
+    // template finds the one kept.
+    // The copy kept is the one with a GUID this sync sends, so it keeps
+    // matching by GUID.
+    let merged_templates = crate::template_repeats::merge_repeated(
+        tx,
+        &source_guids(src, "exposuretemplate", used_templates.as_ref())?,
+    )?;
+    if !merged_templates.is_empty() {
+        tracing::info!(
+            templates = merged_templates.len(),
+            "merged repeated exposure templates in the sync destination"
+        );
+    }
+    for merged in &merged_templates {
+        changes.push(format!(
+            "merge exposuretemplate \"{}\" #{} into #{} ({} plans moved)",
+            merged.name, merged.removed_id, merged.kept_id, merged.plans
+        ));
+    }
+    let mut tmpl = upsert_guid_table(
         src,
         tx,
         "exposuretemplate",
         &[],
-        None,
+        used_templates.as_ref(),
         &[],
         preserve_existing,
         changes,
     )?;
+    tmpl.counts.deleted = merged_templates.len();
     let tmpl_map = tmpl.id_map;
 
     let proj = upsert_guid_table(
@@ -2012,6 +2224,7 @@ pub(crate) fn sync_arrivals(
         None,
         &["accepted"],
         true,
+        TemplateScope::All,
         SourceDeletionContext {
             destination: SyncDestination::Catalog,
             rules: deletions,
@@ -2066,6 +2279,7 @@ pub(crate) fn sync_pull_in_transaction(
         opts.project_filter.as_deref(),
         &["accepted"],
         false,
+        TemplateScope::All,
         SourceDeletionContext {
             destination: SyncDestination::Catalog,
             rules: &opts.deletions,

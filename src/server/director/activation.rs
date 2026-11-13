@@ -1823,6 +1823,42 @@ fn write_rig_inner(tx: &Connection, inputs: &Inputs<'_>) -> Result<Outcome, RigE
     )?;
     ensure_director_tables(tx)?;
     let mut changes = Vec::new();
+    // Templates the rig repeats are merged first, so the plan's templates
+    // find the one kept.
+    // The copy kept is one with a library template's GUID, so the library
+    // template keeps its GUID on the rig.
+    let library_guids = inputs
+        .contributions
+        .iter()
+        .filter_map(|contribution| contribution.template.template_guid)
+        .map(|guid| guid.to_string())
+        .collect();
+    let merged = crate::template_repeats::merge_repeated(tx, &library_guids).map_err(|error| {
+        RigError::Skip(format!(
+            "Its repeated exposure templates could not be merged: {error:#}."
+        ))
+    })?;
+    for merged in merged {
+        changes.push(Change {
+            kind: "template",
+            action: "merge",
+            name: format!("#{} {}", merged.removed_id, merged.name),
+            detail: match merged.plans {
+                0 => format!(
+                    "same name and settings as #{}; this copy is deleted",
+                    merged.kept_id
+                ),
+                1 => format!(
+                    "same name and settings as #{}; its exposure plan moves there and this copy is deleted",
+                    merged.kept_id
+                ),
+                n => format!(
+                    "same name and settings as #{}; its {n} exposure plans move there and this copy is deleted",
+                    merged.kept_id
+                ),
+            },
+        });
+    }
     let project_name = inputs.project.name.clone();
     let target_base = if inputs.framing.target_name.is_empty() {
         inputs.project.name.clone()

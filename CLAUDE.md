@@ -227,12 +227,17 @@ before the GitHub release fallback. See [docs/UPDATES.md](docs/UPDATES.md).
   degrees at the astrometry boundary.
 - `gradingStatus` values are `0 = Pending`, `1 = Accepted`, and `2 = Rejected`.
   Keep `rejectreason` consistent with the grade.
-- Match records across databases by stable GUID. The one exception is a
+- Match records across databases by stable GUID. One exception is a
   destination row PSF Guard minted itself (an import or remote upload) for a
   frame whose telescope row then arrives: sync recognizes it by target, file
   name, and capture time and updates it in place rather than inserting a
-  twin. Beyond that, do not substitute names or nearby coordinates for sync
-  identity.
+  twin. The other exception is an exposure template whose GUID the
+  destination lacks: it takes the destination's template that is identical
+  in every other setting (`template_repeats::identical_template_key`) and
+  gives it the source's GUID, because two copies of one Target Scheduler
+  database fill in different GUIDs on upgrade. A template that differs in
+  any setting is never rewritten. Beyond that, do not substitute names or
+  nearby coordinates for sync identity.
 - Open a source database read-only during sync. Refuse the same source and
   destination path. Preview every UI transfer before Apply.
 - The Library merges databases, but Grid, Detail, Comparison, and Sequence
