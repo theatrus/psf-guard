@@ -552,10 +552,18 @@ frame showed **Catalog only**. **Settings** lists such pairs under the
 database, with **Merge renamed lights**. A merge first copies the
 database beside itself. Each first frame then uses the renamed file and
 keeps its grade, or takes the second frame's grade when it had none. The
-second frame is removed, and a sync does not bring it back. A pair stays as
-it is when the two frames have different grades, when the second frame is
-in a collaboration report or the reject archive, or when calibrated copies
-or a remote upload are recorded against it. The check waits while an image
+second frame is removed, and a sync does not bring it back.
+
+Merging two catalogs that hold the same frames under different GUIDs, such
+as two catalogs that each imported the same folder, can leave a first
+frame in the catalog more than once under its old name. **Settings** shows such a pair as
+*catalogued 2 times*, and the merge keeps one of those frames: a graded one,
+or else the oldest. The renamed file's frame and the other copies are
+removed, and a sync does not bring them back.
+
+A pair stays as it is when the frames have different grades, when the
+second frame or a copy is in a collaboration report or the reject archive,
+or when calibrated copies or a remote upload are recorded against it. The check waits while an image
 folder is missing, since a frame whose file is there would look renamed;
 **Settings** names the missing folder.
 Close N.I.N.A. on that rig before merging. To merge from the command line,

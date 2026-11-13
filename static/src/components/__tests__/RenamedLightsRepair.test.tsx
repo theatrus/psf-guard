@@ -16,6 +16,7 @@ function light(id: number, file_name: string, grade = 0): RenamedLight {
 const pair = {
   kept: light(51, '/data/Jellyfish_LIGHT_SII_Session_2026-10-27_0051.fits'),
   twin: light(812, '/data/Jellyfish_LIGHT_SII_Session_2026-10-27A_0051.fits', 1),
+  copies: [],
   takes_grade: true,
 };
 const held = {
@@ -46,6 +47,19 @@ describe('renamed light repair', () => {
     expect(await screen.findByRole('status')).toHaveTextContent('Merged 1 renamed light in Veil.');
     expect(screen.getByRole('status')).toHaveTextContent('catalog.sqlite.before-renamed-merge-1790000000');
     expect(merge).toHaveBeenCalledTimes(1);
+  });
+
+  it('says when the first light was catalogued more than once', async () => {
+    const copied = {
+      kept: light(71, '/capture/Tree_LIGHT_SII_Session_2026-10-27_0071.fits'),
+      twin: light(813, '/capture/Tree_LIGHT_SII_Session_2026-10-27B_0071.fits'),
+      copies: [light(902, '/capture/Tree_LIGHT_SII_Session_2026-10-27_0071.fits')],
+      takes_grade: false,
+    };
+    mount(true, { pairs: [copied], held: [] });
+    const note = await screen.findByRole('note', { name: 'Renamed lights in Veil' });
+    expect(note).toHaveTextContent('Tree_LIGHT_SII_Session_2026-10-27_0071.fits (catalogued 2 times) → Tree_LIGHT_SII_Session_2026-10-27B_0071.fits');
+    expect(note).toHaveTextContent('A first light catalogued more than once keeps one row.');
   });
 
   it('points a viewer at the command line instead', async () => {

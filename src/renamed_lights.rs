@@ -250,8 +250,19 @@ pub struct RenamedPair {
     pub kept: Light,
     /// The second light, which is removed.
     pub twin: Light,
+    /// Other copies of the first light: the same file name, their file gone
+    /// too. A merge of two catalogs that hold the same frames under
+    /// different guids leaves them. They are removed as well.
+    pub copies: Vec<Light>,
     /// Whether the kept light takes the twin's grade: it had none.
     pub takes_grade: bool,
+}
+
+impl RenamedPair {
+    /// The lights a merge removes: the twin, then each copy.
+    pub fn removed(&self) -> impl Iterator<Item = &Light> {
+        std::iter::once(&self.twin).chain(&self.copies)
+    }
 }
 
 /// Twins left alone, and why.
@@ -563,13 +574,46 @@ pub fn plan(
                 ));
                 continue;
             }
-            // The twin's other matches: another missing light makes the
-            // choice of which to keep a guess.
-            if twins_of(*twin_index).len() > 1 {
-                report.held.push(hold(
-                    "more than one light whose file is gone is this exposure".into(),
-                ));
-                continue;
+            // The twin's other matches. Copies of the first light (the same
+            // file name, the file gone, the twin their only other match) are
+            // one exposure catalogued more than once, and fold into one
+            // light with the twin. Missing lights of different names make
+            // the choice of which to keep a guess.
+            let others = twins_of(*twin_index);
+            let mut copies: Vec<&Light> = Vec::new();
+            if others.len() > 1 {
+                let mut all_copies = true;
+                for &other in &others {
+                    if other != index
+                        && !(same_name(&all[other].file_name, &kept.file_name)
+                            && !is_found(&all[other])
+                            && twins_of(other) == [*twin_index])
+                    {
+                        all_copies = false;
+                        break;
+                    }
+                }
+                if !all_copies {
+                    report.held.push(hold(
+                        "it matches more than one light whose file is gone, under different names"
+                            .into(),
+                    ));
+                    continue;
+                }
+                // One copy stays: a graded one, else the oldest. The others
+                // are reported with it, so only its turn adds the pair.
+                let keeper = others
+                    .iter()
+                    .copied()
+                    .min_by_key(|other| (all[*other].grade == 0, all[*other].id));
+                if keeper != Some(index) {
+                    continue;
+                }
+                copies = others
+                    .iter()
+                    .filter(|other| **other != index)
+                    .map(|other| &all[*other])
+                    .collect();
             }
             if let Some(reason) = records.keeps_own_file(kept) {
                 report
@@ -583,16 +627,34 @@ pub fn plan(
                     .push(hold(format!("the second light stays: {reason}")));
                 continue;
             }
+            if let Some(reason) = copies
+                .iter()
+                .find_map(|copy| records.must_stay(copy, protected))
+            {
+                report
+                    .held
+                    .push(hold(format!("a copy of the first light stays: {reason}")));
+                continue;
+            }
             let takes_grade = kept.grade == 0 && twin.grade != 0;
-            if kept.grade != 0 && twin.grade != 0 && kept.grade != twin.grade {
-                report.held.push(hold(
-                    "the two lights have different grades; grade one to match the other".into(),
-                ));
+            let grades: BTreeSet<i64> = std::iter::once(kept)
+                .chain(std::iter::once(twin))
+                .chain(copies.iter().copied())
+                .map(|light| light.grade)
+                .filter(|grade| *grade != 0)
+                .collect();
+            if grades.len() > 1 {
+                report.held.push(hold(if copies.is_empty() {
+                    "the two lights have different grades; grade one to match the other".into()
+                } else {
+                    "the lights have different grades; grade them to match".into()
+                }));
                 continue;
             }
             report.pairs.push(RenamedPair {
                 kept: kept.clone(),
                 twin: twin.clone(),
+                copies: copies.into_iter().cloned().collect(),
                 takes_grade,
             });
         }
@@ -635,57 +697,59 @@ pub fn merge(
                 params![twin.grade, twin.reject_reason, kept.id],
             )?;
         }
-        // A flat chosen by hand for the twin applies to the light it was.
-        if table_exists(&tx, "psf_guard_flat_light_choice") {
-            tx.execute(
-                "UPDATE OR IGNORE psf_guard_flat_light_choice SET light_guid = ?1
-                 WHERE light_guid = ?2",
-                params![kept.guid, twin.guid],
-            )?;
-        }
-        for (table, key, value) in [
-            ("imagedata", "acquiredimageid", twin.id.to_string()),
-            (
-                "psf_guard_rejected_at",
-                "acquired_image_guid",
-                twin.guid.clone(),
-            ),
-            (
-                "psf_guard_flat_light_choice",
-                "light_guid",
-                twin.guid.clone(),
-            ),
-            (
-                "psf_guard_flat_light_angle",
-                "light_id",
-                twin.id.to_string(),
-            ),
-            ("psf_guard_ts_sync_grade", "guid", twin.guid.clone()),
-            ("psf_guard_ts_sync_pending", "guid", twin.guid.clone()),
-            ("psf_guard_renamed_light", "guid", twin.guid.clone()),
-        ] {
-            if table_exists(&tx, table) {
+        for removed in pair.removed() {
+            // A flat chosen by hand for a removed light applies to the light it was.
+            if table_exists(&tx, "psf_guard_flat_light_choice") {
                 tx.execute(
-                    &format!("DELETE FROM \"{table}\" WHERE CAST(\"{key}\" AS TEXT) = ?1"),
-                    [value],
+                    "UPDATE OR IGNORE psf_guard_flat_light_choice SET light_guid = ?1
+                     WHERE light_guid = ?2",
+                    params![kept.guid, removed.guid],
                 )?;
             }
-        }
-        // The twin's import counted the exposure a second time.
-        if has_exposure_plans && let Some(exposure_id) = twin.exposure_id {
+            for (table, key, value) in [
+                ("imagedata", "acquiredimageid", removed.id.to_string()),
+                (
+                    "psf_guard_rejected_at",
+                    "acquired_image_guid",
+                    removed.guid.clone(),
+                ),
+                (
+                    "psf_guard_flat_light_choice",
+                    "light_guid",
+                    removed.guid.clone(),
+                ),
+                (
+                    "psf_guard_flat_light_angle",
+                    "light_id",
+                    removed.id.to_string(),
+                ),
+                ("psf_guard_ts_sync_grade", "guid", removed.guid.clone()),
+                ("psf_guard_ts_sync_pending", "guid", removed.guid.clone()),
+                ("psf_guard_renamed_light", "guid", removed.guid.clone()),
+            ] {
+                if table_exists(&tx, table) {
+                    tx.execute(
+                        &format!("DELETE FROM \"{table}\" WHERE CAST(\"{key}\" AS TEXT) = ?1"),
+                        [value],
+                    )?;
+                }
+            }
+            // The removed light counted the exposure a second time.
+            if has_exposure_plans && let Some(exposure_id) = removed.exposure_id {
+                tx.execute(
+                    "UPDATE exposureplan SET acquired = acquired - 1
+                     WHERE Id = ?1 AND acquired > 0",
+                    [exposure_id],
+                )?;
+            }
+            tx.execute("DELETE FROM acquiredimage WHERE Id = ?1", [removed.id])?;
             tx.execute(
-                "UPDATE exposureplan SET acquired = acquired - 1
-                 WHERE Id = ?1 AND acquired > 0",
-                [exposure_id],
+                "INSERT OR REPLACE INTO psf_guard_merged_light
+                     (removed_guid, removed_id, kept_guid, file_name, merged_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![removed.guid, removed.id, kept.guid, removed.file_name, now],
             )?;
         }
-        tx.execute("DELETE FROM acquiredimage WHERE Id = ?1", [twin.id])?;
-        tx.execute(
-            "INSERT OR REPLACE INTO psf_guard_merged_light
-                 (removed_guid, removed_id, kept_guid, file_name, merged_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![twin.guid, twin.id, kept.guid, twin.file_name, now],
-        )?;
     }
     crate::db::reconcile_accepted_counts(&tx)?;
     crate::db::record_rejection_times(&tx)?;
@@ -873,6 +937,48 @@ mod tests {
                 .unwrap();
         }
 
+        /// Catalogue the first light again under `guid`, as a merge of
+        /// another catalog that holds the same frame under a guid of its
+        /// own does: in a twin of its target, also under a guid of its
+        /// own. `file_name` gives the copy another name.
+        fn copy_first_light(&self, guid: &str, file_name: Option<&str>) -> i64 {
+            let first: i64 = self
+                .conn
+                .query_row("SELECT min(Id) FROM acquiredimage", [], |row| row.get(0))
+                .unwrap();
+            self.conn
+                .execute_batch(&format!(
+                    "CREATE TEMP TABLE twin_project AS SELECT * FROM project LIMIT 1;
+                     UPDATE twin_project SET Id = NULL, guid = 'project-{guid}';
+                     INSERT INTO project SELECT * FROM twin_project;
+                     DROP TABLE twin_project;
+                     CREATE TEMP TABLE twin_target AS SELECT * FROM target LIMIT 1;
+                     UPDATE twin_target SET Id = NULL, guid = 'target-{guid}',
+                         projectid = (SELECT Id FROM project WHERE guid = 'project-{guid}');
+                     INSERT INTO target SELECT * FROM twin_target;
+                     DROP TABLE twin_target;
+                     CREATE TEMP TABLE copy AS SELECT * FROM acquiredimage WHERE Id = {first};
+                     UPDATE copy SET Id = NULL, guid = '{guid}', exposureId = 0,
+                         projectId = (SELECT Id FROM project WHERE guid = 'project-{guid}'),
+                         targetId = (SELECT Id FROM target WHERE guid = 'target-{guid}');
+                     INSERT INTO acquiredimage SELECT * FROM copy;
+                     DROP TABLE copy;"
+                ))
+                .unwrap();
+            let id = self.conn.last_insert_rowid();
+            if let Some(file_name) = file_name {
+                let path = self.images.join(file_name).to_string_lossy().into_owned();
+                self.conn
+                    .execute(
+                        "UPDATE acquiredimage SET metadata = json_set(metadata, '$.FileName', ?1)
+                         WHERE Id = ?2",
+                        params![path, id],
+                    )
+                    .unwrap();
+            }
+            id
+        }
+
         /// (acquired, accepted) of the light's exposure plan.
         fn plan_counts(&self) -> (i64, i64) {
             self.conn
@@ -1013,6 +1119,80 @@ mod tests {
         assert!(report.pairs.is_empty());
         assert!(
             report.held[0].reason.contains("collaboration"),
+            "{report:?}"
+        );
+    }
+
+    #[test]
+    fn copies_of_the_first_light_fold_into_one_light_with_the_twin() {
+        let mut catalog = Catalog::with_twin();
+        let lights = catalog.lights();
+        let (first, twin) = (lights[0].clone(), lights[1].clone());
+        let copy = catalog.copy_first_light("merged-copy", None);
+        // The copy was graded where it came from: it is the light that stays.
+        catalog.grade(copy, 1);
+        let finder = catalog.finder(None);
+        let protected = BTreeSet::new();
+
+        let report = plan(&catalog.conn, &finder, &protected).unwrap();
+        assert!(report.held.is_empty(), "{report:?}");
+        let [pair] = report.pairs.as_slice() else {
+            panic!("{report:?}");
+        };
+        assert_eq!((pair.kept.id, pair.twin.id), (copy, twin.0));
+        assert_eq!(
+            pair.copies.iter().map(|light| light.id).collect::<Vec<_>>(),
+            vec![first.0]
+        );
+
+        let outcome = merge(&mut catalog.conn, &finder, &protected).unwrap();
+
+        assert_eq!(outcome.merged.len(), 1);
+        assert_eq!(
+            catalog.lights(),
+            vec![(copy, "merged-copy".to_string(), twin.2.clone(), 1)]
+        );
+        let removed = crate::commands::reject_removal::removed_guids(&catalog.conn).unwrap();
+        assert!(removed.contains(&first.1) && removed.contains(&twin.1));
+        let after = plan(&catalog.conn, &finder, &protected).unwrap();
+        assert!(after.pairs.is_empty() && after.held.is_empty(), "{after:?}");
+    }
+
+    #[test]
+    fn missing_lights_of_other_names_or_grades_stay() {
+        let catalog = Catalog::with_twin();
+        let lights = catalog.lights();
+        let finder = catalog.finder(None);
+
+        // A missing light of another name is the same exposure: which of
+        // the two the renamed file is cannot be told.
+        let other = catalog.copy_first_light(
+            "other-name",
+            Some("Jellyfish Nebula SHO_LIGHT_SII_300.00s_2026-10-27_23-06-46_0051.fits"),
+        );
+        let report = plan(&catalog.conn, &finder, &BTreeSet::new()).unwrap();
+        assert!(report.pairs.is_empty(), "{report:?}");
+        assert!(
+            report
+                .held
+                .iter()
+                .all(|held| held.reason.contains("under another name")),
+            "{report:?}"
+        );
+        catalog
+            .conn
+            .execute("DELETE FROM acquiredimage WHERE Id = ?1", [other])
+            .unwrap();
+
+        // Copies graded differently stay until someone grades them alike.
+        let copy = catalog.copy_first_light("graded-copy", None);
+        catalog.grade(copy, 2);
+        catalog.grade(lights[0].0, 1);
+        let report = plan(&catalog.conn, &finder, &BTreeSet::new()).unwrap();
+        assert!(report.pairs.is_empty(), "{report:?}");
+        assert_eq!(report.held.len(), 1, "one entry for the copies: {report:?}");
+        assert!(
+            report.held[0].reason.contains("grade them to match"),
             "{report:?}"
         );
     }

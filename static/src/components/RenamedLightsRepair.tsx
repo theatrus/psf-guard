@@ -51,7 +51,8 @@ export default function RenamedLightsRepair({ dbId, dbName, canManage }: { dbId:
     </p>
     {pairs > 0 && <ul>
       {data.pairs.slice(0, EXAMPLES).map(pair => <li key={pair.twin.id}>
-        <code>{baseName(pair.kept.file_name)}</code> → <code>{baseName(pair.twin.file_name)}</code>
+        <code>{baseName(pair.kept.file_name)}</code>
+        {pair.copies.length > 0 && ` (catalogued ${pair.copies.length + 1} times)`} → <code>{baseName(pair.twin.file_name)}</code>
       </li>)}
       {pairs > EXAMPLES && <li>and {plural(pairs - EXAMPLES, 'other', 'others')}</li>}
     </ul>}
@@ -65,7 +66,8 @@ export default function RenamedLightsRepair({ dbId, dbName, canManage }: { dbId:
             {merge.isPending ? 'Merging…' : 'Merge renamed lights'}
           </button>{' '}
           Copies the database beside itself first. Each first light then uses the renamed file and keeps its grade,
-          or takes the second light's grade when it had none, and the second light is removed. Close N.I.N.A. on
+          or takes the second light's grade when it had none, and the second light is removed. A first light
+          catalogued more than once keeps one row. Close N.I.N.A. on
           that rig before merging.
         </p>
       : <p>

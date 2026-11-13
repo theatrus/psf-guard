@@ -883,6 +883,9 @@ pub fn main() -> Result<()> {
                             ""
                         }
                     );
+                    for copy in &pair.copies {
+                        println!("      and its copy #{} {}", copy.id, copy.file_name);
+                    }
                 }
                 for held in held {
                     println!(
@@ -916,11 +919,12 @@ pub fn main() -> Result<()> {
                 .outcome
                 .merged
                 .iter()
-                .map(|pair| crate::commands::reject_removal::RemovedFrame {
-                    image_id: pair.twin.id,
-                    guid: pair.twin.guid.clone(),
-                    project_id: pair.twin.project_id,
-                    target_id: pair.twin.target_id,
+                .flat_map(|pair| pair.removed())
+                .map(|light| crate::commands::reject_removal::RemovedFrame {
+                    image_id: light.id,
+                    guid: light.guid.clone(),
+                    project_id: light.project_id,
+                    target_id: light.target_id,
                 })
                 .collect();
             let caches = std::path::Path::new(&cache_dir).join(&entry.id);
