@@ -10,8 +10,8 @@
 //!   file name: the same capture time, exposure and filter, whatever their
 //!   profile, project or target. Each group has one light Target Scheduler
 //!   recorded, which stays, and the copies PSF Guard minted, which go.
-//! - It also lists the projects and targets an import created that will
-//!   have no lights left, and that nothing else uses: those go too.
+//! - It also lists the projects an import created that a merge leaves with
+//!   no lights, and that nothing else uses: those go too.
 //! - [`fold`] does both in one transaction, and refuses when the catalog no
 //!   longer matches the preview's digest.
 //!
@@ -76,17 +76,6 @@ pub struct EmptyProject {
     pub exposure_plans: usize,
 }
 
-/// A target with no lights left, in a project an import created that keeps
-/// other lights. It is deleted with its exposure plans.
-#[derive(Debug, Clone, Serialize)]
-pub struct EmptyTarget {
-    pub id: i64,
-    pub name: String,
-    pub project_id: i64,
-    pub project: String,
-    pub exposure_plans: usize,
-}
-
 /// A project an import created that has no lights left, kept, and why.
 #[derive(Debug, Clone, Serialize)]
 pub struct KeptProject {
@@ -101,7 +90,6 @@ pub struct FoldPlan {
     pub groups: Vec<ImportedCopies>,
     pub held: Vec<HeldCopies>,
     pub projects: Vec<EmptyProject>,
-    pub targets: Vec<EmptyTarget>,
     pub kept_projects: Vec<KeptProject>,
     /// Changes when anything the fold would touch does.
     pub digest: String,
@@ -110,7 +98,7 @@ pub struct FoldPlan {
 impl FoldPlan {
     /// Whether applying it would change anything.
     pub fn is_empty(&self) -> bool {
-        self.groups.is_empty() && self.projects.is_empty() && self.targets.is_empty()
+        self.groups.is_empty() && self.projects.is_empty()
     }
 
     /// The lights a fold removes.
@@ -221,12 +209,9 @@ pub fn plan(conn: &Connection, keepers: &Keepers) -> Result<FoldPlan> {
                 ));
                 continue;
             }
-            if let Some(reason) = records.keeps_own_file(kept) {
-                plan.held.push(hold(format!(
-                    "Target Scheduler's light must stay as it is: {reason}"
-                )));
-                continue;
-            }
+            // The kept light's row and file stay as they are, so what
+            // keeps a light's own file (the reject archive, an upload)
+            // does not hold the group; it holds a copy, below.
             if let Some(reason) = copies
                 .iter()
                 .find_map(|copy| records.must_stay(copy, &keepers.reported))
@@ -283,12 +268,14 @@ fn guids_in(conn: &Connection, table: &str, column: &str) -> Result<HashSet<Stri
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
-/// The projects and targets an import created that a merge leaves with no
-/// lights: this one, which removes the plan's copies, or an earlier one
-/// recorded in `psf_guard_merged_light`. A project goes whole when each of
-/// its targets is such a target; otherwise only those targets go. A project
-/// Target Scheduler has active, or that Planning uses, stays whole. An
-/// empty target no merge took a light from stays: nothing here made it so.
+/// The projects an import created that a merge leaves with no lights:
+/// this one, which removes the plan's copies, or an earlier one recorded in
+/// `psf_guard_merged_light`, sync's adoption of a row in another target
+/// included. A project goes when each of its targets lost its last light
+/// that way. Only whole projects go: a deleted project leaves a record that
+/// keeps a sync from bringing it back, and a lone target would have none.
+/// A project stays when Target Scheduler has it active, or Planning uses it
+/// or one of its targets.
 fn empty_imports(
     conn: &Connection,
     removed: &HashSet<i64>,
@@ -368,13 +355,22 @@ fn empty_imports(
             |row| row.get::<_, i64>(0),
         )? as usize)
     };
-    // Planning's records in this database.
+    // Planning's records in this database: a project deletion removes those
+    // of its targets, so a project with any stays.
     let planned_projects = guids_in(conn, "psf_guard_director_project", "project_guid")?;
-    let planned_targets = guids_in(conn, "psf_guard_director_target", "target_guid")?;
+    let mut planned_targets = HashSet::new();
+    for table in [
+        "psf_guard_director_target",
+        "psf_guard_director_plan",
+        "psf_guard_collaboration_plan",
+    ] {
+        planned_targets.extend(guids_in(conn, table, "target_guid")?);
+    }
     // Targets a merge took a light from, now or before: an empty target
     // that never lost one to a merge is left as it is.
     let merged_from = guids_in(conn, "psf_guard_merged_light", "target_guid")?;
     let losing: HashSet<i64> = plan.removed().filter_map(|light| light.target_id).collect();
+    let lower = |guid: &Option<String>| guid.as_ref().map(|guid| guid.trim().to_lowercase());
     for (project_id, name, guid, state) in projects {
         let targets: Vec<(i64, String, Option<String>)> = targets_of
             .query_map([project_id], |row| {
@@ -385,34 +381,38 @@ fn empty_imports(
                 ))
             })?
             .collect::<rusqlite::Result<_>>()?;
-        let merged = |id: &i64, guid: &Option<String>| {
-            losing.contains(id)
-                || guid
-                    .as_ref()
-                    .is_some_and(|guid| merged_from.contains(&guid.trim().to_lowercase()))
+        let emptied = |(id, _, guid): &(i64, String, Option<String>)| {
+            lights_in_target.get(id).copied().unwrap_or(0) == 0
+                && (losing.contains(id)
+                    || lower(guid).is_some_and(|guid| merged_from.contains(&guid)))
         };
-        let empty: Vec<&(i64, String, Option<String>)> = targets
-            .iter()
-            .filter(|(id, _, guid)| {
-                lights_in_target.get(id).copied().unwrap_or(0) == 0 && merged(id, guid)
-            })
-            .collect();
-        let whole = !targets.is_empty()
-            && empty.len() == targets.len()
-            && lights_in_project.get(&project_id).copied().unwrap_or(0) == 0;
-        if empty.is_empty() {
+        // Only a project a merge emptied is this repair's to delete.
+        if lights_in_project.get(&project_id).copied().unwrap_or(0) > 0
+            || targets
+                .iter()
+                .any(|(id, _, _)| lights_in_target.get(id).copied().unwrap_or(0) > 0)
+            || !targets.iter().any(emptied)
+        {
             continue;
         }
-        let guid = guid.map(|guid| guid.trim().to_lowercase());
         let keep = |reason: &str| KeptProject {
             id: project_id,
             name: name.clone(),
             reason: reason.into(),
         };
+        let guid = lower(&guid);
         if guid.as_ref().is_some_and(|guid| {
             keepers.planned_projects.contains(guid) || planned_projects.contains(guid)
         }) {
             plan.kept_projects.push(keep("a Director plan uses it"));
+            continue;
+        }
+        if targets
+            .iter()
+            .any(|(_, _, guid)| lower(guid).is_some_and(|guid| planned_targets.contains(&guid)))
+        {
+            plan.kept_projects
+                .push(keep("Planning uses one of its targets"));
             continue;
         }
         if state == Some(1) {
@@ -420,36 +420,21 @@ fn empty_imports(
                 .push(keep("it is active in Target Scheduler"));
             continue;
         }
-        let planned = |target_guid: &Option<String>| {
-            target_guid
-                .as_ref()
-                .is_some_and(|guid| planned_targets.contains(&guid.trim().to_lowercase()))
-        };
-        if whole && !targets.iter().any(|(_, _, guid)| planned(guid)) {
-            let mut exposure_plans = 0;
-            for (id, _, _) in &targets {
-                exposure_plans += plans_of(*id)?;
-            }
-            plan.projects.push(EmptyProject {
-                id: project_id,
-                name,
-                targets: targets.iter().map(|(_, name, _)| name.clone()).collect(),
-                exposure_plans,
-            });
+        if !targets.iter().all(emptied) {
+            plan.kept_projects
+                .push(keep("a merge did not empty all of its targets"));
             continue;
         }
-        for (id, target, target_guid) in empty {
-            if planned(target_guid) {
-                continue;
-            }
-            plan.targets.push(EmptyTarget {
-                id: *id,
-                name: target.clone(),
-                project_id,
-                project: name.clone(),
-                exposure_plans: plans_of(*id)?,
-            });
+        let mut exposure_plans = 0;
+        for (id, _, _) in &targets {
+            exposure_plans += plans_of(*id)?;
         }
+        plan.projects.push(EmptyProject {
+            id: project_id,
+            name,
+            targets: targets.iter().map(|(_, name, _)| name.clone()).collect(),
+            exposure_plans,
+        });
     }
     Ok(())
 }
@@ -501,9 +486,6 @@ fn digest(conn: &Connection, plan: &FoldPlan) -> Result<String> {
             ids.push((b'E', target, plan_ids(target)?));
         }
     }
-    for target in &plan.targets {
-        ids.push((b'T', target.id, plan_ids(target.id)?));
-    }
     for (label, id, children) in ids {
         hasher.update([label]);
         hasher.update(id.to_le_bytes());
@@ -518,42 +500,6 @@ fn digest(conn: &Connection, plan: &FoldPlan) -> Result<String> {
         .collect())
 }
 
-/// Delete a target and what belongs to it, as a project deletion does for
-/// each of its targets. The caller has checked it has no lights.
-fn delete_target(tx: &Connection, target_id: i64) -> Result<()> {
-    if has_column(tx, "psf_guard_removed_image", "target_id") {
-        tx.execute(
-            "UPDATE psf_guard_removed_image SET target_id = NULL, exposure_id = NULL
-             WHERE target_id = ?1",
-            [target_id],
-        )?;
-    }
-    if has_column(tx, "target", "guid")
-        && has_column(tx, "psf_guard_scheduler_flat_history", "target_guid")
-    {
-        tx.execute(
-            "DELETE FROM psf_guard_scheduler_flat_history
-             WHERE target_guid = (SELECT guid FROM target WHERE Id = ?1)",
-            [target_id],
-        )?;
-    }
-    for (table, column) in [
-        ("overrideexposureorderitem", "targetid"),
-        ("filtercadenceitem", "targetid"),
-        ("flathistory", "targetId"),
-        ("exposureplan", "targetid"),
-    ] {
-        if has_column(tx, table, column) {
-            tx.execute(
-                &format!("DELETE FROM \"{table}\" WHERE \"{column}\" = ?1"),
-                [target_id],
-            )?;
-        }
-    }
-    tx.execute("DELETE FROM target WHERE Id = ?1", [target_id])?;
-    Ok(())
-}
-
 /// How [`fold`] ended.
 #[derive(Debug, Clone)]
 pub enum FoldOutcome {
@@ -564,10 +510,23 @@ pub enum FoldOutcome {
     Changed(FoldPlan),
 }
 
-/// Fold each group into its kept light and delete the empty projects and
-/// targets, in one transaction. With `digest`, refuse when the plan made
-/// inside the transaction has another one.
+/// Fold each group into its kept light and delete the empty projects, in
+/// one transaction. With `digest`, refuse when the plan made inside the
+/// transaction has another one.
 pub fn fold(conn: &mut Connection, digest: Option<&str>, keepers: &Keepers) -> Result<FoldOutcome> {
+    fold_with(conn, digest, keepers, || Ok(()))
+}
+
+/// [`fold`], calling `before_write` once the plan inside the transaction
+/// matches and has something to do, before anything is written. The
+/// transaction holds the write lock, so a copy taken there is the catalog
+/// the plan was made from.
+fn fold_with(
+    conn: &mut Connection,
+    digest: Option<&str>,
+    keepers: &Keepers,
+    before_write: impl FnOnce() -> Result<()>,
+) -> Result<FoldOutcome> {
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let plan = plan(&tx, keepers)?;
     if digest.is_some_and(|digest| digest != plan.digest) {
@@ -576,6 +535,7 @@ pub fn fold(conn: &mut Connection, digest: Option<&str>, keepers: &Keepers) -> R
     if plan.is_empty() {
         return Ok(FoldOutcome::Folded(plan));
     }
+    before_write()?;
     let now = now();
     let removal = LightRemoval::new(&tx)?;
     let has_plans = has_column(&tx, "exposureplan", "accepted");
@@ -613,9 +573,6 @@ pub fn fold(conn: &mut Connection, digest: Option<&str>, keepers: &Keepers) -> R
             removal.uncount(&tx, copy, copy.grade == 1)?;
         }
     }
-    for target in &plan.targets {
-        delete_target(&tx, target.id)?;
-    }
     for project in &plan.projects {
         let Some(removal) = project_removal::plan(&tx, project.id, &keepers.reported)? else {
             continue;
@@ -643,8 +600,8 @@ pub struct RepairOutcome {
 }
 
 /// The whole repair on a database file: refuse a file this process cannot
-/// write, copy it beside itself when there is something to do, then fold.
-/// Runs on its own connection.
+/// write, then fold, copying the file beside itself first when there is
+/// something to do. Runs on its own connection.
 pub fn repair_database(
     path: &std::path::Path,
     digest: Option<&str>,
@@ -657,25 +614,15 @@ pub fn repair_database(
             path.display()
         );
     }
-    let preview = plan(&conn, keepers)?;
-    if digest.is_some_and(|digest| digest != preview.digest) {
-        return Ok(RepairOutcome {
-            outcome: FoldOutcome::Changed(preview),
-            backup: None,
-        });
-    }
-    if preview.is_empty() {
-        return Ok(RepairOutcome {
-            outcome: FoldOutcome::Folded(preview),
-            backup: None,
-        });
-    }
-    let backup = crate::ts_guids::backup_beside_as(path, "imported-copies")?;
-    let outcome = fold(&mut conn, Some(&preview.digest), keepers)?;
-    Ok(RepairOutcome {
-        outcome,
-        backup: Some(backup),
-    })
+    // The copy is taken inside the fold's transaction, once its plan
+    // matches the preview: a catalog that changed is neither copied nor
+    // changed.
+    let mut backup = None;
+    let outcome = fold_with(&mut conn, digest, keepers, || {
+        backup = Some(crate::ts_guids::backup_beside_as(path, "imported-copies")?);
+        Ok(())
+    })?;
+    Ok(RepairOutcome { outcome, backup })
 }
 
 #[cfg(test)]

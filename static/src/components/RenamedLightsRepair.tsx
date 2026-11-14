@@ -76,8 +76,8 @@ export default function RenamedLightsRepair({ dbId, dbName, canManage }: { dbId:
           that rig before merging.
         </p>
       : <p>
-          {canManage ? 'This server cannot write the file. ' : 'An editor can merge them, or '}
-          Run <code>psf-guard merge-renamed-lights --db {dbId} --apply</code> where the file is writable.
+          {canManage ? 'This server cannot write the file. Run ' : 'An editor can merge them, or run '}
+          <code>psf-guard merge-renamed-lights --db {dbId} --apply</code> where the file is writable.
         </p>)}
     {merge.isError && <p className="settings-error" role="alert">{merge.error instanceof Error ? merge.error.message : 'The merge failed.'}</p>}
   </div>;

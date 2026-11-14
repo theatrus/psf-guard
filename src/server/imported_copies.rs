@@ -1,14 +1,14 @@
 //! A database's imported copies in Settings: lights catalogued twice, once
 //! as Target Scheduler recorded them and once by an import of the same
-//! file, and the merge that removes the copies and the empty projects and
-//! targets the import made (#1100). See [`crate::imported_copies`].
+//! file, and the merge that removes the copies and the empty projects the
+//! import made (#1100). See [`crate::imported_copies`].
 //!
 //! - **Check** (`GET …/imported-copies`) plans on its own read-only
 //!   connection. It writes nothing.
 //! - **Merge** (`POST …/imported-copies/merge` with the check's digest)
-//!   copies the database beside itself, then plans again and applies in one
-//!   transaction. When the catalog changed since the check it changes
-//!   nothing and returns the new plan.
+//!   plans again in one transaction. When the plan matches, it copies the
+//!   database beside itself and applies; when the catalog changed since the
+//!   check, it copies and changes nothing and returns the new plan.
 
 use std::sync::Arc;
 
@@ -101,7 +101,7 @@ pub async fn report(
 
 /// `POST /api/db/{db_id}/imported-copies/merge` with `{digest}` — copy the
 /// database beside itself, then remove the copies and the empty projects
-/// and targets. Runs off the request path on its own connection.
+/// the import made. Runs off the request path on its own connection.
 pub async fn merge(
     State(state): State<Arc<AppState>>,
     ctx: DbContext,
@@ -164,7 +164,6 @@ pub async fn merge(
             db = %db_id,
             groups = plan.groups.len(),
             projects = plan.projects.len(),
-            targets = plan.targets.len(),
             backup = %backup,
             "removed imported copies of Target Scheduler's lights"
         );

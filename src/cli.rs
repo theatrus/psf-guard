@@ -741,7 +741,7 @@ pub enum Commands {
     /// of the same files: the same file name, capture time, exposure and
     /// filter, in another project or target. Target Scheduler's light stays
     /// and takes the copy's grade when it has none. Then delete the
-    /// projects and targets an import created that have no lights left.
+    /// projects an import created that a merge left with no lights.
     ///
     /// Without `--apply` this only shows what would change, and why any
     /// light stays. `--apply` copies the database beside itself first.

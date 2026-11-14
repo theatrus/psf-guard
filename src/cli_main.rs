@@ -995,12 +995,6 @@ pub fn main() -> Result<()> {
                         project.exposure_plans
                     );
                 }
-                for target in &plan.targets {
-                    println!(
-                        "DELETE target #{} {} in {} ({} exposure plan(s))",
-                        target.id, target.name, target.project, target.exposure_plans
-                    );
-                }
                 for kept in &plan.kept_projects {
                     println!("KEEP  project #{} {}: {}", kept.id, kept.name, kept.reason);
                 }
@@ -1008,12 +1002,10 @@ pub fn main() -> Result<()> {
             let path = std::path::Path::new(&entry.db_path);
             let summary = |plan: &FoldPlan| {
                 format!(
-                    "{} light(s) with imported copies, {} left alone, {} empty project(s) and {} \
-                     empty target(s) to delete",
+                    "{} light(s) with imported copies, {} left alone, {} empty project(s) to delete",
                     plan.groups.len(),
                     plan.held.len(),
-                    plan.projects.len(),
-                    plan.targets.len()
+                    plan.projects.len()
                 )
             };
             if !apply {

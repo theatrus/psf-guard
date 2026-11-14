@@ -260,6 +260,58 @@ fn recorded_by_nina(metadata: &serde_json::Value) -> bool {
     metadata.get("GuidingRMS").is_some()
 }
 
+/// [`recorded_by_nina`] for metadata as a row stores it.
+pub(crate) fn metadata_recorded_by_nina(metadata: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(metadata)
+        .is_ok_and(|metadata| recorded_by_nina(&metadata))
+}
+
+/// Create `psf_guard_merged_light`, or give an older one its target column.
+fn ensure_merged_schema(conn: &Connection) -> Result<()> {
+    conn.execute_batch(MERGED_SCHEMA)?;
+    if !has_column(conn, "psf_guard_merged_light", "target_guid") {
+        conn.execute_batch("ALTER TABLE psf_guard_merged_light ADD COLUMN target_guid TEXT")?;
+    }
+    Ok(())
+}
+
+/// Record that the light `removed_guid` became `kept_guid`, so a sync from
+/// a catalog that still has it does not bring it back. `target_id` is the
+/// target the light was in; [`crate::imported_copies`] may delete it once
+/// it has no lights.
+pub(crate) fn record_merged(
+    conn: &Connection,
+    removed_guid: &str,
+    removed_id: i64,
+    kept_guid: &str,
+    file_name: &str,
+    target_id: Option<i64>,
+    now: i64,
+) -> Result<()> {
+    ensure_merged_schema(conn)?;
+    conn.execute(
+        &format!(
+            "INSERT OR REPLACE INTO psf_guard_merged_light
+                 (removed_guid, removed_id, kept_guid, file_name, merged_at, target_guid)
+             VALUES (?1, ?2, ?3, ?4, ?5, {})",
+            if has_column(conn, "target", "guid") {
+                "(SELECT guid FROM target WHERE Id = ?6)"
+            } else {
+                "NULLIF(?6, ?6)"
+            }
+        ),
+        params![
+            removed_guid,
+            removed_id,
+            kept_guid,
+            file_name,
+            now,
+            target_id
+        ],
+    )?;
+    Ok(())
+}
+
 /// A light whose file is gone, and the twin an import made of its renamed
 /// file.
 #[derive(Debug, Clone, Serialize)]
@@ -738,15 +790,11 @@ pub fn plan(
 pub(crate) struct LightRemoval {
     tables: HashSet<&'static str>,
     has_exposure_plans: bool,
-    target_guids: bool,
 }
 
 impl LightRemoval {
     pub(crate) fn new(tx: &Connection) -> Result<Self> {
-        tx.execute_batch(MERGED_SCHEMA)?;
-        if !has_column(tx, "psf_guard_merged_light", "target_guid") {
-            tx.execute_batch("ALTER TABLE psf_guard_merged_light ADD COLUMN target_guid TEXT")?;
-        }
+        ensure_merged_schema(tx)?;
         let tables = [
             "imagedata",
             "psf_guard_rejected_at",
@@ -762,7 +810,6 @@ impl LightRemoval {
         Ok(Self {
             tables,
             has_exposure_plans: has_column(tx, "exposureplan", "acquired"),
-            target_guids: has_column(tx, "target", "guid"),
         })
     }
 
@@ -813,27 +860,15 @@ impl LightRemoval {
             }
         }
         tx.execute("DELETE FROM acquiredimage WHERE Id = ?1", [removed.id])?;
-        tx.execute(
-            &format!(
-                "INSERT OR REPLACE INTO psf_guard_merged_light
-                     (removed_guid, removed_id, kept_guid, file_name, merged_at, target_guid)
-                 VALUES (?1, ?2, ?3, ?4, ?5, {})",
-                if self.target_guids {
-                    "(SELECT guid FROM target WHERE Id = ?6)"
-                } else {
-                    "NULLIF(?6, ?6)"
-                }
-            ),
-            params![
-                removed.guid,
-                removed.id,
-                kept.guid,
-                removed.file_name,
-                now,
-                removed.target_id
-            ],
-        )?;
-        Ok(())
+        record_merged(
+            tx,
+            &removed.guid,
+            removed.id,
+            &kept.guid,
+            &removed.file_name,
+            removed.target_id,
+            now,
+        )
     }
 
     /// Take a removed light out of its exposure plan's acquired count, and

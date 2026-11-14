@@ -252,7 +252,6 @@ fn an_imported_copy_folds_into_target_schedulers_light() {
         )
     );
     assert_eq!(project.exposure_plans, 1);
-    assert!(plan.targets.is_empty());
 
     let before: (i64, i64, i64, String, String) = pair
         .catalog
@@ -403,7 +402,7 @@ fn lights_with_different_grades_stay() {
             "the lights have different grades; grade them to match"
         );
         // The import keeps its light, so its project stays.
-        assert!(plan.projects.is_empty() && plan.targets.is_empty());
+        assert!(plan.projects.is_empty());
         assert!(plan.is_empty());
         let FoldOutcome::Folded(_) =
             fold(&mut pair.catalog.conn, Some(&plan.digest), &keepers()).unwrap()
@@ -537,26 +536,9 @@ fn several_imports_of_the_file_all_fold_in() {
 }
 
 #[test]
-fn only_empty_targets_an_import_made_and_nothing_uses_are_deleted() {
+fn only_imported_projects_a_merge_empties_are_deleted() {
     let pair = pair(1, 0);
     let catalog = &pair.catalog;
-    // The import's project keeps a light of its own in a second target, so
-    // only the emptied target goes.
-    let kept_target = catalog.target(pair.import_project, "M 45 RGB Panel 2");
-    let kept_plan = catalog.plan(kept_target, IMPORT_PROFILE, 1, 0);
-    catalog.light(Row {
-        project: pair.import_project,
-        target: kept_target,
-        plan: kept_plan,
-        profile: IMPORT_PROFILE,
-        guid: "import-only",
-        file_name: "/capture/M 45 RGB_LIGHT_Luminance_0099.fits".into(),
-        captured: "2026-10-05T02:13:11Z",
-        acquired: ACQUIRED + 86_400,
-        filter: "Luminance",
-        grade: 0,
-        nina: false,
-    });
     // A project Target Scheduler made, with no lights, is not the import's.
     let ts_empty = catalog.project(TS_PROFILE, "Pleiades wide", false, 0);
     catalog.target(ts_empty, "Pleiades wide");
@@ -566,29 +548,105 @@ fn only_empty_targets_an_import_made_and_nothing_uses_are_deleted() {
     let never_target = catalog.target(never, "M 94");
     catalog.plan(never_target, IMPORT_PROFILE, 0, 0);
     let plan = super::plan(&catalog.conn, &keepers()).unwrap();
-    assert!(plan.projects.is_empty(), "{plan:?}");
-    let [target] = plan.targets.as_slice() else {
-        panic!("{plan:?}");
-    };
     assert_eq!(
-        (target.id, target.project_id, target.exposure_plans),
-        (pair.import_target, pair.import_project, 1)
+        plan.projects
+            .iter()
+            .map(|project| project.id)
+            .collect::<Vec<_>>(),
+        [pair.import_project]
     );
+    assert!(plan.kept_projects.is_empty(), "{plan:?}");
 
-    // Planning's record of the target keeps it.
-    catalog
-        .conn
-        .execute_batch(
-            "CREATE TABLE psf_guard_director_target (target_guid TEXT PRIMARY KEY, project_guid TEXT);
-             INSERT INTO psf_guard_director_target VALUES ('target-M 45 RGB', 'project-M 45 RGB');",
-        )
-        .unwrap();
+    // A second target that never had a light keeps the project: no merge
+    // emptied it.
+    let unshot = catalog.target(pair.import_project, "M 45 RGB Panel 2");
+    let plan = super::plan(&catalog.conn, &keepers()).unwrap();
+    assert!(plan.projects.is_empty(), "{plan:?}");
+    assert_eq!(
+        plan.kept_projects[0].reason,
+        "a merge did not empty all of its targets"
+    );
+    // A light of its own there keeps the project too, and no target is
+    // deleted alone.
+    let unshot_plan = catalog.plan(unshot, IMPORT_PROFILE, 1, 0);
+    catalog.light(Row {
+        project: pair.import_project,
+        target: unshot,
+        plan: unshot_plan,
+        profile: IMPORT_PROFILE,
+        guid: "import-only",
+        file_name: "/capture/M 45 RGB_LIGHT_Luminance_0099.fits".into(),
+        captured: "2026-10-05T02:13:11Z",
+        acquired: ACQUIRED + 86_400,
+        filter: "Luminance",
+        grade: 0,
+        nina: false,
+    });
     let plan = super::plan(&catalog.conn, &keepers()).unwrap();
     assert!(
-        plan.targets.is_empty() && plan.projects.is_empty(),
+        plan.projects.is_empty() && plan.kept_projects.is_empty(),
         "{plan:?}"
     );
     assert_eq!(plan.groups.len(), 1, "the copy still goes");
+}
+
+#[test]
+fn planning_records_of_a_target_keep_its_project() {
+    for table in [
+        "psf_guard_director_target",
+        "psf_guard_director_plan",
+        "psf_guard_collaboration_plan",
+    ] {
+        let pair = pair(1, 0);
+        pair.catalog
+            .conn
+            .execute_batch(&format!(
+                "CREATE TABLE {table} (target_guid TEXT, project_guid TEXT);
+                 INSERT INTO {table} VALUES ('target-M 45 RGB', 'project-M 45 RGB');"
+            ))
+            .unwrap();
+        let plan = super::plan(&pair.catalog.conn, &keepers()).unwrap();
+        assert!(plan.projects.is_empty(), "{table}: {plan:?}");
+        assert_eq!(
+            plan.kept_projects[0].reason,
+            "Planning uses one of its targets"
+        );
+        assert_eq!(plan.groups.len(), 1, "the copy still goes");
+    }
+}
+
+#[test]
+fn a_rejected_light_in_the_reject_archive_still_loses_its_copy() {
+    // Moving Target Scheduler's reject to the archive moved its file; the
+    // merge changes neither, so the copy still goes.
+    let mut pair = pair(2, 0);
+    pair.catalog
+        .conn
+        .execute_batch(
+            "CREATE TABLE psf_guard_archive (acquired_image_guid TEXT PRIMARY KEY);
+             INSERT INTO psf_guard_archive VALUES ('ts-light');",
+        )
+        .unwrap();
+    let plan = super::plan(&pair.catalog.conn, &keepers()).unwrap();
+    assert!(plan.held.is_empty(), "{plan:?}");
+    assert_eq!(plan.groups.len(), 1);
+    fold(&mut pair.catalog.conn, Some(&plan.digest), &keepers()).unwrap();
+    assert_eq!(pair.catalog.count("SELECT COUNT(*) FROM acquiredimage"), 1);
+
+    // An archived copy still holds the group.
+    let pair = self::pair(2, 0);
+    pair.catalog
+        .conn
+        .execute_batch(
+            "CREATE TABLE psf_guard_archive (acquired_image_guid TEXT PRIMARY KEY);
+             INSERT INTO psf_guard_archive VALUES ('import-light');",
+        )
+        .unwrap();
+    let plan = super::plan(&pair.catalog.conn, &keepers()).unwrap();
+    assert_eq!(
+        plan.held[0].reason,
+        "an imported copy must stay: its file is in the reject archive"
+    );
 }
 
 #[test]
@@ -636,7 +694,7 @@ fn a_planned_or_active_imported_project_stays() {
     };
     let plan = super::plan(&pair.catalog.conn, &planned).unwrap();
     assert_eq!(plan.groups.len(), 1);
-    assert!(plan.projects.is_empty() && plan.targets.is_empty());
+    assert!(plan.projects.is_empty());
     assert_eq!(plan.kept_projects[0].reason, "a Director plan uses it");
 
     pair.catalog
@@ -647,7 +705,7 @@ fn a_planned_or_active_imported_project_stays() {
         )
         .unwrap();
     let plan = super::plan(&pair.catalog.conn, &keepers()).unwrap();
-    assert!(plan.projects.is_empty() && plan.targets.is_empty());
+    assert!(plan.projects.is_empty());
     assert_eq!(
         plan.kept_projects[0].reason,
         "it is active in Target Scheduler"
@@ -696,6 +754,13 @@ fn a_fold_refuses_a_catalog_that_changed_since_the_preview() {
     let outcome = repair_database(&pair.catalog.path, Some(&plan.digest), &keepers()).unwrap();
     assert!(matches!(outcome.outcome, FoldOutcome::Changed(_)));
     assert!(outcome.backup.is_none());
+    // No copy of the database is left beside it either.
+    let copies: Vec<String> = std::fs::read_dir(pair.catalog.path.parent().unwrap())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name.contains(".before-imported-copies"))
+        .collect();
+    assert!(copies.is_empty(), "{copies:?}");
 }
 
 #[test]

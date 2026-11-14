@@ -592,7 +592,8 @@ records of the frames, because projects and targets match only by GUID.
 Each frame then appears in two projects, often under two N.I.N.A. profiles.
 
 A sync now recognizes the imported frame, even in another target, and gives
-it Target Scheduler's record (see
+it Target Scheduler's record. The frame moves to Target Scheduler's project,
+target and exposure plan, and the import's plan counts one frame fewer (see
 [data transfer](design/data-transfer.md)). For a catalog that already holds
 the doubles, **Settings** lists them under the database, with **Merge
 imported copies**. Two lights are the same frame when they have the same
@@ -606,16 +607,19 @@ them.
   the copy's grade when it has none; an Accepted grade adds one to its
   plan's accepted count.
 - The imported copies are removed, and a sync does not bring them back.
-- Projects and targets that an import created, and that the merge leaves
-  with no lights, are deleted with their exposure plans. **Settings** lists
-  them before you merge. A project stays when it is active in Target
-  Scheduler or a Director plan uses it. An empty target stays when no merge
-  removed a light from it.
+- Projects that an import created, and that have no lights left because a
+  merge or a sync took them, are deleted with their targets and exposure
+  plans. **Settings** lists them before you merge. A project stays when it
+  is active in Target Scheduler, when a Director plan uses it or one of its
+  targets, or when one of its targets had no lights for a merge to take.
+  PSF Guard does not delete a lone target from a project that stays: a
+  sync could bring it back.
 
 A frame stays as it is when its lights have different grades, Accepted and
 Rejected; grade them alike, then merge again. It also stays when a copy is
 in a collaboration report or the reject archive, or when calibrated copies
-or a remote upload are recorded against it. If the database changes between
+or a remote upload are recorded against it. Target Scheduler's light can be
+in the reject archive: the merge changes neither its row nor its file. If the database changes between
 the list and the merge, nothing is changed and **Settings** shows the new
 list. When **Settings** offers both merges, run **Merge renamed lights**
 first, so this merge can delete the projects it leaves empty. Close N.I.N.A.

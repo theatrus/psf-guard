@@ -30,7 +30,6 @@ const report: ImportedCopiesReport = {
     { id: 5, name: 'M 45 RGB', targets: ['M 45 RGB'], exposure_plans: 4 },
     { id: 10, name: 'Veil Nebula Complex', targets: Array.from({ length: 8 }, (_, index) => `Panel ${index + 1}`), exposure_plans: 18 },
   ],
-  targets: [{ id: 12, name: 'Veil Panel 3', project_id: 11, project: 'Veil', exposure_plans: 2 }],
   kept_projects: [{ id: 46, name: 'M 94', reason: 'a Director plan uses it' }],
   digest: 'digest-1',
   writable: true,
@@ -58,17 +57,16 @@ describe('imported copies repair', () => {
     expect(note).toHaveTextContent(`${NAME} in M45, imported again in M 45 RGB`);
     expect(note).toHaveTextContent('1 light stays as it is: Christmas Tree Cluster_LIGHT_SII_0071.fits (the lights have different grades; grade them to match).');
     expect(note).toHaveTextContent('The merge deletes these projects, which an import created and which will have no lights: M 45 RGB, Veil Nebula Complex (8 targets).');
-    expect(note).toHaveTextContent('It also deletes this empty target: Veil Panel 3 in Veil.');
     expect(note).toHaveTextContent('1 empty imported project stays: M 94 (a Director plan uses it).');
     fireEvent.click(screen.getByRole('button', { name: 'Merge imported copies' }));
     const status = await screen.findByRole('status');
-    expect(status).toHaveTextContent('Merged 1 light with imported copies in Telescope, and deleted 2 empty projects and 1 empty target.');
+    expect(status).toHaveTextContent('Merged 1 light with imported copies in Telescope, and deleted 2 empty projects.');
     expect(status).toHaveTextContent('telescope.sqlite.before-imported-copies-digest-1');
     expect(merge).toHaveBeenCalledTimes(1);
   });
 
   it('shows the new list when the database changed since the preview', async () => {
-    const preview = { ...report, groups: [], projects: [], targets: [], kept_projects: [], digest: 'digest-2' };
+    const preview = { ...report, groups: [], projects: [], kept_projects: [], digest: 'digest-2' };
     mount(true, {}, { state: 'changed', preview });
     await screen.findByRole('note', { name: 'Imported copies in Telescope' });
     fireEvent.click(screen.getByRole('button', { name: 'Merge imported copies' }));
@@ -80,19 +78,25 @@ describe('imported copies repair', () => {
 
   it('points a viewer at the command line instead', async () => {
     mount(false);
-    expect(await screen.findByRole('note')).toHaveTextContent('psf-guard merge-imported-copies --db telescope --apply');
+    expect(await screen.findByRole('note')).toHaveTextContent('An editor can merge them, or run psf-guard merge-imported-copies --db telescope --apply where the file is writable.');
+    expect(screen.queryByRole('button', { name: 'Merge imported copies' })).not.toBeInTheDocument();
+  });
+
+  it('points an editor at the command line when the server cannot write the file', async () => {
+    mount(true, { writable: false });
+    expect(await screen.findByRole('note')).toHaveTextContent('This server cannot write the file. Run psf-guard merge-imported-copies --db telescope --apply where the file is writable.');
     expect(screen.queryByRole('button', { name: 'Merge imported copies' })).not.toBeInTheDocument();
   });
 
   it('offers the merge for empty projects an earlier merge left', async () => {
-    mount(true, { groups: [], held: [], targets: [], kept_projects: [] });
+    mount(true, { groups: [], held: [], kept_projects: [] });
     const note = await screen.findByRole('note');
-    expect(note).toHaveTextContent('An earlier merge left projects or targets an import created with no lights.');
+    expect(note).toHaveTextContent('An earlier merge left projects an import created with no lights.');
     expect(screen.getByRole('button', { name: 'Merge imported copies' })).toBeEnabled();
   });
 
   it('stays silent when nothing was imported twice', async () => {
-    const { container } = mount(true, { groups: [], held: [], projects: [], targets: [], kept_projects: [] });
+    const { container } = mount(true, { groups: [], held: [], projects: [], kept_projects: [] });
     await new Promise(resolve => setTimeout(resolve, 50));
     expect(container).toBeEmptyDOMElement();
   });

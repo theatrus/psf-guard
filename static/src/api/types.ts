@@ -4854,8 +4854,6 @@ export interface ImportedCopies { kept: RenamedLight; copies: RenamedLight[]; ta
 export interface HeldImportedCopies { kept: RenamedLight; copies: RenamedLight[]; reason: string }
 /** A project an import created that a merge leaves with no lights; the merge deletes it. */
 export interface EmptyImportedProject { id: number; name: string; targets: string[]; exposure_plans: number }
-/** A target with no lights left, in an imported project that keeps other lights; the merge deletes it. */
-export interface EmptyImportedTarget { id: number; name: string; project_id: number; project: string; exposure_plans: number }
 /** An imported project left with no lights that the merge keeps, and why. */
 export interface KeptImportedProject { id: number; name: string; reason: string }
 /** What merging imported copies would change. `digest` goes back with the merge. */
@@ -4863,7 +4861,6 @@ export interface ImportedCopiesPlan {
   groups: ImportedCopies[];
   held: HeldImportedCopies[];
   projects: EmptyImportedProject[];
-  targets: EmptyImportedTarget[];
   kept_projects: KeptImportedProject[];
   digest: string;
 }
