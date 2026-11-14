@@ -606,7 +606,11 @@ pub async fn serve(options: WorkerOptions, shutdown: impl Future<Output = ()>) -
             "this worker accepts stack builds only"
         };
         match (&options.tools.rc_astro, problem) {
-            (None, _) => tracing::warn!("rc-astro is not installed here; {then}"),
+            (None, _) => tracing::warn!(
+                "rc-astro was not found here (looked in {}); {then}. Set its path with \
+                 --rc-astro or in the worker settings",
+                crate::remote_work::rc_astro::searched_places()
+            ),
             (Some(_), Some(problem)) => {
                 tracing::warn!("rc-astro could not be read ({problem}); {then}")
             }

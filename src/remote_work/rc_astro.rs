@@ -36,7 +36,8 @@ pub struct StepResult {
 }
 
 /// The installed rc-astro: the one `executable` gives, else the one
-/// `PSF_GUARD_RC_ASTRO` gives, else the one on the standard paths.
+/// `PSF_GUARD_RC_ASTRO` gives, else the first on `PATH`, else the first
+/// standard install (see [`standard_installs`]).
 /// `PSF_GUARD_RC_ASTRO=off` leaves rc-astro to the connected workers.
 pub fn locate(executable: Option<&Path>) -> Option<RcAstroCli> {
     let variable = std::env::var_os("PSF_GUARD_RC_ASTRO").filter(|path| !path.is_empty());
@@ -54,9 +55,77 @@ pub fn locate(executable: Option<&Path>) -> Option<RcAstroCli> {
         .or_else(|| variable.map(PathBuf::from));
     let located = match configured {
         Some(path) => Some(RcAstroCli::with_executable(path)),
-        None => RcAstroCli::locate(),
+        // An app opened from the Finder, the Dock or the Start menu, and a
+        // service, get a PATH without the folders a terminal adds, so the
+        // installers' own folders are tried too.
+        None => RcAstroCli::locate().or_else(|| {
+            standard_installs(std::env::consts::OS, &|name| std::env::var_os(name))
+                .into_iter()
+                .find(|candidate| candidate.is_file())
+                .map(RcAstroCli::with_executable)
+        }),
     };
     located.map(|cli| cli.with_host(format!("psf-guard-{}", env!("CARGO_PKG_VERSION"))))
+}
+
+/// Where RC-Astro's installers put rc-astro on `os`, in the order tried.
+/// `variable` reads an environment variable.
+pub fn standard_installs(
+    os: &str,
+    variable: &dyn Fn(&str) -> Option<std::ffi::OsString>,
+) -> Vec<PathBuf> {
+    let home = || {
+        variable("HOME")
+            .filter(|home| !home.is_empty())
+            .map(PathBuf::from)
+    };
+    match os {
+        // The installer's app folder, then the links a terminal's PATH has.
+        "macos" => [
+            Some(PathBuf::from("/Applications/RC-Astro/CLI/rc-astro")),
+            home().map(|home| home.join("Applications/RC-Astro/CLI/rc-astro")),
+            Some(PathBuf::from("/usr/local/bin/rc-astro")),
+            Some(PathBuf::from("/opt/homebrew/bin/rc-astro")),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
+        "windows" => ["ProgramFiles", "ProgramW6432"]
+            .into_iter()
+            .filter_map(|name| variable(name).filter(|folder| !folder.is_empty()))
+            .map(|folder| {
+                PathBuf::from(folder)
+                    .join("RC-Astro")
+                    .join("CLI")
+                    .join("rc-astro.exe")
+            })
+            .fold(Vec::new(), |mut found, path| {
+                if !found.contains(&path) {
+                    found.push(path);
+                }
+                found
+            }),
+        // install.sh: the app folder, and its link in /usr/local/bin.
+        _ => [
+            Some(PathBuf::from("/opt/rc-astro/rc-astro")),
+            Some(PathBuf::from("/usr/local/bin/rc-astro")),
+            home().map(|home| home.join(".local/bin/rc-astro")),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
+    }
+}
+
+/// Where [`locate`] looks when nothing names the executable, for a message
+/// that says rc-astro was not found.
+pub fn searched_places() -> String {
+    let installs = standard_installs(std::env::consts::OS, &|name| std::env::var_os(name));
+    let installs: Vec<String> = installs
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect();
+    format!("PATH, {}", installs.join(", "))
 }
 
 /// Every tool's live schema, and the last problem reading one. Spawns
@@ -121,4 +190,73 @@ pub fn run(
         device: processed.device,
         warnings: processed.warnings,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsString;
+
+    fn environment(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {
+        let pairs: Vec<(String, String)> = pairs
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect();
+        move |name| {
+            pairs
+                .iter()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| OsString::from(value))
+        }
+    }
+
+    #[test]
+    fn a_mac_app_finds_the_installer_s_folder_without_a_terminal_path() {
+        let found = standard_installs("macos", &environment(&[("HOME", "/Users/ann")]));
+        assert_eq!(
+            found,
+            [
+                "/Applications/RC-Astro/CLI/rc-astro",
+                "/Users/ann/Applications/RC-Astro/CLI/rc-astro",
+                "/usr/local/bin/rc-astro",
+                "/opt/homebrew/bin/rc-astro",
+            ]
+            .map(PathBuf::from)
+        );
+        // Without a home folder, the per-user folder is left out.
+        assert_eq!(standard_installs("macos", &environment(&[])).len(), 3);
+    }
+
+    #[test]
+    fn windows_looks_in_program_files_once() {
+        let found = standard_installs(
+            "windows",
+            &environment(&[
+                ("ProgramFiles", r"C:\Program Files"),
+                ("ProgramW6432", r"C:\Program Files"),
+            ]),
+        );
+        assert_eq!(
+            found,
+            [PathBuf::from(r"C:\Program Files")
+                .join("RC-Astro")
+                .join("CLI")
+                .join("rc-astro.exe")]
+        );
+        assert!(standard_installs("windows", &environment(&[])).is_empty());
+    }
+
+    #[test]
+    fn linux_finds_the_install_script_s_folder() {
+        let found = standard_installs("linux", &environment(&[("HOME", "/home/ann")]));
+        assert_eq!(
+            found,
+            [
+                "/opt/rc-astro/rc-astro",
+                "/usr/local/bin/rc-astro",
+                "/home/ann/.local/bin/rc-astro",
+            ]
+            .map(PathBuf::from)
+        );
+    }
 }
