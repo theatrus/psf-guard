@@ -224,9 +224,18 @@ and registers no plugins.
   copies the executable to `%ProgramFiles%\PSF Guard Worker\psf-guard-worker.exe`
   and settings to `%ProgramData%\PSF Guard Worker\worker.json`. It sets
   `work_dir` to the service's own `tasks` folder. The service runs as the
-  virtual account `NT SERVICE\PSFGuardWorker`.
-  `icacls` restricts the data folder to SYSTEM, Administrators and that
-  account. Settings and task files inherit the folder's permissions;
+  account running `install` (or `--account NAME`), because rc-astro keeps
+  licenses per Windows account and network shares need a user. Install
+  grants that account `SeServiceLogonRight` when it lacks it, checks the
+  password with a service logon before stopping the old service, and
+  records the SID and whether it granted the right in `account.json`.
+  Reinstalling over the same account keeps the stored password unless
+  `--new-password` is given. `--virtual-account` keeps the older
+  `NT SERVICE\PSFGuardWorker`. When the account changes, install removes
+  the old SID from the data folder, deletes the task files, revokes a right
+  it granted, and deletes a virtual account's profile with `DeleteProfileW`.
+  `icacls` restricts the data folder to SYSTEM, Administrators and the
+  service's account. Settings and task files inherit the folder's permissions;
   reinstalling repairs permissions left by earlier installs.
   Running install again stops the service, updates its copies and
   configuration, and restarts it. Installation and removal wait for the
@@ -237,7 +246,7 @@ and registers no plugins.
   A failed run logs its reason and exits with a service-specific code;
   Windows restarts it after 30 seconds. `worker-service uninstall` stops
   and removes the service, then deletes its executable, settings, task files
-  and logs. The desktop app disables **Start worker** until the service
+  and logs, the virtual account's profile, and a logon right install gave. The desktop app disables **Start worker** until the service
   stops. A Windows service state does not prove a connection to the
   processing server, so the UI reports it separately.
 - **Start worker at login** (`commands/worker/login.rs`): a LaunchAgent with

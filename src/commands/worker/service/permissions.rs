@@ -5,7 +5,9 @@ use std::process::Command;
 
 use anyhow::{Context, Result};
 
-pub(super) fn lock_down(folder: &Path, account: &str) -> Result<()> {
+/// Allow SYSTEM, Administrators and `account` into `folder`, and take
+/// `revoke`, the service's previous account, off it.
+pub(super) fn lock_down(folder: &Path, account: &str, revoke: Option<&str>) -> Result<()> {
     // Do not recurse here: /inheritance:r on each child removes the ACEs
     // just inherited from this folder and can leave worker.json unreadable.
     let locked = Command::new("icacls")
@@ -25,6 +27,19 @@ pub(super) fn lock_down(folder: &Path, account: &str) -> Result<()> {
         "Could not set permissions on {} to allow only SYSTEM, Administrators and the PSF Guard Worker service account ({locked})",
         folder.display()
     );
+
+    if let Some(revoke) = revoke {
+        let removed = Command::new("icacls")
+            .arg(folder)
+            .args(["/remove:g", revoke, "/Q"])
+            .status()
+            .context("removing the previous service account from the data folder with icacls")?;
+        anyhow::ensure!(
+            removed.success(),
+            "Could not remove the previous service account from {} ({removed})",
+            folder.display()
+        );
+    }
 
     // Reset only the contents, never the protected root. This also repairs
     // children whose inheritance an earlier installation disabled, and gives
@@ -79,7 +94,7 @@ mod tests {
         // Substitute the test user's SID for the service account. No service
         // installation or administrator privileges are needed in Windows CI.
         let account = format!("*{}", String::from_utf8(user.stdout).unwrap().trim());
-        lock_down(&folder, &account).unwrap();
+        lock_down(&folder, &account, None).unwrap();
         powershell(include_str!("permissions.tests.ps1"), &folder);
 
         // Reproduce the old installer's empty protected child ACL, including
@@ -98,7 +113,7 @@ foreach ($name in @('worker.json', 'tasks/nested/output.fits')) {
 "#,
             &folder,
         );
-        lock_down(&folder, &account).unwrap();
+        lock_down(&folder, &account, None).unwrap();
         powershell(include_str!("permissions.tests.ps1"), &folder);
 
         // Atomic settings replacement and newly created task files must
@@ -107,6 +122,14 @@ foreach ($name in @('worker.json', 'tasks/nested/output.fits')) {
         replacement.write_all(b"test token").unwrap();
         replacement.persist(folder.join("worker.json")).unwrap();
         std::fs::write(folder.join("tasks/new.fits"), "new output").unwrap();
+        powershell(include_str!("permissions.tests.ps1"), &folder);
+
+        // Moving the service to another account takes the old one off the
+        // folder and every file in it. BUILTIN\Users stands in for the old
+        // virtual account.
+        let previous = "*S-1-5-32-545";
+        lock_down(&folder, previous, None).unwrap();
+        lock_down(&folder, &account, Some(previous)).unwrap();
         powershell(include_str!("permissions.tests.ps1"), &folder);
     }
 }

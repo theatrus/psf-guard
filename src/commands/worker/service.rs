@@ -5,14 +5,19 @@
 //! service never runs the app's own files. `install` copies the binary to
 //! `%ProgramFiles%\PSF Guard Worker` and the settings to
 //! `%ProgramData%\PSF Guard Worker`, which only administrators and the
-//! service's account can reach, and runs the service as its own virtual
-//! account, `NT SERVICE\PSFGuardWorker`, rather than Local System. Running
-//! `install` again updates the copies, such as after the app is updated.
+//! service's account can reach. The service runs as the account that
+//! installs it, so it has that person's RC-Astro license and network
+//! shares; `--virtual-account` runs it as its own account,
+//! `NT SERVICE\PSFGuardWorker`, as earlier installs did. Running
+//! `install` again updates the copies, such as after the app is updated,
+//! and moves an older install off the virtual account.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
+#[cfg(windows)]
+mod account;
 #[cfg(windows)]
 mod permissions;
 #[cfg(windows)]
@@ -30,9 +35,55 @@ const DESCRIPTION: &str = "Runs stack builds and RC-Astro tools for a PSF Guard 
 #[cfg_attr(not(windows), allow(dead_code))]
 const FOLDER: &str = "PSF Guard Worker";
 
+/// The account the service runs as.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum RunAs {
+    /// The account running `install`.
+    #[default]
+    Installer,
+    /// A named account, such as `PC\ann` or `DOMAIN\ann`.
+    Account(String),
+    /// The service's own virtual account, `NT SERVICE\PSFGuardWorker`,
+    /// which needs no password but has no one's license or shares.
+    Virtual,
+}
+
+/// How `install` gets a user account's password.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Password {
+    /// Ask in the terminal, only when the account changes.
+    #[default]
+    WhenChanged,
+    /// Ask in the terminal even when the account is unchanged, such as
+    /// after its Windows password changed.
+    Again,
+    /// Read one line from standard input, for a script.
+    Stdin,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct InstallOptions {
+    pub run_as: RunAs,
+    pub password: Password,
+}
+
+/// What `install` did about the service's account, for the command's
+/// output.
+#[derive(Debug, Clone, Default)]
+pub struct Installed {
+    /// The account the service runs as.
+    pub account: String,
+    /// The account the service ran as before, when it changed.
+    pub replaced: Option<String>,
+    /// Whether this install gave the account "Log on as a service".
+    pub granted_service_logon: bool,
+    /// Whether the old virtual account's profile was deleted.
+    pub deleted_virtual_profile: bool,
+}
+
 /// Install the service with the settings at `settings`, or update it, and
 /// start it.
-pub fn install(settings: &Path) -> Result<()> {
+pub fn install(settings: &Path, options: &InstallOptions) -> Result<Installed> {
     let settings =
         std::path::absolute(settings).with_context(|| format!("finding {}", settings.display()))?;
     let loaded = super::WorkerSettings::load(&settings)?.ok_or_else(|| {
@@ -43,7 +94,7 @@ pub fn install(settings: &Path) -> Result<()> {
         )
     })?;
     loaded.validate()?;
-    platform::install(loaded)
+    platform::install(loaded, options)
 }
 
 /// Stop the service and remove it, with its copies of the binary and the
@@ -79,6 +130,53 @@ pub enum ServiceState {
 fn service_settings(mut settings: super::WorkerSettings, tasks: &Path) -> super::WorkerSettings {
     settings.work_dir = Some(tasks.display().to_string());
     settings
+}
+
+/// What `install` records about the account, in the service's data folder,
+/// so that a later install or uninstall can undo what it did.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(not(windows), allow(dead_code))]
+struct AccountRecord {
+    sid: String,
+    /// "Log on as a service" was given by an install, not by the person.
+    #[serde(default)]
+    granted_service_logon: bool,
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+impl AccountRecord {
+    const FILE: &'static str = "account.json";
+
+    fn load(data: &Path) -> Option<Self> {
+        let text = std::fs::read_to_string(data.join(Self::FILE)).ok()?;
+        serde_json::from_str(&text).ok()
+    }
+
+    fn save(&self, data: &Path) -> Result<()> {
+        let path = data.join(Self::FILE);
+        let temporary = path.with_extension("json.tmp");
+        std::fs::write(&temporary, serde_json::to_vec_pretty(self)?)?;
+        std::fs::rename(&temporary, &path).with_context(|| format!("writing {}", path.display()))
+    }
+}
+
+/// Whether a service account name is the service's own virtual account.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn is_virtual_account(name: &str) -> bool {
+    name.eq_ignore_ascii_case(&format!(r"NT SERVICE\{SERVICE_NAME}"))
+}
+
+/// Read a password from one line of `input`, without its line ending.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn read_password_line(mut input: impl std::io::BufRead) -> Result<String> {
+    let mut line = String::new();
+    input.read_line(&mut line).context("reading the password")?;
+    let password = line.trim_end_matches(['\r', '\n']).to_string();
+    anyhow::ensure!(
+        !password.is_empty(),
+        "No password was given on standard input"
+    );
+    Ok(password)
 }
 
 /// The arguments the service starts the binary with.
@@ -124,6 +222,7 @@ mod platform {
 
     const ERROR_ACCESS_DENIED: i32 = 5;
     const ERROR_SERVICE_DOES_NOT_EXIST: i32 = 1060;
+    const ERROR_SERVICE_LOGON_FAILED: i32 = 1069;
     const REFUSED: &str = "Administrator access is required to manage the PSF Guard Worker service. Open PowerShell as administrator and run the command again.";
 
     static SETTINGS: OnceLock<PathBuf> = OnceLock::new();
@@ -208,21 +307,109 @@ mod platform {
         Ok(())
     }
 
-    pub fn install(settings: crate::commands::worker::WorkerSettings) -> Result<()> {
+    /// The account to run as, and its password when the service's account
+    /// changes to it.
+    struct Target {
+        account: account::Account,
+        password: Option<String>,
+    }
+
+    fn virtual_account_name() -> String {
+        format!(r"NT SERVICE\{SERVICE_NAME}")
+    }
+
+    /// The account the installed service runs as, or `None` when Windows
+    /// cannot say or the account no longer exists.
+    fn installed_account(service: &Service) -> Option<account::Account> {
+        let name = service.query_config().ok()?.account_name?;
+        account::lookup(&name.to_string_lossy()).ok()
+    }
+
+    fn ask_password(account: &account::Account, how: Password) -> Result<String> {
+        if how == Password::Stdin {
+            return read_password_line(std::io::stdin().lock());
+        }
+        let password = rpassword::prompt_password(format!(
+            "Windows password for {} (the service logs on with it): ",
+            account.name
+        ))
+        .context("reading the password; to give it from a script, use --password-stdin")?;
+        anyhow::ensure!(!password.is_empty(), "No password was entered");
+        Ok(password)
+    }
+
+    pub fn install(
+        settings: crate::commands::worker::WorkerSettings,
+        options: &InstallOptions,
+    ) -> Result<Installed> {
         let manager =
             manager(ServiceManagerAccess::CONNECT | ServiceManagerAccess::CREATE_SERVICE)?;
         let access = ServiceAccess::CHANGE_CONFIG
+            | ServiceAccess::QUERY_CONFIG
             | ServiceAccess::START
             | ServiceAccess::STOP
             | ServiceAccess::QUERY_STATUS;
         let existing = open(&manager, access)?;
+        let data = data();
+        let previous = existing.as_ref().and_then(installed_account);
+        let record = AccountRecord::load(&data);
+
+        // Settle the account, its right and its password while the old
+        // service still runs, so a refused password changes nothing.
+        let wanted = match &options.run_as {
+            RunAs::Virtual => None,
+            RunAs::Installer => Some(account::current()?),
+            RunAs::Account(name) => Some(account::lookup(name)?),
+        };
+        let mut granted = false;
+        let target = match wanted {
+            None => None,
+            Some(wanted) => {
+                anyhow::ensure!(
+                    wanted.user,
+                    "{} is not a user account. Choose a person's account with --account, \
+                     or install with --virtual-account.",
+                    wanted.name
+                );
+                let unchanged = previous.as_ref().is_some_and(|old| old.sid == wanted.sid);
+                let password = if unchanged && options.password == Password::WhenChanged {
+                    None
+                } else {
+                    Some(ask_password(&wanted, options.password)?)
+                };
+                granted = account::grant_service_logon(&wanted)?;
+                if let Some(password) = &password
+                    && let Err(error) = account::check_password(&wanted, password)
+                {
+                    if granted {
+                        let _ = account::revoke_service_logon(&wanted.sid);
+                    }
+                    return Err(error);
+                }
+                Some(Target {
+                    account: wanted,
+                    password,
+                })
+            }
+        };
+        let virtual_name = virtual_account_name();
+        let new_sid = match &target {
+            Some(target) => target.account.sid.clone(),
+            // Windows creates the virtual account with the service.
+            None => String::new(),
+        };
+        let changed = match (&previous, &target) {
+            (Some(old), Some(new)) => old.sid != new.account.sid,
+            (Some(old), None) => !old.name.eq_ignore_ascii_case(&virtual_name),
+            (None, _) => existing.is_some(),
+        };
+
         // The copies can change only while the service is stopped.
         if let Some(service) = &existing {
             stop_and_wait(service)?;
         }
 
         let binary = binary()?;
-        let data = data();
         let tasks = data.join("tasks");
         let saved = data.join("worker.json");
         std::fs::create_dir_all(binary.parent().expect("a Program Files folder"))?;
@@ -232,6 +419,18 @@ mod platform {
             .with_context(|| format!("copying PSF Guard to {}", binary.display()))?;
         service_settings(settings, &tasks).save(&saved)?;
 
+        // A new service, or a changed account, gets the account's name and
+        // password. An unchanged account keeps the password Windows stored.
+        let (account_name, account_password) = match &target {
+            Some(target) => match &target.password {
+                Some(password) => (
+                    Some(OsString::from(&target.account.name)),
+                    Some(OsString::from(password)),
+                ),
+                None => (None, None),
+            },
+            None => (Some(OsString::from(&virtual_name)), None),
+        };
         let info = ServiceInfo {
             name: OsString::from(SERVICE_NAME),
             display_name: OsString::from(DISPLAY_NAME),
@@ -241,22 +440,68 @@ mod platform {
             executable_path: binary,
             launch_arguments: launch_arguments(&saved),
             dependencies: Vec::new(),
-            // A virtual account of the service's own, which Windows creates
-            // with it and which needs no password.
-            account_name: Some(OsString::from(format!(r"NT SERVICE\{SERVICE_NAME}"))),
-            account_password: None,
+            account_name,
+            account_password,
         };
         let service = match existing {
             Some(service) => {
                 service.change_config(&info)?;
                 service
             }
+            // A new service has no account yet, so a password was asked.
             None => manager
                 .create_service(&info, access)
                 .context("The service could not be created")?,
         };
-        // Only now does the service's account exist to be granted access.
-        permissions::lock_down(&data, &format!(r"NT SERVICE\{SERVICE_NAME}"))?;
+        drop(info);
+
+        // Only now does a new virtual account exist to be granted access.
+        let grantee = match &target {
+            Some(_) => format!("*{new_sid}"),
+            None => virtual_name.clone(),
+        };
+        // The old account loses the folder, which holds the token.
+        let revoked = if changed {
+            previous.as_ref().map(|old| format!("*{}", old.sid))
+        } else {
+            None
+        };
+        permissions::lock_down(&data, &grantee, revoked.as_deref())?;
+        let mut deleted_virtual_profile = false;
+        if changed && let Some(old) = &previous {
+            // The old account's task files go; the server queues them again.
+            let _ = std::fs::remove_dir_all(&tasks);
+            std::fs::create_dir_all(&tasks)?;
+            if is_virtual_account(&old.name) {
+                deleted_virtual_profile =
+                    account::delete_profile(&old.sid).unwrap_or_else(|error| {
+                        eprintln!("The old service account's profile stays: {error:#}");
+                        false
+                    });
+            } else if let Some(record) = &record
+                && record.sid == old.sid
+                && record.granted_service_logon
+            {
+                let _ = account::revoke_service_logon(&old.sid);
+            }
+        }
+        match &target {
+            Some(target) => {
+                // Keep what an earlier install gave the same account.
+                let earlier = record
+                    .as_ref()
+                    .is_some_and(|record| record.sid == new_sid && record.granted_service_logon);
+                AccountRecord {
+                    sid: target.account.sid.clone(),
+                    granted_service_logon: granted || earlier,
+                }
+                .save(&data)?;
+            }
+            None => {
+                let _ = std::fs::remove_file(data.join(AccountRecord::FILE));
+            }
+        }
+
         service.set_description(DESCRIPTION)?;
         service.set_delayed_auto_start(true)?;
         // A restart or a shutdown gives the worker time to leave the server.
@@ -277,20 +522,65 @@ mod platform {
             ),
         })?;
         service.set_failure_actions_on_non_crash_failures(true)?;
-        service.start::<&str>(&[])?;
-        Ok(())
+        let runs_as = target
+            .as_ref()
+            .map(|target| target.account.name.clone())
+            .unwrap_or(virtual_name);
+        service.start::<&str>(&[]).map_err(|error| {
+            if os_error(&error) == Some(ERROR_SERVICE_LOGON_FAILED) {
+                anyhow::anyhow!(
+                    "Windows could not log the service on as {runs_as}. If the account's \
+                     password changed, run the command again with --new-password."
+                )
+            } else {
+                anyhow::Error::new(error).context("starting the PSF Guard Worker service")
+            }
+        })?;
+        Ok(Installed {
+            account: runs_as,
+            replaced: if changed {
+                previous.map(|old| old.name)
+            } else {
+                None
+            },
+            granted_service_logon: granted,
+            deleted_virtual_profile,
+        })
     }
 
     pub fn uninstall() -> Result<()> {
         let manager = manager(ServiceManagerAccess::CONNECT)?;
         let service = open(
             &manager,
-            ServiceAccess::QUERY_STATUS | ServiceAccess::STOP | ServiceAccess::DELETE,
+            ServiceAccess::QUERY_STATUS
+                | ServiceAccess::QUERY_CONFIG
+                | ServiceAccess::STOP
+                | ServiceAccess::DELETE,
         )?
         .context("The PSF Guard Worker service is not installed")?;
+        // Read the account while the service, and so a virtual account,
+        // still exists.
+        let ran_as = installed_account(&service);
+        let record = AccountRecord::load(&data());
         stop_and_wait(&service)?;
         service.delete()?;
         drop(service);
+        if let Some(ran_as) = &ran_as {
+            if is_virtual_account(&ran_as.name) {
+                if let Err(error) = account::delete_profile(&ran_as.sid) {
+                    eprintln!("The service account's profile stays: {error:#}");
+                }
+            } else if let Some(record) = &record
+                && record.sid == ran_as.sid
+                && record.granted_service_logon
+                && let Err(error) = account::revoke_service_logon(&ran_as.sid)
+            {
+                eprintln!(
+                    "{} keeps the right to log on as a service: {error:#}",
+                    ran_as.name
+                );
+            }
+        }
         // The settings contain the token.
         let _ = std::fs::remove_dir_all(data());
         if let Ok(binary) = binary() {
@@ -442,7 +732,10 @@ mod platform {
     const ELSEWHERE: &str = "This command is available only on Windows. On Linux, use the psf-guard-worker \
          systemd service. On macOS, open PSF Guard and choose Settings › Workers › Worker on this computer.";
 
-    pub fn install(_settings: crate::commands::worker::WorkerSettings) -> Result<()> {
+    pub fn install(
+        _settings: crate::commands::worker::WorkerSettings,
+        _options: &InstallOptions,
+    ) -> Result<Installed> {
         anyhow::bail!(ELSEWHERE)
     }
 
@@ -490,10 +783,54 @@ mod tests {
     }
 
     #[test]
+    fn a_script_gives_the_password_on_one_line() {
+        assert_eq!(
+            read_password_line("pa ss\r\nnext\n".as_bytes()).unwrap(),
+            "pa ss"
+        );
+        assert_eq!(read_password_line("secret".as_bytes()).unwrap(), "secret");
+        assert!(read_password_line("\n".as_bytes()).is_err());
+        assert!(read_password_line("".as_bytes()).is_err());
+    }
+
+    #[test]
+    fn only_the_service_s_own_account_is_its_virtual_account() {
+        assert!(is_virtual_account(r"NT SERVICE\PSFGuardWorker"));
+        assert!(is_virtual_account(r"nt service\psfguardworker"));
+        assert!(!is_virtual_account(r"PC\ann"));
+        assert!(!is_virtual_account(r"NT SERVICE\OtherService"));
+    }
+
+    #[test]
+    fn the_account_record_keeps_what_an_install_gave() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(AccountRecord::load(dir.path()), None);
+        let record = AccountRecord {
+            sid: "S-1-5-21-1-2-3-1001".into(),
+            granted_service_logon: true,
+        };
+        record.save(dir.path()).unwrap();
+        assert_eq!(AccountRecord::load(dir.path()), Some(record));
+        // A record from a later version with more fields still loads.
+        std::fs::write(
+            dir.path().join(AccountRecord::FILE),
+            r#"{"sid": "S-1-5-21-9", "later": 1}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            AccountRecord::load(dir.path()),
+            Some(AccountRecord {
+                sid: "S-1-5-21-9".into(),
+                granted_service_logon: false,
+            })
+        );
+    }
+
+    #[test]
     fn installing_needs_settings_that_can_run() {
         let dir = tempfile::tempdir().unwrap();
         let missing = dir.path().join("worker.json");
-        assert!(install(&missing)
+        assert!(install(&missing, &InstallOptions::default())
             .unwrap_err()
             .to_string()
             .contains("Settings › Workers › Worker on this computer"));
@@ -502,7 +839,7 @@ mod tests {
             r#"{"server": "observatory:3000", "token": "psfw_secret"}"#,
         )
         .unwrap();
-        assert!(install(&missing)
+        assert!(install(&missing, &InstallOptions::default())
             .unwrap_err()
             .to_string()
             .contains("http://"));

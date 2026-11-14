@@ -1780,15 +1780,54 @@ pub fn main() -> Result<()> {
             use crate::cli::WorkerServiceAction;
             use crate::commands::worker::{service, WorkerSettings};
             match action {
-                WorkerServiceAction::Install { config } => {
+                WorkerServiceAction::Install {
+                    config,
+                    account,
+                    virtual_account,
+                    new_password,
+                    password_stdin,
+                } => {
                     let path = match config {
                         Some(config) => std::path::PathBuf::from(config),
                         None => WorkerSettings::default_path()?,
                     };
-                    service::install(&path)?;
+                    let options = service::InstallOptions {
+                        run_as: match (virtual_account, account) {
+                            (true, _) => service::RunAs::Virtual,
+                            (false, Some(name)) => service::RunAs::Account(name),
+                            (false, None) => service::RunAs::Installer,
+                        },
+                        password: if password_stdin {
+                            service::Password::Stdin
+                        } else if new_password {
+                            service::Password::Again
+                        } else {
+                            service::Password::WhenChanged
+                        },
+                    };
+                    let installed = service::install(&path, &options)?;
+                    if let Some(replaced) = &installed.replaced {
+                        println!(
+                            "Moved the service from {replaced} to {}. Its task files were \
+                             deleted; the server queues those tasks again.",
+                            installed.account
+                        );
+                    }
+                    if installed.deleted_virtual_profile {
+                        println!("Deleted the profile of the old service account.");
+                    }
+                    if installed.granted_service_logon {
+                        println!(
+                            "Gave {} the right to log on as a service. Uninstalling the \
+                             service removes it.",
+                            installed.account
+                        );
+                    }
                     println!(
-                        "The PSF Guard Worker service runs with a copy of the settings in {}. \
-                         After you change them, or update PSF Guard, run this command again.",
+                        "The PSF Guard Worker service runs as {} with a copy of the settings \
+                         in {}. After you change them, or update PSF Guard, run this command \
+                         again.",
+                        installed.account,
                         path.display()
                     );
                 }
