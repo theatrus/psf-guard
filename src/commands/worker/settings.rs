@@ -31,7 +31,8 @@ pub struct WorkerSettings {
     /// temporary folder.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub work_dir: Option<String>,
-    /// The rc-astro executable. Empty finds the standard install.
+    /// The rc-astro executable. Empty finds rc-astro on PATH, then in the
+    /// folder RC-Astro's installer uses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rc_astro: Option<String>,
     /// The work the worker accepts, as `--work` takes it. Empty accepts

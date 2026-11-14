@@ -134,6 +134,13 @@ impl WorkChoice {
         self.stack
     }
 
+    /// Whether it takes any RC-Astro tool.
+    pub fn takes_rc_astro(&self) -> bool {
+        self.rc_astro_tools
+            .as_ref()
+            .is_none_or(|tools| !tools.is_empty())
+    }
+
     pub fn takes_rc_astro_tool(&self, tool: &str) -> bool {
         self.rc_astro_tools
             .as_ref()

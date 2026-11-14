@@ -1447,8 +1447,8 @@ pub enum Commands {
         #[arg(long)]
         work_dir: Option<String>,
 
-        /// The rc-astro executable (defaults to PSF_GUARD_RC_ASTRO, then the
-        /// standard install).
+        /// The rc-astro executable (defaults to PSF_GUARD_RC_ASTRO, then
+        /// rc-astro on PATH, then the folder RC-Astro's installer uses).
         #[arg(long)]
         rc_astro: Option<String>,
 
