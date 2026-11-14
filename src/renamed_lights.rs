@@ -38,7 +38,7 @@ use crate::image_io::FrameKind;
 /// is the target the twin was in, which
 /// [`crate::imported_copies`] may delete once it has no lights; merges
 /// before it was added left it empty.
-pub(crate) const MERGED_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS psf_guard_merged_light (
+const MERGED_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS psf_guard_merged_light (
     removed_guid TEXT PRIMARY KEY NOT NULL,
     removed_id INTEGER NOT NULL,
     kept_guid TEXT NOT NULL,
@@ -462,7 +462,7 @@ pub(crate) fn lights(conn: &Connection) -> Result<Vec<Light>> {
     Ok(lights)
 }
 
-pub(crate) fn same_name(left: &str, right: &str) -> bool {
+fn same_name(left: &str, right: &str) -> bool {
     base_name(left).eq_ignore_ascii_case(base_name(right))
 }
 
