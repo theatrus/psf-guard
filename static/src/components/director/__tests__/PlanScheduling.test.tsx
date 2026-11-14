@@ -86,7 +86,7 @@ describe('plan scheduling limits', () => {
     expect(row('Meridian window')).toHaveTextContent('20 minfrom every plan30 minfrom rig');
     expect(row('Minimum time')).toHaveTextContent('30 minTarget Scheduler default');
     // An empty field says what it inherits.
-    expect(screen.getByRole('spinbutton', { name: 'Minimum time' })).toHaveAttribute('placeholder', '30 min');
+    expect(await screen.findByRole('spinbutton', { name: 'Minimum time' })).toHaveAttribute('placeholder', '30 min');
   });
 
   it('saves an override through the page bar and can return to inheriting', async () => {
