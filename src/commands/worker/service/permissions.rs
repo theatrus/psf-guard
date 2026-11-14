@@ -189,7 +189,8 @@ foreach ($name in @('worker.json', 'tasks/nested/output.fits')) {
 $ErrorActionPreference = 'Stop'
 $root = $env:PSF_GUARD_ACL_TEST_FOLDER
 $acl = Get-Acl -LiteralPath $root
-$rule = New-Object Security.AccessControl.FileSystemAccessRule('S-1-1-0', 'Read', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
+$everyone = New-Object Security.Principal.SecurityIdentifier('S-1-1-0')
+$rule = New-Object Security.AccessControl.FileSystemAccessRule($everyone, 'Read', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
 $acl.AddAccessRule($rule)
 Set-Acl -LiteralPath $root -AclObject $acl
 "#,
