@@ -148,11 +148,12 @@ pub async fn merge(
             .outcome
             .merged
             .iter()
-            .map(|pair| RemovedFrame {
-                image_id: pair.twin.id,
-                guid: pair.twin.guid.clone(),
-                project_id: pair.twin.project_id,
-                target_id: pair.twin.target_id,
+            .flat_map(|pair| pair.removed())
+            .map(|light| RemovedFrame {
+                image_id: light.id,
+                guid: light.guid.clone(),
+                project_id: light.project_id,
+                target_id: light.target_id,
             })
             .collect();
         if !removed.is_empty() {

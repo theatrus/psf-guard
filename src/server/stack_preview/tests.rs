@@ -3582,9 +3582,14 @@ async fn a_build_whose_frames_change_while_it_waits_runs_as_a_new_build() {
 async fn a_build_that_cannot_be_prepared_fails_with_why() {
     let directory = tempfile::tempdir().unwrap();
     let (state, ctx) = state_with_frames(directory.path());
+    // Holding the database keeps the runner from failing the build before
+    // its first state is read (it did on macOS CI).
+    let db = ctx.db();
+    let busy = db.lock().unwrap();
     let job =
         build_set::queue_preparation(&state, &ctx, 1, build_request(vec![1, 99]), false).unwrap();
     assert_eq!(job.state, StackJobState::Preparing);
+    drop(busy);
     let done = prepared(&state, &job.job_id).await;
     assert_eq!(done.state, StackJobState::Failed);
     assert_eq!(
