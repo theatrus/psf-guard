@@ -4847,6 +4847,31 @@ export interface RenamedLightsReport {
 }
 /** What a merge did, and the copy taken first (none when there was nothing to merge). */
 export interface RenamedLightsMerged { merged: RenamedPair[]; held: HeldRenamedPair[]; backup_path: string | null }
+/** One exposure catalogued twice: the light Target Scheduler recorded, which stays,
+ *  and the lights an import made of the same file, which a merge removes. */
+export interface ImportedCopies { kept: RenamedLight; copies: RenamedLight[]; takes_grade: boolean }
+/** A group the merge leaves alone, and why. */
+export interface HeldImportedCopies { kept: RenamedLight; copies: RenamedLight[]; reason: string }
+/** A project an import created that a merge leaves with no lights; the merge deletes it. */
+export interface EmptyImportedProject { id: number; name: string; targets: string[]; exposure_plans: number }
+/** A target with no lights left, in an imported project that keeps other lights; the merge deletes it. */
+export interface EmptyImportedTarget { id: number; name: string; project_id: number; project: string; exposure_plans: number }
+/** An imported project left with no lights that the merge keeps, and why. */
+export interface KeptImportedProject { id: number; name: string; reason: string }
+/** What merging imported copies would change. `digest` goes back with the merge. */
+export interface ImportedCopiesPlan {
+  groups: ImportedCopies[];
+  held: HeldImportedCopies[];
+  projects: EmptyImportedProject[];
+  targets: EmptyImportedTarget[];
+  kept_projects: KeptImportedProject[];
+  digest: string;
+}
+export interface ImportedCopiesReport extends ImportedCopiesPlan { writable: boolean }
+/** A merge's result, or a new preview when the database changed since the last one. */
+export type ImportedCopiesMerge =
+  | (ImportedCopiesPlan & { state: 'merged'; backup_path: string | null })
+  | { state: 'changed'; preview: ImportedCopiesReport };
 
 /** One volume holding database caches, as the last disk check found it. */
 export interface CacheVolumeReport {

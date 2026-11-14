@@ -18,7 +18,7 @@ import { BUILD_HEADER, noteServerBuild } from '../updates/pageBuild';
 import type { DirectorAdoptionPlan, DirectorAdoptionReport, DirectorCollection, DirectorCutoutRequest, DirectorCutoutResult, DirectorDiscovery, DirectorFramingDraft, DirectorFramingDraftView, DirectorFramingPreview, DirectorFramingRequest, DirectorIdentity, DirectorIdentityPage, DirectorMappingPage, DirectorFeasibility, DirectorMosaicPreview, DirectorResolvedName,
   DirectorSkyMarks,
   DirectorSkyMarksQuery, DirectorActivation, DirectorActivationPushReport, DirectorActivationReport, DirectorPlanDraft, DirectorPlanList, DirectorPlanView, DirectorRigStatusView, DirectorRigSummary, SyncLatestAction, DirectorRigProfileSummary, DirectorTemplateList, DirectorStatus, DirectorRigPlan, DirectorRigProfileEdit, DirectorRigProfileView, DirectorRigReport, DirectorSurvey, DirectorNameSearch, DirectorLibraryTemplate, DirectorAttached, DirectorTakenValues, DirectorRigScheduling, DirectorPlanProgress, DirectorPlanDeletion, DirectorPlanDeletionOutcome, DirectorCollaborationLeave, DirectorCollaborationLeft } from './directorTypes';
-import type { GuidFillReport, GuidReport, RenamedLightsMerged, RenamedLightsReport,
+import type { GuidFillReport, GuidReport, ImportedCopiesMerge, ImportedCopiesReport, RenamedLightsMerged, RenamedLightsReport,
   ProjectMosaic,
   ProjectProcessingSettings,
   StackColorInputSources,
@@ -1547,6 +1547,22 @@ export const apiClient = {
     const apiInstance = await getApi();
     const { data } = await apiInstance.post<ApiResponse<RenamedLightsMerged>>(dbPath(dbId, '/renamed-lights/merge'));
     if (!data.data) throw new Error(data.error || 'Failed to merge renamed lights');
+    return data.data;
+  },
+
+  /** Lights an import catalogued beside Target Scheduler's records of the same files. */
+  getImportedCopies: async (dbId: string): Promise<ImportedCopiesReport> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.get<ApiResponse<ImportedCopiesReport>>(dbPath(dbId, '/imported-copies'));
+    if (!data.data) throw new Error(data.error || 'Failed to check for imported copies');
+    return data.data;
+  },
+
+  /** Merge as previewed; a changed database answers with a new preview. */
+  mergeImportedCopies: async (dbId: string, digest: string): Promise<ImportedCopiesMerge> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<ImportedCopiesMerge>>(dbPath(dbId, '/imported-copies/merge'), { digest });
+    if (!data.data) throw new Error(data.error || 'Failed to merge imported copies');
     return data.data;
   },
 

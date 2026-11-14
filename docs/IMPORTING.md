@@ -299,7 +299,8 @@ it was, and stopping it while it writes rolls its one transaction back.
 
 The matching rules prevent common duplicates and splits:
 
-- a basename already stored in the database is skipped;
+- a basename already stored in the database is skipped, whatever its
+  folder, project or N.I.N.A. profile;
 - a renamed file keeps the frame its old name made, when that frame's file
   is gone (see [Renamed files](#renamed-files));
 - an `OBJECT` name match attaches to the existing target;
@@ -581,6 +582,46 @@ there would look renamed; **Settings** shows which folder is missing.
 Close N.I.N.A. on that rig before merging. To merge from the command line,
 run `psf-guard merge-renamed-lights --db <slug>` to see the pairs, then
 again with `--apply`.
+
+### Frames catalogued twice after a merge
+
+A catalog can hold a frame twice: once as Target Scheduler recorded it, and
+once from an import of the same file. This happens when you merge a catalog
+that imported the capture folder with one that has Target Scheduler's
+records of the frames, because projects and targets match only by GUID.
+Each frame then appears in two projects, often under two N.I.N.A. profiles.
+
+A sync now recognizes the imported frame, even in another target, and gives
+it Target Scheduler's record (see
+[data transfer](design/data-transfer.md)). For a catalog that already holds
+the doubles, **Settings** lists them under the database, with **Merge
+imported copies**. Two lights are the same frame when they have the same
+file name, capture time, exposure and filter, and N.I.N.A. recorded one of
+them.
+
+**Merge imported copies** first copies the database beside itself. Then:
+
+- Target Scheduler's light stays, with its project, target, exposure plan
+  and GUID, so the plan's acquired and accepted counts do not drop. It takes
+  the copy's grade when it has none; an Accepted grade adds one to its
+  plan's accepted count.
+- The imported copies are removed, and a sync does not bring them back.
+- Projects and targets that an import created, and that the merge leaves
+  with no lights, are deleted with their exposure plans. **Settings** lists
+  them before you merge. A project stays when it is active in Target
+  Scheduler or a Director plan uses it. An empty target stays when no merge
+  removed a light from it.
+
+A frame stays as it is when its lights have different grades, Accepted and
+Rejected; grade them alike, then merge again. It also stays when a copy is
+in a collaboration report or the reject archive, or when calibrated copies
+or a remote upload are recorded against it. If the database changes between
+the list and the merge, nothing is changed and **Settings** shows the new
+list. When **Settings** offers both merges, run **Merge renamed lights**
+first, so this merge can delete the projects it leaves empty. Close N.I.N.A.
+on that rig before merging. To merge from the command line, run
+`psf-guard merge-imported-copies --db <slug>` to see the changes, then again
+with `--apply`.
 
 ## Organize projects and targets
 

@@ -231,7 +231,9 @@ before the GitHub release fallback. See [docs/UPDATES.md](docs/UPDATES.md).
   destination row PSF Guard minted itself (an import or remote upload) for a
   frame whose telescope row then arrives: sync recognizes it by target, file
   name, and capture time and updates it in place rather than inserting a
-  twin. The other exception is an exposure template whose GUID the
+  twin. When no row in that target matches, sync takes the one minted row
+  in any target with the same file name, filter and capture time; a row is
+  minted when its metadata lacks `GuidingRMS`, which only N.I.N.A. writes. The other exception is an exposure template whose GUID the
   destination lacks: it takes the destination's template that is identical
   in every other setting (`template_repeats::identical_template_key`) and
   gives it the source's GUID, because two copies of one Target Scheduler

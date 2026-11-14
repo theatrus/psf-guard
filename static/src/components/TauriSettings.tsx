@@ -52,6 +52,7 @@ import {
 import { starMetadataFillEnabled } from '../hooks/useStarMetadataFill';
 import { PurgeRejectsButton } from './RejectRemovalControls';
 import MissingGuidRepair from './MissingGuidRepair';
+import ImportedCopiesRepair from './ImportedCopiesRepair';
 import RenamedLightsRepair from './RenamedLightsRepair';
 import DatabaseImportSettings from './DatabaseImportSettings';
 import ScanRulesEditor from './ScanRulesEditor';
@@ -1593,6 +1594,7 @@ export default function TauriSettings({
                       />
                       <MissingGuidRepair dbId={entry.id} dbName={entry.name} canManage={canEdit} />
                       <RenamedLightsRepair dbId={entry.id} dbName={entry.name} canManage={canEdit} />
+                      <ImportedCopiesRepair dbId={entry.id} dbName={entry.name} canManage={canEdit} />
                     </div>
                   </div>
                   {isEditing && <div id={editorId}>{renderDatabaseForm(entry)}</div>}
