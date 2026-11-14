@@ -166,7 +166,8 @@ that contains one.
 
 Use a Windows service when the worker needs to run before anyone logs in.
 The service starts with Windows. It uses its own copies of the app and
-settings, separate from the desktop worker.
+settings, separate from the desktop worker. It runs as your Windows account,
+so it can use your RC-Astro license and the network shares you can open.
 
 1. Open **Settings › Performance › Workers › Worker on this computer** in the desktop
    app and enter the worker settings. Turn off **Start worker at login**,
@@ -178,28 +179,71 @@ settings, separate from the desktop worker.
    psf-guard-cli worker-service install
    ```
 
-   To use a different settings file, add `--config FILE`.
+3. Enter your Windows password when the command asks for it. For a
+   Microsoft account, enter the account's password, not your PIN.
 
-The command installs and starts the **PSF Guard Worker** service. It copies
-the executable to `%ProgramFiles%\PSF Guard Worker` and settings to
+The command checks the password, then installs and starts the **PSF Guard
+Worker** service. It copies the executable to
+`%ProgramFiles%\PSF Guard Worker` and settings to
 `%ProgramData%\PSF Guard Worker\worker.json`. SYSTEM, Administrators and
-the service account can access the service's data folder. The settings
-include the worker token.
+the service's account can access the service's data folder. The settings
+include the worker token. Task files use
+`%ProgramData%\PSF Guard Worker\tasks`; the desktop app's **Temporary task
+folder** setting does not change the service's task folder.
 
-The service runs under its own account, `NT SERVICE\PSFGuardWorker`.
-Task files use `%ProgramData%\PSF Guard Worker\tasks`; the desktop app's
-**Temporary task folder** setting does not change the service's task folder.
+Windows stores the password with the service. If your account does not yet
+have the **Log on as a service** right, the command gives it that right.
+
+Options:
+
+- `--config FILE` uses a different settings file.
+- `--account NAME` runs the service as another account, such as
+  `PC\astro` or `DOMAIN\astro`. Use it when the PowerShell window runs as
+  a different administrator account from the one that licensed RC-Astro.
+- `--virtual-account` runs the service as its own account,
+  `NT SERVICE\PSFGuardWorker`, as earlier versions did. It needs no
+  password, but it cannot use your RC-Astro license or shares that need a
+  user account.
+- `--password-stdin` reads the password from one line of standard input,
+  for a script. Windows PowerShell 5.1 pipes text as ASCII; for a password
+  with other characters, first run
+  `$OutputEncoding = [System.Text.UTF8Encoding]::new()`.
 
 ### Apply settings or app updates to the service
 
 After changing worker settings, click **Save worker settings**. After
 saving settings or updating PSF Guard, open PowerShell as administrator and
 run `psf-guard-cli worker-service install` again. The command stops the
-service, updates its copies of the app and settings, and restarts it.
+service, updates its copies of the app and settings, and restarts it. It
+asks for the password only when the account changes.
+
+After you change your Windows password, the service can no longer log on.
+The next `psf-guard-cli worker-service install` notices and asks for the new
+password. To set it without waiting for that, run
+`psf-guard-cli worker-service install --new-password`.
 
 **Restart worker** controls the desktop worker. It does not restart or
 update the Windows service. While the service is running or changing state,
 **Start worker** is disabled to prevent a second worker from starting.
+
+### Move an older service to your account
+
+Services installed by earlier versions run as `NT SERVICE\PSFGuardWorker`.
+To move one to your account, run `psf-guard-cli worker-service install`
+from PowerShell opened as administrator and enter your password. The
+command:
+
+- runs the service as your account;
+- leaves only SYSTEM, Administrators and your account with access to the
+  data folder, removing the old account and any access added by hand;
+- deletes the old account's task files, which the server queues again;
+- deletes the old account's Windows profile.
+
+If the command stops partway, run it again: it finishes the clean-up the
+earlier run started.
+
+If you had set a different account in Windows Services, the command
+replaces it with the account running the command, or with `--account NAME`.
 
 ### Check service logs and requirements
 
@@ -209,6 +253,10 @@ update the Windows service. While the service is running or changing state,
   and run `psf-guard-cli worker-service install` from PowerShell opened as
   administrator. This repairs the service folder's permissions and starts
   the worker.
+- **Password refused:** the command stops before changing the service.
+  Check the password; a Microsoft account needs its password, not its PIN.
+  An account without a password cannot run a service; set one, or install
+  with `--virtual-account`.
 - **Failures:** if the server refuses the token, the service logs the reason
   and stops. Windows restarts it after 30 seconds. Replace a refused token
   in the desktop settings and run the install command again.
@@ -218,27 +266,23 @@ update the Windows service. While the service is running or changing state,
 - **Sleep:** prevent the computer from sleeping while you need it to process
   tasks. A worker cannot process tasks while Windows is asleep.
 - **RC-Astro tools:** the service uses rc-astro from its account's `PATH`,
-  or the executable specified in its settings. An installation or license
-  available only to your desktop account may be unavailable to the service.
-  If the service cannot run RC-Astro, it can still accept stack builds.
-  Use the desktop worker if RC-Astro requires your desktop account.
-- **Shared storage:** the default service account accesses network shares
-  through the computer's network identity. If a share requires a user
-  account, change the service account in Windows Services to a user with
-  access to that share. Give that user modify access to
-  `%ProgramData%\PSF Guard Worker`. Enter folder mappings with UNC paths,
-  such as `\\nas\astro`, that the service account can access.
-  Reinstalling restores the default service account. After reinstalling,
-  stop the service, reapply your custom account, and start the service in
-  Windows Services.
+  or the executable specified in its settings. rc-astro keeps licenses per
+  Windows account, so the service can use them only when it runs as the
+  account that activated rc-astro. If the service cannot run RC-Astro, it
+  can still accept stack builds.
+- **Shared storage:** the service opens network shares as its account. Enter
+  folder mappings with UNC paths, such as `\\nas\astro`: a service does not
+  see drive letters mapped in your desktop session.
 
 ### Remove the Windows service
 
 Before uninstalling PSF Guard, open PowerShell as administrator and run
 `psf-guard-cli worker-service uninstall`. This stops and removes the service
 and deletes its copied executable, settings including the token, task files,
-and logs. The server queues unfinished tasks again. The desktop app's
-saved worker settings remain in its own settings folder.
+and logs. It takes away the **Log on as a service** right if installing gave
+it, and deletes the profile of `NT SERVICE\PSFGuardWorker` for a service
+that ran as that account. The server queues unfinished tasks again. The
+desktop app's saved worker settings remain in its own settings folder.
 
 ## Choose the work a worker accepts
 

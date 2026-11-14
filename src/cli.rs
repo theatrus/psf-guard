@@ -23,9 +23,27 @@ pub enum WorkerServiceAction {
         /// saves for this user).
         #[arg(long, value_name = "FILE")]
         config: Option<String>,
+        /// The Windows account the service runs as, such as `PC\ann`.
+        /// Defaults to the account running this command. The service gets
+        /// that account's RC-Astro license and network shares.
+        #[arg(long, value_name = "NAME", conflicts_with = "virtual_account")]
+        account: Option<String>,
+        /// Run as the service's own account, `NT SERVICE\PSFGuardWorker`,
+        /// which needs no password but has no one's RC-Astro license or
+        /// network shares.
+        #[arg(long)]
+        virtual_account: bool,
+        /// Ask for the account's password even though the service already
+        /// runs as it, such as after the password changed.
+        #[arg(long, conflicts_with = "virtual_account")]
+        new_password: bool,
+        /// Read the account's password from one line of standard input.
+        #[arg(long, conflicts_with = "virtual_account")]
+        password_stdin: bool,
     },
     /// Stop and remove the service. Delete its copied executable, settings,
-    /// task files and logs.
+    /// task files and logs, the virtual account's profile, and the right to
+    /// log on as a service when installing gave it.
     Uninstall,
     /// Run as the service. Windows starts this; it is not for a terminal.
     #[command(hide = true)]
@@ -1469,10 +1487,12 @@ pub enum Commands {
     /// Run the worker as a Windows service, for a computer that runs work
     /// while nobody is logged in.
     ///
-    /// Save the worker's settings in the desktop app's Settings › Workers ›
-    /// This computer first, or write a settings file. Then, from a terminal opened
-    /// as administrator, run `psf-guard-cli worker-service install`. The
-    /// service runs as Local System and starts with Windows.
+    /// Save the worker's settings in the desktop app's Settings ›
+    /// Performance › Workers › Worker on this computer first, or write a
+    /// settings file. Then, from a terminal opened as administrator, run
+    /// `psf-guard-cli worker-service install`. The service starts with
+    /// Windows and runs as the account that installed it, which needs a
+    /// password.
     WorkerService {
         #[command(subcommand)]
         action: WorkerServiceAction,

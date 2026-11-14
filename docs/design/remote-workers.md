@@ -224,10 +224,24 @@ and registers no plugins.
   copies the executable to `%ProgramFiles%\PSF Guard Worker\psf-guard-worker.exe`
   and settings to `%ProgramData%\PSF Guard Worker\worker.json`. It sets
   `work_dir` to the service's own `tasks` folder. The service runs as the
-  virtual account `NT SERVICE\PSFGuardWorker`.
-  `icacls` restricts the data folder to SYSTEM, Administrators and that
-  account. Settings and task files inherit the folder's permissions;
-  reinstalling repairs permissions left by earlier installs.
+  account running `install` (or `--account NAME`), because rc-astro keeps
+  licenses per Windows account and network shares need a user. Install
+  decides the account work with a pure `plan`, tested on every platform. It
+  grants `SeServiceLogonRight` when the account lacks it, and checks the
+  password with a service logon before it stops the old service. Before
+  changing anything it writes `account.json`: every SID an install granted
+  the right to, and the previous account still to clean up. A retry after a
+  failure finishes that clean-up, and each install takes back rights it
+  granted to accounts the service no longer uses. Reinstalling over the same
+  account keeps the stored password; a logon failure at start asks for the
+  new one, and `--new-password` asks up front. `--virtual-account` keeps the
+  older `NT SERVICE\PSFGuardWorker`; moving to it first sets LocalService
+  with an empty password, since Windows otherwise keeps the user's stored
+  password. `SetNamedSecurityInfoW` replaces the data folder's whole DACL,
+  protected, with SYSTEM, Administrators and the service account's SID, so
+  no earlier or hand-added entry survives. Settings and task files inherit
+  the folder's permissions; reinstalling repairs permissions left by earlier
+  installs.
   Running install again stops the service, updates its copies and
   configuration, and restarts it. Installation and removal wait for the
   stopped service's process to exit before replacing or deleting its
@@ -237,7 +251,7 @@ and registers no plugins.
   A failed run logs its reason and exits with a service-specific code;
   Windows restarts it after 30 seconds. `worker-service uninstall` stops
   and removes the service, then deletes its executable, settings, task files
-  and logs. The desktop app disables **Start worker** until the service
+  and logs, the virtual account's profile, and a logon right install gave. The desktop app disables **Start worker** until the service
   stops. A Windows service state does not prove a connection to the
   processing server, so the UI reports it separately.
 - **Start worker at login** (`commands/worker/login.rs`): a LaunchAgent with
