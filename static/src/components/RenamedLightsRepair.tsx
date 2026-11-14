@@ -71,7 +71,8 @@ export default function RenamedLightsRepair({ dbId, dbName, canManage }: { dbId:
           </button>{' '}
           Copies the database beside itself first. Each first light then uses the renamed file and keeps its grade,
           or takes the second light's grade when it had none, and the second light is removed. When a light is
-          catalogued more than once, one copy stays and the others are removed. Close N.I.N.A. on
+          catalogued more than once, one copy stays, Target Scheduler's if there is one, and the others are
+          removed. Close N.I.N.A. on
           that rig before merging.
         </p>
       : <p>
