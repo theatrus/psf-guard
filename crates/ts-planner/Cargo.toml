@@ -12,7 +12,7 @@ description = "An emulation of N.I.N.A. Target Scheduler's planner, to preview w
 [dependencies]
 psf-guard-director-core = { path = "../director-core" }
 serde = { version = "1", features = ["derive"] }
-sofars = "=0.6.2"
+sofars = "=0.6.3"
 
 [dev-dependencies]
 serde_json = { version = "1", features = ["float_roundtrip"] }
