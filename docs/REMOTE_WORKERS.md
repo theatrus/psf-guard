@@ -205,7 +205,9 @@ Options:
   password, but it cannot use your RC-Astro license or shares that need a
   user account.
 - `--password-stdin` reads the password from one line of standard input,
-  for a script.
+  for a script. Windows PowerShell 5.1 pipes text as ASCII; for a password
+  with other characters, first run
+  `$OutputEncoding = [System.Text.UTF8Encoding]::new()`.
 
 ### Apply settings or app updates to the service
 
@@ -216,8 +218,9 @@ service, updates its copies of the app and settings, and restarts it. It
 asks for the password only when the account changes.
 
 After you change your Windows password, the service can no longer log on.
-Run `psf-guard-cli worker-service install --new-password` and enter the new
-password.
+The next `psf-guard-cli worker-service install` notices and asks for the new
+password. To set it without waiting for that, run
+`psf-guard-cli worker-service install --new-password`.
 
 **Restart worker** controls the desktop worker. It does not restart or
 update the Windows service. While the service is running or changing state,
@@ -231,9 +234,13 @@ from PowerShell opened as administrator and enter your password. The
 command:
 
 - runs the service as your account;
-- removes the old account's access to the data folder;
+- leaves only SYSTEM, Administrators and your account with access to the
+  data folder, removing the old account and any access added by hand;
 - deletes the old account's task files, which the server queues again;
 - deletes the old account's Windows profile.
+
+If the command stops partway, run it again: it finishes the clean-up the
+earlier run started.
 
 If you had set a different account in Windows Services, the command
 replaces it with the account running the command, or with `--account NAME`.

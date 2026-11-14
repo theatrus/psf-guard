@@ -170,10 +170,14 @@ fn sid_string(sid: PSID) -> Result<String> {
 }
 
 /// A SID from its string form, freed on drop.
-struct Sid(PSID);
+pub(super) struct Sid(PSID);
 
 impl Sid {
-    fn parse(sid: &str) -> Result<Self> {
+    pub(super) fn as_ptr(&self) -> PSID {
+        self.0
+    }
+
+    pub(super) fn parse(sid: &str) -> Result<Self> {
         let text = wide(sid);
         let mut parsed: PSID = ptr::null_mut();
         if unsafe { ConvertStringSidToSidW(text.as_ptr(), &mut parsed) } == 0 {
