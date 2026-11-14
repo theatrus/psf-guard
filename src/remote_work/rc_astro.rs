@@ -41,11 +41,7 @@ pub struct StepResult {
 /// `PSF_GUARD_RC_ASTRO=off` leaves rc-astro to the connected workers.
 pub fn locate(executable: Option<&Path>) -> Option<RcAstroCli> {
     let variable = std::env::var_os("PSF_GUARD_RC_ASTRO").filter(|path| !path.is_empty());
-    if executable.is_none()
-        && variable
-            .as_ref()
-            .is_some_and(|value| value.eq_ignore_ascii_case("off"))
-    {
+    if executable.is_none() && turned_off() {
         return None;
     }
     // A service unit often runs with a minimal PATH; PSF_GUARD_RC_ASTRO
@@ -68,7 +64,15 @@ pub fn locate(executable: Option<&Path>) -> Option<RcAstroCli> {
     located.map(|cli| cli.with_host(format!("psf-guard-{}", env!("CARGO_PKG_VERSION"))))
 }
 
-/// Where RC-Astro's installers put rc-astro on `os`, in the order tried.
+/// Whether `PSF_GUARD_RC_ASTRO=off` leaves rc-astro to the connected
+/// workers.
+pub fn turned_off() -> bool {
+    std::env::var_os("PSF_GUARD_RC_ASTRO").is_some_and(|value| value.eq_ignore_ascii_case("off"))
+}
+
+/// Where rc-astro is on `os` when it is not on `PATH`, in the order tried:
+/// the folders a terminal's `PATH` usually has, in that order, then the
+/// installer's own folder, which a link in one of them usually points to.
 /// `variable` reads an environment variable.
 pub fn standard_installs(
     os: &str,
@@ -80,36 +84,34 @@ pub fn standard_installs(
             .map(PathBuf::from)
     };
     match os {
-        // The installer's app folder, then the links a terminal's PATH has.
         "macos" => [
+            Some(PathBuf::from("/opt/homebrew/bin/rc-astro")),
+            Some(PathBuf::from("/usr/local/bin/rc-astro")),
             Some(PathBuf::from("/Applications/RC-Astro/CLI/rc-astro")),
             home().map(|home| home.join("Applications/RC-Astro/CLI/rc-astro")),
-            Some(PathBuf::from("/usr/local/bin/rc-astro")),
-            Some(PathBuf::from("/opt/homebrew/bin/rc-astro")),
         ]
         .into_iter()
         .flatten()
         .collect(),
-        "windows" => ["ProgramFiles", "ProgramW6432"]
-            .into_iter()
-            .filter_map(|name| variable(name).filter(|folder| !folder.is_empty()))
-            .map(|folder| {
-                PathBuf::from(folder)
-                    .join("RC-Astro")
-                    .join("CLI")
-                    .join("rc-astro.exe")
-            })
-            .fold(Vec::new(), |mut found, path| {
-                if !found.contains(&path) {
-                    found.push(path);
-                }
-                found
-            }),
-        // install.sh: the app folder, and its link in /usr/local/bin.
+        "windows" => {
+            let mut found: Vec<PathBuf> = ["ProgramFiles", "ProgramW6432"]
+                .into_iter()
+                .filter_map(|name| variable(name).filter(|folder| !folder.is_empty()))
+                .map(|folder| {
+                    PathBuf::from(folder)
+                        .join("RC-Astro")
+                        .join("CLI")
+                        .join("rc-astro.exe")
+                })
+                .collect();
+            found.dedup();
+            found
+        }
+        // install.sh links /usr/local/bin/rc-astro to /opt/rc-astro.
         _ => [
-            Some(PathBuf::from("/opt/rc-astro/rc-astro")),
-            Some(PathBuf::from("/usr/local/bin/rc-astro")),
             home().map(|home| home.join(".local/bin/rc-astro")),
+            Some(PathBuf::from("/usr/local/bin/rc-astro")),
+            Some(PathBuf::from("/opt/rc-astro/rc-astro")),
         ]
         .into_iter()
         .flatten()
@@ -216,15 +218,17 @@ mod tests {
         assert_eq!(
             found,
             [
+                "/opt/homebrew/bin/rc-astro",
+                "/usr/local/bin/rc-astro",
                 "/Applications/RC-Astro/CLI/rc-astro",
                 "/Users/ann/Applications/RC-Astro/CLI/rc-astro",
-                "/usr/local/bin/rc-astro",
-                "/opt/homebrew/bin/rc-astro",
             ]
             .map(PathBuf::from)
         );
         // Without a home folder, the per-user folder is left out.
         assert_eq!(standard_installs("macos", &environment(&[])).len(), 3);
+        // A terminal's PATH puts Homebrew's folder before /usr/local/bin.
+        assert!(found[0].starts_with("/opt/homebrew"));
     }
 
     #[test]
@@ -252,9 +256,9 @@ mod tests {
         assert_eq!(
             found,
             [
-                "/opt/rc-astro/rc-astro",
-                "/usr/local/bin/rc-astro",
                 "/home/ann/.local/bin/rc-astro",
+                "/usr/local/bin/rc-astro",
+                "/opt/rc-astro/rc-astro",
             ]
             .map(PathBuf::from)
         );
