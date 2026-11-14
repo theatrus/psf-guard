@@ -606,9 +606,16 @@ pub async fn serve(options: WorkerOptions, shutdown: impl Future<Output = ()>) -
             "this worker accepts stack builds only"
         };
         match (&options.tools.rc_astro, problem) {
+            (None, _) if !options.work.takes_rc_astro() => {
+                tracing::info!("--work leaves out every RC-Astro tool; {then}")
+            }
+            (None, _) if crate::remote_work::rc_astro::turned_off() => {
+                tracing::info!("PSF_GUARD_RC_ASTRO=off leaves out rc-astro; {then}")
+            }
             (None, _) => tracing::warn!(
-                "rc-astro was not found here (looked in {}); {then}. Set its path with \
-                 --rc-astro or in the worker settings",
+                "rc-astro was not found here (looked in {}); {then}. Give its path with \
+                 --rc-astro, the rc_astro key of the worker's settings file, or \
+                 PSF_GUARD_RC_ASTRO",
                 crate::remote_work::rc_astro::searched_places()
             ),
             (Some(_), Some(problem)) => {

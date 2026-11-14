@@ -47,7 +47,7 @@ the tool it is running, and the server queues the task again.
 process list. `--name` changes the name the server shows, which is the host
 name by default. `--rc-astro PATH` gives the rc-astro executable when it is
 neither on `PATH` nor in the folder RC-Astro's installer uses (see
-[Find rc-astro](STACKING_PREVIEWS.md#find-rc-astro)). `--slots N` lets the
+[Reversible view processing](STACKING_PREVIEWS.md#reversible-view-processing)). `--slots N` lets the
 worker run up to N tasks at once, from 1 to 16; the default is 1, since each
 RC-Astro step uses the GPU.
 
