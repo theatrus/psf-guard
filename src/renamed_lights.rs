@@ -238,8 +238,22 @@ pub struct Light {
     pub target_id: Option<i64>,
     #[serde(skip)]
     exposure_id: Option<i64>,
+    /// Whether N.I.N.A. recorded the light, as Target Scheduler does,
+    /// rather than a PSF Guard import; see [`recorded_by_nina`].
+    #[serde(skip)]
+    recorded_by_nina: bool,
     #[serde(skip)]
     identity: FrameIdentity,
+}
+
+/// Whether a light's metadata came from N.I.N.A. Target Scheduler writes
+/// every field of N.I.N.A.'s image metadata, `GuidingRMS` among them, even
+/// for an unguided frame. PSF Guard never writes that field: an import,
+/// remote uploads included, fills only what the file's headers give; the
+/// quality scan adds star counts and HFR; and a sync or a restore copies
+/// the metadata it was sent.
+fn recorded_by_nina(metadata: &serde_json::Value) -> bool {
+    metadata.get("GuidingRMS").is_some()
 }
 
 /// A light whose file is gone, and the twin an import made of its renamed
@@ -252,7 +266,8 @@ pub struct RenamedPair {
     pub twin: Light,
     /// Other copies of the first light: the same file name, their file gone
     /// too. A merge of two catalogs that hold the same frames under
-    /// different guids leaves them. They are removed as well.
+    /// different guids leaves them, and so does an import of the folder
+    /// Target Scheduler recorded the frames from. They are removed as well.
     pub copies: Vec<Light>,
     /// Other copies of the twin, under the renamed file's name, removed too.
     pub twin_copies: Vec<Light>,
@@ -406,8 +421,9 @@ fn lights(conn: &Connection) -> Result<Vec<Light>> {
         let metadata = row.get::<_, Option<String>>(2)?.unwrap_or_default();
         let target: Option<String> = row.get(5)?;
         let identity = light_identity(&metadata, row.get(3)?, row.get(4)?, target.clone());
-        let file_name = serde_json::from_str::<serde_json::Value>(&metadata)
-            .ok()
+        let json = serde_json::from_str::<serde_json::Value>(&metadata).ok();
+        let file_name = json
+            .as_ref()
             .and_then(|json| {
                 json.get("FileName")
                     .and_then(|name| name.as_str())
@@ -424,6 +440,7 @@ fn lights(conn: &Connection) -> Result<Vec<Light>> {
             exposure_id: row.get(8)?,
             project_id: row.get(9)?,
             target_id: row.get(10)?,
+            recorded_by_nina: json.as_ref().is_some_and(recorded_by_nina),
             identity,
         })
     })?;
@@ -585,9 +602,12 @@ pub fn plan(
             let twin = &all[twin_index];
             // The first light, catalogued once or more: a merge of two
             // catalogs that hold the same frames under different guids
-            // leaves copies under its name. One of them stays: one that
-            // must not be removed, then one in the renamed file's target,
-            // then the oldest. Only its turn reports the group.
+            // leaves copies under its name, and so does a folder imported
+            // beside Target Scheduler's own record of it. One of them
+            // stays: one that must not be removed, then the one N.I.N.A.
+            // recorded, whose exposure plan counted the frame, then one in
+            // the renamed file's target, then the oldest. Only its turn
+            // reports the group.
             let firsts: Vec<usize> = std::iter::once(index)
                 .chain(matches(index).into_iter().filter(|other| {
                     same_name(&all[index].file_name, &all[*other].file_name)
@@ -599,6 +619,7 @@ pub fn plan(
                 (
                     records.keeps_own_file(light).is_some(),
                     records.must_stay(light, protected).is_none(),
+                    !light.recorded_by_nina,
                     light.target_id != twin.target_id,
                     light.id,
                 )
@@ -1237,6 +1258,155 @@ mod tests {
             catalog.lights(),
             vec![(first.0, first.1.clone(), twin.2.clone(), 0)]
         );
+    }
+
+    #[test]
+    fn target_schedulers_record_of_a_light_stays_over_an_import_of_it() {
+        // Target Scheduler recorded the exposure under another profile,
+        // with its own project, target and plan. An import of the capture
+        // folder catalogued it again before the rename, and once more
+        // after it.
+        let mut catalog = Catalog::with_twin();
+        let lights = catalog.lights();
+        let (first, twin) = (lights[0].clone(), lights[1].clone());
+        catalog.grade(twin.0, 1);
+        let old_path = format!(r"C:\Users\astro\Documents\NINA_Images\{OLD_NAME}");
+        let metadata = serde_json::json!({
+            "FileName": old_path,
+            "SessionId": 113,
+            "FilterName": "SII",
+            "ExposureStartTime": "2026-10-27T23:06:46.4882859Z",
+            "ExposureDuration": 300.0,
+            "Gain": 100,
+            "Offset": 30,
+            "DetectedStars": 687,
+            "HFR": 2.44,
+            "GuidingRMS": 0.48,
+            "GuidingRMSArcSec": 1.65,
+        })
+        .to_string();
+        catalog
+            .conn
+            .execute_batch(
+                "CREATE TEMP TABLE ts_project AS SELECT * FROM project LIMIT 1;
+                 UPDATE ts_project SET Id = NULL, guid = 'ts-project', profileId = 'ts-profile',
+                     name = 'IC 443 Jellyfish Nebula';
+                 INSERT INTO project SELECT * FROM ts_project;
+                 DROP TABLE ts_project;
+                 CREATE TEMP TABLE ts_target AS SELECT * FROM target LIMIT 1;
+                 UPDATE ts_target SET Id = NULL, guid = 'ts-target',
+                     projectid = (SELECT Id FROM project WHERE guid = 'ts-project');
+                 INSERT INTO target SELECT * FROM ts_target;
+                 DROP TABLE ts_target;
+                 CREATE TEMP TABLE ts_plan AS SELECT * FROM exposureplan LIMIT 1;
+                 UPDATE ts_plan SET Id = NULL, guid = 'ts-plan', profileId = 'ts-profile',
+                     desired = 45, acquired = 1, accepted = 1,
+                     targetid = (SELECT Id FROM target WHERE guid = 'ts-target');
+                 INSERT INTO exposureplan SELECT * FROM ts_plan;
+                 DROP TABLE ts_plan;",
+            )
+            .unwrap();
+        catalog
+            .conn
+            .execute(
+                "INSERT INTO acquiredimage (projectId, targetId, acquireddate, filtername,
+                     gradingStatus, metadata, profileId, exposureId, guid)
+                 SELECT p.Id, t.Id, a.acquireddate, 'SII', 1, ?1, 'ts-profile', e.Id, 'ts-light'
+                 FROM project p, target t, exposureplan e, acquiredimage a
+                 WHERE p.guid = 'ts-project' AND t.guid = 'ts-target' AND e.guid = 'ts-plan'
+                     AND a.Id = ?2",
+                params![metadata, first.0],
+            )
+            .unwrap();
+        let ts_id = catalog.conn.last_insert_rowid();
+        let placed = |catalog: &Catalog| -> (String, i64, i64, i64, String) {
+            catalog
+                .conn
+                .query_row(
+                    "SELECT a.profileId, a.projectId, a.targetId, a.exposureId, p.guid
+                     FROM acquiredimage a JOIN project p ON p.Id = a.projectId
+                     WHERE a.guid = 'ts-light'",
+                    [],
+                    |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                        ))
+                    },
+                )
+                .unwrap()
+        };
+        let counts = |catalog: &Catalog, guid: &str| -> (i64, i64) {
+            catalog
+                .conn
+                .query_row(
+                    "SELECT acquired, accepted FROM exposureplan WHERE guid = ?1",
+                    [guid],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap()
+        };
+        let import_plan: String = catalog
+            .conn
+            .query_row(
+                "SELECT e.guid FROM exposureplan e JOIN acquiredimage a ON a.exposureId = e.Id
+                 WHERE a.Id = ?1",
+                [first.0],
+                |row| row.get(0),
+            )
+            .unwrap();
+        crate::db::reconcile_accepted_counts(&catalog.conn).unwrap();
+        assert_eq!(counts(&catalog, &import_plan), (2, 1));
+        assert_eq!(counts(&catalog, "ts-plan"), (1, 1));
+        let before = placed(&catalog);
+        assert_eq!(before.4, "ts-project");
+        let finder = catalog.finder(None);
+        let protected = BTreeSet::new();
+
+        let report = plan(&catalog.conn, &finder, &protected).unwrap();
+        assert!(report.held.is_empty(), "{report:?}");
+        let [pair] = report.pairs.as_slice() else {
+            panic!("{report:?}");
+        };
+        // Target Scheduler's row stays, though the import's is in the
+        // renamed file's target and is older.
+        assert_eq!((pair.kept.id, pair.twin.id), (ts_id, twin.0));
+        assert_eq!(
+            pair.copies.iter().map(|light| light.id).collect::<Vec<_>>(),
+            vec![first.0]
+        );
+        assert!(!pair.takes_grade);
+
+        merge(&mut catalog.conn, &finder, &protected).unwrap();
+
+        assert_eq!(
+            catalog.lights(),
+            vec![(ts_id, "ts-light".to_string(), twin.2.clone(), 1)]
+        );
+        assert_eq!(placed(&catalog), before);
+        assert_eq!(counts(&catalog, "ts-plan"), (1, 1));
+        assert_eq!(counts(&catalog, &import_plan), (0, 0));
+        // A Target Scheduler sync sends the name it recorded; the light
+        // keeps the renamed file.
+        assert_eq!(
+            renamed(&catalog.conn).unwrap()["ts-light"],
+            Renamed {
+                source_name: old_path,
+                file_name: twin.2.clone(),
+            }
+        );
+        let merged: BTreeSet<String> = catalog
+            .conn
+            .prepare("SELECT removed_guid FROM psf_guard_merged_light WHERE kept_guid = 'ts-light'")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(merged, BTreeSet::from([first.1, twin.1]));
     }
 
     #[test]

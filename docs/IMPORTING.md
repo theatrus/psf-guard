@@ -554,14 +554,24 @@ database beside itself. Each first frame then uses the renamed file and
 keeps its grade, or takes the second frame's grade when it had none. The
 second frame is removed, and a sync does not bring it back.
 
-Merging two catalogs that hold the same frames under different GUIDs, such
-as two catalogs that each imported the same folder, can leave a frame in
-the catalog more than once, under its old name or the renamed one.
+A frame can be in the catalog more than once, under its old name or the
+renamed one. This happens when you merge two catalogs that hold the same
+frames under different GUIDs, such as two catalogs that each imported the
+same folder. It also happens when you import the folder N.I.N.A. saved the
+frames in while Target Scheduler's own records of them are in the catalog.
 **Settings** shows such a pair as *catalogued 2 times*, and the merge keeps
-one frame. That is a frame in a collaboration report if there is one, then
-the frame in the same target as the renamed file, then the oldest. It takes
-the renamed file, and the grade one of the others has when it has none. The
-other copies are removed, and a sync does not bring them back.
+one frame, chosen in this order:
+
+1. a frame in a collaboration report;
+2. the frame Target Scheduler recorded, so its exposure plan keeps counting
+   the frame and the rig does not shoot it again;
+3. the frame in the same target as the renamed file;
+4. the oldest frame.
+
+The frame that stays keeps its project, target, exposure plan and GUID. It
+takes the renamed file, and the grade one of the others has when it has
+none. The other copies are removed, and a sync does not bring them back.
+Each removed frame's exposure plan counts one frame fewer.
 
 A pair stays as it is when the frames have different grades, when the
 second frame or a copy is in a collaboration report or the reject archive,
