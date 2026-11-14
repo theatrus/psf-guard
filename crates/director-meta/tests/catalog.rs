@@ -612,6 +612,11 @@ fn source_projects_get_their_plans_and_links_together_or_not_at_all() {
             .unwrap(),
         Some(shared.project_id)
     );
+    // Every linked project GUID, whichever catalog links it.
+    let linked = store.linked_source_project_guids().unwrap();
+    assert!(linked.contains(&new.source_project_guid.to_string().to_lowercase()));
+    assert!(linked.contains(&shared.source_project_guid.to_string().to_lowercase()));
+    assert!(!linked.contains(&Uuid::new_v4().to_string()));
     // Taken in again, a linked project keeps its plan.
     let again = source(new.source_project_guid, "profile-a", "Pelican");
     assert_eq!(

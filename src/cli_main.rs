@@ -945,6 +945,121 @@ pub fn main() -> Result<()> {
             }
         }
 
+        Commands::MergeImportedCopies {
+            db,
+            apply,
+            cache_dir,
+            registry,
+        } => {
+            use crate::imported_copies::{self, FoldOutcome, FoldPlan, Keepers};
+            let (registry_path, entry) = removal_entry(registry, &db)?;
+            let keepers = Keepers {
+                reported: reported_image_guids(&registry_path)?,
+                planned_projects: planned_project_guids(&registry_path)?,
+            };
+            let show = |plan: &FoldPlan, verb: &str| {
+                for group in &plan.groups {
+                    for copy in &group.copies {
+                        println!(
+                            "{verb} #{} {} ({}) <- #{} {} ({}){}",
+                            group.kept.id,
+                            group.kept.file_name,
+                            group.kept.target.as_deref().unwrap_or("no target"),
+                            copy.id,
+                            copy.file_name,
+                            copy.target.as_deref().unwrap_or("no target"),
+                            if group.grade_from_copy(copy) {
+                                " (takes its grade)"
+                            } else {
+                                ""
+                            }
+                        );
+                    }
+                }
+                for held in &plan.held {
+                    println!(
+                        "KEEP  #{} {} and {} cop{}: {}",
+                        held.kept.id,
+                        held.kept.file_name,
+                        held.copies.len(),
+                        if held.copies.len() == 1 { "y" } else { "ies" },
+                        held.reason
+                    );
+                }
+                for project in &plan.projects {
+                    println!(
+                        "DELETE project #{} {} ({} target(s), {} exposure plan(s))",
+                        project.id,
+                        project.name,
+                        project.targets.len(),
+                        project.exposure_plans
+                    );
+                }
+                for target in &plan.targets {
+                    println!(
+                        "DELETE target #{} {} in {} ({} exposure plan(s))",
+                        target.id, target.name, target.project, target.exposure_plans
+                    );
+                }
+                for kept in &plan.kept_projects {
+                    println!("KEEP  project #{} {}: {}", kept.id, kept.name, kept.reason);
+                }
+            };
+            let path = std::path::Path::new(&entry.db_path);
+            let summary = |plan: &FoldPlan| {
+                format!(
+                    "{} light(s) with imported copies, {} left alone, {} empty project(s) and {} \
+                     empty target(s) to delete",
+                    plan.groups.len(),
+                    plan.held.len(),
+                    plan.projects.len(),
+                    plan.targets.len()
+                )
+            };
+            if !apply {
+                let conn = crate::ts_guids::open_existing(path, false)?;
+                let plan = imported_copies::plan(&conn, &keepers)?;
+                show(&plan, "MERGE");
+                println!("\n{}.", summary(&plan));
+                if !plan.is_empty() {
+                    println!("Preview only; run again with --apply to make these changes.");
+                }
+                return Ok(());
+            }
+            let repaired = imported_copies::repair_database(path, None, &keepers)?;
+            let FoldOutcome::Folded(plan) = repaired.outcome else {
+                anyhow::bail!(
+                    "the database changed while it was being merged; nothing was changed"
+                );
+            };
+            show(&plan, "MERGED");
+            let removed: Vec<crate::commands::reject_removal::RemovedFrame> = plan
+                .removed()
+                .map(|light| crate::commands::reject_removal::RemovedFrame {
+                    image_id: light.id,
+                    guid: light.guid.clone(),
+                    project_id: light.project_id,
+                    target_id: light.target_id,
+                })
+                .collect();
+            let caches = std::path::Path::new(&cache_dir).join(&entry.id);
+            let forgotten = crate::commands::reject_removal::forget_image_caches(&caches, &removed);
+            if forgotten > 0 {
+                println!(
+                    "Deleted {forgotten} cache file(s) under {}.",
+                    caches.display()
+                );
+            }
+            match &repaired.backup {
+                Some(backup) => println!(
+                    "\n{}. The database was copied first to {}.",
+                    summary(&plan),
+                    backup.display()
+                ),
+                None => println!("Nothing to merge or delete; nothing was changed."),
+            }
+        }
+
         Commands::RestoreRemoved {
             db,
             batch,
@@ -2034,6 +2149,20 @@ fn removal_entry(
         )
     })?;
     Ok((registry_path, entry))
+}
+
+/// GUIDs of the projects a Director plan links, lower case, from the
+/// Director store beside the registry; none when there is no store.
+fn planned_project_guids(registry: &std::path::Path) -> Result<std::collections::BTreeSet<String>> {
+    let path = crate::server::director::default_meta_path(registry);
+    if !path.exists() {
+        return Ok(Default::default());
+    }
+    let store = psf_guard_director_meta::MetaStore::open_reader(&path)
+        .with_context(|| format!("reading the Director store at {}", path.display()))?;
+    store
+        .linked_source_project_guids()
+        .with_context(|| format!("reading Director plans from {}", path.display()))
 }
 
 /// Frames a collaboration capture or report names, from the Director store

@@ -302,6 +302,15 @@ impl Service {
             .map_err(|error| format!("{error:?}"))
     }
 
+    /// GUIDs of every project a plan links, in any catalog, lower case.
+    pub(crate) async fn linked_source_project_guids(
+        self: Arc<Self>,
+    ) -> Result<std::collections::BTreeSet<String>, String> {
+        self.query(|store| store.linked_source_project_guids())
+            .await
+            .map_err(|error| format!("{error:?}"))
+    }
+
     /// The plan that links a catalog's project, for a deletion preview.
     /// `None` too when another registered file with the same catalog
     /// identity stands for the catalog in Planning.

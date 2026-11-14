@@ -206,6 +206,19 @@ impl MetaStore {
         Ok(guids)
     }
 
+    /// GUIDs of every database's projects that a plan links, in lower case.
+    /// A project GUID is unique, so a caller that cannot tell which catalog
+    /// Planning knows a file as can still ask whether a project is planned.
+    pub fn linked_source_project_guids(&self) -> Result<std::collections::BTreeSet<String>, Error> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT DISTINCT lower(source_project_guid) FROM project_catalog")?;
+        let guids = statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(guids)
+    }
+
     /// Forget one database's project after it was deleted there: its link,
     /// the plan's work for that database's rig, and the rig in the plan's
     /// activation record, so the next activation does not create the

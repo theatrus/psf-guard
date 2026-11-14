@@ -2763,6 +2763,32 @@ mod tests {
     }
 
     #[test]
+    fn a_file_target_scheduler_recorded_elsewhere_is_not_imported_again() {
+        // Target Scheduler recorded the frame on the capture computer, under
+        // another profile and target; the import reads the copy on the
+        // server (#1100).
+        let mut conn = fresh_conn();
+        let frame = light("M31", "Ha", 1_000);
+        import_frames(&mut conn, vec![frame.clone()], &ImportOptions::default()).unwrap();
+        conn.execute(
+            "UPDATE acquiredimage SET profileId = 'ts-profile',
+                 metadata = json_set(metadata, '$.FileName', ?1, '$.GuidingRMS', 0.5)",
+            [format!(
+                r"C:\Users\astro\Documents\N.I.N.A\{}",
+                frame.basename()
+            )],
+        )
+        .unwrap();
+        let elsewhere = FrameMeta {
+            path: PathBuf::from(format!("/capture/Session_2026-01-01/{}", frame.basename())),
+            object: Some("Andromeda".into()),
+            ..frame
+        };
+        let outcome = import_frames(&mut conn, vec![elsewhere], &ImportOptions::default()).unwrap();
+        assert_eq!((outcome.skipped_existing, outcome.imported), (1, 0));
+    }
+
+    #[test]
     fn reimport_skips_existing_by_basename() {
         let mut conn = fresh_conn();
         let frames = vec![light("M31", "Ha", 1_000)];

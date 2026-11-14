@@ -34,13 +34,17 @@ use crate::frame_derivatives::{identities_match, identity_of, light_identity, Fr
 use crate::image_io::FrameKind;
 
 /// PSF Guard's record of each twin [`merge`] removed, so a sync from a
-/// catalog that still has the twin does not bring it back.
-const MERGED_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS psf_guard_merged_light (
+/// catalog that still has the twin does not bring it back. `target_guid`
+/// is the target the twin was in, which
+/// [`crate::imported_copies`] may delete once it has no lights; merges
+/// before it was added left it empty.
+pub(crate) const MERGED_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS psf_guard_merged_light (
     removed_guid TEXT PRIMARY KEY NOT NULL,
     removed_id INTEGER NOT NULL,
     kept_guid TEXT NOT NULL,
     file_name TEXT NOT NULL,
-    merged_at INTEGER NOT NULL
+    merged_at INTEGER NOT NULL,
+    target_guid TEXT
 )";
 
 /// PSF Guard's record of each light it moved to a renamed file: the name
@@ -208,7 +212,7 @@ pub fn exported_metadata(
     }
 }
 
-fn now() -> i64 {
+pub(crate) fn now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_secs() as i64)
@@ -217,7 +221,7 @@ fn now() -> i64 {
 
 /// A file name without its folders, across either separator: Target
 /// Scheduler records the capture computer's path.
-fn base_name(file_name: &str) -> &str {
+pub(crate) fn base_name(file_name: &str) -> &str {
     file_name.rsplit(['/', '\\']).next().unwrap_or(file_name)
 }
 
@@ -237,13 +241,13 @@ pub struct Light {
     #[serde(skip)]
     pub target_id: Option<i64>,
     #[serde(skip)]
-    exposure_id: Option<i64>,
+    pub(crate) exposure_id: Option<i64>,
     /// Whether N.I.N.A. recorded the light, as Target Scheduler does,
     /// rather than a PSF Guard import; see [`recorded_by_nina`].
     #[serde(skip)]
-    recorded_by_nina: bool,
+    pub(crate) recorded_by_nina: bool,
     #[serde(skip)]
-    identity: FrameIdentity,
+    pub(crate) identity: FrameIdentity,
 }
 
 /// Whether a light's metadata came from N.I.N.A. Target Scheduler writes
@@ -309,13 +313,13 @@ pub struct MergeOutcome {
     pub held: Vec<HeldPair>,
 }
 
-fn table_exists(conn: &Connection, table: &str) -> bool {
+pub(crate) fn table_exists(conn: &Connection, table: &str) -> bool {
     conn.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1")
         .and_then(|mut statement| statement.exists([table]))
         .unwrap_or(false)
 }
 
-fn has_column(conn: &Connection, table: &str, column: &str) -> bool {
+pub(crate) fn has_column(conn: &Connection, table: &str, column: &str) -> bool {
     conn.prepare(&format!(
         "SELECT 1 FROM pragma_table_info('{table}') WHERE lower(name) = lower(?1)"
     ))
@@ -334,7 +338,7 @@ fn strings(conn: &Connection, table: &str, sql: &str) -> Result<HashSet<String>>
 
 /// What else the catalog records about its lights that decides whether a
 /// row may take a file over or be removed.
-struct Records {
+pub(crate) struct Records {
     /// Lights moved to the reject archive: their file is elsewhere.
     archived: HashSet<String>,
     /// Lights that arrived by remote upload, found through their record.
@@ -346,7 +350,7 @@ struct Records {
 }
 
 impl Records {
-    fn read(conn: &Connection) -> Result<Self> {
+    pub(crate) fn read(conn: &Connection) -> Result<Self> {
         Ok(Self {
             archived: strings(
                 conn,
@@ -372,7 +376,7 @@ impl Records {
     }
 
     /// Why this light may not take a renamed file over, if it may not.
-    fn keeps_own_file(&self, light: &Light) -> Option<&'static str> {
+    pub(crate) fn keeps_own_file(&self, light: &Light) -> Option<&'static str> {
         if self.archived.contains(&light.guid) {
             Some("its file is in the reject archive")
         } else if self.uploaded.contains(&light.id.to_string()) {
@@ -385,7 +389,11 @@ impl Records {
     }
 
     /// Why this light may not be removed as a twin, if it may not.
-    fn must_stay(&self, light: &Light, protected: &BTreeSet<String>) -> Option<&'static str> {
+    pub(crate) fn must_stay(
+        &self,
+        light: &Light,
+        protected: &BTreeSet<String>,
+    ) -> Option<&'static str> {
         if protected.contains(&light.guid) {
             Some("it is in a collaboration report")
         } else if self.archived.contains(&light.guid) {
@@ -402,7 +410,7 @@ impl Records {
 
 /// Every light with a guid and a file name. A light without a guid cannot
 /// be recorded as merged; `fill-guids` gives it one.
-fn lights(conn: &Connection) -> Result<Vec<Light>> {
+pub(crate) fn lights(conn: &Connection) -> Result<Vec<Light>> {
     if !has_column(conn, "acquiredimage", "guid") {
         return Ok(Vec::new());
     }
@@ -454,7 +462,7 @@ fn lights(conn: &Connection) -> Result<Vec<Light>> {
     Ok(lights)
 }
 
-fn same_name(left: &str, right: &str) -> bool {
+pub(crate) fn same_name(left: &str, right: &str) -> bool {
     base_name(left).eq_ignore_ascii_case(base_name(right))
 }
 
@@ -724,6 +732,130 @@ pub fn plan(
     Ok(report)
 }
 
+/// What removing a light that is a copy of another touches: the light's
+/// own row and thumbnails, and what PSF Guard keeps about it. Read once per
+/// transaction.
+pub(crate) struct LightRemoval {
+    tables: HashSet<&'static str>,
+    has_exposure_plans: bool,
+    target_guids: bool,
+}
+
+impl LightRemoval {
+    pub(crate) fn new(tx: &Connection) -> Result<Self> {
+        tx.execute_batch(MERGED_SCHEMA)?;
+        if !has_column(tx, "psf_guard_merged_light", "target_guid") {
+            tx.execute_batch("ALTER TABLE psf_guard_merged_light ADD COLUMN target_guid TEXT")?;
+        }
+        let tables = [
+            "imagedata",
+            "psf_guard_rejected_at",
+            "psf_guard_flat_light_choice",
+            "psf_guard_flat_light_angle",
+            "psf_guard_ts_sync_grade",
+            "psf_guard_ts_sync_pending",
+            "psf_guard_renamed_light",
+        ]
+        .into_iter()
+        .filter(|table| table_exists(tx, table))
+        .collect();
+        Ok(Self {
+            tables,
+            has_exposure_plans: has_column(tx, "exposureplan", "acquired"),
+            target_guids: has_column(tx, "target", "guid"),
+        })
+    }
+
+    /// Remove `removed`, a copy of `kept`, and record it so that a sync
+    /// does not bring it back. A flat chosen by hand for it moves to
+    /// `kept`; everything else PSF Guard kept about it goes.
+    pub(crate) fn remove(
+        &self,
+        tx: &Connection,
+        kept: &Light,
+        removed: &Light,
+        now: i64,
+    ) -> Result<()> {
+        // A flat chosen by hand for a removed light applies to the light it was.
+        if self.tables.contains("psf_guard_flat_light_choice") {
+            tx.execute(
+                "UPDATE OR IGNORE psf_guard_flat_light_choice SET light_guid = ?1
+                 WHERE light_guid = ?2",
+                params![kept.guid, removed.guid],
+            )?;
+        }
+        for (table, key, value) in [
+            ("imagedata", "acquiredimageid", removed.id.to_string()),
+            (
+                "psf_guard_rejected_at",
+                "acquired_image_guid",
+                removed.guid.clone(),
+            ),
+            (
+                "psf_guard_flat_light_choice",
+                "light_guid",
+                removed.guid.clone(),
+            ),
+            (
+                "psf_guard_flat_light_angle",
+                "light_id",
+                removed.id.to_string(),
+            ),
+            ("psf_guard_ts_sync_grade", "guid", removed.guid.clone()),
+            ("psf_guard_ts_sync_pending", "guid", removed.guid.clone()),
+            ("psf_guard_renamed_light", "guid", removed.guid.clone()),
+        ] {
+            if self.tables.contains(table) {
+                tx.execute(
+                    &format!("DELETE FROM \"{table}\" WHERE CAST(\"{key}\" AS TEXT) = ?1"),
+                    [value],
+                )?;
+            }
+        }
+        tx.execute("DELETE FROM acquiredimage WHERE Id = ?1", [removed.id])?;
+        tx.execute(
+            &format!(
+                "INSERT OR REPLACE INTO psf_guard_merged_light
+                     (removed_guid, removed_id, kept_guid, file_name, merged_at, target_guid)
+                 VALUES (?1, ?2, ?3, ?4, ?5, {})",
+                if self.target_guids {
+                    "(SELECT guid FROM target WHERE Id = ?6)"
+                } else {
+                    "NULLIF(?6, ?6)"
+                }
+            ),
+            params![
+                removed.guid,
+                removed.id,
+                kept.guid,
+                removed.file_name,
+                now,
+                removed.target_id
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Take a removed light out of its exposure plan's acquired count, and
+    /// out of its accepted count too when `accepted` says so.
+    pub(crate) fn uncount(&self, tx: &Connection, removed: &Light, accepted: bool) -> Result<()> {
+        let Some(exposure_id) = removed.exposure_id.filter(|_| self.has_exposure_plans) else {
+            return Ok(());
+        };
+        tx.execute(
+            "UPDATE exposureplan SET acquired = acquired - 1 WHERE Id = ?1 AND acquired > 0",
+            [exposure_id],
+        )?;
+        if accepted {
+            tx.execute(
+                "UPDATE exposureplan SET accepted = accepted - 1 WHERE Id = ?1 AND accepted > 0",
+                [exposure_id],
+            )?;
+        }
+        Ok(())
+    }
+}
+
 /// Fold each twin [`plan`] finds now into its first light, in one
 /// transaction. The plan is made again inside it, so what merges is what
 /// the catalog holds at that moment.
@@ -740,21 +872,8 @@ pub fn merge(
             held: report.held,
         });
     }
-    tx.execute_batch(MERGED_SCHEMA)?;
     let now = now();
-    let has_exposure_plans = has_column(&tx, "exposureplan", "acquired");
-    let tables: HashSet<&str> = [
-        "imagedata",
-        "psf_guard_rejected_at",
-        "psf_guard_flat_light_choice",
-        "psf_guard_flat_light_angle",
-        "psf_guard_ts_sync_grade",
-        "psf_guard_ts_sync_pending",
-        "psf_guard_renamed_light",
-    ]
-    .into_iter()
-    .filter(|table| table_exists(&tx, table))
-    .collect();
+    let removal = LightRemoval::new(&tx)?;
     for pair in &report.pairs {
         let (kept, twin) = (&pair.kept, &pair.twin);
         tx.execute(
@@ -770,57 +889,9 @@ pub fn merge(
             )?;
         }
         for removed in pair.removed() {
-            // A flat chosen by hand for a removed light applies to the light it was.
-            if tables.contains("psf_guard_flat_light_choice") {
-                tx.execute(
-                    "UPDATE OR IGNORE psf_guard_flat_light_choice SET light_guid = ?1
-                     WHERE light_guid = ?2",
-                    params![kept.guid, removed.guid],
-                )?;
-            }
-            for (table, key, value) in [
-                ("imagedata", "acquiredimageid", removed.id.to_string()),
-                (
-                    "psf_guard_rejected_at",
-                    "acquired_image_guid",
-                    removed.guid.clone(),
-                ),
-                (
-                    "psf_guard_flat_light_choice",
-                    "light_guid",
-                    removed.guid.clone(),
-                ),
-                (
-                    "psf_guard_flat_light_angle",
-                    "light_id",
-                    removed.id.to_string(),
-                ),
-                ("psf_guard_ts_sync_grade", "guid", removed.guid.clone()),
-                ("psf_guard_ts_sync_pending", "guid", removed.guid.clone()),
-                ("psf_guard_renamed_light", "guid", removed.guid.clone()),
-            ] {
-                if tables.contains(table) {
-                    tx.execute(
-                        &format!("DELETE FROM \"{table}\" WHERE CAST(\"{key}\" AS TEXT) = ?1"),
-                        [value],
-                    )?;
-                }
-            }
+            removal.remove(&tx, kept, removed, now)?;
             // The removed light counted the exposure a second time.
-            if has_exposure_plans && let Some(exposure_id) = removed.exposure_id {
-                tx.execute(
-                    "UPDATE exposureplan SET acquired = acquired - 1
-                     WHERE Id = ?1 AND acquired > 0",
-                    [exposure_id],
-                )?;
-            }
-            tx.execute("DELETE FROM acquiredimage WHERE Id = ?1", [removed.id])?;
-            tx.execute(
-                "INSERT OR REPLACE INTO psf_guard_merged_light
-                     (removed_guid, removed_id, kept_guid, file_name, merged_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![removed.guid, removed.id, kept.guid, removed.file_name, now],
-            )?;
+            removal.uncount(&tx, removed, false)?;
         }
     }
     crate::db::reconcile_accepted_counts(&tx)?;
