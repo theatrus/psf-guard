@@ -1455,8 +1455,23 @@ afterward. The exchange file always says `ROWORDER = 'TOP-DOWN'`: rc-astro
 reverses the rows of a file without `ROWORDER`, such as a WBPP master, or one
 that says `BOTTOM-UP`, and PSF Guard keeps rows in the order they are stored.
 A result cached before PSF Guard did this is used again only when its stack
-said `TOP-DOWN`; any other runs again. Find the CLI on `PATH`, or set its path in the `PSF_GUARD_RC_ASTRO`
-environment variable for service units with a minimal `PATH`.
+said `TOP-DOWN`; any other runs again.
+
+#### Find rc-astro
+
+PSF Guard looks for the CLI in the `PSF_GUARD_RC_ASTRO` environment variable,
+then on `PATH`, then where RC-Astro's installers put it:
+
+| System | Folders tried |
+|---|---|
+| macOS | `/Applications/RC-Astro/CLI`, `~/Applications/RC-Astro/CLI`, `/usr/local/bin`, `/opt/homebrew/bin` |
+| Windows | `%ProgramFiles%\RC-Astro\CLI` |
+| Linux | `/opt/rc-astro`, `/usr/local/bin`, `~/.local/bin` |
+
+The installers' folders matter for the desktop app opened from the Finder,
+the Dock or the Start menu, and for services: none of them gets the `PATH`
+a terminal has. For an install elsewhere, set `PSF_GUARD_RC_ASTRO`, or a
+worker's **rc-astro** setting.
 Each tool runs on a connected [worker](REMOTE_WORKERS.md) that offers the
 same tool version, or on this server, as **Settings › Performance › Workers › Where work
 runs** chooses; a server without rc-astro uses its workers' tools.

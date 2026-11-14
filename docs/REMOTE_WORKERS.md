@@ -46,8 +46,10 @@ the tool it is running, and the server queues the task again.
 `--token psfw_…` also works, but the variable keeps the token out of the
 process list. `--name` changes the name the server shows, which is the host
 name by default. `--rc-astro PATH` gives the rc-astro executable when it is
-not on `PATH`. `--slots N` lets the worker run up to N tasks at once, from 1
-to 16; the default is 1, since each RC-Astro step uses the GPU.
+neither on `PATH` nor in the folder RC-Astro's installer uses (see
+[Find rc-astro](STACKING_PREVIEWS.md#find-rc-astro)). `--slots N` lets the
+worker run up to N tasks at once, from 1 to 16; the default is 1, since each
+RC-Astro step uses the GPU.
 
 ## Run a worker from the desktop app
 
@@ -217,8 +219,9 @@ update the Windows service. While the service is running or changing state,
   the worker time to disconnect.
 - **Sleep:** prevent the computer from sleeping while you need it to process
   tasks. A worker cannot process tasks while Windows is asleep.
-- **RC-Astro tools:** the service uses rc-astro from its account's `PATH`,
-  or the executable specified in its settings. An installation or license
+- **RC-Astro tools:** the service uses the executable specified in its
+  settings, or rc-astro on its account's `PATH` or in
+  `%ProgramFiles%\RC-Astro\CLI`. An installation or license
   available only to your desktop account may be unavailable to the service.
   If the service cannot run RC-Astro, it can still accept stack builds.
   Use the desktop worker if RC-Astro requires your desktop account.
