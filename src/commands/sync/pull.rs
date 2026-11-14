@@ -845,12 +845,26 @@ fn metadata_basename(value: &Value) -> Option<String> {
 /// file name, and a capture time within a couple of seconds. It is then
 /// updated in place and takes the telescope's guid, so the catalog ends up
 /// exactly as if the telescope's row had come first.
+///
+/// A row PSF Guard minted can sit in another target: an import of the
+/// capture folder makes its own project and target, and a merge of two
+/// catalogs brings the telescope's under other GUIDs. Such a row is adopted
+/// too, and moves to the telescope's target, when it is the only one with
+/// that file name, filter and capture time.
 /// A destination row that may be adopted: its Id, capture time, and write
 /// column values.
 type AdoptableRow = (i64, Option<i64>, Vec<Value>);
 
+/// A row PSF Guard minted, which may be adopted from any target: its Id,
+/// capture time, filter, and write column values.
+type MintedRow = (i64, Option<i64>, Option<String>, Vec<Value>);
+
 struct AdoptableRows {
     by_target_and_name: HashMap<(i64, String), Vec<AdoptableRow>>,
+    /// Rows N.I.N.A. never recorded, by file name, whatever their target.
+    minted_by_name: HashMap<String, Vec<MintedRow>>,
+    /// Rows already adopted, by Id.
+    taken: HashSet<i64>,
     /// Rows PSF Guard catalogued from a calibrated copy because it had no
     /// raw frame, by target. Their file name is the copy's, so the raw's
     /// name never finds them; the capture fields do.
@@ -866,12 +880,16 @@ impl AdoptableRows {
         target_w: usize,
         acquired_date_w: Option<usize>,
         metadata_w: Option<usize>,
+        filter_w: Option<usize>,
     ) -> Self {
         let mut by_target_and_name: HashMap<(i64, String), Vec<AdoptableRow>> = HashMap::new();
+        let mut minted_by_name: HashMap<String, Vec<MintedRow>> = HashMap::new();
         let mut calibrated_by_target: HashMap<i64, Vec<_>> = HashMap::new();
         let Some(metadata_w) = metadata_w else {
             return Self {
                 by_target_and_name,
+                minted_by_name,
+                taken: HashSet::new(),
                 calibrated_by_target,
             };
         };
@@ -899,6 +917,17 @@ impl AdoptableRows {
                 continue;
             };
             let acquired = acquired_date_w.and_then(|position| as_i64(&values[position]));
+            if !recorded_by_nina(&values[metadata_w]) {
+                let filter = metadata_file_identity(&values[metadata_w])
+                    .and_then(|(_, _, filter)| filter)
+                    .or_else(|| filter_w.and_then(|position| text_of(&values[position])));
+                minted_by_name.entry(basename.clone()).or_default().push((
+                    *dest_id,
+                    acquired,
+                    filter,
+                    values.clone(),
+                ));
+            }
             by_target_and_name
                 .entry((target, basename))
                 .or_default()
@@ -906,6 +935,8 @@ impl AdoptableRows {
         }
         Self {
             by_target_and_name,
+            minted_by_name,
+            taken: HashSet::new(),
             calibrated_by_target,
         }
     }
@@ -921,8 +952,9 @@ impl AdoptableRows {
         let matches: Vec<usize> = candidates
             .iter()
             .enumerate()
-            .filter(|(_, (_, identity, _))| {
-                crate::frame_derivatives::identities_match(identity, incoming)
+            .filter(|(_, (dest_id, identity, _))| {
+                !self.taken.contains(dest_id)
+                    && crate::frame_derivatives::identities_match(identity, incoming)
             })
             .map(|(index, _)| index)
             .collect();
@@ -930,6 +962,7 @@ impl AdoptableRows {
             return None;
         };
         let (dest_id, _, values) = candidates.swap_remove(*index);
+        self.taken.insert(dest_id);
         Some((dest_id, values))
     }
 
@@ -943,14 +976,69 @@ impl AdoptableRows {
         let candidates = self
             .by_target_and_name
             .get_mut(&(target, basename.to_string()))?;
-        let index = candidates.iter().position(|(_, dest_acquired, _)| {
-            match (acquired, dest_acquired) {
-                (Some(a), Some(b)) => (a - b).abs() <= ADOPTION_TIME_TOLERANCE_SECS,
-                _ => false,
-            }
+        let index = candidates.iter().position(|(dest_id, dest_acquired, _)| {
+            !self.taken.contains(dest_id) && close_in_time(acquired, *dest_acquired)
         })?;
         let (dest_id, _, values) = candidates.swap_remove(index);
+        self.taken.insert(dest_id);
         Some((dest_id, values))
+    }
+
+    /// Take the one row PSF Guard minted for this frame in another target:
+    /// the same file name, the same filter, and a capture time within the
+    /// tolerance. Two such rows are a guess, and neither is taken.
+    fn take_elsewhere(
+        &mut self,
+        basename: &str,
+        acquired: Option<i64>,
+        filter: Option<&str>,
+    ) -> Option<(i64, Vec<Value>)> {
+        let candidates = self.minted_by_name.get(basename)?;
+        let matches: Vec<usize> = candidates
+            .iter()
+            .enumerate()
+            .filter(|(_, (dest_id, dest_acquired, dest_filter, _))| {
+                !self.taken.contains(dest_id)
+                    && close_in_time(acquired, *dest_acquired)
+                    && match (filter, dest_filter.as_deref()) {
+                        (Some(left), Some(right)) => crate::utils::filter_names_match(left, right),
+                        (None, None) => true,
+                        _ => false,
+                    }
+            })
+            .map(|(index, _)| index)
+            .collect();
+        let [index] = matches.as_slice() else {
+            return None;
+        };
+        let (dest_id, _, _, values) = candidates[*index].clone();
+        self.taken.insert(dest_id);
+        Some((dest_id, values))
+    }
+}
+
+fn close_in_time(left: Option<i64>, right: Option<i64>) -> bool {
+    match (left, right) {
+        (Some(a), Some(b)) => (a - b).abs() <= ADOPTION_TIME_TOLERANCE_SECS,
+        _ => false,
+    }
+}
+
+/// Whether N.I.N.A. recorded the row: Target Scheduler writes `GuidingRMS`
+/// for every frame, and PSF Guard never does (see
+/// [`crate::renamed_lights`]).
+fn recorded_by_nina(metadata: &Value) -> bool {
+    let Value::Text(metadata) = metadata else {
+        return false;
+    };
+    serde_json::from_str::<serde_json::Value>(metadata)
+        .is_ok_and(|metadata| metadata.get("GuidingRMS").is_some())
+}
+
+fn text_of(value: &Value) -> Option<String> {
+    match value {
+        Value::Text(text) if !text.trim().is_empty() => Some(text.clone()),
+        _ => None,
     }
 }
 
@@ -1014,6 +1102,7 @@ fn upsert_acquired_images(
         tgt_w,
         acquired_date_w,
         metadata_w,
+        wpos("filtername"),
     );
 
     let insert_sql = format!(
@@ -1175,9 +1264,11 @@ fn upsert_acquired_images(
                 }
             }
             None => {
-                let by_name = metadata_w
-                    .and_then(|position| metadata_basename(&write_values[position]))
-                    .and_then(|basename| adoptable.take(target_id, &basename, acquired_date));
+                let basename =
+                    metadata_w.and_then(|position| metadata_basename(&write_values[position]));
+                let by_name = basename
+                    .as_deref()
+                    .and_then(|basename| adoptable.take(target_id, basename, acquired_date));
                 // The raw frame behind a light first catalogued from its
                 // calibrated copy: that light takes the raw over.
                 let mut took_raw = false;
@@ -1194,6 +1285,16 @@ fn upsert_acquired_images(
                     let row = adoptable.take_calibrated(target_id, &identity)?;
                     took_raw = true;
                     Some(row)
+                });
+                // A row PSF Guard minted for this frame in another target.
+                let adopted = adopted.or_else(|| {
+                    let filter = metadata_w
+                        .and_then(|position| metadata_file_identity(&write_values[position]))
+                        .and_then(|(_, _, filter)| filter)
+                        .or_else(|| {
+                            wpos("filtername").and_then(|position| text_of(&write_values[position]))
+                        });
+                    adoptable.take_elsewhere(basename.as_deref()?, acquired_date, filter.as_deref())
                 });
                 if let Some((dest_id, cur_vals)) = adopted {
                     // The destination already holds this frame under a guid
@@ -2533,6 +2634,97 @@ mod tests {
         let again = sync_pull(&src, &dest, &opts()).unwrap();
         assert_eq!(again.adopted, 0);
         assert_eq!(again.acquiredimage.inserted, 0);
+    }
+
+    /// A catalog that imported the capture folder before it had the
+    /// telescope's structure: the frame sits in a project and target the
+    /// import made, under a guid PSF Guard minted. `metadata` is the row's.
+    fn local_with_import_project(rows: &[(&str, &str)]) -> Connection {
+        let dest = empty_local();
+        dest.execute_batch(
+            "INSERT INTO project (Id,profileId,name,description,state,priority,guid) VALUES (7,'import','C 33','Imported by PSF Guard (1 frames)',0,1,'import-pg');
+             INSERT INTO target (Id,name,active,ra,dec,epochcode,projectid,guid) VALUES (7,'C 33',1,10.6,41.2,2,7,'import-tg');
+             INSERT INTO exposuretemplate (Id,profileId,name,filtername,gain,guid) VALUES (7,'import','Ha','Ha',100,'import-eg');
+             INSERT INTO exposureplan (Id,profileId,exposure,desired,acquired,accepted,targetid,exposureTemplateId,guid) VALUES (7,'import',300,1,1,0,7,7,'import-lg');",
+        )
+        .unwrap();
+        for (guid, metadata) in rows {
+            dest.execute(
+                "INSERT INTO acquiredimage (projectId,targetId,acquireddate,filtername,gradingStatus,metadata,profileId,exposureId,guid)
+                 VALUES (7,7,1001,'Ha',0,?1,'import',7,?2)",
+                rusqlite::params![metadata, guid],
+            )
+            .unwrap();
+        }
+        dest
+    }
+
+    #[test]
+    fn adopts_a_row_an_import_made_in_its_own_target() {
+        // The import made its own project and target for the frame, so the
+        // telescope's target is another one. The row is still the frame.
+        let src = telescope();
+        let dest = local_with_import_project(&[(
+            "local-a",
+            "{\"FileName\":\"/capture/C33/LIGHT/a.fits\",\"FilterName\":\"Ha\"}",
+        )]);
+        let s = sync_pull(&src, &dest, &opts()).unwrap();
+        assert_eq!(s.adopted, 1);
+        assert_eq!(s.acquiredimage.inserted, 1, "b.fits is new");
+        assert_eq!(one::<i64>(&dest, "SELECT count(*) FROM acquiredimage"), 2);
+        let (guid, target): (String, String) = dest
+            .query_row(
+                "SELECT a.Id, t.guid FROM acquiredimage a JOIN target t ON t.Id = a.targetId
+                 WHERE a.guid = 'img1'",
+                [],
+                |r| Ok((r.get::<_, i64>(0)?.to_string(), r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (guid.as_str(), target.as_str()),
+            ("1", "tg"),
+            "the imported row takes the telescope's guid and target"
+        );
+        let again = sync_pull(&src, &dest, &opts()).unwrap();
+        assert_eq!((again.adopted, again.acquiredimage.inserted), (0, 0));
+    }
+
+    #[test]
+    fn leaves_rows_in_other_targets_it_cannot_tell_apart() {
+        // A row N.I.N.A. recorded is another source's record, not one
+        // PSF Guard minted.
+        let src = telescope();
+        let recorded = local_with_import_project(&[(
+            "other-ts",
+            "{\"FileName\":\"C:\\\\NINA\\\\a.fits\",\"FilterName\":\"Ha\",\"GuidingRMS\":0.5}",
+        )]);
+        let s = sync_pull(&src, &recorded, &opts()).unwrap();
+        assert_eq!((s.adopted, s.acquiredimage.inserted), (0, 2));
+
+        // Two minted rows of the name: which one is the frame is a guess.
+        let two = local_with_import_project(&[
+            (
+                "local-a",
+                "{\"FileName\":\"/capture/a.fits\",\"FilterName\":\"Ha\"}",
+            ),
+            (
+                "local-a2",
+                "{\"FileName\":\"/archive/a.fits\",\"FilterName\":\"Ha\"}",
+            ),
+        ]);
+        let s = sync_pull(&src, &two, &opts()).unwrap();
+        assert_eq!((s.adopted, s.acquiredimage.inserted), (0, 2));
+
+        // Another filter is another frame.
+        let filter = local_with_import_project(&[(
+            "local-a",
+            "{\"FileName\":\"/capture/a.fits\",\"FilterName\":\"OIII\"}",
+        )]);
+        filter
+            .execute("UPDATE acquiredimage SET filtername = 'OIII'", [])
+            .unwrap();
+        let s = sync_pull(&src, &filter, &opts()).unwrap();
+        assert_eq!((s.adopted, s.acquiredimage.inserted), (0, 2));
     }
 
     fn derivative(
