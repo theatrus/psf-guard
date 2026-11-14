@@ -61,7 +61,7 @@ describe('renamed light repair', () => {
     mount(true, { pairs: [copied], held: [] });
     const note = await screen.findByRole('note', { name: 'Renamed lights in Veil' });
     expect(note).toHaveTextContent('Tree_LIGHT_SII_Session_2026-10-27_0071.fits (catalogued 2 times) → Tree_LIGHT_SII_Session_2026-10-27B_0071.fits');
-    expect(note).toHaveTextContent('When a light is catalogued more than once, one copy stays and the others are removed.');
+    expect(note).toHaveTextContent("When a light is catalogued more than once, one copy stays, Target Scheduler's if there is one, and the others are removed.");
   });
 
   it('points a viewer at the command line instead', async () => {
