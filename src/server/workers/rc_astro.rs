@@ -109,7 +109,7 @@ fn provider_state(
                     .map(|message| format!(" ({message})"))
                     .unwrap_or_default()
             )),
-            Some(remedy),
+            Some(Remedy::License),
         ),
         None => (
             ProviderReadiness::NotInstalled,

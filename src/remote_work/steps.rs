@@ -138,8 +138,10 @@ pub fn offers_of(offers: &super::protocol::Offers) -> Vec<StepOffer> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Remedy {
-    /// Install RC-Astro's `rc-astro` CLI and license the tool.
+    /// Install RC-Astro's `rc-astro` CLI.
     InstallRcAstro,
+    /// License the tool with RC-Astro on a machine that has it.
+    License,
     /// Download ONNX Runtime and the noise model in Settings.
     DownloadNoiseModel,
 }
