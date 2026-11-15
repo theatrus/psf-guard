@@ -51,7 +51,7 @@ test('a worker joins with the token shown once, and stops when it is revoked', a
   // Where RC-Astro runs saves at once; stack builds stay on this server
   // until chosen otherwise. Each radio shows the saved choice, so it turns
   // on once the save returns.
-  const tools = page.getByRole('group', { name: 'RC-Astro tools' });
+  const tools = page.getByRole('group', { name: 'Processing steps' });
   const stacks = page.getByRole('group', { name: 'Stack builds' });
   await expect(stacks.getByRole('radio', { name: /^This server only/ })).toBeChecked();
   const workersOnly = tools.getByRole('radio', { name: /^Workers only/ });

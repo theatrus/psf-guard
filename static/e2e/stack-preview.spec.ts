@@ -462,7 +462,7 @@ test('refuses RC-Astro values past the tool range beside Apply, where the server
   await openProcessingSteps(processing);
   await processing.getByRole('radio', { name: 'Set in this build' }).click();
   const red = processing.getByRole('region', { name: 'R input linear processing' });
-  await red.getByRole('checkbox', { name: 'RC-Astro BlurXTerminator' }).check();
+  await red.getByRole('combobox', { name: 'Sharpening' }).selectOption('bxt');
   await red.getByRole('spinbutton', { name: 'Sharpen Stars' }).fill('0.9');
   await red.getByRole('spinbutton', { name: 'Sharpen Nonstellar' }).fill('0.9');
   await expect(red.getByRole('spinbutton', { name: 'Sharpen Stars' })).toHaveAttribute('aria-invalid', 'true');
@@ -586,7 +586,7 @@ test('retains RC-Astro color steps in saved setups on desktop and mobile', async
   await openProcessingSteps(processing);
   await processing.getByRole('radio', { name: 'Set in this build' }).click();
   const red = processing.getByRole('region', { name: 'R input linear processing' });
-  await red.getByRole('checkbox', { name: 'RC-Astro BlurXTerminator' }).check();
+  await red.getByRole('combobox', { name: 'Sharpening' }).selectOption('bxt');
   await red.getByRole('spinbutton', { name: 'Sharpen Stars' }).fill('0.2');
   const setups = processing.locator('.processing-setups-bar');
   await setups.getByRole('button', { name: /Save as/ }).click();
@@ -603,7 +603,7 @@ test('retains RC-Astro color steps in saved setups on desktop and mobile', async
   await setups.getByRole('combobox', { name: 'Saved color processing setups' })
     .selectOption({ label: 'RC color test' });
   await setups.getByRole('button', { name: 'Apply setup' }).click();
-  await expect(red.getByRole('checkbox', { name: 'RC-Astro BlurXTerminator' })).toBeChecked();
+  await expect(red.getByRole('combobox', { name: 'Sharpening' })).toHaveValue('bxt');
   await expect(red.getByRole('spinbutton', { name: 'Sharpen Stars' })).toHaveValue('0.2');
   const preview = card.locator('.stack-color-image img');
   await expect.poll(() => preview.evaluate((element) => {
@@ -738,11 +738,11 @@ test('runs RC-Astro on the color channels together', async ({ page }, testInfo) 
   await processing.locator(':scope > summary').click();
   await openProcessingSteps(processing);
   const together = processing.getByRole('region', { name: 'RC-Astro on the color channels together' });
-  await expect(together.getByRole('checkbox', { name: 'RC-Astro StarXTerminator' })).toHaveCount(0);
-  await together.getByRole('checkbox', { name: 'RC-Astro BlurXTerminator' }).check();
+  await expect(together.getByRole('combobox', { name: 'Star removal' })).toHaveCount(0);
+  await together.getByRole('combobox', { name: 'Sharpening' }).selectOption('bxt');
   await expect(together.getByRole('checkbox', { name: 'Correct only' })).toBeChecked();
   await expect(together.getByRole('spinbutton', { name: 'Sharpen Stars' })).toBeDisabled();
-  await together.getByRole('checkbox', { name: 'RC-Astro NoiseXTerminator' }).check();
+  await together.getByRole('combobox', { name: 'Noise reduction' }).selectOption('nxt');
   await expect(processing.getByRole('group', { name: 'Process linear color', exact: true }).locator(':scope > summary')).toContainText('BXT + NXT');
   await together.evaluate((element) => element.scrollIntoView({ block: 'center' }));
   await together.screenshot({ path: testInfo.outputPath('color-channels-together-desktop.png') });
@@ -2388,8 +2388,8 @@ test('keeps narrowband and RGB star processing consistent on desktop and phone',
   const balance = processing.getByRole('group', { name: 'Stretch and narrowband balance', exact: true });
   const combine = processing.getByRole('group', { name: 'Combine and restore stars', exact: true });
   for (const step of [linear, balance, combine]) await step.locator(':scope > summary').click();
-  const stars = linear.getByRole('region', { name: 'RGB stars RC-Astro tools' });
-  await stars.getByRole('checkbox', { name: 'RC-Astro BlurXTerminator' }).check();
+  const stars = linear.getByRole('region', { name: 'RGB stars processing tools' });
+  await stars.getByRole('combobox', { name: 'Sharpening' }).selectOption('bxt');
   await stars.getByRole('spinbutton', { name: 'Sharpen Stars' }).fill('0.6');
   await stars.getByRole('spinbutton', { name: 'Adjust Star Halos' }).fill('-0.1');
   const tone = combine.getByRole('spinbutton', { name: 'RGB star stretch amount' });
@@ -2398,12 +2398,12 @@ test('keeps narrowband and RGB star processing consistent on desktop and phone',
   const starCalibration = linear.getByRole('switch', { name: 'Color calibration' });
   await starCalibration.click();
   await expect(starCalibration).not.toBeChecked();
-  const rgbSeparation = linear.getByRole('region', { name: 'RGB separation RC-Astro tools' });
-  const nebulaSeparation = linear.getByRole('region', { name: 'Narrowband nebula separation RC-Astro tools' });
+  const rgbSeparation = linear.getByRole('region', { name: 'RGB separation processing tools' });
+  const nebulaSeparation = linear.getByRole('region', { name: 'Narrowband nebula separation processing tools' });
   const overlap = rgbSeparation.getByRole('spinbutton', { name: 'Tile Overlap' });
   await overlap.fill('0.3');
   await expect(nebulaSeparation.getByRole('spinbutton', { name: 'Tile Overlap' })).toHaveValue('0.2');
-  await expect(rgbSeparation.getByRole('checkbox', { name: 'RC-Astro StarXTerminator' })).toBeDisabled();
+  await expect(rgbSeparation.getByRole('combobox', { name: 'Star removal' })).toBeDisabled();
   const reduction = combine.getByRole('spinbutton', { name: 'RGB star reduction' });
   await reduction.fill('0.4');
   await setups.getByRole('button', { name: 'Save as…' }).click();
@@ -2429,7 +2429,7 @@ test('keeps narrowband and RGB star processing consistent on desktop and phone',
   expect(await setups.getByRole('combobox').evaluate(font)).toBe(await stars.getByRole('spinbutton', { name: 'Sharpen Stars' }).evaluate(font));
   const fontSize = (element: Element) => getComputedStyle(element).fontSize;
   expect(await balance.locator(':scope > summary strong').evaluate(fontSize)).toBe(await stars.locator(':scope > header strong').evaluate(fontSize));
-  expect(await balance.getByRole('checkbox', { name: 'Narrowband balance', exact: true }).locator('..').evaluate(fontSize)).toBe(await stars.getByRole('checkbox', { name: 'RC-Astro BlurXTerminator' }).locator('..').evaluate(fontSize));
+  expect(await balance.getByRole('checkbox', { name: 'Narrowband balance', exact: true }).locator('..').evaluate(fontSize)).toBe(await stars.getByRole('combobox', { name: 'Sharpening' }).locator('..').evaluate(fontSize));
   await balance.locator(':scope > summary').focus();
   await page.keyboard.press('Enter');
   await expect(balance.locator(':scope > summary')).toHaveAttribute('aria-expanded', 'false');

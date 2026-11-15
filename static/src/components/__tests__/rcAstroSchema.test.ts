@@ -34,7 +34,7 @@ describe('rcAstroProblem', () => {
 
   it('refuses a cleared field even before the schema loads', () => {
     expect(rcAstroProblem(steps({ ss: Number.NaN }), undefined))
-      .toBe('Enter a finite value for every RC-Astro parameter');
+      .toBe('Enter a finite value for every processing parameter');
     expect(rcAstroProblem(steps({ ss: 0.9 }), undefined)).toBeNull();
   });
 });

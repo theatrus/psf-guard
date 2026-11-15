@@ -8,6 +8,7 @@ import DesktopWorkerSettings from '../DesktopWorkerSettings';
 
 const native = vi.hoisted(() => ({
   get: vi.fn(), save: vi.fn(), start: vi.fn(), stop: vi.fn(), pause: vi.fn(),
+  noiseModel: vi.fn(), downloadNoiseModel: vi.fn(),
 }));
 vi.mock('../../utils/tauri', async importOriginal => {
   const original = await importOriginal<typeof import('../../utils/tauri')>();
@@ -26,6 +27,9 @@ beforeEach(() => {
     settings_path: '/home/ann/.config/psf-guard/worker.json',
   };
   native.get.mockImplementation(async () => worker);
+  native.noiseModel.mockReset();
+  native.downloadNoiseModel.mockReset();
+  native.noiseModel.mockImplementation(async () => null);
   native.save.mockImplementation(async (saved: SaveDesktopWorker) => {
     const { token, start_at_login, ...settings } = saved;
     worker = { ...worker, settings, has_token: worker.has_token || !!token, start_at_login };
@@ -62,7 +66,7 @@ describe('this computer\'s worker', () => {
 
     fireEvent.change(screen.getByLabelText('Server address'), { target: { value: 'http://observatory:3000' } });
     fireEvent.change(screen.getByLabelText('Worker token'), { target: { value: 'psfw_secret' } });
-    await userEvent.click(screen.getByRole('checkbox', { name: 'RC-Astro tools' }));
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Processing steps' }));
     await userEvent.click(screen.getByRole('checkbox', { name: 'Use shared storage' }));
     fireEvent.change(screen.getByLabelText('Server folder 1'), { target: { value: '/srv/astro' } });
     fireEvent.change(screen.getByLabelText('Folder on this computer 1'), { target: { value: 'Z:\\astro' } });
@@ -77,6 +81,7 @@ describe('this computer\'s worker', () => {
       maps: [{ server: '/srv/astro', local: 'Z:\\astro' }],
       work_dir: null,
       rc_astro: null,
+      onnxruntime: null,
       work: ['stack'],
       slots: 1,
       token: 'psfw_secret',
@@ -111,9 +116,9 @@ describe('this computer\'s worker', () => {
     const stack = await screen.findByRole('checkbox', { name: 'Stack builds' });
     expect(stack).toBeChecked();
     await userEvent.click(stack);
-    await userEvent.click(screen.getByRole('checkbox', { name: 'RC-Astro tools' }));
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Processing steps' }));
     await userEvent.click(screen.getByRole('button', { name: 'Save worker settings' }));
-    expect(await screen.findByText('Select at least one task type: Stack builds or RC-Astro tools.')).toBeInTheDocument();
+    expect(await screen.findByText('Select at least one task type: Stack builds or Processing steps.')).toBeInTheDocument();
     expect(native.save).not.toHaveBeenCalled();
 
     await userEvent.click(stack);
@@ -145,5 +150,38 @@ describe('this computer\'s worker', () => {
     mount(<DesktopWorkerSettings />);
     expect(await screen.findByText(/psf-guard-worker/)).toBeInTheDocument();
     expect(screen.queryByLabelText('Server address')).not.toBeInTheDocument();
+  });
+
+  it('downloads the noise model only when asked, and saves an ONNX Runtime path', async () => {
+    worker = {
+      ...worker,
+      has_token: true,
+      settings: {
+        server: 'http://observatory:3000', name: null, files: 'remote', maps: [],
+        work_dir: null, rc_astro: null, onnxruntime: null, work: [], slots: 1,
+      },
+    };
+    native.noiseModel.mockImplementation(async () => ({
+      installed: { folder: '/home/ann/.local/share/psf-guard/noise-model', runtime_problem: 'ONNX Runtime is not installed' },
+      runtime_download: '1.31.1',
+    }));
+    native.downloadNoiseModel.mockImplementation(async () => ({
+      installed: { folder: '/home/ann/.local/share/psf-guard/noise-model', runtime_version: '1.31.1', model: 'noise-v1-d33' },
+      runtime_download: '1.31.1',
+    }));
+    mount(<DesktopWorkerSettings />);
+
+    const model = await screen.findByRole('group', { name: 'Noise model' });
+    expect(model).toHaveTextContent('ONNX Runtime is not installed; the model is not installed.');
+    expect(native.downloadNoiseModel).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole('button', { name: 'Download noise model' }));
+    expect(native.downloadNoiseModel).toHaveBeenCalledWith({ runtime: true, model: true });
+    expect(await screen.findByText(/Installed: noise-v1-d33, ONNX Runtime 1.31.1/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Update noise model' })).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('ONNX Runtime path'), { target: { value: ' /opt/onnxruntime/lib ' } });
+    await userEvent.click(screen.getByRole('button', { name: 'Save worker settings' }));
+    await waitFor(() => expect(native.save).toHaveBeenCalledTimes(1));
+    expect(native.save.mock.calls[0][0]).toMatchObject({ onnxruntime: '/opt/onnxruntime/lib', work: [] });
   });
 });

@@ -20,6 +20,7 @@ import type {
 import StackEmissionControls from './StackEmissionControls';
 import StackDeconvolutionControls, { StackDeconvolutionSummary } from './StackDeconvolutionControls';
 import StackRcAstroControls from './StackRcAstroControls';
+import { listsProvider, NOISE_MODEL_PROVIDER, providerSchemas } from './processingTools';
 import {
   bxtCorrectOnly,
   defaultParameters,
@@ -88,7 +89,7 @@ function hasInvalidNumbers(processing: StackColorProcessing): boolean {
 
 /** The tools that run on the color channels together: star removal runs on
  *  the channel stacks only. */
-const colorChannelTools = ['bxt', 'nxt'] as const;
+const colorChannelTools = ['bxt', 'nxt', NOISE_MODEL_PROVIDER] as const;
 
 /** On the color channels, BlurXTerminator starts in Correct only mode when
  *  the installed tool can run it: it fixes star shapes and color fringes,
@@ -645,7 +646,9 @@ export default function StackColorProcessingControls({
   onApply: (processing: StackColorProcessing) => void;
 }) {
   const rcAstroCapabilities = useRcAstroCapabilities().data;
-  const rcAstroTools = rcAstroCapabilities?.tools;
+  const rcAstroTools = providerSchemas(rcAstroCapabilities);
+  // The color-channel tools show when the server lists a provider for them.
+  const channelToolsAvailable = listsProvider(rcAstroCapabilities, colorChannelTools);
   const calibrates = colorCalibrationApplies(roles);
   const colorDefaults = useDefaultColorProcessing();
   const defaults = useMemo(() => {
@@ -1059,7 +1062,7 @@ export default function StackColorProcessingControls({
                   <strong>{narrowband ? 'Narrowband nebula' : 'Broadband color'}</strong>
                   <span>Before stretch</span>
                 </header>
-                {(rcAstroCapabilities?.available ||
+                {(channelToolsAvailable ||
                   !!draft.color_rc_astro?.steps.length ||
                   colorRcAstro) && (
                   <section
@@ -1090,7 +1093,7 @@ export default function StackColorProcessingControls({
                     )}
                   </section>
                 )}
-                {!rcAstroCapabilities?.available &&
+                {!channelToolsAvailable &&
                   !draft.color_rc_astro?.steps.length &&
                   !colorRcAstro && (
                     <p className="processing-setups-hint">
@@ -1141,7 +1144,7 @@ export default function StackColorProcessingControls({
                   </p>
                   {managesStars &&
                     narrowband &&
-                    (rcAstroCapabilities?.available || draft.narrowband?.rgb_star_processing) && (
+                    (channelToolsAvailable || draft.narrowband?.rgb_star_processing) && (
                       <section className="stack-color-channel-tools">
                         <StackRcAstroControls
                           label={combination ? 'RGB branch' : 'RGB stars'}

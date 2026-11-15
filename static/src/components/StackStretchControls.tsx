@@ -8,6 +8,7 @@ import StackStretchStageEditor from './StackStretchStageEditor';
 import StackDeconvolutionControls from './StackDeconvolutionControls';
 import StackRcAstroControls from './StackRcAstroControls';
 import { rcAstroProblem, useRcAstroCapabilities } from './rcAstroSchema';
+import { providerSchemas } from './processingTools';
 import ProcessingSetupsBar from './ProcessingSetupsBar';
 import ColorCalibrationSwitch from './ColorCalibrationSwitch';
 import { builtinViewSetups } from './processingSetups';
@@ -70,7 +71,7 @@ export default function StackStretchControls({
     requestForPreview(applied, displayReferred)
   );
   const [pending, setPending] = useState(false);
-  const rcAstroTools = useRcAstroCapabilities().data?.tools;
+  const rcAstroTools = providerSchemas(useRcAstroCapabilities().data);
   const [reverting, setReverting] = useState(false);
   const [pendingProgress, setPendingProgress] =
     useState<StackStretchPendingProgress | null>(null);

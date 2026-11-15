@@ -76,6 +76,8 @@ export function useHeaderActivity() {
   useEffect(() => {
     if (wasInstalling.current && !installing) {
       queryClient.invalidateQueries({ queryKey: ['astrometry', 'capabilities'] });
+      // A noise model download shows as a catalog row too.
+      queryClient.invalidateQueries({ queryKey: ['rc-astro-capabilities'] });
       queryClient.invalidateQueries({
         predicate: (query) => query.queryKey[0] === 'db' && query.queryKey.includes('stack-color'),
       });

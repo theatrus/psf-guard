@@ -13,7 +13,8 @@ export type ActivityControl =
   | { kind: 'preview'; preview: PreviewKind; key: string }
   | { kind: 'import'; dbId: string }
   | { kind: 'export'; dbId: string }
-  | { kind: 'catalog-install' };
+  | { kind: 'catalog-install' }
+  | { kind: 'noise-model-download' };
 
 /** The job a row's Pause or Resume button calls. */
 export interface ActivityPause {
@@ -107,6 +108,8 @@ function controlOf(control: JobControl): ActivityControl {
       return { kind: 'backup' };
     case 'catalog-install':
       return { kind: 'catalog-install' };
+    case 'noise-model-download':
+      return { kind: 'noise-model-download' };
     case 'wbpp-queued':
       return { kind: 'wbpp-queued', dbId: control.db_id, queueId: control.queue_id };
     case 'preview':

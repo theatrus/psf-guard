@@ -1375,9 +1375,73 @@ export interface ExternalToolSchema {
   parameters: ExternalToolParameter[];
 }
 
+/** The kinds of processing step, in the order a chain runs them. */
+export type ProcessingCategory = 'sharpen' | 'denoise' | 'star_removal';
+
+/** One tool that can fill a category, and whether it can run. */
+export interface ProcessingProvider {
+  category: ProcessingCategory;
+  /** The step's key: `bxt`, `nxt`, `noise-model`, `sxt`. */
+  provider: string;
+  name: string;
+  state: 'ready' | 'not_licensed' | 'not_installed';
+  /** Why it cannot run, with what to do about it. */
+  reason?: string;
+  remedy?: 'install_rc_astro' | 'license' | 'download_noise_model';
+  /** The version the next run uses, for display. */
+  version?: string;
+  /** Present when some machine has the provider. */
+  schema?: ExternalToolSchema;
+  this_server: boolean;
+  /** The connected workers that have it, by name. */
+  workers: string[];
+}
+
+/** What this server has installed for Seiza's noise model. */
+export interface NoiseModelInstalled {
+  /** ONNX Runtime's library; sent to people who manage the server. */
+  runtime_path?: string;
+  runtime_version?: string;
+  runtime_problem?: string;
+  /** The installed model's name, such as `noise-v1-d33`. */
+  model?: string;
+  model_problem?: string;
+  backends?: Array<{ backend: string; unavailable?: string; automatic: boolean }>;
+  /** The folder the downloads go to; empty for a viewer. */
+  folder: string;
+}
+
+export type NoiseModelDownloadPart = 'runtime' | 'model';
+
+export interface NoiseModelDownloadProgress {
+  running: boolean;
+  part?: NoiseModelDownloadPart;
+  message: string;
+  bytes_completed?: number;
+  bytes_total?: number;
+  error?: string;
+  started_at?: number;
+  finished_at?: number;
+}
+
+/** Seiza's noise model on this server: what is installed and its download. */
+export interface SeizaNoiseModel {
+  installed: NoiseModelInstalled;
+  /** The ONNX Runtime path a person set. */
+  onnxruntime?: string;
+  /** The ONNX Runtime release PSF Guard can download for this server;
+   *  absent when it has none for this kind of computer. */
+  runtime_download?: string;
+  download: NoiseModelDownloadProgress;
+}
+
+/** `GET /api/tools/rc-astro`: every processing provider and its state. */
 export interface RcAstroCapabilities {
+  /** Whether rc-astro is on this server or a connected worker. */
   available: boolean;
+  /** The rc-astro path on the server; sent to people who manage it. */
   executable?: string;
+  /** The schema of each provider some machine has. */
   tools: ExternalToolSchema[];
   /** Whether this server has rc-astro. */
   this_server?: boolean;
@@ -1387,12 +1451,26 @@ export interface RcAstroCapabilities {
    *  takes runs on this server. */
   tool_workers?: Record<string, string[]>;
   error?: string;
+  /** Absent from a server older than the provider list. */
+  providers?: ProcessingProvider[];
+  /** Absent from a server older than the noise model. */
+  seiza?: SeizaNoiseModel;
+}
+
+/** The capabilities every view reads: `providers` is always filled, from
+ *  `tools` when the server sent none. */
+export interface ProcessingCapabilities extends RcAstroCapabilities {
+  providers: ProcessingProvider[];
 }
 
 export type RcAstroParameterValue = number | boolean;
 
 export interface RcAstroStep {
+  /** The provider's key. The server also writes it as `provider`, with the
+   *  step's `category`. */
   tool: string;
+  category?: ProcessingCategory;
+  provider?: string;
   parameters: Record<string, RcAstroParameterValue>;
 }
 
@@ -1404,11 +1482,15 @@ export interface RcAstroStepResult {
   tool: string;
   name: string;
   ml_version: number | null;
+  /** What ran the step when it is not an RC-Astro tool: the noise model's
+   *  name, backend and Seiza version. */
+  version?: string;
   device?: string;
   warnings: string[];
 }
 
 export interface StackRcAstroResult {
+  /** The rc-astro CLI's version; empty when no RC-Astro tool ran. */
   cli_version: string;
   steps: RcAstroStepResult[];
   has_stars: boolean;
@@ -2376,7 +2458,8 @@ export type JobControl =
   | { kind: 'preview'; preview: PreviewKind; key: string }
   | { kind: 'import'; db_id: string }
   | { kind: 'export'; db_id: string }
-  | { kind: 'catalog-install' };
+  | { kind: 'catalog-install' }
+  | { kind: 'noise-model-download' };
 
 /** The automatic jobs a person can pause. Mirrors `PausableJob` in
  *  `src/server/catalog_jobs.rs`. */
@@ -5485,6 +5568,8 @@ export interface WorkerSessionSummary {
   rc_astro: string[];
   /** The Seiza stacking version it stacks builds with, when it takes them. */
   stacking_version?: string;
+  /** The noise model it runs, as "noise-v1-d33 cpu f32, …". */
+  noise_model?: string;
   file_mode: 'remote' | 'shared';
   /** Whether task files reach it by path. */
   exchange_shared: boolean;

@@ -163,6 +163,9 @@ import type { GuidFillReport, GuidReport, ImportedCopiesMerge, ImportedCopiesRep
   StackViewProcessingRequest,
   AstrometryCapabilities,
   RcAstroCapabilities,
+  SeizaNoiseModel,
+  NoiseModelDownloadPart,
+  NoiseModelDownloadProgress,
   StackStretchPendingProgress,
   AstrometryValidationReport,
   CatalogInstallPreset,
@@ -1734,7 +1737,35 @@ export const apiClient = {
   getRcAstroCapabilities: async (): Promise<RcAstroCapabilities> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.get<ApiResponse<RcAstroCapabilities>>('/tools/rc-astro');
-    if (!data.data) throw new Error(data.error || 'Failed to probe RC-Astro tools');
+    if (!data.data) throw new Error(data.error || 'Failed to check the processing tools');
+    return data.data;
+  },
+
+  /** Download ONNX Runtime, the noise model, or both to the server. */
+  downloadNoiseModel: async (parts: NoiseModelDownloadPart[]): Promise<NoiseModelDownloadProgress> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.post<ApiResponse<NoiseModelDownloadProgress>>(
+      '/tools/noise-model/download',
+      { parts }
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to start the download');
+    return data.data;
+  },
+
+  /** Stop the noise model download under way. */
+  stopNoiseModelDownload: async (): Promise<void> => {
+    const apiInstance = await getApi();
+    await apiInstance.post('/tools/noise-model/download/stop');
+  },
+
+  /** Set, or with an empty path clear, the ONNX Runtime the server uses. */
+  updateNoiseModelSettings: async (onnxruntime: string): Promise<SeizaNoiseModel> => {
+    const apiInstance = await getApi();
+    const { data } = await apiInstance.put<ApiResponse<SeizaNoiseModel>>(
+      '/settings/noise-model',
+      { onnxruntime: onnxruntime.trim() || null }
+    );
+    if (!data.data) throw new Error(data.error || 'Failed to save the ONNX Runtime path');
     return data.data;
   },
 

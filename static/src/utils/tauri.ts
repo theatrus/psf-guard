@@ -201,6 +201,9 @@ export interface DesktopWorkerSettings {
   maps: WorkerPathMap[];
   work_dir: string | null;
   rc_astro: string | null;
+  /** An ONNX Runtime the person installed, for the noise model: its
+   *  library, or the folder that contains it. */
+  onnxruntime?: string | null;
   /** `--work` choices; empty takes everything the worker can run. */
   work: string[];
   slots: number;
@@ -236,8 +239,27 @@ export interface SaveDesktopWorker extends DesktopWorkerSettings {
   start_at_login: boolean;
 }
 
+/** What this computer has installed for the noise model. */
+export interface DesktopWorkerNoiseModel {
+  installed: {
+    runtime_path?: string;
+    runtime_version?: string;
+    runtime_problem?: string;
+    model?: string;
+    model_problem?: string;
+    folder: string;
+  };
+  /** The ONNX Runtime release PSF Guard downloads here; `null` when it has
+   *  none for this kind of computer. */
+  runtime_download: string | null;
+}
+
 // The worker this computer runs in the menu bar or the system tray.
 export const desktopWorker = {
+  /** `null` from an app older than the noise model. */
+  noiseModel: (): Promise<DesktopWorkerNoiseModel | null> => desktopInvoke('get_worker_noise_model'),
+  downloadNoiseModel: (parts: { runtime: boolean; model: boolean }): Promise<DesktopWorkerNoiseModel> =>
+    desktopInvoke('download_worker_noise_model', parts),
   get: (): Promise<DesktopWorker> => desktopInvoke('get_desktop_worker'),
   save: (worker: SaveDesktopWorker): Promise<DesktopWorker> =>
     desktopInvoke('save_desktop_worker', { worker }),

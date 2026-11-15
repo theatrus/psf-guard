@@ -174,7 +174,7 @@ describe('WorkerSettings', () => {
       }),
     );
     render(<WorkerSettings />, { wrapper: wrapper() });
-    const tools = await screen.findByRole('group', { name: 'RC-Astro tools' });
+    const tools = await screen.findByRole('group', { name: 'Processing steps' });
     const stacks = screen.getByRole('group', { name: 'Stack builds' });
     // Stack builds stay on this server until someone chooses otherwise.
     expect(within(stacks).getByRole('radio', { name: /^This server only/ })).toBeChecked();

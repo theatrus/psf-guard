@@ -17,7 +17,7 @@ const WORKERS_QUERY_KEY = ['workers'] as const;
 type PlacementKind = 'rc_astro' | 'stack';
 
 const PLACEMENT_KINDS: Array<{ kind: PlacementKind; legend: string; fallback: WorkPlacement }> = [
-  { kind: 'rc_astro', legend: 'RC-Astro tools', fallback: 'workers_first' },
+  { kind: 'rc_astro', legend: 'Processing steps', fallback: 'workers_first' },
   { kind: 'stack', legend: 'Stack builds', fallback: 'this_server' },
 ];
 
@@ -78,6 +78,9 @@ function WorkerRow({ worker }: { worker: WorkerSessionSummary }) {
               ? worker.rc_astro.join(', ')
               : 'No RC-Astro tools'}
           </span>
+          {worker.noise_model && (
+            <span className="muted">Noise model ({worker.noise_model})</span>
+          )}
           {worker.stacking_version && (
             <span className="muted">Stack builds (Seiza stacking {worker.stacking_version})</span>
           )}
@@ -215,7 +218,7 @@ export default function WorkerSettings() {
         <div>
           <h3>Workers for this server</h3>
           <p>
-            Use other computers to build stacks and run RC-Astro tools for this
+            Use other computers to build stacks and run processing steps for this
             server. Create a worker token here, then use it to connect the PSF Guard
             app or <code>psf-guard worker</code> on the worker computer. This server
             stores the catalog and processing results.

@@ -5085,7 +5085,7 @@
   font-size: 0.54rem;
 }
 
-/* RC-Astro tool chain: shares the deconvolution card look. */
+/* Processing tools card: shares the deconvolution card look. */
 .stack-rc-astro-controls {
   min-width: 0;
   padding: 0.52rem;
@@ -5104,13 +5104,20 @@
 }
 
 .stack-rc-astro-controls > header span,
-.stack-rc-astro-controls > p {
+.stack-rc-astro-controls > p,
+.stack-rc-astro-note {
   color: var(--color-text-muted);
   font-size: 0.59rem;
 }
 
-.stack-rc-astro-controls > p {
+.stack-rc-astro-controls > p,
+.stack-rc-astro-note {
   margin: 0.35rem 0 0;
+}
+
+.stack-rc-astro-note button {
+  padding: 0.1rem 0.45rem;
+  font-size: 0.59rem;
 }
 
 .stack-rc-astro-tool {
@@ -5120,7 +5127,14 @@
 .stack-rc-astro-tool > label {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 0.42rem;
+  font-size: 0.64rem;
+}
+
+.stack-rc-astro-tool > label select {
+  min-width: 0;
+  max-width: 62%;
   font-size: 0.64rem;
 }
 

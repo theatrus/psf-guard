@@ -94,8 +94,8 @@ it('applies RGB-star BlurXTerminator independently of narrowband color tools', a
       deconvolutions={{}} disabled={false} onApply={applied} />
   </QueryClientProvider>);
   await openProcessingFlow();
-  const stars = await screen.findByRole('region', { name: 'RGB stars RC-Astro tools' });
-  await userEvent.click(within(stars).getByRole('checkbox', { name: 'RC-Astro BlurXTerminator' }));
+  const stars = await screen.findByRole('region', { name: 'RGB stars processing tools' });
+  await userEvent.selectOptions(within(stars).getByRole('combobox', { name: 'Sharpening' }), 'bxt');
   await userEvent.click(screen.getByRole('button', { name: 'Apply processing stack' }));
   expect(applied).toHaveBeenCalledWith(expect.objectContaining({ narrowband: expect.objectContaining({
     rgb_star_processing: { steps: [{ tool: 'bxt', parameters: {} }] },
