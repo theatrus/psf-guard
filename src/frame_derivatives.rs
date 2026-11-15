@@ -552,10 +552,29 @@ pub fn identities_match(light: &FrameIdentity, derivative: &FrameIdentity) -> bo
     same_capture_fields(light, derivative)
 }
 
+/// [`identities_match`] without the target's name, for two records of one
+/// frame that sit in targets named differently: Target Scheduler's and an
+/// import's. The name was the only field that set two rigs' frames apart,
+/// so a caller must check other evidence that the frames are one.
+pub fn identities_match_ignoring_target(light: &FrameIdentity, other: &FrameIdentity) -> bool {
+    let (Some(light_time), Some(other_time)) = (light.captured_at, other.captured_at) else {
+        return false;
+    };
+    light_time.same_as(other_time) && capture_fields_agree(light, other, false)
+}
+
 /// [`identities_match`] without the capture time, for a caller that
 /// compares times its own way: the exposure, the filter, and the target
 /// and camera where both give one.
 pub fn same_capture_fields(light: &FrameIdentity, derivative: &FrameIdentity) -> bool {
+    capture_fields_agree(light, derivative, true)
+}
+
+fn capture_fields_agree(
+    light: &FrameIdentity,
+    derivative: &FrameIdentity,
+    with_target: bool,
+) -> bool {
     let (Some(light_exposure), Some(derivative_exposure)) =
         (light.exposure_s, derivative.exposure_s)
     else {
@@ -579,7 +598,7 @@ pub fn same_capture_fields(light: &FrameIdentity, derivative: &FrameIdentity) ->
         (Some(left), Some(right)) => same_text(left, right),
         _ => true,
     };
-    agrees_where_both_say(&light.target, &derivative.target)
+    (!with_target || agrees_where_both_say(&light.target, &derivative.target))
         && agrees_where_both_say(&light.camera, &derivative.camera)
 }
 
