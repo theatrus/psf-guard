@@ -8,7 +8,10 @@ export type ReceiverChange = {
   enabled?: boolean;
   image_directory?: string;
   token?: string;
+  /** Remove the remote API key. */
+  clear_token?: boolean;
   sync_enabled?: boolean;
+  peer_sync_enabled?: boolean;
   placement?: RemoteImageUploadPlacement;
   directory_template?: string;
   directory_template_source?: 'catalog' | 'preset';

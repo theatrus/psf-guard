@@ -1,16 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, Copy, KeyRound, Power, Save, Trash2 } from 'lucide-react';
-import UnsavedMark from '../UnsavedMark';
+import { Check, Copy, KeyRound, Power, Trash2 } from 'lucide-react';
 import { apiClient } from '../../api/client';
-import type { RemoteImageUploadSummary } from '../../api/types';
 import { useAccess } from '../../auth/access';
 import { contactText, serverAddress } from './pluginShared';
 import { requestMessage as message, useRemoteReceiver } from './remoteReceiver';
 import '../director/DirectorPage.css';
 
-/** The PSF Guard Sync plugin on a rig: who is paired, scheduler sync and
- *  the remote API key. Image uploads, which both plugins use, have their
- *  own panel. Built like the Director plugin's panel: each part says
+/** The PSF Guard Sync plugin on a rig: who is paired, and scheduler sync.
+ *  Image uploads, which both plugins use, have their own panel, and so do
+ *  other PSF Guard servers and the remote API key (`PeerAccessPanel`). Built like the Director plugin's panel: each part says
  *  whether it is on and acts at once. */
 export default function SyncPluginPanel({ databaseId, onChanged }: {
   databaseId: string;
@@ -23,7 +21,8 @@ export default function SyncPluginPanel({ databaseId, onChanged }: {
   // The plugin pairs from N.I.N.A., so the page looks while a code waits,
   // and again whenever you come back to it.
   const { loaded, database, upload, act, save, busy } = useRemoteReceiver(databaseId, { onChanged, pollMs: code ? 3_000 : false });
-  const clients = upload?.clients ?? [];
+  // Another PSF Guard pairs too; those are listed with the peers.
+  const clients = (upload?.clients ?? []).filter(entry => entry.kind !== 'peer');
   // A plugin that pairs answers the code: it is spent.
   const pairedCount = useRef(clients.length);
   useEffect(() => {
@@ -41,7 +40,7 @@ export default function SyncPluginPanel({ databaseId, onChanged }: {
   if (loaded.isPending) return <p role="status">Loading the Sync plugin...</p>;
   if (!database) return <p className="director-error" role="alert">{loaded.isError ? message(loaded.error) : 'This database is not registered.'}</p>;
 
-  const credential = upload?.token_configured ?? false;
+  const credential = clients.length > 0;
   const syncOn = upload?.sync_enabled ?? false;
   const address = serverAddress();
   const generate = () => act.mutate(async () => {
@@ -58,10 +57,7 @@ export default function SyncPluginPanel({ databaseId, onChanged }: {
       act.mutate(() => apiClient.revokePairedClient(databaseId, clientUuid));
     }
   };
-  const older = [
-    ...clients.filter(entry => entry.last_contact && !entry.last_contact.places_new_projects).map(entry => entry.name),
-    ...(upload?.key_contact && !upload.key_contact.places_new_projects ? ['The client using the remote API key'] : []),
-  ];
+  const older = clients.filter(entry => entry.last_contact && !entry.last_contact.places_new_projects).map(entry => entry.name);
 
   return <section className="rig-profile-form rig-plugin plugin-card" aria-label="PSF Guard Sync">
     <div className="director-toolbar plugin-card-heading">
@@ -108,49 +104,5 @@ export default function SyncPluginPanel({ databaseId, onChanged }: {
           : <button type="button" disabled={busy} onClick={() => save({ sync_enabled: true })}><Check size={16} />Turn on scheduler sync</button>}
       </div>}
     </fieldset>
-
-    <KeySettings upload={upload} busy={busy} onSave={(token, onSaved) => save({ token }, onSaved)} />
   </section>;
-}
-
-/** The single remote API key, for scripts and clients that do not pair. */
-function KeySettings({ upload, busy, onSave }: {
-  upload: RemoteImageUploadSummary | undefined;
-  busy: boolean;
-  onSave: (token: string, onSaved: () => void) => void;
-}) {
-  const [key, setKey] = useState('');
-  const [copy, setCopy] = useState<'idle' | 'copied' | 'failed'>('idle');
-  const set = upload?.key_configured ?? false;
-  const generate = () => {
-    const bytes = new Uint8Array(32);
-    crypto.getRandomValues(bytes);
-    setKey(Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join(''));
-    setCopy('idle');
-  };
-  const copyKey = async () => {
-    try { await navigator.clipboard.writeText(key); setCopy('copied'); } catch { setCopy('failed'); }
-  };
-  return <fieldset>
-    <legend>Remote API key</legend>
-    <UnsavedMark label="remote API key" dirty={!!key} />
-    <p className="plugin-state" data-on={set} data-testid="sync-key-state">{set ? 'Set.' : 'Not set.'} <span className="director-muted">For scripts and clients that cannot pair. The Sync plugin pairs with a code instead.</span></p>
-    {upload?.key_contact && <p className="director-muted">{contactText(upload.key_contact)}</p>}
-    {key
-      ? <div className="rig-plugin-code">
-        <label className="rig-profile-field"><span>New key</span>
-          <span className="rig-profile-input"><input readOnly aria-label="New remote API key" value={key} onFocus={event => event.target.select()} />
-            <button type="button" onClick={() => void copyKey()}><Copy size={14} />{copy === 'copied' ? 'Copied' : 'Copy'}</button>
-          </span>
-        </label>
-        <p role="status">{copy === 'failed' ? 'Copy failed. Select and copy the key.' : 'Copy this key now. It is not shown again after you save it.'}</p>
-        <div className="director-actions">
-          <button type="button" disabled={busy} onClick={() => onSave(key, () => setKey(''))}><Save size={16} />Save key</button>
-          <button type="button" disabled={busy} onClick={() => setKey('')}>Cancel</button>
-        </div>
-      </div>
-      : <div className="director-actions">
-        <button type="button" disabled={busy} onClick={generate}><KeyRound size={16} />{set ? 'Replace key' : 'Generate key'}</button>
-      </div>}
-  </fieldset>;
 }

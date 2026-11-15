@@ -24,6 +24,7 @@ import UnsavedMark from './UnsavedMark';
 import { Database as DatabaseIcon, Pencil, Trash2 } from 'lucide-react';
 import TemplateLibrary from './director/TemplateLibrary';
 import SyncPluginPanel from './rigs/SyncPluginPanel';
+import PeerAccessPanel from './rigs/PeerAccessPanel';
 import ImageUploadsPanel from './rigs/ImageUploadsPanel';
 import PluginsOnRig from './rigs/PluginsOnRig';
 import './director/DirectorPage.css';
@@ -1657,6 +1658,10 @@ export default function TauriSettings({
               <SchedulerSyncControls key={`scheduler:${selectedDatabase.id}`} databases={databases} localDatabaseId={selectedDatabase.id} disabled={isApplying} />
               <RemoteSyncPreviews databases={[selectedDatabase]} disabled={isApplying} />
               <RemotePeerSync key={`peer:${selectedDatabase.id}`} databases={databases} localDatabaseId={selectedDatabase.id} disabled={isApplying} />
+              {/* The receiving half: which other servers may sync with this database. */}
+              {managementAllowed && canEdit && <div className="director-page director-embedded" key={`peer-access:${selectedDatabase.id}`}>
+                <div className="plugin-cards"><PeerAccessPanel databaseId={selectedDatabase.id} databaseName={selectedDatabase.name} onChanged={() => void reload()} /></div>
+              </div>}
             </div>
           )}
 

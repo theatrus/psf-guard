@@ -2035,8 +2035,10 @@ plan. The owned catalog changes when you activate that plan.
 A rig can run on another PSF Guard, at a remote observatory, with its own
 database that N.I.N.A. and Target Scheduler write. To plan for it from here:
 
-1. Register that PSF Guard as a peer under **Settings, Remote PSF Guard**,
-   and pull its catalog into a database on this server. That copy is the rig
+1. On that PSF Guard, open **Settings, Sync, Other PSF Guard servers** and
+   click **Generate server pairing code**. Here, register it as a peer under
+   **Settings, Remote PSF Guard** with its URL and the code, and pull its
+   catalog into a database on this server. That copy is the rig
    here. PSF Guard adds it to planning and stores the rig's profile with it.
 2. Open **Rigs, Setup** for the copy and set **Remote site** to the peer.
 3. Activate as usual. Apply writes the rows into the copy, then sends the

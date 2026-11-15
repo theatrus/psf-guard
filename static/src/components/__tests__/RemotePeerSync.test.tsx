@@ -245,13 +245,28 @@ describe('RemotePeerSync', () => {
     await user.type(screen.getByLabelText('Name'), 'Second scope');
     await user.clear(screen.getByLabelText('Base URL'));
     await user.type(screen.getByLabelText('Base URL'), 'https://second.example');
-    await user.type(screen.getByLabelText('API key'), 'a-key-long-enough-for-the-peer');
+    await user.type(screen.getByLabelText('Pairing code'), 'psfpt_a-code-from-the-peer');
     await user.click(screen.getByRole('button', { name: 'Save peer' }));
 
     await waitFor(() => expect(posted).not.toBeNull());
-    expect(posted).toMatchObject({
+    expect(posted).toEqual({
       name: 'Second scope',
       base_url: 'https://second.example',
+      pairing_code: 'psfpt_a-code-from-the-peer',
+    });
+
+    // A peer too old to pair takes its remote API key in the same field.
+    posted = null;
+    await user.click(await screen.findByRole('button', { name: 'Add peer' }));
+    await user.type(screen.getByLabelText('Name'), 'Old scope');
+    await user.clear(screen.getByLabelText('Base URL'));
+    await user.type(screen.getByLabelText('Base URL'), 'https://old.example');
+    await user.type(screen.getByLabelText('Pairing code'), 'a-key-long-enough-for-the-peer');
+    await user.click(screen.getByRole('button', { name: 'Save peer' }));
+    await waitFor(() => expect(posted).not.toBeNull());
+    expect(posted).toEqual({
+      name: 'Old scope',
+      base_url: 'https://old.example',
       token: 'a-key-long-enough-for-the-peer',
     });
   });
