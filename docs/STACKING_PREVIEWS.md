@@ -1528,8 +1528,9 @@ and never downloads them by itself. To install them on the server:
    that was not finished is not installed. Each ONNX Runtime download goes
    to a folder of its own, and PSF Guard switches to it once it is whole,
    so a download never disturbs the ONNX Runtime in use.
-3. Open a stack's **View processing** and choose **Seiza noise model**
-   under **Noise reduction**.
+3. Open a stack's **View processing** and turn on **Seiza noise model**
+   under **Noise reduction**: a checkbox when it is the only provider
+   there, a choice in the picker when NoiseXTerminator is ready too.
 
 **Download** beside **ONNX Runtime** or **Seiza noise model** fetches that
 part alone, and **Update** fetches the latest model again. To use an ONNX
@@ -1572,6 +1573,14 @@ a run you start uses the processor share of the job that waits for it. An
 automatic run, such as a re-apply after a rebuild, pauses between tiles
 while your own work runs, and gives up this server's worker when you apply
 a step that needs it; it then starts again from the beginning.
+
+**Processing tools** also has **Check license** for this server's
+rc-astro. It asks RC-Astro, online, for the account this computer is
+registered to and each product's state, and shows RC-Astro's own messages.
+PSF Guard runs it only when you click, and does not activate or deactivate
+anything. See [Check a worker's RC-Astro
+license](REMOTE_WORKERS.md#check-a-workers-rc-astro-license) for how to
+read the report.
 
 `GET /api/tools/processing` lists every provider with its state: ready, not
 licensed or not installed, the reason, its version and where it runs. It

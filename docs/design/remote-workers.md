@@ -264,6 +264,30 @@ is one more provider and an engine behind the same interface.
   file itself and calls Seiza only when the file exists, so installing ONNX
   Runtime needs no restart. Changing the path of one that has run does.
 
+## RC-Astro license checks
+
+A worker registers the rc-astro path it found (`Offers.rc_astro_path`), and
+its tools' schemas already carry each tool's local license state, so
+Settings › Workers shows both with no online check. `rc-astro license
+--json` forces an online check, and RC-Astro asks hosts not to run it
+routinely, so it runs only when a person clicks.
+
+- **Runner and parser** (`remote_work/rc_astro.rs`): one run, a 60 second
+  limit, no retries. The NDJSON is read tolerantly: unknown events, keys and
+  tokens are passed over and each product's `message` is kept as given. A
+  refusal gives its report and its error; offline gives the error alone.
+- **This server:** `POST /api/tools/rc-astro/license-check` runs it off the
+  async runtime and answers in the request. It is one short process with a
+  limit, so it is not a tracked job. The account's address goes only to a
+  caller who may write.
+- **A worker:** `POST /api/workers/{session}/license-check` puts an
+  `rc_astro_license` task on the board that only that session may claim
+  (`TaskNeeds::LicenseCheck`), and waits for its result. A worker offers
+  `license_check`; the kind is not in `work`, so an older server reads the
+  registration, and an older worker, which lacks the field, is never sent
+  the task.
+- **At the worker:** `psf-guard-cli rc-astro license` prints the report.
+
 ## Desktop worker
 
 `psf-guard worker --tray` runs the desktop app's worker: a second process of

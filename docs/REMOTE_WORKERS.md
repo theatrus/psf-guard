@@ -526,6 +526,52 @@ Processing that was running before the restart waits up to 30 minutes for
 its workers to return. A worker reads its rc-astro tools when it starts, so
 restart it after you license or upgrade rc-astro there.
 
+## Check a worker's RC-Astro license
+
+When an RC-Astro step fails on a worker, look at the worker's row in
+**Settings › Performance › Workers** on the server. The row shows:
+
+- **rc-astro:** the rc-astro executable the worker found.
+- Each tool with its version and **licensed** or **not licensed**. This is
+  the state the tool itself reports on that computer. PSF Guard reads it
+  when the worker starts and makes no online check for it.
+
+To ask RC-Astro for the account's current state, click **Check license** on
+the row. The worker runs `rc-astro license --json` once, as the account the
+worker runs under, and the row shows the report:
+
+- **Computer:** the account and computer the report is about, such as
+  `svc@studio-pc`. A Windows service runs as its own account, which has its
+  own RC-Astro licenses.
+- **RC-Astro account:** the account that computer is registered to, or
+  **This computer is not registered to an RC-Astro account** with a link to
+  get an activation code.
+- Each product with RC-Astro's own message, such as how many activations
+  are in use.
+- When RC-Astro needs a step at a terminal, its message and the command to
+  run on that computer.
+
+The check goes online. RC-Astro asks that it run only when a person asks,
+so PSF Guard never runs it by itself. When the worker is offline, the row
+shows RC-Astro's error and the tools keep the state they reported. PSF
+Guard does not activate or deactivate licenses: run the command RC-Astro
+gives in a terminal on the worker, then restart the worker.
+
+A worker with an older PSF Guard cannot be asked from the server. On that
+computer, or on any worker, run:
+
+```bash
+psf-guard-cli rc-astro license
+```
+
+It prints the same report. Run it as the account the worker runs under.
+`--json` prints the report as JSON, and `--rc-astro PATH` checks another
+executable. An rc-astro from before RC-Astro's account system has no such
+check; the command says so.
+
+For this server's own rc-astro, use **Check license** under **Processing
+tools** in **Settings › Processing › Stacking**.
+
 ## Stop, failures and recovery
 
 - **Stop** on a processing run removes its task from the server's queue
