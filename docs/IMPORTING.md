@@ -561,7 +561,10 @@ frames under different GUIDs, such as two catalogs that each imported the
 same folder. It also happens when you import the folder N.I.N.A. saved the
 frames in while Target Scheduler's own records of them are in the catalog.
 **Settings** shows such a pair as *catalogued 2 times*, and the merge keeps
-one frame, chosen in this order:
+one frame, chosen in this order. Target Scheduler's frame and an import's
+copy can be in targets with different names, for example after you rename
+the target in N.I.N.A.; they still match when the capture time, exposure,
+filter and camera agree.
 
 1. a frame in a collaboration report;
 2. the frame Target Scheduler recorded, so its exposure plan keeps counting
