@@ -654,7 +654,7 @@ test('processing FITS downloads are explicit and fit desktop and phone panels', 
   await processing.locator(':scope > summary').click();
   await openProcessingSteps(processing);
   const red = processing.getByRole('region', { name: 'R input linear processing' });
-  const together = processing.getByRole('region', { name: 'RC-Astro on the color channels together' });
+  const together = processing.getByRole('region', { name: 'Processing on the color channels together' });
   const download = together.getByRole('link', { name: 'Download processed color channels FITS' });
   await expect(download).toBeVisible();
   await expect(red.getByRole('link', { name: 'Download R input starless FITS' })).toBeVisible();
@@ -739,7 +739,7 @@ test('runs RC-Astro on the color channels together', async ({ page }, testInfo) 
   const processing = card.locator('.stack-color-processing');
   await processing.locator(':scope > summary').click();
   await openProcessingSteps(processing);
-  const together = processing.getByRole('region', { name: 'RC-Astro on the color channels together' });
+  const together = processing.getByRole('region', { name: 'Processing on the color channels together' });
   await expect(together.getByRole('combobox', { name: 'Star removal' })).toHaveCount(0);
   await together.getByRole('combobox', { name: 'Sharpening' }).selectOption('bxt');
   await expect(together.getByRole('checkbox', { name: 'Correct only' })).toBeChecked();

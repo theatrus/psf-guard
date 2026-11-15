@@ -15,6 +15,7 @@ import {
 import { toolName } from './stackProcessingLabel';
 import { openSettings } from '../utils/settingsIntent';
 import type {
+  ProcessingCategory,
   ExternalToolSchema,
   ProcessingProvider,
   RcAstroProcessing,
@@ -28,8 +29,8 @@ interface Props {
   config: RcAstroProcessing | null | undefined;
   result?: StackRcAstroResult;
   disabled: boolean;
-  /** The providers offered, by key; every one the server lists when absent. */
-  toolKeys?: readonly string[];
+  /** The categories offered; every provider the server lists when absent. */
+  categories?: readonly ProcessingCategory[];
   /** The parameters a provider starts with when it is picked. */
   defaultsFor?: (schema: ExternalToolSchema) => Record<string, RcAstroParameterValue>;
   heading?: string;
@@ -58,7 +59,7 @@ export default function StackRcAstroControls({
   config,
   result,
   disabled,
-  toolKeys,
+  categories,
   defaultsFor = defaultParameters,
   heading = 'Processing tools',
   required = false,
@@ -67,7 +68,7 @@ export default function StackRcAstroControls({
 }: Props) {
   const capabilities = useRcAstroCapabilities();
   const listed = capabilities.data?.providers ?? [];
-  const offered = listed.filter((provider) => !toolKeys || toolKeys.includes(provider.provider));
+  const offered = listed.filter((provider) => !categories || categories.includes(provider.category));
   const steps = config?.steps ?? [];
   const problem = capabilities.data?.error ?? capabilities.error?.message;
 
@@ -243,7 +244,8 @@ function ProviderNote({ provider, named = false }: { provider: ProcessingProvide
 function ResultDiagnostics({ result }: { result: StackRcAstroResult }) {
   return (
     <div className="stack-rc-astro-diagnostics">
-      {result.cli_version && <span>RC-Astro {result.cli_version}</span>}
+      {/* What made the result shown, which may no longer be installed. */}
+      {result.cli_version && <span>Made with RC-Astro {result.cli_version}</span>}
       {result.steps.map((step) => (
         <span key={step.tool}>
           {step.name}

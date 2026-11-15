@@ -176,6 +176,22 @@ describe('ProcessingToolsSettings', () => {
     expect(requested).toEqual([{ parts: ['model'] }]);
   });
 
+  it('asks for ONNX Runtime again when it is installed already', async () => {
+    const requested: unknown[] = [];
+    server.use(
+      http.get('/api/tools/rc-astro', () => ok(answer(seizaReady, true))),
+      http.post('/api/tools/noise-model/download', async ({ request }) => {
+        requested.push(await request.json());
+        return ok({ running: true, part: 'runtime', message: 'Starting…' });
+      }),
+    );
+    render(<ProcessingToolsSettings canManage />, { wrapper: wrapper() });
+
+    // Without force the server answers that the release is installed.
+    await userEvent.click(await screen.findByRole('button', { name: 'Download ONNX Runtime again' }));
+    await waitFor(() => expect(requested).toEqual([{ parts: ['runtime'], force: true }]));
+  });
+
   it('saves the path of an ONNX Runtime the person installed', async () => {
     let state = answer(seizaMissing);
     const saved: unknown[] = [];

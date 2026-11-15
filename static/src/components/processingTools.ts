@@ -104,7 +104,9 @@ export function providerSchemas(
  *  `keys` is absent. */
 export function listsProvider(
   capabilities: ProcessingCapabilities | undefined,
-  keys?: readonly string[],
+  categories?: readonly ProcessingCategory[],
 ): boolean {
-  return !!capabilities?.providers.some((provider) => !keys || keys.includes(provider.provider));
+  return !!capabilities?.providers.some(
+    (provider) => !categories || categories.includes(provider.category)
+  );
 }

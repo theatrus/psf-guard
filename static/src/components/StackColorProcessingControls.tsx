@@ -20,7 +20,7 @@ import type {
 import StackEmissionControls from './StackEmissionControls';
 import StackDeconvolutionControls, { StackDeconvolutionSummary } from './StackDeconvolutionControls';
 import StackRcAstroControls from './StackRcAstroControls';
-import { listsProvider, NOISE_MODEL_PROVIDER, providerSchemas } from './processingTools';
+import { listsProvider, providerSchemas } from './processingTools';
 import {
   bxtCorrectOnly,
   defaultParameters,
@@ -87,9 +87,10 @@ function hasInvalidNumbers(processing: StackColorProcessing): boolean {
     );
 }
 
-/** The tools that run on the color channels together: star removal runs on
- *  the channel stacks only. */
-const colorChannelTools = ['bxt', 'nxt', NOISE_MODEL_PROVIDER] as const;
+/** The categories that run on the color channels together: any provider
+ *  that sharpens or reduces noise. Star removal runs on the channel stacks
+ *  only. */
+const colorChannelCategories = ['sharpen', 'denoise'] as const;
 
 /** On the color channels, BlurXTerminator starts in Correct only mode when
  *  the installed tool can run it: it fixes star shapes and color fringes,
@@ -648,7 +649,7 @@ export default function StackColorProcessingControls({
   const rcAstroCapabilities = useRcAstroCapabilities().data;
   const rcAstroTools = providerSchemas(rcAstroCapabilities);
   // The color-channel tools show when the server lists a provider for them.
-  const channelToolsAvailable = listsProvider(rcAstroCapabilities, colorChannelTools);
+  const channelToolsAvailable = listsProvider(rcAstroCapabilities, colorChannelCategories);
   const calibrates = colorCalibrationApplies(roles);
   const colorDefaults = useDefaultColorProcessing();
   const defaults = useMemo(() => {
@@ -1067,15 +1068,15 @@ export default function StackColorProcessingControls({
                   colorRcAstro) && (
                   <section
                     className="stack-color-channel-tools"
-                    aria-label="RC-Astro on the color channels together"
+                    aria-label="Processing on the color channels together"
                   >
                     <StackRcAstroControls
                       label="Color channels"
-                      heading="RC-Astro on the color channels together"
+                      heading="Processing on the color channels together"
                       config={draft.color_rc_astro}
                       result={colorRcAstro ?? undefined}
                       disabled={disabled}
-                      toolKeys={colorChannelTools}
+                      categories={colorChannelCategories}
                       defaultsFor={colorChannelDefaults}
                       onChange={updateColorRcAstro}
                     />
@@ -1151,7 +1152,7 @@ export default function StackColorProcessingControls({
                           heading={combination ? 'RGB branch processing' : 'RGB star processing'}
                           config={draft.narrowband?.rgb_star_processing}
                           disabled={disabled || !preparesRgbBranch}
-                          toolKeys={colorChannelTools}
+                          categories={colorChannelCategories}
                           onChange={(rgb_star_processing) =>
                             changeNarrowband({
                               ...draft.narrowband,

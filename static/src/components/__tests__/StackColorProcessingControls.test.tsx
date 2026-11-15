@@ -336,7 +336,7 @@ describe('StackColorProcessingControls', () => {
       backgrounds={{}} protections={{}} fallbacks={{}} deconvolutions={{}}
       disabled={false} onApply={onApply} />);
     await openProcessingFlow();
-    const together = await screen.findByRole('region', { name: 'RC-Astro on the color channels together' });
+    const together = await screen.findByRole('region', { name: 'Processing on the color channels together' });
     expect(within(together).queryByRole('combobox', { name: 'Star removal' })).toBeNull();
 
     // Turning a tool on and off again leaves nothing to apply.
@@ -375,7 +375,7 @@ describe('StackColorProcessingControls', () => {
       backgrounds={{}} protections={{}} fallbacks={{}} deconvolutions={{}}
       disabled={false} onApply={onApply} />);
     await openProcessingFlow();
-    const together = await screen.findByRole('region', { name: 'RC-Astro on the color channels together' });
+    const together = await screen.findByRole('region', { name: 'Processing on the color channels together' });
     await user.selectOptions(within(together).getByRole('combobox', { name: 'Sharpening' }), 'bxt');
     expect(within(together).queryByRole('checkbox', { name: 'Correct only' })).toBeNull();
     await user.click(screen.getByRole('button', { name: 'Apply processing stack' }));
@@ -415,7 +415,7 @@ describe('StackColorProcessingControls', () => {
       backgrounds={{}} protections={{}} fallbacks={{}} deconvolutions={{}}
       disabled={false} onApply={vi.fn()} />);
     await openProcessingFlow();
-    const together = await screen.findByRole('region', { name: 'RC-Astro on the color channels together' });
+    const together = await screen.findByRole('region', { name: 'Processing on the color channels together' });
     const correctOnly = within(together).getByRole('checkbox', { name: 'Correct only' });
     expect(correctOnly).toBeChecked();
     await user.click(correctOnly);

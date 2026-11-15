@@ -60,7 +60,11 @@ export default function ProcessingToolsSettings({
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: processingCapabilitiesKey });
   const download = useMutation({
-    mutationFn: (parts: NoiseModelDownloadPart[]) => apiClient.downloadNoiseModel(parts),
+    // Asking for ONNX Runtime alone when it is installed asks for it again.
+    mutationFn: (parts: NoiseModelDownloadPart[]) => apiClient.downloadNoiseModel(
+      parts,
+      parts.length === 1 && parts[0] === 'runtime' && !!capabilities.data?.seiza?.installed.runtime_version,
+    ),
     onSuccess: (progress) => {
       queryClient.setQueryData<ProcessingCapabilities>(processingCapabilitiesKey, (current) =>
         current?.seiza ? { ...current, seiza: { ...current.seiza, download: progress } } : current);

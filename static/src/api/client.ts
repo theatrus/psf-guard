@@ -1742,11 +1742,15 @@ export const apiClient = {
   },
 
   /** Download ONNX Runtime, the noise model, or both to the server. */
-  downloadNoiseModel: async (parts: NoiseModelDownloadPart[]): Promise<NoiseModelDownloadProgress> => {
+  downloadNoiseModel: async (
+    parts: NoiseModelDownloadPart[],
+    /** Download ONNX Runtime again when this release is installed. */
+    force = false,
+  ): Promise<NoiseModelDownloadProgress> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.post<ApiResponse<NoiseModelDownloadProgress>>(
       '/tools/noise-model/download',
-      { parts }
+      force ? { parts, force } : { parts }
     );
     if (!data.data) throw new Error(data.error || 'Failed to start the download');
     return data.data;

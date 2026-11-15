@@ -474,8 +474,13 @@ function NoiseModelOnThisComputer({
   // An app older than the noise model answers nothing.
   if (!data) return null;
   const { installed } = data;
-  const needsRuntime = !installed.runtime_version && !path.trim() && !!data.runtime_download;
-  const ready = !!installed.runtime_version && !!installed.model;
+  // The app reads what is on disk and does not open the library, so a
+  // library the person installed has a path and no version here.
+  const needsRuntime = !installed.runtime_path && !path.trim() && !!data.runtime_download;
+  const ready = !!installed.runtime_path && !!installed.model;
+  const runtime = installed.runtime_version
+    ? `ONNX Runtime ${installed.runtime_version}`
+    : 'ONNX Runtime at the path below';
   return (
     <fieldset className="desktop-worker-work" aria-describedby="desktop-worker-noise-model-state">
       <legend>Noise model</legend>
@@ -483,13 +488,13 @@ function NoiseModelOnThisComputer({
         {download.isPending
           ? 'Downloading…'
           : ready
-            ? `Installed: ${installed.model}, ONNX Runtime ${installed.runtime_version}. Restart the worker after a download.`
+            ? `Installed: ${installed.model}, ${runtime}. Restart the worker after a download.`
             : [
-              installed.runtime_version ? `ONNX Runtime ${installed.runtime_version}` : 'ONNX Runtime is not installed',
+              installed.runtime_path ? runtime : 'ONNX Runtime is not installed',
               installed.model ? installed.model : 'the model is not installed',
             ].join('; ') + '.'}
       </p>
-      {!ready && !data.runtime_download && !installed.runtime_version && (
+      {!ready && !data.runtime_download && !installed.runtime_path && (
         <p className="muted">
           PSF Guard has no ONNX Runtime download for this computer. Install ONNX Runtime 1.17 or
           later and enter its path.

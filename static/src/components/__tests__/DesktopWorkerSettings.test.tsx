@@ -166,7 +166,7 @@ describe('this computer\'s worker', () => {
       runtime_download: '1.31.1',
     }));
     native.downloadNoiseModel.mockImplementation(async () => ({
-      installed: { folder: '/home/ann/.local/share/psf-guard/noise-model', runtime_version: '1.31.1', model: 'noise-v1-d33' },
+      installed: { folder: '/home/ann/.local/share/psf-guard/noise-model', runtime_path: '/home/ann/.local/share/psf-guard/noise-model/onnxruntime-1.31.1-a/libonnxruntime.so', runtime_version: '1.31.1', model: 'noise-v1-d33' },
       runtime_download: '1.31.1',
     }));
     mount(<DesktopWorkerSettings />);

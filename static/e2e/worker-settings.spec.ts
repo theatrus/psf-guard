@@ -45,7 +45,7 @@ test('a worker joins with the token shown once, and stops when it is revoked', a
 
   // This server's own worker is listed even with no rc-astro here.
   const local = page.locator('.worker-row', { has: page.getByText('This server', { exact: true }) });
-  await expect(local).toContainText('No RC-Astro tools');
+  await expect(local).toContainText('No processing tools');
   await expect(local).toContainText('Reads task files in place');
 
   // Where RC-Astro runs saves at once; stack builds stay on this server
@@ -97,7 +97,7 @@ test('a worker joins with the token shown once, and stops when it is revoked', a
   const row = page.locator(`.worker-row[data-worker="${name}"]`);
   await expect(row).toContainText('Connected', { timeout: 30_000 });
   await expect(row).toContainText('Shared storage');
-  await expect(row).toContainText('No RC-Astro tools');
+  await expect(row).toContainText('No processing tools');
   await expect(tokenRow).toContainText('In use');
   await row.scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath('worker-connected.png') });

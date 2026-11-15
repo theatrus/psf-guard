@@ -62,7 +62,7 @@ describe('StackStretchControls saved processing', () => {
     rerender(<StackStretchControls {...props} applied={applied} />);
     expect(apply).not.toHaveBeenCalled();
     fireEvent.click(screen.getByText('View processing'));
-    expect(screen.getByText('RC-Astro 2.6.6')).toBeInTheDocument();
+    expect(screen.getByText('Made with RC-Astro 2.6.6')).toBeInTheDocument();
     fireEvent.change(screen.getByRole('combobox', { name: 'Test R stretch model' }),
       { target: { value: 'identity' } });
     rerender(<StackStretchControls {...props} applied={JSON.parse(JSON.stringify(applied))} />);

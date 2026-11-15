@@ -414,7 +414,7 @@ describe('StackRcAstroControls', () => {
       result={{ cli_version: '2.6.6', has_stars: true, steps: [{ tool: 'sxt',
         name: 'StarXTerminator', ml_version: 11, device: 'CUDA', warnings: ['Ran on the CPU'] }] }}
       disabled={false} onChange={() => {}} />, { wrapper: wrapper() });
-    expect(await screen.findByText('RC-Astro 2.6.6')).toBeInTheDocument();
+    expect(await screen.findByText('Made with RC-Astro 2.6.6')).toBeInTheDocument();
     expect(screen.getByText(/StarXTerminator · model 11 · CUDA/)).toBeInTheDocument();
     expect(screen.getByText('Ran on the CPU')).toBeInTheDocument();
   });
@@ -464,7 +464,7 @@ describe('StackRcAstroControls', () => {
   it('fixes the picker on the configured provider where the step is required', async () => {
     server.use(http.get('/api/tools/rc-astro', () => ok(listed)));
     render(<StackRcAstroControls label="M31 separation" heading="Star separation" required
-      toolKeys={['sxt']} excludedParameters={['stars']}
+      categories={['star_removal']} excludedParameters={['stars']}
       config={{ steps: [{ tool: 'sxt', parameters: {} }] }} disabled={false} onChange={() => {}} />,
       { wrapper: wrapper() });
     const card = await screen.findByRole('region', { name: 'M31 separation processing tools' });
@@ -506,7 +506,7 @@ describe('StackRcAstroControls', () => {
     const config: RcAstroProcessing = { steps: [{ tool: 'bxt', parameters: { overlap: 0.3 } }] };
     const { rerender } = render(
       <StackRcAstroControls label="Color channels" config={config} disabled={false}
-        toolKeys={['bxt', 'nxt']} onChange={onChange} />,
+        categories={['sharpen', 'denoise']} onChange={onChange} />,
       { wrapper: wrapper() }
     );
 
@@ -525,7 +525,7 @@ describe('StackRcAstroControls', () => {
     rerender(
       <StackRcAstroControls label="Color channels"
         config={{ steps: [{ tool: 'bxt', parameters: { overlap: 0.3, ...pinned } }] }}
-        disabled={false} toolKeys={['bxt', 'nxt']} onChange={onChange} />
+        disabled={false} categories={['sharpen', 'denoise']} onChange={onChange} />
     );
     expect(screen.getByRole('checkbox', { name: 'Correct only' })).toBeChecked();
     expect(await screen.findByRole('spinbutton', { name: 'Sharpen Stars' })).toBeDisabled();

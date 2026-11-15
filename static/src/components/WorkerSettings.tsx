@@ -76,7 +76,7 @@ function WorkerRow({ worker }: { worker: WorkerSessionSummary }) {
           <span className="muted">
             {worker.rc_astro.length
               ? worker.rc_astro.join(', ')
-              : 'No RC-Astro tools'}
+              : 'No processing tools'}
           </span>
           {worker.noise_model && (
             <span className="muted">Noise model ({worker.noise_model})</span>
