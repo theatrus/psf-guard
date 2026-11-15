@@ -24,7 +24,8 @@ work on this server ──submit──► task board ◄──claim / report / c
   and what a worker must offer to run it (`TaskNeeds`). The shared types are
   in `src/remote_work/`.
 - **A worker advertises its work**: the task kinds it accepts
-  (`Offers.work`) and, for RC-Astro, the tools it accepts. `psf-guard worker
+  (`Offers.work`) and the provider of each processing step it runs
+  (`Offers.steps`; `Offers.rc_astro` for a server from before providers). `psf-guard worker
   --work` narrows them; without it a worker accepts everything it can run.
 - **Work on this server** submits a task and waits on its `Ticket`, on its
   own thread. Dropping the ticket takes the task off the board and removes
@@ -176,6 +177,66 @@ step whichever worker ran the earlier steps.
   optionally, `stars.fits`. Coverage is restored on the server.
 - **Progress.** The stage reads `NoiseXTerminator on studio-pc` while a
   remote worker runs it.
+
+## Processing steps by provider
+
+A chain's steps are grouped by category (`sharpen`, `denoise`,
+`star_removal`), each run by one provider: an RC-Astro tool, or Seiza's
+noise model (`noise-model`, a `denoise` provider). `remote_work/steps.rs`
+lists the providers, and every other part reads that list, so a new model
+is one more provider and an engine behind the same interface.
+
+- **One runner interface.** `StepRunner` is what an engine implements: the
+  schemas of the providers this machine can run, the payload a task
+  carries, the outputs, whether it reads the image's holes, the run, and
+  what a person does when no machine has it. `RcAstroEngine` runs the three
+  RC-Astro providers; `SeizaNoiseEngine` runs the model. A provider's
+  schema is its contract: name, the version that identifies its output,
+  license, and parameters with ranges. PSF Guard builds the model's schema,
+  with the amounts as parameters and the model's identity as the version:
+  the card's hash, `seiza_model::OUTPUT_VERSION`, the backend, the
+  precision and the band scale.
+- **One step record.** `ProcessingStep` is a provider and its parameters;
+  the provider decides the category. It is written as `{category,
+  provider, tool, parameters}` and read from that or from the earlier
+  `{tool, parameters}`, where the tool is the provider. `tool` is still
+  written so a release from before providers reads a setup this release
+  saved. A chain refuses two providers of one category.
+- **One chain.** Ids, manifests, prefix caching and pruning are the ones
+  RC-Astro steps had. A step's id still hashes the step as `{tool,
+  parameters}` with the schema's version, so results cached before
+  providers keep their ids.
+- **One task kind.** `processing_step`, whose spec is `{category, provider}`
+  beside the engine's payload. For an RC-Astro provider the payload is the
+  spec an `rc_astro_step` always had.
+- **Offers and needs.** A worker offers each provider with its schema in
+  `Offers.steps`. A task needs a provider, licensed, at its version.
+- **Older peers.** A worker from before providers sends no `steps`; the
+  server reads its `rc_astro` tools as offers, and sends it an RC-Astro
+  provider's step as `rc_astro_step`, with the same spec. A newer worker
+  still lists its RC-Astro tools in `rc_astro` and leaves the new kind out
+  of `work`, so a server from before providers reads its registration and
+  sends it `rc_astro_step` tasks, which it runs. Tasks live in memory only,
+  so none is stored across the change.
+- **Placement.** One choice places every provider's steps. It is stored
+  under the RC-Astro kind (`rc_astro` in the registry), as before.
+- **One capabilities answer.** `GET /api/tools/processing` lists each
+  provider's state, reason, remedy, version, schema and where it runs.
+- **Run.** The model's engine reads `input.fits` with its holes as they
+  are, runs in a `ComputePool`, and writes `processed.fits`. This server's
+  worker leases the pool's threads from the shared budget
+  (`workers::set_local_compute`): `Interactive` for a person's run, `Viewed`
+  otherwise. Seiza gives ONNX Runtime no thread count, so ONNX Runtime's own
+  threads are outside the lease.
+- **Downloads.** Neither side fetches anything by itself. The server's
+  download is a tracked job (`server/noise_model.rs`) with a row in the job
+  line; a worker's is `psf-guard-cli noise-model download` or the desktop
+  app's button. Seiza verifies the model; PSF Guard verifies the ONNX
+  Runtime archive against a SHA-256 in `noise_model/install.rs`.
+- **One library per process.** ONNX Runtime opens once, and Seiza keeps a
+  failed open until the process ends. PSF Guard therefore finds the library
+  file itself and calls Seiza only when the file exists, so installing ONNX
+  Runtime needs no restart. Changing the path of one that has run does.
 
 ## Desktop worker
 

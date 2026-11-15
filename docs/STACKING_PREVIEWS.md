@@ -1477,6 +1477,85 @@ runs** chooses; a server without rc-astro uses its workers' tools.
 `GET /api/tools/rc-astro` reports the tools the UI offers and where they
 run.
 
+### Processing steps by category
+
+The steps that run on the linear stack are grouped by what they do, and run
+in this order: **Sharpening**, **Noise reduction**, **Star removal**. Each
+category has a picker: **Off**, or one provider.
+
+| Category | Providers |
+|---|---|
+| **Sharpening** | BlurXTerminator |
+| **Noise reduction** | NoiseXTerminator, or Seiza noise model |
+| **Star removal** | StarXTerminator |
+
+A stack uses one provider in each category, so noise reduction runs
+NoiseXTerminator or Seiza's model, never both. A provider that is not
+installed or not licensed stays in the picker with the reason. Every
+provider shares one chain: each step caches under its own identity, a later
+change reuses the steps before it, and processing setups store the chain.
+Setups, views and cached results saved before the pickers keep working and
+mean the same: a saved NoiseXTerminator step is the **Noise reduction**
+choice NoiseXTerminator.
+
+### Seiza's noise model
+
+**Seiza noise model** is a **Noise reduction** provider that needs no
+RC-Astro license. It runs Seiza's learned noise model on the linear stack.
+
+PSF Guard does not ship the model or ONNX Runtime, the library that runs it,
+and never downloads them by itself. To install them on the server:
+
+1. Open **Settings › Processing › Stacking** and find **Processing tools**.
+2. Click **Download both**. PSF Guard downloads Microsoft's ONNX Runtime
+   release and checks it against a SHA-256 pinned in PSF Guard, then
+   downloads Seiza's latest published noise model, which Seiza verifies.
+   The job line shows the download, and **Stop download** ends it.
+3. Open a stack's **View processing** and choose **Seiza noise model**
+   under **Noise reduction**.
+
+**Download** beside **ONNX Runtime** or **Seiza noise model** fetches that
+part alone, and **Update** fetches the latest model again. To use an ONNX
+Runtime you installed yourself, enter its library file or its folder in
+**ONNX Runtime path** and click **Save path**; PSF Guard then offers no ONNX
+Runtime download. This is the only way on a computer PSF Guard has no
+download for, such as a Mac with an Intel processor. ONNX Runtime must be
+1.17 or later. PSF Guard opens ONNX Runtime once: after you change the path
+of an ONNX Runtime that has already run, restart PSF Guard. You can also run
+`psf-guard-cli noise-model download` on the server computer, as the account
+the server runs as. The downloads go to `noise-model` in PSF Guard's data
+folder for that account, and take about 600 MB; set
+`PSF_GUARD_NOISE_MODEL_DIR` to use another folder, such as a volume a
+container keeps.
+
+Set how much of the noise the model finds is removed, each from 0 to 1:
+
+- **Grain** is the pixel-scale noise. The default is 0.7.
+- **Mottle** is the wider blotches. The default is 0.9.
+
+Until the model is installed, the picker lists it as not installed and the
+card offers **Download in Settings**. A saved setup or view that uses it
+keeps its settings, and applying it fails with a message that explains where
+to download the model.
+
+The step's cache identity includes the two amounts, the model (by the hash
+of its card), Seiza's model output version, the backend and the precision.
+A new model or backend runs the step again, and so does a change to
+**Grain** or **Mottle**. The processed FITS carries a `SEIZAMDL` card with
+the model's name.
+
+The model runs on the CPU on Linux and Windows, where it is slow on a large
+stack: plan for tens of minutes on a 60-megapixel stack. On a Mac with
+Apple silicon it runs on the GPU through Core ML, unless **Use the GPU** is
+off in **Settings › Performance › GPU**. The step runs on this server or on
+a connected [worker](REMOTE_WORKERS.md) that has the same model, as
+**Processing steps** under **Where work runs** chooses.
+
+`GET /api/tools/processing` lists every provider with its state: ready, not
+licensed or not installed, the reason, its version and where it runs. It
+also reports what the server has installed for Seiza's model. `GET
+/api/tools/rc-astro` gives the same answer.
+
 A chain takes minutes on CPU. Every **Apply processing** — a stretch,
 deconvolution or RC-Astro chain — runs on the server as a *processing run*,
 detached from the request that started it. The request waits up to five

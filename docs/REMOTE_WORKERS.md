@@ -6,8 +6,11 @@ processor cores. The server stores the catalog and processing results.
 
 Workers run two kinds of work:
 
-- **RC-Astro tools**: BlurXTerminator, NoiseXTerminator and StarXTerminator,
-  for stack previews, color previews and narrowband stars.
+- **Processing steps**: sharpening, noise reduction and star removal for
+  stack previews, color previews and narrowband stars. The providers are
+  RC-Astro's BlurXTerminator, NoiseXTerminator and StarXTerminator, and
+  Seiza's noise model, which needs no RC-Astro license; see [Noise model on
+  a worker](#noise-model-on-a-worker).
 - **Stack builds**: each channel of a build, stacked from its frames. Stack
   builds stay on the server unless you send them to workers; see [Stack
   builds on a worker](#stack-builds-on-a-worker).
@@ -24,15 +27,18 @@ database management.
    tools on that computer. Run `rc-astro download-models` to download the
    models before the first task. Workers that only build stacks do not
    need rc-astro.
-3. On the server, open **Settings › Performance › Workers** and click **+ Add a worker**.
+3. If the worker will run the noise model, run `psf-guard-cli noise-model
+   download` on that computer. See [Noise model on a
+   worker](#noise-model-on-a-worker).
+4. On the server, open **Settings › Performance › Workers** and click **+ Add a worker**.
    Enter a name for the worker, such as `studio-pc`, and click **Create
    token**.
-4. Copy a command PSF Guard shows: one for macOS and Linux shells, one for
+5. Copy a command PSF Guard shows: one for macOS and Linux shells, one for
    Windows PowerShell. The token in it is shown only once. When the page's
    address only works on the server itself, such as `localhost`, the command
    contains `THIS-SERVER:PORT`; replace it with the server's address on your
    network.
-5. Run the command on the worker:
+6. Run the command on the worker:
 
    ```bash
    PSF_GUARD_WORKER_TOKEN=psfw_… psf-guard worker --server http://192.168.1.10:3000
@@ -66,8 +72,9 @@ continues running when you close the app window.
    Worker on this computer**.
 4. Enter the **Server address**, such as `http://192.168.1.10:3000`, and the
    **Worker token**. Leave **Worker name** blank to use the computer's host
-   name. Under **Task types**, select **Stack builds**, **RC-Astro tools**,
-   or both.
+   name. Under **Task types**, select **Stack builds**, **Processing
+   steps**, or both. To run the noise model, click **Download noise model**
+   under **Noise model**.
 5. Set **Concurrent tasks** to the maximum number of tasks this worker can
    run at the same time, from 1 to 16. Start with 1 for GPU work.
 6. To start the worker when you log in, select **Start worker at login**.
@@ -293,6 +300,7 @@ A worker accepts everything it can run unless you list its work with
 `--work`. Repeat it for more:
 
 - `--work stack` accepts stack builds.
+- `--work noise-model` accepts Seiza's noise model.
 - `--work rc-astro` accepts every RC-Astro tool installed on the worker.
 - `--work bxt`, `--work nxt` or `--work sxt` accepts only that tool.
 
@@ -303,19 +311,66 @@ accepts, and whether it accepts stack builds.
 
 ## Choose where work runs
 
-Under **Where work runs** in **Settings › Performance › Workers**, choose where RC-Astro
-tools run, and where stack builds run:
+Under **Where work runs** in **Settings › Performance › Workers**, choose where
+**Processing steps** run, and where **Stack builds** run. **Processing
+steps** covers every provider: the RC-Astro tools and Seiza's noise model.
+It is the choice that read **RC-Astro tools** before, and keeps the value
+you set:
 
 - **Workers first.** A connected worker that accepts the work runs it. The
   server runs the work itself only while no such worker is connected, so it
   is the fallback when a worker is stopped or unreachable. This is the
-  default for RC-Astro tools.
+  default for processing steps.
 - **Workers only.** Only workers run the work. With no worker connected, it
   fails rather than run on the server.
 - **This server only.** The server runs the work, and workers are not sent
   it. This is the default for stack builds.
 
 WBPP runs always run on the server.
+
+## Noise model on a worker
+
+A worker runs Seiza's noise model when it has ONNX Runtime and the model.
+PSF Guard never downloads them by itself. On the worker computer:
+
+1. Run `psf-guard-cli noise-model download`. The command downloads
+   Microsoft's ONNX Runtime release, checks it against a SHA-256 pinned in
+   PSF Guard, then downloads Seiza's latest published noise model. Both go
+   to `noise-model` in PSF Guard's data folder for your account; set
+   `PSF_GUARD_NOISE_MODEL_DIR` to use another folder.
+2. Restart the worker. It logs **Accepts the noise model …**, and the
+   server's **Settings › Performance › Workers** shows **Noise model** on the
+   worker's row.
+
+In the desktop app, use **Download noise model** under **Noise model** in
+**Worker on this computer** instead, then click **Restart worker**.
+
+`psf-guard-cli noise-model status` shows what is installed and which model
+this computer runs. To use an ONNX Runtime you installed yourself, 1.17 or
+later, run `psf-guard-cli noise-model download --skip-runtime`, and give its
+library file or folder with the worker's `--onnxruntime PATH`, the
+`onnxruntime` key of its settings file, or **ONNX Runtime path** in the
+desktop app. PSF Guard has no ONNX Runtime download for a Mac with an Intel
+processor, so that is the only way there.
+
+The server sends a noise model step only to a worker that offers the model
+the step was planned with: the same model (by the hash of its card), Seiza
+model output version, backend and precision. These are part of the result's
+cache identity, so a result does not change with the computer that made it.
+When workers and the server have different models, the step uses the model
+of the first connected worker by name, as an RC-Astro tool does; see [Which
+worker runs a tool](#which-worker-runs-a-tool). Run `noise-model download`
+on each computer to give them the same model.
+
+A worker runs the model on the backend Seiza picks for that computer: the
+CPU on Linux and Windows, the GPU through Core ML on a Mac with Apple
+silicon. The server's **Use the GPU** setting applies to the server's own
+runs. A Windows service runs as one account: run the download as that
+account, or set `PSF_GUARD_NOISE_MODEL_DIR` for both.
+
+Update workers with the server. A worker from before this release still
+runs RC-Astro tools for a newer server, and a newer worker still runs them
+for an older server; neither runs the noise model for the other.
 
 ## Stack builds on a worker
 
