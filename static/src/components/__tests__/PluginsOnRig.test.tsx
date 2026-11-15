@@ -58,6 +58,11 @@ describe('Plugins on this rig', () => {
     await waitFor(() => expect(screen.getByTestId('plugin-director')).toHaveTextContent('OffNot paired'));
   });
 
+  it('does not count another PSF Guard or the remote API key as the Sync plugin', async () => {
+    show({ token_configured: true, key_configured: true, sync_enabled: true, peer_sync_enabled: true, clients: [{ client_uuid: 'p', name: 'home-server', kind: 'peer', paired_at: 1 }] });
+    expect(await screen.findByTestId('plugin-sync')).toHaveTextContent('Not paired');
+  });
+
   it('shows only the Sync plugin without planning', async () => {
     show({});
     expect(await screen.findByTestId('plugin-sync')).toHaveTextContent('Not paired');

@@ -1659,9 +1659,7 @@ export default function TauriSettings({
               <RemoteSyncPreviews databases={[selectedDatabase]} disabled={isApplying} />
               <RemotePeerSync key={`peer:${selectedDatabase.id}`} databases={databases} localDatabaseId={selectedDatabase.id} disabled={isApplying} />
               {/* The receiving half: which other servers may sync with this database. */}
-              {managementAllowed && canEdit && <div className="director-page director-embedded" key={`peer-access:${selectedDatabase.id}`}>
-                <div className="plugin-cards"><PeerAccessPanel databaseId={selectedDatabase.id} databaseName={selectedDatabase.name} onChanged={() => void reload()} /></div>
-              </div>}
+              {managementAllowed && canEdit && <PeerAccessPanel key={`peer-access:${selectedDatabase.id}`} databaseId={selectedDatabase.id} databaseName={selectedDatabase.name} onChanged={() => void reload()} />}
             </div>
           )}
 

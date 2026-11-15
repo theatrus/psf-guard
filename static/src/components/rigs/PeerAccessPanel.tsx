@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Check, Copy, KeyRound, Power, Save, Trash2 } from 'lucide-react';
 import UnsavedMark from '../UnsavedMark';
 import { apiClient } from '../../api/client';
 import type { RemoteImageUploadSummary } from '../../api/types';
 import { useAccess } from '../../auth/access';
-import { ago, serverAddress } from './pluginShared';
+import { ago, contactText, serverAddress } from './pluginShared';
+import { usePairingCode } from './usePairingCode';
 import { requestMessage as message, useRemoteReceiver } from './remoteReceiver';
 import '../director/DirectorPage.css';
 
@@ -18,24 +19,14 @@ export default function PeerAccessPanel({ databaseId, databaseName, onChanged }:
   onChanged?: () => void;
 }) {
   const { canWrite } = useAccess();
-  const [code, setCode] = useState<{ token: string; expiresAt: number } | null>(null);
-  const [copy, setCopy] = useState<'idle' | 'copied' | 'failed'>('idle');
   // The other server pairs from its own Settings, so the page looks while
-  // a code waits.
-  const { loaded, database, upload, act, save, busy } = useRemoteReceiver(databaseId, { onChanged, pollMs: code ? 3_000 : false });
+  // a code waits. The count comes from the last answer; the hook's code
+  // decides the polling, so the two are read in this order.
+  const [waiting, setWaiting] = useState(false);
+  const { loaded, database, upload, act, save, busy } = useRemoteReceiver(databaseId, { onChanged, pollMs: waiting ? 3_000 : false });
   const peers = (upload?.clients ?? []).filter(entry => entry.kind === 'peer');
-  // A server that pairs answers the code: it is spent.
-  const pairedCount = useRef(peers.length);
-  useEffect(() => {
-    if (peers.length > pairedCount.current) setCode(null);
-    pairedCount.current = peers.length;
-  }, [peers.length]);
-  // An expired code can no longer pair: it goes, and so does the polling.
-  useEffect(() => {
-    if (!code) return;
-    const timer = window.setTimeout(() => setCode(null), Math.max(0, code.expiresAt - Date.now()));
-    return () => window.clearTimeout(timer);
-  }, [code]);
+  const { code, copy, issue, copyCode } = usePairingCode(databaseId, 'peer', peers.length);
+  useEffect(() => setWaiting(!!code), [code]);
 
   if (!canWrite) return null;
   if (loaded.isPending) return <p role="status">Loading paired PSF Guard servers...</p>;
@@ -45,24 +36,18 @@ export default function PeerAccessPanel({ databaseId, databaseName, onChanged }:
   const syncOn = upload?.peer_sync_enabled ?? upload?.sync_enabled ?? false;
   const credential = peers.length > 0 || keySet;
   const address = serverAddress();
-  const generate = () => act.mutate(async () => {
-    const issued = await apiClient.issuePairingCode(databaseId, 'peer');
-    setCopy('idle');
-    setCode({ token: issued.pairing_token, expiresAt: issued.expires_at * 1000 });
-  });
-  const copyCode = async () => {
-    if (!code) return;
-    try { await navigator.clipboard.writeText(code.token); setCopy('copied'); } catch { setCopy('failed'); }
-  };
+  const generate = () => act.mutate(issue);
   const remove = (name: string, clientUuid: string) => {
     if (window.confirm(`Remove ${name}? That server must pair again to sync with ${databaseName}.`)) {
       act.mutate(() => apiClient.revokePairedClient(databaseId, clientUuid));
     }
   };
 
-  return <section className="rig-profile-form rig-plugin plugin-card" aria-label="Other PSF Guard servers">
+  // Settings frames each section of the Sync tab, so this one has no card
+  // frame of its own.
+  return <section className="director-page director-embedded rig-profile-form rig-plugin" aria-label="Other PSF Guard servers">
     <div className="director-toolbar plugin-card-heading">
-      <h4>Other PSF Guard servers</h4>
+      <h3>Other PSF Guard servers</h3>
       <span className="director-muted">Sync with {databaseName}</span>
     </div>
     {act.isError && <p className="director-error" role="alert">{message(act.error)}</p>}
@@ -71,7 +56,7 @@ export default function PeerAccessPanel({ databaseId, databaseName, onChanged }:
       <legend>Pair</legend>
       <ul className="rig-plugin-rows" aria-label="Paired PSF Guard servers">
         {peers.map(entry => <li key={entry.client_uuid}>
-          <span>{entry.name} <small className="director-muted">Paired {new Date(entry.paired_at * 1000).toLocaleDateString()} · {entry.last_contact ? `last sync ${ago(entry.last_contact.at * 1000)}` : 'no sync recorded'}</small></span>
+          <span>{entry.name} <small className="director-muted">Paired {new Date(entry.paired_at * 1000).toLocaleDateString()} · {contactText(entry.last_contact)}</small></span>
           <button type="button" disabled={busy} aria-label={`Remove ${entry.name}`} onClick={() => remove(entry.name, entry.client_uuid)}><Trash2 size={14} />Remove</button>
         </li>)}
       </ul>

@@ -136,41 +136,67 @@ pub async fn add_peer(
     let registry_path = require_registry_path(&state)?;
     let name = require_text(&request.name, "name")?;
     let base_url = validated_url(&request.base_url)?;
-    // Pair before reading the registry: the exchange waits on the network,
-    // and the registry must not be held across it.
-    let paired = match pairing_code(&request) {
+    let key = request
+        .token
+        .as_deref()
+        .map(str::trim)
+        .filter(|token| !token.is_empty());
+    let default_id = crate::server::slug::compute_default_slug(&base_url);
+    let code = pairing_code(&request);
+    // Everything that can refuse the request locally is checked before the
+    // code is spent: a refusal after the exchange would leave a credential
+    // on the peer that nothing here holds.
+    if code.is_none() {
+        if key.is_none() {
+            return Err(AppError::BadRequest(
+                "a peer needs a pairing code or an API key".into(),
+            ));
+        }
+        if load_registry(&state)?
+            .peers
+            .iter()
+            .any(|peer| peer.id == default_id)
+        {
+            return Err(AppError::BadRequest(format!(
+                "a peer for {base_url} is already configured"
+            )));
+        }
+    }
+    // The exchange waits on the network, so the registry is read after it.
+    let paired = match code {
         Some(code) => Some(pair(&base_url, code).await?),
         None => None,
     };
     let mut registry = load_registry(&state)?;
     let taken = |id: &str| registry.peers.iter().any(|peer| peer.id == id);
-    let mut id = crate::server::slug::compute_default_slug(&base_url);
-    let (token, catalog_id) = match paired {
+    let (id, token, catalog_id) = match paired {
         Some(paired) => {
             // A code is for one of the peer's databases, so one address may
-            // be paired once for each.
-            if taken(&id) {
+            // be paired more than once. The ID is made unique, never refused.
+            let mut id = default_id;
+            let mut attempt = 1;
+            while taken(&id) {
+                attempt += 1;
                 id = crate::server::slug::compute_default_slug(&format!(
-                    "{base_url} {}",
+                    "{base_url} {} {attempt}",
                     paired.catalog_id
                 ));
             }
-            (paired.token, Some(paired.catalog_id))
+            (id, paired.token, Some(paired.catalog_id))
         }
-        None => match request.token.as_deref().map(str::trim) {
-            Some(token) if !token.is_empty() => (token.to_string(), normalized(request.catalog_id)),
-            _ => {
-                return Err(AppError::BadRequest(
-                    "a peer needs a pairing code or an API key".into(),
-                ))
+        None => {
+            if taken(&default_id) {
+                return Err(AppError::BadRequest(format!(
+                    "a peer for {base_url} is already configured"
+                )));
             }
-        },
+            (
+                default_id,
+                key.unwrap_or_default().to_string(),
+                normalized(request.catalog_id.clone()),
+            )
+        }
     };
-    if taken(&id) {
-        return Err(AppError::BadRequest(format!(
-            "a peer for {base_url} is already configured"
-        )));
-    }
     let entry = PeerEntry {
         id,
         name,
@@ -191,8 +217,10 @@ pub async fn update_peer(
     let registry_path = require_registry_path(&state)?;
     let name = require_text(&request.name, "name")?;
     let base_url = validated_url(&request.base_url)?;
-    // Pair before reading the registry, so a refused code leaves the peer
-    // as it was and the registry is not held across the network wait.
+    // An unknown peer is refused before the code is spent. The exchange
+    // then runs before the registry is read again, so a refused code leaves
+    // the peer as it was and the registry is not held across the wait.
+    find_peer(&state, &peer_id)?;
     let paired = match pairing_code(&request) {
         Some(code) => Some(pair(&base_url, code).await?),
         None => None,

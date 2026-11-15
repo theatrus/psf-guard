@@ -140,6 +140,9 @@ impl SyncClient {
                 "protocol_version": 1,
                 "pairing_token": pairing_code.trim(),
                 "client_name": client_name,
+                // Says a server is pairing, so the peer refuses a code
+                // generated for the N.I.N.A. Sync plugin.
+                "client_kind": "peer",
             }),
         )
         .await

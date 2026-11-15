@@ -1831,7 +1831,11 @@ export const apiClient = {
         enabled: boolean;
         image_directory?: string;
         token?: string;
+        /** Remove the remote API key; ignored when `token` sets a new one. */
+        clear_token?: boolean;
         sync_enabled?: boolean;
+        /** Sync for paired PSF Guard servers and the remote API key. */
+        peer_sync_enabled?: boolean;
         placement?: 'flat' | 'target_tree';
         directory_template?: string;
         /** `preset`: use `directory_template`; `catalog`: keep the catalog match (any template is ignored). Omit when the layout select was not touched. */

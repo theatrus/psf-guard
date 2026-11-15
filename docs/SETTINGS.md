@@ -100,8 +100,8 @@ control. The selected page includes the database name.
   - **Remote PSF Guard** lists the servers this one syncs with. To add one,
     generate a pairing code on that server, click **Add peer** here, and
     enter its URL and the code. This server exchanges the code for its own
-    credential. A server too old to pair takes its remote API key in the
-    same field.
+    credential. For a server too old to pair, enter its remote API key in
+    the same field.
   - **Other PSF Guard servers** shows which servers may sync with the
     selected database. **Generate server pairing code** makes a code for one
     server; it works once and expires after an hour. Each paired server

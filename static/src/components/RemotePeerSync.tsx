@@ -269,7 +269,7 @@ export default function RemotePeerSync({ databases, disabled, localDatabaseId }:
             />
           </label>
           <label>
-            <span>Pairing code</span>
+            <span>Pairing code or API key</span>
             <input
               type="password"
               value={formToken}
@@ -282,8 +282,8 @@ export default function RemotePeerSync({ databases, disabled, localDatabaseId }:
           <small>
             Generate the code on the peer: Settings, Sync, Other PSF Guard servers. This
             server exchanges it for its own credential, which is stored here and never
-            returned to this page. A peer too old to pair takes its remote API key
-            in this field instead.
+            returned to this page. For a peer too old to pair, enter its remote API
+            key in this field.
           </small>
           <button
             type="button"

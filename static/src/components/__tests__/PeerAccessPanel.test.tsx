@@ -49,12 +49,12 @@ function show(receiver: Receiver, { failSaves = false } = {}) {
 }
 
 describe('Other PSF Guard servers panel', () => {
-  it('lists paired servers, not Sync plugins, with their last sync, and removes one', async () => {
+  it('lists paired servers, not Sync plugins, with their last contact, and removes one', async () => {
     const { revoked } = show({ token_configured: true, peer_sync_enabled: true, clients: [plugin, peer, { client_uuid: 'q', name: 'laptop', kind: 'peer', paired_at: at }] });
     const list = await screen.findByRole('list', { name: 'Paired PSF Guard servers' });
     expect(within(list).getAllByRole('listitem')).toHaveLength(2);
-    expect(within(list).getByText(/home-server/).closest('li')).toHaveTextContent('last sync 5 min ago');
-    expect(within(list).getByText(/laptop/).closest('li')).toHaveTextContent('no sync recorded');
+    expect(within(list).getByText(/home-server/).closest('li')).toHaveTextContent('last contact 5 min ago');
+    expect(within(list).getByText(/laptop/).closest('li')).toHaveTextContent('no contact recorded');
     expect(screen.queryByText(/Observatory PC/)).toBeNull();
     vi.spyOn(window, 'confirm').mockReturnValueOnce(true);
     fireEvent.click(screen.getByRole('button', { name: 'Remove laptop' }));

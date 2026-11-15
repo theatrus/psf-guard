@@ -955,12 +955,18 @@ also support `--target` and `--status`.
 ### Transfer between PSF Guard servers
 
 Open the local database under **Settings → Databases & rigs → Overview**,
-then choose **Sync → Remote PSF Guard**. Add the peer URL and its manual API
-key, test the connection, then preview and apply a transfer.
-On the receiving catalog's **Rig setup** page (the **Plugins** tab with planning
-on), click **Generate key** under **Remote API key**, copy the key, and click
-**Save key**. Then click **Turn on scheduler sync**. Turn on
-**Image uploads** separately if the client will send files.
+then choose **Sync**. On the receiving server, find **Other PSF Guard
+servers** on the same tab of its database and click **Generate server pairing
+code**. On the sending server, click **Add peer** under **Remote PSF Guard**,
+enter the peer's URL and the code, test the connection, then preview and
+apply a transfer. Pairing turns on sync for other servers on the receiving
+database. Each server pairs with its own code, and **Remove** on the
+receiving server cuts off one server alone.
+
+For a script, or a server too old to pair, use the **Remote API key** in the
+same card: click **Generate key**, copy the key, and click **Save key**, then
+click **Turn on sync for other servers**. Turn on **Image uploads** on the
+**Rig setup** page separately if the client will send files.
 
 ```bash
 psf-guard sync remote --direction pull \

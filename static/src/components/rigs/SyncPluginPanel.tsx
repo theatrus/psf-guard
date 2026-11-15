@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Check, Copy, KeyRound, Power, Trash2 } from 'lucide-react';
 import { apiClient } from '../../api/client';
+import { usePairingCode } from './usePairingCode';
 import { useAccess } from '../../auth/access';
 import { contactText, serverAddress } from './pluginShared';
 import { requestMessage as message, useRemoteReceiver } from './remoteReceiver';
@@ -16,25 +17,14 @@ export default function SyncPluginPanel({ databaseId, onChanged }: {
   onChanged?: () => void;
 }) {
   const { canWrite } = useAccess();
-  const [code, setCode] = useState<{ token: string; expiresAt: number } | null>(null);
-  const [copy, setCopy] = useState<'idle' | 'copied' | 'failed'>('idle');
   // The plugin pairs from N.I.N.A., so the page looks while a code waits,
   // and again whenever you come back to it.
-  const { loaded, database, upload, act, save, busy } = useRemoteReceiver(databaseId, { onChanged, pollMs: code ? 3_000 : false });
+  const [waiting, setWaiting] = useState(false);
+  const { loaded, database, upload, act, save, busy } = useRemoteReceiver(databaseId, { onChanged, pollMs: waiting ? 3_000 : false });
   // Another PSF Guard pairs too; those are listed with the peers.
   const clients = (upload?.clients ?? []).filter(entry => entry.kind !== 'peer');
-  // A plugin that pairs answers the code: it is spent.
-  const pairedCount = useRef(clients.length);
-  useEffect(() => {
-    if (clients.length > pairedCount.current) setCode(null);
-    pairedCount.current = clients.length;
-  }, [clients.length]);
-  // An expired code can no longer pair: it goes, and so does the polling.
-  useEffect(() => {
-    if (!code) return;
-    const timer = window.setTimeout(() => setCode(null), Math.max(0, code.expiresAt - Date.now()));
-    return () => window.clearTimeout(timer);
-  }, [code]);
+  const { code, copy, issue, copyCode } = usePairingCode(databaseId, 'plugin', clients.length);
+  useEffect(() => setWaiting(!!code), [code]);
 
   if (!canWrite) return <p className="director-muted">Sign in as an editor to manage the Sync plugin.</p>;
   if (loaded.isPending) return <p role="status">Loading the Sync plugin...</p>;
@@ -43,15 +33,7 @@ export default function SyncPluginPanel({ databaseId, onChanged }: {
   const credential = clients.length > 0;
   const syncOn = upload?.sync_enabled ?? false;
   const address = serverAddress();
-  const generate = () => act.mutate(async () => {
-    const issued = await apiClient.issuePairingCode(databaseId);
-    setCopy('idle');
-    setCode({ token: issued.pairing_token, expiresAt: issued.expires_at * 1000 });
-  });
-  const copyCode = async () => {
-    if (!code) return;
-    try { await navigator.clipboard.writeText(code.token); setCopy('copied'); } catch { setCopy('failed'); }
-  };
+  const generate = () => act.mutate(issue);
   const remove = (name: string, clientUuid: string) => {
     if (window.confirm(`Remove ${name}? The plugin must pair again to reach this database.`)) {
       act.mutate(() => apiClient.revokePairedClient(databaseId, clientUuid));

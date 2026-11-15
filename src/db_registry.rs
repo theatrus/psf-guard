@@ -398,29 +398,39 @@ impl RemoteImageUploadConfig {
     /// Whether the credential `holder` (from [`Self::token_holder`]) may
     /// sync: a paired Sync plugin under `sync_enabled`, a paired peer or the
     /// remote API key under the peer grant.
-    pub fn sync_allowed_for(&self, holder: &str) -> bool {
-        match self
-            .clients
+    /// The kind of the paired client `holder`, or `None` when no such
+    /// client is paired (the remote API key's holder among them).
+    pub fn client_kind(&self, holder: &str) -> Option<RemoteClientKind> {
+        self.clients
             .iter()
             .find(|client| client.client_uuid == holder)
             .map(|client| client.kind)
-        {
+    }
+
+    /// Whether any client of `kind` is paired.
+    pub fn has_client_of(&self, kind: RemoteClientKind) -> bool {
+        self.clients.iter().any(|client| client.kind == kind)
+    }
+
+    pub fn sync_allowed_for(&self, holder: &str) -> bool {
+        match self.client_kind(holder) {
             Some(RemoteClientKind::Plugin) => self.sync_enabled,
             Some(RemoteClientKind::Peer) => self.peer_sync_allowed(),
             None => holder == LEGACY_KEY_HOLDER && self.peer_sync_allowed(),
         }
     }
 
-    /// Whether a Sync plugin can sync with this database: a paired plugin
-    /// with its grant on, or the remote API key, which plugins older than
-    /// pairing use, with the peer grant on.
+    /// Whether a Sync plugin can sync with this database. With a plugin
+    /// paired, its grant decides: turning scheduler sync off must not leave
+    /// the plugin counted through a key it does not use. With none paired,
+    /// the remote API key under the peer grant counts, because a plugin
+    /// older than pairing uses it.
     pub fn sync_plugin_can_reach(&self) -> bool {
-        (self.sync_enabled
-            && self
-                .clients
-                .iter()
-                .any(|client| client.kind == RemoteClientKind::Plugin))
-            || (self.peer_sync_allowed() && self.legacy_key_configured())
+        if self.has_client_of(RemoteClientKind::Plugin) {
+            self.sync_enabled
+        } else {
+            self.peer_sync_allowed() && self.legacy_key_configured()
+        }
     }
 
     pub fn token_is_configured(&self) -> bool {
@@ -1581,8 +1591,8 @@ mod tests {
         assert!(config.sync_allowed_for(&peer));
         assert!(config.sync_allowed_for(LEGACY_KEY_HOLDER));
         assert!(
-            config.sync_plugin_can_reach(),
-            "an older plugin uses the key"
+            !config.sync_plugin_can_reach(),
+            "the paired plugin's grant is off; the key is not its credential"
         );
 
         config.peer_sync_enabled = Some(false);
@@ -1592,9 +1602,11 @@ mod tests {
         assert!(!config.sync_allowed_for(LEGACY_KEY_HOLDER));
         assert!(!config.sync_allowed_for("never-paired"));
 
-        // A paired peer is not a Sync plugin.
+        // With no plugin paired, the key may be an older plugin's.
         config.revoke_client(&plugin);
         config.peer_sync_enabled = Some(true);
+        assert!(config.sync_plugin_can_reach());
+        // A paired peer is not a Sync plugin.
         config.clear_token();
         assert!(!config.sync_plugin_can_reach());
         assert!(config.token_matches("psfrc_peer_credential_0123456789"));

@@ -245,7 +245,7 @@ describe('RemotePeerSync', () => {
     await user.type(screen.getByLabelText('Name'), 'Second scope');
     await user.clear(screen.getByLabelText('Base URL'));
     await user.type(screen.getByLabelText('Base URL'), 'https://second.example');
-    await user.type(screen.getByLabelText('Pairing code'), 'psfpt_a-code-from-the-peer');
+    await user.type(screen.getByLabelText('Pairing code or API key'), 'psfpt_a-code-from-the-peer');
     await user.click(screen.getByRole('button', { name: 'Save peer' }));
 
     await waitFor(() => expect(posted).not.toBeNull());
@@ -261,7 +261,7 @@ describe('RemotePeerSync', () => {
     await user.type(screen.getByLabelText('Name'), 'Old scope');
     await user.clear(screen.getByLabelText('Base URL'));
     await user.type(screen.getByLabelText('Base URL'), 'https://old.example');
-    await user.type(screen.getByLabelText('Pairing code'), 'a-key-long-enough-for-the-peer');
+    await user.type(screen.getByLabelText('Pairing code or API key'), 'a-key-long-enough-for-the-peer');
     await user.click(screen.getByRole('button', { name: 'Save peer' }));
     await waitFor(() => expect(posted).not.toBeNull());
     expect(posted).toEqual({

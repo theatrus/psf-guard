@@ -459,7 +459,71 @@ async fn adding_a_peer_with_a_code_pairs_this_server() {
     assert_eq!(config.clients.len(), 1);
     assert_eq!(config.clients[0].kind, RemoteClientKind::Peer);
     assert!(!config.clients[0].name.is_empty());
-    assert!(can_sync(peer_router, &token).await);
+    assert!(can_sync(peer_router.clone(), &token).await);
+
+    // The same address pairs again with a new code, under its own ID.
+    let (_, issued) = call(
+        peer_router.clone(),
+        "POST",
+        "/api/databases/review/pairing-token?kind=peer",
+        None,
+        None,
+    )
+    .await;
+    let (status, again) = call(
+        router.clone(),
+        "POST",
+        "/api/peers",
+        None,
+        Some(json!({
+            "name": "Telescope again",
+            "base_url": base_url,
+            "pairing_code": issued["data"]["pairing_token"],
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{again:#}");
+    assert_ne!(again["data"]["id"], added["data"]["id"]);
+
+    // A code generated for the Sync plugin is refused, and stays unspent
+    // for the plugin.
+    let (_, issued) = call(
+        peer_router.clone(),
+        "POST",
+        "/api/databases/review/pairing-token",
+        None,
+        None,
+    )
+    .await;
+    let plugin_code = issued["data"]["pairing_token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (status, wrong) = call(
+        router.clone(),
+        "POST",
+        "/api/peers",
+        None,
+        Some(json!({ "name": "Wrong card", "base_url": base_url, "pairing_code": plugin_code })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{wrong:#}");
+    assert!(
+        wrong["error"]
+            .as_str()
+            .unwrap()
+            .contains("N.I.N.A. Sync plugin"),
+        "{wrong:#}"
+    );
+    let (status, paired) = call(
+        peer_router.clone(),
+        "POST",
+        "/api/sync/v1/pair",
+        None,
+        Some(json!({ "protocol_version": 1, "pairing_token": plugin_code, "client_name": "N.I.N.A." })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{paired:#}");
 
     // A used code is refused, and nothing is stored for it.
     let (status, refused) = call(
@@ -476,6 +540,45 @@ async fn adding_a_peer_with_a_code_pairs_this_server() {
             .unwrap()
             .peers
             .len(),
-        1
+        2
     );
+}
+
+#[tokio::test]
+async fn a_plugin_is_refused_a_servers_code_and_the_code_stays_unspent() {
+    let (_state, router, _registry_path, _directory) = harness();
+    let (_, issued) = call(
+        router.clone(),
+        "POST",
+        "/api/databases/review/pairing-token?kind=peer",
+        None,
+        None,
+    )
+    .await;
+    let code = issued["data"]["pairing_token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    // The Sync plugin identifies itself by its version header.
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/sync/v1/pair")
+        .header("content-type", "application/json")
+        .header("x-psf-guard-plugin-version", "1.5.0.0")
+        .body(Body::from(
+            json!({ "protocol_version": 1, "pairing_token": code }).to_string(),
+        ))
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    // A server can still use it.
+    let (status, paired) = call(
+        router,
+        "POST",
+        "/api/sync/v1/pair",
+        None,
+        Some(json!({ "protocol_version": 1, "pairing_token": code, "client_kind": "peer" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{paired:#}");
 }

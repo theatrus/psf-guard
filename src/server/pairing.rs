@@ -105,6 +105,15 @@ impl PairingStore {
         Ok((token, expires_at))
     }
 
+    /// What kind of client an unexpired code is for, without spending it.
+    pub fn kind_of(&self, token: &str) -> Result<Option<RemoteClientKind>, AppError> {
+        Ok(self
+            .lock()?
+            .get(&hash_token(token))
+            .filter(|entry| entry.expires_at > unix_seconds())
+            .map(|entry| entry.kind))
+    }
+
     /// Consume a code, returning the catalog it pairs and the kind of client
     /// it was issued for. Single-use: a second presentation of the same code
     /// finds nothing.
@@ -165,6 +174,10 @@ pub struct PairRequest {
     /// Astro"), shown in the paired-clients list.
     #[serde(default)]
     pub client_name: Option<String>,
+    /// What is pairing: `peer` from another PSF Guard. The Sync plugin
+    /// sends none; its version header identifies it.
+    #[serde(default)]
+    pub client_kind: Option<RemoteClientKind>,
 }
 
 #[derive(Debug, Serialize)]
@@ -186,6 +199,7 @@ pub struct PairResult {
 /// clients keep working, and the operator revokes them one by one.
 pub async fn pair_route(
     State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
     Json(request): Json<PairRequest>,
 ) -> Result<Json<ApiResponse<PairResult>>, AppError> {
     use crate::db_registry::{DbRegistry, RemoteImageUploadConfig};
@@ -207,6 +221,38 @@ pub async fn pair_route(
             "unsupported pairing protocol {}",
             request.protocol_version
         )));
+    }
+    // A code from the wrong card would register a server as a Sync plugin,
+    // or a plugin as a server. Refuse it unspent, so the right client can
+    // still use it. A client that does not say what it is pairs as the
+    // code's kind, as plugins older than this did.
+    let caller = request.client_kind.or_else(|| {
+        headers
+            .contains_key(crate::server::rig_plugins::PLUGIN_VERSION_HEADER)
+            .then_some(RemoteClientKind::Plugin)
+    });
+    if let (Some(caller), Some(issued_for)) =
+        (caller, state.pairing.kind_of(&request.pairing_token)?)
+        && caller != issued_for
+    {
+        audit(
+            "-",
+            AuditOutcome::Refused,
+            Some("code is for another kind of client"),
+        );
+        return Err(AppError::BadRequest(
+            match issued_for {
+                RemoteClientKind::Plugin => {
+                    "this pairing code is for the N.I.N.A. Sync plugin. Generate a server \
+                     pairing code under Settings, Sync, Other PSF Guard servers"
+                }
+                RemoteClientKind::Peer => {
+                    "this pairing code is for another PSF Guard server. Generate a Sync \
+                     pairing code on the Rig setup page"
+                }
+            }
+            .into(),
+        ));
     }
     let Some((db_id, kind)) = state.pairing.consume(&request.pairing_token)? else {
         audit("-", AuditOutcome::Refused, Some("unknown or expired code"));
