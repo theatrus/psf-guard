@@ -260,6 +260,23 @@ fn recorded_by_nina(metadata: &serde_json::Value) -> bool {
     metadata.get("GuidingRMS").is_some()
 }
 
+/// Whether two lights are the same exposure. Target Scheduler's record of
+/// a frame and an import's copy of it sit in different targets, which
+/// N.I.N.A. and the import may name differently, and a target renamed in
+/// N.I.N.A. changes only Target Scheduler's side. Between those two the
+/// target's name is left out; the capture time, exposure, filter and
+/// camera must still agree.
+fn same_exposure(left: &Light, right: &Light) -> bool {
+    if left.recorded_by_nina == right.recorded_by_nina {
+        return identities_match(&left.identity, &right.identity);
+    }
+    let mut left = left.identity.clone();
+    let mut right = right.identity.clone();
+    left.target = None;
+    right.target = None;
+    identities_match(&left, &right)
+}
+
 /// [`recorded_by_nina`] for metadata as a row stores it.
 pub(crate) fn metadata_recorded_by_nina(metadata: &str) -> bool {
     serde_json::from_str::<serde_json::Value>(metadata)
@@ -626,9 +643,7 @@ pub fn plan(
             group
                 .iter()
                 .copied()
-                .filter(|other| {
-                    *other != index && identities_match(&all[index].identity, &all[*other].identity)
-                })
+                .filter(|other| *other != index && same_exposure(&all[index], &all[*other]))
                 .collect()
         };
         let twins_of = |index: usize| -> Vec<usize> {
@@ -1366,16 +1381,15 @@ mod tests {
         );
     }
 
-    #[test]
-    fn target_schedulers_record_of_a_light_stays_over_an_import_of_it() {
-        // Target Scheduler recorded the exposure under another profile,
-        // with its own project, target and plan. An import of the capture
-        // folder catalogued it again before the rename, and once more
-        // after it.
-        let mut catalog = Catalog::with_twin();
-        let lights = catalog.lights();
-        let (first, twin) = (lights[0].clone(), lights[1].clone());
-        catalog.grade(twin.0, 1);
+    /// Target Scheduler's record of the first light, in another profile
+    /// with its own project, target (named `target_name` when given) and
+    /// exposure plan, under the name before the rename. Returns its id and
+    /// file name.
+    fn add_target_scheduler_record(
+        catalog: &Catalog,
+        first: i64,
+        target_name: Option<&str>,
+    ) -> (i64, String) {
         let old_path = format!(r"C:\Users\astro\Documents\NINA_Images\{OLD_NAME}");
         let metadata = serde_json::json!({
             "FileName": old_path,
@@ -1395,36 +1409,59 @@ mod tests {
             .conn
             .execute_batch(
                 "CREATE TEMP TABLE ts_project AS SELECT * FROM project LIMIT 1;
-                 UPDATE ts_project SET Id = NULL, guid = 'ts-project', profileId = 'ts-profile',
-                     name = 'IC 443 Jellyfish Nebula';
-                 INSERT INTO project SELECT * FROM ts_project;
-                 DROP TABLE ts_project;
-                 CREATE TEMP TABLE ts_target AS SELECT * FROM target LIMIT 1;
-                 UPDATE ts_target SET Id = NULL, guid = 'ts-target',
-                     projectid = (SELECT Id FROM project WHERE guid = 'ts-project');
-                 INSERT INTO target SELECT * FROM ts_target;
-                 DROP TABLE ts_target;
-                 CREATE TEMP TABLE ts_plan AS SELECT * FROM exposureplan LIMIT 1;
-                 UPDATE ts_plan SET Id = NULL, guid = 'ts-plan', profileId = 'ts-profile',
-                     desired = 45, acquired = 1, accepted = 1,
-                     targetid = (SELECT Id FROM target WHERE guid = 'ts-target');
-                 INSERT INTO exposureplan SELECT * FROM ts_plan;
-                 DROP TABLE ts_plan;",
+             UPDATE ts_project SET Id = NULL, guid = 'ts-project', profileId = 'ts-profile',
+                 name = 'IC 443 Jellyfish Nebula';
+             INSERT INTO project SELECT * FROM ts_project;
+             DROP TABLE ts_project;
+             CREATE TEMP TABLE ts_target AS SELECT * FROM target LIMIT 1;
+             UPDATE ts_target SET Id = NULL, guid = 'ts-target',
+                 projectid = (SELECT Id FROM project WHERE guid = 'ts-project');
+             INSERT INTO target SELECT * FROM ts_target;
+             DROP TABLE ts_target;
+             CREATE TEMP TABLE ts_plan AS SELECT * FROM exposureplan LIMIT 1;
+             UPDATE ts_plan SET Id = NULL, guid = 'ts-plan', profileId = 'ts-profile',
+                 desired = 45, acquired = 1, accepted = 1,
+                 targetid = (SELECT Id FROM target WHERE guid = 'ts-target');
+             INSERT INTO exposureplan SELECT * FROM ts_plan;
+             DROP TABLE ts_plan;",
             )
             .unwrap();
         catalog
             .conn
             .execute(
                 "INSERT INTO acquiredimage (projectId, targetId, acquireddate, filtername,
-                     gradingStatus, metadata, profileId, exposureId, guid)
-                 SELECT p.Id, t.Id, a.acquireddate, 'SII', 1, ?1, 'ts-profile', e.Id, 'ts-light'
-                 FROM project p, target t, exposureplan e, acquiredimage a
-                 WHERE p.guid = 'ts-project' AND t.guid = 'ts-target' AND e.guid = 'ts-plan'
-                     AND a.Id = ?2",
-                params![metadata, first.0],
+                 gradingStatus, metadata, profileId, exposureId, guid)
+             SELECT p.Id, t.Id, a.acquireddate, 'SII', 1, ?1, 'ts-profile', e.Id, 'ts-light'
+             FROM project p, target t, exposureplan e, acquiredimage a
+             WHERE p.guid = 'ts-project' AND t.guid = 'ts-target' AND e.guid = 'ts-plan'
+                 AND a.Id = ?2",
+                params![metadata, first],
             )
             .unwrap();
         let ts_id = catalog.conn.last_insert_rowid();
+        if let Some(name) = target_name {
+            catalog
+                .conn
+                .execute(
+                    "UPDATE target SET name = ?1 WHERE guid = 'ts-target'",
+                    [name],
+                )
+                .unwrap();
+        }
+        (ts_id, old_path)
+    }
+
+    #[test]
+    fn target_schedulers_record_of_a_light_stays_over_an_import_of_it() {
+        // Target Scheduler recorded the exposure under another profile,
+        // with its own project, target and plan. An import of the capture
+        // folder catalogued it again before the rename, and once more
+        // after it.
+        let mut catalog = Catalog::with_twin();
+        let lights = catalog.lights();
+        let (first, twin) = (lights[0].clone(), lights[1].clone());
+        catalog.grade(twin.0, 1);
+        let (ts_id, old_path) = add_target_scheduler_record(&catalog, first.0, None);
         let placed = |catalog: &Catalog| -> (String, i64, i64, i64, String) {
             catalog
                 .conn
@@ -1513,6 +1550,79 @@ mod tests {
             .collect::<rusqlite::Result<_>>()
             .unwrap();
         assert_eq!(merged, BTreeSet::from([first.1, twin.1]));
+    }
+
+    #[test]
+    fn target_schedulers_record_matches_an_import_in_a_target_renamed_since() {
+        // The target was renamed in N.I.N.A. after the import, and an
+        // earlier merge already removed the import's light under the old
+        // name. Target Scheduler's record and the renamed file's light
+        // are left, in targets with different names.
+        let mut catalog = Catalog::with_twin();
+        let lights = catalog.lights();
+        let (first, twin) = (lights[0].clone(), lights[1].clone());
+        let (ts_id, old_path) =
+            add_target_scheduler_record(&catalog, first.0, Some("IC 443 Jellyfish Nebula SHO"));
+        catalog
+            .conn
+            .execute("DELETE FROM acquiredimage WHERE Id = ?1", [first.0])
+            .unwrap();
+        let finder = catalog.finder(None);
+        let protected = BTreeSet::new();
+
+        let report = plan(&catalog.conn, &finder, &protected).unwrap();
+        assert!(report.held.is_empty(), "{report:?}");
+        let [pair] = report.pairs.as_slice() else {
+            panic!("{report:?}");
+        };
+        assert_eq!((pair.kept.id, pair.twin.id), (ts_id, twin.0));
+        assert!(pair.copies.is_empty());
+
+        merge(&mut catalog.conn, &finder, &protected).unwrap();
+
+        assert_eq!(
+            catalog.lights(),
+            vec![(ts_id, "ts-light".to_string(), twin.2.clone(), 1)]
+        );
+        assert_eq!(
+            renamed(&catalog.conn).unwrap()["ts-light"],
+            Renamed {
+                source_name: old_path,
+                file_name: twin.2.clone(),
+            }
+        );
+    }
+
+    #[test]
+    fn two_imports_in_differently_named_targets_still_differ() {
+        // Between two lights an import made, the target's name still
+        // counts: neither is Target Scheduler's record.
+        let catalog = Catalog::with_twin();
+        let lights = catalog.lights();
+        catalog
+            .conn
+            .execute_batch(
+                "CREATE TEMP TABLE other_target AS SELECT * FROM target LIMIT 1;
+                 UPDATE other_target SET Id = NULL, guid = 'other-target', name = 'Another target';
+                 INSERT INTO target SELECT * FROM other_target;
+                 DROP TABLE other_target;",
+            )
+            .unwrap();
+        catalog
+            .conn
+            .execute(
+                "UPDATE acquiredimage SET targetId = (SELECT Id FROM target WHERE guid = 'other-target')
+                 WHERE Id = ?1",
+                [lights[1].0],
+            )
+            .unwrap();
+        let finder = catalog.finder(None);
+
+        let report = plan(&catalog.conn, &finder, &BTreeSet::new()).unwrap();
+        assert!(
+            report.pairs.is_empty() && report.held.is_empty(),
+            "{report:?}"
+        );
     }
 
     #[test]
