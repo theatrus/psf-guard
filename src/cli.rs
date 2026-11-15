@@ -40,6 +40,22 @@ pub enum NoiseModelAction {
     },
 }
 
+/// What `psf-guard rc-astro` does.
+#[derive(Subcommand, Debug)]
+pub enum RcAstroAction {
+    /// Show RC-Astro's account and license state on this computer. This
+    /// makes one online check with RC-Astro, as the account you run it as.
+    License {
+        /// Print the report as JSON.
+        #[arg(long)]
+        json: bool,
+        /// The rc-astro executable (defaults to PSF_GUARD_RC_ASTRO, then
+        /// rc-astro on PATH, then the folder RC-Astro's installer uses).
+        #[arg(long, value_name = "PATH")]
+        rc_astro: Option<String>,
+    },
+}
+
 /// What `psf-guard worker-service` does.
 #[derive(Subcommand, Debug)]
 pub enum WorkerServiceAction {
@@ -1557,6 +1573,17 @@ pub enum Commands {
     NoiseModel {
         #[command(subcommand)]
         action: NoiseModelAction,
+    },
+
+    /// Check RC-Astro's tools on this computer.
+    ///
+    /// `psf-guard rc-astro license` shows which rc-astro PSF Guard found,
+    /// the RC-Astro account this computer is registered to, and each
+    /// product's license state. Run it on a worker computer as the account
+    /// the worker runs under to see what the worker sees.
+    RcAstro {
+        #[command(subcommand)]
+        action: RcAstroAction,
     },
 
     /// Run the worker as a Windows service, for a computer that runs work

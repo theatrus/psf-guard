@@ -101,6 +101,11 @@ impl LocalTools {
                     .takes_stack()
                     .then(|| env!("CARGO_PKG_VERSION").into()),
                 steps,
+                rc_astro_path: self
+                    .rc_astro
+                    .as_ref()
+                    .map(|cli| cli.executable().display().to_string()),
+                license_check: self.rc_astro.is_some(),
             },
             problem,
         )
@@ -249,6 +254,14 @@ pub fn execute(
                 report,
             },
         ),
+        TaskKind::RcAstroLicense => {
+            let cli = tools
+                .rc_astro
+                .as_ref()
+                .ok_or_else(|| "rc-astro is not installed on this worker".to_string())?;
+            let check = rc_astro::check_license(cli.executable(), rc_astro::LICENSE_CHECK_LIMIT);
+            serde_json::to_value(check).map_err(|error| error.to_string())
+        }
         TaskKind::ProcessingStep => {
             let spec: steps::StepSpec = serde_json::from_value(spec)
                 .map_err(|error| format!("The processing step could not be read: {error}"))?;

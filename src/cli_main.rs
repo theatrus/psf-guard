@@ -1885,6 +1885,9 @@ pub fn main() -> Result<()> {
                 ))?;
             }
         }
+        Commands::RcAstro { action } => {
+            crate::commands::rc_astro::run(action)?;
+        }
         Commands::NoiseModel { action } => {
             crate::commands::noise_model::run(action)?;
         }

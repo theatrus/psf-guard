@@ -271,6 +271,112 @@ async fn a_remote_worker_downloads_the_input_and_uploads_the_result() {
     eventually("the worker leaves", || connected(&server).is_none()).await;
 }
 
+/// A person asks one worker for RC-Astro's account status: the worker runs
+/// the online check itself and the server gets its report. The worker's row
+/// has its rc-astro path and each tool's own license state before anyone
+/// asks.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_worker_answers_a_license_check_only_when_asked() {
+    let tool = crate::server::stack_preview::rc_astro::test_tool::install(false);
+    let server = server().await;
+    let work = tempfile::tempdir().unwrap();
+    let (stop, worker) = start_worker(&server, FileAccess::default(), work.path());
+    eventually("the worker connects", || connected(&server).is_some()).await;
+    let row = connected(&server).unwrap();
+    assert!(row.license_check);
+    assert!(row
+        .rc_astro_path
+        .as_deref()
+        .is_some_and(|path| path.ends_with("rc-astro")));
+    assert_eq!(row.rc_astro_tools.len(), 3);
+    assert!(row.rc_astro_tools.iter().all(|found| found.licensed));
+    // Connecting and listing made no online check.
+    assert_eq!(tool.license_calls(), 0);
+
+    let ask = |session: String| {
+        let state = Arc::clone(&server.state);
+        tokio::task::spawn_blocking(move || state.workers.check_worker_license(&session))
+    };
+    let check = ask(row.session.clone()).await.unwrap().unwrap();
+    assert_eq!(tool.license_calls(), 1);
+    assert_eq!(check.cli_version.as_deref(), Some("9.9.9-test"));
+    let report = check.report.unwrap();
+    assert_eq!(report.computer, "ann@stand-in");
+    assert_eq!(report.account_email.as_deref(), Some("user@example.com"));
+    assert_eq!(report.products[0].message, "Permanent license through ML4");
+
+    // Offline, the worker sends RC-Astro's own error and no report.
+    tool.go_offline();
+    let check = ask(row.session.clone()).await.unwrap().unwrap();
+    assert_eq!(check.report, None);
+    assert_eq!(
+        check.error.as_deref(),
+        Some("Could not reach the RC-Astro license server")
+    );
+    assert_eq!(tool.license_calls(), 2);
+    // This server's own check runs the same command here.
+    let state = Arc::clone(&server.state);
+    let local = tokio::task::spawn_blocking(move || state.workers.check_local_license())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(local.error.is_some());
+    assert_eq!(tool.license_calls(), 3);
+    assert!(ask("no-such-session".into()).await.unwrap().is_err());
+
+    // The routes Settings calls: this server's check answers with RC-Astro's
+    // error in the report, and a worker that is not connected is refused
+    // with the reason.
+    use tower::ServiceExt as _;
+    let post = |path: String| {
+        let app = crate::server::api_router(Arc::clone(&server.state));
+        async move {
+            let response = app
+                .oneshot(
+                    axum::http::Request::builder()
+                        .method("POST")
+                        .uri(path)
+                        .header("content-type", "application/json")
+                        .body(axum::body::Body::from("{}"))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let status = response.status();
+            let body = axum::body::to_bytes(response.into_body(), 1 << 20)
+                .await
+                .unwrap();
+            (
+                status,
+                serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+            )
+        }
+    };
+    let (status, body) = post("/tools/rc-astro/license-check".into()).await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+    assert_eq!(
+        body["data"]["error"],
+        "Could not reach the RC-Astro license server"
+    );
+    assert_eq!(tool.license_calls(), 4);
+    // A worker's check is for the people who run the server.
+    let (status, _) = post(format!("/workers/{}/license-check", row.session)).await;
+    assert_eq!(status, axum::http::StatusCode::FORBIDDEN);
+    assert_eq!(tool.license_calls(), 4);
+    server.state.set_allow_database_management(true);
+    let (status, body) = post("/workers/no-such-session/license-check".into()).await;
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"], "That worker is not connected");
+    let (status, body) = post(format!("/workers/{}/license-check", row.session)).await;
+    assert_eq!(status, axum::http::StatusCode::OK, "{body}");
+    assert_eq!(tool.license_calls(), 5);
+
+    drop(stop);
+    worker.await.unwrap().unwrap();
+    eventually("the worker leaves", || connected(&server).is_none()).await;
+}
+
 /// An output larger than axum's default 2 MB body limit reaches the server.
 /// This catches the route switching to an extractor such as `Bytes` under
 /// that default; it cannot tell whether a raised limit reads the body into

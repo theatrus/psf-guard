@@ -76,6 +76,14 @@ pub struct Offers {
     /// reads the registration, and sends the worker RC-Astro steps as before.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub steps: Vec<crate::remote_work::steps::StepOffer>,
+    /// The rc-astro the worker found, for Settings › Workers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rc_astro_path: Option<String>,
+    /// Whether the worker answers [`TaskKind::RcAstroLicense`]: it has
+    /// rc-astro and is new enough to know the task. `work` does not list
+    /// the kind, so an older server still reads the registration.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub license_check: bool,
 }
 
 fn one_slot() -> usize {
@@ -187,6 +195,12 @@ pub enum TaskKind {
     RcAstroStep,
     /// One channel of a stack build: its frames integrated into a stack.
     StackChannel,
+    /// RC-Astro's account status on the worker, checked online because a
+    /// person asked: `rc-astro license --json`, run as the worker's
+    /// account. The result is a
+    /// [`crate::remote_work::rc_astro::LicenseCheck`]. Sent only to the
+    /// worker it is about, and only to one that offers `license_check`.
+    RcAstroLicense,
     /// One provider's step over one image: an RC-Astro tool or one of
     /// Seiza's models. See [`crate::remote_work::steps`]. A worker older
     /// than providers is sent an RC-Astro provider's step as

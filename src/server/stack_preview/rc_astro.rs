@@ -2003,6 +2003,19 @@ pub(crate) mod test_tool {
             std::fs::write(self.dir.path().join("release"), b"").unwrap();
         }
 
+        /// Have the next license check fail as an offline computer's does.
+        pub fn go_offline(&self) {
+            std::fs::write(self.dir.path().join("offline"), b"").unwrap();
+        }
+
+        /// One line per license check the tool was asked for.
+        pub fn license_calls(&self) -> usize {
+            std::fs::read_to_string(self.dir.path().join("license-calls"))
+                .unwrap_or_default()
+                .lines()
+                .count()
+        }
+
         /// One line per run the tool started, naming the tool.
         pub fn invocations_log(&self) -> String {
             std::fs::read_to_string(self.dir.path().join("invocations")).unwrap_or_default()
@@ -2063,6 +2076,13 @@ rm -f "{state}/release"
         };
         let script = format!(
             r#"#!/bin/sh
+if [ "$1" = "license" ]; then
+  echo "$@" >> "{state}/license-calls"
+  echo '{{"event":"info","topic":"version","cliVersion":"9.9.9-test","schemaVersion":6}}'
+  if [ -f "{state}/offline" ]; then echo '{{"event":"error","message":"Could not reach the RC-Astro license server"}}'; exit 77; fi
+  echo '{{"event":"info","topic":"licenseReport","operation":"check","computer":"ann@stand-in","account":{{"email":"user@example.com"}},"activationUrl":"https://www.rc-astro.com/account","licenseStatus":[{{"product":"nxt","name":"NoiseXTerminator","status":"permanent","message":"Permanent license through ML4","mlVersion":4}}]}}'
+  exit 0
+fi
 if [ "$2" = "--json" ]; then
   case "$1" in
     bxt) name="BlurXTerminator" ;;

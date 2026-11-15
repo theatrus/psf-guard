@@ -79,6 +79,53 @@ pub fn settings_routes() -> Router<Arc<AppState>> {
         .route("/workers/tokens/{id}", delete(revoke_token))
         .route("/workers/exchange", put(set_exchange))
         .route("/workers/placement", put(set_placement))
+        .route(
+            "/workers/{session}/license-check",
+            post(check_worker_license),
+        )
+        .route("/tools/rc-astro/license-check", post(check_license))
+}
+
+/// POST /api/tools/rc-astro/license-check
+///
+/// RC-Astro's account status on this server, checked online because a
+/// person asked. The check is one short rc-astro run with a time limit, so
+/// it runs off the async runtime and answers in the request; it is not a
+/// tracked job. The account's address goes only to a caller who may write.
+async fn check_license(
+    State(state): State<Arc<AppState>>,
+    Extension(access): Extension<RequestAccess>,
+) -> Result<Json<ApiResponse<crate::remote_work::rc_astro::LicenseCheck>>, AppError> {
+    let checked = Arc::clone(&state);
+    let check = tokio::task::spawn_blocking(move || checked.workers.check_local_license())
+        .await
+        .map_err(|error| AppError::InternalError(format!("License check failed: {error}")))?
+        .map_err(AppError::BadRequest)?;
+    Ok(Json(ApiResponse::success(
+        if access.role == AccessRole::ReadWrite {
+            check
+        } else {
+            check.without_addresses()
+        },
+    )))
+}
+
+/// POST /api/workers/{session}/license-check
+///
+/// The same check, made by one connected worker as the account it runs
+/// under.
+async fn check_worker_license(
+    State(state): State<Arc<AppState>>,
+    Extension(access): Extension<RequestAccess>,
+    Path(session): Path<String>,
+) -> Result<Json<ApiResponse<crate::remote_work::rc_astro::LicenseCheck>>, AppError> {
+    require_operator(&state, &access)?;
+    let checked = Arc::clone(&state);
+    let check = tokio::task::spawn_blocking(move || checked.workers.check_worker_license(&session))
+        .await
+        .map_err(|error| AppError::InternalError(format!("License check failed: {error}")))?
+        .map_err(AppError::BadRequest)?;
+    Ok(Json(ApiResponse::success(check)))
 }
 
 fn refusal(status: StatusCode, message: impl Into<String>) -> Response {

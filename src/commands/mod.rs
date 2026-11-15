@@ -14,6 +14,7 @@ pub mod list_projects;
 pub mod list_targets;
 pub mod noise_model;
 pub mod project_removal;
+pub mod rc_astro;
 pub mod read_fits;
 pub mod regrade;
 pub mod reject_archive;

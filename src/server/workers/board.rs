@@ -69,6 +69,9 @@ pub enum TaskNeeds {
         stacking_version: String,
         release: String,
     },
+    /// The one worker with this session, which answers RC-Astro license
+    /// checks: the check is about that machine and its account.
+    LicenseCheck { session: String },
 }
 
 impl TaskNeeds {
@@ -106,6 +109,8 @@ impl TaskNeeds {
                     && offers.stacking_version.as_deref() == Some(stacking_version)
                     && offers.stacking_release.as_deref() == Some(release)
             }
+            // Which session it is, `may_run_queued` checks.
+            TaskNeeds::LicenseCheck { .. } => offers.license_check,
         }
     }
 
@@ -120,6 +125,7 @@ impl TaskNeeds {
                 stacking_version,
                 release,
             } => format!("stacking with PSF Guard {release} and Seiza stacking {stacking_version}"),
+            TaskNeeds::LicenseCheck { .. } => "an RC-Astro license check on its worker".into(),
         }
     }
 }
@@ -431,6 +437,19 @@ impl Default for Timings {
     }
 }
 
+/// One RC-Astro tool on a worker and its local license state.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ToolLicense {
+    pub provider: String,
+    pub name: String,
+    pub version: String,
+    pub licensed: bool,
+    /// The license line the tool printed. It gives the licensee, and
+    /// Settings › Workers is for people who run the server.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
 /// A connected worker, for Settings › Workers.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SessionSummary {
@@ -447,6 +466,14 @@ pub struct SessionSummary {
     pub slots: usize,
     /// The licensed RC-Astro tools it takes, as "StarXTerminator 2.6.6".
     pub rc_astro: Vec<String>,
+    /// The rc-astro it found, when it reported one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rc_astro_path: Option<String>,
+    /// Each RC-Astro tool it has, with the license state the tool itself
+    /// reports. This is the local state: no online check is made for it.
+    pub rc_astro_tools: Vec<ToolLicense>,
+    /// Whether it can be asked for an online license check.
+    pub license_check: bool,
     /// The Seiza stacking version it stacks builds with, when it takes
     /// stack builds.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1359,6 +1386,26 @@ impl Board {
         Ok(())
     }
 
+    /// Whether the worker with `session` can be asked for an online license
+    /// check: its name and whether it is this server's own, or why not.
+    pub fn license_checkable(&self, session: &str) -> Result<(String, bool), String> {
+        let now = Instant::now();
+        let inner = self.lock();
+        let found = inner
+            .sessions
+            .get(session)
+            .filter(|found| found.online(now))
+            .ok_or_else(|| "That worker is not connected".to_string())?;
+        if !found.offers.license_check {
+            return Err(format!(
+                "{} cannot be asked for a license check: it has no rc-astro, or runs a PSF Guard \
+                 from before the check. On that computer, run `psf-guard-cli rc-astro license`",
+                found.name
+            ));
+        }
+        Ok((found.name.clone(), found.local))
+    }
+
     /// The providers each connected worker offers and may run under the
     /// placement of processing steps: other machines' by name, then this
     /// server's, which is the fallback.
@@ -1423,6 +1470,19 @@ impl Board {
                     .contains(&TaskKind::StackChannel)
                     .then(|| found.offers.stacking_version.clone())
                     .flatten(),
+                rc_astro_path: found.offers.rc_astro_path.clone(),
+                rc_astro_tools: steps
+                    .iter()
+                    .filter(|offer| is_rc_astro(&offer.provider))
+                    .map(|offer| ToolLicense {
+                        provider: offer.provider.clone(),
+                        name: offer.schema.name.clone(),
+                        version: offer.schema.cli_version.clone(),
+                        licensed: offer.schema.licensed,
+                        message: offer.schema.license_message.clone(),
+                    })
+                    .collect(),
+                license_check: found.offers.license_check && found.online(now),
                 noise_model: steps
                     .iter()
                     .find(|offer| !is_rc_astro(&offer.provider))
@@ -1771,7 +1831,17 @@ impl Inner {
     /// rule: this server's worker counts too, since it takes over once the
     /// other workers are gone.
     fn may_run_queued(&self, session: &Session, task: &Task) -> bool {
-        task.needs.met_by(&session.offers)
+        let this_one = match &task.needs {
+            TaskNeeds::LicenseCheck { session: wanted } => self
+                .sessions
+                .get(wanted)
+                // A worker that registers again under its token and name
+                // replaces its session, so the pair is one worker.
+                .is_some_and(|found| found.token_and_name() == session.token_and_name()),
+            _ => true,
+        };
+        this_one
+            && task.needs.met_by(&session.offers)
             && self.placement(task.kind).allows(session.local)
             && !task.refused_by.contains(&session.token_and_name())
     }
