@@ -1,23 +1,20 @@
-//! The processing steps on workers: which worker's RC-Astro tools and
-//! noise model a chain uses, and one step run as a task on the board.
+//! Processing steps on workers: which worker's provider a chain uses for
+//! each step, and one step run as a task on the board. Every provider goes
+//! through here, whatever its engine: an RC-Astro tool or a Seiza model.
 
 use seiza_stacking::{ExternalToolRequest, ExternalToolSchema, LinearImage, ProcessedStackImage};
+use serde::Serialize;
 
 use super::board::{NewTask, TaskNeeds, WaitError};
 use super::Workers;
-use crate::remote_work::noise_model;
-use crate::remote_work::protocol::{HeaderCard, TaskKind};
-use crate::remote_work::rc_astro::{self as task, StepResult, StepSpec};
+use crate::remote_work::protocol::TaskKind;
+use crate::remote_work::rc_astro::{self as task, StepResult};
+use crate::remote_work::steps::{self, Category, Remedy, StepOffer};
 
-/// The message when no worker has rc-astro.
-pub const NOT_INSTALLED: &str = "rc-astro is not installed on this server or on a connected worker";
+pub use crate::remote_work::noise_model::NOT_INSTALLED as NOISE_MODEL_NOT_INSTALLED;
+pub use crate::remote_work::rc_astro::NOT_INSTALLED;
 
-/// The message when no worker has the noise model, with what to do.
-pub const NOISE_MODEL_NOT_INSTALLED: &str =
-    "The noise model is not installed on this server or on a connected worker. \
-     Open Settings, choose Reference catalogs, and click Download under Noise model";
-
-/// Where the processing steps run, and at what priority.
+/// Where processing steps run, and at what priority.
 #[derive(Clone, Copy)]
 pub struct RcAstroRunner<'a> {
     pub workers: &'a Workers,
@@ -26,105 +23,82 @@ pub struct RcAstroRunner<'a> {
     pub person: bool,
 }
 
-/// The tools the workers offer, as `GET /api/tools/rc-astro` lists them.
-pub struct Offered {
-    /// For each tool, the schema the next run would use.
-    pub tools: Vec<ExternalToolSchema>,
-    /// Whether this server has rc-astro.
-    pub this_server: bool,
-    /// The connected workers that have rc-astro, by name.
-    pub workers: Vec<String>,
-    /// For each tool, the connected workers that take it, by name.
-    pub tool_workers: std::collections::BTreeMap<String, Vec<String>>,
+/// Whether a provider can run a step now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderReadiness {
+    Ready,
+    /// A machine has it, but none has a license for it.
+    NotLicensed,
+    /// No machine the placement allows has it.
+    NotInstalled,
 }
 
-impl Workers {
-    /// Whether this server would run a step with `schema` itself, were it
-    /// queued now. See [`super::board::Board::runs_here`].
-    pub fn rc_astro_runs_here(&self, schema: &ExternalToolSchema) -> bool {
-        self.refresh_local();
-        let (kind, needs) = TaskNeeds::step(schema);
-        self.board.runs_here(kind, &needs)
-    }
+/// One provider's state, as `GET /api/tools/processing` lists it.
+#[derive(Debug, Clone, Serialize)]
+pub struct ProviderState {
+    pub category: Category,
+    pub provider: String,
+    pub name: String,
+    pub state: ProviderReadiness,
+    /// Why it cannot run, with what a person does about it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// The kind of action that fixes it, for the controls.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remedy: Option<Remedy>,
+    /// The version the next run would use, for a person to read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// The schema the next run would use.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schema: Option<ExternalToolSchema>,
+    /// Whether this server has it.
+    pub this_server: bool,
+    /// The connected workers that have it, by name.
+    pub workers: Vec<String>,
+}
 
-    /// The noise model the next run would use and who offers it: the first
-    /// connected worker's by name, otherwise this server's. Opens ONNX
-    /// Runtime on this server when its library is installed and the offers
-    /// are a minute old.
-    pub fn noise_model_offers(&self) -> Vec<(String, bool, noise_model::Identity)> {
-        self.refresh_local();
-        self.board.noise_model_offers()
-    }
-
-    /// The schema each tool would run with: the first connected worker's by
-    /// name that takes the tool, otherwise this server's. A licensed schema
-    /// wins over an unlicensed one. Spawns short-lived processes when this
-    /// server's tools were last probed a minute ago.
-    pub fn rc_astro_tools(&self) -> Offered {
-        self.refresh_local();
-        let offers = self.board.rc_astro_offers();
-        let mut tools = Vec::new();
-        for tool in task::TOOLS {
-            let mut candidates = offers
-                .iter()
-                .flat_map(|(_, _, schemas)| schemas.iter().filter(|schema| schema.key == tool));
-            let licensed = offers
-                .iter()
-                .flat_map(|(_, _, schemas)| schemas.iter())
-                .find(|schema| schema.key == tool && schema.licensed);
-            if let Some(schema) = licensed.or_else(|| candidates.next()) {
-                tools.push(schema.clone());
-            }
-        }
-        Offered {
-            tools,
-            this_server: offers.iter().any(|(_, local, _)| *local),
-            workers: offers
-                .iter()
-                .filter(|(_, local, _)| !local)
-                .map(|(name, _, _)| name.clone())
-                .collect(),
-            tool_workers: task::TOOLS
-                .iter()
-                .map(|tool| {
-                    let names = offers
-                        .iter()
-                        .filter(|(_, local, schemas)| {
-                            !local && schemas.iter().any(|schema| schema.key == *tool)
-                        })
-                        .map(|(name, _, _)| name.clone())
-                        .collect();
-                    (tool.to_string(), names)
-                })
-                .collect(),
+impl ProviderState {
+    /// The schema a step runs with, or why it cannot run.
+    fn runnable(&self) -> Result<ExternalToolSchema, String> {
+        match (&self.schema, self.state) {
+            (Some(schema), ProviderReadiness::Ready) => Ok(schema.clone()),
+            _ => Err(self
+                .reason
+                .clone()
+                .unwrap_or_else(|| format!("{} cannot run", self.name))),
         }
     }
+}
 
-    /// The schema `tool` runs with, or why it cannot run.
-    pub fn rc_astro_schema(&self, tool: &str) -> Result<ExternalToolSchema, String> {
-        if noise_model::is_step(tool) {
-            return self
-                .noise_model_offers()
-                .first()
-                .map(|(_, _, identity)| identity.schema())
-                .ok_or_else(|| NOISE_MODEL_NOT_INSTALLED.to_string());
-        }
-        self.refresh_local();
-        let offers = self.board.rc_astro_offers();
-        let mut unlicensed = None;
-        for (worker, local, schemas) in &offers {
-            if let Some(schema) = schemas.iter().find(|schema| schema.key == tool) {
-                if schema.licensed {
-                    return Ok(schema.clone());
-                }
-                unlicensed.get_or_insert((worker, *local, schema));
-            }
-        }
-        match unlicensed {
-            Some((worker, local, schema)) => Err(format!(
+/// One provider's state from the offers of the machines that may run it:
+/// other machines' first, by name, then this server's. A licensed schema
+/// wins over an unlicensed one.
+fn provider_state(
+    provider: &steps::Provider,
+    offers: &[(String, bool, Vec<StepOffer>)],
+) -> ProviderState {
+    let having: Vec<(&String, bool, &ExternalToolSchema)> = offers
+        .iter()
+        .filter_map(|(name, local, steps)| {
+            let offer = steps.iter().find(|offer| offer.provider == provider.key)?;
+            Some((name, *local, &offer.schema))
+        })
+        .collect();
+    let chosen = having
+        .iter()
+        .find(|(_, _, schema)| schema.licensed)
+        .or(having.first());
+    let (missing, remedy) = steps::runner(provider.engine).missing();
+    let (state, reason, remedy) = match chosen {
+        Some((_, _, schema)) if schema.licensed => (ProviderReadiness::Ready, None, None),
+        Some((worker, local, schema)) => (
+            ProviderReadiness::NotLicensed,
+            Some(format!(
                 "{} is not licensed {}{}",
                 schema.name,
-                if local {
+                if *local {
                     "on this server".to_string()
                 } else {
                     format!("on {worker}")
@@ -135,14 +109,70 @@ impl Workers {
                     .map(|message| format!(" ({message})"))
                     .unwrap_or_default()
             )),
-            None => Err(NOT_INSTALLED.into()),
-        }
+            Some(remedy),
+        ),
+        None => (
+            ProviderReadiness::NotInstalled,
+            Some(missing.to_string()),
+            Some(remedy),
+        ),
+    };
+    ProviderState {
+        category: provider.category,
+        provider: provider.key.into(),
+        name: chosen
+            .map(|(_, _, schema)| schema.name.clone())
+            .unwrap_or_else(|| provider.name.into()),
+        state,
+        reason,
+        remedy,
+        version: chosen.map(|(_, _, schema)| {
+            crate::remote_work::noise_model::display_version(&schema.cli_version).to_string()
+        }),
+        schema: chosen.map(|(_, _, schema)| (*schema).clone()),
+        this_server: having.iter().any(|(_, local, _)| *local),
+        workers: having
+            .iter()
+            .filter(|(_, local, _)| !local)
+            .map(|(name, _, _)| (*name).clone())
+            .collect(),
+    }
+}
+
+impl Workers {
+    /// Whether this server would run a step with `schema` itself, were it
+    /// queued now. See [`super::board::Board::runs_here`].
+    pub fn step_runs_here(&self, schema: &ExternalToolSchema) -> bool {
+        self.refresh_local();
+        self.board
+            .runs_here(TaskKind::ProcessingStep, &TaskNeeds::step(schema))
+    }
+
+    /// Every provider's state, in the order a chain runs their categories.
+    /// Probes this server's own when the last probe is a minute old: that
+    /// spawns short-lived rc-astro processes, and opens ONNX Runtime when
+    /// its library is installed.
+    pub fn providers(&self) -> Vec<ProviderState> {
+        self.refresh_local();
+        let offers = self.board.step_offers();
+        steps::PROVIDERS
+            .iter()
+            .map(|provider| provider_state(provider, &offers))
+            .collect()
+    }
+
+    /// The schema a provider's step runs with, or why it cannot run.
+    pub fn step_schema(&self, provider: &str) -> Result<ExternalToolSchema, String> {
+        let known = steps::provider(provider)
+            .ok_or_else(|| format!("unknown processing step {provider:?}"))?;
+        self.refresh_local();
+        provider_state(known, &self.board.step_offers()).runnable()
     }
 }
 
 impl RcAstroRunner<'_> {
-    /// Run one tool over `image` on the first worker that offers it at
-    /// `schema`'s version. `cancel` takes the task off the board, and the
+    /// Run one step over `image` on the first worker that offers its
+    /// provider at `schema`'s version. `cancel` takes the task off the board, and the
     /// worker running it stops. `progress` is told how much is done and
     /// which worker runs it: `None` for this server.
     pub fn run(
@@ -181,45 +211,28 @@ pub(crate) fn run_on_board(
     cancel: Option<&seiza_stacking::CancelSignal>,
     progress: &mut dyn FnMut(f32, Option<&str>),
 ) -> Result<ProcessedStackImage, String> {
+    let provider = steps::provider(&schema.key)
+        .ok_or_else(|| format!("unknown processing step {:?}", schema.key))?;
+    let runner = steps::runner(provider.engine);
     let ticket = board.ticket()?;
     let input = ticket.dir().join(task::INPUT);
     task::write_image(&input, image)?;
-    let (kind, needs) = TaskNeeds::step(schema);
-    let (spec, outputs) = if kind == TaskKind::NoiseModelStep {
-        let identity = board
-            .noise_model_identity(&schema.cli_version)
-            .ok_or_else(|| NOISE_MODEL_NOT_INSTALLED.to_string())?;
-        let spec = noise_model::StepSpec {
-            identity,
-            amounts: noise_model::Amounts::from_request(request)?,
-            person,
-        };
-        (
-            serde_json::to_value(&spec).map_err(|error| error.to_string())?,
-            vec![(task::PROCESSED.into(), true)],
-        )
-    } else {
-        let spec = StepSpec {
-            schema: schema.clone(),
-            request: request.clone(),
-            headers: HeaderCard::from_fits(headers),
-        };
-        (
-            serde_json::to_value(&spec).map_err(|error| error.to_string())?,
-            vec![(task::PROCESSED.into(), true), (task::STARS.into(), false)],
-        )
+    let spec = steps::StepSpec {
+        category: provider.category,
+        provider: provider.key.into(),
+        payload: runner.payload(schema, request, headers, person)?,
     };
     ticket.submit(NewTask {
-        kind,
+        kind: TaskKind::ProcessingStep,
         label: format!(
             "{} on a {}×{} image",
             schema.name, image.width, image.height
         ),
         person,
-        needs,
-        spec,
+        needs: TaskNeeds::step(schema),
+        spec: serde_json::to_value(&spec).map_err(|error| error.to_string())?,
         inputs: vec![(task::INPUT.into(), input)],
-        outputs,
+        outputs: runner.outputs(),
     })?;
     let stopped = || cancel.is_some_and(|cancel| cancel.is_cancelled());
     let finished = ticket

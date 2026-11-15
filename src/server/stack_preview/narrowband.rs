@@ -79,7 +79,7 @@ impl NarrowbandProcessing {
             config.validate()?;
             if config.steps.iter().any(|step| {
                 !matches!(
-                    step.tool.as_str(),
+                    step.provider.as_str(),
                     "bxt" | "nxt" | crate::remote_work::noise_model::TOOL
                 )
             }) {
@@ -290,7 +290,7 @@ pub(super) fn resolve(
     }
     let config = super::super::rc_astro::RcAstroProcessing {
         steps: vec![super::super::rc_astro::RcAstroStep {
-            tool: "sxt".into(),
+            provider: "sxt".into(),
             parameters: BTreeMap::from([(
                 "stars".into(),
                 seiza_stacking::ExternalParameterValue::Bool(true),
@@ -408,7 +408,7 @@ pub(super) fn resolve(
 
 fn validate_separation(config: &super::super::rc_astro::RcAstroProcessing) -> Result<(), String> {
     config.validate()?;
-    if config.steps.len() != 1 || config.steps[0].tool != "sxt" {
+    if config.steps.len() != 1 || config.steps[0].provider != "sxt" {
         return Err("Managed star separation supports only StarXTerminator".into());
     }
     for (name, value) in &config.steps[0].parameters {
@@ -437,7 +437,7 @@ fn separation_config(
         .1;
     let mut config = requested.cloned().unwrap_or(RcAstroProcessing {
         steps: vec![RcAstroStep {
-            tool: "sxt".into(),
+            provider: "sxt".into(),
             parameters: BTreeMap::new(),
         }],
     });
@@ -567,13 +567,13 @@ fn same_exposure_band(selected: &[&StackColorSource], candidate: &StackColorSour
 
 pub(super) fn defer_channel_star_removal(processing: &mut StackColorProcessing) {
     for config in processing.input_rc_astro.values_mut() {
-        config.steps.retain(|step| step.tool != "sxt");
+        config.steps.retain(|step| step.provider != "sxt");
     }
     processing
         .input_rc_astro
         .retain(|_, config| !config.steps.is_empty());
     if let Some(config) = &mut processing.color_rc_astro {
-        config.steps.retain(|step| step.tool != "sxt");
+        config.steps.retain(|step| step.provider != "sxt");
         if config.steps.is_empty() {
             processing.color_rc_astro = None;
         }
@@ -1028,7 +1028,7 @@ mod tests {
         let config = RcAstroProcessing {
             steps: ["bxt", "nxt", "sxt"]
                 .map(|tool| RcAstroStep {
-                    tool: tool.into(),
+                    provider: tool.into(),
                     parameters: BTreeMap::new(),
                 })
                 .to_vec(),
@@ -1043,7 +1043,7 @@ mod tests {
             processing.input_rc_astro[&StackColorRole::Ha]
                 .steps
                 .iter()
-                .map(|step| step.tool.as_str())
+                .map(|step| step.provider.as_str())
                 .collect::<Vec<_>>(),
             ["bxt", "nxt"]
         );
@@ -1430,7 +1430,7 @@ mod tests {
         job.narrowband_resolution = resolution;
         let preparation_config = super::super::super::rc_astro::RcAstroProcessing {
             steps: vec![super::super::super::rc_astro::RcAstroStep {
-                tool: "bxt".into(),
+                provider: "bxt".into(),
                 parameters: Default::default(),
             }],
         };

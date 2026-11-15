@@ -1,6 +1,6 @@
-//! Seiza's noise model on the server: where its ONNX Runtime is, what
-//! `GET /api/tools/noise-model` reports, and the downloads a person starts
-//! in Settings.
+//! Seiza's noise model on the server: where its ONNX Runtime is, what is
+//! installed, and the downloads a person starts in Settings. The provider
+//! itself is in `remote_work::noise_model`.
 //!
 //! PSF Guard never fetches ONNX Runtime or the model by itself. Until a
 //! person downloads both, or gives the path of an ONNX Runtime they
@@ -54,22 +54,11 @@ pub fn config() -> Config {
     )
 }
 
-/// What `GET /api/tools/noise-model` reports.
+/// What this server has installed for Seiza's models, and the download
+/// under way: one part of `GET /api/tools/processing`.
 #[derive(Debug, Clone, Serialize)]
-pub struct NoiseModelCapabilities {
-    /// Whether this server or a connected worker can run the step.
-    pub available: bool,
-    /// The step's schema, as the next run would use it.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub schema: Option<seiza_stacking::ExternalToolSchema>,
-    /// The model, backend and Seiza version the next run would use.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub version: Option<String>,
-    /// Whether this server can run the step.
-    pub this_server: bool,
-    /// The connected workers that can run the step, by name.
-    pub workers: Vec<String>,
-    /// What is installed on this server.
+pub struct SeizaInstall {
+    /// ONNX Runtime and the noise model on this server.
     pub installed: Installed,
     /// The ONNX Runtime path a person set, when one is set.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -81,51 +70,25 @@ pub struct NoiseModelCapabilities {
     pub download: DownloadProgress,
 }
 
-fn capabilities(state: &AppState) -> NoiseModelCapabilities {
-    let offers = state.workers.noise_model_offers();
-    let next = offers.first().map(|(_, _, identity)| identity);
-    NoiseModelCapabilities {
-        available: next.is_some(),
-        schema: next.map(|identity| identity.schema()),
-        version: next.map(|identity| noise_model::display_version(&identity.version()).to_string()),
-        this_server: offers.iter().any(|(_, local, _)| *local),
-        workers: offers
-            .iter()
-            .filter(|(_, local, _)| !local)
-            .map(|(name, _, _)| name.clone())
-            .collect(),
+impl SeizaInstall {
+    /// Every viewer may see what is installed; folders and library paths
+    /// on the server stay with the operator role.
+    pub fn for_viewer(mut self) -> Self {
+        self.installed.runtime_path = None;
+        self.installed.folder = String::new();
+        self.onnxruntime = None;
+        self
+    }
+}
+
+/// What is installed now. Opens ONNX Runtime when its library is on disk.
+pub fn install_state(state: &AppState) -> SeizaInstall {
+    SeizaInstall {
         installed: noise_model::SeizaEngine::new(config()).installed(),
         onnxruntime: config().onnxruntime.map(|path| path.display().to_string()),
         runtime_download: install::release().map(|_| install::ONNXRUNTIME_VERSION.to_string()),
         download: state.noise_model_downloads.progress(),
     }
-}
-
-/// Every viewer may see whether the step exists; folders and library paths
-/// on the server stay with the operator role.
-fn for_viewer(mut capabilities: NoiseModelCapabilities) -> NoiseModelCapabilities {
-    capabilities.installed.runtime_path = None;
-    capabilities.installed.folder = String::new();
-    capabilities.onnxruntime = None;
-    capabilities
-}
-
-/// GET /api/tools/noise-model
-pub async fn get_capabilities(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<ApiResponse<NoiseModelCapabilities>>, AppError> {
-    let probed = Arc::clone(&state);
-    // Opens ONNX Runtime when its library is installed.
-    let capabilities = tokio::task::spawn_blocking(move || capabilities(&probed))
-        .await
-        .map_err(|error| AppError::InternalError(format!("Noise model probe failed: {error}")))?;
-    Ok(Json(ApiResponse::success(
-        if state.database_management_allowed() {
-            capabilities
-        } else {
-            for_viewer(capabilities)
-        },
-    )))
 }
 
 /// PUT /api/settings/noise-model
@@ -134,7 +97,7 @@ pub async fn get_capabilities(
 pub async fn update_settings(
     State(state): State<Arc<AppState>>,
     Json(request): Json<NoiseModelSettings>,
-) -> Result<Json<ApiResponse<NoiseModelCapabilities>>, AppError> {
+) -> Result<Json<ApiResponse<SeizaInstall>>, AppError> {
     require_database_management_allowed(&state)?;
     let settings = NoiseModelSettings {
         onnxruntime: request
@@ -157,7 +120,11 @@ pub async fn update_settings(
     .await?;
     configure(Some(&settings));
     state.workers.forget_local_offers();
-    get_capabilities(State(state)).await
+    let probed = Arc::clone(&state);
+    let installed = tokio::task::spawn_blocking(move || install_state(&probed))
+        .await
+        .map_err(|error| AppError::InternalError(format!("Noise model probe failed: {error}")))?;
+    Ok(Json(ApiResponse::success(installed)))
 }
 
 /// What a download fetches.
@@ -502,12 +469,7 @@ mod tests {
 
     #[test]
     fn a_viewer_sees_no_server_paths() {
-        let capabilities = for_viewer(NoiseModelCapabilities {
-            available: true,
-            schema: None,
-            version: Some("noise-v1 cpu f32".into()),
-            this_server: true,
-            workers: Vec::new(),
+        let install = SeizaInstall {
             installed: Installed {
                 runtime_path: Some("/opt/onnx/libonnxruntime.so".into()),
                 runtime_version: Some("1.31.1".into()),
@@ -518,8 +480,9 @@ mod tests {
             onnxruntime: Some("/opt/onnx".into()),
             runtime_download: None,
             download: DownloadProgress::default(),
-        });
-        let json = serde_json::to_string(&capabilities).unwrap();
+        }
+        .for_viewer();
+        let json = serde_json::to_string(&install).unwrap();
         assert!(!json.contains("/opt/onnx"), "{json}");
         assert!(!json.contains("/srv/psf-guard"), "{json}");
         assert!(json.contains("1.31.1"));

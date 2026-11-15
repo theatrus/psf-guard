@@ -714,7 +714,7 @@ pub struct DbRegistry {
     )]
     pub remote_workers: Option<RemoteWorkerSettings>,
     /// The path of an ONNX Runtime a person installed for the noise model,
-    /// edited in Settings › Reference catalogs. Additive within registry
+    /// edited in Settings › Stacking. Additive within registry
     /// v2; absent uses the ONNX Runtime PSF Guard downloaded. A block this
     /// version cannot read reads as absent.
     #[serde(
@@ -735,8 +735,8 @@ pub struct RemoteWorkerSettings {
     /// it in the cache folder. A worker in shared mode must see this folder.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exchange_folder: Option<String>,
-    /// Where the processing steps run: the RC-Astro tools and the noise
-    /// model.
+    /// Where processing steps run, whatever provider runs them. The key
+    /// is from when RC-Astro's tools were the only providers.
     #[serde(default)]
     pub rc_astro: WorkPlacement,
     /// Where stack builds' channels are stacked. This server unless chosen
@@ -783,7 +783,7 @@ impl WorkPlacement {
         match kind {
             crate::remote_work::protocol::TaskKind::StackChannel => Self::this_server(),
             crate::remote_work::protocol::TaskKind::RcAstroStep
-            | crate::remote_work::protocol::TaskKind::NoiseModelStep => Self::default(),
+            | crate::remote_work::protocol::TaskKind::ProcessingStep => Self::default(),
         }
     }
 

@@ -1545,11 +1545,11 @@ pub enum Commands {
     /// Download Seiza's noise model and ONNX Runtime to this computer, or
     /// show what is installed.
     ///
-    /// The noise model is a stack processing step that needs no RC-Astro
-    /// license. PSF Guard never downloads it by itself: run `psf-guard
+    /// The noise model is a noise reduction provider for stack processing
+    /// that needs no RC-Astro license. PSF Guard never downloads it by itself: run `psf-guard
     /// noise-model download` on a worker computer, then restart the
-    /// worker. A server downloads its own from Settings › Reference
-    /// catalogs, or with this command on the server computer.
+    /// worker. A server downloads its own from Settings › Stacking, or
+    /// with this command on the server computer.
     NoiseModel {
         #[command(subcommand)]
         action: NoiseModelAction,

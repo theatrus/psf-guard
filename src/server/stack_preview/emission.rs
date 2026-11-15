@@ -947,7 +947,7 @@ pub(super) fn validate_natural_star_removal(
     if processing
         .input_rc_astro
         .values()
-        .any(|config| config.steps.iter().any(|step| step.tool == "sxt"))
+        .any(|config| config.steps.iter().any(|step| step.provider == "sxt"))
     {
         return Err(AppError::BadRequest("RGB/LRGB with emission retains broadband stars and cannot use channel StarXTerminator. Choose Set in this build and remove SXT, or choose narrowband with RGB stars.".into()));
     }

@@ -54,11 +54,13 @@ const STALE_TASK_FILES: Duration = Duration::from_secs(6 * 3600);
 /// What a worker must offer to run a task.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TaskNeeds {
-    /// This RC-Astro tool, at this CLI and model version, licensed.
-    RcAstro {
-        tool: String,
+    /// This provider of a processing step, licensed, at the version that
+    /// identifies its output: an RC-Astro tool's CLI and model version, or
+    /// a Seiza model's identity line.
+    Step {
+        provider: String,
         name: String,
-        cli_version: String,
+        version: String,
         ml_version: Option<i64>,
     },
     /// Stacking at this Seiza stacking output version, on this PSF Guard
@@ -67,55 +69,35 @@ pub enum TaskNeeds {
         stacking_version: String,
         release: String,
     },
-    /// The noise model with this identity: the model by its card's hash,
-    /// Seiza's output version, the backend and the precision, as
-    /// [`crate::remote_work::noise_model::Identity::version`] writes them.
-    NoiseModel { version: String },
 }
 
 impl TaskNeeds {
-    /// What a chain step run with `schema` needs: the noise model for its
-    /// step, an RC-Astro tool for every other.
-    pub fn step(schema: &seiza_stacking::ExternalToolSchema) -> (TaskKind, Self) {
-        if crate::remote_work::noise_model::is_step(&schema.key) {
-            (
-                TaskKind::NoiseModelStep,
-                TaskNeeds::NoiseModel {
-                    version: schema.cli_version.clone(),
-                },
-            )
-        } else {
-            (TaskKind::RcAstroStep, Self::rc_astro(schema))
-        }
-    }
-
-    /// An RC-Astro step run with `schema`: its tool, licensed, at its CLI
-    /// and model version.
-    pub fn rc_astro(schema: &seiza_stacking::ExternalToolSchema) -> Self {
-        TaskNeeds::RcAstro {
-            tool: schema.key.clone(),
+    /// A processing step run with `schema`: its provider, licensed, at its
+    /// version.
+    pub fn step(schema: &seiza_stacking::ExternalToolSchema) -> Self {
+        TaskNeeds::Step {
+            provider: schema.key.clone(),
             name: schema.name.clone(),
-            cli_version: schema.cli_version.clone(),
+            version: schema.cli_version.clone(),
             ml_version: schema.ml_version,
         }
     }
 
     fn met_by(&self, offers: &Offers) -> bool {
         match self {
-            TaskNeeds::RcAstro {
-                tool,
-                cli_version,
+            TaskNeeds::Step {
+                provider,
+                version,
                 ml_version,
                 ..
-            } => {
-                offers.work.contains(&TaskKind::RcAstroStep)
-                    && offers.rc_astro.iter().any(|schema| {
-                        schema.key == *tool
-                            && schema.licensed
-                            && schema.cli_version == *cli_version
-                            && schema.ml_version == *ml_version
-                    })
-            }
+            } => crate::remote_work::steps::offers_of(offers)
+                .iter()
+                .any(|offer| {
+                    offer.provider == *provider
+                        && offer.schema.licensed
+                        && offer.schema.cli_version == *version
+                        && offer.schema.ml_version == *ml_version
+                }),
             TaskNeeds::Stack {
                 stacking_version,
                 release,
@@ -124,29 +106,28 @@ impl TaskNeeds {
                     && offers.stacking_version.as_deref() == Some(stacking_version)
                     && offers.stacking_release.as_deref() == Some(release)
             }
-            TaskNeeds::NoiseModel { version } => offers
-                .noise_model
-                .as_ref()
-                .is_some_and(|identity| identity.version() == *version),
         }
     }
 
     /// What the task needs, as a person reads it.
     fn describe(&self) -> String {
         match self {
-            TaskNeeds::RcAstro {
-                name, cli_version, ..
-            } => format!("{name} {cli_version}"),
+            TaskNeeds::Step { name, version, .. } => format!(
+                "{name} {}",
+                crate::remote_work::noise_model::display_version(version)
+            ),
             TaskNeeds::Stack {
                 stacking_version,
                 release,
             } => format!("stacking with PSF Guard {release} and Seiza stacking {stacking_version}"),
-            TaskNeeds::NoiseModel { version } => format!(
-                "the noise model {}",
-                crate::remote_work::noise_model::display_version(version)
-            ),
         }
     }
+}
+
+/// Whether a provider is one of RC-Astro's tools.
+fn is_rc_astro(provider: &str) -> bool {
+    crate::remote_work::steps::provider(provider)
+        .is_some_and(|found| found.engine == crate::remote_work::steps::Engine::RcAstro)
 }
 
 /// A task to put on the board.
@@ -366,10 +347,10 @@ struct Inner {
 
 impl Inner {
     fn placement(&self, kind: TaskKind) -> WorkPlacement {
-        // One choice covers the processing steps: the noise model runs
-        // where the RC-Astro tools do.
+        // One choice covers every provider's steps. It is stored under the
+        // RC-Astro kind, which was the only one before providers.
         let kind = match kind {
-            TaskKind::NoiseModelStep => TaskKind::RcAstroStep,
+            TaskKind::ProcessingStep => TaskKind::RcAstroStep,
             kind => kind,
         };
         self.placements
@@ -997,7 +978,13 @@ impl Board {
         let assignment = Assignment {
             task: id.clone(),
             lease,
-            kind: task.kind,
+            // A worker older than providers knows an RC-Astro step by its
+            // old kind; the spec reads the same.
+            kind: if task.kind == TaskKind::ProcessingStep && found.offers.steps.is_empty() {
+                TaskKind::RcAstroStep
+            } else {
+                task.kind
+            },
             label: task.label.clone(),
             spec: task.spec.clone(),
             inputs: task
@@ -1323,70 +1310,28 @@ impl Board {
         Ok(())
     }
 
-    /// The RC-Astro schemas of each connected worker that may run RC-Astro
-    /// steps under their placement: other machines' by name, then this
+    /// The providers each connected worker offers and may run under the
+    /// placement of processing steps: other machines' by name, then this
     /// server's, which is the fallback.
-    pub fn rc_astro_offers(&self) -> Vec<(String, bool, Vec<seiza_stacking::ExternalToolSchema>)> {
+    pub fn step_offers(&self) -> Vec<(String, bool, Vec<crate::remote_work::steps::StepOffer>)> {
         let now = Instant::now();
         let inner = self.lock();
-        let placement = inner.placement(TaskKind::RcAstroStep);
+        let placement = inner.placement(TaskKind::ProcessingStep);
         let mut offers = inner
             .sessions
             .values()
             .filter(|found| found.online(now) && placement.allows(found.local))
-            .filter(|found| {
-                found.offers.work.contains(&TaskKind::RcAstroStep)
-                    && !found.offers.rc_astro.is_empty()
-            })
             .map(|found| {
                 (
                     found.name.clone(),
                     found.local,
-                    found.offers.rc_astro.clone(),
+                    crate::remote_work::steps::offers_of(&found.offers),
                 )
             })
+            .filter(|(_, _, steps)| !steps.is_empty())
             .collect::<Vec<_>>();
         offers.sort_by(|left, right| left.1.cmp(&right.1).then_with(|| left.0.cmp(&right.0)));
         offers
-    }
-
-    /// The noise model of each connected worker that may run it under its
-    /// placement: other machines' by name, then this server's, which is
-    /// the fallback.
-    pub fn noise_model_offers(
-        &self,
-    ) -> Vec<(String, bool, crate::remote_work::noise_model::Identity)> {
-        let now = Instant::now();
-        let inner = self.lock();
-        let placement = inner.placement(TaskKind::NoiseModelStep);
-        let mut offers = inner
-            .sessions
-            .values()
-            .filter(|found| found.online(now) && placement.allows(found.local))
-            .filter_map(|found| {
-                Some((
-                    found.name.clone(),
-                    found.local,
-                    found.offers.noise_model.clone()?,
-                ))
-            })
-            .collect::<Vec<_>>();
-        offers.sort_by(|left, right| left.1.cmp(&right.1).then_with(|| left.0.cmp(&right.0)));
-        offers
-    }
-
-    /// The identity a worker registered whose line is `version`: what a
-    /// step planned with that line sends to the worker that runs it.
-    pub fn noise_model_identity(
-        &self,
-        version: &str,
-    ) -> Option<crate::remote_work::noise_model::Identity> {
-        self.lock()
-            .sessions
-            .values()
-            .filter_map(|found| found.offers.noise_model.as_ref())
-            .find(|identity| identity.version() == version)
-            .cloned()
     }
 
     /// The connected workers and the queued tasks, for Settings › Workers.
@@ -1400,7 +1345,14 @@ impl Board {
         let mut sessions = inner
             .sessions
             .iter()
-            .map(|(id, found)| SessionSummary {
+            .map(|(id, found)| {
+                (
+                    id,
+                    found,
+                    crate::remote_work::steps::offers_of(&found.offers),
+                )
+            })
+            .map(|(id, found, steps)| SessionSummary {
                 session: id.clone(),
                 token_id: found.token_id.clone(),
                 name: found.name.clone(),
@@ -1411,13 +1363,10 @@ impl Board {
                 seconds_since_seen: now.duration_since(found.last_seen).as_secs(),
                 threads: found.offers.threads,
                 slots: found.slots(),
-                rc_astro: found
-                    .offers
-                    .rc_astro
+                rc_astro: steps
                     .iter()
-                    .filter(|_| found.offers.work.contains(&TaskKind::RcAstroStep))
-                    .filter(|schema| schema.licensed)
-                    .map(|schema| format!("{} {}", schema.name, schema.cli_version))
+                    .filter(|offer| offer.schema.licensed && is_rc_astro(&offer.provider))
+                    .map(|offer| format!("{} {}", offer.schema.name, offer.schema.cli_version))
                     .collect(),
                 stacking_version: found
                     .offers
@@ -1425,10 +1374,13 @@ impl Board {
                     .contains(&TaskKind::StackChannel)
                     .then(|| found.offers.stacking_version.clone())
                     .flatten(),
-                noise_model: found.offers.noise_model.as_ref().map(|identity| {
-                    crate::remote_work::noise_model::display_version(&identity.version())
-                        .to_string()
-                }),
+                noise_model: steps
+                    .iter()
+                    .find(|offer| !is_rc_astro(&offer.provider))
+                    .map(|offer| {
+                        crate::remote_work::noise_model::display_version(&offer.schema.cli_version)
+                            .to_string()
+                    }),
                 file_mode: found.files.mode,
                 exchange_shared: found.exchange_shared,
                 exchange_problem: found.exchange_problem.clone(),

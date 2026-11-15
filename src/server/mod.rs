@@ -916,7 +916,10 @@ pub fn api_router(state: Arc<AppState>) -> Router {
             "/tools/rc-astro",
             get(stack_preview::rc_astro::get_rc_astro_capabilities),
         )
-        .route("/tools/noise-model", get(noise_model::get_capabilities))
+        .route(
+            "/tools/processing",
+            get(stack_preview::rc_astro::get_rc_astro_capabilities),
+        )
         .route(
             "/tools/noise-model/download",
             post(noise_model::start_download),

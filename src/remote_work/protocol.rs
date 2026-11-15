@@ -66,14 +66,16 @@ pub struct Offers {
     /// sends a channel only to a worker on its own release.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stacking_release: Option<String>,
-    /// The noise model the worker runs, when it has ONNX Runtime and a
-    /// model installed and `--work` does not leave it out. A server sends a
-    /// noise model step only to a worker that offers the identity the step
-    /// was planned with. The offer is this field alone: `work` does not
-    /// list [`TaskKind::NoiseModelStep`], so a server older than the model
-    /// still reads the registration.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub noise_model: Option<crate::remote_work::noise_model::Identity>,
+    /// Every provider of a processing step the worker runs, by category:
+    /// the RC-Astro tools again, and Seiza's noise model when ONNX Runtime
+    /// and a model are installed. A server sends a step only to a worker
+    /// that offers its provider at the version the step was planned with.
+    /// A worker older than providers sends none; the server then reads its
+    /// `rc_astro` tools as offers. `work` does not list
+    /// [`TaskKind::ProcessingStep`], so a server older than providers still
+    /// reads the registration, and sends the worker RC-Astro steps as before.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub steps: Vec<crate::remote_work::steps::StepOffer>,
 }
 
 fn one_slot() -> usize {
@@ -180,13 +182,16 @@ pub struct Assignment {
 #[serde(rename_all = "snake_case")]
 pub enum TaskKind {
     /// One RC-Astro tool over one image. See
-    /// [`crate::remote_work::rc_astro`].
+    /// [`crate::remote_work::rc_astro`]. What servers older than providers
+    /// send, and what a worker older than providers is sent.
     RcAstroStep,
     /// One channel of a stack build: its frames integrated into a stack.
     StackChannel,
-    /// Seiza's noise model over one image. See
-    /// [`crate::remote_work::noise_model`].
-    NoiseModelStep,
+    /// One provider's step over one image: an RC-Astro tool or one of
+    /// Seiza's models. See [`crate::remote_work::steps`]. A worker older
+    /// than providers is sent an RC-Astro provider's step as
+    /// [`TaskKind::RcAstroStep`], which has the same spec.
+    ProcessingStep,
 }
 
 /// A file the task reads.

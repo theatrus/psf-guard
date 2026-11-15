@@ -133,11 +133,6 @@ pub fn display_version(version: &str) -> &str {
     version.split(CARD_MARK).next().unwrap_or(version)
 }
 
-/// Whether a chain step is the noise model.
-pub fn is_step(tool: &str) -> bool {
-    tool == TOOL
-}
-
 /// How much of the noise the model finds is removed.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Amounts {
@@ -181,13 +176,113 @@ impl Amounts {
 /// What the server sends with the image.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StepSpec {
-    /// The model the step runs. A worker whose own differs fails the task
-    /// instead of writing other pixels under this identity.
-    pub identity: Identity,
+    /// The model the step was planned with, as [`Identity::version`] writes
+    /// it. A worker whose own differs fails the task instead of writing
+    /// other pixels under this identity.
+    pub version: String,
     pub amounts: Amounts,
     /// A person waits for the result.
     #[serde(default)]
     pub person: bool,
+}
+
+/// The message when no machine has the noise model, with what to do.
+pub const NOT_INSTALLED: &str =
+    "The noise model is not installed on this server or on a connected worker. \
+     Open Settings, choose Stacking, and click Download under Processing tools";
+
+/// Seiza's noise model as a provider of processing steps.
+pub struct SeizaNoiseEngine;
+
+impl super::steps::StepRunner for SeizaNoiseEngine {
+    fn offers(&self, tools: &super::LocalTools) -> (Vec<ExternalToolSchema>, Option<String>) {
+        // What is missing is not a problem to report: the model is an
+        // optional download.
+        let schema = tools
+            .noise_model
+            .as_ref()
+            .and_then(|engine| engine.identity().ok())
+            .map(|identity| identity.schema());
+        (schema.into_iter().collect(), None)
+    }
+
+    fn payload(
+        &self,
+        schema: &ExternalToolSchema,
+        request: &ExternalToolRequest,
+        _headers: &[(String, seiza_fits::HeaderValue)],
+        person: bool,
+    ) -> Result<serde_json::Value, String> {
+        serde_json::to_value(StepSpec {
+            version: schema.cli_version.clone(),
+            amounts: Amounts::from_request(request)?,
+            person,
+        })
+        .map_err(|error| error.to_string())
+    }
+
+    fn outputs(&self) -> Vec<(String, bool)> {
+        vec![(PROCESSED.into(), true)]
+    }
+
+    /// Seiza's model keeps the image's holes from the network itself, as
+    /// the model's card asks.
+    fn reads_holes(&self) -> bool {
+        true
+    }
+
+    fn run(
+        &self,
+        payload: serde_json::Value,
+        context: super::steps::RunContext<'_>,
+    ) -> Result<serde_json::Value, String> {
+        let spec: StepSpec = serde_json::from_value(payload)
+            .map_err(|error| format!("The noise model task could not be read: {error}"))?;
+        let tools = context.tools;
+        let engine = tools
+            .noise_model
+            .as_ref()
+            .ok_or_else(|| "The noise model is not installed on this worker".to_string())?;
+        let input = context
+            .inputs
+            .get(INPUT)
+            .ok_or_else(|| "The noise model task has no input image".to_string())?;
+        let compute = match &tools.compute {
+            Some(source) => source(spec.person),
+            None => super::Compute {
+                threads: (crate::concurrency::logical_cores() / tools.slots.max(1)).max(1),
+                hold: None,
+            },
+        };
+        // Tiles finish on Seiza's threads, so the report is shared with
+        // them. Each whole percent is reported once.
+        let report = std::sync::Mutex::new((context.report, 0.0f32));
+        let stop = context.stop;
+        let stopped = || stop.requested();
+        let result = run(
+            engine.as_ref(),
+            &spec,
+            input,
+            context.output_dir,
+            compute.threads,
+            &stopped,
+            &|fraction| {
+                let mut report = report
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                if fraction >= report.1 + 0.01 || fraction >= 1.0 {
+                    report.1 = fraction;
+                    report.0.fraction(fraction);
+                }
+            },
+        )?;
+        drop(compute.hold);
+        serde_json::to_value(result).map_err(|error| error.to_string())
+    }
+
+    fn missing(&self) -> (&'static str, super::steps::Remedy) {
+        (NOT_INSTALLED, super::steps::Remedy::DownloadNoiseModel)
+    }
 }
 
 /// Runs the model on this machine. The server and the worker command use
@@ -221,15 +316,22 @@ pub fn run(
     stop: &(dyn Fn() -> bool + Sync),
     progress: &(dyn Fn(f32) + Sync),
 ) -> Result<StepResult, String> {
+    let here = engine.identity()?;
+    if here.version() != spec.version {
+        return Err(format!(
+            "This machine runs {}, not the {} the step was planned with. Apply the processing again",
+            display_version(&here.version()),
+            display_version(&spec.version),
+        ));
+    }
     let image = super::rc_astro::read_image(input)?;
     // Seiza does its own parallel work in the calling thread's pool.
     let pool = crate::concurrency::ComputePool::take("noise-model", threads)
         .map_err(|error| format!("The noise model could not start its threads: {error}"))?;
-    let processed =
-        pool.install(|| engine.denoise(&spec.identity, &image, spec.amounts, stop, progress))?;
+    let processed = pool.install(|| engine.denoise(&here, &image, spec.amounts, stop, progress))?;
     super::rc_astro::write_image(&output_dir.join(PROCESSED), &processed)?;
     Ok(StepResult {
-        device: Some(spec.identity.backend.clone()),
+        device: Some(here.backend),
         warnings: Vec::new(),
     })
 }
@@ -811,7 +913,7 @@ mod tests {
         crate::remote_work::rc_astro::write_image(&input, &image).unwrap();
         let engine = testing::FixedEngine::new("noise-v1");
         let spec = StepSpec {
-            identity: testing::identity("noise-v1"),
+            version: testing::identity("noise-v1").version(),
             amounts: Amounts {
                 grain: 0.5,
                 mottle: 0.5,
@@ -837,7 +939,7 @@ mod tests {
 
         // Another machine's model never runs under this identity.
         let other = StepSpec {
-            identity: testing::identity("noise-v2"),
+            version: testing::identity("noise-v2").version(),
             ..spec
         };
         assert!(run(
@@ -871,7 +973,7 @@ mod tests {
         let task_input = folder.path().join(INPUT);
         crate::remote_work::rc_astro::write_image(&task_input, &before).unwrap();
         let spec = StepSpec {
-            identity,
+            version: identity.version(),
             amounts: Amounts {
                 grain: 0.7,
                 mottle: 0.9,
@@ -885,8 +987,13 @@ mod tests {
         }
         let started = std::time::Instant::now();
         crate::remote_work::execute(
-            crate::remote_work::protocol::TaskKind::NoiseModelStep,
-            serde_json::to_value(&spec).unwrap(),
+            crate::remote_work::protocol::TaskKind::ProcessingStep,
+            serde_json::to_value(crate::remote_work::steps::StepSpec {
+                category: crate::remote_work::steps::Category::Denoise,
+                provider: TOOL.into(),
+                payload: serde_json::to_value(&spec).unwrap(),
+            })
+            .unwrap(),
             &std::collections::BTreeMap::from([(INPUT.to_string(), task_input)]),
             folder.path(),
             folder.path(),

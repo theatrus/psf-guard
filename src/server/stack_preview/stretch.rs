@@ -1418,10 +1418,11 @@ async fn restore_processing(
     )
     .await
     .map_err(|error| match &error {
-        // A server with no rc-astro of its own waits for its workers, which
-        // join again some time after a restart.
+        // A server with no rc-astro or noise model of its own waits for its
+        // workers, which join again some time after a restart.
         AppError::BadRequest(message)
-            if message.contains(crate::server::workers::rc_astro::NOT_INSTALLED) =>
+            if message.contains(crate::server::workers::rc_astro::NOT_INSTALLED)
+                || message.contains(crate::remote_work::noise_model::NOT_INSTALLED) =>
         {
             NotRestored::Retry(message.clone())
         }

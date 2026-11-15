@@ -8,6 +8,7 @@
 pub mod noise_model;
 pub mod protocol;
 pub mod rc_astro;
+pub mod steps;
 
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -50,18 +51,29 @@ impl LocalTools {
         threads: usize,
         choice: &WorkChoice,
     ) -> (protocol::Offers, Option<String>) {
-        let (mut rc_astro, problem) = match &self.rc_astro {
-            Some(cli) => rc_astro::probe(cli),
-            None => (Vec::new(), None),
-        };
-        // What is missing is not a problem to report: the model is an
-        // optional download.
-        let noise_model = self
-            .noise_model
-            .as_ref()
-            .filter(|_| choice.takes_noise_model())
-            .and_then(|engine| engine.identity().ok());
-        rc_astro.retain(|schema| choice.takes_rc_astro_tool(&schema.key));
+        // Every engine reports the providers it can run here.
+        let mut steps = Vec::new();
+        let mut problem = None;
+        for engine in [steps::Engine::RcAstro, steps::Engine::SeizaNoiseModel] {
+            let (schemas, engine_problem) = steps::runner(engine).offers(self);
+            problem = problem.or(engine_problem);
+            steps.extend(
+                schemas
+                    .into_iter()
+                    .filter(|schema| choice.takes_provider(&schema.key))
+                    .filter_map(steps::StepOffer::of),
+            );
+        }
+        // Servers older than providers read the RC-Astro tools here, and
+        // `work` as the kinds they know.
+        let rc_astro: Vec<_> = steps
+            .iter()
+            .filter(|offer| {
+                steps::provider(&offer.provider)
+                    .is_some_and(|found| found.engine == steps::Engine::RcAstro)
+            })
+            .map(|offer| offer.schema.clone())
+            .collect();
         let mut work = Vec::new();
         if !rc_astro.is_empty() {
             work.push(TaskKind::RcAstroStep);
@@ -81,7 +93,7 @@ impl LocalTools {
                 stacking_release: choice
                     .takes_stack()
                     .then(|| env!("CARGO_PKG_VERSION").into()),
-                noise_model,
+                steps,
             },
             problem,
         )
@@ -173,6 +185,15 @@ impl WorkChoice {
         self.noise_model
     }
 
+    /// Whether it takes a provider's steps, by the provider's key.
+    pub fn takes_provider(&self, provider: &str) -> bool {
+        match steps::provider(provider).map(|found| found.engine) {
+            Some(steps::Engine::RcAstro) => self.takes_rc_astro_tool(provider),
+            Some(steps::Engine::SeizaNoiseModel) => self.takes_noise_model(),
+            None => false,
+        }
+    }
+
     /// Whether it takes any RC-Astro tool.
     pub fn takes_rc_astro(&self) -> bool {
         self.rc_astro_tools
@@ -202,65 +223,37 @@ pub fn execute(
     report: &mut dyn TaskReport,
 ) -> Result<serde_json::Value, String> {
     match kind {
-        TaskKind::RcAstroStep => {
-            let spec: rc_astro::StepSpec = serde_json::from_value(spec)
-                .map_err(|error| format!("The RC-Astro task could not be read: {error}"))?;
-            let cli = tools
-                .rc_astro
-                .as_ref()
-                .ok_or_else(|| "rc-astro is not installed on this worker".to_string())?;
-            let input = inputs
-                .get(rc_astro::INPUT)
-                .ok_or_else(|| "The RC-Astro task has no input image".to_string())?;
-            let cancel = {
-                let stop = stop.clone();
-                seiza_stacking::CancelSignal::new(move || stop.requested())
-            };
-            let result = rc_astro::run(cli, &spec, input, output_dir, &cancel, &mut |done| {
-                report.fraction(done)
-            })?;
-            serde_json::to_value(result).map_err(|error| error.to_string())
-        }
-        TaskKind::NoiseModelStep => {
-            let spec: noise_model::StepSpec = serde_json::from_value(spec)
-                .map_err(|error| format!("The noise model task could not be read: {error}"))?;
-            let engine = tools
-                .noise_model
-                .as_ref()
-                .ok_or_else(|| "The noise model is not installed on this worker".to_string())?;
-            let input = inputs
-                .get(noise_model::INPUT)
-                .ok_or_else(|| "The noise model task has no input image".to_string())?;
-            let compute = match &tools.compute {
-                Some(source) => source(spec.person),
-                None => Compute {
-                    threads: (crate::concurrency::logical_cores() / tools.slots.max(1)).max(1),
-                    hold: None,
-                },
-            };
-            // Tiles finish on Seiza's threads, so the report is shared with
-            // them. Each whole percent is reported once.
-            let report = std::sync::Mutex::new((report, 0.0f32));
-            let stopped = || stop.requested();
-            let result = noise_model::run(
-                engine.as_ref(),
-                &spec,
-                input,
+        // What a server older than providers sends: an RC-Astro step, whose
+        // spec is the RC-Astro engine's payload.
+        TaskKind::RcAstroStep => steps::runner(steps::Engine::RcAstro).run(
+            spec,
+            steps::RunContext {
+                inputs,
                 output_dir,
-                compute.threads,
-                &stopped,
-                &|fraction| {
-                    let mut report = report
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner());
-                    if fraction >= report.1 + 0.01 || fraction >= 1.0 {
-                        report.1 = fraction;
-                        report.0.fraction(fraction);
-                    }
+                tools,
+                stop,
+                report,
+            },
+        ),
+        TaskKind::ProcessingStep => {
+            let spec: steps::StepSpec = serde_json::from_value(spec)
+                .map_err(|error| format!("The processing step could not be read: {error}"))?;
+            let provider = steps::provider(&spec.provider).ok_or_else(|| {
+                format!(
+                    "This worker does not know the provider {:?}; update PSF Guard on it",
+                    spec.provider
+                )
+            })?;
+            steps::runner(provider.engine).run(
+                spec.payload,
+                steps::RunContext {
+                    inputs,
+                    output_dir,
+                    tools,
+                    stop,
+                    report,
                 },
-            )?;
-            drop(compute.hold);
-            serde_json::to_value(result).map_err(|error| error.to_string())
+            )
         }
         TaskKind::StackChannel => crate::server::stack_preview::remote_channel::execute(
             spec,
@@ -387,20 +380,56 @@ mod tests {
             .offers(4, &WorkChoice::parse(work).unwrap())
             .0
         };
+        let model = |offers: &protocol::Offers| {
+            offers
+                .steps
+                .iter()
+                .find(|offer| offer.provider == noise_model::TOOL)
+                .map(|offer| (offer.category, offer.schema.cli_version.clone()))
+        };
         let installed = noise_model::testing::FixedEngine::new("noise-v1");
         let offered = offers(installed.clone(), &[]);
         assert_eq!(
-            offered.noise_model,
-            Some(noise_model::testing::identity("noise-v1"))
+            model(&offered),
+            Some((
+                steps::Category::Denoise,
+                noise_model::testing::identity("noise-v1").version()
+            ))
         );
-        // An older server reads `work` as a list of the kinds it knows.
-        assert!(!offered.work.contains(&TaskKind::NoiseModelStep));
-        assert_eq!(offers(installed, &["stack".into()]).noise_model, None);
+        // A server older than providers reads `work` as a list of the kinds
+        // it knows, and a registration with a kind it does not know fails.
+        assert!(!offered.work.contains(&TaskKind::ProcessingStep));
+        let wire = serde_json::to_value(&offered).unwrap();
+        assert_eq!(wire["work"], serde_json::json!(["stack_channel"]));
+        assert_eq!(model(&offers(installed, &["stack".into()])), None);
         let missing = noise_model::testing::FixedEngine::missing("ONNX Runtime is not installed");
-        assert_eq!(offers(missing, &[]).noise_model, None);
-        // A registration from before the model reads as offering none.
-        let old: protocol::Offers = serde_json::from_str(r#"{"threads": 4}"#).unwrap();
-        assert_eq!(old.noise_model, None);
+        assert_eq!(model(&offers(missing, &[])), None);
+    }
+
+    #[test]
+    fn a_worker_older_than_providers_offers_its_rc_astro_tools_as_providers() {
+        // What a worker of an earlier release registers with.
+        let old: protocol::Offers = serde_json::from_value(serde_json::json!({
+            "threads": 4,
+            "work": ["rc_astro_step"],
+            "rc_astro": [{
+                "schema_version": 6, "cli_version": "2.6.6", "key": "nxt",
+                "name": "RC-Astro NoiseXTerminator", "ml_version": 3, "licensed": true,
+                "license_message": null, "parameters": [],
+            }],
+        }))
+        .unwrap();
+        assert!(old.steps.is_empty());
+        let read = steps::offers_of(&old);
+        assert_eq!(read.len(), 1);
+        assert_eq!(read[0].provider, "nxt");
+        assert_eq!(read[0].category, steps::Category::Denoise);
+        // One that left RC-Astro out of `--work` offers none.
+        let narrowed = protocol::Offers {
+            work: vec![TaskKind::StackChannel],
+            ..old
+        };
+        assert!(steps::offers_of(&narrowed).is_empty());
     }
 
     fn everything_listed() -> WorkChoice {

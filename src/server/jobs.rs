@@ -1624,7 +1624,7 @@ fn catalog_install_row(progress: &CatalogInstallProgress) -> JobRow {
 }
 
 /// A download of ONNX Runtime or the noise model a person started in
-/// Settings › Reference catalogs. Settings is a dialog, not a view, so the
+/// Settings › Stacking. Settings is a dialog, not a view, so the
 /// row has no link.
 fn noise_model_download_row(progress: &crate::server::noise_model::DownloadProgress) -> JobRow {
     JobRow {

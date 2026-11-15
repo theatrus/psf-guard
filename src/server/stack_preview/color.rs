@@ -1709,7 +1709,7 @@ fn validate_request(request: &StackColorRequest) -> Result<(), AppError> {
             }
             if let Some(config) = &processing.color_rc_astro {
                 config.validate().map_err(AppError::BadRequest)?;
-                if config.steps.iter().any(|step| step.tool == "sxt") {
+                if config.steps.iter().any(|step| step.provider == "sxt") {
                     return Err(AppError::BadRequest(
                         "StarXTerminator runs on channel stacks, not on the color channels together"
                             .into(),
@@ -3726,8 +3726,8 @@ fn color_memory_plan(
                     // A step with no schema fails before any tool runs.
                     schemas
                         .iter()
-                        .find(|(tool, _)| *tool == step.tool)
-                        .is_some_and(|(_, schema)| state.workers.rc_astro_runs_here(schema))
+                        .find(|(tool, _)| *tool == step.provider)
+                        .is_some_and(|(_, schema)| state.workers.step_runs_here(schema))
                 })
         });
         if runs_here {

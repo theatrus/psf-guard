@@ -25,7 +25,7 @@ fn offers(tools: &[(&str, &str)]) -> Offers {
         work: vec![TaskKind::RcAstroStep],
         stacking_version: None,
         stacking_release: None,
-        noise_model: None,
+        steps: Vec::new(),
         rc_astro: tools
             .iter()
             .map(|(tool, version)| schema(tool, version, true))
@@ -44,10 +44,10 @@ fn registration(name: &str, offers: Offers, files: FileAccess) -> Registration {
 }
 
 fn needs(tool: &str, version: &str) -> TaskNeeds {
-    TaskNeeds::RcAstro {
-        tool: tool.into(),
+    TaskNeeds::Step {
+        provider: tool.into(),
         name: format!("RC-Astro {tool}"),
-        cli_version: version.into(),
+        version: version.into(),
         ml_version: Some(4),
     }
 }
@@ -603,7 +603,7 @@ fn this_server_runs_a_task_only_while_no_other_worker_can() {
     );
     // The remote worker goes first in the schema order, this server last.
     let order = board
-        .rc_astro_offers()
+        .step_offers()
         .into_iter()
         .map(|(name, _, _)| name)
         .collect::<Vec<_>>();
@@ -749,7 +749,7 @@ fn placement_keeps_work_on_workers_or_on_this_server() {
     board.set_placement(TaskKind::RcAstroStep, WorkPlacement::WorkersOnly);
     let names = |board: &Board| {
         board
-            .rc_astro_offers()
+            .step_offers()
             .into_iter()
             .map(|(name, _, _)| name)
             .collect::<Vec<_>>()
@@ -1073,7 +1073,7 @@ fn only_a_worker_that_stacks_at_the_same_version_takes_a_channel() {
         rc_astro: Vec::new(),
         stacking_version: Some(version.into()),
         stacking_release: Some("0.12".into()),
-        noise_model: None,
+        steps: Vec::new(),
     };
     let older = board.register(
         "token",
@@ -1190,6 +1190,18 @@ fn a_stopped_task_goes_to_no_new_worker() {
     assert_eq!(waiting.join().unwrap().unwrap_err(), WaitError::Stopped);
 }
 
+/// What a worker of this release registers: its providers as `steps`, and
+/// its RC-Astro tools again for a server older than providers.
+fn step_offers(schemas: Vec<seiza_stacking::ExternalToolSchema>) -> Offers {
+    Offers {
+        steps: schemas
+            .into_iter()
+            .filter_map(crate::remote_work::steps::StepOffer::of)
+            .collect(),
+        ..offers(&[])
+    }
+}
+
 #[test]
 fn a_noise_model_step_goes_only_to_a_worker_that_offers_the_same_model() {
     use crate::remote_work::noise_model::testing::identity;
@@ -1198,34 +1210,29 @@ fn a_noise_model_step_goes_only_to_a_worker_that_offers_the_same_model() {
     let board = board(dir.path(), Timings::default());
     let wanted = identity("noise-v1");
     // The step's schema is what a chain plans with; its needs come from it.
-    let (kind, needs) = TaskNeeds::step(&wanted.schema());
-    assert_eq!(kind, TaskKind::NoiseModelStep);
+    let needs = TaskNeeds::step(&wanted.schema());
     let ticket = board.ticket().unwrap();
     ticket
         .submit(NewTask {
-            kind,
+            kind: TaskKind::ProcessingStep,
             ..task("denoise", true, needs.clone())
         })
         .unwrap();
 
-    let with = |noise_model| Offers {
-        noise_model,
-        ..offers(&[("nxt", "2.6.6")])
-    };
-    // RC-Astro alone, another model, and the same model on another backend
-    // all leave the task where it is.
+    // RC-Astro's own noise reduction, another model, and the same model on
+    // another backend all leave the task where it is.
     let other_backend = crate::remote_work::noise_model::Identity {
         backend: "coreml-gpu".into(),
         ..wanted.clone()
     };
     for (name, offered) in [
-        ("none", None),
-        ("other-model", Some(identity("noise-v2"))),
-        ("other-backend", Some(other_backend)),
+        ("nxt-only", schema("nxt", "2.6.6", true)),
+        ("other-model", identity("noise-v2").schema()),
+        ("other-backend", other_backend.schema()),
     ] {
         let session = board.register(
             name,
-            registration(name, with(offered), FileAccess::default()),
+            registration(name, step_offers(vec![offered]), FileAccess::default()),
             false,
         );
         assert!(board.try_claim(&session).unwrap().is_none(), "{name}");
@@ -1233,26 +1240,91 @@ fn a_noise_model_step_goes_only_to_a_worker_that_offers_the_same_model() {
     }
     let session = board.register(
         "same",
-        registration("same", with(Some(wanted.clone())), FileAccess::default()),
+        registration(
+            "same",
+            step_offers(vec![schema("nxt", "2.6.6", true), wanted.schema()]),
+            FileAccess::default(),
+        ),
         false,
     );
     assert!(board.remote_can_run(&needs));
     let claimed = board.try_claim(&session).unwrap().unwrap();
-    assert_eq!(claimed.kind, TaskKind::NoiseModelStep);
+    assert_eq!(claimed.kind, TaskKind::ProcessingStep);
     assert_eq!(claimed.label, "denoise");
-    // The worker's summary shows the model without its card's hash.
+    // The worker's summary shows the model without its card's hash, beside
+    // its RC-Astro tools.
     let (sessions, _) = board.summary();
     let summary = sessions.iter().find(|found| found.name == "same").unwrap();
     assert_eq!(
         summary.noise_model.as_deref(),
         Some("noise-v1 cpu f32, seiza-model 0.1.0, band scale 5")
     );
-    // The step is sent the identity the worker registered.
-    assert_eq!(board.noise_model_identity(&wanted.version()), Some(wanted));
+    assert_eq!(summary.rc_astro, ["RC-Astro nxt 2.6.6"]);
 }
 
 #[test]
-fn the_noise_model_runs_where_the_rc_astro_tools_do() {
+fn a_worker_older_than_providers_is_sent_an_rc_astro_step_under_its_old_kind() {
+    let dir = tempfile::tempdir().unwrap();
+    let board = board(dir.path(), Timings::default());
+    // A step of this release: one kind for every provider.
+    let submit = |label: &str| {
+        let ticket = board.ticket().unwrap();
+        ticket
+            .submit(NewTask {
+                kind: TaskKind::ProcessingStep,
+                spec: serde_json::json!({"category": "denoise", "provider": "nxt", "schema": {}}),
+                ..task(label, true, TaskNeeds::step(&schema("nxt", "2.6.6", true)))
+            })
+            .unwrap();
+        ticket
+    };
+    // The older worker registers RC-Astro tools and no providers. It never
+    // heard of the new kind, so the step reaches it as `rc_astro_step`, with
+    // the spec an RC-Astro task has always had beside the new fields.
+    let _first = submit("first");
+    let old = board.register(
+        "old",
+        registration("old", offers(&[("nxt", "2.6.6")]), FileAccess::default()),
+        false,
+    );
+    let sent = board.try_claim(&old).unwrap().unwrap();
+    assert_eq!(sent.kind, TaskKind::RcAstroStep);
+    assert_eq!(
+        serde_json::to_value(&sent).unwrap()["kind"],
+        "rc_astro_step"
+    );
+    assert_eq!(sent.spec["provider"], "nxt");
+    // It is never sent a provider it does not have.
+    let model = crate::remote_work::noise_model::testing::identity("noise-v1");
+    let denoise = board.ticket().unwrap();
+    denoise
+        .submit(NewTask {
+            kind: TaskKind::ProcessingStep,
+            ..task("model", true, TaskNeeds::step(&model.schema()))
+        })
+        .unwrap();
+    board
+        .fail(&old, &sent.task, &sent.lease, "done".into())
+        .unwrap();
+    assert!(board.try_claim(&old).unwrap().is_none());
+
+    // A worker of this release gets the same step under the one kind.
+    let _second = submit("second");
+    let new = board.register(
+        "new",
+        registration(
+            "new",
+            step_offers(vec![schema("nxt", "2.6.6", true)]),
+            FileAccess::default(),
+        ),
+        false,
+    );
+    let sent = board.try_claim(&new).unwrap().unwrap();
+    assert_eq!(sent.kind, TaskKind::ProcessingStep);
+}
+
+#[test]
+fn every_provider_runs_where_the_stored_rc_astro_choice_says() {
     let dir = tempfile::tempdir().unwrap();
     let board = board(dir.path(), Timings::default());
     for placement in [
@@ -1260,7 +1332,9 @@ fn the_noise_model_runs_where_the_rc_astro_tools_do() {
         WorkPlacement::ThisServer,
         WorkPlacement::WorkersFirst,
     ] {
+        // The setting is stored and set under the RC-Astro kind, as before
+        // providers.
         board.set_placement(TaskKind::RcAstroStep, placement);
-        assert_eq!(board.placement(TaskKind::NoiseModelStep), placement);
+        assert_eq!(board.placement(TaskKind::ProcessingStep), placement);
     }
 }

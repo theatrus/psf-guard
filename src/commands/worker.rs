@@ -615,7 +615,11 @@ pub async fn serve(options: WorkerOptions, shutdown: impl Future<Output = ()>) -
     offers.slots = options.slots;
     if offers.rc_astro.is_empty() {
         // Without RC-Astro tools, a worker may still take stack builds.
-        let then = match (offers.work.is_empty(), offers.noise_model.is_some()) {
+        let model = offers
+            .steps
+            .iter()
+            .any(|offer| offer.provider == crate::remote_work::noise_model::TOOL);
+        let then = match (offers.work.is_empty(), model) {
             (true, false) => "this worker has no work to accept yet",
             (true, true) => "this worker accepts the noise model only",
             (false, false) => "this worker accepts stack builds only",
@@ -653,10 +657,14 @@ pub async fn serve(options: WorkerOptions, shutdown: impl Future<Output = ()>) -
             );
         }
     }
-    match (&offers.noise_model, &options.tools.noise_model) {
-        (Some(identity), _) => tracing::info!(
+    let model = offers
+        .steps
+        .iter()
+        .find(|offer| offer.provider == crate::remote_work::noise_model::TOOL);
+    match (model, &options.tools.noise_model) {
+        (Some(offer), _) => tracing::info!(
             "Accepts the noise model {}",
-            crate::remote_work::noise_model::display_version(&identity.version())
+            crate::remote_work::noise_model::display_version(&offer.schema.cli_version)
         ),
         (None, Some(engine)) if options.work.takes_noise_model() => {
             let engine = Arc::clone(engine);

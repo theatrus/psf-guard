@@ -194,6 +194,80 @@ pub fn run(
     })
 }
 
+/// RC-Astro's tools as providers of processing steps.
+pub struct RcAstroEngine;
+
+/// The message when no worker has rc-astro.
+pub const NOT_INSTALLED: &str = "rc-astro is not installed on this server or on a connected worker";
+
+impl super::steps::StepRunner for RcAstroEngine {
+    fn offers(&self, tools: &super::LocalTools) -> (Vec<ExternalToolSchema>, Option<String>) {
+        match &tools.rc_astro {
+            Some(cli) => probe(cli),
+            None => (Vec::new(), None),
+        }
+    }
+
+    fn payload(
+        &self,
+        schema: &ExternalToolSchema,
+        request: &ExternalToolRequest,
+        headers: &[(String, seiza_fits::HeaderValue)],
+        _person: bool,
+    ) -> Result<serde_json::Value, String> {
+        serde_json::to_value(StepSpec {
+            schema: schema.clone(),
+            request: request.clone(),
+            headers: HeaderCard::from_fits(headers),
+        })
+        .map_err(|error| error.to_string())
+    }
+
+    fn outputs(&self) -> Vec<(String, bool)> {
+        vec![(PROCESSED.into(), true), (STARS.into(), false)]
+    }
+
+    fn reads_holes(&self) -> bool {
+        false
+    }
+
+    fn run(
+        &self,
+        payload: serde_json::Value,
+        context: super::steps::RunContext<'_>,
+    ) -> Result<serde_json::Value, String> {
+        let spec: StepSpec = serde_json::from_value(payload)
+            .map_err(|error| format!("The RC-Astro task could not be read: {error}"))?;
+        let cli = context
+            .tools
+            .rc_astro
+            .as_ref()
+            .ok_or_else(|| "rc-astro is not installed on this worker".to_string())?;
+        let input = context
+            .inputs
+            .get(INPUT)
+            .ok_or_else(|| "The RC-Astro task has no input image".to_string())?;
+        let cancel = {
+            let stop = context.stop.clone();
+            seiza_stacking::CancelSignal::new(move || stop.requested())
+        };
+        let report = context.report;
+        let result = run(
+            cli,
+            &spec,
+            input,
+            context.output_dir,
+            &cancel,
+            &mut |done| report.fraction(done),
+        )?;
+        serde_json::to_value(result).map_err(|error| error.to_string())
+    }
+
+    fn missing(&self) -> (&'static str, super::steps::Remedy) {
+        (NOT_INSTALLED, super::steps::Remedy::InstallRcAstro)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
