@@ -535,7 +535,9 @@ exists. An import of all the database's image folders, such as an automatic
 import, then matches the renamed file to its frame instead of adding it
 again. The frame keeps its grade, quality data and history, and uses the
 new file name. The file must be the same exposure: the same capture time,
-exposure, filter and target. A file is matched only when exactly one frame
+exposure, filter and target. When Target Scheduler recorded the frame and
+its target was renamed in N.I.N.A. since, the airmass and focuser position
+stand in for the target's name. A file is matched only when exactly one frame
 fits and that frame's file is not found in any image folder. A copy of a
 file that is still there imports as a frame of its own, as before. An
 import of only some folders, and the command line's `import`, do not match
@@ -560,6 +562,14 @@ renamed one. This happens when you merge two catalogs that hold the same
 frames under different GUIDs, such as two catalogs that each imported the
 same folder. It also happens when you import the folder N.I.N.A. saved the
 frames in while Target Scheduler's own records of them are in the catalog.
+Target Scheduler's frame and an import's copy can be in targets with
+different names, for example after you rename the target in N.I.N.A. They
+still match when the capture time, exposure and filter agree, and the
+airmass and focuser position N.I.N.A. recorded agree with the file's. At
+least one of those two readings must be on both. A focuser position
+belongs to one rig, so another rig's frame from the same second does not
+match.
+
 **Settings** shows such a pair as *catalogued 2 times*, and the merge keeps
 one frame, chosen in this order:
 

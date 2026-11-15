@@ -29,7 +29,7 @@ use sha2::{Digest, Sha256};
 
 use crate::commands::import::IMPORTED_PROJECT_MARKER;
 use crate::commands::project_removal;
-use crate::frame_derivatives::identities_match;
+use crate::frame_derivatives::identities_match_ignoring_target;
 use crate::renamed_lights::{
     base_name, has_column, lights, now, table_exists, Light, LightRemoval, Records,
 };
@@ -119,11 +119,7 @@ pub struct Keepers {
 /// The light's capture fields without its target's name: the two rows
 /// sit in targets named differently.
 fn same_exposure(left: &Light, right: &Light) -> bool {
-    let mut left = left.identity.clone();
-    let mut right = right.identity.clone();
-    left.target = None;
-    right.target = None;
-    identities_match(&left, &right)
+    identities_match_ignoring_target(&left.identity, &right.identity)
 }
 
 /// Group lights of one file name into sets of the same exposure.
