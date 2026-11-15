@@ -596,7 +596,9 @@ test('retains RC-Astro color steps in saved setups on desktop and mobile', async
     .locator('option', { hasText: 'RC color test' })).toHaveCount(1);
   const setupsDocument = (await (await page.request.get('/api/processing-setups')).json()).data;
   const saved = setupsDocument.setups.find((entry: { name: string }) => entry.name === 'RC color test');
-  expect(saved.settings.input_rc_astro.red.steps).toEqual([{ tool: 'bxt', parameters: { ss: 0.2 } }]);
+  // A step is saved with its category and provider; `tool` stays for a
+  // release from before providers.
+  expect(saved.settings.input_rc_astro.red.steps).toEqual([{ category: 'sharpen', provider: 'bxt', tool: 'bxt', parameters: { ss: 0.2 } }]);
   await page.reload();
   await processing.locator(':scope > summary').click();
   await openProcessingSteps(processing);
