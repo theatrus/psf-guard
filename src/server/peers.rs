@@ -4,9 +4,14 @@
 //! sending half; this is the surface that lets someone drive the sending half
 //! from a browser instead of a terminal.
 //!
-//! The key never reaches the browser. It is written once through the CRUD
-//! route an editor uses, stored in the registry, and read back only by this
-//! process when it talks to the peer. A peer is a network address, not a
+//! A peer is added with a pairing code an editor generated on it: this
+//! server exchanges the code for its own credential there, so the peer
+//! lists this server and can remove it alone. A peer older than pairing
+//! between PSF Guard servers takes its remote API key.
+//!
+//! The credential never reaches the browser. It is written once through the
+//! CRUD route an editor uses, stored in the registry, and read back only by
+//! this process when it talks to the peer. A peer is a network address, not a
 //! server path, so the database-management gate does not apply.
 
 use axum::{
@@ -55,6 +60,11 @@ pub struct UpsertPeerRequest {
     /// Absent on an edit means "keep the stored key".
     #[serde(default)]
     pub token: Option<String>,
+    /// A pairing code generated on the peer for one of its databases. This
+    /// server exchanges it for its own credential and stores that; it wins
+    /// over `token` and `catalog_id`.
+    #[serde(default)]
+    pub pairing_code: Option<String>,
     #[serde(default)]
     pub catalog_id: Option<String>,
 }
@@ -124,16 +134,39 @@ pub async fn add_peer(
     // configuration, so it lives behind the same grant as the rest of the
     // registry.
     let registry_path = require_registry_path(&state)?;
-    let mut registry = load_registry(&state)?;
-
     let name = require_text(&request.name, "name")?;
     let base_url = validated_url(&request.base_url)?;
-    let token = match request.token.as_deref().map(str::trim) {
-        Some(token) if !token.is_empty() => token.to_string(),
-        _ => return Err(AppError::BadRequest("a peer needs an API key".into())),
+    // Pair before reading the registry: the exchange waits on the network,
+    // and the registry must not be held across it.
+    let paired = match pairing_code(&request) {
+        Some(code) => Some(pair(&base_url, code).await?),
+        None => None,
     };
-    let id = crate::server::slug::compute_default_slug(&base_url);
-    if registry.peers.iter().any(|peer| peer.id == id) {
+    let mut registry = load_registry(&state)?;
+    let taken = |id: &str| registry.peers.iter().any(|peer| peer.id == id);
+    let mut id = crate::server::slug::compute_default_slug(&base_url);
+    let (token, catalog_id) = match paired {
+        Some(paired) => {
+            // A code is for one of the peer's databases, so one address may
+            // be paired once for each.
+            if taken(&id) {
+                id = crate::server::slug::compute_default_slug(&format!(
+                    "{base_url} {}",
+                    paired.catalog_id
+                ));
+            }
+            (paired.token, Some(paired.catalog_id))
+        }
+        None => match request.token.as_deref().map(str::trim) {
+            Some(token) if !token.is_empty() => (token.to_string(), normalized(request.catalog_id)),
+            _ => {
+                return Err(AppError::BadRequest(
+                    "a peer needs a pairing code or an API key".into(),
+                ))
+            }
+        },
+    };
+    if taken(&id) {
         return Err(AppError::BadRequest(format!(
             "a peer for {base_url} is already configured"
         )));
@@ -143,7 +176,7 @@ pub async fn add_peer(
         name,
         base_url,
         token,
-        catalog_id: normalized(request.catalog_id),
+        catalog_id,
     };
     registry.peers.push(entry.clone());
     save(&registry, &registry_path)?;
@@ -156,11 +189,16 @@ pub async fn update_peer(
     Json(request): Json<UpsertPeerRequest>,
 ) -> Result<Json<ApiResponse<PeerSummary>>, AppError> {
     let registry_path = require_registry_path(&state)?;
-    let mut registry = load_registry(&state)?;
-
     let name = require_text(&request.name, "name")?;
     let base_url = validated_url(&request.base_url)?;
-    let catalog_id = normalized(request.catalog_id);
+    // Pair before reading the registry, so a refused code leaves the peer
+    // as it was and the registry is not held across the network wait.
+    let paired = match pairing_code(&request) {
+        Some(code) => Some(pair(&base_url, code).await?),
+        None => None,
+    };
+    let mut registry = load_registry(&state)?;
+    let catalog_id = normalized(request.catalog_id.clone());
     let peer = registry
         .peers
         .iter_mut()
@@ -171,7 +209,10 @@ pub async fn update_peer(
     peer.catalog_id = catalog_id;
     // An absent key means "leave it alone": the browser never received it, so
     // it cannot echo it back on a rename.
-    if let Some(token) = request.token.as_deref().map(str::trim)
+    if let Some(paired) = paired {
+        peer.token = paired.token;
+        peer.catalog_id = Some(paired.catalog_id);
+    } else if let Some(token) = request.token.as_deref().map(str::trim)
         && !token.is_empty()
     {
         peer.token = token.to_string();
@@ -378,6 +419,25 @@ pub async fn sync_with_peer(
         summary: outcome.summary,
         deleted_projects: outcome.deleted_project_guids,
     })))
+}
+
+fn pairing_code(request: &UpsertPeerRequest) -> Option<&str> {
+    request
+        .pairing_code
+        .as_deref()
+        .map(str::trim)
+        .filter(|code| !code.is_empty())
+}
+
+/// Exchange a pairing code at `base_url` for this server's credential
+/// there. The peer lists this server under its host name.
+async fn pair(base_url: &str, code: &str) -> Result<crate::sync_client::RemotePairing, AppError> {
+    let client_name = crate::commands::worker::machine_name().unwrap_or_else(|| "PSF Guard".into());
+    crate::sync_client::SyncClient::new(base_url, "")
+        .map_err(|error| AppError::BadRequest(error.to_string()))?
+        .pair(code, &client_name)
+        .await
+        .map_err(|error| AppError::BadRequest(format!("{error:#}")))
 }
 
 fn unreachable(error: anyhow::Error) -> PeerCheck {

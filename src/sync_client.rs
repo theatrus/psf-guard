@@ -36,6 +36,15 @@ pub struct RemoteCatalog {
     pub writable: bool,
 }
 
+/// What a peer answers to a pairing code: the database the code was for,
+/// and the credential this server now holds for it.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RemotePairing {
+    pub catalog_id: String,
+    pub catalog_name: String,
+    pub token: String,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct RemoteCapabilities {
     pub protocol_version: u32,
@@ -118,6 +127,23 @@ impl SyncClient {
 
     pub fn base_url(&self) -> &str {
         &self.base_url
+    }
+
+    /// Exchange a pairing code an editor generated on the peer for this
+    /// server's own credential there. The code is the whole authorization,
+    /// so the client needs no key yet. `client_name` is what the peer's
+    /// Settings lists this server as.
+    pub async fn pair(&self, pairing_code: &str, client_name: &str) -> Result<RemotePairing> {
+        self.post(
+            "/api/sync/v1/pair",
+            &serde_json::json!({
+                "protocol_version": 1,
+                "pairing_token": pairing_code.trim(),
+                "client_name": client_name,
+            }),
+        )
+        .await
+        .with_context(|| format!("pairing with {}", self.base_url))
     }
 
     pub async fn capabilities(&self) -> Result<RemoteCapabilities> {

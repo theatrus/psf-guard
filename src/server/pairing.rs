@@ -5,9 +5,13 @@
 //! the code is worthless after one use or an hour. Every pairing mints its
 //! own credential, so the operator revokes one client without signing out
 //! the rest.
+//!
+//! A code is for one kind of client: the N.I.N.A. Sync plugin, or another
+//! PSF Guard. The kind decides which sync grant the pairing turns on and
+//! which list in Settings shows the client.
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     Json,
 };
 use serde::{Deserialize, Serialize};
@@ -17,6 +21,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use crate::db_registry::RemoteClientKind;
 use crate::server::{
     api::ApiResponse,
     handlers::{require_registry_path, AppError},
@@ -58,6 +63,7 @@ fn unix_seconds() -> i64 {
 
 struct PendingPairing {
     db_id: String,
+    kind: RemoteClientKind,
     expires_at: i64,
 }
 
@@ -76,28 +82,33 @@ impl PairingStore {
         Self::default()
     }
 
-    /// Mint a code for one catalog. Any earlier unconsumed code for the same
-    /// catalog is revoked — one outstanding code per catalog, so a stale
-    /// sticky note cannot pair after the operator issued a fresh one.
-    pub fn issue(&self, db_id: &str) -> Result<(String, i64), AppError> {
+    /// Mint a code for one catalog and one kind of client. Any earlier
+    /// unconsumed code for the same catalog and kind is revoked, so a stale
+    /// sticky note cannot pair after the operator issued a fresh one. A
+    /// plugin's code and a peer's code can wait side by side.
+    pub fn issue(&self, db_id: &str, kind: RemoteClientKind) -> Result<(String, i64), AppError> {
         let token = format!("{PAIRING_TOKEN_PREFIX}{}", random_secret());
         let expires_at = unix_seconds() + PAIRING_TTL_SECONDS;
         let mut pending = self.lock()?;
         let now = unix_seconds();
-        pending.retain(|_, entry| entry.db_id != db_id && entry.expires_at > now);
+        pending.retain(|_, entry| {
+            !(entry.db_id == db_id && entry.kind == kind) && entry.expires_at > now
+        });
         pending.insert(
             hash_token(&token),
             PendingPairing {
                 db_id: db_id.to_string(),
+                kind,
                 expires_at,
             },
         );
         Ok((token, expires_at))
     }
 
-    /// Consume a code, returning the catalog it pairs. Single-use: a second
-    /// presentation of the same code finds nothing.
-    pub fn consume(&self, token: &str) -> Result<Option<String>, AppError> {
+    /// Consume a code, returning the catalog it pairs and the kind of client
+    /// it was issued for. Single-use: a second presentation of the same code
+    /// finds nothing.
+    pub fn consume(&self, token: &str) -> Result<Option<(String, RemoteClientKind)>, AppError> {
         let mut pending = self.lock()?;
         let Some(entry) = pending.remove(&hash_token(token)) else {
             return Ok(None);
@@ -105,7 +116,7 @@ impl PairingStore {
         if entry.expires_at <= unix_seconds() {
             return Ok(None);
         }
-        Ok(Some(entry.db_id))
+        Ok(Some((entry.db_id, entry.kind)))
     }
 
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, HashMap<String, PendingPairing>>, AppError> {
@@ -121,17 +132,25 @@ pub struct PairingCode {
     pub expires_at: i64,
 }
 
-/// `POST /api/databases/{db_id}/pairing-token` — operator-side, management
-/// gated exactly like editing the database the code will grant.
+#[derive(Debug, Default, Deserialize)]
+pub struct IssueQuery {
+    /// `plugin` (the default) or `peer`.
+    #[serde(default)]
+    pub kind: RemoteClientKind,
+}
+
+/// `POST /api/databases/{db_id}/pairing-token[?kind=peer]` — operator-side,
+/// an editor's. Without `kind` the code pairs a Sync plugin, as before.
 pub async fn issue_pairing_token_route(
     State(state): State<Arc<AppState>>,
     Path(db_id): Path<String>,
+    Query(query): Query<IssueQuery>,
 ) -> Result<Json<ApiResponse<PairingCode>>, AppError> {
     require_registry_path(&state)?;
     if !state.databases.read().unwrap().contains_key(&db_id) {
         return Err(AppError::NotFound);
     }
-    let (pairing_token, expires_at) = state.pairing.issue(&db_id)?;
+    let (pairing_token, expires_at) = state.pairing.issue(&db_id, query.kind)?;
     Ok(Json(ApiResponse::success(PairingCode {
         pairing_token,
         expires_at,
@@ -189,7 +208,7 @@ pub async fn pair_route(
             request.protocol_version
         )));
     }
-    let Some(db_id) = state.pairing.consume(&request.pairing_token)? else {
+    let Some((db_id, kind)) = state.pairing.consume(&request.pairing_token)? else {
         audit("-", AuditOutcome::Refused, Some("unknown or expired code"));
         return Err(AppError::Forbidden(
             "pairing code is unknown, expired, or already used".into(),
@@ -220,11 +239,17 @@ pub async fn pair_route(
         .remote_image_upload
         .get_or_insert_with(RemoteImageUploadConfig::default);
     let client_uuid = config
-        .add_client(client_name, &token)
+        .add_client(client_name, &token, kind)
         .map_err(|error| AppError::InternalError(format!("storing client token: {error}")))?;
     // Pairing exists to connect a scheduler-sync client; upload stays
     // whatever the operator configured (it needs a receive directory too).
-    config.sync_enabled = true;
+    // Only the paired kind's grant turns on: pairing a plugin does not let
+    // peers or the remote API key sync, nor the reverse.
+    config.pin_peer_sync();
+    match kind {
+        RemoteClientKind::Plugin => config.sync_enabled = true,
+        RemoteClientKind::Peer => config.peer_sync_enabled = Some(true),
+    }
     let entry = entry.clone();
 
     let context = Arc::new(
@@ -292,31 +317,51 @@ pub async fn revoke_client_route(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use RemoteClientKind::{Peer, Plugin};
+
+    fn paired(catalog: &str, kind: RemoteClientKind) -> Option<(String, RemoteClientKind)> {
+        Some((catalog.to_string(), kind))
+    }
 
     #[test]
     fn pairing_codes_are_single_use() {
         let store = PairingStore::new();
-        let (token, _) = store.issue("catalog").unwrap();
+        let (token, _) = store.issue("catalog", Plugin).unwrap();
         assert!(token.starts_with(PAIRING_TOKEN_PREFIX));
-        assert_eq!(store.consume(&token).unwrap().as_deref(), Some("catalog"));
+        assert_eq!(store.consume(&token).unwrap(), paired("catalog", Plugin));
         assert_eq!(store.consume(&token).unwrap(), None);
     }
 
     #[test]
     fn reissuing_revokes_the_previous_code_for_that_catalog() {
         let store = PairingStore::new();
-        let (first, _) = store.issue("catalog").unwrap();
-        let (second, _) = store.issue("catalog").unwrap();
+        let (first, _) = store.issue("catalog", Plugin).unwrap();
+        let (second, _) = store.issue("catalog", Plugin).unwrap();
         assert_eq!(store.consume(&first).unwrap(), None);
-        assert_eq!(store.consume(&second).unwrap().as_deref(), Some("catalog"));
+        assert_eq!(store.consume(&second).unwrap(), paired("catalog", Plugin));
     }
 
     #[test]
     fn codes_for_other_catalogs_survive_a_reissue() {
         let store = PairingStore::new();
-        let (other, _) = store.issue("other").unwrap();
-        let (_, _) = store.issue("catalog").unwrap();
-        assert_eq!(store.consume(&other).unwrap().as_deref(), Some("other"));
+        let (other, _) = store.issue("other", Plugin).unwrap();
+        let (_, _) = store.issue("catalog", Plugin).unwrap();
+        assert_eq!(store.consume(&other).unwrap(), paired("other", Plugin));
+    }
+
+    #[test]
+    fn a_peers_code_and_a_plugins_code_wait_side_by_side() {
+        let store = PairingStore::new();
+        let (plugin, _) = store.issue("catalog", Plugin).unwrap();
+        let (peer, _) = store.issue("catalog", Peer).unwrap();
+        // A second peer code replaces only the first peer code.
+        let (second_peer, _) = store.issue("catalog", Peer).unwrap();
+        assert_eq!(store.consume(&peer).unwrap(), None);
+        assert_eq!(store.consume(&plugin).unwrap(), paired("catalog", Plugin));
+        assert_eq!(
+            store.consume(&second_peer).unwrap(),
+            paired("catalog", Peer)
+        );
     }
 
     #[test]
