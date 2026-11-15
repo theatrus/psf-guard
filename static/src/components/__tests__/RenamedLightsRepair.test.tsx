@@ -66,7 +66,7 @@ describe('renamed light repair', () => {
 
   it('points a viewer at the command line instead', async () => {
     mount(false);
-    expect(await screen.findByRole('note')).toHaveTextContent('psf-guard merge-renamed-lights --db veil --apply');
+    expect(await screen.findByRole('note')).toHaveTextContent('An editor can merge them, or run psf-guard merge-renamed-lights --db veil --apply where the file is writable.');
     expect(screen.queryByRole('button', { name: 'Merge renamed lights' })).not.toBeInTheDocument();
   });
 

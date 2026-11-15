@@ -33,6 +33,7 @@ pub mod frame_shapes;
 pub mod frame_sites;
 pub mod handlers;
 pub mod import_job;
+pub mod imported_copies;
 pub mod job_line;
 pub mod job_text;
 pub mod jobs;
@@ -365,6 +366,8 @@ pub fn api_router(state: Arc<AppState>) -> Router {
         .route("/guids/fill", post(handlers::fill_guids_route))
         .route("/renamed-lights", get(renamed_lights::report))
         .route("/renamed-lights/merge", post(renamed_lights::merge))
+        .route("/imported-copies", get(imported_copies::report))
+        .route("/imported-copies/merge", post(imported_copies::merge))
         .route(
             "/projects/{project_id}/merge",
             post(handlers::merge_project_route),

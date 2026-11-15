@@ -877,7 +877,21 @@ pub fn remove(
     if plan.protected_frames > 0 {
         return Ok(Outcome::Protected(plan));
     }
-    ensure_schema(&tx)?;
+    let frames = remove_planned(&tx, &plan, now)?;
+    tx.commit()?;
+    Ok(Outcome::Removed { plan, frames })
+}
+
+/// Delete a planned project in the caller's transaction, recording it as
+/// [`remove`] does so that a sync does not bring it back: the tombstones,
+/// then every row with [`delete_project_rows`].
+pub(crate) fn remove_planned(
+    tx: &Connection,
+    plan: &RemovalPlan,
+    now: i64,
+) -> Result<Vec<RemovedFrame>> {
+    let project_id = plan.project_id;
+    ensure_schema(tx)?;
     // A GUID shared with another project identifies neither.
     let tombstone_guid = plan.guid.as_deref().filter(|_| plan.unique_guid);
     // Every deletion keeps its project out of later syncs, with frames or
@@ -918,7 +932,7 @@ pub fn remove(
     }
     // Calibrated copies paired with the frames: an import would otherwise
     // take one for a new light once its frame is gone.
-    if table_exists(&tx, "psf_guard_frame_derivative") {
+    if table_exists(tx, "psf_guard_frame_derivative") {
         tx.execute(
             "INSERT INTO psf_guard_removed_project_frame
                 (removal_id, acquired_image_id, acquired_image_guid, project_id, project_guid,
@@ -931,9 +945,7 @@ pub fn remove(
             params![project_id, tombstone_guid, now, removal],
         )?;
     }
-    let frames = delete_project_rows(&tx, &plan)?;
-    tx.commit()?;
-    Ok(Outcome::Removed { plan, frames })
+    delete_project_rows(tx, plan)
 }
 
 /// Delete a planned project's rows: its frames and what PSF Guard keeps

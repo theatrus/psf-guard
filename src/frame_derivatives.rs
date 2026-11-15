@@ -549,6 +549,13 @@ pub fn identities_match(light: &FrameIdentity, derivative: &FrameIdentity) -> bo
     if !light_time.same_as(derivative_time) {
         return false;
     }
+    same_capture_fields(light, derivative)
+}
+
+/// [`identities_match`] without the capture time, for a caller that
+/// compares times its own way: the exposure, the filter, and the target
+/// and camera where both give one.
+pub fn same_capture_fields(light: &FrameIdentity, derivative: &FrameIdentity) -> bool {
     let (Some(light_exposure), Some(derivative_exposure)) =
         (light.exposure_s, derivative.exposure_s)
     else {
