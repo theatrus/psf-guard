@@ -26,6 +26,10 @@ pub enum NoiseModelAction {
         /// Leave out the model.
         #[arg(long)]
         skip_model: bool,
+        /// Download ONNX Runtime again when this release is installed
+        /// already.
+        #[arg(long)]
+        force: bool,
     },
     /// Show what is installed on this computer and which model it runs.
     Status {
@@ -1527,9 +1531,9 @@ pub enum Commands {
         #[arg(long, value_name = "PATH")]
         onnxruntime: Option<String>,
 
-        /// Work this worker accepts: `stack` for stack builds, `noise-model`
-        /// for Seiza's noise model, `rc-astro` for every RC-Astro tool, or
-        /// `bxt`, `nxt` or `sxt` for one. Repeat
+        /// Work this worker accepts: `stack` for stack builds, `processing`
+        /// (or `rc-astro`) for every processing step, or `noise-model`,
+        /// `bxt`, `nxt` or `sxt` for one provider. Repeat
         /// for more. Without this option, the worker accepts every task type
         /// it can run. Choose where tasks run in Settings › Workers.
         /// Restart the worker after licensing or upgrading rc-astro.

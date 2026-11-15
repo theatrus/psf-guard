@@ -15,7 +15,8 @@ pub fn run(action: NoiseModelAction) -> Result<()> {
         NoiseModelAction::Download {
             skip_runtime,
             skip_model,
-        } => download(!skip_runtime, !skip_model),
+            force,
+        } => download(!skip_runtime, !skip_model, force),
         NoiseModelAction::Status { onnxruntime } => {
             status(&Config::new(onnxruntime.map(PathBuf::from), true));
             Ok(())
@@ -23,7 +24,7 @@ pub fn run(action: NoiseModelAction) -> Result<()> {
     }
 }
 
-fn download(runtime: bool, model: bool) -> Result<()> {
+fn download(runtime: bool, model: bool, force: bool) -> Result<()> {
     let config = Config::new(None, true);
     println!("Downloading to {}", config.folder.display());
     let report = |step: install::Step| {
@@ -40,8 +41,8 @@ fn download(runtime: bool, model: bool) -> Result<()> {
     };
     let ended = tokio::runtime::Runtime::new()?.block_on(async {
         if runtime {
-            let library = install::download_runtime(&config, &report).await?;
-            println!("\nONNX Runtime is at {}", library.display());
+            let installed = install::download_runtime(&config, force, &report).await?;
+            println!("\nONNX Runtime is at {}", installed.library.display());
         }
         if model {
             let name = install::download_model(&config, &report).await?;

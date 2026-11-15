@@ -240,13 +240,15 @@ pub struct WorkerNoiseModel {
     pub runtime_download: Option<String>,
 }
 
-/// What this computer has installed for the noise model. Opens ONNX
-/// Runtime in the app when its library is on disk.
+/// What this computer has on disk for the noise model. The app does not
+/// open ONNX Runtime here: it also hosts the app's own server, a process
+/// loads one ONNX Runtime for its life, and the worker's saved path may be
+/// another library than the server's. The worker opens its own.
 #[tauri::command]
 pub async fn get_worker_noise_model() -> Result<WorkerNoiseModel, String> {
     use crate::remote_work::noise_model::{install, SeizaEngine};
     let config = noise_model_config()?;
-    let installed = tokio::task::spawn_blocking(move || SeizaEngine::new(config).installed())
+    let installed = tokio::task::spawn_blocking(move || SeizaEngine::new(config).on_disk())
         .await
         .map_err(|error| error.to_string())?;
     Ok(WorkerNoiseModel {
@@ -266,7 +268,7 @@ pub async fn download_worker_noise_model(
     use crate::remote_work::noise_model::install;
     let config = noise_model_config()?;
     if runtime {
-        install::download_runtime(&config, &|_| {}).await?;
+        install::download_runtime(&config, false, &|_| {}).await?;
     }
     if model {
         install::download_model(&config, &|_| {}).await?;

@@ -77,6 +77,28 @@ impl SeizaInstall {
         self.installed.runtime_path = None;
         self.installed.folder = String::new();
         self.onnxruntime = None;
+        // A problem other than "not installed" quotes a path or a loader's
+        // error, and so does each backend's reason.
+        let plain = |problem: &mut Option<String>, missing: &str, broken: &str| {
+            if problem.as_deref().is_some_and(|text| text != missing) {
+                *problem = Some(broken.to_string());
+            }
+        };
+        plain(
+            &mut self.installed.runtime_problem,
+            noise_model::RUNTIME_MISSING,
+            "ONNX Runtime on this server cannot be used",
+        );
+        plain(
+            &mut self.installed.model_problem,
+            noise_model::MODEL_MISSING,
+            "The noise model on this server cannot be used",
+        );
+        self.installed.backends.clear();
+        if self.download.error.is_some() {
+            self.download.error = Some("The download failed".into());
+            self.download.message = "The download failed".into();
+        }
         self
     }
 }
@@ -140,6 +162,9 @@ pub enum DownloadPart {
 #[derive(Debug, Clone, Deserialize)]
 pub struct DownloadRequest {
     pub parts: Vec<DownloadPart>,
+    /// Download ONNX Runtime again when this release is installed already.
+    #[serde(default)]
+    pub force: bool,
 }
 
 /// A download's state, for Settings and the job line.
@@ -205,6 +230,7 @@ impl NoiseModelDownloads {
     pub fn start(
         &self,
         parts: Vec<DownloadPart>,
+        force: bool,
         config: Config,
         guard: InteractiveJobGuard,
         state: &Arc<AppState>,
@@ -227,7 +253,7 @@ impl NoiseModelDownloads {
                         })
                     };
                     match part {
-                        DownloadPart::Runtime => install::download_runtime(&config, &report)
+                        DownloadPart::Runtime => install::download_runtime(&config, force, &report)
                             .await
                             .map(|_| ()),
                         DownloadPart::Model => {
@@ -304,13 +330,16 @@ impl NoiseModelDownloads {
                 progress.bytes_total = None;
                 progress.finished_at = Some(unix_now());
                 match ended {
+                    // "Already installed" is the truer last word when nothing
+                    // was fetched.
+                    Ok(()) if progress.message.contains("already installed") => {}
                     Ok(()) => progress.message = "Downloaded".into(),
                     Err(error) => {
                         if !stop.requested() {
                             tracing::error!("Noise model download failed: {error}");
                         }
                         progress.message = if stop.requested() {
-                            "Stopped. Nothing partly downloaded is used".into()
+                            "Stopped. A part that was not finished is not installed".into()
                         } else {
                             format!("The download failed: {error}")
                         };
@@ -349,7 +378,7 @@ pub async fn start_download(
     let guard = state.begin_named_interactive_job("a noise model download");
     let progress = state
         .noise_model_downloads
-        .start(parts, config(), guard, &state);
+        .start(parts, request.force, config(), guard, &state);
     Ok(Json(ApiResponse::success(progress)))
 }
 
@@ -473,18 +502,48 @@ mod tests {
             installed: Installed {
                 runtime_path: Some("/opt/onnx/libonnxruntime.so".into()),
                 runtime_version: Some("1.31.1".into()),
+                runtime_problem: Some(
+                    "PSF Guard already opened ONNX Runtime at /opt/onnx/libonnxruntime.so".into(),
+                ),
                 model: Some("noise-v1".into()),
+                model_problem: Some("/srv/psf-guard/noise-model/models/x: bad card".into()),
+                backends: vec![noise_model::BackendLine {
+                    backend: "cuda".into(),
+                    unavailable: Some("/opt/onnx/libonnxruntime.so has no CUDA".into()),
+                    automatic: false,
+                }],
                 folder: "/srv/psf-guard/noise-model".into(),
                 ..Default::default()
             },
             onnxruntime: Some("/opt/onnx".into()),
             runtime_download: None,
-            download: DownloadProgress::default(),
+            download: DownloadProgress {
+                message: "The download failed: Creating /srv/psf-guard/noise-model: denied".into(),
+                error: Some("Creating /srv/psf-guard/noise-model: denied".into()),
+                ..Default::default()
+            },
         }
         .for_viewer();
         let json = serde_json::to_string(&install).unwrap();
         assert!(!json.contains("/opt/onnx"), "{json}");
         assert!(!json.contains("/srv/psf-guard"), "{json}");
         assert!(json.contains("1.31.1"));
+        assert!(json.contains("cannot be used"), "{json}");
+        // "Not installed" is no secret and stays as it is.
+        let missing = SeizaInstall {
+            installed: Installed {
+                runtime_problem: Some(noise_model::RUNTIME_MISSING.into()),
+                model_problem: Some(noise_model::MODEL_MISSING.into()),
+                ..Default::default()
+            },
+            onnxruntime: None,
+            runtime_download: None,
+            download: DownloadProgress::default(),
+        }
+        .for_viewer();
+        assert_eq!(
+            missing.installed.runtime_problem.as_deref(),
+            Some(noise_model::RUNTIME_MISSING)
+        );
     }
 }
