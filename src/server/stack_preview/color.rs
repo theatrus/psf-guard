@@ -1709,9 +1709,9 @@ fn validate_request(request: &StackColorRequest) -> Result<(), AppError> {
             }
             if let Some(config) = &processing.color_rc_astro {
                 config.validate().map_err(AppError::BadRequest)?;
-                if config.steps.iter().any(|step| step.provider == "sxt") {
+                if config.removes_stars() {
                     return Err(AppError::BadRequest(
-                        "StarXTerminator runs on channel stacks, not on the color channels together"
+                        "Star removal runs on channel stacks, not on the color channels together"
                             .into(),
                     ));
                 }
@@ -2085,7 +2085,7 @@ pub(super) fn prepare_color_job(
         let mut hash = Sha256::new();
         hash.update(base_job_id.as_bytes());
         hash.update(
-            serde_json::to_vec(
+            crate::remote_work::steps::identity_json(
                 &stars_plan
                     .as_ref()
                     .map(|plan| (&plan.nebula_chain, &plan.rgb_chain)),
@@ -2289,7 +2289,8 @@ fn color_job_id(identity: &ColorJobIdentity<'_>) -> Result<String, AppError> {
     if let Some(combination) = request.combination {
         hasher.update(b"combined-color-v1");
         hasher.update(
-            serde_json::to_vec(&combination).map_err(|e| AppError::InternalError(e.to_string()))?,
+            crate::remote_work::steps::identity_json(&combination)
+                .map_err(|e| AppError::InternalError(e.to_string()))?,
         );
     }
     hasher.update(STACK_COLOR_CACHE_VERSION.to_le_bytes());
@@ -2298,7 +2299,7 @@ fn color_job_id(identity: &ColorJobIdentity<'_>) -> Result<String, AppError> {
     if request.automatic_palette || request.stars.is_some() {
         hasher.update(b"narrowband-stars-v1");
         hasher.update(
-            serde_json::to_vec(&(request.automatic_palette, request.stars))
+            crate::remote_work::steps::identity_json(&(request.automatic_palette, request.stars))
                 .map_err(|error| AppError::InternalError(error.to_string()))?,
         );
     }
@@ -2320,28 +2321,38 @@ fn color_job_id(identity: &ColorJobIdentity<'_>) -> Result<String, AppError> {
     {
         hasher.update(super::stretch::deconvolution_version().as_bytes());
     }
-    hasher.update(serde_json::to_vec(&request.crop).map_err(|error| {
-        AppError::InternalError(format!("Failed to encode color crop mode: {error}"))
-    })?);
+    hasher.update(
+        crate::remote_work::steps::identity_json(&request.crop).map_err(|error| {
+            AppError::InternalError(format!("Failed to encode color crop mode: {error}"))
+        })?,
+    );
     // A build that follows the cards is a job of its own even when its tools
     // match a build's own settings: a finished job is reused as it stands,
     // and it records whether it follows the cards. The color inputs and
     // RC-Astro chains key on the tools alone, so switching only composes
     // again.
-    hasher.update(serde_json::to_vec(&request.processing).map_err(|error| {
-        AppError::InternalError(format!(
-            "Failed to encode color processing options: {error}"
-        ))
-    })?);
     hasher.update(
-        serde_json::to_vec(identity.background_protection).map_err(|error| {
-            AppError::InternalError(format!("Failed to encode background protection: {error}"))
+        crate::remote_work::steps::identity_json(&request.processing).map_err(|error| {
+            AppError::InternalError(format!(
+                "Failed to encode color processing options: {error}"
+            ))
         })?,
     );
     hasher.update(
-        serde_json::to_vec(&identity.color_calibration_basis).map_err(|error| {
-            AppError::InternalError(format!("Failed to encode color calibration basis: {error}"))
-        })?,
+        crate::remote_work::steps::identity_json(identity.background_protection).map_err(
+            |error| {
+                AppError::InternalError(format!("Failed to encode background protection: {error}"))
+            },
+        )?,
+    );
+    hasher.update(
+        crate::remote_work::steps::identity_json(&identity.color_calibration_basis).map_err(
+            |error| {
+                AppError::InternalError(format!(
+                    "Failed to encode color calibration basis: {error}"
+                ))
+            },
+        )?,
     );
     for source in identity.sources {
         hasher.update([source.role as u8]);
@@ -2497,9 +2508,9 @@ fn source_family_key(sources: &[StackColorSource]) -> String {
             .iter()
             .map(|source| (source.role, source.wbpp))
             .collect::<BTreeMap<_, _>>();
-        serde_json::to_vec(&("wbpp-origin", &families, &origins))
+        crate::remote_work::steps::identity_json(&("wbpp-origin", &families, &origins))
     } else {
-        serde_json::to_vec(&families)
+        crate::remote_work::steps::identity_json(&families)
     }
     .expect("color source families are serializable");
     let mut key = String::with_capacity(64);
@@ -2617,7 +2628,7 @@ fn color_input_cache_id(
         hasher.update(seiza_deconvolution::ALGORITHM_VERSION.to_le_bytes());
     }
     hasher.update(
-        serde_json::to_vec(&(
+        crate::remote_work::steps::identity_json(&(
             &processing.background_extraction,
             &processing.input_deconvolutions,
             resolved_background_protection,
@@ -2636,9 +2647,11 @@ fn color_input_cache_id(
     if !processed_channels.is_empty() {
         hasher.update(b"channel-tools");
         hasher.update(COLOR_CHANNEL_TOOLS_VERSION.to_le_bytes());
-        hasher.update(serde_json::to_vec(processed_channels).map_err(|error| {
-            AppError::InternalError(format!("Failed to encode channel tools: {error}"))
-        })?);
+        hasher.update(
+            crate::remote_work::steps::identity_json(processed_channels).map_err(|error| {
+                AppError::InternalError(format!("Failed to encode channel tools: {error}"))
+            })?,
+        );
     }
     if processing.emission.is_some() {
         hasher.update(b"aligned-linear-continuum-v1");
@@ -3924,6 +3937,8 @@ fn compose_color(
     let lease = state.lease_workers(priority, budget.workers);
     let pool = crate::concurrency::ComputePool::take("stack-color", lease.workers)
         .map_err(|error| error.to_string())?;
+    // A processing step this job waits on runs on these workers.
+    let _held = crate::remote_work::steps::hold_threads(lease.workers);
     tracing::info!(
         "Stack color {}: {} worker(s) — {}; {}",
         job.job_id,
@@ -7607,7 +7622,63 @@ mod tests {
         let AppError::BadRequest(message) = validate_request(&request("sxt")).unwrap_err() else {
             panic!("expected a bad request");
         };
-        assert!(message.contains("StarXTerminator"), "{message}");
+        assert!(message.contains("Star removal"), "{message}");
+    }
+
+    #[test]
+    fn a_color_build_with_its_own_steps_keeps_the_job_id_it_had_before_providers() {
+        let request: StackColorRequest = serde_json::from_value(serde_json::json!({
+            "target_id": 1, "kind": "rgb",
+            "processing": {
+                "input_rc_astro": {"red": {"steps": [
+                    {"tool": "bxt", "parameters": {"ss": 0.4}}, {"tool": "nxt", "parameters": {}}
+                ]}},
+                "color_rc_astro": {"steps": [{"tool": "nxt", "parameters": {}}]}
+            }
+        }))
+        .unwrap();
+        // The bytes the id hashes for the processing are the ones the
+        // release before providers hashed: each step as {tool, parameters}.
+        let hashed = String::from_utf8(
+            crate::remote_work::steps::identity_json(&request.processing).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            hashed.contains(
+                r#""input_rc_astro":{"red":{"steps":[{"tool":"bxt","parameters":{"ss":0.4}},{"tool":"nxt","parameters":{}}]}}"#
+            ),
+            "{hashed}"
+        );
+        assert!(
+            hashed.contains(r#""color_rc_astro":{"steps":[{"tool":"nxt","parameters":{}}]}"#),
+            "{hashed}"
+        );
+        assert!(
+            !hashed.contains("provider") && !hashed.contains("category"),
+            "{hashed}"
+        );
+        // What a client and a stored record get still has both spellings.
+        let written = serde_json::to_string(&request.processing).unwrap();
+        assert!(written.contains(r#""provider":"bxt""#), "{written}");
+        let id = color_job_id(&ColorJobIdentity {
+            database_id: "db",
+            project_id: 1,
+            request: &request,
+            label: "RGB",
+            channel_tools_input_id: None,
+            color_rc_astro_id: None,
+            background_protection: &BTreeMap::new(),
+            color_calibration_basis: None,
+            sources: &[],
+        })
+        .unwrap();
+        // The id this build gives. With the bytes above unchanged it is the
+        // id the earlier release gave; a change here recomposes every
+        // color build that has steps of its own.
+        assert_eq!(
+            id,
+            "2314f687907b3fb935b6bcb930e732e63f121bfcd52f7aae0346fa73b4c1fa4b"
+        );
     }
 
     #[test]

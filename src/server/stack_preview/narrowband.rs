@@ -77,13 +77,10 @@ impl NarrowbandProcessing {
         }
         if let Some(config) = &self.rgb_star_processing {
             config.validate()?;
-            if config.steps.iter().any(|step| {
-                !matches!(
-                    step.provider.as_str(),
-                    "bxt" | "nxt" | crate::remote_work::noise_model::TOOL
-                )
-            }) {
-                return Err("RGB star processing supports BlurXTerminator, NoiseXTerminator and the noise model before star separation".into());
+            // Any provider that sharpens or reduces noise may run here; star
+            // removal is the separation's own step.
+            if config.removes_stars() {
+                return Err("RGB star processing sharpens and reduces noise before star separation; it does not remove stars".into());
             }
         }
         Ok(())
@@ -167,10 +164,12 @@ pub(super) fn available_sources(target: &TargetSources) -> String {
         })
         .collect();
     values.sort();
-    Sha256::digest(serde_json::to_vec(&values).expect("source identities serialize"))
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    Sha256::digest(
+        crate::remote_work::steps::identity_json(&values).expect("source identities serialize"),
+    )
+    .iter()
+    .map(|byte| format!("{byte:02x}"))
+    .collect()
 }
 
 /// Resolve policy before selecting sources. Tool probing here is short-lived;
@@ -408,7 +407,9 @@ pub(super) fn resolve(
 
 fn validate_separation(config: &super::super::rc_astro::RcAstroProcessing) -> Result<(), String> {
     config.validate()?;
-    if config.steps.len() != 1 || config.steps[0].provider != "sxt" {
+    if config.steps.len() != 1
+        || config.steps[0].category() != Some(crate::remote_work::steps::Category::StarRemoval)
+    {
         return Err("Managed star separation supports only StarXTerminator".into());
     }
     for (name, value) in &config.steps[0].parameters {
@@ -567,13 +568,17 @@ fn same_exposure_band(selected: &[&StackColorSource], candidate: &StackColorSour
 
 pub(super) fn defer_channel_star_removal(processing: &mut StackColorProcessing) {
     for config in processing.input_rc_astro.values_mut() {
-        config.steps.retain(|step| step.provider != "sxt");
+        config.steps.retain(|step| {
+            step.category() != Some(crate::remote_work::steps::Category::StarRemoval)
+        });
     }
     processing
         .input_rc_astro
         .retain(|_, config| !config.steps.is_empty());
     if let Some(config) = &mut processing.color_rc_astro {
-        config.steps.retain(|step| step.provider != "sxt");
+        config.steps.retain(|step| {
+            step.category() != Some(crate::remote_work::steps::Category::StarRemoval)
+        });
         if config.steps.is_empty() {
             processing.color_rc_astro = None;
         }

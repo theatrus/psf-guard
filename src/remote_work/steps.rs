@@ -94,6 +94,36 @@ pub fn category_of(key: &str) -> Option<Category> {
     provider(key).map(|provider| provider.category)
 }
 
+/// Whether a provider is one of RC-Astro's tools.
+pub fn is_rc_astro(key: &str) -> bool {
+    provider(key).is_some_and(|found| found.engine == Engine::RcAstro)
+}
+
+thread_local! {
+    /// Whether this thread is encoding a value for an identity.
+    static FOR_IDENTITY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether a step being serialized on this thread is part of an identity.
+pub fn encoding_identity() -> bool {
+    FOR_IDENTITY.with(std::cell::Cell::get)
+}
+
+/// `value` as JSON for a cache or job identity. A step in it is encoded as
+/// it was before providers, `{"tool", "parameters"}`, so every identity
+/// made then is the one made now: a color job, a stretch, an emission
+/// input. Use this, not `serde_json::to_vec`, wherever the bytes are hashed.
+pub fn identity_json<T: Serialize + ?Sized>(value: &T) -> serde_json::Result<Vec<u8>> {
+    struct Reset(bool);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            FOR_IDENTITY.with(|flag| flag.set(self.0));
+        }
+    }
+    let _reset = Reset(FOR_IDENTITY.with(|flag| flag.replace(true)));
+    serde_json::to_vec(value)
+}
+
 /// One provider a worker can run: its schema gives the name, the version
 /// that identifies its output, whether it is licensed, and its parameters.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -134,6 +164,39 @@ pub fn offers_of(offers: &super::protocol::Offers) -> Vec<StepOffer> {
         .collect()
 }
 
+thread_local! {
+    /// The threads the job on this thread leased, while it waits on a step.
+    static HELD_THREADS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Says, for as long as it lives, that the job on this thread holds
+/// `threads` leased workers.
+pub struct HeldThreads(usize);
+
+/// Record the workers a job leased, so a step it waits on runs on them
+/// rather than leasing again from a budget the job has already taken.
+pub fn hold_threads(threads: usize) -> HeldThreads {
+    HeldThreads(HELD_THREADS.with(|held| held.replace(threads)))
+}
+
+impl Drop for HeldThreads {
+    fn drop(&mut self) {
+        HELD_THREADS.with(|held| held.set(self.0));
+    }
+}
+
+/// The threads the job waiting on this thread holds: its pool's size when
+/// the step is applied inside the job's `ComputePool`, else what
+/// [`hold_threads`] recorded, else 0. A job waits while its step runs, so
+/// the step may use them.
+pub fn held_threads() -> usize {
+    if rayon::current_thread_index().is_some() {
+        rayon::current_num_threads()
+    } else {
+        HELD_THREADS.with(std::cell::Cell::get)
+    }
+}
+
 /// What fixes a provider no machine offers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -169,13 +232,15 @@ pub trait StepRunner: Sync {
     ) -> (Vec<seiza_stacking::ExternalToolSchema>, Option<String>);
 
     /// What the server sends a worker with the image, for a step planned
-    /// with `schema`.
+    /// with `schema`. `threads` is how many the waiting job holds, or 0
+    /// when it holds none: see [`held_threads`].
     fn payload(
         &self,
         schema: &seiza_stacking::ExternalToolSchema,
         request: &seiza_stacking::ExternalToolRequest,
         headers: &[(String, seiza_fits::HeaderValue)],
         person: bool,
+        threads: usize,
     ) -> Result<serde_json::Value, String>;
 
     /// The files a run writes, and whether the task fails without each.

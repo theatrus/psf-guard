@@ -63,6 +63,19 @@ impl Serialize for ProcessingStep {
             tool: &'a str,
             parameters: &'a BTreeMap<String, ExternalParameterValue>,
         }
+        // An identity hashes the step as it was written before providers.
+        if steps::encoding_identity() {
+            #[derive(Serialize)]
+            struct Keyed<'a> {
+                tool: &'a str,
+                parameters: &'a BTreeMap<String, ExternalParameterValue>,
+            }
+            return Keyed {
+                tool: &self.provider,
+                parameters: &self.parameters,
+            }
+            .serialize(serializer);
+        }
         Stored {
             category: self.category(),
             provider: &self.provider,
@@ -145,6 +158,14 @@ impl ProcessingChain {
         Ok(())
     }
 
+    /// Whether a step of the chain removes the stars, whichever provider
+    /// does it.
+    pub fn removes_stars(&self) -> bool {
+        self.steps
+            .iter()
+            .any(|step| step.category() == Some(Category::StarRemoval))
+    }
+
     /// Steps in canonical run order, regardless of request order: sharpen
     /// the linear data, reduce its noise, then separate the stars.
     fn ordered(&self) -> Vec<&ProcessingStep> {
@@ -189,7 +210,9 @@ impl StackRcAstroResult {
     /// Whether StarXTerminator ran, so the result is starless, whether or
     /// not it kept the stars as an image of their own.
     pub fn removed_stars(&self) -> bool {
-        self.steps.iter().any(|step| step.tool == "sxt")
+        self.steps
+            .iter()
+            .any(|step| steps::category_of(&step.tool) == Some(Category::StarRemoval))
     }
 }
 
@@ -239,10 +262,7 @@ fn capabilities(state: &AppState) -> ProcessingCapabilities {
     let providers = state.workers.providers();
     let rc_astro: Vec<_> = providers
         .iter()
-        .filter(|provider| {
-            steps::provider(&provider.provider)
-                .is_some_and(|known| known.engine == steps::Engine::RcAstro)
-        })
+        .filter(|provider| steps::is_rc_astro(&provider.provider))
         .collect();
     let mut workers: Vec<String> = rc_astro
         .iter()
@@ -454,19 +474,7 @@ pub(super) fn rc_astro_chain_ids(
     // The canonical order is the identity: two requests that run the same
     // steps the same way cache as one.
     for step in config.ordered() {
-        // The step as it was encoded while RC-Astro's tools were the only
-        // providers: `{"tool", "parameters"}`. Every result cached then
-        // keeps its identity.
-        #[derive(Serialize)]
-        struct Keyed<'a> {
-            tool: &'a str,
-            parameters: &'a BTreeMap<String, ExternalParameterValue>,
-        }
-        let encoded = serde_json::to_vec(&Keyed {
-            tool: &step.provider,
-            parameters: &step.parameters,
-        })
-        .map_err(|error| {
+        let encoded = steps::identity_json(step).map_err(|error| {
             AppError::InternalError(format!("Failed to encode RC-Astro request: {error}"))
         })?;
         let (_, schema) = schemas
@@ -802,7 +810,7 @@ fn apply_rc_astro_with_runner(
         let runner = steps::runner(engine);
         // The chain's version line is rc-astro's; a model gives its own on
         // its step.
-        let rc_astro = engine == steps::Engine::RcAstro;
+        let rc_astro = steps::is_rc_astro(&step.provider);
         if rc_astro {
             cli_version = schema.cli_version.clone();
         }
@@ -1244,6 +1252,7 @@ mod tests {
         workers.set_tool_source(std::sync::Arc::new(move || {
             crate::remote_work::LocalTools {
                 noise_model: Some(engine.clone()),
+                this_server: true,
                 slots: 1,
                 ..Default::default()
             }
@@ -1308,14 +1317,42 @@ mod tests {
         assert_eq!(step.name, "Seiza noise model");
         assert_eq!(
             step.version.as_deref(),
-            Some("noise-v1 cpu f32, seiza-model 0.1.0, band scale 5")
+            Some("noise-v1 cpu f32, seiza-model 0.1.0, band scale 5, ONNX Runtime 1.31.1")
         );
         assert_eq!(step.device.as_deref(), Some("cpu"));
+
+        // No job held workers for that run, so the model had this
+        // machine's cores. A job that leased three applies the step inside
+        // its pool, or records them, and the model runs on three.
+        assert_eq!(
+            engine.threads.load(Ordering::SeqCst),
+            crate::concurrency::logical_cores()
+        );
+        for (inside_pool, grain) in [(true, 0.25), (false, 0.3)] {
+            let held = normalize_against_schemas(
+                &RcAstroProcessing {
+                    steps: vec![noise_step(grain)],
+                },
+                &schemas,
+            )
+            .unwrap();
+            let held_ids =
+                rc_astro_chain_ids("db", "mono:1", "revision", &held, &schemas, None).unwrap();
+            if inside_pool {
+                let pool = crate::concurrency::ComputePool::take("test-held", 3).unwrap();
+                pool.install(|| apply(&held, &held_ids));
+            } else {
+                let _held = steps::hold_threads(3);
+                apply(&held, &held_ids);
+            }
+            assert_eq!(engine.threads.load(Ordering::SeqCst), 3, "{inside_pool}");
+        }
+        assert_eq!(engine.runs.load(Ordering::SeqCst), 3);
 
         // The same request is a cache hit: the model does not run again.
         let second = apply(&config, &ids);
         assert_eq!(second.image.data[0], 4.0);
-        assert_eq!(engine.runs.load(Ordering::SeqCst), 1);
+        assert_eq!(engine.runs.load(Ordering::SeqCst), 3);
         assert!(rc_astro_chain_cached(cache.path(), &ids, &config));
         // The result says which model made it, and not RC-Astro.
         let header = seiza_image_io::read_header(&rc_astro_fits_path(cache.path(), &ids[0]))
@@ -1337,7 +1374,7 @@ mod tests {
             rc_astro_chain_ids("db", "mono:1", "revision", &stronger, &schemas, None).unwrap();
         assert_ne!(stronger_ids, ids);
         assert_eq!(apply(&stronger, &stronger_ids).image.data[0], 2.0);
-        assert_eq!(engine.runs.load(Ordering::SeqCst), 2);
+        assert_eq!(engine.runs.load(Ordering::SeqCst), 4);
     }
 
     #[test]
