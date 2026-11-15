@@ -176,6 +176,31 @@ describe('ProcessingToolsSettings', () => {
     expect(requested).toEqual([{ parts: ['model'] }]);
   });
 
+  it('checks this server\u2019s RC-Astro license only when asked', async () => {
+    let asked = 0;
+    server.use(
+      http.get('/api/tools/rc-astro', () => ok({ ...answer(seizaMissing), this_server: true })),
+      http.post('/api/tools/rc-astro/license-check', () => {
+        asked += 1;
+        return ok({
+          executable: '/opt/rc-astro/rc-astro',
+          report: { computer: 'ann@server', account_email: 'user@example.com', products: [
+            { product: 'bxt', name: 'BlurXTerminator', status: 'permanent', message: 'Permanent license' },
+          ] },
+        });
+      }),
+    );
+    render(<ProcessingToolsSettings canManage />, { wrapper: wrapper() });
+
+    const button = await screen.findByRole('button', { name: 'Check license on this server' });
+    expect(asked).toBe(0);
+    await userEvent.click(button);
+    const report = await screen.findByRole('status');
+    expect(report).toHaveTextContent('RC-Astro account: user@example.com');
+    expect(report).toHaveTextContent('BlurXTerminator: Permanent license');
+    expect(asked).toBe(1);
+  });
+
   it('asks for ONNX Runtime again when it is installed already', async () => {
     const requested: unknown[] = [];
     server.use(

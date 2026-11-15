@@ -1,3 +1,4 @@
+import RcAstroLicenseCheck from './RcAstroLicenseCheck';
 import { useEffect, useState, type FormEvent } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
@@ -78,6 +79,15 @@ function WorkerRow({ worker }: { worker: WorkerSessionSummary }) {
               ? worker.rc_astro.join(', ')
               : 'No processing tools'}
           </span>
+          {worker.rc_astro_path && (
+            <span className="muted">rc-astro: <code>{worker.rc_astro_path}</code></span>
+          )}
+          {worker.rc_astro_tools?.map((tool) => (
+            <span className="muted" key={tool.provider} data-licensed={tool.licensed}
+              title={tool.message}>
+              {tool.name.replace(/^RC-Astro /, '')} {tool.version}: {tool.licensed ? 'licensed' : 'not licensed'}
+            </span>
+          ))}
           {worker.noise_model && (
             <span className="muted">Noise model ({worker.noise_model})</span>
           )}
@@ -92,6 +102,22 @@ function WorkerRow({ worker }: { worker: WorkerSessionSummary }) {
             </span>
           )}
         </div>
+        {worker.connected && worker.license_check && (
+          <RcAstroLicenseCheck
+            where={worker.local ? 'this server' : worker.name}
+            check={worker.local
+              ? apiClient.checkRcAstroLicense
+              : () => apiClient.checkWorkerRcAstroLicense(worker.session)}
+          />
+        )}
+        {worker.connected && !worker.license_check && !!worker.rc_astro_tools?.length && (
+          <div className="user-row-details">
+            <span className="muted">
+              To check its license, update PSF Guard on this worker, or run{' '}
+              <code>psf-guard-cli rc-astro license</code> there.
+            </span>
+          </div>
+        )}
         {worker.running.map((task, index) => (
           <div className="user-row-details" key={index}>
             <span>

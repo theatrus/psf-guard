@@ -163,6 +163,7 @@ import type { GuidFillReport, GuidReport, ImportedCopiesMerge, ImportedCopiesRep
   StackViewProcessingRequest,
   AstrometryCapabilities,
   RcAstroCapabilities,
+  RcAstroLicenseCheck,
   SeizaNoiseModel,
   NoiseModelDownloadPart,
   NoiseModelDownloadProgress,
@@ -358,6 +359,25 @@ const stackStretchError = (cause: unknown, fallback: string): Error => {
   }
   return cause instanceof Error ? cause : new Error(fallback);
 };
+
+/** Post a license check and return its report, or throw the server's own
+ *  message when it could not run one. */
+async function licenseCheck(path: string): Promise<RcAstroLicenseCheck> {
+  const apiInstance = await getApi();
+  try {
+    const { data } = await apiInstance.post<ApiResponse<RcAstroLicenseCheck>>(path);
+    if (!data.data) throw new Error(data.error || 'The license check failed');
+    return data.data;
+  } catch (cause) {
+    if (axios.isAxiosError<ApiResponse<unknown>>(cause)) {
+      throw new Error(
+        cause.response?.data?.error || cause.message || 'The license check failed',
+        { cause },
+      );
+    }
+    throw cause;
+  }
+}
 
 /** What a stack build is asked for, alone or split by channel. */
 export type StackPreviewStartRequest = {
@@ -1358,6 +1378,15 @@ export const apiClient = {
     if (!data.data) throw new Error(data.error || 'Failed to save the stacking method');
     return data.data;
   },
+
+  /** Ask RC-Astro, online, for this server's account and license state. */
+  checkRcAstroLicense: async (): Promise<RcAstroLicenseCheck> =>
+    licenseCheck('/tools/rc-astro/license-check'),
+
+  /** Have one connected worker ask RC-Astro for its account and license
+   *  state, as the account the worker runs under. */
+  checkWorkerRcAstroLicense: async (session: string): Promise<RcAstroLicenseCheck> =>
+    licenseCheck(`/workers/${encodeURIComponent(session)}/license-check`),
 
   getWorkers: async (): Promise<WorkersSettings> => {
     const apiInstance = await getApi();

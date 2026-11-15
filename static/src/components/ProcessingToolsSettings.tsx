@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../api/client';
+import RcAstroLicenseCheck from './RcAstroLicenseCheck';
 import { useRcAstroCapabilities } from './rcAstroSchema';
 import {
   NOISE_MODEL_PROVIDER,
@@ -152,6 +153,10 @@ export default function ProcessingToolsSettings({
 
       {data?.executable && (
         <p className="catalog-footnote">rc-astro on this server: <code>{data.executable}</code></p>
+      )}
+
+      {(data?.this_server || !!data?.executable) && (
+        <RcAstroLicenseCheck where="this server" check={apiClient.checkRcAstroLicense} />
       )}
 
       {seiza && installed && (

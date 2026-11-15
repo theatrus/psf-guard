@@ -5570,11 +5570,53 @@ export interface WorkerSessionSummary {
   stacking_version?: string;
   /** The noise model it runs, as "noise-v1-d33 cpu f32, …". */
   noise_model?: string;
+  /** The rc-astro it found. */
+  rc_astro_path?: string;
+  /** Each RC-Astro tool it has, with the license state the tool reports
+   *  itself: no online check is made for it. Absent from an older server. */
+  rc_astro_tools?: Array<{ provider: string; name: string; version: string; licensed: boolean; message?: string }>;
+  /** Whether it can be asked for an online license check. */
+  license_check?: boolean;
   file_mode: 'remote' | 'shared';
   /** Whether task files reach it by path. */
   exchange_shared: boolean;
   exchange_problem?: string;
   running: Array<{ label: string; fraction: number }>;
+}
+
+/** One product's line of RC-Astro's license table. */
+export interface RcAstroLicenseProduct {
+  product: string;
+  name: string;
+  /** RC-Astro's status token; the vocabulary is open, so show `message`. */
+  status: string;
+  /** RC-Astro's own text for this product, shown as given. */
+  message: string;
+  command?: string;
+  days_left?: number;
+  ml_version?: number;
+  used?: number;
+  limit?: number;
+  email?: string;
+}
+
+/** What one online `rc-astro license --json` gave: a report, an error, or
+ *  both, since a refusal sends its report first. */
+export interface RcAstroLicenseCheck {
+  /** The rc-astro that ran. */
+  executable: string;
+  cli_version?: string;
+  report?: {
+    /** `user@computer`: the account rc-astro ran under. */
+    computer: string;
+    /** Absent when the computer is registered to no RC-Astro account. */
+    account_email?: string;
+    activation_url?: string;
+    products: RcAstroLicenseProduct[];
+    /** A step RC-Astro needs a person to take at a terminal. */
+    attention?: { reason: string; message: string; command?: string };
+  };
+  error?: string;
 }
 
 /** Where one kind of work runs. */

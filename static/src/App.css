@@ -7920,3 +7920,36 @@
 .star-reading.is-unused {
   color: var(--color-text-muted);
 }
+
+/* An RC-Astro license check: the button and the report it gives. */
+.rc-astro-license {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0.5rem 0;
+  justify-items: start;
+}
+
+.rc-astro-license-report {
+  display: grid;
+  gap: 0.25rem;
+  width: 100%;
+  padding: 0.5rem 0.65rem;
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-bg-tertiary);
+  border-radius: 6px;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.rc-astro-license-report p,
+.rc-astro-license-report ul {
+  margin: 0;
+}
+
+.rc-astro-license-report ul {
+  padding-left: 1.1rem;
+}
+
+.rc-astro-license-report [data-attention] {
+  color: var(--color-warning);
+}
