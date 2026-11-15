@@ -209,7 +209,7 @@ describe('StackColorProcessingControls', () => {
     await openProcessingFlow();
     await user.click(screen.getByRole('radio', { name: 'Set in this build' }));
     const red = screen.getByRole('region', { name: 'R input linear processing' });
-    await user.selectOptions(await within(red).findByRole('combobox', { name: 'Noise reduction' }), 'nxt');
+    await user.click(await within(red).findByRole('checkbox', { name: 'NoiseXTerminator' }));
     await user.click(screen.getByRole('button', { name: 'Apply processing stack' }));
     expect(onApply).toHaveBeenCalledWith(expect.objectContaining({
       input_rc_astro: { red: { steps: [{ tool: 'nxt', parameters: {} }] } },
@@ -249,7 +249,7 @@ describe('StackColorProcessingControls', () => {
     await openProcessingFlow();
     await user.click(screen.getByRole('radio', { name: 'Set in this build' }));
     const red = screen.getByRole('region', { name: 'R input linear processing' });
-    await user.selectOptions(await within(red).findByRole('combobox', { name: 'Sharpening' }), 'bxt');
+    await user.click(await within(red).findByRole('checkbox', { name: 'RC-Astro BlurXTerminator' }));
     const stars = within(red).getByRole('spinbutton', { name: 'Sharpen Stars' });
     await user.clear(stars);
     await user.type(stars, '0.9');
@@ -337,16 +337,16 @@ describe('StackColorProcessingControls', () => {
       disabled={false} onApply={onApply} />);
     await openProcessingFlow();
     const together = await screen.findByRole('region', { name: 'Processing on the color channels together' });
-    expect(within(together).queryByRole('combobox', { name: 'Star removal' })).toBeNull();
+    expect(within(together).queryByRole('group', { name: 'Star removal' })).toBeNull();
 
     // Turning a tool on and off again leaves nothing to apply.
-    await user.selectOptions(within(together).getByRole('combobox', { name: 'Noise reduction' }), 'nxt');
-    await user.selectOptions(within(together).getByRole('combobox', { name: 'Noise reduction' }), '');
+    await user.click(within(together).getByRole('checkbox', { name: 'NoiseXTerminator' }));
+    await user.click(within(together).getByRole('checkbox', { name: 'NoiseXTerminator' }));
     expect(screen.getByRole('button', { name: 'Apply processing stack' })).toBeDisabled();
 
-    await user.selectOptions(within(together).getByRole('combobox', { name: 'Sharpening' }), 'bxt');
+    await user.click(within(together).getByRole('checkbox', { name: 'BlurXTerminator' }));
     expect(within(together).getByRole('checkbox', { name: 'Correct only' })).toBeChecked();
-    await user.selectOptions(within(together).getByRole('combobox', { name: 'Noise reduction' }), 'nxt');
+    await user.click(within(together).getByRole('checkbox', { name: 'NoiseXTerminator' }));
     await user.click(screen.getByRole('button', { name: 'Apply processing stack' }));
     expect(onApply).toHaveBeenCalledWith(expect.objectContaining({
       color_rc_astro: { steps: [
@@ -376,7 +376,7 @@ describe('StackColorProcessingControls', () => {
       disabled={false} onApply={onApply} />);
     await openProcessingFlow();
     const together = await screen.findByRole('region', { name: 'Processing on the color channels together' });
-    await user.selectOptions(within(together).getByRole('combobox', { name: 'Sharpening' }), 'bxt');
+    await user.click(within(together).getByRole('checkbox', { name: 'BlurXTerminator' }));
     expect(within(together).queryByRole('checkbox', { name: 'Correct only' })).toBeNull();
     await user.click(screen.getByRole('button', { name: 'Apply processing stack' }));
     expect(onApply).toHaveBeenCalledWith(expect.objectContaining({
@@ -570,8 +570,8 @@ it('configures separate linear SXT runs and retains their parameters in the proc
   const nebula = await screen.findByRole('region', { name: 'Narrowband nebula separation processing tools' });
   const rgb = screen.getByRole('region', { name: 'RGB separation processing tools' });
   expect(within(screen.getByRole('region', { name: 'RGB branch' })).getByRole('switch', { name: 'Color calibration' })).toBeChecked();
-  const enabled = within(rgb).getByRole('combobox', { name: 'Star removal' });
-  expect(enabled).toHaveValue('sxt'); expect(enabled).toBeDisabled();
+  const enabled = within(rgb).getByRole('checkbox', { name: 'RC-Astro StarXTerminator' });
+  expect(enabled).toBeChecked(); expect(enabled).toBeDisabled();
   expect(within(rgb).queryByRole('checkbox', { name: 'Unscreen Stars' })).not.toBeInTheDocument();
   const overlap = within(rgb).getByRole('spinbutton', { name: 'Tile Overlap' });
   await userEvent.clear(overlap); await userEvent.type(overlap, '0.3');

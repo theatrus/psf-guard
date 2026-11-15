@@ -1,3 +1,4 @@
+import { Fragment } from 'react';
 import {
   defaultParameters,
   isCorrectOnly,
@@ -48,9 +49,10 @@ const stateMark: Record<ProcessingProvider['state'], string> = {
 
 /**
  * The processing steps that run on linear data before the stretch. Each
- * category (sharpening, noise reduction, star removal) has one picker: Off,
- * or one of the providers the server lists for it. A chain never has two
- * steps of one category. The picked provider's controls come from its live
+ * category (sharpening, noise reduction, star removal) has one control. With
+ * one provider to pick it is a checkbox with the provider's name; with more
+ * it is a picker: Off, or one of the providers the server lists. A chain
+ * never has two steps of one category. The picked provider's controls come from its live
  * schema, so they stay correct across upgrades. A saved step stays visible
  * and removable when its provider is gone.
  */
@@ -131,37 +133,73 @@ export default function StackRcAstroControls({
       )}
       {blocks.map(({ category, categoryLabel, providers, step, extra }) => {
         const picked = step ? providers.find((provider) => provider.provider === step.tool) : undefined;
-        const blocked = providers.filter((provider) => provider.state !== 'ready');
+        // What a person could pick: the ready providers, and the one the
+        // step uses now, so a saved choice is never hidden.
+        const choices = providers.filter(
+          (provider) => provider.state === 'ready' || provider === picked
+        );
+        const choiceCount = choices.length + (step && !picked ? 1 : 0);
+        // The single choice; absent when it is a step the server does not list.
+        const only = step ? picked : choices[0];
+        const title = required ? 'The Stars choice controls whether star separation runs' : undefined;
+        const stepOf = (provider: ProcessingProvider): RcAstroStep => ({
+          tool: provider.provider,
+          parameters: provider.schema ? defaultsFor(provider.schema) : {},
+        });
+        // Providers a person cannot pick, other than the one in use.
+        const others = providers.filter(
+          (provider) => provider.state !== 'ready' && provider !== picked
+        );
         return (
-          <div className="stack-rc-astro-tool" key={category}>
-            <label title={required ? 'The Stars choice controls whether star separation runs' : undefined}>
+          <div className="stack-rc-astro-tool" key={category} role="group" aria-label={categoryLabel}>
+            {choiceCount > 1 && (
+              <label title={title}>
+                <strong>{categoryLabel}</strong>
+                <select
+                  aria-label={categoryLabel}
+                  value={step?.tool ?? ''}
+                  disabled={disabled || required}
+                  onChange={(event) => {
+                    const provider = providers.find((candidate) => candidate.provider === event.target.value);
+                    setCategoryStep(category, provider ? stepOf(provider) : null);
+                  }}
+                >
+                  <option value="">Off</option>
+                  {providers.map((provider) => (
+                    <option key={provider.provider} value={provider.provider}
+                      disabled={provider.state !== 'ready' && provider.provider !== step?.tool}>
+                      {toolName(provider.name)}{stateMark[provider.state]}
+                    </option>
+                  ))}
+                  {step && !picked && (
+                    <option value={step.tool}>
+                      {capabilities.isPending ? step.tool : `${step.tool} (unavailable)`}
+                    </option>
+                  )}
+                </select>
+              </label>
+            )}
+            {/* One choice: a checkbox with the provider's name, as the cards
+                had before a category could have several providers. */}
+            {choiceCount === 1 && (
+              <label title={title}>
+                <input
+                  type="checkbox"
+                  checked={!!step}
+                  disabled={disabled || required}
+                  onChange={(event) =>
+                    setCategoryStep(category, event.target.checked && only ? stepOf(only) : null)}
+                />
+                <strong>
+                  {only?.name ?? (capabilities.isPending ? step?.tool : `${step?.tool} (unavailable)`)}
+                </strong>
+              </label>
+            )}
+            {/* Nothing to pick: an unlicensed tool keeps its checkbox,
+                disabled; a provider that is not installed has its note. */}
+            {choiceCount === 0 && !others.some((provider) => provider.state === 'not_licensed') && (
               <strong>{categoryLabel}</strong>
-              <select
-                aria-label={categoryLabel}
-                value={step?.tool ?? ''}
-                disabled={disabled || required}
-                onChange={(event) => {
-                  const provider = providers.find((candidate) => candidate.provider === event.target.value);
-                  setCategoryStep(category, provider ? {
-                    tool: provider.provider,
-                    parameters: provider.schema ? defaultsFor(provider.schema) : {},
-                  } : null);
-                }}
-              >
-                <option value="">Off</option>
-                {providers.map((provider) => (
-                  <option key={provider.provider} value={provider.provider}
-                    disabled={provider.state !== 'ready' && provider.provider !== step?.tool}>
-                    {toolName(provider.name)}{stateMark[provider.state]}
-                  </option>
-                ))}
-                {step && !picked && (
-                  <option value={step.tool}>
-                    {capabilities.isPending ? step.tool : `${step.tool} (unavailable)`}
-                  </option>
-                )}
-              </select>
-            </label>
+            )}
             {step && !picked && (
               <p className="stack-rc-astro-note">
                 {capabilities.isPending
@@ -171,9 +209,6 @@ export default function StackRcAstroControls({
               </p>
             )}
             {picked && picked.state !== 'ready' && <ProviderNote provider={picked} />}
-            {!step && blocked.map((provider) => (
-              <ProviderNote key={provider.provider} provider={provider} named />
-            ))}
             {/* A chain saved before one step per category was the rule. */}
             {extra.map((other) => (
               <p className="stack-rc-astro-note" key={other.tool}>
@@ -197,6 +232,21 @@ export default function StackRcAstroControls({
               />
             ) : (
               <p className="stack-rc-astro-note">{parameterList(step)}</p>
+            ))}
+            {/* The picker lists these while a step is picked; a checkbox
+                does not, so their notes stay under it. */}
+            {(!step || choiceCount === 1) && others.map((provider) => (
+              choiceCount === 0 && provider.state === 'not_licensed' ? (
+                <Fragment key={provider.provider}>
+                  <label>
+                    <input type="checkbox" checked={false} disabled readOnly />
+                    <strong>{provider.name}</strong>
+                  </label>
+                  <ProviderNote provider={provider} />
+                </Fragment>
+              ) : (
+                <ProviderNote key={provider.provider} provider={provider} named />
+              )
             ))}
           </div>
         );

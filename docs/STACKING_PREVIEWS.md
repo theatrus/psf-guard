@@ -1480,8 +1480,16 @@ run.
 ### Processing steps by category
 
 The steps that run on the linear stack are grouped by what they do, and run
-in this order: **Sharpening**, **Noise reduction**, **Star removal**. Each
-category has a picker: **Off**, or one provider.
+in this order: **Sharpening**, **Noise reduction**, **Star removal**.
+
+- A category with one available provider shows a checkbox with the
+  provider's name, such as **RC-Astro BlurXTerminator**. Check it to run
+  the step.
+- A category with more than one available provider shows a picker: **Off**,
+  or one provider.
+
+A provider is available when it is installed and licensed. A provider a
+stack already uses also counts, so you can always turn a saved step off.
 
 | Category | Providers |
 |---|---|
@@ -1490,13 +1498,19 @@ category has a picker: **Off**, or one provider.
 | **Star removal** | StarXTerminator |
 
 A stack uses one provider in each category, so noise reduction runs
-NoiseXTerminator or Seiza's model, never both. A provider that is not
-installed or not licensed stays in the picker with the reason. Every
-provider shares one chain: each step caches under its own identity, a later
-change reuses the steps before it, and processing setups store the chain.
-Setups, views and cached results saved before the pickers keep working and
-mean the same: a saved NoiseXTerminator step is the **Noise reduction**
-choice NoiseXTerminator.
+NoiseXTerminator or Seiza's model, never both. **Noise reduction** shows a
+picker when both are available, and a checkbox for the available provider
+otherwise. A provider that is not installed is listed under the checkbox or
+in the picker with the reason, and the Seiza noise model has a
+**Download in Settings** button. An RC-Astro tool that is not licensed and
+is the only provider in its category shows a disabled checkbox with the
+reason.
+
+Every provider shares one chain: each step caches under its own identity, a
+later change reuses the steps before it, and processing setups store the
+chain. Setups, views and cached results saved before the categories keep
+working and mean the same: a saved NoiseXTerminator step is the
+**Noise reduction** choice NoiseXTerminator.
 
 ### Seiza's noise model
 

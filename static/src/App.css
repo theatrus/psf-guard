@@ -5125,12 +5125,18 @@
   margin-top: 0.45rem;
 }
 
-.stack-rc-astro-tool > label {
+.stack-rc-astro-tool > label,
+.stack-rc-astro-tool > strong {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 0.42rem;
   font-size: 0.64rem;
+}
+
+/* A picker sits at the far edge from its category; a checkbox stays beside
+   its provider's name. */
+.stack-rc-astro-tool > label:has(> select) {
+  justify-content: space-between;
 }
 
 /* The picker takes what the label leaves, never its longest option's
