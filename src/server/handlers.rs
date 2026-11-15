@@ -761,6 +761,7 @@ fn remote_image_upload_summary(
         token_configured: config.is_some_and(|config| config.token_is_configured()),
         key_configured: config.is_some_and(|config| config.legacy_key_configured()),
         sync_enabled: config.is_some_and(|config| config.sync_enabled),
+        peer_sync_enabled: config.is_some_and(|config| config.peer_sync_allowed()),
         clients: config
             .map(|config| {
                 config
@@ -770,6 +771,7 @@ fn remote_image_upload_summary(
                         client_uuid: client.client_uuid.clone(),
                         name: client.name.clone(),
                         paired_at: client.paired_at,
+                        kind: client.kind,
                         last_contact: contacts.remove(&client.client_uuid).map(Into::into),
                     })
                     .collect()
@@ -1133,6 +1135,8 @@ fn apply_remote_image_upload_update(
 ) -> Result<bool, AppError> {
     let mut config = entry.remote_image_upload.clone().unwrap_or_default();
     let was_receiving = config.enabled;
+    let was_syncing = config.sync_enabled;
+    let peers_were_syncing = config.peer_sync_allowed();
     let previous_dir = config.image_dir.clone();
     config.enabled = update.enabled;
     if let Some(directory) = update.image_directory.as_ref() {
@@ -1142,9 +1146,28 @@ fn apply_remote_image_upload_update(
         config
             .set_token(token)
             .map_err(|error| AppError::BadRequest(error.to_string()))?;
+    } else if update.clear_token {
+        config.clear_token();
+    }
+    // Each grant changes alone: the peers' grant stops following the
+    // plugins' the first time either is set.
+    if update.sync_enabled.is_some() || update.peer_sync_enabled.is_some() {
+        config.pin_peer_sync();
     }
     if let Some(sync_enabled) = update.sync_enabled {
         config.sync_enabled = sync_enabled;
+    }
+    if let Some(peer_sync_enabled) = update.peer_sync_enabled {
+        let has_peer_credential = config.legacy_key_configured()
+            || config.has_client_of(crate::db_registry::RemoteClientKind::Peer);
+        // Checked when the grant turns on. A save that leaves it on, such
+        // as one that removes the key, is not refused.
+        if peer_sync_enabled && !peers_were_syncing && !has_peer_credential {
+            return Err(AppError::BadRequest(
+                "pair a PSF Guard server or set a remote API key before turning on its sync".into(),
+            ));
+        }
+        config.peer_sync_enabled = Some(peer_sync_enabled);
     }
     let target_tree_was_selected = update.placement.is_some_and(|placement| {
         placement == crate::db_registry::RemoteImageUploadPlacement::TargetTree
@@ -1213,7 +1236,10 @@ fn apply_remote_image_upload_update(
             layout_chosen = holds;
         }
     }
-    if config.sync_enabled && !config.token_is_configured() {
+    // Checked when the grant turns on. Every save from Settings sends the
+    // stored value back, so a save that removes the last credential, the
+    // key, must not be refused for a grant that was already on.
+    if config.sync_enabled && !was_syncing && !config.token_is_configured() {
         return Err(AppError::BadRequest(
             "generate a remote API key before enabling remote scheduler sync".into(),
         ));

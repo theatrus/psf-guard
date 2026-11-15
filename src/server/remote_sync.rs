@@ -1159,11 +1159,12 @@ pub(super) fn authenticated_catalog(
     }
     // Sync is a separate grant from image upload. A key configured before
     // this protocol existed authenticates, but reaches nothing until the
-    // operator opts the database in.
+    // operator opts the database in. A paired Sync plugin has one grant;
+    // a paired PSF Guard and the remote API key share another.
     if !catalog
         .remote_image_upload
         .as_ref()
-        .is_some_and(|config| config.sync_enabled)
+        .is_some_and(|config| config.sync_allowed_for(&holder))
     {
         return Err(refuse(
             &catalog.id,

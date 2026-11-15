@@ -27,8 +27,9 @@ export default function PluginsOnRig({ databaseId, director }: {
     retryDelay: 700,
   });
   const upload = databases.data?.find(entry => entry.id === databaseId)?.remote_image_upload;
-  // A paired plugin, or the remote API key a script uses.
-  const paired = upload?.token_configured ?? false;
+  // A paired Sync plugin. Another PSF Guard pairs too, and the remote API
+  // key has its own switch; neither is this plugin.
+  const paired = upload?.clients?.some(entry => entry.kind !== 'peer') ?? false;
   const syncOn = paired && !!upload?.sync_enabled;
   const sync = !paired ? 'Not paired' : syncOn ? 'scheduler sync' : 'Paired, scheduler sync off';
   // Uploads serve both plugins, so they have their own row.

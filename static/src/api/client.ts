@@ -1831,7 +1831,11 @@ export const apiClient = {
         enabled: boolean;
         image_directory?: string;
         token?: string;
+        /** Remove the remote API key; ignored when `token` sets a new one. */
+        clear_token?: boolean;
         sync_enabled?: boolean;
+        /** Sync for paired PSF Guard servers and the remote API key. */
+        peer_sync_enabled?: boolean;
         placement?: 'flat' | 'target_tree';
         directory_template?: string;
         /** `preset`: use `directory_template`; `catalog`: keep the catalog match (any template is ignored). Omit when the layout select was not touched. */
@@ -1890,7 +1894,10 @@ export const apiClient = {
   addPeer: async (req: {
     name: string;
     base_url: string;
-    token: string;
+    /** The peer's remote API key, for a peer that cannot pair. */
+    token?: string;
+    /** A pairing code generated on the peer; this server exchanges it for its own credential. */
+    pairing_code?: string;
     catalog_id?: string | null;
   }): Promise<PeerSummary> => {
     const apiInstance = await getApi();
@@ -1972,12 +1979,14 @@ export const apiClient = {
   /** Mint a one-time pairing code for a catalog. The client exchanges it
    * once at /api/sync/v1/pair for the durable bearer token. */
   issuePairingCode: async (
-    dbId: string
+    dbId: string,
+    /** What the code pairs: the N.I.N.A. Sync plugin (the default) or another PSF Guard. */
+    kind: 'plugin' | 'peer' = 'plugin'
   ): Promise<{ pairing_token: string; expires_at: number }> => {
     const apiInstance = await getApi();
     const { data } = await apiInstance.post<
       ApiResponse<{ pairing_token: string; expires_at: number }>
-    >(`/databases/${encodeURIComponent(dbId)}/pairing-token`);
+    >(`/databases/${encodeURIComponent(dbId)}/pairing-token`, undefined, kind === 'peer' ? { params: { kind } } : undefined);
     if (!data.data) throw new Error(data.error || 'Failed to issue pairing code');
     return data.data;
   },

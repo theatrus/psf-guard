@@ -219,6 +219,11 @@ fn options(args: WorkerArgs) -> Result<WorkerOptions> {
 /// without starting a process, which on Windows would open a console window
 /// for the tray worker.
 fn host_name() -> String {
+    machine_name().unwrap_or_else(|| "worker".into())
+}
+
+/// This machine's host name, when it can be read.
+pub(crate) fn machine_name() -> Option<String> {
     #[cfg(windows)]
     let name = std::env::var("COMPUTERNAME").ok();
     #[cfg(unix)]
@@ -238,7 +243,6 @@ fn host_name() -> String {
     let name: Option<String> = None;
     name.map(|name| name.trim().to_string())
         .filter(|name| !name.is_empty())
-        .unwrap_or_else(|| "worker".into())
 }
 
 /// Why a request to the server failed.

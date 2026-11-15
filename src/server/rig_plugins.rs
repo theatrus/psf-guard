@@ -53,7 +53,7 @@ pub(crate) fn sync_plugin_paired(context: &DatabaseContext) -> bool {
     context
         .remote_image_upload
         .as_ref()
-        .is_some_and(|config| config.sync_enabled && config.token_is_configured())
+        .is_some_and(|config| config.sync_plugin_can_reach())
 }
 
 /// The N.I.N.A. profile a plugin paired with `catalog_id` last reported,

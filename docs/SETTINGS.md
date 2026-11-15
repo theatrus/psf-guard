@@ -62,10 +62,11 @@ control. The selected page includes the database name.
     take work, and, in a row of its own, whether **Image uploads** are on.
   - Below it, each part has its own card: **PSF Guard Sync**, **Image
     uploads**, and, with planning, **PSF Guard Director**.
-  - The **PSF Guard Sync** card follows the Director plugin's: **Pair**,
-    **Scheduler sync** and **Remote API key**. Each part shows whether it is
-    on. **Scheduler sync** has **Turn on** or **Turn off**, which applies at
-    once. A new remote API key is shown once, then saved with **Save key**.
+  - The **PSF Guard Sync** card follows the Director plugin's: **Pair** and
+    **Scheduler sync**. Each part shows whether it is on. **Scheduler sync**
+    has **Turn on** or **Turn off**, which applies at once. It covers paired
+    Sync plugins only; other PSF Guard servers and the remote API key have
+    their own switch under **Sync**.
   - **Image uploads** serves both plugins: the Sync plugin sends frames from
     its upload instruction, and the Director plugin sends the frames it
     captures. **Turn on image uploads** needs a **Receive folder**, not a
@@ -96,6 +97,23 @@ control. The selected page includes the database name.
   transfers. Transfers use the opened database as their local endpoint. Peers
   and credentials remain shared. The Sync plugin's pairing and incoming uploads
   are on **Rig setup**; **Open Rig setup** goes there.
+  - **Remote PSF Guard** lists the servers this one syncs with. To add one,
+    generate a pairing code on that server, click **Add peer** here, and
+    enter its URL and the code. This server exchanges the code for its own
+    credential. For a server too old to pair, enter its remote API key in
+    the same field.
+  - **Other PSF Guard servers** shows which servers may sync with the
+    selected database. **Generate server pairing code** makes a code for one
+    server; it works once and expires after an hour. Each paired server
+    shows when it paired and when it last synced, and **Remove** cuts off
+    that server alone. **Sync** has **Turn on sync for other servers** or
+    **Turn off sync for other servers**, which applies at once and leaves
+    the Sync plugin's switch alone.
+  - **Remote API key**, in the same card, is one shared key for scripts,
+    and for a PSF Guard server or Sync plugin too old to pair. The card
+    shows when the key was last used. A new key is shown once, then saved
+    with **Save key**. **Remove key** deletes it; paired servers and plugins
+    keep working.
 
 The shared **Overview** lists databases and staged transfer previews. Each
 preview acts on its recorded database and endpoints. Choose **New / import**

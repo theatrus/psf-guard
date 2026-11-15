@@ -515,8 +515,12 @@ pub struct RemoteImageUploadSummary {
     pub token_configured: bool,
     /// The single remote API key is set, apart from any paired client.
     pub key_configured: bool,
+    /// Paired Sync plugins may sync.
     pub sync_enabled: bool,
-    /// Paired clients, for the Settings list and per-client revocation.
+    /// Paired PSF Guard servers, and clients using the remote API key, may
+    /// sync.
+    pub peer_sync_enabled: bool,
+    /// Paired clients, for the Settings lists and per-client revocation.
     #[serde(default)]
     pub clients: Vec<RemoteClientSummary>,
     /// The last request made with the remote API key, which belongs to no
@@ -530,6 +534,8 @@ pub struct RemoteClientSummary {
     pub client_uuid: String,
     pub name: String,
     pub paired_at: i64,
+    /// `plugin` for the N.I.N.A. Sync plugin, `peer` for another PSF Guard.
+    pub kind: crate::db_registry::RemoteClientKind,
     /// The client's last Sync request since contacts were first recorded.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_contact: Option<SyncContactSummary>,
@@ -575,6 +581,14 @@ pub struct RemoteImageUploadUpdate {
     /// or the reverse. Absent means "leave the stored setting alone".
     #[serde(default)]
     pub sync_enabled: Option<bool>,
+    /// The same grant for paired PSF Guard servers and the remote API key.
+    /// Absent means "leave the stored setting alone".
+    #[serde(default)]
+    pub peer_sync_enabled: Option<bool>,
+    /// Remove the single remote API key. Paired clients keep working.
+    /// Ignored when `token` sets a new key in the same request.
+    #[serde(default)]
+    pub clear_token: bool,
     /// Optional so older management clients leave the stored layout alone.
     #[serde(default)]
     pub placement: Option<crate::db_registry::RemoteImageUploadPlacement>,

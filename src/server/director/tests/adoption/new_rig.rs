@@ -36,6 +36,7 @@ fn pair_sync_plugin(a: &Activated) {
             token_salt: "salt".into(),
             token_sha256: "hash".into(),
             paired_at: 1,
+            kind: Default::default(),
         }],
         ..Default::default()
     };

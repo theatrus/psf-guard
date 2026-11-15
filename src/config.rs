@@ -136,7 +136,11 @@ pub fn apply_remote_access(
             &config.token_file,
         )?;
         let access = open(entries, &config.database, &token, &mut keyed)?;
+        // The config file's key is the remote API key, so its grant is the
+        // one that matters. The plugins' grant goes on with it, as it did
+        // when the two were one.
         access.sync_enabled = true;
+        access.peer_sync_enabled = Some(true);
         note(&mut opened, &config.database, "sync");
     }
     for config in upload {

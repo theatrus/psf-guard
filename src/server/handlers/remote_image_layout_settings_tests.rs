@@ -29,6 +29,8 @@ fn update() -> RemoteImageUploadUpdate {
         image_directory: None,
         token: None,
         sync_enabled: None,
+        peer_sync_enabled: None,
+        clear_token: false,
         placement: Some(crate::db_registry::RemoteImageUploadPlacement::TargetTree),
         directory_template: None,
         rescan_directory_layout: false,
@@ -371,7 +373,11 @@ fn a_missing_receive_folder_blocks_only_changes_that_need_it() {
         .remote_image_upload
         .as_mut()
         .unwrap()
-        .add_client("Observatory", "psfrc_observatory_credential_0123456789")
+        .add_client(
+            "Observatory",
+            "psfrc_observatory_credential_0123456789",
+            crate::db_registry::RemoteClientKind::Plugin,
+        )
         .unwrap();
     let mut request = update();
     request.enabled = true;
@@ -386,4 +392,79 @@ fn a_missing_receive_folder_blocks_only_changes_that_need_it() {
     // Turning uploads on again checks the folder.
     entry.remote_image_upload.as_mut().unwrap().enabled = false;
     assert!(apply_remote_image_upload_update(&mut entry, &request).is_err());
+}
+
+#[test]
+fn the_plugins_grant_and_the_peers_grant_change_alone() {
+    use crate::db_registry::RemoteClientKind;
+    // A registry from before the grants were split: one switch, on, with
+    // the remote API key set and a plugin paired.
+    let mut entry = legacy_target_tree_entry();
+    let mut config = crate::db_registry::RemoteImageUploadConfig {
+        sync_enabled: true,
+        ..Default::default()
+    };
+    config.set_token("legacy-manual-key-0123456789").unwrap();
+    let plugin = config
+        .add_client(
+            "Observatory",
+            "psfrc_observatory_credential_0123456789",
+            RemoteClientKind::Plugin,
+        )
+        .unwrap();
+    assert_eq!(config.peer_sync_enabled, None);
+    entry.remote_image_upload = Some(config);
+    let mut request = update();
+    request.placement = None;
+
+    // Turning the plugins' grant off leaves the key's grant as it was.
+    request.sync_enabled = Some(false);
+    apply_remote_image_upload_update(&mut entry, &request).unwrap();
+    let config = entry.remote_image_upload.as_ref().unwrap();
+    assert!(!config.sync_allowed_for(&plugin));
+    assert!(config.sync_allowed_for(crate::db_registry::LEGACY_KEY_HOLDER));
+
+    // And the reverse.
+    request.sync_enabled = Some(true);
+    request.peer_sync_enabled = Some(false);
+    apply_remote_image_upload_update(&mut entry, &request).unwrap();
+    let config = entry.remote_image_upload.as_ref().unwrap();
+    assert!(config.sync_allowed_for(&plugin));
+    assert!(!config.sync_allowed_for(crate::db_registry::LEGACY_KEY_HOLDER));
+
+    // Removing the key leaves the paired plugin working, and the peers'
+    // grant cannot turn on with nothing to use it.
+    request.sync_enabled = None;
+    request.peer_sync_enabled = None;
+    request.clear_token = true;
+    apply_remote_image_upload_update(&mut entry, &request).unwrap();
+    let config = entry.remote_image_upload.as_ref().unwrap();
+    assert!(!config.legacy_key_configured());
+    assert!(!config.token_matches("legacy-manual-key-0123456789"));
+    assert!(config.token_matches("psfrc_observatory_credential_0123456789"));
+    request.clear_token = false;
+    request.peer_sync_enabled = Some(true);
+    assert!(apply_remote_image_upload_update(&mut entry, &request).is_err());
+}
+
+#[test]
+fn the_key_can_be_removed_when_it_is_the_only_credential_and_sync_is_on() {
+    // A database from before pairing: the key, scheduler sync on, nothing
+    // paired. Settings sends the stored grants back with every save.
+    let mut entry = legacy_target_tree_entry();
+    let mut config = crate::db_registry::RemoteImageUploadConfig {
+        sync_enabled: true,
+        ..Default::default()
+    };
+    config.set_token("legacy-manual-key-0123456789").unwrap();
+    entry.remote_image_upload = Some(config);
+    let mut request = update();
+    request.placement = None;
+    request.sync_enabled = Some(true);
+    request.peer_sync_enabled = Some(true);
+    request.clear_token = true;
+    apply_remote_image_upload_update(&mut entry, &request).unwrap();
+    let config = entry.remote_image_upload.as_ref().unwrap();
+    assert!(!config.token_is_configured());
+    assert!(!config.token_matches("legacy-manual-key-0123456789"));
 }

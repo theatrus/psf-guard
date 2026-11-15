@@ -217,6 +217,30 @@ pub struct RemoteClient {
     pub token_salt: String,
     pub token_sha256: String,
     pub paired_at: i64,
+    /// What paired: the N.I.N.A. Sync plugin, or another PSF Guard. Absent
+    /// in registries written before peers could pair, when only the plugin
+    /// did.
+    #[serde(default, skip_serializing_if = "RemoteClientKind::is_plugin")]
+    pub kind: RemoteClientKind,
+}
+
+/// What a paired credential belongs to. Each kind has its own sync grant:
+/// [`RemoteImageUploadConfig::sync_enabled`] for the plugin,
+/// [`RemoteImageUploadConfig::peer_sync_enabled`] for another PSF Guard.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteClientKind {
+    /// The N.I.N.A. Sync plugin.
+    #[default]
+    Plugin,
+    /// Another PSF Guard server.
+    Peer,
+}
+
+impl RemoteClientKind {
+    fn is_plugin(&self) -> bool {
+        *self == Self::Plugin
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -301,6 +325,13 @@ pub struct RemoteImageUploadConfig {
     /// sync protocol existed does not silently gain merge and apply rights.
     #[serde(default)]
     pub sync_enabled: bool,
+    /// The same grant for another PSF Guard: a paired peer, or any client
+    /// using the single remote API key. `None` in a registry written before
+    /// the grants were split follows `sync_enabled`, as it did then; it is
+    /// fixed to a value the first time either grant changes
+    /// ([`Self::pin_peer_sync`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peer_sync_enabled: Option<bool>,
     /// Server-derived layout below `image_dir`. The client still supplies
     /// only a basename; it can never choose a directory or relative path.
     #[serde(default)]
@@ -345,6 +376,63 @@ impl RemoteImageUploadConfig {
         Ok(())
     }
 
+    /// Remove the single remote API key. Paired clients keep working.
+    pub fn clear_token(&mut self) {
+        self.token_salt.clear();
+        self.token_sha256.clear();
+    }
+
+    /// Whether another PSF Guard, or a client using the remote API key, may
+    /// sync with this database.
+    pub fn peer_sync_allowed(&self) -> bool {
+        self.peer_sync_enabled.unwrap_or(self.sync_enabled)
+    }
+
+    /// Fix the peer grant to what it is now. Call this before changing
+    /// `sync_enabled`, so turning the plugin's grant on or off leaves the
+    /// peers' grant as it was.
+    pub fn pin_peer_sync(&mut self) {
+        self.peer_sync_enabled = Some(self.peer_sync_allowed());
+    }
+
+    /// Whether the credential `holder` (from [`Self::token_holder`]) may
+    /// sync: a paired Sync plugin under `sync_enabled`, a paired peer or the
+    /// remote API key under the peer grant.
+    /// The kind of the paired client `holder`, or `None` when no such
+    /// client is paired (the remote API key's holder among them).
+    pub fn client_kind(&self, holder: &str) -> Option<RemoteClientKind> {
+        self.clients
+            .iter()
+            .find(|client| client.client_uuid == holder)
+            .map(|client| client.kind)
+    }
+
+    /// Whether any client of `kind` is paired.
+    pub fn has_client_of(&self, kind: RemoteClientKind) -> bool {
+        self.clients.iter().any(|client| client.kind == kind)
+    }
+
+    pub fn sync_allowed_for(&self, holder: &str) -> bool {
+        match self.client_kind(holder) {
+            Some(RemoteClientKind::Plugin) => self.sync_enabled,
+            Some(RemoteClientKind::Peer) => self.peer_sync_allowed(),
+            None => holder == LEGACY_KEY_HOLDER && self.peer_sync_allowed(),
+        }
+    }
+
+    /// Whether a Sync plugin can sync with this database. With a plugin
+    /// paired, its grant decides: turning scheduler sync off must not leave
+    /// the plugin counted through a key it does not use. With none paired,
+    /// the remote API key under the peer grant counts, because a plugin
+    /// older than pairing uses it.
+    pub fn sync_plugin_can_reach(&self) -> bool {
+        if self.has_client_of(RemoteClientKind::Plugin) {
+            self.sync_enabled
+        } else {
+            self.peer_sync_allowed() && self.legacy_key_configured()
+        }
+    }
+
     pub fn token_is_configured(&self) -> bool {
         self.legacy_key_configured() || !self.clients.is_empty()
     }
@@ -387,7 +475,12 @@ impl RemoteImageUploadConfig {
 
     /// Add a paired client credential, returning its id. Validates the token
     /// the same way `set_token` does; the legacy single token is untouched.
-    pub fn add_client(&mut self, name: &str, token: &str) -> Result<String> {
+    pub fn add_client(
+        &mut self,
+        name: &str,
+        token: &str,
+        kind: RemoteClientKind,
+    ) -> Result<String> {
         if token.len() < Self::MIN_TOKEN_LENGTH || token.len() > Self::MAX_TOKEN_LENGTH {
             anyhow::bail!(
                 "client token must be {}-{} characters",
@@ -407,6 +500,7 @@ impl RemoteImageUploadConfig {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|duration| duration.as_secs() as i64)
                 .unwrap_or(0),
+            kind,
         });
         Ok(client_uuid)
     }
@@ -1420,10 +1514,18 @@ mod tests {
         let mut config = RemoteImageUploadConfig::default();
         config.set_token("legacy-manual-key-0123456789").unwrap();
         let laptop = config
-            .add_client("Laptop", "psfrc_laptop_credential_0123456789")
+            .add_client(
+                "Laptop",
+                "psfrc_laptop_credential_0123456789",
+                RemoteClientKind::Plugin,
+            )
             .unwrap();
         let observatory = config
-            .add_client("Observatory", "psfrc_observatory_credential_0123456789")
+            .add_client(
+                "Observatory",
+                "psfrc_observatory_credential_0123456789",
+                RemoteClientKind::Plugin,
+            )
             .unwrap();
 
         assert!(config.token_is_configured());
@@ -1455,12 +1557,93 @@ mod tests {
     }
 
     #[test]
+    fn each_kind_of_credential_syncs_under_its_own_grant() {
+        let mut config = RemoteImageUploadConfig::default();
+        config.set_token("legacy-manual-key-0123456789").unwrap();
+        let plugin = config
+            .add_client(
+                "N.I.N.A.",
+                "psfrc_plugin_credential_0123456789",
+                RemoteClientKind::Plugin,
+            )
+            .unwrap();
+        let peer = config
+            .add_client(
+                "home-server",
+                "psfrc_peer_credential_0123456789",
+                RemoteClientKind::Peer,
+            )
+            .unwrap();
+
+        // Before the grants were split there was one switch for all three.
+        assert!(!config.sync_allowed_for(&plugin));
+        assert!(!config.sync_allowed_for(&peer));
+        assert!(!config.sync_allowed_for(LEGACY_KEY_HOLDER));
+        config.sync_enabled = true;
+        assert!(config.sync_allowed_for(&plugin));
+        assert!(config.sync_allowed_for(&peer));
+        assert!(config.sync_allowed_for(LEGACY_KEY_HOLDER));
+
+        // Once fixed, the peers' grant no longer follows the plugins'.
+        config.pin_peer_sync();
+        config.sync_enabled = false;
+        assert!(!config.sync_allowed_for(&plugin));
+        assert!(config.sync_allowed_for(&peer));
+        assert!(config.sync_allowed_for(LEGACY_KEY_HOLDER));
+        assert!(
+            !config.sync_plugin_can_reach(),
+            "the paired plugin's grant is off; the key is not its credential"
+        );
+
+        config.peer_sync_enabled = Some(false);
+        config.sync_enabled = true;
+        assert!(config.sync_allowed_for(&plugin));
+        assert!(!config.sync_allowed_for(&peer));
+        assert!(!config.sync_allowed_for(LEGACY_KEY_HOLDER));
+        assert!(!config.sync_allowed_for("never-paired"));
+
+        // With no plugin paired, the key may be an older plugin's.
+        config.revoke_client(&plugin);
+        config.peer_sync_enabled = Some(true);
+        assert!(config.sync_plugin_can_reach());
+        // A paired peer is not a Sync plugin.
+        config.clear_token();
+        assert!(!config.sync_plugin_can_reach());
+        assert!(config.token_matches("psfrc_peer_credential_0123456789"));
+        assert!(!config.token_matches("legacy-manual-key-0123456789"));
+    }
+
+    #[test]
+    fn a_registry_from_before_peers_paired_reads_its_clients_as_plugins() {
+        let config: RemoteImageUploadConfig = serde_json::from_value(serde_json::json!({
+            "sync_enabled": true,
+            "clients": [{
+                "client_uuid": "c", "name": "N.I.N.A.", "paired_at": 1,
+                "token_salt": "0123456789abcdef0123456789abcdef",
+                "token_sha256": "0".repeat(64),
+            }],
+        }))
+        .unwrap();
+        assert_eq!(config.clients[0].kind, RemoteClientKind::Plugin);
+        assert_eq!(config.peer_sync_enabled, None);
+        assert!(config.peer_sync_allowed());
+        // A plugin client is written as before, with no `kind`.
+        let written = serde_json::to_value(&config).unwrap();
+        assert!(written["clients"][0].get("kind").is_none());
+        assert!(written.get("peer_sync_enabled").is_none());
+    }
+
+    #[test]
     fn clients_alone_configure_the_token_check() {
         // A catalog that was only ever paired (no manual key) still counts
         // as configured, or capabilities would hide it from its own client.
         let mut config = RemoteImageUploadConfig::default();
         config
-            .add_client("Only client", "psfrc_only_credential_0123456789")
+            .add_client(
+                "Only client",
+                "psfrc_only_credential_0123456789",
+                RemoteClientKind::Plugin,
+            )
             .unwrap();
         assert!(config.token_is_configured());
         assert!(config.token_matches("psfrc_only_credential_0123456789"));

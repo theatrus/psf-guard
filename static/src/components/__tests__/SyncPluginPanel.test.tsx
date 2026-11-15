@@ -54,6 +54,19 @@ describe('Sync plugin panel', () => {
     await waitFor(() => expect(revoked).toEqual(['c']));
   });
 
+  it('lists another PSF Guard and the remote API key elsewhere', async () => {
+    show({
+      token_configured: true, key_configured: true, key_contact: { at, capabilities: [], places_new_projects: false },
+      clients: [paired, { client_uuid: 'p', name: 'home-server', kind: 'peer', paired_at: at, last_contact: { at, capabilities: [], places_new_projects: false } }],
+    });
+    const list = await screen.findByRole('list', { name: 'Paired Sync plugins' });
+    expect(within(list).getAllByRole('listitem')).toHaveLength(1);
+    expect(screen.queryByText(/home-server/)).toBeNull();
+    // Neither a paired server nor the key's last user is an old plugin.
+    expect(screen.queryByRole('note')).toBeNull();
+    expect(screen.queryByTestId('sync-key-state')).toBeNull();
+  });
+
   it('generates a pairing code with the steps for N.I.N.A.', async () => {
     show({});
     expect(await screen.findByText(/Install PSF Guard Sync from the N.I.N.A. plugin repository/)).toBeInTheDocument();
@@ -83,19 +96,6 @@ describe('Sync plugin panel', () => {
     expect(screen.queryByTestId('sync-upload-state')).toBeNull();
   });
 
-  it('generates a remote API key, shows it once, and saves it', async () => {
-    const { saves } = show({});
-    expect(await screen.findByTestId('sync-key-state')).toHaveTextContent('Not set.');
-    fireEvent.click(screen.getByRole('button', { name: 'Generate key' }));
-    const key = screen.getByLabelText('New remote API key');
-    expect((key as HTMLInputElement).value).toMatch(/^[0-9a-f]{64}$/);
-    expect(screen.getByText('Copy this key now. It is not shown again after you save it.')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Save key' }));
-    await waitFor(() => expect(saves).toHaveLength(1));
-    expect(saves[0].token).toBe((key as HTMLInputElement).value);
-    expect(screen.queryByLabelText('New remote API key')).toBeNull();
-  });
-
   it('still offers Turn off when sync and uploads stay on after the last plugin is removed', async () => {
     const { saves } = show({ token_configured: false, sync_enabled: true, enabled: true, image_directory: '/images/remote' });
     expect(await screen.findByTestId('sync-scheduler-state')).toHaveTextContent('On, but no plugin is paired, so nothing arrives.');
@@ -103,15 +103,6 @@ describe('Sync plugin panel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Turn off scheduler sync' }));
     await waitFor(() => expect(saves).toHaveLength(1));
     expect(saves[0]).toMatchObject({ sync_enabled: false });
-  });
-
-  it('keeps a generated key on screen when saving it fails', async () => {
-    show({}, { failSaves: true });
-    fireEvent.click(await screen.findByRole('button', { name: 'Generate key' }));
-    const key = (screen.getByLabelText('New remote API key') as HTMLInputElement).value;
-    fireEvent.click(screen.getByRole('button', { name: 'Save key' }));
-    expect(await screen.findByRole('alert')).toBeInTheDocument();
-    expect(screen.getByLabelText('New remote API key')).toHaveValue(key);
   });
 
   it('drops a pairing code once it expires', async () => {

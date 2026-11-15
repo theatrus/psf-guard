@@ -209,18 +209,34 @@ impl SyncLive {
         catalog: &crate::server::database_context::DatabaseContext,
         now_ms: u64,
     ) -> Option<Self> {
+        // Another PSF Guard syncing with this database is not the rig's
+        // Sync plugin calling: neither a paired server, nor a caller with
+        // the remote API key that reports no plugin version.
+        let from_plugin = |holder: &str, contact: &crate::server::rig_plugins::SyncContact| {
+            use crate::db_registry::RemoteClientKind;
+            match catalog
+                .remote_image_upload
+                .as_ref()
+                .and_then(|config| config.client_kind(holder))
+            {
+                Some(RemoteClientKind::Plugin) => true,
+                Some(RemoteClientKind::Peer) => false,
+                None => contact.version.is_some(),
+            }
+        };
         let newest = state
             .sync_contacts
             .for_catalog(&catalog.id)
-            .into_values()
+            .into_iter()
+            .filter(|(holder, contact)| from_plugin(holder, contact))
+            .map(|(_, contact)| contact)
             .max_by_key(|contact| contact.at);
         let latest_action = state.remote_audit.latest(&catalog.id);
         let problems = state.remote_audit.problems(&catalog.id);
         let sequence = state.sync_sequences.get(&catalog.id);
-        let accepts = catalog
-            .remote_image_upload
-            .as_ref()
-            .is_some_and(|config| config.sync_enabled || config.enabled);
+        let accepts = catalog.remote_image_upload.as_ref().is_some_and(|config| {
+            config.sync_enabled || config.sync_plugin_can_reach() || config.enabled
+        });
         // A Director-only rig's refused upload still shows.
         if !accepts
             && newest.is_none()

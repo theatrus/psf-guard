@@ -28,6 +28,9 @@ const DIRECTIONS: Array<{ value: RemoteSyncDirection; label: string; note: strin
   },
 ];
 
+/** How a pairing code from another PSF Guard starts. */
+const PAIRING_CODE_PREFIX = 'psfpt_';
+
 /** Counts worth showing: a merge reports dozens, nearly all of them zero. */
 function summaryLine(summary: Record<string, number>): string {
   const shown = Object.entries(summary)
@@ -92,7 +95,11 @@ export default function RemotePeerSync({ databases, disabled, localDatabaseId }:
       apiClient.addPeer({
         name: formName.trim(),
         base_url: formUrl.trim(),
-        token: formToken.trim(),
+        // A pairing code is exchanged for this server's own credential;
+        // anything else is the peer's remote API key.
+        ...(formToken.trim().startsWith(PAIRING_CODE_PREFIX)
+          ? { pairing_code: formToken.trim() }
+          : { token: formToken.trim() }),
       }),
     onSuccess: (peer) => {
       setAdding(false);
@@ -190,7 +197,7 @@ export default function RemotePeerSync({ databases, disabled, localDatabaseId }:
           <h3>Remote PSF Guard</h3>
           <p>
             Sync with another PSF Guard over the network. Preview is always required
-            before Apply, and the API key stays on this server.
+            before Apply, and the peer's credential stays on this server.
           </p>
         </div>
         <span className="scheduler-sync-safety">Preview first</span>
@@ -262,19 +269,21 @@ export default function RemotePeerSync({ databases, disabled, localDatabaseId }:
             />
           </label>
           <label>
-            <span>API key</span>
+            <span>Pairing code or API key</span>
             <input
               type="password"
               value={formToken}
               onChange={(event) => setFormToken(event.target.value)}
-              placeholder="The key that peer issued for its database"
+              placeholder="psfpt_…"
             />
           </label>
           {/* Outside the label: help text inside one becomes part of the
               field's accessible name. */}
           <small>
-            The key is stored on this server and sent to the peer on every request. It
-            is never returned to this page.
+            Generate the code on the peer: Settings, Sync, Other PSF Guard servers. This
+            server exchanges it for its own credential, which is stored here and never
+            returned to this page. For a peer too old to pair, enter its remote API
+            key in this field.
           </small>
           <button
             type="button"

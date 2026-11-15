@@ -2799,6 +2799,8 @@ export interface RemoteClientSummary {
   client_uuid: string;
   name: string;
   paired_at: number;
+  /** What paired: the N.I.N.A. Sync plugin or another PSF Guard. Absent from older servers, where only the plugin paired. */
+  kind?: 'plugin' | 'peer';
   last_contact?: SyncContactSummary;
 }
 
@@ -2821,8 +2823,10 @@ export interface RemoteImageUploadSummary {
   token_configured: boolean;
   /** The single remote API key is set, apart from paired clients. Absent from older servers. */
   key_configured?: boolean;
-  /** Remote scheduler sync is a separate grant from image upload. */
+  /** Paired Sync plugins may sync. A separate grant from image upload. */
   sync_enabled: boolean;
+  /** Paired PSF Guard servers, and clients using the remote API key, may sync. Absent from older servers, where it follows `sync_enabled`. */
+  peer_sync_enabled?: boolean;
   /** Paired clients; each holds its own revocable credential. */
   clients?: RemoteClientSummary[];
   /** The last request made with the remote API key. */
