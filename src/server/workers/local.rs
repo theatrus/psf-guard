@@ -20,7 +20,7 @@ pub(super) struct LocalWorker {
 impl LocalWorker {
     /// Register this server's worker and start the thread that claims its
     /// tasks. The thread ends when the board closes.
-    pub(super) fn start(board: Arc<Board>, offers: Offers) -> Self {
+    pub(super) fn start(board: Arc<Board>, offers: Offers, tools: super::ToolSource) -> Self {
         let session = board.register(
             super::THIS_SERVER,
             Registration {
@@ -38,7 +38,7 @@ impl LocalWorker {
         let thread_session = session.clone();
         let started = std::thread::Builder::new()
             .name("worker-this-server".into())
-            .spawn(move || claim_until_closed(&board, &thread_session));
+            .spawn(move || claim_until_closed(&board, &thread_session, &tools));
         if let Err(error) = started {
             tracing::error!("This server's worker could not start: {error}");
         }
@@ -50,12 +50,12 @@ impl LocalWorker {
     }
 }
 
-fn claim_until_closed(board: &Arc<Board>, session: &str) {
+fn claim_until_closed(board: &Arc<Board>, session: &str, tools: &super::ToolSource) {
     while !board.is_closed() {
         match board.claim_blocking(session, POLL) {
             Ok(Some(assignment)) => {
                 let task = assignment.task.clone();
-                run(board, session, assignment);
+                run(board, session, assignment, tools);
                 board.local_done(&task);
             }
             Ok(None) => {}
@@ -68,7 +68,7 @@ fn claim_until_closed(board: &Arc<Board>, session: &str) {
 }
 
 /// Run one task where its files are, and answer for it on the board.
-fn run(board: &Arc<Board>, session: &str, assignment: Assignment) {
+fn run(board: &Arc<Board>, session: &str, assignment: Assignment, tools: &super::ToolSource) {
     let Assignment {
         task,
         lease,
@@ -103,7 +103,7 @@ fn run(board: &Arc<Board>, session: &str, assignment: Assignment) {
         // Stopped before it started.
         return;
     }
-    let tools = super::local_tools();
+    let tools = tools();
     let mut report = Report {
         board,
         session,

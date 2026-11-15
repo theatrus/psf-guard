@@ -38,7 +38,13 @@ pub struct Workers {
     /// When this server's offers were last probed, what they were, and the
     /// last problem reading a schema.
     local_offers: Mutex<Option<(Instant, Offers, Option<String>)>>,
+    /// Finds the tools installed on this server.
+    tools: RwLock<ToolSource>,
 }
+
+/// Finds the tools installed on this server: [`local_tools`], or a test's
+/// stand-ins.
+pub(crate) type ToolSource = Arc<dyn Fn() -> LocalTools + Send + Sync>;
 
 impl Default for Workers {
     fn default() -> Self {
@@ -54,6 +60,7 @@ impl Workers {
             tokens: RwLock::new(Vec::new()),
             local: OnceLock::new(),
             local_offers: Mutex::new(None),
+            tools: RwLock::new(Arc::new(local_tools)),
         }
     }
 }
@@ -132,8 +139,8 @@ impl Workers {
             .map(|token| token.id.clone())
     }
 
-    /// What this server's own worker offers, probing rc-astro again when the
-    /// last probe is older than a minute. Spawns short-lived processes then.
+    /// What this server's own worker offers, probing rc-astro and the noise
+    /// model again when the last probe is older than a minute. Spawns short-lived processes then.
     fn local_offers(&self) -> Offers {
         let mut cached = self
             .local_offers
@@ -144,12 +151,12 @@ impl Workers {
         {
             return offers.clone();
         }
-        let tools = local_tools();
+        let tools = (self.tool_source())();
         // This server stacks its own builds in process; its worker runs
-        // RC-Astro tools.
+        // the processing steps.
         let (offers, problem) = tools.offers(
             crate::concurrency::logical_cores(),
-            &crate::remote_work::WorkChoice::rc_astro_only(),
+            &crate::remote_work::WorkChoice::processing_only(),
         );
         if let Some(problem) = &problem {
             tracing::debug!("rc-astro on this server: {problem}");
@@ -167,14 +174,42 @@ impl Workers {
             .and_then(|(_, _, problem)| problem.clone())
     }
 
+    fn tool_source(&self) -> ToolSource {
+        Arc::clone(
+            &self
+                .tools
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        )
+    }
+
+    /// Use `source` for this server's tools, in place of what is installed.
+    #[cfg(test)]
+    pub(crate) fn set_tool_source(&self, source: ToolSource) {
+        *self
+            .tools
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = source;
+        self.forget_local_offers();
+    }
+
+    /// Probe this server's tools again on the next request, such as after a
+    /// download installed one.
+    pub fn forget_local_offers(&self) {
+        *self
+            .local_offers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+    }
+
     /// Start this server's own worker when it is not running, and bring
     /// what it offers up to date. Spawns short-lived processes when the
     /// offers are a minute old.
     pub fn refresh_local(&self) {
         let offers = self.local_offers();
-        let worker = self
-            .local
-            .get_or_init(|| local::LocalWorker::start(Arc::clone(&self.board), offers.clone()));
+        let worker = self.local.get_or_init(|| {
+            local::LocalWorker::start(Arc::clone(&self.board), offers.clone(), self.tool_source())
+        });
         self.board.update_offers(worker.session(), offers);
     }
 }
@@ -183,8 +218,30 @@ impl Workers {
 pub(crate) fn local_tools() -> LocalTools {
     LocalTools {
         rc_astro: crate::remote_work::rc_astro::locate(None),
+        noise_model: Some(local_noise_model()),
+        compute: LOCAL_COMPUTE
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone(),
         slots: 1,
     }
+}
+
+/// What runs the noise model on this server: Seiza, with the ONNX Runtime
+/// path and the GPU choice from Settings as they are now.
+fn local_noise_model() -> Arc<dyn crate::remote_work::noise_model::Engine> {
+    crate::remote_work::noise_model::SeizaEngine::new(crate::server::noise_model::config())
+}
+
+/// Grants this server's worker its threads from the server's shared budget.
+static LOCAL_COMPUTE: RwLock<Option<crate::remote_work::ComputeSource>> = RwLock::new(None);
+
+/// Lease the threads of this server's noise model runs from `source`. A
+/// server sets it once it has its budgets.
+pub fn set_local_compute(source: crate::remote_work::ComputeSource) {
+    *LOCAL_COMPUTE
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(source);
 }
 
 #[cfg(test)]

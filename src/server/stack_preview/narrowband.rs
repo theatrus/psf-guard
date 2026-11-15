@@ -77,12 +77,13 @@ impl NarrowbandProcessing {
         }
         if let Some(config) = &self.rgb_star_processing {
             config.validate()?;
-            if config
-                .steps
-                .iter()
-                .any(|step| !matches!(step.tool.as_str(), "bxt" | "nxt"))
-            {
-                return Err("RGB star processing supports BlurXTerminator and NoiseXTerminator before star separation".into());
+            if config.steps.iter().any(|step| {
+                !matches!(
+                    step.tool.as_str(),
+                    "bxt" | "nxt" | crate::remote_work::noise_model::TOOL
+                )
+            }) {
+                return Err("RGB star processing supports BlurXTerminator, NoiseXTerminator and the noise model before star separation".into());
             }
         }
         Ok(())

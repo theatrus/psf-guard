@@ -26,6 +26,8 @@ pub struct WorkerSettingsView {
     pub maps: Vec<PathMap>,
     pub work_dir: Option<String>,
     pub rc_astro: Option<String>,
+    #[serde(default)]
+    pub onnxruntime: Option<String>,
     pub work: Vec<String>,
     pub slots: usize,
 }
@@ -88,6 +90,7 @@ async fn describe() -> Result<DesktopWorker, String> {
             maps: settings.maps,
             work_dir: settings.work_dir,
             rc_astro: settings.rc_astro,
+            onnxruntime: settings.onnxruntime,
             work: settings.work,
             slots: settings.slots,
         }),
@@ -126,6 +129,7 @@ pub async fn save_desktop_worker(worker: SaveDesktopWorker) -> Result<DesktopWor
         maps: view.maps,
         work_dir: view.work_dir,
         rc_astro: view.rc_astro,
+        onnxruntime: view.onnxruntime,
         work: view.work,
         slots: view.slots,
     };
@@ -213,4 +217,59 @@ pub async fn pause_desktop_worker(paused: bool) -> Result<DesktopWorker, String>
     };
     paused.map_err(|error| format!("The worker did not answer: {error}"))?;
     describe().await
+}
+
+/// Where this computer's worker finds ONNX Runtime and the model: its saved
+/// ONNX Runtime path, when it has one, and PSF Guard's own folder.
+fn noise_model_config() -> Result<crate::remote_work::noise_model::Config, String> {
+    let saved = WorkerSettings::load(&settings_path()?).map_err(|error| format!("{error:#}"))?;
+    Ok(crate::remote_work::noise_model::Config::new(
+        saved
+            .and_then(|settings| settings.onnxruntime)
+            .map(PathBuf::from),
+        true,
+    ))
+}
+
+/// What Settings shows about the noise model on this computer.
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkerNoiseModel {
+    pub installed: crate::remote_work::noise_model::Installed,
+    /// The ONNX Runtime release PSF Guard downloads for this computer, or
+    /// `None` when it has none for this kind of computer.
+    pub runtime_download: Option<String>,
+}
+
+/// What this computer has installed for the noise model. Opens ONNX
+/// Runtime in the app when its library is on disk.
+#[tauri::command]
+pub async fn get_worker_noise_model() -> Result<WorkerNoiseModel, String> {
+    use crate::remote_work::noise_model::{install, SeizaEngine};
+    let config = noise_model_config()?;
+    let installed = tokio::task::spawn_blocking(move || SeizaEngine::new(config).installed())
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(WorkerNoiseModel {
+        installed,
+        runtime_download: install::release().map(|_| install::ONNXRUNTIME_VERSION.to_string()),
+    })
+}
+
+/// Download ONNX Runtime, the noise model, or both to this computer, for
+/// its worker. Returns what is installed once the download ends. A running
+/// worker offers the model after it is restarted.
+#[tauri::command]
+pub async fn download_worker_noise_model(
+    runtime: bool,
+    model: bool,
+) -> Result<WorkerNoiseModel, String> {
+    use crate::remote_work::noise_model::install;
+    let config = noise_model_config()?;
+    if runtime {
+        install::download_runtime(&config, &|_| {}).await?;
+    }
+    if model {
+        install::download_model(&config, &|_| {}).await?;
+    }
+    get_worker_noise_model().await
 }

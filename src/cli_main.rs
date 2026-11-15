@@ -1853,6 +1853,7 @@ pub fn main() -> Result<()> {
             maps,
             work_dir,
             rc_astro,
+            onnxruntime,
             work,
             slots,
         } => {
@@ -1877,11 +1878,15 @@ pub fn main() -> Result<()> {
                         maps,
                         work_dir,
                         rc_astro,
+                        onnxruntime,
                         work,
                         slots,
                     },
                 ))?;
             }
+        }
+        Commands::NoiseModel { action } => {
+            crate::commands::noise_model::run(action)?;
         }
         Commands::WorkerService { action } => {
             use crate::cli::WorkerServiceAction;

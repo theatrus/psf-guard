@@ -1,17 +1,23 @@
-//! RC-Astro tools on workers: which worker's tools a chain uses, and one
-//! tool run as a task on the board.
+//! The processing steps on workers: which worker's RC-Astro tools and
+//! noise model a chain uses, and one step run as a task on the board.
 
 use seiza_stacking::{ExternalToolRequest, ExternalToolSchema, LinearImage, ProcessedStackImage};
 
 use super::board::{NewTask, TaskNeeds, WaitError};
 use super::Workers;
+use crate::remote_work::noise_model;
 use crate::remote_work::protocol::{HeaderCard, TaskKind};
 use crate::remote_work::rc_astro::{self as task, StepResult, StepSpec};
 
 /// The message when no worker has rc-astro.
 pub const NOT_INSTALLED: &str = "rc-astro is not installed on this server or on a connected worker";
 
-/// Where the RC-Astro tools run, and at what priority.
+/// The message when no worker has the noise model, with what to do.
+pub const NOISE_MODEL_NOT_INSTALLED: &str =
+    "The noise model is not installed on this server or on a connected worker. \
+     Open Settings, choose Reference catalogs, and click Download under Noise model";
+
+/// Where the processing steps run, and at what priority.
 #[derive(Clone, Copy)]
 pub struct RcAstroRunner<'a> {
     pub workers: &'a Workers,
@@ -37,8 +43,17 @@ impl Workers {
     /// queued now. See [`super::board::Board::runs_here`].
     pub fn rc_astro_runs_here(&self, schema: &ExternalToolSchema) -> bool {
         self.refresh_local();
-        self.board
-            .runs_here(TaskKind::RcAstroStep, &TaskNeeds::rc_astro(schema))
+        let (kind, needs) = TaskNeeds::step(schema);
+        self.board.runs_here(kind, &needs)
+    }
+
+    /// The noise model the next run would use and who offers it: the first
+    /// connected worker's by name, otherwise this server's. Opens ONNX
+    /// Runtime on this server when its library is installed and the offers
+    /// are a minute old.
+    pub fn noise_model_offers(&self) -> Vec<(String, bool, noise_model::Identity)> {
+        self.refresh_local();
+        self.board.noise_model_offers()
     }
 
     /// The schema each tool would run with: the first connected worker's by
@@ -87,6 +102,13 @@ impl Workers {
 
     /// The schema `tool` runs with, or why it cannot run.
     pub fn rc_astro_schema(&self, tool: &str) -> Result<ExternalToolSchema, String> {
+        if noise_model::is_step(tool) {
+            return self
+                .noise_model_offers()
+                .first()
+                .map(|(_, _, identity)| identity.schema())
+                .ok_or_else(|| NOISE_MODEL_NOT_INSTALLED.to_string());
+        }
         self.refresh_local();
         let offers = self.board.rc_astro_offers();
         let mut unlicensed = None;
@@ -162,22 +184,42 @@ pub(crate) fn run_on_board(
     let ticket = board.ticket()?;
     let input = ticket.dir().join(task::INPUT);
     task::write_image(&input, image)?;
-    let spec = StepSpec {
-        schema: schema.clone(),
-        request: request.clone(),
-        headers: HeaderCard::from_fits(headers),
+    let (kind, needs) = TaskNeeds::step(schema);
+    let (spec, outputs) = if kind == TaskKind::NoiseModelStep {
+        let identity = board
+            .noise_model_identity(&schema.cli_version)
+            .ok_or_else(|| NOISE_MODEL_NOT_INSTALLED.to_string())?;
+        let spec = noise_model::StepSpec {
+            identity,
+            amounts: noise_model::Amounts::from_request(request)?,
+            person,
+        };
+        (
+            serde_json::to_value(&spec).map_err(|error| error.to_string())?,
+            vec![(task::PROCESSED.into(), true)],
+        )
+    } else {
+        let spec = StepSpec {
+            schema: schema.clone(),
+            request: request.clone(),
+            headers: HeaderCard::from_fits(headers),
+        };
+        (
+            serde_json::to_value(&spec).map_err(|error| error.to_string())?,
+            vec![(task::PROCESSED.into(), true), (task::STARS.into(), false)],
+        )
     };
     ticket.submit(NewTask {
-        kind: TaskKind::RcAstroStep,
+        kind,
         label: format!(
             "{} on a {}×{} image",
             schema.name, image.width, image.height
         ),
         person,
-        needs: TaskNeeds::rc_astro(schema),
-        spec: serde_json::to_value(&spec).map_err(|error| error.to_string())?,
+        needs,
+        spec,
         inputs: vec![(task::INPUT.into(), input)],
-        outputs: vec![(task::PROCESSED.into(), true), (task::STARS.into(), false)],
+        outputs,
     })?;
     let stopped = || cancel.is_some_and(|cancel| cancel.is_cancelled());
     let finished = ticket

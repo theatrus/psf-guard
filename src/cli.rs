@@ -14,6 +14,28 @@ pub struct Cli {
     pub command: Commands,
 }
 
+/// What `psf-guard noise-model` does.
+#[derive(Subcommand, Debug)]
+pub enum NoiseModelAction {
+    /// Download ONNX Runtime and the latest noise model to this computer.
+    Download {
+        /// Leave out ONNX Runtime, such as when you installed one yourself
+        /// and gave the worker its path.
+        #[arg(long)]
+        skip_runtime: bool,
+        /// Leave out the model.
+        #[arg(long)]
+        skip_model: bool,
+    },
+    /// Show what is installed on this computer and which model it runs.
+    Status {
+        /// The library of an ONNX Runtime you installed, or the folder
+        /// that contains it, in place of the downloaded one.
+        #[arg(long, value_name = "PATH")]
+        onnxruntime: Option<String>,
+    },
+}
+
 /// What `psf-guard worker-service` does.
 #[derive(Subcommand, Debug)]
 pub enum WorkerServiceAction {
@@ -1435,8 +1457,8 @@ pub enum Commands {
     /// Create a token in the server's Settings › Workers, then run
     /// `psf-guard worker --server http://host:3000`, with the token in
     /// PSF_GUARD_WORKER_TOKEN or `--token`. The worker offers the RC-Astro
-    /// tools installed here, runs the tasks the server sends it, and keeps
-    /// running until you stop it with Ctrl-C.
+    /// tools and the noise model installed here, runs the tasks the server
+    /// sends it, and keeps running until you stop it with Ctrl-C.
     ///
     /// With `--config`, the worker reads its settings from a file instead,
     /// such as the one the desktop app writes. With `--tray`, the desktop
@@ -1452,7 +1474,7 @@ pub enum Commands {
         #[arg(
             long,
             value_name = "FILE",
-            conflicts_with_all = ["server", "token", "name", "files", "maps", "work_dir", "rc_astro", "work", "slots"]
+            conflicts_with_all = ["server", "token", "name", "files", "maps", "work_dir", "rc_astro", "onnxruntime", "work", "slots"]
         )]
         config: Option<String>,
 
@@ -1461,7 +1483,7 @@ pub enum Commands {
         /// Desktop app builds only.
         #[arg(
             long,
-            conflicts_with_all = ["server", "token", "name", "files", "maps", "work_dir", "rc_astro", "work", "slots"]
+            conflicts_with_all = ["server", "token", "name", "files", "maps", "work_dir", "rc_astro", "onnxruntime", "work", "slots"]
         )]
         tray: bool,
 
@@ -1499,8 +1521,15 @@ pub enum Commands {
         #[arg(long)]
         rc_astro: Option<String>,
 
-        /// Work this worker accepts: `stack` for stack builds, `rc-astro`
-        /// for every RC-Astro tool, or `bxt`, `nxt` or `sxt` for one. Repeat
+        /// The library of an ONNX Runtime you installed for the noise
+        /// model, or the folder that contains it (defaults to the one
+        /// `psf-guard noise-model download` fetched).
+        #[arg(long, value_name = "PATH")]
+        onnxruntime: Option<String>,
+
+        /// Work this worker accepts: `stack` for stack builds, `noise-model`
+        /// for Seiza's noise model, `rc-astro` for every RC-Astro tool, or
+        /// `bxt`, `nxt` or `sxt` for one. Repeat
         /// for more. Without this option, the worker accepts every task type
         /// it can run. Choose where tasks run in Settings › Workers.
         /// Restart the worker after licensing or upgrading rc-astro.
@@ -1511,6 +1540,19 @@ pub enum Commands {
         /// RC-Astro step uses the GPU, so more than one seldom helps.
         #[arg(long, default_value_t = 1)]
         slots: usize,
+    },
+
+    /// Download Seiza's noise model and ONNX Runtime to this computer, or
+    /// show what is installed.
+    ///
+    /// The noise model is a stack processing step that needs no RC-Astro
+    /// license. PSF Guard never downloads it by itself: run `psf-guard
+    /// noise-model download` on a worker computer, then restart the
+    /// worker. A server downloads its own from Settings › Reference
+    /// catalogs, or with this command on the server computer.
+    NoiseModel {
+        #[command(subcommand)]
+        action: NoiseModelAction,
     },
 
     /// Run the worker as a Windows service, for a computer that runs work

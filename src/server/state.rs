@@ -132,6 +132,8 @@ pub struct AppState {
     /// Process-global, single-flight Seiza catalog installation with progress
     /// that survives closing and reopening the Settings page.
     pub catalog_install: crate::server::catalog_install::CatalogInstallManager,
+    /// The download of ONNX Runtime and the noise model a person started.
+    pub noise_model_downloads: crate::server::noise_model::NoiseModelDownloads,
     /// Durable, preview-first database transfer state.
     pub sync_previews: crate::server::sync_preview::SyncPreviewManager,
     /// Serializes guarded transfer applies so one preview cannot invalidate
@@ -586,6 +588,7 @@ impl AppState {
             catalog_jobs: crate::server::catalog_jobs::CatalogJobRegistry::default(),
             previews: crate::server::previews::Previews::default(),
             catalog_install: crate::server::catalog_install::CatalogInstallManager::default(),
+            noise_model_downloads: crate::server::noise_model::NoiseModelDownloads::default(),
             sync_previews: crate::server::sync_preview::SyncPreviewManager::new(&cache_dir),
             sync_apply_lock: tokio::sync::Mutex::new(()),
             remote_exports: crate::server::remote_sync::ExportStore::new(),
@@ -935,6 +938,7 @@ impl AppState {
             catalog_jobs: crate::server::catalog_jobs::CatalogJobRegistry::default(),
             previews: crate::server::previews::Previews::default(),
             catalog_install: crate::server::catalog_install::CatalogInstallManager::default(),
+            noise_model_downloads: crate::server::noise_model::NoiseModelDownloads::default(),
             sync_previews: crate::server::sync_preview::SyncPreviewManager::new(
                 "/tmp/psf-guard-test",
             ),

@@ -66,6 +66,14 @@ pub struct Offers {
     /// sends a channel only to a worker on its own release.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stacking_release: Option<String>,
+    /// The noise model the worker runs, when it has ONNX Runtime and a
+    /// model installed and `--work` does not leave it out. A server sends a
+    /// noise model step only to a worker that offers the identity the step
+    /// was planned with. The offer is this field alone: `work` does not
+    /// list [`TaskKind::NoiseModelStep`], so a server older than the model
+    /// still reads the registration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub noise_model: Option<crate::remote_work::noise_model::Identity>,
 }
 
 fn one_slot() -> usize {
@@ -176,6 +184,9 @@ pub enum TaskKind {
     RcAstroStep,
     /// One channel of a stack build: its frames integrated into a stack.
     StackChannel,
+    /// Seiza's noise model over one image. See
+    /// [`crate::remote_work::noise_model`].
+    NoiseModelStep,
 }
 
 /// A file the task reads.

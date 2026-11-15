@@ -67,9 +67,28 @@ pub enum TaskNeeds {
         stacking_version: String,
         release: String,
     },
+    /// The noise model with this identity: the model by its card's hash,
+    /// Seiza's output version, the backend and the precision, as
+    /// [`crate::remote_work::noise_model::Identity::version`] writes them.
+    NoiseModel { version: String },
 }
 
 impl TaskNeeds {
+    /// What a chain step run with `schema` needs: the noise model for its
+    /// step, an RC-Astro tool for every other.
+    pub fn step(schema: &seiza_stacking::ExternalToolSchema) -> (TaskKind, Self) {
+        if crate::remote_work::noise_model::is_step(&schema.key) {
+            (
+                TaskKind::NoiseModelStep,
+                TaskNeeds::NoiseModel {
+                    version: schema.cli_version.clone(),
+                },
+            )
+        } else {
+            (TaskKind::RcAstroStep, Self::rc_astro(schema))
+        }
+    }
+
     /// An RC-Astro step run with `schema`: its tool, licensed, at its CLI
     /// and model version.
     pub fn rc_astro(schema: &seiza_stacking::ExternalToolSchema) -> Self {
@@ -105,6 +124,10 @@ impl TaskNeeds {
                     && offers.stacking_version.as_deref() == Some(stacking_version)
                     && offers.stacking_release.as_deref() == Some(release)
             }
+            TaskNeeds::NoiseModel { version } => offers
+                .noise_model
+                .as_ref()
+                .is_some_and(|identity| identity.version() == *version),
         }
     }
 
@@ -118,6 +141,10 @@ impl TaskNeeds {
                 stacking_version,
                 release,
             } => format!("stacking with PSF Guard {release} and Seiza stacking {stacking_version}"),
+            TaskNeeds::NoiseModel { version } => format!(
+                "the noise model {}",
+                crate::remote_work::noise_model::display_version(version)
+            ),
         }
     }
 }
@@ -339,6 +366,12 @@ struct Inner {
 
 impl Inner {
     fn placement(&self, kind: TaskKind) -> WorkPlacement {
+        // One choice covers the processing steps: the noise model runs
+        // where the RC-Astro tools do.
+        let kind = match kind {
+            TaskKind::NoiseModelStep => TaskKind::RcAstroStep,
+            kind => kind,
+        };
         self.placements
             .get(&kind)
             .copied()
@@ -411,6 +444,9 @@ pub struct SessionSummary {
     /// stack builds.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stacking_version: Option<String>,
+    /// The noise model it runs, as "noise-v1-d33 cpu f32, …".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub noise_model: Option<String>,
     pub file_mode: FileMode,
     /// Whether task files reach it by path.
     pub exchange_shared: bool,
@@ -1314,6 +1350,45 @@ impl Board {
         offers
     }
 
+    /// The noise model of each connected worker that may run it under its
+    /// placement: other machines' by name, then this server's, which is
+    /// the fallback.
+    pub fn noise_model_offers(
+        &self,
+    ) -> Vec<(String, bool, crate::remote_work::noise_model::Identity)> {
+        let now = Instant::now();
+        let inner = self.lock();
+        let placement = inner.placement(TaskKind::NoiseModelStep);
+        let mut offers = inner
+            .sessions
+            .values()
+            .filter(|found| found.online(now) && placement.allows(found.local))
+            .filter_map(|found| {
+                Some((
+                    found.name.clone(),
+                    found.local,
+                    found.offers.noise_model.clone()?,
+                ))
+            })
+            .collect::<Vec<_>>();
+        offers.sort_by(|left, right| left.1.cmp(&right.1).then_with(|| left.0.cmp(&right.0)));
+        offers
+    }
+
+    /// The identity a worker registered whose line is `version`: what a
+    /// step planned with that line sends to the worker that runs it.
+    pub fn noise_model_identity(
+        &self,
+        version: &str,
+    ) -> Option<crate::remote_work::noise_model::Identity> {
+        self.lock()
+            .sessions
+            .values()
+            .filter_map(|found| found.offers.noise_model.as_ref())
+            .find(|identity| identity.version() == version)
+            .cloned()
+    }
+
     /// The connected workers and the queued tasks, for Settings › Workers.
     /// Forgets workers not heard from for an hour.
     pub fn summary(&self) -> (Vec<SessionSummary>, Vec<QueuedSummary>) {
@@ -1350,6 +1425,10 @@ impl Board {
                     .contains(&TaskKind::StackChannel)
                     .then(|| found.offers.stacking_version.clone())
                     .flatten(),
+                noise_model: found.offers.noise_model.as_ref().map(|identity| {
+                    crate::remote_work::noise_model::display_version(&identity.version())
+                        .to_string()
+                }),
                 file_mode: found.files.mode,
                 exchange_shared: found.exchange_shared,
                 exchange_problem: found.exchange_problem.clone(),

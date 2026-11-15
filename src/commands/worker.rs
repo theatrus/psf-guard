@@ -42,6 +42,8 @@ pub struct WorkerArgs {
     pub maps: Vec<String>,
     pub work_dir: Option<String>,
     pub rc_astro: Option<String>,
+    /// An ONNX Runtime the person installed, for the noise model.
+    pub onnxruntime: Option<String>,
     pub work: Vec<String>,
     pub slots: usize,
 }
@@ -200,6 +202,15 @@ fn options(args: WorkerArgs) -> Result<WorkerOptions> {
             .unwrap_or_else(|| std::env::temp_dir().join("psf-guard-worker")),
         tools: LocalTools {
             rc_astro,
+            // A worker runs the model on the backend Seiza picks for this
+            // machine; the server's GPU switch is for the server's own runs.
+            noise_model: Some(crate::remote_work::noise_model::SeizaEngine::new(
+                crate::remote_work::noise_model::Config::new(
+                    args.onnxruntime.map(PathBuf::from),
+                    true,
+                ),
+            )),
+            compute: None,
             slots: args.slots,
         },
         work: WorkChoice::parse(&args.work).map_err(anyhow::Error::msg)?,
@@ -604,10 +615,11 @@ pub async fn serve(options: WorkerOptions, shutdown: impl Future<Output = ()>) -
     offers.slots = options.slots;
     if offers.rc_astro.is_empty() {
         // Without RC-Astro tools, a worker may still take stack builds.
-        let then = if offers.work.is_empty() {
-            "this worker has no work to accept yet"
-        } else {
-            "this worker accepts stack builds only"
+        let then = match (offers.work.is_empty(), offers.noise_model.is_some()) {
+            (true, false) => "this worker has no work to accept yet",
+            (true, true) => "this worker accepts the noise model only",
+            (false, false) => "this worker accepts stack builds only",
+            (false, true) => "this worker accepts stack builds and the noise model",
         };
         match (&options.tools.rc_astro, problem) {
             (None, _) if !options.work.takes_rc_astro() => {
@@ -640,6 +652,22 @@ pub async fn serve(options: WorkerOptions, shutdown: impl Future<Output = ()>) -
                 }
             );
         }
+    }
+    match (&offers.noise_model, &options.tools.noise_model) {
+        (Some(identity), _) => tracing::info!(
+            "Accepts the noise model {}",
+            crate::remote_work::noise_model::display_version(&identity.version())
+        ),
+        (None, Some(engine)) if options.work.takes_noise_model() => {
+            let engine = Arc::clone(engine);
+            let missing = tokio::task::spawn_blocking(move || engine.identity().err()).await?;
+            tracing::info!(
+                "This worker does not run the noise model: {}. Run `psf-guard noise-model \
+                 download` on this computer, then restart the worker",
+                missing.unwrap_or_else(|| "it is not installed".into())
+            );
+        }
+        (None, _) => {}
     }
     let registration = Registration {
         protocol: PROTOCOL_VERSION,

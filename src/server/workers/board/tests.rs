@@ -25,6 +25,7 @@ fn offers(tools: &[(&str, &str)]) -> Offers {
         work: vec![TaskKind::RcAstroStep],
         stacking_version: None,
         stacking_release: None,
+        noise_model: None,
         rc_astro: tools
             .iter()
             .map(|(tool, version)| schema(tool, version, true))
@@ -1072,6 +1073,7 @@ fn only_a_worker_that_stacks_at_the_same_version_takes_a_channel() {
         rc_astro: Vec::new(),
         stacking_version: Some(version.into()),
         stacking_release: Some("0.12".into()),
+        noise_model: None,
     };
     let older = board.register(
         "token",
@@ -1186,4 +1188,79 @@ fn a_stopped_task_goes_to_no_new_worker() {
     );
     assert!(board.try_claim(&second).unwrap().is_none());
     assert_eq!(waiting.join().unwrap().unwrap_err(), WaitError::Stopped);
+}
+
+#[test]
+fn a_noise_model_step_goes_only_to_a_worker_that_offers_the_same_model() {
+    use crate::remote_work::noise_model::testing::identity;
+
+    let dir = tempfile::tempdir().unwrap();
+    let board = board(dir.path(), Timings::default());
+    let wanted = identity("noise-v1");
+    // The step's schema is what a chain plans with; its needs come from it.
+    let (kind, needs) = TaskNeeds::step(&wanted.schema());
+    assert_eq!(kind, TaskKind::NoiseModelStep);
+    let ticket = board.ticket().unwrap();
+    ticket
+        .submit(NewTask {
+            kind,
+            ..task("denoise", true, needs.clone())
+        })
+        .unwrap();
+
+    let with = |noise_model| Offers {
+        noise_model,
+        ..offers(&[("nxt", "2.6.6")])
+    };
+    // RC-Astro alone, another model, and the same model on another backend
+    // all leave the task where it is.
+    let other_backend = crate::remote_work::noise_model::Identity {
+        backend: "coreml-gpu".into(),
+        ..wanted.clone()
+    };
+    for (name, offered) in [
+        ("none", None),
+        ("other-model", Some(identity("noise-v2"))),
+        ("other-backend", Some(other_backend)),
+    ] {
+        let session = board.register(
+            name,
+            registration(name, with(offered), FileAccess::default()),
+            false,
+        );
+        assert!(board.try_claim(&session).unwrap().is_none(), "{name}");
+        assert!(!board.remote_can_run(&needs), "{name}");
+    }
+    let session = board.register(
+        "same",
+        registration("same", with(Some(wanted.clone())), FileAccess::default()),
+        false,
+    );
+    assert!(board.remote_can_run(&needs));
+    let claimed = board.try_claim(&session).unwrap().unwrap();
+    assert_eq!(claimed.kind, TaskKind::NoiseModelStep);
+    assert_eq!(claimed.label, "denoise");
+    // The worker's summary shows the model without its card's hash.
+    let (sessions, _) = board.summary();
+    let summary = sessions.iter().find(|found| found.name == "same").unwrap();
+    assert_eq!(
+        summary.noise_model.as_deref(),
+        Some("noise-v1 cpu f32, seiza-model 0.1.0, band scale 5")
+    );
+    // The step is sent the identity the worker registered.
+    assert_eq!(board.noise_model_identity(&wanted.version()), Some(wanted));
+}
+
+#[test]
+fn the_noise_model_runs_where_the_rc_astro_tools_do() {
+    let dir = tempfile::tempdir().unwrap();
+    let board = board(dir.path(), Timings::default());
+    for placement in [
+        WorkPlacement::WorkersOnly,
+        WorkPlacement::ThisServer,
+        WorkPlacement::WorkersFirst,
+    ] {
+        board.set_placement(TaskKind::RcAstroStep, placement);
+        assert_eq!(board.placement(TaskKind::NoiseModelStep), placement);
+    }
 }

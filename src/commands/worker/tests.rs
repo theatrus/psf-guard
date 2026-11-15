@@ -131,6 +131,7 @@ fn start_controlled_worker(
         tools: LocalTools {
             rc_astro: crate::remote_work::rc_astro::locate(None),
             slots: 1,
+            ..Default::default()
         },
         work,
         slots: 1,
@@ -582,6 +583,7 @@ fn maps_imply_shared_files_and_must_name_both_sides() {
         maps: maps.iter().map(|map| map.to_string()).collect(),
         work_dir: None,
         rc_astro: None,
+        onnxruntime: None,
         work: Vec::new(),
         slots: 1,
     };
@@ -909,8 +911,8 @@ async fn the_server_keeps_a_running_image_only_from_the_current_lease_and_only_a
         .unwrap();
     let client = Client::new(&server.address, &server.secret).unwrap();
     let (offers, _) = LocalTools {
-        rc_astro: None,
         slots: 1,
+        ..Default::default()
     }
     .offers(1, &WorkChoice::parse(&["stack".into()]).unwrap());
     let session = client

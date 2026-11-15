@@ -1,5 +1,6 @@
-//! RC-Astro post-processing on stacked linear FITS: BlurXTerminator,
-//! NoiseXTerminator, and StarXTerminator through their standalone CLI.
+//! Post-processing on stacked linear FITS: RC-Astro's BlurXTerminator,
+//! NoiseXTerminator, and StarXTerminator through their standalone CLI, and
+//! Seiza's noise model, a step of its own that needs no RC-Astro license.
 //!
 //! This is a reversible view-processing tier like deconvolution: the
 //! integration artifact is never touched, results cache under their own
@@ -28,8 +29,10 @@ use crate::server::state::AppState;
 pub(super) const RC_ASTRO_CACHE_VERSION: u32 = 3;
 
 /// The order steps run when several are enabled: sharpen the linear data,
-/// denoise it, then separate the stars.
-pub const RC_ASTRO_STEP_ORDER: [&str; 3] = ["bxt", "nxt", "sxt"];
+/// denoise it, then separate the stars. Seiza's noise model runs where
+/// NoiseXTerminator does.
+pub const RC_ASTRO_STEP_ORDER: [&str; 4] =
+    ["bxt", "nxt", crate::remote_work::noise_model::TOOL, "sxt"];
 
 /// One tool run with its parameter values, keyed by schema parameter name.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -50,15 +53,15 @@ impl RcAstroProcessing {
     /// message and before anything is hashed or cached.
     pub fn validate(&self) -> Result<(), String> {
         if self.steps.is_empty() {
-            return Err("RC-Astro processing lists no steps".into());
+            return Err("The processing lists no steps".into());
         }
         let mut seen = Vec::new();
         for step in &self.steps {
             if !RC_ASTRO_STEP_ORDER.contains(&step.tool.as_str()) {
-                return Err(format!("unknown RC-Astro tool {:?}", step.tool));
+                return Err(format!("unknown processing step {:?}", step.tool));
             }
             if seen.contains(&step.tool.as_str()) {
-                return Err(format!("RC-Astro tool {:?} is listed twice", step.tool));
+                return Err(format!("processing step {:?} is listed twice", step.tool));
             }
             seen.push(step.tool.as_str());
         }
@@ -84,6 +87,10 @@ pub struct RcAstroStepResult {
     pub tool: String,
     pub name: String,
     pub ml_version: Option<i64>,
+    /// What ran the step, when it is not an RC-Astro tool: the noise
+    /// model's name, backend and Seiza version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
     #[serde(default)]
     pub device: Option<String>,
     #[serde(default)]
@@ -93,6 +100,7 @@ pub struct RcAstroStepResult {
 /// The whole chain's outcome, reported back to the client.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct StackRcAstroResult {
+    /// The rc-astro CLI's version; empty when no RC-Astro tool ran.
     pub cli_version: String,
     pub steps: Vec<RcAstroStepResult>,
     /// Whether a stars image was produced and stored beside the result.
@@ -522,7 +530,7 @@ fn persist_prefix(
     // file.
     let unique = super::temporary_tag();
     let temporary = fits.with_extension(format!("{unique}.tmp.fits"));
-    let mut cards = rc_astro_cards();
+    let mut cards = rc_astro_cards(result);
     cards.extend(
         reference_headers
             .iter()
@@ -666,7 +674,10 @@ fn apply_rc_astro_with_runner(
             .iter()
             .find(|(tool, _)| tool == &step.tool)
             .ok_or_else(|| format!("no schema for RC-Astro tool {:?}", step.tool))?;
-        cli_version = schema.cli_version.clone();
+        let noise_model = crate::remote_work::noise_model::is_step(&step.tool);
+        if !noise_model {
+            cli_version = schema.cli_version.clone();
+        }
         let request = ExternalToolRequest {
             tool: step.tool.clone(),
             parameters: step
@@ -711,10 +722,12 @@ fn apply_rc_astro_with_runner(
                 }
             }
         }
+        // Seiza's model reads the image with its holes in place: it keeps
+        // them from the network itself, as the model's card asks.
         let mut processed = run(
             schema,
             &request,
-            &padded,
+            if noise_model { &current } else { &padded },
             &exchange_headers,
             &mut step_progress,
         )?;
@@ -729,6 +742,9 @@ fn apply_rc_astro_with_runner(
             tool: step.tool.clone(),
             name: schema.name.clone(),
             ml_version: schema.ml_version,
+            version: noise_model.then(|| {
+                crate::remote_work::noise_model::display_version(&schema.cli_version).to_string()
+            }),
             device: processed.device.clone(),
             warnings: processed.warnings.clone(),
         });
@@ -855,19 +871,27 @@ pub(super) fn prune_rc_astro_cache(
     }
 }
 
-fn rc_astro_cards() -> Vec<seiza_fits::WriteHeaderCard> {
-    vec![
-        seiza_fits::WriteHeaderCard::new(
+/// The cards that say what processed a result: RC-Astro's tools, Seiza's
+/// noise model, or both.
+fn rc_astro_cards(result: &StackRcAstroResult) -> Vec<seiza_fits::WriteHeaderCard> {
+    let text = |key: &str, value: &str, comment: &str| {
+        seiza_fits::WriteHeaderCard::new(key, seiza_fits::HeaderValue::String(value.into()))
+            .with_comment(comment)
+    };
+    let mut cards = Vec::new();
+    if result.steps.iter().any(|step| step.version.is_none()) {
+        cards.push(text(
             "SEIZARCA",
-            seiza_fits::HeaderValue::String("RC-ASTRO".into()),
-        )
-        .with_comment("processed by RC-Astro standalone tools"),
-        seiza_fits::WriteHeaderCard::new(
-            "SEIZATRF",
-            seiza_fits::HeaderValue::String("LINEAR".into()),
-        )
-        .with_comment("linear sample transfer"),
-    ]
+            "RC-ASTRO",
+            "processed by RC-Astro standalone tools",
+        ));
+    }
+    if let Some(version) = result.steps.iter().find_map(|step| step.version.as_deref()) {
+        let model = version.split(' ').next().unwrap_or(version);
+        cards.push(text("SEIZAMDL", model, "Seiza learned model"));
+    }
+    cards.push(text("SEIZATRF", "LINEAR", "linear sample transfer"));
+    cards
 }
 
 #[cfg(test)]
@@ -1080,6 +1104,189 @@ mod tests {
             "parameters": [],
         }))
         .unwrap()
+    }
+
+    /// Workers whose own worker runs a stand-in noise model.
+    fn workers_with_noise_model(
+        engine: std::sync::Arc<crate::remote_work::noise_model::testing::FixedEngine>,
+    ) -> crate::server::workers::Workers {
+        let workers = crate::server::workers::Workers::default();
+        workers.set_tool_source(std::sync::Arc::new(move || {
+            crate::remote_work::LocalTools {
+                noise_model: Some(engine.clone()),
+                slots: 1,
+                ..Default::default()
+            }
+        }));
+        workers
+    }
+
+    fn noise_step(grain: f64) -> RcAstroStep {
+        RcAstroStep {
+            tool: crate::remote_work::noise_model::TOOL.into(),
+            parameters: BTreeMap::from([(
+                crate::remote_work::noise_model::GRAIN.to_string(),
+                ExternalParameterValue::Float(grain),
+            )]),
+        }
+    }
+
+    #[test]
+    fn the_noise_model_runs_as_a_step_with_no_rc_astro_and_caches_its_result() {
+        use crate::remote_work::noise_model::testing::FixedEngine;
+        use std::sync::atomic::Ordering;
+
+        let cache = tempfile::tempdir().unwrap();
+        let engine = FixedEngine::new("noise-v1");
+        let workers = workers_with_noise_model(engine.clone());
+        let runner = crate::server::workers::rc_astro::RcAstroRunner {
+            workers: &workers,
+            person: true,
+        };
+        let config = RcAstroProcessing {
+            steps: vec![noise_step(0.5)],
+        };
+        config.validate().unwrap();
+        let schemas = schemas_for(&workers, &config).unwrap();
+        let config = normalize_against_schemas(&config, &schemas).unwrap();
+        let ids = rc_astro_chain_ids("db", "mono:1", "revision", &config, &schemas, None).unwrap();
+        let image = LinearImage::new(2, 2, 1, vec![8.0, f32::NAN, 2.0, 4.0]).unwrap();
+        let apply = |config: &RcAstroProcessing, ids: &[String]| {
+            apply_rc_astro(
+                runner,
+                cache.path(),
+                ids,
+                config,
+                &schemas,
+                &image,
+                &[],
+                &mut |_, _| {},
+                None,
+                &mut || Ok(()),
+            )
+            .unwrap()
+        };
+        let first = apply(&config, &ids);
+        assert_eq!(first.image.data[0], 4.0);
+        assert_eq!(first.image.data[3], 2.0);
+        // A pixel with no coverage stays one.
+        assert!(first.image.data[1].is_nan());
+        assert!(first.stars.is_none());
+        // No RC-Astro tool ran, so the result gives no rc-astro version.
+        assert_eq!(first.result.cli_version, "");
+        let step = &first.result.steps[0];
+        assert_eq!(step.name, "Seiza noise model");
+        assert_eq!(
+            step.version.as_deref(),
+            Some("noise-v1 cpu f32, seiza-model 0.1.0, band scale 5")
+        );
+        assert_eq!(step.device.as_deref(), Some("cpu"));
+
+        // The same request is a cache hit: the model does not run again.
+        let second = apply(&config, &ids);
+        assert_eq!(second.image.data[0], 4.0);
+        assert_eq!(engine.runs.load(Ordering::SeqCst), 1);
+        assert!(rc_astro_chain_cached(cache.path(), &ids, &config));
+        // The result says which model made it, and not RC-Astro.
+        let header = seiza_image_io::read_header(&rc_astro_fits_path(cache.path(), &ids[0]))
+            .unwrap()
+            .cards;
+        assert!(header.iter().any(|(key, value)| key == "SEIZAMDL"
+            && matches!(value, seiza_fits::HeaderValue::String(model) if model.trim() == "noise-v1")));
+        assert!(!header.iter().any(|(key, _)| key == "SEIZARCA"));
+
+        // Another amount is another result.
+        let stronger = normalize_against_schemas(
+            &RcAstroProcessing {
+                steps: vec![noise_step(0.75)],
+            },
+            &schemas,
+        )
+        .unwrap();
+        let stronger_ids =
+            rc_astro_chain_ids("db", "mono:1", "revision", &stronger, &schemas, None).unwrap();
+        assert_ne!(stronger_ids, ids);
+        assert_eq!(apply(&stronger, &stronger_ids).image.data[0], 2.0);
+        assert_eq!(engine.runs.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn the_noise_model_s_cache_identity_follows_the_model_that_runs() {
+        use crate::remote_work::noise_model::testing::identity;
+
+        let config = RcAstroProcessing {
+            steps: vec![noise_step(0.5)],
+        };
+        let ids = |identity: &crate::remote_work::noise_model::Identity| {
+            let schemas = vec![(
+                crate::remote_work::noise_model::TOOL.to_string(),
+                identity.schema(),
+            )];
+            rc_astro_chain_ids("db", "mono:1", "revision", &config, &schemas, None).unwrap()
+        };
+        let base = identity("noise-v1");
+        for changed in [
+            crate::remote_work::noise_model::Identity {
+                card_sha256: "d".repeat(64),
+                ..base.clone()
+            },
+            crate::remote_work::noise_model::Identity {
+                output_version: "0.2.0".into(),
+                ..base.clone()
+            },
+            crate::remote_work::noise_model::Identity {
+                backend: "coreml-gpu".into(),
+                ..base.clone()
+            },
+            crate::remote_work::noise_model::Identity {
+                precision: "f16".into(),
+                ..base.clone()
+            },
+        ] {
+            assert_ne!(ids(&changed), ids(&base), "{changed:?}");
+        }
+        assert_eq!(ids(&base), ids(&base.clone()));
+    }
+
+    #[test]
+    fn a_missing_noise_model_fails_with_what_to_click() {
+        use crate::remote_work::noise_model::testing::FixedEngine;
+
+        let workers =
+            workers_with_noise_model(FixedEngine::missing("ONNX Runtime is not installed"));
+        let config = RcAstroProcessing {
+            steps: vec![noise_step(0.5)],
+        };
+        let refused = schemas_for(&workers, &config).unwrap_err();
+        assert!(refused.contains("Reference catalogs"), "{refused}");
+        assert!(refused.contains("Download"), "{refused}");
+    }
+
+    #[test]
+    fn the_noise_model_runs_after_sharpening_and_before_star_removal() {
+        let config = RcAstroProcessing {
+            steps: vec![step("sxt"), noise_step(0.5), step("nxt"), step("bxt")],
+        };
+        config.validate().unwrap();
+        let ordered: Vec<&str> = config
+            .ordered()
+            .iter()
+            .map(|step| step.tool.as_str())
+            .collect();
+        assert_eq!(ordered, ["bxt", "nxt", "noise-model", "sxt"]);
+        // An amount outside 0 to 1 is refused before anything runs.
+        let schemas = vec![(
+            crate::remote_work::noise_model::TOOL.to_string(),
+            crate::remote_work::noise_model::testing::identity("noise-v1").schema(),
+        )];
+        let refused = normalize_against_schemas(
+            &RcAstroProcessing {
+                steps: vec![noise_step(1.5)],
+            },
+            &schemas,
+        )
+        .unwrap_err();
+        assert!(refused.contains("outside"), "{refused}");
     }
 
     #[test]
@@ -1654,6 +1861,7 @@ fi
                     tool: (*tool).into(),
                     name: (*tool).into(),
                     ml_version: None,
+                    version: None,
                     device: None,
                     warnings: Vec::new(),
                 })
