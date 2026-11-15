@@ -403,7 +403,13 @@ mod tests {
         };
         assert_eq!(options.normalization, library.normalization);
         assert_eq!(options.weighting, library.weighting);
-        assert_eq!(options.registration.model, library.registration.model);
+        // Seiza 0.51 made the quadratic warp the library default. Classic
+        // keeps the similarity it had, so stacks recorded before the method
+        // could be chosen are still read the way they were built.
+        assert_eq!(
+            options.registration.model,
+            seiza_stacking::RegistrationModel::Similarity
+        );
         assert_eq!(options.interpolation, library.interpolation);
         assert_eq!(options.cfa_integration, library.cfa_integration);
     }
