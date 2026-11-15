@@ -124,11 +124,7 @@ impl TaskNeeds {
     }
 }
 
-/// Whether a provider is one of RC-Astro's tools.
-fn is_rc_astro(provider: &str) -> bool {
-    crate::remote_work::steps::provider(provider)
-        .is_some_and(|found| found.engine == crate::remote_work::steps::Engine::RcAstro)
-}
+use crate::remote_work::steps::is_rc_astro;
 
 /// A task to put on the board.
 pub struct NewTask {
@@ -227,6 +223,9 @@ struct Task {
     stop_requested: bool,
     /// Stops the work when this server's worker runs it.
     local_stop: Option<crate::concurrency::Stop>,
+    /// A person's task took this server's worker from it: when the worker
+    /// answers that it stopped, the task goes back in the queue.
+    preempted: bool,
     /// When the worker last reported or sent an output: a stop that lets
     /// the worker finish waits while it keeps doing so.
     last_report: Option<Instant>,
@@ -357,6 +356,33 @@ impl Inner {
             .get(&kind)
             .copied()
             .unwrap_or_else(|| WorkPlacement::default_for(kind))
+    }
+
+    /// A person's task with `needs` was queued. When this server's worker
+    /// would run it but is busy with automatic work, stop that work: it
+    /// goes back in the queue when the worker answers, and the person's
+    /// task, which goes first, takes the worker. A long automatic model run
+    /// would otherwise keep a person waiting for all of it.
+    fn preempt_automatic_work(&mut self, needs: &TaskNeeds, kind: TaskKind) {
+        let placement = self.placement(kind);
+        let Some((local, _)) = self.sessions.iter().find(|(_, session)| {
+            session.local && needs.met_by(&session.offers) && placement.allows(true)
+        }) else {
+            return;
+        };
+        let local = local.clone();
+        for task in self.tasks.values_mut() {
+            let runs_here =
+                matches!(&task.state, TaskState::Leased { session, .. } if *session == local);
+            if runs_here
+                && !task.person
+                && !task.preempted
+                && let Some(stop) = &task.local_stop
+            {
+                task.preempted = true;
+                stop.request();
+            }
+        }
     }
 
     /// Whether `session` may run `task`: it offers what the task needs, the
@@ -852,6 +878,7 @@ impl Board {
         let mut inner = self.lock();
         let seq = inner.next_seq;
         inner.next_seq += 1;
+        let preempts = task.person.then(|| (task.needs.clone(), task.kind));
         inner.tasks.insert(
             id,
             Task {
@@ -874,9 +901,13 @@ impl Board {
                 preview: None,
                 stop_requested: false,
                 local_stop: None,
+                preempted: false,
                 last_report: None,
             },
         );
+        if let Some((needs, kind)) = preempts {
+            inner.preempt_automatic_work(&needs, kind);
+        }
         drop(inner);
         self.notify();
         Ok(())
@@ -1293,7 +1324,25 @@ impl Board {
                 .values()
                 .any(|other| other.local && needs.met_by(&other.offers));
         let found = inner.tasks.get_mut(task).expect("the task is current");
-        if let (true, Some(refuser)) = (fallback, &refuser) {
+        if found.preempted {
+            // It stopped for a person's task, not for a fault: it waits its
+            // turn again, and the stop does not count against it.
+            found.preempted = false;
+            found.stop_requested = false;
+            found.local_stop = None;
+            found.events.clear();
+            found.events_received = 0;
+            found.preview = None;
+            found.last_report = None;
+            found.fraction = 0.0;
+            if let TaskState::Leased { lease, .. } = &found.state {
+                let old = found.lease_dir(lease);
+                inner.trash.push(old);
+            }
+            let found = inner.tasks.get_mut(task).expect("the task is current");
+            tracing::info!("{} went back in the queue for a person's step", found.label);
+            found.state = TaskState::Queued;
+        } else if let (true, Some(refuser)) = (fallback, &refuser) {
             found.refused_by.insert(refuser.token_and_name());
             let old = found.requeue(format!("{worker} could not run it: {error}"));
             inner.trash.extend(old);

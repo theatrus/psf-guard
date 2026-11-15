@@ -223,6 +223,11 @@ pub(crate) fn local_tools() -> LocalTools {
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone(),
+        yield_to_person: LOCAL_YIELD
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone(),
+        this_server: true,
         slots: 1,
     }
 }
@@ -235,6 +240,17 @@ fn local_noise_model() -> Arc<dyn crate::remote_work::noise_model::Engine> {
 
 /// Grants this server's worker its threads from the server's shared budget.
 static LOCAL_COMPUTE: RwLock<Option<crate::remote_work::ComputeSource>> = RwLock::new(None);
+
+/// How this server's automatic model runs wait for a person's work.
+static LOCAL_YIELD: RwLock<Option<crate::remote_work::YieldHook>> = RwLock::new(None);
+
+/// Have this server's automatic model runs wait through `hook` between
+/// tiles. A server sets it once it has its state.
+pub fn set_local_yield(hook: crate::remote_work::YieldHook) {
+    *LOCAL_YIELD
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(hook);
+}
 
 /// Lease the threads of this server's noise model runs from `source`. A
 /// server sets it once it has its budgets.

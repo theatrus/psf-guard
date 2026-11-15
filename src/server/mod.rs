@@ -191,8 +191,20 @@ fn apply_registry_settings(registry: &crate::db_registry::DbRegistry) {
 }
 
 /// Have this server's noise model runs lease their threads from the shared
-/// budget: a person's run at `Interactive`, automatic work at `Viewed`.
+/// budget when the job that waits for them holds none: a person's run at
+/// `Interactive`, automatic work at `Viewed`. An automatic run also waits,
+/// between tiles, while a person's work runs.
 fn lease_noise_model_threads(state: &Arc<AppState>) {
+    let waiting = Arc::downgrade(state);
+    workers::set_local_yield(Arc::new(move |stop| {
+        if let Some(state) = waiting.upgrade() {
+            state.wait_for_interactive_work_unless(
+                std::time::Duration::from_millis(250),
+                stop,
+                |_| {},
+            );
+        }
+    }));
     let state = Arc::downgrade(state);
     workers::set_local_compute(Arc::new(move |person| {
         let Some(state) = state.upgrade() else {

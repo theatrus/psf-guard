@@ -1257,7 +1257,7 @@ fn a_noise_model_step_goes_only_to_a_worker_that_offers_the_same_model() {
     let summary = sessions.iter().find(|found| found.name == "same").unwrap();
     assert_eq!(
         summary.noise_model.as_deref(),
-        Some("noise-v1 cpu f32, seiza-model 0.1.0, band scale 5")
+        Some("noise-v1 cpu f32, seiza-model 0.1.0, band scale 5, ONNX Runtime 1.31.1")
     );
     assert_eq!(summary.rc_astro, ["RC-Astro nxt 2.6.6"]);
 }
@@ -1337,4 +1337,85 @@ fn every_provider_runs_where_the_stored_rc_astro_choice_says() {
         board.set_placement(TaskKind::RcAstroStep, placement);
         assert_eq!(board.placement(TaskKind::ProcessingStep), placement);
     }
+}
+
+#[test]
+fn a_person_s_step_takes_this_server_s_worker_from_automatic_work() {
+    let dir = tempfile::tempdir().unwrap();
+    let board = board(dir.path(), Timings::default());
+    let model = crate::remote_work::noise_model::testing::identity("noise-v1");
+    let local = board.register(
+        crate::server::workers::THIS_SERVER,
+        registration(
+            "This server",
+            step_offers(vec![schema("nxt", "2.6.6", true), model.schema()]),
+            FileAccess::default(),
+        ),
+        true,
+    );
+    let step = |label: &str, person: bool, schema: &seiza_stacking::ExternalToolSchema| {
+        let ticket = board.ticket().unwrap();
+        ticket
+            .submit(NewTask {
+                kind: TaskKind::ProcessingStep,
+                ..task(label, person, TaskNeeds::step(schema))
+            })
+            .unwrap();
+        ticket
+    };
+    // An automatic model run, which can take most of an hour, has the
+    // worker.
+    let _automatic = step("automatic model", false, &model.schema());
+    let running = board.try_claim(&local).unwrap().unwrap();
+    let stop = crate::concurrency::Stop::new();
+    board
+        .attach_stop(&local, &running.task, &running.lease, stop.clone())
+        .unwrap();
+    assert!(!stop.requested());
+    // A person applies a step this server would run: the automatic run is
+    // told to stop.
+    let _person = step("person nxt", true, &schema("nxt", "2.6.6", true));
+    assert!(stop.requested());
+    // The worker answers that it stopped. The run goes back in the queue,
+    // behind the person's step, and the stop does not count as a failure.
+    board
+        .fail(
+            &local,
+            &running.task,
+            &running.lease,
+            "The noise model was stopped".into(),
+        )
+        .unwrap();
+    let next = board.try_claim(&local).unwrap().unwrap();
+    assert_eq!(next.label, "person nxt");
+    board
+        .fail(&local, &next.task, &next.lease, "done".into())
+        .unwrap();
+    for _ in 0..MAX_ATTEMPTS + 1 {
+        let again = board.try_claim(&local).unwrap().unwrap();
+        assert_eq!(again.label, "automatic model");
+        let stop = crate::concurrency::Stop::new();
+        board
+            .attach_stop(&local, &again.task, &again.lease, stop.clone())
+            .unwrap();
+        let _another = step("person again", true, &schema("nxt", "2.6.6", true));
+        assert!(stop.requested());
+        board
+            .fail(&local, &again.task, &again.lease, "stopped".into())
+            .unwrap();
+        let person = board.try_claim(&local).unwrap().unwrap();
+        assert_eq!(person.label, "person again");
+        board
+            .fail(&local, &person.task, &person.lease, "done".into())
+            .unwrap();
+    }
+    // Another person's work on a step this server does not run leaves the
+    // automatic run alone.
+    let again = board.try_claim(&local).unwrap().unwrap();
+    let stop = crate::concurrency::Stop::new();
+    board
+        .attach_stop(&local, &again.task, &again.lease, stop.clone())
+        .unwrap();
+    let _elsewhere = step("person bxt", true, &schema("bxt", "2.6.6", true));
+    assert!(!stop.requested());
 }

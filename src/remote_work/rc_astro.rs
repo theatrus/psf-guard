@@ -214,6 +214,7 @@ impl super::steps::StepRunner for RcAstroEngine {
         request: &ExternalToolRequest,
         headers: &[(String, seiza_fits::HeaderValue)],
         _person: bool,
+        _threads: usize,
     ) -> Result<serde_json::Value, String> {
         serde_json::to_value(StepSpec {
             schema: schema.clone(),

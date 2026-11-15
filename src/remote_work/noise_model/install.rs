@@ -84,18 +84,103 @@ impl Step {
     }
 }
 
-/// Download this platform's ONNX Runtime into `config`'s folder and return
-/// the library's path. The archive is verified before anything is unpacked,
-/// and the folder appears whole or not at all.
+/// What a download of ONNX Runtime ended with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeInstall {
+    /// The library's path.
+    pub library: PathBuf,
+    /// The release was installed already, so nothing was downloaded.
+    pub already_installed: bool,
+}
+
+/// The file that says which folder holds the ONNX Runtime in use. A new
+/// download goes to a folder of its own and this file is switched to it, so
+/// a library a process has open is never deleted from under it.
+pub(super) const CURRENT: &str = "onnxruntime.current";
+/// Starts the name of each folder a download unpacks into.
+const INSTALL_PREFIX: &str = "onnxruntime-";
+/// Starts the name of a folder a download is unpacking into.
+const STAGING_PREFIX: &str = ".unpack-";
+/// Ends the name of an archive being downloaded.
+const PART_SUFFIX: &str = ".part";
+
+/// The folder of the ONNX Runtime in use, when a download installed one.
+pub(super) fn current_folder(folder: &Path) -> Option<PathBuf> {
+    let name = std::fs::read_to_string(folder.join(CURRENT)).ok()?;
+    let name = name.trim();
+    // The file gives a folder beside it, never a path.
+    (name.starts_with(INSTALL_PREFIX) && !name.contains(['/', '\\'])).then(|| folder.join(name))
+}
+
+/// The release a download installed in `folder`, when its library is there.
+pub fn installed_version(folder: &Path) -> Option<String> {
+    let current = current_folder(folder)?;
+    current.join(LIBRARY_FILE).is_file().then_some(())?;
+    Some(
+        std::fs::read_to_string(current.join("VERSION"))
+            .ok()?
+            .trim()
+            .to_string(),
+    )
+}
+
+/// Remove what earlier downloads left: archives and unpack folders of a
+/// download that was stopped or crashed, and installs no longer in use. A
+/// folder that cannot be removed, such as one whose library a process
+/// still has open on Windows, stays for the next time.
+fn sweep(folder: &Path) {
+    let current = current_folder(folder);
+    let Ok(entries) = std::fs::read_dir(folder) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.ends_with(PART_SUFFIX) && path.is_file() {
+            let _ = std::fs::remove_file(&path);
+        } else if name.starts_with(STAGING_PREFIX)
+            || (name.starts_with(INSTALL_PREFIX)
+                && path.is_dir()
+                && current.as_deref() != Some(path.as_path()))
+        {
+            let _ = std::fs::remove_dir_all(&path);
+        }
+    }
+}
+
+/// Removes a download's archive and unpack folder when the download ends,
+/// however it ends: finished, failed, or dropped by Stop part way. It also
+/// tells an unpack still running on another thread to throw its work away.
+struct Cleanup {
+    archive: PathBuf,
+    staging: PathBuf,
+    cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Drop for Cleanup {
+    fn drop(&mut self) {
+        self.cancelled
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let _ = std::fs::remove_file(&self.archive);
+        let _ = std::fs::remove_dir_all(&self.staging);
+    }
+}
+
+/// Download this platform's ONNX Runtime into `config`'s folder. The
+/// archive is verified before anything is unpacked, and the install appears
+/// whole or not at all. When the release is installed already, nothing is
+/// downloaded unless `force` asks for it again.
 pub async fn download_runtime(
     config: &Config,
+    force: bool,
     report: &(dyn Fn(Step) + Send + Sync),
-) -> Result<PathBuf, String> {
+) -> Result<RuntimeInstall, String> {
     let release = release().ok_or_else(|| NO_RELEASE.to_string())?;
     download_runtime_from(
         config,
         release,
         &format!("{RELEASE_URL}/v{ONNXRUNTIME_VERSION}/{}", release.asset),
+        force,
         report,
     )
     .await
@@ -105,33 +190,55 @@ async fn download_runtime_from(
     config: &Config,
     release: Release,
     url: &str,
+    force: bool,
     report: &(dyn Fn(Step) + Send + Sync),
-) -> Result<PathBuf, String> {
-    std::fs::create_dir_all(&config.folder)
-        .map_err(|error| format!("Creating {}: {error}", config.folder.display()))?;
-    let tag = std::process::id();
-    let archive = config.folder.join(format!(".{}.{tag}.part", release.asset));
-    let staging = config.folder.join(format!(".onnxruntime-{tag}"));
-    let fetched = fetch(url, &archive, release, report).await;
-    let installed = match fetched {
-        Ok(()) => {
-            report(Step::say(format!(
-                "Unpacking ONNX Runtime {ONNXRUNTIME_VERSION}…"
-            )));
-            let target = config.runtime_folder();
-            let (archive, staging) = (archive.clone(), staging.clone());
-            tokio::task::spawn_blocking(move || {
-                install_archive(&archive, release.asset, &staging, &target)
-            })
-            .await
-            .map_err(|error| format!("Unpacking ONNX Runtime failed: {error}"))
-            .and_then(|installed| installed)
-        }
-        Err(error) => Err(error),
+) -> Result<RuntimeInstall, String> {
+    let folder = config.folder.clone();
+    std::fs::create_dir_all(&folder)
+        .map_err(|error| format!("Creating {}: {error}", folder.display()))?;
+    sweep(&folder);
+    if !force
+        && installed_version(&folder).as_deref() == Some(ONNXRUNTIME_VERSION)
+        && let Some(current) = current_folder(&folder)
+    {
+        report(Step::say(format!(
+            "ONNX Runtime {ONNXRUNTIME_VERSION} is already installed"
+        )));
+        return Ok(RuntimeInstall {
+            library: current.join(LIBRARY_FILE),
+            already_installed: true,
+        });
+    }
+    let tag = unique_tag();
+    let cleanup = Cleanup {
+        archive: folder.join(format!(".{}{PART_SUFFIX}", release.asset)),
+        staging: folder.join(format!("{STAGING_PREFIX}{tag}")),
+        cancelled: std::sync::Arc::default(),
     };
-    let _ = std::fs::remove_file(&archive);
-    let _ = std::fs::remove_dir_all(&staging);
-    installed
+    fetch(url, &cleanup.archive, release, report).await?;
+    report(Step::say(format!(
+        "Unpacking ONNX Runtime {ONNXRUNTIME_VERSION}…"
+    )));
+    let (archive, staging) = (cleanup.archive.clone(), cleanup.staging.clone());
+    let cancelled = std::sync::Arc::clone(&cleanup.cancelled);
+    let library = tokio::task::spawn_blocking(move || {
+        install_archive(&archive, release.asset, &staging, &folder, &tag, &cancelled)
+    })
+    .await
+    .map_err(|error| format!("Unpacking ONNX Runtime failed: {error}"))??;
+    Ok(RuntimeInstall {
+        library,
+        already_installed: false,
+    })
+}
+
+/// A name part no other download of this or another process has.
+fn unique_tag() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!("{:x}-{:x}", std::process::id(), nanos)
 }
 
 /// Download `url` to `archive` and check it against the release's hash.
@@ -187,14 +294,20 @@ async fn fetch(
     Ok(())
 }
 
-/// Unpack a verified archive into `staging`, then put that in place of
-/// `target`. Returns the library's path in `target`.
+/// Unpack a verified archive into `staging`, move that to a folder of its
+/// own in `folder`, and switch [`CURRENT`] to it. Returns the library's
+/// path. The install in use before stays where it is until a later download
+/// sweeps it. `cancelled` is read before the switch: a download that was
+/// stopped while this ran installs nothing.
 fn install_archive(
     archive: &Path,
     asset: &str,
     staging: &Path,
-    target: &Path,
+    folder: &Path,
+    tag: &str,
+    cancelled: &std::sync::atomic::AtomicBool,
 ) -> Result<PathBuf, String> {
+    let stopped = || cancelled.load(std::sync::atomic::Ordering::SeqCst);
     let _ = std::fs::remove_dir_all(staging);
     std::fs::create_dir_all(staging)
         .map_err(|error| format!("Creating {}: {error}", staging.display()))?;
@@ -203,23 +316,37 @@ fn install_archive(
     } else {
         unpack_tgz(archive, staging)
     };
-    unpacked.map_err(|error| format!("Unpacking {asset}: {error}"))?;
+    let discard = |reason: String| {
+        let _ = std::fs::remove_dir_all(staging);
+        reason
+    };
+    unpacked.map_err(|error| discard(format!("Unpacking {asset}: {error}")))?;
     if !staging.join(LIBRARY_FILE).is_file() {
-        return Err(format!("{asset} has no {LIBRARY_FILE}"));
+        return Err(discard(format!("{asset} has no {LIBRARY_FILE}")));
     }
     std::fs::write(staging.join("VERSION"), ONNXRUNTIME_VERSION)
-        .map_err(|error| format!("Writing {}: {error}", staging.display()))?;
-    if target.exists() {
-        // Windows refuses to remove a library a process has open.
-        std::fs::remove_dir_all(target).map_err(|error| {
-            format!(
-                "Replacing {}: {error}. Stop PSF Guard and every worker that uses it, then download again",
-                target.display()
-            )
-        })?;
+        .map_err(|error| discard(format!("Writing {}: {error}", staging.display())))?;
+    if stopped() {
+        return Err(discard("The download was stopped".into()));
     }
-    std::fs::rename(staging, target)
-        .map_err(|error| format!("Moving ONNX Runtime to {}: {error}", target.display()))?;
+    let name = format!("{INSTALL_PREFIX}{ONNXRUNTIME_VERSION}-{tag}");
+    let target = folder.join(&name);
+    std::fs::rename(staging, &target).map_err(|error| {
+        discard(format!(
+            "Moving ONNX Runtime to {}: {error}",
+            target.display()
+        ))
+    })?;
+    // The switch is one rename, so a reader sees the old install or the
+    // new one.
+    let pointer = folder.join(format!("{CURRENT}.{tag}"));
+    let switched = std::fs::write(&pointer, &name)
+        .and_then(|()| std::fs::rename(&pointer, folder.join(CURRENT)));
+    if let Err(error) = switched {
+        let _ = std::fs::remove_file(&pointer);
+        let _ = std::fs::remove_dir_all(&target);
+        return Err(format!("Switching to {}: {error}", target.display()));
+    }
     Ok(target.join(LIBRARY_FILE))
 }
 
@@ -593,37 +720,180 @@ mod tests {
         );
     }
 
-    #[test]
-    fn an_install_replaces_the_folder_whole_and_refuses_an_archive_without_the_library() {
-        let folder = tempfile::tempdir().unwrap();
-        let target = folder.path().join("onnxruntime");
-        std::fs::create_dir_all(&target).unwrap();
-        std::fs::write(target.join("old"), b"old").unwrap();
-        let library = if LIBRARY_FILE.ends_with(".dll") {
+    fn library_entry() -> &'static str {
+        if LIBRARY_FILE.ends_with(".dll") {
             "x/lib/onnxruntime.dll"
         } else if LIBRARY_FILE.ends_with(".dylib") {
             "x/lib/libonnxruntime.dylib"
         } else {
             "x/lib/libonnxruntime.so"
-        };
+        }
+    }
+
+    /// Install a stand-in archive in `folder`, as a download does once the
+    /// archive is verified.
+    fn install(folder: &Path, tag: &str, body: &'static [u8]) -> Result<PathBuf, String> {
         // The test archive is a tgz on every platform; only the name the
         // platform loads differs.
-        let archive = folder.path().join("ort.tgz");
-        std::fs::write(&archive, tgz(&[(library, File(b"library"))])).unwrap();
-        let staging = folder.path().join(".staging");
-        let installed = install_archive(&archive, "ort.tgz", &staging, &target).unwrap();
-        assert_eq!(installed, target.join(LIBRARY_FILE));
-        assert!(!target.join("old").exists());
-        assert_eq!(
-            std::fs::read_to_string(target.join("VERSION")).unwrap(),
-            ONNXRUNTIME_VERSION
-        );
-        assert!(!staging.exists());
+        let archive = folder.join("ort.tgz");
+        std::fs::write(&archive, tgz(&[(library_entry(), File(body))])).unwrap();
+        install_archive(
+            &archive,
+            "ort.tgz",
+            &folder.join(format!("{STAGING_PREFIX}{tag}")),
+            folder,
+            tag,
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+    }
 
+    #[test]
+    fn a_download_installs_beside_the_one_in_use_and_switches_to_it() {
+        let folder = tempfile::tempdir().unwrap();
+        let folder = folder.path();
+        assert_eq!(installed_version(folder), None);
+        let first = install(folder, "a", b"first").unwrap();
+        assert_eq!(std::fs::read(&first).unwrap(), b"first");
+        assert_eq!(
+            installed_version(folder).as_deref(),
+            Some(ONNXRUNTIME_VERSION)
+        );
+        let in_use = current_folder(folder).unwrap();
+        assert_eq!(first, in_use.join(LIBRARY_FILE));
+
+        // A second download never touches the folder in use: a process may
+        // have its library open, and Windows refuses to delete that.
+        let second = install(folder, "b", b"second").unwrap();
+        assert_ne!(second, first);
+        assert_eq!(std::fs::read(&first).unwrap(), b"first");
+        assert_eq!(current_folder(folder).unwrap().join(LIBRARY_FILE), second);
+        // Nothing is left of the unpacking.
+        assert!(!folder.join(format!("{STAGING_PREFIX}b")).exists());
+
+        // An archive without the library installs nothing and switches
+        // nothing.
+        let archive = folder.join("bad.tgz");
         std::fs::write(&archive, tgz(&[("x/LICENSE", File(b"MIT"))])).unwrap();
-        let refused = install_archive(&archive, "ort.tgz", &staging, &target).unwrap_err();
+        let refused = install_archive(
+            &archive,
+            "bad.tgz",
+            &folder.join(format!("{STAGING_PREFIX}c")),
+            folder,
+            "c",
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .unwrap_err();
         assert!(refused.contains(LIBRARY_FILE), "{refused}");
-        // The folder installed before stays.
-        assert!(target.join(LIBRARY_FILE).is_file());
+        assert_eq!(current_folder(folder).unwrap().join(LIBRARY_FILE), second);
+
+        // The next download sweeps the install no longer in use.
+        sweep(folder);
+        assert!(!first.exists());
+        assert!(second.is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_old_install_that_cannot_be_removed_does_not_stop_a_new_one() {
+        use std::os::unix::fs::PermissionsExt;
+        let folder = tempfile::tempdir().unwrap();
+        let folder = folder.path();
+        let first = install(folder, "a", b"first").unwrap();
+        let old = first.parent().unwrap().to_path_buf();
+        // As a loaded library does on Windows: nothing in the folder can be
+        // deleted.
+        std::fs::set_permissions(&old, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let second = install(folder, "b", b"second").unwrap();
+        sweep(folder);
+        let kept = first.is_file();
+        std::fs::set_permissions(&old, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(current_folder(folder).unwrap().join(LIBRARY_FILE), second);
+        assert_eq!(std::fs::read(&second).unwrap(), b"second");
+        // Root removes it anyway; anyone else leaves it whole for later.
+        if kept {
+            assert_eq!(std::fs::read(&first).unwrap(), b"first");
+        }
+    }
+
+    #[test]
+    fn a_stopped_download_installs_nothing_and_leaves_nothing_behind() {
+        let folder = tempfile::tempdir().unwrap();
+        let folder = folder.path();
+        let first = install(folder, "a", b"first").unwrap();
+        // Stop drops the download while it waits for the archive or the
+        // unpack: the guard removes both, and tells the unpack to discard.
+        let cleanup = Cleanup {
+            archive: folder.join(format!(".ort.tgz{PART_SUFFIX}")),
+            staging: folder.join(format!("{STAGING_PREFIX}b")),
+            cancelled: std::sync::Arc::default(),
+        };
+        std::fs::write(&cleanup.archive, tgz(&[(library_entry(), File(b"second"))])).unwrap();
+        let (archive, staging) = (cleanup.archive.clone(), cleanup.staging.clone());
+        let cancelled = std::sync::Arc::clone(&cleanup.cancelled);
+        std::fs::create_dir_all(&staging).unwrap();
+        drop(cleanup);
+        assert!(!archive.exists());
+        assert!(!staging.exists());
+        // An unpack that was already running finishes its work and then
+        // throws it away.
+        std::fs::write(&archive, tgz(&[(library_entry(), File(b"second"))])).unwrap();
+        let stopped =
+            install_archive(&archive, "ort.tgz", &staging, folder, "b", &cancelled).unwrap_err();
+        assert!(stopped.contains("stopped"), "{stopped}");
+        assert!(!staging.exists());
+        assert_eq!(current_folder(folder).unwrap().join(LIBRARY_FILE), first);
+        // What a crashed download left is swept by the next one.
+        std::fs::create_dir_all(folder.join(format!("{STAGING_PREFIX}crashed"))).unwrap();
+        std::fs::write(folder.join(format!(".x.zip{PART_SUFFIX}")), b"half").unwrap();
+        std::fs::remove_file(&archive).unwrap();
+        sweep(folder);
+        let left: Vec<String> = std::fs::read_dir(folder)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with('.'))
+            .collect();
+        assert!(left.is_empty(), "{left:?}");
+    }
+
+    #[tokio::test]
+    async fn an_installed_release_is_not_downloaded_again_unless_asked() {
+        let folder = tempfile::tempdir().unwrap();
+        let config = Config {
+            onnxruntime: None,
+            folder: folder.path().to_path_buf(),
+            use_gpu: true,
+        };
+        let library = install(folder.path(), "a", b"first").unwrap();
+        let release = Release {
+            asset: "ort.tgz",
+            sha256: "",
+        };
+        // The address answers nothing: reaching for it would fail.
+        let nowhere = "http://127.0.0.1:9/ort.tgz";
+        let said = std::sync::Mutex::new(Vec::new());
+        let report = |step: Step| said.lock().unwrap().push(step.message);
+        let kept = download_runtime_from(&config, release, nowhere, false, &report)
+            .await
+            .unwrap();
+        assert_eq!(
+            kept,
+            RuntimeInstall {
+                library: library.clone(),
+                already_installed: true
+            }
+        );
+        assert!(said.lock().unwrap()[0].contains("already installed"));
+        // Forced, it tries the download, which fails here and leaves the
+        // install in use as it was, with no archive behind.
+        assert!(
+            download_runtime_from(&config, release, nowhere, true, &report)
+                .await
+                .is_err()
+        );
+        assert_eq!(std::fs::read(&library).unwrap(), b"first");
+        assert!(!folder
+            .path()
+            .join(format!(".ort.tgz{PART_SUFFIX}"))
+            .exists());
     }
 }

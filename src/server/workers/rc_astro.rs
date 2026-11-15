@@ -57,6 +57,11 @@ pub struct ProviderState {
     pub this_server: bool,
     /// The connected workers that have it, by name.
     pub workers: Vec<String>,
+    /// The license line the tool printed, which gives the licensee. It is
+    /// not sent to a browser: an apply that fails for want of a license
+    /// shows it to the person who applied.
+    #[serde(skip)]
+    license: Option<String>,
 }
 
 impl ProviderState {
@@ -64,10 +69,16 @@ impl ProviderState {
     fn runnable(&self) -> Result<ExternalToolSchema, String> {
         match (&self.schema, self.state) {
             (Some(schema), ProviderReadiness::Ready) => Ok(schema.clone()),
-            _ => Err(self
-                .reason
-                .clone()
-                .unwrap_or_else(|| format!("{} cannot run", self.name))),
+            _ => Err(format!(
+                "{}{}",
+                self.reason
+                    .clone()
+                    .unwrap_or_else(|| format!("{} cannot run", self.name)),
+                self.license
+                    .as_deref()
+                    .map(|line| format!(" ({line})"))
+                    .unwrap_or_default()
+            )),
         }
     }
 }
@@ -96,18 +107,13 @@ fn provider_state(
         Some((worker, local, schema)) => (
             ProviderReadiness::NotLicensed,
             Some(format!(
-                "{} is not licensed {}{}",
+                "{} is not licensed {}",
                 schema.name,
                 if *local {
                     "on this server".to_string()
                 } else {
                     format!("on {worker}")
-                },
-                schema
-                    .license_message
-                    .as_deref()
-                    .map(|message| format!(" ({message})"))
-                    .unwrap_or_default()
+                }
             )),
             Some(Remedy::License),
         ),
@@ -130,6 +136,9 @@ fn provider_state(
             crate::remote_work::noise_model::display_version(&schema.cli_version).to_string()
         }),
         schema: chosen.map(|(_, _, schema)| (*schema).clone()),
+        license: chosen
+            .filter(|(_, _, schema)| !schema.licensed)
+            .and_then(|(_, _, schema)| schema.license_message.clone()),
         this_server: having.iter().any(|(_, local, _)| *local),
         workers: having
             .iter()
@@ -220,7 +229,8 @@ pub(crate) fn run_on_board(
     let spec = steps::StepSpec {
         category: provider.category,
         provider: provider.key.into(),
-        payload: runner.payload(schema, request, headers, person)?,
+        // The job that waits holds its leased workers for the step.
+        payload: runner.payload(schema, request, headers, person, steps::held_threads())?,
     };
     ticket.submit(NewTask {
         kind: TaskKind::ProcessingStep,
@@ -261,4 +271,76 @@ pub(crate) fn run_on_board(
         device: result.device,
         warnings: result.warnings,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn offer(licensed: bool, message: Option<&str>) -> StepOffer {
+        StepOffer::of(
+            serde_json::from_value(serde_json::json!({
+                "schema_version": 6, "cli_version": "2.6.6", "key": "nxt",
+                "name": "RC-Astro NoiseXTerminator", "ml_version": 3, "licensed": licensed,
+                "license_message": message, "parameters": [],
+            }))
+            .unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_browser_is_not_sent_the_license_line_but_a_failed_apply_gives_it() {
+        let nxt = steps::provider("nxt").unwrap();
+        let offers = vec![(
+            "studio".to_string(),
+            false,
+            vec![offer(false, Some("Trial of Ann Example expired"))],
+        )];
+        let state = provider_state(nxt, &offers);
+        assert_eq!(state.state, ProviderReadiness::NotLicensed);
+        assert_eq!(state.remedy, Some(Remedy::License));
+        assert_eq!(
+            state.reason.as_deref(),
+            Some("RC-Astro NoiseXTerminator is not licensed on studio")
+        );
+        // The handler clears the schema's own copy; nothing else carries it.
+        let mut sent = state.clone();
+        sent.schema.as_mut().unwrap().license_message = None;
+        let json = serde_json::to_string(&sent).unwrap();
+        assert!(!json.contains("Ann Example"), "{json}");
+        // The person who applies the step is told.
+        let refused = state.runnable().unwrap_err();
+        assert!(
+            refused.contains("Trial of Ann Example expired"),
+            "{refused}"
+        );
+    }
+
+    #[test]
+    fn a_provider_no_machine_has_reports_what_to_do_and_one_that_is_ready_reports_nothing() {
+        let nxt = steps::provider("nxt").unwrap();
+        let missing = provider_state(nxt, &[]);
+        assert_eq!(missing.state, ProviderReadiness::NotInstalled);
+        assert_eq!(missing.remedy, Some(Remedy::InstallRcAstro));
+        assert_eq!(missing.reason.as_deref(), Some(NOT_INSTALLED));
+        let model = steps::provider(crate::remote_work::noise_model::TOOL).unwrap();
+        assert_eq!(
+            provider_state(model, &[]).remedy,
+            Some(Remedy::DownloadNoiseModel)
+        );
+        // A licensed copy on this server wins over an unlicensed one on a
+        // worker, and the provider is ready with no reason.
+        let ready = provider_state(
+            nxt,
+            &[
+                ("studio".to_string(), false, vec![offer(false, None)]),
+                ("This server".to_string(), true, vec![offer(true, None)]),
+            ],
+        );
+        assert_eq!(ready.state, ProviderReadiness::Ready);
+        assert_eq!(ready.reason, None);
+        assert!(ready.this_server);
+        assert_eq!(ready.workers, ["studio"]);
+    }
 }

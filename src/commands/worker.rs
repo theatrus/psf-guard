@@ -211,6 +211,8 @@ fn options(args: WorkerArgs) -> Result<WorkerOptions> {
                 ),
             )),
             compute: None,
+            yield_to_person: None,
+            this_server: false,
             slots: args.slots,
         },
         work: WorkChoice::parse(&args.work).map_err(anyhow::Error::msg)?,

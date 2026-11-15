@@ -44,6 +44,11 @@ const DEFAULT_MOTTLE: f64 = 0.9;
 /// cache identities.
 const BAND_SCALE_PX: f32 = 5.0;
 
+/// What a machine with no ONNX Runtime reports.
+pub const RUNTIME_MISSING: &str = "ONNX Runtime is not installed";
+/// What a machine with no noise model reports.
+pub const MODEL_MISSING: &str = "The noise model is not installed";
+
 /// Marks the model's card hash in [`Identity::version`].
 const CARD_MARK: &str = ", card ";
 
@@ -74,6 +79,10 @@ pub struct Identity {
     pub backend: String,
     /// The graph's precision: `f32` or `f16`.
     pub precision: String,
+    /// The version of the ONNX Runtime that runs it, such as `1.31.1`.
+    /// Another release can round differently, so its results are not this
+    /// one's.
+    pub runtime: String,
 }
 
 impl Identity {
@@ -81,8 +90,13 @@ impl Identity {
     /// chain's cache identity and the task's demand both include every part.
     pub fn version(&self) -> String {
         format!(
-            "{} {} {}, seiza-model {}, band scale {BAND_SCALE_PX}{CARD_MARK}{}",
-            self.model, self.backend, self.precision, self.output_version, self.card_sha256
+            "{} {} {}, seiza-model {}, band scale {BAND_SCALE_PX}, ONNX Runtime {}{CARD_MARK}{}",
+            self.model,
+            self.backend,
+            self.precision,
+            self.output_version,
+            self.runtime,
+            self.card_sha256
         )
     }
 
@@ -128,7 +142,7 @@ impl Identity {
 }
 
 /// A schema version without the card's hash, for a person to read:
-/// `noise-v1-d33 cpu f32, seiza-model 0.1.0, band scale 5`.
+/// `noise-v1-d33 cpu f32, seiza-model 0.1.0, band scale 5, ONNX Runtime 1.31.1`.
 pub fn display_version(version: &str) -> &str {
     version.split(CARD_MARK).next().unwrap_or(version)
 }
@@ -184,6 +198,10 @@ pub struct StepSpec {
     /// A person waits for the result.
     #[serde(default)]
     pub person: bool,
+    /// The workers the job that waits for this step leased on the server.
+    /// The server's own worker runs on them; another machine uses its own.
+    #[serde(default)]
+    pub threads: usize,
 }
 
 /// The message when no machine has the noise model, with what to do.
@@ -212,11 +230,13 @@ impl super::steps::StepRunner for SeizaNoiseEngine {
         request: &ExternalToolRequest,
         _headers: &[(String, seiza_fits::HeaderValue)],
         person: bool,
+        threads: usize,
     ) -> Result<serde_json::Value, String> {
         serde_json::to_value(StepSpec {
             version: schema.cli_version.clone(),
             amounts: Amounts::from_request(request)?,
             person,
+            threads,
         })
         .map_err(|error| error.to_string())
     }
@@ -247,7 +267,14 @@ impl super::steps::StepRunner for SeizaNoiseEngine {
             .inputs
             .get(INPUT)
             .ok_or_else(|| "The noise model task has no input image".to_string())?;
+        // On this server the job that waits for the step already leased its
+        // workers, and the step runs on those. Leasing again would be left
+        // one thread, since the job holds the budget.
         let compute = match &tools.compute {
+            _ if tools.this_server && spec.threads > 0 => super::Compute {
+                threads: spec.threads,
+                hold: None,
+            },
             Some(source) => source(spec.person),
             None => super::Compute {
                 threads: (crate::concurrency::logical_cores() / tools.slots.max(1)).max(1),
@@ -273,6 +300,13 @@ impl super::steps::StepRunner for SeizaNoiseEngine {
                 if fraction >= report.1 + 0.01 || fraction >= 1.0 {
                     report.1 = fraction;
                     report.0.fraction(fraction);
+                }
+                drop(report);
+                // Seiza reports after each tile, on the thread that runs
+                // them in turn, so waiting here pauses the run between
+                // tiles. Automatic work yields to a person's this way.
+                if let (false, Some(wait)) = (spec.person, &tools.yield_to_person) {
+                    wait(&stopped);
                 }
             },
         )?;
@@ -364,9 +398,10 @@ impl Config {
         self.folder.join("models")
     }
 
-    /// The folder a downloaded ONNX Runtime is unpacked in.
+    /// The folder of the downloaded ONNX Runtime in use. Each download has a
+    /// folder of its own; see [`install::download_runtime`].
     pub fn runtime_folder(&self) -> PathBuf {
-        self.folder.join("onnxruntime")
+        install::current_folder(&self.folder).unwrap_or_else(|| self.folder.join("onnxruntime"))
     }
 
     /// ONNX Runtime's library, or what a person does to get one. A path that
@@ -406,7 +441,7 @@ impl Config {
             .iter()
             .map(|place| place.join(LIBRARY_FILE))
             .find(|path| path.is_file())
-            .ok_or_else(|| "ONNX Runtime is not installed".to_string())
+            .ok_or_else(|| RUNTIME_MISSING.to_string())
     }
 
     /// The installed noise model, or why there is none to run.
@@ -414,9 +449,7 @@ impl Config {
         seiza_model::ModelStore::new(self.models())
             .resolve(None)
             .map_err(|error| match error {
-                seiza_model::ModelError::NoModelInstalled { .. } => {
-                    "The noise model is not installed".to_string()
-                }
+                seiza_model::ModelError::NoModelInstalled { .. } => MODEL_MISSING.to_string(),
                 error => error.to_string(),
             })
     }
@@ -538,14 +571,45 @@ impl SeizaEngine {
         }
     }
 
-    fn identity_of(bundle: &seiza_model::ModelBundle, backend: seiza_model::Backend) -> Identity {
+    fn identity_of(
+        bundle: &seiza_model::ModelBundle,
+        backend: seiza_model::Backend,
+        runtime: &seiza_model::RuntimeInfo,
+    ) -> Identity {
         Identity {
+            runtime: runtime.version.clone(),
             model: bundle.card().name.clone(),
             card_sha256: bundle.card_sha256().to_string(),
             output_version: seiza_model::OUTPUT_VERSION.into(),
             backend: backend.to_string(),
             precision: backend.default_precision().to_string(),
         }
+    }
+
+    /// What is on disk, without opening ONNX Runtime: for a process that
+    /// must not load the library, such as the desktop app, whose own server
+    /// may use another one. A process loads one ONNX Runtime for its life.
+    /// The version is the downloaded release's; a library a person
+    /// installed gives its path only.
+    pub fn on_disk(&self) -> Installed {
+        let mut installed = Installed {
+            folder: self.config.folder.display().to_string(),
+            ..Default::default()
+        };
+        match self.config.bundle() {
+            Ok(bundle) => installed.model = Some(bundle.card().name.clone()),
+            Err(problem) => installed.model_problem = Some(problem),
+        }
+        match self.config.library() {
+            Ok(library) => {
+                if library.starts_with(&self.config.folder) {
+                    installed.runtime_version = install::installed_version(&self.config.folder);
+                }
+                installed.runtime_path = Some(library.display().to_string());
+            }
+            Err(problem) => installed.runtime_problem = Some(problem),
+        }
+        installed
     }
 
     /// What this machine has. Opens ONNX Runtime when its library is on
@@ -573,13 +637,14 @@ impl SeizaEngine {
             }
         };
         installed.runtime_path = Some(library.display().to_string());
-        match Self::open_runtime(&library) {
-            Ok(info) => installed.runtime_version = Some(info.version),
+        let runtime = match Self::open_runtime(&library) {
+            Ok(info) => info,
             Err(problem) => {
                 installed.runtime_problem = Some(problem);
                 return installed;
             }
-        }
+        };
+        installed.runtime_version = Some(runtime.version.clone());
         let options = Self::options(library);
         installed.backends = seiza_model::Backend::available(&options)
             .into_iter()
@@ -591,7 +656,9 @@ impl SeizaEngine {
             .collect();
         if let Some(bundle) = bundle {
             match self.backend(&bundle, &options) {
-                Ok(backend) => installed.identity = Some(Self::identity_of(&bundle, backend)),
+                Ok(backend) => {
+                    installed.identity = Some(Self::identity_of(&bundle, backend, &runtime))
+                }
                 Err(problem) => installed.model_problem = Some(problem),
             }
         }
@@ -612,9 +679,9 @@ impl Engine for SeizaEngine {
     fn identity(&self) -> Result<Identity, String> {
         let bundle = self.config.bundle()?;
         let library = self.config.library()?;
-        Self::open_runtime(&library)?;
+        let runtime = Self::open_runtime(&library)?;
         let backend = self.backend(&bundle, &Self::options(library))?;
-        Ok(Self::identity_of(&bundle, backend))
+        Ok(Self::identity_of(&bundle, backend, &runtime))
     }
 
     fn denoise(
@@ -627,10 +694,10 @@ impl Engine for SeizaEngine {
     ) -> Result<LinearImage, String> {
         let bundle = self.config.bundle()?;
         let library = self.config.library()?;
-        Self::open_runtime(&library)?;
+        let runtime = Self::open_runtime(&library)?;
         let options = Self::options(library);
         let backend = self.backend(&bundle, &options)?;
-        let here = Self::identity_of(&bundle, backend);
+        let here = Self::identity_of(&bundle, backend, &runtime);
         if &here != wanted {
             return Err(format!(
                 "This machine runs {}, not the {} the step was planned with. Apply the processing again",
@@ -678,6 +745,8 @@ pub(crate) mod testing {
     pub(crate) struct FixedEngine {
         pub identity: Result<Identity, String>,
         pub runs: AtomicUsize,
+        /// The size of the pool the last run was given.
+        pub threads: AtomicUsize,
     }
 
     impl FixedEngine {
@@ -685,6 +754,7 @@ pub(crate) mod testing {
             Arc::new(Self {
                 identity: Ok(identity(model)),
                 runs: AtomicUsize::new(0),
+                threads: AtomicUsize::new(0),
             })
         }
 
@@ -692,6 +762,7 @@ pub(crate) mod testing {
             Arc::new(Self {
                 identity: Err(problem.into()),
                 runs: AtomicUsize::new(0),
+                threads: AtomicUsize::new(0),
             })
         }
     }
@@ -703,6 +774,7 @@ pub(crate) mod testing {
             output_version: "0.1.0".into(),
             backend: "cpu".into(),
             precision: "f32".into(),
+            runtime: "1.31.1".into(),
         }
     }
 
@@ -726,6 +798,8 @@ pub(crate) mod testing {
                 return Err("The noise model was stopped".into());
             }
             self.runs.fetch_add(1, Ordering::SeqCst);
+            self.threads
+                .store(rayon::current_num_threads(), Ordering::SeqCst);
             progress(1.0);
             let mut output = image.clone();
             for sample in &mut output.data {
@@ -817,13 +891,20 @@ mod tests {
                     ..identity.clone()
                 },
             ),
+            (
+                "ONNX Runtime",
+                Identity {
+                    runtime: "1.32.0".into(),
+                    ..identity.clone()
+                },
+            ),
         ] {
             assert_ne!(changed.version(), version, "{part}");
         }
         assert_eq!(identity.schema().cli_version, version);
         assert_eq!(
             display_version(&version),
-            "noise-v1-d33 cpu f32, seiza-model 0.1.0, band scale 5"
+            "noise-v1-d33 cpu f32, seiza-model 0.1.0, band scale 5, ONNX Runtime 1.31.1"
         );
         let schema = identity.schema();
         assert_eq!(schema.key, TOOL);
@@ -868,8 +949,14 @@ mod tests {
             );
         }
         // A downloaded copy does not stand in for a set path that is wrong.
-        let downloaded = config(None).runtime_folder();
+        let downloaded = folder.path().join("downloads").join("onnxruntime-1.0-a");
         std::fs::create_dir_all(&downloaded).unwrap();
+        std::fs::write(
+            folder.path().join("downloads").join(install::CURRENT),
+            "onnxruntime-1.0-a",
+        )
+        .unwrap();
+        assert_eq!(config(None).runtime_folder(), downloaded);
         std::fs::write(downloaded.join(LIBRARY_FILE), b"library").unwrap();
         let wrong = config(Some(folder.path().join("nowhere")))
             .library()
@@ -919,6 +1006,7 @@ mod tests {
                 mottle: 0.5,
             },
             person: true,
+            threads: 0,
         };
         let result = run(
             engine.as_ref(),
@@ -979,6 +1067,7 @@ mod tests {
                 mottle: 0.9,
             },
             person: true,
+            threads: 0,
         };
         struct Quiet;
         impl crate::remote_work::TaskReport for Quiet {
