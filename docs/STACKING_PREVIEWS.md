@@ -1510,7 +1510,10 @@ and never downloads them by itself. To install them on the server:
 2. Click **Download both**. PSF Guard downloads Microsoft's ONNX Runtime
    release and checks it against a SHA-256 pinned in PSF Guard, then
    downloads Seiza's latest published noise model, which Seiza verifies.
-   The job line shows the download, and **Stop download** ends it.
+   The job line shows the download, and **Stop download** ends it; a part
+   that was not finished is not installed. Each ONNX Runtime download goes
+   to a folder of its own, and PSF Guard switches to it once it is whole,
+   so a download never disturbs the ONNX Runtime in use.
 3. Open a stack's **View processing** and choose **Seiza noise model**
    under **Noise reduction**.
 
@@ -1539,8 +1542,9 @@ keeps its settings, and applying it fails with a message that explains where
 to download the model.
 
 The step's cache identity includes the two amounts, the model (by the hash
-of its card), Seiza's model output version, the backend and the precision.
-A new model or backend runs the step again, and so does a change to
+of its card), Seiza's model output version, the backend, the precision and
+the ONNX Runtime version. A new model, backend or ONNX Runtime runs the
+step again, and so does a change to
 **Grain** or **Mottle**. The processed FITS carries a `SEIZAMDL` card with
 the model's name.
 
@@ -1549,7 +1553,11 @@ stack: plan for tens of minutes on a 60-megapixel stack. On a Mac with
 Apple silicon it runs on the GPU through Core ML, unless **Use the GPU** is
 off in **Settings › Performance › GPU**. The step runs on this server or on
 a connected [worker](REMOTE_WORKERS.md) that has the same model, as
-**Processing steps** under **Where work runs** chooses.
+**Processing steps** under **Where work runs** chooses. On this server
+a run you start uses the processor share of the job that waits for it. An
+automatic run, such as a re-apply after a rebuild, pauses between tiles
+while your own work runs, and gives up this server's worker when you apply
+a step that needs it; it then starts again from the beginning.
 
 `GET /api/tools/processing` lists every provider with its state: ready, not
 licensed or not installed, the reason, its version and where it runs. It
@@ -2246,9 +2254,9 @@ RC-Astro keep their cached results.
 
 ![RC-Astro tools configured on a linear red input before its display stretch](stack-rc-astro-color-desktop.png)
 
-### RC-Astro on the color channels together
+### Processing on the color channels together
 
-**RC-Astro on the color channels together** in the **Processing stack** editor runs
+**Processing on the color channels together** in the **Processing stack** editor runs
 BlurXTerminator and NoiseXTerminator on the aligned, normalized channels as
 one three-channel image, after alignment and before color calibration and the
 stretches. It is off by default and is shown when the server has RC-Astro.

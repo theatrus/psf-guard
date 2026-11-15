@@ -34,7 +34,7 @@ For each input, a color build runs, in order:
    model shared by all channels;
 4. resampling onto the reference with the transform from step 1;
 5. normalization;
-6. RC-Astro on the color channels together, when set (step 3);
+6. Processing on the color channels together, when set (step 3);
 7. color calibration and the input's stretch stages;
 8. composition, then the RGB output stages.
 
@@ -193,7 +193,7 @@ detected 205 fewer stars.
 This is one target, one channel and a small rotation. A larger turn, or a
 channel with more resampling, could favour registering first.
 
-## Step 3: RC-Astro on the color channels together (built)
+## Step 3: Processing on the color channels together (built)
 
 `StackColorProcessing.color_rc_astro` runs BlurXTerminator and
 NoiseXTerminator on the aligned, normalized linear channels as one

@@ -300,8 +300,11 @@ A worker accepts everything it can run unless you list its work with
 `--work`. Repeat it for more:
 
 - `--work stack` accepts stack builds.
-- `--work noise-model` accepts Seiza's noise model.
-- `--work rc-astro` accepts every RC-Astro tool installed on the worker.
+- `--work processing` accepts every processing step the worker can run:
+  the RC-Astro tools installed there and Seiza's noise model. `--work
+  rc-astro` means the same, as it did before the noise model, so a worker
+  set up with it runs the model once the model is downloaded.
+- `--work noise-model` accepts only Seiza's noise model.
 - `--work bxt`, `--work nxt` or `--work sxt` accepts only that tool.
 
 For example, `--work bxt --work sxt` sends BlurXTerminator and
@@ -335,7 +338,9 @@ PSF Guard never downloads them by itself. On the worker computer:
 
 1. Run `psf-guard-cli noise-model download`. The command downloads
    Microsoft's ONNX Runtime release, checks it against a SHA-256 pinned in
-   PSF Guard, then downloads Seiza's latest published noise model. Both go
+   PSF Guard, then downloads Seiza's latest published noise model. When
+   that ONNX Runtime release is installed already, the command keeps it;
+   `--force` downloads it again. Both go
    to `noise-model` in PSF Guard's data folder for your account; set
    `PSF_GUARD_NOISE_MODEL_DIR` to use another folder.
 2. Restart the worker. It logs **Accepts the noise model …**, and the
@@ -355,8 +360,10 @@ processor, so that is the only way there.
 
 The server sends a noise model step only to a worker that offers the model
 the step was planned with: the same model (by the hash of its card), Seiza
-model output version, backend and precision. These are part of the result's
-cache identity, so a result does not change with the computer that made it.
+model output version, backend, precision and ONNX Runtime version. These
+are part of the result's cache identity, so a result made with one ONNX
+Runtime or backend is never reused as another's. Two computers that match
+in all of these can still differ in the last digits, as two processors do.
 When workers and the server have different models, the step uses the model
 of the first connected worker by name, as an RC-Astro tool does; see [Which
 worker runs a tool](#which-worker-runs-a-tool). Run `noise-model download`

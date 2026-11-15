@@ -195,7 +195,7 @@ is one more provider and an engine behind the same interface.
   license, and parameters with ranges. PSF Guard builds the model's schema,
   with the amounts as parameters and the model's identity as the version:
   the card's hash, `seiza_model::OUTPUT_VERSION`, the backend, the
-  precision and the band scale.
+  precision, the band scale and the ONNX Runtime version.
 - **One step record.** `ProcessingStep` is a provider and its parameters;
   the provider decides the category. It is written as `{category,
   provider, tool, parameters}` and read from that or from the earlier
@@ -223,16 +223,42 @@ is one more provider and an engine behind the same interface.
 - **One capabilities answer.** `GET /api/tools/processing` lists each
   provider's state, reason, remedy, version, schema and where it runs.
 - **Run.** The model's engine reads `input.fits` with its holes as they
-  are, runs in a `ComputePool`, and writes `processed.fits`. This server's
-  worker leases the pool's threads from the shared budget
-  (`workers::set_local_compute`): `Interactive` for a person's run, `Viewed`
-  otherwise. Seiza gives ONNX Runtime no thread count, so ONNX Runtime's own
-  threads are outside the lease.
+  are, runs in a `ComputePool`, and writes `processed.fits`.
+- **Threads on this server.** The stretch or color job that waits for a
+  step holds its leased workers while it waits, so the step runs on those:
+  the job records them (`steps::hold_threads`, or its pool when it applies
+  the step inside one) and the task's spec carries the count. Leasing again
+  would be left one thread, since the job holds the budget. A run with no
+  waiting job's count leases its own (`workers::set_local_compute`):
+  `Interactive` for a person's run, `Viewed` otherwise. Seiza gives ONNX
+  Runtime no thread count, so ONNX Runtime's own threads are outside the
+  lease.
+- **Automatic runs give way.** Seiza reports after each tile on the thread
+  that runs the tiles in turn, so an automatic run waits there while a
+  person's work runs (`workers::set_local_yield`). Seiza can stop a run but
+  not resume one, so when a person's task needs this server's worker and
+  automatic work has it, the board stops that work and queues it again
+  without counting a failure (`Inner::preempt_automatic_work`); the
+  person's task goes first.
+- **Step rules test the category.** A rule such as "no star removal on the
+  color channels together" asks a step's category, never a provider's key,
+  on the server and in the controls.
+- **Identities.** Wherever a value that holds steps is hashed, it is encoded
+  with `steps::identity_json`, which writes each step as `{tool,
+  parameters}`: color jobs, stretches and emission inputs keep the ids they
+  had before providers.
 - **Downloads.** Neither side fetches anything by itself. The server's
   download is a tracked job (`server/noise_model.rs`) with a row in the job
   line; a worker's is `psf-guard-cli noise-model download` or the desktop
   app's button. Seiza verifies the model; PSF Guard verifies the ONNX
-  Runtime archive against a SHA-256 in `noise_model/install.rs`.
+  Runtime archive against a SHA-256 in `noise_model/install.rs`. Each
+  ONNX Runtime download unpacks to a folder of its own, and
+  `onnxruntime.current` is switched to it by one rename, so a library a
+  process has open is never deleted. The next download sweeps folders no
+  longer in use and whatever a stopped download left. A drop guard removes
+  a stopped download's archive and tells an unpack still running to discard
+  its work. The desktop app reads the worker's install from disk and does
+  not open the library: it shares a process with the app's server.
 - **One library per process.** ONNX Runtime opens once, and Seiza keeps a
   failed open until the process ends. PSF Guard therefore finds the library
   file itself and calls Seiza only when the file exists, so installing ONNX
