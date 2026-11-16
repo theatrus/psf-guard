@@ -747,6 +747,19 @@ mod license_tests {
         )
         .unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // Another test's thread may fork while this file is open for
+        // writing, and its child then holds the file open for a moment.
+        // Until that child is gone the script cannot be run ("Text file
+        // busy"), so wait here, not in the test that runs it. A first
+        // argument other than `license` records no call.
+        for _ in 0..400 {
+            match std::process::Command::new(&path).arg("probe").output() {
+                Err(error) if error.raw_os_error() == Some(26) => {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                _ => break,
+            }
+        }
         RcAstroCli::with_executable(path)
     }
 
